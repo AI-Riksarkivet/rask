@@ -1,8 +1,10 @@
 """A signer's own private signing key: read from the secret store, held only while it is published ([[LH-064]]).
 
-Each signing identity owns an Ed25519 pair in the store. The seed sits in `signing-key-<identity>` (field `seed`) and
-only that identity's own sidecar may read it; the public half sits in `signing-public-<identity>` (field `keys`, the
-current key first) and every verifier reads it. A signer resolves its seed through its own sidecar, derives the public
+Each signing identity owns an Ed25519 pair in the store, under the identity's KEY NAME (`signing_key_name`): the seed
+sits in `signing-key-<name>` (field `seed`) and only that identity's own sidecar may read it; the public half sits in
+`signing-public-<name>` (field `keys`, the current key first) and every verifier reads it. On the estate an identity is
+a service-account subject (`kubernetes~system:serviceaccount:<ns>:<sa>`), the subject its events are authored as, and its
+key name is the account's name. A signer resolves its seed through its own sidecar, derives the public
 key from it, and signs only while that key is listed.
 
 READY MEANS LISTED, NOT MERELY READABLE. A verifier refuses an event signed with a key its identity does not publish,
@@ -38,6 +40,7 @@ from fastapi import FastAPI, Request
 
 from service_kit.draining import RETRY
 from service_kit.governed.secrets import fetch_dapr_secret
+from service_kit.lakehouse.subjects import SERVICE_ACCOUNT_SUBJECT_PREFIX
 from service_kit.probes import ReadyCheck
 from service_kit.schemas.health import Readiness, ReadinessStatus
 
@@ -47,17 +50,18 @@ log = logging.getLogger(__name__)
 #: The `app.state` attribute the lifespan publishes the holder under, read by the gate and the readiness check.
 SIGNING_STATE: Final = "signing"
 
-#: The field of `signing-key-<identity>` that holds the NKEY user seed.
+#: The field of `signing-key-<name>` that holds the NKEY user seed.
 SEED_FIELD: Final = "seed"
 
-#: The field of `signing-public-<identity>` that holds the comma-separated public NKEYs, current first.
+#: The field of `signing-public-<name>` that holds the comma-separated public NKEYs, current first.
 KEYS_FIELD: Final = "keys"
 
 #: The longest a ready signer goes between resolutions. A store that was re-minted is noticed within this bound.
 MAX_REFRESH_SECONDS: Final = 300.0
 
-#: A signing identity becomes part of a secret name and so of a sidecar URL path: only a DNS-label-like name is read.
-_IDENTITY: Final = re.compile(r"[a-z0-9][a-z0-9-]*")
+#: A key name becomes part of a secret name and so of a sidecar URL path, an OpenBao path and a shell word: only a
+#: DNS-label-like name is read.
+_KEY_NAME: Final = re.compile(r"[a-z0-9][a-z0-9-]*")
 
 #: The bound on one verifier's read of a published key list. ONE attempt, and short: verification sits on the delivery
 #: path of every signed event, and the boot-time retry `fetch_dapr_secret` defaults to (about two minutes) would hold a
@@ -95,28 +99,38 @@ class SigningStatus(Protocol):
     def reason(self) -> str: ...
 
 
+def signing_key_name(identity: str) -> str:
+    """The name `identity`'s key pair is stored under: a service account's name for its subject, else the identity.
+
+    A subject's `~` and `:` belong in no secret name, OpenBao path or shell word, and an account name is a DNS label.
+    The signers are the release's own accounts, all in the release's namespace, so the account name alone is unique in
+    the store the release reads; the chart names the same keys (`lance.signingKeys`).
+    """
+    return identity.rpartition(":")[2] if identity.startswith(SERVICE_ACCOUNT_SUBJECT_PREFIX) else identity
+
+
 def signing_key_secret(identity: str) -> str:
     """The secret holding `identity`'s private seed. Dapr grants by secret name, so this name is what is scoped."""
-    return f"signing-key-{identity}"
+    return f"signing-key-{signing_key_name(identity)}"
 
 
 def signing_public_secret(identity: str) -> str:
     """The secret holding `identity`'s published public keys. Never denied to any sidecar."""
-    return f"signing-public-{identity}"
+    return f"signing-public-{signing_key_name(identity)}"
 
 
 def published_key_fetch(store: str) -> Callable[[str], Mapping[str, str]]:
-    """The secret read a verifier's `lineage_kit.keys.PublishedKeys` takes: a secret's fields through THIS pod's sidecar.
+    """The read a verifier's `lineage_kit.keys.PublishedKeys` takes: an identity's published list through THIS pod's sidecar.
 
     One attempt bounded by `KEY_READ_TIMEOUT_SECONDS`. A secret the sidecar cannot serve answers ``{}``, which the
     reader turns into `KeySourceUnavailableError`, so the door answers RETRY rather than refusing an honest event.
 
     Args:
-        store: The Dapr secret store holding every identity's `signing-public-<identity>`.
+        store: The Dapr secret store holding every identity's `signing-public-<name>` (`signing_public_secret`).
     """
 
-    def fetch(secret: str) -> dict[str, str]:
-        return fetch_dapr_secret(store, secret, timeout=KEY_READ_TIMEOUT_SECONDS, retries=1)
+    def fetch(identity: str) -> dict[str, str]:
+        return fetch_dapr_secret(store, signing_public_secret(identity), timeout=KEY_READ_TIMEOUT_SECONDS, retries=1)
 
     return fetch
 
@@ -147,10 +161,10 @@ class SigningKeyHolder[KeyT: SigningKeyLike]:
             retry_seconds: Between resolutions while not ready, at most `refresh_seconds`.
 
         Raises:
-            ValueError: `identity` is not a lower-case DNS-label-like name, or the intervals are out of order.
+            ValueError: `identity`'s key name is not a lower-case DNS-label-like name, or the intervals are out of order.
         """
-        if _IDENTITY.fullmatch(identity) is None:
-            raise ValueError(f"{identity!r} is not a signing identity: it becomes part of a secret name, so only [a-z0-9-] is read")
+        if _KEY_NAME.fullmatch(signing_key_name(identity)) is None:
+            raise ValueError(f"{identity!r} is not a signing identity: its key name becomes part of a secret name, so only [a-z0-9-] is read")
         if not 0 < retry_seconds <= refresh_seconds <= MAX_REFRESH_SECONDS:
             raise ValueError(f"the intervals must satisfy 0 < retry <= refresh <= {MAX_REFRESH_SECONDS}s, got {retry_seconds}s and {refresh_seconds}s")
         self._identity = identity

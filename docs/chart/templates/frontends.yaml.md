@@ -191,7 +191,7 @@ hold, and the SMALLER one always wins.
 ## `- name: LINEAGE_SERVICE_TOKEN_FILE`
 
 Governed READ fallback: with no user session the BFF authenticates to lineage
-as a SERVICE (bounded by frontend.serviceIdentity's FGA READER rung), so the
+as a SERVICE (bounded by the FGA rungs its ServiceAccount's subject holds), so the
 read-only UI works without a per-user browser login.
 
 The zone's projected `rask-lineage` identity ([[LH-220]]): the BFF re-reads the file per

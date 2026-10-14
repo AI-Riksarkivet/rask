@@ -156,7 +156,8 @@ it at boot (CrashLoopBackOff, contained only because the rolling update kept the
 `kubectl set image` keeps pods on current code and applies **no configuration**. When helm cannot
 write, config silently stops arriving while images keep moving — which is how LH-064 ran signing code
 for a day with neither half of its credential pair. A signer's pair comes from the release:
-`RASK_SIGNING_IDENTITY` is rendered on its Deployment, and the `signing-key-<identity>` secret is
+`RASK_SIGNING_IDENTITY` (its service-account subject) is rendered on its Deployment, and the `signing-key-<key name>`
+secret (the ServiceAccount's name, `lance.signingKeys`) is
 seeded into the chart's dev OpenBao (a store the chart does not mint into is provisioned by the
 operator and attested by `signing.provisioned`).
 
@@ -252,7 +253,7 @@ catalog, lineage, maintenance, the medallion, OpenBao and Dex ran as `default` w
   new identity, issues the bus users again under the same root, and seeds again), so a rask upgrade replaces no store.
   The `seed` container in that pod writes only to its own server and gates the pod's readiness on a
   key it writes last, and a rollout surges first so the seed can carry each signing identity's Ed25519
-  pair (`signing-public-<id>`, then `signing-key-<id>`) over from the outgoing pod
+  pair (`signing-public-<key name>`, then `signing-key-<key name>`) over from the outgoing pod
   (`test_the_dev_openbao_is_seeded_by_its_own_pod.py`); a `mint` init container on a memory volume makes
   the candidates. A replacement with no outgoing pod (a deleted pod, a drained node) mints every pair
   afresh: the old public keys go with the old store, and an enforcing lineage refuses what was signed

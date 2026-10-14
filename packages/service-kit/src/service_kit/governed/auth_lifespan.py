@@ -102,8 +102,6 @@ class _GovernedSettings(_FgaSettings, Protocol):
     @property
     def sa_audience(self) -> str | None: ...
     @property
-    def sa_subjects(self) -> dict[str, str]: ...
-    @property
     def sa_fetch_token_file(self) -> str | None: ...
     @property
     def sa_ca_file(self) -> str | None: ...
@@ -263,7 +261,6 @@ async def attach_auth(
             app.state.sa_oidc = machine_identity.ServiceAccountVerifier(
                 settings.sa_issuer,
                 settings.sa_audience,
-                settings.sa_subjects,
                 cache_ttl=settings.oidc_cache_ttl,
                 leeway=settings.oidc_leeway,
                 fetch_token_file=settings.sa_fetch_token_file,

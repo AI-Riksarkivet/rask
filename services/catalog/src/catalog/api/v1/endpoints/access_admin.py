@@ -147,10 +147,10 @@ def _validated_object(obj: str) -> str:
 
 
 def _qualified_subject(user: str) -> str:
-    """Resolve to a FULL subject: a bare id is a user (``user:<id>``); a qualified subject or userset
+    """Resolve to a FULL subject (`fga.grantee_object`): a subject is the user it is; a qualified object or userset
     (``team:acme#member``, ``role:admin#assignee``) passes through verbatim — the same resolution as the
     per-object access/check + access/grant surfaces (double-prefixing would falsely deny every check)."""
-    return user if ":" in user else f"user:{user}"
+    return fga.grantee_object(user)
 
 
 def _require_fga_client(client: FgaClientDep) -> OpenFgaClient:

@@ -92,7 +92,8 @@ Three layers, each owned in ONE place:
 
 **A tenant EXISTS when its registry record does** — not when a warehouse implies it and not when FGA
 holds tuples for it. `POST /management/v1/projects` writes the record AND the `project#admin` tuple (the creator's; a
-machine identity names the person in `admin` and is never admin itself, LH-433, `fga_deps.project_admin_for`) in
+machine identity names the person in `admin` and is never admin itself, LH-433, `fga_deps.project_admin_for`; a
+service account's subject is never a person, `is_person_subject`) in
 one operation (estate-admin gated on `can_observe_events` at the root), which is what stops existence
 and permission drifting apart. There is **no bootstrap exception** in warehouse-create any more: one
 door, and a warehouse-owner cannot ride a create into project admin.
@@ -364,7 +365,9 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   (`services/catalog/tests/test_a_stock_client_opens_on_the_vended_credential.py`). The maintain tier opens to
   `can_vend_maintain` alone ([[LH-473]], ADR 0156 C4): the model's `maintenance` relation, which the catalog writes
   for `LANCE_FGA_MAINTAINERS` on every warehouse (`cascade_tuples`, backfilled at startup, and the chart's
-  `bootstrap-admin` hook) and no grant door hands out. An owner is a maintainer and keeps the maintainer doors, and is
+  `bootstrap-admin` hook) and no grant door hands out. The list holds subjects, maintenance's service-account subject
+  (`kubernetes~system:serviceaccount:<ns>:<release>-sa-maintenance`, `lance.saSubject`), each written as the user it is
+  (`fga.user_object`). An owner is a maintainer and keeps the maintainer doors, and is
   not vended the tier.
 - **Stock clients commit through `version/create`** ([[LH-471]], ADR 0157). `DescribeTable` and `DeclareTable`
   answer `managed_versioning=true`, so pylance stages `_versions/<n>.manifest-<uuid>` (its `manifest_path` is the

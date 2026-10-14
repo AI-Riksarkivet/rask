@@ -82,7 +82,6 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | catalog.multibase.baseCredentialRefs | object | `{}` | Map of data-base URI to a Dapr secret-store reference naming that base's credential. Every key must also be in `dataBases` or the render fails. Empty = estate options. |
 | catalog.multibase.dataBases | list | `[]` | Allowlist of bucket URIs one table's fragments may be spread across (`?data_base=` on create). Empty = multi-base off, single-location creates. |
 | catalog.multibase.devSeed | bool | `false` | Local fixture: create each referenced base's bucket, scoped MinIO user and dev-OpenBao secret. Refused on a real deployment, without MinIO or without the dev OpenBao. |
-| catalog.serviceIdentity | string | `"service-catalog"` | The identity the catalog presents and signs its emitted lineage as (the one delegator). Empty = the catalog emits unsigned lineage. |
 | catalog.trashGraceDays | int | `7` | Days a dropped table or namespace stays undroppable before the trash purge may reclaim it (LANCE_TRASH_GRACE_DAYS). 0 destroys immediately. |
 | catalog.warehouses.enabled | bool | `true` | Per-warehouse physical multi-tenancy: POST /management/v1/warehouses provisions a bucket per warehouse and binds top-level namespaces to it. Unbound namespaces use `minio.bucket`. |
 | config.AWS_REGION | string | `"us-east-1"` | AWS region written to the fleet ConfigMap for S3 clients; any value works against RustFS/MinIO. |
@@ -157,7 +156,6 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | frontend.securityContext.capabilities | object | `{"drop":["ALL"]}` | Container securityContext capabilities for zones; drops ALL Linux capabilities. |
 | frontend.serveUrl | string | `""` | Ray Serve HTTP origin for zones that run inference; empty uses `ray.dashboardUrl`. |
 | frontend.service.port | int | `3000` | Port each zone's Bun server listens on and its Service exposes. |
-| frontend.serviceIdentity | string | `"service-web"` | FGA subject the zones' BFF uses for service reads; the `<release>-sa-web` ServiceAccount maps to it. Must be reader on the warehouse. |
 | fullnameOverride | string | `"rask"` | Base name for every rendered object; pinned to `rask` so in-cluster Services resolve as `rask-<component>`. |
 | image.catalog | object | `{"repository":"lance-rest-catalog","tag":"dev"}` | Lakehouse image (catalog, lineage, maintenance, media services): `repository` is the image name under image.repository, `tag` is required (empty fails the render). |
 | image.digest | string | `""` | Global digest pin (sha256:...) for every first-party image; wins over `tag`. Empty uses tags. |
@@ -179,7 +177,6 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | lifecycle.teardownSeconds | int | `10` | Seconds reserved for the app's lifespan teardown; uvicorn's graceful-shutdown bound is grace - preStop - this. |
 | lifecycle.terminationGracePeriodSeconds | int | `40` | Pod grace period in seconds; must be at least preStop + sidecar drain + 5 s buffer. |
 | maintenance.bindingName | string | `"maintenance-cron"` | Name of the Dapr cron binding that fires the sweep tick (`MAINTENANCE_BINDING_NAME`). |
-| maintenance.catalogServiceIdentity | string | `"service-maintenance"` | Subject maintenance claims at the catalog's identity door; bootstrap grants it on each warehouse and the catalog audits it on every vend. |
 | maintenance.compactThreads | int | `2` | Compaction read threads. Memory ceiling is scanBatchSize x row size x compactThreads; set the two together. |
 | maintenance.controlEmit | bool | `false` | Announce each reclamation on the catalog control topic (catalog.control.v1); needs Dapr sidecars. Off by default. |
 | maintenance.controlRoot | string | `""` | S3 root of the catalog's control registries (projects, warehouses, trash, `_bases/`). Empty uses the primary bucket; set together with the catalog's. |
@@ -349,9 +346,9 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | services.notifications.channels.slack.enabled | bool | `false` | Renders the Slack Dapr binding and adds `slack` to RASK_NOTIFICATIONS_CHANNELS. Off by default. |
 | services.notifications.channels.slack.secretName | string | `"notifications-slack"` | Secret-store key holding the Slack `webhookUrl` field. |
 | services.notifications.daprIngest | bool | `true` | Renders APP_API_TOKEN for notifications, which refuses to start with Dapr on and no token. |
-| services.notifications.env | object | `{"RASK_LINEAGE_SERVICE_IDENTITY":"notifications"}` | Env-var map rendered verbatim into the notifications container; RASK_LINEAGE_SERVICE_IDENTITY is the subject it maps to at lineage's door. |
 | services.notifications.frontDoor | bool | `true` | Renders notifications outside singleTenant, because the gateway routes /api/notifications to it. |
 | services.notifications.governedAuth | bool | `true` | Gives notifications the OIDC/FGA env and FGA token mount when auth.enabled. |
+| services.notifications.identityAudiences | list | `["rask-lineage"]` | Audiences of the service-account tokens projected into the notifications pod, one per door it calls (rask-lineage). |
 | services.notifications.module | string | `"notifications:app"` | uvicorn import path the notifications (inbox) Deployment runs. |
 | services.notifications.port | int | `8850` | Container and Service port of the notifications app. |
 | services.notifications.reconcileBindingName | string | `"notifications-reconcile-cron"` | Name of the reconcile cron binding; also rendered as RASK_NOTIFICATIONS_BINDING_NAME so the tick reaches the matching route. |

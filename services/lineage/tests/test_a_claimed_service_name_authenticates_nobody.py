@@ -2,9 +2,10 @@
 
 [[LH-220]], clause "the shared token plus a claimed name answers 401". Measured live before the row: notifications was
 allowlisted and not privileged, so the estate-wide `dapr-api-token` plus `x-lance-service-identity: notifications`
-authenticated as notifications, and any holder of that one token could speak as any allowlisted subject. Under D1 a
-service authenticates with its pod's projected token, verified offline against the cluster issuer and mapped by its
-full username; the shared token stays only as the proof a sidecar delivered a request, and names nobody.
+authenticated as notifications, and any holder of that one token could speak as any allowlisted subject. A service
+authenticates with its pod's projected token, verified offline against the cluster issuer, and is the subject its full
+username names (`kubernetes~system:serviceaccount:<ns>:<sa>`, ADR 0156 C5); the shared token stays only as the proof a
+sidecar delivered a request, and names nobody.
 
 Driven at lineage's real door: its `authenticate`, the verifiers `attach_auth` builds from lineage's settings at boot,
 and the handlers `build_lance_service_app` installs. The service-account issuer is the loopback one in the root
@@ -13,7 +14,6 @@ conftest, which serves its key set only to a bearer from a private CA, as k3s do
 
 from __future__ import annotations
 
-import json
 import logging
 from collections.abc import AsyncGenerator, Iterator
 from contextlib import asynccontextmanager
@@ -43,12 +43,10 @@ def door(sa_issuer: Any, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient
         "RASK_OIDC_AUDIENCE": "lance-catalog",
         "RASK_SA_ISSUER": issuer.issuer,
         "RASK_SA_AUDIENCE": "rask-lineage",
-        "RASK_SA_SUBJECTS": json.dumps({f"system:serviceaccount:default:{_NOTIFICATIONS}": "notifications"}),
         "RASK_SA_FETCH_TOKEN_FILE": str(issuer.fetch_token_file),
         "RASK_SA_CA_FILE": str(issuer.ca_file),
-        # The deployment as it was: the shared token configured and notifications on the service allowlist.
+        # The shared token configured, as the deployment carries it for its sidecars.
         "APP_API_TOKEN": _SHARED,
-        "LINEAGE_SERVICE_SUBJECTS": "notifications",
     }.items():
         monkeypatch.setenv(key, value)
     get_settings.cache_clear()
@@ -75,7 +73,7 @@ def door(sa_issuer: Any, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient
     ("credential", "status", "subject"),
     [
         pytest.param("shared-token-and-a-name", 401, None, id="the-shared-token-and-a-claimed-name"),
-        pytest.param("own-projected-token", 200, "notifications", id="the-pods-own-projected-token"),
+        pytest.param("own-projected-token", 200, f"kubernetes~system:serviceaccount:default:{_NOTIFICATIONS}", id="the-pods-own-projected-token"),
     ],
 )
 def test_lineage_admits_a_service_by_its_projected_token_and_never_by_a_claimed_name(

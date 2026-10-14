@@ -73,15 +73,6 @@ def test_reports_the_callers_own_verdicts(monkeypatch: pytest.MonkeyPatch) -> No
     assert resp.permissions["can_create_table"] is False
 
 
-def test_a_sub_that_already_carries_a_prefix_is_not_double_prefixed(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`user:user:alice` matches no tuple, so the whole answer would be a plausible all-false. Same
-    rule the home zone's /settings gate applies to `me.sub`."""
-    resp, asked = _run(monkeypatch, sub="user:alice", allow={"can_get_metadata"})
-    assert resp.subject == "user:alice"
-    assert {u for u, _r, _o in asked} == {"user:alice"}
-    assert resp.permissions["can_get_metadata"] is True
-
-
 def test_no_token_is_refused_rather_than_answered_for_anonymous(monkeypatch: pytest.MonkeyPatch) -> None:
     """The siblings fall back to "anonymous" for their AUDIT row; here the subject IS the subject of
     every Check, so an anonymous fallback would silently answer a different question."""

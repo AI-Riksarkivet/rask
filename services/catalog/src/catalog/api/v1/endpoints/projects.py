@@ -183,7 +183,7 @@ async def create_project(
     project_id = body.id
     if not _ID_RE.match(project_id):
         raise InvalidInputError(f"invalid project id {project_id!r}: must match {_ID_RE.pattern}")
-    admin = fga_deps.project_admin_for(token, settings, body.admin)
+    admin = fga_deps.project_admin_for(token, body.admin)
     await fga_deps.require_relation(client, settings, token, relation="can_observe_events", obj=settings.fga_root_object)
     so = settings.storage_options()
     existing = await run_in_threadpool(project_registry.get_project, settings.registry_root, so, project_id)

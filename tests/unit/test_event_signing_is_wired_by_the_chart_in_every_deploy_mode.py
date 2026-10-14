@@ -28,6 +28,7 @@ import subprocess
 
 import pytest
 
+from service_kit.governed.signing_key import signing_key_secret, signing_public_secret
 from tests.unit import chart_render
 from tests.unit.chart_render import DEFAULT_ARGS
 
@@ -116,7 +117,8 @@ def test_a_store_nothing_seeds_is_refused_until_the_operator_attests_its_signing
     with pytest.raises(subprocess.CalledProcessError) as refused:
         chart_render.render(*DEFAULT_ARGS, *mode)
     message = refused.value.stderr
-    missing = [name for identity in identities for name in (f"signing-public-{identity}", f"signing-key-{identity}") if name not in message]
+    # The names each signer reads its pair under (`signing_key_secret`), so the chart and the signer agree on them.
+    missing = [name for identity in identities for name in (signing_public_secret(identity), signing_key_secret(identity)) if name not in message]
     assert not missing, f"the refusal does not name {missing}, so the operator cannot tell which secrets to create"
 
     # The users a store nothing seeds must already hold; the bus's own config is the bus's, not rask's to attest.
@@ -162,7 +164,9 @@ def test_lineage_and_every_bus_door_verify_against_exactly_the_rendered_signers_
     else:
         assert {"LINEAGE_SIGNERS", "LINEAGE_DELEGATORS"} <= env.keys(), "lineage requires no signature: the chart gives it no signer set or delegator set"
         assert json.loads(env["LINEAGE_SIGNERS"]) == _signers(docs), "the signer set is not the identities the Deployments sign as"
-        assert json.loads(env["LINEAGE_DELEGATORS"]) == ["service-catalog"], "only the catalog, which authenticated the person, may sign for one"
+        assert json.loads(env["LINEAGE_DELEGATORS"]) == _identities_running(docs, "catalog.main:app"), (
+            "only the catalog, which authenticated the person, may sign for one"
+        )
 
     hosts = _door_hosts(docs)
     assert hosts.keys() == door_hosts, f"the pods whose app hosts a door are not the ones this case names: {sorted(hosts)}"
@@ -178,7 +182,7 @@ def test_lineage_and_every_bus_door_verify_against_exactly_the_rendered_signers_
             workload: {
                 "RASK_SIGNATURE_DOORS": doors,
                 "RASK_EVENT_SIGNERS": _signers(docs),
-                "RASK_EVENT_DELEGATORS": ["service-catalog"],
+                "RASK_EVENT_DELEGATORS": roles["catalog"],
             }
             | ({"RASK_CONTROL_SIGNER_ROLES": roles} if _DOOR_APPS[app] else {})
             for workload, app in hosts.items()
@@ -186,43 +190,6 @@ def test_lineage_and_every_bus_door_verify_against_exactly_the_rendered_signers_
     # One expected map for the whole render, so a door host missing a setting, a pod carrying one without hosting a door and a set that
     # differs from the one its door admits all fail on the same diff.
     assert _door_env(docs) == expected, "the doors' settings are not the sets their doors admit, in the asked mode, on exactly the pods that host a door"
-
-
-#: An overlay in which no identity signs.
-_NOBODY = (
-    "--set", "catalog.serviceIdentity=",
-    "--set", "maintenance.enabled=false",
-)  # fmt: skip
-
-
-@pytest.mark.parametrize(
-    ("overlay", "refusal"),
-    [
-        pytest.param((*_NOBODY, "--set", "signing.doors=off"), "lineage would verify nothing", id="lineage-enforcing-with-no-signer"),
-        # observe verifies too (it counts what it would refuse), so each guard's boundary is off against anything else.
-        pytest.param(
-            (*_NOBODY, "--set", "signing.enforce=false", "--set", "signing.doors=observe"),
-            "the doors would verify nothing",
-            id="the-doors-observing-with-no-signer",
-        ),
-        pytest.param(
-            ("--set", "signing.doors=observe", "--set", "catalog.serviceIdentity="),
-            "no identity holds the control-event role catalog",
-            id="the-doors-observing-with-a-control-event-role-nobody-holds",
-        ),
-    ],
-)
-def test_a_render_that_verifies_with_no_signer_is_refused_rather_than_rendered_as_a_verifier_that_requires_nothing(
-    overlay: tuple[str, ...], refusal: str
-) -> None:
-    # The off side of both switches renders, so each refusal below is its guard's and not the overlay's.
-    assert not _signers(chart_render.render(*DEFAULT_ARGS, *_NOBODY, "--set", "signing.enforce=false", "--set", "signing.doors=off")), (
-        "the overlay still has a signer, so the refusal below is not what it names"
-    )
-
-    with pytest.raises(subprocess.CalledProcessError) as refused:
-        chart_render.render(*DEFAULT_ARGS, *overlay)
-    assert refusal in refused.value.stderr
 
 
 def _loaded_configurations(docs: tuple[dict, ...]) -> dict[str, tuple[str, dict]]:
@@ -242,12 +209,13 @@ def _loaded_configurations(docs: tuple[dict, ...]) -> dict[str, tuple[str, dict]
 
 def test_a_configuration_is_renamed_when_and_only_when_its_spec_changes_so_a_pod_cannot_load_a_stale_one() -> None:
     before = _loaded_configurations(chart_render.render(*DEFAULT_ARGS))
-    after = _loaded_configurations(chart_render.render(*DEFAULT_ARGS, "--set", "maintenance.catalogServiceIdentity=service-maintenance-renamed"))
+    probe = ("--set", "nats.auth.users.probe.publish={probe.v1}", "--set", "nats.auth.users.probe.subscribe={_INBOX.>}")
+    after = _loaded_configurations(chart_render.render(*DEFAULT_ARGS, *probe))
 
     assert before.keys() == after.keys() and len(before) > 5, f"the pods that name a Configuration are {sorted(before)}"
     edited = {pod for pod in before if before[pod][1] != after[pod][1]}
     renamed = {pod for pod in before if before[pod][0] != after[pod][0]}
-    # Maintenance denies every signing key but its own whichever name that is, so its Configuration is the one that does not change.
+    # A bus user's credential is denied in every per-app Configuration; the gateway loads the shared `lance-tracing` one, which lists none.
     assert edited and edited != before.keys(), (
         f"the overlay must edit some Configurations and leave others, or one direction below measures nothing: {sorted(edited)}"
     )

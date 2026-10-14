@@ -46,7 +46,10 @@ if TYPE_CHECKING:
     from dapr.aio.clients import DaprClient
 
 
-IDENTITY = "service-maintenance"
+#: Maintenance's service-account subject: the author it stamps, and the identity it signs as.
+IDENTITY = "kubernetes~system:serviceaccount:rask:rask-sa-maintenance"
+#: The name its key pair is stored under (`signing_key_name`): the account's name.
+KEY_NAME = "rask-sa-maintenance"
 SECRETS = "http://localhost:3500/v1.0/secrets/lance-secrets"
 
 
@@ -84,6 +87,7 @@ def boot(monkeypatch: pytest.MonkeyPatch, respx_allows_unused_routes: None) -> I
     env = {
         "MAINTENANCE_SECRETS_FROM_DAPR": "true",
         "RASK_SIGNING_IDENTITY": IDENTITY,
+        "MAINTENANCE_CATALOG_SERVICE_IDENTITY": IDENTITY,
         "MAINTENANCE_S3_ACCESS_KEY_ID": "test",
         "MAINTENANCE_LINEAGE_EMIT_ENABLED": "true",
         "MAINTENANCE_CONTROL_EMIT_ENABLED": "true",
@@ -102,8 +106,8 @@ def boot(monkeypatch: pytest.MonkeyPatch, respx_allows_unused_routes: None) -> I
         def _boot(seed: httpx.Response, keys: httpx.Response) -> TestClient:
             stack.enter_context(respx.mock)
             respx.get(f"{SECRETS}/lance").mock(return_value=httpx.Response(200, json={"minio-secret-key": "the-s3-secret"}))
-            respx.get(f"{SECRETS}/signing-key-{IDENTITY}").mock(return_value=seed)
-            respx.get(f"{SECRETS}/signing-public-{IDENTITY}").mock(return_value=keys)
+            respx.get(f"{SECRETS}/signing-key-{KEY_NAME}").mock(return_value=seed)
+            respx.get(f"{SECRETS}/signing-public-{KEY_NAME}").mock(return_value=keys)
             return stack.enter_context(TestClient(service.app))
 
         yield _boot

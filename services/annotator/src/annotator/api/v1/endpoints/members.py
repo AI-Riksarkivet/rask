@@ -72,8 +72,8 @@ class GrantRequest(BaseModel):
 
 
 def _user_string(raw: str) -> str:
-    """`gina` -> `user:gina`; anything already typed (`user:…`, `role:…#assignee`) passes through."""
-    return raw if ":" in raw else f"user:{raw}"
+    """`gina` -> `user:gina`; an object of a model type (`role:…#assignee`) passes through (`fga.grantee_object`)."""
+    return fga.grantee_object(raw)
 
 
 async def _require_manage(checker: FgaChecker, subject: str, project_id: str, action: str) -> str:

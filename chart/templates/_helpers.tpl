@@ -526,50 +526,20 @@ securityContext:
 {{- end -}}
 
 {{- define "lance.fleetAudiences" -}}
-{{- $name := index . 0 -}}{{- $env := (index . 1).env | default dict -}}{{- $out := list -}}
-{{- if get $env "RASK_CATALOG_SERVICE_IDENTITY" }}{{ $out = append $out "rask-catalog" }}{{ end -}}
-{{- if or (get $env "RASK_LINEAGE_SERVICE_IDENTITY") (eq $name "notifications") }}{{ $out = append $out "rask-lineage" }}{{ end -}}
-{{- join " " $out -}}
+{{- join " " ((index . 1).identityAudiences | default list) -}}
 {{- end -}}
 
-{{- define "lance.saSubjects" -}}
-{{- $root := index . 0 -}}{{- $door := index . 1 -}}{{- $v := $root.Values -}}
-{{- $sa := printf "system:serviceaccount:%s:%s-sa-" $root.Release.Namespace (include "lance.fullname" $root) -}}
-{{- $m := dict -}}
-{{- if and $v.maintenance.enabled (eq $door "catalog") -}}
-{{- $_ := set $m (printf "%smaintenance" $sa) (required "maintenance.catalogServiceIdentity is blank" $v.maintenance.catalogServiceIdentity) -}}
-{{- end -}}
-{{- if eq $door "lineage" -}}
-{{- if $v.frontend.enabled }}{{- $_ := set $m (printf "%sweb" $sa) (required "frontend.serviceIdentity is blank" $v.frontend.serviceIdentity) }}{{- end -}}
-{{- end -}}
-{{- range $name, $svc := $v.services -}}
-{{- if and (not (has $name (list "catalog" "lineage"))) (or $svc.frontDoor $v.singleTenant.enabled) -}}
-{{- $env := $svc.env | default dict -}}
-{{- if eq $door "catalog" }}{{- with get $env "RASK_CATALOG_SERVICE_IDENTITY" }}{{- $_ := set $m (printf "%s%s" $sa $name) . }}{{- end }}{{- end -}}
-{{- if eq $door "lineage" }}{{- with (get $env "RASK_LINEAGE_SERVICE_IDENTITY") | default (ternary "notifications" "" (eq $name "notifications")) }}{{- $_ := set $m (printf "%s%s" $sa $name) . }}{{- end }}{{- end -}}
-{{- end -}}
-{{- end -}}
-{{- toJson $m -}}
-{{- end -}}
-
-{{- define "lance.machineSubjects" -}}
-{{- $root := . -}}{{- $v := .Values -}}{{- $ids := list -}}
-{{- range $door := list "catalog" "lineage" }}{{- range $_, $sub := (include "lance.saSubjects" (list $root $door) | fromJson) }}{{- $ids = append $ids $sub }}{{- end }}{{- end -}}
-{{- range (include "lance.signers" $root | fromJsonArray) }}{{- if .id }}{{- $ids = append $ids .id }}{{- end }}{{- end -}}
-{{- $ids = append $ids (include "lance.delegatorIdentities" $root) -}}
-{{- if $v.frontend.enabled }}{{- $ids = append $ids $v.frontend.serviceIdentity }}{{- end -}}
-{{- $ids = append $ids ((get ($v.services.notifications.env | default dict) "RASK_LINEAGE_SERVICE_IDENTITY") | default "notifications") -}}
-{{- toJson ($ids | compact | uniq | sortAlpha) -}}
+{{- define "lance.saSubject" -}}
+{{- $root := index . 0 -}}
+{{- printf "kubernetes~system:serviceaccount:%s:%s-sa-%s" $root.Release.Namespace (include "lance.fullname" $root) (index . 1) -}}
 {{- end -}}
 
 {{- define "lance.saVerifier" -}}
 {{- $root := index . 0 -}}{{- $part := index . 1 -}}{{- $door := index . 2 -}}
-{{- $subjects := include "lance.saSubjects" (list $root $door) | fromJson -}}
-{{- if and $root.Values.auth.enabled $subjects -}}
+{{- if $root.Values.auth.enabled -}}
 {{- if eq $part "env" }}
 - { name: RASK_SA_ISSUER, value: {{ $root.Values.auth.serviceAccountIssuer | quote }} }
 - { name: RASK_SA_AUDIENCE, value: {{ printf "rask-%s" $door }} }
-- { name: RASK_SA_SUBJECTS, value: {{ toJson $subjects | quote }} }
 - { name: RASK_SA_FETCH_TOKEN_FILE, value: /var/run/secrets/rask/sa-fetch/token }
 - { name: RASK_SA_CA_FILE, value: /var/run/secrets/rask/sa-fetch/ca.crt }
 {{- else }}
@@ -785,8 +755,8 @@ scoped_secret() {
         defaultAccess: allow
 
         {{- $denied := list }}
-        {{- $signs := include "lance.signingIdentitiesForApp" (list $cfgRoot $app) | splitList " " }}
-        {{- range (include "lance.signingIdentities" $cfgRoot | splitList " ") }}
+        {{- $signs := include "lance.signingKeys" (list $cfgRoot $app) | splitList " " }}
+        {{- range (include "lance.signingKeys" (list $cfgRoot) | splitList " ") }}
         {{- if and . (not (has . $signs)) }}
         {{- $denied = append $denied (printf "signing-key-%s" .) }}
         {{- end }}
@@ -809,27 +779,33 @@ scoped_secret() {
 {{- end -}}
 
 {{- define "lance.signers" -}}
-{{- $v := .Values -}}{{- $s := list (dict "id" $v.catalog.serviceIdentity "app" $v.services.catalog.daprAppId "role" "catalog") -}}
-{{- if $v.maintenance.enabled }}{{- $s = append $s (dict "id" $v.maintenance.catalogServiceIdentity "app" $v.maintenance.daprAppId "role" "maintenance") }}{{- end -}}
+{{- $v := .Values -}}{{- $s := list (dict "id" (include "lance.saSubject" (list . "catalog")) "key" (printf "%s-sa-catalog" (include "lance.fullname" .)) "app" $v.services.catalog.daprAppId "role" "catalog") -}}
+{{- if $v.maintenance.enabled }}{{- $s = append $s (dict "id" (include "lance.saSubject" (list . "maintenance")) "key" (printf "%s-sa-maintenance" (include "lance.fullname" .)) "app" $v.maintenance.daprAppId "role" "maintenance") }}{{- end -}}
 {{- toJson $s -}}
 {{- end -}}
 
 {{- define "lance.signingIdentities" -}}
 {{- $ids := list -}}
-{{- range (include "lance.signers" . | fromJsonArray) }}
-{{- if .id }}
-{{- if not (regexMatch "^[a-z0-9][a-z0-9-]*$" .id) }}{{- fail (printf "signing identity %q must match ^[a-z0-9][a-z0-9-]*$: it becomes a shell word, an OpenBao path and a Dapr URL segment" .id) }}{{- end }}
-{{- $ids = append $ids .id }}
-{{- end }}
-{{- end -}}
+{{- range (include "lance.signers" . | fromJsonArray) }}{{- $ids = append $ids .id }}{{- end -}}
 {{- join " " ($ids | uniq | sortAlpha) -}}
 {{- end -}}
 
-{{- define "lance.delegatorIdentities" -}}{{- .Values.catalog.serviceIdentity -}}{{- end -}}
+{{- define "lance.signingKeys" -}}
+{{- $keys := list -}}
+{{- range (include "lance.signers" (first .) | fromJsonArray) }}
+{{- if or (eq (len $) 1) (eq .app (index $ 1)) }}
+{{- if not (regexMatch "^[a-z0-9][a-z0-9-]*$" .key) }}{{- fail (printf "signing key name %q must match ^[a-z0-9][a-z0-9-]*$: it becomes a shell word, an OpenBao path and a Dapr URL segment" .key) }}{{- end }}
+{{- $keys = append $keys .key }}
+{{- end }}
+{{- end -}}
+{{- join " " ($keys | uniq | sortAlpha) -}}
+{{- end -}}
+
+{{- define "lance.delegatorIdentities" -}}{{- include "lance.saSubject" (list . "catalog") -}}{{- end -}}
 
 {{- define "lance.signingIdentitiesForApp" -}}
 {{- $app := index . 1 -}}{{- $mine := list -}}
-{{- range (include "lance.signers" (index . 0) | fromJsonArray) }}{{- if and .id (eq .app $app) }}{{- $mine = append $mine .id }}{{- end }}{{- end -}}
+{{- range (include "lance.signers" (index . 0) | fromJsonArray) }}{{- if eq .app $app }}{{- $mine = append $mine .id }}{{- end }}{{- end -}}
 {{- join " " ($mine | uniq | sortAlpha) -}}
 {{- end -}}
 
@@ -841,7 +817,7 @@ scoped_secret() {
 
 {{- define "lance.controlSignerRoles" -}}
 {{- $m := dict "catalog" (list) "maintenance" (list) -}}
-{{- range (include "lance.signers" . | fromJsonArray) }}{{- if and .id .role }}{{- $_ := set $m .role (append (get $m .role) .id | uniq | sortAlpha) }}{{- end }}{{- end -}}
+{{- range (include "lance.signers" . | fromJsonArray) }}{{- if .role }}{{- $_ := set $m .role (append (get $m .role) .id | uniq | sortAlpha) }}{{- end }}{{- end -}}
 {{- toJson $m -}}
 {{- end -}}
 
@@ -851,7 +827,6 @@ scoped_secret() {
 {{- if and $r.Values.auth.enabled (include "lance.secretsViaDapr" $r) }}
 {{- $signers := include "lance.signingIdentities" $r | splitList " " | compact }}
 {{- if and (ne $mode "off") (not $signers) }}{{- fail (printf "signing.doors=%s but no identity signs: the doors would verify nothing" $mode) }}{{- end }}
-{{- range (include "lance.signers" $r | fromJsonArray) }}{{- if and .role (not .id) (ne $mode "off") }}{{- fail (printf "signing.doors=%s but no identity holds the control-event role %s: the doors would refuse all its events" $mode .role) }}{{- end }}{{- end -}}
 {{- if gt (len .) 2 }}{{- $roles := include "lance.controlSignerRoles" $r | fromJson }}{{- $signers = list }}{{- range (index . 2) }}{{- $signers = concat $signers (get $roles .) }}{{- end }}{{- $signers = $signers | uniq | sortAlpha }}{{- end }}
 - { name: RASK_SIGNATURE_DOORS, value: {{ $mode | quote }} }
 - { name: RASK_EVENT_SIGNERS, value: {{ $signers | toJson | quote }} }

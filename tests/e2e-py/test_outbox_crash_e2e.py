@@ -45,6 +45,7 @@ from outbox_probe import owned_output_table
 
 from catalog.core.lineage_emit import INSERT, InputRef, build_write_event
 from lineage_kit.signing import SigningKey, attach_signature
+from service_kit.governed.signing_key import signing_key_secret
 from service_kit.lakehouse import outbox
 
 
@@ -66,8 +67,11 @@ CATALOG_JOB_NAMESPACE = os.environ.get("LANCE_E2E_CATALOG_JOB_NAMESPACE", "lance
 
 #: WHO THE HARNESS SIGNS AS: the catalog, the one chart-listed identity that may stamp a person as the author. The release names the
 #: OpenBao Deployment whose `seed` container holds the store's CLI token, for the case where the stack script exports no seed.
-SIGNING_IDENTITY = os.environ.get("LANCE_E2E_SIGNING_IDENTITY", "service-catalog")
 RELEASE = os.environ.get("LANCE_E2E_RELEASE", "rask")
+#: The catalog's service-account subject in the release's namespace (`lance.saSubject`).
+SIGNING_IDENTITY = os.environ.get(
+    "LANCE_E2E_SIGNING_IDENTITY", f"kubernetes~system:serviceaccount:{os.environ.get('LANCE_E2E_NAMESPACE', 'default')}:{RELEASE}-sa-catalog"
+)
 
 #: The output this probe's staged event names. NAMESPACE AND TABLE SEPARATELY because the event needs
 #: both spellings: `namespace` is the OpenLineage domain label and `table_id` carries the CATALOG ID,
@@ -124,7 +128,7 @@ def _signing_key() -> SigningKey | None:
             "kv",
             "get",
             "-field=seed",
-            f"secret/signing-key-{SIGNING_IDENTITY}",
+            f"secret/{signing_key_secret(SIGNING_IDENTITY)}",
         ]
         try:
             seed = subprocess.run(read_seed, capture_output=True, text=True, check=True, timeout=60).stdout.strip()  # noqa: S603

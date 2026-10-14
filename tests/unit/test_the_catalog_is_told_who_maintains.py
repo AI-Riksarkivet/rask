@@ -46,7 +46,7 @@ def test_the_maintenance_identity_actually_lands_in_the_list() -> None:
     """
     env = _catalog_env()
 
-    assert "service-maintenance" in env["LANCE_FGA_MAINTAINERS"], (
+    assert "-sa-maintenance" in env["LANCE_FGA_MAINTAINERS"], (
         f"LANCE_FGA_MAINTAINERS renders as {env['LANCE_FGA_MAINTAINERS']!r} — no warehouse will be maintainable"
     )
 
@@ -61,6 +61,6 @@ def test_the_catalog_seeds_maintenance_no_data_rung() -> None:
     env = _catalog_env()
 
     assert "LANCE_FGA_CASCADE_WRITERS" not in env, "the catalog is told a service writer list, granted a data rung at every warehouse create"
-    assert json.loads(env["LANCE_FGA_MAINTAINERS"]) == ["user:service-maintenance"], (
+    assert json.loads(env["LANCE_FGA_MAINTAINERS"]) == ["kubernetes~system:serviceaccount:default:release-name-sa-maintenance"], (
         f"LANCE_FGA_MAINTAINERS renders as {env['LANCE_FGA_MAINTAINERS']!r}, not maintenance alone"
     )

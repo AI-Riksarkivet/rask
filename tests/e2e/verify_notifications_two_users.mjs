@@ -127,8 +127,10 @@ function fgaAuth() {
 	return { authorization: `Bearer ${readFileSync(FGA_TOKEN_FILE, 'utf8').trim()}` };
 }
 /** The notifications service's OWN principal — the reconciler reads lineage's governed feed as this,
- *  so it needs its own grant. Matches `RASK_LINEAGE_SERVICE_IDENTITY` / the chart's default. */
-const SERVICE_SUBJECT = process.env.NOTIFICATIONS_SUBJECT ?? 'notifications';
+ *  so it needs its own grant. Its ServiceAccount's subject (`lance.saSubject`), written as the OpenFGA user
+ *  it is (`service_kit.governed.fga.user_object`: `%` as `%25`, `:` as `%3A`). */
+const SERVICE_SUBJECT = process.env.NOTIFICATIONS_SUBJECT ?? 'kubernetes~system:serviceaccount:default:rask-sa-notifications';
+const SERVICE_USER = `user:${SERVICE_SUBJECT.replaceAll('%', '%25').replaceAll(':', '%3A')}`;
 /** The project used to prove WATCH targeting — created as tuples only; no catalog row is needed. */
 const WATCH_PROJECT = process.env.WATCH_PROJECT ?? 'drive-watch-project';
 const TOKEN_URL = process.env.TOKEN_URL ?? `${ORIGIN}/dex/token`;
@@ -342,7 +344,7 @@ const storeId = await fgaStoreId();
 await seedGrants(storeId, [
 	{ user: `user:${aliceSub}`, relation: 'writer', object: `table:${OUTPUT}` },
 	{ user: `user:${bobSub}`, relation: 'writer', object: `table:${OUTPUT}` },
-	{ user: `user:${SERVICE_SUBJECT}`, relation: 'reader', object: `table:${OUTPUT}` },
+	{ user: SERVICE_USER, relation: 'reader', object: `table:${OUTPUT}` },
 	{ user: `user:${aliceSub}`, relation: 'member', object: `project:${WATCH_PROJECT}` },
 ]);
 console.log(`   seeded 4 grants in store ${storeId}`);

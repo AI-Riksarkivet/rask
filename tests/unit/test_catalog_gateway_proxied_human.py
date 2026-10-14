@@ -58,11 +58,10 @@ def test_gateway_proxied_human_with_a_valid_bearer_authenticates() -> None:
 
 
 def test_a_service_token_through_the_public_front_door_is_refused(sa_issuer: Any) -> None:
-    """A valid, mapped token for the producer, forwarded by the gateway, is refused."""
+    """A valid token for the producer's account, forwarded by the gateway, is refused."""
     verifier = ServiceAccountVerifier(
         sa_issuer.issuer,
         "rask-catalog",
-        {_PRODUCER: "service-medallion-producer"},
         cache_ttl=300,
         leeway=60,
         fetch_token_file=str(sa_issuer.fetch_token_file),
@@ -82,7 +81,7 @@ def test_only_a_persons_bearer_is_forwarded_to_the_object_store() -> None:
     """`web_identity` vending re-presents the raw bearer, so a service's catalog-audience token must answer None."""
     credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials="a.real.jwt")
     person = IDToken(iss="https://dex.example/dex", sub=_SUB, aud="lance-catalog", iat=0, exp=1 << 31)
-    service = ServicePrincipal(subject="service-medallion-producer", service_account=_PRODUCER)
+    service = ServicePrincipal(service_account=_PRODUCER)
 
     assert security.raw_bearer(credentials, person) == "a.real.jwt"
     assert security.raw_bearer(credentials, service) is None

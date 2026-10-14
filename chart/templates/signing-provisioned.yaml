@@ -1,6 +1,6 @@
 
 {{- if and (include "lance.secretsViaDapr" .) (or (not .Values.openbao.devMode) .Values.openbao.externalAddr) (not (.Values.signing).provisioned) }}
-{{- $ids := include "lance.signingIdentities" . | splitList " " | compact }}
+{{- $ids := include "lance.signingKeys" (list .) | splitList " " | compact }}
 {{- if $ids }}
 {{- $names := list }}
 {{- range $ids }}{{- $names = concat $names (list (printf "signing-public-%s" .) (printf "signing-key-%s" .)) }}{{- end }}

@@ -658,8 +658,8 @@ async def _refuse_self_elevation(client: OpenFgaClient, *, user: str, grantee: o
     Separation of duties, enforced at the only layer that can see both sides. See
     :func:`_authorize_grant` for why it cannot live in the model.
 
-    Reads the grantee the same way :func:`~catalog.api.v1.endpoints.access._access_mutate` does — a
-    bare id is a user, a qualified string is passed through — because a guard that resolved it
+    Reads the grantee the same way :func:`~catalog.api.v1.endpoints.access._access_mutate` does
+    (:func:`fga.grantee_object`) — because a guard that resolved it
     DIFFERENTLY from the code that writes the tuple would be guarding a grant nobody makes.
 
     Order matters: this runs AFTER the ``can_grant_*`` check, so a caller who may not grant the rung
@@ -668,8 +668,8 @@ async def _refuse_self_elevation(client: OpenFgaClient, *, user: str, grantee: o
     """
     if not isinstance(grantee, str) or not grantee:
         return  # not a grant this guard can reason about; the endpoint's own validation owns the shape
-    subject = f"user:{user}"
-    resolved = grantee if ":" in grantee else f"user:{grantee}"
+    subject = fga.user_object(user)
+    resolved = fga.grantee_object(grantee)
     if resolved != subject:
         if "#" not in resolved:
             return  # a plain grant to somebody else
@@ -1420,16 +1420,15 @@ async def require_project_exists(settings: Settings, project: str) -> None:
         )
 
 
-def project_admin_for(token: Principal | None, settings: Settings, named: str | None) -> str | None:
+def project_admin_for(token: Principal | None, named: str | None) -> str | None:
     """The subject seeded as admin of a project ``token`` creates: the person creating it, or the person
     a machine names. ``None`` only for an unauthenticated stack, where nothing is seeded.
 
     A MACHINE NEVER ADMINISTERS A TENANT (LH-433, the 2026-09-10 ruling ``seed_ownership`` applies to
     tables). A project has no parent to own it transitively, so a machine-created project would be left
     with no admin; the machine names the person instead (ADR 0143's provisioning operator knows the
-    tenant's owner). The name must be a person: not a userset or wildcard, and not one of the estate's
-    machine subjects (``machine_subjects``, the chart's whole list, plus this door's own map). The caller's
-    own type is judged by how it was proved, never by its name.
+    tenant's owner). The name must be a person: not a userset or wildcard, and not a service account's subject
+    (``is_person_subject``). The caller's own type is judged by how it was proved, never by its name.
     """
     if not isinstance(token, ServicePrincipal):
         if named is not None:
@@ -1437,7 +1436,7 @@ def project_admin_for(token: Principal | None, settings: Settings, named: str | 
         return token.sub if token is not None else None
     if named is None:
         raise InvalidInputError("a machine creating a project names the person who administers it in `admin`")
-    if not is_person_subject(named) or named in settings.machine_subjects or named in settings.sa_subjects.values():
+    if not is_person_subject(named):
         raise InvalidInputError(f"`admin` must name a person; {named!r} is not one")
     return named
 
@@ -1463,7 +1462,7 @@ async def seed_project_admin(
         return False
     await fga.write_tuples(  # noqa: TID251
         client,
-        [fga.ClientTuple(user=f"user:{admin}", relation="admin", object=f"project:{project}")],
+        [fga.ClientTuple(user=fga.user_object(admin), relation="admin", object=f"project:{project}")],
         actor=token.sub,
         origin="project_create",
     )
@@ -1888,7 +1887,7 @@ async def seed_warehouse(
     await fga.write_tuples(  # noqa: TID251
         client,
         [
-            fga.ClientTuple(user=f"user:{token.sub}", relation="owner", object=obj),
+            fga.ClientTuple(user=fga.user_object(token.sub), relation="owner", object=obj),
             *cascade_tuples(settings, warehouse_id=warehouse_id, project=project),
         ],
         actor=token.sub,
@@ -1917,7 +1916,7 @@ def cascade_tuples(settings: Settings, *, warehouse_id: str, project: str) -> li
         # `maintenance` ALONE: the platform's maintenance identity, a maintainer that may also be vended the
         # maintain tier. Maintenance rewrites how a dataset is stored and must not be able to drop it or change
         # what it says, which is exactly the separation `can_maintain` was minted to express.
-        *(fga.ClientTuple(user=subject, relation="maintenance", object=obj) for subject in settings.fga_maintainers),
+        *(fga.ClientTuple(user=fga.user_object(subject), relation="maintenance", object=obj) for subject in settings.fga_maintainers),
     ]
 
 

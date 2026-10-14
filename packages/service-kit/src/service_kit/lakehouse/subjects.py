@@ -30,6 +30,11 @@ from typing import Final
 #: for the platform to enumerate them — this frozenset is the floor, not the design.
 _NOT_A_PERSON: Final = frozenset({"", "anonymous", "anon", "system", "service", "*", "user:*", "data_eng", "analyst", "ray", "reconcile"})
 
+#: Every subject a service-account token proves begins with this (`kubernetes~system:serviceaccount:<ns>:<sa>`,
+#: ADR 0156 C5): the source `kubernetes`, then the token's `sub`. A person's IdP subject never carries it, so the
+#: prefix is how a subject is known to be a machine without a list of the estate's machines.
+SERVICE_ACCOUNT_SUBJECT_PREFIX: Final = "kubernetes~system:serviceaccount:"
+
 
 def is_person_subject(value: str | None) -> bool:
     """Is this value an ADDRESS for one person — the only thing `lance.originator` may carry?
@@ -40,6 +45,7 @@ def is_person_subject(value: str | None) -> bool:
     after a role, a team, or `*`.
 
     Wildcards and usersets are statements about everyone, which address no one; a `user:`-prefixed value
-    is an FGA object id rather than a subject.
+    is an FGA object id rather than a subject; a service account's subject is a machine.
     """
-    return bool(value) and value not in _NOT_A_PERSON and "#" not in str(value) and not str(value).startswith("user:")
+    text = str(value)
+    return bool(value) and value not in _NOT_A_PERSON and "#" not in text and not text.startswith(("user:", SERVICE_ACCOUNT_SUBJECT_PREFIX))

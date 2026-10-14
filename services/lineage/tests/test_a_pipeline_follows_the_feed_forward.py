@@ -33,10 +33,13 @@ from service_kit.governed.machine_identity import ServicePrincipal
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
-PIPELINE = ServicePrincipal(subject="pipeline", service_account="system:serviceaccount:etl:etl-runner")
+PIPELINE = ServicePrincipal(service_account="system:serviceaccount:etl:etl-runner")
 
 #: The tables the pipeline may see. `acme-silver$hidden` and `globex-silver$orders` are someone else's.
-GRANTED = frozenset(("user:pipeline", "can_get_metadata", f"table:{name}") for name in ("acme-silver$pages", "acme-gold$catalog", "acme-gold$index"))
+GRANTED = frozenset(
+    ("user:kubernetes~system%3Aserviceaccount%3Aetl%3Aetl-runner", "can_get_metadata", f"table:{name}")
+    for name in ("acme-silver$pages", "acme-gold$catalog", "acme-gold$index")
+)
 
 #: The feed as committed. Seq numbers have holes, as a real feed does: an insert that loses its
 #: `ON CONFLICT` still draws a seq.

@@ -40,7 +40,6 @@ class _Settings(BaseModel):
     oidc_allow_insecure: bool = False
     sa_issuer: str | None = None
     sa_audience: str | None = None
-    sa_subjects: dict[str, str] = {}
     sa_fetch_token_file: str | None = None
     sa_ca_file: str | None = None
     fga_enabled: bool = True

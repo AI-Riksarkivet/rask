@@ -229,16 +229,14 @@ services:
     # lets ticks stack on each other instead of the next one finding the same work still to do.
     # -- Schedule of the reconcile cron over lineage's /events feed; must stay above the app's 25 s reconcile budget.
     reconcileSchedule: "@every 30s"
-    # -- Env-var map rendered verbatim into the notifications container; RASK_LINEAGE_SERVICE_IDENTITY is the subject it maps to at lineage's door.
-    env:
-      # The subject notifications' ServiceAccount maps to at lineage's door (`lance.saSubjects`
-      # reads it; its projected `rask-lineage` token is what authenticates). Remove it and the
-      # reconciler maps to the `notifications` default.
-      #
-      # Admission is only half of it: the reconciler reads `/events/projection`, gated on
-      # `can_read_event_feed` at the estate root, and `bootstrap-admin.yaml` grants this same subject
-      # `event_reader` there ([[CTL-021]]). Without the grant every feed page answers 403.
-      RASK_LINEAGE_SERVICE_IDENTITY: notifications
+    # The doors notifications calls as its own ServiceAccount: one projected token per audience
+    # (`lance.identityTokens`). At lineage's door it is the subject
+    # `kubernetes~system:serviceaccount:<ns>:<release>-sa-notifications`, and the reconciler reads
+    # `/events/projection`, gated on `can_read_event_feed` at the estate root, which
+    # `bootstrap-admin.yaml` grants that subject as `event_reader` ([[CTL-021]]). Without the grant every
+    # feed page answers 403.
+    # -- Audiences of the service-account tokens projected into the notifications pod, one per door it calls (rask-lineage).
+    identityAudiences: [rask-lineage]
     # -- List of dependencies notifications waits for in an init container; only `minio` is honoured (when minio.enabled).
     waitFor: []
   gateway:
@@ -726,10 +724,6 @@ frontend:
   # swallows this explicit 0 (the bug tests/unit/test_invariants.py now forbids chart-wide).
   # -- Bun server idle timeout per connection in seconds (0 to 255); 0 disables it so live query streams are not cut.
   idleTimeoutSeconds: 0
-  # The bare FGA subject the zones' BFF names when reading lineage as a SERVICE (no user session) — must be
-  # READER on the warehouse + the subject `-sa-web` maps to at lineage's door.
-  # -- FGA subject the zones' BFF uses for service reads; the `<release>-sa-web` ServiceAccount maps to it. Must be reader on the warehouse.
-  serviceIdentity: service-web
   # The zones. home = the catch-all "/"; every other zone is pinned to /<name>.
   # The union of both estates — one entry per zone directory (the zone-contract deploy-path gate
   # pins this list to frontend/microfrontends/*).
@@ -784,9 +778,11 @@ auth:
   # docs/docs/authentication.md:457-483). Each caller projects one token per door audience
   # (`rask-catalog`, `rask-lineage`) at /var/run/secrets/rask/identity/<audience>/token,
   # 600 s (the Kubernetes minimum; the kubelet rotates it at ~515 s, measured 2026-10-02) and re-read on
-  # every request. A door verifies it offline against this issuer's JWKS and maps the full
-  # `system:serviceaccount:<ns>:<sa>` to the subject its grants name (`RASK_SA_SUBJECTS`, rendered by
-  # `lance.saSubjects` from the same identity values the FGA seeds use); an unmapped account is refused.
+  # every request. A door verifies it offline against this issuer's JWKS, and any token that verifies is
+  # the subject `kubernetes~system:serviceaccount:<ns>:<sa>`, from whatever namespace (ADR 0156 C5): no
+  # list of accounts stands at the door, and OpenFGA alone decides what the subject may do. Each of the
+  # release's own services is the subject of its ServiceAccount (`lance.saSubject`), which is the subject
+  # its grants (bootstrap-admin, LANCE_FGA_MAINTAINERS) and its event signatures name.
   # The issuer serves discovery and keys only to a bearer from a private CA (k3s runs
   # `--anonymous-auth=false`), so each door also projects an API-audience token (3600 s) and
   # `kube-root-ca.crt` at /var/run/secrets/rask/sa-fetch. Never the automount token: it is a one-year
@@ -937,17 +933,6 @@ vending:
 
 # === Catalog request limits =======================================================================
 catalog:
-  # THE CATALOG'S OWN NAME ON THE ESTATE, the identity it signs the lineage it emits as ([[LH-064]]): its
-  # Ed25519 key pair is minted against this name (`signing:`), and it is the one delegator, because the
-  # catalog authenticated the person it signs for.
-  #
-  # It is the identity this service PRESENTS, never one it accepts: `lance.saSubjects` does not map
-  # `-sa-catalog` at the catalog's door, because the catalog does not call itself.
-  #
-  # Empty makes the catalog no signer: it emits unsigned, which lineage admits only while
-  # `signing.enforce` is false.
-  # -- The identity the catalog presents and signs its emitted lineage as (the one delegator). Empty = the catalog emits unsigned lineage.
-  serviceIdentity: service-catalog
   # Max request-body bytes accepted on any catalog route. The Arrow-IPC write endpoints buffer the whole
   # body in memory, so an unbounded POST (e.g. a multi-GB media blob pushed through the catalog instead of
   # the direct storage/vending path) OOMs the worker. The body-limit middleware rejects oversized bodies
@@ -1335,10 +1320,6 @@ maintenance:
   # (`DatasetResult.compaction_mode`), so a permanent degradation is a count rather than a guess.
   # -- Let the catalog plan and commit compaction while this pod only rewrites, signed by a vended credential; falls back to in-pod compaction. Off by default.
   distributedCompaction: false
-  # The subject this service claims at the catalog's identity door. It is what the bootstrap-admin hook
-  # grants `writer` on each warehouse, and what the catalog audits on every vend.
-  # -- Subject maintenance claims at the catalog's identity door; bootstrap grants it on each warehouse and the catalog audits it on every vend.
-  catalogServiceIdentity: service-maintenance
   # -- Dead-letter topic for compaction work units that exhaust their retries.
   workDlqTopic: dlq.maintenance.work
   # -- Dapr pub/sub component name of the compaction work lane.
@@ -2703,11 +2684,12 @@ openbao:
 # === Event signing keys ([[LH-064]]) ======================================================================
 # Every identity in `lance.signingIdentities` (the catalog and maintenance) signs the lineage it emits with its own Ed25519 key, so lineage holds public keys only and cannot
 # forge what it verifies. The store holds two secrets per identity, never two fields of one, because Dapr scopes a
-# secret by NAME and a per-app deny list can only name a whole secret:
-#   signing-public-<identity>   field `keys`  comma-separated public NKEYs, current first, at most one previous
-#   signing-key-<identity>      field `seed`  the NKEY user seed, readable only by the sidecars of the identity's own app-id
+# secret by NAME and a per-app deny list can only name a whole secret. <key> is the signer's ServiceAccount name
+# (`lance.signingKeys`); the identity is that account's subject (`lance.saSubject`), which no secret name can carry:
+#   signing-public-<key>   field `keys`  comma-separated public NKEYs, current first, at most one previous
+#   signing-key-<key>      field `seed`  the NKEY user seed, readable only by the sidecars of the identity's own app-id
 # The field names stay disjoint from the fields a runtime-named reader requires (access_key, secret_key, token,
-# aws_access_key_id), so a warehouse record that names signing-key-<identity> returns nothing.
+# aws_access_key_id), so a warehouse record that names signing-key-<key> returns nothing.
 #
 # THE DEV OPENBAO MINTS AND CARRIES THEM (templates/openbao.yaml). A `mint` init container runs
 # `nk -gen user -pubout` once per identity and leaves each candidate pair on a memory emptyDir that the openbao
@@ -2722,7 +2704,7 @@ openbao:
 # The chosen pair is persisted to the kept copy before the first write and every re-seed writes exactly it, public
 # list first ("publish before use": a signer is Ready only while its kid is listed).
 #
-# ROTATION. `bao kv metadata delete secret/signing-key-<identity>` and roll `deploy/rask-openbao`: the seed finds the list
+# ROTATION. `bao kv metadata delete secret/signing-key-<key>` and roll `deploy/rask-openbao`: the seed finds the list
 # but no key, takes the mint candidate and PREPENDS its public key, keeping one previous. Never a soft `bao kv delete`:
 # the seed refuses the "No data found" it leaves behind and the replacement pod never becomes Ready (docs/OPERATORS.md § 6).
 # Rotate at most once per 7 days: the bus keeps 168 h and a retired key must stay listed until nothing signed with it is
@@ -2789,8 +2771,8 @@ signing:
   # -- Mode of the bus doors' signature check: "off", "observe" (count would-refuse) or "enforce" (ack and refuse). Always quoted.
   doors: "enforce"
   # NON-DEV STORES (openbao.devMode=false, or openbao.externalAddr) MINT NOTHING, so every signer would stay not
-  # Ready. The render fails until the operator attests here that signing-public-<identity> and then
-  # signing-key-<identity> exist for every identity the failure names. Tooling for that, and rotation on such a
+  # Ready. The render fails until the operator attests here that signing-public-<key> and then
+  # signing-key-<key> exist for every identity the failure names. Tooling for that, and rotation on such a
   # store, is the production runbook, which waits for a production estate (owner, no-prod parking 2026-09-21).
   # -- Attest that signing keys exist for every identity in a non-dev store; the render fails until it is true there.
   provisioned: false

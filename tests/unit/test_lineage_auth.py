@@ -788,7 +788,7 @@ def test_audit_read_best_effort_swallows_store_failure() -> None:
 
 # --- A service principal on the HTTP ingest ----------------------------------------------------------
 # The Ray TRAIN job is a sidecar-less IN-CLUSTER producer (RAY-TRAIN.md D2): it POSTs the HTTP ingest with its
-# pod's projected token, which the door maps to a `ServicePrincipal` (`service_kit.governed.machine_identity`). The
+# pod's projected token, which the door verifies into a `ServicePrincipal` (`service_kit.governed.machine_identity`). The
 # door itself is driven over HTTP in `services/lineage/tests/test_a_claimed_service_name_authenticates_nobody.py`;
 # this pins what the ingest gates do with the principal it hands them.
 
@@ -800,7 +800,7 @@ def test_service_principal_is_attributed_and_fga_bounded() -> None:
     (`writer` on `namespace:models`) actually permits, and is *stricter* than the Dapr subscription route
     it mirrors (which trusts the producer-stamped author outright).
     """
-    principal = security.ServicePrincipal(subject="service-trainer", service_account="system:serviceaccount:default:rask-sa-ray")
+    principal = security.ServicePrincipal(service_account="system:serviceaccount:default:rask-sa-ray")
     event = RunEvent.model_validate(
         {
             "eventType": "COMPLETE",
@@ -814,7 +814,8 @@ def test_service_principal_is_attributed_and_fga_bounded() -> None:
     )
     # (1) attributed — the run is no longer authored by "" (which is what the graph held before)
     fga_deps.enforce_author(event, principal)
-    assert event.run.facets["author"] == {"name": "service-trainer", "sub": "service-trainer"}
+    trainer = "kubernetes~system:serviceaccount:default:rask-sa-ray"
+    assert event.run.facets["author"] == {"name": trainer, "sub": trainer}
 
     # (2) authorized — the FGA check runs as the SERVICE subject, and a denial is a 403
     checked: dict[str, Any] = {}
@@ -834,7 +835,7 @@ def test_service_principal_is_attributed_and_fga_bounded() -> None:
                     principal,
                 )
             )
-    assert checked["user"] == "service-trainer"  # NOT an opaque Dex sub
+    assert checked["user"] == trainer  # NOT an opaque Dex sub
     assert checked["relation"] == "can_write_data"
     assert checked["objects"] == ["table:models$churn"]
 

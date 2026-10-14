@@ -188,14 +188,14 @@ class _FakeStore:
     estate door). A relation outside the pair is an error, so a silent gate change can't slip past."""
 
     def __init__(self, *, estate_admins: tuple[str, ...] = ()) -> None:
-        self.tuples: set[tuple[str, str, str]] = {(f"user:{sub}", "owner", _ROOT_OBJECT) for sub in estate_admins}
+        self.tuples: set[tuple[str, str, str]] = {(fga_module.user_object(sub), "owner", _ROOT_OBJECT) for sub in estate_admins}
         self.checks: list[tuple[str, str, str]] = []
 
     async def check(self, _client: object, *, user: str, relation: str, obj: str, **_kw: object) -> bool:
         self.checks.append((user, relation, obj))
-        # The real `fga.check` qualifies a bare sub into `user:<sub>` (qualify=True) before it reaches the
-        # store; mirror that here so a checked subject and a seeded tuple are the same string.
-        subject = user if ":" in user else f"user:{user}"
+        # The real `fga.check` sends a bare sub as the user it is (`user_object`, qualify=True) and a full
+        # subject verbatim (qualify=False); mirror that so a checked subject and a seeded tuple are the same string.
+        subject = user if _kw.get("qualify") is False else fga_module.user_object(user)
         if relation == "can_observe_events":
             return (subject, "owner", obj) in self.tuples
         if relation == "can_create_warehouse":
@@ -329,28 +329,23 @@ def test_estate_admin_creates_a_project_and_the_project_then_governs_itself(tmp_
 def test_a_machine_that_mints_a_project_names_its_person_admin_and_holds_nothing(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """LH-433: a machine never becomes a tenant's admin. A provisioning identity (ADR 0143's operator) that
     creates a project must name the person who administers it; it is refused 400 before anything is written
-    when it names nobody or another machine, and when it names a person only that person is seeded."""
+    when it names nobody or a service account's subject, and when it names a person only that person is seeded."""
     from catalog.api.v1.endpoints import projects as proj_ep
     from service_kit.control_emit import NoopControlEmitter
     from service_kit.governed.machine_identity import ServicePrincipal
 
-    store = _FakeStore(estate_admins=("provisioner",))
+    provisioner = "kubernetes~system:serviceaccount:ops:provisioner"
+    store = _FakeStore(estate_admins=(provisioner,))
     store.install(monkeypatch)
-    # The chart's shape: this door's map admits only the provisioner, and the estate's other machines are
-    # known only through the whole list (`lance.machineSubjects`).
-    settings = _governed_settings(tmp_path).model_copy(
-        update={
-            "sa_subjects": {"system:serviceaccount:ops:provisioner": "provisioner"},
-            "machine_subjects": ["notifications", "service-catalog", "service-maintenance", "service-web"],
-        }
-    )
-    machine = ServicePrincipal(subject="provisioner", service_account="system:serviceaccount:ops:provisioner")
+    settings = _governed_settings(tmp_path)
+    machine = ServicePrincipal(service_account="system:serviceaccount:ops:provisioner")
 
     def create(admin: str | None) -> Any:
         body = proj_ep.CreateProjectRequest(id="acme", admin=admin)
         return asyncio.run(proj_ep.create_project(settings=settings, token=machine, client=MagicMock(), control=NoopControlEmitter(), body=body))
 
-    for unnamed in (None, "service-web", "service-catalog", "provisioner"):
+    # A service account's subject, the provisioner's own or another release's, is a machine whatever its namespace.
+    for unnamed in (None, "kubernetes~system:serviceaccount:rask:rask-sa-web", provisioner):
         with pytest.raises(InvalidInputError):
             create(unnamed)
         assert proj_svc.list_projects(settings.registry_root, {}) == [], f"a refused create ({unnamed!r}) wrote the tenant anyway"
@@ -358,7 +353,9 @@ def test_a_machine_that_mints_a_project_names_its_person_admin_and_holds_nothing
     minted = create("alice")
 
     assert minted.admins == ["user:alice"]
-    assert not any(t[0] == "user:provisioner" and t[2] == "project:acme" for t in store.tuples), "the machine holds a tuple on the tenant it minted"
+    assert not any(t[0] == "user:kubernetes~system%3Aserviceaccount%3Aops%3Aprovisioner" and t[2] == "project:acme" for t in store.tuples), (
+        "the machine holds a tuple on the tenant it minted"
+    )
 
 
 def test_an_ordinary_user_cannot_mint_a_tenant_through_any_door(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:

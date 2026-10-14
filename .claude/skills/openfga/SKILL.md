@@ -106,6 +106,14 @@ When a workflow step points to a rule ID, open the matching file in `references/
 |------|-------------|
 | `references/grant-provenance.md` | Who GAVE a grant — the audit-join review procedure, and why a tuple cannot answer it |
 
+**A subject becomes a `user` id in one place, `service_kit.governed.fga.user_object`** (ADR 0156 C5, [[LH-474]]). A
+service account's subject is `kubernetes~system:serviceaccount:<ns>:<sa>`, and OpenFGA refuses a user id with a second
+`:` ("the 'user' field is malformed", HTTP 400, measured on the live store 2026-10-14), so `user_object` writes `%` as
+`%25` and `:` as `%3A`: `user:kubernetes~system%3Aserviceaccount%3A<ns>%3A<sa>`. An IdP subject carries neither and is
+its own id. `subject_of` decodes an id read back (`list_users` does), and a grant API's grantee goes through
+`grantee_object` (an object of another model type passes as written). A tuple, a seed or a test that spells a service's
+user by hand with raw `:` is refused by the store; spell it through `user_object`.
+
 ### Testing
 | File | Description |
 |------|-------------|

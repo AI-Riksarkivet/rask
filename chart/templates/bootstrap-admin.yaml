@@ -46,7 +46,7 @@ spec:
               import os, sys, time
               import httpx
               from service_kit.governed.auth.write_model import STORE_NAME, fga_headers, history, model_document
-              from service_kit.governed.fga import newest_store
+              from service_kit.governed.fga import grantee_object, newest_store, user_object
 
               api = os.environ["FGA_API_URL"].rstrip("/")
               token_file = os.environ["RASK_FGA_TOKEN_FILE"]
@@ -57,7 +57,7 @@ spec:
               # the window between them from being a window of 403s.
               estate_obj = "estate:rask"
               subject = {{ .Values.auth.bootstrapAdmin | quote }}
-              user = subject if ":" in subject else f"user:{subject}"
+              user = grantee_object(subject)
 
               # The store the services use (RASK_FGA_STORE_ID pins one), and in it the model THIS image
               # carries ([[LH-201]]). A tuple naming no model is checked against the store's newest, i.e.
@@ -92,6 +92,10 @@ spec:
               # stays a no-op — and one already-granted subject never short-circuits another that is
               # still missing: an early exit would hide every service grant behind an admin who was
               # already in place.
+              # Every service is the subject of its own ServiceAccount (`lance.saSubject`,
+              # `kubernetes~system:serviceaccount:<ns>:<sa>`, ADR 0156 C5), and a tuple names the user that
+              # subject is (`user_object`, which writes `:` as `%3A`: OpenFGA refuses a user id with a second `:`).
+              #
               # MAINTAINERS: the maintenance plane REWRITES bytes. It holds the root
               # object-store key today and compacts every bucket with it, and the vending door replaces
               # that with a credential scoped to one table and expiring in 900s. Without a grant the vend
@@ -134,13 +138,13 @@ spec:
               # remembers to revoke.
               {{- $maintainers := list }}
               {{- if and .Values.maintenance.enabled .Values.maintenance.vendWriteCredentials }}
-              {{- $maintainers = append $maintainers .Values.maintenance.catalogServiceIdentity }}
+              {{- $maintainers = append $maintainers (include "lance.saSubject" (list . "maintenance")) }}
               {{- end }}
               maintainers = {{ $maintainers | toJson }}
 
               {{- $eventReaders := list }}
               {{- if .Values.services.notifications }}
-              {{- $eventReaders = append $eventReaders ((get (.Values.services.notifications.env | default dict) "RASK_LINEAGE_SERVICE_IDENTITY") | default "notifications") }}
+              {{- $eventReaders = append $eventReaders (include "lance.saSubject" (list . "notifications")) }}
               {{- end }}
               event_readers = {{ $eventReaders | toJson }}
               # The admin grant is the one that really is conditional on the subject: with no
@@ -148,7 +152,7 @@ spec:
               # are unaffected by that.
               grants = (
                   ([(user, "owner")] if subject else [])
-                  + [(m if ":" in m else f"user:{m}", "maintenance") for m in maintainers]
+                  + [(user_object(m), "maintenance") for m in maintainers]
               )
               # ESTATE GRANTS — a SHORTER list than the warehouse one, and the difference is the point.
               #
@@ -161,7 +165,7 @@ spec:
               # is a platform surface rather than anyone's data: `event_reader`, the whole run feed.
               estate_grants = (
                   ([(user, "admin")] if subject else [])
-                  + [(r if ":" in r else f"user:{r}", "event_reader") for r in event_readers]
+                  + [(user_object(r), "event_reader") for r in event_readers]
               )
 
               for target, pairs in ((obj, grants), (estate_obj, estate_grants)):

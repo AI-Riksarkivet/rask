@@ -46,7 +46,7 @@ async def test_a_maintenance_only_estate_still_runs_the_backfill(monkeypatch) ->
     """`backfill` early-returns when there is nothing to grant; a declared maintenance identity is something to
     grant ([[LH-165]]), and skipping it is the silent-skip shape that leaves a new warehouse unmaintainable.
     """
-    settings = _fga_settings(LANCE_FGA_MAINTAINERS=["user:service-maintenance"])
+    settings = _fga_settings(LANCE_FGA_MAINTAINERS=["kubernetes~system:serviceaccount:rask:rask-sa-maintenance"])
     skipped: list[str] = []
 
     def _log_info(event: str, **kw: object) -> None:
@@ -84,7 +84,9 @@ async def test_a_record_without_a_project_is_REPORTED_not_guessed(monkeypatch) -
         "list_warehouses",
         lambda *a, **k: [{"id": "orphan"}, {"id": "wh1", "project": "acme"}],
     )
-    seen, written, failures = await cascade_backfill.backfill(_fga_settings(LANCE_FGA_MAINTAINERS=["user:service-maintenance"]))
+    seen, written, failures = await cascade_backfill.backfill(
+        _fga_settings(LANCE_FGA_MAINTAINERS=["kubernetes~system:serviceaccount:rask:rask-sa-maintenance"])
+    )
     assert seen == 2
     assert written == 2, "the healthy warehouse must still be repaired"
     assert len(failures) == 1 and "orphan" in failures[0] and "no project" in failures[0]
@@ -108,7 +110,9 @@ async def test_one_failure_does_not_abandon_the_rest(monkeypatch) -> None:
         "list_warehouses",
         lambda *a, **k: [{"id": "a", "project": "p"}, {"id": "boom", "project": "p"}, {"id": "z", "project": "p"}],
     )
-    seen, written, failures = await cascade_backfill.backfill(_fga_settings(LANCE_FGA_MAINTAINERS=["user:service-maintenance"]))
+    seen, written, failures = await cascade_backfill.backfill(
+        _fga_settings(LANCE_FGA_MAINTAINERS=["kubernetes~system:serviceaccount:rask:rask-sa-maintenance"])
+    )
     assert calls == ["a", "boom", "z"], "the walk stopped at the failure"
     assert (seen, written) == (3, 4)
     assert len(failures) == 1 and "openfga said no" in failures[0]

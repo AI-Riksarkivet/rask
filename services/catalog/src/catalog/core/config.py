@@ -381,11 +381,12 @@ class CatalogAuthzSettings(BaseSettings):
 
     #: THE IDENTITY THIS CATALOG SIGNS THE LINEAGE IT EMITS AS ([[LH-064]]), one variable on every signer
     #: (`RASK_SIGNING_IDENTITY`). With `secrets_from_dapr` it decides whether the catalog signs at all: its private
-    #: key is `signing-key-<this>` in the store. Empty is an estate with no store to sign from, and it emits
-    #: unsigned. The services this catalog ACCEPTS at its door are the `RASK_SA_SUBJECTS` map (`OidcSettings`);
-    #: this is the name it signs under.
+    #: key is `signing-key-<its key name>` in the store (`signing_key_name`). Empty is an estate with no store to sign from, and it emits
+    #: unsigned. On the estate it is the catalog's own service-account subject
+    #: (`kubernetes~system:serviceaccount:<ns>:<sa>`), the subject its signed events are authored as.
     signing_identity: str = Field(default="", alias="RASK_SIGNING_IDENTITY")
-    #: The MAINTENANCE identities — the sweep, and anything else that rewrites HOW a dataset is stored.
+    #: The MAINTENANCE identities — the sweep, and anything else that rewrites HOW a dataset is stored. Each is a
+    #: SUBJECT (on the estate, maintenance's service-account subject); the tuple names the user it is (`fga.user_object`).
     #:
     #: Maintenance compacts, optimizes indices and reclaims versions, and must hold ``maintainer`` and nothing
     #: else. The model keeps it apart from the data rungs in both directions (``can_maintain`` neither implies
@@ -402,12 +403,6 @@ class CatalogAuthzSettings(BaseSettings):
     # True, top-level creation also requires can_create_* on fga_root_object — an admin-gated
     # root that must be seeded to bootstrap. Nested creation always gates on the parent.
     fga_lock_root_create: bool = Field(default=False, alias="LANCE_FGA_LOCK_ROOT_CREATE")
-
-    #: EVERY SUBJECT THE ESTATE'S MACHINE IDENTITIES CARRY (LH-433), rendered by the chart's `lance.machineSubjects`
-    #: from the identity values it already holds: both doors' service-account maps, the signers, the event
-    #: delegator, the zones' identity and the event reader. A project's named admin must be a person, and a
-    #: person's OIDC `sub` has no form of its own to test, so a name is judged against this list.
-    machine_subjects: list[str] = Field(default_factory=list, alias="RASK_MACHINE_SUBJECTS")
 
 
 class Settings(

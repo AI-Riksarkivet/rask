@@ -128,8 +128,9 @@ operator wave and not in the "never build" bucket.
 ## 6 · Event signing keys: provisioning, rotation and loss (LH-064)
 
 Every signing identity (`lance.signingIdentities` in `chart/templates/_helpers.tpl`: the catalog and maintenance) signs the lineage it emits with its own Ed25519 key. The store
-holds two secrets per identity: `signing-public-<identity>` (field `keys`: comma-separated public NKEYs, current
-first, at most one previous) and `signing-key-<identity>` (field `seed`: the NKEY user seed). A signer is Ready only
+holds two secrets per identity, named by its key (the signer's ServiceAccount name, `lance.signingKeys`; the identity
+itself is that account's subject, `kubernetes~system:serviceaccount:<ns>:<sa>`): `signing-public-<key>` (field `keys`: comma-separated public NKEYs, current
+first, at most one previous) and `signing-key-<key>` (field `seed`: the NKEY user seed). A signer is Ready only
 while the kid of its own seed is in its list, so the list is always written before the seed it belongs to. Lineage
 reads lists only. The residual stays named: a pod that holds OpenBao's root token or reaches :8200 reads the store
 without a sidecar until XC-079.
@@ -140,8 +141,8 @@ pair per identity on a memory volume the server never mounts, and its `seed` con
 rollout therefore carries every pair over; an in-place restart of either container writes the same pair again.
 
 **A sealed or external store mints nothing.** The render refuses it until the secrets exist and
-`--set signing.provisioned=true` attests it. Each identity needs `signing-public-<identity>` (field `keys`: its public
-NKEYs, comma-separated, current first) written before `signing-key-<identity>` (field `seed`: its NKEY user seed);
+`--set signing.provisioned=true` attests it. Each identity needs `signing-public-<key>` (field `keys`: its public
+NKEYs, comma-separated, current first) written before `signing-key-<key>` (field `seed`: its NKEY user seed);
 `nk -gen user -pubout` prints a pair. Tooling for this is the production runbook, which waits for a production
 estate (owner, no-prod parking 2026-09-21). Until the keys exist no signer is Ready and none emits: a sidecar
 delivery to one is answered RETRY, not dropped.
@@ -156,17 +157,17 @@ with it remains to verify). On the dev OpenBao, with its pod Ready (2/2) and not
 replacement carries a pair over only from an outgoing pod that is serving a seeded store (LH-347):
 
 ```
-kubectl exec deploy/rask-openbao -c seed -- bao kv metadata delete secret/signing-key-<identity>
+kubectl exec deploy/rask-openbao -c seed -- bao kv metadata delete secret/signing-key-<key>
 kubectl rollout restart deploy/rask-openbao
 ```
 
 The seed in the replacement pod finds the list without its key, mints, prepends the new public key and keeps one
 previous. A replacement pod starts with an empty kept copy, so the old key is not written back (an in-place restart of
-the `seed` container would write it back from `/tmp/seed/signing-key-<identity>`).
+the `seed` container would write it back from `/tmp/seed/signing-key-<key>`).
 
 **The command is the metadata delete, never a soft `bao kv delete`.** Measured 2026-10-04 on openbao/openbao:2.2.0:
-after `bao kv metadata delete`, `bao kv get -field=seed secret/signing-key-<identity>` prints
-`No value found at secret/data/signing-key-<identity>`, which the seed reads as an absence and so rotates. After a
+after `bao kv metadata delete`, `bao kv get -field=seed secret/signing-key-<key>` prints
+`No value found at secret/data/signing-key-<key>`, which the seed reads as an absence and so rotates. After a
 soft `bao kv delete` it prints `No data found at ...`, which the seed refuses as an unreadable store, so the
 replacement pod never becomes Ready and the rollout wedges (the outgoing pod keeps serving, `maxUnavailable: 0`).
 
@@ -178,8 +179,8 @@ identity afresh and the old public keys go with the old store. Events signed bef
 enforcement is on (acked and counted); every signer re-resolves within 5 minutes. Restart every signer and lineage
 after any non-surge OpenBao replacement rather than waiting for that interval.
 
-**Reading it back.** From an app's own sidecar, `GET /v1.0/secrets/lance-secrets/signing-key-<its identity>` answers
-200 with a `seed` field, every other identity's key is refused, and every `signing-public-<identity>` answers 200.
+**Reading it back.** From an app's own sidecar, `GET /v1.0/secrets/lance-secrets/signing-key-<its key>` answers
+200 with a `seed` field, every other identity's key is refused, and every `signing-public-<key>` answers 200.
 Lineage's sidecar is refused every key. Each app's Dapr Configuration is named by the hash of its spec
 (`lance-config-<app>-<hash>`) and its pods name it in `dapr.io/config`, so a deny-list edit renames the object and rolls
 exactly the pods whose list changed. HotReload is off and Helm applies a Deployment before the Configuration it names:

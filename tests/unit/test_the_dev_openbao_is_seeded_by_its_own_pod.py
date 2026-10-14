@@ -63,6 +63,7 @@ from typing import Any
 
 import pytest
 
+from service_kit.governed.signing_key import signing_key_name
 from tests.unit import chart_render
 from tests.unit.chart_render import DEFAULT_ARGS, OBSERVABILITY_ARGS, REPO
 from tests.unit.openbao_standins import BAO, NK, NSC, install
@@ -128,9 +129,14 @@ def _store(stores: Path, name: str, key: str) -> dict[str, str]:
 
 
 def _signing_identities(docs: tuple[dict, ...]) -> list[str]:
-    """The identities the Deployments sign as, read from the env the chart renders on them."""
+    """The key names of the identities the Deployments sign as (`signing_key_name`), from the env the chart renders on them.
+
+    The seed stores each pair under its identity's key name, which is the name a signer reads it by.
+    """
     found = {
-        env["RASK_SIGNING_IDENTITY"] for _, _, container in chart_render.containers(docs) if "RASK_SIGNING_IDENTITY" in (env := chart_render.env_of(container))
+        signing_key_name(env["RASK_SIGNING_IDENTITY"])
+        for _, _, container in chart_render.containers(docs)
+        if "RASK_SIGNING_IDENTITY" in (env := chart_render.env_of(container))
     }
     return sorted(found)
 

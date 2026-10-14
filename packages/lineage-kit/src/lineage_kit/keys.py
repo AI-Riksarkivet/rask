@@ -1,11 +1,12 @@
 """The public keys each signing identity publishes, read through an injected fetch and served from a short-lived cache ([[LH-064]], [[XC-078]]).
 
-A verifier needs the keys its signer publishes: the secret `signing-public-<identity>`, field `keys`, current key first. Every door
-that verifies reads them the same way, so the reader is one class and only HOW a secret is fetched differs between services. That
-is the `fetch` callable a caller injects: a service reads through its own Dapr sidecar, whose client lives in service-kit, and
-lineage-kit cannot import service-kit while service-kit cannot import lineage-kit, so the seam between them is a function.
+A verifier needs the keys its signer publishes: the identity's published list, field `keys`, current key first. Every door
+that verifies reads them the same way, so the reader is one class and only HOW a list is fetched differs between services. That
+is the `fetch` callable a caller injects: a service reads through its own Dapr sidecar, whose client lives in service-kit along
+with the name the list is stored under (`service_kit.governed.signing_key.signing_public_secret`), and lineage-kit cannot import
+service-kit while service-kit cannot import lineage-kit, so the seam between them is a function.
 
-`fetch(secret_name)` answers the secret's fields, or `{}` when the secret could not be read. An unreadable list and an absent one
+`fetch(identity)` answers the fields of the list that identity publishes, or `{}` when it could not be read. An unreadable list and an absent one
 are one answer, `KeySourceUnavailableError`: either way nothing is known about a signature, and a verifier that refused on a store
 blip would destroy honest events.
 """
@@ -21,8 +22,7 @@ from typing import Final, NamedTuple
 from lineage_kit.signing import KeySourceUnavailableError, PublicKeySource, parse_published_keys
 
 
-#: An identity publishes its keys in the secret named `<prefix><identity>`, as the comma-separated text of its `keys` field.
-_PUBLISHED_LIST_PREFIX: Final = "signing-public-"
+#: An identity publishes its keys as the comma-separated text of its list's `keys` field.
 _KEYS_FIELD: Final = "keys"
 
 #: How long one successful read of an identity's list is served without asking again. SHORT, because the list is
@@ -171,7 +171,7 @@ class PublishedKeys:
         if failed is not None and failed >= arrived:
             raise KeySourceUnavailableError(f"the public keys {identity!r} publishes could not be read by the read this verification waited for")
         started = self._clock()
-        bundle = self._fetch(f"{_PUBLISHED_LIST_PREFIX}{identity}")
+        bundle = self._fetch(identity)
         keys = tuple(parse_published_keys(bundle.get(_KEYS_FIELD, "")))
         if not keys:
             self._failed[identity] = self._clock()

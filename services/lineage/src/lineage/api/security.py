@@ -4,9 +4,9 @@ When OIDC is disabled (the default) this is a no-op and all routes stay open. Wh
 verified bearer, and the bearer's unverified issuer decides which verifier answers it:
 
 - the cluster's service-account issuer (`RASK_SA_ISSUER`): a pod's projected token, verified offline against the
-  cluster's key set and mapped by its full username to the subject the estate's grants name
-  (`service_kit.governed.machine_identity`, [[LH-220]], D1). It comes back a `ServicePrincipal` and never falls
-  through to the IdP;
+  cluster's key set; whatever its namespace it is the subject `kubernetes~system:serviceaccount:<ns>:<sa>`
+  (`service_kit.governed.machine_identity`, [[LH-220]], ADR 0156 C5). It comes back a `ServicePrincipal` and never
+  falls through to the IdP;
 - anything else: the IdP's verifier (`OIDCVerifier`, the same one the catalog uses), which answers a person.
 
 Either way the caller is authorized by FGA as its `.sub`. Nothing a caller asserts in a header names it:

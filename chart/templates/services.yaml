@@ -151,11 +151,10 @@ spec:
             {{- include "lance.governedOidcEnv" . | nindent 12 }}
             {{- include "lance.governedFgaEnv" . | nindent 12 }}
             {{- include "lance.saVerifier" (list $root "env" "catalog") | nindent 12 }}
-            - { name: RASK_MACHINE_SUBJECTS, value: {{ include "lance.machineSubjects" $root | quote }} }
 
             {{- $maintainers := list }}
             {{- if and $root.Values.maintenance.enabled $root.Values.maintenance.vendWriteCredentials }}
-              {{- $maintainers = append $maintainers (printf "user:%s" $root.Values.maintenance.catalogServiceIdentity) }}
+              {{- $maintainers = append $maintainers (include "lance.saSubject" (list $root "maintenance")) }}
             {{- end }}
             - { name: LANCE_FGA_MAINTAINERS, value: {{ toJson (compact $maintainers) | quote }} }
             {{- with include "lance.governedFgaPins" . }}{{- . | nindent 12 }}{{- end }}

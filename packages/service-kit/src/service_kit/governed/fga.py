@@ -32,6 +32,7 @@ import asyncio
 import functools
 import json
 import logging
+import re
 import unicodedata
 from collections.abc import Awaitable, Callable, Iterable
 from contextlib import suppress
@@ -184,6 +185,43 @@ def load_model() -> dict[str, Any]:
 def model_types() -> frozenset[str]:
     """The object types the bundled authorization model defines."""
     return frozenset(str(definition["type"]) for definition in load_model()["type_definitions"])
+
+
+#: The two characters a subject may carry that a `user` object id may not. OpenFGA refuses a user with a second `:`
+#: ("the 'user' field is malformed", HTTP 400, measured on the live store 2026-10-14 with
+#: `user:kubernetes~system:serviceaccount:default:rask-sa-maintenance`) and accepts the same id with `:` written `%3A`.
+#: `%` is encoded first so the encoding is reversible; nothing else is touched, so an IdP subject, which carries
+#: neither, is its own id and every tuple that already names one is unchanged.
+_SUBJECT_ESCAPES: Final = (("%", "%25"), (":", "%3A"))
+_ENCODED_SUBJECT: Final = re.compile("%(25|3A)")
+
+
+def user_object(subject: str) -> str:
+    """The OpenFGA user a subject is: ``user:`` and the subject, percent-encoded so OpenFGA accepts the id.
+
+    The one place a subject becomes a ``user`` id; :func:`subject_of` is its inverse, for ids read back from the store.
+    """
+    for raw, escaped in _SUBJECT_ESCAPES:
+        subject = subject.replace(raw, escaped)
+    return f"user:{subject}"
+
+
+def subject_of(user_id: str) -> str:
+    """The subject a ``user`` object id names (the id after ``user:``): the inverse of :func:`user_object`."""
+    return _ENCODED_SUBJECT.sub(lambda escape: "%" if escape.group(1) == "25" else ":", user_id)
+
+
+def grantee_object(grantee: str) -> str:
+    """The OpenFGA user a grant names: an object of another model type passes, a subject becomes its ``user``.
+
+    ``team:eng#member``, ``role:validators#assignee`` and ``project:p`` name objects of the model's own types and pass
+    as written. ``user:<subject>`` and a bare subject are the user that subject is, encoded by :func:`user_object`, so a
+    service account's subject (``kubernetes~system:serviceaccount:<ns>:<sa>``) is granted the way a person's is.
+    """
+    kind, typed, rest = grantee.partition(":")
+    if typed and kind != "user" and kind in model_types():
+        return grantee
+    return user_object(rest if typed and kind == "user" else grantee)
 
 
 def is_object_id(obj: str) -> bool:
@@ -1066,7 +1104,7 @@ async def check(
     wrong. Contextual tuples are per-request and never persisted, but they are evaluated like stored
     ones, so one carrying the clock is refused (:func:`reject_stored_clock`) before anything is sent.
 
-    Callers pass a BARE subject id (the token's ``sub``) and this prepends ``user:``. Pass
+    Callers pass a BARE subject id (the token's ``sub``) and this sends the user it is (:func:`user_object`). Pass
     ``qualify=False`` when ``user`` is ALREADY a full subject — a ``type:id`` user or a ``type:id#rel``
     userset — so it is sent verbatim (the access-simulator probes arbitrary subjects, incl. usersets;
     double-prefixing them to ``user:user:…`` would make every Check falsely deny — review 2026-07-20).
@@ -1077,7 +1115,7 @@ async def check(
     The per-request timeout is carried by ``client`` (see ``make_client``).
     """
     reject_stored_clock(contextual_tuples or ())
-    subject = f"user:{user}" if qualify else user
+    subject = user_object(user) if qualify else user
 
     async def _do_check() -> bool:
         response = await client.check(
@@ -1132,7 +1170,9 @@ async def batch_check(
     beside it.
     """
     unaskable = {o: False for o in objects if not is_object_id(o)}
-    items = [ClientBatchCheckItem(user=f"user:{user}", relation=relation, object=o, context=condition_context(context)) for o in objects if o not in unaskable]
+    items = [
+        ClientBatchCheckItem(user=user_object(user), relation=relation, object=o, context=condition_context(context)) for o in objects if o not in unaskable
+    ]
     if not items:
         return unaskable
 
@@ -1208,7 +1248,7 @@ async def list_objects(
 ) -> ObjectListing:
     """Return the objects of ``object_type`` the user has ``relation`` on (e.g. ``table:…``).
 
-    Callers pass a BARE subject id (the token's ``sub``) and this prepends ``user:``. Pass
+    Callers pass a BARE subject id (the token's ``sub``) and this sends the user it is (:func:`user_object`). Pass
     ``qualify=False`` when ``user`` is ALREADY a full subject — a ``type:id`` user or a ``type:id#rel``
     userset — exactly as :func:`check` does. Without that hatch the estate-admin explorer could only ask
     "what can this *user* reach", never "what can ``team:eng#member`` reach", and in THIS model the
@@ -1222,7 +1262,7 @@ async def list_objects(
     Read-only/idempotent, so it gets the same bounded retry + fail-closed treatment as
     :func:`check`.
     """
-    subject = f"user:{user}" if qualify else user
+    subject = user_object(user) if qualify else user
 
     async def _do_list_objects() -> ObjectListing:
         response = await client.list_objects(ClientListObjectsRequest(user=subject, relation=relation, type=object_type, context=condition_context(context)))
@@ -1393,7 +1433,9 @@ async def list_users(
             # ASKS for one (user_relation set); dropping it silently — as this did before — hid exactly
             # the subjects this model routes access through.
             if (obj_arm := getattr(user, "object", None)) is not None:
-                subjects.append(f"{obj_arm.type}:{obj_arm.id}" if qualified else obj_arm.id)
+                # A bare id is a SUBJECT, so a `user` id is decoded (:func:`subject_of`); a qualified one is the
+                # store's own object id, which a caller passes back verbatim (`qualify=False`).
+                subjects.append(f"{obj_arm.type}:{obj_arm.id}" if qualified else subject_of(obj_arm.id) if obj_arm.type == "user" else obj_arm.id)
             elif (userset_arm := getattr(user, "userset", None)) is not None:
                 subjects.append(f"{userset_arm.type}:{userset_arm.id}#{userset_arm.relation}" if qualified else userset_arm.id)
             elif (wildcard_arm := getattr(user, "wildcard", None)) is not None:
@@ -2018,7 +2060,7 @@ async def grant_on_create(
     # parent chain from the project's admin — which is exactly why the edge must still be written, and
     # why this is a flag on the SAME batch rather than a second call: dropping the owner tuple and
     # dropping the edge look identical at the call site and are opposite in effect.
-    tuples = [ClientTuple(user=f"user:{user_sub}", relation="owner", object=obj)] if grant_owner else []
+    tuples = [ClientTuple(user=user_object(user_sub), relation="owner", object=obj)] if grant_owner else []
     if not tuples and not parent_object:
         # Nothing to write: no owner grant asked for and no parent to link. A root-level object created
         # by a machine has no governance to seed, and an empty batch is a wasted round trip.

@@ -85,7 +85,7 @@ spec:
             # per-table credential. Those are reads.
             - { name: MAINTENANCE_CATALOG_URL, value: {{ printf "http://%s-catalog:%v" (include "lance.fullname" $root) $root.Values.services.catalog.port | quote }} }
             - { name: MAINTENANCE_AUDIT_ENABLED, value: {{ hasKey $root.Values.auth "audit" | ternary $root.Values.auth.audit true | quote }} }
-            - { name: MAINTENANCE_CATALOG_SERVICE_IDENTITY, value: {{ $root.Values.maintenance.catalogServiceIdentity | quote }} }
+            - { name: MAINTENANCE_CATALOG_SERVICE_IDENTITY, value: {{ include "lance.saSubject" (list $root "maintenance") | quote }} }
             {{- if $root.Values.maintenance.distributedCompaction }}
             # THE REWRITE'S BYTES LEAVE THIS POD. `compact_files()` plans, executes and commits in one
             # call, so this pod's memory ceiling is a function of the largest table anyone owns rather

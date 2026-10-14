@@ -92,7 +92,7 @@ spec:
             {{- if $root.Values.maintenance.vendWriteCredentials }}
             - { name: MAINTENANCE_CATALOG_URL, value: {{ printf "http://%s-catalog:%v" (include "lance.fullname" $root) $root.Values.services.catalog.port | quote }} }
             - { name: MAINTENANCE_AUDIT_ENABLED, value: {{ hasKey $root.Values.auth "audit" | ternary $root.Values.auth.audit true | quote }} }
-            - { name: MAINTENANCE_CATALOG_SERVICE_IDENTITY, value: {{ $root.Values.maintenance.catalogServiceIdentity | quote }} }
+            - { name: MAINTENANCE_CATALOG_SERVICE_IDENTITY, value: {{ include "lance.saSubject" (list $root "maintenance") | quote }} }
             {{- if $root.Values.maintenance.distributedCompaction }}
             - { name: MAINTENANCE_DISTRIBUTED_COMPACTION, value: "true" }
             {{- end }}

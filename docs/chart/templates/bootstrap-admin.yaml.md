@@ -76,5 +76,6 @@ walks to find whom to tell about runs in EVERY warehouse. The governed `/events`
 service only the tables its grants reach, so a tenant warehouse's runs would never arrive.
 `event_reader` and nothing wider: no tier, no tenant data, no rung that mints a project or
 edits a tuple (`model.fga.yaml` pins both halves). Who is told stays gated per person.
-The subject is the value `lance.saSubjects` maps the reconciler's ServiceAccount to at
-lineage's door, from the same values key, so the two cannot drift.
+The subject is the reconciler's ServiceAccount's (`lance.saSubject`), the one lineage's door
+verifies its token as, so the two cannot drift. Every grant names the user its subject is
+(`service_kit.governed.fga.user_object`, `:` written `%3A`).

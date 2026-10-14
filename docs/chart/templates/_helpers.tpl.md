@@ -230,7 +230,7 @@ was renamed: no lance name collided with a rask name.
 
 VALUES THEY REQUIRE (the values.yaml merge must land these or the render breaks):
   age.externalHost · auth.enabled · catalog.controlEmit · dapr.{enabled,sidecarRestricted,
-  sidecarResources.*,resiliency.enabled} · dex.clientId · frontend.{apps,image.tag,serviceIdentity,
+  sidecarResources.*,resiliency.enabled} · dex.clientId · frontend.{apps,image.tag,
   idleTimeoutSeconds,oidc.*} · services.gateway.port · image.catalog.{repository,tag} · lifecycle.preStopSeconds ·
   medallion.buckets · nats.url ·
   observability.{enabled,environment} · openbao.{enabled,port,externalAddr} · pubsub.name ·
@@ -542,7 +542,7 @@ would 404, and ClientEmitter catches-and-logs transport errors, so that too woul
 ## `{{- end -}}`
 
 No credential here: a pod that calls lineage over HTTP authenticates with its projected
-`rask-lineage` token (lance.identityTokens), which lineage maps through `lance.saSubjects`.
+`rask-lineage` token (lance.identityTokens), whose subject is its ServiceAccount's (lance.saSubject).
 
 ## `{{- define "lance.preStop" -}}`
 
@@ -775,19 +775,20 @@ values.yaml `auth.serviceAccountIssuer`. Call: include "lance.identityTokens" (l
 
 ## `{{- define "lance.fleetAudiences" -}}`
 
-A fleet service's door audiences, read off the identities it declares in `env`.
+A fleet service's door audiences, its `identityAudiences` value: one projected token per door it calls.
 
-## `{{- define "lance.saSubjects" -}}`
+## `{{- define "lance.saSubject" -}}`
 
-A verifier door's map of caller service account (full username) -> subject, as JSON. Every key is an
-SA security-sa.yaml renders for a pod that projects this door's audience. A blank identity fails the render: the
-account would authenticate as the empty subject, and every account mapped to it as the same one.
-Call: include "lance.saSubjects" (list $root "catalog"|"lineage").
+The subject one of the release's own services is: `kubernetes~system:serviceaccount:<release namespace>:<release>-sa-<name>`
+(ADR 0156 C5), the subject of the ServiceAccount its pod runs as. Every grant, author and signing identity the chart
+names for a service is this, so none can name a subject the pod does not authenticate as.
+Call: include "lance.saSubject" (list $root <name>).
 
 ## `{{- define "lance.saVerifier" -}}`
 
 The SA verifier a door builds beside Dex: its env, and the API-audience token + cluster CA it fetches
-the issuer's keys with. Renders nothing with auth off or for a door no service calls.
+the issuer's keys with. Any token the issuer signs for the door's audience is a subject, from any namespace, and
+OpenFGA alone authorizes it: no list of accounts is rendered. Renders nothing with auth off.
 Call: include "lance.saVerifier" (list $root "env"|"volumes"|"mounts" <door>).
 
 ## `{{- define "lance.saFetch" -}}`
@@ -1165,10 +1166,17 @@ Named by the hash of its spec, so an edit renames it; the object and the pod's `
 
 ## `{{- define "lance.signers" -}}`
 
-EVENT SIGNING ([[LH-064]]; values.yaml `signing:`). `lance.signers` is the ONE declaration, an (identity, app-id, control-event
-role) per signer: the mint and seed loops, the deny lists, RASK_SIGNING_IDENTITY, LINEAGE_SIGNERS and the doors' env are views of it.
+EVENT SIGNING ([[LH-064]]; values.yaml `signing:`). `lance.signers` is the ONE declaration, an (identity, key name, app-id,
+control-event role) per signer: the mint and seed loops, the deny lists, RASK_SIGNING_IDENTITY, LINEAGE_SIGNERS and the doors' env
+are views of it. The identity is the signer's service-account subject (lance.saSubject), the author its events are authorized as;
+the key name is its ServiceAccount's name, which `service_kit.governed.signing_key.signing_key_name` derives from the identity,
+because a subject's `~` and `:` belong in no secret name, OpenBao path or shell word.
 
-## `{{- define "lance.delegatorIdentities" -}}{{- .Values.catalog.serviceIdentity -}}{{- end -}}`
+## `{{- define "lance.signingKeys" -}}`
+
+The key names the store holds a pair under (list $root [$appId]): every signer's, or one app-id's. Each must be a DNS label.
+
+## `{{- define "lance.delegatorIdentities" -}}{{- include "lance.saSubject" (list . "catalog") -}}{{- end -}}`
 
 Who may sign for a person: the catalog, which authenticated that person.
 

@@ -236,7 +236,8 @@ DEMO_ESTATE = Estate(
         Grant("team:partners", "team", "project:beta"),
         # dave: a plain WRITER on the bucket — writes any stage, but is NOT a validator.
         Grant("user:dave", "writer", "warehouse:acme-bucket"),
-        # NO READ GRANT FOR `service-web`, and its absence is the control (Q17-8 / §F2-2 F2-4).
+        # NO READ GRANT FOR THE WEB ZONES' SERVICE ACCOUNT (`kubernetes~system:serviceaccount:<ns>:<release>-sa-web`),
+        # and its absence is the control (Q17-8 / §F2-2 F2-4).
         # `bff.ts` and `runs-feed.ts` send that identity ONLY when there is no session, so it is the
         # ANONYMOUS principal — granting it reader on a tenant's tiers is granting the public those
         # tiers. A human reads a tenant's lineage with their OWN bearer; if a surface needs to be public,

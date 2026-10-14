@@ -62,7 +62,7 @@ async def test_the_backfill_writes_the_SAME_grants_minus_the_caller(monkeypatch)
     on every tenant they touched. That is why the backfill exists as its own door rather than as
     "just run the create again".
     """
-    settings = _fga_settings(LANCE_FGA_MAINTAINERS=["user:service-maintenance"])
+    settings = _fga_settings(LANCE_FGA_MAINTAINERS=["kubernetes~system:serviceaccount:rask:rask-sa-maintenance"])
 
     seen = await _captured_tuples(
         lambda: fga_deps.backfill_cascade_grants(
@@ -71,9 +71,11 @@ async def test_the_backfill_writes_the_SAME_grants_minus_the_caller(monkeypatch)
         monkeypatch,
     )
 
-    assert fga.ClientTuple(user="user:service-maintenance", relation="maintenance", object="warehouse:wh1") in seen
+    assert fga.ClientTuple(user="user:kubernetes~system%3Aserviceaccount%3Arask%3Arask-sa-maintenance", relation="maintenance", object="warehouse:wh1") in seen
     assert fga.ClientTuple(user="project:acme", relation="project", object="warehouse:wh1") in seen
-    assert not [t for t in seen if t.user.startswith("user:") and "service-" not in t.user], f"the backfill granted a non-service subject: {seen}"
+    assert not [t for t in seen if t.user.startswith("user:") and not t.user.startswith("user:kubernetes~")], (
+        f"the backfill granted a non-service subject: {seen}"
+    )
 
 
 @pytest.mark.asyncio
@@ -87,7 +89,7 @@ async def test_creating_a_warehouse_grants_it(monkeypatch) -> None:
     so the two populations of warehouse cannot differ. Measured 2026-09-15 on the live estate: the 4 of
     97 warehouses without the tuple were the 4 newest, every one created after the hand-written grants.
     """
-    settings = _fga_settings(LANCE_FGA_MAINTAINERS=["user:service-maintenance"])
+    settings = _fga_settings(LANCE_FGA_MAINTAINERS=["kubernetes~system:serviceaccount:rask:rask-sa-maintenance"])
     token = IDToken.model_validate({"sub": "alice", "iss": "https://dex", "aud": "rask", "iat": 0, "exp": 1})
 
     seen = await _captured_tuples(
@@ -95,4 +97,6 @@ async def test_creating_a_warehouse_grants_it(monkeypatch) -> None:
         monkeypatch,
     )
 
-    assert ("user:service-maintenance", "maintenance", "warehouse:wh1") in [(t.user, t.relation, t.object) for t in seen]
+    assert ("user:kubernetes~system%3Aserviceaccount%3Arask%3Arask-sa-maintenance", "maintenance", "warehouse:wh1") in [
+        (t.user, t.relation, t.object) for t in seen
+    ]

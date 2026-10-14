@@ -47,13 +47,13 @@ from service_kit.governed.machine_identity import ServicePrincipal
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
-#: The subject lineage maps the reconciler's service account to (`RASK_SA_SUBJECTS`, from the chart's
-#: `services.notifications.env.RASK_LINEAGE_SERVICE_IDENTITY`), and the one the bootstrap hook grants.
-RECONCILER = ServicePrincipal(subject="notifications", service_account="system:serviceaccount:rask:rask-sa-notifications")
+#: The reconciler's service account, whose subject (`kubernetes~system:serviceaccount:rask:rask-sa-notifications`,
+#: the chart's `lance.saSubject`) is the one the bootstrap hook grants.
+RECONCILER = ServicePrincipal(service_account="system:serviceaccount:rask:rask-sa-notifications")
 
 #: Every relation OpenFGA answers true for, as `(user, relation, object)`: what the bootstrap hook's
 #: `event_reader` tuple on the estate root derives for the reconciler, and nothing else.
-GRANTED = frozenset({("user:notifications", "can_read_event_feed", "estate:rask")})
+GRANTED = frozenset({("user:kubernetes~system%3Aserviceaccount%3Arask%3Arask-sa-notifications", "can_read_event_feed", "estate:rask")})
 
 #: A run whose output lives in a TENANT warehouse, carrying what an ingest run carries beyond targeting:
 #: an input, a column-lineage facet naming another tenant's table, and a job facet.
@@ -214,9 +214,7 @@ async def test_the_walk_reaches_a_tenant_warehouse_run_and_is_sent_only_what_tar
 
     # The rung IS the gate: an unfiltered feed of every warehouse's runs answers a verified caller that holds
     # nothing on the estate root with 403, so a refactor that drops the check fails here rather than shipping.
-    lineage.dependency_overrides[authenticate] = lambda: ServicePrincipal(
-        subject="service-pipeline", service_account="system:serviceaccount:rask:rask-sa-pipeline"
-    )
+    lineage.dependency_overrides[authenticate] = lambda: ServicePrincipal(service_account="system:serviceaccount:rask:rask-sa-pipeline")
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=lineage)) as http:
         stranger = LineageFeedClient(client=http, base_url="http://lineage.test", token_file=str(token), timeout_seconds=5.0, page_limit=500)
         with pytest.raises(httpx.HTTPStatusError) as refused:

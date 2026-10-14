@@ -193,11 +193,11 @@ async def _access_check(
     segments = parse_identifier(id, settings.delimiter)
     obj = f"{fga_type}:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}"
     subject = token.sub if token else "anonymous"
-    # Resolve to a FULL subject: a bare id is a user (``user:<id>``); a qualified userset
+    # Resolve to a FULL subject (`fga.grantee_object`): a subject is the user it is; a qualified userset
     # (``role:…#member`` / ``team:…#member``) is passed through as-is. Then check with qualify=False so
     # fga.check sends it verbatim — otherwise its default ``user:`` prefix would double to ``user:user:…``
     # and every simulated Check would falsely deny (audit 2026-07-20 caught exactly this).
-    user = body.user if ":" in body.user else f"user:{body.user}"
+    user = fga.grantee_object(body.user)
     try:
         allowed = await fga.check(client, user=user, relation=body.relation, obj=obj, qualify=False)
     except ServiceUnavailableError:
@@ -249,10 +249,8 @@ async def _my_permissions(client: OpenFgaClient | None, settings: Settings, toke
         raise UnauthenticatedError("the permission self-view needs an authenticated caller")
     segments = parse_identifier(id, settings.delimiter)
     obj = f"{fga_type}:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}"
-    # An OIDC ``sub`` is opaque and MAY already carry a type prefix. Prefixing unconditionally yields
-    # `user:user:<sub>`, a subject that matches no tuple, so every relation answers a correct-looking
-    # `false` and the page renders "you may do nothing" for an owner. Same rule the settings gate uses.
-    subject = token.sub if ":" in token.sub else f"user:{token.sub}"
+    # The caller's subject is the user it is (`fga.user_object`), a service account's included.
+    subject = fga.user_object(token.sub)
     relations = _can_relations(fga_type)
     # TaskGroup, not gather — same reason as the review path: one failure cancels its siblings rather
     # than leaving orphaned retry loops hammering a degraded OpenFGA after the request has 503'd.
@@ -404,9 +402,9 @@ async def _access_mutate(
     segments = parse_identifier(id, settings.delimiter)
     obj = f"{fga_type}:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}"
     actor = token.sub if token else "anonymous"
-    # Resolve the grantee to a FULL subject (qualify=False semantics, mirroring access/check): a bare id is a
-    # user; a qualified userset (``role:…#assignee`` / ``team:…#member``) is passed through verbatim.
-    grantee = body.user if ":" in body.user else f"user:{body.user}"
+    # Resolve the grantee to a FULL subject (qualify=False semantics, mirroring access/check): a subject is the
+    # user it is; a qualified userset (``role:…#assignee`` / ``team:…#member``) is passed through verbatim.
+    grantee = fga.grantee_object(body.user)
     if grant:
         await _refuse_a_cross_tenant_role_grant(client, grantee, fga_type=fga_type, segments=segments, settings=settings)
     tup = fga.ClientTuple(user=grantee, relation=body.relation, object=obj)

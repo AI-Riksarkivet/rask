@@ -9,10 +9,11 @@ wired onto ``app.state`` (e.g. discovery failed at startup, or a deployment skew
 ``ServiceUnavailableError`` (503) rather than silently letting requests through. A
 configured-but-broken auth layer must never degrade to open access.
 
-A service is the Kubernetes service account its projected token names ([[LH-220]], D1). The bearer's
+A service is the Kubernetes service account its projected token names ([[LH-220]], ADR 0156 C5). The bearer's
 unverified ``iss`` routes it: the cluster's service-account issuer goes to ``app.state.sa_oidc``, which
-verifies it offline and maps its full username to a subject; every other issuer goes to the IdP. A
-service-account token never falls through to the IdP, and no header names the caller.
+verifies it offline and answers the subject ``kubernetes~system:serviceaccount:<ns>:<sa>``, from any namespace;
+every other issuer goes to the IdP, which refuses a token it did not sign (401). A service-account token never
+falls through to the IdP, no header names the caller, and OpenFGA alone decides what the subject may do.
 """
 
 from __future__ import annotations
@@ -88,10 +89,9 @@ def authenticate(
     """Authenticate the request: a projected service-account token (a service) or an OIDC bearer (a person).
 
     The service-account verifier is chosen by the token's unverified ``iss`` and then checks the
-    signature, audience, expiry and the exact full-username map; signature and audience alone accept
-    every account in the cluster that carries this door's audience (measured 2026-10-02, the P5.3 c0
-    probe), so the map is what binds a token to one subject. ``dapr-api-token`` is not read here: it
-    proves a sidecar delivered a request and names nobody.
+    signature, audience and expiry; every account in the cluster whose token carries this door's audience
+    authenticates, as its own subject, and is authorized by its tuples alone. ``dapr-api-token`` is not
+    read here: it proves a sidecar delivered a request and names nobody.
     """
     if not settings.oidc_enabled:
         return None

@@ -11,7 +11,6 @@ service-account issuer in the root conftest; the token is one the same door admi
 
 from __future__ import annotations
 
-import json
 import logging
 from collections.abc import AsyncGenerator, Iterator
 from contextlib import asynccontextmanager
@@ -39,7 +38,6 @@ def door(sa_issuer: Any, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient
         "RASK_OIDC_AUDIENCE": "lance-catalog",
         "RASK_SA_ISSUER": sa_issuer.issuer,
         "RASK_SA_AUDIENCE": "rask-lineage",
-        "RASK_SA_SUBJECTS": json.dumps({f"system:serviceaccount:default:{_TRAINER}": "service-trainer"}),
         "RASK_SA_FETCH_TOKEN_FILE": str(sa_issuer.fetch_token_file),
         "RASK_SA_CA_FILE": str(sa_issuer.ca_file),
     }.items():

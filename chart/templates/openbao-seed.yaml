@@ -1,5 +1,5 @@
 {{- if and .Values.openbao.enabled .Values.openbao.devMode }}
-{{- $signers := include "lance.signingIdentities" . | splitList " " | compact }}
+{{- $signers := include "lance.signingKeys" (list .) | splitList " " | compact }}
 {{- $mint := and (not .Values.openbao.externalAddr) $signers }}
 {{- $nats := include "lance.natsMints" . }}
 {{- $natsUsers := include "lance.natsUsers" . | splitList " " | compact }}

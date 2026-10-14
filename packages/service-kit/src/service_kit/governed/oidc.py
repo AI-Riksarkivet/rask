@@ -403,11 +403,10 @@ class OIDCVerifier:
     def _provider_for(self, token: str) -> _Provider:
         """Select the configured provider whose issuer matches the token's ``iss`` claim.
 
-        With a single issuer this is trivial. With several, we read the (still unverified)
-        ``iss`` from the token to pick the right provider, then verification proves it.
+        The (still unverified) ``iss`` picks the provider, then verification proves it. A token naming
+        no configured issuer is refused here, with one issuer as with several, so another issuer's token
+        is a 401 that costs no fetch and never waits on a provider it does not belong to.
         """
-        if len(self._issuers) == 1:
-            return self._resolve(self._issuers[0])
         try:
             claimed = jwt.decode(token, options={"verify_signature": False}).get("iss")
         except jwt.PyJWTError as exc:

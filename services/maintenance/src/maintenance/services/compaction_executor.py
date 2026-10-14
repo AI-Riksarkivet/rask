@@ -173,8 +173,8 @@ def unauthenticated_remedy(*, table_id: str, identity: str) -> str:
     """The sentence a maintenance 401 carries: the table it was asked for, and the credential to repair."""
     return (
         f"the catalog did not accept the service credential of {identity!r} when asked for {table_id} (401) — this is "
-        f"maintenance's own identity, not the table: check its projected rask-catalog token and that the catalog's "
-        f"RASK_SA_SUBJECTS maps this pod's service account to {identity!r}."
+        f"maintenance's own identity, not the table: check its projected rask-catalog token (audience rask-catalog, "
+        f"signed by the catalog's RASK_SA_ISSUER) and that {identity!r} is this pod's service-account subject."
     )
 
 

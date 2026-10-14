@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 
+from service_kit.governed.signing_key import signing_key_secret, signing_public_secret
 from tests.unit import chart_render
 from tests.unit.chart_render import DEFAULT_ARGS, env_of, render
 
@@ -56,8 +57,8 @@ def test_each_sidecar_may_read_only_its_own_signing_key_and_no_bus_credential() 
                 signs_as[app_id].add(identity)
     signers = set().union(*signs_as.values()) if signs_as else set()
     assert signers, "no Deployment renders RASK_SIGNING_IDENTITY: nothing in this render signs, so the gate measures nothing"
-    private = {f"signing-key-{identity}" for identity in signers}
-    public = {f"signing-public-{identity}" for identity in signers}
+    private = {signing_key_secret(identity) for identity in signers}
+    public = {signing_public_secret(identity) for identity in signers}
     users = chart_render.nats_users(docs)
     assert users, "the dev seed issues no NATS user, so the bus credentials this gate hides are not in the store to hide"
     bus = {f"nats-user-{user}" for user in users} | {"nats-root", "nats-route"}
@@ -73,7 +74,7 @@ def test_each_sidecar_may_read_only_its_own_signing_key_and_no_bus_credential() 
                 if scope.get("storeName") != STORE:
                     continue
                 checked.add(app_id)
-                own = {f"signing-key-{identity}" for identity in signs_as.get(app_id, set())}
+                own = {signing_key_secret(identity) for identity in signs_as.get(app_id, set())}
                 if (readable := _readable(scope, private)) != own:
                     problems[app_id] = {"may read": sorted(readable), "signs with": sorted(own)}
                 if hidden := public - _readable(scope, public):
