@@ -391,8 +391,10 @@ Work moves idea → ship along one path, and `/ask-matt` explains any step:
 
 - **Claim first.** `gh issue edit <n> --add-assignee @me` is the first write, before a branch or a test. An
   assigned row is its assignee's; take the next one from the map's frontier (first unassigned, unblocked row).
-- **One row, one branch, one PR.** Branch from `origin/main` named after the row (`lh-476-management-routes`),
-  merge through a PR. Never commit a row straight to `main`.
+- **One row, one commit, straight to `main`** (owner, 2026-10-14: one person works the repo, and a CI round costs
+  30-40 min for nothing the local gates miss). Commit the row on `main` as one commit, run the local gates (the full
+  offline suite, `ruff`, `ty`, `make lint-imports`, the comment gate, `make openapi` when a route changed), push, then
+  deploy and read back. No PR.
 - **Reference a row with `Refs #n`, never a closing keyword.** `Closes`/`Fixes` in a commit or a PR body closes the
   issue on push or merge, and a row closes only when its fix is deployed and read back live: close it by hand
   with a comment naming the helm revision.

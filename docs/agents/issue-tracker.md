@@ -30,9 +30,9 @@ wayfinder tickets:
 - **Pick from the map.** The next row is the first one in the pinned map's order that is unassigned and
   has no open blocker: the frontier query under *Wayfinding operations*, run over the map's rows.
   Blocking edges are native issue dependencies (same section); a row whose blocker is open waits.
-- **One row, one branch, one PR.** The branch is named after the row (`lh-476-management-routes`), is
-  short-lived and rebased onto `main` daily, and merges through a PR the other people can see, so new
-  work starts from merged code rather than from someone's local branch.
+- **One row, one commit, straight to `main`** (owner, 2026-10-14). One person works the repo, so a row is one commit
+  on `main`, proven by the local gates, pushed, then deployed and read back. No branch and no PR: a CI round costs
+  30-40 minutes and catches nothing the local gates miss.
 - **One open row per defect.** A row found to describe the same defect as another is closed with the
   `duplicate` label and a comment naming the survivor, and its evidence is copied onto the survivor. A
   row that a spec ticket fixes stays its own row, gets a `blocked_by` edge on that ticket, and the ticket
