@@ -19,7 +19,7 @@ from typing import Any
 import pyarrow as pa
 import pytest
 
-from annotator.projects.lakehouse import RUN_FACETS_HEADER, CatalogPublisher
+from annotator.projects.lakehouse import CatalogPublisher
 from annotator.projects.publish import PUBLISHED_LABELS_SCHEMA, PublishPlan
 
 
@@ -108,7 +108,7 @@ def _publisher(create: _Create | None = None, tags: _Tags | None = None, **kw: A
 
 
 @pytest.mark.asyncio
-async def test_create_posts_exist_ok_with_schema_typed_rows_and_the_facet_header() -> None:
+async def test_create_posts_exist_ok_with_schema_typed_rows_and_its_run() -> None:
     create = _Create(version=9)
     publisher = _publisher(create, token="svc-token", originator="alice")
 
@@ -116,7 +116,7 @@ async def test_create_posts_exist_ok_with_schema_typed_rows_and_the_facet_header
         "silver$vasa_0123456789ab",
         _plan(rows=2),
         properties={"annotation.project_id": "p1"},
-        run_facet={"annotationProject": {"projectId": "p1"}},
+        run_id="pub-1",
     )
 
     assert version == 9
@@ -125,7 +125,7 @@ async def test_create_posts_exist_ok_with_schema_typed_rows_and_the_facet_header
     assert call["mode"] == "exist_ok", "the saga's retry safety RELIES on exist_ok — any other mode re-creates or errors on replay"
     assert json.loads(call["properties"]) == {"annotation.project_id": "p1"}
     headers = call["_headers"]
-    assert json.loads(headers[RUN_FACETS_HEADER]) == {"annotationProject": {"projectId": "p1"}}
+    assert (headers["x-rask-run-id"], "x-rask-inputs" in headers) == ("pub-1", False), "an absent pin names no input (§7.2 — never fabricate)"
     assert headers["Authorization"] == "Bearer svc-token"
     # The service's bearer authors the events, so this header is the only place the human survives.
     assert headers["x-lance-originator"] == "alice"
@@ -170,29 +170,19 @@ async def test_a_fresh_tag_is_created() -> None:
 
 
 @pytest.mark.asyncio
-async def test_the_pin_params_reach_the_create_call() -> None:
-    """§7.2 over the wire: the S4 `source`/`source_version` query params ride the direct-HTTP
-    create (the spec-generated SDK cannot send them — the OPEN-WORK register, row B3 (drained 2026-09-10; in git history))."""
+async def test_the_pin_reaches_the_create_as_the_runs_input() -> None:
+    """§7.2 over the wire: the one pinned source is the run's input in the catalog Context."""
     create = _Create()
     publisher = _publisher(create)
 
-    await publisher.create_table(
-        "silver$t_1",
-        _plan(),
-        properties={},
-        run_facet={},
-        source="demo",
-        source_version=24,
-    )
+    await publisher.create_table("silver$t_1", _plan(), properties={}, run_id="pub-1", source="demo$pages", source_version=24)
 
-    call = create.calls[0]
-    assert call["source"] == "demo"
-    assert call["source_version"] == 24
+    assert json.loads(create.calls[0]["_headers"]["x-rask-inputs"]) == [{"table": ["demo", "pages"], "version": 24}]
 
 
 # --------------------------------------------------------------------------------------------------
-# _HttpCreateApi — the direct-HTTP create transport itself (the SDK client cannot send the S4 pin
-# params, so this class IS the wire; the audit found it previously untested behind the injected fake)
+# _HttpCreateApi — the direct-HTTP create transport itself (the audit found it previously untested behind the
+# injected fake)
 # --------------------------------------------------------------------------------------------------
 
 
@@ -206,7 +196,7 @@ class _Resp:
         return self._body
 
 
-def test_the_http_create_api_sends_the_pin_params_the_arrow_type_and_quotes_the_id(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_http_create_api_sends_the_context_the_arrow_type_and_quotes_the_id(monkeypatch: pytest.MonkeyPatch) -> None:
     from annotator.projects import lakehouse
     from annotator.projects.lakehouse import _HttpCreateApi
 
@@ -219,35 +209,15 @@ def test_the_http_create_api_sends_the_pin_params_the_arrow_type_and_quotes_the_
     monkeypatch.setattr(lakehouse, "publish_client", lambda _timeout: _StubClient(fake_post))
     api = _HttpCreateApi("http://catalog:2333/")
 
-    resp = api.create_table(
-        "silver$vasa_0123456789ab", b"ARROW", mode="exist_ok", properties="{}", source="demo", source_version=24, _headers={RUN_FACETS_HEADER: "{}"}
-    )
+    resp = api.create_table("silver$vasa_0123456789ab", b"ARROW", mode="exist_ok", properties="{}", _headers={"x-rask-run-id": "pub-1"})
 
     assert resp.version == 7
     # `$` is the catalog delimiter INSIDE the id — it must travel percent-encoded, not as a path split.
     assert seen["url"] == "http://catalog:2333/v1/table/silver%24vasa_0123456789ab/create"
-    assert seen["params"]["source"] == "demo"
-    assert seen["params"]["source_version"] == "24"
     assert seen["params"]["mode"] == "exist_ok"
     assert seen["headers"]["content-type"] == "application/vnd.apache.arrow.stream"
-    assert seen["headers"][RUN_FACETS_HEADER] == "{}"
+    assert seen["headers"]["x-rask-run-id"] == "pub-1"
     assert seen["content"] == b"ARROW"
-
-
-def test_the_http_create_api_omits_the_pin_params_when_there_is_no_pin(monkeypatch: pytest.MonkeyPatch) -> None:
-    from annotator.projects import lakehouse
-    from annotator.projects.lakehouse import _HttpCreateApi
-
-    seen: dict[str, Any] = {}
-
-    def fake_post(url: str, *, params: dict[str, str], content: bytes, headers: dict[str, str], timeout: float) -> _Resp:
-        seen.update(params=params)
-        return _Resp(200, {"version": 3})
-
-    monkeypatch.setattr(lakehouse, "publish_client", lambda _timeout: _StubClient(fake_post))
-    _HttpCreateApi("http://catalog:2333").create_table("silver$t", b"A", mode="exist_ok")
-
-    assert "source" not in seen["params"] and "source_version" not in seen["params"], "an absent pin must stay absent on the wire (§7.2 — never fabricate)"
 
 
 def test_the_http_create_api_raises_the_sdk_exception_on_http_errors(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -39,17 +39,19 @@ from catalog.api.dependencies import (
     FgaClientDep,
     LineageEmitterDep,
     NamespaceDep,
+    RunDep,
     SettingsDep,
     StorageOptionsDep,
 )
-from catalog.api.rask_params import RaskDataBase, RaskExternalBlobBase, RaskFlag, RaskSource, RaskSourceVersion
-from catalog.api.security import CurrentToken
-from catalog.core import provenance_guard
+from catalog.api.rask_params import RaskDataBase, RaskExternalBlobBase, RaskFlag
+from catalog.api.security import CurrentToken, Principal
+from catalog.core import provenance_guard, run_context
 from catalog.core.formats import reject_unsupported_properties
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
-from catalog.core.lineage_emit import COMPACT_TABLE, DELETE, INSERT, MERGE_INSERT, OVERWRITE_TABLE, UPDATE, merge_source_pin, parse_run_facets
+from catalog.core.lineage_emit import COMPACT_TABLE, DELETE, INSERT, MERGE_INSERT, OVERWRITE_TABLE, UPDATE
 from catalog.core.modes import CreateMode, InsertMode
 from catalog.core.namespace import judged_native_dataset, judged_native_version
+from catalog.core.run_context import RunContext
 from catalog.core.serialization import dump
 from catalog.schemas import (
     CompactionCommitRequest,
@@ -109,6 +111,11 @@ management_router = APIRouter(prefix="/management/v1/table", tags=["data-managem
 # `properties` map and none of them called it while it was private to this module.
 
 
+def _stamp(run: RunContext | None, token: Principal | None) -> dict[str, str] | None:
+    """The transaction properties a write door stamps: the request's run, committed by the verified caller."""
+    return run_context.commit_properties(run, author=token.sub if token is not None else None)
+
+
 @router.post("/{id}/create", response_model_exclude_none=True)
 async def create_table(
     id: str,
@@ -119,14 +126,12 @@ async def create_table(
     emitter: LineageEmitterDep,
     control: ControlEmitterDep,
     so: StorageOptionsDep,
+    run: RunDep,
     data: Annotated[bytes, Body(media_type=ARROW_STREAM_MEDIA_TYPE)],
     mode: str | None = None,
     properties: str | None = None,
     data_base: RaskDataBase = [],  # noqa: B006 — FastAPI Query default, not mutated
     external_blob_base: RaskExternalBlobBase = None,
-    source: RaskSource = None,
-    source_version: RaskSourceVersion = None,
-    run_facets_json: Annotated[str | None, Header(alias="X-Lance-Run-Facets")] = None,
     authorization: Annotated[str | None, Header()] = None,
     idempotency_key: idem.IdempotencyKeyHeader = None,
     force: RaskFlag = False,
@@ -150,17 +155,12 @@ async def create_table(
     entry and outside governed storage (``table_bases.requested_external_blob_base``). Omitted → no
     external base, and a pointer in the rows is refused.
 
-    Derived-write lineage (S4, optional — the same metadata ``merge_insert`` has always taken):
-    ``source`` + ``source_version`` record the version-pinned upstream this table DERIVES FROM
-    (an annotation publish from ``transcripts@N``, a Ray job's first write), surfaced as a
-    version-pinned INPUT on the CREATE RunEvent; the ``X-Lance-Run-Facets`` header carries producer
-    run metadata (e.g. the ``annotationProject`` facet) verbatim onto the same event. Before S4,
-    every FIRST write of a derived table was emitted with no pin and no facet — only later merges
-    could carry provenance.
+    The run the request's Context names (:mod:`catalog.core.run_context`) is stamped into the commit and its inputs
+    become the create event's version-pinned inputs; the tier judge has already refused a silver or gold create that
+    names none, and an input the caller cannot read.
     """
-    # BEFORE `idem.begin`, like the register door's: a malformed mode, id, base, property map, source
-    # pin or run facet is a SHAPE refusal, and a claim minted for it would hold the key for its lease and
-    # answer the corrected retry 409.
+    # BEFORE `idem.begin`, like the register door's: a malformed mode, id, base or property map is a SHAPE
+    # refusal, and a claim minted for it would hold the key for its lease and answer the corrected retry 409.
     create_mode = CreateMode.parse(mode)
     shape = table_create.parse_create_shape(
         id,
@@ -168,9 +168,6 @@ async def create_table(
         data_base=data_base,
         external_blob_base=external_blob_base,
         properties=properties,
-        source=source,
-        source_version=source_version,
-        run_facets_json=run_facets_json,
     )
     # The body is shape too, read off the loop. The table read here is the one written, so the payload
     # is decoded once.
@@ -199,6 +196,7 @@ async def create_table(
         shape=shape,
         data_base=data_base,
         authorization=authorization,
+        run=run,
         force=force,
     )
     # AFTER the door succeeded, and only then: a failure raises past this line, leaving the claim
@@ -325,6 +323,7 @@ async def insert_into_table(
     so: StorageOptionsDep,
     token: CurrentToken,
     emitter: LineageEmitterDep,
+    run: RunDep,
     data: Annotated[bytes, Body(media_type=ARROW_STREAM_MEDIA_TYPE)],
     mode: str | None = None,
     branch: Annotated[str | None, Query(description="The ref to insert into. Omit for main.")] = None,
@@ -336,7 +335,9 @@ async def insert_into_table(
 
     ``mode=overwrite`` removes every row on the ref before inserting (spec.yaml InsertIntoTableRequest.mode),
     so a protected table refuses it 409 unless ``force=true``, on any branch — the protection record is the
-    table's — and it is recorded as ``overwrite_table`` with the ``OVERWRITE`` lifecycle state ([[LH-242]])."""
+    table's — and it is recorded as ``overwrite_table`` with the ``OVERWRITE`` lifecycle state ([[LH-242]]).
+
+    The run the request's Context names is stamped into the commit, on main only ([[LH-225]])."""
     segments = parse_identifier(id, settings.delimiter)
     # PARSED HERE, ONCE: pylance's `LanceDataset.insert` refuses a value outside Append/Overwrite with a
     # bare ValueError or OSError (500, measured on pylance 12.0.0), where the spec answers InvalidInput.
@@ -353,7 +354,9 @@ async def insert_into_table(
         dataplane.coerce_insert_arrow, ns, so, segments, data, branch, max_bytes=settings.max_body_bytes, overwrite=insert_mode is InsertMode.OVERWRITE
     )
     req = InsertIntoTableRequest(id=segments, mode=insert_mode.value, branch=branch)
-    response: InsertIntoTableResponse = await run_in_threadpool(dataplane.insert_into_table, ns, so, req, data, max_bytes=settings.max_body_bytes)
+    response: InsertIntoTableResponse = await run_in_threadpool(
+        partial(dataplane.insert_into_table, ns, so, req, data, max_bytes=settings.max_body_bytes, transaction_properties=_stamp(run, token))
+    )
     # The version THIS insert committed, off the handle that committed it: a reopen would name whichever
     # append landed last.
     await lineage_deps.emit_measured_write(
@@ -369,6 +372,7 @@ async def insert_into_table(
         # A branch has its own version sequence; reading this write back off main pins the edge to a
         # version that never carried it.
         branch=branch,
+        run=run,
     )
     return response
 
@@ -382,7 +386,7 @@ async def merge_insert_into_table(
     so: StorageOptionsDep,
     token: CurrentToken,
     emitter: LineageEmitterDep,
-    client: FgaClientDep,
+    run: RunDep,
     data: Annotated[bytes, Body(media_type=ARROW_STREAM_MEDIA_TYPE)],
     # `on` STAYS A SINGLE KEY until the lance-namespace bump (A9 is blocked on A10). 0.12.0 makes it an
     # array of field paths — a composite merge key, sent as a repeated query parameter — but the
@@ -398,18 +402,13 @@ async def merge_insert_into_table(
     timeout: str | None = None,
     use_index: bool | None = None,
     branch: Annotated[str | None, Query(description="The ref to merge into. Omit for main.")] = None,
-    source: RaskSource = None,
-    source_version: RaskSourceVersion = None,
-    run_facets_json: Annotated[str | None, Header(alias="X-Lance-Run-Facets")] = None,
     authorization: Annotated[str | None, Header()] = None,
 ) -> MergeInsertIntoTableResponse:
     """Upsert Arrow-IPC rows — ``merge_insert_into_table``; emits a MERGE_INSERT lineage event.
     The ``*_filt`` SQL filters, ``timeout``, ``use_index`` and ``branch`` are spec-0.9 query params.
 
-    Training-shaped lineage (optional, catalog stays un-opinionated): ``source`` + ``source_version``
-    record the version-pinned upstream this merge DERIVED FROM (a pipeline's merge from ``source@N`` — the
-    reproducibility pin surfaced on the lineage READ edge), and the ``X-Lance-Run-Facets`` header carries
-    producer run metadata (e.g. training ``params``) verbatim onto the emitted RunEvent.
+    The run the request's Context names is stamped into the commit, on main only, and its inputs become the
+    event's version-pinned inputs ([[LH-225]]).
 
     IMPLICIT DDL (§4): after the merge commits, a best-effort BTREE index is ensured on the ``on``
     key (pylance's ``use_index`` only helps *if an index exists*, and nothing else ever builds one —
@@ -421,18 +420,6 @@ async def merge_insert_into_table(
     ``response.version + 1`` while the MERGE_INSERT lineage points at ``response.version`` — a
     version gap, not a lost write."""
     segments = parse_identifier(id, settings.delimiter)
-    # Validate the optional lineage metadata BEFORE the write — a malformed pin/facet is a 4xx, not a
-    # committed merge whose provenance then silently drops.
-    source_pin = merge_source_pin(source, source_version, settings.delimiter)
-    extra_run_facets = parse_run_facets(run_facets_json)
-    if source_pin is not None:
-        # The caller named a source to record as a merge INPUT. The catalog is the TRUSTED stamper on the
-        # Dapr transport (the lineage ingest input-authz guard runs only on the HTTP path), so a named source
-        # the caller can't READ would forge a cross-tenant DERIVED_FROM/READ edge — or a phantom vertex for a
-        # nonexistent one. Mirror the ingest guard here: require can_get_metadata on the source, fail-closed
-        # (no-op when FGA is off). A denial 4xx never distinguishes "hidden" from "absent" (both → no tuple).
-        await fga_deps.require_can_get_metadata(client, settings, token, segments=source_pin.segments)
-    inputs = [source_pin] if source_pin is not None else None
     req = MergeInsertIntoTableRequest(
         id=segments,
         on=on,
@@ -446,7 +433,9 @@ async def merge_insert_into_table(
         branch=branch,
     )
     response: MergeInsertIntoTableResponse = await run_in_threadpool(
-        partial(dataplane.merge_insert_into_table, ns, so, req, data, max_bytes=settings.max_body_bytes, data_ns=data_ns)
+        partial(
+            dataplane.merge_insert_into_table, ns, so, req, data, max_bytes=settings.max_body_bytes, data_ns=data_ns, transaction_properties=_stamp(run, token)
+        )
     )
     # merge can add/change columns (schema drift at this version) → record the post-write schema, read
     # PINNED at the version this merge produced so a concurrent writer can't smuggle in a later schema.
@@ -463,8 +452,7 @@ async def merge_insert_into_table(
         # Pinned AND branched, together: the dataplane call above already takes `branch=branch`, so a
         # trailer that does not is measuring a different dataset than the one just written.
         branch=branch,
-        inputs=inputs,
-        extra_run_facets=extra_run_facets,
+        run=run,
     )
     # AFTER the merge and the emit (matching the emit pattern; §0 forbids BackgroundTasks): ensure the
     # merge key is BTREE-indexed so subsequent upserts stop full-scanning. Best-effort inside — no

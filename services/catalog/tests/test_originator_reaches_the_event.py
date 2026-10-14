@@ -23,6 +23,7 @@ from typing import Any, Unpack
 import pytest
 
 from catalog.core.lineage_emit import EmitFields, InputRef, OriginatorBoundEmitter, _BaseLineageEmitter, emit_write_event
+from catalog.core.run_context import RunContext
 
 
 class _Recording:
@@ -107,7 +108,7 @@ def _optional() -> EmitFields:
         source_uri="s3://bkt/t.lance",
         schema_fields=[],
         inputs=[InputRef("acme", "acme$src", 2)],
-        extra_run_facets={"params": {"_producer": "p", "_schemaURL": "s", "lr": "0.1"}},
+        run=RunContext(run_id="pipeline-7", job="nightly"),
         project="acme",
         originator="bob",
     )
@@ -125,7 +126,7 @@ def test_every_field_in_the_bundle_reaches_the_emitted_event() -> None:
     assert event["run"]["runId"] == "run-1"
     assert facets["lance"]["project"] == "acme"
     assert facets["lance"]["originator"] == "bob"
-    assert facets["params"]["lr"] == "0.1"
+    assert (facets["lance"]["runId"], facets["lance"]["job"]) == ("pipeline-7", "nightly")
     assert event["inputs"][0]["name"] == "acme$src"
     assert event["outputs"][0]["facets"]["dataSource"]["uri"] == "s3://bkt/t.lance"
 

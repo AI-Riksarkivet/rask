@@ -157,6 +157,25 @@ the process:
   with `OMP_NUM_THREADS` unset. pyarrow's CPU pool reports `pa.cpu_count() == 64`, and importing
   pyarrow and running a threaded Parquet read added 68 threads.
 
+### Transaction properties (pylance 13.0.0, 2026-10-14)
+
+No file here mentions `transaction_properties`, so what [[LH-225]] relies on was measured:
+
+- **They persist with the commit.** `write_dataset(..., transaction_properties=...)`, `LanceDataset.insert(...,
+  transaction_properties=...)` (passed through to `write_dataset`) and `LanceDataset.commit(Transaction(...,
+  transaction_properties=...))` each write them into the version's transaction, and
+  `read_transaction(v).transaction_properties` returns them. A stock client committing through the namespace under
+  `managed_versioning` carries them in the transaction its staged manifest names.
+- **`update`, `delete` and `add_columns` take none**, and neither does `MergeInsertBuilder.execute`; a merge can carry
+  them only through `execute_uncommitted` and `LanceDataset.commit`.
+- **That path drops the merge's key check under a race.** The Python `LanceOperation.Update` has no inserted-rows
+  filter, so `LanceDataset.commit` rebases an `execute_uncommitted` merge over a writer that landed first without
+  re-checking keys: two racing `when_matched_fail().when_not_matched_insert_all()` inserts of one key both committed,
+  with `max_retries=0` as well, where `execute` refuses the second. A detached commit finalized at exactly the next
+  version through the `dir` backend's `create_table_version` loses the race instead (`ConcurrentModificationError`,
+  "Version 2 already exists ... with different content"), and re-planning sees the winner's rows.
+- **`cleanup_old_versions` deletes `_transactions/`**, so a reader of the stamp must run inside version retention.
+
 ## A digest, not a copy
 
 `lancemultibasebranchingblobv2.md` is the one file here that is not upstream text. It is a digest

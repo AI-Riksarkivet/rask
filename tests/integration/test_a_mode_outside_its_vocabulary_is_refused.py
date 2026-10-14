@@ -195,6 +195,6 @@ def test_the_data_plane_refuses_it_without_the_door(tmp_path: Path, branch: str 
         open_dataset(ns, {}, ["t"]).create_branch(branch, None)
 
     with pytest.raises(InvalidInputError):
-        insert_into_table(ns, {}, InsertIntoTableRequest(id=["t"], mode="Appnd", branch=branch), _rows(5), max_bytes=_BODY_LIMIT)
+        insert_into_table(ns, {}, InsertIntoTableRequest(id=["t"], mode="Appnd", branch=branch), _rows(5), max_bytes=_BODY_LIMIT, transaction_properties=None)
 
     assert open_dataset(ns, {}, ["t"], branch=branch).count_rows() == 3, "a refused insert must write no rows"

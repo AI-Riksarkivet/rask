@@ -7,7 +7,8 @@ One repeated `id` therefore wedges every downstream full-sync merge. The doors h
 within the rows a write carries, and against the rows the table holds when the write lands.
 
 Driven through the real catalog app on a real pylance ``dir`` backend, through the doors that write rows
-server-side: ``/create``, ``/insert`` and ``/merge_insert``. Two inserts racing one new key must land it once.
+server-side: ``/create``, ``/insert`` and ``/merge_insert``. Two inserts racing one new key must land it once,
+whether or not they name a run in their Context ([[LH-225]]).
 A client-written commit is judged at ``version/create``
 (``services/catalog/tests/test_a_stock_client_commits_every_operation_through_version_create.py``).
 """
@@ -48,8 +49,8 @@ def _create(client: TestClient, *ids: int, mode: str = "Create") -> httpx.Respon
     return client.post(f"/v1/table/{TABLE}/create", params={"mode": mode}, content=_ipc(_rows(*ids)), headers=ARROW)
 
 
-def _insert(client: TestClient, *ids: int) -> httpx.Response:
-    return client.post(f"/v1/table/{TABLE}/insert", content=_ipc(_rows(*ids)), headers=ARROW)
+def _insert(client: TestClient, *ids: int, context: dict[str, str] | None = None) -> httpx.Response:
+    return client.post(f"/v1/table/{TABLE}/insert", content=_ipc(_rows(*ids)), headers={**ARROW, **(context or {})})
 
 
 def _merge(client: TestClient, *ids: int) -> httpx.Response:
@@ -57,13 +58,13 @@ def _merge(client: TestClient, *ids: int) -> httpx.Response:
     return client.post(f"/v1/table/{TABLE}/merge_insert", params=params, content=_ipc(_rows(*ids)), headers=ARROW)
 
 
-def _two_inserts_of_one_new_key(client: TestClient, _location: str) -> list[httpx.Response]:
+def _two_inserts_of_one_new_key(client: TestClient, _location: str, context: dict[str, str] | None = None) -> list[httpx.Response]:
     start = threading.Barrier(2)
     answers: list[httpx.Response] = []
 
     def insert() -> None:
         start.wait()
-        answers.append(_insert(client, 9))
+        answers.append(_insert(client, 9, context=context))
 
     threads = [threading.Thread(target=insert) for _ in range(2)]
     for thread in threads:
@@ -82,6 +83,14 @@ def _two_inserts_of_one_new_key(client: TestClient, _location: str) -> list[http
         pytest.param(lambda c, _l: [_insert(c, 2, 5)], True, [400], [1, 2], id="insert-repeats-a-held-key"),
         pytest.param(lambda c, _l: [_merge(c, 5, 5)], True, [400], [1, 2], id="merge-source-repeats-within"),
         pytest.param(_two_inserts_of_one_new_key, True, [200, 400], [1, 2, 9], id="racing-inserts-land-a-new-key-once"),
+        # A run in the Context sends an insert through the stamped commit, which must keep the key check across the race.
+        pytest.param(
+            lambda c, location: _two_inserts_of_one_new_key(c, location, {"x-rask-run-id": "run-7"}),
+            True,
+            [200, 400],
+            [1, 2, 9],
+            id="racing-inserts-naming-a-run-land-a-new-key-once",
+        ),
     ],
 )
 def test_a_write_repeating_the_primary_key_is_refused_and_the_table_keeps_each_key_once(

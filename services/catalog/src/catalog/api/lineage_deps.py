@@ -17,14 +17,13 @@ Ops that emit a versionless marker with no read-back (drop/deregister/declare/re
 
 from __future__ import annotations
 
-from typing import Any
-
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import LanceNamespace
 
 from catalog.api.security import Principal
 from catalog.core.config import Settings
-from catalog.core.lineage_emit import InputPin, LineageEmitter, emit_write_event
+from catalog.core.lineage_emit import LineageEmitter, emit_write_event, run_inputs
+from catalog.core.run_context import RunContext
 from catalog.services import dataplane
 from service_kit.lakehouse.objectfs import StorageOptions
 
@@ -41,8 +40,7 @@ async def emit_measured_write(
     authorization: str | None,
     pin_version: int | None,
     branch: str | None,
-    inputs: list[InputPin] | None = None,
-    extra_run_facets: dict[str, Any] | None = None,
+    run: RunContext | None = None,
 ) -> None:
     """Read back ``(version, schema)`` in one pinned open, then emit the best-effort WROTE event.
 
@@ -57,9 +55,9 @@ async def emit_measured_write(
     as a write to main. A branch write also carries that branch's ``branch_identifier``, because a recreated
     branch restarts its numbering and ``(ref, version)`` alone then names two commits.
 
-    ``inputs`` names the version-pinned source dataset(s) this write DERIVED FROM (a pipeline's merge from
-    ``source@N``); ``extra_run_facets`` rides caller-supplied run facets (e.g. training ``params``) —
-    both threaded verbatim to :func:`emit_write_event`, so the catalog stays un-opinionated about them.
+    ``run`` is the run the writer named (:mod:`catalog.core.run_context`): its inputs become the event's
+    version-pinned inputs, the derivation edge the catalog records for the write, and its id and job ride the
+    event.
     """
     # A request may spell main by name; the event records main as no ref at all, as Lance does.
     ref = dataplane.recorded_branch(branch)
@@ -85,6 +83,6 @@ async def emit_measured_write(
         # gives branch v3, a later main write gives main v3, different contents.
         branch=ref,
         branch_identifier=identifier,
-        inputs=inputs,
-        extra_run_facets=extra_run_facets,
+        inputs=run_inputs(run),
+        run=run,
     )

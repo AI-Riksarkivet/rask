@@ -26,7 +26,6 @@ from annotator.projects.publish import (
     PUBLISHED_COLUMNS,
     PublishRefusal,
     build_plan,
-    project_facet,
     table_properties,
 )
 
@@ -171,43 +170,9 @@ def test_a_waived_review_writes_empty_string_not_null() -> None:
 
     assert row["reviewed_by"] == ""
     assert row["review_action"] == NO_SHAPE
-    assert project_facet(_project(), _plan([(task, _draft("t0", 1))]))["tasksWithoutReview"] == 1
 
 
-# --------------------------------------------------------------------------------------------------
-# The run facet — §7.2
-# --------------------------------------------------------------------------------------------------
-
-
-def test_the_facet_reports_project_totals() -> None:
-    plan = _plan(
-        [
-            (_task("t0", TaskState.ACCEPTED, submitted_by="zoe", reviewed_by="carol"), _draft("t0", 1)),
-            (_task("t1", TaskState.ACCEPTED, submitted_by="gina", reviewed_by="carol"), _draft("t1", 2)),
-            (_task("t2", TaskState.SKIPPED), None),
-        ]
-    )
-    facet = project_facet(_project(), plan, frozen_at=NOW)
-
-    assert facet["projectSlug"] == "vasa-portraits"
-    assert facet["publishId"] == PUBLISH_ID
-    assert (facet["taskCount"], facet["acceptedCount"], facet["skippedCount"]) == (3, 2, 1)
-    assert (facet["annotatorCount"], facet["reviewerCount"]) == (2, 1)
-    assert facet["labelClasses"] == ["person", "ship"], "label classes must be sorted, not schema-ordered"
-    assert facet["frozenAt"] == NOW.isoformat()
-
-
-def test_send_origins_are_counted_per_task_not_per_row() -> None:
-    """A task with ten shapes is ONE send. Counting rows would report a project's origins in
-    proportion to how densely each item happened to be annotated."""
-    plan = _plan([(_task("t0", TaskState.ACCEPTED), _draft("t0", 10)), (_task("t1", TaskState.ACCEPTED), _draft("t1", 1))])
-    facet = project_facet(_project(), plan)
-
-    assert facet["sendOrigins"] == {"chunks": 2}
-    assert facet["sourceDatasets"] == [{"dataset": "transcripts_v2", "items": 2, "version": None}]
-
-
-def test_a_replayed_publish_produces_an_identical_plan_and_facet() -> None:
+def test_a_replayed_publish_produces_an_identical_plan() -> None:
     """The workflow replays this activity after a crash. Two replays that differ would read as two
     provenances for one publish — so everything derived is sorted, and nothing is timestamped here."""
     pairs = [
@@ -218,7 +183,6 @@ def test_a_replayed_publish_produces_an_identical_plan_and_facet() -> None:
     first, second = _plan(list(pairs)), _plan(list(pairs))
 
     assert first.rows == second.rows
-    assert project_facet(_project(), first) == project_facet(_project(), second)
 
 
 # --------------------------------------------------------------------------------------------------
@@ -336,19 +300,8 @@ def test_source_pin_refuses_anything_ambiguous(specs: list, why: str) -> None:
     assert source_pin(plan) is None, why
 
 
-def test_the_facet_source_datasets_carry_their_captured_versions() -> None:
-    project = AnnotationProject(project_id="p1", tenant="acme", slug="vasa")
-    pairs = [(_pin_task("t0", "demo", 24), None), (_pin_task("t1", "other", None), None)]
-    plan = build_plan(project, pairs, publish_id="tok", published_at=NOW)
-
-    facet = project_facet(project, plan)
-    by_name = {d["dataset"]: d for d in facet["sourceDatasets"]}
-    assert by_name["demo"]["version"] == 24
-    assert by_name["other"]["version"] is None, "an uncaptured version must read as unknown, not invented"
-
-
 # --------------------------------------------------------------------------------------------------
-# Consensus v1 — replica groups in the facet (counts only; the merge is a named follow-up)
+# Consensus v1 — adjudication in the publish (a stale pick refuses)
 # --------------------------------------------------------------------------------------------------
 
 
@@ -371,77 +324,6 @@ def _replica_task(task_id: str, replica_of: str, labels: list[str]) -> tuple[Tas
     return task, draft
 
 
-def test_the_facet_reports_consensus_counts_never_a_fabricated_merge() -> None:
-    """Two groups of two replicas: one agrees, one does not. The facet counts; every replica's rows
-    still land (annotated_by distinguishes) — no invented merge.
-
-    The facet is GEOMETRY-AWARE since #55, so `perfect_agreement_groups` is gone and
-    `unanimous_groups` replaces it. That is a RENAME, not an alias: the old key meant "identical
-    label multisets" and the new one means "the same objects, labelled the same", and a consumer
-    silently reading a stronger number under the old name is drift a published metric cannot afford.
-
-    Both replicas here draw at IDENTICAL coordinates, so g1's two boxes are ambiguous to geometry
-    alone — `person`/`ship` against `ship`/`person`. They agree, and the label tie-break is what
-    makes that come out right rather than depending on enumeration order.
-    """
-    project = AnnotationProject(project_id="p1", tenant="acme", slug="vasa", consensus_n=2)
-    pairs = [
-        _replica_task("g1-r1", "g1", ["person", "ship"]),
-        _replica_task("g1-r2", "g1", ["ship", "person"]),  # same objects, same labels → agrees
-        _replica_task("g2-r1", "g2", ["person"]),
-        _replica_task("g2-r2", "g2", ["signature"]),  # one object, two names → disagrees
-    ]
-    plan = build_plan(project, pairs, publish_id="tok", published_at=NOW)
-    facet = project_facet(project, plan)
-
-    consensus = facet["consensus"]
-    assert consensus["n"] == 2
-    assert consensus["groups"] == 2
-    assert consensus["unanimous_groups"] == 1
-    assert "perfect_agreement_groups" not in consensus
-    # Three objects across the two groups: two in g1, one in g2.
-    assert consensus["objects"] == 3
-    # The threshold rides WITH the number — an agreement figure is unreadable without it.
-    assert consensus["iou_threshold"] == 0.5
-    # All four replicas' shapes are rows — 2+2+1+1.
-    assert len(plan.rows) == 6
-
-
-def test_the_same_labels_in_DIFFERENT_PLACES_are_no_longer_agreement() -> None:
-    """The headline regression #55 fixes, and the reason the metric was replaced rather than tuned.
-
-    Two annotators drew one box each, both labelled `person`, nowhere near each other. The old
-    scorer compared label multisets — `['person'] == ['person']` — and reported PERFECT agreement
-    for two people who did not mark the same thing at all. For a detection task that is the entire
-    question.
-    """
-    project = AnnotationProject(project_id="p1", tenant="acme", slug="vasa", consensus_n=2)
-    here, there = _replica_task("g1-r1", "g1", ["person"]), _replica_task("g1-r2", "g1", ["person"])
-    # Move the second annotator's box far away; everything else about the pair is identical.
-    for shape in there[1].shapes:
-        shape.x, shape.y = 500.0, 500.0
-
-    plan = build_plan(project, [here, there], publish_id="tok", published_at=NOW)
-    consensus = project_facet(project, plan)["consensus"]
-
-    assert consensus["unanimous_groups"] == 0
-    # Two distinct objects, each seen by exactly one annotator — not one object they agreed on.
-    assert consensus["objects"] == 2
-
-
-def test_no_consensus_facet_when_the_task_has_no_replicas() -> None:
-    project = AnnotationProject(project_id="p1", tenant="acme", slug="vasa")
-    pairs = [(_pin_task("t0", "demo", 24), None)]
-    plan = build_plan(project, pairs, publish_id="tok", published_at=NOW)
-
-    assert "consensus" not in project_facet(project, plan)
-
-
-# --------------------------------------------------------------------------------------------------
-# Consensus v1 — adjudication in the publish (the facet carries the pick; a stale pick refuses)
-# --------------------------------------------------------------------------------------------------
-
-
 def _adjudicated_project(**picks: str) -> AnnotationProject:
     return AnnotationProject(
         project_id="p1",
@@ -452,30 +334,9 @@ def _adjudicated_project(**picks: str) -> AnnotationProject:
     )
 
 
-def test_the_facet_carries_the_managers_picks() -> None:
-    project = _adjudicated_project(g1="g1-r2")
-    pairs = [_replica_task("g1-r1", "g1", ["ship"]), _replica_task("g1-r2", "g1", ["boat"])]
-    plan = build_plan(project, pairs, publish_id="tok", published_at=NOW)
-
-    facet = project_facet(project, plan)
-
-    pick = facet["consensus"]["adjudications"]["g1"]
-    assert pick["task_id"] == "g1-r2"
-    assert pick["by"] == "meg", "the facet must carry WHO decided — a pick without attribution is not provenance"
-    assert pick["at"], "…and WHEN"
-
-
-def test_no_adjudications_key_when_nothing_was_picked() -> None:
-    project = AnnotationProject(project_id="p1", tenant="acme", slug="vasa", consensus_n=2)
-    pairs = [_replica_task("g1-r1", "g1", ["ship"]), _replica_task("g1-r2", "g1", ["ship"])]
-    plan = build_plan(project, pairs, publish_id="tok", published_at=NOW)
-
-    assert "adjudications" not in project_facet(project, plan)["consensus"], "an absent pick must stay absent — not an empty map pretending to be a decision"
-
-
 def test_a_pick_naming_a_no_longer_accepted_replica_refuses_the_publish() -> None:
     """The group was adjudicated, then the winner was reopened and skipped. Publishing anyway would
-    stamp a facet whose canonical pick points outside the accepted set — refused, never dropped."""
+    record a canonical pick outside the accepted set — refused, never dropped."""
     project = _adjudicated_project(g1="g1-r1")
     skipped_task, _ = _replica_task("g1-r1", "g1", [])
     skipped_task = skipped_task.model_copy(update={"state": TaskState.SKIPPED})
@@ -508,7 +369,7 @@ def test_a_pick_naming_another_groups_member_refuses_the_publish() -> None:
         build_plan(project, pairs, publish_id="tok", published_at=NOW)
 
 
-def test_the_ontology_is_stamped_into_properties_and_facet() -> None:
+def test_the_ontology_is_stamped_into_properties() -> None:
     """§7.1: a downstream consumer must know what SHAPE of labels the table holds."""
     from annotator.projects.publish import table_properties
 
@@ -522,9 +383,6 @@ def test_the_ontology_is_stamped_into_properties_and_facet() -> None:
     plan = build_plan(project, pairs, publish_id="tok", published_at=NOW)
 
     assert table_properties(project, plan)["annotation.task_kind"] == "reading-order"
-    facet = project_facet(project, plan)
-    assert facet["ontology"]["kind"] == "reading-order"
-    assert facet["ontology"]["classes"][0]["tools"] == ["bbox"]
 
 
 # --------------------------------------------------------------------------------------------------

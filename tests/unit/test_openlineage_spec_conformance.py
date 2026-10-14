@@ -29,6 +29,7 @@ from jsonschema import Draft202012Validator, FormatChecker
 from openlineage.client import facet_v2
 
 from catalog.core import lineage_emit as catalog_emit
+from catalog.core.run_context import RunContext
 from lineage.models import ColumnLineageEdge, Dataset, OutputStatistics, RunEvent
 from maintenance.core import lineage_emit as compaction_emit
 from service_kit import openlineage as ol
@@ -95,8 +96,8 @@ def test_catalog_write_event_conforms() -> None:
         job_namespace="lance-catalog",
         source_uri="s3://lakehouse/bronze/images",
         schema_fields=[{"name": "id", "type": "int64"}, {"name": "payload", "type": "blob"}],
-        inputs=[catalog_emit.InputRef("alpha$raw", "alpha$raw$drop", 7)],
-        extra_run_facets=catalog_emit.shape_run_facets({"params": {"lr": 0.01}}),
+        inputs=[catalog_emit.InputRef("alpha$raw", "alpha$raw$drop", 7, "review")],
+        run=RunContext(run_id="nightly-7", job="ingest"),
     )
     _assert_conforms(event)
 

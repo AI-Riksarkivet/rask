@@ -43,7 +43,7 @@ from pydantic import BaseModel, ConfigDict
 
 from annotator.projects.machines import IllegalTransition
 from annotator.projects.models import AnnotationProject, Draft, ProjectState, Task, TaskState
-from annotator.projects.publish import PROJECT_FACET, PublishPlan, PublishRefusal, build_plan, project_facet, source_pin, table_properties
+from annotator.projects.publish import PublishPlan, PublishRefusal, build_plan, source_pin, table_properties
 from service_kit.lakehouse.naming import CATALOG_DELIMITER
 
 
@@ -64,14 +64,14 @@ class Publisher(Protocol):
         plan: PublishPlan,
         *,
         properties: dict[str, str],
-        run_facet: dict[str, Any],
+        run_id: str,
         source: str | None = None,
         source_version: int | None = None,
     ) -> int:
         """Create the table from the plan's rows; return its version. MUST treat an existing table
-        with this id as success — the saga relies on that for retry safety. ``source`` +
-        ``source_version`` are the §7.2 reproducibility pin (the lineage READ edge) — present only
-        when the plan pins unambiguously, and the transport passes them through verbatim."""
+        with this id as success — the saga relies on that for retry safety. ``run_id`` and the pin
+        (``source`` at ``source_version``, present only when the plan pins unambiguously) travel as the
+        catalog Context's run and input."""
         ...
 
     async def tag_version(self, table_id: str, version: int, tag: str) -> None:
@@ -250,11 +250,8 @@ async def run_publish(
             # else nothing: `source_pin` never fabricates, so neither does the wire.
             source=pin[0] if pin else None,
             source_version=pin[1] if pin else None,
-            # KEYED by the facet name. `project_facet` returns the spec-legal PAYLOAD; the catalog's
-            # `X-Lance-Run-Facets` is a {name: payload} mapping, so handing it the bare payload would
-            # emit a facet with no name — dropped or rejected at the far end, which is provenance
-            # that silently does not arrive.
-            run_facet={PROJECT_FACET: project_facet(project, plan)},
+            # The publish token names the run: minted once per publish, so a retried create names the same one.
+            run_id=publish_id,
         )
         await _note(project_handle, f"tagging version {version}")
         await publisher.tag_version(table_id, version, tag)

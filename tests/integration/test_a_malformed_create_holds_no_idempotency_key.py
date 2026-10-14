@@ -4,9 +4,8 @@ The create door's claim is an object-store record with a 300 s lease. A refusal 
 leaves it in flight, and the caller who fixes the request and retries under the same key is answered
 409 `ConcurrentModification` for an attempt that never ran. So every refusal that needs nothing but the
 request runs ahead of the claim: the mode, a wildcard segment, an off-allowlist `data_base`, `properties`
-that are not a JSON map of strings (spec.yaml:3761-3767), a non-Lance format, the derived-write pin
-(`source` / `source_version`), the `X-Lance-Run-Facets` header, and a body that is not a valid Arrow
-IPC stream, in its framing or in its buffers.
+that are not a JSON map of strings (spec.yaml:3761-3767), a non-Lance format, a malformed run in the
+request's Context, and a body that is not a valid Arrow IPC stream, in its framing or in its buffers.
 
 Driven over HTTP against a real `dir` backend, each as a keyed typo followed by the fixed request under
 the same key, so the second status is read where a retrying client reads it.
@@ -69,10 +68,7 @@ _OFFSETS = struct.pack("<iii", 0, 5, 10)
         pytest.param(f"{CREATE}?properties=[1]", {}, "string values", id="properties-that-are-an-array"),
         pytest.param(f'{CREATE}?properties={{"a":1}}', {}, "string values", id="a-property-that-is-a-number"),
         pytest.param(f'{CREATE}?properties={{"write.format.default":"parquet"}}', {}, "Lance only", id="a-non-lance-format"),
-        pytest.param(f"{CREATE}?source_version=3", {}, "source_version requires source", id="a-source-version-with-no-source"),
-        pytest.param(f"{CREATE}?source=%24&source_version=1", {}, "not a valid dataset id", id="a-delimiter-only-source"),
-        pytest.param(CREATE, {"X-Lance-Run-Facets": "{not-json"}, "must be valid JSON", id="run-facets-that-are-not-json"),
-        pytest.param(CREATE, {"X-Lance-Run-Facets": "[1]"}, "must be a JSON object", id="run-facets-that-are-not-an-object"),
+        pytest.param(CREATE, {"x-rask-run-id": "run-7", "x-rask-inputs": "{not-json"}, "inputs are not JSON", id="a-run-whose-inputs-are-not-json"),
     ],
 )
 def test_a_keyed_shape_refusal_lets_the_corrected_retry_run(real_ns_client: TestClient, malformed: str, headers: dict[str, str], refusal: str) -> None:

@@ -16,11 +16,13 @@ granted except the ones a case denies, so the door's own rung choice is what dec
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -41,11 +43,14 @@ _TABLE = ["db", "t"]
 
 class Served(BaseModel):
     url: str
+    #: Relations FGA denies: a bare relation everywhere, ``<relation> <object>`` on one object.
     denied: set[str]
     root: Path
 
-    def stock(self) -> lance_namespace.LanceNamespace:
-        return lance_namespace.connect("rest", {"uri": self.url, "headers.Authorization": _TOKEN["Authorization"]})
+    def stock(self, context: dict[str, str] | None = None) -> lance_namespace.LanceNamespace:
+        """pylance's REST namespace, sending ``context`` as request headers on every call (``headers.<name>``)."""
+        headers = {f"headers.{name}": value for name, value in (context or {}).items()}
+        return lance_namespace.connect("rest", {"uri": self.url, "headers.Authorization": _TOKEN["Authorization"], **headers})
 
 
 @pytest.fixture
@@ -64,8 +69,8 @@ def served(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Served]:
         monkeypatch.setenv(key, value)
     served = Served(url="", denied=set(), root=tmp_path / "root")
 
-    async def check(_client: object, *, relation: str, **_kw: object) -> bool:
-        return relation not in served.denied
+    async def check(_client: object, *, relation: str, obj: str, **_kw: object) -> bool:
+        return relation not in served.denied and f"{relation} {obj}" not in served.denied
 
     monkeypatch.setattr(fga_module, "check", check)
     monkeypatch.setattr(fga_module, "grant_on_create", AsyncMock())
@@ -254,14 +259,21 @@ def test_a_refused_commit_leaves_the_table_at_its_version_and_answers_a_spec_err
     after = _opened(stock)
     assert after.version == 3
     assert _rows(after) == [(1, "a"), (3, "c"), (4, "d")]
-    # pylance reports a refused finalize as an unknown outcome and keeps its staged manifest; asking for it again
-    # shows the answer the client was given.
-    table, version = staged_at
+    assert _answer_to_the_staged_commit(served, *staged_at)[:2] == (status, code)
+    assert _opened(stock).version == 3
+
+
+def _answer_to_the_staged_commit(served: Served, table: str, version: int) -> tuple[int, int, str]:
+    """The status, spec code and detail the catalog answers the one staged manifest of ``table`` at ``version``.
+
+    pylance reports a refused finalize as an unknown outcome and keeps its staged manifest; asking for it again shows
+    the answer the client was given.
+    """
     (staged,) = served.root.glob(f"*_{table}/_versions/*.manifest-*")
     path = staged.relative_to("/").as_posix()
     again = httpx.post(f"{served.url}/v1/table/{table}/version/create", json={"version": version, "manifest_path": path}, headers=_TOKEN)
-    assert (again.status_code, again.json().get("code")) == (status, code), again.text
-    assert _opened(stock).version == 3
+    body = again.json()
+    return again.status_code, body.get("code"), body.get("detail", "")
 
 
 def test_what_lands_is_what_was_judged_whatever_the_writer_puts_over_its_staged_manifest_meanwhile(served: Served, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -282,3 +294,189 @@ def test_what_lands_is_what_was_judged_whatever_the_writer_puts_over_its_staged_
     landed = _opened(stock)
     assert landed.version == 2
     assert _rows(landed) == [(1, "a"), (2, "b"), (3, "c"), (4, "d")]
+
+
+#: The provenance a pipeline names on a governed write (ADR 0156 C2): its run, its job, and each input at a version.
+_RUN = {"x-rask-run-id": "run-7", "x-rask-job": "nightly", "x-rask-inputs": json.dumps([{"table": ["db", "src"], "version": 1}])}
+
+
+def _with_source(served: Served) -> lance_namespace.LanceNamespace:
+    """``db$t`` at version 1 and the input ``db$src`` at version 1."""
+    stock = _created(served)
+    lance.write_dataset(
+        _keyed([1], ["s"]), namespace_client=stock, table_id=["db", "src"], mode="create", data_storage_version="2.2", enable_stable_row_ids=True
+    )
+    return stock
+
+
+def _ipc(table: pa.Table) -> bytes:
+    sink = pa.BufferOutputStream()
+    with pa.ipc.new_stream(sink, table.schema) as writer:
+        writer.write_table(table)
+    return sink.getvalue().to_pybytes()
+
+
+def _insert(stock: lance_namespace.LanceNamespace) -> None:
+    stock.insert_into_table(lance_namespace.InsertIntoTableRequest(id=_TABLE, mode="append"), _ipc(_keyed([4], ["d"])))
+
+
+def _merge_insert(stock: lance_namespace.LanceNamespace) -> None:
+    request = lance_namespace.MergeInsertIntoTableRequest(id=_TABLE, on="id", when_matched_update_all=True, when_not_matched_insert_all=True)
+    stock.merge_insert_into_table(request, _ipc(_keyed([3, 4], ["C", "d"])))
+
+
+def _committed_properties(dataset: lance.LanceDataset, version: int) -> dict[str, str]:
+    """The transaction properties version ``version`` of ``dataset`` committed."""
+    transaction = dataset.read_transaction(version)
+    assert transaction is not None, f"version {version} has no transaction"
+    return dict(transaction.transaction_properties or {})
+
+
+class _Recorder:
+    """The lineage emitter, keeping what each write door announced."""
+
+    def __init__(self) -> None:
+        self.writes: list[dict[str, Any]] = []
+
+    async def project_for(self, top_ns: str) -> str | None:
+        return None
+
+    async def emit_create(self, **fields: Any) -> None:
+        self.writes.append(fields)
+
+    async def emit_write(self, **fields: Any) -> None:
+        self.writes.append(fields)
+
+
+@pytest.mark.parametrize("door", [pytest.param(_insert, id="insert"), pytest.param(_merge_insert, id="merge_insert")])
+def test_a_catalog_write_door_commits_the_run_its_context_names(
+    served: Served, door: Callable[[lance_namespace.LanceNamespace], None], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from catalog.core.lineage_emit import InputRef
+    from catalog.main import app
+
+    _with_source(served)
+    recorder = _Recorder()
+    monkeypatch.setattr(app.state, "lineage_emitter", recorder, raising=False)
+
+    door(served.stock(_RUN))
+
+    landed = _opened(served.stock())
+    assert landed.version == 2
+    properties = _committed_properties(landed, 2)
+    assert {key: value for key, value in properties.items() if key != "rask.inputs"} == {"rask.run_id": "run-7", "rask.job": "nightly", "rask.author": "alice"}
+    assert json.loads(properties["rask.inputs"]) == [{"table": ["db", "src"], "version": 1}]
+    (announced,) = recorder.writes
+    assert (announced["version"], announced["inputs"], announced["run"].run_id, announced["run"].job) == (
+        2,
+        [InputRef("db", "db$src", 1, None)],
+        "run-7",
+        "nightly",
+    )
+
+
+_SILVER = ["lab", "t"]
+_PROVENANCE = {"rask.run_id": "run-7", "rask.author": "alice", "rask.inputs": json.dumps([{"table": ["db", "src"], "version": 1}])}
+
+
+def _stock_append_naming_no_run(served: Served) -> tuple[int, int, str]:
+    with pytest.raises(OSError):
+        lance.write_dataset(_keyed([2], ["b"]), namespace_client=served.stock(), table_id=_SILVER, mode="append")
+    return _answer_to_the_staged_commit(served, "lab$t", 2)
+
+
+def _stock_append_naming_another_author(served: Served) -> tuple[int, int, str]:
+    """The author is the verified caller; a run naming anyone else would be a forged provenance."""
+    forged = {**_PROVENANCE, "rask.author": "mallory"}
+    with pytest.raises(OSError):
+        lance.write_dataset(_keyed([2], ["b"]), namespace_client=served.stock(), table_id=_SILVER, mode="append", transaction_properties=forged)
+    return _answer_to_the_staged_commit(served, "lab$t", 2)
+
+
+def _insert_door_naming_no_run(served: Served) -> tuple[int, int, str]:
+    answer = httpx.post(
+        f"{served.url}/v1/table/lab$t/insert", content=_ipc(_keyed([2], ["b"])), headers={**_TOKEN, "content-type": "application/vnd.apache.arrow.stream"}
+    )
+    return answer.status_code, answer.json()["code"], answer.json()["detail"]
+
+
+def _update_door(served: Served) -> tuple[int, int, str]:
+    """``update`` cannot carry a run into its commit, so a silver table refuses it whatever the Context names."""
+    context = {"x-rask-run-id": "run-7", "x-rask-inputs": _PROVENANCE["rask.inputs"]}
+    answer = httpx.post(f"{served.url}/v1/table/lab$t/update", json={"updates": [["v", "'z'"]]}, headers={**_TOKEN, **context})
+    return answer.status_code, answer.json()["code"], answer.json()["detail"]
+
+
+def _rename_into_silver(served: Served) -> tuple[int, int, str]:
+    """A rename commits nothing a run can reach, so it may not move another tier's table into silver."""
+    body = {"new_table_name": "moved", "new_namespace_id": ["lab"]}
+    answer = httpx.post(f"{served.url}/v1/table/db$src/rename", json=body, headers=_TOKEN)
+    return answer.status_code, answer.json()["code"], answer.json()["detail"]
+
+
+@pytest.mark.parametrize(
+    ("write", "answer", "names"),
+    [
+        pytest.param(_stock_append_naming_no_run, (400, 13), "rask.run_id", id="a-stock-commit-naming-no-run"),
+        pytest.param(_stock_append_naming_another_author, (400, 13), "rask.author", id="a-stock-commit-naming-another-author"),
+        pytest.param(_insert_door_naming_no_run, (400, 13), "rask.run_id", id="the-insert-door-naming-no-run"),
+        pytest.param(_update_door, (406, 0), "merge_insert", id="the-update-door"),
+        pytest.param(_rename_into_silver, (400, 13), "untiered table into a silver namespace", id="a-rename-into-silver"),
+    ],
+)
+def test_a_silver_commit_lands_only_when_it_names_its_run_and_inputs(
+    served: Served, write: Callable[[Served], tuple[int, int, str]], answer: tuple[int, int], names: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from catalog.core.lineage_emit import InputRef
+    from catalog.main import app
+
+    stock = _with_source(served)
+    stock.create_namespace(lance_namespace.CreateNamespaceRequest(id=["lab"], properties={"rask.tier": "silver"}))
+    lance.write_dataset(
+        _keyed([1], ["a"]),
+        namespace_client=stock,
+        table_id=_SILVER,
+        mode="create",
+        data_storage_version="2.2",
+        enable_stable_row_ids=True,
+        transaction_properties=_PROVENANCE,
+    )
+
+    status, code, detail = write(served)
+
+    assert ((status, code), names in detail) == (answer, True), detail
+    assert lance.dataset(namespace_client=stock, table_id=_SILVER).version == 1
+    recorder = _Recorder()
+    monkeypatch.setattr(app.state, "lineage_emitter", recorder, raising=False)
+    lance.write_dataset(_keyed([2], ["b"]), namespace_client=stock, table_id=_SILVER, mode="overwrite", transaction_properties=_PROVENANCE)
+    landed = lance.dataset(namespace_client=stock, table_id=_SILVER)
+    assert (landed.version, _committed_properties(landed, 2)) == (2, _PROVENANCE)
+    assert [(write["version"], write["inputs"]) for write in recorder.writes] == [(2, [InputRef("db", "db$src", 1, None)])]
+    # A restore brings back rows the table held, here a fragment the overwrite dropped, so it names no run.
+    landed.checkout_version(1).restore()
+    assert _rows(lance.dataset(namespace_client=stock, table_id=_SILVER)) == [(1, "a")]
+
+
+def _stock_append_naming(served: Served, inputs: str) -> tuple[int, str]:
+    provenance = {"rask.run_id": "run-7", "rask.author": "alice", "rask.inputs": inputs}
+    with pytest.raises(OSError):
+        lance.write_dataset(_keyed([4], ["d"]), namespace_client=served.stock(), table_id=_TABLE, mode="append", transaction_properties=provenance)
+    _, code, detail = _answer_to_the_staged_commit(served, "db$t", 2)
+    return code, detail
+
+
+def _insert_door_naming(served: Served, inputs: str) -> tuple[int, str]:
+    with pytest.raises(lance_namespace.PermissionDeniedError) as refused:
+        _insert(served.stock({"x-rask-run-id": "run-7", "x-rask-inputs": inputs}))
+    return refused.value.code, str(refused.value)
+
+
+@pytest.mark.parametrize("commit", [pytest.param(_stock_append_naming, id="a-stock-commit"), pytest.param(_insert_door_naming, id="the-insert-door")])
+def test_a_commit_naming_an_input_the_caller_cannot_read_is_refused(served: Served, commit: Callable[[Served, str], tuple[int, str]]) -> None:
+    stock = _with_source(served)
+    served.denied.add("can_read_data table:db$src")
+
+    code, detail = commit(served, json.dumps([{"table": ["db", "src"], "version": 1}]))
+
+    assert (code, "can_read_data required on table:db$src" in detail) == (15, True), detail
+    assert _opened(stock).version == 1

@@ -23616,7 +23616,7 @@
     },
     "/v1/table/{id}/create": {
       "post": {
-        "description": "Create a Lance table from an Arrow-IPC stream \u2014 ``create_table``; seeds ownership + lineage.\n\n``mode=Overwrite`` over an existing table writes a new version of it ([[LH-242]],\n``table_create``'s module docstring): a protected table refuses it 409 unless ``force=true``, which\nturns the protection lock only, as on drop.\n\n``properties`` is the spec-0.9 JSON-encoded query parameter. Client-supplied ``storage_options``\nare deliberately NOT accepted: storage access is the catalog's to vend (two-tier secret model),\nso callers can't redirect writes or splice credentials.\n\n``data_base`` (#3-B, repeatable) spreads the table's fragments across the named approved buckets (Lance\nmulti-base). Each MUST be on the ``LANCE_MULTIBASE_DATA_BASES`` allowlist \u2014 a caller can never point a\nbase at an arbitrary bucket. Omitted \u2192 a single-location table exactly as before.\n\n``external_blob_base`` ([[LH-209]]) asks to register ONE external blob base, so the table's blob\ncolumns may hold ``Blob.from_uri`` pointers under it. It must lie inside a ``LANCE_EXTERNAL_BLOB_BASES``\nentry and outside governed storage (``table_bases.requested_external_blob_base``). Omitted \u2192 no\nexternal base, and a pointer in the rows is refused.\n\nDerived-write lineage (S4, optional \u2014 the same metadata ``merge_insert`` has always taken):\n``source`` + ``source_version`` record the version-pinned upstream this table DERIVES FROM\n(an annotation publish from ``transcripts@N``, a Ray job's first write), surfaced as a\nversion-pinned INPUT on the CREATE RunEvent; the ``X-Lance-Run-Facets`` header carries producer\nrun metadata (e.g. the ``annotationProject`` facet) verbatim onto the same event. Before S4,\nevery FIRST write of a derived table was emitted with no pin and no facet \u2014 only later merges\ncould carry provenance.",
+        "description": "Create a Lance table from an Arrow-IPC stream \u2014 ``create_table``; seeds ownership + lineage.\n\n``mode=Overwrite`` over an existing table writes a new version of it ([[LH-242]],\n``table_create``'s module docstring): a protected table refuses it 409 unless ``force=true``, which\nturns the protection lock only, as on drop.\n\n``properties`` is the spec-0.9 JSON-encoded query parameter. Client-supplied ``storage_options``\nare deliberately NOT accepted: storage access is the catalog's to vend (two-tier secret model),\nso callers can't redirect writes or splice credentials.\n\n``data_base`` (#3-B, repeatable) spreads the table's fragments across the named approved buckets (Lance\nmulti-base). Each MUST be on the ``LANCE_MULTIBASE_DATA_BASES`` allowlist \u2014 a caller can never point a\nbase at an arbitrary bucket. Omitted \u2192 a single-location table exactly as before.\n\n``external_blob_base`` ([[LH-209]]) asks to register ONE external blob base, so the table's blob\ncolumns may hold ``Blob.from_uri`` pointers under it. It must lie inside a ``LANCE_EXTERNAL_BLOB_BASES``\nentry and outside governed storage (``table_bases.requested_external_blob_base``). Omitted \u2192 no\nexternal base, and a pointer in the rows is refused.\n\nThe run the request's Context names (:mod:`catalog.core.run_context`) is stamped into the commit and its inputs\nbecome the create event's version-pinned inputs; the tier judge has already refused a silver or gold create that\nnames none, and an input the caller cannot read.",
         "operationId": "create_table_v1_table__id__create_post",
         "parameters": [
           {
@@ -23676,22 +23676,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "X-Lance-Run-Facets",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Run-Facets"
             }
           },
           {
@@ -25549,7 +25533,7 @@
     },
     "/v1/table/{id}/insert": {
       "post": {
-        "description": "Append Arrow-IPC rows \u2014 ``insert_into_table``; emits an INSERT lineage event.\n``branch`` targets a non-main branch (spec 0.9 query param for Arrow-IPC-body ops).\n\n``mode=overwrite`` removes every row on the ref before inserting (spec.yaml InsertIntoTableRequest.mode),\nso a protected table refuses it 409 unless ``force=true``, on any branch \u2014 the protection record is the\ntable's \u2014 and it is recorded as ``overwrite_table`` with the ``OVERWRITE`` lifecycle state ([[LH-242]]).",
+        "description": "Append Arrow-IPC rows \u2014 ``insert_into_table``; emits an INSERT lineage event.\n``branch`` targets a non-main branch (spec 0.9 query param for Arrow-IPC-body ops).\n\n``mode=overwrite`` removes every row on the ref before inserting (spec.yaml InsertIntoTableRequest.mode),\nso a protected table refuses it 409 unless ``force=true``, on any branch \u2014 the protection record is the\ntable's \u2014 and it is recorded as ``overwrite_table`` with the ``OVERWRITE`` lifecycle state ([[LH-242]]).\n\nThe run the request's Context names is stamped into the commit, on main only ([[LH-225]]).",
         "operationId": "insert_into_table_v1_table__id__insert_post",
         "parameters": [
           {
@@ -25709,7 +25693,7 @@
     },
     "/v1/table/{id}/merge_insert": {
       "post": {
-        "description": "Upsert Arrow-IPC rows \u2014 ``merge_insert_into_table``; emits a MERGE_INSERT lineage event.\nThe ``*_filt`` SQL filters, ``timeout``, ``use_index`` and ``branch`` are spec-0.9 query params.\n\nTraining-shaped lineage (optional, catalog stays un-opinionated): ``source`` + ``source_version``\nrecord the version-pinned upstream this merge DERIVED FROM (a pipeline's merge from ``source@N`` \u2014 the\nreproducibility pin surfaced on the lineage READ edge), and the ``X-Lance-Run-Facets`` header carries\nproducer run metadata (e.g. training ``params``) verbatim onto the emitted RunEvent.\n\nIMPLICIT DDL (\u00a74): after the merge commits, a best-effort BTREE index is ensured on the ``on``\nkey (pylance's ``use_index`` only helps *if an index exists*, and nothing else ever builds one \u2014\nwithout it every upsert full-scans). The FIRST merge on a ``(table, on)`` pays the build\nsynchronously; later merges pay one cheap list call. Passing ``use_index=false`` opts out of the\nimplicit build too (a caller declining index USAGE shouldn't be charged index CREATION). The\nbuild commits its OWN Lance version with no lineage event (consistent with\n``/create_scalar_index`` today), so the first indexed merge leaves the table at\n``response.version + 1`` while the MERGE_INSERT lineage points at ``response.version`` \u2014 a\nversion gap, not a lost write.",
+        "description": "Upsert Arrow-IPC rows \u2014 ``merge_insert_into_table``; emits a MERGE_INSERT lineage event.\nThe ``*_filt`` SQL filters, ``timeout``, ``use_index`` and ``branch`` are spec-0.9 query params.\n\nThe run the request's Context names is stamped into the commit, on main only, and its inputs become the\nevent's version-pinned inputs ([[LH-225]]).\n\nIMPLICIT DDL (\u00a74): after the merge commits, a best-effort BTREE index is ensured on the ``on``\nkey (pylance's ``use_index`` only helps *if an index exists*, and nothing else ever builds one \u2014\nwithout it every upsert full-scans). The FIRST merge on a ``(table, on)`` pays the build\nsynchronously; later merges pay one cheap list call. Passing ``use_index=false`` opts out of the\nimplicit build too (a caller declining index USAGE shouldn't be charged index CREATION). The\nbuild commits its OWN Lance version with no lineage event (consistent with\n``/create_scalar_index`` today), so the first indexed merge leaves the table at\n``response.version + 1`` while the MERGE_INSERT lineage points at ``response.version`` \u2014 a\nversion gap, not a lost write.",
         "operationId": "merge_insert_into_table_v1_table__id__merge_insert_post",
         "parameters": [
           {
@@ -25883,22 +25867,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "X-Lance-Run-Facets",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Run-Facets"
             }
           },
           {

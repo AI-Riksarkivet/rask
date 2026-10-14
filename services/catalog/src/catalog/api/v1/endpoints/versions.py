@@ -36,6 +36,7 @@ from catalog.api.dependencies import FgaClientDep, LineageEmitterDep, NamespaceD
 from catalog.api.pagination import paginate_versions
 from catalog.api.rask_params import RaskFlag
 from catalog.api.security import CurrentToken
+from catalog.core import run_context
 from catalog.core.base_judge import BaseJudge
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.core.namespace import open_dataset_unchecked
@@ -223,7 +224,12 @@ async def create_table_version(
         await fga_deps.require_staged_operation(client, settings, token, segments=segments, operation=staged.operation, creates=staged.creates)
         judge = BaseJudge.from_settings(settings)
         record = await run_in_threadpool(judge.read_record, described.location)
-        await run_in_threadpool(partial(managed_versions.judge, base_judge=judge, external_bases=record.entries if record is not None else ()), staged, so)
+        run = run_context.from_properties(staged.properties)
+        run_context.require_caller_authored(staged.properties, run, caller=token.sub if token is not None else None)
+        adds_data = await run_in_threadpool(
+            partial(managed_versions.judge, base_judge=judge, external_bases=record.entries if record is not None else ()), staged, so
+        )
+        await fga_deps.judge_staged_run(settings, token, client, ns=ns, segments=segments, run=run, adds_data=adds_data)
     except BaseException:
         await run_in_threadpool(managed_versions.refuse, staged, so)
         raise
@@ -249,6 +255,7 @@ async def create_table_version(
         authorization=authorization,
         pin_version=staged.version,
         branch=None,
+        run=run,
     )
     return response
 

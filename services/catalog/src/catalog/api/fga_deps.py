@@ -52,7 +52,7 @@ from openfga_sdk import OpenFgaClient
 
 from catalog.api.dependencies import FgaClientDep, SettingsDep
 from catalog.api.security import CurrentToken, Principal
-from catalog.core import tier_policy
+from catalog.core import run_context, tier_policy
 from catalog.core.config import Settings
 from catalog.core.identifiers import MAX_NAMESPACE_DEPTH, parse_identifier
 from catalog.services import native
@@ -853,10 +853,12 @@ async def _write_door(request: Request, settings: Settings) -> tier_policy.Write
     if not segments or suffix in _GRANT_SUFFIXES:
         return None
     obj = _object(_FGA_TYPE[resource], segments, settings.delimiter)
+    run = run_context.from_headers(request.headers) if suffix in tier_policy.STAMPING_DOORS else None
+    input_rungs = input_read_rungs(run, settings.delimiter)
     if suffix in _CREATE_ON_PARENT_SUFFIXES.get(resource, frozenset()):
         check = _create_parent_check(resource, segments, settings)
         rung = tier_policy.Rung(relation=check[1], obj=check[0]) if check is not None else None
-        return tier_policy.Write(op=suffix, obj=obj, rung=rung, table=tuple(segments))
+        return tier_policy.Write(op=suffix, obj=obj, rung=rung, table=tuple(segments), run=run, input_rungs=input_rungs)
     if suffix == "credentials":
         # A vend is a read at its default tier and a WRITE at a writing one: the credential is how a
         # direct-to-storage writer writes, so it is judged on the rung its tier opens.
@@ -869,28 +871,72 @@ async def _write_door(request: Request, settings: Settings) -> tier_policy.Write
     if relation in _READ_RELATIONS:
         return None
     table = await _rename_destination(request, segments) if suffix == "rename" else tuple(segments)
-    return tier_policy.Write(op=suffix, obj=obj, rung=tier_policy.Rung(relation=relation, obj=obj), table=table)
+    moved_from = tuple(segments) if suffix == "rename" else ()
+    return tier_policy.Write(
+        op=suffix, obj=obj, rung=tier_policy.Rung(relation=relation, obj=obj), table=table, run=run, input_rungs=input_rungs, moved_from=moved_from
+    )
+
+
+def input_read_rungs(run: run_context.RunContext | None, delimiter: str) -> tuple[tier_policy.Rung, ...]:
+    """The ``can_read_data`` rung on each input ``run`` names."""
+    return tuple(tier_policy.Rung(relation="can_read_data", obj=_object("table", list(entry.table), delimiter)) for entry in (run.inputs if run else ()))
+
+
+def _rung_check(settings: Settings, token: Principal | None, injected: OpenFgaClient | None) -> tier_policy.RungCheck | None:
+    """The tier judge's rung check, asked through :func:`_require`; ``None`` with FGA off, when every rung allows.
+
+    Raises:
+        ServiceUnavailableError: FGA is on and unwired.
+        UnauthenticatedError: FGA is on and nobody is signed in.
+    """
+    if not settings.fga_enabled:
+        return None
+    client = require_wired(injected)
+    if token is None:
+        raise UnauthenticatedError("authentication required")
+    user = token.sub
+
+    async def check(rung: tier_policy.Rung) -> None:
+        await _require(client, user=user, relation=rung.relation, obj=rung.obj)
+
+    return check
 
 
 async def _judge(request: Request, settings: Settings, token: Principal | None, injected: OpenFgaClient | None, write: tier_policy.Write) -> None:
     """Hand ``write`` to the tier judge, with the rung asked through :func:`_require` when FGA is on."""
-    check: tier_policy.RungCheck | None = None
-    if settings.fga_enabled:
-        client = require_wired(injected)
-        if token is None:
-            raise UnauthenticatedError("authentication required")
-        user = token.sub
-
-        async def check(rung: tier_policy.Rung) -> None:
-            await _require(client, user=user, relation=rung.relation, obj=rung.obj)
-
+    check = _rung_check(settings, token, injected)
     # Imported HERE rather than at module scope: `dependencies` imports this module for its guards.
     from catalog.api.dependencies import namespace_for_top_ns
 
-    async def namespace() -> LanceNamespace:
-        return await namespace_for_top_ns(request, settings, write.table[0])
+    async def namespace(top_ns: str) -> LanceNamespace:
+        return await namespace_for_top_ns(request, settings, top_ns)
 
     await tier_policy.judge(write, caller=token.sub if token is not None else None, check=check, namespace=namespace)
+
+
+async def judge_staged_run(
+    settings: Settings,
+    token: Principal | None,
+    injected: OpenFgaClient | None,
+    *,
+    ns: LanceNamespace,
+    segments: Sequence[str],
+    run: run_context.RunContext | None,
+    adds_data: bool,
+) -> None:
+    """Judge the run a stock client's staged commit to table ``segments`` names (ADR 0157).
+
+    Only a commit that ``adds_data`` must name a run on a derived tier, whose tier is then read through ``ns``, the
+    connection the door resolved for the table; any named input is checked either way.
+
+    Raises:
+        InvalidInputError: The table is silver or gold and the commit names no run or no input.
+        PermissionDeniedError: The caller lacks ``can_read_data`` on a named input.
+    """
+    check = _rung_check(settings, token, injected)
+    tier = await tier_policy.tier_of(ns, segments[:-1]) if adds_data and len(segments) > 1 else None
+    names = f"the staged manifest's transaction properties {run_context.RUN_ID_PROPERTY} and {run_context.INPUTS_PROPERTY}"
+    await tier_policy.judge_run(tier, run, input_read_rungs(run, settings.delimiter), check=check, names=names)
 
 
 async def spec_vend_tier(
@@ -926,7 +972,7 @@ async def spec_vend_tier(
             return None
         audit(writing, ALLOW, subject=token.sub, resource=obj)
 
-    async def namespace() -> LanceNamespace:
+    async def namespace(_top_ns: str) -> LanceNamespace:
         return ns
 
     write = tier_policy.Write(op=door, obj=obj, rung=tier_policy.Rung(relation=writing, obj=obj), table=tuple(segments))

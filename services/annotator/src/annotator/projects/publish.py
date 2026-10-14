@@ -21,10 +21,9 @@ Three rules carry the weight:
    — under `fix_and_accept` that is the reviewer — so the two are carried separately rather than
    collapsed into one "who did this", which would credit the wrong person in either direction.
 
-Provenance is written in both directions, and they cannot disagree because both are projected from
-one plan in one pass: the ROWS carry `annotated_by` / `reviewed_by` so a consumer answers "who
-annotated this row" with no graph query, and ONE `annotationProject` run facet carries the project
-totals so the graph answers "what produced this dataset".
+Provenance rides the rows: they carry `annotated_by` / `reviewed_by`, so a consumer answers "who annotated
+this row" with no graph query. The publish names its run (the publish id) and its one pinned source in the
+catalog Context, and the catalog commits both with the table and records the derivation edge.
 """
 
 from __future__ import annotations
@@ -37,9 +36,7 @@ from typing import Any, Final
 import pyarrow as pa
 from pydantic import BaseModel, Field
 
-from annotator.projects.agreement import group_scores, summarize
 from annotator.projects.models import AnnotationProject, Draft, Link, Shape, Task, TaskState
-from lineage_kit.schemas import custom_facet
 from service_kit.lakehouse.naming import CATALOG_DELIMITER
 
 
@@ -50,10 +47,6 @@ _SHAPES_FROM: Final[frozenset[TaskState]] = frozenset({TaskState.ACCEPTED})
 #: domain, not a null — a consumer filters `shape_type != 'none'` for shapes and reads `task_outcome`
 #: for coverage, and neither query has to reason about nullability.
 NO_SHAPE: Final[str] = "none"
-
-#: The publish run facet (§7.2). Named to avoid the catalog's `_RESERVED_RUN_FACETS`
-#: (`lance`, `author`, `errorMessage`, `progress`, `parent`) — a collision there is rejected at emit.
-PROJECT_FACET: Final[str] = "annotationProject"
 
 #: The published table's Arrow schema (§7.1) — the DATA CONTRACT, and the reason a publish can create
 #: a correctly-typed table even when a project published nothing but skip sentinels. Without an
@@ -369,130 +362,23 @@ def build_plan(
     return plan
 
 
-def project_facet(project: AnnotationProject, plan: PublishPlan, *, frozen_at: datetime | None = None) -> dict[str, Any]:
-    """The `annotationProject` run facet (§7.2) — every key a fact the project store already holds.
-
-    Counts rather than name lists: the NAMES are on every row (`annotated_by`, `reviewed_by`), so
-    putting them here too would be a second copy that can disagree with the first. Sorted and derived
-    so a replayed publish emits an identical facet — two replays producing different payloads would
-    read as two provenances for one publish.
-    """
-    annotators = {a.annotated_by for a in plan.attributions if a.annotated_by}
-    reviewers = {a.reviewed_by for a in plan.attributions if a.reviewed_by}
-    # Counted per TASK, not per row: a task with ten shapes contributes ten rows and exactly one
-    # send. Counting rows would report a project's origins in proportion to how densely each item
-    # happened to be annotated, which is not what the number means.
-    origins: dict[str, int] = {}
-    datasets: dict[str, int] = {}
-    # One pass: the FIRST row seen for a task id speaks for that task (all its rows share the same
-    # source), so a single scan recording first-seen rows replaces the per-task rescan.
-    first_row: dict[str, dict[str, Any]] = {}
-    for r in plan.rows:
-        first_row.setdefault(r["task_id"], r)
-    for row in first_row.values():
-        origins[row["item_source_kind"]] = origins.get(row["item_source_kind"], 0) + 1
-        if row["item_dataset"]:
-            datasets[row["item_dataset"]] = datasets.get(row["item_dataset"], 0) + 1
-    return custom_facet(
-        projectId=project.project_id,
-        projectSlug=project.slug,
-        publishId=plan.publish_id,
-        taskCount=len(plan.attributions),
-        acceptedCount=plan.accepted_count,
-        skippedCount=plan.skipped_count,
-        annotatorCount=len(annotators),
-        reviewerCount=len(reviewers),
-        reviewRequired=project.review_required,
-        # ONE class list. This read `label_schema.classes` while the facet's `template` below came
-        # from a separate object nothing cross-checked, so the run facet could carry a taxonomy the
-        # enforcement had never heard of. Both now project from the same ontology.
-        labelClasses=sorted(c.name for c in project.ontology.classes),
-        shapeCount=plan.shape_count,
-        sendOrigins=dict(sorted(origins.items())),
-        # §7.2's per-dataset `version`, from the SEND capture (`ItemSource.dataset_version`). A
-        # dataset whose captured versions are mixed reports None — "unknown" is a fact, an invented
-        # number is not.
-        sourceDatasets=[
-            {
-                "dataset": name,
-                "items": n,
-                # The captured version when it is UNAMBIGUOUS for this dataset; None otherwise —
-                # "unknown" is a fact, an invented number is not (§7.2).
-                "version": (plan.dataset_versions.get(name) or [None])[0] if len(plan.dataset_versions.get(name, [])) == 1 else None,
-            }
-            for name, n in sorted(datasets.items())
-        ],
-        leadTimeSecondsTotal=project.lead_time_seconds_total,
-        frozenAt=frozen_at.isoformat() if frozen_at else None,
-        # An accepted task with no reviewer is legal (the project can waive review), so it is
-        # REPORTED rather than refused — and it is the number a governance reader most wants.
-        tasksWithoutReview=sum(1 for a in plan.attributions if a.outcome == "accepted" and not a.reviewed_by),
-        # The task definition travels whole — the facet is where "what was this task" lives, and
-        # `labelClasses` above is now a projection OF this rather than a second opinion about it.
-        ontology=project.ontology.model_dump(mode="json"),
-        # Consensus v1 (only when replica groups exist): agreement COUNTS from label multisets per
-        # group — every replica's rows still land, and no merged truth is invented here.
-        **({"consensus": _consensus_counts(project, plan)} if plan.replica_groups else {}),
-    )
-
-
-def _consensus_counts(project: AnnotationProject, plan: PublishPlan) -> dict[str, Any]:
-    """Agreement per replica group, GEOMETRY-AWARE and chance-corrected (#55).
-
-    This used to compare LABEL MULTISETS: a group "agreed" when every member's sorted list of label
-    strings matched. That called two annotators drawing boxes in completely different places with
-    the same labels a PERFECT agreement, applied no chance correction, and scored a group where
-    every replica was skipped as perfect because ``[] == []``.
-
-    Now: shapes are matched at IoU >= 0.5 (``agreement.IOU_MATCH_THRESHOLD``) and the labels of
-    matched objects are scored with Fleiss' kappa. ``unanimous_groups`` replaces
-    ``perfect_agreement_groups`` — a RENAME, not an alias, because the old key's meaning changed
-    and a consumer silently reading a stronger number under the old name is exactly the drift a
-    published metric cannot afford.
-
-    Still never a fabricated merge: the counts sit beside the manager's PICKS, and a consumer
-    wanting canonical rows filters by the picked ids.
-    """
-    shapes_by_task: dict[str, list[dict[str, Any]]] = {}
-    for row in plan.rows:
-        if row["shape_type"] == NO_SHAPE:
-            continue
-        shapes_by_task.setdefault(row["task_id"], []).append(row)
-    scored = [group_scores([shapes_by_task.get(tid, []) for tid in members]) for members in plan.replica_groups.values()]
-    # The pick WITH its attribution (task_id, by, at) — a facet naming only the winner would drop
-    # exactly the "who decided, when" half that makes an adjudication provenance (audit finding).
-    picks = {
-        group: {"task_id": adj.task_id, "by": adj.by, "at": adj.at.isoformat()}
-        for group, adj in sorted(project.adjudications.items())
-        if group in plan.replica_groups
-    }
-    return {
-        "n": project.consensus_n,
-        **summarize(scored),
-        **({"adjudications": picks} if picks else {}),
-    }
-
-
 def source_pin(plan: PublishPlan, *, delimiter: str = CATALOG_DELIMITER) -> tuple[str, int] | None:
     """The reproducibility pin (§7.2): the ONE (dataset, version) every published item came from.
 
     Pins only when EVERY published item names the same one dataset with the same one CAPTURED
     version. Two datasets, two versions of one dataset, any uncaptured version, or any item that
-    recorded no dataset at all → None: the run facet still reports the per-dataset truth, but a
-    single fabricated pin would be a lie — and the pin surfaces as the lineage READ edge, which
-    downstream reproduction trusts.
+    recorded no dataset at all → None: a single fabricated pin would be a lie, and the pin becomes the
+    publish's input in the catalog's lineage, which downstream reproduction trusts.
 
     …and the same rule applies to the NAME. The pin travels to the catalog as a table reference, so
     it must BE one: a namespace-qualified id like ``bronze$pages``. `ItemSource.where` carries the
     MEDIA dataset name, which for an unregistered corpus (a Lance directory the catalog has never
     heard of) is a bare word. Sending it made the catalog authorize `table:transcripts_v2` — an
     object that does not exist — and FGA denies before it checks existence, so the ENTIRE publish
-    failed with `can_get_metadata required on table:transcripts_v2` for the sake of a provenance
-    nicety. Observed live, 2026-08-03.
+    failed for the sake of a provenance nicety. Observed live, 2026-08-03.
 
-    An unregistered corpus simply has no lineage READ edge to draw: there is no catalog node at the
-    other end. Refusing to name one is the same discipline as refusing to fabricate a version — and
-    the per-dataset truth still reaches the run facet either way."""
+    An unregistered corpus simply has no lineage edge to draw: there is no catalog node at the other
+    end. Refusing to name one is the same discipline as refusing to fabricate a version."""
     if plan.sources_uncaptured or len(plan.dataset_versions) != 1:
         return None
     dataset, versions = next(iter(plan.dataset_versions.items()))

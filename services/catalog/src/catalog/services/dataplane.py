@@ -23,12 +23,14 @@ import re
 import uuid
 from collections.abc import Callable, Generator, Iterable, Iterator, Sequence
 from contextlib import contextmanager, suppress
+from dataclasses import replace
 from typing import Any, Final, cast
 
 import lance
 import lance.optimize as lance_optimize
 import pyarrow as pa
 import pyarrow.fs as pafs
+from lance.dataset import Transaction
 from lance_namespace import (
     AlterTableAddColumnsRequest,
     AlterTableAddColumnsResponse,
@@ -45,6 +47,7 @@ from lance_namespace import (
     CreateTableResponse,
     CreateTableTagRequest,
     CreateTableTagResponse,
+    CreateTableVersionRequest,
     DeclareTableRequest,
     DeleteFromTableRequest,
     DeleteFromTableResponse,
@@ -91,7 +94,7 @@ from lance_namespace import (
 )
 from pydantic import BaseModel
 
-from catalog.core import provenance_guard
+from catalog.core import manifest_bytes, provenance_guard
 from catalog.core.base_judge import require_sanctioned_bases
 from catalog.core.config import shared_lance_session
 from catalog.core.modes import CreateMode, InsertMode
@@ -374,6 +377,7 @@ def _write_blob(
     data_bases: list[DataBase] | None = None,
     properties: dict[str, str] | None = None,
     base_credentials: BaseCredentials | None = None,
+    transaction_properties: dict[str, str] | None = None,
 ) -> lance.LanceDataset:
     """Write a table at file format 2.2 with stable row ids.
 
@@ -423,6 +427,7 @@ def _write_blob(
             target_bases=target_bases,
             base_store_params=base_store_params,
             allow_external_blob_outside_bases=allow_external,
+            transaction_properties=transaction_properties,
         )
     except OSError as exc:
         # An external-pointer blob outside every registered base (and the blanket flag off) is a client
@@ -494,6 +499,7 @@ def create_table(
     base_credentials: BaseCredentials | None = None,
     registry: base_registry.BaseRegistry | None,
     holder: str = "",
+    transaction_properties: dict[str, str] | None = None,
 ) -> CreateTableResponse:
     """Create a table at file format 2.2 with stable row ids — the ONLY create path (audit 2026-07-14).
 
@@ -527,6 +533,8 @@ def create_table(
     again when the write fails. Required and never defaulted — the governed door passes the control root;
     ``None`` is an explicit choice for a caller outside governance (a test building a fixture), which
     leaves the table with no record at all.
+
+    ``transaction_properties`` ride the commit that writes the data (the run a governed create names).
     """
     allow_external = allow_external_blobs
     external_blob_bases = external_blob_bases or []
@@ -550,6 +558,7 @@ def create_table(
                 data_bases=registered_data_bases(data_bases, current) if data_bases else None,
                 properties=properties,
                 base_credentials=base_credentials,
+                transaction_properties=transaction_properties,
             )
             return CreateTableResponse(location=existing, version=dataset.version, properties=properties)
         if normalized is CreateMode.EXIST_OK:  # keep it untouched, just report its current version
@@ -573,6 +582,7 @@ def create_table(
             base_credentials=base_credentials,
             registry=registry,
             holder=holder,
+            transaction_properties=transaction_properties,
         )
 
     location = ns.declare_table(DeclareTableRequest(id=segments, properties=properties)).location
@@ -591,6 +601,7 @@ def create_table(
         base_credentials=base_credentials,
         registry=registry,
         holder=holder,
+        transaction_properties=transaction_properties,
     )
 
 
@@ -613,6 +624,7 @@ def _write_blob_into(
     base_credentials: BaseCredentials | None = None,
     registry: base_registry.BaseRegistry | None,
     holder: str = "",
+    transaction_properties: dict[str, str] | None = None,
 ) -> CreateTableResponse:
     """Write the blob table's first data version into an already-declared ``location``, rolling the declare
     back with ``drop_table`` on failure so the name stays retryable rather than stuck declared-but-unreadable.
@@ -651,6 +663,7 @@ def _write_blob_into(
             data_bases=own_bases,
             properties=properties,
             base_credentials=base_credentials,
+            transaction_properties=transaction_properties,
         )
     except Exception:
         with suppress(Exception):  # best-effort rollback; re-raise the real write error
@@ -973,6 +986,63 @@ def object_sizes(uris: Sequence[str], *, so: StorageOptions) -> list[int | None]
     else:
         infos = [fs.get_file_info(path) for fs, path in (dataset_fs(uri, so) for uri in uris)]
     return [None if info.type != pafs.FileType.File else int(info.size) for info in infos]
+
+
+def object_store_path(location: str) -> str:
+    """``location`` as Lance's object store names it: no scheme, no bucket, no leading slash."""
+    if location.startswith("s3://"):
+        return location.removeprefix("s3://").partition("/")[2].strip("/")
+    return location.removeprefix("file://").strip("/")
+
+
+#: How many times a stamped commit plans again after another writer took the version it followed.
+_STAMPED_COMMIT_ATTEMPTS: Final = 10
+
+
+def commit_stamped[T](
+    ns: LanceNamespace, so: StorageOptions, table_id: list[str], properties: dict[str, str], plan: Callable[[lance.LanceDataset], tuple[Transaction, T]]
+) -> tuple[int, T]:
+    """Commit the transaction ``plan`` builds on main's latest version with ``properties``; return the version.
+
+    ``plan`` also returns what it measured (a merge's row counts), handed back beside the version. A commit through
+    ``LanceDataset.commit`` would rebase over a writer that landed first, and a merge_insert transaction loses its key
+    check on the way through Python (pylance 13.0.0: ``LanceOperation.Update`` carries no inserted-rows filter):
+    measured, two racing ``when_matched_fail`` inserts of one key both landed, with ``max_retries=0`` as well. So the
+    transaction is committed detached and finalized as exactly the version after the one it was planned on, through
+    the backend's put-if-not-exists (the ``version/create`` finalize); a lost race plans again on the new latest
+    version, whose rows the key check then sees.
+
+    Raises:
+        ConcurrentModificationError: Every attempt lost its race.
+    """
+    for _ in range(_STAMPED_COMMIT_ATTEMPTS):
+        dataset = disarm_commit_path_cleanup(open_dataset(ns, so, table_id), table_id)
+        transaction, measured = plan(dataset)
+        detached = lance.LanceDataset.commit(dataset, replace(transaction, transaction_properties=properties), detached=True)
+        location = dataset.uri
+        version = dataset.version + 1
+        finalize_id = manifest_bytes.detached_id()
+        try:
+            fs, base = dataset_fs(location, so)
+            versions = f"{base.rstrip('/')}/_versions"
+            with fs.open_input_stream(f"{versions}/d{detached.version}.manifest") as source:
+                body = manifest_bytes.with_manifest_version(source.read(), version)
+            with fs.open_output_stream(f"{versions}/d{finalize_id}.manifest") as sink:
+                sink.write(body)
+            request = CreateTableVersionRequest(
+                id=table_id, version=version, manifest_path=f"{object_store_path(location)}/_versions/d{finalize_id}.manifest", manifest_size=len(body)
+            )
+            native.call(ns, "create_table_version", request)
+        except ConcurrentModificationError:
+            discard_detached_manifest(location, so, finalize_id)
+            continue
+        except BaseException:
+            discard_detached_manifest(location, so, finalize_id)
+            raise
+        finally:
+            discard_detached_manifest(location, so, detached.version)
+        return version, measured
+    raise ConcurrentModificationError(f"the commit lost the race for the next version {_STAMPED_COMMIT_ATTEMPTS} times; retry it")
 
 
 def discard_detached_manifest(location: str, so: StorageOptions, version: int) -> None:
@@ -1605,7 +1675,9 @@ def delete_from_table(ns: LanceNamespace, so: StorageOptions, req: DeleteFromTab
     return DeleteFromTableResponse(version=dataset.version)
 
 
-def insert_into_table(ns: LanceNamespace, so: StorageOptions, req: InsertIntoTableRequest, data: bytes, *, max_bytes: int) -> InsertIntoTableResponse:
+def insert_into_table(
+    ns: LanceNamespace, so: StorageOptions, req: InsertIntoTableRequest, data: bytes, *, max_bytes: int, transaction_properties: dict[str, str] | None
+) -> InsertIntoTableResponse:
     """Append (or overwrite) Arrow-IPC rows on the ref the request NAMES, and report the commit it made.
 
     ONE PATH FOR EVERY REF, through a handle opened on that ref. A branch needs it: measured live
@@ -1624,7 +1696,10 @@ def insert_into_table(ns: LanceNamespace, so: StorageOptions, req: InsertIntoTab
     On a table declaring a primary key, rows repeating a key among themselves are refused, and an append
     lands through Lance's `merge_insert(...).when_matched_fail().when_not_matched_insert_all()`, refused
     when the table holds one of its keys as it commits ([[LH-243]], :mod:`catalog.services.primary_keys`).
+
+    ``transaction_properties`` (a run, :mod:`catalog.core.run_context`) ride the commit, on main only.
     """
+    _refuse_a_run_on_a_branch(transaction_properties, req.branch, door="insert")
     # Validated here as well as at the door's coercion: this hands pyarrow's buffers to Lance in-process,
     # and Lance writes whatever an unvalidated offset points at.
     rows = read_arrow_body(data, max_bytes=max_bytes)
@@ -1637,19 +1712,40 @@ def insert_into_table(ns: LanceNamespace, so: StorageOptions, req: InsertIntoTab
     keys = primary_keys.key_columns(dataset.lance_schema)
     primary_keys.refuse_repeats_within(rows, keys, door="insert")
     with _write_schema_errors():
-        if mode is InsertMode.APPEND and primary_keys.joinable(rows, keys):
+        keyed_append = mode is InsertMode.APPEND and primary_keys.joinable(rows, keys)
+        if keyed_append and transaction_properties is not None:
+            version, _ = commit_stamped(
+                ns, so, _table_id(req), transaction_properties, lambda latest: primary_keys.plan_new_keys(latest, rows, keys, door="insert")
+            )
+        elif keyed_append:
             # Lance's own enforcement, on the same handle: refused when the key is held as it lands, and
             # re-planned when another commit wins the race, so a racing insert of the same key is refused ([[LH-243]]).
             primary_keys.append_new_keys(dataset, rows, keys, door="insert")
+            version = int(dataset.version)
         else:
-            dataset.insert(rows, mode=mode.value)
+            # An append or overwrite commutes with any racing append, so Lance's own rebase keeps it whole.
+            dataset.insert(rows, mode=mode.value, transaction_properties=transaction_properties)
+            version = int(dataset.version)
     # The rows this request wrote, read off its own payload: a row count diff across the commit would
     # include whatever a concurrent writer appended in between.
-    return InsertIntoTableResponse(version=int(dataset.version), num_inserted_rows=rows.num_rows)
+    return InsertIntoTableResponse(version=version, num_inserted_rows=rows.num_rows)
+
+
+def _refuse_a_run_on_a_branch(transaction_properties: dict[str, str] | None, branch: str | None, *, door: str) -> None:
+    """Refuse a run on a branch write: the backend's put-if-not-exists that keeps a stamped commit whole finalizes main only."""
+    if transaction_properties is not None and recorded_branch(branch) is not None:
+        raise UnsupportedOperationError(f"{door} with a run in its Context is served on main only; a branch write cannot carry the run into its commit")
 
 
 def merge_insert_into_table(
-    ns: LanceNamespace, so: StorageOptions, req: MergeInsertIntoTableRequest, data: bytes, *, max_bytes: int, data_ns: LanceNamespace
+    ns: LanceNamespace,
+    so: StorageOptions,
+    req: MergeInsertIntoTableRequest,
+    data: bytes,
+    *,
+    max_bytes: int,
+    data_ns: LanceNamespace,
+    transaction_properties: dict[str, str] | None,
 ) -> MergeInsertIntoTableResponse:
     """Run the spec's merge-insert against the ref the request NAMES; main's native merge runs on ``data_ns``.
 
@@ -1661,7 +1757,11 @@ def merge_insert_into_table(
     transcription rather than interpretation — which is exactly why this door is HONOURED where `query`
     is refused. There is no vector search, no full-text query and no index-selection surface here to
     re-derive and get subtly wrong.
+
+    ``transaction_properties`` (a run, :mod:`catalog.core.run_context`) ride the commit, on main only; the merge then
+    runs in-process, because the native merge takes no transaction properties.
     """
+    _refuse_a_run_on_a_branch(transaction_properties, req.branch, door="merge_insert")
     # BEFORE EITHER ARM. The branch arm hands pyarrow's buffers to Lance in-process, where an offset
     # past its values buffer is written as process heap and a decreasing one crashes the process
     # (measured on pylance 12.0.0); main's native reader refuses both, as a 500. Checked once, here, so
@@ -1672,30 +1772,41 @@ def merge_insert_into_table(
     dataset = disarm_commit_path_cleanup(open_dataset(ns, so, _table_id(req), branch=req.branch), _table_id(req))
     # A source repeating a key either inserts every copy (unmatched) or is ambiguous (matched); both arms ([[LH-243]]).
     primary_keys.refuse_repeats_within(rows, primary_keys.key_columns(dataset.lance_schema), door="merge_insert")
-    if req.branch is None:
+    if req.branch is None and transaction_properties is None:
         return cast(MergeInsertIntoTableResponse, native.call(data_ns, "merge_insert_into_table", req, data))
     # THE BUILDER IS CONSTRUCTED INSIDE THE GUARD, and that placement is the fix rather than a tidy-up:
     # `merge_insert(on)` is where Lance rejects a key column that does not exist, and it sat outside
     # `caller_sql`, so the one door whose whole job is matching on that column reported `Internal 18`
     # for naming it wrongly — while the branchless path answered 13.
     with _write_schema_errors(), caller_sql("invalid merge_insert filter"):
-        builder = dataset.merge_insert(req.on)
-        if req.when_matched_update_all:
-            builder.when_matched_update_all(req.when_matched_update_all_filt)
-        if req.when_not_matched_insert_all:
-            builder.when_not_matched_insert_all()
-        if req.when_not_matched_by_source_delete:
-            builder.when_not_matched_by_source_delete(req.when_not_matched_by_source_delete_filt)
-        if req.use_index is not None:
-            builder.use_index(req.use_index)
-        stats = builder.execute(rows)
+        if transaction_properties is not None:
+            version, stats = commit_stamped(
+                ns, so, _table_id(req), transaction_properties, lambda latest: _merge_builder(latest, req).execute_uncommitted(rows)
+            )
+        else:
+            stats = _merge_builder(dataset, req).execute(rows)
+            version = dataset.version
     counts = stats if isinstance(stats, dict) else {}
     return MergeInsertIntoTableResponse(
-        version=dataset.version,
+        version=version,
         num_updated_rows=int(counts.get("num_updated_rows", 0)),
         num_inserted_rows=int(counts.get("num_inserted_rows", 0)),
         num_deleted_rows=int(counts.get("num_deleted_rows", 0)),
     )
+
+
+def _merge_builder(dataset: lance.LanceDataset, req: MergeInsertIntoTableRequest) -> lance.MergeInsertBuilder:
+    """The merge ``req`` asks for, on ``dataset``; every spec parameter has a builder method of the same name."""
+    builder = dataset.merge_insert(req.on)
+    if req.when_matched_update_all:
+        builder.when_matched_update_all(req.when_matched_update_all_filt)
+    if req.when_not_matched_insert_all:
+        builder.when_not_matched_insert_all()
+    if req.when_not_matched_by_source_delete:
+        builder.when_not_matched_by_source_delete(req.when_not_matched_by_source_delete_filt)
+    if req.use_index is not None:
+        builder.use_index(req.use_index)
+    return builder
 
 
 def refuse_a_restore_that_arms_cleanup(ns: LanceNamespace, so: StorageOptions, table_id: list[str], *, version: int | None, branch: str | None) -> None:

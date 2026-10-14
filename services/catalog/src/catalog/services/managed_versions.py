@@ -16,8 +16,6 @@ version number meet the store's arbitration, not the catalog's.
 from __future__ import annotations
 
 import logging
-import secrets
-import struct
 from collections.abc import Sequence
 from functools import partial
 
@@ -28,7 +26,7 @@ from lance.fragment import DataFile
 from lance_namespace import CreateTableVersionRequest, CreateTableVersionResponse, InvalidInputError, LanceNamespace, UnsupportedOperationError
 from pydantic import BaseModel, InstanceOf
 
-from catalog.core import lineage_emit, provenance_guard
+from catalog.core import lineage_emit, manifest_bytes, provenance_guard
 from catalog.core.base_judge import BaseJudge, require_sanctioned_bases
 from catalog.services import client_fragments, dataplane, maintenance, native, primary_keys
 from service_kit.lakehouse import base_registry, features
@@ -36,93 +34,6 @@ from service_kit.lakehouse.objectfs import StorageOptions
 
 
 log = logging.getLogger(__name__)
-
-#: A detached version id: the top bit set, as Lance's own detached commits are (``d<id>.manifest``).
-_DETACHED_BIT = 1 << 63
-
-#: A manifest file ends ``<u64 offset of the Manifest message> <u16 major> <u16 minor> LANC``, and the message at that
-#: offset is ``<u32 length> <protobuf>`` (pylance 13.0.0 manifests, read back in the test of this module).
-_MAGIC = b"LANC"
-_FOOTER = struct.Struct("<QHH4s")
-_LENGTH = struct.Struct("<I")
-
-
-#: ``uint64 version = 3`` of ``message Manifest`` (Lance ``protos/table.proto`` at v13.0.0): a varint, wire type 0.
-_VERSION_FIELD = 3
-
-
-def _read_varint(buffer: bytes, at: int) -> tuple[int, int]:
-    """The varint at ``at`` and the offset after it."""
-    value, shift = 0, 0
-    while True:
-        if at >= len(buffer) or shift > 63:
-            raise InvalidInputError("the staged manifest's Manifest message is truncated")
-        byte = buffer[at]
-        value |= (byte & 0x7F) << shift
-        at += 1
-        if not byte & 0x80:
-            return value, at
-        shift += 7
-
-
-def _varint(value: int) -> bytes:
-    out = bytearray()
-    while True:
-        low = value & 0x7F
-        value >>= 7
-        if not value:
-            out.append(low)
-            return bytes(out)
-        out.append(low | 0x80)
-
-
-def _with_version_field(message: bytes, version: int) -> bytes:
-    """``message`` with its top-level field 3 (a varint) replaced by ``version``, every other field kept byte for byte."""
-    out, at, written = bytearray(), 0, False
-    while at < len(message):
-        start = at
-        key, at = _read_varint(message, at)
-        number, wire = key >> 3, key & 0x7
-        if wire == 0:
-            _, at = _read_varint(message, at)
-        elif wire == 1:
-            at += 8
-        elif wire == 2:
-            length, at = _read_varint(message, at)
-            at += length
-        elif wire == 5:
-            at += 4
-        else:
-            raise InvalidInputError(f"the staged manifest's Manifest message has an unsupported wire type {wire}")
-        if at > len(message):
-            raise InvalidInputError("the staged manifest's Manifest message is truncated")
-        if number == _VERSION_FIELD and wire == 0:
-            out += _varint(key) + _varint(version)
-            written = True
-        else:
-            out += message[start:at]
-    if not written:
-        out += _varint(_VERSION_FIELD << 3) + _varint(version)
-    return bytes(out)
-
-
-def with_manifest_version(manifest: bytes, version: int) -> bytes:
-    """``manifest`` with its ``version`` field set to ``version`` and every other byte's meaning unchanged.
-
-    The sections before the Manifest message (index and transaction sections, addressed by absolute offsets) are kept
-    byte for byte; only the message and the footer's offset to it are written again.
-
-    Raises:
-        InvalidInputError: ``manifest`` does not end in a Lance manifest footer.
-    """
-    if len(manifest) < _FOOTER.size or manifest[-4:] != _MAGIC:
-        raise InvalidInputError("the staged manifest is not a Lance manifest (no LANC footer)")
-    offset, major, minor, _ = _FOOTER.unpack(manifest[-_FOOTER.size :])
-    if offset + _LENGTH.size > len(manifest) - _FOOTER.size:
-        raise InvalidInputError("the staged manifest's footer points outside the file")
-    (length,) = _LENGTH.unpack_from(manifest, offset)
-    body = _with_version_field(manifest[offset + _LENGTH.size : offset + _LENGTH.size + length], version)
-    return manifest[:offset] + _LENGTH.pack(len(body)) + body + _FOOTER.pack(offset, major, minor, _MAGIC)
 
 
 class StagedVersion(BaseModel):
@@ -137,18 +48,13 @@ class StagedVersion(BaseModel):
     staged_uri: str
     version: int
     operation: str
+    #: The staged transaction's properties, where a stock writer names its run (:mod:`catalog.core.run_context`).
+    properties: dict[str, str] = {}
 
     @property
     def creates(self) -> bool:
         """The table's first version: there is no committed version for it to follow."""
         return self.version == 1
-
-
-def _object_store_path(location: str) -> str:
-    """``location`` as Lance's object store names it: no scheme, no bucket, no leading slash."""
-    if location.startswith("s3://"):
-        return location.removeprefix("s3://").partition("/")[2].strip("/")
-    return location.removeprefix("file://").strip("/")
 
 
 def _staged_uri(location: str, manifest_path: str) -> str:
@@ -158,7 +64,7 @@ def _staged_uri(location: str, manifest_path: str) -> str:
     no leading slash, then ``_versions/<n>.manifest-<uuid>``), so it is compared in that form.
     """
     root = location.rstrip("/")
-    prefix = f"{_object_store_path(root)}/_versions/"
+    prefix = f"{dataplane.object_store_path(root)}/_versions/"
     name = manifest_path.removeprefix(prefix) if manifest_path.startswith(prefix) else ""
     if not name or "/" in name or ".manifest-" not in name or name.endswith(".manifest"):
         raise InvalidInputError(f"manifest_path {manifest_path!r} is not a staged manifest under this table's _versions/")
@@ -199,11 +105,11 @@ def stage(location: str, so: StorageOptions, request: CreateTableVersionRequest)
     fs, _ = dataplane.dataset_fs(location, so)
     with fs.open_input_stream(dataplane.dataset_fs(staged, so)[1]) as source:
         manifest = source.read()
-    stated = _varint_field(_manifest_message(manifest), _VERSION_FIELD)
+    stated = manifest_bytes.varint_field(manifest_bytes.manifest_message(manifest), manifest_bytes.VERSION_FIELD)
     if stated != request.version:
         raise InvalidInputError(f"commit refused: the staged manifest is version {stated}, the request names {request.version}")
-    detached_id, finalize_id = _DETACHED_BIT | secrets.randbits(62), _DETACHED_BIT | secrets.randbits(62)
-    _write(location, so, f"d{detached_id}.manifest", with_manifest_version(manifest, detached_id))
+    detached_id, finalize_id = manifest_bytes.detached_id(), manifest_bytes.detached_id()
+    _write(location, so, f"d{detached_id}.manifest", manifest_bytes.with_manifest_version(manifest, detached_id))
     _write(location, so, f"d{finalize_id}.manifest", manifest)
     try:
         transaction = lance.dataset(location, version=detached_id, storage_options=dict(so) if so else None).read_transaction(detached_id)
@@ -216,7 +122,16 @@ def stage(location: str, so: StorageOptions, request: CreateTableVersionRequest)
         _discard(location, so, detached_id, finalize_id)
         raise
     operation = type(transaction.operation).__name__ if transaction is not None else "Unknown"
-    return StagedVersion(location=location, detached_id=detached_id, finalize_id=finalize_id, staged_uri=staged, version=request.version, operation=operation)
+    properties = dict(transaction.transaction_properties or {}) if transaction is not None else {}
+    return StagedVersion(
+        location=location,
+        detached_id=detached_id,
+        finalize_id=finalize_id,
+        staged_uri=staged,
+        version=request.version,
+        operation=operation,
+        properties=properties,
+    )
 
 
 def _open(staged: StagedVersion, so: StorageOptions) -> lance.LanceDataset:
@@ -415,36 +330,6 @@ def _refuse_added_feature_flags(proposed: lance.LanceDataset, current: lance.Lan
 _NEXT_ROW_ID_FIELD = 14
 
 
-def _varint_field(message: bytes, number: int) -> int | None:
-    """The value of top-level varint field ``number`` in ``message``, or ``None`` when it is absent (proto3's zero)."""
-    at, found = 0, None
-    while at < len(message):
-        key, at = _read_varint(message, at)
-        wire = key & 0x7
-        if wire == 0:
-            value, at = _read_varint(message, at)
-            if key >> 3 == number:
-                found = value
-        elif wire == 1:
-            at += 8
-        elif wire == 2:
-            length, at = _read_varint(message, at)
-            at += length
-        elif wire == 5:
-            at += 4
-        else:
-            raise InvalidInputError(f"a Manifest message has an unsupported wire type {wire}")
-    return found
-
-
-def _manifest_message(manifest: bytes) -> bytes:
-    if len(manifest) < _FOOTER.size or manifest[-4:] != _MAGIC:
-        raise InvalidInputError("not a Lance manifest (no LANC footer)")
-    offset = _FOOTER.unpack(manifest[-_FOOTER.size :])[0]
-    (length,) = _LENGTH.unpack_from(manifest, offset)
-    return manifest[offset + _LENGTH.size : offset + _LENGTH.size + length]
-
-
 def _next_row_id(location: str, so: StorageOptions, version: int) -> int:
     """The first stable row id the table had not assigned at ``version``, read off its committed manifest.
 
@@ -455,7 +340,7 @@ def _next_row_id(location: str, so: StorageOptions, version: int) -> int:
     for name in (f"{(1 << 64) - 1 - version}.manifest", f"{version}.manifest"):
         try:
             with fs.open_input_stream(f"{base.rstrip('/')}/_versions/{name}") as source:
-                return _varint_field(_manifest_message(source.read()), _NEXT_ROW_ID_FIELD) or 0
+                return manifest_bytes.varint_field(manifest_bytes.manifest_message(source.read()), _NEXT_ROW_ID_FIELD) or 0
         except FileNotFoundError:
             continue
     raise InvalidInputError(f"the version this commit follows, {version}, has no committed manifest")
@@ -479,6 +364,9 @@ def _refuse_malformed_new_fragments(
     if carrying:
         raise InvalidInputError(f"commit refused: appended fragment(s) {carrying[:5]} carry an overlay or a deletion file, which an append never writes")
 
+
+#: Operations whose new files carry only rows the table held at some version, so they add no data a run produced.
+_CARRIES_HELD_ROWS = frozenset({"Rewrite", "Restore"})
 
 #: Operations whose rung is above the writer's: they rewind, rewrite or replace the table, so moving rows and their
 #: ids is what they are for (``fga_deps.require_staged_operation``).
@@ -515,11 +403,13 @@ def _refuse_rows_coming_back(staged: StagedVersion, so: StorageOptions, proposed
         raise InvalidInputError(f"commit refused: new rows reuse stable row ids below the table's next row id {floor} that this commit did not delete")
 
 
-def judge(staged: StagedVersion, so: StorageOptions, *, base_judge: BaseJudge, external_bases: Sequence[base_registry.RecordedBase]) -> None:
-    """Refuse the staged version if it breaks a rule the catalog's own write doors hold.
+def judge(staged: StagedVersion, so: StorageOptions, *, base_judge: BaseJudge, external_bases: Sequence[base_registry.RecordedBase]) -> bool:
+    """Refuse the staged version if it breaks a rule the catalog's own write doors hold; say whether it adds data.
 
     The version is compared with the one it follows. What it adds is judged: a file or a row carried over was judged
-    when it landed.
+    when it landed. It adds data when it names a data file the version it follows does not hold, unless it is a
+    compaction or a restore, whose files carry rows the table already held: such a commit on a derived tier names its
+    run.
 
     Raises:
         InvalidInputError: The version breaks one of the rules below; nothing was finalized.
@@ -547,6 +437,7 @@ def judge(staged: StagedVersion, so: StorageOptions, *, base_judge: BaseJudge, e
     _refuse_held_keys(proposed, split)
     if staged.operation == "Rewrite" and current is not None:
         maintenance.require_compactable(current, so)
+    return bool(split.added_files) and staged.operation not in _CARRIES_HELD_ROWS
 
 
 #: The lineage operation each staged Lance operation is announced as. pylance stages merge_insert as an ``Update`` and
@@ -593,7 +484,7 @@ def finalize(ns: LanceNamespace, staged: StagedVersion, request: CreateTableVers
     The backend is handed the catalog's own copy, which it moves into the version slot (measured on pylance 13.0.0), so
     the version that lands is the one judged whatever the writer puts over its staged key meanwhile.
     """
-    path = f"{_object_store_path(staged.location.rstrip('/'))}/_versions/d{staged.finalize_id}.manifest"
+    path = f"{dataplane.object_store_path(staged.location.rstrip('/'))}/_versions/d{staged.finalize_id}.manifest"
     judged = request.model_copy(update={"manifest_path": path})
     try:
         response = CreateTableVersionResponse.model_validate(native.call(ns, "create_table_version", judged))

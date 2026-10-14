@@ -114,7 +114,6 @@ _RECORDED_HEADER_EXCEPTIONS = frozenset(
         "dapr-caller-app-id",
         "x-lance-originator",
         "Idempotency-Key",
-        "X-Lance-Run-Facets",
     }
 )
 

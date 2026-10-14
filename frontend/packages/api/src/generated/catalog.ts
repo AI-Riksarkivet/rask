@@ -2898,13 +2898,9 @@ export interface paths {
          *     entry and outside governed storage (``table_bases.requested_external_blob_base``). Omitted → no
          *     external base, and a pointer in the rows is refused.
          *
-         *     Derived-write lineage (S4, optional — the same metadata ``merge_insert`` has always taken):
-         *     ``source`` + ``source_version`` record the version-pinned upstream this table DERIVES FROM
-         *     (an annotation publish from ``transcripts@N``, a Ray job's first write), surfaced as a
-         *     version-pinned INPUT on the CREATE RunEvent; the ``X-Lance-Run-Facets`` header carries producer
-         *     run metadata (e.g. the ``annotationProject`` facet) verbatim onto the same event. Before S4,
-         *     every FIRST write of a derived table was emitted with no pin and no facet — only later merges
-         *     could carry provenance.
+         *     The run the request's Context names (:mod:`catalog.core.run_context`) is stamped into the commit and its inputs
+         *     become the create event's version-pinned inputs; the tier judge has already refused a silver or gold create that
+         *     names none, and an input the caller cannot read.
          */
         post: operations["create_table_v1_table__id__create_post"];
         delete?: never;
@@ -3257,6 +3253,8 @@ export interface paths {
          *     ``mode=overwrite`` removes every row on the ref before inserting (spec.yaml InsertIntoTableRequest.mode),
          *     so a protected table refuses it 409 unless ``force=true``, on any branch — the protection record is the
          *     table's — and it is recorded as ``overwrite_table`` with the ``OVERWRITE`` lifecycle state ([[LH-242]]).
+         *
+         *     The run the request's Context names is stamped into the commit, on main only ([[LH-225]]).
          */
         post: operations["insert_into_table_v1_table__id__insert_post"];
         delete?: never;
@@ -3279,10 +3277,8 @@ export interface paths {
          * @description Upsert Arrow-IPC rows — ``merge_insert_into_table``; emits a MERGE_INSERT lineage event.
          *     The ``*_filt`` SQL filters, ``timeout``, ``use_index`` and ``branch`` are spec-0.9 query params.
          *
-         *     Training-shaped lineage (optional, catalog stays un-opinionated): ``source`` + ``source_version``
-         *     record the version-pinned upstream this merge DERIVED FROM (a pipeline's merge from ``source@N`` — the
-         *     reproducibility pin surfaced on the lineage READ edge), and the ``X-Lance-Run-Facets`` header carries
-         *     producer run metadata (e.g. training ``params``) verbatim onto the emitted RunEvent.
+         *     The run the request's Context names is stamped into the commit, on main only, and its inputs become the
+         *     event's version-pinned inputs ([[LH-225]]).
          *
          *     IMPLICIT DDL (§4): after the merge commits, a best-effort BTREE index is ensured on the ``on``
          *     key (pylance's ``use_index`` only helps *if an index exists*, and nothing else ever builds one —
@@ -14012,7 +14008,6 @@ export interface operations {
                 delimiter?: string | null;
             };
             header?: {
-                "X-Lance-Run-Facets"?: string | null;
                 authorization?: string | null;
                 "Idempotency-Key"?: string | null;
                 "dapr-caller-app-id"?: string | null;
@@ -14661,7 +14656,6 @@ export interface operations {
                 delimiter?: string | null;
             };
             header?: {
-                "X-Lance-Run-Facets"?: string | null;
                 authorization?: string | null;
                 "dapr-caller-app-id"?: string | null;
                 "x-lance-originator"?: string | null;

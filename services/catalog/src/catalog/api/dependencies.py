@@ -17,10 +17,12 @@ from lance_namespace import (
 )
 from openfga_sdk import OpenFgaClient
 
+from catalog.core import run_context
 from catalog.core.config import Settings, StorePlane, get_settings
 from catalog.core.identifiers import parse_identifier
 from catalog.core.lineage_emit import LineageEmitter, NoopEmitter, OriginatorBoundEmitter, is_person_subject
 from catalog.core.namespace import build_namespace_for_root
+from catalog.core.run_context import RunContext
 from catalog.core.vending import CredentialVendor, ModeBVendor
 from catalog.services import warehouses
 from service_kit.control_emit import ControlEmitter, NoopControlEmitter
@@ -349,6 +351,18 @@ def get_lineage_emitter(
 
 
 LineageEmitterDep = Annotated[LineageEmitter, Depends(get_lineage_emitter)]
+
+
+def get_run(request: Request) -> RunContext | None:
+    """The run the request's spec Context names (:mod:`catalog.core.run_context`), or ``None``.
+
+    Read from the request rather than declared as ``Header`` parameters, so the Context headers stay out of the
+    spec operations' published contract.
+    """
+    return run_context.from_headers(request.headers)
+
+
+RunDep = Annotated[RunContext | None, Depends(get_run)]
 
 
 def get_control_emitter(request: Request) -> ControlEmitter:

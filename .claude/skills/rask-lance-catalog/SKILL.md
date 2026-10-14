@@ -126,7 +126,22 @@ ADR 0160, LH-470). `catalog/core/tier_policy.py` holds it:
 - **Pinned by tests.** `services/catalog/tests/test_an_undeclared_door_is_refused.py` walks every mounted route and
   fails on a write that skips the judge; `tests/integration/test_a_tier_is_declared_by_its_admin_and_judged_on_every_write.py`
   covers the admin gate and the judged tier over HTTP.
-- **Not here yet.** The tier's own rules (run and inputs on silver/gold, the hold) land with LH-225 and LH-466. Nothing anywhere reads a tier from a name.
+- **Silver and gold name their run** ([[LH-225]], ADR 0156 C2). A write adding data to a silver or gold table names
+  its run and inputs, and every named input, on any tier, needs `can_read_data` (`tier_policy.judge_run`). The
+  run is `catalog.core.run_context`: on `create`, `insert` and `merge_insert` it comes from the spec Context headers
+  `x-rask-run-id`, `x-rask-job`, `x-rask-inputs` (a JSON array of `{table: [segments], version, branch}`) and the
+  door stamps it as the transaction properties `rask.run_id` / `rask.job` / `rask.inputs`, with `rask.author` the
+  verified caller; at `version/create` the catalog reads the same properties from the staged manifest, which may carry
+  no other `rask.*` key, and refuses a `rask.author` other than the caller or a run without one (a property any
+  committer can write proves authorship only because of that refusal). A compaction and a restore add no data, so
+  they name no run. A rename commits nothing a run can reach, so moving a table into silver or gold from another
+  tier is refused; `register` into a derived tier is LH-463's. A keyed insert
+  and a merge carrying a run commit through `dataplane.commit_stamped`: detached, then finalized as exactly the
+  next version by the backend's put-if-not-exists, because `LanceDataset.commit` of an `execute_uncommitted` merge
+  rebases past a racing writer without its key check (measured on pylance 13.0.0: a duplicate key landed). A run on
+  a branch write is refused 406. `update` and `add_columns` cannot carry transaction properties on pylance 13, so
+  silver and gold refuse them 406. The hold behind `published` lands with LH-466. Nothing anywhere reads a tier from
+  a name.
 
 ## Storage — what state lives where (and why there is NO app database)
 
@@ -371,9 +386,9 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   `services/catalog/tests/test_a_stock_client_commits_every_operation_through_version_create.py` and
   `tests/integration/test_a_forged_fragment_is_refused_and_the_table_is_unchanged.py`. `/compaction_commit` and
   `register` still judge file versions on their own doors.
-  **Provenance rides ad hoc channels today** (`source`/`source_version`, `X-Lance-Run-Facets`). ADR 0156 C2 and ADR 0157 replace them with the spec `Context` (`header.*`): the
-  catalog stamps or verifies reserved `rask.run_id` / `rask.inputs` transaction properties, requires
-  `can_read_data` on each input and refuses an anonymous silver/gold commit (LH-225, #180).
+  **Provenance travels in the spec Context** ([[LH-225]]): the staged manifest's `rask.*` transaction properties name
+  the run, `version/create` refuses a silver or gold commit adding data without a run and inputs, and the finalize's
+  lineage event names the inputs at their versions. See the tier bullet under "rask's hierarchy layer".
 - **A write's lineage event names the commit that write made, never a reopen** ([[LH-214]]).
   `lineage_deps.emit_measured_write` takes `pin_version` and `branch` with no default: a new write door
   passes its handle's `version` after the commit, its response's `version`, or

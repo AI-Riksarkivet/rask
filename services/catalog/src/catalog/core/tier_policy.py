@@ -5,9 +5,13 @@ project's admin. It is never read from a name. The judge owns the write decision
 declares, and only then reads the tier, so a caller without the rung learns nothing about the namespace path
 it named. Every decision is audited with the tier it was taken under.
 
-The judge answers allow or refuse today. The tier's own rules land with the rows that need them: the run and
-inputs on silver and gold (LH-225) and the hold behind ``published`` (LH-466). A staged manifest's content is judged
-by ``catalog.services.managed_versions`` (LH-471).
+A write that adds data to a silver or gold table names the run that produced it and the inputs it read
+(:mod:`catalog.core.run_context`, ADR 0156 C2): a catalog door reads them from the request's Context and stamps them
+into its commit, a stock client writes them into its staged manifest. A door whose pylance call cannot carry
+transaction properties (``update``, ``add_columns``) is refused on those tiers, because the run it was given would
+not reach the commit. Every named input, on any tier, needs ``can_read_data``: naming a table one cannot read as an
+input would launder it into the derived table's lineage. The hold behind ``published`` lands with LH-466. A staged
+manifest's content is judged by ``catalog.services.managed_versions`` (LH-471), which hands its run here.
 """
 
 from __future__ import annotations
@@ -17,13 +21,14 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Final
 
 from fastapi.concurrency import run_in_threadpool
-from lance_namespace import DescribeNamespaceRequest, InternalError, InvalidInputError, LanceNamespace, NamespaceNotFoundError
+from lance_namespace import DescribeNamespaceRequest, InternalError, InvalidInputError, LanceNamespace, NamespaceNotFoundError, UnsupportedOperationError
 from pydantic import BaseModel, ConfigDict
 
 from catalog.core.provenance_guard import RESERVED_METADATA_PREFIXES, is_reserved_key
+from catalog.core.run_context import INPUTS_HEADER, INPUTS_PROPERTY, RUN_ID_HEADER, RUN_ID_PROPERTY, RunContext
 from catalog.services import native
 from service_kit.governed.audit import ALLOW, audit
-from service_kit.schemas.storage import GOVERNED_TIERS
+from service_kit.schemas.storage import GOVERNED_TIERS, StorageRole
 
 
 log = logging.getLogger(__name__)
@@ -33,6 +38,16 @@ log = logging.getLogger(__name__)
 TIER_PROPERTY: Final = "rask.tier"
 
 TIERS: Final = frozenset(tier.value for tier in GOVERNED_TIERS)
+
+#: The tiers whose data is derived, so every write adding data to them names its run and inputs.
+DERIVED_TIERS: Final = frozenset({StorageRole.SILVER.value, StorageRole.GOLD.value})
+
+#: The write doors that add data and stamp the request's run into their commit.
+STAMPING_DOORS: Final = frozenset({"create", "insert", "merge_insert"})
+
+#: The write doors that add data through a pylance call taking no transaction properties: the run cannot reach the
+#: commit (pylance 13.0.0: ``LanceDataset.update`` and ``add_columns`` have no such parameter).
+UNSTAMPED_DATA_DOORS: Final = frozenset({"update", "add_columns"})
 
 #: Ask one rung, raising the spec's typed refusal on a denial. ``None`` when FGA is off.
 type RungCheck = Callable[["Rung"], Awaitable[None]]
@@ -62,6 +77,11 @@ class Write(BaseModel):
     obj: str
     rung: Rung | None
     table: tuple[str, ...]
+    #: The run the request's Context names, and the ``can_read_data`` rung on each of its inputs.
+    run: RunContext | None = None
+    input_rungs: tuple[Rung, ...] = ()
+    #: The table a rename moves, whose tier the destination's is compared with.
+    moved_from: tuple[str, ...] = ()
 
 
 class Judgement(BaseModel):
@@ -122,11 +142,14 @@ async def tier_of(ns: LanceNamespace, namespace: Sequence[str]) -> str | None:
     return None
 
 
-async def judge(op: Write, *, caller: str | None, check: RungCheck | None, namespace: Callable[[], Awaitable[LanceNamespace]]) -> Judgement:
+async def judge(op: Write, *, caller: str | None, check: RungCheck | None, namespace: Callable[[str], Awaitable[LanceNamespace]]) -> Judgement:
     """Allow ``op`` or refuse it with the spec's typed error.
 
     ``check`` asks the rung (``None`` with FGA off, when no rung exists to ask). ``namespace`` yields the
-    connection the table's namespace path resolves through, and is only awaited once the rung allowed.
+    connection a top-level namespace resolves through, and is only awaited once the rung allowed.
+
+    A rename commits nothing, so no run can reach it: one that moves a table into a silver or gold namespace from a
+    namespace of another tier is refused, because it would place data in the derived tier that no run produced.
 
     Raises:
         PermissionDeniedError: The caller lacks the rung the route declares.
@@ -134,6 +157,40 @@ async def judge(op: Write, *, caller: str | None, check: RungCheck | None, names
     """
     if check is not None and op.rung is not None:
         await check(op.rung)
-    tier = await tier_of(await namespace(), op.table[:-1]) if len(op.table) > 1 else None
+    tier = await _tier_of_table(namespace, op.table)
+    if op.moved_from and tier in DERIVED_TIERS and (source := await _tier_of_table(namespace, op.moved_from)) != tier:
+        raise InvalidInputError(
+            f"rename refused: moving a {source or 'untiered'} table into a {tier} namespace places data no run produced; "
+            f"write it there with the run that derives it"
+        )
+    if op.op in UNSTAMPED_DATA_DOORS and tier in DERIVED_TIERS:
+        raise UnsupportedOperationError(
+            f"{op.op} on a {tier} table is refused: its commit cannot carry the run and inputs a {tier} write names; "
+            "write the rows with merge_insert and the run in the request's Context"
+        )
+    if op.op in STAMPING_DOORS:
+        await judge_run(tier, op.run, op.input_rungs, check=check, names=f"the request's Context headers {RUN_ID_HEADER} and {INPUTS_HEADER}")
     audit("tier_judge", ALLOW, subject=caller, resource=op.obj, op=op.op, tier=tier or "untiered")
     return Judgement(tier=tier)
+
+
+async def _tier_of_table(namespace: Callable[[str], Awaitable[LanceNamespace]], table: Sequence[str]) -> str | None:
+    """The tier of the namespace path table ``table`` lies in, read through its top-level namespace's connection."""
+    return await tier_of(await namespace(table[0]), table[:-1]) if len(table) > 1 else None
+
+
+async def judge_run(tier: str | None, run: RunContext | None, input_rungs: Sequence[Rung], *, check: RungCheck | None, names: str) -> None:
+    """Refuse a data write to a derived tier that names no run and inputs, and any write naming an input it cannot read.
+
+    ``names`` says where the caller puts the run, for the refusal. ``check`` is ``None`` with FGA off, when every rung
+    allows.
+
+    Raises:
+        InvalidInputError: ``tier`` is silver or gold and the write names no run, or no input.
+        PermissionDeniedError: The caller lacks ``can_read_data`` on a named input (raised by ``check``).
+    """
+    if tier in DERIVED_TIERS and (run is None or not run.inputs):
+        raise InvalidInputError(f"commit refused: a write to a {tier} table names its run ({RUN_ID_PROPERTY}) and its inputs ({INPUTS_PROPERTY}) in {names}")
+    if check is not None:
+        for rung in input_rungs:
+            await check(rung)

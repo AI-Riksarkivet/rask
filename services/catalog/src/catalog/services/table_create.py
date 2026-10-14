@@ -7,18 +7,17 @@ intent for that plane — "the endpoints stay routing-only" — and this is the 
 The steps, and the order, are exactly what the door ran, because the ORDER is the contract:
 
 1. shape guards that cost nothing (wildcards, the multi-base allowlist, ``properties`` as a map of
-   strings, the LANCE-ONLY format rule, the derived-write pin and the run facets) —
-   :func:`parse_create_shape` — and the body read as an Arrow IPC stream
+   strings, the LANCE-ONLY format rule) — :func:`parse_create_shape` — and the body read as an Arrow IPC stream
    (``dataplane.read_arrow_body``). The door runs both before its idempotency claim, so a request that
    is invalid on its face never pays for a lookup (catalog-api-19) and never holds a key;
 2. the parent-exists and live-trash guards — round trips, still strictly BEFORE the write;
-3. the derived-write pin, authorized before the write rather than after it;
-4. the #21 lineage stamp into the decoded table's schema metadata;
-5. the pre-existence probe, and for an Overwrite of an existing table its owner-tier drop gate and
+3. the #21 lineage stamp into the decoded table's schema metadata;
+4. the pre-existence probe, and for an Overwrite of an existing table its owner-tier drop gate and
    its deletion-protection guard;
-6. the data-plane write;
-7. seed-with-compensation, which grants owner only on a table this request brought into being;
-8. the schema read-back, the lineage emit (``overwrite_table`` for an Overwrite of an existing table)
+5. the data-plane write, carrying the run the request's Context names in its transaction properties (the tier
+   judge refused a missing run and an unreadable input before the door ran);
+6. seed-with-compensation, which grants owner only on a table this request brought into being;
+7. the schema read-back, the lineage emit (``overwrite_table`` for an Overwrite of an existing table)
    and the control emit.
 
 **An Overwrite of an existing table is a new version of the same table** ([[LH-242]]). The spec's
@@ -46,7 +45,6 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from typing import Any
 
 import pyarrow as pa
 from fastapi.concurrency import run_in_threadpool
@@ -63,14 +61,15 @@ from pydantic import BaseModel
 
 from catalog.api import fga_deps
 from catalog.api.security import Principal
-from catalog.core import provenance_guard
+from catalog.core import provenance_guard, run_context
 from catalog.core.base_judge import GovernedStorage
 from catalog.core.config import Settings
 from catalog.core.formats import reject_unsupported_properties
 from catalog.core.identifiers import parse_identifier, require_safe_segments
-from catalog.core.lineage_emit import OVERWRITE_TABLE, InputPin, InputRef, LineageEmitter, merge_source_pin, parse_run_facets
+from catalog.core.lineage_emit import OVERWRITE_TABLE, LineageEmitter, input_refs, run_inputs
 from catalog.core.lineage_metadata import build_lineage_metadata, stamp_lineage_metadata
 from catalog.core.modes import CreateMode
+from catalog.core.run_context import RunContext
 from catalog.services import dataplane, native, table_bases
 from catalog.services.base_credentials import BaseCredentials
 from service_kit.control_emit import ControlEmitter, emit_control
@@ -112,8 +111,6 @@ class CreateShape(BaseModel):
     properties: dict[str, str] | None = None
     #: The external blob base the create asks to register ([[LH-209]]), judged with settings before the write.
     external_blob_base: str | None = None
-    source_pin: InputPin | None = None
-    run_facets: dict[str, Any] | None = None
 
 
 def _parse_properties(raw: str | None) -> dict[str, str] | None:
@@ -142,17 +139,13 @@ def parse_create_shape(
     settings: Settings,
     data_base: list[str],
     properties: str | None,
-    source: str | None,
     external_blob_base: str | None = None,
-    source_version: int | None,
-    run_facets_json: str | None,
 ) -> CreateShape:
     """Refuse a create that is malformed on its face, and return what it decoded.
 
     Pure: no round trip, no write. The door calls it BEFORE its idempotency claim, beside the mode
     parse, because a claim minted for a request refused here would hold the key for its lease and
-    answer the corrected retry 409. Authorizing the pin needs FGA, so that stays in
-    :func:`create_governed_table`.
+    answer the corrected retry 409.
     """
     # A wildcard (`*`/`?`) in a segment would flow verbatim from the table's derived prefix into the
     # vended STS session policy and widen credentials to siblings — refused at SHAPE, before any write.
@@ -170,12 +163,7 @@ def parse_create_shape(
     # Create properties are stamped onto the Lance file's schema metadata, so they meet the same
     # reserved-namespace rule as every other metadata write door ([[LH-208]]).
     provenance_guard.refuse_reserved_keys(parsed_properties or {}, door="create properties")
-    return CreateShape(
-        properties=parsed_properties,
-        external_blob_base=external_blob_base,
-        source_pin=merge_source_pin(source, source_version, settings.delimiter),
-        run_facets=parse_run_facets(run_facets_json),
-    )
+    return CreateShape(properties=parsed_properties, external_blob_base=external_blob_base)
 
 
 async def create_governed_table(
@@ -193,6 +181,7 @@ async def create_governed_table(
     shape: CreateShape,
     data_base: list[str],
     authorization: str | None,
+    run: RunContext | None,
     force: bool = False,
 ) -> CreateTableResponse:
     """Create a Lance table from an Arrow-IPC stream, governed end to end.
@@ -201,8 +190,8 @@ async def create_governed_table(
     before its idempotency claim (``CreateMode.parse``, :func:`parse_create_shape`,
     ``dataplane.read_arrow_body``); four decisions below turn on
     the mode — the pre-existence guards, the ownership seed, the schema read-back and the compensation
-    rule. The derived-write pin is AUTHORIZED here, after the round trips and before the write — see
-    the module docstring. ``force`` releases deletion protection for an Overwrite of an existing table,
+    rule. ``run`` is the run the request's Context names, which the tier judge already judged: it is stamped
+    into the commit and its inputs become the event's inputs. ``force`` releases deletion protection for an Overwrite of an existing table,
     and nothing else.
     """
     # THE ROUND TRIPS COME AFTER THE FREE CHECKS (catalog-api-19). These two both dial out — a
@@ -220,12 +209,6 @@ async def create_governed_table(
     # The id must not still belong to a trashed table (diff2 F10 item 4): a recoverable drop KEEPS
     # its grants, so creating here would hand the new table the dead one's readers and writers.
     await fga_deps.require_no_live_trash(settings, parse_identifier(id, settings.delimiter))
-    # S4: authorize the parsed pin BEFORE the write, with the same forge-guard as merge_insert: a
-    # caller who cannot READ the named source must not be able to stamp a cross-tenant DERIVED_FROM
-    # edge (or a phantom vertex) into trusted lineage.
-    source_pin = shape.source_pin
-    if source_pin is not None:
-        await fga_deps.require_can_get_metadata(client, settings, token, segments=source_pin.segments)
     # [[LH-209]] The one external blob base this create may register, judged before the write: none unless
     # the request names one, and never one that reaches governed storage.
     external_base = await run_in_threadpool(
@@ -287,6 +270,7 @@ async def create_governed_table(
         base_credentials=BaseCredentials.from_settings(settings),
         registry=registry,
         holder=table_id,
+        transaction_properties=run_context.commit_properties(run, author=created_by),
     )
 
     # Make the caller owner of a table this request brought into being + link it to its parent so it
@@ -370,19 +354,7 @@ async def create_governed_table(
         _, schema_fields, _location = await run_in_threadpool(dataplane.read_version_and_schema, ns, so, segments, response.version, None)
     else:
         schema_fields = dataplane.payload_schema_fields(table.schema, segments)
-    # S4: the pin resolves to a version-pinned INPUT exactly as `emit_write_event` resolves a merge's
-    # (canonical ids, so the lineage Dataset == the OpenFGA object); the facets ride verbatim.
-    input_refs = (
-        [
-            InputRef(
-                fga.parent_namespace_id(source_pin.segments, delimiter=settings.delimiter) or "",
-                fga.canonical_object_id(source_pin.segments, delimiter=settings.delimiter),
-                source_pin.version,
-            )
-        ]
-        if source_pin is not None
-        else None
-    )
+    inputs = input_refs(run_inputs(run), delimiter=settings.delimiter)
     if overwrote_existing:
         # Not a creation: the table, its creator and its CREATED edge all predate this request.
         await emitter.emit_write(
@@ -395,8 +367,8 @@ async def create_governed_table(
             authorization=authorization,
             source_uri=response.location,
             schema_fields=schema_fields,
-            inputs=input_refs,
-            extra_run_facets=shape.run_facets,
+            inputs=inputs,
+            run=run,
         )
     else:
         await emitter.emit_create(
@@ -408,8 +380,8 @@ async def create_governed_table(
             authorization=authorization,
             source_uri=response.location,  # the real Lance URI → #23 reconcile can read the on-disk file
             schema_fields=schema_fields,
-            inputs=input_refs,
-            extra_run_facets=shape.run_facets,
+            inputs=inputs,
+            run=run,
         )
     # Only a real creation emits — an ExistOk request that KEPT a pre-existing table wrote nothing and
     # created nothing (same guard that skips ownership seeding above), so a `table_created` here would be a

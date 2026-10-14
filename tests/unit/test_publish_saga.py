@@ -133,7 +133,7 @@ class _Publisher:
         plan: Any,
         *,
         properties: dict[str, str],
-        run_facet: dict[str, Any],
+        run_id: str,
         source: str | None = None,
         source_version: int | None = None,
     ) -> int:
@@ -145,7 +145,7 @@ class _Publisher:
         self.tables.setdefault(table_id, 7)
         self.rows = list(plan.rows)
         self.properties = properties
-        self.run_facet = run_facet
+        self.run_id = run_id
         return self.tables[table_id]
 
     async def tag_version(self, table_id: str, version: int, tag: str) -> None:

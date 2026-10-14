@@ -45,9 +45,9 @@ from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE
 
 logger = logging.getLogger(__name__)
 
-#: The catalog header that carries caller-supplied run facets (`{name: payload}`). The catalog's
-#: ``merge_insert`` already parses it; the ``create`` side is the S4 extension.
-RUN_FACETS_HEADER = "X-Lance-Run-Facets"
+#: The catalog Context headers that name a write's run and its inputs (ADR 0156 C2).
+RUN_ID_HEADER = "x-rask-run-id"
+INPUTS_HEADER = "x-rask-inputs"
 
 #: Connect-failure retries for the publish transport's DIRECT-HTTP half, kept equal to the retry
 #: budget the generated client is built with below (`Configuration(retries=...)`).
@@ -71,19 +71,6 @@ def publish_client(timeout: float) -> Any:
     import httpx  # noqa: PLC0415 - publish path only, like every other httpx use in this module
 
     return httpx.Client(transport=httpx.HTTPTransport(retries=CATALOG_TRANSPORT_RETRIES), timeout=timeout)
-
-
-def _bare_facets(run_facet: dict[str, Any]) -> dict[str, Any]:
-    """Strip the spec stamps off each facet payload for the `X-Lance-Run-Facets` contract.
-
-    `project_facet` returns a spec-legal facet — `custom_facet` stamps `_producer`/`_schemaURL` into
-    it — but the header carries BARE payloads: the catalog's `shape_run_facets` stamps each facet
-    itself and 400s any `_`-prefixed or `producer` key. Found by the live drive as a publish that
-    could never succeed; the stripping lives HERE because the stamping is this transport's far end."""
-    return {
-        name: {k: v for k, v in payload.items() if not k.startswith("_") and k != "producer"} if isinstance(payload, dict) else payload
-        for name, payload in run_facet.items()
-    }
 
 
 def _arrow_stream_bytes(plan: PublishPlan) -> bytes:
@@ -182,8 +169,6 @@ class _HttpCreateApi:
         delimiter: str = CATALOG_DELIMITER,
         mode: str | None = None,
         properties: str | None = None,
-        source: str | None = None,
-        source_version: int | None = None,
         _headers: dict[str, str] | None = None,
         _request_timeout: float = 60.0,
     ) -> CreateTableResult:
@@ -194,10 +179,6 @@ class _HttpCreateApi:
             params["mode"] = mode
         if properties:
             params["properties"] = properties
-        if source:
-            params["source"] = source
-            if source_version is not None:
-                params["source_version"] = str(source_version)
         response = self._client.post(
             f"{self._base}/v1/table/{quote(table_id, safe='')}/create",
             params=params,
@@ -253,8 +234,7 @@ class CatalogPublisher:
         # only the create would leave the publish half-attributed.
         if originator:
             client.set_default_header("x-lance-originator", originator)
-        # Create goes over DIRECT HTTP, not the SDK: the spec-generated `create_table` cannot send
-        # our S4 `source`/`source_version` query params (the OPEN-WORK register, row B3 (drained 2026-09-10; in git history)), and the pin must travel.
+        # Create goes over direct HTTP on the pooled, retrying client, posting the Arrow stream body itself.
         self._data = _HttpCreateApi(base_url)
         self._tags = TagApi(client)
 
@@ -279,7 +259,7 @@ class CatalogPublisher:
         plan: PublishPlan,
         *,
         properties: dict[str, str],
-        run_facet: dict[str, Any],
+        run_id: str,
         source: str | None = None,
         source_version: int | None = None,
     ) -> int:
@@ -287,7 +267,9 @@ class CatalogPublisher:
         from service_kit.lancekit.reader import translate_catalog_errors  # noqa: PLC0415 - keeps import-time light
 
         body = _arrow_stream_bytes(plan)
-        headers = {**self._headers, RUN_FACETS_HEADER: json.dumps(_bare_facets(run_facet))}
+        headers = {**self._headers, RUN_ID_HEADER: run_id}
+        if source is not None and source_version is not None:
+            headers[INPUTS_HEADER] = json.dumps([{"table": source.split(self._delimiter), "version": source_version}])
 
         def _call() -> Any:
             with translate_catalog_errors():
@@ -297,8 +279,6 @@ class CatalogPublisher:
                     delimiter=self._delimiter,
                     mode="exist_ok",
                     properties=json.dumps(properties),
-                    source=source,
-                    source_version=source_version,
                     _headers=headers,
                     _request_timeout=self._timeout,
                 )

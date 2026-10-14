@@ -59,6 +59,7 @@ def _create(**over: Any) -> Any:
         "control": None,
         "so": {},
         "data": encode_arrow_stream(pa.table({"id": [1]})),
+        "run": None,
     }
     kwargs.update(over)
     return asyncio.run(ep.create_table(**kwargs))

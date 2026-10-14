@@ -37,12 +37,11 @@ from typing import Any, NamedTuple, Protocol, TypedDict, Unpack, runtime_checkab
 import httpx
 import lance
 from dapr.aio.clients import DaprClient
-from lance_namespace import InvalidInputError
 from opentelemetry import metrics
 from pydantic import BaseModel
 
-from catalog.core.identifiers import parse_identifier
-from lineage_kit import CanonError, SigningKey, attach_signature, author_of, canon_1
+from catalog.core.run_context import RunContext
+from lineage_kit import CanonError, SigningKey, attach_signature, author_of
 from service_kit.governed import fga
 from service_kit.governed.signing_key import SigningKeyHolder, SigningKeyUnavailableError
 from service_kit.lakehouse import outbox
@@ -161,19 +160,43 @@ class InputPin(BaseModel):
 
     segments: list[str]
     version: int | None = None
+    #: The branch the version is on, ``None`` for main: a branch numbers its versions apart from main.
+    branch: str | None = None
 
 
 class InputRef(NamedTuple):
-    """A resolved input edge for the wire builder: canonical ``(namespace, name)`` + pinned version."""
+    """A resolved input edge for the wire builder: canonical ``(namespace, name)``, pinned version and its branch."""
 
     namespace: str
     name: str
     version: int | None
+    branch: str | None = None
+
+
+def input_refs(pins: list[InputPin] | None, *, delimiter: str) -> list[InputRef] | None:
+    """``pins`` resolved to the canonical ids the lineage graph and FGA key on, so an edge meets the real node."""
+    refs = [
+        InputRef(
+            fga.parent_namespace_id(pin.segments, delimiter=delimiter) or "",
+            fga.canonical_object_id(pin.segments, delimiter=delimiter),
+            pin.version,
+            pin.branch,
+        )
+        for pin in pins or []
+    ]
+    return refs or None
+
+
+def run_inputs(run: RunContext | None) -> list[InputPin] | None:
+    """The inputs a run names, as the pins a write's event derives from."""
+    if run is None or not run.inputs:
+        return None
+    return [InputPin(segments=list(entry.table), version=entry.version, branch=entry.branch) for entry in run.inputs]
 
 
 def _input_dataset(ref: InputRef) -> dict[str, Any]:
     """An OpenLineage INPUT dataset, carrying the standard ``DatasetVersionDatasetFacet`` when a source
-    version is pinned."""
+    version is pinned, and rask's ``lance`` facet naming the branch that version is on."""
     dataset: dict[str, Any] = {"namespace": ref.namespace, "name": ref.name}
     if ref.version is not None:
         dataset["facets"] = {
@@ -183,6 +206,8 @@ def _input_dataset(ref: InputRef) -> dict[str, Any]:
                 "datasetVersion": str(ref.version),
             }
         }
+    if ref.branch is not None:
+        dataset.setdefault("facets", {})["lance"] = custom_facet(_PRODUCER, ref=ref.branch)
     return dataset
 
 
@@ -252,7 +277,7 @@ def build_write_event(
     source_uri: str | None = None,
     schema_fields: SchemaFields | None = None,
     inputs: list[InputRef] | None = None,
-    extra_run_facets: dict[str, Any] | None = None,
+    run: RunContext | None = None,
     project: str | None = None,
     originator: str | None = None,
     branch: str | None = None,
@@ -274,8 +299,15 @@ def build_write_event(
     SOURCE table so the destination's provenance chain is not severed (the graph shows dest←source instead
     of the renamed table appearing as an orphan with no history). Default ``None`` → no input edge, the
     normal case for a fresh write.
+
+    ``run`` is the run the writer named (:mod:`catalog.core.run_context`); its id and job ride the catalog's ``lance``
+    facet, because ``run_id`` is this event's own id and the writer's need not be the UUID OpenLineage asks for.
     """
     lance_fields: dict[str, Any] = {"operation": operation}
+    if run is not None:
+        lance_fields["runId"] = run.run_id
+        if run.job is not None:
+            lance_fields["job"] = run.job
     if version is not None:
         lance_fields["version"] = version
     # THE REF THE WRITE LANDED ON, because the version alone does not identify a snapshot. A branch is a
@@ -315,13 +347,7 @@ def build_write_event(
     # write can only name its human here. Targeting only — it authorizes nothing.
     if is_person_subject(originator):
         lance_fields["originator"] = originator
-    # Caller-supplied run facets FIRST (e.g. a `params` training-params facet on a merge), already spec-shaped
-    # by shape_run_facets, so the catalog stays un-opinionated about their content. The catalog-OWNED `lance`
-    # (operation/version) and `author` facets are stamped AFTER — they always win a name collision, so a
-    # producer can never forge the operation (a false CREATED edge) or the author on the trusted transport,
-    # even if a reserved name slipped past shape_run_facets' denylist (defense in depth).
-    run_facets: dict[str, Any] = dict(extra_run_facets) if extra_run_facets else {}
-    run_facets["lance"] = custom_facet(_PRODUCER, **lance_fields)
+    run_facets: dict[str, Any] = {"lance": custom_facet(_PRODUCER, **lance_fields)}
     # WHICH ENGINE WROTE THIS, in the field a non-rask consumer reads. The catalog commits through
     # pylance in-process while the medallion's stage lanes write through Ray, so "what produced this
     # table" has two answers and, without this facet, no way to tell them apart in the graph. Stamped
@@ -394,72 +420,6 @@ def build_write_event(
     }
 
 
-def require_signable_run_facets(run_facets: dict[str, Any]) -> None:
-    """Refuse shaped run facets whose event could not be signed, canonicalizing them where that event carries them.
-
-    THE CATALOG SIGNS THE WHOLE EVENT ([[LH-064]]), so whether a payload has a canonical form depends on how deep it sits:
-    canon-1 refuses nesting past ``MAX_NESTING``, and a facet is nested inside its event's ``run`` and ``facets`` members,
-    deeper than in the bag the door parses. Canonicalizing that bag alone admits every payload nested within a few levels of
-    the limit, and the write that carried one commits with an announcement nothing can sign.
-
-    THE EVENT IS BUILT BY :func:`build_write_event`, so this restates no depth: a change to where the builder puts caller
-    facets moves this check with it. The operation is a data one because that is the shape that carries them: the
-    ``DatasetEvent`` a DDL operation emits takes only the catalog's own ``author`` and ``lance`` facets from the run bag.
-
-    Raises:
-        CanonError: the event has no canonical form. The message says the facets are judged where the event carries them,
-            because a header can be shallower than the limit it is refused for.
-    """
-    event = build_write_event(
-        table_id="",
-        namespace="",
-        author=None,
-        version=None,
-        operation=MERGE_INSERT,
-        run_id="",
-        event_time="",
-        job_namespace="",
-        extra_run_facets=run_facets,
-    )
-    try:
-        canon_1(event)
-    except CanonError as exc:
-        raise CanonError(f"the facets cannot be signed where the event carries them: {exc}") from exc
-
-
-#: Run-facet names a producer may NOT set through the passthrough: the ones the catalog STAMPS itself
-#: (``lance`` = operation/version, ``author`` = the verified principal) and the ones the lineage consumer
-#: TRUSTS off the wire (``errorMessage`` / ``progress`` run state, ``parent`` run hierarchy). Left open, a
-#: caller-named ``author``/``lance`` facet would forge the principal or the operation — minting a false
-#: ``(:User)-[:CREATED]->(:Dataset)`` edge — on the Dapr transport, which trusts the catalog's stamp
-#: wholesale (there is no ``enforce_author`` on that internal channel). Rejected here as a clean 4xx.
-_RESERVED_RUN_FACETS = frozenset({"lance", "author", "errorMessage", "progress", "parent"})
-
-
-def shape_run_facets(raw: dict[str, Any]) -> dict[str, Any]:
-    """Wrap caller-supplied run-facet payloads with the spec-required ``_producer`` / ``_schemaURL``.
-
-    The catalog stays un-opinionated about a producer's run metadata (e.g. a pipeline's merge carrying
-    training ``params``): it does not interpret the payload, it only stamps each named facet spec-legal
-    via :func:`custom_facet` so a strict OpenLineage consumer accepts the event. ``raw`` maps a facet
-    name to its payload object. Guarded fail-closed: the facet NAME may not be a reserved catalog-owned /
-    consumer-trusted facet (:data:`_RESERVED_RUN_FACETS`) nor empty; the payload must be a JSON object; and
-    its keys may not shadow the spec's ``_``-prefixed fields nor ``producer`` (all of which
-    :func:`custom_facet` owns — ``producer`` is its positional arg, so a ``producer`` key would raise a bare
-    ``TypeError``). Raises ``ValueError`` on any violation so the caller boundary can translate it to a 4xx.
-    """
-    shaped: dict[str, Any] = {}
-    for name, payload in raw.items():
-        if not name or name in _RESERVED_RUN_FACETS:
-            raise ValueError(f"run facet {name!r} is reserved and cannot be set by a producer")
-        if not isinstance(payload, dict):
-            raise ValueError(f"run facet {name!r} must be a JSON object")
-        if any(key.startswith("_") or key == "producer" for key in payload):
-            raise ValueError(f"run facet {name!r} may not set a reserved field (_-prefixed or 'producer')")
-        shaped[name] = custom_facet(_PRODUCER, **payload)
-    return shaped
-
-
 #: How the emitter learns which TENANT a write belongs to, given the table's TOP namespace segment.
 #:
 #: A callable rather than a registry import, for the reason every other seam in this estate is one: the
@@ -471,62 +431,6 @@ def shape_run_facets(raw: dict[str, Any]) -> dict[str, Any]:
 #: `acme` and project `acme-bronze`, and guessing wrong notifies the wrong tenant's watchers. The
 #: registry binding is the only sound answer.
 type ProjectResolver = Callable[[str], Awaitable[str | None]]
-
-
-def merge_source_pin(source: str | None, source_version: int | None, delimiter: str) -> InputPin | None:
-    """The optional version-pinned source dataset a derived write DERIVED FROM → an ``InputPin`` (or ``None``).
-
-    A blank/absent ``source`` yields no pin; a ``source_version`` with no ``source`` is meaningless (there
-    is nothing to pin) → a fail-fast 4xx, not a silently dropped pin. An empty/delimiter-only ``source`` is
-    rejected too — otherwise it would forge a nameless input vertex (or, on the HTTP transport, drop the
-    whole event). The pin makes the write reproducible: its provenance names the exact source version
-    consumed, surfaced on the lineage READ edge (``input_version``).
-
-    Here rather than in an endpoint module because BOTH the create door and ``merge_insert`` take it, and
-    the create door's orchestration moved to ``catalog.services.table_create`` (catalog-api-03) — a copy
-    on each side is the duplication that keeps producing divergent validation.
-    """
-    if not source or not source.strip():
-        if source_version is not None:
-            raise InvalidInputError("source_version requires source")
-        return None
-    segments = parse_identifier(source, delimiter)
-    if not segments or any(not segment for segment in segments):
-        raise InvalidInputError(f"source is not a valid dataset id: {source!r}")
-    return InputPin(segments=segments, version=source_version)
-
-
-def parse_run_facets(raw_json: str | None) -> dict[str, Any] | None:
-    """Parse + spec-shape the optional ``X-Lance-Run-Facets`` header (a JSON object ``{facet: {payload}}``).
-
-    The Arrow-IPC body carries the write's data, so a producer's run metadata (e.g. training ``params``)
-    rides this header instead. The catalog stays un-opinionated about the payload (:func:`shape_run_facets`
-    only stamps each facet spec-legal + rejects reserved facet names); malformed JSON, a non-object shape,
-    a reserved name/key, or facets the event carrying them could not be signed with (:func:`require_signable_run_facets`)
-    fail-fast as a 4xx (never a 500). Shared by the create door and ``merge_insert`` for the same reason as
-    :func:`merge_source_pin`.
-    """
-    if not raw_json:
-        return None
-    try:
-        parsed = json.loads(raw_json)
-    except (ValueError, RecursionError) as exc:
-        # JSONDecodeError ⊂ ValueError, but json.loads also raises a BARE ValueError for an integer literal
-        # past the 4300-digit int-string-conversion limit, and RecursionError for a deeply-nested payload —
-        # both a malformed producer header (a 4xx, never a 500). (Phase 2 re-audit, 2026-07-21.)
-        raise InvalidInputError("X-Lance-Run-Facets must be valid JSON") from exc
-    if not isinstance(parsed, dict):
-        raise InvalidInputError("X-Lance-Run-Facets must be a JSON object of {facet: {payload}}")
-    try:
-        shaped = shape_run_facets(parsed)
-        # THE CATALOG SIGNS WHAT IT EMITS, and a signature is over the canonical form of the event: a number that has
-        # none (NaN and Infinity, which `json.loads` accepts, or an integer past 2^53-1), or nesting too deep where the
-        # event carries the facets, would make the event unsignable AFTER the write committed. Refused here, with the
-        # other malformed headers, so no write commits on a header whose announcement cannot be signed.
-        require_signable_run_facets(shaped)
-        return shaped
-    except (ValueError, TypeError) as exc:  # CanonError is a ValueError; TypeError: belt-and-suspenders for a payload kwarg collision
-        raise InvalidInputError(str(exc)) from exc
 
 
 class EmitFields(TypedDict, total=False):
@@ -560,8 +464,8 @@ class EmitFields(TypedDict, total=False):
     schema_fields: SchemaFields | None
     #: The version-pinned source dataset(s) this write DERIVES FROM.
     inputs: list[InputRef] | None
-    #: Producer-supplied run facets (e.g. training ``params``), threaded verbatim.
-    extra_run_facets: dict[str, Any] | None
+    #: The run the writer named, whose id and job ride the ``lance`` facet.
+    run: RunContext | None
     #: The TENANT owning the namespace — WATCH targeting's only key.
     project: str | None
     #: The person a SERVICE made this write for, when ``author`` is the service.
@@ -764,7 +668,7 @@ class _BaseLineageEmitter:
             source_uri=fields.get("source_uri"),
             schema_fields=fields.get("schema_fields"),
             inputs=fields.get("inputs"),
-            extra_run_facets=fields.get("extra_run_facets"),
+            run=fields.get("run"),
             project=resolved_project,
             originator=fields.get("originator"),
             branch=fields.get("branch"),
@@ -961,7 +865,7 @@ async def emit_write_event(
     schema_fields: SchemaFields | None = None,
     source_uri: str | None = None,
     inputs: list[InputPin] | None = None,
-    extra_run_facets: dict[str, Any] | None = None,
+    run: RunContext | None = None,
 ) -> None:
     """Publish a best-effort lineage ``WROTE`` event for a catalog mutation, awaited INLINE in the handler.
 
@@ -973,17 +877,10 @@ async def emit_write_event(
     ``source_uri`` attaches the standard dataSource facet (the physical storage URI) so #23 reconcile can
     find the on-disk file — passed by ops that (re)attach a location, e.g. ``register``/``declare``.
     ``inputs`` names the source dataset(s) this write is DERIVED FROM, each optionally version-pinned (a
-    rename passes its source; a pipeline's merge passes ``source@N``); ``extra_run_facets`` rides caller-supplied
-    run facets (e.g. training params). Ids come from ``fga`` so the lineage Dataset == the OpenFGA object.
+    rename passes its source; a pipeline's write passes the inputs its run names); ``run`` names that run's id and job.
+    Ids come from ``fga`` so the lineage Dataset == the OpenFGA object.
     """
-    refs = [
-        InputRef(
-            fga.parent_namespace_id(pin.segments, delimiter=delimiter) or "",
-            fga.canonical_object_id(pin.segments, delimiter=delimiter),
-            pin.version,
-        )
-        for pin in (inputs or [])
-    ]
+    refs = input_refs(inputs, delimiter=delimiter)
     # THE TENANT, resolved from the table's TOP namespace segment — the rung the warehouse registry
     # binds. Done HERE rather than at the eight call sites because not one of them has a project in
     # scope (`endpoints/data.py` does not mention the word), and because a lookup repeated eight times
@@ -1000,8 +897,8 @@ async def emit_write_event(
         authorization=authorization,
         source_uri=source_uri,
         schema_fields=schema_fields,
-        inputs=refs or None,
-        extra_run_facets=extra_run_facets,
+        inputs=refs,
+        run=run,
         project=project,
         branch=branch,
         branch_identifier=branch_identifier,

@@ -27,10 +27,6 @@ from fastapi import Query
 #: A rask-only boolean switch on a spec operation (`force`, `purge`).
 RaskFlag = Annotated[bool, Query(include_in_schema=False)]
 
-#: The version-pinned upstream a table DERIVES FROM. Lineage input, not a spec concept.
-RaskSource = Annotated[str | None, Query(include_in_schema=False)]
-RaskSourceVersion = Annotated[int | None, Query(ge=1, include_in_schema=False)]
-
 #: Approved buckets to spread a table's fragments across (Lance multi-base).
 RaskDataBase = Annotated[list[str], Query(include_in_schema=False)]
 

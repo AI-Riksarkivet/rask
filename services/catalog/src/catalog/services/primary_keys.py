@@ -38,7 +38,7 @@ from __future__ import annotations
 import re
 from collections.abc import Generator, Sequence
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Final, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import pyarrow as pa
 from lance.schema import LanceSchema
@@ -47,6 +47,7 @@ from lance_namespace import InvalidInputError
 
 if TYPE_CHECKING:
     import lance
+    from lance.dataset import Transaction
 
 
 #: How many repeated or held key values a refusal names. Enough to find the rows; a refusal that
@@ -147,6 +148,16 @@ def append_new_keys(dataset: lance.LanceDataset, rows: pa.Table, keys: Sequence[
     """
     with _refusing_held_keys(door):
         dataset.merge_insert(list(keys)).when_matched_fail().when_not_matched_insert_all().execute(rows)
+
+
+def plan_new_keys(dataset: lance.LanceDataset, rows: pa.Table, keys: Sequence[str], *, door: str) -> tuple[Transaction, dict[str, Any]]:
+    """Plan the append of ``rows`` on ``dataset`` as :func:`append_new_keys` lands it, uncommitted, with its row counts.
+
+    Raises:
+        InvalidInputError: ``dataset`` holds a row with one of the key values.
+    """
+    with _refusing_held_keys(door):
+        return dataset.merge_insert(list(keys)).when_matched_fail().when_not_matched_insert_all().execute_uncommitted(rows)
 
 
 def refuse_keys_held(dataset: lance.LanceDataset, rows: pa.Table, keys: Sequence[str], *, door: str) -> None:

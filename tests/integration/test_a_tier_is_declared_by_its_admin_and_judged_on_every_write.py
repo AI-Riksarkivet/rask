@@ -8,6 +8,7 @@ tier on purpose (`sales` is silver, `gold` is untiered): a judge reading names w
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Iterator
 from pathlib import Path
@@ -162,6 +163,10 @@ def _rows() -> bytes:
     return sink.getvalue().to_pybytes()
 
 
+#: The run a silver write names (ADR 0156 C2): an input the writer may read, at a version.
+_RUN = {"x-rask-run-id": "run-7", "x-rask-inputs": json.dumps([{"table": ["src", "a"], "version": 1}])}
+
+
 def test_a_write_is_judged_under_the_tier_its_namespace_declares(real_ns_client: TestClient, grants: _Grants, caplog: pytest.LogCaptureFixture) -> None:
     """Without the writer rung the write is PermissionDenied (15); with it the decision is audited under the
     declared tier, and a namespace whose NAME is a tier but which declares none is judged untiered."""
@@ -173,17 +178,18 @@ def test_a_write_is_judged_under_the_tier_its_namespace_declares(real_ns_client:
         "alice",
         *[("can_create_table", f"namespace:{ns}") for ns in ("sales", "gold")],
         *[("can_write_data", f"table:{ns}$t") for ns in ("sales", "gold")],
+        ("can_read_data", "table:src$a"),
     )
     for ns in ("sales", "gold"):
-        assert client.post(f"/v1/table/{ns}$t/create?mode=create", content=_rows(), headers=ARROW).status_code == 200
+        assert client.post(f"/v1/table/{ns}$t/create?mode=create", content=_rows(), headers={**ARROW, **_RUN}).status_code == 200
 
     _act_as(client, "dave")
-    _refused(client.post("/v1/table/sales$t/insert", content=_rows(), headers=ARROW), 15)
+    _refused(client.post("/v1/table/sales$t/insert", content=_rows(), headers={**ARROW, **_RUN}), 15)
 
     _act_as(client, "alice")
     caplog.set_level(logging.INFO, logger=AUDIT_LOGGER)
     for ns in ("sales", "gold"):
-        assert client.post(f"/v1/table/{ns}$t/insert", content=_rows(), headers=ARROW).status_code == 200
+        assert client.post(f"/v1/table/{ns}$t/insert", content=_rows(), headers={**ARROW, **_RUN}).status_code == 200
     judged = [
         (r.__dict__["audit.resource"], r.__dict__["audit.tier"])
         for r in caplog.records

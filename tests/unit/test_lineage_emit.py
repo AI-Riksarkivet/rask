@@ -29,7 +29,6 @@ from catalog.core.lineage_emit import (
     build_write_event,
     emit_write_event,
     make_emitter,
-    shape_run_facets,
 )
 from lineage.models import RunEvent
 
@@ -309,12 +308,10 @@ def test_build_write_event_records_derived_from_inputs() -> None:
     assert _written(event)["name"] == "db1$renamed"
 
 
-def test_merge_insert_event_carries_version_pinned_input_and_passed_run_facet() -> None:
-    # Phase 2: a stage runner's merge from source@N emits training-shaped OpenLineage — a version-PINNED INPUT
-    # (the standard DatasetVersionDatasetFacet, i.e. the reproducibility pin the lineage service reads via
-    # input_version) plus a caller-supplied run facet the catalog carries VERBATIM (un-opinionated: it only
-    # stamps it spec-legal, it does not interpret the payload).
-    facets = shape_run_facets({"params": {"lr": 0.01, "epochs": 5}})
+def test_a_derived_write_event_pins_each_input_at_its_version_and_branch() -> None:
+    # A write derived from inputs names each at the version it consumed (the standard DatasetVersionDatasetFacet,
+    # which the lineage service reads back as input_version), and an input read off a branch names that branch,
+    # because a branch numbers its versions apart from main.
     event = build_write_event(
         table_id="db$gold",
         namespace="db",
@@ -324,73 +321,12 @@ def test_merge_insert_event_carries_version_pinned_input_and_passed_run_facet() 
         run_id="r1",
         event_time="2026-07-21T00:00:00Z",
         job_namespace="catalog",
-        inputs=[InputRef("db", "db$silver", 4)],
-        extra_run_facets=facets,
+        inputs=[InputRef("db", "db$silver", 4), InputRef("db", "db$review", 2, "draft")],
     )
-    # The INPUT dataset carries the standard DatasetVersionDatasetFacet pinning the consumed source version.
-    assert len(event["inputs"]) == 1
-    source = event["inputs"][0]
-    assert source["namespace"] == "db" and source["name"] == "db$silver"
-    version_facet = source["facets"]["version"]
-    assert version_facet["datasetVersion"] == "4"
-    assert version_facet["_producer"] and version_facet["_schemaURL"].endswith("DatasetVersionDatasetFacet")
-    # The passed run facet rides verbatim on the run, stamped spec-legal (custom_facet _producer/_schemaURL).
-    params = _facets(event)["params"]
-    assert params["lr"] == 0.01 and params["epochs"] == 5
-    assert params["_producer"] and params["_schemaURL"]
-    # Adversarial round-trip: the lineage RunEvent model reads the pin back off the standard facet, so the
-    # graph really can answer "which exact source version produced this merge?" (#115 reproducibility).
-    parsed = _parsed(event)
-    assert parsed.input_version("db$silver") == "4"
-
-
-@pytest.mark.parametrize(
-    "raw",
-    [
-        {"author": {"name": "admin", "sub": "admin"}},  # forge the verified principal
-        pytest.param({"": {"k": "v"}}, id="raw5"),  # a nameless facet
-    ],
-)
-def test_shape_run_facets_rejects_reserved_facet_names(raw: dict[str, Any]) -> None:
-    # A producer may NOT set a catalog-owned / consumer-trusted facet name — else it forges the author, the
-    # operation (a false CREATED edge), or run state on the governed graph (the Phase 2 audit blocker).
-    with pytest.raises(ValueError, match="reserved"):
-        shape_run_facets(raw)
-
-
-def test_shape_run_facets_rejects_reserved_payload_keys_and_non_objects() -> None:
-    # The catalog owns the spec's _-prefixed fields AND custom_facet's `producer` positional (a `producer`
-    # key would raise a bare TypeError → a 500); each payload must be a JSON object. All fail-fast as 4xx.
-    with pytest.raises(ValueError, match="reserved"):
-        shape_run_facets({"params": {"_producer": "evil"}})
-    with pytest.raises(ValueError, match="reserved"):
-        shape_run_facets({"params": {"producer": "evil"}})  # would otherwise be a TypeError → 500
-    with pytest.raises(ValueError, match="JSON object"):
-        shape_run_facets({"params": ["not", "an", "object"]})
-
-
-def test_build_write_event_catalog_facets_win_over_caller_facets() -> None:
-    # Defense in depth: even if a caller-supplied `lance`/`author` facet reached build_write_event (past
-    # shape_run_facets), the catalog's stamp is applied AFTER and MUST win — no author/operation forgery.
-    forged = {
-        "lance": {"_producer": "x", "_schemaURL": "x", "operation": "create_table", "version": 999},
-        "author": {"_producer": "x", "_schemaURL": "x", "name": "admin", "sub": "admin"},
-    }
-    event = build_write_event(
-        table_id="db$t",
-        namespace="db",
-        author="mallory",
-        version=3,
-        operation=MERGE_INSERT,
-        run_id="r1",
-        event_time="2026-07-21T00:00:00Z",
-        job_namespace="catalog",
-        extra_run_facets=forged,
-    )
-    assert _facets(event)["lance"]["operation"] == "merge_insert"  # catalog op wins, not create_table
-    assert _facets(event)["author"]["sub"] == "mallory"  # verified principal wins, not admin
-    parsed = _parsed(event)
-    assert parsed.operation == "merge_insert" and parsed.author == "mallory"
+    on_main, on_branch = event["inputs"]
+    assert (on_main["facets"]["version"]["datasetVersion"], "lance" in on_main["facets"]) == ("4", False)
+    assert (on_branch["facets"]["version"]["datasetVersion"], on_branch["facets"]["lance"]["ref"]) == ("2", "draft")
+    assert _parsed(event).input_version("db$silver") == "4"
 
 
 def test_emit_write_event_maps_input_pins_to_canonical_dataset_ids() -> None:
