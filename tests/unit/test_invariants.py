@@ -323,6 +323,20 @@ def test_a_per_component_pin_beats_the_global_tag_and_a_digest_beats_the_pin() -
     assert 'image: "reg.example/gateway@sha256:abc"' in both, "a per-component tag overrode a digest"
 
 
+@pytest.mark.parametrize("key", ["image.tags.lance-rest-catalog", "image.digests.gateway"])
+def test_an_image_reference_that_helm_parsed_as_a_number_is_refused_at_render(key: str) -> None:
+    """A short sha can be all digits, and `--set` parses `93951597` as an int64.
+
+    The image helper formats it with `%s`, so the render carried `lance-rest-catalog:%!s(int64=93951597)`; measured
+    2026-10-14 on rev 3, the pre-upgrade hook's pod sat in InvalidImageName for the whole `--wait` and the upgrade
+    failed. A number is also lossy (`--set` turns `01234567` into 1234567), so the schema refuses it and names the
+    key, and `--set-string` is the way to pass one.
+    """
+    with pytest.raises(subprocess.CalledProcessError) as refused:
+        _helm_template(*_REAL_REGISTRY, f"{key}=93951597")
+    assert key.rsplit(".", 1)[-1] in refused.value.stderr and "string" in refused.value.stderr, refused.value.stderr
+
+
 @pytest.mark.parametrize("ray_enabled", ["true", "false"])
 def test_no_env_var_is_rendered_TWICE_on_any_workload(ray_enabled: str) -> None:
     """A duplicated env NAME is not a cosmetic defect — it makes the release unupgradable.

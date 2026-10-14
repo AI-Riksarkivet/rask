@@ -413,9 +413,9 @@ image:
   #   tags:    { lance-rest-catalog: be-256ca0da, web-lakehouse: zone-14d8882d }
   #   digests: { gateway: "sha256:834d2e23…" }
   # -- Per-component tag map keyed by component name (gateway, lance-rest-catalog, web-<zone>, ...); beats the global tag.
-  tags: {}
+  tags: {} # @schema additionalProperties: {"type": "string"}
   # -- Per-component digest map keyed by component name; beats `tags` and the global tag.
-  digests: {}
+  digests: {} # @schema additionalProperties: {"type": "string"}
   # Opt-in for side-loaded images (`make k3s-build` + `k3s-import`, `kind load`): renders a bare
   # `<component>:<tag>` that the node must ALREADY hold. Never set this for a remote cluster.
   # -- Renders bare `<component>:<tag>` references for images side-loaded into the node (k3s-import). Never for a remote cluster.

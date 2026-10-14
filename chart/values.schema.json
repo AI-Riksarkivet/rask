@@ -779,7 +779,10 @@
                 },
                 "digests": {
                     "description": "Per-component digest map keyed by component name; beats `tags` and the global tag.",
-                    "type": "object"
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
                 },
                 "localImages": {
                     "description": "Renders bare `\u003ccomponent\u003e:\u003ctag\u003e` references for images side-loaded into the node (k3s-import). Never for a remote cluster.",
@@ -799,7 +802,10 @@
                 },
                 "tags": {
                     "description": "Per-component tag map keyed by component name (gateway, lance-rest-catalog, web-\u003czone\u003e, ...); beats the global tag.",
-                    "type": "object"
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
                 }
             }
         },
