@@ -19,22 +19,19 @@ import logging
 from functools import partial
 from typing import Annotated
 
-from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import APIRouter, Query
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import (
     DescribeTableRequest,
     DescribeTableResponse,
-    ServiceUnavailableError,
     TableBranchNotFoundError,
-    UnauthenticatedError,
 )
 
 from catalog.api.dependencies import FgaClientDep, NamespaceDep, SettingsDep, VendorDep
 from catalog.api.security import CurrentToken, RawBearerToken
 from catalog.core.base_judge import BaseJudge
 from catalog.core.identifiers import parse_identifier
-from catalog.core.vending import Tier, dataset_facts, require_vendable_bases, table_has_branch, unsanctioned_bases
+from catalog.core.vending import Tier, dataset_facts, require_vendable_bases, table_has_branch, unsanctioned_bases, vend_or_refuse
 from catalog.schemas import CredentialResponse
 from catalog.services import native
 from service_kit.governed import fga
@@ -138,24 +135,20 @@ async def vend_credentials(
     if missed := unsanctioned_bases(described.location, bases, settings.multibase_data_base_list):
         log.info("vend_server_mediated_unreachable_bases", extra={"location": described.location, "bases": list(missed)})
         return CredentialResponse(mode="server_mediated")
-    # The blocking STS call (AssumeRole / AssumeRoleWithWebIdentity) runs in the threadpool. A rejected
-    # exchange is most often the caller's token (web_identity: expired / untrusted issuer) → 401; otherwise
-    # the STS backend is unavailable/misconfigured → 503. Either way a meaningful 4xx/5xx, never a bare 500.
-    try:
-        creds = await run_in_threadpool(
-            vendor.vend, table_location=described.location, tier=tier, web_identity_token=web_identity_token, bases=bases, branch=branch
+    # The blocking STS call (AssumeRole / AssumeRoleWithWebIdentity) runs in the threadpool; a refused or
+    # unreachable exchange answers 401 or 503 (`vend_or_refuse`), never a bare 500.
+    creds = await run_in_threadpool(
+        partial(
+            vend_or_refuse,
+            vendor,
+            vending_mode=settings.vending_mode,
+            table_location=described.location,
+            tier=tier,
+            web_identity_token=web_identity_token,
+            bases=bases,
+            branch=branch,
         )
-    except ClientError as exc:
-        # A REJECTED exchange (the STS backend refused the request). Only web_identity re-presents the
-        # caller's token, so only there is a rejection an AUTH problem (401); a rejection in any other mode
-        # is a backend/config fault (503).
-        if settings.vending_mode == "web_identity":
-            raise UnauthenticatedError("credential exchange rejected — token invalid or untrusted") from exc
-        raise ServiceUnavailableError("credential vending backend rejected the request") from exc
-    except BotoCoreError as exc:
-        # A TRANSPORT failure (endpoint unreachable / timeout) is a store OUTAGE in every mode, never an auth
-        # problem — reporting it as 401 would send an authorized caller into a futile re-login loop (audit).
-        raise ServiceUnavailableError("credential vending backend unavailable") from exc
+    )
     mode = "server_mediated" if creds is None else "direct"
     if mode == "direct":  # #41 audit the actual issuance of direct object-store credentials (who, what, tier)
         obj = f"table:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}"
@@ -165,5 +158,6 @@ async def vend_credentials(
             subject=token.sub if token is not None else None,
             resource=obj,
             tier=tier,
+            door="credentials",
         )
     return CredentialResponse(mode=mode, credentials=creds, location=described.location, read_version=facts.read_version)

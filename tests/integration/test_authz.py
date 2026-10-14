@@ -159,7 +159,8 @@ def test_read_op_checks_reader_and_allows(client: TestClient, fake_ns: MagicMock
     captured: list[dict] = []
     monkeypatch.setattr(fga_module, "check", _fake_check(captured, allow=True))
 
-    resp = client.post("/v1/table/db1$users/describe", headers={"Authorization": "Bearer t"})
+    # No credential asked for: the vend's own tier probe is `test_the_spec_doors_vend_the_tier_fga_grants.py`'s.
+    resp = client.post("/v1/table/db1$users/describe", json={"vend_credentials": False}, headers={"Authorization": "Bearer t"})
     assert resp.status_code == 200
     assert captured == [{"user": "alice", "relation": "can_get_metadata", "obj": "table:db1$users"}]
 

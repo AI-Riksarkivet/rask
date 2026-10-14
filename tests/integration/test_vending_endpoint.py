@@ -66,24 +66,3 @@ def test_missing_location_falls_back_to_server_mediated(client: TestClient, fake
 def test_invalid_tier_is_rejected(client: TestClient, fake_ns: MagicMock) -> None:
     fake_ns.describe_table.return_value = _described("s3://lance-catalog/db$t")
     assert client.post("/management/v1/table/db$t/credentials?tier=admin").status_code == 422
-
-
-# --------------------------------------------------------------------------------------------------
-# The SPEC's own credential path: DescribeTable(vend_credentials=true) -> response.storage_options.
-# We previously DROPPED this field, so a generic Lance client (incl. medallion-producer in REST mode) got no
-# credentials and had no way to discover our bespoke /credentials endpoint. The one confirmed
-# reinvention in the 2026-07-14 audit — interop-breaking.
-# --------------------------------------------------------------------------------------------------
-
-
-def test_describe_does_not_vend_unless_asked(client: TestClient, fake_ns: MagicMock) -> None:
-    # Backward-compatible: the field is opt-in. A plain describe must not hand out credentials.
-    fake_ns.describe_table.return_value = _described("s3://lance-catalog/db$t")
-    vendor = MagicMock()
-    client.app.dependency_overrides[get_vendor] = lambda: vendor
-
-    resp = client.post("/v1/table/db$t/describe")
-    assert resp.status_code == 200
-    assert "storage_options" not in resp.json()  # response_model_exclude_none drops the null
-    vendor.vend.assert_not_called()
-    client.app.dependency_overrides.pop(get_vendor, None)

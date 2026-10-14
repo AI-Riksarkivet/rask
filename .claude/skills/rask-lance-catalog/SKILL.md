@@ -334,20 +334,25 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   `LANCE_MULTIBASE_DATA_BASES` alone. Pinned by
   `tests/integration/test_an_external_blob_base_is_authorized_per_table.py` and the planted-base case of
   `test_a_forged_fragment_is_refused_and_the_table_is_unchanged.py`.
-- **A vend's tier is one FGA rung's allow-list over the Lance layout** ([[LH-202]],
-  `vending.build_session_policy`). Every tier lists and gets `<prefix>/*`; `write` (`can_write_data`)
-  adds put on `data/*` and nothing that commits, deletes or
-  moves a ref, so a writer appends through `/commit` (`?branch=` for a branch); `maintain`
-  (`can_maintain`) gets put/delete on the whole prefix for compaction and cleanup, and is also the shape
-  for the warehouse scope probe. The door checks the one rung its tier names, never
-  either. A put over an existing data file is the residue no session policy can refuse.
-  **Which spec door vends what, today:** `DescribeTable` with `vend_credentials` vends the READ tier only,
-  and `DeclareTable` vends nothing. ADR 0156 C3 makes both vend the highest tier FGA grants the caller,
-  with write credentials that never reach `_refs/` or a final `_versions/*.manifest` (LH-229, #149) — which
-  takes an explicit Deny on `_versions/*.manifest`, not only a narrower Allow, plus put on `_transactions/` and
-  `_deletions/` (measured, ADR 0157 § Decision, LH-469) — and
-  C4 confines the maintain tier, which any `can_maintain` holder can be vended now, to the maintenance
-  identity (LH-473, #599).
+- **A vend's tier is one FGA rung's allow-list over the Lance layout** ([[LH-202]], [[LH-229]],
+  `vending.build_session_policy`). Every tier lists and gets `<prefix>/*`. `write` (`can_write_data`) is a
+  managed-versioning writer (ADR 0157): put on what a commit needs under the ref it writes
+  (`service_kit.lakehouse.table_layout.WRITER_PUT_GLOBS`: `data/`, `_transactions/`, `_deletions/`, `_indices/` and a
+  staged `_versions/<n>.manifest-<uuid>`) and an explicit Deny on a final `_versions/*.manifest`; nothing under
+  `_refs/`, no version hint, no delete. The Deny is load-bearing, measured on MinIO and on the deployed `rask-minio`
+  (LH-469, #594): the staged Allow also matches `<n>.manifest-<uuid>.manifest`, which pylance reads as a final
+  manifest. Until LH-471 serves `CreateTableVersion`, a writer's append still commits through `/commit`
+  (`?branch=` for a branch). `maintain` (`can_maintain`) gets put/delete on the whole prefix for compaction and
+  cleanup, and is also the shape for the warehouse scope probe. The management vend door checks the one rung its
+  tier names, never either. A put over an existing key is the residue no session policy can refuse.
+  **The spec doors vend the highest tier FGA grants the caller** (ADR 0156 C3, `fga_deps.spec_vend_tier`):
+  `DescribeTable` and `DeclareTable` vend unless the request sets `vend_credentials` false (unset, the spec lets the
+  server decide), write on `can_write_data` (judged by the tier judge), read on `can_read_data`, otherwise none.
+  Every mint, at all three doors, writes the `vend_credentials` audit record with its `tier` and `door`. A stock
+  client opening through the namespace therefore signs with the vended credential, not its own
+  (`services/catalog/tests/test_a_stock_client_opens_on_the_vended_credential.py`). C4 confines the maintain tier,
+  which any `can_maintain` holder can be vended at the management door now, to the maintenance identity (LH-473,
+  #599).
 - **Three doors commit client-produced data, and all three judge its file versions.** `/commit`
   (`dataplane.commit_appended_fragments`), `/compaction_commit` (`commit_compaction`) and `register`
   refuse data files at another version than the table's

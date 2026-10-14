@@ -68,7 +68,6 @@ def test_body_vend_credentials_and_version_are_honoured(client: TestClient, fake
     resp = client.post("/v1/table/db$t/describe", json={"vend_credentials": True, "version": 1})
     assert resp.status_code == 200, resp.text
     assert resp.json()["storage_options"] == {"aws_access_key_id": "AK"}
-    assert vendor.vend.call_args.kwargs["tier"] == "read"  # describe is gated on the reader rung only
     assert _sent(fake_ns).version == 1
 
 

@@ -43,7 +43,8 @@ from collections.abc import Callable, Sequence
 from typing import Any, Final, Literal, Protocol, assert_never, cast, runtime_checkable
 from urllib.parse import urlsplit
 
-from lance_namespace import InvalidInputError, ServiceUnavailableError
+from botocore.exceptions import BotoCoreError, ClientError
+from lance_namespace import InvalidInputError, ServiceUnavailableError, UnauthenticatedError
 from pydantic import BaseModel, Field
 
 from catalog.core.base_judge import BaseJudge, require_sanctioned_bases
@@ -53,7 +54,7 @@ from service_kit.lakehouse.base_registry import BaseJudgement, BaseRole, BaseSta
 from service_kit.lakehouse.branch_layout import BRANCH_CONTAINER, BRANCH_FILE_DIRS
 from service_kit.lakehouse.features import BasePathRef
 from service_kit.lakehouse.objectfs import lance_storage_options
-from service_kit.lakehouse.table_layout import DATA_DIR
+from service_kit.lakehouse.table_layout import FINAL_MANIFEST_GLOB, WRITER_PUT_GLOBS
 
 
 log = logging.getLogger(__name__)
@@ -61,8 +62,9 @@ log = logging.getLogger(__name__)
 #: What a credential may do inside the prefix it is scoped to ([[LH-202]]):
 #:
 #: * ``read`` — list and get the table.
-#: * ``write`` — a ``can_write_data`` append: read the table, put data files under ``data/``,
-#:   nothing that commits, deletes or moves a ref. Commits go through ``/commit``.
+#: * ``write`` — a ``can_write_data`` managed-versioning writer: read the table, put what a commit needs
+#:   (data, transaction, deletion and index files, and a staged manifest), never a final manifest, a ref or
+#:   a delete. The catalog commits the version.
 #: * ``maintain`` — a ``can_maintain`` rewrite and reclaim: get, put and delete anywhere in the prefix,
 #:   because compaction commits versions and cleanup deletes them. Also the shape for a prefix with no
 #:   Lance layout to narrow by (the warehouse scope probe).
@@ -485,12 +487,16 @@ def build_session_policy(
     `lance_docs/file_format.md` fixes, one rung per FGA relation ([[LH-202]]):
 
     * ``read``: nothing else.
-    * ``write`` (``can_write_data``): put and abort-upload on ``<prefix>/data/*``, where ``write_fragments``
-      lands data files and blob sidecars (``service_kit.lakehouse.table_layout``). Never ``_versions/``, ``_transactions/``, ``_deletions/``, ``_indices/``, ``_refs/``,
-      ``tree/`` or ``_mem_wal/``, and no delete of anything Lance reads: the append is committed by the
-      catalog's ``/commit`` under its own credential, so a writer that could put a manifest could commit
-      Overwrite, Restore, UpdateBases or a DataReplacement around the door, and one that could put under
-      ``_refs/`` could move a tag or forge a branch.
+    * ``write`` (``can_write_data``): put and abort-upload on what a managed-versioning writer stages under
+      the ref it writes (``service_kit.lakehouse.table_layout.WRITER_PUT_GLOBS``: ``data/``,
+      ``_transactions/``, ``_deletions/``, ``_indices/`` and a staged ``_versions/<n>.manifest-<uuid>``), and
+      an explicit Deny on a final ``_versions/*.manifest`` (``FINAL_MANIFEST_GLOB``). Nothing under ``_refs/``,
+      ``_mem_wal/`` or another ref's ``tree/``, and no delete. The catalog commits the version under its own
+      credential, so a writer that could put a final manifest could commit Overwrite, Restore, UpdateBases or
+      a DataReplacement around it, and one that could put under ``_refs/`` could move a tag or forge a branch.
+      The Deny is load-bearing, measured (LH-469, #594): the staged Allow also matches
+      ``<n>.manifest-<uuid>.manifest``, a name pylance reads as final, and a session policy's explicit Deny
+      overrides any Allow on MinIO and on AWS S3 alike.
     * ``maintain`` (``can_maintain``): get, put, delete and abort-upload on ``<prefix>/*``: compaction
       commits versions and cleanup deletes them, and an object store cannot tell a rewrite from a write.
 
@@ -583,8 +589,18 @@ def build_session_policy(
     # (`branch_layout.BRANCH_FILE_DIRS`) stops at `a`'s own files.
     ref_root = f"{root}/{BRANCH_CONTAINER}/{branch}" if branch else root
     if tier == "write":
-        # The same rung on a branch as on main: a branch writer appends through `/commit?branch=`.
-        statements.append({"Sid": "TableData", "Effect": "Allow", "Action": list(_APPEND_ACTIONS), "Resource": f"arn:aws:s3:::{ref_root}/{DATA_DIR}/*"})
+        # The same rung on a branch as on main, scoped to the ref the writer writes.
+        statements.append(
+            {
+                "Sid": "StagedCommit",
+                "Effect": "Allow",
+                "Action": list(_APPEND_ACTIONS),
+                "Resource": [f"arn:aws:s3:::{ref_root}/{glob}" for glob in WRITER_PUT_GLOBS],
+            }
+        )
+        statements.append(
+            {"Sid": "NeverAFinalManifest", "Effect": "Deny", "Action": ["s3:PutObject"], "Resource": f"arn:aws:s3:::{ref_root}/{FINAL_MANIFEST_GLOB}"}
+        )
     elif tier == "maintain" and branch:
         statements.append(
             {
@@ -637,6 +653,37 @@ def build_session_policy(
         )
         n += 1
     return {"Version": "2012-10-17", "Statement": statements}
+
+
+def vend_or_refuse(
+    vendor: CredentialVendor,
+    *,
+    vending_mode: VendingMode,
+    table_location: str,
+    tier: Tier,
+    web_identity_token: str | None,
+    bases: Sequence[str],
+    branch: str = "",
+) -> VendedCredentials | None:
+    """``vendor.vend``, with a failed exchange answered as the spec's typed error rather than a bare 500.
+
+    Every door that mints a credential calls this, so a refused exchange means one thing at each of them.
+
+    Raises:
+        UnauthenticatedError: The store rejected a web-identity exchange, which re-presents the caller's own
+            token, so the token is what it refused.
+        ServiceUnavailableError: The store rejected the exchange in any other mode (a configuration fault), or
+            could not be reached (an outage, never an auth problem: a 401 would send an authorized caller
+            into a futile re-login loop).
+    """
+    try:
+        return vendor.vend(table_location=table_location, tier=tier, web_identity_token=web_identity_token, bases=bases, branch=branch)
+    except ClientError as exc:
+        if vending_mode == "web_identity":
+            raise UnauthenticatedError("credential exchange rejected — token invalid or untrusted") from exc
+        raise ServiceUnavailableError("credential vending backend rejected the request") from exc
+    except BotoCoreError as exc:
+        raise ServiceUnavailableError("credential vending backend unavailable") from exc
 
 
 class ModeBVendor:

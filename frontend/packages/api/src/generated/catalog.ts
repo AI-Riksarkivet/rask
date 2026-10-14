@@ -3004,6 +3004,9 @@ export interface paths {
          * Declare Table
          * @description Declare a new (empty) table at ``id`` via ``declare_table``, then seed the caller's FGA ownership
          *     and emit a versionless DECLARE_TABLE marker (the table's first provenance — who reserved it + where).
+         *
+         *     The response carries the credential the declarer writes the table with, the highest tier FGA grants
+         *     (:func:`_vend_on_spec_door`), unless the request sets ``vend_credentials`` false.
          */
         post: operations["declare_table_v1_table__id__declare_post"];
         delete?: never;
@@ -3091,19 +3094,11 @@ export interface paths {
          *     ``branch`` (body-only) is REFUSED unless it names main — see the site below. ``identity`` and ``context``
          *     are ignored: the caller is the verified bearer token, not a field of the request body.
          *
-         *     ``vend_credentials`` (spec 0.9) returns short-lived, table-scoped ``storage_options`` in the response —
-         *     the SPEC'S OWN way for a client to get credentials. A bespoke ``POST /{id}/credentials`` alone would leave a
-         *     GENERIC Lance client with no credentials and no way to discover our endpoint: interop-breaking, and the
-         *     one confirmed reinvention in the 2026-07-14 audit. ``/credentials`` remains as the richer superset (tiers,
-         *     web-identity exchange).
-         *
-         *     READ TIER ONLY, deliberately. The router already gates describe on the reader rung; vending a WRITE
-         *     credential from a read-authorized call would be a privilege escalation. A write credential still requires
-         *     ``POST /{id}/credentials?tier=write``, which separately checks ``can_write_data``.
-         *
-         *     Multi-base tables fall back to server-mediated (no storage_options): the STS session policy is scoped to
-         *     the table's PRIMARY root bucket, so a vended client could not reach fragments living in a registered data
-         *     base — the same #3-B ⊥ #2 conflict the credentials endpoint already handles.
+         *     CREDENTIALS COME WITH THE ANSWER unless the caller sets ``vend_credentials`` false: unset, the spec lets
+         *     the server decide (``lance_docs/ns_catalog/spec.yaml`` § DescribeTableRequest), and a stock client opening
+         *     through the namespace that gets none signs with whatever its environment holds. The tier is the highest FGA
+         *     grants the caller (:func:`_vend_on_spec_door`, ADR 0156 C3): the router admitted a metadata reader, and a
+         *     write credential is decided by the tier judge like every write.
          */
         post: operations["describe_table_v1_table__id__describe_post"];
         delete?: never;

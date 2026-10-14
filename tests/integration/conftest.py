@@ -16,7 +16,7 @@ import lance
 import pyarrow as pa
 import pytest
 from fastapi.testclient import TestClient
-from lance_namespace import DescribeTableResponse, LanceNamespace
+from lance_namespace import DescribeNamespaceResponse, DescribeTableResponse, LanceNamespace
 from moto.server import ThreadedMotoServer
 
 
@@ -102,6 +102,8 @@ def client(fake_ns: MagicMock, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) 
     described = tmp_path / "described.lance"
     lance.write_dataset(pa.table({"id": pa.array([0], pa.int64())}), str(described), data_storage_version="2.2", enable_stable_row_ids=True)
     fake_ns.describe_table.return_value = DescribeTableResponse(location=str(described), table_uri=str(described))
+    # A namespace declaring no tier: every write, a write-tier vend among them, reads its tier before it is judged.
+    fake_ns.describe_namespace.return_value = DescribeNamespaceResponse(properties={})
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()
