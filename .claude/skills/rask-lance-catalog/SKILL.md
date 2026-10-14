@@ -15,18 +15,16 @@ Two contracts stack here, and confusing them is how bugs happen:
 
 ## The spec surface (verified 2026-08-04 against lance.org)
 
-- **Operations: 54/54 ROUTED, 47 backend-backed.** `tests/integration/test_spec_conformance.py`
+- **Operations: 54/54 ROUTED, 48 backend-backed.** `tests/integration/test_spec_conformance.py`
   asserts that every op in the vendored `lance_docs/ns_catalog/spec.yaml` has a served route. Nothing
   counts the vendored ops or compares them with upstream, so a shrunken or stale spec weakens that
-  check silently (`lance_docs/PROVENANCE.md`). The other **7 answer a spec-correct 406**: four because
+  check silently (`lance_docs/PROVENANCE.md`). The other **6 answer a spec-correct 406**: four because
   the native `dir` backend stubs them —
-  `backfill_column`, `alter_transaction` and BOTH materialized-view ops — and the three version-TRACKING
-  ops because the catalog refuses them while it never advertises `managed_versioning` —
-  `create_table_version`, `batch_create_table_versions`, `batch_commit_tables`
-  (`versions.py::_versions_are_unmanaged`, `docs/COVERAGE.md`). ADR 0157 decides the opposite: the catalog
-  serves `CreateTableVersion` under `managed_versioning=true`, judging each staged manifest before its own
-  put-if-not-exists, and the bespoke `/commit` door is deleted. That is LH-471 (#597), gated on the
-  object-store policy measurement LH-469 (#594); until it lands, the 406 above is the code. Spelling matters when grepping: the spec op and
+  `backfill_column`, `alter_transaction` and BOTH materialized-view ops — and the two multi-table commits,
+  `batch_create_table_versions` and `batch_commit_tables`, because the catalog judges one table version at a time
+  (`versions.py::_batches_are_not_judged`, `docs/COVERAGE.md`). `CreateTableVersion` is served under
+  `managed_versioning=true` (ADR 0157, LH-471): see "Stock clients commit through `version/create`" below.
+  Spelling matters when grepping: the spec op and
   the served route are SINGULAR — `POST /v1/table/{id}/backfill_column` (`spec.yaml:1570`,
   `endpoints/columns.py:146`) — while `alter_table_backfill_columns` is the native method it wraps.
   **`rename_table` is NOT one of them.** It is backed in-process and answers 200; `docs/COVERAGE.md:15-17`
@@ -128,8 +126,7 @@ ADR 0160, LH-470). `catalog/core/tier_policy.py` holds it:
 - **Pinned by tests.** `services/catalog/tests/test_an_undeclared_door_is_refused.py` walks every mounted route and
   fails on a write that skips the judge; `tests/integration/test_a_tier_is_declared_by_its_admin_and_judged_on_every_write.py`
   covers the admin gate and the judged tier over HTTP.
-- **Not here yet.** The tier's own rules (run and inputs on silver/gold, the hold, the staged manifest's file
-  versions) land with LH-225, LH-466 and LH-471. Nothing anywhere reads a tier from a name.
+- **Not here yet.** The tier's own rules (run and inputs on silver/gold, the hold) land with LH-225 and LH-466. Nothing anywhere reads a tier from a name.
 
 ## Storage — what state lives where (and why there is NO app database)
 
@@ -323,7 +320,7 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   schema or property key, which LH-208 refuses), inside a `LANCE_EXTERNAL_BLOB_BASES` entry and outside every governed root and bucket (catalog,
   control, model registry and artifact roots, reserved and warehouse-claimed buckets:
   `table_bases.requested_external_blob_base`); a plain create registers none, so Lance refuses its
-  `Blob.from_uri` rows. `/commit` accepts a kind-3 descriptor only through a base the table's RECORD holds
+  `Blob.from_uri` rows. `version/create` accepts a kind-3 descriptor only through a base the table's RECORD holds
   as `external_blob`, never one merely configured or in the manifest. A vend drops every pointer base
   (judged CONFIGURED, or recorded `external_blob`) from the grant and still vends direct; external bytes
   are served by the blob door. A plain base inside a configured entry is CONFIGURED at the read/vend/blob doors
@@ -341,8 +338,7 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   staged `_versions/<n>.manifest-<uuid>`) and an explicit Deny on a final `_versions/*.manifest`; nothing under
   `_refs/`, no version hint, no delete. The Deny is load-bearing, measured on MinIO and on the deployed `rask-minio`
   (LH-469, #594): the staged Allow also matches `<n>.manifest-<uuid>.manifest`, which pylance reads as a final
-  manifest. Until LH-471 serves `CreateTableVersion`, a writer's append still commits through `/commit`
-  (`?branch=` for a branch). `maintain` (`can_maintain`) gets put/delete on the whole prefix for compaction and
+  manifest. The catalog finalizes what the writer staged (`version/create`, below). `maintain` (`can_maintain`) gets put/delete on the whole prefix for compaction and
   cleanup, and is also the shape for the warehouse scope probe. The management vend door checks the one rung its
   tier names, never either. A put over an existing key is the residue no session policy can refuse.
   **The spec doors vend the highest tier FGA grants the caller** (ADR 0156 C3, `fga_deps.spec_vend_tier`):
@@ -353,20 +349,29 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   (`services/catalog/tests/test_a_stock_client_opens_on_the_vended_credential.py`). C4 confines the maintain tier,
   which any `can_maintain` holder can be vended at the management door now, to the maintenance identity (LH-473,
   #599).
-- **Three doors commit client-produced data, and all three judge its file versions.** `/commit`
-  (`dataplane.commit_appended_fragments`), `/compaction_commit` (`commit_compaction`) and `register`
-  refuse data files at another version than the table's
-  (`service_kit.lakehouse.features.describe_foreign_data_file_versions`). `/commit` judges the FOOTER
-  too, because the declared version is the writer's word: `catalog.services.client_fragments` holds
-  each fragment to its data files (sizes, footer row and column counts, version, the field ids the
-  footer's columns are) and, on a table with blob columns, reads every sidecar on a detached commit
-  first ([[LH-211]]). The spec's version-TRACKING
-  doors (`version/create`, `version/batch-create`, `batch-commit`) would move a client-staged manifest
-  into the version slot unjudged, so they answer 406 while `managed_versioning` is never advertised
-  ([[LH-206]]). Advertising it is a design change, not a flag: `version/create` must first carry the
-  judgement, protection and lineage the doors above carry, which is LH-471 (#597, ADR 0157).
-  **Provenance rides ad hoc channels today** (`source`/`source_version`, `X-Lance-Run-Facets`, the
-  `/commit` `run_id`). ADR 0156 C2 and ADR 0157 replace them with the spec `Context` (`header.*`): the
+- **Stock clients commit through `version/create`** ([[LH-471]], ADR 0157). `DescribeTable` and `DeclareTable`
+  answer `managed_versioning=true`, so pylance stages `_versions/<n>.manifest-<uuid>` (its `manifest_path` is the
+  object-store path: the key, no scheme, no bucket) and asks `POST /v1/table/{id}/version/create`.
+  `catalog.services.managed_versions` copies the staged bytes to a DETACHED slot `_versions/d<id>.manifest` with the
+  manifest's own `version` field set to `id` (Lance refuses a manifest whose version is not the one asked for, and a
+  create has no committed version to `checkout_version` from; the copy is a one-field wire edit of `Manifest.version =
+  3`), opens it with pylance, judges it against the version it follows, deletes the copy, and finalizes through the
+  `dir` backend's put-if-not-exists. A refusal leaves the table at its version; pylance reports it as an unknown
+  outcome and keeps its staged manifest. The judge: the operation's rung (`fga_deps.require_staged_operation`:
+  restore `can_restore`, rewrite `can_maintain`, an Overwrite after the first version `can_drop` plus protection,
+  `Clone` and unknown operations refused); a create at 2.2 with stable row ids and no later change to either;
+  reserved schema metadata, the provenance and key columns and field-level `rask.*` metadata unchanged; no
+  `lance.auto_cleanup.*` and no change to `rask.*` config; feature flags the commit adds; the base list unchanged and
+  sanctioned, and no added file through a base; a new fragment naming a held file, no file, or (on an Append) an
+  overlay, a deletion file or row ids below the table's `next_row_id`; each added file well formed, present at its
+  declared size and agreeing with its footer, at the table's file version ([[LH-211]], `client_fragments`); blob
+  sidecars against the table's recorded external bases; the primary key across new rows and carried rows; a
+  rewrite's `require_compactable`. The finalize is announced with `emit_measured_write`. A branch commit is refused
+  406 (branches are created at `branches/create` and written through `insert`/`merge_insert?branch=`). Pinned by
+  `services/catalog/tests/test_a_stock_client_commits_every_operation_through_version_create.py` and
+  `tests/integration/test_a_forged_fragment_is_refused_and_the_table_is_unchanged.py`. `/compaction_commit` and
+  `register` still judge file versions on their own doors.
+  **Provenance rides ad hoc channels today** (`source`/`source_version`, `X-Lance-Run-Facets`). ADR 0156 C2 and ADR 0157 replace them with the spec `Context` (`header.*`): the
   catalog stamps or verifies reserved `rask.run_id` / `rask.inputs` transaction properties, requires
   `can_read_data` on each input and refuses an anonymous silver/gold commit (LH-225, #180).
 - **A write's lineage event names the commit that write made, never a reopen** ([[LH-214]]).

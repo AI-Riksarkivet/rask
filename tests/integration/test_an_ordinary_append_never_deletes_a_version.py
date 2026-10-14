@@ -9,8 +9,7 @@ commits disarms the ref first, and the append rebases onto that config-only comm
 
 The table is armed out of band, straight through pylance, the way a maintain-tier credential can: no catalog
 door writes manifest config, and the property doors refuse the keys. Driven through the real catalog app on
-a real pylance ``dir`` backend, through both append doors, ``/insert`` (the catalog writes the rows) and
-``/commit`` (the client wrote the fragments, the catalog commits them), and through the erasure door, whose
+a real pylance ``dir`` backend, through the append door ``/insert`` (the catalog writes the rows) and the erasure door, whose
 deletes and compactions are commits too and whose ``retain_days`` window is the only reclamation it may do.
 """
 
@@ -45,23 +44,18 @@ def _ipc(table: pa.Table) -> bytes:
     return sink.getvalue()
 
 
-def _append(client: TestClient, location: str, door: Literal["insert", "commit"], marker: int) -> None:
-    if door == "insert":
-        response = client.post(f"/v1/table/{TABLE}/insert", content=_ipc(_rows(marker)), headers=ARROW)
-    else:
-        read_version = lance.dataset(location).version
-        fragments = lance.fragment.write_fragments(_rows(marker), location, data_storage_version="2.2", enable_stable_row_ids=True)
-        response = client.post(f"/management/v1/table/{TABLE}/commit", json={"fragments": [f.to_json() for f in fragments], "read_version": read_version})
+def _append(client: TestClient, marker: int) -> None:
+    response = client.post(f"/v1/table/{TABLE}/insert", content=_ipc(_rows(marker)), headers=ARROW)
     assert response.status_code == 200, response.text
 
 
-@pytest.mark.parametrize("door", ["insert", "commit", "erasure"])
-def test_door_commits_on_an_armed_table_keep_every_version(real_ns_client: TestClient, door: Literal["insert", "commit", "erasure"]) -> None:
+@pytest.mark.parametrize("door", ["insert", "erasure"])
+def test_door_commits_on_an_armed_table_keep_every_version(real_ns_client: TestClient, door: Literal["insert", "erasure"]) -> None:
     assert real_ns_client.post("/v1/namespace/lh245/create", json={}).status_code == 200
     created = real_ns_client.post(f"/v1/table/{TABLE}/create", content=_ipc(_rows(1)), headers=ARROW)
     assert created.status_code == 200, created.text
     location = str(created.json()["location"])
-    _append(real_ns_client, location, "insert", 2)
+    _append(real_ns_client, 2)
     lance.dataset(location).update_config(_ARMED)
     kept = {v["version"] for v in lance.dataset(location).versions()}
 
@@ -70,7 +64,7 @@ def test_door_commits_on_an_armed_table_keep_every_version(real_ns_client: TestC
         assert erased.status_code == 200, erased.text
     else:
         for marker in (10, 11, 12):
-            _append(real_ns_client, location, door, marker)
+            _append(real_ns_client, marker)
 
     after = lance.dataset(location)
     assert kept <= {v["version"] for v in after.versions()}, (

@@ -59,7 +59,7 @@ async def vend_credentials(
     tier: Annotated[
         Tier,
         Query(
-            description="`read` (can_read_data), `write` (can_write_data: read the table, put files under `data/` for `/commit` to fold in) or `maintain` (can_maintain: get, put and delete the whole prefix)."
+            description="`read` (can_read_data), `write` (can_write_data: read the table, put data, transaction and deletion files and a staged manifest for CreateTableVersion to finalize) or `maintain` (can_maintain: get, put and delete the whole prefix)."
         ),
     ] = "read",
     # [[LH-055]] WHICH branch this credential is for. Naming one narrows the grant rather than widening

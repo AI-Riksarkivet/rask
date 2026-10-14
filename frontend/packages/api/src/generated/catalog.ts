@@ -1367,40 +1367,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/management/v1/table/{id}/commit": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Commit Fragments
-         * @description Client-DIRECT append commit (#2) — the catalog as the governed commit coordinator.
-         *
-         *     The client wrote data fragments straight to object storage with vended, table-scoped creds (never
-         *     through here); this endpoint receives only the tiny serialized ``FragmentMetadata`` + the ``read_version``
-         *     and folds them into a metadata-only Lance ``commit`` under ROOT creds, then emits the INSERT lineage. So
-         *     NO data byte transits the catalog — the byte-proxy's scaling + OOM liability is gone for the bulk-append
-         *     path (the read-modify-write ops — insert/merge_insert/update/delete — and the 2.2-centralizing create
-         *     stay server-side; transaction.md/namespace.md). Writer tier: the router ``authorize`` gate maps
-         *     ``/commit`` to ``can_write_data``. Conflict → 409 (re-read the version + re-commit); schema/version
-         *     mismatch → 400; store outage → 503 (see ``dataplane._classify_commit_error``).
-         *
-         *     THE WRITER'S ONLY COMMIT PATH, on main and on every branch ([[LH-202]]). A writer-tier credential puts
-         *     files under ``data/`` (``tree/<branch>/data/`` for a branch credential) and nothing that commits, so
-         *     a writer of a branch (D3) appends here with ``branch``. A branch that does not exist is 404
-         *     ``TableBranchNotFound``, the code the vend door answers for the same name.
-         */
-        post: operations["commit_fragments_management_v1_table__id__commit_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/management/v1/table/{id}/compaction_commit": {
         parameters: {
             query?: never;
@@ -1415,8 +1381,7 @@ export interface paths {
          * @description Commit the workers' rewrite results as ONE metadata-only version.
          *
          *     Every data file this publishes was written by the worker that executed the task and already exists
-         *     when this is called, so no data byte transits the catalog — the same property that makes the sibling
-         *     ``/commit`` append door safe. Conflict taxonomy is shared: a result that lost a race to an Overwrite
+         *     when this is called, so no data byte transits the catalog. Conflict taxonomy is shared: a result that lost a race to an Overwrite
          *     is a NON-retryable 400 telling the caller to re-plan (its plan is void, not just its commit), a
          *     malformed result is a 400, a store outage a 503 (``dataplane._classify_commit_error``).
          *
@@ -2680,9 +2645,9 @@ export interface paths {
         put?: never;
         /**
          * Batch Commit Tables
-         * @description Not supported (406) while this catalog does not manage table versions — ``managed_versioning`` is
-         *     never reported, so no sub-operation runs, ``declare_table`` and ``deregister_table`` included. Those
-         *     two have their own doors, which carry the protection, ownership and lineage a batch would skip.
+         * @description Not supported (406): no sub-operation runs, ``declare_table`` and ``deregister_table`` included. Those two
+         *     have their own doors, which carry the protection, ownership and lineage a batch would skip, and a version is
+         *     committed per table through ``CreateTableVersion``.
          */
         post: operations["batch_commit_tables_v1_table_batch_commit_post"];
         delete?: never;
@@ -2702,8 +2667,7 @@ export interface paths {
         put?: never;
         /**
          * Batch Create Table Versions
-         * @description Not supported (406) while this catalog does not manage table versions — ``managed_versioning`` is
-         *     never reported, so no entry is created, whatever the mounted backend implements.
+         * @description Not supported (406): a batch finalizes several tables at once, and the catalog judges one at a time.
          */
         post: operations["batch_create_table_versions_v1_table_version_batch_create_post"];
         delete?: never;
@@ -3672,12 +3636,11 @@ export interface paths {
         put?: never;
         /**
          * Create Table Version
-         * @description Not supported (406) while this catalog does not manage table versions.
+         * @description Finalize a client-staged manifest as the table's next version, after judging it ([[LH-471]], ADR 0157).
          *
-         *     ``CreateTableVersion`` moves a client-staged manifest into the table's next version slot. The spec
-         *     pairs it with ``managed_versioning``, which ``describe_table`` never reports here, so no client is
-         *     sent to it; served, it would publish a manifest whose data files nothing judges against the table's
-         *     file version.
+         *     The catalog answers ``managed_versioning=true``, so a stock writer stages ``_versions/<n>.manifest-<uuid>`` and
+         *     asks here; ``managed_versions`` judges the version it describes and finalizes the judged bytes through
+         *     the backend's put-if-not-exists. A refusal leaves the table at its version and answers a typed spec error.
          */
         post: operations["create_table_version_v1_table__id__version_create_post"];
         delete?: never;
@@ -5049,29 +5012,6 @@ export interface components {
             occurred_at?: string;
         };
         /**
-         * CommitFragmentsRequest
-         * @description A client-direct APPEND commit (#2): the serialized Lance ``FragmentMetadata`` the client wrote
-         *     DIRECTLY to object storage (``[fragment.to_json() for fragment in write_fragments(...)]``), plus the
-         *     ``read_version`` those fragments were built against (optimistic concurrency).
-         */
-        CommitFragmentsRequest: {
-            /** Fragments */
-            fragments: {
-                [key: string]: unknown;
-            }[];
-            /** Read Version */
-            read_version: number;
-            /** Run Id */
-            run_id?: string | null;
-        };
-        /** CommitFragmentsResponse */
-        CommitFragmentsResponse: {
-            /** Row Count */
-            row_count: number;
-            /** Version */
-            version: number;
-        };
-        /**
          * CommitTableOperation
          * @description A single operation within a batch commit. Provide exactly one of the operation fields to specify the operation kind.
          */
@@ -5842,9 +5782,9 @@ export interface components {
          * @description The vending result. ``mode="direct"`` carries scoped ``credentials``; ``mode="server_mediated"``
          *     means no credential was issued (Mode B / unknown bucket) — the client uses the data endpoints.
          *
-         *     ``location`` + ``read_version`` give a client-direct writer its write TARGET and the optimistic-commit
-         *     BASE version in one round-trip (#2): the client writes fragments to ``location`` then commits them via
-         *     ``POST /{id}/commit`` at ``read_version`` — no second ``describe`` needed.
+         *     ``location`` + ``read_version`` give a direct writer its write TARGET and the version its commit follows in
+         *     one round-trip: the client writes under ``location`` and stages its commit, which the catalog finalizes
+         *     through the spec's ``CreateTableVersion`` (ADR 0157).
          */
         CredentialResponse: {
             credentials?: components["schemas"]["VendedCredentials"] | null;
@@ -11620,50 +11560,6 @@ export interface operations {
             };
         };
     };
-    commit_fragments_management_v1_table__id__commit_post: {
-        parameters: {
-            query?: {
-                /** @description The branch to append to. Omit for main. The fragments must sit under the branch's own `tree/<branch>/data/` and `read_version` is branch-local. */
-                branch?: string | null;
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                authorization?: string | null;
-                "dapr-caller-app-id"?: string | null;
-                "x-lance-originator"?: string | null;
-            };
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CommitFragmentsRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CommitFragmentsResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     commit_table_compaction_management_v1_table__id__compaction_commit_post: {
         parameters: {
             query?: {
@@ -11753,7 +11649,7 @@ export interface operations {
     vend_credentials_management_v1_table__id__credentials_post: {
         parameters: {
             query?: {
-                /** @description `read` (can_read_data), `write` (can_write_data: read the table, put files under `data/` for `/commit` to fold in) or `maintain` (can_maintain: get, put and delete the whole prefix). */
+                /** @description `read` (can_read_data), `write` (can_write_data: read the table, put data, transaction and deletion files and a staged manifest for CreateTableVersion to finalize) or `maintain` (can_maintain: get, put and delete the whole prefix). */
                 tier?: "read" | "write" | "maintain";
                 /** @description The branch this credential is for. Naming one NARROWS the grant: writes land under that branch's own `<table>/tree/<branch>/` (`data/` at the write tier; `_versions`, `_transactions`, `_deletions`, `_indices` and `data` at the maintain tier) and main drops to read-only. Omit for main. */
                 branch?: string;
@@ -15379,7 +15275,9 @@ export interface operations {
                 delimiter?: string | null;
             };
             header?: {
+                authorization?: string | null;
                 "dapr-caller-app-id"?: string | null;
+                "x-lance-originator"?: string | null;
             };
             path: {
                 id: string;

@@ -20,7 +20,7 @@ from service_kit.lakehouse.ns_errors import as_unsupported_if_stub
 # it internally. Passing the model raises ``TypeError: ... is not an instance of 'Mapping'``, which a broad
 # stub hint would launder into a fake 501, so ``call`` dumps pydantic args to a dict for the methods named
 # here. (Confirmed against lance_namespace.)
-_DICT_REQUEST_METHODS = frozenset({"describe_table_version"})
+_DICT_REQUEST_METHODS = frozenset({"describe_table_version", "create_table_version"})
 
 
 def _as_dict(arg: object) -> object:

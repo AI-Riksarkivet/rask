@@ -27,7 +27,6 @@ from lance_namespace import (
     MergeInsertIntoTableResponse,
     QueryTableRequest,
     QueryTableResponse,
-    TableBranchNotFoundError,
     UpdateTableRequest,
     UpdateTableResponse,
 )
@@ -44,19 +43,15 @@ from catalog.api.dependencies import (
     StorageOptionsDep,
 )
 from catalog.api.rask_params import RaskDataBase, RaskExternalBlobBase, RaskFlag, RaskSource, RaskSourceVersion
-from catalog.api.security import CurrentSubject, CurrentToken
+from catalog.api.security import CurrentToken
 from catalog.core import provenance_guard
-from catalog.core.base_judge import BaseJudge
 from catalog.core.formats import reject_unsupported_properties
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.core.lineage_emit import COMPACT_TABLE, DELETE, INSERT, MERGE_INSERT, OVERWRITE_TABLE, UPDATE, merge_source_pin, parse_run_facets
 from catalog.core.modes import CreateMode, InsertMode
 from catalog.core.namespace import judged_native_dataset, judged_native_version
 from catalog.core.serialization import dump
-from catalog.core.vending import table_has_branch
 from catalog.schemas import (
-    CommitFragmentsRequest,
-    CommitFragmentsResponse,
     CompactionCommitRequest,
     CompactionCommitResponse,
     CompactionPlanRequest,
@@ -68,7 +63,6 @@ from catalog.services import blob_serving, dataplane, native, table_create
 from service_kit.governed import fga
 from service_kit.governed.audit import audit_read
 from service_kit.lakehouse import protection
-from service_kit.lakehouse.commit_runs import CommitRun
 from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE
 
 
@@ -213,77 +207,6 @@ async def create_table(
     return response
 
 
-@management_router.post("/{id}/commit", response_model_exclude_none=True)
-async def commit_fragments(
-    id: str,
-    ns: NamespaceDep,
-    settings: SettingsDep,
-    so: StorageOptionsDep,
-    token: CurrentToken,
-    subject: CurrentSubject,
-    emitter: LineageEmitterDep,
-    body: CommitFragmentsRequest,
-    authorization: Annotated[str | None, Header()] = None,
-    branch: Annotated[
-        str | None,
-        Query(
-            description="The branch to append to. Omit for main. The fragments must sit under the branch's own `tree/<branch>/data/` and `read_version` is branch-local."
-        ),
-    ] = None,
-) -> CommitFragmentsResponse:
-    """Client-DIRECT append commit (#2) — the catalog as the governed commit coordinator.
-
-    The client wrote data fragments straight to object storage with vended, table-scoped creds (never
-    through here); this endpoint receives only the tiny serialized ``FragmentMetadata`` + the ``read_version``
-    and folds them into a metadata-only Lance ``commit`` under ROOT creds, then emits the INSERT lineage. So
-    NO data byte transits the catalog — the byte-proxy's scaling + OOM liability is gone for the bulk-append
-    path (the read-modify-write ops — insert/merge_insert/update/delete — and the 2.2-centralizing create
-    stay server-side; transaction.md/namespace.md). Writer tier: the router ``authorize`` gate maps
-    ``/commit`` to ``can_write_data``. Conflict → 409 (re-read the version + re-commit); schema/version
-    mismatch → 400; store outage → 503 (see ``dataplane._classify_commit_error``).
-
-    THE WRITER'S ONLY COMMIT PATH, on main and on every branch ([[LH-202]]). A writer-tier credential puts
-    files under ``data/`` (``tree/<branch>/data/`` for a branch credential) and nothing that commits, so
-    a writer of a branch (D3) appends here with ``branch``. A branch that does not exist is 404
-    ``TableBranchNotFound``, the code the vend door answers for the same name."""
-    segments = parse_identifier(id, settings.delimiter)
-    described: DescribeTableResponse = await run_in_threadpool(native.call, ns, "describe_table", DescribeTableRequest(id=segments))
-    if not described.location:
-        raise InvalidInputError("table has no object-store location for a client-direct commit")
-    if branch is not None and not await run_in_threadpool(table_has_branch, described.location, settings.storage_options(), branch):
-        raise TableBranchNotFoundError(f"branch {branch!r} not found on this table")
-    # A run belongs to the verified caller that names it ([[LH-280]]).
-    run = (
-        CommitRun(control_root=settings.registry_root, storage_options=settings.storage_options(), subject=subject, run_id=body.run_id) if body.run_id else None
-    )
-    # [[LH-209]] The external blob bases this table's create authorized, from the catalog's own record: the
-    # manifest's list is the writer's, and the configured allowlist is wider than any one table.
-    record = await run_in_threadpool(BaseJudge.from_settings(settings).read_record, described.location)
-    version, row_count = await run_in_threadpool(
-        partial(dataplane.commit_appended_fragments, run=run, external_blob_bases=record.entries if record is not None else (), branch=branch),
-        described.location,
-        so,
-        body.fragments,
-        body.read_version,
-    )
-    # The shared measured-write trailer, pinned to the version THIS commit made, same as /insert — so the
-    # WROTE edge + columnLineage-ready schema land identically whether the append was byte-proxy or direct.
-    # On the ref the commit went to: a branch's version number read back off main is another snapshot.
-    await lineage_deps.emit_measured_write(
-        emitter,
-        segments,
-        ns=ns,
-        so=so,
-        settings=settings,
-        token=token,
-        operation=INSERT,
-        authorization=authorization,
-        pin_version=version,
-        branch=branch,
-    )
-    return CommitFragmentsResponse(version=version, row_count=row_count)
-
-
 # The published contract requires a body; the handler still accepts none, so a missing body meets the
 # same 400 `InvalidInput` as missing bounds instead of FastAPI's 422.
 @management_router.post("/{id}/compaction_plan", response_model_exclude_none=True, openapi_extra={"requestBody": {"required": True}})
@@ -357,8 +280,7 @@ async def commit_table_compaction(
     """Commit the workers' rewrite results as ONE metadata-only version.
 
     Every data file this publishes was written by the worker that executed the task and already exists
-    when this is called, so no data byte transits the catalog — the same property that makes the sibling
-    ``/commit`` append door safe. Conflict taxonomy is shared: a result that lost a race to an Overwrite
+    when this is called, so no data byte transits the catalog. Conflict taxonomy is shared: a result that lost a race to an Overwrite
     is a NON-retryable 400 telling the caller to re-plan (its plan is void, not just its commit), a
     malformed result is a 400, a store outage a 503 (``dataplane._classify_commit_error``).
 

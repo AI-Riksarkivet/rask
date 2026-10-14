@@ -17,7 +17,7 @@ postures by an enormous margin; the other is the root key.
 
 ONE RUNG PER TIER ([[LH-202]]). The maintain tier reaches `_versions/` and deletes, the write tier only
 `data/`, so a door that accepted either rung for either tier would hand a writer the policy that commits
-any transaction around `/commit`.
+any transaction around `version/create`.
 
 Owner ruling 2026-09-08. Driven through the REAL route rather than a helper, because what is being
 pinned is a credential-vending authorization decision.

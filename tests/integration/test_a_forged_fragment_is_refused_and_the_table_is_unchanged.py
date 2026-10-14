@@ -1,15 +1,19 @@
-"""[[LH-211]] ``/commit`` holds a client-written fragment to its data files, and a forgery leaves the table as it was.
+"""[[LH-211]] [[LH-471]] ``CreateTableVersion`` holds a client-written fragment to its data files, and a forgery leaves the table as it was.
 
 THE FORGER is a writer holding a write vend: it can put any object under the table's ``data/`` and send
-any ``FragmentMetadata``. Measured through ``commit_appended_fragments`` on pylance 12.0.0 before the
-fix, every case below COMMITTED, and the table then failed every read, read rows that were never
+any ``FragmentMetadata``. Measured through the catalog's client-direct append on pylance 12.0.0 before the
+judgement, every case below COMMITTED (a file listed twice inside one fragment did too; pylance 13.0.0's commit
+collapses it to one entry, measured, so it is no longer a case), and the table then failed every read, read rows that were never
 written, re-minted every field id, could not be opened, or lost its blobs, while the door emitted an
 INSERT carrying the false row count.
 
-ONE ESTATE, ON MOTO: the real catalog app over a fresh bucket, every table created through its create
-door, and each fragment written straight under the table's ``data/`` by ``write_fragments`` with the estate
-key a write vend stands in for, then forged the way the case names. Each forgery is sent to the door and must be refused 400 ``InvalidInput`` with the latest
-version unchanged and nothing left under ``_versions/`` that the version line does not hold.
+ONE ESTATE, ON MOTO: the real catalog app served by uvicorn over a fresh bucket, every table created through its
+create door, and each fragment written straight under the table's ``data/`` by ``write_fragments`` with the estate
+key a write vend stands in for, then forged the way the case names. Each forgery is committed by stock pylance as an
+``Append`` through the namespace, so it reaches the catalog as a staged manifest at ``version/create`` (ADR 0157). It
+must be refused with the latest version unchanged and nothing left under ``_versions/`` that the version line does not
+hold. pylance reports a refused finalize as an unknown outcome and keeps its staged manifest, so the catalog's answer is
+read by asking for that manifest again: 400 ``InvalidInput`` naming the forgery.
 """
 
 from __future__ import annotations
@@ -18,16 +22,20 @@ import copy
 import hashlib
 import json
 import os
+import threading
+import time
 import uuid
 from collections.abc import Callable, Iterator
 from typing import Any
 from urllib.parse import quote
 
 import boto3
+import httpx
 import lance
+import lance_namespace
 import pyarrow as pa
 import pytest
-from fastapi.testclient import TestClient
+import uvicorn
 from lance import blob_array, blob_field
 from lance.blob import Blob
 
@@ -71,8 +79,9 @@ def _write(location: str, rows: pa.Table, key: dict[str, str]) -> list[dict[str,
 class _Estate:
     """The catalog on a fresh bucket, with the estate key a write vend stands in for."""
 
-    def __init__(self, url: str, client: TestClient, bucket: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    def __init__(self, url: str, client: httpx.Client, bucket: str, monkeypatch: pytest.MonkeyPatch) -> None:
         self.client = client
+        self.stock = lance_namespace.connect("rest", {"uri": str(client.base_url)})
         self.bucket = bucket
         self.monkeypatch = monkeypatch
         #: The external blob base a bronze create names, inside the approved corpus bucket ([[LH-209]]).
@@ -136,9 +145,18 @@ def estate(moto_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[_Estate]:
     get_settings.cache_clear()
     from catalog.main import app
 
-    # A forgery the door lets through can break the read-back after the commit; that is a 500 to assert on, not an exception to abort with.
-    with TestClient(app, raise_server_exceptions=False) as client:
+    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=0, log_level="warning", lifespan="on"))
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    deadline = time.monotonic() + 30
+    while not server.started:
+        if not thread.is_alive() or time.monotonic() > deadline:
+            raise RuntimeError("uvicorn did not start")
+        time.sleep(0.05)
+    with httpx.Client(base_url=f"http://127.0.0.1:{server.servers[0].sockets[0].getsockname()[1]}", timeout=120) as client:
         yield _Estate(moto_url, client, bucket, monkeypatch)
+    server.should_exit = True
+    thread.join(timeout=30)
     get_settings.cache_clear()
 
 
@@ -210,6 +228,30 @@ def _committed(estate: _Estate) -> _Staged:
     return _Staged(estate, table, location, fragment)
 
 
+def _commit(staged: _Staged, fragments: list[dict[str, Any]], read_version: int) -> httpx.Response | None:
+    """Commit ``fragments`` as an Append through the namespace; on a refusal, the catalog's answer to the retained staged manifest."""
+    table_id = staged.table.split("$")
+    operation = lance.LanceOperation.Append([lance.FragmentMetadata.from_json(json.dumps(fragment)) for fragment in fragments])
+    try:
+        lance.LanceDataset.commit(
+            staged.location,
+            operation,
+            read_version=read_version,
+            storage_options=staged.estate.key,
+            namespace_client=staged.estate.stock,
+            table_id=table_id,
+            namespace_client_managed_versioning=True,
+        )
+    except OSError:
+        retained = [key for key in staged.estate.keys(f"{staged.estate.prefix(staged.location)}/_versions/") if ".manifest-" in key]
+        assert len(retained) == 1, retained
+        manifest_path = f"{staged.estate.bucket}/{retained[0]}".partition("/")[2]
+        return staged.estate.client.post(
+            f"/v1/table/{quote(staged.table, safe='$')}/version/create", json={"version": read_version + 1, "manifest_path": manifest_path}
+        )
+    return None
+
+
 def _external(uri: str) -> Callable[[_Staged], list[dict[str, Any]]]:
     """A bronze fragment whose payload names ``uri`` as an external blob, written with Lance's outside-bases bypass."""
 
@@ -264,12 +306,6 @@ def _an_overlay(staged: _Staged) -> list[dict[str, Any]]:
     return _with(overlays=[{"data_file": copy.deepcopy(staged.file), "offsets": [0]}])(staged)
 
 
-def _same_file_twice(staged: _Staged) -> list[dict[str, Any]]:
-    fragment = staged.copy()
-    fragment["files"] = [copy.deepcopy(staged.file), copy.deepcopy(staged.file)]
-    return [fragment]
-
-
 def _outside_data(staged: _Staged) -> list[dict[str, Any]]:
     """The writer's own file again, one directory down: the store finds it, and Lance escapes the ``/``."""
     staged.put(f"sub/{staged.file['path']}", staged.read(staged.file["path"]))
@@ -296,10 +332,9 @@ def _missing_sidecar(staged: _Staged) -> list[dict[str, Any]]:
         pytest.param(_plain, _rows(+1), "rows and the fragment declares physical_rows=3", id="physical-rows-over"),
         pytest.param(_plain, _rows(-1), "rows and the fragment declares physical_rows=1", id="physical-rows-under"),
         pytest.param(_plain, _with_file(column_indices=[5, 6, 7]), "its footer has 3 columns", id="column-indices-past-the-file"),
-        pytest.param(_plain, _copied_row_ids, "carries none of row_id_meta", id="copied-row-id-meta"),
-        pytest.param(_plain, _an_overlay, "carries none of overlays", id="overlay"),
-        pytest.param(_plain, _with(files=[]), "no data file", id="no-data-file"),
-        pytest.param(_plain, _same_file_twice, "are listed twice", id="same-file-twice"),
+        pytest.param(_plain, _copied_row_ids, "reuse stable row ids below the table's next row id", id="copied-row-id-meta"),
+        pytest.param(_plain, _an_overlay, "the staged manifest cannot be opened", id="overlay"),
+        pytest.param(_plain, _with(files=[]), "name no data file", id="no-data-file"),
         pytest.param(_plain, _with_file(fields=[0, 2, 1]), "its columns are the table's field ids [0, 1, 2]", id="fields-permuted"),
         pytest.param(_plain, _with_file(fields=[5, 6, 7]), "its columns are the table's field ids [0, 1, 2]", id="fields-unknown"),
         pytest.param(_plain, _with_file(fields=[0, 1, -2]), "fields must be a non-empty list of field ids", id="fields-tombstone"),
@@ -318,8 +353,8 @@ def _missing_sidecar(staged: _Staged) -> list[dict[str, Any]]:
             id="external-blob-at-another-tables-object-through-a-planted-base",
         ),
         pytest.param(_bronze, _external("s3://{bucket}/elsewhere/secret.bin"), "the table has no external blob base", id="external-blob-without-a-base"),
-        pytest.param(_plain, lambda staged: [staged.copy(), staged.copy()], "names the same file", id="same-file-in-two-fragments"),
-        pytest.param(_committed, lambda staged: [staged.copy()], "the table already holds this file", id="re-append-a-held-file-after-a-delete"),
+        pytest.param(_plain, lambda staged: [staged.copy(), staged.copy()], "one data file is named twice", id="same-file-in-two-fragments"),
+        pytest.param(_committed, lambda staged: [staged.copy()], "names data file(s) the table already holds", id="re-append-a-held-file-after-a-delete"),
     ],
 )
 def test_a_forged_fragment_is_refused_and_the_table_is_unchanged(
@@ -329,8 +364,9 @@ def test_a_forged_fragment_is_refused_and_the_table_is_unchanged(
     before, rows = estate.open(staged.location).version, estate.ids(staged.location)
     fragments = forge(staged)
 
-    resp = estate.client.post(f"/management/v1/table/{quote(staged.table, safe='$')}/commit", json={"fragments": fragments, "read_version": before})
+    resp = _commit(staged, fragments, before)
 
+    assert resp is not None, "the forged commit was finalized"
     assert (resp.status_code, resp.json().get("code")) == (400, _INVALID_INPUT), resp.text
     assert refusal in resp.json()["detail"], resp.text
     assert estate.open(staged.location).version == before, "the refused commit still minted a version"
@@ -350,13 +386,11 @@ def test_a_writers_own_blob_fragments_commit_through_every_check(estate: _Estate
     external = _write(location, _blob_rows([(source, b"external-page")], external_base=estate.external_base), estate.key)
     before = estate.open(location).version
 
-    resp = estate.client.post(
-        f"/management/v1/table/{quote(table, safe='$')}/commit", json={"fragments": [*managed, *external], "read_version": before, "run_id": "run-lh211"}
-    )
+    refused = _commit(_Staged(estate, table, location, managed[0]), [*managed, *external], before)
 
-    assert resp.status_code == 200, resp.text
-    assert int(resp.json()["version"]) == before + 1
+    assert refused is None, refused.text
     landed = estate.open(location)
+    assert landed.version == before + 1
     assert landed.count_rows() == len(_PAYLOADS) + 1
     assert [payload for _, payload in landed.read_blobs("payload", indices=list(range(len(_PAYLOADS) + 1)))] == [*_PAYLOADS, b"external-page"]
     assert estate.version_residue(location) == []

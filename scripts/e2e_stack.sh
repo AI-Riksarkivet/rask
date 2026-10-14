@@ -398,7 +398,6 @@ fi
 PYTHONPATH=services uv run pytest \
   tests/e2e-py/test_credential_isolation_e2e.py \
   tests/e2e-py/test_object_store_cas_e2e.py \
-  tests/e2e-py/test_client_direct_e2e.py \
   tests/e2e-py/test_warehouses_e2e.py \
   tests/e2e-py/test_multibase_e2e.py \
   tests/e2e-py/test_outbox_crash_e2e.py \

@@ -787,38 +787,14 @@ class CredentialResponse(BaseModel):
     """The vending result. ``mode="direct"`` carries scoped ``credentials``; ``mode="server_mediated"``
     means no credential was issued (Mode B / unknown bucket) — the client uses the data endpoints.
 
-    ``location`` + ``read_version`` give a client-direct writer its write TARGET and the optimistic-commit
-    BASE version in one round-trip (#2): the client writes fragments to ``location`` then commits them via
-    ``POST /{id}/commit`` at ``read_version`` — no second ``describe`` needed."""
+    ``location`` + ``read_version`` give a direct writer its write TARGET and the version its commit follows in
+    one round-trip: the client writes under ``location`` and stages its commit, which the catalog finalizes
+    through the spec's ``CreateTableVersion`` (ADR 0157)."""
 
     mode: str
     credentials: VendedCredentials | None = None
     location: str | None = None
     read_version: int | None = None
-
-
-# --------------------------------------------------------------------------- #
-# Client-direct fragment commit (#2)
-# --------------------------------------------------------------------------- #
-
-
-class CommitFragmentsRequest(BaseModel):
-    """A client-direct APPEND commit (#2): the serialized Lance ``FragmentMetadata`` the client wrote
-    DIRECTLY to object storage (``[fragment.to_json() for fragment in write_fragments(...)]``), plus the
-    ``read_version`` those fragments were built against (optimistic concurrency)."""
-
-    fragments: list[dict[str, Any]]
-    read_version: int
-    #: The caller's name for the run this commit belongs to, scoped to the verified caller. What it buys is
-    #: IDEMPOTENT REPLAY: a retried commit of fragments that already landed is answered with the version
-    #: that holds them, and an EMPTY commit carrying it is answered with what the catalog recorded this
-    #: caller's run committing (refused 400 when nothing is recorded).
-    run_id: str | None = None
-
-
-class CommitFragmentsResponse(BaseModel):
-    version: int
-    row_count: int
 
 
 def _publish_the_executor_bounds_as_required(schema: JsonDict) -> None:

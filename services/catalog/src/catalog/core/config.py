@@ -360,7 +360,7 @@ class CatalogVendingSettings(BaseSettings):
     # storage (MinIO default, AWS S3, Ceph RGW, RustFS). Default "mode_b": server-mediated — no
     # credential leaves the catalog (the simplest, backend-agnostic default). "sts": STS AssumeRole
     # short-TTL per-table scoped tokens (the recommended path; MinIO/Ceph/AWS all implement STS).
-    # Client-DIRECT is the default WRITE path via POST /{id}/commit (the catalog never proxies data bytes);
+    # Client-DIRECT writes stage a manifest the catalog judges and finalizes (CreateTableVersion, ADR 0157);
     # the vending MODE is the separate CREDENTIAL mechanism. Default `mode_b` (server_mediated) is safe on
     # any store; `web_identity`/`sts` are the SCOPED-credential upgrade and are opt-in because they need an
     # STS endpoint — WITHOUT one, boto3 resolves to the PUBLIC AWS STS endpoint and would POST the caller's

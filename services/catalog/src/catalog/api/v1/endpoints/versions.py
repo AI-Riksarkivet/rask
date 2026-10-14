@@ -7,9 +7,10 @@
 from __future__ import annotations
 
 import logging
+from functools import partial
 from typing import Annotated
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Header, Query
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import (
     BatchCommitTablesRequest,
@@ -20,6 +21,8 @@ from lance_namespace import (
     BatchDeleteTableVersionsResponse,
     CreateTableVersionRequest,
     CreateTableVersionResponse,
+    DescribeTableRequest,
+    DescribeTableResponse,
     DescribeTableVersionRequest,
     DescribeTableVersionResponse,
     InvalidInputError,
@@ -28,16 +31,17 @@ from lance_namespace import (
     UnsupportedOperationError,
 )
 
-from catalog.api import fga_deps
-from catalog.api.dependencies import FgaClientDep, NamespaceDep, SettingsDep, StorageOptionsDep
+from catalog.api import fga_deps, lineage_deps
+from catalog.api.dependencies import FgaClientDep, LineageEmitterDep, NamespaceDep, SettingsDep, StorageOptionsDep
 from catalog.api.pagination import paginate_versions
 from catalog.api.rask_params import RaskFlag
 from catalog.api.security import CurrentToken
 from catalog.core.base_judge import BaseJudge
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.core.namespace import open_dataset_unchecked
-from catalog.services import dataplane, maintenance, native
+from catalog.services import dataplane, maintenance, managed_versions, native
 from service_kit.governed import fga
+from service_kit.governed.audit import SUCCESS, audit
 from service_kit.lakehouse import protection
 
 
@@ -114,36 +118,28 @@ async def table_history(
     return {"table": id, "versions": rows}
 
 
-def _versions_are_unmanaged(operation: str) -> UnsupportedOperationError:
-    """The refusal for a version-TRACKING op while this catalog does not manage table versions.
+def _batches_are_not_judged(operation: str) -> UnsupportedOperationError:
+    """The refusal for a multi-table commit: the catalog judges and finalizes one table version at a time.
 
-    The spec pairs these ops with ``managed_versioning``: a caller routes commits through them only when
-    ``describe_table`` reports it, and the catalog's namespace never does (pinned by
-    ``test_the_catalog_namespace_does_not_advertise_managed_versioning``). Advertising it would put
-    clients on a catalog-mediated commit pointer, the Iceberg shape the LANCE-ONLY ruling in CLAUDE.md
-    exists to avoid. A table commits through Lance's own manifest commit or the catalog's ``/commit``
-    door, which judge what they publish; these would move a client-staged manifest into the version
-    slot unjudged.
+    ``CreateTableVersion`` judges a staged manifest before the backend's put-if-not-exists, so a refusal leaves
+    that table at its version. A batch finalizes several tables as one, and judging each before one atomic
+    finalize is not something the ``dir`` backend offers, so a stock client commits each table on its own.
     """
-    return UnsupportedOperationError(
-        f"{operation} is not supported: this catalog does not manage table versions (describe_table never reports managed_versioning). "
-        "Commit through Lance's own manifest commit, or POST /management/v1/table/{id}/commit"
-    )
+    return UnsupportedOperationError(f"{operation} is not supported: commit each table through CreateTableVersion, which the catalog judges per table")
 
 
 @router.post("/version/batch-create", response_model_exclude_none=True)
 def batch_create_table_versions(body: BatchCreateTableVersionsRequest) -> BatchCreateTableVersionsResponse:
-    """Not supported (406) while this catalog does not manage table versions — ``managed_versioning`` is
-    never reported, so no entry is created, whatever the mounted backend implements."""
-    raise _versions_are_unmanaged("BatchCreateTableVersions")
+    """Not supported (406): a batch finalizes several tables at once, and the catalog judges one at a time."""
+    raise _batches_are_not_judged("BatchCreateTableVersions")
 
 
 @router.post("/batch-commit", response_model_exclude_none=True)
 def batch_commit_tables(body: BatchCommitTablesRequest) -> BatchCommitTablesResponse:
-    """Not supported (406) while this catalog does not manage table versions — ``managed_versioning`` is
-    never reported, so no sub-operation runs, ``declare_table`` and ``deregister_table`` included. Those
-    two have their own doors, which carry the protection, ownership and lineage a batch would skip."""
-    raise _versions_are_unmanaged("BatchCommitTables")
+    """Not supported (406): no sub-operation runs, ``declare_table`` and ``deregister_table`` included. Those two
+    have their own doors, which carry the protection, ownership and lineage a batch would skip, and a version is
+    committed per table through ``CreateTableVersion``."""
+    raise _batches_are_not_judged("BatchCommitTables")
 
 
 @router.post("/{id}/version/list", response_model_exclude_none=True)
@@ -191,15 +187,70 @@ def list_table_versions(
 
 
 @router.post("/{id}/version/create", response_model_exclude_none=True)
-def create_table_version(id: str, body: CreateTableVersionRequest) -> CreateTableVersionResponse:
-    """Not supported (406) while this catalog does not manage table versions.
+async def create_table_version(
+    id: str,
+    body: CreateTableVersionRequest,
+    ns: NamespaceDep,
+    settings: SettingsDep,
+    so: StorageOptionsDep,
+    token: CurrentToken,
+    client: FgaClientDep,
+    emitter: LineageEmitterDep,
+    authorization: Annotated[str | None, Header()] = None,
+) -> CreateTableVersionResponse:
+    """Finalize a client-staged manifest as the table's next version, after judging it ([[LH-471]], ADR 0157).
 
-    ``CreateTableVersion`` moves a client-staged manifest into the table's next version slot. The spec
-    pairs it with ``managed_versioning``, which ``describe_table`` never reports here, so no client is
-    sent to it; served, it would publish a manifest whose data files nothing judges against the table's
-    file version.
+    The catalog answers ``managed_versioning=true``, so a stock writer stages ``_versions/<n>.manifest-<uuid>`` and
+    asks here; ``managed_versions`` judges the version it describes and finalizes the judged bytes through
+    the backend's put-if-not-exists. A refusal leaves the table at its version and answers a typed spec error.
     """
-    raise _versions_are_unmanaged("CreateTableVersion")
+    segments = parse_identifier(id, settings.delimiter)
+    body.id = reconcile_body_id(segments, body.id)
+    if body.branch is not None:
+        # A branch's versions live under ``tree/<branch>/`` and its first one needs the owner rung; neither is judged
+        # here, so a branch is created at ``branches/create`` and written through ``insert`` / ``merge_insert``
+        # with ``branch``, the doors that already judge a branch write.
+        raise UnsupportedOperationError(
+            "CreateTableVersion on a branch is not served: create the branch with POST /v1/table/{id}/branches/create "
+            "and write it through insert or merge_insert with branch"
+        )
+    described: DescribeTableResponse = await run_in_threadpool(native.call, ns, "describe_table", DescribeTableRequest(id=segments))
+    if not described.location:
+        raise InvalidInputError("table has no object-store location to commit a version to")
+    canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
+    staged = await run_in_threadpool(managed_versions.stage, described.location, so, body)
+    try:
+        await fga_deps.require_staged_operation(client, settings, token, segments=segments, operation=staged.operation, creates=staged.creates)
+        judge = BaseJudge.from_settings(settings)
+        record = await run_in_threadpool(judge.read_record, described.location)
+        await run_in_threadpool(partial(managed_versions.judge, base_judge=judge, external_bases=record.entries if record is not None else ()), staged, so)
+    except BaseException:
+        await run_in_threadpool(managed_versions.refuse, staged, so)
+        raise
+    finally:
+        await run_in_threadpool(managed_versions.discard, staged, so)
+    response = await run_in_threadpool(managed_versions.finalize, ns, staged, body, so)
+    audit(
+        "commit_version",
+        SUCCESS,
+        subject=token.sub if token is not None else None,
+        resource=f"table:{canonical}",
+        version=staged.version,
+        operation=staged.operation,
+    )
+    await lineage_deps.emit_measured_write(
+        emitter,
+        segments,
+        ns=ns,
+        so=so,
+        settings=settings,
+        token=token,
+        operation=managed_versions.lineage_operation(staged),
+        authorization=authorization,
+        pin_version=staged.version,
+        branch=None,
+    )
+    return response
 
 
 @router.post("/{id}/version/describe", response_model_exclude_none=True)

@@ -7,7 +7,7 @@ burst the pod OOMs and takes every in-flight request with it. This sheds the ove
 ``max_concurrent`` writes are in flight, the next is rejected with **429** (the ``THROTTLING`` → 429
 mapping in service_kit/lakehouse/ns_errors.py that had no producer) + a ``Retry-After``, BEFORE a single body byte is
 buffered — so shedding actually relieves
-memory pressure rather than adding to it. Reads and non-bulk writes (``/commit``, ``update``, ``delete``)
+memory pressure rather than adding to it. Reads and non-bulk writes (``version/create``, ``update``, ``delete``)
 pass through untouched. ``max_concurrent=0`` disables it entirely.
 
 Pure ASGI (not ``BaseHTTPMiddleware``) so the reject happens before the body is read, mirroring body_limit.
@@ -28,7 +28,7 @@ from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE
 
 
 _PROBLEM_JSON = b"application/problem+json"
-# Only the bulk Arrow-IPC body writes — the ones that buffer a large body. /commit (a small metadata op) and
+# Only the bulk Arrow-IPC body writes — the ones that buffer a large body. version/create (a small metadata op) and
 # update/delete (predicate-driven) are deliberately NOT gated: they don't carry the multi-hundred-MiB payload.
 _WRITE_SUFFIXES = ("/create", "/insert", "/merge_insert")
 # The discriminator is the Arrow-IPC content-type, NOT the path suffix alone: `/create` also ends the CHEAP
