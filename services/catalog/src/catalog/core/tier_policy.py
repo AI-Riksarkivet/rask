@@ -6,8 +6,8 @@ declares, and only then reads the tier, so a caller without the rung learns noth
 it named. Every decision is audited with the tier it was taken under.
 
 The judge answers allow or refuse today. The tier's own rules land with the rows that need them: the run and
-inputs on silver and gold (LH-225), the hold behind ``published`` (LH-466), the staged manifest's file
-versions (LH-471).
+inputs on silver and gold (LH-225) and the hold behind ``published`` (LH-466). A staged manifest's content is judged
+by ``catalog.services.managed_versions`` (LH-471).
 """
 
 from __future__ import annotations

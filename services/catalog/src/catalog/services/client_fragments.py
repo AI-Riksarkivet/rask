@@ -1,8 +1,7 @@
-"""What a client-written fragment must prove before ``/commit`` folds it into a version ([[LH-211]]).
+"""What a client-written data file must prove before ``CreateTableVersion`` finalizes a version that adds it ([[LH-211]], [[LH-471]]).
 
-The client-direct append receives ``FragmentMetadata`` that a vended writer serialized, and Lance's
-commit takes every field of it on trust. Measured through ``commit_appended_fragments`` on pylance
-12.0.0, each of these COMMITTED: a ``file_size_bytes`` 100 bytes too large and a 64-byte garbage file
+A stock writer stages a manifest whose fragments it described itself, and Lance's commit takes every field
+of them on trust. Measured through a client-direct append on pylance 12.0.0, each of these COMMITTED: a ``file_size_bytes`` 100 bytes too large and a 64-byte garbage file
 (every later read fails); an over-declared ``physical_rows`` (every read fails) and an under-declared one
 (rows silently dropped); ``column_indices`` past the file's columns; a ``row_id_meta`` copied from a
 committed fragment (duplicate stable row ids); a deletion file and an overlay (the overlay made the table
@@ -16,12 +15,9 @@ then served its bytes) or a missing one; the same file in two fragments; and a f
 So the JSON is a claim and the data file is the authority. Its footer carries the row count, the column
 count and the format version the writer actually wrote, and its schema names the columns
 (lance_docs/file_format.md, "Offsets & Footer" and "Reading Strategy": one or two reads from the end of
-the file). Three gates, in the order the commit door runs them:
+the file). The gates ``catalog.services.managed_versions`` runs on each data file a version adds:
 
-* :func:`refuse_forged_metadata`: what the JSON alone shows. A fresh append carries no row ids, version
-  metas, deletion file or overlay (``write_fragments`` leaves all of them unset, with or without
-  ``enable_stable_row_ids``, measured), names its files bare under ``data/``, lists each field id once, and names each file once.
-* :func:`refuse_files_the_table_holds`: no file the table already references.
+* :func:`refuse_a_malformed_data_file`: a bare name under ``data/``, each field id once, sizes and versions that are integers.
 * :func:`verify_against_footers`: each data file's footer agrees with what the fragment declares.
 * :func:`verify_blob_sidecars`: every sidecar a blob descriptor points into exists and is long enough, and
   every external blob lies under one of the table's external bases and exists.
@@ -141,38 +137,7 @@ def _names(exc: BaseException, markers: tuple[str, ...]) -> bool:
     return any(marker in message for marker in markers)
 
 
-def refuse_forged_metadata(fragments: Sequence[FragmentMetadata]) -> None:
-    """Refuse what the fragment JSON alone shows a fresh append cannot carry.
-
-    Raises:
-        InvalidInputError: A fragment carries row ids, version metas, a deletion file or an overlay, has
-            no data file or a malformed one, names a path outside ``data/``, or lists a field id twice
-            or a negative one (``-2`` is Lance's tombstone).
-    """
-    named: dict[str, int] = {}
-    for index, fragment in enumerate(fragments):
-        carried = [name for name in _UNSET_ON_APPEND if getattr(fragment, name) is not None]
-        if fragment.overlays:
-            carried.append("overlays")
-        if carried:
-            raise _refuse(index, None, f"an appended fragment carries none of {', '.join(carried)}; Lance assigns them at commit or they describe an edit")
-        if not _is_int(fragment.physical_rows) or fragment.physical_rows < 0:
-            raise _refuse(index, None, f"physical_rows must be a non-negative integer, got {fragment.physical_rows!r}")
-        if not fragment.files:
-            raise _refuse(index, None, "a fragment with no data file reads every column as NULL")
-        seen: set[int] = set()
-        for data_file in fragment.files:
-            _refuse_a_malformed_data_file(index, data_file)
-            repeated = seen.intersection(data_file.fields)
-            if repeated or len(set(data_file.fields)) != len(data_file.fields):
-                raise _refuse(index, data_file.path, f"field ids {sorted(repeated) or data_file.fields} are listed twice; each field lives in one data file")
-            seen.update(data_file.fields)
-        for path in {data_file.path for data_file in fragment.files}:
-            if (first := named.setdefault(path, index)) != index:
-                raise _refuse(index, path, f"fragment {first} names the same file; a file appended twice reads its rows twice")
-
-
-def _refuse_a_malformed_data_file(index: int, data_file: DataFile) -> None:
+def refuse_a_malformed_data_file(index: int, data_file: DataFile) -> None:
     path = data_file.path
     if not isinstance(path, str) or not _BARE_DATA_FILE.fullmatch(path):
         raise _refuse(index, None, f"data file path {path!r} is not a bare file name under the table's data/ directory")
@@ -186,24 +151,6 @@ def _refuse_a_malformed_data_file(index: int, data_file: DataFile) -> None:
     size = data_file.file_size_bytes
     if size is not None and (not _is_int(size) or size <= 0):
         raise _refuse(index, path, f"file_size_bytes must be a positive integer or absent, got {size!r}")
-
-
-def refuse_files_the_table_holds(fragments: Sequence[FragmentMetadata], table: lance.LanceDataset) -> None:
-    """Refuse a data file the table already references.
-
-    Re-appending a committed fragment's file reads its rows again, deleted ones included: measured on
-    pylance 12.0.0, after ``delete("id = 0")`` the re-appended file brought the deleted row back, so a
-    writer could undo any delete, an erasure among them. ``table`` is the version the append is made
-    against; its manifest names every file it holds, so this reads no object.
-
-    Raises:
-        InvalidInputError: A fragment names a file the table already holds.
-    """
-    held = {data_file.path for fragment in table.get_fragments() for data_file in fragment.metadata.files}
-    for index, fragment in enumerate(fragments):
-        for data_file in fragment.files:
-            if data_file.path in held:
-                raise _refuse(index, data_file.path, "the table already holds this file; appending it again reads its rows twice and restores deleted ones")
 
 
 def _declares_v2(data_file: DataFile) -> bool:

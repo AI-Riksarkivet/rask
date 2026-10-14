@@ -23,16 +23,21 @@ precedence. The store's own 403s are the deployed probe's job.
 from __future__ import annotations
 
 import json
+import re
+import threading
+import time
 import uuid
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, Literal
 
 import boto3
+import httpx
 import lance
+import lance_namespace
 import pyarrow as pa
 import pytest
-from fastapi.testclient import TestClient
+import uvicorn
 from moto.iam.access_control import IAMPolicy, PermissionResult
 
 from catalog.core.vending import StsVendor
@@ -50,7 +55,7 @@ def _rows(ids: list[int], blob_bytes: int = 16) -> pa.Table:
 class _Estate:
     """The catalog on moto, one table and a branch of it created through the door, and every session policy vended."""
 
-    def __init__(self, client: TestClient, s3: Any, bucket: str, policies: list[str]) -> None:
+    def __init__(self, client: httpx.Client, s3: Any, bucket: str, policies: list[str]) -> None:
         self.client, self.s3, self.bucket, self.policies = client, s3, bucket, policies
         assert client.post("/v1/namespace/db/create", json={}).status_code == 200
         self.location = self._create(_TABLE)
@@ -104,8 +109,18 @@ def estate(moto_url: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> It
 
     vendor = StsVendor(role_arn="arn:aws:iam::123456789012:role/lance-vend", region="us-east-1", endpoint=moto_url, assume_role=_assume_role)
     app.dependency_overrides[get_vendor] = lambda: vendor
-    with TestClient(app) as client:
+    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=0, log_level="warning", lifespan="on"))
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    deadline = time.monotonic() + 30
+    while not server.started:
+        if not thread.is_alive() or time.monotonic() > deadline:
+            raise RuntimeError("uvicorn did not start")
+        time.sleep(0.05)
+    with httpx.Client(base_url=f"http://127.0.0.1:{server.servers[0].sockets[0].getsockname()[1]}", timeout=120) as client:
         yield _Estate(client, s3, bucket, policies)
+    server.should_exit = True
+    thread.join(timeout=30)
     app.dependency_overrides.clear()
     get_settings.cache_clear()
 
@@ -172,25 +187,22 @@ def test_a_vend_permits_only_what_its_tier_may_change(estate: _Estate, tier: _Ti
     assert not _permits(policy, action, estate.bucket, sibling), "a prefix sibling of the table is never reached"
 
 
-@pytest.mark.parametrize("branch", ["", "b1"], ids=["main", "branch"])
-def test_a_writer_lands_rows_with_only_what_its_vend_allows(estate: _Estate, branch: str) -> None:
-    options, policy = estate.vend("write", branch)
-    handle = lance.dataset(estate.location, storage_options=options)
-    if branch:
-        handle = handle.checkout_version((branch, None))
+#: A final manifest, in either naming scheme: what only the catalog's finalize may write.
+_FINAL_MANIFEST = re.compile(r"/_versions/\d+\.manifest$")
+
+
+def test_a_writer_lands_rows_with_only_what_its_vend_allows(estate: _Estate) -> None:
+    """A stock append on the vended write tier stages everything itself and leaves only the final manifest to the catalog."""
+    options, policy = estate.vend("write")
+    stock = lance_namespace.connect("rest", {"uri": str(estate.client.base_url)})
     before = estate.keys()
 
-    fragments = lance.fragment.write_fragments(_rows([1, 2], blob_bytes=200_000), handle, storage_options=options)
-    written = sorted(estate.keys() - before)
-    committed = estate.client.post(
-        f"/management/v1/table/{_TABLE}/commit",
-        params={"branch": branch} if branch else {},
-        json={"fragments": [f.to_json() for f in fragments], "read_version": handle.version},
-    )
+    lance.write_dataset(_rows([1, 2], blob_bytes=200_000), namespace_client=stock, table_id=["db", "pages"], mode="append", storage_options=options)
 
-    assert committed.status_code == 200, committed.text
-    assert written and all(_permits(policy, "s3:PutObject", estate.bucket, key) for key in written), written
-    main = lance.dataset(estate.location, storage_options=options)
-    landed = main.checkout_version((branch, None)) if branch else main
+    new = sorted(estate.keys() - before)
+    finalized = [key for key in new if _FINAL_MANIFEST.search(key)]
+    staged_by_the_writer = [key for key in new if key not in finalized]
+    assert finalized and not any(_permits(policy, "s3:PutObject", estate.bucket, key) for key in finalized), finalized
+    assert staged_by_the_writer and all(_permits(policy, "s3:PutObject", estate.bucket, key) for key in staged_by_the_writer), staged_by_the_writer
+    landed = lance.dataset(estate.location, storage_options=options)
     assert sorted(landed.to_table(columns=["id"]).column("id").to_pylist()) == [0, 1, 2]
-    assert main.count_rows() == (1 if branch else 3), "a branch commit leaves main as it was"

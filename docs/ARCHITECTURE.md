@@ -248,8 +248,8 @@ gate for readers), are in [`TIER-GOVERNANCE.md`](TIER-GOVERNANCE.md).
 
 ## 8. "Commit auth" — what it is and how it's already handled
 
-A **commit** here = writing a new Lance version (append/merge/update/delete, or a
-fragment commit through `/commit`). In a governed catalog you want a commit to be **(a) authorized,
+A **commit** here = writing a new Lance version (append/merge/update/delete, through a catalog door or a stock
+client's `CreateTableVersion`). In a governed catalog you want a commit to be **(a) authorized,
 (b) audited, (c) lineage-tracked** — three *different* things:
 
 | Concern | Question | Who answers it | Status |
@@ -259,13 +259,12 @@ fragment commit through `/commit`). In a governed catalog you want a commit to b
 | **(c) Lineage** | "Where did this data come from?" | **OpenLineage** (emit on commit) → the in-service Apache AGE graph | ✅ built & deployed (see §9 + `docs/LINEAGE.md`) |
 
 So **commit auth already exists**: committing goes through the same `authorize` dependency that gates every write,
-checking `can_write_data` on `table:<id>`. Today a commit reaches the catalog on its own `/management/v1/table/{id}/commit`
-door, and the spec's `CreateTableVersion` family answers 406 because the catalog does not advertise
-`managed_versioning`. Decided and not yet built: on silver and gold a commit must name its run and its inputs in
-the spec `Context` headers, which the catalog stamps as `rask.*` transaction properties after checking
-`can_read_data` on each input, and from which it emits the lineage edge itself (ADR 0156 C2, LH-225 #180); stock
-clients then commit through `CreateTableVersion` under `managed_versioning`, which replaces the `/commit` door
-(ADR 0157, LH-471 #597). `docs/TIER-GOVERNANCE.md` tracks each rule.
+checking `can_write_data` on `table:<id>`. A stock client commits through the spec's `CreateTableVersion`: the
+catalog answers `managed_versioning=true`, judges the staged version (the operation's rung, file versions, bases,
+footers, the primary key, protected columns) and finalizes it (ADR 0157, LH-471 #597). Decided and not yet built:
+on silver and gold a commit must name its run and its inputs in the spec `Context` headers, which the catalog
+stamps as `rask.*` transaction properties after checking `can_read_data` on each input, and from which it emits
+the lineage edge itself (ADR 0156 C2, LH-225 #180). `docs/TIER-GOVERNANCE.md` tracks each rule.
 
 ---
 

@@ -320,11 +320,11 @@ Key facts that aren't obvious from any single file:
   version. On pylance 12 and 13 an append or fragment commit whose files are at another version is
   COMMITTED and stamps reader flag 256 (mixed data file versions), which no operation removes:
   maintenance refuses the table, and pylance 11 and lancedb 0.34 cannot open it, while lancedb 0.40 (the
-  pinned one) can (`lance_docs/PROVENANCE.md`). The catalog's `/commit` door and the register door refuse
+  pinned one) can (`lance_docs/PROVENANCE.md`). The catalog's `version/create` (a stock client's commit, ADR 0157) and the register door refuse
   such a set (`service_kit.lakehouse.features.describe_foreign_data_file_versions`), and the maintenance
   counter `compaction.datasets.mixed_file_versions` pages on one. pylance 13's `update()`,
   `merge_insert().data_storage_version()` and `compact_files()` also take a `data_storage_version` that
-  can stamp the flag, and no guard sees those calls: rask code never passes it.
+  can stamp the flag: a stock client's such commit is refused at `version/create`, and rask code never passes it.
 - **A workload is a SEALED RUNNER, and the platform knows nothing about it.** `runners/<workload>` submits one Ray Data pipeline per CLI invocation and blocks on `.materialize()`; long-lived model weights stay warm behind **Ray Serve** deployments the runner owns and `make serve-up` deploys independently of any job. Serve replica counts and GPU fractions are the RUNNER's business (`RASK_SERVE_REPLICAS` / `RASK_SERVE_GPU_FRAC` plus literals inside its own pipeline module) — never the platform's. Whatever a workload's stage graph, model or output format is, it reaches the platform as config: bytes in, a governed table out, lineage emitted. Its per-workload mechanics live in that runner's own README, not here.
 - **The estate is AUTHENTICATED, and this bullet used to say the opposite.** It read *"No auth, no app
   middleware. The services assume localhost / trusted network"* — which was true once and has been

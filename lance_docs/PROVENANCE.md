@@ -120,7 +120,7 @@ tables at 2.1 and 2.2 with stable row ids:
 - From pylance 13.0.0, `update()`, `merge_insert().data_storage_version()` and `compact_files()` also
   take a `data_storage_version`, which can stamp the flag: measured 2026-10-12 (only `update` was run),
   `update(data_storage_version="2.1")` on a 2.2 table leaves flags `(258, 258)`. No rask code passes it,
-  and the `/commit` guard does not see those calls.
+  and a stock client's `update` is judged at `version/create`, which refuses the files that would set it.
 
 `service_kit.lakehouse.features.describe_foreign_data_file_versions` names the files that would set it.
 

@@ -73,7 +73,7 @@ def test_write_over_cap_is_shed_with_429_before_the_body() -> None:
 
 
 def test_reads_and_non_bulk_writes_are_not_gated() -> None:
-    # A read (GET) and /commit (a small metadata op) must pass through even while a write slot is held.
+    # A read (GET) and version/create (a small metadata op) must pass through even while a write slot is held.
     async def scenario() -> tuple[int, int]:
         release = asyncio.Event()
         entered = asyncio.Event()
@@ -89,7 +89,7 @@ def test_reads_and_non_bulk_writes_are_not_gated() -> None:
         t1 = asyncio.create_task(_drive(mw, _write("/v1/table/t/insert")))
         await entered.wait()  # the one write slot is held in flight
         get_code = await _drive(mw, _scope("GET", "/v1/table/t"))
-        commit_code = await _drive(mw, _scope("POST", "/management/v1/table/t/commit"))
+        commit_code = await _drive(mw, _scope("POST", "/v1/table/t/version/create"))
         release.set()
         await t1
         return get_code, commit_code

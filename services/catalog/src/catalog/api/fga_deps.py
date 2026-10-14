@@ -59,7 +59,7 @@ from catalog.services import native
 from service_kit.governed import fga
 from service_kit.governed.audit import ALLOW, DENY, FAILURE, audit
 from service_kit.governed.machine_identity import ServicePrincipal
-from service_kit.lakehouse import trash
+from service_kit.lakehouse import protection, trash
 from service_kit.lakehouse.subjects import is_person_subject
 
 
@@ -327,7 +327,6 @@ _WRITER_SUFFIX_RELATION: Final[dict[str, dict[str, str]]] = {
             "create_scalar_index",
             "index/{index_name}/drop",
             "version/create",
-            "commit",
         ),
         "can_write_data",
     ),
@@ -1640,6 +1639,53 @@ async def require_can_drop_table(
         return
     obj = f"table:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}"
     await _require(client, user=token.sub, relation="can_drop", obj=obj)
+
+
+#: The rung a staged commit's operation needs at ``version/create`` beyond the router's ``can_write_data`` ([[LH-471]]).
+#: Each is the rung the catalog's own door for that operation asks, so staging an operation never clears a lower bar
+#: than doing it through the door: restore is ``restore``'s owner rung, a rewrite is compaction's maintainer rung, and
+#: an Overwrite of a table that already has a version is drop-then-recreate (``require_can_drop_table``). The writer
+#: operations need nothing more than the router's rung.
+_STAGED_OPERATION_RELATION: Final[dict[str, str | None]] = {
+    **dict.fromkeys(("Append", "Delete", "Update", "Merge", "Project", "CreateIndex", "DataReplacement", "DataOverlay", "UpdateConfig")),
+    "Restore": "can_restore",
+    "Rewrite": "can_maintain",
+    "Overwrite": "can_drop",
+}
+
+
+async def require_staged_operation(
+    client: OpenFgaClient | None,
+    settings: Settings,
+    token: Principal | None,
+    *,
+    segments: list[str],
+    operation: str,
+    creates: bool,
+) -> None:
+    """Refuse a staged commit whose operation needs a rung the caller lacks, or that no door commits this way.
+
+    ``creates`` is true for the table's first version, which the declare that reserved it already authorized. An
+    Overwrite of a table with a version is drop-then-recreate, so the protection record refuses it as it refuses a
+    drop, with FGA on or off; ``force`` has no channel on the spec door. The rung check is a no-op when FGA is off / unwired / unauthenticated, as the other ``require_*`` gates are; an
+    operation outside the map (``Clone`` among them, which the branch and clone doors own) is refused whatever FGA
+    says.
+
+    Raises:
+        InvalidInputError: ``operation`` is not one a stock commit may stage here.
+    """
+    if operation not in _STAGED_OPERATION_RELATION:
+        raise InvalidInputError(f"a {operation} cannot be committed through CreateTableVersion")
+    relation = _STAGED_OPERATION_RELATION[operation]
+    if relation is None or (operation == "Overwrite" and creates):
+        return
+    canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
+    if operation == "Overwrite":
+        guard = await run_in_threadpool(protection.get_protection, settings.registry_root, settings.storage_options(), "table", canonical)
+        require_not_protected(guard or {}, kind="table", obj_id=canonical, force=False)
+    if not (settings.fga_enabled and client is not None and token is not None):
+        return
+    await _require(client, user=token.sub, relation=relation, obj=f"table:{canonical}")
 
 
 async def require_can_promote(

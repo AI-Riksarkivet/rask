@@ -196,25 +196,6 @@ def _refused(resp: Any, code: int) -> None:  # noqa: ANN401 — an httpx.Respons
     assert resp.json()["code"] == code, resp.text
 
 
-def test_a_commit_through_the_planted_base_is_refused_and_the_table_is_unchanged(estate: _Estate, planted: str) -> None:
-    """Closes-when (1). The decoy under the attacker's own ``data/`` is what the file-existence check would find.
-
-    A based file's path resolves through its base, not under the table's ``data/``, so an existence check
-    alone answers for the decoy; the refusal of the ``base_id`` itself is what this test can fail on.
-    """
-    fragment = _spliced_fragment(estate, planted)
-    prefix = estate.attacker.removeprefix(f"{estate.root}/")
-    for data_file in fragment["files"]:
-        estate.s3.put_object(Bucket=estate.bucket, Key=f"{prefix}/data/{data_file['path']}", Body=b"decoy")
-    before = estate.open(estate.attacker).version
-
-    resp = estate.client.post("/management/v1/table/db$attacker/commit", json={"fragments": [fragment], "read_version": before})
-
-    _refused(resp, _INVALID_INPUT)
-    assert estate.open(estate.attacker).version == before, "the refused commit still minted a version"
-    assert "222-victim" not in estate.open(estate.attacker).to_table().column("ssn").to_pylist()
-
-
 class _ThrottledRecords:
     """An S3 client whose every GET under ``_bases/`` answers SlowDown: the store failing, not the record."""
 

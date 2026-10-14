@@ -403,6 +403,7 @@ async def declare_table(
         except Exception:
             await fga_deps.compensate_create(client, settings, token, resource="table", segments=segments, undo=_undo_declare, reason="vend_failed")
             raise
+    response.managed_versioning = True
     # Versionless (no data yet): records who declared it + the reserved location, and keys the CREATED edge
     # (declare_table ∈ lineage _CREATE_OPS). Reconcile fills the real version once data lands at the URI.
     await emit_write_event(
@@ -544,6 +545,8 @@ async def describe_table(
         version=version,
         tag=tag,
     )
+    # ADR 0157: every commit comes back through CreateTableVersion, where the catalog judges it.
+    response.managed_versioning = True
     if vend_credentials is not False and response.location:
         response.storage_options = await _vend_on_spec_door(
             ns,

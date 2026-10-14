@@ -6,12 +6,10 @@ source repeats a key the target holds is refused `Ambiguous merge inserts are pr
 One repeated `id` therefore wedges every downstream full-sync merge. The doors hold the key instead:
 within the rows a write carries, and against the rows the table holds when the write lands.
 
-Driven through the real catalog app on a real pylance ``dir`` backend, through the four doors that land
-rows: ``/create``, ``/insert`` (the catalog writes the rows), ``/commit`` (the client wrote the fragments,
-the catalog commits them) and ``/merge_insert``. Three cases are the ones a check-then-write gets wrong:
-a compaction landing between a client's ``write_fragments`` and its ``/commit`` must not make the table's
-own rows read as the append's, a key another writer landed after the commit's ``read_version`` is held all
-the same, and two inserts racing one new key must land it once.
+Driven through the real catalog app on a real pylance ``dir`` backend, through the doors that write rows
+server-side: ``/create``, ``/insert`` and ``/merge_insert``. Two inserts racing one new key must land it once.
+A client-written commit is judged at ``version/create``
+(``services/catalog/tests/test_a_stock_client_commits_every_operation_through_version_create.py``).
 """
 
 from __future__ import annotations
@@ -54,32 +52,9 @@ def _insert(client: TestClient, *ids: int) -> httpx.Response:
     return client.post(f"/v1/table/{TABLE}/insert", content=_ipc(_rows(*ids)), headers=ARROW)
 
 
-def _commit(client: TestClient, read_version: int, fragments: list[lance.FragmentMetadata]) -> httpx.Response:
-    return client.post(f"/management/v1/table/{TABLE}/commit", json={"fragments": [f.to_json() for f in fragments], "read_version": read_version})
-
-
-def _commit_rows(client: TestClient, location: str, *ids: int) -> httpx.Response:
-    read_version = lance.dataset(location).version
-    return _commit(client, read_version, lance.fragment.write_fragments(_rows(*ids), location, data_storage_version="2.2"))
-
-
 def _merge(client: TestClient, *ids: int) -> httpx.Response:
     params = {"on": "id", "when_matched_update_all": "true", "when_not_matched_insert_all": "true"}
     return client.post(f"/v1/table/{TABLE}/merge_insert", params=params, content=_ipc(_rows(*ids)), headers=ARROW)
-
-
-def _commit_across_a_compaction(client: TestClient, location: str) -> list[httpx.Response]:
-    inserted = _insert(client, 4)
-    read_version = lance.dataset(location).version
-    fragments = lance.fragment.write_fragments(_rows(3), location, data_storage_version="2.2")
-    lance.dataset(location).optimize.compact_files()
-    return [inserted, _commit(client, read_version, fragments)]
-
-
-def _commit_after_another_writer_landed_its_key(client: TestClient, location: str) -> list[httpx.Response]:
-    read_version = lance.dataset(location).version
-    fragments = lance.fragment.write_fragments(_rows(3), location, data_storage_version="2.2")
-    return [_insert(client, 3), _commit(client, read_version, fragments)]
 
 
 def _two_inserts_of_one_new_key(client: TestClient, _location: str) -> list[httpx.Response]:
@@ -105,11 +80,7 @@ def _two_inserts_of_one_new_key(client: TestClient, _location: str) -> list[http
         pytest.param(lambda c, _l: [_create(c, 5, 5, mode="Overwrite")], True, [400], [1, 2], id="overwrite-repeats-within"),
         pytest.param(lambda c, _l: [_insert(c, 5, 5)], True, [400], [1, 2], id="insert-repeats-within"),
         pytest.param(lambda c, _l: [_insert(c, 2, 5)], True, [400], [1, 2], id="insert-repeats-a-held-key"),
-        pytest.param(lambda c, loc: [_commit_rows(c, loc, 5, 5)], True, [400], [1, 2], id="commit-repeats-within"),
-        pytest.param(lambda c, loc: [_commit_rows(c, loc, 2, 5)], True, [400], [1, 2], id="commit-repeats-a-held-key"),
         pytest.param(lambda c, _l: [_merge(c, 5, 5)], True, [400], [1, 2], id="merge-source-repeats-within"),
-        pytest.param(_commit_across_a_compaction, True, [200, 200], [1, 2, 3, 4], id="commit-across-a-compaction-lands"),
-        pytest.param(_commit_after_another_writer_landed_its_key, True, [200, 400], [1, 2, 3], id="commit-repeats-a-key-landed-since-its-read"),
         pytest.param(_two_inserts_of_one_new_key, True, [200, 400], [1, 2, 9], id="racing-inserts-land-a-new-key-once"),
     ],
 )

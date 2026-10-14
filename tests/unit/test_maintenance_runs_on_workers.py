@@ -17,8 +17,7 @@ machine:
 Steps 1 and 3 are the only halves that need root, and neither reads a data byte. The task and the
 result are both JSON strings (``.json()`` / ``.from_json()``), so the work rides a queue between them.
 
-These pin the dataplane primitives against real pylance — no S3, no cluster — the same shape as
-``test_client_direct_commit.py``, which pins the sibling client-direct append.
+These pin the dataplane primitives against real pylance — no S3, no cluster.
 """
 
 from __future__ import annotations

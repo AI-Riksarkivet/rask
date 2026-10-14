@@ -6,7 +6,7 @@ this measures which are **backend-backed (200)** vs **spec-correct 406**, becaus
 stubs them or because the catalog refuses them (the three version-tracking ops, [[LH-206]]). Dispatch: most ops go to `native` (the Rust `DirectoryNamespace`); several go to the
 in-process `dataplane` (pylance, always 200) — see `services/catalog/services/{native,dataplane}.py`.
 
-**Tally: 47 / 54 backed (200), 7 spec-correct 406** — four native-backend stubs and three version-tracking ops the catalog refuses while it does not advertise `managed_versioning` ([[LH-206]]). `uv run pytest tests/unit tests/integration` → 568 passed (measured 2026-07-12; e2e suites skipped unless their live backends are set).
+**Tally: 48 / 54 backed (200), 6 spec-correct 406** — four native-backend stubs and the two multi-table commits, which the catalog does not judge as one ([[LH-206]], [[LH-471]]). `uv run pytest tests/unit tests/integration` → 568 passed (measured 2026-07-12; e2e suites skipped unless their live backends are set).
 
 > **Correction (2026-08-05):** `rename_table` was still listed as unsupported long after #5b backed it
 > in-process (`dataplane.rename_table` — copy the dataset root to the destination, repoint the namespace,
@@ -47,10 +47,9 @@ Of the **7 remaining 406s**, four are genuine native-backend stubs and three are
   implementation is a **greenfield materialization subsystem** (run a query engine → write a Lance table →
   incremental refresh); pylance offers only scan/filter, no query engine. So it's buildable, but a new
   subsystem, not a thin delegation — out of scope here.
-- **`create_table_version` / `batch_create_table_versions` / `batch_commit_tables`** — version-TRACKING ops the
-  spec pairs with `managed_versioning`, which `describe_table` never reports here. The catalog answers 406
-  whatever the backend implements (`versions.py::_versions_are_unmanaged`): a table commits through Lance's
-  own manifest CAS or `/commit`, and these would publish a client-staged manifest unjudged.
+- **`batch_create_table_versions` / `batch_commit_tables`** — the catalog judges and finalizes one table version at a
+  time (`create_table_version`, served under `managed_versioning=true`, ADR 0157), so it answers 406 to a batch that
+  would finalize several as one (`versions.py::_batches_are_not_judged`).
 - **`backfill_columns` / `alter_transaction`** — stubbed in the native Rust namespace. `backfill_columns`
   answers `alter_table_backfill_columns not implemented`, and since #101 that MESSAGE reaches the
   client: Unsupported is a capability statement, not a fault, so `ns_errors.problem_detail` exempts it from the

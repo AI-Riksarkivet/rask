@@ -18,15 +18,11 @@ from __future__ import annotations
 
 import io
 import itertools
-import json
 import logging
 import re
-import threading
 import uuid
 from collections.abc import Callable, Generator, Iterable, Iterator, Sequence
-from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager, suppress
-from functools import partial
 from typing import Any, Final, cast
 
 import lance
@@ -100,12 +96,12 @@ from catalog.core.base_judge import require_sanctioned_bases
 from catalog.core.config import shared_lance_session
 from catalog.core.modes import CreateMode, InsertMode
 from catalog.core.namespace import disarm_commit_path_cleanup, judged_native_version, open_dataset, open_dataset_unchecked
-from catalog.services import changes, client_fragments, native, primary_keys, table_bases, table_claims
+from catalog.services import changes, native, primary_keys, table_bases, table_claims
 from catalog.services.base_credentials import BaseCredentials
 from catalog.services.cast_size import bytes_after_cast
-from service_kit.lakehouse import auto_cleanup, base_registry, branch_layout, commit_runs, location_claims
+from service_kit.lakehouse import auto_cleanup, base_registry, branch_layout, location_claims
 from service_kit.lakehouse.base_refs import decoded_path
-from service_kit.lakehouse.features import VersionedDataFile, describe_foreign_data_file_versions, manifest_base_path_refs
+from service_kit.lakehouse.features import describe_foreign_data_file_versions, manifest_base_path_refs
 from service_kit.lakehouse.objectfs import StorageOptions, credential_of, s3_filesystem
 from service_kit.lakehouse.schema import SchemaFields, facet_fields
 from service_kit.lancekit.absence import reads_as_absent
@@ -877,7 +873,7 @@ def _relative_location(uri: str, *, root: str) -> str:
     return uri.removeprefix("file://").rstrip("/").rsplit("/", 1)[-1]
 
 
-def _dataset_fs(uri: str, so: StorageOptions) -> tuple[pafs.FileSystem, str]:
+def dataset_fs(uri: str, so: StorageOptions) -> tuple[pafs.FileSystem, str]:
     """Resolve ``uri`` to a ``(filesystem, path)`` pair for a dataset relocation.
 
     A local ``file://`` / bare-path location (the ``dir`` backend default) needs no credentials; an
@@ -933,362 +929,7 @@ def _classify_commit_error(exc: OSError, *, remedy: str = _APPEND_REMEDY) -> Exc
             return ServiceUnavailableError(f"object store unavailable during commit: {exc}")
 
 
-def _fragment_signature(fragment: lance.FragmentMetadata) -> str:
-    """The fragment as a commit stores it.
-
-    Measured on pylance 12.0.0: an Append's transaction keeps each fragment exactly as sent (id, data files
-    and their bases, sizes, field ids, row count, deletion file), so equal signatures read the same rows.
-    Both sides pass through pylance's ``to_json``, so a fragment serialized on another pylance compares by
-    content rather than by spelling.
-    """
-    return json.dumps(fragment.to_json(), sort_keys=True)
-
-
-def _read_transactions(location: str, so: StorageOptions, versions: Sequence[int]) -> list[tuple[int, lance.Transaction | None, Exception | None]]:
-    """Each version's transaction in version order, with any failure carried for the caller to judge.
-
-    One handle per worker thread: measured on pylance 12.0.0, eight threads reading transactions through
-    one ``LanceDataset`` raised ``RuntimeError: Already borrowed`` in 20 of 20 rounds over 40 versions, and
-    in 0 of 20 with a handle each.
-    """
-    local = threading.local()
-
-    def _read(version: int) -> tuple[int, lance.Transaction | None, Exception | None]:
-        try:
-            handle: lance.LanceDataset | None = getattr(local, "dataset", None)
-            if handle is None:
-                handle = local.dataset = lance.dataset(location, storage_options=dict(so) if so else None, session=shared_lance_session())
-            return version, handle.read_transaction(version), None
-        except Exception as exc:
-            return version, None, exc
-
-    with ThreadPoolExecutor(max_workers=min(8, len(versions))) as pool:
-        return list(pool.map(_read, versions))
-
-
-def _held_signature(fragment: dict[str, Any]) -> str:
-    """A fragment as a version's manifest holds it: its data files and its row count.
-
-    Measured on pylance 12.0.0: a commit keeps each fragment's files and physical_rows exactly and assigns
-    id, row_id_meta and the two version metas, which are left out.
-    """
-    return json.dumps({"files": fragment.get("files"), "physical_rows": fragment.get("physical_rows")}, sort_keys=True)
-
-
-def _version_holds(location: str, so: StorageOptions, version: int, fragments: Sequence[lance.FragmentMetadata]) -> bool:
-    """Whether ``version``'s manifest holds every one of these fragments with no deletion file: what a reader of that version reads."""
-    try:
-        held = [
-            f.metadata.to_json()
-            for f in lance.dataset(location, version=version, storage_options=dict(so) if so else None, session=shared_lance_session()).get_fragments()
-        ]
-    except Exception as exc:
-        if reads_as_absent(exc):
-            return False
-        raise ServiceUnavailableError(f"cannot read version {version} of {location!r} to confirm it holds the run's fragments: {exc}") from exc
-    present = {_held_signature(fragment) for fragment in held if fragment.get("deletion_file") is None}
-    return {_held_signature(fragment.to_json()) for fragment in fragments} <= present
-
-
-def _rows_at(location: str, so: StorageOptions, version: int) -> int:
-    return lance.dataset(location, version=version, storage_options=dict(so) if so else None, session=shared_lance_session()).count_rows()
-
-
-def _find_run_commit(location: str, so: StorageOptions, fragments: Sequence[lance.FragmentMetadata], *, read_version: int, run_id: str) -> int | None:
-    """The version after ``read_version`` whose operation added every one of these fragments.
-
-    A committer whose answer was lost retries with the same fragments, and Append never conflicts with
-    Append (transaction.md), so only recognizing the earlier commit keeps its rows from landing twice. The
-    fragments are the evidence, never a run id, which any writer of the table can put on a commit
-    ([[LH-280]]): whoever committed them, the rows are in the table as sent. A version counts only when its
-    manifest holds the fragments too: the transaction record is evidence the version's writer chose, while
-    the manifest is what a reader of that version reads.
-
-    Fails closed: an error that proves absence reads as "not committed" (no table, a stranger's version
-    with no transaction file); any other error raises, because appending again on an unread store risks
-    the duplicate this exists to prevent.
-    """
-    try:
-        dataset = lance.dataset(location, storage_options=dict(so) if so else None, session=shared_lance_session())
-    except Exception as exc:
-        if not reads_as_absent(exc):
-            raise ServiceUnavailableError(
-                f"cannot determine whether run {run_id!r} already committed to {location!r} — the object store is unreadable, "
-                f"and proceeding would risk appending the same rows twice: {exc}"
-            ) from exc
-        return None
-    # `version_refs()`, not `versions()`: pylance answers it without reading a manifest per version.
-    candidates = [version for version_info in dataset.version_refs() if (version := int(version_info["version"])) > read_version]
-    if not candidates:
-        return None
-    wanted = {_fragment_signature(fragment) for fragment in fragments}
-    for version, transaction, exc in _read_transactions(location, so, candidates):
-        if exc is not None:
-            if not reads_as_absent(exc):
-                raise ServiceUnavailableError(
-                    f"cannot read version {version} while checking whether run {run_id!r} already committed — "
-                    f"this may be the run's own commit, and skipping it would append the rows twice: {exc}"
-                ) from exc
-            continue
-        if transaction is None:
-            continue
-        added = list(getattr(transaction.operation, "fragments", None) or ())
-        if wanted <= {_fragment_signature(fragment) for fragment in added} and _version_holds(location, so, version, fragments):
-            return version
-    return None
-
-
-def _recorded_run_commit(location: str, so: StorageOptions, run: commit_runs.CommitRun) -> tuple[int, int] | None:
-    """The version the catalog recorded ``run`` committing and the row count there, while that version exists."""
-    try:
-        recorded = commit_runs.read_committed(run, location)
-    except OSError as exc:
-        raise ServiceUnavailableError(f"cannot read what run {run.run_id!r} committed to {location!r}: the control root is unreadable: {exc}") from exc
-    if recorded is None:
-        return None
-    try:
-        return recorded.version, _rows_at(location, so, recorded.version)
-    except Exception as exc:
-        if reads_as_absent(exc):
-            return None
-        raise ServiceUnavailableError(f"cannot read version {recorded.version}, which run {run.run_id!r} committed to {location!r}: {exc}") from exc
-
-
-def _record_run_commit(run: commit_runs.CommitRun, location: str, *, version: int) -> None:
-    try:
-        commit_runs.record_committed(run, location, version=version)
-    except OSError as exc:
-        raise ServiceUnavailableError(
-            f"run {run.run_id!r} committed version {version} to {location!r}, and the catalog could not record it: {exc}. "
-            "A retry of the same fragments is answered with that version"
-        ) from exc
-
-
-def _prior_run_commit(
-    location: str, so: StorageOptions, frags: Sequence[lance.FragmentMetadata], *, read_version: int, run: commit_runs.CommitRun
-) -> tuple[int, int] | None:
-    """What ``run`` already committed to the table, as ``(version, row_count)``, or ``None`` when this commit must land.
-
-    Fragments that already landed after ``read_version`` answer with the version holding them. Otherwise
-    the catalog's record of this caller's run answers: always for an EMPTY commit (the "what did I commit?"
-    probe), and for a commit carrying fragments only when the recorded version is newer than
-    ``read_version``, because a retry can resend a different list for a run that already committed (ingest
-    falls back to its carried list once the staged one is purged).
-    """
-    if frags:
-        landed = _find_run_commit(location, so, frags, read_version=read_version, run_id=run.run_id)
-        if landed is not None:
-            _record_run_commit(run, location, version=landed)
-            return landed, _rows_at(location, so, landed)
-    recorded = _recorded_run_commit(location, so, run)
-    if recorded is None or (frags and recorded[0] <= read_version):
-        return None
-    return recorded
-
-
-def commit_appended_fragments(
-    location: str,
-    so: StorageOptions,
-    fragments: list[dict[str, Any]],
-    read_version: int,
-    *,
-    run: commit_runs.CommitRun | None = None,
-    external_blob_bases: Sequence[base_registry.RecordedBase] = (),
-    branch: str | None = None,
-) -> tuple[int, int]:
-    """Commit client-written fragments as an APPEND — the catalog as the governed commit coordinator (#2).
-
-    The client wrote the data fragments DIRECTLY to object storage with vended, table-scoped creds
-    (``lance.fragment.write_fragments`` — the guide's distributed-write protocol); this folds the tiny
-    serialized ``FragmentMetadata`` into a metadata-ONLY Lance commit under ROOT creds, so no data byte ever
-    transits the catalog and the version + lineage emit stay atomic (the External Manifest Store pattern —
-    namespace.md). ``write_fragments`` inherits the table's ``data_storage_version`` only when the client
-    names none; pylance 12 and 13 commit fragments at another version and stamp the sticky reader flag 256, so
-    :func:`_refuse_foreign_file_versions` judges the fragments' file versions before Lance sees them. Lance
-    assigns/rebases stable row ids at commit (row_id_lineage.md). CREATE and OVERWRITE stay server-side to
-    centralize the 2.2 invariant and to owner-govern the destructive reset. Append auto-rebases against
-    concurrent appends and conflicts only with Overwrite/Restore (transaction.md); a stale/incompatible
-    commit raises, mapped by :func:`_classify_commit_error`.
-
-    With ``run``, a retry is idempotent: fragments that already landed are answered with the version that
-    holds them (:func:`_find_run_commit`), and an EMPTY commit is answered with what the catalog recorded
-    this caller's run committing, or refused when it recorded nothing.
-
-    ``branch`` commits onto that branch rather than main ([[LH-202]]): a writer-tier credential reaches only
-    ``data/`` (``tree/<branch>/data/`` for a branch), so this door is how a writer of any branch (D3) lands an
-    append. ``read_version`` and the returned version are branch-local, every file is looked for under the
-    branch's own ``data/``, and the commit goes through the branch handle, which Lance commits to
-    ``tree/<branch>/_versions/`` (measured on 12.0.0). A run is recorded against main only, so a branch
-    commit carrying one is refused.
-
-    Returns:
-        ``(version, row_count)``: the committed version and the ref's row count at it.
-
-    The fragments are a claim and the data files are the authority (:mod:`catalog.services.client_fragments`):
-    nothing an append cannot carry, each file at its declared size, and each footer agreeing with the
-    fragment's rows, columns, field ids and file version. A table with blob columns or a declared primary key
-    is committed detached first, so every blob sidecar its descriptors point into is read, and no appended
-    key repeats within the append or one the table holds ([[LH-243]]), before the version is published.
-    ``external_blob_bases`` is the catalog's record of the external blob bases the table's create
-    authorized ([[LH-209]]); an external descriptor resolving through any other base is refused.
-
-    Raises:
-        InvalidInputError: Malformed fragments, no fragments (and no recorded run commit), a based data
-            file, a foreign file version, a data file missing under the table or at another size, a
-            footer or blob sidecar that contradicts the fragment, metadata an append cannot carry, or a
-            primary-key value that repeats within the append or is already held.
-        ServiceUnavailableError: The object store or the control root could not be read or written.
-    """
-    if read_version < 0:
-        raise InvalidInputError(f"read_version must be non-negative, got {read_version}")
-    if run is not None and branch is not None:
-        raise InvalidInputError("a run is recorded against main only; commit a branch without a run_id")
-    # Client-controlled input: a malformed fragment dict raises KeyError/TypeError/ValueError from
-    # ``from_json`` (outside the OSError taxonomy) — translate to a 400, never a 500 (audit 2026-07-14).
-    try:
-        frags = [lance.FragmentMetadata.from_json(json.dumps(f)) for f in fragments]
-    except (KeyError, TypeError, ValueError, AttributeError) as exc:
-        raise InvalidInputError(f"malformed fragment metadata: {exc}") from exc
-    # The run checks come before the empty guard and every check of the files: a retry may arrive after
-    # maintenance compacted its files away, and an empty commit carrying a run is a question only the
-    # record can answer.
-    if run is not None:
-        prior = _prior_run_commit(location, so, frags, read_version=read_version, run=run)
-        if prior is not None:
-            return prior
-    if not frags:
-        raise InvalidInputError("no fragments to commit")
-    _refuse_based_data_files(fragments)
-    client_fragments.refuse_forged_metadata(frags)
-    judged_version, judged_against = _refuse_foreign_file_versions(location, so, frags, read_version, branch=branch)
-    client_fragments.refuse_files_the_table_holds(frags, judged_against)
-    ref_location = _ref_location(location, branch)
-    # HIGH (audit 2026-07-14): Lance's commit validates NEITHER data-file existence NOR the declared row
-    # count, so a client whose direct write landed under a DIFFERENT prefix than the catalog-resolved
-    # location (no malice required) could otherwise commit a 200-OK-but-UNREADABLE current version that
-    # breaks reads for EVERY reader until an operator restores. Pre-verify the files exist under the table
-    # location; a failed check leaves the table untouched (400) instead of poisoning its current version.
-    _verify_fragment_data_files(ref_location, so, fragments)
-    # The files exist at their declared sizes; their footers now say whether they hold what is declared ([[LH-211]]).
-    client_fragments.verify_against_footers(ref_location, so, frags, judged_against)
-    op = lance.LanceOperation.Append(frags)
-    # A branch commits through its own handle: `LanceDataset.commit` of a branch-checked-out dataset lands
-    # on `tree/<branch>/_versions/` and leaves main where it was (measured on 12.0.0).
-    # Disarmed before the commit ([[LH-245]]): the Append rebases onto the config-only commit, so neither deletes a version.
-    ref = disarm_commit_path_cleanup(_open_on_ref(location, so, version=None, branch=branch), [location])
-    target: str | lance.LanceDataset = location if branch is None else ref
-    columns = client_fragments.blob_columns(judged_against)
-    keys = primary_keys.key_columns(judged_against.lance_schema)
-    if columns or keys:
-        _verify_detached(target, ref_location, so, op, frags, ref, read_version=judged_version, columns=columns, keys=keys, external_bases=external_blob_bases)
-    try:
-        dataset = lance.LanceDataset.commit(target, op, read_version=judged_version, storage_options=so)
-    except OSError as exc:
-        raise _classify_commit_error(exc) from exc
-    version = int(dataset.version)
-    if run is not None:
-        _record_run_commit(run, location, version=version)
-    return version, dataset.count_rows()
-
-
-def _refuse_based_data_files(fragments: list[dict[str, Any]]) -> None:
-    """Refuse any client fragment whose data file names a base (a non-null ``base_id``) ([[LH-279]]).
-
-    ``base_id`` indexes the TABLE's base list, which a write vend can extend with ``add_bases`` — and
-    ``add_bases`` with an existing id REPOINTS that base (lh279 m4) — so a fragment resolving through a
-    base is a pointer the writer chose into bytes the writer need not own: measured, an appended fragment
-    through a planted base made the victim's rows the attacker's (lh279 m2). No rule judged at
-    ``read_version`` can bound it, because the base list the commit lands on is the writer's too.
-
-    Refusing the primitive costs no legitimate producer: every base a vend reaches is granted READ only,
-    and the one ``/commit`` client (ingest's lander) calls ``write_fragments`` without ``target_bases``,
-    so its files carry ``base_id`` null. A table spread across bases is written server-side at create.
-
-    Raises:
-        InvalidInputError: A data file carries a non-null ``base_id``; nothing was read or committed.
-    """
-    based = [
-        (index, data_file.get("path"))
-        for index, frag in enumerate(fragments)
-        for data_file in (frag.get("files") if isinstance(frag, dict) else None) or []
-        if isinstance(data_file, dict) and data_file.get("base_id") is not None
-    ]
-    if based:
-        log.warning("catalog_commit_refused_based_data_file", extra={"files": based[:5], "count": len(based)})
-        raise InvalidInputError(
-            f"commit refused: {len(based)} data file(s) resolve through a base (non-null base_id), e.g. fragment/file {based[:5]}. "
-            "A client commit may only append files under the table's own data/ directory; write them there with write_fragments and no target_bases"
-        )
-
-
-def _ref_location(location: str, branch: str | None) -> str:
-    """The directory a ref's own files live under: the dataset root for main, ``tree/<branch>`` for a branch (`file_format.md`)."""
-    return location if branch is None else f"{location.rstrip('/')}/{branch_layout.BRANCH_CONTAINER}/{branch}"
-
-
-def _open_on_ref(location: str, so: StorageOptions, *, version: int | None, branch: str | None) -> lance.LanceDataset:
-    """``location`` at ``version`` of main, or of ``branch`` when one is named (branch-local numbering)."""
-    options = dict(so) if so else None
-    if branch is None:
-        return lance.dataset(location, version=version, storage_options=options, session=shared_lance_session())
-    return lance.dataset(location, storage_options=options, session=shared_lance_session()).checkout_version((branch, version))
-
-
-def _refuse_foreign_file_versions(
-    location: str, so: StorageOptions, frags: Sequence[lance.FragmentMetadata], read_version: int, *, branch: str | None = None
-) -> tuple[int, lance.LanceDataset]:
-    """Refuse fragments whose data files would mix the table's file versions.
-
-    Returns the version the commit is made at, and the table version the files' declared format matched,
-    which their footers are then held to.
-
-    pylance 12.0.0 commits them and stamps reader flag 256, which no operation removes, so the refusal
-    has to come before the commit. The table is judged at ``read_version``, the version the caller built
-    against: an Overwrite since then is Lance's own non-retryable conflict, and judging at the latest
-    version would answer it with the wrong error. ``read_version`` 0 names no manifest, so the latest is
-    judged, and the caller commits at the version returned: a commit at 0 runs no conflict check at all,
-    so an Overwrite landing between this read and the commit would slip unjudged files onto another
-    version (measured on 12.0.0). A base that cannot be read fails closed.
-    """
-    try:
-        base = _open_on_ref(location, so, version=read_version or None, branch=branch)
-    except Exception as exc:
-        if reads_as_absent(exc):
-            raise InvalidInputError(f"{_NO_BASE_DETAIL}: {exc}") from exc
-        raise ServiceUnavailableError(f"cannot read the table to judge the fragments' file versions, so nothing was committed: {exc}") from exc
-    # THE VERSION THE CALLER BUILT AGAINST, judged like any read ([[LH-279]]): an append onto a table whose
-    # manifest declares a base nothing sanctioned carries that base into the version it mints.
-    require_sanctioned_bases(location, manifest_base_path_refs(base), judge=None)
-    files = [data_file for frag in frags for data_file in frag.files]
-    reason = describe_foreign_data_file_versions(base.data_storage_version, files)
-    if reason is None:
-        return int(base.version), base
-    if read_version and (latest := _latest_if_it_matches(location, so, files, branch=branch)) is not None:
-        # Written after an Overwrite moved the table to their version: Lance's own non-retryable
-        # conflict is the true answer, and it refuses the commit without setting the flag.
-        return int(base.version), latest
-    log.warning(
-        "catalog_commit_refused_foreign_file_version",
-        extra={
-            "location": location,
-            "read_version": read_version,
-            "table_version": base.data_storage_version,
-            "fragment_versions": sorted({f"{d.file_major_version}.{d.file_minor_version}" for d in files}),
-        },
-    )
-    raise InvalidInputError(
-        f"{reason}. Re-read the table's current version and write the fragments against it without data_storage_version "
-        f"(write_fragments into an existing table inherits it). A committed mix cannot be undone"
-    )
-
-
-def _latest_if_it_matches(location: str, so: StorageOptions, files: Sequence[VersionedDataFile], *, branch: str | None = None) -> lance.LanceDataset | None:
-    """The ref's LATEST version when ``files`` are all at its file version, else ``None``. Read only on the refusal path."""
-    latest = _open_on_ref(location, so, version=None, branch=branch)
-    return latest if describe_foreign_data_file_versions(latest.data_storage_version, files) is None else None
-
-
-def _verify_fragment_data_files(location: str, so: StorageOptions, fragments: list[dict[str, Any]]) -> None:
+def verify_fragment_data_files(location: str, so: StorageOptions, fragments: list[dict[str, Any]]) -> None:
     """Reject a commit that references data files ABSENT under ``<location>/data/`` (audit HIGH fix).
 
     ``location`` is the ref's own directory (:func:`_ref_location`): a branch's appended files live under
@@ -1301,7 +942,7 @@ def _verify_fragment_data_files(location: str, so: StorageOptions, fragments: li
     at the declared size, so a larger one failed every read of the table (measured, [[LH-211]]). An absent
     size is legitimate, and Lance asks the store.
     """
-    fs, base = _dataset_fs(location, so)
+    fs, base = dataset_fs(location, so)
     prefix = base.rstrip("/") + "/data/"
     # Collect every root-relative data file first, then resolve them in ONE batched lookup: pyarrow's
     # list overload runs the object-store lookups concurrently, so an N-fragment commit costs one round
@@ -1325,73 +966,28 @@ def _verify_fragment_data_files(location: str, so: StorageOptions, fragments: li
         )
 
 
-def _verify_detached(
-    target: str | lance.LanceDataset,
-    ref_location: str,
-    so: StorageOptions,
-    op: lance.LanceOperation.Append,
-    frags: Sequence[lance.FragmentMetadata],
-    base: lance.LanceDataset,
-    *,
-    read_version: int,
-    columns: Sequence[str],
-    keys: Sequence[str],
-    external_bases: Sequence[base_registry.RecordedBase],
-) -> None:
-    """Commit ``op`` DETACHED, judge what only a readable version can show, then discard the detached version.
-
-    Two judgements need the appended rows readable through a dataset: every blob sidecar the ``columns``'
-    descriptors point into, and the primary key ``keys`` names ([[LH-243]]), whose values the fragments
-    carry in their data files and nowhere else. The appended rows are the ones in ``frags``' own data files:
-    the detached commit rebases onto the latest version, so a fragment a compaction rewrote after
-    ``read_version`` is new to the detached version too, and holds the table's rows, not the append's.
-    They are judged within themselves and against ``base``, the ref's latest version opened before the
-    detached commit, by :mod:`catalog.services.primary_keys`.
-
-    A detached commit never becomes the latest version (pylance's ``LanceDataset.commit``), so the
-    table's readers never see it. Lance's own cleanup does not remove a detached manifest: after
-    ``cleanup_old_versions(older_than=0)`` the ``_versions/d<version>.manifest`` was still there while
-    the commit's ``.txn`` was gone (measured on 12.0.0), so the door deletes the manifest itself.
-
-    ``target`` is what the real commit goes through (the location for main, the branch handle for a
-    branch) and ``ref_location`` the directory whose ``_versions/`` the detached manifest lands in.
-    """
-    try:
-        detached = lance.LanceDataset.commit(target, op, read_version=read_version, storage_options=so, detached=True)
-    except OSError as exc:
-        raise _classify_commit_error(exc) from exc
-    try:
-        if columns:
-            client_fragments.verify_blob_sidecars(detached, frags, columns, external_bases=external_bases, object_sizes=partial(_object_sizes, so=so))
-        if keys:
-            own = {data_file.path for frag in frags for data_file in frag.files}
-            appended = [fragment for fragment in detached.get_fragments() if any(data_file.path in own for data_file in fragment.metadata.files)]
-            rows = detached.scanner(columns=list(dict.fromkeys(key.split(".", 1)[0] for key in keys)), fragments=appended).to_table()
-            primary_keys.refuse_repeats_within(rows, keys, door="commit")
-            primary_keys.refuse_keys_held(base, rows, keys, door="commit")
-    finally:
-        _discard_detached_manifest(ref_location, so, int(detached.version))
-
-
-def _object_sizes(uris: Sequence[str], *, so: StorageOptions) -> list[int | None]:
-    """Each object's size, ``None`` for one that is absent: one batched lookup per filesystem, as :func:`_verify_fragment_data_files` does."""
+def object_sizes(uris: Sequence[str], *, so: StorageOptions) -> list[int | None]:
+    """Each object's size, ``None`` for one that is absent: one batched lookup per filesystem, as :func:`verify_fragment_data_files` does."""
     if so.get("endpoint") and all(uri.startswith("s3://") for uri in uris):
         infos = s3_filesystem(so).get_file_info([uri.removeprefix("s3://") for uri in uris])
     else:
-        infos = [fs.get_file_info(path) for fs, path in (_dataset_fs(uri, so) for uri in uris)]
+        infos = [fs.get_file_info(path) for fs, path in (dataset_fs(uri, so) for uri in uris)]
     return [None if info.type != pafs.FileType.File else int(info.size) for info in infos]
 
 
-def _discard_detached_manifest(location: str, so: StorageOptions, version: int) -> None:
-    """Delete ``_versions/d<version>.manifest``, writing nothing else.
+def discard_detached_manifest(location: str, so: StorageOptions, version: int) -> None:
+    """Delete ``_versions/d<version>.manifest``, writing nothing else; the ``d`` prefix keeps the name apart from every
+    manifest on the version line."""
+    delete_table_object(location, so, f"_versions/d{version}.manifest")
 
-    S3 goes through the storage seam's plain DeleteObject: pyarrow's ``S3FileSystem.delete_file`` PUTs
-    the parent's directory marker after the delete, which left a ``_versions/`` object beside the
-    table's manifests (measured on moto). The ``d`` prefix keeps the name apart from every manifest on
-    the version line. A delete that fails leaves an unreachable manifest, never a wrong table, so it is
-    logged rather than raised.
+
+def delete_table_object(location: str, so: StorageOptions, relative: str) -> None:
+    """Delete ``<location>/<relative>``, writing nothing else.
+
+    S3 goes through the storage seam's plain DeleteObject: pyarrow's ``S3FileSystem.delete_file`` PUTs the parent's
+    directory marker after the delete, which left a ``_versions/`` object beside the table's manifests (measured on
+    moto). A delete that fails leaves an inert object, never a wrong table, so it is logged rather than raised.
     """
-    relative = f"_versions/d{version}.manifest"
     try:
         if location.startswith("s3://") and so.get("endpoint"):
             bucket, prefix = split_s3_uri(location.rstrip("/"))
@@ -1399,10 +995,10 @@ def _discard_detached_manifest(location: str, so: StorageOptions, version: int) 
             client = s3_client(so["endpoint"], access_key=access_key, secret_key=secret_key, session_token=session_token, region=so.get("region"))
             client.delete_object(Bucket=bucket, Key=f"{prefix}/{relative}")
         else:
-            fs, base = _dataset_fs(location, so)
+            fs, base = dataset_fs(location, so)
             fs.delete_file(f"{base.rstrip('/')}/{relative}")
     except Exception:
-        log.warning("catalog_commit_detached_manifest_left", extra={"location": location, "manifest": relative}, exc_info=True)
+        log.warning("catalog_table_object_left", extra={"location": location, "object": relative}, exc_info=True)
 
 
 #: pylance's stub declares neither ``CompactionTask.json()`` nor ``RewriteResult.from_json()``, though

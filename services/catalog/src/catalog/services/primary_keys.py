@@ -16,11 +16,10 @@ twice: within the rows the write carries, and against the rows the table holds w
   .when_not_matched_insert_all().execute(rows)`: it raises on the first held key, and a merge that loses
   a commit race re-plans against the newer version, so two inserts racing one new key land it once
   (measured on 12.0.0: 20 of 20 races clean, where a check followed by an append landed both every time).
-- ``/commit`` lands client-written fragments as an Append, which has no merge form. Its rows are judged
-  against the version its detached commit rebased onto, through a key-only
-  `merge_insert(keys).when_matched_fail()` planned with `execute_uncommitted`, which raises on the first
-  held key and writes no file (measured on 12.0.0). Both merges run on a scalar index on the key where one
-  exists (Lance plans the join on the scalar-index path).
+- ``version/create`` judges a client-staged version: the rows of its new fragments are judged within
+  themselves and against the rows the version carries over (``catalog.services.managed_versions``). The
+  ``/insert`` merge runs on a scalar index on the key where one exists (Lance plans the join on the
+  scalar-index path).
 
 A table that declares no key is append-only by the format's definition (`file_format.md:3152-3153`)
 and is not judged.
@@ -29,9 +28,9 @@ Two bounds, both measured on pylance 12.0.0:
 
 - A key on a field nested in a struct is judged within the rows only. `merge_insert` cannot key on a
   nested field ("No field named target_k"), so Lance offers no join to judge it against the table.
-- ``/commit``'s judgement and its real commit are two steps. A writer landing the same NEW key between
-  them lands too: an Append rebases over a concurrent append without comparing keys
-  (`lance_docs/file_format.md` § Conflict Resolution).
+- ``version/create`` judges the version that follows the one it was built on, and the backend's
+  put-if-not-exists then decides the race: a writer that lost it re-stages against the newer version, and
+  that version is judged again.
 """
 
 from __future__ import annotations
