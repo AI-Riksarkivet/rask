@@ -102,8 +102,9 @@ spec:
               # rungs in both directions (`model.fga`): a maintainer may rewrite HOW a dataset is stored
               # and may not change WHAT it says. Granting the sweep `writer` is the widest write grant in
               # the estate and would make one compromised maintenance pod equivalent to compromising
-              # every table it can reach. The sweep vends `tier=maintain`, which the door opens to
-              # `can_maintain` alone (`credentials.py`), so this is the rung its vend needs.
+              # every table it can reach. The grant is `maintenance`, which makes the subject a maintainer
+              # and is the one relation that opens the `tier=maintain` vend (`can_vend_maintain`): an
+              # owner is a maintainer too and is not vended that tier (ADR 0156 C4).
               #
               # MEASURED on the live store 2026-09-09, before this line changed: `service-maintenance`
               # held `can_write_data` on 106 tables and `can_maintain` on 323. The writer grant existed
@@ -147,7 +148,7 @@ spec:
               # are unaffected by that.
               grants = (
                   ([(user, "owner")] if subject else [])
-                  + [(m if ":" in m else f"user:{m}", "maintainer") for m in maintainers]
+                  + [(m if ":" in m else f"user:{m}", "maintenance") for m in maintainers]
               )
               # ESTATE GRANTS — a SHORTER list than the warehouse one, and the difference is the point.
               #

@@ -31,7 +31,7 @@ STS call, which AWS web identity deliberately does not.
   simplest, backend-agnostic default — nothing is delegated.
 
 OpenFGA decides the tier: ``can_read_data`` -> ``"read"``, ``can_write_data`` -> ``"write"``,
-``can_maintain`` -> ``"maintain"`` (:func:`build_session_policy` says what each grants).
+``can_vend_maintain`` -> ``"maintain"`` (:func:`build_session_policy` says what each grants).
 """
 
 from __future__ import annotations
@@ -65,7 +65,7 @@ log = logging.getLogger(__name__)
 #: * ``write`` — a ``can_write_data`` managed-versioning writer: read the table, put what a commit needs
 #:   (data, transaction, deletion and index files, and a staged manifest), never a final manifest, a ref or
 #:   a delete. The catalog commits the version.
-#: * ``maintain`` — a ``can_maintain`` rewrite and reclaim: get, put and delete anywhere in the prefix,
+#: * ``maintain`` — the maintenance identity's rewrite and reclaim (``can_vend_maintain``): get, put and delete anywhere in the prefix,
 #:   because compaction commits versions and cleanup deletes them. Also the shape for a prefix with no
 #:   Lance layout to narrow by (the warehouse scope probe).
 Tier = Literal["read", "write", "maintain"]
@@ -497,7 +497,7 @@ def build_session_policy(
       The Deny is load-bearing, measured (LH-469, #594): the staged Allow also matches
       ``<n>.manifest-<uuid>.manifest``, a name pylance reads as final, and a session policy's explicit Deny
       overrides any Allow on MinIO and on AWS S3 alike.
-    * ``maintain`` (``can_maintain``): get, put, delete and abort-upload on ``<prefix>/*``: compaction
+    * ``maintain`` (``can_vend_maintain``, the maintenance identity alone): get, put, delete and abort-upload on ``<prefix>/*``: compaction
       commits versions and cleanup deletes them, and an object store cannot tell a rewrite from a write.
 
     WHAT A SESSION POLICY CANNOT REFUSE: a ``PutObject`` over an existing key. A writer's ``data/*`` grant

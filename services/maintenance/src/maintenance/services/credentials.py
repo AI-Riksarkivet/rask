@@ -231,7 +231,7 @@ def _vend(table_id: str, settings: MaintenanceSettings) -> Vended | None:
         # FastAPI ignores an unknown body on a query parameter — a body-borne tier came back READ with
         # a 200, and the rewrite then failed at the object store as `403 AccessDenied` on a PUT.
         # Measured in-cluster 2026-09-03 on the ingest client, which had exactly this bug.
-        # `maintain`, the tier `can_maintain` opens ([[LH-202]]): a rewrite commits versions and a reclaim
+        # `maintain`, the tier `can_vend_maintain` opens to this identity alone ([[LH-202]], [[LH-473]]): a rewrite commits versions and a reclaim
         # deletes them, and the writer tier reaches `data/` only.
         response = httpx.post(url, params={"tier": "maintain"}, headers=headers, timeout=_TIMEOUT_SECONDS)
     except httpx.HTTPError as exc:

@@ -114,26 +114,37 @@ def _grant(
     monkeypatch.setattr(door.fga, "check", _check)
 
 
-def test_a_maintainer_gets_the_maintain_tier_credential(governed: tuple[TestClient, list[str]], monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_maintenance_identity_gets_the_maintain_tier_credential(governed: tuple[TestClient, list[str]], monkeypatch: pytest.MonkeyPatch) -> None:
     client, checked = governed
-    _grant(monkeypatch, checked, allow={"can_maintain"})
+    _grant(monkeypatch, checked, allow={"can_maintain", "can_vend_maintain"})
 
     resp = client.post("/management/v1/table/db$t/credentials?tier=maintain")
 
     assert resp.status_code == 200, resp.text
     assert resp.json()["mode"] == "direct"
-    assert checked == ["can_maintain"], f"the maintain tier asks its own rung only: {checked}"
+    assert checked == ["can_vend_maintain"], f"the maintain tier asks its own rung only: {checked}"
 
 
-def test_a_writer_cannot_obtain_the_maintain_tier(governed: tuple[TestClient, list[str]], monkeypatch: pytest.MonkeyPatch) -> None:
-    """The escalation the split exists to close: `can_write_data` does not open the whole-prefix policy."""
+@pytest.mark.parametrize(
+    "held",
+    [
+        pytest.param({"can_write_data"}, id="a-writer"),
+        # An owner is a maintainer and keeps every maintainer door; the whole-prefix policy is not one of them
+        # (ADR 0156 C4, [[LH-473]]).
+        pytest.param({"can_write_data", "can_maintain"}, id="an-owner"),
+    ],
+)
+def test_only_the_maintenance_identity_obtains_the_maintain_tier(
+    governed: tuple[TestClient, list[str]], monkeypatch: pytest.MonkeyPatch, held: set[str]
+) -> None:
+    """The escalation the split exists to close: neither writing nor owning opens the whole-prefix policy."""
     client, checked = governed
-    _grant(monkeypatch, checked, allow={"can_write_data"})
+    _grant(monkeypatch, checked, allow=held)
 
     resp = client.post("/management/v1/table/db$t/credentials?tier=maintain")
 
     assert resp.status_code == 403, resp.text
-    assert checked == ["can_maintain"]
+    assert checked == ["can_vend_maintain"]
 
 
 def test_a_maintainer_cannot_obtain_the_write_tier(governed: tuple[TestClient, list[str]], monkeypatch: pytest.MonkeyPatch) -> None:
@@ -177,7 +188,7 @@ def test_a_maintainer_REACHES_the_vend_route_at_all(governed: tuple[TestClient, 
     route assumed every credential request implies a data read.
     """
     client, checked = governed
-    _grant(monkeypatch, checked, allow={"can_maintain"}, router_grants=set())
+    _grant(monkeypatch, checked, allow={"can_maintain", "can_vend_maintain"}, router_grants=set())
 
     resp = client.post("/management/v1/table/db$t/credentials?tier=maintain")
 

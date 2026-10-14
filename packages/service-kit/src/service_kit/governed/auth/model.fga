@@ -211,9 +211,12 @@ type warehouse
     define reader: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant] or writer or member from project
     # A warehouse-level validator validates EVERY stage below it.
     define validator: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant] or owner
-    # A warehouse-level maintainer maintains EVERY stage below it — one tuple per warehouse is how the
-    # sweep is granted, which keeps the grant enumerable rather than estate-wide.
-    define maintainer: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant] or owner
+    # THE MAINTENANCE IDENTITY, the platform's own: the catalog writes it for `LANCE_FGA_MAINTAINERS` at warehouse
+    # create and backfill, no grant door hands it out, and it alone opens the maintain storage tier
+    # (`table.can_vend_maintain`, ADR 0156 C4). One tuple per warehouse keeps the grant enumerable.
+    define maintenance: [user]
+    # A warehouse-level maintainer maintains EVERY stage below it.
+    define maintainer: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant] or owner or maintenance
     # CLASSIFYING A COLUMN IS NOT WRITING TO IT ([[LH-058]]). Attaching a classification to a field says
     # what the data IS; it neither reads nor changes a row. The reference model makes exactly this point
     # about its own vocabulary — "independent of `modify` (separation of duties: classify without holding
@@ -426,6 +429,7 @@ type namespace
     # says. Granting the sweep `writer` estate-wide would have made one compromised maintenance pod
     # equivalent to compromising every table (owner ruling 2026-09-08: zero trust).
     define maintainer: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant] or owner or maintainer from parent
+    define maintenance: maintenance from parent
     # The classifier rung, cascading like `maintainer` — one grant per tenant reaches every table
     # beneath it. See `type warehouse` for why this is not the reference's `tag` type.
     define classifier: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant] or owner or classifier from parent
@@ -513,6 +517,7 @@ type table
     define validator: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant] or owner or validator from parent
     # See the namespace rung for why this is separate from `writer` in both directions.
     define maintainer: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant] or owner or maintainer from parent
+    define maintenance: maintenance from parent
     # The classifier rung, cascading like `maintainer` — one grant per tenant reaches every table
     # beneath it. See `type warehouse` for why this is not the reference's `tag` type.
     define classifier: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant] or owner or classifier from parent
@@ -541,6 +546,10 @@ type table
     # Compaction, index optimisation and version reclamation rewrite HOW a dataset is stored; they never
     # change WHAT it says. `can_maintain` therefore neither implies nor is implied by `can_write_data`.
     define can_maintain: maintainer
+    # The maintain storage tier puts and deletes the whole table prefix, `_versions/` and `_refs/` included, so
+    # it could finalize a version or move a tag around `version/create`; only the maintenance identity is
+    # vended it (ADR 0156 C4). An owner keeps every maintainer DOOR, which the catalog judges, and not this.
+    define can_vend_maintain: maintenance
     # Writing a governance key on a FIELD (`rask.*` field metadata — today the classification that makes
     # a table unvendable as raw bytes). `classifier`, never `writer`: the whole point is that someone may
     # label data they may not read, and that someone who may WRITE rows may not un-label it.

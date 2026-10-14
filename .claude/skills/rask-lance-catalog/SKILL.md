@@ -361,9 +361,11 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   server decide), write on `can_write_data` (judged by the tier judge), read on `can_read_data`, otherwise none.
   Every mint, at all three doors, writes the `vend_credentials` audit record with its `tier` and `door`. A stock
   client opening through the namespace therefore signs with the vended credential, not its own
-  (`services/catalog/tests/test_a_stock_client_opens_on_the_vended_credential.py`). C4 confines the maintain tier,
-  which any `can_maintain` holder can be vended at the management door now, to the maintenance identity (LH-473,
-  #599).
+  (`services/catalog/tests/test_a_stock_client_opens_on_the_vended_credential.py`). The maintain tier opens to
+  `can_vend_maintain` alone ([[LH-473]], ADR 0156 C4): the model's `maintenance` relation, which the catalog writes
+  for `LANCE_FGA_MAINTAINERS` on every warehouse (`cascade_tuples`, backfilled at startup, and the chart's
+  `bootstrap-admin` hook) and no grant door hands out. An owner is a maintainer and keeps the maintainer doors, and is
+  not vended the tier.
 - **Stock clients commit through `version/create`** ([[LH-471]], ADR 0157). `DescribeTable` and `DeclareTable`
   answer `managed_versioning=true`, so pylance stages `_versions/<n>.manifest-<uuid>` (its `manifest_path` is the
   object-store path: the key, no scheme, no bucket) and asks `POST /v1/table/{id}/version/create`.

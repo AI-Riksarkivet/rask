@@ -86,7 +86,7 @@ _FGA_TYPE: dict[str, str] = {
 # Read-only trailing actions (reader rung). ``query``/``count_rows`` read DATA; the rest
 # read metadata — split so list_objects(can_read_data) is meaningful (both are reader).
 # ``credentials`` (vending) is a DATA read at minimum — the router guard requires can_read_data; the
-# endpoint additionally requires can_write_data for a write-tier vend and can_maintain for a maintain-tier one.
+# endpoint additionally requires can_write_data for a write-tier vend and can_vend_maintain for a maintain-tier one.
 # ``blobs`` (GET /v1/table/{id}/blobs — the credential-less blob serving path) returns raw payload
 # bytes, so it is a DATA read exactly like ``query``.
 # ``changes`` (§ J4) is the MOST disclosing read a table has — every row it ever received, in order —
@@ -807,14 +807,14 @@ async def _authorize_batch(request: Request, client: OpenFgaClient, settings: Se
 
 
 #: The rung each WRITING credential tier opens, one rung per tier and never either-of ([[LH-202]]).
-#: `can_write_data` is a LOGICAL writer, whose policy reaches `data/` only; `can_maintain` a PHYSICAL one
-#: (compaction, index optimization, reclamation rewrite and delete files while preserving content), whose
-#: policy reaches the whole prefix, and the model denies a maintainer read, write, drop and promote.
-#: Accepting either rung for either tier would hand a writer the maintainer's policy, which can commit any
-#: transaction around the catalog. The maintainer's whole-prefix credential, scoped to one table for 900 s,
-#: is the owner's ruling of 2026-09-08: the alternative measured before it was 207 of 285 rewrites a tick
-#: signed by the deployment's ROOT key, because a refused vend falls back to the ambient credential.
-VEND_TIER_RUNGS: Final[dict[str, str]] = {"write": "can_write_data", "maintain": "can_maintain"}
+#: `can_write_data` is a LOGICAL writer, whose policy reaches `data/` only; `can_vend_maintain` is the
+#: maintenance identity's alone (ADR 0156 C4, [[LH-473]]), a PHYSICAL writer whose policy reaches the whole
+#: prefix, `_versions/` and `_refs/` included, so it can finalize a version or move a tag around
+#: `version/create`. An owner is a maintainer and keeps every maintainer door the catalog judges, and is not
+#: vended this. The whole-prefix credential, scoped to one table for 900 s, is the owner's ruling of
+#: 2026-09-08: the alternative measured before it was 207 of 285 rewrites a tick signed by the deployment's
+#: ROOT key, because a refused vend falls back to the ambient credential.
+VEND_TIER_RUNGS: Final[dict[str, str]] = {"write": "can_write_data", "maintain": "can_vend_maintain"}
 
 #: The resources whose non-read doors write a table's data or its history, and so reach the tier judge.
 _JUDGED_RESOURCES: Final = frozenset({"table", "materialized_view"})
@@ -1914,9 +1914,10 @@ def cascade_tuples(settings: Settings, *, warehouse_id: str, project: str) -> li
     obj = f"warehouse:{warehouse_id}"
     return [
         fga.ClientTuple(user=f"project:{project}", relation="project", object=obj),
-        # `maintainer` ALONE. Maintenance rewrites how a dataset is stored and must not be able to drop it
-        # or change what it says, which is exactly the separation `can_maintain` was minted to express.
-        *(fga.ClientTuple(user=subject, relation="maintainer", object=obj) for subject in settings.fga_maintainers),
+        # `maintenance` ALONE: the platform's maintenance identity, a maintainer that may also be vended the
+        # maintain tier. Maintenance rewrites how a dataset is stored and must not be able to drop it or change
+        # what it says, which is exactly the separation `can_maintain` was minted to express.
+        *(fga.ClientTuple(user=subject, relation="maintenance", object=obj) for subject in settings.fga_maintainers),
     ]
 
 

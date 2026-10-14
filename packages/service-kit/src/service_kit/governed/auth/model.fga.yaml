@@ -30,9 +30,10 @@ tuples:
   - { user: warehouse:acme_bucket, relation: parent, object: namespace:acme_gold }
   - { user: namespace:acme_silver, relation: parent, object: table:acme_silver_features }
   - { user: namespace:acme_gold, relation: parent, object: table:acme_gold_catalog }
-  # service-maintenance: MAINTAINER on one warehouse. One tuple per warehouse is the grant shape —
-  # enumerable, revocable per tenant, and nothing like a `writer` on every table.
-  - { user: user:service-maintenance, relation: maintainer, object: warehouse:acme_bucket }
+  # service-maintenance: the MAINTENANCE identity on one warehouse, which makes it a maintainer there. One
+  # tuple per warehouse is the grant shape — enumerable, revocable per tenant, and nothing like a `writer`
+  # on every table.
+  - { user: user:service-maintenance, relation: maintenance, object: warehouse:acme_bucket }
   # service-silver-to-gold: a CASCADE writer — the two rungs its work needs and nothing above them.
   # Same grant shape as the sweep's: one tuple per warehouse per rung, enumerable and revocable per tenant.
   - { user: user:service-silver-to-gold, relation: writer, object: warehouse:acme_bucket }
@@ -1329,6 +1330,8 @@ tests:
         object: table:acme_silver_features
         assertions:
           can_maintain: true
+          # The maintain storage tier is the maintenance identity's alone (ADR 0156 C4, [[LH-473]]).
+          can_vend_maintain: true
           # THE HALF THAT MATTERS. A maintainer may not change what the data says, may not read it, and
           # may not destroy it — so a compromised sweep cannot rewrite, exfiltrate or drop a table.
           can_write_data: false
@@ -1351,10 +1354,16 @@ tests:
         assertions:
           can_write_data: true
           can_maintain: false
-      # An OWNER keeps it, concentrically, exactly as `validator` behaves: alice administers the project.
+          can_vend_maintain: false
+      # An OWNER keeps the maintainer doors, concentrically, exactly as `validator` behaves: alice
+      # administers the project. The maintain storage tier is not among them: its credential puts and
+      # deletes `_versions/` and `_refs/`, which would let an owner finalize a version or move a tag around
+      # `version/create` (ADR 0156 C4).
       - user: user:alice
         object: table:acme_silver_features
-        assertions: { can_maintain: true }
+        assertions:
+          can_maintain: true
+          can_vend_maintain: false
 
   - name: a cascade writer may PUBLISH what it may not DESTROY, and that separation runs both ways
     # Owner ruling 2026-09-10 (zero trust). The cascade calls four table doors — describe, credentials,

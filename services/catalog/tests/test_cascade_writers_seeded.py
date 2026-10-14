@@ -71,7 +71,7 @@ async def test_the_backfill_writes_the_SAME_grants_minus_the_caller(monkeypatch)
         monkeypatch,
     )
 
-    assert fga.ClientTuple(user="user:service-maintenance", relation="maintainer", object="warehouse:wh1") in seen
+    assert fga.ClientTuple(user="user:service-maintenance", relation="maintenance", object="warehouse:wh1") in seen
     assert fga.ClientTuple(user="project:acme", relation="project", object="warehouse:wh1") in seen
     assert not [t for t in seen if t.user.startswith("user:") and "service-" not in t.user], f"the backfill granted a non-service subject: {seen}"
 
@@ -80,8 +80,8 @@ async def test_the_backfill_writes_the_SAME_grants_minus_the_caller(monkeypatch)
 async def test_creating_a_warehouse_grants_it(monkeypatch) -> None:
     """A warehouse is maintainable the moment it exists, or its tenant's data is never compacted.
 
-    [[LH-165]]. `warehouse.maintainer` has no `from parent`, so the sweep reaches a tenant's tables
-    through exactly one tuple, `warehouse:<id>#maintainer@<maintenance identity>`, and the create door is
+    [[LH-165]]. `warehouse.maintenance` has no `from parent`, so the sweep reaches a tenant's tables
+    through exactly one tuple, `warehouse:<id>#maintenance@<maintenance identity>`, and the create door is
     where it has to be written: there is then no window in which a tenant exists and its data cannot be
     maintained. It rides in `cascade_tuples`, which the create door and `backfill_cascade_grants` share,
     so the two populations of warehouse cannot differ. Measured 2026-09-15 on the live estate: the 4 of
@@ -95,4 +95,4 @@ async def test_creating_a_warehouse_grants_it(monkeypatch) -> None:
         monkeypatch,
     )
 
-    assert ("user:service-maintenance", "maintainer", "warehouse:wh1") in [(t.user, t.relation, t.object) for t in seen]
+    assert ("user:service-maintenance", "maintenance", "warehouse:wh1") in [(t.user, t.relation, t.object) for t in seen]
