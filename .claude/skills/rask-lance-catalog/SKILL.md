@@ -135,7 +135,7 @@ ADR 0160, LH-470). `catalog/core/tier_policy.py` holds it:
   no other `rask.*` key, and refuses a `rask.author` other than the caller or a run without one (a property any
   committer can write proves authorship only because of that refusal). A compaction and a restore add no data, so
   they name no run. A rename commits nothing a run can reach, so moving a table into silver or gold from another
-  tier is refused; `register` into a derived tier is LH-463's. A keyed insert
+  tier is refused, and so is `register` into one, which attaches bytes no run produced through the catalog ([[LH-463]]). A keyed insert
   and a merge carrying a run commit through `dataplane.commit_stamped`: detached, then finalized as exactly the
   next version by the backend's put-if-not-exists, because `LanceDataset.commit` of an `execute_uncommitted` merge
   rebases past a racing writer without its key check (measured on pylance 13.0.0: a duplicate key landed). A run on

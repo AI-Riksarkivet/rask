@@ -321,3 +321,15 @@ def test_a_stale_binding_cache_entry_expires_instead_of_lasting_until_restart(
     resolved = client.app.state.warehouse_binding_cache
     assert deps._fresh_cached_binding(resolved, "tenantns", 300.0) is None, "the stale entry outlived its TTL"
     assert "tenantns" not in resolved, "the expired entry was not evicted"
+
+
+def test_a_table_registered_under_a_bound_namespace_is_then_described(routing: tuple[TestClient, Path, Path, Path]) -> None:
+    """[[LH-463]] `RegisterTable` answers for the table it registered: describe and list find it afterwards."""
+    client, _default_root, warehouse_root, registry = routing
+    _register_warehouse(registry, warehouse_root)
+    registered = client.post("/v1/table/tenantns$events/register", json={"location": "medallion/bronze"})
+
+    assert registered.status_code == 200, registered.text
+    described = client.post("/v1/table/tenantns$events/describe", json={})
+    listed = client.get("/v1/namespace/tenantns/table/list")
+    assert (described.status_code, listed.json().get("tables")) == (200, ["events"]), (described.text, listed.text)

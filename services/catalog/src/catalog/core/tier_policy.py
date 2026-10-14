@@ -8,7 +8,7 @@ it named. Every decision is audited with the tier it was taken under.
 A write that adds data to a silver or gold table names the run that produced it and the inputs it read
 (:mod:`catalog.core.run_context`, ADR 0156 C2): a catalog door reads them from the request's Context and stamps them
 into its commit, a stock client writes them into its staged manifest. A door whose pylance call cannot carry
-transaction properties (``update``, ``add_columns``) is refused on those tiers, because the run it was given would
+transaction properties (``update``, ``add_columns``), or that attaches bytes written elsewhere (``register``), is refused on those tiers, because the run it was given would
 not reach the commit. Every named input, on any tier, needs ``can_read_data``: naming a table one cannot read as an
 input would launder it into the derived table's lineage. The hold behind ``published`` lands with LH-466. A staged
 manifest's content is judged by ``catalog.services.managed_versions`` (LH-471), which hands its run here.
@@ -45,9 +45,10 @@ DERIVED_TIERS: Final = frozenset({StorageRole.SILVER.value, StorageRole.GOLD.val
 #: The write doors that add data and stamp the request's run into their commit.
 STAMPING_DOORS: Final = frozenset({"create", "insert", "merge_insert"})
 
-#: The write doors that add data through a pylance call taking no transaction properties: the run cannot reach the
-#: commit (pylance 13.0.0: ``LanceDataset.update`` and ``add_columns`` have no such parameter).
-UNSTAMPED_DATA_DOORS: Final = frozenset({"update", "add_columns"})
+#: The write doors that land data and commit nothing the request's run can reach: ``update`` and ``add_columns`` call
+#: pylance methods taking no transaction properties (pylance 13.0.0), and ``register`` attaches bytes written elsewhere
+#: ([[LH-463]]).
+UNSTAMPABLE_DATA_DOORS: Final = frozenset({"update", "add_columns", "register"})
 
 #: Ask one rung, raising the spec's typed refusal on a denial. ``None`` when FGA is off.
 type RungCheck = Callable[["Rung"], Awaitable[None]]
@@ -163,10 +164,10 @@ async def judge(op: Write, *, caller: str | None, check: RungCheck | None, names
             f"rename refused: moving a {source or 'untiered'} table into a {tier} namespace places data no run produced; "
             f"write it there with the run that derives it"
         )
-    if op.op in UNSTAMPED_DATA_DOORS and tier in DERIVED_TIERS:
+    if op.op in UNSTAMPABLE_DATA_DOORS and tier in DERIVED_TIERS:
         raise UnsupportedOperationError(
-            f"{op.op} on a {tier} table is refused: its commit cannot carry the run and inputs a {tier} write names; "
-            "write the rows with merge_insert and the run in the request's Context"
+            f"{op.op} on a {tier} table is refused: it cannot carry the run and inputs a {tier} write names into a commit; "
+            "write the rows with create, insert or merge_insert and the run in the request's Context"
         )
     if op.op in STAMPING_DOORS:
         await judge_run(tier, op.run, op.input_rungs, check=check, names=f"the request's Context headers {RUN_ID_HEADER} and {INPUTS_HEADER}")
