@@ -37,8 +37,8 @@ lance = pytest.importorskip("lance")
 
 TABLE_ID = ["tier"]
 
-#: `stage` present, `lineage` and `source_rowid` absent — a table that CLAIMS to be governed and is not.
-PARTIAL = pa.schema([pa.field("id", pa.int64()), pa.field("stage", pa.string())])
+#: `source_rowid` at a width that is not Lance's stable row id: a column that cannot trace a row to its source.
+PARTIAL = pa.schema([pa.field("id", pa.int64()), pa.field("source_rowid", pa.int64())])
 CONFORMING = pa.schema(
     [
         pa.field("id", pa.int64()),
@@ -61,13 +61,13 @@ def test_gate_refuses_a_nonconforming_tier_exactly_as_publish_does(tmp_path: Pat
         tmp_path,
         PARTIAL,
         id=pa.array([1, 2], pa.int64()),
-        stage=pa.array(["silver", "silver"]),
+        source_rowid=pa.array([7, 8], pa.int64()),
     )
 
     # `InvalidInputError` — the spec's typed error, which `install_problem_handlers` renders as a 400
     # problem+json carrying code 4. Matching the CONCRETE type is the point: a service_kit exception
     # here would escape the spec envelope, which the catalog has an AST gate against.
-    with pytest.raises(InvalidInputError, match="conforming tier"):
+    with pytest.raises(InvalidInputError, match="source_rowid"):
         gate(uri, key_column="id", version=1)
 
 

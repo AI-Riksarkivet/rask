@@ -12,10 +12,10 @@ namespace. A writer who sets or nulls one of them re-points or erases another pa
 table, so every such write is refused, whichever route the request takes and whatever the create
 payload carries.
 
-THE PROVENANCE COLUMNS. A governed tier row is `{id, payload, stage, lineage, source_rowid}`
-(`medallion/schemas/tier.py`). `stage`, `lineage` and `source_rowid` are named by
-`service_kit.lakehouse.stage_stamp`, and every reader resolves them by that name, so they are protected
-by name wherever they appear. The row identity is protected by Lance's own declaration instead: any
+THE PROVENANCE COLUMN. A governed row needs no column (ADR 0156 C9): its run and inputs ride the commit
+([[LH-225]]), and `stage` and `lineage` are the writer's own. `source_rowid` is the one column the platform names
+(`service_kit.lakehouse.stage_stamp`), an opt-in that traces a row to the source row it descends from, and every
+reader resolves it by that name, so it is protected by name wherever it appears. The row identity is protected by Lance's own declaration instead: any
 field carrying `lance-schema:unenforced-primary-key`, and each of its ancestors, in any table
 (`lance_docs/file_format.md` § Unenforced Primary Key). Measured on pylance 12.0.0:
 
@@ -41,7 +41,7 @@ from typing import Final
 import pyarrow as pa
 from lance_namespace import InvalidInputError
 
-from service_kit.lakehouse.stage_stamp import LINEAGE_COLUMN, SOURCE_ROWID_COLUMN, STAGE_COLUMN
+from service_kit.lakehouse.stage_stamp import SOURCE_ROWID_COLUMN
 
 
 #: Schema-metadata namespaces only the platform writes. A key under either is refused at every write door.
@@ -53,8 +53,8 @@ PRIMARY_KEY_METADATA: Final = b"lance-schema:unenforced-primary-key"
 #: The values Lance reads as "this field is in the key" (`file_format.md`: `true`, `1` or `yes`, case-insensitive).
 _PRIMARY_KEY_TRUE: Final = frozenset({b"true", b"1", b"yes"})
 
-#: The tier's provenance columns, by the names `stage_stamp` writes and every reader resolves.
-PROVENANCE_COLUMNS: Final = frozenset({STAGE_COLUMN, LINEAGE_COLUMN, SOURCE_ROWID_COLUMN})
+#: The platform's provenance column, by the name `stage_stamp` writes and every reader resolves.
+PROVENANCE_COLUMNS: Final = frozenset({SOURCE_ROWID_COLUMN})
 
 
 def _text(key: str | bytes) -> str:

@@ -302,7 +302,7 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   schema metadata first. `description` is the one user-facing reserved key (the
   lakehouse renders it under the table name); everything else in that map is opaque user data.
 - **`drop_columns` / `alter_columns` refuse to drop, rename or re-type provenance** ([[LH-208]]): the
-  columns `stage`, `lineage`, `source_rowid` by name, and every field carrying
+  column `source_rowid` by name (`stage` and `lineage` are the writer's, ADR 0156 C9), and every field carrying
   `lance-schema:unenforced-primary-key` plus its ancestors, by metadata, in any table. Measured on pylance
   12.0.0, Lance itself accepts all of those (a re-type strips the key); it refuses only `nullable=True` on
   the key (mapped to 400 in `_column_op`) and changes to the key's field metadata.
@@ -533,9 +533,8 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   gate (`/management/v1/project/{id}/gate/*`) runs against the committed version and only a pass advances the
   `published` tag. ADR 0156 C1 makes that tag THE gate: readers of a governed tier read `@published`,
   approval moves it (`UpdateTableTag`), rejection restores main to it (`RestoreTable`), and moving it
-  notifies the project's watchers (LH-466, #586). The provenance columns `stage`, `lineage` and
-  `source_rowid` are reserved by name today; C9 drops the requirement for `stage` and `lineage` and makes
-  `source_rowid` an opt-in (LH-477, #603).
+  notifies the project's watchers (LH-466, #586). A governed row needs no column (C9, [[LH-477]]): `source_rowid`
+  is an opt-in the publish door holds to uint64 stable row ids, and `stage` and `lineage` are the writer's.
 
   **`register_table` is the door for bytes written outside the catalog's own doors.** It turns written
   bytes into a `table:` object, seeds ownership tuples, and every governed path (protection, trash,

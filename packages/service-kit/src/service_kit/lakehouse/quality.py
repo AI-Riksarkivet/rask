@@ -24,7 +24,7 @@ import pyarrow as pa
 from pydantic import BaseModel, model_validator
 
 from service_kit.lakehouse import blobs
-from service_kit.lakehouse.stage_stamp import LINEAGE_COLUMN, SOURCE_ROWID_COLUMN, STAGE_COLUMN
+from service_kit.lakehouse.stage_stamp import SOURCE_ROWID_COLUMN
 
 
 #: Assertion names — stable identifiers the ``dataQualityAssertions`` facet carries (and the gate keys on).
@@ -52,75 +52,29 @@ WARN: Final = "warn"
 #: refusal is auditable in the same list a caller already reads rather than arriving as a bare error.
 PROVENANCE: Final = "provenance_complete"
 
-#: The three columns that make a row traceable. Named here rather than in a service, because the rule
-#: is the PLATFORM's and a service must not be the authority on what governs it.
-_TIER_PROVENANCE_COLUMNS: frozenset[str] = frozenset({STAGE_COLUMN, LINEAGE_COLUMN, SOURCE_ROWID_COLUMN})
-
 
 def tier_contract_violations(schema: pa.Schema, *, has_stable_row_ids: bool | None = None) -> list[str]:
-    """Why this schema is not a conforming governed tier — empty when it is, or does not claim to be.
+    """Why this schema's `source_rowid` cannot name the row it descends from — empty when it can, or is absent.
 
-    A governed row carries `stage` (which tier), `lineage` (the run that produced it) and
-    `source_rowid` (the bronze row it descends from). Owner ruling D1, 2026-08-31: honest provenance is
-    MANDATORY, because the case it serves is impact analysis — one document is corrupted at ingest, and
-    "which rows downstream are contaminated?" must not answer confidently and wrongly.
-
-    OPT-IN BY CLAIM, and that is the whole reason this is safe to apply at a door every publish passes
-    through. A table carrying NONE of the three is not a governed tier — a registered external dataset,
-    a user's own table — and is left alone. A table carrying ANY of them is claiming to be one, and must
-    then carry all three, with the two types that have a CONSEQUENCE checked (`source_rowid`'s width and
-    `lineage`'s JSON extension — see below for why `stage` is not). That rule refuses exactly the shape that ships today
-    (`source_rowid` present, `stage` and `lineage` absent) without touching a plain table.
-
-    STRUCTURAL, not referential, and deliberately so: `publish` is handed a table id and a version and
-    does not know the parent table, so "does every value name a real parent row?" cannot be asked here
-    without new plumbing. It does not need to be — the referential half already runs in the stage job,
-    where both datasets are open. What the job CANNOT do is notice an absent column: it counts
-    parentless rows as `count_rows(filter="source_rowid IS NULL") if the column is in the schema else 0`,
-    so a table that drops the column reports zero and passes. Structure is the half that was missing.
+    A governed row needs no column (ADR 0156 C9): its run and inputs are the commit's transaction properties
+    ([[LH-225]]), and `stage` and `lineage` are the writer's own columns. `source_rowid` is the one column the
+    platform names, an opt-in a pipeline writes so impact analysis can trace a row to the bronze row it came
+    from; a table that carries it must be able to back it.
     """
-    names = set(schema.names)
-    claimed = names & _TIER_PROVENANCE_COLUMNS
-    if not claimed:
+    if SOURCE_ROWID_COLUMN not in schema.names:
         return []
-
-    problems = [f"missing {column!r}" for column in sorted(_TIER_PROVENANCE_COLUMNS - names)]
-
-    # A `source_rowid` of the wrong width is a DIFFERENT column wearing the right name, and it is the
-    # failure a reader is least likely to see: present, non-null, and passing every count-based check.
-    # It is uint64 because that is what Lance's own stable row id is.
-    if SOURCE_ROWID_COLUMN in names:
-        actual = schema.field(SOURCE_ROWID_COLUMN).type
-        if not pa.types.is_uint64(actual):
-            problems.append(f"{SOURCE_ROWID_COLUMN!r} is {actual}, not uint64 — the width Lance's stable row id uses")
-
-    # `lineage` IS TYPED, and the type is the whole reason the column is worth having. It is
-    # `pa.json_()` — the Arrow JSON extension Lance persists as JSONB — because that is what makes the
-    # cell queryable IN PLACE (`json_get_string` / `json_extract` in a filter) and indexable: a JSON
-    # scalar index over `lineage -> run_id` needs it, and lance 11 refuses one on anything else — *"A JSON index can only be created on a Binary or
-    # LargeBinary field"* (measured 2026-09-09, both types driven). A `pa.string()` column holding the
-    # same bytes is a DIFFERENT column wearing the right name: it reads back, it is never null, and the
-    # tier it belongs to can never carry that index.
-    #
-    # `stage` is deliberately NOT type-checked. Nothing indexes or json-parses it, so string vs
-    # large_string has no consequence to name, and a refusal with no consequence behind it trains a
-    # reader to route around the gate.
-    if LINEAGE_COLUMN in names:
-        actual = schema.field(LINEAGE_COLUMN).type
-        if actual != pa.json_():
-            problems.append(f"{LINEAGE_COLUMN!r} is {actual}, not {pa.json_()} — a JSON index can only be built on a JSON/binary column")
-
-    # THE DEEPER FAILURE THE COLUMNS CANNOT SHOW. `source_rowid` holds a Lance STABLE row id, and
-    # `enable_stable_row_ids` is CREATE-TIME ONLY — set later it is a silent no-op. So a dataset
-    # created without it carries a perfectly well-typed column of values that are not stable, and the
-    # estate measured the cost: after compaction the ids moved from `0..5` to `4294967296..`, silently
-    # naming rows that no longer exist. Every impact-analysis query over that tier answers confidently
-    # and wrongly, which is the outcome ruling D1 exists to prevent.
-    #
-    # `None` means the caller could not read the property (a schema-only check, or a backend that does
-    # not expose it) and is treated as "not asserted" rather than as a violation — refusing on an
-    # unreadable property would fail closed against callers who cannot answer, which is a different
-    # and worse failure than the one being prevented.
+    problems: list[str] = []
+    # A `source_rowid` of the wrong width is a DIFFERENT column wearing the right name, and it is the failure a
+    # reader is least likely to see: present, non-null, and passing every count-based check. It is uint64
+    # because that is what Lance's own stable row id is.
+    actual = schema.field(SOURCE_ROWID_COLUMN).type
+    if not pa.types.is_uint64(actual):
+        problems.append(f"{SOURCE_ROWID_COLUMN!r} is {actual}, not uint64 — the width Lance's stable row id uses")
+    # `source_rowid` holds a Lance STABLE row id, and `enable_stable_row_ids` is CREATE-TIME ONLY — set later it is
+    # a silent no-op. A dataset created without it carries a well-typed column of values that are not stable:
+    # measured on the estate, after compaction the ids moved from `0..5` to `4294967296..`, naming rows that no
+    # longer exist. `None` means the caller could not read the property and is not a violation: refusing on an
+    # unreadable property would fail closed against callers who cannot answer.
     if has_stable_row_ids is False:
         problems.append("the dataset was created without stable row ids, so `source_rowid` can never name a row that survives compaction")
     return problems

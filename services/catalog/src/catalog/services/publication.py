@@ -187,28 +187,18 @@ def _open_for_contract(uri: str, storage_options: dict[str, str], version: int) 
 
 
 def refuse_a_tier_without_provenance(schema: Any, *, version: int, has_stable_row_ids: bool | None = None) -> None:
-    """Raise 400 when a table CLAIMS to be a governed tier and does not carry the provenance to be one.
+    """Raise 400 when a table carries a `source_rowid` that cannot name the row it descends from.
 
-    Owner ruling D1, 2026-08-31: honest `source_rowid` provenance is mandatory. The case that decided
-    it is impact analysis — one document is corrupted at ingest, and "which rows downstream are
-    contaminated, so I re-run only those?" must not answer confidently and wrongly. A fabricated
-    parent id is worse than an absent one, because it is queryable.
-
-    AT THIS DOOR, because it is the one every publisher passes, and because a writer-side check that
-    counts parentless rows only `if SOURCE_ROWID_COLUMN in out.schema.names` reports zero for a table that
-    drops the column, and passes the check that exists to catch it.
-
-    Refuses on CLAIM, never on absence: a table carrying none of the three columns is not a governed
-    tier and is untouched. `tier_contract_violations` owns that rule; this function owns only the
+    At this door because every publisher passes it. A table without the column is untouched: a governed row needs
+    no column (ADR 0156 C9), and `quality.tier_contract_violations` owns the rule; this function owns only the
     door's answer to it.
     """
     problems = tier_contract_violations(schema, has_stable_row_ids=has_stable_row_ids)
     if not problems:
         return
     raise InvalidInputError(
-        f"version {version} carries some governed-tier columns but is not a conforming tier: {'; '.join(problems)}. "
-        "A tier that carries any of `stage`, `lineage` or `source_rowid` is claiming to be governed and must carry all "
-        "three, so a row can always be traced to the source row it came from."
+        f"version {version} carries `source_rowid` that cannot trace a row to its source: {'; '.join(problems)}. "
+        "Write it as uint64 stable row ids of the source table, or leave the column out."
     )
 
 
