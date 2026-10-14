@@ -75,3 +75,4 @@ in `CLAUDE.md`. Add a line when a trap costs a session, and delete one when the 
 - **A scaled-down webhook still intercepts.** scaling an operator to 0 leaves its failurePolicy=Fail webhook; blocked every Deployment write for ~1 min (XC-126).
 - **A Dagger lane uploads the whole host tree.** `+defaultPath="/"` sends ~15 GB here and looks hung for 30+ min; run lanes with --src a clean `git ls-files` copy.
 - **Build the local loop before the CI round.** 2026-10-12: seven blind 30-40 min CI rounds; a local Dagger k3s found the cause in minutes; reproduce first.
+- **The node runs out of inotify before memory.** 2026-10-14: root held 127 of 128 instances (one per container, the containerd shim OOM watch); the Dagger engine dnsmasq exited 5 and builds died on DNS; `make k3s-install` sets 8192.
