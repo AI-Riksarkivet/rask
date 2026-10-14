@@ -6,10 +6,11 @@
 # -- The StatefulSet and Service name, what rask's `lance.minioHost` dials for release `rask`; the claims are named
 # after it, so it is also what keeps the bytes.
 name: rask-minio
-# rask's first-party image (`.docker/minio.dockerfile`); rask's hooks run its `mc` from the same image. On the dev estate
-# values-live-pins.yaml (scripts/k3s-pins.sh) names the tag the store runs.
+# rask's first-party image (`.docker/minio.dockerfile`); rask's hooks run its `mc` from the same image. A bare name is a
+# side-loaded image on the node (make k3s-import); an upgrade layers values-live-pins.yaml (scripts/k3s-pins.sh), the tag
+# the store runs.
 image:
-  repository: localhost:5000/minio
+  repository: minio
   tag: dev
   pullPolicy: IfNotPresent
 servers: 1

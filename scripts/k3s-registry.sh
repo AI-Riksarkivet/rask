@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # One-time host setup for the local image path: stand up a local image registry and
 # point k3s's containerd at it, so Dagger can PUSH images (fast, cached) instead
-# of the slow `docker save | k3s ctr images import -` side-load that `make k3s-build`
-# uses. Safe to re-run (idempotent). Requires sudo and restarts k3s once.
+# of the tarball side-load `make k3s-build` + `make k3s-import` do. Safe to re-run (idempotent). Requires sudo and restarts k3s once.
 set -euo pipefail
 
 # THE CLUSTER THIS SCRIPT MEANS ([[XC-057]]). This one targets the deployed estate on purpose, and

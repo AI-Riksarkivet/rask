@@ -11,10 +11,11 @@
 #   scripts/dagger-image.sh --zone lakehouse    --tag web-lakehouse:dev
 #   scripts/dagger-image.sh --runner htr        --tag ray-htr:dev
 #   scripts/dagger-image.sh --name cnpg-age-ext --tag cnpg-age:dev --arg AGE_REF=v1.5.0
+#   scripts/dagger-image.sh --name gateway      --out build/k3s-images/gateway.tar   (no docker: what k3s-build does)
 #
 # DELIVERY: --load (default) exports an OCI tarball and `docker load`s it, which reproduces exactly what
-# `docker buildx build --load` used to do, so `make k3s-import` and the compose stacks keep working
-# unchanged. Measured on the gateway image: the export dominates at ~78 s (it is the BUILD), and the
+# `docker buildx build --load` used to do, so the compose stacks and the kind lane keep working unchanged.
+# --out stops at the tarball, which `make k3s-import` loads into k3s's containerd with no docker daemon. Measured on the gateway image: the export dominates at ~78 s (it is the BUILD), and the
 # `docker load` adds ~5 s. --push publishes straight to a registry instead, skipping the daemon.
 #
 # THE ENGINE, AND WHAT EACH MODE ACTUALLY NEEDS OF IT. Dagger always speaks HTTPS to a registry and
@@ -37,7 +38,7 @@
 # nothing and never discards the cache.
 set -euo pipefail
 
-NAME="" ZONE="" RUNNER="" TAG="" MODE="load" ADDRESS=""
+NAME="" ZONE="" RUNNER="" TAG="" MODE="load" ADDRESS="" OUT=""
 EXTRA_ARGS=()
 
 while [[ $# -gt 0 ]]; do
@@ -48,6 +49,7 @@ while [[ $# -gt 0 ]]; do
     --tag)     TAG="$2"; shift 2 ;;
     --arg)     EXTRA_ARGS+=(--build-arg "$2"); shift 2 ;;
     --push)    MODE="push"; ADDRESS="$2"; shift 2 ;;
+    --out)     MODE="out"; OUT="$2"; shift 2 ;;
     *) echo "!! unknown flag: $1" >&2; exit 2 ;;
   esac
 done
@@ -61,7 +63,8 @@ fi
 
 command -v dagger >/dev/null 2>&1 || { echo "!! dagger CLI not on PATH — https://docs.dagger.io/install" >&2; exit 1; }
 
-# Respect an operator's choice; otherwise prefer the repo's configured engine when it is up.
+# Respect an operator's choice; otherwise prefer the repo's configured engine when it is up. --out is held to --load's
+# rule: it writes a file instead of loading into docker, but it builds on the same engine and must not split its cache.
 if [[ -z "${_EXPERIMENTAL_DAGGER_RUNNER_HOST:-}" ]]; then
   engine="${DAGGER_ENGINE_NAME:-dagger-engine-rask}"
   state="${DAGGER_ENGINE_STATE:-dagger-engine-rask-state}"
@@ -100,6 +103,14 @@ fn+=(--build-date="$BUILD_DATE" --vcs-ref="$VCS_REF" --version="$VERSION")
 if [[ "$MODE" == "push" ]]; then
   echo ">> dagger: ${ZONE:-$NAME} -> $ADDRESS"
   exec dagger call "${fn[@]}" publish --address="$ADDRESS"
+fi
+
+# --out: the OCI tarball at the caller's path and nothing else; no image is loaded into docker ([[XC-152]]).
+# `make k3s-import` loads it into k3s's containerd under the name the chart expects.
+if [[ "$MODE" == "out" ]]; then
+  mkdir -p "$(dirname "$OUT")"
+  echo ">> dagger: ${ZONE:-${RUNNER:-$NAME}} -> $OUT"
+  exec dagger call "${fn[@]}" export --path="$OUT"
 fi
 
 tar="$(mktemp -d)/image.tar"

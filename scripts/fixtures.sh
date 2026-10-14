@@ -157,7 +157,12 @@ for item in items(sys.stdin.read()):
     # --force-conflicts too: an adopted object can carry fields its controller manages at runtime (Dapr's operator
     # owns its CRDs' conversion-webhook namespace), and Helm 4's server-side apply refuses those as conflicts. The
     # new owner's controller sets them again once it runs.
-    OWN=(--take-ownership --force-conflicts)
+    # Helm 3 applies client-side, where a field another manager set is no conflict and the flag does not exist.
+    OWN=(--take-ownership)
+    major="$("$HELM" version --template '{{.Version}}')" || { echo "!! helm version failed" >&2; exit 2; }
+    major="${major#v}"; major="${major%%.*}"
+    [[ "$major" =~ ^[0-9]+$ ]] || { echo "!! cannot read helm's major version from '$major'" >&2; exit 2; }
+    [ "$major" -ge 4 ] && OWN+=(--force-conflicts)
   fi
 
   echo ">> fixture $name: ${SOURCE[*]} as release $RELEASE in $NAMESPACE"

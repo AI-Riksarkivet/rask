@@ -11,8 +11,9 @@ otel:
   environment: rask
 rayVersion: "2.58.0"
 image:
-  # The head image (.docker/ray-cluster.dockerfile), pushed to the dev registry.
-  repository: localhost:5000/ray-cluster
+  # The head image (.docker/ray-cluster.dockerfile). A bare name is a side-loaded image on the node (make k3s-import);
+  # a registry path is pulled.
+  repository: ray-cluster
   tag: dev
   pullPolicy: IfNotPresent
 # GPUs the head advertises. Above 0 the head asks for nvidia.com/gpu and runs under runtimeClassName, which needs a
