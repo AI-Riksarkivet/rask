@@ -34,7 +34,7 @@ from typing import Any, Literal
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from lance_namespace import DescribeTableResponse
+from lance_namespace import DescribeNamespaceResponse, DescribeTableResponse
 
 from catalog.api.dependencies import get_namespace, get_settings
 from catalog.api.v1.endpoints import tables
@@ -110,6 +110,10 @@ class _Namespace:
 
     def describe_table(self, request: Any) -> DescribeTableResponse:
         return DescribeTableResponse(location="s3://lakehouse/abc12345_ns$t")
+
+    def describe_namespace(self, request: Any) -> DescribeNamespaceResponse:
+        """The namespace declares no tier; the tier judge reads it before a write-tier vend."""
+        return DescribeNamespaceResponse(properties={})
 
 
 @pytest.fixture

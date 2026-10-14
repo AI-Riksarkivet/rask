@@ -25,9 +25,9 @@ named table. Fail-closed twice over: an unwired client raises 503 here, and
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from functools import lru_cache
-from typing import Final
+from typing import Final, Literal
 
 from fastapi import Request
 from fastapi.concurrency import run_in_threadpool
@@ -894,6 +894,47 @@ async def _judge(request: Request, settings: Settings, token: Principal | None, 
     await tier_policy.judge(write, caller=token.sub if token is not None else None, check=check, namespace=namespace)
 
 
+async def spec_vend_tier(
+    settings: Settings, token: Principal | None, injected: OpenFgaClient | None, ns: LanceNamespace, segments: Sequence[str], *, door: str
+) -> Literal["read", "write"] | None:
+    """The highest tier a spec door (``describe``, ``declare``) vends the caller on table ``segments`` (ADR 0156 C3).
+
+    ``can_write_data`` opens the write tier, and that is a write, so the tier judge decides it and audits the
+    tier it was taken under, as it does for the management vend door; ``ns`` is the connection the door already
+    resolved for the table, which is the one its namespace path's tier is read through. ``can_read_data`` opens
+    the read tier. Neither, no credential: the door still answers, because describing a table is a metadata
+    read. Maintain is never vended here; it is the maintenance identity's (LH-473).
+
+    The rungs are probed with ``fga.check``, which writes no DENY: a reader's describe asking whether it may also
+    write is not an access attempt. The rung that decides the tier is audited ALLOW, as every authorization
+    decision is; whether a credential is then minted is the door's ``vend_credentials`` record. With FGA off
+    every rung allows, so the write tier is vended, as the management door vends it.
+
+    Raises:
+        ServiceUnavailableError: FGA is on and unwired, or OpenFGA failed: fail closed, as every gate here does.
+        UnauthenticatedError: FGA is on and nobody is signed in.
+    """
+    obj = _object("table", list(segments), settings.delimiter)
+    writing = VEND_TIER_RUNGS["write"]
+    if settings.fga_enabled:
+        client = require_wired(injected)
+        if token is None:
+            raise UnauthenticatedError("authentication required")
+        if not await fga.check(client, user=token.sub, relation=writing, obj=obj):
+            if await fga.check(client, user=token.sub, relation="can_read_data", obj=obj):
+                audit("can_read_data", ALLOW, subject=token.sub, resource=obj)
+                return "read"
+            return None
+        audit(writing, ALLOW, subject=token.sub, resource=obj)
+
+    async def namespace() -> LanceNamespace:
+        return ns
+
+    write = tier_policy.Write(op=door, obj=obj, rung=tier_policy.Rung(relation=writing, obj=obj), table=tuple(segments))
+    await tier_policy.judge(write, caller=token.sub if token is not None else None, check=None, namespace=namespace)
+    return "write"
+
+
 async def authorize(request: Request, settings: SettingsDep, token: CurrentToken, injected: FgaClientDep) -> None:
     """Enforce the caller's permission for this route: the tier judge decides every write door, with FGA on
     or off, and OpenFGA every other door (a no-op when FGA is off)."""
@@ -1545,21 +1586,39 @@ async def seed_ownership_or_compensate(
         )
     except Exception:
         if undo is not None:
-            obj = fga.canonical_object_id(segments, delimiter=settings.delimiter)
-            try:
-                await revoke_ownership(client, settings, resource=resource, segments=segments, token=token)
-            except Exception as revoke_exc:
-                # Expected when OpenFGA is the thing that is down. Logged, never fatal — the undo below
-                # is what actually makes the retry converge, and it must not be skipped for this.
-                log.warning("compensation_revoke_failed", extra={"object": obj, "resource": resource, "error": str(revoke_exc)})
-            try:
-                await undo()
-                log.warning("create_compensated", extra={"object": obj, "resource": resource, "reason": "grant_failed"})
-            except Exception as undo_exc:
-                # Both halves failed: the object is stranded and only the structural reconcile can
-                # reach it. Loud on purpose — this is the state an operator has to be told about.
-                log.error("create_compensation_failed", extra={"object": obj, "resource": resource, "error": str(undo_exc)})
+            await compensate_create(client, settings, token, resource=resource, segments=segments, undo=undo, reason="grant_failed")
         raise
+
+
+async def compensate_create(
+    client: OpenFgaClient | None,
+    settings: Settings,
+    token: Principal | None,
+    *,
+    resource: str,
+    segments: list[str],
+    undo: Callable[[], Awaitable[None]],
+    reason: str,
+) -> None:
+    """Take back a create whose request is about to fail: revoke the ownership it seeded, then run ``undo``.
+
+    The two steps are independent and best effort, revoke first, as :func:`seed_ownership_or_compensate` explains;
+    nothing here raises, because the caller re-raises the error that made it compensate.
+    """
+    obj = fga.canonical_object_id(segments, delimiter=settings.delimiter)
+    try:
+        await revoke_ownership(client, settings, resource=resource, segments=segments, token=token)
+    except Exception as revoke_exc:
+        # Expected when OpenFGA is the thing that is down. Logged, never fatal — the undo below
+        # is what actually makes the retry converge, and it must not be skipped for this.
+        log.warning("compensation_revoke_failed", extra={"object": obj, "resource": resource, "error": str(revoke_exc)})
+    try:
+        await undo()
+        log.warning("create_compensated", extra={"object": obj, "resource": resource, "reason": reason})
+    except Exception as undo_exc:
+        # Both halves failed: the object is stranded and only the structural reconcile can
+        # reach it. Loud on purpose — this is the state an operator has to be told about.
+        log.error("create_compensation_failed", extra={"object": obj, "resource": resource, "error": str(undo_exc)})
 
 
 async def require_can_drop_table(

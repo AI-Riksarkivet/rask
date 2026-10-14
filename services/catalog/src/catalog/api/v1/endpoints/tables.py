@@ -25,9 +25,11 @@ from lance_namespace import (
     InvalidInputError,
     InvalidTableStateError,
     LanceNamespace,
+    LanceNamespaceError,
     ListNamespacesRequest,
     ListTablesRequest,
     ListTablesResponse,
+    PermissionDeniedError,
     RegisterTableRequest,
     RegisterTableResponse,
     RenameTableRequest,
@@ -38,6 +40,7 @@ from lance_namespace import (
     TableExistsRequest,
     TableNotFoundError,
 )
+from openfga_sdk import OpenFgaClient
 
 from catalog.api import fga_deps, lineage_deps
 from catalog.api import idempotency as idem
@@ -54,8 +57,9 @@ from catalog.api.dependencies import (
 )
 from catalog.api.pagination import paginate
 from catalog.api.rask_params import RaskFlag
-from catalog.api.security import CurrentToken
+from catalog.api.security import CurrentToken, Principal, RawBearerToken
 from catalog.core.base_judge import BaseJudge, GovernedStorage
+from catalog.core.config import Settings
 from catalog.core.formats import reject_unsupported_properties
 from catalog.core.identifiers import MAX_NAMESPACE_DEPTH, parse_identifier, reconcile_body_id, require_safe_segments
 from catalog.core.lineage_emit import (
@@ -69,11 +73,12 @@ from catalog.core.lineage_emit import (
 )
 from catalog.core.modes import RegisterMode
 from catalog.core.namespace import judged_native_version, open_dataset_unchecked, registered_dataset_facts, warn_if_mixed_file_versions
-from catalog.core.vending import dataset_facts, require_vendable_bases, unsanctioned_bases
+from catalog.core.vending import CredentialVendor, ModeBVendor, Tier, dataset_facts, require_vendable_bases, unsanctioned_bases, vend_or_refuse
 from catalog.schemas import ProtectionResponse, SetProtectionRequest, TrashEntry
 from catalog.services import dataplane, native, table_bases, table_claims, warehouses
 from service_kit.control_emit import emit_control
 from service_kit.governed import fga
+from service_kit.governed.audit import SUCCESS, audit
 from service_kit.lakehouse import base_registry, location_claims, maintenance_policies, protection, trash
 from service_kit.lakehouse.ns_errors import PartiallyApplied
 
@@ -235,6 +240,101 @@ async def list_all_tables(
     return response
 
 
+def _vendable_bases(location: str, settings: Settings, so: dict[str, str]) -> tuple[str, ...] | None:
+    """The bases a credential for the table at ``location`` grants, or ``None`` where only the catalog may read it.
+
+    ``None`` is the management vend door's ``server_mediated``, off the same read ([[LH-057]]):
+
+    * a classified column cannot be excluded from an object-store grant, because Lance's field-to-file mapping
+      is write-order dependent ([[LH-058]], `credentials.py`);
+    * a base under its own credential is read only through the catalog ([[LH-273]]);
+    * a sanctioned base the session policy cannot address is reachable only with the catalog's root credential.
+
+    Raises:
+        InvalidTableStateError: A base the catalog did not sanction, refused rather than read through ([[LH-279]]).
+    """
+    facts = dataset_facts(location, so)
+    bases = require_vendable_bases(location, facts, BaseJudge.from_settings(settings))
+    if facts.classified or facts.own_credential or unsanctioned_bases(location, bases, settings.multibase_data_base_list):
+        return None
+    return bases
+
+
+def _mint(
+    location: str, tier: Tier, bases: tuple[str, ...], settings: Settings, vendor: CredentialVendor, web_identity_token: str | None
+) -> dict[str, str] | None:
+    """The ``storage_options`` the vendor mints for ``location`` at ``tier``, with the expiry the spec reads.
+
+    THE EXPIRY GOES INSIDE ``storage_options``, where the spec puts it and the only place a stock client looks
+    (``lance_docs/ns_catalog/spec.yaml`` § DescribeTableResponse: "If the vended credentials are temporary, the
+    ``expires_at_millis`` key ..."). Without it a temporary credential looks permanent, and the client discovers
+    the TTL by failing at the 900-second mark instead of refreshing.
+    """
+    creds = vend_or_refuse(vendor, vending_mode=settings.vending_mode, table_location=location, tier=tier, web_identity_token=web_identity_token, bases=bases)
+    if creds is None:
+        return None
+    options = dict(creds.storage_options)
+    if creds.expires_at_millis is not None:
+        options["expires_at_millis"] = str(creds.expires_at_millis)
+    return options
+
+
+async def _vend_on_spec_door(
+    ns: LanceNamespace,
+    *,
+    door: str,
+    segments: list[str],
+    location: str,
+    settings: Settings,
+    so: dict[str, str],
+    vendor: CredentialVendor,
+    token: Principal | None,
+    client: OpenFgaClient | None,
+    web_identity_token: str | None,
+    asked: bool,
+) -> dict[str, str] | None:
+    """Vend the highest tier FGA grants the caller on ``segments`` (ADR 0156 C3), and record the issuance (#41).
+
+    A stock client opening a table through the namespace signs with what the spec door returns, and one that
+    gets nothing signs with whatever its environment holds; vending here is what keeps it off an ambient key.
+
+    The order is the cost and the record: whether the table is directly readable at all is settled first (a base
+    nothing sanctioned is refused there, whatever the vendor), so a server-mediated table, or a deployment that
+    vends nothing, asks FGA nothing. The tier is
+    :func:`fga_deps.spec_vend_tier`'s. Only then is a credential minted, and only a mint writes the
+    ``vend_credentials`` issuance record.
+
+    ``asked`` is ``vend_credentials`` set true. Left unset, the credential is the server's offer: a refusal or a
+    failed exchange leaves the answer without one and is logged, because a metadata read, the catalog's most
+    called door, must not fail on the object store's STS. Asked for, the refusal is the answer.
+
+    Raises:
+        PermissionDeniedError: The caller asked and FGA grants it no rung that opens a tier.
+        LanceNamespaceError: The caller asked and the vend was refused or failed (409, 401, 503).
+    """
+    try:
+        bases = await run_in_threadpool(_vendable_bases, location, settings, so)
+        if bases is None or isinstance(vendor, ModeBVendor):
+            return None
+        tier = await fga_deps.spec_vend_tier(settings, token, client, ns, segments, door=door)
+        if tier is None:
+            if asked:
+                raise PermissionDeniedError(
+                    f"can_read_data required on table:{fga.canonical_object_id(segments, delimiter=settings.delimiter)} to vend credentials"
+                )
+            return None
+        options = await run_in_threadpool(_mint, location, tier, bases, settings, vendor, web_identity_token)
+    except LanceNamespaceError:
+        if asked:
+            raise
+        log.warning("spec_vend_skipped", extra={"door": door, "table": "/".join(segments)}, exc_info=True)
+        return None
+    if options is not None:
+        resource = f"table:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}"
+        audit("vend_credentials", SUCCESS, subject=token.sub if token is not None else None, resource=resource, tier=tier, door=door)
+    return options
+
+
 # `paginate` lives in `catalog.api.pagination` (it moved when the model registry needed the same
 # cursor) — two keyset implementations in one service is two things to keep in step.
 @router.post("/{id}/declare", response_model_exclude_none=True)
@@ -242,15 +342,22 @@ async def declare_table(
     id: str,
     ns: NamespaceDep,
     settings: SettingsDep,
+    so: StorageOptionsDep,
+    vendor: VendorDep,
     token: CurrentToken,
     client: FgaClientDep,
     emitter: LineageEmitterDep,
     control: ControlEmitterDep,
+    web_identity_token: RawBearerToken,
     body: DeclareTableRequest | None = None,
     authorization: Annotated[str | None, Header()] = None,
 ) -> DeclareTableResponse:
     """Declare a new (empty) table at ``id`` via ``declare_table``, then seed the caller's FGA ownership
-    and emit a versionless DECLARE_TABLE marker (the table's first provenance — who reserved it + where)."""
+    and emit a versionless DECLARE_TABLE marker (the table's first provenance — who reserved it + where).
+
+    The response carries the credential the declarer writes the table with, the highest tier FGA grants
+    (:func:`_vend_on_spec_door`), unless the request sets ``vend_credentials`` false.
+    """
     # LANCE-ONLY (2026-08-15 ruling). This door takes `properties` through its spec request
     # model and never checked it, so a non-Lance format could be selected here while the create
     # door rejected it. Before anything is reserved.
@@ -275,6 +382,27 @@ async def declare_table(
     # failed seed left a declared-only table that its declarer could not see, could not drop, and could
     # not re-declare (native `AlreadyExists`), reserving the id against everyone, permanently (F3).
     await fga_deps.seed_ownership_or_compensate(client, settings, token, resource="table", segments=segments, undo=_undo_declare, created=True)
+    # The credential is part of the answer, so a vend that fails takes the declaration back with it, before
+    # anything announces the table: a declared, owned table whose declarer was told it failed is one a retry
+    # can only meet as AlreadyExists.
+    if req.vend_credentials is not False and response.location:
+        try:
+            response.storage_options = await _vend_on_spec_door(
+                ns,
+                door="declare",
+                segments=segments,
+                location=response.location,
+                settings=settings,
+                so=so,
+                vendor=vendor,
+                token=token,
+                client=client,
+                web_identity_token=web_identity_token,
+                asked=req.vend_credentials is True,
+            )
+        except Exception:
+            await fga_deps.compensate_create(client, settings, token, resource="table", segments=segments, undo=_undo_declare, reason="vend_failed")
+            raise
     # Versionless (no data yet): records who declared it + the reserved location, and keys the CREATED edge
     # (declare_table ∈ lineage _CREATE_OPS). Reconcile fills the real version once data lands at the URI.
     await emit_write_event(
@@ -328,12 +456,15 @@ def _refuse_a_branch_describe_cannot_honour(branch: str | None) -> None:
 
 
 @router.post("/{id}/describe", response_model_exclude_none=True)
-def describe_table(
+async def describe_table(
     id: str,
     ns: NamespaceDep,
     settings: SettingsDep,
     so: StorageOptionsDep,
     vendor: VendorDep,
+    token: CurrentToken,
+    client: FgaClientDep,
+    web_identity_token: RawBearerToken,
     body: DescribeTableRequest | None = None,
     with_table_uri: bool | None = None,
     load_detailed_metadata: bool | None = None,
@@ -366,19 +497,11 @@ def describe_table(
     ``branch`` (body-only) is REFUSED unless it names main — see the site below. ``identity`` and ``context``
     are ignored: the caller is the verified bearer token, not a field of the request body.
 
-    ``vend_credentials`` (spec 0.9) returns short-lived, table-scoped ``storage_options`` in the response —
-    the SPEC'S OWN way for a client to get credentials. A bespoke ``POST /{id}/credentials`` alone would leave a
-    GENERIC Lance client with no credentials and no way to discover our endpoint: interop-breaking, and the
-    one confirmed reinvention in the 2026-07-14 audit. ``/credentials`` remains as the richer superset (tiers,
-    web-identity exchange).
-
-    READ TIER ONLY, deliberately. The router already gates describe on the reader rung; vending a WRITE
-    credential from a read-authorized call would be a privilege escalation. A write credential still requires
-    ``POST /{id}/credentials?tier=write``, which separately checks ``can_write_data``.
-
-    Multi-base tables fall back to server-mediated (no storage_options): the STS session policy is scoped to
-    the table's PRIMARY root bucket, so a vended client could not reach fragments living in a registered data
-    base — the same #3-B ⊥ #2 conflict the credentials endpoint already handles.
+    CREDENTIALS COME WITH THE ANSWER unless the caller sets ``vend_credentials`` false: unset, the spec lets
+    the server decide (``lance_docs/ns_catalog/spec.yaml`` § DescribeTableRequest), and a stock client opening
+    through the namespace that gets none signs with whatever its environment holds. The tier is the highest FGA
+    grants the caller (:func:`_vend_on_spec_door`, ADR 0156 C3): the router admitted a metadata reader, and a
+    write credential is decided by the tier judge like every write.
     """
     segments = parse_identifier(id, settings.delimiter)
     if body is not None:
@@ -408,18 +531,50 @@ def describe_table(
     # answered for MAIN with a 200 — including for a branch that had never been created (verified live
     # 2026-08-31). A refusal that covers one of two channels is why this door read as settled.
     _refuse_a_branch_describe_cannot_honour(branch)
-    if tag is not None:
-        if version is not None:
-            raise InvalidInputError("`tag` cannot be used together with `version` (spec 0.9)")
-        resolved = dataplane.get_tag_version(ns, so, GetTableTagVersionRequest(id=segments, tag=tag))
-        version = resolved.version
-    req = DescribeTableRequest(
-        id=segments,
+    if tag is not None and version is not None:
+        raise InvalidInputError("`tag` cannot be used together with `version` (spec 0.9)")
+    response = await run_in_threadpool(
+        _describe,
+        ns,
+        so,
+        segments,
         with_table_uri=with_table_uri,
         load_detailed_metadata=load_detailed_metadata,
         check_declared=check_declared,
         version=version,
+        tag=tag,
     )
+    if vend_credentials is not False and response.location:
+        response.storage_options = await _vend_on_spec_door(
+            ns,
+            door="describe",
+            segments=segments,
+            location=response.location,
+            settings=settings,
+            so=so,
+            vendor=vendor,
+            token=token,
+            client=client,
+            web_identity_token=web_identity_token,
+            asked=vend_credentials is True,
+        )
+    return response
+
+
+def _describe(
+    ns: LanceNamespace,
+    so: dict[str, str],
+    segments: list[str],
+    *,
+    with_table_uri: bool | None,
+    load_detailed_metadata: bool | None,
+    check_declared: bool | None,
+    version: int | None,
+    tag: str | None,
+) -> DescribeTableResponse:
+    """The blocking half of :func:`describe_table`: resolve the pin, describe, and fill the metadata."""
+    if tag is not None:
+        version = dataplane.get_tag_version(ns, so, GetTableTagVersionRequest(id=segments, tag=tag)).version
     if version is not None:
         # A VERSION THAT DOES NOT EXIST MUST NOT DESCRIBE THE ONE THAT DOES. `describe_table` answers off
         # the namespace manifest and does not resolve the pin, so `?version=9999` on a two-version table
@@ -428,8 +583,10 @@ def describe_table(
         # mints the spec's own error 11 `TableVersionNotFound`; the open runs ONLY when a version was
         # named, so the unpinned describe every client makes is untouched.
         open_dataset_unchecked(ns, so, segments, version=version)
+    req = DescribeTableRequest(
+        id=segments, with_table_uri=with_table_uri, load_detailed_metadata=load_detailed_metadata, check_declared=check_declared, version=version
+    )
     response: DescribeTableResponse = native.call(ns, "describe_table", req)
-
     # pylance 8.0.0 leaves `metadata` empty even with load_detailed_metadata — so the #74 Table Properties
     # UI could write a property but never read it back (browser-driven find 2026-07-21). Fill it from the
     # dataset's schema metadata (best-effort: a read failure must never break describe).
@@ -440,39 +597,6 @@ def describe_table(
                 response.metadata = schema_meta
         except Exception:
             log.warning("describe_schema_metadata_read_failed", extra={"table": "/".join(segments)})
-
-    if vend_credentials and response.location:
-        # THE SAME QUESTION THE VEND DOOR ASKS, off the same read ([[LH-057]]). This door fell back on
-        # "does any fragment live in a base", which was the pre-union premise, and then vended with NO
-        # `bases=` at all — so every multi-base table that passed the guard got a credential scoped to
-        # less than the table is, which is § H12's shortfall on the door nobody re-checked.
-        facts = dataset_facts(response.location, so)
-        # [[LH-279]] The vend door's own refusal, off the same read: a base the catalog did not sanction
-        # answers 409 rather than a credential that would read through it.
-        bases = require_vendable_bases(response.location, facts, BaseJudge.from_settings(settings))
-        # [[LH-058]] THE SECOND VENDING HOP, and it has to ask the same question. This door vends too, so
-        # gating only `POST /credentials` would leave a classified table's raw bytes reachable through
-        # `describe` — the same shortfall this block's own comment describes for the bases, one door over.
-        # See `credentials.py` for why a classified column makes a table unvendable rather than narrowly
-        # vendable: the field-to-file mapping is write-order dependent, so no policy can exclude a column.
-        if facts.classified:
-            return response  # a classified column cannot be excluded from an object-store grant — server-mediated only
-        if facts.own_credential:
-            return response  # [[LH-273]] a base under its own credential is read only through the catalog — server-mediated only
-        if unsanctioned_bases(response.location, bases, settings.multibase_data_base_list):
-            return response  # a sanctioned base the session policy cannot address — only the catalog's root creds reach it
-        creds = vendor.vend(table_location=response.location, tier="read", bases=bases)
-        if creds is not None:
-            # THE EXPIRY GOES INSIDE `storage_options`, which is where the spec puts it and the only
-            # place a stock client looks: `lance_docs/ns_catalog/spec.yaml:2878-2880` — *"If the vended
-            # credentials are temporary, the `expires_at_millis` key ..."*. `VendedCredentials` carries
-            # it as a sibling FIELD, which is right for rask's own callers and invisible to a client
-            # that refreshes on the key alone. Without it a temporary credential looks permanent, and
-            # the client discovers the TTL by failing at the 900-second mark instead of refreshing.
-            options = dict(creds.storage_options)
-            if creds.expires_at_millis is not None:
-                options["expires_at_millis"] = str(creds.expires_at_millis)
-            response.storage_options = options
     return response
 
 

@@ -1,24 +1,23 @@
-"""[[LH-202]] A vended credential reaches only the files its rung may change, and a writer still lands rows.
+"""[[LH-202]], [[LH-229]] A vended credential reaches only the files its rung may change, and a writer still lands rows.
 
 THE LAYOUT THE FORMAT FIXES DECIDES THE GRANT. `lance_docs/file_format.md` places a table's files in
 named directories: `data/` (data files, and blob sidecars under `data/<stem>/`), `_versions/` (the
 manifests, so every commit), `_transactions/`, `_deletions/`, `_indices/`, `_refs/` (branch and tag
-pointers), `tree/<branch>/` (each branch's own directories) and `_mem_wal/`. A `can_write_data` holder
-appends: its client writes data files and the catalog's `/commit` folds them into a version under the
-catalog's own credential. So the writer tier is read on the table plus `PutObject` on `data/`, and nothing that commits, deletes or moves a ref. Whole-prefix write and delete
-belong to `can_maintain`, whose compaction rewrites files and whose cleanup deletes versions.
+pointers), `tree/<branch>/` (each branch's own directories) and `_mem_wal/`.
 
-MEASURED ON PYLANCE 12.0.0 before choosing the allow-list (`LANCE_LOG=lance::events::file_audit` and a
-listing before and after): `write_fragments` creates `data/<file>.lance` and, for a blob v2 column,
-`data/<file>/<n>.blob`; on a branch handle, the same under `tree/<branch>/data/`. Nothing else. The
-second test keeps that measurement live: every object the writer's `write_fragments` creates must be one
-the policy it was vended allows.
+A `can_write_data` holder is a managed-versioning writer (ADR 0157): it puts data files, transaction files,
+deletion files, index files and a STAGED manifest `_versions/<n>.manifest-<uuid>`, and the catalog finalizes
+the version under its own credential. So the writer tier never reaches a final `_versions/<n>.manifest`, the
+version hint or `_refs/`, and that refusal is an explicit Deny: an Allow on `_versions/*.manifest-*` alone
+also matches `<n>.manifest-<uuid>.manifest`, which pylance reads as a final manifest. Measured on MinIO
+`RELEASE.2025-04-22T22-12-26Z` with stock pylance 13.0.0, on a throwaway store and on the deployed
+`rask-minio` (LH-469, #594). Whole-prefix write and delete belong to `can_maintain`.
 
 DRIVEN THROUGH THE REAL DOOR AND THE REAL VENDOR. The catalog runs on a moto server, the vendor is the
 estate's `StsVendor`, and its AssumeRole goes to moto's STS; the only thing added is a recorder of the
 session policy that call carried. moto's S3 does not enforce session policies, so the policy is judged
-with moto's IAM evaluator (`IAMPolicy`), which applies IAM's own wildcard semantics. The store's own
-403s are the deployed probe's job.
+with moto's IAM evaluator (`IAMPolicy`), which applies IAM's wildcard semantics and an explicit Deny's
+precedence. The store's own 403s are the deployed probe's job.
 """
 
 from __future__ import annotations
@@ -140,16 +139,22 @@ _Tier = Literal["read", "write", "maintain"]
         pytest.param("write", "", "s3:DeleteObject", "data/f.lance", False, id="write-cannot-delete-data"),
         pytest.param("write", "", "s3:PutObject", "_versions/9.manifest", False, id="write-cannot-commit"),
         pytest.param("write", "", "s3:DeleteObject", "_versions/1.manifest", False, id="write-cannot-delete-a-version"),
-        pytest.param("write", "", "s3:PutObject", "_transactions/9-x.txn", False, id="write-cannot-write-a-transaction"),
-        pytest.param("write", "", "s3:PutObject", "_deletions/0-1-1.arrow", False, id="write-cannot-write-a-deletion"),
-        pytest.param("write", "", "s3:PutObject", "_indices/u/index.idx", False, id="write-cannot-write-an-index"),
+        pytest.param("write", "", "s3:PutObject", "_versions/9.manifest-0b1c", True, id="write-stages-a-manifest"),
+        pytest.param("write", "", "s3:PutObject", "_versions/18446744073709551606.manifest", False, id="write-cannot-commit-v2-naming"),
+        pytest.param("write", "", "s3:PutObject", "_versions/9.manifest-0b1c.manifest", False, id="write-cannot-plant-a-final-name"),
+        pytest.param("write", "", "s3:PutObject", "_versions/latest_version_hint.json", False, id="write-cannot-move-the-hint"),
+        pytest.param("write", "", "s3:PutObject", "_transactions/9-x.txn", True, id="write-stages-a-transaction"),
+        pytest.param("write", "", "s3:PutObject", "_deletions/0-1-1.arrow", True, id="write-stages-a-deletion"),
+        pytest.param("write", "", "s3:PutObject", "_indices/u/index.idx", True, id="write-stages-an-index"),
         pytest.param("write", "", "s3:PutObject", "_refs/tags/t.json", False, id="write-cannot-move-a-tag"),
         pytest.param("write", "", "s3:PutObject", "_refs/branches/b2.json", False, id="write-cannot-forge-a-branch"),
         pytest.param("write", "", "s3:PutObject", "tree/b1/data/f.lance", False, id="write-main-cannot-reach-a-branch"),
         pytest.param("write", "", "s3:PutObject", "_mem_wal/0/x", False, id="write-cannot-write-the-mem-wal"),
         pytest.param("write", "b1", "s3:PutObject", "tree/b1/data/f.lance", True, id="branch-write-data-file"),
+        pytest.param("write", "b1", "s3:PutObject", "tree/b1/_versions/9.manifest-0b1c", True, id="branch-write-stages-a-manifest"),
         pytest.param("write", "b1", "s3:PutObject", "tree/b1/_versions/9.manifest", False, id="branch-write-cannot-commit"),
-        pytest.param("write", "b1", "s3:PutObject", "tree/b1/_transactions/9-x.txn", False, id="branch-write-cannot-write-a-transaction"),
+        pytest.param("write", "b1", "s3:PutObject", "tree/b1/_transactions/9-x.txn", True, id="branch-write-stages-a-transaction"),
+        pytest.param("write", "b1", "s3:PutObject", "_versions/9.manifest-0b1c", False, id="branch-write-cannot-stage-on-main"),
         pytest.param("write", "b1", "s3:PutObject", "data/f.lance", False, id="branch-write-cannot-write-main"),
         pytest.param("maintain", "", "s3:PutObject", "_versions/9.manifest", True, id="maintain-commits"),
         pytest.param("maintain", "", "s3:PutObject", "data/f.lance", True, id="maintain-rewrites"),
