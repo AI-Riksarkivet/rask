@@ -13,6 +13,17 @@ set -euo pipefail
 
 KUBECONFIG_PATH="/etc/rancher/k3s/k3s.yaml"
 
+# INOTIFY INSTANCES ARE PER UID, and every container on the node is root's. Under cgroup v2 the
+# containerd shim holds one inotify instance per container (its OOM watch on memory.events), k3s-server
+# about twenty and systemd ten more. Measured 2026-10-14 on the single-node estate (56 pods): root held
+# 127 of the distro default 128, shims 78 of them, each shim at most its container count, so it is
+# sizing and not a leak. At the ceiling the next process that asks fails, and silently: the Dagger
+# engine's dnsmasq exits 5 ("failed to create inotify: Too many open files"), and every build then dies
+# resolving github.com on 10.87.0.1:53. The values are the ones kind documents for a Kubernetes node.
+echo ">> [0/2] inotify limits"
+printf 'fs.inotify.max_user_instances = 8192\nfs.inotify.max_user_watches = 524288\n' | sudo tee /etc/sysctl.d/90-rask-inotify.conf >/dev/null
+sudo sysctl -q --load=/etc/sysctl.d/90-rask-inotify.conf
+
 echo ">> [1/2] k3s"
 if ! command -v k3s >/dev/null 2>&1; then
   curl -sfL https://get.k3s.io | sh -
