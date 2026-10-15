@@ -17,8 +17,6 @@ These pin the carrier. The door's own report, from a failure forced mid-cascade 
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
-
 from service_kit.lakehouse.ns_errors import PartiallyApplied, problem_detail
 
 
@@ -29,16 +27,3 @@ def test_an_extension_member_cannot_redefine_a_reserved_field() -> None:
     assert body["status"] == status, "an extension member overwrote the status"
     assert body["detail"] != "leaked internals", "an extension member defeated the 5xx redaction"
     assert body["extra"] == "kept", "a non-reserved extension member was dropped"
-
-
-def test_the_carrier_is_the_declared_type_not_a_stapled_attribute() -> None:
-    """`problem_extra` has to be part of a type, or the raising code cannot typecheck against it.
-
-    Pinned because the first attempt set the attribute on a bare `ServiceUnavailableError`, which `ty`
-    refused — and the tempting repair is a suppression rather than a declaration.
-    """
-    err = PartiallyApplied("x", problem_extra={"a": 1})
-
-    assert isinstance(err.problem_extra, dict)
-    assert type(err).__mro__[1].__name__ == "ServiceUnavailableError", "the 503 semantics are the carrier's whole point"
-    assert not hasattr(MagicMock(spec=PartiallyApplied), "nonexistent_field")

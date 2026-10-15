@@ -2174,10 +2174,13 @@ export interface paths {
          *        everything in them. Before anything is removed, every bound namespace's subtree is enumerated and held to
          *        its protection (:func:`_cascade_subtrees`): a protected namespace or table refuses 409 naming it unless
          *        ``force=true``, and that refusal changes nothing.
-         *     5. The cascade removes each bound namespace's subtree against the warehouse's OWN bucket-rooted connection,
-         *        one namespace fully finished before the next: every table detached (:func:`_detach_table`; the
-         *        bytes stay unless step 7 purges them) and the namespaces dropped deepest first, each object's records
-         *        cleared as it goes, and only then their grants revoked (:func:`_revoke_subtree`), the binding last.
+         *     5. The warehouse's own trash is ended first (``warehouses.trash_owned_by``): each trashed object's kept grants,
+         *        policy, claim and base record, its trash record last. The bindings select it, so it goes while they still
+         *        stand, and a re-issue after a failure here selects the same records. Then the cascade removes each bound
+         *        namespace's subtree against the warehouse's OWN bucket-rooted connection, one namespace fully finished before
+         *        the next: every table detached (:func:`_detach_table`; the bytes stay unless step 7 purges them) and the
+         *        namespaces dropped deepest first, and only then what each object held ended, its records before its grants
+         *        (``fga_deps.end_removed_subtree``), the binding last.
          *        ``namespaces_dropped`` names every namespace removed, nested ones included. The `dir` backend drops a
          *        namespace Restrict whatever ``behavior`` says (measured: ``behavior="Cascade"`` is ignored, not
          *        refused), so emptying it first is what lets the drop land. A failure part-way leaves every object not

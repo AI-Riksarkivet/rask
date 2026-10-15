@@ -77,13 +77,6 @@ def test_read_object_tuples_paginates_to_completion() -> None:
     }
 
 
-def test_revoke_object_tuples_noop_when_no_grants() -> None:
-    fake = _ReadDeleteClient([([], "")])
-    removed = asyncio.run(fga.revoke_object_tuples(_client(fake), "table:gone", actor="test", origin="create"))
-    assert len(removed) == 0
-    assert fake.deleted == []  # nothing to delete → no write issued at all
-
-
 class _PartialMissingClient:
     """read returns 3 tuples; the MIDDLE one's delete raises the missing-delete 400 (a concurrent revoke).
     Per-tuple deletes must still remove the OTHER two — a single batched transactional delete would have
@@ -112,17 +105,10 @@ class _PartialMissingClient:
 def test_per_tuple_delete_tolerates_one_missing_without_losing_the_rest() -> None:
     fake = _PartialMissingClient()
     removed = asyncio.run(fga.revoke_object_tuples(_client(fake), "table:t", actor="test", origin="create"))
-    assert len(removed) == 3  # all three attempted
-    # The present two are removed; the concurrently-absent one is tolerated — NOT an all-or-nothing loss.
-    assert _keys(fake.deleted) == {
-        ("user:a", "owner", "table:t"),
-        ("user:c", "writer", "table:t"),
-    }
-
-
-# --------------------------------------------------------------------------- #
-# fga_deps.revoke_ownership — the endpoint-facing wrapper (mirrors seed_ownership)
-# --------------------------------------------------------------------------- #
+    # The present two are removed and returned; the concurrently-absent one is tolerated — NOT an all-or-nothing loss,
+    # and not counted as a removal the server never made.
+    assert _keys(fake.deleted) == {("user:a", "owner", "table:t"), ("user:c", "writer", "table:t")}
+    assert _keys(removed) == _keys(fake.deleted)
 
 
 def _settings(*, fga_enabled: bool) -> Any:

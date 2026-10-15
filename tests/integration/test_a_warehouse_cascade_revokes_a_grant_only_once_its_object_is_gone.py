@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 import threading
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import Any, override
 from unittest.mock import MagicMock
 
@@ -35,6 +35,8 @@ from openfga_sdk.client.models import ClientWriteRequest
 from catalog.core.config import get_settings
 from catalog.core.lineage_emit import HttpLineageEmitter
 from catalog.services import warehouses
+from service_kit.lakehouse import base_registry, maintenance_policies, trash
+from service_kit.lakehouse.objectfs import StorageOptions
 from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from storage import S3Client
 from tests.integration.openfga_grants import Options, TupleStore, act_as
@@ -45,28 +47,49 @@ _ROWS = pa.table({"id": pa.array([1, 2], pa.int64())})
 
 
 class _Outage(TupleStore):
-    """The store, refusing every revoke of ``down`` as an OpenFGA that stopped answering does, while ``down`` is set."""
+    """The store, refusing the revokes of ``down`` after the first ``spared`` as an OpenFGA that stopped answering does."""
 
     def __init__(self) -> None:
         super().__init__()
         self.down: str | None = None
+        self.spared = 0
+
+    def stop_after_one(self, obj: str) -> None:
+        """Refuse every revoke naming ``obj`` after the first, as an OpenFGA that stops answering part-way through them."""
+        self.down, self.spared = obj, 1
 
     @override
     async def write(self, body: ClientWriteRequest, options: Options = None) -> None:
         if self.down is not None and any(self.down in (t.user, t.object) for t in body.deletes or []):
-            raise OSError("openfga did not answer")
+            if self.spared == 0:
+                raise OSError("openfga did not answer")
+            self.spared -= 1
         await super().write(body, options)
 
 
 class _Tenant:
     """Project ``acme`` and its warehouse on a bucket of its own, driven by the project's admin."""
 
-    def __init__(self, client: TestClient, store: _Outage, posted: list[dict[str, Any]], s3: S3Client, warehouse: str) -> None:
+    def __init__(self, client: TestClient, store: _Outage, posted: list[dict[str, Any]], s3: S3Client, warehouse: str, monkeypatch: pytest.MonkeyPatch) -> None:
         self.client = client
         self.store = store
         self.posted = posted
         self.s3 = s3
         self.warehouse = warehouse
+        self.monkeypatch = monkeypatch
+
+    def break_policy_store_once(self) -> None:
+        """Fail the next maintenance-policy delete, as a control root that does not answer once."""
+        real = maintenance_policies.delete_policy
+        failed: list[str] = []
+
+        def delete_policy(control_root: str, storage_options: StorageOptions, kind: str, canonical_id: str) -> bool:
+            if not failed:
+                failed.append(canonical_id)
+                raise OSError("the control root did not answer")
+            return real(control_root, storage_options, kind, canonical_id)
+
+        self.monkeypatch.setattr(maintenance_policies, "delete_policy", delete_policy)
 
     def bind(self, namespace: str) -> None:
         answer = self.client.post(f"/management/v1/warehouses/{self.warehouse}/namespaces", json={"namespace": namespace})
@@ -80,8 +103,37 @@ class _Tenant:
         answer = self.client.post(f"/v1/table/{table}/create", content=encode_arrow_stream(_ROWS), headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE})
         assert answer.status_code == 200, answer.text
 
+    def drop(self, kind: str, name: str, body: dict[str, str] | None = None) -> None:
+        answer = self.client.post(f"/v1/{kind}/{name}/drop", json=body or {})
+        assert answer.status_code == 200, answer.text
+
+    def set_policy(self, table: str) -> None:
+        answer = self.client.post(f"/management/v1/table/{table}/policy/set", json={"retention_days": 7})
+        assert answer.status_code == 200, answer.text
+
     def delete_warehouse(self) -> httpx.Response:
         return self.client.delete(f"/management/v1/warehouses/{self.warehouse}", params={"cascade": "true", "purge_bucket": "true"})
+
+    def trashed(self, objects: list[tuple[str, str]]) -> list[tuple[str, str]]:
+        """Those of ``(kind, id)`` the trash still holds a record for."""
+        settings = get_settings()
+        return [(kind, name) for kind, name in objects if trash.get(settings.registry_root, settings.storage_options(), name, kind=kind) is not None]
+
+    def trash_locations(self, tables: list[str]) -> list[str]:
+        """Where each of ``tables``' trash records says its bytes are."""
+        settings = get_settings()
+        records = [trash.get(settings.registry_root, settings.storage_options(), table, kind="table") for table in tables]
+        return [str(record["location"]) for record in records if record is not None]
+
+    def base_recorded(self, locations: list[str]) -> list[str]:
+        """Those of ``locations`` the base registry still holds a record for."""
+        settings = get_settings()
+        registry = base_registry.BaseRegistry(control_root=settings.registry_root, storage_options=settings.storage_options())
+        return [location for location in locations if base_registry.read_base_record(registry, location) is not None]
+
+    def has_policy(self, kind: str, name: str) -> bool:
+        settings = get_settings()
+        return maintenance_policies.get_policy(settings.registry_root, settings.storage_options(), kind, name) is not None
 
     def present(self, objects: list[str]) -> list[str]:
         """Those of ``objects`` the catalog still serves, each asked through its own door."""
@@ -157,24 +209,38 @@ def tenant(moto_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[_Tenant]:
         for path, body in (("/management/v1/projects", {"id": PROJECT}), ("/management/v1/warehouses", {"id": warehouse, "project": PROJECT})):
             answer = client.post(path, json=body)
             assert answer.status_code == 200, f"{path}: {answer.text}"
-        yield _Tenant(client, store, posted, s3, warehouse)
+        yield _Tenant(client, store, posted, s3, warehouse, monkeypatch)
     app.dependency_overrides.clear()
     get_settings.cache_clear()
 
 
 def test_a_cascade_removes_every_table_and_namespace_then_revokes_their_grants(tenant: _Tenant) -> None:
-    """Tables under the bound namespace and under a nested one are detached, and so is the namespace subtree; a table a
-    recoverable drop already detached loses the grants its undrop needed; the count the door reports is what the store lost."""
+    """Tables under the bound namespace and under a nested one are detached, and so is the namespace subtree. The
+    warehouse's own trash ends with it: a table a recoverable drop detached, a namespace a recoverable cascade dropped
+    with its table, and a trashed table whose namespace was dropped since each lose the grants, policy and records their
+    undrop needed, a table's base record among them. The count the door reports is what the store lost."""
     tenant.bind("bronze")
     for table in ("bronze$a", "bronze$b"):
         tenant.create_table(table)
     tenant.create_namespace("bronze$inner")
     tenant.create_table("bronze$inner$c")
     tenant.create_table("bronze$trashed")
-    assert tenant.client.post("/v1/table/bronze$trashed/drop", json={}).status_code == 200
-    tables = ["bronze$a", "bronze$b", "bronze$inner$c", "bronze$trashed"]
-    governed = [f"warehouse:{tenant.warehouse}", "namespace:bronze", "namespace:bronze$inner", *(f"table:{table}" for table in tables)]
+    tenant.drop("table", "bronze$trashed")
+    tenant.bind("silver")
+    tenant.create_table("silver$s")
+    tenant.set_policy("silver$s")
+    tenant.drop("namespace", "silver", {"behavior": "Cascade"})
+    tenant.bind("gold")
+    tenant.create_table("gold$g")
+    tenant.drop("table", "gold$g")
+    tenant.drop("namespace", "gold")
+    trash_held = [("table", "bronze$trashed"), ("table", "silver$s"), ("namespace", "silver"), ("table", "gold$g")]
+    tables = ["bronze$a", "bronze$b", "bronze$inner$c", "bronze$trashed", "silver$s", "gold$g"]
+    governed = [f"warehouse:{tenant.warehouse}", "namespace:bronze", "namespace:bronze$inner", "namespace:silver", *(f"table:{table}" for table in tables)]
     assert len(tenant.store.naming(governed)) == len(governed), "an object was seeded no tuple, so the revoke below would pass vacuously"
+    assert tenant.trashed(trash_held) == trash_held and tenant.has_policy("table", "silver$s"), "nothing kept for an undrop, so its end would pass vacuously"
+    locations = tenant.trash_locations(["bronze$trashed", "silver$s", "gold$g"])
+    assert len(tenant.base_recorded(locations)) == 3, "a trashed table kept no base record, so its end would pass vacuously"
     assert "bronze" in tenant.client.app.state.warehouse_binding_cache, "nothing routed through the binding, so its eviction below would pass vacuously"
     held = len(tenant.store.tuples)
     tenant.posted.clear()
@@ -185,39 +251,70 @@ def test_a_cascade_removes_every_table_and_namespace_then_revokes_their_grants(t
     body = answer.json()
     assert (body["namespaces_dropped"], body["bucket_purged"]) == (["bronze$inner", "bronze"], True)
     assert tenant.store.naming(governed) == {}, "a grant outlived the object it was on"
+    assert (tenant.trashed(trash_held), tenant.has_policy("table", "silver$s")) == ([], False), "the warehouse's trash outlived it"
+    assert tenant.base_recorded(locations) == [], "a trashed table's base record outlived its warehouse"
     assert body["tuples_revoked"] == held - len(tenant.store.tuples), "the door reported a count the store did not lose"
     assert sorted(tenant.announced_drops()) == ["bronze$a", "bronze$b", "bronze$inner$c"]
     assert not tenant.bucket_exists()
     assert not tenant.bound("bronze") and "bronze" not in tenant.client.app.state.warehouse_binding_cache
 
 
-def test_a_cascade_that_fails_part_way_says_what_landed_keeps_the_rest_governed_and_a_reissue_finishes_it(tenant: _Tenant) -> None:
-    """OpenFGA stops answering for ``bronze$b`` while the first namespace's grants are revoked: the 503 counts what the
-    store lost, every object the catalog still serves keeps every grant and stays readable, and the same call issued
-    again finishes the delete."""
+@pytest.mark.parametrize(
+    "fail",
+    [
+        pytest.param(lambda tenant: tenant.store.stop_after_one("table:bronze$b"), id="openfga-stops-in-a-bound-namespace"),
+        pytest.param(lambda tenant: tenant.store.stop_after_one("table:bronze$inner$d"), id="openfga-stops-in-its-trash"),
+        pytest.param(lambda tenant: tenant.break_policy_store_once(), id="the-control-root-fails-after-a-revoke"),
+    ],
+)
+def test_a_cascade_that_fails_part_way_says_what_landed_keeps_the_rest_governed_and_a_reissue_finishes_it(
+    tenant: _Tenant, fail: Callable[[_Tenant], None]
+) -> None:
+    """OpenFGA stops answering part-way through one object's grants, among a bound namespace's objects or among the
+    trash the warehouse ends, or the control root fails once the first trashed object's grants are gone: the 503 names
+    exactly what is gone and counts what the store lost, every object the catalog still serves keeps every grant but the
+    edges to what is gone, and the same call issued again finishes the delete. The trash holds a nested
+    namespace a recoverable cascade detached, which names no location: only its top-level namespace's binding ties it
+    to this warehouse, so the re-issue finds it only if the binding still stands."""
     for namespace in ("bronze", "silver"):
         tenant.bind(namespace)
     tables = ["bronze$a", "bronze$b", "silver$c"]
     for table in tables:
         tenant.create_table(table)
+    tenant.create_namespace("bronze$inner")
+    tenant.create_table("bronze$inner$d")
+    tenant.drop("namespace", "bronze$inner", {"behavior": "Cascade"})
+    trash_held = [("table", "bronze$inner$d"), ("namespace", "bronze$inner")]
+    kept = [f"{kind}:{name}" for kind, name in trash_held]
     governed = [f"warehouse:{tenant.warehouse}", "namespace:bronze", "namespace:silver", *(f"table:{table}" for table in tables)]
+    assert tenant.trashed(trash_held) == trash_held and len(tenant.store.naming(kept)) == len(kept), (
+        "nothing kept for an undrop, so its end would pass vacuously"
+    )
     before = tenant.store.naming(governed)
     held = len(tenant.store.tuples)
-    tenant.store.down = "table:bronze$b"
+    fail(tenant)
 
     partial = tenant.delete_warehouse()
 
     served = tenant.present(governed)
-    assert tenant.store.naming(served) == {obj: before[obj] for obj in served}, "a grant on an object still there was revoked"
+    gone = [obj for obj in governed if obj not in served]
+    # The edge a removed object left on its parent goes with that object's revoke, whenever it lands: every other tuple
+    # on a served object stays.
+    untouched = {obj: {t for t in before[obj] if not set(t) & set(gone)} for obj in served}
+    now = {obj: {t for t in held if not set(t) & set(gone)} for obj, held in tenant.store.naming(served).items()}
+    assert now == untouched, "a grant on an object still there was revoked"
     assert (partial.status_code, partial.headers["content-type"]) == (503, "application/problem+json"), partial.text
     report = partial.json()
-    assert (report["partial"], report["namespaces_dropped"], sorted(report["tables_removed"])) == (True, ["bronze"], ["bronze$a", "bronze$b"])
+    said_gone = [*(f"namespace:{name}" for name in report["namespaces_dropped"]), *(f"table:{name}" for name in report["tables_removed"])]
+    assert (report["partial"], sorted(said_gone)) == (True, sorted(gone)), "the 503 named other than what is gone"
+    ended = [f"{kind}:{name}" for kind, name in trash_held if (kind, name) not in tenant.trashed(trash_held)]
+    assert sorted(report["trash_ended"]) == sorted(ended), "the 503 named other than the trash it ended"
     assert report["tuples_revoked"] == held - len(tenant.store.tuples), "the 503 reported a count the store did not lose"
-    assert served == [f"warehouse:{tenant.warehouse}", "namespace:silver", "table:silver$c"]
     tenant.store.down = None
 
     finished = tenant.delete_warehouse()
 
     assert finished.status_code == 200, finished.text
-    assert tenant.store.naming(governed) == {}, "the re-issue left a grant on an object it removed"
+    assert tenant.trashed(trash_held) == [], "the re-issue left the warehouse's trash behind"
+    assert tenant.store.naming([*governed, *kept]) == {}, "the re-issue left a grant on an object it removed"
     assert not tenant.bucket_exists()

@@ -13,7 +13,10 @@ from typing import TYPE_CHECKING
 from openfga_sdk.client.models import ClientBatchCheckRequest, ClientBatchCheckResponse, ClientCheckRequest, ClientTuple, ClientWriteRequest
 from openfga_sdk.client.models.batch_check_single_response import ClientBatchCheckSingleResponse
 from openfga_sdk.client.models.list_users_request import ClientListUsersRequest
+from openfga_sdk.exceptions import ApiException
 from openfga_sdk.models import CheckResponse, ListUsersResponse, ReadRequestTupleKey, ReadResponse, Tuple, TupleKey
+from openfga_sdk.models.error_code import ErrorCode
+from openfga_sdk.models.validation_error_message_response import ValidationErrorMessageResponse
 
 from service_kit.governed.oidc import IDToken
 
@@ -79,9 +82,13 @@ class TupleStore:
         return ReadResponse(tuples=held, continuation_token="")
 
     async def write(self, body: ClientWriteRequest, options: Options = None) -> None:
+        """Hold what is written; refuse a delete of a tuple not held, as OpenFGA does, which a revoke reads as gone."""
         del options
+        doomed = {(t.user, t.relation, t.object) for t in body.deletes or []}
+        if doomed - self.tuples:
+            raise _absent_delete()
         self.tuples |= {(t.user, t.relation, t.object) for t in body.writes or []}
-        self.tuples -= {(t.user, t.relation, t.object) for t in body.deletes or []}
+        self.tuples -= doomed
 
     async def list_users(self, body: ClientListUsersRequest, options: Options = None) -> ListUsersResponse:
         """The project door's display of its admins, which it degrades to nobody without; no claim reads it here."""
@@ -95,6 +102,16 @@ class TupleStore:
         """The held tuples naming each of ``objects`` as their object or their user, for those any tuple names."""
         named = {obj: {t for t in self.tuples if obj in (t[0], t[2])} for obj in objects}
         return {obj: held for obj, held in named.items() if held}
+
+
+def _absent_delete() -> ApiException:
+    """What the SDK raises for a delete of an absent tuple: a 400 whose parsed body carries the structured code."""
+    exc = ApiException(status=400, reason="Bad Request")
+    exc.parsed_exception = ValidationErrorMessageResponse(
+        code=ErrorCode.WRITE_FAILED_DUE_TO_INVALID_INPUT,
+        message="cannot delete a tuple which does not exist",
+    )
+    return exc
 
 
 def act_as(client: TestClient, sub: str) -> None:

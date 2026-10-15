@@ -25,7 +25,7 @@ named table. Fail-closed twice over: an unwired client raises 503 here, and
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from functools import lru_cache
 from typing import Final, Literal
 
@@ -59,7 +59,7 @@ from catalog.services import native
 from service_kit.governed import fga
 from service_kit.governed.audit import ALLOW, DENY, FAILURE, audit
 from service_kit.governed.machine_identity import ServicePrincipal
-from service_kit.lakehouse import protection, trash
+from service_kit.lakehouse import maintenance_policies, protection, trash
 from service_kit.lakehouse.subjects import is_person_subject
 
 
@@ -1564,6 +1564,78 @@ async def revoke_ownership(
     removed = await fga.revoke_object_tuples(client, obj, actor=actor, origin="create")  # noqa: TID251
     if removed:
         log.info("fga_tuples_revoked", extra={"object": obj, "removed": len(removed)})
+
+
+async def revoke_removed_object(client: OpenFgaClient | None, settings: Settings, obj: str, *, token: Principal | None) -> int:
+    """Delete every tuple on ``obj``, an object a lifecycle delete removed, and return how many the server removed.
+
+    Distinct from :func:`revoke_ownership` in two ways that matter to a cascade: the audit origin is
+    ``lifecycle_delete`` (a deletion of the hierarchy, not one object's drop), and the count comes back for the door to
+    report. 0 when FGA is off or unwired. An outage part-way raises :class:`fga.RevokeInterrupted` naming what went.
+    """
+    if not (settings.fga_enabled and client is not None):
+        return 0
+    actor = token.sub if token is not None else "system:catalog"
+    removed = await fga.revoke_object_tuples(client, obj, actor=actor, origin="lifecycle_delete")  # noqa: TID251
+    if removed:
+        log.info("fga_tuples_revoked", extra={"object": obj, "removed": len(removed)})
+    return len(removed)
+
+
+async def end_removed_subtree(
+    client: OpenFgaClient | None,
+    settings: Settings,
+    *,
+    root: list[str],
+    removed: Sequence[tuple[str, list[str]]],
+    token: Principal | None,
+) -> AsyncIterator[int]:
+    """End what namespace ``root`` and ``removed``, which a lifecycle delete removed, still hold, children first.
+
+    Each object's protection and maintenance-policy records go, so an object created at its id inherits neither, then
+    its grants. Yields each object's revoked count as its revoke lands, so a door reporting what it revoked counts
+    every object revoked before a failure. Run ONLY ONCE EVERY OBJECT IN THE SUBTREE IS GONE ([[LH-495]]): a grant
+    revoked before its object is removed strands the object, alive and with nobody left who may read, drop or recover
+    it through a door.
+
+    THE GRANTS GO LAST, BECAUSE THEY ARE WHAT FINDS AN OBJECT AGAIN. Every object created under a namespace leaves a
+    ``child`` edge on it (``fga.hierarchy_edge_tuples``), and only that object's own revoke removes the edge. A
+    re-issue lists only what still stands, so an edge still standing is what names an object a failure stopped before
+    its end, and this walk ends its records and grants then. Each edge is followed before the object holding it is
+    revoked. ``removed`` (the catalog's own listing) covers an object created before the edges existed; with FGA off
+    nothing names an object once it is gone, and only the listed ones are ended. Every clear is idempotent, so a
+    protection record is cleared without asking whether one exists: an object a forced attempt left unfinished may be
+    re-issued without ``force``.
+
+    AN OBJECT IN THE TRASH KEEPS ITS RECORDS AND GRANTS. A recoverable drop keeps them for its undrop (#75), and a
+    trashed table is undropped into its namespace once that namespace is created again, so they go only when its
+    trash record does: at the trash purge, or with its warehouse (``catalog.services.warehouses.trash_owned_by``).
+    """
+    so = settings.storage_options()
+    seen: set[str] = set()
+
+    async def trashed(obj: str) -> bool:
+        kind, _, canonical = obj.partition(":")
+        return await run_in_threadpool(trash.get, settings.registry_root, so, canonical, kind=kind) is not None
+
+    async def end(obj: str) -> AsyncIterator[int]:
+        seen.add(obj)
+        if settings.fga_enabled and client is not None and obj.startswith("namespace:"):
+            for held in await fga.read_object_tuples(client, obj):
+                if held.relation == "child" and held.user and held.user not in seen and not await trashed(held.user):
+                    async for count in end(held.user):
+                        yield count
+        kind, _, canonical = obj.partition(":")
+        await run_in_threadpool(protection.clear_protection, settings.registry_root, so, kind, canonical)
+        await run_in_threadpool(maintenance_policies.delete_policy, settings.registry_root, so, kind, canonical)
+        yield await revoke_removed_object(client, settings, obj, token=token)
+
+    children_first = sorted(removed, key=lambda item: (item[0] == "namespace", -len(item[1])))
+    for resource, segments in [*children_first, ("namespace", root)]:
+        obj = f"{resource}:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}"
+        if obj not in seen:
+            async for count in end(obj):
+                yield count
 
 
 async def seed_ownership_or_compensate(

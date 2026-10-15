@@ -24,7 +24,7 @@ import pyarrow.fs as pafs
 from lance_namespace import NamespaceAlreadyExistsError, ServiceUnavailableError
 
 from catalog.services.control_records import BindingRecord, BucketClaimRecord, WarehouseRecord, read_json, validated, validated_or_refuse, write_json
-from service_kit.lakehouse import base_registry, trash
+from service_kit.lakehouse import trash
 from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base
 from service_kit.lakehouse.records import RecordExistsError, RecordMissingError, create_json, mutate_json
 
@@ -552,19 +552,8 @@ def delete_warehouse_record(control_root: str, storage_options: StorageOptions, 
     Deleting the RECORD is not deleting the BUCKET: the bytes survive unless the caller explicitly
     asked to purge them (Decision 3 — a catalog entry is recoverable, a customer's bucket is not, and
     the two never share a default). A record-less bucket is reported by the reconciler, not silently
-    forgotten.
+    forgotten. The warehouse's trash is ended by the delete door before this runs (:func:`trash_owned_by`).
     """
-    # THE TRASH GOES WITH IT, and reading the record BEFORE the delete is the only order that can find
-    # it. A dropped table leaves a trash record naming its location so it can be undropped inside the
-    # retention window; this delete removes the registry entry that made that location maintainable, so
-    # a surviving record names a root the estate no longer maintains and every purge tick refuses it
-    # forever. Measured on the live estate 2026-09-20: 869 of 877 expired records were refused
-    # `outside the maintained estate`, across 45 warehouses that had been deleted exactly this way.
-    #
-    # The clutter is the smaller half. A trash record PROMISES recoverability, and a warehouse delete
-    # that purged its bucket destroyed the bytes it promises — so clearing them together keeps the
-    # promise and the bytes in one lifetime rather than leaving an undrop that can only name a ghost.
-    _clear_trash_under(control_root, storage_options, warehouse_id)
     fs, base = fs_and_base(control_root, storage_options)
     try:
         fs.delete_file(f"{base}/{_REGISTRY_PREFIX}/{warehouse_id}.json")
@@ -572,47 +561,45 @@ def delete_warehouse_record(control_root: str, storage_options: StorageOptions, 
         return
 
 
-def _clear_trash_under(control_root: str, storage_options: StorageOptions, warehouse_id: str) -> int:
-    """Clear every trash record whose location sits in this warehouse's bucket. Returns the count.
+def trash_owned_by(control_root: str, storage_options: StorageOptions, warehouse_id: str, *, bucket: str, delimiter: str) -> list[dict[str, Any]]:
+    """The trash records a delete of ``warehouse_id`` ends, each child's before its parent's.
 
-    Scoped by BUCKET rather than by warehouse id, because the two are separate fields on the record and
-    a warehouse may name a bucket that is not its own id. Falls back to the id when no record can be
-    read — a delete of an already-absent warehouse must still be able to tidy what named it.
+    THE TRASH GOES WITH THE WAREHOUSE. A recoverable drop keeps a record, the object's grants, its policy and its
+    location's claim for an undrop; deleting the warehouse removes what made those locations maintainable and, on
+    ``?purge_bucket=true``, the bytes. Measured on the live estate 2026-09-20: 869 of 877 expired records were refused
+    `outside the maintained estate`, across 45 warehouses deleted with their trash left behind, and on 2026-10-15 the
+    grants such records kept were the reconciler's 17 `ghost_tables`.
 
-    Best-effort by contract: the registry delete is the operation, and a trash sweep that raised would
-    turn a completed delete into an error the caller would retry against a record that is already gone.
+    A record is this warehouse's when its top-level namespace is bound to it, or is a trashed namespace whose recorded
+    binding names it, or when its bytes sit in this bucket and its namespace belongs to no other warehouse. The last
+    clause keeps a table whose namespace was dropped after it (nothing else names it), and its condition spares a
+    sibling's: one project may back two warehouses with one bucket, and a record under the other's namespace is the
+    other's to end. Read before anything changes, from :func:`read_bindings`, which reports a binding it cannot read:
+    that binding could name this warehouse or another, so the selection refuses rather than guessing.
 
-    DELETION ONLY, NEVER DEACTIVATION, though both drop a bucket out of `maintained_roots`. Deactivate
-    is offboarding step ONE and is reversible — `maintainable_buckets` excludes it so no process rewrites
-    a quarantined tenant's data, and "a reactivated warehouse is swept again on the next tick, having
-    lost nothing". Clearing its trash would take the one thing a reactivation is supposed to restore.
-    A delete has no such return, which is what makes the same sweep right here and wrong there.
+    Raises:
+        ServiceUnavailableError: A binding record could not be read.
     """
-    record = get_warehouse(control_root, storage_options, warehouse_id) or {}
-    bucket = str(record.get("bucket") or warehouse_id)
-    prefix = f"s3://{bucket}/"
-    registry = base_registry.BaseRegistry(control_root=control_root, storage_options=storage_options)
-    cleared = 0
-    try:
-        for entry in trash.list_all(control_root, storage_options):
-            location = str(entry.get("location") or "")
-            if not location.startswith(prefix):
-                continue
-            # [[LH-279]] The base record goes BEFORE the trash record it belongs to. A recoverably-dropped
-            # table keeps its `_bases/` record for an undrop; a warehouse delete clears that trash and (on
-            # `?purge_bucket=true`) deletes the bytes, and the maintenance purge that would otherwise forget
-            # the record never sees the table — so a table registered at the same location in a re-created
-            # warehouse would inherit bases nobody judged for it. Forget-first is fail-safe: a store blip
-            # here aborts the loop with the trash record intact, and the retry forgets it again.
-            base_registry.forget_base_record(registry, location, table=str(entry.get("id") or ""))
-            if trash.clear(control_root, storage_options, str(entry.get("id") or ""), kind=str(entry.get("kind") or "table")):
-                cleared += 1
-    except Exception as exc:  # noqa: BLE001 — tidying must never outrank the delete it follows
-        log.warning("warehouse_trash_not_cleared", extra={"warehouse": warehouse_id, "error": f"{type(exc).__name__}: {exc}"})
-        return cleared
-    if cleared:
-        log.info("warehouse_trash_cleared", extra={"warehouse": warehouse_id, "bucket": bucket, "records": cleared})
-    return cleared
+    bindings, skipped = read_bindings(control_root, storage_options)
+    if skipped:
+        raise ServiceUnavailableError(
+            f"{len(skipped)} namespace binding record(s) could not be read ({', '.join(sorted(skipped))}), so this "
+            f"warehouse's trash cannot be told from another's. Refusing rather than ending a record that may not be its own."
+        )
+    records = trash.list_all(control_root, storage_options)
+    here = {str(b["top_ns"]) for b in bindings if b.get("warehouse_id") == warehouse_id}
+    elsewhere = {str(b["top_ns"]) for b in bindings if b.get("warehouse_id") != warehouse_id}
+    for record in records:
+        binding = record.get("binding")
+        if record.get("kind") == "namespace" and isinstance(binding, dict):
+            (here if binding.get("warehouse_id") == warehouse_id else elsewhere).add(str(record.get("id") or ""))
+    in_bucket = f"s3://{bucket}/"
+
+    def top(record: dict[str, Any]) -> str:
+        return str(record.get("id") or "").split(delimiter, 1)[0]
+
+    owned = [r for r in records if top(r) not in elsewhere and (top(r) in here or str(r.get("location") or "").startswith(in_bucket))]
+    return sorted(owned, key=lambda r: (r.get("kind") == "namespace", -len(str(r.get("id") or "").split(delimiter))))
 
 
 def purge_bucket(bucket: str, storage_options: StorageOptions) -> int:

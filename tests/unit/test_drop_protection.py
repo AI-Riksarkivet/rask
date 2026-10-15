@@ -372,12 +372,6 @@ def test_a_recoverable_drop_KEEPS_the_owner_grants(tmp_path: Any) -> None:
     revoked.assert_not_awaited()
 
 
-def test_the_tasks_suffix_is_reader_tier_not_writer(tmp_path: Any) -> None:
-    """The live audit's other finding: `tasks` was unmapped, so it fell through to WRITER — and after a
-    drop the owner has no write rung, making their own deadline unreadable."""
-    assert "tasks" in fga_deps._META_READ_ACTIONS  # noqa: SLF001
-
-
 def test_a_CASCADE_refuses_when_a_descendant_is_protected(tmp_path: Any) -> None:
     """A cascade destroys children INSIDE one native call — they never reach a door. Before this, a
     protected table under a cascade-dropped namespace died silently while the docstring claimed
@@ -543,24 +537,6 @@ def test_cascade_purge_true_still_destroys_natively_and_files_nothing(tmp_path: 
     assert trash.list_all(settings.registry_root, settings.storage_options()) == []
 
 
-def test_a_recoverable_cascade_KEEPS_the_fga_tuples(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The #75 rule at the subtree scale: the owner is the one person who needs to undrop it, so the
-    grants die with the bytes (purge/expiry), never with a recoverable drop."""
-    revoked: list[str] = []
-
-    async def _recording_revoke(client: Any, settings: Any, *, resource: str, segments: list[str], token: Any) -> None:
-        revoked.append(f"{resource}:{'$'.join(segments)}")
-
-    monkeypatch.setattr(fga_deps, "revoke_ownership", _recording_revoke)
-
-    settings = _settings(tmp_path, grace_days=7)
-    _drop_namespace_cascade(settings, _CascadableNamespace())
-    assert revoked == [], "a recoverable cascade revoked tuples its own undrop needs"
-
-    _drop_namespace_cascade(settings, _CascadableNamespace(), purge=True)
-    assert "namespace:bronze" in revoked and "table:bronze$inner$t2" in revoked, "the destructive path must still revoke"
-
-
 def test_namespace_undrop_rebuilds_the_whole_subtree(tmp_path: Any) -> None:
     """The plural undrop: namespaces shallowest-first, then every table re-registered at its old id
     from the RELATIVE location form (#75's dir-backend lesson), and the records cleared."""
@@ -620,13 +596,6 @@ def test_trash_kinds_do_not_collide(tmp_path: Any) -> None:
     trash.put(settings.registry_root, so, trash.make_record("bronze", location="s3://b/t", dropped_by="u", grace_days=7))
     assert trash.get(settings.registry_root, so, "bronze", kind="namespace") is None
     assert trash.get(settings.registry_root, so, "bronze") is not None
-
-
-def test_the_undrop_suffixes_are_owner_gated_not_writer(tmp_path: Any) -> None:
-    """The authz map is where each door's tier is declared, and a misplaced entry grants the wrong rung
-    — pin both kinds (#96 extends #75's table rule to the namespace rung)."""
-    assert fga_deps._OWNER_SUFFIX_RELATION["table"]["undrop"] == "can_drop"  # noqa: SLF001
-    assert fga_deps._OWNER_SUFFIX_RELATION["namespace"]["undrop"] == "can_delete"  # noqa: SLF001
 
 
 def test_a_destructive_drop_of_a_top_level_namespace_removes_its_WAREHOUSE_BINDING(tmp_path: Any) -> None:

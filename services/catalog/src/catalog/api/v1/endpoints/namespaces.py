@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Iterable, Mapping
+from collections.abc import AsyncIterator, Iterable, Mapping
 from contextlib import suppress
 from typing import Annotated
 
@@ -50,7 +50,7 @@ from catalog.core import tier_policy
 from catalog.core.config import Settings
 from catalog.core.formats import reject_unsupported_properties
 from catalog.core.identifiers import MAX_NAMESPACE_DEPTH, parse_identifier, reconcile_body_id, require_safe_segments
-from catalog.core.lineage_emit import DROP_TABLE, REGISTER_TABLE, emit_write_event
+from catalog.core.lineage_emit import DROP_TABLE, REGISTER_TABLE, LineageEmitter, emit_write_event
 
 # `MAX_NAMESPACE_DEPTH` is IMPORTED, not redeclared: the point of F10 item 10 is that two walkers
 # over the same tree disagreed about how deep it may go, and a second copy of the number would let
@@ -62,7 +62,7 @@ from catalog.schemas import ProtectionResponse, SetProtectionRequest, TrashEntry
 from catalog.services import native, table_claims, warehouses
 from service_kit.control_emit import emit_control
 from service_kit.governed import fga
-from service_kit.lakehouse import base_registry, location_claims, maintenance_policies, protection, trash
+from service_kit.lakehouse import base_registry, location_claims, protection, trash
 
 
 log = logging.getLogger(__name__)
@@ -312,19 +312,17 @@ async def create_or_keep_namespace(ns: LanceNamespace, segments: list[str], req:
 
 
 async def _forget_namespace(settings: Settings, client: OpenFgaClient | None, token: Principal | None, segments: list[str], *, unbind: bool) -> None:
-    """Remove every governance record a dropped namespace leaves keyed by its id: protection, maintenance
-    policy, the warehouse binding (``unbind``, top-level only) and its FGA tuples.
+    """Remove every governance record a dropped namespace leaves keyed by its id: the warehouse binding (``unbind``,
+    top-level only), then its protection, maintenance policy and FGA tuples, with those of every child an earlier
+    attempt removed, which its `child` edges still name (``fga_deps.end_removed_subtree``).
 
     Each step is idempotent — an absent record or tuple is already the post-condition — so a retry over a
     half-finished drop converges. A record left behind is inherited by the next namespace created at the id.
     """
-    so = settings.storage_options()
-    canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
-    await run_in_threadpool(protection.clear_protection, settings.registry_root, so, "namespace", canonical)
-    await run_in_threadpool(maintenance_policies.delete_policy, settings.registry_root, so, "namespace", canonical)
     if unbind and len(segments) == 1:
-        await run_in_threadpool(warehouses.unbind_namespace, settings.registry_root, so, segments[0])
-    await fga_deps.revoke_ownership(client, settings, resource="namespace", segments=segments, token=token)
+        await run_in_threadpool(warehouses.unbind_namespace, settings.registry_root, settings.storage_options(), segments[0])
+    async for _ in fga_deps.end_removed_subtree(client, settings, root=segments, removed=[], token=token):
+        pass
 
 
 async def _judge_tier_declaration(
@@ -609,8 +607,8 @@ async def _destroy_subtree(
     registry: base_registry.BaseRegistry,
     claims: location_claims.ClaimStore,
     delimiter: str,
-) -> None:
-    """Destroy the subtree BOTTOM-UP, ourselves (#117).
+) -> AsyncIterator[list[str]]:
+    """Destroy the subtree BOTTOM-UP, ourselves (#117), yielding each table as it goes.
 
     `drop_namespace(behavior=Cascade)` is not implemented by the `dir` backend the chart runs — it
     answers `NamespaceNotEmpty` for EVERY casing (probed directly against the library). So the
@@ -631,6 +629,10 @@ async def _destroy_subtree(
     Each destroyed table's base record goes with its bytes ([[LH-279]]), off the location its drop answers:
     left behind, it would sanction its bases for the next table registered there. Its location claim goes
     too ([[LH-204]]), or the location stays held for the claim's lease.
+
+    Each table is yielded once it is gone, or found gone already, so the caller announces it before the next one
+    goes ([[LH-495]]): the retry lists only what still stands, so a table the first attempt destroyed is announced
+    then or not at all.
     """
     tables = [child for resource, child in descendants if resource == "table"]
     child_namespaces = sorted((child for resource, child in descendants if resource == "namespace"), key=len, reverse=True)
@@ -653,9 +655,33 @@ async def _destroy_subtree(
             if dropped.location:
                 await run_in_threadpool(base_registry.forget_base_record, registry, dropped.location, table=delimiter.join(child))
                 await run_in_threadpool(location_claims.release, claims, dropped.location, delimiter.join(child))
+        yield child
     for child in [*child_namespaces, segments]:
         with suppress(NamespaceNotFoundError):
             await run_in_threadpool(native.call, ns, "drop_namespace", DropNamespaceRequest(id=child))
+
+
+async def _announce_removed(
+    emitter: LineageEmitter, settings: Settings, segments: list[str], *, operation: str, token: Principal | None, authorization: str | None
+) -> None:
+    """Tell lineage a table stopped existing, so its reconcile does not read it as live forever ([[LH-144]]).
+
+    Before its grants are revoked: on the http transport the caller's bearer authorizes the ingest against grants
+    still standing. Best-effort and logged: a missing lineage row must not stop the delete before its revoke, which
+    would trade it for grants on nothing.
+    """
+    try:
+        await emit_write_event(
+            emitter,
+            segments,
+            delimiter=settings.delimiter,
+            author=token.sub if token is not None else None,
+            version=None,
+            operation=operation,
+            authorization=authorization,
+        )
+    except Exception as exc:  # noqa: BLE001 — provenance must never fail the delete it records
+        log.warning("cascade_drop_lineage_emit_failed", extra={"table": segments, "error": str(exc)})
 
 
 async def _require_descendants_unprotected(settings: Settings, descendants: list[tuple[str, list[str]]], *, force: bool) -> None:
@@ -790,9 +816,13 @@ async def drop_namespace(
         await _trash_subtree(ns, settings, token, segments, descendants)
         response = DropNamespaceResponse()
     elif cascade:
-        # The dir backend cannot cascade (#117) — we enumerate and destroy bottom-up ourselves.
+        # The dir backend cannot cascade (#117) — we enumerate and destroy bottom-up ourselves, announcing each table as
+        # it goes ([[LH-495]]): the retry after a failure part-way lists only what still stands.
         registry = base_registry.BaseRegistry(control_root=settings.registry_root, storage_options=settings.storage_options())
-        await _destroy_subtree(ns, segments, descendants, registry=registry, claims=table_claims.claim_store(settings), delimiter=settings.delimiter)
+        async for table in _destroy_subtree(
+            ns, segments, descendants, registry=registry, claims=table_claims.claim_store(settings), delimiter=settings.delimiter
+        ):
+            await _announce_removed(emitter, settings, table, operation=DROP_TABLE, token=token, authorization=authorization)
         response = DropNamespaceResponse()
     else:
         try:
@@ -801,26 +831,15 @@ async def drop_namespace(
             if drop_mode is not DropMode.SKIP:
                 raise
             return await _skip_absent_namespace(settings, client, token, segments)
-    # The record dies with the object — a reused id must not inherit protection nobody set on it.
-    if guard:  # only when one existed — see the table doors
+    # The record dies with the object — a reused id must not inherit protection nobody set on it. A recoverable cascade
+    # clears its namespace's here, and its DESCENDANTS' only under force=true (an unforced cascade already proved none
+    # exist); every other drop ends them below, with the rest of what each removed object holds.
+    if recoverable and guard:  # only when one existed — see the table doors
         await run_in_threadpool(protection.clear_protection, settings.registry_root, settings.storage_options(), "namespace", canonical)
-    # Same reuse rule for the DESCENDANTS' protection records — only reachable with force=true (an
-    # unforced cascade already proved none exist, so this loop would be guaranteed-wasted deletes).
-    if force:
+    if recoverable and force:
         for resource, child_segments in descendants:
             child_id = fga.canonical_object_id(child_segments, delimiter=settings.delimiter)
             await run_in_threadpool(protection.clear_protection, settings.registry_root, settings.storage_options(), resource, child_id)
-    # The MAINTENANCE POLICIES die with a DESTROYED subtree, under the same reuse rule as the protection
-    # records above and the warehouse binding below — and NOT on the recoverable path, where undrop
-    # rebuilds the subtree and each object must come back configured as it was.
-    # The descendants are cleared unconditionally here rather than under `force`, unlike protection: an
-    # unforced cascade proves no PROTECTED descendant exists, which says nothing about policies, so
-    # gating on `force` would leak a policy for every table destroyed by an ordinary cascade.
-    if not recoverable:
-        await run_in_threadpool(maintenance_policies.delete_policy, settings.registry_root, settings.storage_options(), "namespace", canonical)
-        for resource, child_segments in descendants:
-            child_id = fga.canonical_object_id(child_segments, delimiter=settings.delimiter)
-            await run_in_threadpool(maintenance_policies.delete_policy, settings.registry_root, settings.storage_options(), resource, child_id)
     # The warehouse BINDING dies with a destroyed top-level namespace. `unbind_namespace` existed and
     # only the warehouse-delete door called it, so every direct drop of a top-level namespace leaked
     # its binding record — and the UI derives its namespace list from bindings, so the dropped
@@ -829,47 +848,26 @@ async def drop_namespace(
     # grants are: undrop rebuilds the subtree and the binding must still be there to route it.
     if not recoverable and len(segments) == 1:
         await run_in_threadpool(warehouses.unbind_namespace, settings.registry_root, settings.storage_options(), segments[0])
-    # Revoke AFTER the drop commits (so a failed/restricted drop leaves the still-valid grants in place):
-    # the namespace's own tuples, then every cascaded descendant's. NOT on a recoverable cascade (#96,
-    # the #75 rule): the owner is the one person who needs to undrop it, and the grants die with the
-    # bytes — at purge, or when the sweep's expiry reclaims the trash.
-    # RECORD THE DELETION OF EVERY TABLE THIS CASCADE DESTROYED, exactly as the single-table door does
-    # ("the dataset node persists in the graph, named a `drop_table` run"). Those children die inside the
-    # one native call and never reach that door, so without this nothing records that they went.
-    #
-    # `repository.dropped_at` reads a drop from these events ([[LH-144]]), so a table nothing records
-    # stays indistinguishable from a live one and `lineage_reconcile_ungoverned` names it every tick.
-    # Measured 2026-09-18: 20 datasets reported ungoverned on the live estate, 8 of them tables this
-    # repo's own suites had cascade-dropped hours earlier.
-    #
-    # BEFORE THE REVOKE, the ordering the table door states and for its reason: on the http transport
-    # the caller's bearer authorizes ingest against their still-live write grant, so revoking first
-    # would 403 the very event that records who dropped the table. Emitted for a recoverable drop too,
-    # matching that door — the undrop emits a `register_table` marker per table, which lineage reads as
-    # the table existing again.
-    # GUARDED PER TABLE, which the single-table door does not need and this does. That door emits once;
-    # this emits N times and the FGA revoke runs AFTER. An exception escaping mid-loop would skip both
-    # the remaining tables' records and the revoke — trading a missing lineage row for orphan grants,
-    # which is the worse of the two. Each failure is logged rather than swallowed silently.
-    for resource, child_segments in descendants:
-        if resource != "table":
-            continue
-        try:
-            await emit_write_event(
-                emitter,
-                child_segments,
-                delimiter=settings.delimiter,
-                author=token.sub if token is not None else None,
-                version=None,
-                operation=DROP_TABLE,
-                authorization=authorization,
-            )
-        except Exception as exc:  # noqa: BLE001 — provenance must never fail the drop it records
-            log.warning("cascade_drop_lineage_emit_failed", extra={"table": child_segments, "error": str(exc)})
-    if not recoverable:
-        await fga_deps.revoke_ownership(client, settings, resource="namespace", segments=segments, token=token)
+    # RECORD THE DELETION OF EVERY TABLE THIS CASCADE DETACHED, exactly as the single-table door does ("the dataset
+    # node persists in the graph, named a `drop_table` run"); a destroyed subtree announced each table as it went.
+    # `repository.dropped_at` reads a drop from these events ([[LH-144]]), so a table nothing records stays
+    # indistinguishable from a live one and `lineage_reconcile_ungoverned` names it every tick. Measured 2026-09-18:
+    # 20 datasets reported ungoverned on the live estate, 8 of them tables this repo's own suites had cascade-dropped
+    # hours earlier. Emitted for a recoverable drop too, matching that door — the undrop emits a `register_table`
+    # marker per table, which lineage reads as the table existing again.
+    if recoverable:
         for resource, child_segments in descendants:
-            await fga_deps.revoke_ownership(client, settings, resource=resource, segments=child_segments, token=token)
+            if resource == "table":
+                await _announce_removed(emitter, settings, child_segments, operation=DROP_TABLE, token=token, authorization=authorization)
+    # End what each removed object holds AFTER the drop commits, so a failed or Restrict-refused drop leaves all of it in
+    # place: the descendants first, found by the catalog's listing and by the `child` edges a failed earlier attempt
+    # left, each one's protection and maintenance policy before its grants, then the namespace's own. NOT on a
+    # recoverable cascade (#96, the #75 rule): undrop rebuilds the subtree, and each object must come back configured
+    # as it was and reachable by the owner, the one person who needs to undrop it. Those die with the bytes — at
+    # purge, or when the sweep's expiry reclaims the trash.
+    if not recoverable:
+        async for _ in fga_deps.end_removed_subtree(client, settings, root=segments, removed=descendants, token=token):
+            pass
     await emit_control(
         control,
         action="namespace_dropped",

@@ -10,6 +10,7 @@ Found on 2026-08-05 by driving the real doors, not by reading code.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
 from typing import Any
 
 from lance_namespace import NamespaceNotFoundError
@@ -57,6 +58,9 @@ class _RecordingNs:
 
 
 # ---------------------------------------------------------------- #117 the cascade actually destroys
+async def _drain(destroying: AsyncIterator[list[str]]) -> list[list[str]]:
+    """Run the destroy to its end, as the door's own loop does, returning the tables it reported gone."""
+    return [item async for item in destroying]
 
 
 def test_the_cascade_destroys_BOTTOM_UP_and_never_asks_the_backend_to() -> None:
@@ -70,7 +74,9 @@ def test_the_cascade_destroys_BOTTOM_UP_and_never_asks_the_backend_to() -> None:
         ("namespace", ["bronze", "inner"]),
         ("table", ["bronze", "inner", "t2"]),
     ]
-    asyncio.run(_destroy_subtree(ns, ["bronze"], descendants, registry=_NO_RECORDS, claims=ClaimStore(control_root="/nonexistent/control"), delimiter="$"))
+    asyncio.run(
+        _drain(_destroy_subtree(ns, ["bronze"], descendants, registry=_NO_RECORDS, claims=ClaimStore(control_root="/nonexistent/control"), delimiter="$"))
+    )
 
     assert "drop_table:bronze$pages" in ns.calls
     assert "drop_table:bronze$inner$t2" in ns.calls
@@ -95,8 +101,10 @@ def test_an_already_absent_child_is_DRIFT_not_an_error() -> None:
 
     ns: Any = _Vanishing()
     asyncio.run(
-        _destroy_subtree(
-            ns, ["bronze"], [("table", ["bronze", "ghost"])], registry=_NO_RECORDS, claims=ClaimStore(control_root="/nonexistent/control"), delimiter="$"
+        _drain(
+            _destroy_subtree(
+                ns, ["bronze"], [("table", ["bronze", "ghost"])], registry=_NO_RECORDS, claims=ClaimStore(control_root="/nonexistent/control"), delimiter="$"
+            )
         )
     )
     assert "drop_namespace:bronze:restrict" in ns.calls, "one absent child blocked the whole cascade"

@@ -36,6 +36,7 @@ from typing import cast
 from unittest.mock import AsyncMock, MagicMock, create_autospec
 
 import pyarrow as pa
+import pytest
 from fastapi.testclient import TestClient
 from lance_namespace import (
     CreateNamespaceResponse,
@@ -45,7 +46,6 @@ from lance_namespace import (
     DescribeTableResponse,
     DropNamespaceResponse,
     DropTableResponse,
-    ListNamespacesResponse,
     ListTablesResponse,
     ServiceUnavailableError,
 )
@@ -528,21 +528,6 @@ def test_deregister_table_revokes_tuples(client: TestClient, fake_ns: MagicMock,
     assert call is not None and call.args[1] == "table:db1$users"
 
 
-def test_drop_namespace_revokes_tuples(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
-    """CONTRACT: a successful drop_namespace revokes the namespace's tuples (obj ``namespace:db1``)."""
-    fake_ns.drop_namespace.return_value = DropNamespaceResponse()
-    _wire(client)
-    monkeypatch.setattr(fga_module, "check", _fake_check([], allow=True))
-    revoke = AsyncMock(return_value=[_revoked_tuple() for _ in range(1)])
-    monkeypatch.setattr(fga_module, "revoke_object_tuples", revoke)
-
-    resp = client.post("/v1/namespace/db1/drop", headers={"Authorization": "Bearer t"})
-    assert resp.status_code == 200
-    revoke.assert_awaited_once()
-    call = revoke.await_args
-    assert call is not None and call.args[1] == "namespace:db1"
-
-
 def test_rename_table_seeds_destination_then_revokes_source(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
     """CONTRACT: rename seeds the DEST id's tuples and revokes the SOURCE — and seed fires BEFORE revoke.
 
@@ -653,31 +638,6 @@ def test_overwrite_of_existing_table_by_non_owner_is_denied_and_revokes_nothing(
     fake_ns.create_table.assert_not_called()  # gated BEFORE the irreversible write
 
 
-def test_cascade_drop_namespace_revokes_every_child(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
-    """CONTRACT: a Cascade namespace drop revokes the namespace AND every dropped child (tables + nested
-    namespaces enumerated before the drop), so no reused child id inherits a stale grant."""
-    fake_ns.drop_namespace.return_value = DropNamespaceResponse()
-    fake_ns.list_tables.return_value = ListTablesResponse(tables=["users", "logs"], page_token=None)
-    fake_ns.list_namespaces.return_value = ListNamespacesResponse(namespaces=[], page_token=None)
-    _wire(client)
-    monkeypatch.setattr(fga_module, "check", _fake_check([], allow=True))
-    revoked: list[str] = []
-
-    async def _revoke(_c: object, obj: str, **_k: object) -> list[SimpleNamespace]:
-        revoked.append(obj)
-        return [_revoked_tuple(obj=obj)]
-
-    monkeypatch.setattr(fga_module, "revoke_object_tuples", _revoke)
-
-    resp = client.post(
-        "/v1/namespace/db1/drop",
-        json={"behavior": "Cascade"},
-        headers={"Authorization": "Bearer t"},
-    )
-    assert resp.status_code == 200
-    assert set(revoked) == {"namespace:db1", "table:db1$users", "table:db1$logs"}
-
-
 def test_restrict_drop_namespace_revokes_only_itself(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
     """CONTRACT: a Restrict (default) drop does NOT enumerate or revoke children — a non-empty Restrict drop
     errors in the backend, so children (and their still-valid grants) stay put."""
@@ -691,6 +651,7 @@ def test_restrict_drop_namespace_revokes_only_itself(client: TestClient, fake_ns
         return [_revoked_tuple(obj=obj)]
 
     monkeypatch.setattr(fga_module, "revoke_object_tuples", _revoke)
+    monkeypatch.setattr(fga_module, "read_object_tuples", AsyncMock(return_value=[]))  # the namespace holds no child edge
 
     resp = client.post("/v1/namespace/db1/drop", json={}, headers={"Authorization": "Bearer t"})
     assert resp.status_code == 200
@@ -932,6 +893,32 @@ def test_table_restore_is_owner_tier(client: TestClient, fake_ns: MagicMock, mon
     resp = client.post("/v1/table/db1$t/restore", json={"version": 1}, headers={"Authorization": "Bearer t"})
     assert resp.status_code == 403
     assert captured[-1] == {"user": "alice", "relation": "can_restore", "obj": "table:db1$t"}
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "relation", "obj"),
+    [
+        pytest.param("post", "/management/v1/table/db1$t/undrop", "can_drop", "table:db1$t", id="a-table-undrop-asks-the-drop-rung"),
+        pytest.param("post", "/management/v1/namespace/db1/undrop", "can_delete", "namespace:db1", id="a-namespace-undrop-asks-the-drop-rung"),
+        pytest.param("get", "/management/v1/table/db1$t/tasks", "can_get_metadata", "table:db1$t", id="a-table-deadline-is-a-metadata-read"),
+        pytest.param("get", "/management/v1/namespace/db1/tasks", "can_get_metadata", "namespace:db1", id="a-namespace-deadline-is-a-metadata-read"),
+    ],
+)
+def test_a_trash_door_asks_the_rung_of_the_drop_it_answers(
+    client: TestClient, fake_ns: MagicMock, monkeypatch, method: str, path: str, relation: str, obj: str
+) -> None:
+    """CONTRACT: an undrop reverses a drop, so it asks the drop's own owner rung (#75, #96), and a pending deadline is
+    metadata: after a drop the owner holds no write rung, so a writer-tier `tasks` would hide their own deadline."""
+    _wire(client)
+    captured: list[dict] = []
+    monkeypatch.setattr(fga_module, "check", _fake_check(captured, allow=False))
+
+    resp = getattr(client, method)(path, headers={"Authorization": "Bearer t"})
+
+    # The door's own rung is its first check; a read door then asks the parent's, to tell an absent child from a
+    # forbidden one.
+    assert resp.status_code == 403, resp.text
+    assert captured[0] == {"user": "alice", "relation": relation, "obj": obj}
 
 
 def test_table_branch_and_tag_create_are_owner_tier(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:

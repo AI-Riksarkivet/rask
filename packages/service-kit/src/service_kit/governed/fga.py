@@ -2102,6 +2102,22 @@ def _delete_reported_absent(exc: ApiException) -> bool:
     return exc.status == 400 and exc.code == ErrorCode.WRITE_FAILED_DUE_TO_INVALID_INPUT
 
 
+class RevokeInterrupted(ServiceUnavailableError):
+    """A revoke OpenFGA stopped answering part-way, carrying the tuples it had already removed.
+
+    :func:`delete_tuples` deletes one tuple per write, so an outage can land between two of them, and the
+    ones before it are gone whatever the caller does next. A caller reporting what it revoked counts
+    ``removed`` too, or its report says less than the store lost. The message is the module's constant one.
+    """
+
+    #: The tuples the server confirmed deleted before the failure.
+    removed: list[ClientTuple]
+
+    def __init__(self, *, removed: list[ClientTuple]) -> None:
+        super().__init__("authorization service unavailable")
+        self.removed = removed
+
+
 async def delete_tuples(
     client: OpenFgaClient,
     tuples: list[ClientTuple],
@@ -2111,21 +2127,23 @@ async def delete_tuples(
     retry_attempts: int = DEFAULT_RETRY_ATTEMPTS,
     retry_backoff_seconds: float = DEFAULT_RETRY_BACKOFF_SECONDS,
     retry_max_backoff_seconds: float = DEFAULT_RETRY_MAX_BACKOFF_SECONDS,
-) -> None:
-    """Delete relationship tuples (the revoke counterpart of :func:`write_tuples`).
+) -> list[ClientTuple]:
+    """Delete relationship tuples (the revoke counterpart of :func:`write_tuples`); return those the server removed.
 
     Deletes each tuple in its OWN write — NOT one batch. OpenFGA's Write is transactional (all-or-nothing),
     so a single concurrently-absent tuple (the race our read-then-delete opens) in a batched delete would
     400 the WHOLE call and leave EVERY grant in place while looking like success. Per-tuple, one absent
     tuple can't block the rest, and an absent tuple is idempotent success (the post-condition — gone —
-    already holds). Transient failures are retried; on outage we fail closed with ``ServiceUnavailableError``
-    so the caller does not believe a revoke succeeded when it did not (stale grants would silently linger).
+    already holds), left out of what this returns. Transient failures are retried; on outage we fail
+    closed with :class:`RevokeInterrupted` (a ``ServiceUnavailableError``) so the caller does not believe a
+    revoke succeeded when it did not (stale grants would silently linger).
 
-    A PARTIAL revoke still audits what it removed. The 503 says the call did not finish; it does not say
-    nothing happened, and every tuple already deleted is gone whatever the caller does next.
+    A PARTIAL revoke still audits what it removed, and the error carries it. The 503 says the call did not
+    finish; it does not say nothing happened, and every tuple already deleted is gone whatever the caller
+    does next.
     """
     if not tuples:
-        return
+        return []
 
     # The ONE path that does not go through `_guarded`, and the reason is the `except` block below:
     # this is the only caller that must READ the failure before failing closed, because a
@@ -2148,7 +2166,7 @@ async def delete_tuples(
                     absent.append(t)
                     continue
                 log.error("openfga_delete_unavailable", exc_info=True)
-                raise ServiceUnavailableError("authorization service unavailable") from exc
+                raise RevokeInterrupted(removed=list(removed)) from exc
     finally:
         # `finally`, NOT after the loop (SKG-02). The loop deletes one tuple per write and raises from
         # INSIDE itself on an outage, so the tuples already removed were gone from OpenFGA the moment
@@ -2163,6 +2181,7 @@ async def delete_tuples(
         # asserting a removal that did not happen.
         _audit_tuples("access_tuple_delete", removed, actor, origin)
         _audit_tuples("access_tuple_delete", absent, actor, origin, reason="tuple_absent")
+    return removed
 
 
 async def revoke_object_tuples(
@@ -2175,7 +2194,7 @@ async def revoke_object_tuples(
     retry_backoff_seconds: float = DEFAULT_RETRY_BACKOFF_SECONDS,
     retry_max_backoff_seconds: float = DEFAULT_RETRY_MAX_BACKOFF_SECONDS,
 ) -> list[ClientTuple]:
-    """Delete EVERY tuple on ``obj`` — the revoke-on-delete cleanup. Returns WHAT was removed.
+    """Delete EVERY tuple on ``obj`` — the revoke-on-delete cleanup. Returns WHAT the server removed.
 
     **The tuples, not a count, and the difference is who gets told.** Every destructive door in the
     estate ends here — a project delete, a warehouse delete, a cascading namespace drop, an overwrite
@@ -2190,11 +2209,9 @@ async def revoke_object_tuples(
     silently re-grant the old subjects on the NEW object (stale-grant privilege bleed). Reads the
     full tuple set, then deletes it. No-op (0) when the object has none.
 
-    Scope: revokes the object's OWN tuples. A CASCADING namespace drop (``DropNamespaceRequest``
-    ``behavior=Cascade``) also removes child tables/namespaces — the ``drop_namespace`` endpoint enumerates
-    those descendants BEFORE the drop and calls this once per child, so their grants are revoked too (the
-    default directory backend rejects Cascade outright, so that path only engages on a backend that
-    supports it).
+    Scope: revokes the object's OWN tuples and its inverse ``child`` edge. A cascade that removes a subtree
+    revokes each object in it through the catalog's ``fga_deps.end_removed_subtree``, which finds them by
+    those ``child`` edges. An outage part-way raises :class:`RevokeInterrupted` naming the tuples removed.
     """
     tuples = await read_object_tuples(
         client,
@@ -2216,7 +2233,7 @@ async def revoke_object_tuples(
     parent = next((t.user for t in tuples if t.relation == "parent" and t.user), None)
     if parent and parent.split(":", 1)[0] in _CHILD_EDGE_PARENT_TYPES:
         doomed.append(ClientTuple(user=obj, relation="child", object=parent))
-    await delete_tuples(
+    return await delete_tuples(
         client,
         doomed,
         actor=actor,
@@ -2225,4 +2242,3 @@ async def revoke_object_tuples(
         retry_backoff_seconds=retry_backoff_seconds,
         retry_max_backoff_seconds=retry_max_backoff_seconds,
     )
-    return doomed

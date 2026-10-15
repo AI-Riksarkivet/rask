@@ -500,14 +500,11 @@ def test_a_table_location_is_exclusive(estate: _Estate) -> None:
     readable record, and a branch of it, whose manifest declares the root spelled so, is vended.
 
     And a location belongs to the table registered there only while that table exists: a table DESTROYED
-    — by the catalog's destructive drop, its namespace's destructive cascade, the maintenance purge of
-    its trash record, or a warehouse delete that clears its trash and purges its bucket — takes its base
-    record with its bytes, or the next table registered at the location would inherit bases nobody judged
-    for it.
+    — by the catalog's destructive drop, its namespace's destructive cascade or the maintenance purge of
+    its trash record — takes its base record with its bytes, or the next table registered at the location
+    would inherit bases nobody judged for it. A warehouse delete ends its trashed tables' base records too,
+    pinned at its door by `test_a_warehouse_cascade_revokes_a_grant_only_once_its_object_is_gone.py`.
     """
-    from catalog.services import warehouses
-    from service_kit.lakehouse import trash
-
     victim = estate.victim.removeprefix(f"{estate.root}/")
     for location in (".", "_bases", "%5Fbases", victim, f"{victim}/tree", f"x/.\t./{victim}", f"x/.\n./{victim}", f"x/%2e%2e/{victim}", "medallion/models/m"):
         resp = estate.client.post("/v1/table/db$squatter/register", json={"location": location})
@@ -535,14 +532,3 @@ def test_a_table_location_is_exclusive(estate: _Estate) -> None:
 
     for destroyed in (dropped, cascaded, purged):
         assert base_registry.read_base_record(estate.registry, destroyed) is None, f"{destroyed} left its base record behind"
-
-    # The fifth destroy path: a table recoverably dropped inside a warehouse, whose trash record a
-    # warehouse delete clears (warehouses.delete_warehouse_record -> _clear_trash_under) and whose bytes a
-    # purge_bucket then removes. The maintenance purge never sees it, so the base record leaks unless the
-    # warehouse delete forgets it. Driven at delete_warehouse_record with the bucket as the id, which is
-    # its fallback when no warehouse record exists — the seam the review named, without the admin API.
-    warehoused = _registered(estate, "db$warehoused", "warehoused")
-    trash.put(estate.root, estate.key, trash.make_record("db$warehoused", location=warehoused, dropped_by="user:alice", grace_days=1))
-    assert base_registry.read_base_record(estate.registry, warehoused) is not None, "precondition: the trashed table kept its record"
-    warehouses.delete_warehouse_record(estate.root, estate.key, estate.bucket)
-    assert base_registry.read_base_record(estate.registry, warehoused) is None, "the warehouse delete left the trashed table's base record behind"
