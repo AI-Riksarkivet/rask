@@ -1,12 +1,12 @@
 <script lang="ts">
-	// #73 index management — build (scalar / vector) + drop. Vector indexes (IVF/HNSW) are the Lance
-	// differentiator neither Iceberg nor Unity has; a rebuild is a create with the same column (Lance
-	// replaces). The catalog gates all three at the writer tier (can_write_data).
+	// #73 index management — list + drop. The catalog builds no index: `create_index` and
+	// `create_scalar_index` answer 406 naming the bring-your-own path, so an index is built (or
+	// rebuilt) by the caller's own compute against the table, and appears here once committed. Drop
+	// stays a catalog door, gated at the writer tier (can_write_data).
 	//
 	// Split out of TableDetail.svelte (#98). Mounted under the parent's `{#key table}`, so the
-	// instance never survives a navigation — a column/type typed on table A cannot build against B.
-	import { Select } from '@rask/ui/select';
-	import { createTableIndex, dropTableIndex } from '../remote/catalog.remote';
+	// instance never survives a navigation.
+	import { dropTableIndex } from '../remote/catalog.remote';
 
 	interface IndexRow {
 		index_name?: string;
@@ -20,39 +20,8 @@
 		onchanged,
 	}: { table: string; indexes: IndexRow[]; onchanged: () => Promise<void> } = $props();
 
-	const SCALAR_TYPES = ['BTREE', 'BITMAP', 'INVERTED', 'NGRAM'];
-	const VECTOR_TYPES = ['IVF_PQ', 'IVF_HNSW_SQ'];
-	let ixColumn = $state('');
-	let ixType = $state('BTREE');
-	let ixDistance = $state('cosine');
 	let ixBusy = $state(false);
 	let ixError = $state<string | null>(null);
-	const ixScalar = $derived(SCALAR_TYPES.includes(ixType));
-
-	async function runCreateIndex(): Promise<void> {
-		const column = ixColumn.trim();
-		if (ixBusy || !column || !ixType) return;
-		ixBusy = true;
-		ixError = null;
-		try {
-			const body = ixScalar
-				? { column, index_type: ixType }
-				: { column, index_type: ixType, distance_type: ixDistance };
-			const res = await createTableIndex({ table, body, scalar: ixScalar });
-			if (res.ok) {
-				ixColumn = '';
-				await onchanged(); // pull the new index into the list (the build bumps the version too)
-			} else if (res.status === 401) {
-				ixError = 'Sign in to build an index.';
-			} else if (res.status === 403) {
-				ixError = 'Denied: building an index needs writer access (can_write_data).';
-			} else {
-				ixError = res.detail;
-			}
-		} finally {
-			ixBusy = false;
-		}
-	}
 
 	async function runDropIndex(name: string | undefined): Promise<void> {
 		if (ixBusy || !name) return;
@@ -96,38 +65,9 @@
 			{/each}
 		</div>
 	{/if}
-	<!-- #73 build an index — scalar (BTREE/BITMAP/INVERTED/NGRAM) or vector (IVF/HNSW). Writer-gated. -->
-	<form
-		class="row"
-		onsubmit={(e) => {
-			e.preventDefault();
-			runCreateIndex();
-		}}
-	>
-		<input class="mono" bind:value={ixColumn} placeholder="column" aria-label="Index column" />
-		<Select
-			bind:value={ixType}
-			ariaLabel="Index type"
-			options={[
-				...SCALAR_TYPES.map((t) => ({ value: t, label: `scalar · ${t}` })),
-				...VECTOR_TYPES.map((t) => ({ value: t, label: `vector · ${t}` })),
-			]}
-		/>
-		{#if !ixScalar}
-			<Select
-				bind:value={ixDistance}
-				ariaLabel="Distance type"
-				options={[
-					{ value: 'cosine', label: 'cosine' },
-					{ value: 'l2', label: 'l2' },
-					{ value: 'dot', label: 'dot' },
-				]}
-			/>
-		{/if}
-		<button class="btn" type="submit" disabled={ixBusy || !ixColumn.trim()}>
-			{ixBusy ? '…' : 'Build index'}
-		</button>
-	</form>
+	<p class="mut">
+		Indexes are built on your own compute against this table; the catalog does not build them.
+	</p>
 	{#if ixError}<p class="error">{ixError}</p>{/if}
 </section>
 
@@ -178,23 +118,6 @@
 	}
 	.chip-x:disabled {
 		opacity: 0.4;
-		cursor: default;
-	}
-	.row {
-		display: flex;
-		gap: 8px;
-	}
-	.btn {
-		background: var(--panel-2);
-		border: 1px solid var(--line);
-		border-radius: var(--radius-sm);
-		color: var(--ink);
-		font-size: 12px;
-		padding: 3px 10px;
-		cursor: pointer;
-	}
-	.btn:disabled {
-		opacity: 0.5;
 		cursor: default;
 	}
 </style>

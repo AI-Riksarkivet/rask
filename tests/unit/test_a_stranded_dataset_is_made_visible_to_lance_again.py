@@ -28,7 +28,7 @@ import pyarrow as pa
 import pytest
 import respx
 
-from maintenance.services.compaction_executor import MaintenanceDenied
+from maintenance.services.credentials import MaintenanceDenied
 from maintenance.services.floor import FloorReport, raise_listing_floors
 from maintenance.services.orphans import OrphanFile
 from service_kit.lancekit.versions import committed_at
@@ -235,9 +235,8 @@ def test_the_remainder_beyond_the_cap_is_reported(readable_floor: None) -> None:
 def test_the_commit_is_signed_by_the_vended_credential(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """A write to a governed table goes through the vending door, like every other write here.
 
-    `optimize.py` states the rule for the rewrite — "compacting locally would perform it under whatever
-    credential opened `ds`, which on a denied table is the deployment's ambient key. That is the bypass
-    this class exists to stop." A config commit is a write to the same table, so the same rule binds it.
+    A write signed by whatever opened the dataset is, on a denied table, signed by the deployment's ambient key: the
+    bypass `credentials.MaintenanceDenied` exists to stop. A config commit is a write to the table, so the rule binds it.
     Found by deploying: the first version of this signed with the ambient options while the sweep, on
     the very same dataset, refused for want of a vended credential.
     """

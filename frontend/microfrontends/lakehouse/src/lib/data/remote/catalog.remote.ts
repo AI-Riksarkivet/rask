@@ -8,8 +8,6 @@ import {
 	RenameTableResponseSchema,
 	TableLifecycleResponseSchema,
 	UpdateRowsResponseSchema,
-	type CompactResult,
-	type CreateIndexBody,
 	type DeclareTableResult,
 	type DeleteRowsResult,
 	type GcBounds,
@@ -40,7 +38,7 @@ import { catalogJSON, parsed } from '$lib/server/doors';
 // PARSING follows the same rule the routes did — every parse that existed moves server-side, and none
 // is invented. The lance-namespace lifecycle contracts (drop/deregister/rename/declare/update/delete)
 // were valibot-parsed in the browser and are parsed HERE now; the OpenAPI-generated shapes
-// (detail aggregate, policy, GC, compaction, tags, branches, indexes) were passed through untyped and
+// (detail aggregate, policy, GC, tags, branches, indexes) were passed through untyped and
 // still are — hand-mirroring six generated schemas in valibot would be a second source of truth.
 //
 // SINGLE-FLIGHT REFRESH, where it pays: the four writes that change WHICH TABLES EXIST
@@ -224,17 +222,6 @@ export const runMaintenance = command(
 		typedAs<GcRunResult>(await post(`/management/v1/table/${enc(table)}/maintenance/run`, bounds)),
 );
 
-/** #76 compact small fragments on demand (non-destructive — writes a new version). Owner-gated. */
-export const compactTable = command(
-	v.object({ table: v.string(), targetRowsPerFragment: v.optional(v.nullable(v.number())) }),
-	async ({ table, targetRowsPerFragment }): Promise<ApiResult<CompactResult>> =>
-		typedAs<CompactResult>(
-			await post(`/management/v1/table/${enc(table)}/maintenance/compact`, {
-				target_rows_per_fragment: targetRowsPerFragment ?? null,
-			}),
-		),
-);
-
 // ── version refs: tags, branches, restore ──────────────────────────────────────────────────────
 
 /** #64 name (tag) a Lance version. Writer-gated (can_create_tag). */
@@ -349,31 +336,6 @@ export const setTableProperties = command(
 // column under an optional predicate — a bounded backfill, on a door that is backed.
 
 // ── indexes ────────────────────────────────────────────────────────────────────────────────────
-
-/** #73 build an index — `scalar` picks the catalog's create_scalar_index (BTREE/BITMAP/INVERTED …)
- *  vs create_index (the IVF/HNSW vector families). A rebuild is just a create with the same column
- *  (Lance replaces the existing one). Writer-gated (can_write_data). */
-export const createTableIndex = command(
-	v.object({
-		table: v.string(),
-		body: v.object({
-			column: v.string(),
-			index_type: v.string(),
-			distance_type: v.optional(v.string()),
-		}),
-		scalar: v.boolean(),
-	}),
-	async ({
-		table,
-		body,
-		scalar,
-	}: {
-		table: string;
-		body: CreateIndexBody;
-		scalar: boolean;
-	}): Promise<ApiResult<unknown>> =>
-		post(`/v1/table/${enc(table)}/${scalar ? 'create_scalar_index' : 'create_index'}`, body),
-);
 
 /** #73 drop a named index — writer-gated (can_write_data). */
 export const dropTableIndex = command(

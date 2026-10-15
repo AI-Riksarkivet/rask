@@ -536,9 +536,11 @@ groups:
             reported but never block the purge.
             Runbook: docs/runbooks/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up
 
+      # A 1h window over a 30-minute tick: a failing dataset is counted once a tick, so a narrower window drops to 0
+      # between ticks and resets the `for:`.
       - alert: MaintenanceDatasetsFailing
-        expr: sum(increase(compaction_datasets_failed_total[30m])) > 0
-        for: 30m
+        expr: sum(increase(compaction_datasets_failed_total[1h])) > 0
+        for: 1h
         labels:
           severity: warning
           service: maintenance
@@ -546,8 +548,7 @@ groups:
           summary: "Table maintenance is failing on one or more datasets"
           description: >-
             The sweep could not complete one or more datasets. Sustained failure means those datasets
-            accumulate fragments and superseded versions indefinitely while every tick still reports a
-            successful run. Break down by error.type; the per-dataset URI is on the trace span and in
+            accumulate superseded versions indefinitely while every tick still reports a successful run. Break down by error.type; the per-dataset URI is on the trace span and in
             the maintenance_sweep log line, deliberately not on the metric (unbounded cardinality).
 
       # The sweep is the only thing that reclaims storage. It stopping is silent by construction: no
@@ -557,23 +558,25 @@ groups:
       # died stops emitting `compaction_runs_total` entirely, and a bare `== 0` over an empty vector
       # cannot fire, so the one thing that reclaims storage stops silently AND its alert goes quiet with it.
       # The absence half is now its own rule below: GreptimeDB answers HTTP 500 to the composite form.
-        expr: sum(increase(compaction_runs_total[30m])) == 0
+      # A 2h window over the 30-minute tick: four passes should complete in it, so one slow pass does not page.
+        expr: sum(increase(compaction_runs_total[2h])) == 0
         for: 30m
         labels:
           severity: critical
           service: maintenance
         annotations:
-          summary: "No table-maintenance sweep has COMPLETED in 30 minutes"
+          summary: "No table-maintenance sweep has COMPLETED in two hours"
           description: >-
-            At a 120s cadence roughly fifteen passes should have completed. Either the Dapr cron binding
+            At a 30-minute cadence roughly four passes should have completed. Either the Dapr cron binding
             is not delivering or every pass is dying mid-flight — compare with
             compaction_runs_started_total, whose excess over compaction_runs_total is the lost-pass count.
 
       # The absence half. A sweep pod that has DIED emits no compaction_runs_total at all, and the
-      # `== 0` above cannot fire over a vector that does not exist.
+      # `== 0` above cannot fire over a vector that does not exist. `for: 1h` because a fresh pod's series first appears
+      # when its first pass completes, up to one 30-minute tick plus the pass after boot.
       - alert: MaintenanceSweepMetricsMissing
         expr: absent(compaction_runs_total)
-        for: 30m
+        for: 1h
         labels:
           severity: critical
           service: maintenance
@@ -597,15 +600,15 @@ groups:
           summary: "More than half of swept datasets are being REFUSED"
           description: >-
             The supported-manifest-flag whitelist is rejecting most of the estate, so maintenance is
-            running without maintaining. Usually a pylance upgrade introducing a flag the guard does not
+            running without reclaiming. Usually a pylance upgrade introducing a flag the guard does not
             know. Check the refusal reasons in the maintenance_sweep log line.
 
       # One mixed table is an incident the ratio rule above cannot see (45.3-46.5% of every sweep is refused,
       # measured 2026-09-24). No `for:`: the flag cannot be removed, so waiting buys nothing. The window sets how
-      # long the alert HOLDS between counts: a table is counted only on ticks that open it (a worker restart
-      # can pause delivery for ackWait, 720s), and a policy-skipped table is never opened, so it is not counted.
+      # long the alert HOLDS between counts: a table is counted only on ticks that open it, so the window spans two
+      # 30-minute ticks, and a policy-skipped table is never opened, so it is not counted.
       - alert: LanceMixedDataFileVersions
-        expr: sum(increase(compaction_datasets_mixed_file_versions_total[30m])) > 0
+        expr: sum(increase(compaction_datasets_mixed_file_versions_total[1h])) > 0
         labels:
           severity: critical
           service: maintenance
@@ -619,24 +622,9 @@ groups:
             indices. Find the table in the maintenance_dataset_outcome records where
             mixed_data_file_versions is true, and the writer that appended at another data_storage_version.
 
-      # A plan request the door refuses as malformed is the executor's bug with no in-pod fallback, so one pages.
-      - alert: CompactionPlanRequestRefused
-        expr: sum(increase(compaction_plan_refused_total[30m])) > 0
-        labels:
-          severity: warning
-          service: maintenance
-        annotations:
-          summary: "The catalog refused a compaction plan request as malformed"
-          description: >-
-            The maintenance executor sent a plan request the catalog refused as malformed, so that table was
-            not compacted and nothing rewrote it in-pod. The request is the executor's bug. The
-            compaction_plan_refused ERROR log line names the table, the status and the problem detail.
-
-      # One table the catalog keeps refusing, which the ratio rule cannot see. A rename leaves the old id with no
-      # tuples, so on a governed estate both doors answer it 403 on every tick. A worker's series first appears at
-      # 1, which increase() cannot see, so a deploy of N workers leaves N+1 sweep periods plus ackWait between
-      # counts: 4h holds two workers at the hourly backstop. vmalert keeps `for:` in memory, so its own restart
-      # restarts the clock.
+      # One table the catalog keeps refusing, which the ratio rule cannot see: an id that holds no tuples is answered
+      # 403 at the vend door on every tick. A series first appears at 1, which increase() cannot see, so the window
+      # spans several sweep periods. vmalert keeps `for:` in memory, so its own restart restarts the clock.
       - alert: MaintenanceTableParked
         expr: sum by (table_id) (increase(compaction_tables_parked_total[4h])) > 0
         for: 24h
@@ -646,14 +634,13 @@ groups:
         annotations:
           summary: "The catalog has refused maintenance of {{ $labels.table_id }} for 24 hours"
           description: >-
-            For a day the catalog has refused this table id, so the table is neither compacted nor cleaned.
-            Break down by refused_by. vend_denied and plan_denied are a 403: this identity holds no
-            can_maintain on the id, or the id names no table, which is what a rename leaves when maintenance
-            derives the id from the location or the lineage.dataset_id stamp. table_not_governed is a 404.
-            Grant the id, or fix the stamp or the location. The maintenance_vend_denied,
-            maintenance_rewrite_denied and maintenance_table_not_governed WARNING lines name the dataset.
+            For a day the catalog has refused this table id, so its superseded versions are not reclaimed.
+            Break down by refused_by. vend_denied is a 403: this identity holds no can_maintain on the id,
+            or the id names no table, which is what a stale lineage.dataset_id stamp leaves.
+            table_not_governed is a 404. Grant the id, or fix the stamp or the location. The
+            maintenance_vend_denied and maintenance_table_not_governed WARNING lines name the dataset.
 
-      # A rewrite signs with a table-scoped vended credential or with the ambient process credential,
+      # An expiry pass signs with a table-scoped vended credential or with the ambient process credential,
       # and until this series existed the only signal was an `info` line per dataset. Measured
       # 2026-09-11: 600 records in one window, 300 vend 401s and 300 ambient fallbacks, ZERO scoped —
       # a state that had been true long enough to be cited in a closed backlog row as evidence that an
@@ -664,20 +651,21 @@ groups:
       # comparing the two vectors matches nothing and never fires — the failure this file already
       # records for `outbox_oldest_age`. Dividing by the clamped TOTAL makes the all-ambient case a
       # ratio of 1 instead of an empty vector. No traffic at all yields an empty numerator and no page,
-      # which is correct: a dead sweep is CompactionSweepStopped's job, not this one.
+      # which is correct: a dead sweep is CompactionSweepStopped's job, not this one. The window is 1h because the sweep's
+      # passes arrive in a burst every 30-minute tick, and a narrower one would empty between bursts and reset `for:`.
       - alert: CompactionSigningWithAmbientCredential
         expr: >-
-          sum(increase(compaction_credential_tier_total{tier="ambient"}[30m]))
-          / clamp_min(sum(increase(compaction_credential_tier_total[30m])), 1) > 0.5
-        for: 15m
+          sum(increase(compaction_credential_tier_total{tier="ambient"}[1h]))
+          / clamp_min(sum(increase(compaction_credential_tier_total[1h])), 1) > 0.5
+        for: 30m
         labels:
           severity: warning
           service: maintenance
         annotations:
-          summary: "Most rewrites are signed by the ambient credential, not a vended one"
+          summary: "Most expiry passes are signed by the ambient credential, not a vended one"
           description: >-
-            Credential vending is failing, so maintenance is rewriting data under its process credential
-            instead of a per-table 900-second vended one. The blast radius of every rewrite becomes the
+            Credential vending is failing, so maintenance is reclaiming versions under its process credential
+            instead of a per-table 900-second vended one. The blast radius of every pass becomes the
             maintenance identity's whole scope rather than one table prefix, and the STS machinery the
             estate's storage rule is built on is doing nothing. Check the vend refusals in
             `maintenance.services.credentials` — a 401 there is an identity that cannot present its own
@@ -1017,7 +1005,7 @@ groups:
       # threshold on every evaluation — and a warning that is always firing is muted, which is worse
       # than the silence it replaced. The annotation below already stated the intent ("`maintenance`
       # legitimately runs long during a sweep; any other service here is a defect"); this makes the
-      # expression say it. `MaintenanceSweepOverrunsItsSchedule` covers that service on its own terms.
+      # expression say it. `MaintenanceSweepRunsLong` covers that service on its own terms.
       - alert: HttpServerLatencyHigh
         expr: histogram_quantile(0.95, sum by (service_name, le) (rate(http_server_duration_milliseconds_bucket{service_name!="maintenance"}[10m]))) > 15000
         for: 15m
@@ -1032,25 +1020,26 @@ groups:
             `maintenance` legitimately runs long during a sweep; any other service here is a defect.
             Runbook: docs/runbooks/RUNBOOK-oncall.md#readyz-degraded--pool-or-graph
 
-      # THE THRESHOLD IS THE SWEEP'S OWN SCHEDULE, not a round number. `maintenance.schedule` is
-      # `@every 120s` (chart/values.yaml), so a sweep whose p95 exceeds 120s has not merely slowed —
-      # the next tick fires while the previous one is still running, and the two contend for the same
-      # 512Mi tier. Measured 2026-09-21 the sweep ran ~39.5s, so this has ~3x headroom before it says
-      # anything, which is what keeps it from being muted.
-      #
-      # It is only MEASURABLE because the duration histogram now reaches past 10s ([[XC-067]]); with
-      # the default buckets this expression would be capped at 10000 and could never fire either.
-      - alert: MaintenanceSweepOverrunsItsSchedule
-        expr: histogram_quantile(0.95, sum by (service_name, le) (rate(http_server_duration_milliseconds_bucket{service_name="maintenance"}[30m]))) > 120000
-        for: 30m
+      # THE THRESHOLD IS THE HISTOGRAM'S TOP BUCKET, because the hazard lies past it. The sweep is the
+      # backstop pass every 30 minutes (`maintenance.schedule`), and each pass writes the clone list that
+      # `version/create` judges every compaction against, refusing them once the list is older than
+      # `maintenance.cloneListMaxAgeSeconds` (an hour). A pass longer than its tick lets the list age out,
+      # but 30 minutes is beyond the duration histogram's 300s top bucket ([[XC-067]]), so the rule fires
+      # when the p95 pass reaches that bucket, the longest duration this metric can name. Measured
+      # 2026-09-21 a pass ran ~39.5s. The route selector keeps the write-event lane's requests, which now
+      # expire a table each, out of the sweep's quantile; the 2h window holds four ticks.
+      - alert: MaintenanceSweepRunsLong
+        expr: histogram_quantile(0.95, sum by (service_name, le) (rate(http_server_duration_milliseconds_bucket{service_name="maintenance", http_target="/maintenance-cron"}[2h]))) >= 300000
+        for: 1h
         labels:
           severity: warning
           service: maintenance
         annotations:
-          summary: "The maintenance sweep is taking longer than the interval it runs on"
+          summary: "The maintenance sweep's passes reach five minutes"
           description: >-
-            p95 sweep duration is above the 120s cron interval, so ticks overlap and two sweeps share
-            one container's memory budget. Expect RSS to climb and the worker to be OOMKilled.
+            p95 sweep duration has reached 300s, the top of what its histogram measures. Each pass writes the
+            clone list the catalog judges compactions against; a pass that outgrows the 30-minute schedule lets
+            that list age past an hour, and every bring-your-own compaction is refused 503 until a pass completes.
             Runbook: docs/runbooks/RUNBOOK-oncall.md#readyz-degraded--pool-or-graph
 
       # The watcher's watcher. Both rules above evaluate over an empty vector and go quiet if the

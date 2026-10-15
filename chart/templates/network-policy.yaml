@@ -187,7 +187,7 @@ spec:
               - key: app.kubernetes.io/component
                 operator: In
 
-                {{- $openbaoClients := list "catalog" "lineage" "maintenance" "maintenance-worker" }}
+                {{- $openbaoClients := list "catalog" "lineage" "maintenance" }}
                 {{- if and .Values.dapr.enabled .Values.stateStore.enabled }}
                 {{- $openbaoClients = concat $openbaoClients .Values.stateStore.scopes }}
                 {{- end }}

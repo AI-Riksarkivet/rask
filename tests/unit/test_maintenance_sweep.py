@@ -1,4 +1,4 @@
-"""Unit tests for the compaction service core — infra-free (no S3, no Lance).
+"""Unit tests for the maintenance sweep's core — infra-free (no S3, no Lance).
 
 Pins the two pieces of logic that aren't just Lance calls: dataset discovery (skip the catalog's
 ``__manifest`` + non-directories) and the sweep summary aggregation.
@@ -10,7 +10,8 @@ from typing import Any, cast
 
 import pyarrow.fs as pafs
 
-from maintenance.services.optimize import DatasetResult, discover_datasets
+from maintenance.services.discovery import discover_datasets
+from maintenance.services.expiry import DatasetResult
 from maintenance.services.sweep import summarize
 
 
@@ -61,7 +62,7 @@ def test_summarize_reports_refusals_as_their_own_category() -> None:
     made a shallow clone's silent full materialization invisible in the cron response.
     """
     results = [
-        DatasetResult(uri="s3://b/ok", fragments_removed=3, old_versions_removed=2),
+        DatasetResult(uri="s3://b/ok", old_versions_removed=2),
         DatasetResult(uri="s3://b/clone", refused="unsupported manifest feature flags: 16 (base_paths (shallow clone / multi-base))"),
         DatasetResult(uri="s3://b/skipped", skipped="policy_interval"),
         DatasetResult(uri="s3://b/broken", error="maintain: boom"),
@@ -107,8 +108,8 @@ def test_a_tick_aborted_before_the_loop_still_counts_as_started(monkeypatch: Any
 
 def test_on_cron_single_flight_skips_an_overlapping_sweep(monkeypatch: Any) -> None:
     """A cron tick that finds a prior sweep still in flight SKIPS instead of starting a SECOND concurrent
-    sweep — two sweeps would race compact_files()/cleanup_old_versions() on the same datasets. The sweep is
-    unbounded (every dataset) so overlap is real once it outlasts the cron interval."""
+    sweep — two sweeps would race cleanup_old_versions() on the same datasets and write the same due records. The
+    sweep covers every dataset, so overlap is real once it outlasts the cron interval."""
     import asyncio
     import types
 
@@ -122,11 +123,7 @@ def test_on_cron_single_flight_skips_an_overlapping_sweep(monkeypatch: Any) -> N
 
     monkeypatch.setattr(routes, "emit_sweep_lineage", _noop_emit)
     monkeypatch.setattr(routes, "summarize", lambda _results: {"status": "ok", "datasets": 0})
-    # `work_topic=""` selects the SERIAL lane, which is what this test is about — the single-flight
-    # guard is what stands in for a lease there. It holds on the queue lane too (two concurrent planners
-    # would enqueue every dataset twice), but there the tick is bounded and duplicate units are merely
-    # wasted rather than racing.
-    settings = cast(Any, types.SimpleNamespace(delimiter="$", work_topic=""))
+    settings = cast(Any, types.SimpleNamespace(delimiter="$"))
 
     async def while_a_sweep_is_running() -> dict:
         async with routes._sweep_lock:  # simulate the previous tick's sweep still holding the lock
@@ -143,7 +140,7 @@ def test_on_cron_single_flight_skips_an_overlapping_sweep(monkeypatch: Any) -> N
 def test_a_REFUSED_dataset_is_not_stamped_as_freshly_maintained(monkeypatch: Any) -> None:
     """A refusal carries `error=None`, so the cadence stamp treated it as a successful pass.
 
-    `optimize.compact_one` returns `DatasetResult(uri=…, refused=…)` with no error — a refusal is not
+    `expiry.expire_versions` returns `DatasetResult(uri=…, refused=…)` with no error — a refusal is not
     a failure, and that distinction is deliberate everywhere else. But the stamp gate read
     `result.error is None` and therefore recorded a dataset the sweep can NEVER maintain as freshly
     maintained. For the whole `compact_interval_hours` window it then reported as a transient
@@ -154,7 +151,9 @@ def test_a_REFUSED_dataset_is_not_stamped_as_freshly_maintained(monkeypatch: Any
     the ones that need compaction.
     """
     from maintenance.core.config import MaintenanceSettings
+    from maintenance.services import plan as plan_mod
     from maintenance.services import sweep as sweep_mod
+    from maintenance.services.due import TableIds
 
     policy = {"id": "p1", "kind": "table", "compact_interval_hours": 24}
     stamped: list[str] = []
@@ -164,13 +163,17 @@ def test_a_REFUSED_dataset_is_not_stamped_as_freshly_maintained(monkeypatch: Any
     monkeypatch.setattr(sweep_mod.maintenance_policies, "resolve_policy", lambda *_a, **_k: policy)
     monkeypatch.setattr(sweep_mod.maintenance_policies, "read_state", lambda *_a, **_k: None)
     monkeypatch.setattr(sweep_mod.maintenance_policies, "write_state", lambda _root, _o, _p, uri, _at: stamped.append(uri))
-    monkeypatch.setattr(sweep_mod.warehouse_records, "list_warehouse_records", lambda *_a, **_k: [])
+    monkeypatch.setattr(plan_mod.warehouse_records, "list_warehouse_records", lambda *_a, **_k: [])
+    monkeypatch.setattr(sweep_mod, "table_ids", lambda *_a, **_k: TableIds())
+    monkeypatch.setattr(sweep_mod, "write_clone_list", lambda *_a, **_k: None)
+    monkeypatch.setattr(sweep_mod, "list_due", lambda *_a, **_k: [])
     monkeypatch.setattr(sweep_mod.trash, "list_all", lambda *_a, **_k: [])
     monkeypatch.setattr(sweep_mod.base_refs, "protected_roots", lambda *_a, **_k: sweep_mod.base_refs.BaseRefs())
     monkeypatch.setattr(sweep_mod, "discover_datasets", lambda *_a, **_k: type("D", (), {"uris": ["s3://b/clone.lance"], "truncated": []})())
+    monkeypatch.setattr(sweep_mod, "_probe_before_vending", lambda *_a, **_k: sweep_mod.WriteProbe(may_write=False))
     monkeypatch.setattr(
         sweep_mod,
-        "compact_one",
+        "expire_versions",
         lambda *_a, **_k: DatasetResult(uri="s3://b/clone.lance", refused="unsupported manifest feature flags: 16"),
     )
 

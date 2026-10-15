@@ -340,6 +340,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/management/v1/maintenance/due": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Due Maintenance
+         * @description The tables a compaction or an index optimize is due on, in table order, listed to a caller holding
+         *     ``can_maintain`` on each: what made each due, the policy record that governed it, and how many datasets resolve
+         *     their files through it.
+         */
+        get: operations["list_due_maintenance_management_v1_maintenance_due_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/management/v1/me": {
         parameters: {
             query?: never;
@@ -1388,72 +1410,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/management/v1/table/{id}/compaction_commit": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Commit Table Compaction
-         * @description Commit the workers' rewrite results as ONE metadata-only version.
-         *
-         *     Every data file this publishes was written by the worker that executed the task and already exists
-         *     when this is called, so no data byte transits the catalog. Conflict taxonomy is shared: a result that lost a race to an Overwrite
-         *     is a NON-retryable 400 telling the caller to re-plan (its plan is void, not just its commit), a
-         *     malformed result is a 400, a store outage a 503 (``dataplane._classify_commit_error``).
-         *
-         *     The lineage emit is ``compact_table``, deliberately not a data op: a compaction changes no row, and
-         *     recording it as one would put phantom writes on the graph at every maintenance pass.
-         */
-        post: operations["commit_table_compaction_management_v1_table__id__compaction_commit_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/management/v1/table/{id}/compaction_plan": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Plan Table Compaction
-         * @description Plan a compaction and hand the work to a queue — the catalog does NOT execute it.
-         *
-         *     Rewriting a table's data files is unbounded work whose cost is set by the table rather than by the
-         *     request. Doing it here would make this pod's memory ceiling a function of the largest table anyone
-         *     owns and turn a maintenance pass into an availability incident for every other door on it. So the
-         *     protocol is split by credential: this door plans under ROOT creds (a manifest read — no data byte,
-         *     no new version), a WORKER holding vended table-scoped creds runs each task and writes every byte,
-         *     and ``/compaction_commit`` folds the results back in. See `docs/adr/0045-the-lakehouse-cloud-native-cutover-2026-09-03-04.md`, "The lakehouse cloud-native cutover".
-         *
-         *     Maintainer tier: the router ``authorize`` gate maps this to ``can_maintain``
-         *     (``fga_deps._MAINTENANCE_ACTIONS``), because only the maintenance plane calls it.
-         *
-         *     The body must state ``batch_size``, ``num_threads`` and ``max_source_bytes``, the executor's memory
-         *     bounds. Lance bakes them into every task and the worker cannot set them afterwards, so a plan
-         *     missing any is refused 400 (``InvalidInput``, code 13) with all three named. ``compaction_mode`` is
-         *     baked the same way and is optional: unset, Lance re-encodes.
-         *
-         *     An empty ``tasks`` list is a successful answer: the table is already at target and there is nothing
-         *     to queue.
-         */
-        post: operations["plan_table_compaction_management_v1_table__id__compaction_plan_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/management/v1/table/{id}/credentials": {
         parameters: {
             query?: never;
@@ -1581,38 +1537,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/management/v1/table/{id}/maintenance/compact": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Compact Maintenance
-         * @description Compact small fragments on demand (#76 'compact now'). Owner-gated (``can_drop``) — the same bar as
-         *     the retention policy that schedules maintenance. Non-destructive: writes a new version, removes none.
-         *
-         *     WHERE THE REWRITE HAPPENS depends on whether this deployment has a maintenance queue, and the two
-         *     answers are not a feature flag — they are the same choice ``services/maintenance`` already makes for
-         *     the scheduled lane, read off the same topic name so the two cannot disagree about whether a worker
-         *     exists. With a queue: publish one unit, 202, done in milliseconds. Without one: nothing would ever
-         *     execute that unit, so the rewrite runs here as it always has.
-         *
-         *     What stays in the handler either way is the BOUNDED half — parsing the identifier, opening the
-         *     dataset, and the ``sibling_base_refs`` pre-pass (one non-recursive listing). What leaves is the half
-         *     whose cost is a property of the data rather than of the request: rewriting every fragment of a table
-         *     whose fragment count nobody bounded.
-         */
-        post: operations["compact_maintenance_management_v1_table__id__maintenance_compact_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/management/v1/table/{id}/maintenance/preview": {
         parameters: {
             query?: never;
@@ -1637,46 +1561,6 @@ export interface paths {
          *     what ``/run`` deletes on that ref rather than asserting the branch reached ``open_dataset``.
          */
         post: operations["preview_maintenance_management_v1_table__id__maintenance_preview_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/management/v1/table/{id}/maintenance/reindex": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Reindex Maintenance
-         * @description Rebuild one named index in place ([[LH-105]]). Owner-gated (``can_drop``, declared in
-         *     ``fga_deps._OWNER_SUFFIX_RELATION``) — it destroys the index that is there.
-         *
-         *     **IT REPLACES; IT DOES NOT DROP AND RECREATE**, which is the whole design and was measured rather
-         *     than assumed. `LanceDataset.create_index` carries ``replace: bool = False`` and
-         *     `create_scalar_index` carries ``replace: bool = True`` (pylance 11.0.0, 2026-09-15): a same-name
-         *     vector rebuild is refused at the default — ``LanceError(Index): Index name 'x' already exists`` —
-         *     and accepted under ``replace=True``. So the vector index, the one that cannot repair itself
-         *     through the create doors, is repaired by a flag pylance already has. Dropping first would open a
-         *     window in which the table has NO index — a search silently degrading to a full scan — and would
-         *     leave it with none if the rebuild then failed, which is worse than the mis-parameterised index
-         *     being repaired.
-         *
-         *     **THE SHAPE IS READ, NOT RESTATED.** `index_specs.describe_index_for_rebuild` reads the live
-         *     index's own parameterisation, so a repair cannot quietly re-tune what it repairs; `body.params`
-         *     merges OVER that reading for the caller who is deliberately changing something.
-         *
-         *     WHERE IT RUNS follows the compact door beside it, off the same topic name the maintenance service
-         *     reads, so the two cannot disagree about whether a worker exists. With a queue: publish one
-         *     `IndexWorkItem` and answer 202. Without one: nothing would ever execute the unit, so the rebuild
-         *     runs here.
-         */
-        post: operations["reindex_maintenance_management_v1_table__id__maintenance_reindex_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2993,8 +2877,7 @@ export interface paths {
         put?: never;
         /**
          * Create Index
-         * @description Build a vector index on a table's column — wraps the native ``create_table_index`` op; emits a
-         *     CREATE_INDEX lineage event at the new version.
+         * @description Refused 406: a vector index is built on the caller's compute and committed through ``version/create``.
          */
         post: operations["create_index_v1_table__id__create_index_post"];
         delete?: never;
@@ -3014,8 +2897,7 @@ export interface paths {
         put?: never;
         /**
          * Create Scalar Index
-         * @description Build a scalar index on a table's column — wraps the native ``create_table_scalar_index`` op; emits a
-         *     CREATE_INDEX lineage event at the new version.
+         * @description Refused 406: a scalar index is built on the caller's compute and committed through ``version/create``.
          */
         post: operations["create_scalar_index_v1_table__id__create_scalar_index_post"];
         delete?: never;
@@ -3353,15 +3235,8 @@ export interface paths {
          *     The run the request's Context names is stamped into the commit, on main only, and its inputs become the
          *     event's version-pinned inputs ([[LH-225]]).
          *
-         *     IMPLICIT DDL (§4): after the merge commits, a best-effort BTREE index is ensured on the ``on``
-         *     key (pylance's ``use_index`` only helps *if an index exists*, and nothing else ever builds one —
-         *     without it every upsert full-scans). The FIRST merge on a ``(table, on)`` pays the build
-         *     synchronously; later merges pay one cheap list call. Passing ``use_index=false`` opts out of the
-         *     implicit build too (a caller declining index USAGE shouldn't be charged index CREATION). The
-         *     build commits its OWN Lance version with no lineage event (consistent with
-         *     ``/create_scalar_index`` today), so the first indexed merge leaves the table at
-         *     ``response.version + 1`` while the MERGE_INSERT lineage points at ``response.version`` — a
-         *     version gap, not a lost write.
+         *     The merge builds no index: a writer builds one on the ``on`` key with its own pylance, committed through
+         *     ``version/create``, and the maintenance sweep lists a table whose index no longer covers its rows (ADR 0162).
          */
         post: operations["merge_insert_into_table_v1_table__id__merge_insert_post"];
         delete?: never;
@@ -5108,127 +4983,18 @@ export interface components {
             deregister_table?: components["schemas"]["DeregisterTableResponse"] | null;
         };
         /**
-         * CompactAccepted
-         * @description The 202 body: the door enqueued the rewrite rather than performing it.
-         *
-         *     It reports no fragment counts because it has none — the executor that will produce them is another
-         *     process, and inventing zeroes here would make an accepted request indistinguishable from a
-         *     completed no-op. ``protected_by`` is returned because it is the one verdict that can turn the
-         *     enqueued unit into a refusal at execution time, and a caller watching a table that never compacts
-         *     otherwise has nothing to read.
+         * CompactionDue
+         * @description What made a table due for a compaction: Lance's own planner, run under the winning policy's fragment size.
          */
-        CompactAccepted: {
-            /**
-             * Accepted
-             * @default true
-             */
-            accepted?: boolean;
-            /** Protected By */
-            protected_by?: string | null;
-            /** Uri */
-            uri: string;
-        };
-        /**
-         * CompactRequest
-         * @description Optional #76 target-size override for a one-off compaction (None → Lance's default fragment sizing).
-         */
-        CompactRequest: {
+        CompactionDue: {
+            /** Candidate Fragments */
+            candidate_fragments: number;
+            /** Fragments */
+            fragments: number;
             /** Target Rows Per Fragment */
             target_rows_per_fragment?: number | null;
-        };
-        /** CompactResult */
-        CompactResult: {
-            /** Fragments Added */
-            fragments_added: number;
-            /** Fragments Removed */
-            fragments_removed: number;
-            /** Ok */
-            ok: boolean;
-        };
-        /**
-         * CompactionCommitRequest
-         * @description The workers' rewrite results, come back to be committed as one metadata-only version.
-         */
-        CompactionCommitRequest: {
-            /** Results */
-            results: string[];
-        };
-        /** CompactionCommitResponse */
-        CompactionCommitResponse: {
-            /** Files Added */
-            files_added: number;
-            /** Files Removed */
-            files_removed: number;
-            /** Fragments Added */
-            fragments_added: number;
-            /** Fragments Removed */
-            fragments_removed: number;
-            /** Version */
-            version: number;
-        };
-        /**
-         * CompactionPlanRequest
-         * @description Ask the catalog what compaction this table needs — a metadata read that mints nothing.
-         *
-         *     Most knobs are POLICY: what shape the table should end up in, each optional. Three are MECHANICS —
-         *     how much memory the rewrite may use — and all three are REQUIRED, because **Lance bakes them into
-         *     the task at plan time**. Measured on pylance 12.0.0 (2026-09-25): a planned task's JSON carries an
-         *     ``options`` object holding ``batch_size``, ``num_threads`` and ``max_source_bytes``, and
-         *     ``CompactionTask.execute`` takes only the dataset. So the plan is the executor's one chance to
-         *     state them.
-         *
-         *     Left out, they become Lance's defaults, and that is an unbounded read: the scanner's default batch
-         *     is counted in ROWS, and rows are not a unit of memory — against the ~1.8 MB bronze rows measured
-         *     here it is ~15 GB *per compute thread*, times a thread count taken from the HOST's cores, over a
-         *     plan with no byte limit at all. So the door refuses a plan missing any of them with 400
-         *     ``InvalidInput``, naming all three.
-         *     rask's own executor sends ``MAINTENANCE_SCAN_BATCH_SIZE``, ``MAINTENANCE_COMPACT_THREADS`` and
-         *     ``MAINTENANCE_MAX_SOURCE_BYTES``; a bring-your-own executor sends the bounds it runs under.
-         *
-         *     The catalog does not INTERPRET them — it forwards the executor's own numbers into the plan. An
-         *     unrecognized field is refused rather than dropped — see ``dataplane.plan_compaction``.
-         */
-        CompactionPlanRequest: {
-            /**
-             * Batch Size
-             * @description Required. Rows per scan batch in each rewrite task.
-             */
-            batch_size: number;
-            /**
-             * Compaction Mode
-             * @description How each rewrite task moves the bytes. Unset, Lance re-encodes.
-             */
-            compaction_mode?: ("reencode" | "try_binary_copy" | "force_binary_copy") | null;
-            /** Materialize Deletions */
-            materialize_deletions?: boolean | null;
-            /** Materialize Deletions Threshold */
-            materialize_deletions_threshold?: number | null;
-            /** Max Bytes Per File */
-            max_bytes_per_file?: number | null;
-            /** Max Rows Per Group */
-            max_rows_per_group?: number | null;
-            /**
-             * Max Source Bytes
-             * @description Required. Source bytes one plan may take on, summed over its tasks; Lance stops adding tasks at this limit.
-             */
-            max_source_bytes: number;
-            /**
-             * Num Threads
-             * @description Required. Compute threads per rewrite task.
-             */
-            num_threads: number;
-            /** Target Rows Per Fragment */
-            target_rows_per_fragment?: number | null;
-        };
-        /**
-         * CompactionPlanResponse
-         * @description The planned work. ``tasks`` are opaque strings for a queue — one worker, one task.
-         */
-        CompactionPlanResponse: {
-            /** Read Version */
-            read_version: number;
             /** Tasks */
-            tasks: string[];
+            tasks: number;
         };
         /**
          * CountTableRowsRequest
@@ -6652,6 +6418,31 @@ export interface components {
             transaction_id?: string | null;
         };
         /**
+         * DueTable
+         * @description One table a compaction or an index optimize is due on, as the maintenance sweep measured it (ADR 0162).
+         */
+        DueTable: {
+            /**
+             * Clones
+             * @default 0
+             */
+            clones?: number;
+            compaction?: components["schemas"]["CompactionDue"] | null;
+            /**
+             * Evaluated At
+             * Format: date-time
+             */
+            evaluated_at: string;
+            /** Indices */
+            indices?: components["schemas"]["IndexDue"][];
+            /** Policy */
+            policy?: string | null;
+            /** Table */
+            table: string;
+            /** Version */
+            version: number;
+        };
+        /**
          * ErasureReport
          * @description One subject's erasure across every surface the catalog serves this table from.
          */
@@ -7140,6 +6931,18 @@ export interface components {
             type_url?: string | null;
         };
         /**
+         * IndexDue
+         * @description One index an optimize is due on: rows it does not cover, or more delta segments than a query should fan out over.
+         */
+        IndexDue: {
+            /** Deltas */
+            deltas: number;
+            /** Name */
+            name: string;
+            /** Unindexed Rows */
+            unindexed_rows: number;
+        };
+        /**
          * InsertIntoTableResponse
          * @description Response from inserting records into a table
          */
@@ -7407,6 +7210,16 @@ export interface components {
          * @enum {string}
          */
         LivenessStatus: "ok";
+        /**
+         * MaintenanceDueResponse
+         * @description A page of :class:`DueTable`, in table order; ``page_token`` continues it.
+         */
+        MaintenanceDueResponse: {
+            /** Page Token */
+            page_token?: string | null;
+            /** Tables */
+            tables: components["schemas"]["DueTable"][];
+        };
         /**
          * ManagedAccessRequest
          * @description Turn managed access on or off for one container.
@@ -8450,75 +8263,6 @@ export interface components {
              * @description Optional transaction identifier
              */
             transaction_id?: string | null;
-        };
-        /**
-         * ReindexAccepted
-         * @description The 202 body: the rebuild was enqueued onto the index lane rather than performed here.
-         *
-         *     It reports no version because it has none — the worker that will produce it is another process,
-         *     and inventing the current version would make an accepted request indistinguishable from a
-         *     completed rebuild. The resolved shape IS returned: it is what the unit will be built from, and it
-         *     is the only chance a caller gets to see that the readback found the parameters it expected.
-         */
-        ReindexAccepted: {
-            /**
-             * Accepted
-             * @default true
-             */
-            accepted?: boolean;
-            /** Column */
-            column: string;
-            /** Index Name */
-            index_name: string;
-            /** Index Type */
-            index_type: string;
-            /** Kind */
-            kind: string;
-            /** Params */
-            params?: {
-                [key: string]: unknown;
-            };
-            /** Transaction Id */
-            transaction_id: string;
-        };
-        /**
-         * ReindexRequest
-         * @description [[LH-105]] rebuild one named index in place, keeping the parameterisation it already has.
-         *
-         *     ``index_name`` is the only required field because the point of the door is REPAIR: the shape is
-         *     read off the live index rather than restated by the caller, so a repair cannot silently re-tune
-         *     what it repairs. ``params`` is the escape hatch for the case the readback cannot serve — a vector
-         *     index being deliberately re-partitioned, or one whose `num_partitions` could not be read — and is
-         *     MERGED OVER the readback rather than replacing it, so overriding one value does not drop the rest.
-         */
-        ReindexRequest: {
-            /** Index Name */
-            index_name: string;
-            /** Params */
-            params?: {
-                [key: string]: unknown;
-            };
-        };
-        /**
-         * ReindexResult
-         * @description The 200 body: the rebuild ran in this pod and the index is already back.
-         */
-        ReindexResult: {
-            /** Column */
-            column: string;
-            /** Index Name */
-            index_name: string;
-            /** Index Type */
-            index_type: string;
-            /** Kind */
-            kind: string;
-            /**
-             * Ok
-             * @default true
-             */
-            ok?: boolean;
-            /** Version */
-            version: number;
         };
         /**
          * RelationGrants
@@ -10004,6 +9748,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["EventsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_due_maintenance_management_v1_maintenance_due_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                /** @description Continue after this table id (the previous page's `page_token`). */
+                page_token?: string | null;
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-caller-app-id"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MaintenanceDueResponse"];
                 };
             };
             /** @description Validation Error */
@@ -11745,92 +11526,6 @@ export interface operations {
             };
         };
     };
-    commit_table_compaction_management_v1_table__id__compaction_commit_post: {
-        parameters: {
-            query?: {
-                /** @description The ref the plan was made on. Omit for main; the commit applies the worker's results to this ref. */
-                branch?: string | null;
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                authorization?: string | null;
-                "dapr-caller-app-id"?: string | null;
-                "x-lance-originator"?: string | null;
-            };
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CompactionCommitRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CompactionCommitResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    plan_table_compaction_management_v1_table__id__compaction_plan_post: {
-        parameters: {
-            query?: {
-                /** @description The ref to plan against. Omit for main; the plan reads this ref's fragments and its `read_version`. */
-                branch?: string | null;
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CompactionPlanRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CompactionPlanResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     vend_credentials_management_v1_table__id__credentials_post: {
         parameters: {
             query?: {
@@ -11953,59 +11648,6 @@ export interface operations {
             };
         };
     };
-    compact_maintenance_management_v1_table__id__maintenance_compact_post: {
-        parameters: {
-            query?: {
-                /** @description The ref to compact. A branch is answered by the evidence gate, which refuses on COST when fragments still resolve through the parent. */
-                branch?: string | null;
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                authorization?: string | null;
-                "dapr-caller-app-id"?: string | null;
-                "x-lance-originator"?: string | null;
-            };
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CompactRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CompactResult"] | components["schemas"]["CompactAccepted"];
-                };
-            };
-            /** @description Enqueued onto the maintenance work queue; no fragment counts exist yet. */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CompactAccepted"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     preview_maintenance_management_v1_table__id__maintenance_preview_post: {
         parameters: {
             query?: {
@@ -12035,59 +11677,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GcPreview"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    reindex_maintenance_management_v1_table__id__maintenance_reindex_post: {
-        parameters: {
-            query?: {
-                /** @description The ref to rebuild on. Omit for main; the ref travels with the work item so the worker opens what you named. */
-                branch?: string | null;
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                authorization?: string | null;
-                "dapr-caller-app-id"?: string | null;
-                "x-lance-originator"?: string | null;
-            };
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ReindexRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ReindexResult"] | components["schemas"]["ReindexAccepted"];
-                };
-            };
-            /** @description Enqueued onto the index lane; the rebuilt version does not exist yet. */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ReindexAccepted"];
                 };
             };
             /** @description Validation Error */
@@ -14325,9 +13914,7 @@ export interface operations {
                 delimiter?: string | null;
             };
             header?: {
-                authorization?: string | null;
                 "dapr-caller-app-id"?: string | null;
-                "x-lance-originator"?: string | null;
             };
             path: {
                 id: string;
@@ -14367,9 +13954,7 @@ export interface operations {
                 delimiter?: string | null;
             };
             header?: {
-                authorization?: string | null;
                 "dapr-caller-app-id"?: string | null;
-                "x-lance-originator"?: string | null;
             };
             path: {
                 id: string;

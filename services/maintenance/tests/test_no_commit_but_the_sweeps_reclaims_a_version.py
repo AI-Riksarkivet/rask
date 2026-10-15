@@ -6,13 +6,14 @@ Lance's automatic cleanup runs INSIDE the commit of whoever writes, every N comm
 passes none of the sweep's gates (a legal hold, a protected base), runs under the writer's identity,
 and is recorded nowhere, so a tick removes every key before any gate can return.
 
-Driven on real pylance through the worker's unit, `maintain_one_item`, on the two refusal paths. The sweep
+Driven on real pylance through one dataset's pass, `sweep.maintain_dataset`, on the two refusal paths. The sweep
 is the backstop for a table nobody commits on; a table that is committed on is disarmed by the committing
 door first (`tests/integration/test_an_ordinary_append_never_deletes_a_version.py`).
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import timedelta
 from pathlib import Path
 from typing import Literal
@@ -22,7 +23,9 @@ import pyarrow as pa
 import pytest
 
 from maintenance.core.config import MaintenanceSettings
-from maintenance.services.sweep import DatasetPlan, DatasetWorkItem, maintain_one_item
+from maintenance.services.expiry import DatasetResult
+from maintenance.services.plan import DatasetPlan
+from service_kit.lakehouse.base_refs import BaseRefs, normalise
 
 
 #: The keys an armed table carries. `retain_versions` included, because pylance's own
@@ -44,15 +47,16 @@ def _auto_cleanup_keys(uri: str) -> dict[str, str]:
 
 
 @pytest.mark.parametrize("governed_by", ["legal_hold", "protected_base"])
-def test_a_held_or_protected_table_carries_no_auto_cleanup_keys_after_a_tick(tmp_path: Path, governed_by: Literal["legal_hold", "protected_base"]) -> None:
+def test_a_held_or_protected_table_carries_no_auto_cleanup_keys_after_a_tick(
+    tmp_path: Path, maintain_one: Callable[..., DatasetResult], governed_by: Literal["legal_hold", "protected_base"]
+) -> None:
     """Both gates return before reclamation, which is exactly why the keys must go before either does."""
     uri = _armed_table(tmp_path)
-    if governed_by == "legal_hold":
-        item = DatasetWorkItem(uri=uri, plan=DatasetPlan(older_than=timedelta(0), cleanup_enabled=False))
-    else:
-        item = DatasetWorkItem(uri=uri, plan=DatasetPlan(older_than=timedelta(0)), protected_by=uri)
+    held = governed_by == "legal_hold"
+    plan = DatasetPlan(older_than=timedelta(0), cleanup_enabled=not held)
+    protected = BaseRefs() if held else BaseRefs(protected={normalise(uri)})
 
-    result = maintain_one_item(item, settings=MaintenanceSettings.model_validate({"s3_bucket": "unused"}), options={})
+    result = maintain_one(uri, MaintenanceSettings.model_validate({"s3_bucket": "unused"}), protected=protected, plan=plan)
 
     if governed_by == "protected_base":
         assert result.refused_by == "protected_base", "the fixture stopped being the protected case"

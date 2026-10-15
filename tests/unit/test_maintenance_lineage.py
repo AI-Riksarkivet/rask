@@ -24,7 +24,7 @@ import pytest
 
 from lineage.models import RunEvent
 from maintenance.core.lineage_emit import (
-    COMPACTION,
+    EXPIRE_VERSIONS,
     DaprMaintenanceEmitter,
     NoopEmitter,
     build_maintenance_event,
@@ -33,7 +33,7 @@ from maintenance.core.lineage_emit import (
     make_emitter,
     table_id_from_uri,
 )
-from maintenance.services.optimize import DatasetResult
+from maintenance.services.expiry import DatasetResult
 from maintenance.services.sweep import _MAX_FAIL_EMITS_PER_TICK, emit_sweep_lineage
 
 
@@ -63,7 +63,7 @@ def test_maintenance_event_round_trips_through_lineage_run_event() -> None:
     )
     parsed = RunEvent.model_validate(event)
     assert parsed.is_success
-    assert parsed.operation == COMPACTION
+    assert parsed.operation == EXPIRE_VERSIONS
     assert [d.name for d in parsed.outputs] == ["silver$features"]
     assert parsed.inputs == []
     assert parsed.output_version("silver$features") is None  # versionless on the WROTE edge
@@ -93,7 +93,7 @@ def test_fail_event_round_trips_through_lineage_run_event() -> None:
     # a version or a DERIVED_FROM.
     parsed = RunEvent.model_validate(_fail_event())
     assert not parsed.is_success
-    assert parsed.operation == COMPACTION
+    assert parsed.operation == EXPIRE_VERSIONS
     assert [d.name for d in parsed.outputs] == ["ns$table"]
     assert parsed.output_version("ns$table") is None
     assert parsed.error_message == "maintain: Commit conflict for version 42"
@@ -146,14 +146,14 @@ def _result(uri: str, **kw: Any) -> DatasetResult:
     return DatasetResult(uri=uri, **kw)
 
 
-def test_emit_sweep_lineage_emits_only_for_materially_compacted_datasets() -> None:
+def test_emit_sweep_lineage_emits_only_for_datasets_whose_versions_were_reclaimed() -> None:
     emitter = _RecordingEmitter()
     results = [
-        _result("s3://b/aa3bed11_ns$a", fragments_removed=3),  # compacted → emit
+        _result("s3://b/aa3bed11_ns$a", old_versions_removed=3),  # compacted → emit
         _result("s3://b/aa3bed12_ns$b", old_versions_removed=2),  # GC'd → emit
         _result("s3://b/aa3bed13_ns$c"),  # no-op tick → skip
-        _result("s3://b/aa3bed14_ns$d", fragments_removed=1, error="open: boom"),  # transient noise → skip
-        _result("s3://b/nounderscore", fragments_removed=1),  # unparseable id → skip
+        _result("s3://b/aa3bed14_ns$d", old_versions_removed=1, error="open: boom"),  # transient noise → skip
+        _result("s3://b/nounderscore", old_versions_removed=1),  # unparseable id → skip
     ]
     asyncio.run(emit_sweep_lineage(cast(Any, emitter), results, delimiter="$"))
     assert emitter.calls == [("ns$a", "ns"), ("ns$b", "ns")]
@@ -168,11 +168,11 @@ def test_emit_sweep_lineage_fails_only_for_maintain_errors() -> None:
     emitter = _RecordingEmitter()
     results = [
         _result("s3://b/aa3bed11_ns$a", error="maintain: Commit conflict"),
-        _result("s3://b/aa3bed12_ns$b", fragments_removed=2, error="maintain: cleanup blew up"),  # partial work
+        _result("s3://b/aa3bed12_ns$b", old_versions_removed=2, error="maintain: cleanup blew up"),  # partial work
         _result("s3://b/aa3bed13_ns$c", error="open: not a dataset"),
         _result("s3://b/aa3bed14_ns$d", error="boom"),  # UNPREFIXED error → neither event (selection contract)
         _result("s3://b/medallion", error="maintain: nope"),  # no <uuid>_<id> layout → no id → skip
-        _result("s3://b/aa3bed15_ns$e", fragments_removed=1),  # healthy → COMPLETE as before
+        _result("s3://b/aa3bed15_ns$e", old_versions_removed=1),  # healthy → COMPLETE as before
     ]
     asyncio.run(emit_sweep_lineage(cast(Any, emitter), results, delimiter="$"))
     assert emitter.calls == [("ns$e", "ns")]
@@ -266,7 +266,7 @@ def test_emit_sweep_lineage_root_table_has_empty_namespace() -> None:
     # A single-segment table id has no parent namespace → "" (matching the catalog's create emit, so the
     # maintenance event never clobbers the dataset node's namespace).
     emitter = _RecordingEmitter()
-    asyncio.run(emit_sweep_lineage(cast(Any, emitter), [_result("s3://b/aa3bed10_solo", fragments_removed=1)], delimiter="$"))
+    asyncio.run(emit_sweep_lineage(cast(Any, emitter), [_result("s3://b/aa3bed10_solo", old_versions_removed=1)], delimiter="$"))
     assert emitter.calls == [("solo", "")]
 
 
@@ -309,7 +309,7 @@ def test_dapr_emitter_publishes_to_configured_pubsub_and_topic() -> None:
     assert client.published[0]["topic"] == "lineage.events.v1"
     payload = json.loads(client.published[0]["data"])
     assert payload["outputs"][0]["name"] == "ns$a"
-    assert payload["run"]["facets"]["lance"]["operation"] == COMPACTION
+    assert payload["run"]["facets"]["lance"]["operation"] == EXPIRE_VERSIONS
 
 
 def test_dapr_emitter_best_effort_swallows_publish_failure() -> None:
@@ -370,15 +370,13 @@ def test_a_pass_is_named_by_its_path_and_by_the_stamp_only_where_the_path_is_sil
     The stamp still answers where the path cannot: `medallion/<tier>` names more than one table, which
     is why the cascade stamps it at all.
 
-    Driven through `compact_one` on real pylance into the sweep's own emit, because the name is resolved
+    Driven through expiry on real pylance into the sweep's own emit, because the name is resolved
     in one and spent in the other.
     """
-    from datetime import timedelta
-
     import lance
     import pyarrow as pa
 
-    from maintenance.services.optimize import compact_one
+    from maintenance.services.expiry import ExpiryPolicy, ExpiryTarget, expire_versions
     from service_kit.lakehouse.stage_stamp import declare_dataset_id
 
     forged = "victim$payroll"
@@ -386,10 +384,10 @@ def test_a_pass_is_named_by_its_path_and_by_the_stamp_only_where_the_path_is_sil
     composed = str(tmp_path / "medallion" / "gold")
     for uri in (flat, composed):
         lance.write_dataset(declare_dataset_id(pa.table({"v": [1]}), forged), uri, mode="create")
-        lance.write_dataset(pa.table({"v": [2]}), uri, mode="append")  # a second fragment, so the pass compacts
+        lance.write_dataset(pa.table({"v": [2]}), uri, mode="append")  # a second version, so the pass reclaims one
 
-    results = [compact_one(uri, {}, timedelta(days=7)) for uri in (flat, composed)]
-    assert [(r.error, r.fragments_removed) for r in results] == [(None, 2), (None, 2)], results
+    results = [expire_versions(ExpiryTarget(uri=uri, storage_options={}), ExpiryPolicy(older_than=None, retain_versions=1)) for uri in (flat, composed)]
+    assert [(r.error, r.old_versions_removed) for r in results] == [(None, 1), (None, 1)], results
 
     emitter = _RecordingEmitter()
     asyncio.run(emit_sweep_lineage(cast(Any, emitter), results, delimiter="$"))

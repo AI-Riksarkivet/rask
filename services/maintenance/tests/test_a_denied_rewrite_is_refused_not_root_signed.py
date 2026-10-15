@@ -1,10 +1,8 @@
-"""A catalog DENIAL must stop the rewrite — never fall back to a credential that can do it anyway.
+"""A catalog DENIAL must stop the pass — never fall back to a credential that can do it anyway.
 
-MEASURED ON THE LIVE ESTATE 2026-09-10. The sweep asks the catalog to plan a compaction; for eight
-tables the catalog answers **403**, and the sweep rewrites them anyway with the deployment's ambient
-key. In one 60-minute window: 20 `compaction_plane_unavailable_falling_back` against 352 successes,
-and the vending log carries `credential vending unavailable for lakehouse$gold (403)` and seven
-siblings. Nothing is red, because both seams classify by `status_code >= 400`.
+MEASURED ON THE LIVE ESTATE 2026-09-10: the vending log carried `credential vending unavailable for
+lakehouse$gold (403)` and seven siblings, each table then maintained under the deployment's ambient key,
+because the client classified by `status_code >= 400`.
 
 THE TWO CONDITIONS ARE NOT THE SAME QUESTION:
 
@@ -24,8 +22,8 @@ from typing import Any
 import httpx
 import pytest
 
-from maintenance.services import catalog_compaction, credentials
-from maintenance.services.compaction_executor import MaintenanceDenied, MaintenanceUnauthenticated, denial_remedy
+from maintenance.services import credentials
+from maintenance.services.credentials import MaintenanceDenied, MaintenanceUnauthenticated, denial_remedy
 
 
 class _Settings:
@@ -42,31 +40,27 @@ def _settings() -> Any:
 _FALLBACK = {"aws_access_key_id": "root", "aws_secret_access_key": "root"}
 
 
-def _respond(monkeypatch: pytest.MonkeyPatch, status: int, *, target: Any, attr: str) -> None:
+def _respond(monkeypatch: pytest.MonkeyPatch, status: int) -> None:
     def _post(*_a: object, **_k: object) -> httpx.Response:
         return httpx.Response(status_code=status, json={"detail": "nope"}, request=httpx.Request("POST", "http://catalog:2333/x"))
 
-    monkeypatch.setattr(target, attr, _post)
+    monkeypatch.setattr(credentials.httpx, "post", _post)
 
 
 @pytest.fixture(autouse=True)
 def _identity(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(credentials, "service_headers", lambda _s: {})
-    monkeypatch.setattr(catalog_compaction, "service_headers", lambda _s: {})
 
 
 @pytest.mark.parametrize(("status", "unauthenticated"), [(401, True), (403, False)])
-def test_a_401_is_told_apart_from_a_403_at_both_doors(monkeypatch: pytest.MonkeyPatch, status: int, unauthenticated: bool) -> None:
+def test_a_401_is_told_apart_from_a_403_at_the_vend_door(*, monkeypatch: pytest.MonkeyPatch, status: int, unauthenticated: bool) -> None:
     """A 401 is about this service's own credential and a 403 about the id; both refuse, only the second is the table's."""
-    _respond(monkeypatch, status, target=credentials.httpx, attr="post")
+    _respond(monkeypatch, status)
     with pytest.raises(MaintenanceDenied) as vend:
         credentials.write_options_for("s3://b/t", _settings(), fallback=_FALLBACK, declared_table_id="ns$t")
-    _respond(monkeypatch, status, target=catalog_compaction.httpx, attr="post")
-    with pytest.raises(MaintenanceDenied) as plan:
-        catalog_compaction.plan_via_catalog("ns$t", {}, settings=_settings())
 
-    assert [isinstance(caught.value, MaintenanceUnauthenticated) for caught in (vend, plan)] == [unauthenticated, unauthenticated]
-    assert all("ns$t" in str(caught.value) for caught in (vend, plan)), "the refusal must name the table it was asked for"
+    assert isinstance(vend.value, MaintenanceUnauthenticated) is unauthenticated
+    assert "ns$t" in str(vend.value), "the refusal must name the table it was asked for"
 
 
 # --------------------------------------------------------------------------- #

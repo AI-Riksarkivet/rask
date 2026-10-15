@@ -3,7 +3,7 @@
 // The describe route serializes with response_model_exclude_none, so its null fields arrive absent —
 // read optional fields with `?? null` rather than trusting the generated required-nullable shape.
 //
-// The table-LIFECYCLE transport (registry list, detail aggregate, policy, GC/compaction, tags,
+// The table-LIFECYCLE transport (registry list, detail aggregate, policy, GC, tags,
 // branches, restore, schema evolution, indexes, drop/deregister/rename/declare, row update/delete)
 // lives in `remote/catalog.remote.ts` — the zone's remote-function dialect. What stays here: the wire
 // CONTRACTS (types + the valibot schemas that module parses with) and the clients whose routes are
@@ -81,13 +81,12 @@ export const queryTableRows = (table: string, limit: number) =>
 		body: JSON.stringify({ limit }),
 	});
 
-// Policy set/delete (#50), the GC preview/run pair (#75), compaction (#76) and the version REFS —
+// Policy set/delete (#50), the GC preview/run pair (#75) and the version REFS —
 // tags, branches, restore (#64/#74) — are remote functions now (`remote/catalog.remote.ts`). Their
 // bodies are unchanged; these types are what both sides read them as.
 export type GcBounds = { retention_days?: number | null; retain_versions?: number | null };
 export type GcPreview = components['schemas']['GcPreview'];
 export type GcRunResult = components['schemas']['GcRunResult'];
-export type CompactResult = components['schemas']['CompactResult'];
 
 // #113 the commit log — `GET /management/v1/table/{id}/history?limit=N`, read out of the FORMAT (Lance's transaction
 // log joined to `versions()`). The row shape is field-driven, not fixed: `version` / `timestamp` /
@@ -190,8 +189,6 @@ export const RETYPE_TYPES = [
 	'binary',
 	'large_binary',
 ] as const;
-
-export type CreateIndexBody = { column: string; index_type: string; distance_type?: string };
 
 /** A warehouse record with the medallion serving class: `serving === "gold"` marks the project's
  * per-tenant SERVING warehouse (the gold tier's separate bucket — docs/adr/0034-medallion-tiers-hybrid-physical-layout-2026-07-24.md "Medallion tiers");

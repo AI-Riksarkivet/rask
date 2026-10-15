@@ -1,59 +1,62 @@
-"""The event lane's decision: does this lineage event mean a dataset may need maintenance?
+"""The event lane: after a commit, refresh the written table's due record and expire its versions when enough are due.
 
-The sweep's whole-estate walk is what this replaces as the PRIMARY trigger — measured at 87 datasets
-per tick, one manifest open each, reporting `fragments_removed: 0, versions_removed: 0` on every pass
-since 2026-08-16. The cron stays as an hourly BACKSTOP rather than being retired, because the bus is
-provably incomplete: ingest, Ray TRAIN and every external OpenLineage producer emit over HTTP only and
-never reach the topic, the catalog's lineage lane has no outbox (so a lost trigger is silent), and
-time-triggered work — an old-version GC on a table nobody has written since — has no write to react to.
+A write moves a table's fragment and index counts, and a bring-your-own job's compaction is a write through the
+catalog like any other: refreshing the record after it is exactly what takes the table off the due list. Expiry runs
+on the commit too, once the table carries ``MAINTENANCE_MIN_VERSIONS_TO_EXPIRE`` reclaimable versions — Lakekeeper
+schedules expire-snapshots after a commit for the same reason: a cron that polls every table pays for the tables
+nobody wrote. The sweep stays the backstop, because the bus is incomplete — an external OpenLineage producer emits
+over HTTP only — and a table nobody writes has no commit to react to.
 
-**The event is a hint; the plan is the decision.** `build_write_event` carries the table id, the
-version and the operation, and no fragment or row count, so nothing here can tell whether there is work
-— only whether it is worth asking. `dataplane.plan_compaction` answers that, and an empty task list is
-already its sanctioned "nothing to do".
+**The event is a hint; the evaluation is the decision.** A write event carries the table id, the version and the
+operation, and no fragment or row count, so nothing here can tell whether work is due — only whether it is worth asking.
 
-Subscribing to `lineage.events.v1` rather than minting a trigger topic: it is the one lane every
-governed writer converges on (the catalog's doors, annotator publish, an external producer), which
-`notifications`' reconciler established from the other direction. The control topic is deliberately not
-used — it is a broadcast with no queue group, and competing consumers need one.
+Subscribing to `lineage.events.v1` rather than minting a trigger topic: it is the one lane every governed writer
+converges on. The control topic is deliberately not used — it is a broadcast with no queue group.
 """
 
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from pydantic import BaseModel
+
+from maintenance.core.config import MaintenanceSettings
+from maintenance.services.due import TableIds, refresh_due, table_ids
+from maintenance.services.expiry import DatasetResult, DueVerdict
+from maintenance.services.plan import PlanContext, buckets_to_sweep, load_policies, resolve_plan
+from maintenance.services.sweep import SweepPlan, expire_dataset, trashed_locations
+from service_kit.lakehouse import trash
+from service_kit.lakehouse.base_refs import normalise
+from service_kit.lakehouse.maintenance_due import CloneList, read_clone_list
 
 
 log = logging.getLogger(__name__)
 
 #: Catalog operations that move NO BYTES. A registration is not an arrival: `register_table` emits a
-#: COMPLETE event indistinguishable — on the fields a subscriber matches — from a batch landing, so a
-#: subscriber that acted on it would plan work for a write that moved nothing.
+#: COMPLETE event indistinguishable — on the fields a subscriber matches — from a batch landing.
 _BYTE_FREE_OPERATIONS = frozenset({"register_table", "deregister_table", "declare_table"})
 
-#: THE LOOP GUARD, and it must name BOTH producers or it does not close. Maintenance publishes its own
-#: completion onto this same topic as `compaction` (`maintenance.core.lineage_emit.COMPACTION`) and the
-#: catalog publishes `compact_table` from `/compaction_commit`
-#: (`catalog.core.lineage_emit.COMPACT_TABLE`). Either one, unfiltered, is a cycle that never settles —
-#: and every turn of it looks like a legitimate maintenance run on the lineage graph, so nothing would
-#: report it.
-_MAINTENANCE_OPERATIONS = frozenset({"compaction", "compact_table"})
+#: Commits that change what a due record measures without adding data: a bring-your-own compaction's two commits and an
+#: index build or optimize (ADR 0162). Each refreshes the record whatever the debounce says, because the refresh after one
+#: is what takes the table off the due list, and a job makes few of them.
+_REFRESHING_OPERATIONS = frozenset({"compact_table", "create_index"})
 
 
 class TriggeringWrite(BaseModel):
-    """A write worth asking the planner about: which table, and the version it reached."""
+    """A write worth evaluating: which table, and the version it reached."""
 
     table_id: str
+    #: The catalog operation the event announces (``insert``, ``compact_table``, ...).
+    operation: str
     #: The version the write produced, when the event carried one. It is the DEBOUNCE input (compare
     #: against the last-maintained stamp), never the trigger — a missing facet must not lose a real
     #: write, because the cost of a needless manifest open is one listing and the cost of a lost
-    #: trigger is a table that grows fragments until the hourly backstop notices.
+    #: trigger is a table that grows fragments until the sweep notices.
     version: int | None = None
-    #: The physical Lance URI, from the standard ``dataSource`` facet. REQUIRED to act: this service
-    #: holds no catalog client by design, so a table id alone names something it cannot open — it
-    #: would have to walk the buckets to resolve it, which is the walk this lane exists to replace.
+    #: The physical Lance URI, from the standard ``dataSource`` facet. REQUIRED to act: the table's id comes from
+    #: the ``__manifest`` of the bucket this location is in, never from the event.
     location: str | None = None
 
 
@@ -62,15 +65,13 @@ def triggering_write(event: dict[str, Any]) -> TriggeringWrite | None:
 
     FAILS CLOSED on anything it cannot read. Events arrive off a bus and are client-controlled, so a
     malformed one must be ignored rather than raise: a raise fails the subscription delivery, which
-    Dapr redelivers, turning one bad publish into a retry loop. An event whose operation cannot be read
-    is ignored for a sharper reason — an unreadable operation cannot be checked against the loop guard,
-    and a cycle costs more than a trigger the hourly backstop will catch anyway.
+    Dapr redelivers, turning one bad publish into a retry loop. The sweep re-evaluates whatever this ignores.
     """
     run = event.get("run")
     facets = run.get("facets") if isinstance(run, dict) else None
     lance = facets.get("lance") if isinstance(facets, dict) else None
     operation = lance.get("operation") if isinstance(lance, dict) else None
-    if not isinstance(operation, str) or operation in _BYTE_FREE_OPERATIONS or operation in _MAINTENANCE_OPERATIONS:
+    if not isinstance(operation, str) or operation in _BYTE_FREE_OPERATIONS:
         return None
 
     outputs = event.get("outputs")
@@ -82,29 +83,34 @@ def triggering_write(event: dict[str, Any]) -> TriggeringWrite | None:
         table_id = output.get("name")
         if not isinstance(table_id, str) or not table_id:
             continue
-        return TriggeringWrite(table_id=table_id, version=_version_of(output), location=_location_of(output))
+        return TriggeringWrite(table_id=table_id, operation=operation, version=_version_of(output), location=_location_of(output))
     return None
 
 
 class PlannableWrite(BaseModel):
-    """A triggering write this lane acts on: the physical location it plans, and the version that debounces it."""
+    """A triggering write this lane acts on: the physical location it evaluates, and the version that debounces it."""
 
     location: str
+    operation: str
     version: int | None = None
+
+    def refreshes_regardless(self) -> bool:
+        """Whether this commit refreshes the due record whatever the debounce says (``_REFRESHING_OPERATIONS``)."""
+        return self.operation in _REFRESHING_OPERATIONS
 
 
 def plannable_write(event: dict[str, Any]) -> PlannableWrite | None:
-    """The write this lane would plan for ``event``, or ``None`` when it acknowledges the event untouched.
+    """The write this lane would evaluate for ``event``, or ``None`` when it acknowledges the event untouched.
 
     ONE DECISION FOR THE DOOR AND THE HANDLER ([[XC-078]]). `/maintenance-arrival` checks the signature of exactly the
-    events this selects and `handle_arrival` plans exactly those, so what the lane acts on cannot widen past what the door
-    checks. A triggering write that names no location is acknowledged without a read, so it is not checked either: an
+    events this selects and `handle_arrival` evaluates exactly those, so what the lane acts on cannot widen past what the
+    door checks. A triggering write that names no location is acknowledged without a read, so it is not checked either: an
     event that drives nothing costs no key read.
     """
     hit = triggering_write(event)
     if hit is None or hit.location is None:
         return None
-    return PlannableWrite(location=hit.location, version=hit.version)
+    return PlannableWrite(location=hit.location, operation=hit.operation, version=hit.version)
 
 
 def _version_of(output: dict[str, Any]) -> int | None:
@@ -128,7 +134,7 @@ def _location_of(output: dict[str, Any]) -> str | None:
     """The output's physical URI from the standard ``dataSource`` facet, or ``None`` when absent.
 
     Absent is a real case, not a defect to fail on: a producer outside the catalog may emit a write
-    event without one, and the hourly backstop reaches those tables by discovery anyway. What this
+    event without one, and the sweep reaches those tables by discovery anyway. What this
     must never do is guess a path — a URI nobody confirmed would point maintenance at the wrong object.
     """
     facets = output.get("facets")
@@ -138,23 +144,19 @@ def _location_of(output: dict[str, Any]) -> str | None:
 
 
 def should_replan(*, last_planned: int | None, event_version: int | None, min_versions: int) -> bool:
-    """Have enough versions accumulated since this dataset was last planned to be worth planning again?
+    """Have enough versions accumulated since this dataset was last evaluated to be worth evaluating again?
 
-    THE DEBOUNCE, and it has to run before the plan rather than inside it. `plan_one` calls
-    `sibling_base_refs`, which opens EVERY sibling dataset's manifest in the warehouse to read its
-    `base_paths` — a whole-warehouse cost paid per event. Without this, a table taking a burst of writes
-    drives one full sibling sweep per write. That is Lakekeeper's `min-snapshots-to-expire`, expressed
-    against rask's own version stamps.
+    THE DEBOUNCE, and it runs before the evaluation rather than inside it: an evaluation reads the bucket's
+    ``__manifest``, the policy registry and the clone list and opens the dataset, so a table taking a burst of writes
+    would otherwise pay that per write. Lakekeeper's `min-snapshots-to-expire`, against rask's own version stamps.
 
     Three cases MAINTAIN rather than skip, and each is the direction that fails loud instead of silent:
 
-    * **No stamp** — this lane has never planned the dataset. Skipping would mean it is never maintained
-      until something else writes a stamp.
+    * **No stamp** — this lane has never evaluated the dataset.
     * **No version on the event** — a producer outside the catalog may stamp no version facet. There is
-      nothing to compare, and dropping those would lose maintenance for every such producer; the stamp
-      written after this pass debounces the next one.
-    * **A threshold below one** — a misconfigured `0` must not read as "never plan", which would disable
-      the lane silently. One is the smallest real threshold: every write plans.
+      nothing to compare; the stamp written after this pass debounces the next one.
+    * **A threshold below one** — a misconfigured `0` must not read as "never evaluate", which would disable
+      the lane silently. One is the smallest real threshold: every write evaluates.
 
     A REDELIVERY or an out-of-order event skips, and both matter: delivery is at-least-once so the same
     event arrives twice, and the bus does not order events, so an older version says nothing new.
@@ -162,3 +164,98 @@ def should_replan(*, last_planned: int | None, event_version: int | None, min_ve
     if last_planned is None or event_version is None:
         return True
     return event_version - last_planned >= max(min_versions, 1)
+
+
+class WrittenTable(BaseModel):
+    """The table a write landed in, as this service governs it: its id, its plan's inputs and the last clone list."""
+
+    location: str
+    table: str
+    ids: TableIds
+    context: PlanContext
+    #: The last sweep's clone list, ``None`` when none was written or it does not parse.
+    clones: CloneList | None = None
+
+
+def resolve_written_table(location: str, settings: MaintenanceSettings) -> WrittenTable | DueVerdict:
+    """The table at ``location``, or why there is none to act on (``unnamed``) or no way to tell (``failed``).
+
+    The table's id comes from the ``__manifest`` of the bucket ``location`` is in, and only a bucket the sweep
+    maintains is read: a location elsewhere names nothing this service governs.
+    """
+    options = settings.storage_options()
+    bucket = location.removeprefix("s3://").split("/", 1)[0]
+    if bucket not in buckets_to_sweep(settings, options):
+        return "unnamed"
+    ids = table_ids({f"s3://{bucket}"}, options)
+    if not ids.complete:
+        return "failed"
+    if (table := ids.of(location)) is None:
+        return "unnamed"
+    try:
+        policies = load_policies(settings, options)
+    except Exception:  # noqa: BLE001 — logged by `load_policies`; an unread policy registry decides nothing
+        return "failed"
+    context = PlanContext(policies=policies, now=datetime.now(UTC), older_than=timedelta(days=settings.older_than_days))
+    return WrittenTable(location=location, table=table, ids=ids, context=context, clones=read_clone_list(settings.resolved_control_root, options))
+
+
+def refresh_written_table(written: WrittenTable, settings: MaintenanceSettings) -> DueVerdict:
+    """Re-evaluate the written table's due record.
+
+    The cadence does not apply here: a record left stale until the interval elapsed would keep a compacted table on the
+    due list. The clone list is the last sweep's, empty when none was written.
+    """
+    plan = resolve_plan(written.location, context=written.context, table_id=written.table, settings=settings)
+    clones = written.clones.clones_of(written.location) if written.clones else []
+    return refresh_due(plan.due_question(table=written.table, location=written.location, clones=clones), settings, now=written.context.now)
+
+
+def _is_fresh(clones: CloneList, settings: MaintenanceSettings, *, now: datetime) -> bool:
+    return now - clones.taken_at <= timedelta(seconds=settings.clone_list_max_age_seconds)
+
+
+def _in_trash(location: str, settings: MaintenanceSettings) -> bool:
+    """Whether a trash record names ``location``; an unreadable trash index answers yes (fail toward not deleting)."""
+    try:
+        records = trash.list_all(settings.resolved_control_root, settings.storage_options())
+    except Exception as exc:  # noqa: BLE001 — an unread trash index decides nothing; the sweep re-reads it
+        log.warning("maintenance_event_trash_unreadable", extra={"uri": location, "error": f"{type(exc).__name__}: {exc}"})
+        return True
+    return normalise(location) in trashed_locations(records)
+
+
+def expire_written_table(written: WrittenTable, settings: MaintenanceSettings) -> DatasetResult | None:
+    """Expire the written table's versions after its commit, or ``None`` when this lane leaves it to the sweep.
+
+    Per table, and failing closed: a recoverably dropped table is frozen until undrop or purge, and without a fresh
+    clone list nothing says whether another dataset resolves its files through this one, so both wait for the sweep,
+    which reads the trash and takes a new clone list first. The pins, nested branches, manifest flags, the threshold
+    and the maintain-tier vend are the expiry pass's own.
+    """
+    clones = written.clones
+    if clones is None or not _is_fresh(clones, settings, now=written.context.now):
+        log.info("maintenance_event_expiry_deferred", extra={"uri": written.location, "reason": "no clone list fresher than its bound"})
+        return None
+    if _in_trash(written.location, settings):
+        return None
+    tick = SweepPlan(uris=[written.location], protected=clones.refs(), clones=clones, table_ids=written.ids, context=written.context)
+    return expire_dataset(written.location, sweep=tick, settings=settings)
+
+
+class Acted(BaseModel):
+    """What the event lane did for one write: the due record's verdict, and the expiry pass when one ran."""
+
+    verdict: DueVerdict
+    expired: DatasetResult | None = None
+
+
+def act_on_write(location: str, settings: MaintenanceSettings) -> Acted:
+    """Refresh the written table's due record, then expire its versions; neither when the table cannot be resolved."""
+    written = resolve_written_table(location, settings)
+    if isinstance(written, str):
+        return Acted(verdict=written)
+    verdict = refresh_written_table(written, settings)
+    if verdict == "failed":
+        return Acted(verdict=verdict)
+    return Acted(verdict=verdict, expired=expire_written_table(written, settings))

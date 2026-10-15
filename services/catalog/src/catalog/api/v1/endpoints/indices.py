@@ -1,23 +1,10 @@
 """Index endpoints.
 
-A build/drop bumps the Lance version (new manifest) without changing data or columns, so each emits a
-best-effort versioned lineage ``WROTE`` event (operation ``create_index`` / ``drop_index``) — provenance of
-when a scalar/vector index was (re)built or removed. The native responses carry only a ``transaction_id``,
-so the version each event names is the one THAT transaction committed, resolved through the spec's
-``DescribeTransaction`` (``dataplane.committed_version``) and read back in one pinned open by the shared
-``lineage_deps.emit_measured_write`` trailer (best-effort — a readback failure never fails the
-already-committed index op).
-
-**WHERE A BUILD RUNS depends on whether this deployment has an index queue, and the spec asks for the
-queued form.** ``CreateTableIndex`` states outright that "index creation is handled asynchronously"
-and that progress is monitored through ``ListTableIndices`` / ``DescribeTableIndexStats``; its
-response carries an optional ``transaction_id`` and nothing else. So with a queue this door publishes
-one ``IndexWorkItem``, answers with that unit's id, and returns in milliseconds — the cost of an index
-build is a property of the TABLE, not of the request, and no pod sizing bounds it. Without a queue
-nothing would ever execute the unit, so the build runs here as it always has.
-
-The lineage emit belongs to whichever one actually built: a queued unit has produced no version to
-measure, and emitting one would put a phantom index event on the graph at every request.
+The lakehouse builds no index (ADR 0162). ``create_index`` and ``create_scalar_index`` answer the spec's
+``Unsupported`` (406) naming the bring-your-own path: a build reads a whole column, so it runs on the caller's
+compute, and pylance commits it through ``version/create``, which judges it like any other commit. A drop bumps the
+Lance version without changing data or columns, so it emits a best-effort versioned lineage ``WROTE`` event
+(``drop_index``) naming the version its transaction committed (``dataplane.committed_version``).
 """
 
 from __future__ import annotations
@@ -26,7 +13,7 @@ import logging
 from functools import partial
 from typing import Annotated
 
-from fastapi import APIRouter, Header, Query, Request
+from fastapi import APIRouter, Header, Query
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import (
     CreateTableIndexRequest,
@@ -34,26 +21,20 @@ from lance_namespace import (
     CreateTableScalarIndexResponse,
     DescribeTableIndexStatsRequest,
     DescribeTableIndexStatsResponse,
-    DescribeTableRequest,
-    DescribeTableResponse,
     DropTableIndexRequest,
     DropTableIndexResponse,
-    InvalidInputError,
-    LanceNamespace,
     ListTableIndicesRequest,
     ListTableIndicesResponse,
+    UnsupportedOperationError,
 )
 
 from catalog.api import lineage_deps
-from catalog.api.dependencies import DataNamespaceDep, LineageEmitterDep, NamespaceDep, SettingsDep, StorageOptionsDep
+from catalog.api.dependencies import LineageEmitterDep, NamespaceDep, SettingsDep, StorageOptionsDep
 from catalog.api.security import CurrentToken
-from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
-from catalog.core.lineage_emit import CREATE_INDEX, DROP_INDEX
+from catalog.core.lineage_emit import DROP_INDEX
 from catalog.core.namespace import open_dataset_for_commit
-from catalog.services import dataplane, index_specs, native
-from service_kit import dapr_publish
-from service_kit.lakehouse.work_items import SCALAR_INDEX, VECTOR_INDEX, IndexWorkItem
+from catalog.services import dataplane, native
 
 
 #: Ceiling for the spec list ops' `limit`. The Lance Namespace spec pages these with
@@ -69,82 +50,23 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/v1/table", tags=["index"])
 
 
+#: What both create doors answer: where an index is built instead.
+_BUILD_IT_YOURSELF = (
+    "the catalog builds no index. Build it on your own compute: open the table through this catalog and call pylance's "
+    "create_index or create_scalar_index; the commit goes through version/create, which judges it"
+)
+
+
 @router.post("/{id}/create_index", response_model_exclude_none=True)
-async def create_index(
-    id: str,
-    body: CreateTableIndexRequest,
-    request: Request,
-    ns: NamespaceDep,
-    data_ns: DataNamespaceDep,
-    settings: SettingsDep,
-    so: StorageOptionsDep,
-    token: CurrentToken,
-    emitter: LineageEmitterDep,
-    authorization: Annotated[str | None, Header()] = None,
-) -> CreateTableIndexResponse:
-    """Build a vector index on a table's column — wraps the native ``create_table_index`` op; emits a
-    CREATE_INDEX lineage event at the new version."""
-    segments = parse_identifier(id, settings.delimiter)
-    body.id = reconcile_body_id(segments, body.id)
-    dataplane.refuse_a_branch_this_door_cannot_honour(body.branch, door="create_table_index")
-    # An index build reads every row of the column, queued or not ([[LH-279]]).
-    # Judged ([[LH-279]]: a build reads every row of the column) and disarmed ([[LH-245]]) before it is queued or run.
-    await run_in_threadpool(partial(open_dataset_for_commit, ns, so, segments))
-    if (queued := await _queue_build(request, ns, settings, segments, body, kind=VECTOR_INDEX)) is not None:
-        return CreateTableIndexResponse(transaction_id=queued)
-    response: CreateTableIndexResponse = await run_in_threadpool(native.call, data_ns, "create_table_index", body)
-    await lineage_deps.emit_measured_write(
-        emitter,
-        segments,
-        ns=ns,
-        so=so,
-        settings=settings,
-        token=token,
-        operation=CREATE_INDEX,
-        authorization=authorization,
-        pin_version=await run_in_threadpool(partial(dataplane.committed_version, ns, so, segments, response.transaction_id, branch=None)),
-        # Main only: this door refuses a branch before the build.
-        branch=None,
-    )
-    return response
+def create_index(id: str, body: CreateTableIndexRequest) -> CreateTableIndexResponse:
+    """Refused 406: a vector index is built on the caller's compute and committed through ``version/create``."""
+    raise UnsupportedOperationError(_BUILD_IT_YOURSELF)
 
 
 @router.post("/{id}/create_scalar_index", response_model_exclude_none=True)
-async def create_scalar_index(
-    id: str,
-    body: CreateTableIndexRequest,
-    request: Request,
-    ns: NamespaceDep,
-    settings: SettingsDep,
-    so: StorageOptionsDep,
-    token: CurrentToken,
-    emitter: LineageEmitterDep,
-    authorization: Annotated[str | None, Header()] = None,
-) -> CreateTableScalarIndexResponse:
-    """Build a scalar index on a table's column — wraps the native ``create_table_scalar_index`` op; emits a
-    CREATE_INDEX lineage event at the new version."""
-    segments = parse_identifier(id, settings.delimiter)
-    body.id = reconcile_body_id(segments, body.id)
-    dataplane.refuse_a_branch_this_door_cannot_honour(body.branch, door="create_table_scalar_index")
-    # Judged ([[LH-279]]: a build reads every row of the column) and disarmed ([[LH-245]]) before it is queued or run.
-    await run_in_threadpool(partial(open_dataset_for_commit, ns, so, segments))
-    if (queued := await _queue_build(request, ns, settings, segments, body, kind=SCALAR_INDEX)) is not None:
-        return CreateTableScalarIndexResponse(transaction_id=queued)
-    response: CreateTableScalarIndexResponse = await run_in_threadpool(native.call, ns, "create_table_scalar_index", body)
-    await lineage_deps.emit_measured_write(
-        emitter,
-        segments,
-        ns=ns,
-        so=so,
-        settings=settings,
-        token=token,
-        operation=CREATE_INDEX,
-        authorization=authorization,
-        pin_version=await run_in_threadpool(partial(dataplane.committed_version, ns, so, segments, response.transaction_id, branch=None)),
-        # Main only: this door refuses a branch before the build.
-        branch=None,
-    )
-    return response
+def create_scalar_index(id: str, body: CreateTableIndexRequest) -> CreateTableScalarIndexResponse:
+    """Refused 406: a scalar index is built on the caller's compute and committed through ``version/create``."""
+    raise UnsupportedOperationError(_BUILD_IT_YOURSELF)
 
 
 @router.post("/{id}/index/list", response_model_exclude_none=True)
@@ -247,10 +169,6 @@ async def drop_table_index(
     req = DropTableIndexRequest(id=segments, index_name=index_name)
     await run_in_threadpool(partial(open_dataset_for_commit, ns, so, segments, checked=False))
     response: DropTableIndexResponse = await run_in_threadpool(native.call, ns, "drop_table_index", req)
-    # Reopened after the drop, on the version it committed. The event below is pinned by the drop's own
-    # transaction, so a config commit here does not move the version it names.
-    dropped = await run_in_threadpool(partial(open_dataset_for_commit, ns, so, segments, checked=False))
-    await run_in_threadpool(index_specs.forget_requested_params, dropped, index_name)
     await lineage_deps.emit_measured_write(
         emitter,
         segments,
@@ -265,101 +183,3 @@ async def drop_table_index(
         branch=None,
     )
     return response
-
-
-async def _queue_build(
-    request: Request,
-    ns: LanceNamespace,
-    settings: Settings,
-    segments: list[str],
-    body: CreateTableIndexRequest,
-    *,
-    kind: str,
-) -> str | None:
-    """Publish one build onto the index lane, or ``None`` when this deployment has no queue.
-
-    ``None`` rather than a flag so the caller reads as one decision: either a unit id came back and
-    the door answers with it, or the build runs here. Both halves are gated on the SAME topic name
-    the maintenance service reads, so a door cannot accept work nothing will ever perform.
-
-    What stays in the handler is the BOUNDED half — parsing the identifier and one ``describe_table``
-    to learn where the dataset lives. What leaves is the half whose cost is a property of the data.
-    """
-    publisher = getattr(request.app.state, "dapr_client", None)
-    if not settings.maintenance_index_topic or publisher is None:
-        return None
-    location = await run_in_threadpool(_table_location, ns, segments)
-    item = IndexWorkItem(
-        uri=location,
-        # The request path IS the identity, so the worker never derives one — and this is the producer
-        # that most needs to supply it: a catalog-created table's location may be a path no parser
-        # reads back, and without an id the worker falls back to its ambient credential.
-        table_id=settings.delimiter.join(segments),
-        column=body.column,
-        kind=kind,
-        index_type=body.index_type or "",
-        name=body.name or "",
-        params=_pylance_kwargs(body),
-    )
-    await dapr_publish.publish_event(  # noqa: TID251
-        publisher,
-        timeout_seconds=settings.control_emit_timeout_seconds,
-        pubsub_name=settings.maintenance_index_pubsub,
-        topic_name=settings.maintenance_index_topic,
-        data=item.model_dump_json(),
-        data_content_type="application/json",
-    )
-    log.info("index_build_queued", extra={"table": item.table_id, "column": item.column, "kind": kind, "index_type": item.index_type})
-    return item.unit_id
-
-
-#: The spec's request field -> pylance's keyword. Only where the two DIFFER; everything else in
-#: `_TUNING_FIELDS` passes through under its own name.
-#:
-#: Translated HERE because this is the party that speaks both vocabularies. A worker doing it would
-#: need a namespace handle pointed at the catalog's own root, making a dataset-level service a second
-#: writer to `__manifest`.
-_SPEC_TO_PYLANCE = {"distance_type": "metric"}
-
-#: What a caller may tune, as the spec's own request declares it. Everything NOT listed is platform
-#: routing (`id`, `identity`, `context`, `branch`) or is already a named argument (`column`,
-#: `index_type`, `name`) — forwarding either would either duplicate an argument or hand pylance a
-#: keyword it has never heard of, which is a TypeError inside the worker rather than a 4xx here.
-_TUNING_FIELDS = (
-    "distance_type",
-    "ascii_folding",
-    "base_tokenizer",
-    "language",
-    "lower_case",
-    "max_token_length",
-    "remove_stop_words",
-    "stem",
-    "with_position",
-)
-
-
-def _pylance_kwargs(body: CreateTableIndexRequest) -> dict[str, object]:
-    """The tuning this request carries, under the names pylance answers to.
-
-    UNSET FIELDS ARE OMITTED, never sent as ``None``: pylance's defaults are meaningful (a metric of
-    ``L2``, a tokenizer chosen per index type) and passing an explicit ``None`` overrides them with
-    something no caller asked for.
-    """
-    tuning: dict[str, object] = {}
-    for field in _TUNING_FIELDS:
-        value = getattr(body, field, None)
-        if value is not None:
-            tuning[_SPEC_TO_PYLANCE.get(field, field)] = value
-    return tuning
-
-
-def _table_location(ns: LanceNamespace, segments: list[str]) -> str:
-    """Where this table's dataset lives, as the catalog itself answers.
-
-    Asked rather than composed, the I2 rule: a location built from settings and a location the catalog
-    vends disagree for most of this estate, and a unit carrying the wrong one indexes another table.
-    """
-    described: DescribeTableResponse = native.call(ns, "describe_table", DescribeTableRequest(id=segments))
-    if not described.location:
-        raise InvalidInputError("table has no object-store location to index")
-    return described.location

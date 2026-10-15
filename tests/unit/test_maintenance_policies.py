@@ -17,8 +17,8 @@ import pyarrow as pa
 import pytest
 
 from maintenance.core.config import MaintenanceSettings
-from maintenance.services.optimize import Discovery, compact_one
-from maintenance.services.sweep import _policy_skip_reason
+from maintenance.services.expiry import ExpiryPolicy, ExpiryTarget, expire_versions
+from maintenance.services.plan import cadence_skip
 from service_kit.lakehouse import maintenance_policies as mp
 
 
@@ -203,36 +203,26 @@ def _settings(tmp_path: Path) -> MaintenanceSettings:
             "s3_access_key_id": "x",
             "s3_secret_access_key": "x",
             "policy_root": str(tmp_path),
-            # CONTROL root too, not just the policy root. These tests drive the REAL `run_sweep`, and
-            # since F6(d) the sweep reads the trash index from the control root to decide which
-            # datasets it may rewrite — so an unset control root pointed at the shipped default
-            # (`s3://lance-catalog`), a bucket no unit test has. It used to pass only because that
-            # read was swallowed; now it aborts the tick, as the policy registry already did, because
-            # both are protective surfaces and sweeping without them rewrites data an owner kept.
-            #
-            # The right fix is the hermetic root, not a softer posture: a unit test that reaches for a
-            # real bucket is the defect, and it was invisible while the failure was swallowed.
+            # The control root too: a unit test that reaches for the shipped default bucket is the defect.
             "control_root": str(tmp_path),
         }
     )
 
 
-def test_skip_reasons_disabled_and_interval(tmp_path: Path) -> None:
+def test_the_cadence_skips_inside_the_interval(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     now = datetime.now(UTC)
     uri = "s3://bkt/u1_db$t"
 
-    assert _policy_skip_reason(_policy(compact_enabled=False), settings=settings, options={}, now=now, uri=uri) == "policy_disabled"
-
     cadenced = _policy(compact_interval_hours=6)
     mp.put_policy(str(tmp_path), {}, cadenced)
     # No stamp yet → maintain (an absent/lost stamp must never silence maintenance).
-    assert _policy_skip_reason(cadenced, settings=settings, options={}, now=now, uri=uri) is None
+    assert cadence_skip(cadenced, settings=settings, uri=uri, now=now) is None
     # Fresh stamp → skip; stale stamp → maintain.
     mp.write_state(str(tmp_path), {}, cadenced, uri, (now - timedelta(hours=1)).isoformat())
-    assert _policy_skip_reason(cadenced, settings=settings, options={}, now=now, uri=uri) == "policy_interval"
+    assert cadence_skip(cadenced, settings=settings, uri=uri, now=now) == "policy_interval"
     mp.write_state(str(tmp_path), {}, cadenced, uri, (now - timedelta(hours=7)).isoformat())
-    assert _policy_skip_reason(cadenced, settings=settings, options={}, now=now, uri=uri) is None
+    assert cadence_skip(cadenced, settings=settings, uri=uri, now=now) is None
 
 
 def test_a_naive_or_malformed_stamp_maintains_instead_of_raising(tmp_path: Path) -> None:
@@ -243,9 +233,9 @@ def test_a_naive_or_malformed_stamp_maintains_instead_of_raising(tmp_path: Path)
     uri = "s3://bkt/u1_db$t"
     cadenced = _policy(compact_interval_hours=6)
     mp.write_state(str(tmp_path), {}, cadenced, uri, datetime.now().isoformat())
-    assert _policy_skip_reason(cadenced, settings=settings, options={}, now=now, uri=uri) is None
+    assert cadence_skip(cadenced, settings=settings, uri=uri, now=now) is None
     mp.write_state(str(tmp_path), {}, cadenced, uri, "not-a-timestamp")
-    assert _policy_skip_reason(cadenced, settings=settings, options={}, now=now, uri=uri) is None
+    assert cadence_skip(cadenced, settings=settings, uri=uri, now=now) is None
 
 
 def test_tag_pinned_version_survives_any_retention_policy(tmp_path: Path) -> None:
@@ -258,7 +248,7 @@ def test_tag_pinned_version_survives_any_retention_policy(tmp_path: Path) -> Non
     lance.write_dataset(table, uri, mode="append")  # v3
     lance.dataset(uri).tags.create("blessed", 1)
 
-    result = compact_one(uri, {}, older_than=None, retain_versions=1)
+    result = expire_versions(ExpiryTarget(uri=uri, storage_options={}), ExpiryPolicy(older_than=None, retain_versions=1))
     assert result.error is None, result.error
 
     ds = lance.dataset(uri)
@@ -286,93 +276,6 @@ def test_a_partial_policy_update_preserves_fields_it_did_not_mention(tmp_path: A
     assert updated["compact_enabled"] is False, "the field the caller DID set must apply"
     assert updated["scan_batch_size"] == 64, "the memory bound was silently cleared"
     assert updated["cleanup_enabled"] is False, "the legal hold was silently lifted"
-
-
-# --- #93 the compaction READ bound -----------------------------------------------------------------
-# The knob shipped as a per-tier policy field with no global default, so the UNPOLICIED estate — which
-# is what `helm install` produces — ran `compact_files` at Lance's 8192-ROW batch across a thread per
-# HOST core. Against ~1.8 MB bronze page rows that is ~15 GB per thread, in a pod whose chart tier is
-# a 512Mi limit, on a 120s cron. These drive the real sweep and assert on what reaches Lance, because
-# a silently-dropped kwarg is the failure mode that matters: the pass looks identical while still
-# reading 8192 rows.
-
-
-def _sweep_kwargs(monkeypatch: pytest.MonkeyPatch, settings: MaintenanceSettings, uri: str) -> dict[str, Any]:
-    """Run the real `run_sweep` over one local dataset and return what it handed `compact_files`."""
-    from maintenance.services import sweep as sweep_mod
-
-    seen: dict[str, Any] = {}
-    real = lance.dataset(uri).optimize.__class__.compact_files
-
-    def _spy(self: object, *args: object, **kwargs: object) -> object:
-        seen.update(kwargs)
-        return real(self, *args, **kwargs)  # ty: ignore[invalid-argument-type] — a spy is deliberately untyped
-
-    monkeypatch.setattr(sweep_mod, "_s3fs", lambda _s: None)
-    # `discover_datasets` returns a Discovery (uris + the prefixes the depth bound stopped at), not a
-    # bare list — the truncation must not be droppable, so the stub returns the model too.
-    monkeypatch.setattr(sweep_mod, "discover_datasets", lambda _fs, _bucket, *, max_depth: Discovery(uris=[uri]))
-    lance.dataset(uri).optimize.__class__.compact_files = _spy  # ty: ignore[invalid-assignment]
-    try:
-        sweep_mod.run_sweep(settings)
-    finally:
-        lance.dataset(uri).optimize.__class__.compact_files = real
-    return seen
-
-
-def _small_dataset(tmp_path: Path) -> str:
-    uri = str(tmp_path / "ds")
-    table = pa.table({"n": pa.array([1, 2], pa.int64())})
-    lance.write_dataset(table, uri, mode="overwrite")
-    lance.write_dataset(table, uri, mode="append")
-    return uri
-
-
-def test_an_unpolicied_sweep_is_still_bounded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """No policy anywhere — the shipped state — must NOT mean Lance's unbounded default."""
-    settings = _settings(tmp_path)
-    seen = _sweep_kwargs(monkeypatch, settings, _small_dataset(tmp_path))
-    assert seen.get("batch_size") == settings.scan_batch_size, f"unpolicied sweep read unbounded: {seen}"
-    assert seen.get("num_threads") == settings.compact_threads, f"thread count unbounded: {seen}"
-
-
-def test_a_policy_still_overrides_the_global_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The global is a safe floor for the unpolicied estate, not a ceiling on per-tier tuning."""
-    uri = _small_dataset(tmp_path)
-    settings = _settings(tmp_path)
-    mp.put_policy(str(tmp_path), {}, _policy(id_="ds", path=uri, scan_batch_size=512))
-    seen = _sweep_kwargs(monkeypatch, settings, uri)
-    assert seen.get("batch_size") == 512, f"the policy did not override the global default: {seen}"
-
-
-def test_a_malformed_policy_falls_back_to_the_bound_not_to_lances_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The path that matters most, and the one that was wrong.
-
-    The policy-error handler reset every tuning variable to None, which after this change would have
-    made a MALFORMED policy the single path that hands compaction Lance's unbounded 8192-row read.
-    "We could not read the tuning" is the worst possible moment to become unbounded. Caught by `ty`
-    (`None` not assignable to `int`) rather than by any test, which is why this one exists.
-    """
-    uri = _small_dataset(tmp_path)
-    settings = _settings(tmp_path)
-    # `scan_batch_size` non-numeric → int(str(...)) raises inside the policy block, taking the except.
-    mp.put_policy(str(tmp_path), {}, _policy(id_="ds", path=uri, scan_batch_size="not-a-number"))
-    seen = _sweep_kwargs(monkeypatch, settings, uri)
-    assert seen.get("batch_size") == settings.scan_batch_size, f"a malformed policy went unbounded: {seen}"
-
-
-def test_the_shipped_defaults_fit_the_pods_chart_tier(tmp_path: Path) -> None:
-    """The numbers are chosen, not arbitrary — so the arithmetic is the test.
-
-    The maintenance pod names no `resources` key in chart/templates/maintenance.yaml, so it inherits
-    `resources.default`: a 512Mi LIMIT. The compaction read's ceiling is batch x row size x threads,
-    and against the estate's worst row (a ~1.8 MB bronze page image) that product must leave the
-    process room to exist. Raising either default without raising the pod's tier re-opens the OOM.
-    """
-    settings = _settings(tmp_path)
-    worst_case_row_bytes = 1_800_000  # measured, bronze page images
-    ceiling = settings.scan_batch_size * worst_case_row_bytes * settings.compact_threads
-    assert ceiling < 256 * 1024 * 1024, f"the shipped read ceiling is {ceiling / 2**20:.0f} MiB against a 512Mi pod limit"
 
 
 # ------------------------------------------------- the record's lifecycle vs its object's

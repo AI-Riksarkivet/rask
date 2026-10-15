@@ -13,12 +13,11 @@ WHY THE READBACK NEEDS TWO CALLS, which is the whole reason this module exists. 
 `index_statistics(name)`. A rebuild reading only the non-deprecated call therefore re-partitions the
 index to pylance's default without erroring, which is exactly the silent re-tune above.
 
-THE KIND IS READ, NOT INFERRED. `IndexWorkItem.kind` documents that a worker "guessing between them
-would build a different index than the caller asked for" — true of a worker, and the reason this
-resolution happens here instead: `.type_url` is `/lance.index.pb.VectorIndexDetails` for a vector
-index and `/lance.table.<Kind>IndexDetails` for every scalar one, so the discriminator is observed
-off the live index rather than derived from a name list that a new index type would silently fall
-out of.
+THE KIND IS READ, NOT INFERRED. A rebuild guessing between vector and scalar would build a different
+index than the one it repairs, so this resolution reads it: `.type_url` is
+`/lance.index.pb.VectorIndexDetails` for a vector index and `/lance.table.<Kind>IndexDetails` for every
+scalar one, so the discriminator is observed off the live index rather than derived from a name list
+that a new index type would silently fall out of.
 
 T6 — the bug class is "a rebuild loses a parameter", so every parameter that CAN be lost is asserted,
 not only the one that was found missing.

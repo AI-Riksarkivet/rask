@@ -1,29 +1,20 @@
-"""The maintenance service's write-event subscription — the PRIMARY trigger.
+"""The maintenance service's write-event subscription: after a commit, the written table's due record and its expiry.
 
-The sweep discovers by walking every bucket every tick: measured at 87 datasets, one manifest open
-each, reporting `fragments_removed: 0, versions_removed: 0` on every pass since 2026-08-16. This lane
-replaces that as the primary trigger and leaves the cron as an HOURLY BACKSTOP, which is a correctness
-requirement rather than caution — the bus is provably incomplete (ingest, Ray TRAIN and external
-OpenLineage producers emit over HTTP only and never reach the topic; the catalog's lineage lane has no
-outbox, so a lost trigger is silent), and old-version GC on a table nobody has written since has no
-write to react to at all.
-
-Subscribes to `lineage.events.v1`, the one lane every governed writer converges on, with a queue group
-so replicas compete rather than each planning the same dataset. The control topic is deliberately not
-used: it is a broadcast with no queue group, and it is the notifications plane's people-targeting lane.
-
-Registered only when a work topic is configured — the same condition the cron uses to choose its lane,
-so a deployment cannot advertise a subscription for a queue it never publishes to.
+Subscribes to `lineage.events.v1`, the one lane every governed writer converges on, with a queue group so replicas
+compete rather than each evaluating the same table. On a write it re-evaluates that one table's due record and, once
+enough of its versions are reclaimable, expires them (:func:`maintenance.services.arrival.act_on_write`), emitting the
+same `expire_versions` lineage run the sweep does. Registered when `MAINTENANCE_ARRIVAL_ENABLED` is on and a lineage
+topic is set.
 
 A WRITE IS ITS PUBLISHER'S CLAIM UNTIL ITS SIGNATURE IS CHECKED ([[XC-078]], owner ruling R4). The Dapr app token
 proves that this pod's own sidecar delivered an event, not who published it, and the location a write names is what
-this service plans a rewrite of. So before planning, the door checks the write's `rask_signature` against the keys its
-signer publishes, with the signer sets lineage verifies with (`RASK_EVENT_SIGNERS`, `RASK_EVENT_DELEGATORS`), and
-`RASK_SIGNATURE_DOORS` decides what it does with the verdict (`lineage_kit.door`): off checks nothing, observe plans as
-before and counts what enforcing would refuse, and enforce plans only a write a listed signer's key verifies. A refusal
-is acknowledged and plans nothing, since no redelivery can sign bytes already published; a key list that cannot be read
-is retried, since it says nothing about the signature. Only a write the lane would plan is checked (`plannable_write`),
-so an event it acknowledges untouched costs no key read.
+this service reads. So before evaluating, the door checks the write's `rask_signature` against the keys its signer
+publishes, with the signer sets lineage verifies with (`RASK_EVENT_SIGNERS`, `RASK_EVENT_DELEGATORS`), and
+`RASK_SIGNATURE_DOORS` decides what it does with the verdict (`lineage_kit.door`): off checks nothing, observe evaluates
+as before and counts what enforcing would refuse, and enforce evaluates only a write a listed signer's key verifies. A
+refusal is acknowledged and evaluates nothing, since no redelivery can sign bytes already published; a key list that
+cannot be read is retried, since it says nothing about the signature. Only a write the lane would evaluate is checked
+(`plannable_write`), so an event it acknowledges untouched costs no key read.
 """
 
 from __future__ import annotations
@@ -38,12 +29,12 @@ from fastapi.concurrency import run_in_threadpool
 from lineage_kit.door import DoorMode, DoorVerdict, judge
 from lineage_kit.keys import PublishedKeys
 from lineage_kit.signing import signature_of, verify_signature
-from maintenance.api.dependencies import DaprClientDep, SettingsDep
+from maintenance.api.dependencies import LineageEmitterDep, SettingsDep
 from maintenance.core.config import MaintenanceSettings
+from maintenance.core.lineage_emit import MaintenanceEmitter
 from maintenance.core.metrics import SignatureDoor, create_signature_refused_series, record_signature_refused, record_signature_would_refuse
-from maintenance.services.arrival import plannable_write, should_replan
-from maintenance.services.sweep import plan_one
-from maintenance.services.work_queue import RETRY, SUCCESS, enqueue_units
+from maintenance.services.arrival import act_on_write, plannable_write, should_replan
+from maintenance.services.sweep import emit_sweep_lineage
 from service_kit.draining import retry_when_draining
 from service_kit.governed.dapr_auth import require_dapr_token
 from service_kit.governed.signing_key import published_key_fetch, retry_until_signed
@@ -57,6 +48,10 @@ ARRIVAL_DOOR: Final[SignatureDoor] = "maintenance-arrival"
 
 #: Bounds what an event's own text can put into a log line: the identity and the ids it carries are its publisher's.
 _MAX_LOGGED_CHARS: Final = 300
+
+#: The Dapr subscription answers: acknowledge the delivery, or ask the sidecar to redeliver it.
+SUCCESS: Final = "SUCCESS"
+RETRY: Final = "RETRY"
 
 
 def _published_keys(request: Request, settings: MaintenanceSettings) -> PublishedKeys:
@@ -109,66 +104,55 @@ async def _judge_arrival(arrived: dict[str, Any], *, event_id: object, request: 
     return verdict
 
 
-async def handle_arrival(event: dict[str, Any], settings: MaintenanceSettings, dapr: Any) -> dict[str, str]:  # noqa: ANN401 — DaprClient | None
-    """Decide whether this write means maintenance, and enqueue one unit if it does.
+async def handle_arrival(event: dict[str, Any], settings: MaintenanceSettings, emitter: MaintenanceEmitter) -> dict[str, str]:
+    """Refresh the due record of the table this write names and expire its versions, when enough have accumulated.
 
-    ACKS far more often than it enqueues, and every ack is a decision rather than a shrug: a byte-free
-    catalog operation, one of maintenance's own completion events (the loop guard), an event carrying
-    no physical URI, a trashed or policy-disabled dataset, or a table already at target. None of those
-    is retryable, and the hourly backstop re-reaches anything this declines in error.
+    A compaction's commits and an index build or optimize skip the debounce: the refresh after one is what takes the
+    table off the due list.
 
-    RETRIES only when the unit could not be PUBLISHED. That is the one failure redelivery can fix, and
-    dropping it silently would make a sidecar outage look like an estate with nothing to do.
+    ACKS a byte-free operation, an event carrying no physical URI, a debounced write and a table no manifest names:
+    none of those is retryable, and the sweep re-evaluates anything this declines. RETRIES only when the evaluation
+    could not decide (a manifest, the policy registry or the dataset unreadable), and stamps the debounce only after a
+    decision, so a failed refresh is not skipped by the next event.
 
     It checks no signature: the route calls it only for a write its door admitted, and a direct caller verifies nothing.
     """
     write = plannable_write(event.get("data", event))
     if write is None:
         return {"status": SUCCESS}
-    # DEBOUNCE BEFORE PLANNING, never inside it. `plan_one` calls `sibling_base_refs`, which opens every
-    # sibling manifest in the warehouse — so a write burst would drive one whole-warehouse sweep per
-    # write. Checking a single JSON stamp first is what makes the lane affordable on a busy table.
     options = settings.storage_options()
     last = await run_in_threadpool(maintenance_policies.read_planned_version, settings.resolved_policy_root, options, write.location)
-    if not should_replan(last_planned=last, event_version=write.version, min_versions=settings.event_min_versions):
+    if not write.refreshes_regardless() and not should_replan(last_planned=last, event_version=write.version, min_versions=settings.event_min_versions):
         return {"status": SUCCESS}
-    item = await run_in_threadpool(plan_one, write.location, settings)
-    if item is None:
-        return {"status": SUCCESS}
-    published, _not_queued = await enqueue_units(
-        dapr, [item], pubsub=settings.work_pubsub, topic=settings.work_topic, timeout_seconds=settings.publish_timeout_seconds
-    )
-    if published and write.version is not None:
-        # Stamp only what actually reached the queue. Stamping a unit that failed to publish would
-        # debounce a dataset whose work never got queued — the one combination that loses maintenance
-        # silently, since the next events would be skipped against a plan that never happened.
+    acted = await run_in_threadpool(act_on_write, write.location, settings)
+    if acted.verdict == "failed":
+        return {"status": RETRY}
+    if acted.expired is not None:
+        await emit_sweep_lineage(emitter, [acted.expired], delimiter=settings.delimiter)
+    if write.version is not None:
         await run_in_threadpool(maintenance_policies.write_planned_version, settings.resolved_policy_root, options, write.location, write.version)
-    return {"status": SUCCESS if published else RETRY}
+    return {"status": SUCCESS}
 
 
-def register_arrival_route(app: FastAPI, settings: MaintenanceSettings, dapr_app: DaprApp | None = None) -> DaprApp | None:
-    """Register the write-event subscription and create its door's refusal series at 0, or nothing when this deployment has no queue.
-
-    Takes an existing :class:`DaprApp` when one was already built for another subscription — a second
-    ``DaprApp(app)`` would re-register ``/dapr/subscribe`` and the sidecar would read only one of them.
-    """
-    if not settings.work_topic:
+def register_arrival_route(app: FastAPI, settings: MaintenanceSettings) -> DaprApp | None:
+    """Register the write-event subscription and create its door's refusal series at 0, or nothing when the lane is off."""
+    if not (settings.arrival_enabled and settings.lineage_topic):
         return None
     create_signature_refused_series()
-    wrapper = dapr_app or DaprApp(app)
+    wrapper = DaprApp(app)
 
     @wrapper.subscribe(
         pubsub=settings.lineage_pubsub,
         topic=settings.lineage_topic,
         route="/maintenance-arrival",
-        dead_letter_topic=settings.work_dlq_topic or None,
+        dead_letter_topic=settings.arrival_dlq_topic or None,
     )
     async def on_arrival(
         event: dict[str, Any],
         request: Request,
         *,
         config: SettingsDep,
-        dapr: DaprClientDep,
+        emitter: LineageEmitterDep,
         _: Annotated[None, Depends(require_dapr_token)],
         drain: Annotated[dict[str, str] | None, Depends(retry_when_draining)] = None,
         signing: Annotated[dict[str, str] | None, Depends(retry_until_signed)] = None,
@@ -176,12 +160,12 @@ def register_arrival_route(app: FastAPI, settings: MaintenanceSettings, dapr_app
         """``event`` is typed ``dict`` so FastAPI parses the CloudEvent body — an ``Any`` param becomes
         a query param and 422s. The Dapr app-api-token authenticates the sidecar that delivered it; the
         signature door, when it enforces, is what stops a forged write from naming any URI in any bucket for
-        this service to plan a rewrite of.
+        this service to read.
 
-        While draining, ask for REDELIVERY rather than planning — Dapr's delivery does not consult a
-        readiness probe, and the plan this would produce could outlive the pod that published it. The same answer
-        while this service's signing key is unresolved: the work this plans emits signed events. Both answer before
-        the event is read; the door reads it, so it comes after them and before anything is planned.
+        While draining, ask for REDELIVERY rather than evaluating — Dapr's delivery does not consult a readiness
+        probe. The same answer while this service's signing key is unresolved, so the lane and the sweep come up
+        together. Both answer before the event is read; the door reads it, so it comes after them and before anything
+        is evaluated.
         """
         if drain is not None:
             return drain
@@ -194,7 +178,7 @@ def register_arrival_route(app: FastAPI, settings: MaintenanceSettings, dapr_app
                 return {"status": RETRY}
             if not verdict.act:
                 return {"status": SUCCESS}
-        return await handle_arrival(event, config, dapr)
+        return await handle_arrival(event, config, emitter)
 
     return wrapper
 

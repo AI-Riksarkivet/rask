@@ -320,26 +320,10 @@ class CatalogMaintenanceSettings(BaseSettings):
     #: The maintenance sweep's cleanup window (`maintenance.olderThanDays`), which an erasure report quotes as
     #: the last condition before the subject's bytes leave storage. Read here only to say it; the sweep owns it.
     erasure_cleanup_window_days: int = Field(default=7, ge=0, alias="LANCE_ERASURE_CLEANUP_WINDOW_DAYS")
-    # The maintenance work queue, shared with ``services/maintenance``: the on-demand compaction door
-    # publishes ONE ``DatasetWorkItem`` here instead of rewriting fragments inside the request handler.
-    # Empty topic (the default) = NO QUEUE, and that is the honest default rather than a disabled feature:
-    # the executor is registered only where the same topic is configured (``register_work_route``), so a
-    # 202 from a deployment without one would accept work nothing will ever perform. Unset, the door
-    # keeps the synchronous behaviour it has always had.
-    maintenance_work_pubsub: str = Field(default="maintenance-work-pubsub", alias="LANCE_MAINTENANCE_WORK_PUBSUB")
-    maintenance_work_topic: str = Field(default="", alias="LANCE_MAINTENANCE_WORK_TOPIC")
-    #: The INDEX-BUILD lane. Set, `create_index` / `create_scalar_index` publish one unit and return
-    #: the spec's `transaction_id` instead of building inside the request handler — which is what
-    #: `CreateTableIndex` already documents ("index creation is handled asynchronously", progress via
-    #: `ListTableIndices` / `DescribeTableIndexStats`). Unset, the build runs here as it always has,
-    #: because nothing would ever execute a unit nobody consumes.
-    #:
-    #: The maintenance service reads the SAME topic name from its own settings, so the two cannot
-    #: disagree about whether a worker exists.
-    maintenance_index_topic: str = Field(default="", alias="LANCE_MAINTENANCE_INDEX_TOPIC")
-    #: Its own component, for the reason `services/maintenance` records: `ackWait` is per-component,
-    #: so an index build sharing the work queue's component would share its 720s window.
-    maintenance_index_pubsub: str = Field(default="maintenance-index-pubsub", alias="LANCE_MAINTENANCE_INDEX_PUBSUB")
+    #: How old the maintenance sweep's clone list may be when ``version/create`` judges a compaction against it
+    #: (``service_kit.lakehouse.maintenance_due``, ADR 0162). An older list means the sweep has stopped, and a
+    #: dataset cloned since is unknown, so the compaction is refused; the sweep writes one every tick.
+    clone_list_max_age_seconds: int = Field(default=3600, ge=60, alias="LANCE_CLONE_LIST_MAX_AGE_SECONDS")
 
 
 class CatalogUserStateSettings(BaseSettings):

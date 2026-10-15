@@ -18,7 +18,7 @@ spec:
 scopes:
   - {{ .Values.services.catalog.daprAppId }}
 
-{{- if and .Values.maintenance.enabled .Values.maintenance.lineageEmit (not .Values.maintenance.workTopic) }}
+{{- if and .Values.maintenance.enabled .Values.maintenance.lineageEmit (not .Values.maintenance.arrivalEnabled) }}
 {{- include "lance.publishPubsub" (list . (include "lance.subPubsub" (list . .Values.maintenance.daprAppId)) .Values.maintenance.daprAppId) }}
 {{- end }}
 {{- if .Values.catalog.controlEmit }}
@@ -84,7 +84,7 @@ scopes:
 
 {{- $subscribers = append $subscribers (dict "appId" "notifications" "deliverPolicy" "new") }}
 
-{{- if and .Values.maintenance.enabled .Values.maintenance.workTopic }}
+{{- if and .Values.maintenance.enabled .Values.maintenance.arrivalEnabled }}
 {{- $subscribers = append $subscribers (dict "appId" .Values.maintenance.daprAppId "deliverPolicy" "new") }}
 {{- end }}
 
@@ -178,68 +178,4 @@ scopes:
   - {{ . }}
 {{- end }}
 {{- end }}
-{{- end }}
-{{- if and .Values.dapr.enabled .Values.maintenance.enabled .Values.maintenance.workTopic }}
----
-apiVersion: dapr.io/v1alpha1
-kind: Component
-metadata:
-  name: {{ .Values.maintenance.workPubsub }}
-  labels: {{- include "lance.labels" . | nindent 4 }}
-spec:
-  type: pubsub.jetstream
-  version: v1
-  metadata:
-    - { name: natsURL, value: "{{ include "lance.natsUrl" . }}" }
-    - { name: name, value: "lance-dapr-maintenance-work" }
-    - { name: queueGroupName, value: {{ .Values.maintenance.daprAppId | quote }} }
-    - { name: durableName, value: "{{ .Values.maintenance.daprAppId }}-work-durable" }
-
-    {{- if .Values.dapr.resiliency.enabled }}
-    - { name: ackWait, value: "720s" }
-    - { name: maxDeliver, value: "3" }
-    - { name: backOff, value: "720s,720s" }
-    {{- else }}
-    - { name: ackWait, value: "720s" }
-    - { name: maxDeliver, value: "5" }
-    - { name: backOff, value: "720s,720s,720s,720s" }
-    {{- end }}
-    - { name: maxAckPending, value: "{{ include "lance.maintenanceMaxAckPending" . }}" }
-    {{- with include "lance.natsCreds" (list . .Values.maintenance.daprAppId) }}{{ . | nindent 4 }}{{- end }}
-{{- include "lance.natsAuth" . }}
-scopes:
-  - {{ .Values.maintenance.daprAppId }}
-
-{{- include "lance.publishPubsub" (list . (printf "%s-%s" .Values.maintenance.workPubsub .Values.services.catalog.daprAppId) .Values.services.catalog.daprAppId) }}
-{{- end }}
-{{- if and .Values.maintenance.enabled .Values.maintenance.indexTopic }}
----
-apiVersion: dapr.io/v1alpha1
-kind: Component
-metadata:
-  name: {{ .Values.maintenance.indexPubsub }}
-  labels: {{- include "lance.labels" . | nindent 4 }}
-spec:
-  type: pubsub.jetstream
-  version: v1
-  metadata:
-    - { name: natsURL, value: "{{ include "lance.natsUrl" . }}" }
-    - { name: name, value: "lance-dapr-maintenance-index" }
-    - { name: queueGroupName, value: "{{ .Values.maintenance.daprAppId }}-index" }
-    - { name: durableName, value: "{{ .Values.maintenance.daprAppId }}-index-durable" }
-    - { name: ackWait, value: {{ .Values.maintenance.indexAckWait | quote }} }
-    {{- if .Values.dapr.resiliency.enabled }}
-    - { name: maxDeliver, value: "3" }
-    - { name: backOff, value: "{{ .Values.maintenance.indexAckWait }},{{ .Values.maintenance.indexAckWait }}" }
-    {{- else }}
-    - { name: maxDeliver, value: "5" }
-    - { name: backOff, value: "{{ .Values.maintenance.indexAckWait }},{{ .Values.maintenance.indexAckWait }},{{ .Values.maintenance.indexAckWait }},{{ .Values.maintenance.indexAckWait }}" }
-    {{- end }}
-    - { name: maxAckPending, value: "{{ include "lance.maintenanceIndexMaxAckPending" . }}" }
-    {{- with include "lance.natsCreds" (list . .Values.maintenance.daprAppId) }}{{ . | nindent 4 }}{{- end }}
-{{- include "lance.natsAuth" . }}
-scopes:
-  - {{ .Values.maintenance.daprAppId }}
-
-{{- include "lance.publishPubsub" (list . (printf "%s-%s" .Values.maintenance.indexPubsub .Values.services.catalog.daprAppId) .Values.services.catalog.daprAppId) }}
 {{- end }}

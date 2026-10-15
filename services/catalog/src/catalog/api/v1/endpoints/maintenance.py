@@ -1,39 +1,15 @@
-"""#75 on-demand garbage-collection endpoints — preview (dry-run reclaimable versions) + run, per table.
+"""The per-table maintenance doors: #75 on-demand garbage collection, and the tables maintenance has found due.
 
-Both are owner-gated by the router (``maintenance/preview`` / ``maintenance/run`` → ``can_drop`` in
-fga_deps — reclaiming version history is the drop rung, exactly like the retention policy that schedules it).
-The preview never mutates; the run reclaims old versions with the sweep's tag exemption. The heavy Lance
-work (open dataset, list versions, cleanup) runs in a threadpool so the event loop stays free.
+``maintenance/preview`` and ``maintenance/run`` are owner-gated by the router (``can_drop`` in ``fga_deps``: reclaiming
+version history is the drop rung, like the retention policy that schedules it). The preview never mutates; the run
+reclaims old versions with the sweep's tag exemption. Both honour ``branch``: a branch keeps its own ``_versions``,
+``_transactions`` and ``data`` under ``tree/{branch}/`` (``lance_docs/file_format.md``), so a reclaim through a branch
+handle deletes only the branch's own files (measured on pylance 11.0.0: the parent's ``data/`` stayed byte-identical
+and still time-travelled), and an answer about one ref is never reported as another's.
 
-**EVERY DOOR HERE DECLARES ``branch``, AND WHAT IT DOES WITH ONE IS PER DOOR.** Declaring it is not
-optional either way: FastAPI drops an undeclared query parameter in silence, so a door that "takes no
-branch" is exactly the shape that answers 200 for a branch it ignored.
-
-ALL FOUR VERBS HONOUR IT, and each for a reason measured on the door rather than inferred from how
-destructive it sounds. Reindex carries the ref on the work item so the worker opens what the request
-named. Preview calls ``_base_refs`` zero times and mutates nothing. Compact is answered by
-``require_compactable``, an evidence gate that refuses a real shallow clone on COST. Run reclaims, and
-its reclaim is contained by the LAYOUT: a branch keeps its own ``_versions``/``_transactions``/``data``
-under ``tree/{branch}/`` (``lance_docs/file_format.md:3673-3688``), so ``cleanup_old_versions`` through
-a branch handle deletes the branch's own files. Measured on pylance 11.0.0, on a branch that had
-overwritten every parent fragment — the sharpest case, where all of the parent's bytes are garbage from
-the branch's point of view — one data file went and it was the branch's own; the parent's ``data/``
-stayed byte-identical and still time-travelled to v1.
-
-A branch handle reports the DATASET ROOT as its ``uri`` (measured: ``main.uri == branch.uri``), so
-``_base_refs`` lists the same directory and ``is_protected`` checks the same location whichever ref the
-request named. That is why ``/run``'s refusal bought nothing and was deleted: it cited a bound — one
-parent listing, blind to a referrer under another root — that applies identically to the MAIN request
-this door has always accepted.
-
-A door that honours a ref must answer ABOUT that ref: previewing main and labelling it the branch's is
-the same defect as reclaiming main, delivered as information instead of as deletion.
-
-The estate has paid for this twice. ``indices.py`` records why the spec index doors declare the field
-only to refuse it, and ``ff9604be`` fixed the destructive version: a branch-targeted
-``drop_table_index`` was destroying MAIN's index and answering 200. The reindex door added on
-2026-09-15 reintroduced the pattern on a new route the same day, so every verb mounted here either
-answers about the ref it is given or refuses it; none may act on main in its place.
+``GET /management/v1/maintenance/due`` lists the tables a compaction or an index optimize is due on, as the
+maintenance sweep wrote them (ADR 0162), to the callers that may maintain each. A bring-your-own job pulls it,
+rewrites on its own compute, and commits through ``version/create``, which judges the result.
 """
 
 from __future__ import annotations
@@ -41,29 +17,28 @@ from __future__ import annotations
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, Header, Query, Request, Response, status
+from fastapi import APIRouter, Query
 from fastapi.concurrency import run_in_threadpool
 
-from catalog.api import lineage_deps
-from catalog.api.dependencies import LineageEmitterDep, NamespaceDep, SettingsDep, StorageOptionsDep
+from catalog.api.dependencies import FgaClientDep, NamespaceDep, SettingsDep, StorageOptionsDep
+from catalog.api.pagination import paginate
 from catalog.api.security import CurrentToken
 from catalog.core.base_judge import BaseJudge
 from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier
-from catalog.core.lineage_emit import COMPACT_TABLE, CREATE_INDEX
-from catalog.core.namespace import disarm_commit_path_cleanup, open_dataset
-from catalog.schemas import CompactAccepted, CompactRequest, CompactResult, GcPreview, GcRequest, GcRunResult, ReindexAccepted, ReindexRequest, ReindexResult
-from catalog.services import index_specs, maintenance
-from service_kit import dapr_publish
-from service_kit.lakehouse.work_items import DatasetPlan, DatasetWorkItem, IndexWorkItem
+from catalog.core.namespace import open_dataset
+from catalog.schemas import DueTable, GcPreview, GcRequest, GcRunResult, MaintenanceDueResponse
+from catalog.services import maintenance
+from service_kit.governed import fga
+from service_kit.lakehouse import maintenance_due
 
 
 log = logging.getLogger(__name__)
 
-#: THE MANAGEMENT SURFACE ([[LH-021]]). These are rask's own operations, not Lance namespace ones —
-#: a spec client discovering them on `/v1/table` meets verbs the document never defines. They mount at
-#: `/management/v1` and inherit the same authn/authz and delimiter guard from `api/v1/router.py`.
-router = APIRouter(prefix="/management/v1/table", tags=["maintenance"])
+#: rask's own operations, not Lance namespace ones, so they mount under `/management/v1` ([[LH-021]]) and inherit the
+#: authn/authz and delimiter guard of `api/v1/router.py`.
+table_router = APIRouter(prefix="/management/v1/table", tags=["maintenance"])
+due_router = APIRouter(prefix="/management/v1/maintenance", tags=["maintenance"])
 
 
 async def _base_refs(ds: object, so: dict[str, str], settings: Settings) -> maintenance.BaseRefs:
@@ -89,7 +64,7 @@ async def _base_refs(ds: object, so: dict[str, str], settings: Settings) -> main
     return refs
 
 
-@router.post("/{id}/maintenance/preview")
+@table_router.post("/{id}/maintenance/preview")
 async def preview_maintenance(
     id: str,
     body: GcRequest,
@@ -121,7 +96,7 @@ async def preview_maintenance(
     return GcPreview(**result)
 
 
-@router.post("/{id}/maintenance/run")
+@table_router.post("/{id}/maintenance/run")
 async def run_maintenance(
     id: str,
     body: GcRequest,
@@ -157,235 +132,40 @@ async def run_maintenance(
     return GcRunResult(**result)
 
 
-@router.post(
-    "/{id}/maintenance/compact",
-    # BOTH outcomes are declared, because this OpenAPI is a wire contract: it is generated into
-    # `frontend/packages/api/src/generated/catalog.ts`, and a 202 the schema does not describe is a
-    # response the typed client cannot name. The union return annotation carries the 200; `responses`
-    # carries the 202, which FastAPI cannot infer from a status code set at runtime.
-    responses={
-        status.HTTP_202_ACCEPTED: {
-            "model": CompactAccepted,
-            "description": "Enqueued onto the maintenance work queue; no fragment counts exist yet.",
-        }
-    },
-)
-async def compact_maintenance(
-    id: str,
-    body: CompactRequest,
-    request: Request,
-    response: Response,
-    ns: NamespaceDep,
+@due_router.get("/due")
+async def list_due_maintenance(
     settings: SettingsDep,
-    so: StorageOptionsDep,
     token: CurrentToken,
-    emitter: LineageEmitterDep,
-    authorization: Annotated[str | None, Header()] = None,
-    branch: Annotated[
-        str | None,
-        Query(
-            description="The ref to compact. A branch is answered by the evidence gate, which refuses on COST when fragments still resolve through the parent."
-        ),
-    ] = None,
-) -> CompactResult | CompactAccepted:
-    """Compact small fragments on demand (#76 'compact now'). Owner-gated (``can_drop``) — the same bar as
-    the retention policy that schedules maintenance. Non-destructive: writes a new version, removes none.
+    client: FgaClientDep,
+    limit: Annotated[int, Query(ge=1, le=1000)] = 100,
+    page_token: Annotated[str | None, Query(description="Continue after this table id (the previous page's `page_token`).")] = None,
+) -> MaintenanceDueResponse:
+    """The tables a compaction or an index optimize is due on, in table order, listed to a caller holding
+    ``can_maintain`` on each: what made each due, the policy record that governed it, and how many datasets resolve
+    their files through it."""
+    records = await run_in_threadpool(maintenance_due.list_due, settings.registry_root, settings.storage_options())
+    if settings.fga_enabled and token is not None and client is not None:
+        allowed = await fga.batch_check(client, user=token.sub, relation="can_maintain", objects=[f"table:{record.table}" for record in records])
+        records = [record for record in records if allowed.get(f"table:{record.table}")]
+    by_table = {record.table: record for record in records}
+    page, next_token = paginate(sorted(by_table), page_token, limit)
+    return MaintenanceDueResponse(tables=[_due_view(by_table[table]) for table in page], page_token=next_token)
 
-    WHERE THE REWRITE HAPPENS depends on whether this deployment has a maintenance queue, and the two
-    answers are not a feature flag — they are the same choice ``services/maintenance`` already makes for
-    the scheduled lane, read off the same topic name so the two cannot disagree about whether a worker
-    exists. With a queue: publish one unit, 202, done in milliseconds. Without one: nothing would ever
-    execute that unit, so the rewrite runs here as it always has.
 
-    What stays in the handler either way is the BOUNDED half — parsing the identifier, opening the
-    dataset, and the ``sibling_base_refs`` pre-pass (one non-recursive listing). What leaves is the half
-    whose cost is a property of the data rather than of the request: rewriting every fragment of a table
-    whose fragment count nobody bounded.
-    """
-    # NO SHAPE REFUSAL HERE. A branch is answered by `require_compactable`, which is evidence-based and
-    # already refuses a real shallow clone on COST — "compacting one materialises the shared data into
-    # its own root, 1,072 -> 108,199 bytes against a 119,693-byte base". A branch IS a shallow clone
-    # (`file_format.md:3671`), so it reaches that gate and gets that answer, measured against THIS
-    # dataset rather than asserted from its shape.
-    #
-    # The door used to refuse first, and its reason was wrong about the harm: measured on pylance
-    # 11.0.0, compacting a branch with 3 inherited and 2 own fragments reported
-    # `fragments_removed=5, fragments_added=1`, left main's data directory byte-identical at 3 files,
-    # and both refs still read (branch 40 rows, main 30). So it DOES merge this ref's own fragments and
-    # the parent is not endangered — the cost is duplication, which is exactly what the evidence gate
-    # measures and this one could not. It also made the answer permanent: a branch that has already
-    # been materialised owns all its fragments and is cheap to compact, and a shape refusal can never
-    # notice that.
-    segments = parse_identifier(id, settings.delimiter)
-    ds = await run_in_threadpool(open_dataset, ns, so, segments, branch=branch)
-    # Disarmed before the compaction is run or queued ([[LH-245]]): its commit would otherwise reclaim behind every hold.
-    ds = await run_in_threadpool(disarm_commit_path_cleanup, ds, segments)
-    protected = await _base_refs(ds, so, settings)
-
-    publisher = getattr(request.app.state, "dapr_client", None)
-    if settings.maintenance_work_topic and publisher is not None:
-        location = str(getattr(ds, "uri", "") or "")
-        item = DatasetWorkItem(
-            uri=location,
-            # The executor runs the full ordered pass (compact -> optimize_indices -> cleanup). This door
-            # is documented non-destructive, so both later steps are OFF: moving the work to another lane
-            # must not quietly turn "compact now" into "compact and reclaim history now".
-            plan=DatasetPlan(
-                target_rows_per_fragment=body.target_rows_per_fragment,
-                cleanup_enabled=False,
-                optimize_indices_enabled=False,
-            ),
-            protected_by=protected.is_protected(location),
-            # The door's own request path IS the identity, so it never needs deriving. This is the
-            # producer that most needs to supply it: a catalog-created table's location may be a
-            # medallion path no parser can read back.
-            table_id=id,
-        )
-        await dapr_publish.publish_event(  # noqa: TID251
-            publisher,
-            timeout_seconds=settings.control_emit_timeout_seconds,
-            pubsub_name=settings.maintenance_work_pubsub,
-            topic_name=settings.maintenance_work_topic,
-            data=item.model_dump_json(),
-            data_content_type="application/json",
-        )
-        response.status_code = status.HTTP_202_ACCEPTED
-        return CompactAccepted(uri=location, protected_by=item.protected_by)
-
-    result = await run_in_threadpool(
-        maintenance.compact_now,
-        ds,
-        target_rows_per_fragment=body.target_rows_per_fragment,
-        # The gate's base probe has to ask THIS dataset's store — see `require_compactable`. Handed
-        # down rather than re-derived so the button and the sweep read the same bases the same way.
-        storage_options=so,
-        protected=protected,
+def _due_view(record: maintenance_due.DueRecord) -> DueTable:
+    """A record as the door shows it: the referrers' locations are other tables' storage, so only their count."""
+    return DueTable(
+        table=record.table,
+        version=record.version,
+        compaction=record.compaction,
+        indices=record.indices,
+        policy=record.policy,
+        clones=len(record.clones),
+        evaluated_at=record.evaluated_at,
     )
-    # The QUEUED lane above is answered by an executor that emits; this lane has no such partner, and it
-    # is the lane the deployed estate runs (`maintenance.workTopic` is empty on the release's values).
-    # Pinned to the version the rewrite committed and to the ref it rewrote: the index pass after it may
-    # commit again, and a branch's number names another snapshot on main.
-    await lineage_deps.emit_measured_write(
-        emitter,
-        segments,
-        ns=ns,
-        so=so,
-        settings=settings,
-        token=token,
-        operation=COMPACT_TABLE,
-        authorization=authorization,
-        pin_version=result.get("version"),
-        branch=branch,
-    )
-    return CompactResult(**result)
 
 
-@router.post(
-    "/{id}/maintenance/reindex",
-    responses={
-        status.HTTP_202_ACCEPTED: {
-            "model": ReindexAccepted,
-            "description": "Enqueued onto the index lane; the rebuilt version does not exist yet.",
-        }
-    },
-)
-async def reindex_maintenance(
-    id: str,
-    body: ReindexRequest,
-    request: Request,
-    response: Response,
-    ns: NamespaceDep,
-    settings: SettingsDep,
-    so: StorageOptionsDep,
-    token: CurrentToken,
-    emitter: LineageEmitterDep,
-    authorization: Annotated[str | None, Header()] = None,
-    branch: Annotated[
-        str | None, Query(description="The ref to rebuild on. Omit for main; the ref travels with the work item so the worker opens what you named.")
-    ] = None,
-) -> ReindexResult | ReindexAccepted:
-    """Rebuild one named index in place ([[LH-105]]). Owner-gated (``can_drop``, declared in
-    ``fga_deps._OWNER_SUFFIX_RELATION``) — it destroys the index that is there.
-
-    **IT REPLACES; IT DOES NOT DROP AND RECREATE**, which is the whole design and was measured rather
-    than assumed. `LanceDataset.create_index` carries ``replace: bool = False`` and
-    `create_scalar_index` carries ``replace: bool = True`` (pylance 11.0.0, 2026-09-15): a same-name
-    vector rebuild is refused at the default — ``LanceError(Index): Index name 'x' already exists`` —
-    and accepted under ``replace=True``. So the vector index, the one that cannot repair itself
-    through the create doors, is repaired by a flag pylance already has. Dropping first would open a
-    window in which the table has NO index — a search silently degrading to a full scan — and would
-    leave it with none if the rebuild then failed, which is worse than the mis-parameterised index
-    being repaired.
-
-    **THE SHAPE IS READ, NOT RESTATED.** `index_specs.describe_index_for_rebuild` reads the live
-    index's own parameterisation, so a repair cannot quietly re-tune what it repairs; `body.params`
-    merges OVER that reading for the caller who is deliberately changing something.
-
-    WHERE IT RUNS follows the compact door beside it, off the same topic name the maintenance service
-    reads, so the two cannot disagree about whether a worker exists. With a queue: publish one
-    `IndexWorkItem` and answer 202. Without one: nothing would ever execute the unit, so the rebuild
-    runs here.
-    """
-    segments = parse_identifier(id, settings.delimiter)
-    ds = await run_in_threadpool(open_dataset, ns, so, segments, branch=branch)
-    # Disarmed before the rebuild is run or queued ([[LH-245]]).
-    ds = await run_in_threadpool(disarm_commit_path_cleanup, ds, segments)
-    spec = await run_in_threadpool(index_specs.describe_index_for_rebuild, ds, body.index_name)
-    params = {**spec.params, **body.params}
-    # Kept before the build, because Lance may build less than was asked (lance #9134) and the next
-    # rebuild must still ask for it (`index_specs.record_requested_params`).
-    await run_in_threadpool(index_specs.record_requested_params, ds, spec, body.params)
-
-    publisher = getattr(request.app.state, "dapr_client", None)
-    item = IndexWorkItem(
-        uri=str(getattr(ds, "uri", "") or ""),
-        # THE REF TRAVELS WITH THE UNIT, and that is what lets this door accept a branch at all. It
-        # publishes and answers 202, so the WORKER opens the dataset; a branch accepted here but not
-        # carried would rebuild MAIN's index while this response reported the branch's.
-        branch=branch or "",
-        table_id=id,
-        column=spec.column,
-        kind=spec.kind,
-        index_type=spec.index_type,
-        name=spec.name,
-        replace=True,
-        params=params,
-    )
-    if settings.maintenance_index_topic and publisher is not None:
-        await dapr_publish.publish_event(  # noqa: TID251
-            publisher,
-            timeout_seconds=settings.control_emit_timeout_seconds,
-            pubsub_name=settings.maintenance_index_pubsub,
-            topic_name=settings.maintenance_index_topic,
-            data=item.model_dump_json(),
-            data_content_type="application/json",
-        )
-        response.status_code = status.HTTP_202_ACCEPTED
-        return ReindexAccepted(
-            index_name=spec.name,
-            column=spec.column,
-            kind=spec.kind,
-            index_type=spec.index_type,
-            params=params,
-            transaction_id=item.unit_id,
-        )
-
-    outcome = await run_in_threadpool(maintenance.rebuild_index_now, ds, item)
-    # `CREATE_INDEX` because a replace IS the create door's commit under another name — the two spec index
-    # doors emit it, and a rebuild that reported nothing would leave the graph claiming the index still
-    # dates from whichever build last went through `indices.py`. The version is in hand here, so it is
-    # pinned rather than re-read.
-    await lineage_deps.emit_measured_write(
-        emitter,
-        segments,
-        ns=ns,
-        so=so,
-        settings=settings,
-        token=token,
-        operation=CREATE_INDEX,
-        pin_version=outcome,
-        # The ref the rebuild ran on: `outcome` is that ref's version, a different snapshot on main.
-        branch=branch,
-        authorization=authorization,
-    )
-    return ReindexResult(index_name=spec.name, column=spec.column, kind=spec.kind, index_type=spec.index_type, version=outcome)
+# One exported router, as `router.py` mounts `_module.router` for every endpoint module.
+router = APIRouter()
+router.include_router(table_router)
+router.include_router(due_router)

@@ -1,22 +1,16 @@
-"""Table maintenance service — a FastAPI app driven by Dapr cron **input bindings**.
+"""Table maintenance service — a FastAPI app driven by Dapr cron **input bindings** and one write-event subscription.
 
-``bindings.cron`` components POST to ``/<binding-name>`` every interval (no app code drives the
-schedule — it is component config). Two bindings, two jobs:
+Maintenance decides and does not rewrite (ADR 0155, ADR 0156 C4 and C6, ADR 0162). ``bindings.cron`` components POST
+to ``/<binding-name>`` every interval. Two bindings, two jobs:
 
-* the **sweep** discovers every Lance dataset across the configured buckets and runs one ORDERED pass
-  per dataset — ``compact_files()``, then ``optimize_indices()``, then ``cleanup_old_versions()``.
-  The order is the reason these live in one service: compaction leaves its new fragments unindexed,
-  so index optimization follows it, and cleanup runs last because it reclaims the superseded
-  versions both earlier steps produced, in one pass.
-* the **reconcile** pass reads OpenFGA, the control-root registries and object storage and REPORTS where
-  they disagree — then, ONLY if that report ran clean, purges expired trash records (#79): revoke the
-  object's grants, delete the bytes the catalog recorded at drop time, clear the record. Off by default.
+* the **sweep** discovers every Lance dataset across the swept buckets, expires each one's superseded versions
+  (``cleanup_old_versions`` behind the refusal ladder that guards reclamation), and writes a due record for each table
+  a bring-your-own job should compact or reindex;
+* the **reconcile** pass reads OpenFGA, the control-root registries and object storage and REPORTS where they
+  disagree — then, ONLY if that report ran clean, purges expired trash records (#79). Off by default.
 
-Blocking Lance/S3 IO runs in the threadpool so the event loop stays free.
-Run: ``uvicorn maintenance.service:app``.
-
-Thin entrypoint: lifespan + ``FastAPI()`` + health, with both cron routes registered via
-``maintenance.api.routes``. The operations live in ``maintenance.services``.
+With ``MAINTENANCE_ARRIVAL_ENABLED``, ``/maintenance-arrival`` refreshes a written table's due record between ticks.
+Blocking Lance/S3 IO runs in the threadpool so the event loop stays free. Run: ``uvicorn maintenance.service:app``.
 """
 
 from __future__ import annotations
@@ -26,16 +20,13 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager, suppress
 from typing import Any
 
-import anyio.to_thread
 from dapr.aio.clients import DaprClient
 from fastapi import FastAPI
 from fastapi.concurrency import run_in_threadpool
 
 from lineage_kit import SigningKey, attach_control_signature, parse_published_keys
 from maintenance.api.arrival import register_arrival_route
-from maintenance.api.index_work import register_index_route
 from maintenance.api.routes import build_router
-from maintenance.api.work import register_work_route
 from maintenance.core.config import MaintenanceSettings, get_settings
 from maintenance.core.lineage_emit import make_emitter
 from service_kit.control_emit import ControlSign, make_control_emitter
@@ -119,20 +110,11 @@ def _control_sign(holder: SigningKeyHolder[SigningKey]) -> ControlSign:
 async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     app.state.startup_complete = False
     app.state.shutting_down = False
-    # ARMED ON THE SIGNAL, not on lifespan unwind. The `finally` below flips the same flag, but that
-    # runs after uvicorn has stopped serving — so `retry_when_draining` on `on_unit` could never refuse
-    # a delivery, and `rewrite_slot.retire_this_worker` documented a mechanism this service did not
-    # have. A retiring worker must answer RETRY to the next unit rather than start one it will abandon.
+    # ARMED ON THE SIGNAL, not on lifespan unwind: the `finally` below runs after uvicorn has stopped serving, so
+    # `retry_when_draining` on the arrival route could never refuse a delivery.
     _disarm_drain = arm_drain_on_sigterm(app)
     settings = get_settings()
     instrument_lance_if_available()  # Lance-native IO metrics onto the global MeterProvider
-    # APPLY THE EXECUTION CEILING, because the broker's delivery bound is derived from it. `execute_unit`
-    # runs through `run_in_threadpool`, whose limit is anyio's process-global thread limiter; leaving it
-    # at the library default makes `maxAckPending` a number computed from something nobody chose. Set
-    # here rather than at the call site: the limiter is process-global, so one assignment at boot is the
-    # honest shape and a per-request one would race. Pinned by
-    # tests/unit/test_a_work_unit_is_not_delivered_before_it_can_run.py.
-    anyio.to_thread.current_default_thread_limiter().total_tokens = settings.max_concurrent_units
     # Fail closed if behind a Dapr sidecar but the app-token is unset — the cron route would otherwise be an
     # open forged-sweep path (symmetric with the lineage service). No-op in dev (dapr_enabled off).
     assert_app_token_configured(dapr_enabled=settings.dapr_enabled)
@@ -144,7 +126,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     # the event loop.
     await run_in_threadpool(apply_dapr_secrets, settings)
     # Fail fast at boot if the S3 secret is still empty (neither the store nor plaintext env provided it) —
-    # the sweep is a real S3 consumer, so a silent empty key would otherwise fail every later compaction
+    # the sweep is a real S3 consumer, so a silent empty key would otherwise fail every later pass
     # with a cryptic S3 SignatureDoesNotMatch instead of a clear startup error (parity with the catalog's
     # 'credentials required, no silent fallback'). The shared apply_dapr_secrets already fails closed when the store IS
     # the source; this covers the plaintext-env path (secrets_from_dapr off) the comment used to over-claim.
@@ -157,16 +139,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     # unguarded.
     if not settings.s3_access_key_id:
         raise RuntimeError("MAINTENANCE_S3_ACCESS_KEY_ID is required — it no longer defaults to the RustFS tenant root")
-    # Lineage emission (opt-in, best-effort): build the Dapr pub/sub emitter so each materially-compacted
-    # dataset records a maintenance run on the lineage graph (#7b). The Dapr client targets the local
-    # sidecar, so it's cheap to construct and needs no broker reachability at boot; a no-op emitter when off.
-    # ONE sidecar client for both emitters — lineage (data) and control (governance). Built when either
-    # is on; the sidecar is local, so construction is cheap and needs no broker reachability at boot.
-    # The work queue publishes through this same client, so a configured work topic keeps it alive
-    # even with both emitters off — otherwise the tick would plan units it has no way to send.
-    dapr_client = DaprClient() if (settings.lineage_emit_enabled or settings.control_emit_enabled or settings.work_topic) else None
-    # THIS SERVICE'S OWN SIGNING KEY ([[LH-064]]), or None for a stack with no store or no identity. The planner and
-    # every worker run this module and sign as it. It is also the author every event stamps, which the emitter checks
+    # ONE sidecar client for both emitters — lineage (data) and control (governance). Built when either is on; the
+    # sidecar is local, so construction is cheap and needs no broker reachability at boot.
+    dapr_client = DaprClient() if (settings.lineage_emit_enabled or settings.control_emit_enabled) else None
+    # THIS SERVICE'S OWN SIGNING KEY ([[LH-064]]), or None for a stack with no store or no identity. It is also the author every event stamps, which the emitter checks
     # at construction: a verifier refuses a signer that is not its event's author.
     signing = make_signing_holder(
         secrets_from_dapr=settings.secrets_from_dapr,
@@ -186,7 +162,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         outbox_uri=settings.lineage_outbox_uri,
         storage_options=settings.storage_options(),
         # The SAME identity this service presents at the catalog's service door, so the graph and the
-        # catalog cannot disagree about who compacted a dataset. A signer must sign as it: the emitter refuses to
+        # catalog cannot disagree about who maintained a dataset. A signer must sign as it: the emitter refuses to
         # be built with a key for any other identity.
         author=settings.catalog_service_identity,
         signing=signing,
@@ -247,17 +223,5 @@ app = build_lance_service_app(
 # BUILT from the settings this app was assembled with, not stamped into the routes module at import.
 app.include_router(build_router(get_settings()))
 
-# The work subscription (POST /maintenance-work), registered only when a work topic is configured — the
-# same condition the cron route uses to choose its lane, so a deployment cannot advertise a subscription
-# for a queue it never publishes to.
-_work_app = register_work_route(app, get_settings())
-
-# The write-event subscription (POST /maintenance-arrival) — the PRIMARY trigger. Shares the DaprApp
-# the work route built: a second DaprApp(app) re-registers /dapr/subscribe and the sidecar reads only
-# one of them, so one subscription would silently never be delivered to.
-_work_app = register_arrival_route(app, get_settings(), _work_app) or _work_app
-
-# The index-build subscription (POST /maintenance-index). Its own topic beside the work queue —
-# one ackWait cannot serve both a minutes-long compaction and a vector index over a large table —
-# but the SAME DaprApp, for the reason the line above states.
-register_index_route(app, get_settings(), _work_app)
+# The write-event subscription (POST /maintenance-arrival), registered only when the lane is enabled.
+register_arrival_route(app, get_settings())

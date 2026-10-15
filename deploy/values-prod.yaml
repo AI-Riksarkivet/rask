@@ -172,19 +172,8 @@ rustfs:
   storage: 200Gi
   storageClass: "" # "" = the cluster default SC; prod: a CSI class that supports VolumeSnapshot + encryption
 
-# --- Compaction/GC at a real cadence (not the 120s demo sweep) -------------------------------------
+# --- Version retention (the backstop sweep keeps the chart's cadence, under the clone-list maximum age) ---
 maintenance:
-  # HOURLY, because the event lane is the primary trigger and this is the backstop. It is not a
-  # tuning preference: the bus is provably incomplete (Ray TRAIN and external OpenLineage
-  # producers emit over HTTP only and never reach `lineage.events.v1`; the catalog's lineage lane has
-  # no outbox, so a lost trigger is silent), and clock-due work — an old-version GC on a table nobody
-  # has written since — has no write to react to at all. So this must keep running; it just stops
-  # being what finds work first.
-  #
-  # Relax it FURTHER only alongside `workTopic`: with the event lane off this cron IS the trigger, and
-  # an hourly primary would leave a busy estate an hour behind. Never past 75 minutes: MaintenanceTableParked's
-  # 4h window must hold three periods plus ackWait, or the alert never fires.
-  schedule: "0 0 * * * *" # hourly — the backstop under the event lane
   olderThanDays: 7
 
 # --- Ingress fronts the gateway in prod (kind used a port-forward). Wired in templates/ingress.yaml →

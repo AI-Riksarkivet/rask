@@ -235,13 +235,13 @@ SET_OBSERVED_DROP: Final = (
     "MATCH (d:Dataset) WHERE d.name = $name AND d.source_uri = $uri AND (d.lifecycle_at IS NULL OR d.lifecycle_at < $tm)"
     " SET d.lifecycle = 'DROP', d.lifecycle_at = $tm RETURN 1"
 )
-# The newest COMPLETE run that wrote the dataset, maintenance excluded: a compaction or an index build after
+# The newest COMPLETE run that wrote the dataset, maintenance excluded: an expiry, a compaction or an index build after
 # a drop is not a recreate. FAILed runs keep their WROTE edges, so the COMPLETE filter is load-bearing: a
 # failed drop asserts nothing. The list is `models.MAINTENANCE_OPERATIONS` as a literal, because a constant
 # here is embedded as raw SQL and must stay a LiteralString; `tests/unit/test_lineage.py` pins them equal.
 DATASET_LAST_EXISTENCE_RUN: Final = (
     "MATCH (r:Run)-[:WROTE]->(d:Dataset) WHERE d.name = $name AND r.event_type = 'COMPLETE'"
-    " AND NOT r.operation IN ['compaction', 'compact_table', 'create_index'] RETURN r.operation, r.event_time ORDER BY r.event_time DESC LIMIT 1"
+    " AND NOT r.operation IN ['expire_versions', 'compact_table', 'create_index'] RETURN r.operation, r.event_time ORDER BY r.event_time DESC LIMIT 1"
 )
 SET_DATASET_TAGS: Final = "MATCH (d:Dataset) WHERE d.name = $name SET d.tags=$tags RETURN 1"
 # Governance metadata (#49) — human-curated tags + description on the Dataset node, with last-writer

@@ -56,7 +56,7 @@ spec:
                   # `--defaults` ANSWERS THE PROMPTS, and without it nothing is created. The nats CLI asks
                   # for any option a command does not supply, and a Job has no terminal: measured
                   # 2026-09-22, `nats stream add` answered "invalid input: cannot ask for confirmation
-                  # without a terminal" and MAINTENANCE_INDEX was never created while the Job reported
+                  # without a terminal" and a work-queue stream was never created while the Job reported
                   # Complete. Every other stream predates this, so the creation path was inert and the
                   # only thing that noticed was a stream listing.
                   nats --server "$S" stream add "$1" --defaults \
@@ -67,37 +67,11 @@ spec:
                     || { echo "!! FAILED to create stream $1 — a publisher would have nowhere to land"; exit 1; }
                 fi
               }
-              # A WORK QUEUE is not a retained log, and it needs its own creation path: a message is
-              # REMOVED once acked, which is what makes the stream itself the outstanding-work ledger.
-              # Created with `limits`, acked messages are retained 168h and `messages` stops being
-              # outstanding work — measured 2026-08-06 on a live work-queue stream: retention=limits,
-              # deny_purge=true, deny_delete=true.
-              #
-              # `--deny-purge --deny-delete` are deliberately ABSENT here. They protect a retained
-              # RECORD; a work queue has none — it reclaims by ack — and a purge refused by them answers
-              # err_code 10110, "stream purge not permitted".
-              #
-              # ONE-TIME MIGRATION on an existing cluster: this function is `if exists; then skip`, so a
-              # stream already created with `limits` KEEPS it. Drain it, `nats stream rm` it once, and
-              # let this Job recreate it, or the chart is correct while the cluster is not.
-              add_workqueue_if_missing() {
-                if nats --server "$S" stream info "$1" >/dev/null 2>&1; then
-                  echo "stream $1 already exists"
-                else
-                  nats --server "$S" stream add "$1" --defaults \
-                    --subjects "$2" --storage file --retention work \
-                    --max-age=168h --max-bytes=-1 --max-msgs=-1 --max-msgs-per-subject=-1 \
-                    --max-msg-size=-1 --discard old --dupe-window=2m --replicas {{ (hasKey .Values.nats "streamReplicas") | ternary .Values.nats.streamReplicas 1 }} \
-                    --no-allow-rollup \
-                    || { echo "!! FAILED to create stream $1 — a publisher would have nowhere to land"; exit 1; }
-                fi
-              }
               # RETENTION IS A FAN-OUT CORRECTNESS INVARIANT, and nothing asserted it.
               #
-              # Both creation helpers are `if exists; then skip`, so a stream created ONCE with the wrong
-              # retention keeps it forever and the chart is right while the cluster is wrong — exactly the
-              # drift the work-queue helper below documents for that stream, generalised. What each wrong
-              # value costs is not cosmetic:
+              # The creation helper is `if exists; then skip`, so a stream created ONCE with the wrong
+              # retention keeps it forever and the chart is right while the cluster is wrong. What each
+              # wrong value costs is not cosmetic:
               #
               #   work      on a stream with MULTIPLE per-app durables: the FIRST ack deletes the message,
               #             so the apps steal deliveries from each other. A subscriber silently under-runs —
@@ -127,20 +101,6 @@ spec:
                   echo "stream $1: retention=$got (as intended)"
                 fi
               }
-              converge_max_ack_pending() {
-                local want="$3" got
-                got=$(nats --server "$S" consumer info "$1" "$2" --json 2>/dev/null | sed -n 's/.*"max_ack_pending":[ ]*\([0-9]*\).*/\1/p' | head -1)
-                if [ -z "$got" ]; then
-                  echo "consumer $1/$2: not present yet — Dapr creates it with maxAckPending=$want from the component"
-                elif [ "$got" != "$want" ]; then
-                  echo ">> consumer $1/$2 has max_ack_pending=$got, the chart intends $want — converging"
-                  nats --server "$S" consumer edit "$1" "$2" --max-pending="$want" --force >/dev/null \
-                    || { echo "!! FAILED to converge $1/$2 max_ack_pending — the lane keeps delivering $got units to a fleet that can run $want, and a queued unit burns its ackWait while idle"; exit 1; }
-                  echo "consumer $1/$2: max_ack_pending now $want"
-                else
-                  echo "consumer $1/$2: max_ack_pending=$got (as intended)"
-                fi
-              }
               for stream in LINEAGE DLQ{{ if .Values.catalog.controlEmit }} CATALOG_CONTROL{{ end }}; do
                 assert_retention "$stream" limits
               done
@@ -167,41 +127,6 @@ spec:
               # loop repairs; walking the stream is what makes that repair reach it.
               add_if_missing CATALOG_CONTROL "catalog.control.>"
               {{- end }}
-              {{- if .Values.maintenance.workTopic }}
-              # The maintenance work queue: one message per dataset, planned by the cron tick and
-              # executed by the `/maintenance-work` subscription. It NEEDS a stream — Dapr does not
-              # create one, and a publish with no stream fails, which would leave every tick reporting
-              # units it planned and could not send.
-              #
-              # WORK retention: a unit is REMOVED once
-              # acked, so the stream itself is the outstanding-work ledger and `messages` answers "how
-              # much maintenance is still owed" without a side ledger to keep in step. A retained log
-              # would answer that question wrongly by 168 hours.
-              add_workqueue_if_missing MAINTENANCE_WORK "maintenance.work.>"
-              # `workqueue`, NOT `work`: this is compared against the value nats-server SERIALIZES into
-              # `stream info --json`, whose vocabulary is limits|interest|workqueue. `work` mismatched
-              # unconditionally, so the Job exited 1 on every run and took the whole
-              # `helm upgrade --wait-for-jobs` down with it (revision 34, 2026-08-15).
-              assert_retention MAINTENANCE_WORK workqueue
-              converge_max_ack_pending MAINTENANCE_WORK "{{ .Values.maintenance.daprAppId }}-work-durable" {{ include "lance.maintenanceMaxAckPending" . }}
-              {{- end }}
-              {{- if .Values.maintenance.indexTopic }}
-              # The index-build lane, a SECOND work queue beside the one above. Same retention and the
-              # same reason — a unit is removed once acked, so `messages` answers how many builds are
-              # still owed — but its own stream because the ACK WINDOW differs by an order of
-              # magnitude: `maintenance.indexAckWait` (3600s) against the work queue's 720s, and
-              # `ackWait` is per-COMPONENT in Dapr's JetStream pubsub, so one stream serving both would
-              # hand the index lane the compaction lane's window and redeliver every large build
-              # mid-flight into a second worker building the same index.
-              #
-              # It NEEDS the stream for the reason the work queue does: Dapr creates none, so the
-              # catalog's create_index door would answer 200 with a transaction id for a unit that
-              # landed nowhere and no worker will ever run — the failure this gate ([[LH-151]]) exists
-              # to make impossible.
-              add_workqueue_if_missing MAINTENANCE_INDEX "maintenance.index.>"
-              assert_retention MAINTENANCE_INDEX workqueue
-              converge_max_ack_pending MAINTENANCE_INDEX "{{ .Values.maintenance.daprAppId }}-index-durable" {{ include "lance.maintenanceIndexMaxAckPending" . }}
-              {{- end }}
               # Reconcile app-durable config drift (the UPGRADE path): a Dapr jetstream subscription
               # can only BIND an existing durable whose config matches its request — after a values
               # change that alters consumer config (e.g. the resiliency flip's maxDeliver/backOff),
@@ -218,12 +143,7 @@ spec:
               EXP_BOFF="{{ if .Values.dapr.resiliency.enabled }}720000000000,720000000000{{ else }}30000000000,60000000000,120000000000,300000000000{{ end }}"
               # CATALOG_CONTROL joins only when its stream exists, under the SAME conditional that
               # creates it — a loop over a stream the release does not own would just log noise.
-              #
-              # MAINTENANCE_WORK and the index lane stay OUT, and not by oversight: their backOff is sized by the WORK, not by the fleet convention
-              # (`maintenance-work-durable` renders 720s,720s,720s,720s with resiliency OFF against
-              # EXP_BOFF's 30s,60s,120s,300s; the index lane's is `indexAckWait` repeated). Comparing
-              # them to EXP would find a mismatch every run and delete the queue out from under
-              # in-flight maintenance work. Walking them needs per-stream expected values, not this list.
+
               # ORPHAN PASS (LH-127), beside the drift pass rather than inside it: the two answer different
               # questions. Drift asks "is this durable's config still the one the component requests"; an
               # orphan's config matches forever, because a Dapr sidecar created it from those same templated

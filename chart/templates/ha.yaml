@@ -85,20 +85,3 @@ spec:
       stabilizationWindowSeconds: {{ $.Values.autoscaling.scaleDownStabilizationSeconds }}
 {{- end }}
 {{- end }}
-
-{{- if and .Values.maintenance.enabled .Values.maintenance.dedicatedWorkers.enabled .Values.maintenance.workTopic }}
-{{- if gt (int .Values.maintenance.dedicatedWorkers.replicas) 1 }}
----
-apiVersion: policy/v1
-kind: PodDisruptionBudget
-metadata:
-  name: {{ include "lance.fullname" $ }}-maintenance-worker
-  labels: {{- include "lance.labels" $ | nindent 4 }}
-spec:
-  minAvailable: {{ $.Values.podDisruptionBudget.minAvailable }}
-  selector:
-    matchLabels:
-      app.kubernetes.io/component: maintenance-worker
-      app.kubernetes.io/instance: {{ $.Release.Name }}
-{{- end }}
-{{- end }}

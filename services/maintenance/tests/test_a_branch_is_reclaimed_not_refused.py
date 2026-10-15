@@ -24,8 +24,8 @@ COMPACTION IS A SEPARATE ANSWER AND STAYS REFUSED. A branch manifest DOES regist
 base — measured on the same fixture, `manifest_base_paths` is `[]` on main and `['<parent>']` on the
 branch, whose inherited fragments carry `base_id: 0` while only its own new fragment carries `None`.
 So the flag-16 compaction gate is right about a branch for the reason it gives (compacting would
-materialise the parent's bytes into `tree/<branch>/`), and it is a COST refusal recorded on
-`DatasetResult.refused` while the pass continues. Reclamation is the step this row is about.
+materialise the parent's bytes into `tree/<branch>/`), and the due evaluation lists no compaction for one.
+Reclamation is the step this file is about.
 """
 
 from __future__ import annotations
@@ -36,7 +36,7 @@ from pathlib import Path
 import lance
 import pyarrow as pa
 
-from maintenance.services.optimize import compact_one
+from maintenance.services.expiry import ExpiryPolicy, ExpiryTarget, expire_versions
 from service_kit.lakehouse.base_refs import BaseRefs, containment_of
 
 
@@ -63,7 +63,7 @@ def test_a_branch_of_a_protected_root_is_NOT_refused(tmp_path: Path) -> None:
     protected = BaseRefs(protected={src.lstrip("/")})
     assert containment_of(branch_uri, src) == "branch", "the fixture stopped being the case under test"
 
-    result = compact_one(branch_uri, {}, timedelta(seconds=0), protected=protected)
+    result = expire_versions(ExpiryTarget(uri=branch_uri, storage_options={}, protected=protected), ExpiryPolicy(older_than=timedelta(seconds=0)))
 
     assert result.old_versions_removed > 0, "the branch's own versions were not reclaimed"
     assert result.bytes_removed > 0
@@ -75,7 +75,8 @@ def test_the_root_ITSELF_is_still_refused(tmp_path: Path) -> None:
     """
     src, _branch = _parent_with_branch(tmp_path)
 
-    result = compact_one(src, {}, timedelta(seconds=0), protected=BaseRefs(protected={src.lstrip("/")}))
+    target = ExpiryTarget(uri=src, storage_options={}, protected=BaseRefs(protected={src.lstrip("/")}))
+    result = expire_versions(target, ExpiryPolicy(older_than=timedelta(seconds=0)))
 
     assert result.refused is not None
     assert "another dataset resolves its files through" in result.refused

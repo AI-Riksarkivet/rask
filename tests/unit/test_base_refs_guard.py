@@ -182,9 +182,9 @@ def test_the_clone_breaks_IN_A_FRESH_PROCESS_after_the_source_is_swept(tmp_path:
         4 data files -> compact -> 5 -> fresh process CLONE_OK
                      -> cleanup -> 1 -> fresh process CLONE_BROKEN:ArrowInvalid
 
-    That distinction matters operationally rather than academically: the sweep runs compact ->
-    optimize_indices -> cleanup as ONE ordered pass, so a real tick does both and a guard placed only
-    in front of compaction would be bypassed by the step that actually deletes.
+    That distinction matters operationally rather than academically: a bring-your-own job compacts and
+    the sweep reclaims, so a guard placed only in front of compaction would be bypassed by the step
+    that actually deletes.
 
     The fresh process is the whole test. In-process the clone reads fine after cleanup — the dataset
     cache still holds the deleted files' handles — so this assertion made without a subprocess would
@@ -194,7 +194,7 @@ def test_the_clone_breaks_IN_A_FRESH_PROCESS_after_the_source_is_swept(tmp_path:
     assert len(lance.dataset(src).get_fragments()) > 1, "the fixture must produce several data files or there is nothing to compact"
     assert _clone_opens_in_a_fresh_process(clone) == "CLONE_OK", "the clone was broken before the sweep — the fixture is wrong"
 
-    # The sweep's own order (maintenance/services/optimize.py): compact, then reclaim versions.
+    # A compaction, then the sweep's reclamation.
     lance.dataset(src).optimize.compact_files()
     assert _clone_opens_in_a_fresh_process(clone) == "CLONE_OK", "compaction alone broke the clone — the mechanism has changed, re-read this docstring"
     lance.dataset(src).cleanup_old_versions(older_than=timedelta(seconds=0))
@@ -221,7 +221,8 @@ def _sweep_results(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, uris: list[s
     """
     from maintenance.core.config import MaintenanceSettings
     from maintenance.services import sweep as sweep_mod
-    from maintenance.services.optimize import Discovery
+    from maintenance.services.discovery import Discovery
+    from maintenance.services.due import TableIds
 
     # `control_root` as well as `policy_root`: since F6(d) the real sweep reads the trash index from
     # the control root to decide which datasets it may rewrite, and an unset root points at the
@@ -237,6 +238,7 @@ def _sweep_results(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, uris: list[s
     )
     monkeypatch.setattr(sweep_mod, "_s3fs", lambda _s: None)
     monkeypatch.setattr(sweep_mod, "discover_datasets", lambda _fs, _bucket, *, max_depth: Discovery(uris=list(uris)))
+    monkeypatch.setattr(sweep_mod, "table_ids", lambda *_a, **_k: TableIds())
     return sweep_mod.run_sweep(settings)
 
 
@@ -249,8 +251,8 @@ def test_a_REAL_SWEEP_TICK_refuses_the_source_of_a_live_clone(tmp_path: Path, mo
     exercises the guard directly reports the same green either way.
 
     So this drives `run_sweep` itself and asserts the SOURCE comes back REFUSED, with the refusal
-    naming why. The clone is refused too, by the pre-existing flag-16 gate — different mechanism, and
-    asserting both keeps the two from being confused for one another.
+    naming why. The clone itself is NOT refused: reclamation is root-scoped, so it removes only the
+    clone's own dead files, and asserting both keeps the two from being confused for one another.
     """
     src, clone = _source_and_clone(tmp_path, rows=3, files=4)
 
@@ -259,7 +261,7 @@ def test_a_REAL_SWEEP_TICK_refuses_the_source_of_a_live_clone(tmp_path: Path, mo
     by_uri = {r.uri: r for r in results}
     assert by_uri[src].refused, "the sweep compacted the SOURCE of a live clone — the pre-pass is not wired in"
     assert "resolves its files through" in by_uri[src].refused
-    assert by_uri[clone].refused, "the clone should still be refused by the feature-flag gate"
+    assert by_uri[clone].refused is None, f"the clone was refused reclamation, which is root-scoped and safe on it: {by_uri[clone].refused}"
 
 
 def test_an_ORDINARY_dataset_is_still_swept(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

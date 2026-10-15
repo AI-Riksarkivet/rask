@@ -14,7 +14,8 @@ from pathlib import Path
 import lance
 import pyarrow as pa
 
-from maintenance.services import optimize, orphans
+from maintenance.services import expiry, orphans
+from maintenance.services.expiry import ExpiryPolicy, ExpiryTarget
 
 
 def _dataset(tmp_path: Path, rows: int = 8) -> str:
@@ -45,7 +46,7 @@ def test_referenced_paths_walks_versions_on_the_HEAD_dataset_cache(tmp_path: Pat
     assert len(calls) == 1, f"per-version REOPENS are back ({len(calls)} constructor calls) — the #102 N+1"
 
 
-def test_compact_one_threads_the_shared_session(tmp_path: Path, monkeypatch) -> None:
+def test_expiry_threads_the_shared_session(tmp_path: Path, monkeypatch) -> None:
     uri = _dataset(tmp_path)
     seen: list[object] = []
     real = lance.dataset
@@ -54,7 +55,7 @@ def test_compact_one_threads_the_shared_session(tmp_path: Path, monkeypatch) -> 
         seen.append(kwargs.get("session"))
         return real(uri_arg, *args, **kwargs)
 
-    monkeypatch.setattr(optimize.lance, "dataset", recording)
-    result = optimize.compact_one(uri, storage_options={}, older_than=None)
+    monkeypatch.setattr(expiry.lance, "dataset", recording)
+    result = expiry.expire_versions(ExpiryTarget(uri=uri, storage_options={}), ExpiryPolicy(older_than=None, retain_versions=1))
     assert result.error is None
-    assert seen and seen[0] is not None, "compact_one opened without the shared session"
+    assert seen and seen[0] is not None, "expiry opened without the shared session"

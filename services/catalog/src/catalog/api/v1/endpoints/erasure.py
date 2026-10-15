@@ -128,7 +128,7 @@ async def erase_subject(
     # Every ref disarmed before the first delete ([[LH-245]]): each delete and compaction below is a commit, and
     # on an armed ref Lance would reclaim inside it, ignoring `retain_days`, with nothing in the report.
     dataset = await run_in_threadpool(disarm_every_ref, dataset, segments)
-    # The #114 pre-pass the compact and GC doors run, for the same reason: the evidence that another
+    # The #114 pre-pass `version/create` and the GC door run, for the same reason: the evidence that another
     # dataset resolves its files through this one lives only on that dataset. Same bound too, one listing
     # of the table's parent (`sibling_base_refs`), and a partial map is logged and used, as they do.
     protected = await run_in_threadpool(BaseJudge.from_settings(settings).sibling_base_refs, dataset.uri, so)

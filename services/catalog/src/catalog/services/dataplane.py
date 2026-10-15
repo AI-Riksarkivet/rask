@@ -27,7 +27,6 @@ from dataclasses import replace
 from typing import Any, Final, cast
 
 import lance
-import lance.optimize as lance_optimize
 import pyarrow as pa
 import pyarrow.fs as pafs
 from lance.dataset import Transaction
@@ -43,7 +42,6 @@ from lance_namespace import (
     CountTableRowsResponse,
     CreateTableBranchRequest,
     CreateTableBranchResponse,
-    CreateTableIndexRequest,
     CreateTableResponse,
     CreateTableTagRequest,
     CreateTableTagResponse,
@@ -69,7 +67,6 @@ from lance_namespace import (
     LanceNamespaceError,
     ListTableBranchesRequest,
     ListTableBranchesResponse,
-    ListTableIndicesRequest,
     ListTableTagsRequest,
     ListTableTagsResponse,
     MergeInsertIntoTableRequest,
@@ -97,7 +94,6 @@ from lance_namespace import (
 from pydantic import BaseModel
 
 from catalog.core import manifest_bytes, provenance_guard
-from catalog.core.base_judge import require_sanctioned_bases
 from catalog.core.config import shared_lance_session
 from catalog.core.modes import CreateMode, InsertMode
 from catalog.core.namespace import disarm_commit_path_cleanup, judged_native_version, open_dataset, open_dataset_unchecked
@@ -106,10 +102,10 @@ from catalog.services.base_credentials import BaseCredentials
 from catalog.services.cast_size import bytes_after_cast
 from service_kit.lakehouse import auto_cleanup, base_registry, branch_layout, location_claims
 from service_kit.lakehouse.base_refs import decoded_path
-from service_kit.lakehouse.features import describe_foreign_data_file_versions, manifest_base_path_refs
+from service_kit.lakehouse.features import manifest_base_path_refs
 from service_kit.lakehouse.objectfs import StorageOptions, credential_of, s3_filesystem
 from service_kit.lakehouse.schema import SchemaFields, facet_fields
-from service_kit.lancekit.absence import reads_as_absent
+from service_kit.lakehouse.version_retention import MAIN_BRANCH, recorded_branch
 from service_kit.lancekit.arrow_ipc import ArrowBodyError, ArrowBodyTooLargeError, decode_arrow_stream, encode_arrow_stream
 from service_kit.lancekit.commit_verdict import CommitVerdict, classify_commit_failure
 from service_kit.lancekit.outage import reads_as_store_outage
@@ -215,7 +211,7 @@ def committed_version(ns: LanceNamespace, so: StorageOptions, table_id: list[str
             if transaction is not None and transaction.uuid == transaction_id:
                 return version
     except BaseException as exc:  # noqa: BLE001 — a Rust PANIC is not an Exception; see below
-        # `BaseException`, the way `maintenance.compact_now` catches it: a pyo3 panic derives from
+        # `BaseException`, because a pyo3 panic derives from
         # BaseException and cannot be caught by name (`pyo3_runtime` is synthesised lazily and is not
         # importable). This runs after the write committed, so an escaped panic answers 500 for a commit
         # that happened and skips the door's idempotency record, and a retry commits again.
@@ -734,7 +730,7 @@ def rename_table(
 
     That makes it **O(1) in the dataset**, which is the point. The cost of a rename used to be the
     dataset's size, paid inside a request handler that answered 200 — unbounded work no pod sizing
-    fixes, and the same class as the compact door before it became a 202. Three failure modes go with
+    fixes. Three failure modes go with
     it: the half-copy, the non-atomic source delete that could strand bytes, and the read-rewrite that
     would have collapsed version history.
 
@@ -1071,240 +1067,6 @@ def delete_table_object(location: str, so: StorageOptions, relative: str) -> Non
             fs.delete_file(f"{base.rstrip('/')}/{relative}")
     except Exception:
         log.warning("catalog_table_object_left", extra={"location": location, "object": relative}, exc_info=True)
-
-
-#: pylance's stub declares neither ``CompactionTask.json()`` nor ``RewriteResult.from_json()``, though
-#: both exist on the Rust classes and round-trip (verified 2026-09-03 against pylance's shipped
-#: ``lance/lance/optimize.pyi``, which stops at ``execute``/``plan``/``commit``). One named alias is where
-#: that gap is absorbed — narrow enough that everything else in the two functions below stays checked.
-_RewriteResult: Any = lance_optimize.RewriteResult
-
-#: The POLICY half of what the plan door accepts: what shape the table should end up in, and how its
-#: bytes move. Optional — an absent knob leaves Lance's own choice, which for these is a shape or a
-#: re-encode rather than a memory ceiling.
-#:
-#: ``compaction_mode`` is here because the in-pod rewrite passes it (``MAINTENANCE_REPACK_MODE``) and
-#: Lance bakes it into the task at plan time, so a plan without it would repack differently from the
-#: same sweep in-pod. The rest of ``CompactionOptions`` (buffer sizes, index-remap strategy) stays out:
-#: nothing in this estate sets them. Names are Lance's, verbatim: ``Compaction.plan`` raises
-#: ``ValueError: Invalid compaction option`` for any other (``lance/optimize.py``, pylance 12.0.0).
-_COMPACTION_POLICY_KNOBS = (
-    "target_rows_per_fragment",
-    "max_rows_per_group",
-    "max_bytes_per_file",
-    "materialize_deletions",
-    "materialize_deletions_threshold",
-    "compaction_mode",
-)
-
-#: The executor's MEMORY BOUNDS, which every plan must carry. Measured on pylance 12.0.0 (2026-09-25):
-#: a planned task's JSON bakes all three into its ``options`` and ``CompactionTask.execute`` takes only
-#: the dataset, so the plan is the executor's one chance to state them. Left null they become Lance's
-#: defaults: "The default `batch_size` is 8192 rows" and a compute pool "determined by the number of
-#: cores on the machine" (``lance_docs/guide.md`` § Scanning Data, § Threading Model) — against ~1.8 MB
-#: rows, ~15 GB per thread on the HOST's core count — and ``max_source_bytes`` "(default: None, no
-#: limit)" on what one run takes on (``lance/optimize.py``). Forwarded, never interpreted: the numbers
-#: are the executor's own.
-COMPACTION_EXECUTOR_BOUNDS = ("batch_size", "num_threads", "max_source_bytes")
-
-#: The compaction result's non-retryable remedy. A lost race voids the PLAN, not just the commit — the
-#: fragments the result names were chosen against a version that no longer exists.
-_COMPACTION_REMEDY = "Discard this result and re-plan against the current version"
-
-
-class PlannedCompaction(BaseModel):
-    """What the catalog hands a queue: the version the work was planned against, and the tasks.
-
-    Each task is Lance's own serialized ``CompactionTask`` — an opaque JSON string the catalog does not
-    interpret. Opaque is deliberate: the task names fragments and encoding decisions that are the
-    format's business, and a catalog that parsed them would have to be re-taught on every format change.
-
-    Named for the plan rather than after Lance's own ``CompactionPlan``, which this is built FROM and
-    which is a different type living one import away in the same module.
-    """
-
-    read_version: int
-    tasks: list[str]
-
-
-class CompactionOutcome(BaseModel):
-    """The metadata-only commit's result: the version it minted and what the rewrite moved."""
-
-    version: int
-    fragments_added: int
-    fragments_removed: int
-    files_added: int
-    files_removed: int
-
-
-def plan_compaction(
-    location: str,
-    so: StorageOptions,
-    *,
-    batch_size: int | None,
-    num_threads: int | None,
-    max_source_bytes: int | None,
-    branch: str | None = None,
-    **policy: Any,
-) -> PlannedCompaction:
-    """Plan a compaction WITHOUT executing it — the catalog's first half of the maintenance protocol.
-
-    This is a metadata read: it opens the manifest, decides which fragments should merge, and returns
-    serialized tasks for a queue. It moves no data byte and mints no version, which is what makes it
-    safe to run inside a request handler at all. The second half is :func:`commit_compaction`; between
-    them sits a WORKER holding vended, table-scoped creds that runs ``CompactionTask.execute`` and does
-    every byte of the rewrite — the split that keeps the catalog's memory ceiling a function of its
-    request rate rather than of the largest table anyone owns.
-
-    ``batch_size``, ``num_threads`` and ``max_source_bytes`` are the executor's memory bounds
-    (``COMPACTION_EXECUTOR_BOUNDS``) and all are REQUIRED: a ``None`` in any refuses the plan, naming
-    every one, before the manifest is opened. They have no default because the default would be
-    Lance's: a batch counted in rows, on every core of the host, over a plan with no byte limit.
-
-    ``policy`` accepts only ``_COMPACTION_POLICY_KNOBS``; anything else is refused rather than dropped,
-    so a caller tuning a knob this door does not honour learns it instead of watching the plan ignore it.
-    An empty ``tasks`` list is the ANSWER for a table already at target, not an error — a scheduled sweep
-    over a healthy estate must be able to conclude "nothing to do" without paging anyone.
-    """
-    unknown = sorted(set(policy) - set(_COMPACTION_POLICY_KNOBS))
-    if unknown:
-        raise InvalidInputError(
-            f"unsupported compaction option(s) {unknown}; this door accepts {sorted(_COMPACTION_POLICY_KNOBS + COMPACTION_EXECUTOR_BOUNDS)}"
-        )
-    bounds = dict(zip(COMPACTION_EXECUTOR_BOUNDS, (batch_size, num_threads, max_source_bytes), strict=True))
-    if missing := [name for name, bound in bounds.items() if bound is None]:
-        # EVERY NAME, whichever is missing. Memory is their product, so they are one bound: a caller
-        # told only about the one it forgot would be refused again for the next.
-        raise InvalidInputError(
-            f"a compaction plan must state the executor's memory bounds, batch_size, num_threads AND max_source_bytes (missing: {missing}). "
-            "Lance bakes all three into every task at plan time and CompactionTask.execute accepts no options, so a plan without them runs "
-            "every rewrite on Lance's defaults: the scanner's default batch on every core of the host, with no limit on the bytes one run takes on. "
-            "Send the bounds your executor runs under."
-        )
-    options = {k: v for k, v in policy.items() if v is not None} | bounds
-    try:
-        dataset = lance.dataset(location, storage_options=dict(so) if so else None, session=shared_lance_session())
-        if branch is not None:
-            # THE REF THE REQUEST NAMES. `lance.dataset(uri)` opens MAIN whatever the caller asked for, so
-            # planning without this returns main's fragments and main's `read_version` labelled as the
-            # branch's work — and `commit_compaction` would then have a worker rewrite the wrong ref.
-            # `checkout_version((branch, None))` is pylance's own branch reference, the form
-            # `core.namespace.open_dataset` uses; this door takes a LOCATION rather than a table id, so it
-            # cannot call that helper and applies the ref itself.
-            #
-            # A BRANCH IS SAFE TO COMPACT WHILE IT IS NOT YET SAFE TO RECLAIM, which is the licence for
-            # opening this door while `maintenance/preview|run|compact` stay refused: a compaction rewrites
-            # fragments and mints a version, leaving the old files for whatever reclaims them later
-            # ([[LH-094]]). It changes which dataset is REWRITTEN, never what is DELETED.
-            dataset = dataset.checkout_version((branch, None))
-    except ValueError as exc:
-        # A REGISTERED TABLE WHOSE BYTES ARE NOT THERE. Measured live 2026-09-04: a table declared into
-        # a namespace bound to one warehouse, with its data written to another bucket, reached this
-        # line and pylance's "Dataset at path ... was not found" escaped as a bare 500 "Internal
-        # Server Error" — which tells an operator nothing and looks like a catalog fault rather than
-        # a table that was never written.
-        #
-        # NARROWED, because `ValueError` is not that condition. Measured on pylance 11.0.0: an absent
-        # dataset raises `Dataset at path … was not found`, a malformed storage option raises
-        # `LanceError(IO): Generic Config error: failed to parse "x" as Duration`, and a bucket that
-        # does not exist raises `Generic S3 error: … 404 Not Found: <Code>NoSuchBucket</Code>` — all
-        # three `ValueError`. Reporting any of the last two as "never written" sends an operator to
-        # look for data that was there all along, so only a PROVEN absence answers 404.
-        #
-        # `reads_as_absent` rather than this door's own marker: the question is the estate's, not
-        # compaction's, and four seams had each answered it differently. A local `"not found" in ...`
-        # was one of them — it matches the HTTP status line every object-store error carries, so a
-        # missing warehouse bucket read as a table nobody wrote (§ Q8-15 measured 79 such datasets).
-        # AND THE OTHER TWO GET THE ANSWER THE SIBLING ALREADY GIVES. Re-raising them bare returned a
-        # 500 — the very complaint above, one class over: a store the catalog could not read reported
-        # as a catalog fault. `_already_committed` maps the same condition to `ServiceUnavailableError`
-        # (503) on the line that says "the object store is unreadable", which is the honest answer:
-        # nothing about the REQUEST is wrong, and the operator's next move is the warehouse, not the
-        # policy. The cause is carried in the message rather than swallowed.
-        if not reads_as_absent(exc):
-            raise ServiceUnavailableError(
-                f"cannot read the table at {location!r} to plan a compaction — the object store did not answer for it. "
-                f"This is a STORAGE fault, not a bad request: check the warehouse binding, the bucket and the credential: {exc}"
-            ) from exc
-        # `TableNotFoundError`, not `InvalidInputError`: code 13 tells a client its REQUEST is
-        # malformed and nothing about the policy is. What is absent is the DATA, which code 4,
-        # TableNotFound, names (spec.yaml:2416) — the same answer `rename_table` gives a source that
-        # resolves to nothing, so one client branch serves both.
-        raise TableNotFoundError(
-            f"no dataset exists at this table's location ({location}) — it is declared or registered but was never written: {exc}"
-        ) from exc
-    # A REWRITE THROUGH AN UNSANCTIONED BASE copies the bytes behind it into this table's own root
-    # ([[LH-279]]), which is the read the base judge refuses, made permanent.
-    require_sanctioned_bases(location, manifest_base_path_refs(dataset), judge=None)
-    plan = lance_optimize.Compaction.plan(dataset, cast(Any, options))
-    return PlannedCompaction(read_version=int(plan.read_version), tasks=[cast(str, cast(Any, task).json()) for task in plan.tasks])
-
-
-def commit_compaction(location: str, so: StorageOptions, results: Sequence[str], *, branch: str | None = None) -> CompactionOutcome:
-    """Commit the workers' rewrite results — the catalog's second half, under ROOT creds.
-
-    Metadata-only by construction: every data file this publishes was written by the worker that
-    executed the task, and already exists when this is called. The catalog reads none of them.
-
-    ``results`` are Lance's serialized ``RewriteResult`` strings, arriving off a queue and therefore
-    CLIENT-CONTROLLED: ``from_json`` raises ``ValueError`` on a malformed one, which becomes a 400 here
-    rather than a 500. An EMPTY list is refused for the same reason the sibling append door refuses
-    empty fragments — Lance answers it with a zero-metric success and no new version, which relayed
-    verbatim is indistinguishable from a healthy table and would mask an executor that lost every result
-    it was handed.
-    """
-    if not results:
-        raise InvalidInputError("no compaction results to commit")
-    try:
-        rewrites = [_RewriteResult.from_json(result) for result in results]
-    except (ValueError, TypeError, AttributeError) as exc:
-        raise InvalidInputError(f"malformed compaction result: {exc}") from exc
-    dataset = lance.dataset(location, storage_options=dict(so) if so else None, session=shared_lance_session())
-    if branch is not None:
-        # THE SAME REF THE PLAN READ. `plan_compaction` returns a `read_version` from the branch, and Lance
-        # commits a rewrite against the ref it was planned on — committing here on main would apply the
-        # worker's results to a dataset whose fragments the plan never saw.
-        dataset = dataset.checkout_version((branch, None))
-    # THE SAME GATE THE BUTTON ASKS, and asked HERE rather than at plan time because this is the half
-    # that mints a version and drops the old fragments — a plan nobody commits costs nothing.
-    #
-    # The estate exposes two routes onto one operation: `/maintenance/compact` runs through
-    # `maintenance.compact_now`, which calls `require_compactable` (the feature-flag evidence gate plus
-    # the #114 shallow-clone base-refs guard), while this pair reached `lance_optimize` directly and
-    # asked neither. Both are writer-tier and published at the ingress under `/api/catalog`, so a caller
-    # who took the distributed route got a rewrite the button refuses WITH A REASON — including on a
-    # real shallow clone, where compacting materialises the shared base into the clone's own root.
-    #
-    # Imported here rather than at module scope: `catalog.services.maintenance` imports this module, so
-    # a top-level import is a cycle.
-    from catalog.services.maintenance import require_compactable
-
-    require_sanctioned_bases(location, manifest_base_path_refs(dataset), judge=None)
-    require_compactable(dataset, so)
-    dataset = disarm_commit_path_cleanup(dataset, [location])
-    # The rewrites are client-supplied, so their files are judged like an append's: a forged or buggy
-    # result at another file version would commit and stamp flag 256 (measured on pylance 12.0.0).
-    foreign = describe_foreign_data_file_versions(
-        dataset.data_storage_version, [data_file for rewrite in rewrites for fragment in rewrite.new_fragments for data_file in fragment.files]
-    )
-    if foreign is not None:
-        raise InvalidInputError(f"compaction result refused: {foreign}")
-    try:
-        metrics = lance_optimize.Compaction.commit(dataset, rewrites)
-    except OSError as exc:
-        raise _classify_commit_error(exc, remedy=_COMPACTION_REMEDY) from exc
-    return CompactionOutcome(
-        # THE HANDLE, not a second open. `Compaction.commit` advances the dataset in place — measured
-        # against pylance 2026-09-07: a dataset at version 4 reports 6 on the same handle after the
-        # commit, and `checkout_latest()` leaves it at 6. Re-opening from the URI to read this number
-        # was a full manifest read over the object store, on the catalog's write path, for a value
-        # already in memory.
-        version=int(dataset.version),
-        fragments_added=int(metrics.fragments_added),
-        fragments_removed=int(metrics.fragments_removed),
-        files_added=int(metrics.files_added),
-        files_removed=int(metrics.files_removed),
-    )
 
 
 # Scalar Arrow type names → pyarrow factory, for the alter_columns re-type path. A ``JsonArrowDataType``
@@ -1878,10 +1640,6 @@ def refuse_a_branch_this_door_cannot_honour(branch: str | None, *, door: str, re
     `remove_stop_words`, `with_position`, `max_token_length`, `lower_case`) plus vector parameters, and
     silently building an index with a DEFAULT where the caller asked for a setting is the same class of
     quiet wrongness as building it on the wrong dataset.
-
-    `ensure_merge_key_index` is deliberately NOT refused, and the distinction is the option surface, not
-    the operation: it builds one fixed shape — a BTREE on the merge key, no user options — so it can be
-    served through the handle with nothing left to get wrong.
 
     Both implementations are real work with their own tests; they are named in the lakehouse register, row O1 (drained 2026-09-10; in git history), not
     smuggled in behind a door that currently lies.
@@ -2570,27 +2328,6 @@ _REF_FAILURE_RE = re.compile(r"ref (?P<failure>not found|conflict) error:\s*(?P<
 _REF_INVALID_MARKER = "ref is invalid:"
 
 
-#: The default ref. It is not in `branches.list()` on any dataset — the default is implicit — so the
-#: create door's collision pre-check cannot see it, and pylance answers a request to create it with its
-#: own bug-report text (measured on 11.0.0, 2026-09-15).
-MAIN_BRANCH: Final = "main"
-
-
-def recorded_branch(branch: object) -> str | None:
-    """A ref as Lance records it: ``None`` for main, the branch name otherwise.
-
-    Lance records main as null — a tag's ``branch`` and a branch's ``parentBranch``
-    (``lance_docs/file_format.md`` "Tag File Format" / "Branch Metadata File Format") — and it stores a
-    reference spelled ``("main", n)`` as null too (measured on pylance 12.0.0), while a request may name
-    main by name. Comparing refs through this makes both spellings one ref.
-    """
-    if branch is None or branch == MAIN_BRANCH:
-        return None
-    if not isinstance(branch, str):
-        raise TypeError(f"a branch is named by a str or None, got {type(branch).__name__}")
-    return branch
-
-
 def refuse_a_branch_name_the_backend_cannot_use(name: str) -> None:
     """Refuse the three branch names whose backend failure is not readable, with the spec's own codes.
 
@@ -2888,67 +2625,3 @@ def _forked_from(name: str, forks: Sequence[str]) -> InvalidTableStateError:
         f"branch {name!r} cannot be deleted: {', '.join(repr(f) for f in forks)} is forked from it or from a branch inside it, and a fork "
         "pins its parent. Delete the fork first. Nothing was deleted"
     )
-
-
-def ensure_merge_key_index(ns: LanceNamespace, segments: list[str], on: str | None, *, so: StorageOptions | None = None, branch: str | None = None) -> None:
-    """Best-effort BTREE index on a merge key, built AFTER the first ``/merge_insert`` commits (§4).
-
-    pylance's ``use_index=True`` default only helps *"if an index is available"*, and no automatic
-    data-flow ever builds one — so without this, every upsert full-scans the ``on`` column and merge
-    latency decays as the table grows (the namespace spec's own ``__manifest`` design mandates exactly
-    this pairing: merge-insert PK dedup WITH a BTREE on the key).
-
-    LIST FIRST is required, not an optimization: pylance's ``create_scalar_index`` defaults
-    ``replace=True``, so an unconditional build would full-scan and REBUILD the column on every upsert
-    — turning the fix into a regression.
-
-    A BRANCH BUILDS THROUGH THE DATASET HANDLE, and that is the answer to the note that stood here.
-    It said the dir backend's handling of ``branch`` on an index build was unverified at pylance 8.0.0
-    and the param was forwarded either way. The live pass it asked for happened 2026-08-31 and the
-    answer is NO: the native op accepts ``branch`` and builds on MAIN, so a branch-scoped
-    ``/merge_insert`` merged correctly into the branch and then committed an index version to main —
-    the write isolated, its accelerator not. Measured against pylance 8.0.0: the same build through
-    ``checkout_version((branch, None))`` leaves main at its version and puts the index on the branch.
-    Main keeps the native op, which is already correct.
-
-    Best-effort by contract: an index-build failure or a CreateIndex commit conflict must never fail
-    the write that already committed — any failure logs and returns.
-    """
-    if not on:
-        return
-    try:
-        if branch is not None and so is not None:
-            dataset = disarm_commit_path_cleanup(open_dataset(ns, so, segments, branch=branch), segments)
-            if any(on in (index.get("fields") or []) for index in dataset.list_indices()):
-                return
-            dataset.create_scalar_index(on, index_type="BTREE")
-            log.info("merge_key_index_built", extra={"table": "/".join(segments), "column": on, "branch": branch})
-            return
-        listing = native.call(ns, "list_table_indices", ListTableIndicesRequest(id=segments, branch=branch))
-        for index in listing.indexes or []:
-            if on in (index.columns or []):
-                # An existing index of ANY type covering the key skips the build (never rebuild —
-                # replace=True!). Accepted per the §4 spec wording; a non-BTREE index on the key
-                # (BITMAP/INVERTED) therefore also suppresses the BTREE — revisit only if merge dedup
-                # proves unable to use those.
-                return
-        if so is not None:
-            disarm_commit_path_cleanup(open_dataset(ns, so, segments), segments)
-        native.call(
-            ns,
-            "create_table_scalar_index",
-            CreateTableIndexRequest(id=segments, column=on, index_type="BTREE", branch=branch),
-        )
-        log.info("merge_key_index_built", extra={"table": "/".join(segments), "column": on})
-    except UnsupportedOperationError as exc:
-        # A backend that 501s the list/build ops will NEVER get the accelerator — distinct event so
-        # operators can tell "permanently unsupported here" from a transient failure below.
-        log.warning(
-            "merge_key_index_unsupported",
-            extra={"table": "/".join(segments), "column": on, "error": str(exc)},
-        )
-    except Exception as exc:
-        log.warning(
-            "merge_key_index_skipped",
-            extra={"table": "/".join(segments), "column": on, "error": str(exc)},
-        )

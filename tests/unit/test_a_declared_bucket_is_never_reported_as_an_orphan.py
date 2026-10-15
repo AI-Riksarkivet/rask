@@ -40,7 +40,7 @@ _BASE = [
     "--set-string",
     "frontend.oidc.clientSecret=abcdef0123456789abcdef0123456789",
 ]
-_MAINTENANCE = ("rask-maintenance", "rask-maintenance-worker")
+_MAINTENANCE = ("rask-maintenance",)
 
 
 def _render(*extra: str) -> list[dict]:

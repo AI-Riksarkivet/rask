@@ -55,20 +55,18 @@ log = logging.getLogger(__name__)
 #: both directions on purpose — a maintainer rewrites HOW a dataset is stored, a writer changes WHAT it
 #: says — and the owner ruling (2026-09-08, zero trust) is that the sweep gets the former and never the
 #: latter, so authorizing its provenance on `can_write_data` would demand a grant the estate refuses to
-#: issue. `create_index` is here because building an index changes no row either; it is emitted by BOTH
-#: the sweep and the catalog's own door, which is exactly why the rule below accepts EITHER rung rather
-#: than swapping one for the other.
+#: issue. Three operations are maintenance and none changes a row: the sweep's `expire_versions`
+#: (`maintenance/core/lineage_emit.py`), and the catalog's `compact_table` and `create_index`
+#: (`catalog/core/lineage_emit.py`), which name a bring-your-own job's compaction and index commits through
+#: `version/create`. The catalog gates an index commit at the writer tier, which is why the rule below
+#: accepts EITHER rung rather than swapping one for the other.
 #:
-#: A COMPACTION HAS TWO SPELLINGS AND BOTH BELONG HERE. The sweep emits `compaction`
-#: (`maintenance/core/lineage_emit.py`) and the catalog's on-demand `/compaction_commit` door emits
-#: `compact_table` (`catalog/core/lineage_emit.py`); each names its own door and neither changes a row.
-#: With only the first listed, the catalog's event fell to the data-write rule and demanded
-#: `can_write_data` — the rung the owner's zero-trust ruling deliberately refuses the sweep — so it was
-#: refused terminally. Measured 2026-09-11: 9 of 9 `compact_table` messages on the LINEAGE stream were
-#: rejected `can_write_data required on outputs`, none reached the graph, and each is refused again on
-#: every restart replay. Nothing downstream notices: this path does not dead-letter a refusal, the
-#: outbox has already dropped its staged copy, and the reconciler excludes `Rewrite` from holes.
-#: `maintenance/services/arrival.py` has named both spellings all along — this list was the one adrift.
+#: An operation missing here falls to the data-write rule and demands `can_write_data`, the rung the owner's
+#: zero-trust ruling refuses the sweep, so its event is refused terminally. Measured 2026-09-11: 9 of 9
+#: `compact_table` messages on the LINEAGE stream were rejected `can_write_data required on outputs`, none
+#: reached the graph, and each is refused again on every restart replay. Nothing downstream notices: this
+#: path does not dead-letter a refusal, the outbox has already dropped its staged copy, and the reconciler
+#: excludes `Rewrite` from holes.
 
 #: The relation a data write demands. Named once so the two doors cannot drift on it.
 _WRITE_RELATIONS: Final = ("can_write_data",)
@@ -94,9 +92,9 @@ def relations_for_operation(operation: str | None) -> tuple[str, ...]:
     maintenance act whoever emits it, and an insert is a write whoever emits it, so keying on the
     subject would make the same act authorizable for one producer and not another.
 
-    A maintenance operation accepts EITHER rung, never `can_maintain` alone: `create_index` is emitted
-    by the catalog's own door as well as by the sweep, and that door gates it at the writer tier — so
-    accepting only the maintainer rung would refuse the human who actually built the index. Adding the
+    A maintenance operation accepts EITHER rung, never `can_maintain` alone: the catalog gates an index
+    commit at the writer tier, so accepting only the maintainer rung would refuse the person who actually
+    built the index. Adding the
     maintainer path is strictly additive; it takes nothing away from a writer. Same shape as the
     catalog's `_ALTERNATIVE_RUNGS`, and for the same reason.
 

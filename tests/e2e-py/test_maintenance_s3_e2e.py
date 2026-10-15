@@ -26,12 +26,12 @@ warehouses — reporting is not rewriting. That asymmetry has only ever had fake
 
 Order matters and is enforced by the fixture graph: the sweep runs FIRST and the scan runs over what
 the sweep left behind, because that is the production order (both are cron-driven against the same
-buckets) and because a scan that only passes on datasets nobody compacted proves nothing about the
-estate. Compaction leaves the pre-compaction data files referenced by OLDER live versions, so a scan
-that mistook "referenced by the latest version" for "referenced" would fail exactly here.
+buckets). The sweep compacts nothing (ADR 0155): it expires versions and writes a due record for a table
+its `__manifest` names and Lance's planner has work for, so the plain table is registered in a real `dir`
+namespace on the control bucket and its record is read back from object storage.
 
-**Self-contained and destructive-by-nature.** ``run_sweep`` compacts and GCs every dataset it
-discovers, so this suite never points at an existing bucket: it creates four uuid-suffixed buckets of
+**Self-contained and destructive-by-nature.** ``run_sweep`` reclaims versions of every dataset it
+discovers and writes records on the control root, so this suite never points at an existing bucket: it creates four uuid-suffixed buckets of
 its own, sweeps only those, and deletes them. ``LANCE_E2E_S3_BUCKET`` is deliberately NOT read —
 that variable names the shared catalog bucket the CAS suite uses.
 
@@ -62,13 +62,16 @@ import pyarrow as pa
 import pyarrow.fs as pafs
 import pytest
 from lance import blob_array, blob_field
+from lance_namespace import connect
+from lance_namespace_urllib3_client.models import CreateNamespaceRequest, RegisterTableRequest
 from pydantic import BaseModel
 
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import orphans
-from maintenance.services.optimize import DatasetResult
+from maintenance.services.expiry import DatasetResult
 from maintenance.services.reconcile import ReconcileReport, reconcile
 from maintenance.services.sweep import run_sweep, summarize
+from service_kit.lakehouse.maintenance_due import read_due
 from service_kit.lakehouse.objectfs import s3_filesystem
 
 
@@ -109,7 +112,7 @@ class Estate(BaseModel):
         """Every dataset the sweep must find — the deactivated warehouse's is deliberately absent.
 
         THE BRANCH COUNTS TWICE ON PURPOSE, and leaving its child out is what made this assertion fail
-        against a correct sweep. `optimize.discover_datasets` descends a dataset's own `tree/` and says
+        against a correct sweep. `discovery.discover_datasets` lists a dataset's branches and says
         why: "a BRANCH is a full dataset the parent contains rather than part of it". So `branched` and
         `branched/tree/feature-a` are two datasets, both carry a `_versions/` marker, and both are
         maintained on their own merits — which is consistent with what main cleanup does, since the
@@ -179,11 +182,15 @@ def estate(s3: Any) -> Iterator[Estate]:
     )
     options = _settings_for(built).storage_options()
 
-    # THREE separate appends, so compaction has real work to do on object storage. A single-fragment
-    # dataset would make the sweep a no-op and every assertion below vacuous.
+    # THREE separate appends, so Lance's compaction planner has real work to list on object storage, and the
+    # table registered in the control bucket's `__manifest` so the sweep can name it. A single-fragment dataset
+    # would make the due evaluation a no-op and every assertion below vacuous.
     lance.write_dataset(_rows(), built.plain_uri, storage_options=options)
     lance.write_dataset(_rows(offset=10), built.plain_uri, mode="append", storage_options=options)
     lance.write_dataset(_rows(offset=20), built.plain_uri, mode="append", storage_options=options)
+    namespace = connect("dir", {"root": f"s3://{built.ctl}", **{f"storage.{key}": value for key, value in options.items()}})
+    namespace.create_namespace(CreateNamespaceRequest(id=["e2e"]))
+    namespace.register_table(RegisterTableRequest(id=["e2e", "plain"], location="plain"))
     # A TAG — `_refs/tags/blessed.json`, a live version pointer. The first live run of this pass named
     # every promotion tag in the estate as an orphan.
     lance.dataset(built.plain_uri, storage_options=options).tags.create("blessed", 1)
@@ -246,15 +253,15 @@ def settings(estate: Estate) -> MaintenanceSettings:
 
 @pytest.fixture(scope="module")
 def swept(settings: MaintenanceSettings) -> list[DatasetResult]:
-    """ONE real sweep over the estate. Module-scoped: it rewrites data files, so running it per test
-    would both cost minutes and mean each test saw a different dataset layout."""
+    """ONE real sweep over the estate. Module-scoped: it reclaims versions and writes due records, so running it per
+    test would both cost minutes and mean each test saw a different estate."""
     return run_sweep(settings)
 
 
 @pytest.fixture(scope="module")
 def scanned(estate: Estate, settings: MaintenanceSettings, s3: Any, swept: list[DatasetResult]) -> ReconcileReport:
     """The orphan scan, run AFTER the sweep (production order — the `swept` dependency is what
-    guarantees it) over datasets a compaction has just rewritten.
+    guarantees it) over datasets the sweep has just maintained.
 
     Two stray `data/*.lance` files are planted first: one under a swept dataset and one under the
     DEACTIVATED warehouse's. They are the positive controls — a scan that reports nothing would
@@ -292,18 +299,19 @@ def test_the_sweep_names_exactly_the_datasets_it_found_on_s3(estate: Estate, swe
     assert summarize(swept)["errors"] == {}, "a dataset failed its maintenance pass on real object storage"
 
 
-def test_the_sweep_actually_compacts_on_object_storage(estate: Estate, swept: list[DatasetResult]) -> None:
+def test_the_sweep_lists_the_compaction_it_does_not_run_on_object_storage(estate: Estate, settings: MaintenanceSettings, swept: list[DatasetResult]) -> None:
     """The anti-vacuous control. Without it every other assertion here passes on a sweep that opened
     five datasets and did nothing — which is precisely what a silently mis-credentialled or
     mis-pathed sweep looks like from the outside.
 
-    `fragments_removed`, not `old_versions_removed`: `older_than_days` is `ge=1`, so no version of a
-    dataset written seconds ago is ever eligible for reclamation.
+    The due record, not `old_versions_removed`: `older_than_days` is `ge=1`, so no version of a dataset written
+    seconds ago is ever eligible for reclamation. Its fragments are unchanged: maintenance rewrites nothing.
     """
     plain = next(r for r in swept if r.uri == estate.plain_uri)
-    assert plain.fragments_removed >= 1 and plain.fragments_added >= 1, (
-        f"three appends should have been compacted into fewer fragments, got {plain.model_dump()}"
-    )
+    record = read_due(settings.resolved_control_root, settings.storage_options(), "e2e$plain")
+    assert plain.due == "due", f"three appends should have been listed for compaction, got {plain.model_dump()}"
+    assert record is not None and record.compaction is not None and record.compaction.fragments == 3, record
+    assert len(lance.dataset(estate.plain_uri, storage_options=settings.storage_options()).get_fragments()) == 3, "the sweep rewrote the table"
 
 
 def test_a_registry_only_bucket_is_swept_and_a_deactivated_one_is_not(estate: Estate, swept: list[DatasetResult]) -> None:
@@ -312,12 +320,12 @@ def test_a_registry_only_bucket_is_swept_and_a_deactivated_one_is_not(estate: Es
     `reg` is named by NO config — only by a warehouse record the sweep reads at runtime, which is the
     whole point: a bucket is created by an API call, so a config-time list goes stale by construction.
     `deact` is named by a record too, and must be skipped: deactivate is offboarding step one, and
-    compacting a quarantined tenant would leave maintenance as the one process still rewriting data
-    the estate has said nobody may touch.
+    reclaiming a quarantined tenant's versions would leave maintenance as the one process still deleting
+    data the estate has said nobody may touch.
     """
     found = {r.uri for r in swept}
     assert estate.reg_uri in found, "a bucket known only to the warehouse registry went unmaintained"
-    assert estate.deact_uri not in found, "a DEACTIVATED warehouse's data was rewritten by the sweep"
+    assert estate.deact_uri not in found, "a DEACTIVATED warehouse's data was maintained by the sweep"
 
 
 # --------------------------------------------------------------------------- #
@@ -431,7 +439,7 @@ def test_a_deactivated_warehouse_is_still_scanned_even_though_it_is_not_swept(es
 
     Reporting is not rewriting. A quarantined tenant's orphans are exactly what an operator wants
     named before deciding whether to offboard it, and naming them changes nothing on disk — while
-    compacting the same bytes would not. `test_a_registry_only_bucket_is_swept_and_a_deactivated_one_is_not`
+    reclaiming the same bytes would not. `test_a_registry_only_bucket_is_swept_and_a_deactivated_one_is_not`
     proves the other half: this same dataset was NOT swept.
     """
     found = {(o.dataset, o.path) for o in scanned.orphan_files}

@@ -328,6 +328,36 @@ class Liveness(BaseModel):
         return any(location_within(live, location) or location_within(location, live) for live in self.locations)
 
 
+def manifest_rows(root: str, storage_options: StorageOptions) -> list[dict[str, Any]] | None:
+    """Every row of ``root``'s ``__manifest`` (``object_id``, ``object_type``, ``location``), or ``None`` when unreadable.
+
+    A root with no ``_versions`` directory is a fresh estate and yields ``[]``: an absent manifest is not an unreadable
+    one, and collapsing the two would let a broken manifest read as "nothing is live".
+    """
+    try:
+        fs, base = fs_and_base(root, storage_options)
+        if fs.get_file_info(f"{base}/{MANIFEST_DIR}/_versions").type != pafs.FileType.Directory:
+            return []
+        manifest_uri = f"s3://{base}/{MANIFEST_DIR}" if root.startswith("s3://") else f"{base}/{MANIFEST_DIR}"
+        dataset = lance.dataset(manifest_uri, storage_options=storage_options, session=shared_lance_session())
+        return dataset.to_table(columns=["object_id", "object_type", "location"]).to_pylist()
+    except Exception:  # noqa: BLE001 — ANY failure here must read as unreadable, never as a partial set
+        log.warning("trash_purge_manifest_unreadable", extra={"root": root}, exc_info=True)
+        return None
+
+
+def table_location(root: str, row: dict[str, Any]) -> str | None:
+    """A table row's absolute location, joined onto the root that recorded it; ``None`` for any other row.
+
+    A table row's ``location`` is relative to the root (``lance_docs/ns_catalog/catalog/dir/index.md`` § Manifest Table
+    Schema) unless it carries a scheme.
+    """
+    stored = str(row.get("location") or "").strip()
+    if row.get("object_type") != "table" or not stored:
+        return None
+    return stored if "://" in stored else f"{root.rstrip('/')}/{stored.strip('/')}"
+
+
 def manifest_liveness(root: str, storage_options: StorageOptions) -> Liveness | None:
     """Every object id ``root``'s ``__manifest`` records — tables AND namespaces — and every table location, or ``None``.
 
@@ -342,23 +372,15 @@ def manifest_liveness(root: str, storage_options: StorageOptions) -> Liveness | 
     ``location`` is relative to the root (``lance_docs/ns_catalog/catalog/dir/index.md`` § Manifest Table
     Schema) unless it carries a scheme.
     """
-    try:
-        fs, base = fs_and_base(root, storage_options)
-        if fs.get_file_info(f"{base}/{MANIFEST_DIR}/_versions").type != pafs.FileType.Directory:
-            return Liveness()
-        manifest_uri = f"s3://{base}/{MANIFEST_DIR}" if root.startswith("s3://") else f"{base}/{MANIFEST_DIR}"
-        dataset = lance.dataset(manifest_uri, storage_options=storage_options, session=shared_lance_session())
-        rows = dataset.to_table(columns=["object_id", "object_type", "location"]).to_pylist()
-    except Exception:  # noqa: BLE001 — ANY failure here must fail toward not-deleting, not toward a partial set
-        log.warning("trash_purge_manifest_unreadable", extra={"root": root}, exc_info=True)
+    rows = manifest_rows(root, storage_options)
+    if rows is None:
         return None
     live = Liveness()
     for row in rows:
         if row["object_id"]:
             live.ids.add(str(row["object_id"]))
-        stored = str(row["location"] or "").strip()
-        if row["object_type"] == "table" and stored:
-            live.locations.add(stored if "://" in stored else f"{root.rstrip('/')}/{stored.strip('/')}")
+        if (location := table_location(root, row)) is not None:
+            live.locations.add(location)
     return live
 
 
@@ -444,7 +466,7 @@ def check(record: dict[str, Any], *, roots: set[str], live: Liveness | None) -> 
 
 
 #: The Lance table-layout marker — a directory IS a dataset iff it holds this child. The same string
-#: `maintenance.services.optimize.discover_datasets` decides discovery by, named here so the purge and
+#: `maintenance.services.discovery.discover_datasets` decides discovery by, named here so the purge and
 #: the walk cannot drift apart about what a dataset is.
 _VERSIONS_MARKER = "_versions"
 
@@ -952,7 +974,7 @@ def _estate_base_refs(roots: set[str], storage_options: StorageOptions, *, setti
     gaps narrow the protection rather than widening the deletion, which is the safe direction — but a
     caller reading this should know the set is a floor, not a proof of completeness.
     """
-    from maintenance.services.optimize import discover_datasets
+    from maintenance.services.discovery import discover_datasets
     from maintenance.services.sweep import base_record_reader
     from service_kit.lakehouse.base_refs import protected_roots
 

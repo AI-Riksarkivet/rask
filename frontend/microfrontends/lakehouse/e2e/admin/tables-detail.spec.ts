@@ -10,7 +10,7 @@ import { MOCK_CATALOG } from '../ports';
 // The transport is remote functions now (the transport ruling, area 1): the detail aggregate and every
 // write run on the zone SERVER, which `page.route` cannot see. So the catalog wire is seeded on, and
 // asserted through, the mock catalog's per-bearer ledger — and the assertions get SHARPER, because
-// the upstream path is now the operation's own name (`add_columns`, `create_index`, `tags/create`)
+// the upstream path is now the operation's own name (`add_columns`, `drop_columns`, `tags/create`)
 // rather than this zone's `[op]`/`[action]` allowlist segment.
 //
 // Two things stay at the browser boundary and stay on `page.route`: the Arrow-IPC row insert (a
@@ -81,8 +81,6 @@ const WRITE_ROUTES: Record<string, unknown> = {
 	[`POST /v1/table/${TABLE}/branches/create`]: { version: 5 },
 	[`POST /v1/table/${TABLE}/branches/delete`]: { version: 5 },
 	[`POST /v1/table/${TABLE}/restore`]: { version: 4 },
-	[`POST /v1/table/${TABLE}/create_index`]: { transaction_id: 'ix1' },
-	[`POST /v1/table/${TABLE}/create_scalar_index`]: { transaction_id: 'ix1' },
 	[`POST /v1/table/${TABLE}/index/id_idx/drop`]: { transaction_id: 'ix2' },
 	[`POST /management/v1/table/${TABLE}/maintenance/preview`]: {
 		current_version: 3,
@@ -96,11 +94,6 @@ const WRITE_ROUTES: Record<string, unknown> = {
 		ok: true,
 		old_versions_removed: 1,
 		bytes_removed: 512,
-	},
-	[`POST /management/v1/table/${TABLE}/maintenance/compact`]: {
-		ok: true,
-		fragments_removed: 6,
-		fragments_added: 1,
 	},
 	[`POST /v1/table/${TABLE}/add_columns`]: { version: 4 },
 	[`POST /v1/table/${TABLE}/alter_columns`]: { version: 4 },
@@ -249,19 +242,19 @@ test('insert-rows form encodes JSON to an Arrow-IPC body and posts to /insert (#
 	await expect(section).toContainText('Inserted 1 row');
 });
 
-test('builds a vector index through the create form (#73)', async ({ page }) => {
+test('the catalog builds and compacts nothing: no index-build or compact control (#587)', async ({
+	page,
+}) => {
+	// Index builds and compaction are bring-your-own compute: the catalog's create_index /
+	// create_scalar_index answer 406 and it has no compact door, so the page offers neither.
 	await page.goto('/lakehouse/catalog/tables/db1%24t');
-	const section = page.locator('section', { hasText: 'Indexes' });
-	await section.getByLabel('Index column').fill('vec');
-	await section.getByLabel('Index type').click();
-	await page.getByRole('option', { name: 'vector · IVF_PQ' }).click();
-	await section.getByRole('button', { name: 'Build index' }).click();
-	// A vector type routes to create_index and carries the distance type. The scalar/vector choice is
-	// the ENDPOINT now (it used to be a `?scalar=` flag on this zone's route), so the wire says it.
-	await expect
-		.poll(() => bodyOf(page, `/v1/table/${TABLE}/create_index`))
-		.toEqual({ column: 'vec', index_type: 'IVF_PQ', distance_type: 'cosine' });
-	expect(await callTo(page, `/v1/table/${TABLE}/create_scalar_index`)).toBeUndefined();
+	const indexes = page.locator('section', { hasText: 'Indexes' });
+	await expect(indexes.getByRole('button', { name: 'drop index id_idx' })).toBeVisible();
+	await expect(indexes.getByRole('button', { name: 'Build index' })).toHaveCount(0);
+	await expect(indexes.getByLabel('Index column')).toHaveCount(0);
+	const maintenance = page.locator('section', { hasText: 'Maintenance policy' });
+	await expect(maintenance.getByRole('button', { name: 'Preview' })).toBeVisible();
+	await expect(maintenance.getByRole('button', { name: 'Compact now' })).toHaveCount(0);
 });
 
 test('drops an index via the chip × (#73)', async ({ page }) => {
@@ -297,18 +290,6 @@ test('GC reclaim is a two-click confirm and posts to /maintenance/run (#75)', as
 		.poll(() => callTo(page, `/management/v1/table/${TABLE}/maintenance/run`))
 		.toBeDefined();
 	await expect(gc).toContainText('Reclaimed 1 version');
-});
-
-test('compact-now posts to /maintenance/compact with the policy target size (#76)', async ({
-	page,
-}) => {
-	await page.goto('/lakehouse/catalog/tables/db1%24t');
-	const gc = page.locator('section', { hasText: 'Maintenance policy' }).locator('.gc');
-	await gc.getByRole('button', { name: 'Compact now' }).click();
-	await expect
-		.poll(() => bodyOf(page, `/management/v1/table/${TABLE}/maintenance/compact`))
-		.toEqual({ target_rows_per_fragment: 1048576 });
-	await expect(gc).toContainText('6 fragment'); // "Compacted · 6 fragment(s) → 1."
 });
 
 test('the policy surfaces the compaction target size (#76)', async ({ page }) => {

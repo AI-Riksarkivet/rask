@@ -11,13 +11,12 @@ is frozen:
 
     Karin drops `silver$htr_lines_2019` on a Friday. Grace is 7 days, so the UI tells her she can
     undrop until next Friday. The cron fires every 30 minutes (deploy/values-prod.yaml). Over the
-    weekend the sweep compacts that dataset, remaps its indices and runs `cleanup_old_versions` on
-    it, repeatedly. Monday she undrops and gets a table back — but not the one she dropped: the
+    weekend the sweep runs `cleanup_old_versions` on that dataset, repeatedly. Monday she undrops and gets a table back — but not the one she dropped: the
     version history she was trying to recover to has been pruned, and the sweep's summary counted it
     as a successful maintenance pass.
 
 These tests drive the REAL ``run_sweep`` rather than the partition helper, because the defect is
-positional: the exclusion has to sit between the whole-estate base-ref pre-pass and the compaction
+positional: the exclusion has to sit between the whole-estate base-ref pre-pass and the per-dataset
 loop, and a test that called a helper directly would pass with the filter in the one place that
 re-opens a different data-loss bug (see the shallow-clone test below).
 """
@@ -32,12 +31,12 @@ import pyarrow as pa
 import pytest
 
 from maintenance.core.config import MaintenanceSettings
-from maintenance.services.optimize import Discovery
+from maintenance.services.discovery import Discovery
 from service_kit.lakehouse import trash
 
 
 def _dataset(path: Path) -> str:
-    """A two-version Lance dataset — enough for compaction to have something to do."""
+    """A two-version Lance dataset — enough for expiry to have something to do."""
     uri = str(path)
     table = pa.table({"n": pa.array([1, 2], pa.int64())})
     lance.write_dataset(table, uri, mode="overwrite")
@@ -60,28 +59,26 @@ def _run(
     settings: MaintenanceSettings,
     uris: list[str],
 ) -> tuple[list[Any], list[str]]:
-    """Run the real sweep over ``uris``; return (results, the URIs Lance was actually asked to compact)."""
+    """Run the real sweep over ``uris``; return (results, the URIs whose expiry pass reached its reclamation decision)."""
+    from maintenance.services import expiry
     from maintenance.services import sweep as sweep_mod
+    from maintenance.services.due import TableIds
 
-    compacted: list[str] = []
-    real = lance.dataset(uris[0]).optimize.__class__.compact_files
+    reached: list[str] = []
+    real = expiry.count_reclaimable
 
-    def _spy(self: object, *args: object, **kwargs: object) -> object:
-        # `self` is the DatasetOptimizer; its `_dataset.uri` is the dataset being rewritten.
-        compacted.append(str(getattr(getattr(self, "_dataset", None), "uri", "?")))
-        return real(self, *args, **kwargs)  # ty: ignore[invalid-argument-type] — a spy is deliberately untyped
+    def _spy(ds: lance.LanceDataset, uri: str, policy: expiry.ExpiryPolicy) -> int:
+        reached.append(uri)
+        return real(ds, uri, policy)
 
     monkeypatch.setattr(sweep_mod, "_s3fs", lambda _s: None)
     monkeypatch.setattr(sweep_mod, "discover_datasets", lambda _fs, _bucket, *, max_depth: Discovery(uris=list(uris)))
-    lance.dataset(uris[0]).optimize.__class__.compact_files = _spy  # ty: ignore[invalid-assignment]
-    try:
-        results = sweep_mod.run_sweep(settings)
-    finally:
-        lance.dataset(uris[0]).optimize.__class__.compact_files = real
-    return results, compacted
+    monkeypatch.setattr(sweep_mod, "table_ids", lambda *_a, **_k: TableIds())
+    monkeypatch.setattr(expiry, "count_reclaimable", _spy)
+    return sweep_mod.run_sweep(settings), reached
 
 
-def test_a_trashed_dataset_is_not_compacted_and_says_so(tmp_path: Path, settings: MaintenanceSettings, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_trashed_dataset_is_not_expired_and_says_so(tmp_path: Path, settings: MaintenanceSettings, monkeypatch: pytest.MonkeyPatch) -> None:
     """THE ACCEPTANCE CRITERION. The dropped dataset is left alone, and the tick reports why."""
     live = _dataset(tmp_path / "live.lance")
     dropped = _dataset(tmp_path / "dropped.lance")
@@ -91,10 +88,10 @@ def test_a_trashed_dataset_is_not_compacted_and_says_so(tmp_path: Path, settings
     record = trash.make_record("silver$htr_lines_2019", kind="table", location=dropped, dropped_by="user:karin", grace_days=7)
     trash.put(str(settings.resolved_control_root), {}, record)
 
-    results, compacted = _run(monkeypatch, settings, [live, dropped])
+    results, expired = _run(monkeypatch, settings, [live, dropped])
 
-    assert dropped not in compacted, "the sweep rewrote a dataset the grace window promises is frozen"
-    assert live in compacted, "the exclusion caught a LIVE dataset — the path comparison is too broad"
+    assert dropped not in expired, "the sweep reclaimed versions of a dataset the grace window promises is frozen"
+    assert live in expired, "the exclusion caught a LIVE dataset — the path comparison is too broad"
 
     excluded = [r for r in results if r.trashed]
     assert [r.uri for r in excluded] == [dropped]
@@ -106,21 +103,21 @@ def test_a_trashed_dataset_is_not_compacted_and_says_so(tmp_path: Path, settings
 
 
 def test_an_expired_but_unpurged_record_still_freezes_its_dataset(tmp_path: Path, settings: MaintenanceSettings, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A passed deadline is permission for the PURGE to reclaim, not permission for the sweep to rewrite.
+    """A passed deadline is permission for the PURGE to reclaim, not permission for the sweep to expire.
 
     `undrop` deliberately does not consult the clock, so a record whose deadline has passed but which
     nothing has reclaimed still describes recoverable bytes. Keying the exclusion on `expired()`
     instead of on every record would put exactly those datasets — the ones most likely to be stuck —
-    back under the compactor.
+    back under expiry.
     """
     dropped = _dataset(tmp_path / "long_expired.lance")
     record = trash.make_record("silver$old", kind="table", location=dropped, dropped_by="user:karin", grace_days=7)
     record["expires_at"] = "2020-01-01T00:00:00+00:00"
     trash.put(str(settings.resolved_control_root), {}, record)
 
-    results, compacted = _run(monkeypatch, settings, [dropped])
+    results, expired = _run(monkeypatch, settings, [dropped])
 
-    assert compacted == [], "an expired-but-unpurged record was rewritten"
+    assert expired == [], "an expired-but-unpurged record was reclaimed"
     assert [r.uri for r in results if r.trashed] == [dropped]
 
 
@@ -129,7 +126,7 @@ def test_a_trashed_clone_still_protects_its_live_source(tmp_path: Path, settings
 
     The exclusion must be applied AFTER `base_refs.protected_roots` runs over the FULL discovered list.
     A trashed shallow CLONE's manifest `base_paths` are the only evidence in the estate that its LIVE
-    source must not be compacted (#114/#128d) — the source carries no flag of its own. Filter the
+    source must not be reclaimed (#114/#128d) — the source carries no flag of its own. Filter the
     trashed dataset out before the pre-pass and that protection disappears, so the sweep destroys the
     live source's data files: a worse bug than the one being fixed, reached by putting the right
     filter in the wrong place.
@@ -163,20 +160,17 @@ def test_a_trashed_clone_still_protects_its_live_source(tmp_path: Path, settings
     assert seen, "the base-ref pre-pass did not run"
     assert clone in seen[0], (
         "the trashed dataset was filtered out BEFORE the base-ref pre-pass. A trashed shallow clone's "
-        "base_paths are the only thing protecting its live source from compaction — removing it here "
+        "base_paths are the only thing protecting its live source from reclamation — removing it here "
         "re-opens #114 from the trash side."
     )
 
 
 def test_an_unreadable_trash_index_aborts_the_tick(tmp_path: Path, settings: MaintenanceSettings, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Fail toward NOT rewriting, exactly as the policy registry already does.
+    """Fail toward NOT reclaiming, exactly as the policy registry does.
 
-    This block used to swallow every error, which was right while its only consumer was a log line.
-    Now the same read decides which datasets may be rewritten, so swallowing would silently restore
-    the defect this work closes: an unreadable index means an empty exclusion set means maintain
-    everything, including the frozen data. The precedent is `compaction_policies_unreadable_tick_aborted`
-    forty lines above — a protective registry we cannot read at all stops the tick, and the next cron
-    fire retries.
+    The read decides which datasets may be touched, so swallowing an error would mean an empty exclusion set, which
+    means maintain everything, including the frozen data. A protective registry we cannot read at all stops the tick,
+    and the next cron fire retries.
     """
     from maintenance.services import sweep as sweep_mod
 
@@ -204,7 +198,7 @@ def test_a_namespace_record_carrying_no_location_excludes_nothing(tmp_path: Path
         trash.make_record("silver", kind="namespace", location="", dropped_by="user:karin", grace_days=7),
     )
 
-    results, compacted = _run(monkeypatch, settings, [live])
+    results, expired = _run(monkeypatch, settings, [live])
 
-    assert compacted == [live], "a location-less namespace record froze a live dataset"
+    assert expired == [live], "a location-less namespace record froze a live dataset"
     assert [r for r in results if r.trashed] == []

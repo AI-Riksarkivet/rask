@@ -58,10 +58,9 @@ _READ_ACTIONS: frozenset[str] = frozenset(
         "graph",
         "tasks",
         "preview",
-        # rask's management reads, served as POST in the same grammar: the change feed, the compaction
-        # PLAN (the commit is a write), and the estate FGA workbench's derivations.
+        # rask's management reads, served as POST in the same grammar: the change feed and the estate FGA
+        # workbench's derivations.
         "changes",
-        "compaction_plan",
         "list-objects",
         "list-users",
         "expand",

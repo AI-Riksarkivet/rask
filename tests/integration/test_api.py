@@ -327,45 +327,6 @@ def test_add_columns_emits_pinned_schema_evolution_lineage(client: TestClient, f
     assert captured["schema_fields"] == [{"name": "x", "type": "int64"}]  # post-evolution schema rides along
 
 
-def test_create_index_emits_lineage_at_the_version_its_transaction_committed(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
-    # The native index response carries only a transaction_id → the event names the version THAT transaction
-    # committed (DescribeTransaction), not the table's latest, which a later writer may already have moved.
-    from lance_namespace import CreateTableIndexResponse, DescribeTransactionResponse
-
-    fake_ns.create_table_index.return_value = CreateTableIndexResponse(transaction_id="tx")
-    fake_ns.describe_transaction.return_value = DescribeTransactionResponse(status="SUCCEEDED", properties={"uuid": "tx", "version": "9"})
-    dataset = MagicMock()
-    dataset.version = 12
-    monkeypatch.setattr("catalog.services.dataplane.open_dataset", lambda *a, **k: dataset)
-    captured = _capture_measured_emit(monkeypatch)
-
-    resp = client.post("/v1/table/db$t/create_index", json={"column": "vec", "index_type": "IVF_PQ"})
-    assert resp.status_code == 200
-    assert captured["operation"] == "create_index"
-    assert captured["version"] == 9  # the transaction's commit, not the latest (12)
-
-
-def test_create_index_succeeds_when_readback_fails(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
-    # The index op is COMMITTED before the lineage read-back runs — a transient reopen failure must
-    # degrade the emit to its schemaless form, never turn the committed op into an error response.
-    from lance_namespace import CreateTableIndexResponse, DescribeTransactionResponse
-
-    fake_ns.create_table_index.return_value = CreateTableIndexResponse(transaction_id="tx")
-    fake_ns.describe_transaction.return_value = DescribeTransactionResponse(status="SUCCEEDED", properties={"uuid": "tx", "version": "9"})
-
-    def _boom(*_a: object, **_k: object) -> object:
-        raise RuntimeError("transient object-store hiccup")
-
-    monkeypatch.setattr("catalog.services.dataplane.open_dataset", _boom)
-    captured = _capture_measured_emit(monkeypatch)
-
-    resp = client.post("/v1/table/db$t/create_index", json={"column": "vec", "index_type": "IVF_PQ"})
-    assert resp.status_code == 200  # the committed index build still returns success
-    assert captured["operation"] == "create_index"
-    assert captured["version"] == 9  # the commit is still known: it came from the transaction, not the reopen
-    assert captured["schema_fields"] == []
-
-
 def test_restore_emits_lineage_at_new_version(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
     from lance_namespace import DescribeTransactionResponse, RestoreTableResponse
 

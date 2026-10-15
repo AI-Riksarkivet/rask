@@ -15,21 +15,32 @@ version number meet the store's arbitration, not the catalog's.
 
 from __future__ import annotations
 
+import json
 import logging
-from collections.abc import Sequence
+from collections import Counter
+from collections.abc import Callable, Sequence
+from datetime import UTC, datetime, timedelta
 from functools import partial
 
 import lance
 import pyarrow as pa
 import pyarrow.compute as pc
+import pyarrow.fs as pafs
 from lance.fragment import DataFile
-from lance_namespace import CreateTableVersionRequest, CreateTableVersionResponse, InvalidInputError, LanceNamespace, UnsupportedOperationError
+from lance_namespace import (
+    CreateTableVersionRequest,
+    CreateTableVersionResponse,
+    InvalidInputError,
+    LanceNamespace,
+    ServiceUnavailableError,
+    UnsupportedOperationError,
+)
 from pydantic import BaseModel, InstanceOf
 
 from catalog.core import lineage_emit, manifest_bytes, provenance_guard
 from catalog.core.base_judge import BaseJudge, require_sanctioned_bases
 from catalog.services import client_fragments, dataplane, maintenance, native, primary_keys
-from service_kit.lakehouse import base_registry, features
+from service_kit.lakehouse import base_refs, base_registry, features, maintenance_due
 from service_kit.lakehouse.objectfs import StorageOptions
 
 
@@ -50,6 +61,8 @@ class StagedVersion(BaseModel):
     operation: str
     #: The staged transaction's properties, where a stock writer names its run (:mod:`catalog.core.run_context`).
     properties: dict[str, str] = {}
+    #: The staged manifest's ``max_fragment_id``, ``None`` when it states none.
+    max_fragment_id: int | None = None
 
     @property
     def creates(self) -> bool:
@@ -122,6 +135,8 @@ def stage(location: str, so: StorageOptions, request: CreateTableVersionRequest)
         _discard(location, so, detached_id, finalize_id)
         raise
     operation = type(transaction.operation).__name__ if transaction is not None else "Unknown"
+    if operation == lance.LanceOperation.BaseOperation.__name__:
+        operation = _unmodelled_operation(manifest) or operation
     properties = dict(transaction.transaction_properties or {}) if transaction is not None else {}
     return StagedVersion(
         location=location,
@@ -131,7 +146,21 @@ def stage(location: str, so: StorageOptions, request: CreateTableVersionRequest)
         version=request.version,
         operation=operation,
         properties=properties,
+        max_fragment_id=manifest_bytes.varint_field(manifest_bytes.manifest_message(manifest), manifest_bytes.MAX_FRAGMENT_ID_FIELD),
     )
+
+
+def _unmodelled_operation(manifest: bytes) -> str | None:
+    """The operation of ``manifest``'s inline transaction, read off its protobuf, when pylance models no class for it.
+
+    A stock compaction commits a ``ReserveFragments`` before its ``Rewrite`` (``lance_docs/file_format.md`` § Rewrite),
+    and pylance reads it back as ``BaseOperation``. ``None`` when the manifest carries no inline transaction or names
+    another operation, which then stays unnamed and is refused.
+    """
+    inline = manifest_bytes.transaction_section(manifest)
+    if inline is None:
+        return None
+    return manifest_bytes.operation_name(inline)
 
 
 def _open(staged: StagedVersion, so: StorageOptions) -> lance.LanceDataset:
@@ -177,6 +206,42 @@ def _split(proposed: lance.LanceDataset, current: lance.LanceDataset | None) -> 
                 raise InvalidInputError(f"commit refused: new fragment {fragment.fragment_id} names data file(s) the table already holds: {resurrected[:5]}")
         added.extend((metadata, data_file) for data_file in metadata.files if data_file.path not in held_paths)
     return _Fragments(new=new, carried=carried, added_files=added)
+
+
+class CloneEvidence(BaseModel):
+    """The maintenance sweep's clone list, and how old it may be, as a compaction is judged against it."""
+
+    clones: maintenance_due.CloneList
+    max_age: timedelta
+
+
+class _Judged(BaseModel):
+    """A staged version beside the version it follows: what every rule of :func:`judge` reads."""
+
+    staged: StagedVersion
+    so: StorageOptions
+    proposed: InstanceOf[lance.LanceDataset]
+    #: ``None`` for the table's first version, which follows none.
+    current: InstanceOf[lance.LanceDataset] | None
+    split: _Fragments
+    #: Read for a compaction and for no other operation; ``None`` when no sweep has written a clone list.
+    clone_evidence: CloneEvidence | None = None
+
+    @property
+    def followed(self) -> lance.LanceDataset:
+        """The version this one follows, for a rule that judges a change against it.
+
+        Raises:
+            InvalidInputError: The version is the table's first, so it changes nothing that came before.
+        """
+        if self.current is None:
+            raise InvalidInputError(f"commit refused: a {self.staged.operation} needs a version to follow, and this is the table's first")
+        return self.current
+
+    @property
+    def adds_data(self) -> bool:
+        """It names a data file the version it follows does not hold, and is not a compaction or a restore."""
+        return bool(self.split.added_files) and self.staged.operation not in _CARRIES_HELD_ROWS
 
 
 def _refuse_changed_invariants(proposed: lance.LanceDataset, current: lance.LanceDataset | None) -> None:
@@ -256,35 +321,54 @@ def _refuse_config(proposed: lance.LanceDataset, current: lance.LanceDataset | N
         raise InvalidInputError("commit refused: rask.* table config is the catalog's own and is not changed by a commit")
 
 
-def _refuse_bases(
-    location: str, proposed: lance.LanceDataset, current: lance.LanceDataset | None, added: Sequence[tuple[lance.FragmentMetadata, DataFile]], judge: BaseJudge
-) -> None:
+def _refuse_bases(version: _Judged, judge: BaseJudge) -> None:
     """The base list stays the table's own, and no added file resolves through a base ([[LH-209]], [[LH-279]])."""
-    refs = features.manifest_base_path_refs(proposed)
-    if current is not None and sorted(ref.model_dump_json() for ref in refs) != sorted(
-        ref.model_dump_json() for ref in features.manifest_base_path_refs(current)
+    refs = features.manifest_base_path_refs(version.proposed)
+    if version.current is not None and sorted(ref.model_dump_json() for ref in refs) != sorted(
+        ref.model_dump_json() for ref in features.manifest_base_path_refs(version.current)
     ):
         raise InvalidInputError("commit refused: a commit may not add, remove or repoint the table's bases")
-    require_sanctioned_bases(location, refs, judge=judge)
-    based = [data_file.path for _, data_file in added if data_file.base_id is not None]
+    require_sanctioned_bases(version.staged.location, refs, judge=judge)
+    based = [data_file.path for _, data_file in version.split.added_files if data_file.base_id is not None]
     if based:
         raise InvalidInputError(
             f"commit refused: {len(based)} added data file(s) resolve through a base, e.g. {based[:5]}; write them under the table's own data/"
         )
 
 
-def _refuse_forged_files(location: str, so: StorageOptions, proposed: lance.LanceDataset, split: _Fragments) -> None:
+def _refuse_foreign_file_versions(version: _Judged) -> None:
+    """Every added data file is at the table's file version, which an append never names (reader flag 256 otherwise)."""
+    added = [data_file for _, data_file in version.split.added_files]
+    reason = features.describe_foreign_data_file_versions(version.proposed.data_storage_version, added)
+    if reason is not None:
+        raise InvalidInputError(f"commit refused: {reason}")
+
+
+def _refuse_forged_files(version: _Judged) -> None:
     """Every added file is well formed, present at its declared size, and its footer agrees with its fragment ([[LH-211]])."""
-    for index, (_, data_file) in enumerate(split.added_files):
+    added = version.split.added_files
+    if not added:
+        return
+    for index, (_, data_file) in enumerate(added):
         client_fragments.refuse_a_malformed_data_file(index, data_file)
-    paths = [data_file.path for _, data_file in split.added_files]
+    paths = [data_file.path for _, data_file in added]
     if len(set(paths)) < len(paths):
         raise InvalidInputError("commit refused: one data file is named twice; every field id it carries would be minted again")
-    owners = {id(metadata): metadata for metadata, _ in split.added_files}
+    owners = {id(metadata): metadata for metadata, _ in added}
+    location, so = version.staged.location, version.so
     dataplane.verify_fragment_data_files(
-        location, so, [{"files": [{"path": data_file.path, "file_size_bytes": data_file.file_size_bytes}]} for _, data_file in split.added_files]
+        location, so, [{"files": [{"path": data_file.path, "file_size_bytes": data_file.file_size_bytes}]} for _, data_file in added]
     )
-    client_fragments.verify_against_footers(location, so, list(owners.values()), proposed)
+    client_fragments.verify_against_footers(location, so, list(owners.values()), version.proposed)
+
+
+def _refuse_unverified_blobs(version: _Judged, external_bases: Sequence[base_registry.RecordedBase]) -> None:
+    """Every blob a new fragment names is present, under the table's own root or a base its record holds."""
+    columns = client_fragments.blob_columns(version.proposed)
+    if not columns or not version.split.new:
+        return
+    sizes = partial(dataplane.object_sizes, so=version.so)
+    client_fragments.verify_blob_sidecars(version.proposed, version.split.new, columns, external_bases=external_bases, object_sizes=sizes)
 
 
 def _refuse_held_keys(proposed: lance.LanceDataset, split: _Fragments) -> None:
@@ -330,40 +414,41 @@ def _refuse_added_feature_flags(proposed: lance.LanceDataset, current: lance.Lan
 _NEXT_ROW_ID_FIELD = 14
 
 
-def _next_row_id(location: str, so: StorageOptions, version: int) -> int:
-    """The first stable row id the table had not assigned at ``version``, read off its committed manifest.
+def _committed_field(location: str, so: StorageOptions, version: int, field: int) -> int:
+    """A varint field of the table's committed manifest at ``version``, 0 when the manifest leaves it unset.
 
-    pylance exposes no ``next_row_id``. A V2-named manifest is ``_versions/<u64::MAX - version>.manifest`` and a V1-named
-    one ``_versions/<version>.manifest`` (``lance_docs/file_format.md``).
+    pylance exposes neither ``next_row_id`` nor ``max_fragment_id``. A V2-named manifest is
+    ``_versions/<u64::MAX - version>.manifest`` and a V1-named one ``_versions/<version>.manifest`` (``lance_docs/file_format.md``).
     """
     fs, base = dataplane.dataset_fs(location, so)
     for name in (f"{(1 << 64) - 1 - version}.manifest", f"{version}.manifest"):
         try:
             with fs.open_input_stream(f"{base.rstrip('/')}/_versions/{name}") as source:
-                return manifest_bytes.varint_field(manifest_bytes.manifest_message(source.read()), _NEXT_ROW_ID_FIELD) or 0
+                return manifest_bytes.varint_field(manifest_bytes.manifest_message(source.read()), field) or 0
         except FileNotFoundError:
             continue
     raise InvalidInputError(f"the version this commit follows, {version}, has no committed manifest")
 
 
-def _refuse_malformed_new_fragments(
-    staged: StagedVersion, so: StorageOptions, proposed: lance.LanceDataset, current: lance.LanceDataset | None, split: _Fragments
-) -> None:
+def _refuse_malformed_new_fragments(version: _Judged) -> None:
     """Every new fragment names a data file, and an appended one carries no overlay or deletion file.
 
     Measured through the client-direct append on pylance 12.0.0, each of these committed: a fragment with no data file,
     an overlay (the table no longer opened) and a ``row_id_meta`` copied from a committed fragment (two rows with one
     stable row id, judged by :func:`_refuse_rows_coming_back`).
     """
-    empty = [metadata.id for metadata in split.new if not metadata.files]
+    empty = [metadata.id for metadata in version.split.new if not metadata.files]
     if empty:
         raise InvalidInputError(f"commit refused: fragment(s) {empty[:5]} name no data file")
-    if staged.operation != "Append" or current is None:
+    if version.staged.operation != "Append" or version.current is None:
         return
-    carrying = [metadata.id for metadata in split.new if metadata.overlays or metadata.deletion_file is not None]
+    carrying = [metadata.id for metadata in version.split.new if metadata.overlays or metadata.deletion_file is not None]
     if carrying:
         raise InvalidInputError(f"commit refused: appended fragment(s) {carrying[:5]} carry an overlay or a deletion file, which an append never writes")
 
+
+#: A compaction's two commits: the ``ReserveFragments`` and the ``Rewrite`` that uses the ids it reserved.
+COMPACTION_OPERATIONS = frozenset({"ReserveFragments", "Rewrite"})
 
 #: Operations whose new files carry only rows the table held at some version, so they add no data a run produced.
 _CARRIES_HELD_ROWS = frozenset({"Rewrite", "Restore"})
@@ -380,13 +465,16 @@ def _row_ids(dataset: lance.LanceDataset, fragment_ids: set[int]) -> list[int]:
     return dataset.scanner(columns=[], with_row_id=True, fragments=fragments).to_table().column("_rowid").to_pylist()
 
 
-def _refuse_rows_coming_back(staged: StagedVersion, so: StorageOptions, proposed: lance.LanceDataset, current: lance.LanceDataset, split: _Fragments) -> None:
+def _refuse_rows_coming_back(version: _Judged) -> None:
     """At a writer's rung, no deleted row comes back and every new row's id is fresh or one this commit deleted.
 
     Judged on the fragments, never on the operation the writer's transaction file names: relabelled, a restore is an
     "Append" whose rows reuse old ids, and an undelete an "Update" whose kept fragment lost its deletion file. An
     Update legitimately moves a row with its stable row id, so an id the commit deleted may reappear once.
     """
+    current, proposed = version.current, version.proposed
+    if current is None or not proposed.has_stable_row_ids or version.staged.operation in _REWRITING_OPERATIONS:
+        return
     held = {fragment.fragment_id: fragment.metadata for fragment in current.get_fragments()}
     kept = {fragment.fragment_id: fragment.metadata for fragment in proposed.get_fragments() if fragment.fragment_id in held}
     touched = {fid for fid, metadata in kept.items() if str(metadata.deletion_file) != str(held[fid].deletion_file)}
@@ -395,49 +483,271 @@ def _refuse_rows_coming_back(staged: StagedVersion, so: StorageOptions, proposed
     if after - before:
         raise InvalidInputError("commit refused: rows a delete removed come back; restore a version through the restore door")
     deleted = before - after
-    added = _row_ids(proposed, {metadata.id for metadata in split.new})
+    added = _row_ids(proposed, {metadata.id for metadata in version.split.new})
     if len(set(added)) < len(added):
         raise InvalidInputError("commit refused: two new rows carry one stable row id")
-    floor = _next_row_id(staged.location, so, staged.version - 1)
+    floor = _next_row_id(version.staged.location, version.so, version.staged.version - 1)
     if {row_id for row_id in added if row_id < floor} - deleted:
         raise InvalidInputError(f"commit refused: new rows reuse stable row ids below the table's next row id {floor} that this commit did not delete")
 
 
-def judge(staged: StagedVersion, so: StorageOptions, *, base_judge: BaseJudge, external_bases: Sequence[base_registry.RecordedBase]) -> bool:
+def _next_row_id(location: str, so: StorageOptions, version: int) -> int:
+    """The first stable row id the table had not assigned at ``version``."""
+    return _committed_field(location, so, version, _NEXT_ROW_ID_FIELD)
+
+
+def _fragment_json(fragment: lance.FragmentMetadata) -> str:
+    """Everything Lance records for one fragment: its files, deletion file, overlays, and row id and version metadata."""
+    return json.dumps(fragment.to_json(), sort_keys=True)
+
+
+def _fragments_by_id(dataset: lance.LanceDataset) -> dict[int, str]:
+    return {fragment.fragment_id: _fragment_json(fragment.metadata) for fragment in dataset.get_fragments()}
+
+
+def _index_uuids(dataset: lance.LanceDataset) -> set[str]:
+    return {str(index["uuid"]) for index in dataset.list_indices()}
+
+
+def _refuse_changed_data(version: _Judged) -> None:
+    """A ``CreateIndex`` or a ``ReserveFragments`` carries no data: it changes no fragment and no column."""
+    before, after = _fragments_by_id(version.followed), _fragments_by_id(version.proposed)
+    changed = sorted(fid for fid in before.keys() | after.keys() if before.get(fid) != after.get(fid))
+    if changed:
+        raise InvalidInputError(f"commit refused: a {version.staged.operation} changes no fragment, and this one changes fragment(s) {changed[:5]}")
+    if not version.proposed.schema.equals(version.followed.schema, check_metadata=True):
+        raise InvalidInputError(f"commit refused: a {version.staged.operation} changes no column and no schema metadata")
+
+
+def _refuse_a_reservation_beyond_the_table(version: _Judged) -> None:
+    """A ``ReserveFragments`` reserves fragment ids for the ``Rewrite`` after it and changes nothing else.
+
+    Every fragment a rewrite writes holds at least one row it rewrites, so the table's physical rows bound how many ids
+    one may need; ``max_fragment_id`` at ``2^32 - 1`` exhausts the id space and leaves the table unwritable
+    (``lance_docs/file_format.md`` § ReserveFragments).
+    """
+    _refuse_changed_data(version)
+    if _index_uuids(version.proposed) != _index_uuids(version.followed):
+        raise InvalidInputError("commit refused: a ReserveFragments adds or removes no index")
+    held = _committed_field(version.staged.location, version.so, version.staged.version - 1, manifest_bytes.MAX_FRAGMENT_ID_FIELD)
+    reserved = (version.staged.max_fragment_id or 0) - held
+    rows = sum(fragment.metadata.physical_rows or 0 for fragment in version.followed.get_fragments())
+    if not 1 <= reserved <= rows:
+        raise InvalidInputError(f"commit refused: a ReserveFragments reserves between 1 and the table's {rows} rows of fragment ids, not {reserved}")
+    _refuse_a_compaction_others_read_through(version)
+
+
+def _refuse_a_rewrite_that_changes_rows(version: _Judged) -> None:
+    """A ``Rewrite`` replaces whole fragments with fresh ones holding exactly their live rows, no fewer and no more.
+
+    Measured on pylance 13.0.0, Lance commits a rewrite naming a fragment whose rows it does not carry (they are gone)
+    and one rewriting the rows of a fragment it leaves in place (they are there twice, under one stable row id).
+    """
+    before, after = _fragments_by_id(version.followed), _fragments_by_id(version.proposed)
+    in_place = sorted(fid for fid in before.keys() & after.keys() if before[fid] != after[fid])
+    if in_place:
+        raise InvalidInputError(f"commit refused: a Rewrite replaces fragments whole, and this one changes fragment(s) {in_place[:5]} in place")
+    reused = [metadata.id for metadata in version.split.new if metadata.deletion_file is not None or metadata.overlays]
+    if reused:
+        raise InvalidInputError(f"commit refused: a Rewrite writes its fragments afresh, and new fragment(s) {reused[:5]} carry a deletion file or an overlay")
+    _refuse_rows_not_carried(version, replaced=before.keys() - after.keys(), written=after.keys() - before.keys())
+    maintenance.require_compactable(version.followed, version.so)
+    _refuse_a_compaction_others_read_through(version)
+
+
+def _refuse_rows_not_carried(version: _Judged, *, replaced: set[int], written: set[int]) -> None:
+    """The fragments a rewrite writes hold the live rows of those it replaces: by stable row id, else by count.
+
+    A compaction keeps a row's stable row id, so ids compare the rows themselves; the values under an unchanged id are
+    not compared. A table without stable row ids can only be held to its count.
+    """
+    if not version.proposed.has_stable_row_ids:
+        live = sum(fragment.count_rows() for fragment in version.followed.get_fragments() if fragment.fragment_id in replaced)
+        carried = sum(fragment.count_rows() for fragment in version.proposed.get_fragments() if fragment.fragment_id in written)
+        if live != carried:
+            raise InvalidInputError(f"commit refused: a Rewrite carries exactly the {live} live rows of the fragments it replaces, not {carried}")
+        return
+    before, after = Counter(_row_ids(version.followed, replaced)), Counter(_row_ids(version.proposed, written))
+    if before == after:
+        return
+    lost, extra = sorted((before - after).elements()), sorted((after - before).elements())
+    raise InvalidInputError(
+        f"commit refused: a Rewrite carries exactly the live rows of the fragments it replaces; it loses {len(lost)} "
+        f"(stable row ids {lost[:5]}) and adds or repeats {len(extra)} (stable row ids {extra[:5]})"
+    )
+
+
+def _refuse_a_compaction_others_read_through(version: _Judged) -> None:
+    """A compaction of a table another dataset resolves its files through is refused, by the maintenance sweep's clone list.
+
+    Judged at both of a compaction's commits, so a refused one leaves the table at its version. Only the referring
+    manifests name a table's referrers, so no check of the table finds them; the judge reads the list the sweep's
+    whole-estate pre-pass wrote (ADR 0162) and applies its rule (:func:`base_refs.rewrite_refusal`). A list that is
+    missing or older than its maximum age refuses, as a protective record read as absent always does here.
+
+    Raises:
+        ServiceUnavailableError: No sweep has written a clone list within its maximum age.
+        UnsupportedOperationError: Another dataset resolves its files through this table.
+    """
+    evidence = version.clone_evidence
+    if evidence is None:
+        raise ServiceUnavailableError("compaction refused: the maintenance sweep has written no clone list yet, so this table's referrers are unknown")
+    clones = evidence.clones
+    age = datetime.now(UTC) - clones.taken_at
+    if age > evidence.max_age:
+        raise ServiceUnavailableError(
+            f"compaction refused: the maintenance sweep's clone list is {int(age.total_seconds())}s old, past "
+            f"{int(evidence.max_age.total_seconds())}s, so a dataset cloned since is unknown"
+        )
+    location = version.staged.location
+    reason = base_refs.rewrite_refusal(clones.refs(), location, version.followed.tags.list())
+    if reason is not None:
+        raise UnsupportedOperationError(f"compaction refused: {reason} ({len(clones.clones_of(location))} dataset(s) resolve their files through it)")
+
+
+#: What one operation may change beyond the rules every commit meets: a ``ReserveFragments`` and a ``CreateIndex``
+#: carry no data, and a ``Rewrite`` carries exactly the rows it replaces. Judged once the version's files are sound.
+_OPERATION_RULES: dict[str, Callable[[_Judged], None]] = {
+    "ReserveFragments": _refuse_a_reservation_beyond_the_table,
+    "CreateIndex": _refuse_changed_data,
+    "Rewrite": _refuse_a_rewrite_that_changes_rows,
+}
+
+
+def _refuse_beyond_the_operation(version: _Judged) -> None:
+    rule = _OPERATION_RULES.get(version.staged.operation)
+    if version.current is None or rule is None:
+        return
+    rule(version)
+
+
+class _AddedIndex(BaseModel):
+    """One entry of the version's index section that the version it follows does not hold."""
+
+    uuid: str
+    name: str
+    type: str = ""
+    base_id: int | None = None
+    fragment_ids: set[int]
+
+
+#: Index types pylance reads no statistics for: ``index_stats`` on one panics (``lance-index/src/scalar/json.rs``).
+_INDEX_TYPES_WITHOUT_STATS = frozenset({"json"})
+
+
+def _added_indices(version: _Judged) -> list[_AddedIndex]:
+    held = _index_uuids(version.current) if version.current is not None else set()
+    return [
+        _AddedIndex(
+            uuid=str(index["uuid"]),
+            name=str(index["name"]),
+            type=str(index.get("type") or ""),
+            base_id=index.get("base_id"),
+            fragment_ids=set(index["fragment_ids"]),
+        )
+        for index in version.proposed.list_indices()
+        if str(index["uuid"]) not in held
+    ]
+
+
+def _declared_index_files(version: _Judged) -> dict[str, dict[str, int]]:
+    """The files each index the staged transaction adds says it has, by name and size."""
+    transaction = version.proposed.read_transaction(version.staged.detached_id)
+    new_indices = getattr(transaction.operation, "new_indices", None) if transaction is not None else None
+    return {index.uuid: {file.path: file.size_bytes for file in index.files or []} for index in new_indices or []}
+
+
+def _index_directory(version: _Judged, uuid: str) -> dict[str, int]:
+    """The files under the table's own ``_indices/<uuid>/``, by name and size."""
+    fs, base = dataplane.dataset_fs(version.staged.location, version.so)
+    selector = pafs.FileSelector(f"{base.rstrip('/')}/_indices/{uuid}", allow_not_found=True)
+    return {info.path.rsplit("/", 1)[-1]: info.size or 0 for info in fs.get_file_info(selector) if info.is_file}
+
+
+def _refuse_an_index_outside_its_directory(version: _Judged) -> None:
+    """Every index the version adds is read from the table's own ``_indices/<uuid>/``, holds the files it names, and opens.
+
+    Measured on pylance 13.0.0, Lance commits an index naming a base the table does not have, and one whose directory
+    holds nothing, and every query the index serves then fails.
+    """
+    added = _added_indices(version)
+    if not added:
+        return
+    declared = _declared_index_files(version)
+    fragments = {fragment.fragment_id for fragment in version.proposed.get_fragments()}
+    for index in added:
+        _refuse_an_index_read_elsewhere(index, fragments=fragments)
+        _refuse_an_index_without_its_files(index, declared=declared.get(index.uuid, {}), present=_index_directory(version, index.uuid))
+        _refuse_an_index_that_does_not_open(version.proposed, index)
+
+
+def _refuse_an_index_read_elsewhere(index: _AddedIndex, *, fragments: set[int]) -> None:
+    if index.base_id is not None:
+        raise InvalidInputError(
+            f"commit refused: index {index.name!r} is read through base {index.base_id}; an index lives under the table's own _indices/{index.uuid}/"
+        )
+    uncovered = sorted(index.fragment_ids - fragments)
+    if uncovered:
+        raise InvalidInputError(f"commit refused: index {index.name!r} covers fragment(s) {uncovered[:5]} the version does not hold")
+
+
+def _refuse_an_index_without_its_files(index: _AddedIndex, *, declared: dict[str, int], present: dict[str, int]) -> None:
+    missing = sorted(path for path, size in declared.items() if present.get(path) != size)
+    if missing or not present:
+        raise InvalidInputError(
+            f"commit refused: _indices/{index.uuid}/ does not hold index {index.name!r}'s file(s) {missing[:5] or '(none present)'} at their sizes"
+        )
+
+
+def _refuse_an_index_that_does_not_open(proposed: lance.LanceDataset, index: _AddedIndex) -> None:
+    """The index opens: ``index_stats`` reads it. The JSON index type has none, so its directory is all that is judged."""
+    if index.type.lower() in _INDEX_TYPES_WITHOUT_STATS:
+        return
+    try:
+        proposed.stats.index_stats(index.name)
+    except OSError as exc:
+        raise InvalidInputError(f"commit refused: index {index.name!r} does not open: {exc}") from exc
+
+
+def judge(
+    staged: StagedVersion,
+    so: StorageOptions,
+    *,
+    base_judge: BaseJudge,
+    external_bases: Sequence[base_registry.RecordedBase],
+    clone_evidence: CloneEvidence | None = None,
+) -> bool:
     """Refuse the staged version if it breaks a rule the catalog's own write doors hold; say whether it adds data.
 
     The version is compared with the one it follows. What it adds is judged: a file or a row carried over was judged
     when it landed. It adds data when it names a data file the version it follows does not hold, unless it is a
     compaction or a restore, whose files carry rows the table already held: such a commit on a derived tier names its
-    run.
+    run. A compaction is judged against ``clone_evidence``, which the caller reads for the two operations in
+    :data:`COMPACTION_OPERATIONS` and no other.
 
     Raises:
         InvalidInputError: The version breaks one of the rules below; nothing was finalized.
-        UnsupportedOperationError: The version needs a Lance feature this catalog does not serve.
+        ServiceUnavailableError: A compaction arrived with no clone list within its maximum age.
+        UnsupportedOperationError: The version needs a Lance feature this catalog does not serve, or compacts a table
+            another dataset resolves its files through.
     """
     proposed = _open(staged, so)
     current = None if staged.creates else lance.dataset(staged.location, version=staged.version - 1, storage_options=dict(so) if so else None)
     _refuse_changed_invariants(proposed, current)
     _refuse_changed_schema_governance(proposed, current)
     _refuse_config(proposed, current)
-    split = _split(proposed, current)
-    _refuse_bases(staged.location, proposed, current, split.added_files, base_judge)
-    reason = features.describe_foreign_data_file_versions(proposed.data_storage_version, [data_file for _, data_file in split.added_files])
-    if reason is not None:
-        raise InvalidInputError(f"commit refused: {reason}")
+    version = _Judged(staged=staged, so=so, proposed=proposed, current=current, split=_split(proposed, current), clone_evidence=clone_evidence)
+    _refuse_bases(version, base_judge)
+    _refuse_foreign_file_versions(version)
     _refuse_added_feature_flags(proposed, current)
-    _refuse_malformed_new_fragments(staged, so, proposed, current, split)
-    if current is not None and proposed.has_stable_row_ids and staged.operation not in _REWRITING_OPERATIONS:
-        _refuse_rows_coming_back(staged, so, proposed, current, split)
-    if split.added_files:
-        _refuse_forged_files(staged.location, so, proposed, split)
-    columns = client_fragments.blob_columns(proposed)
-    if columns and split.new:
-        client_fragments.verify_blob_sidecars(proposed, split.new, columns, external_bases=external_bases, object_sizes=partial(dataplane.object_sizes, so=so))
-    _refuse_held_keys(proposed, split)
-    if staged.operation == "Rewrite" and current is not None:
-        maintenance.require_compactable(current, so)
-    return bool(split.added_files) and staged.operation not in _CARRIES_HELD_ROWS
+    _refuse_malformed_new_fragments(version)
+    _refuse_rows_coming_back(version)
+    _refuse_forged_files(version)
+    _refuse_unverified_blobs(version, external_bases)
+    _refuse_held_keys(proposed, version.split)
+    _refuse_beyond_the_operation(version)
+    _refuse_an_index_outside_its_directory(version)
+    return version.adds_data
 
 
 #: The lineage operation each staged Lance operation is announced as. pylance stages merge_insert as an ``Update`` and
@@ -454,6 +764,7 @@ LINEAGE_OPERATION: dict[str, str] = {
     "UpdateConfig": lineage_emit.UPDATE_SCHEMA_METADATA,
     "Restore": lineage_emit.RESTORE_TABLE,
     "Rewrite": lineage_emit.COMPACT_TABLE,
+    "ReserveFragments": lineage_emit.COMPACT_TABLE,
     "Overwrite": lineage_emit.OVERWRITE_TABLE,
 }
 

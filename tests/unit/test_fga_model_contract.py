@@ -101,15 +101,13 @@ def _catalog_pairs(monkeypatch: pytest.MonkeyPatch) -> set[tuple[str, str]]:
     root_settings = _settings(lock_root=True)
 
     # 1. Non-create ops: _action_relation(type, suffix) for EVERY guarded type x EVERY suffix the rung
-    #    maps declare — owner- and writer-tier full suffixes, reader-tier and maintenance trailing
-    #    actions. A suffix a type does not declare is refused and sends OpenFGA nothing, so it adds no
+    #    maps declare — owner- and writer-tier full suffixes and reader-tier trailing actions. A suffix a type does not declare is refused and sends OpenFGA nothing, so it adds no
     #    pair. (`transaction` never routes through here.)
     suffixes = (
         {s for m in fga_deps._OWNER_SUFFIX_RELATION.values() for s in m}
         | {s for m in fga_deps._WRITER_SUFFIX_RELATION.values() for s in m}
         | set(fga_deps._META_READ_ACTIONS)
         | set(fga_deps._DATA_READ_ACTIONS)
-        | set(fga_deps._MAINTENANCE_ACTIONS)
     )
     # `transaction` and `classification` both return from their own branch in `authorize` before
     # `_action_relation` is consulted, so enumerating the generic suffix map against them would assert

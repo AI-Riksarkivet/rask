@@ -206,7 +206,7 @@ def test_the_newest_existence_fact_decides_whether_a_table_is_dropped(
     [
         pytest.param([("drop_table", "COMPLETE", _T.format(5))], [], True, id="a-drop-only-run-history-holds"),
         pytest.param([("insert", "COMPLETE", _T.format(6))], [_catalog("drop_table", _T.format(5))], False, id="a-write-after-the-drop-proves-it-is-back"),
-        pytest.param([("compaction", "COMPLETE", _T.format(6))], [_catalog("drop_table", _T.format(5))], True, id="a-compaction-after-the-drop-does-not"),
+        pytest.param([("expire_versions", "COMPLETE", _T.format(6))], [_catalog("drop_table", _T.format(5))], True, id="an-expiry-after-the-drop-does-not"),
         pytest.param([("drop_table", "COMPLETE", _T.format(6))], [_catalog("create_table", _T.format(5))], True, id="a-drop-run-after-the-create"),
         pytest.param(
             [("insert", "COMPLETE", _T.format(5))], [_catalog("drop_table", _T.format(5))], False, id="a-tie-between-the-stamp-and-a-run-goes-to-existence"

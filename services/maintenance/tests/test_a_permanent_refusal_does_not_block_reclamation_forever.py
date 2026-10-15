@@ -50,7 +50,7 @@ from pydantic import SecretStr
 
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import reconcile as reconcile_mod
-from maintenance.services.optimize import Discovery
+from maintenance.services.discovery import Discovery
 from maintenance.services.orphans import OrphanReport
 from maintenance.services.purge import report_is_clean
 from maintenance.services.reconcile import IncompleteScan, ReconcileReport

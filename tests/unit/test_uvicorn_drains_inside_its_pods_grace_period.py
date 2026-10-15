@@ -36,7 +36,6 @@ _DRAIN_ARMED = frozenset(
         "Deployment/rask-gateway",
         "Deployment/rask-lineage",
         "Deployment/rask-maintenance",
-        "Deployment/rask-maintenance-worker",
         "Deployment/rask-notifications",
         "Deployment/rask-search",
         "Deployment/rask-viewer",

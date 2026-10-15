@@ -784,10 +784,10 @@ def test_the_protection_prepass_scans_AS_DEEP_AS_the_thing_it_protects_against(m
         seen["max_depth"] = kw.get("max_depth")
         return SimpleNamespace(uris=[], truncated=[])
 
-    from maintenance.services import optimize as optimize_mod
+    from maintenance.services import discovery as discovery_mod
     from service_kit.lakehouse import base_refs as base_refs_mod
 
-    monkeypatch.setattr(optimize_mod, "discover_datasets", _fake_discover)
+    monkeypatch.setattr(discovery_mod, "discover_datasets", _fake_discover)
     monkeypatch.setattr(base_refs_mod, "protected_roots", lambda *_a, **_kw: BaseRefs())
 
     mod._estate_base_refs({"file:///nowhere"}, {}, settings=_settings(tmp_path, discovery_max_depth=7))

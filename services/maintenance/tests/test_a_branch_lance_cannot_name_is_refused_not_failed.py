@@ -32,7 +32,7 @@ somebody deletes a directory.
 
 from __future__ import annotations
 
-from maintenance.services.optimize import classify_maintain_failure
+from maintenance.services.expiry import classify_maintain_failure
 
 
 def test_an_invalid_ref_name_is_classified_as_a_refusal() -> None:

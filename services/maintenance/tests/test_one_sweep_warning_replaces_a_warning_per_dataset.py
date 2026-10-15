@@ -14,7 +14,7 @@ reported once, with the breakdown that says which gate refused them.
 
 from __future__ import annotations
 
-from maintenance.services.optimize import DatasetResult, summarize_refusals
+from maintenance.services.expiry import DatasetResult, summarize_refusals
 
 
 def test_the_sweep_counts_refusals_by_gate() -> None:

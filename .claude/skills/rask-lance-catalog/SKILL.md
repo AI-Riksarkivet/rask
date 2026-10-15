@@ -165,10 +165,10 @@ suites: `test_object_store_cas_e2e.py` (Lance's own manifest commits) and
 ## Lifecycle
 
 Reclamation, scheduling and the GC design live in `services/maintenance` itself — read
-`services/maintenance/services/{sweep,optimize,purge,reconcile,index_health,tiers}.py` — plus
+`services/maintenance/services/{sweep,expiry,arrival,due,plan,purge,reconcile,index_health}.py` — plus
 `packages/service-kit/src/service_kit/lakehouse/base_refs.py`, the shallow-clone-source pre-pass, which
-lives in service-kit rather than the service because the catalog's on-demand maintenance doors
-(`catalog/services/maintenance.py`) must apply the same refusal and cannot import the sweep. Read
+lives in service-kit rather than the service because the catalog (`maintenance/run` and the `version/create`
+judge, `catalog/services/maintenance.py`) must apply the same refusal and cannot import the sweep. Read
 them before changing anything the sweep, the reconciler or the orphan scan touches. The
 per-table/namespace/project POLICY that governs a sweep is
 `catalog.schemas.PolicyRequest` (retention, retain_versions, compact_enabled, interval, target rows),
@@ -243,37 +243,31 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   refuses on a non-empty skip list; `list_bindings` is the tolerant half, for enumeration only. A
   binding you cannot read is a namespace you cannot see.
 - `deactivate` = offboarding step one (quarantine; resolver 403s bound namespaces).
-- Maintenance (compaction + `optimize_indices` + `cleanup_old_versions` with tags EXEMPT) lives in
-  **`services/maintenance`** (it does FIVE things, not one: compact, `optimize_indices`, `cleanup_old_versions`, reconcile cross-store drift, and BUILD INDICES off the catalog's request path — `api/index_work.py` + `services/index_build.py`, its own Dapr topic because `ackWait` is per-component and an index build outlasts a sweep unit).
-  **That is the code, not the decided shape.** ADR 0155 and ADR 0156 C4/C6: maintenance DECIDES (expiry,
-  trash purge, orphan scan, reconcile, protection, the policy of what needs compacting or reindexing) and
-  does not rewrite; compaction and index rewrites become a bring-your-own job that commits through the
-  catalog's compaction and index commit doors, which judge the result (LH-467, #587). `CreateTableIndex`
-  stays a bounded asynchronous build in the catalog and erasure stays a named exception; `compact_now`,
-  `rebuild_index_now` and the write-path index build leave. The maintain vend tier goes to the
-  maintenance identity only (LH-473, #599).
-  `catalog/api/maintenance_mode.py` is read-only maintenance MODE (503 + Retry-After), not this. The
-  operations are ONE ordered pass per dataset — **compact → optimize_indices → cleanup**
-  (`maintenance/services/optimize.py::compact_one`): compaction obsoletes files, the index optimize
-  folds the new fragments back in, and version reclamation runs last. This is exactly what Lance's own
-  guide prescribes — *"it's recommended to rewrite files before re-building indices"* and
-  *"`compact_files()` followed by `cleanup_old_versions()`"* (`lance_docs/guide.md`). `compact_one`'s
-  docstring now states the order correctly and may be trusted; the warning that used to sit here
-  ("read the body, not the docstring") was itself stale by 2026-08-16. A policy may skip a STEP
-  (`cleanup_enabled`/`optimize_indices_enabled`), never reorder them — which is why they are modules
-  in one service rather than four services each rescanning every bucket. Version reclamation has ONE
-  owner, this pass: Lance's commit-path auto-cleanup (`lance.auto_cleanup.*`) deletes inside whichever
-  writer commits, past a hold and a protected base. No door arms it (the property guard refuses the keys),
-  every committing catalog door disarms the ref first (`core/namespace.disarm_commit_path_cleanup`; erasure
-  every ref), the restore door refuses an armed version, and `compact_one` deletes every such key before its refusal gates
-  as the backstop for a table nobody commits on (LH-245).
-- **Maintenance does not read a tier.** Compaction's fragment size is the #50 policy's
+- Maintenance lives in **`services/maintenance`** and DECIDES; it rewrites no data (ADR 0162, [[LH-467]]). It runs
+  version expiry (`cleanup_old_versions`, tags EXEMPT), trash purge, the orphan scan and cross-store reconcile, and
+  writes the DUE LIST: one record per table that needs compacting or an index optimize, under `_maintenance_due/` on
+  the control root, with the estate's clone list (`_maintenance_due/state/clones.json`) beside it
+  (`service_kit.lakehouse.maintenance_due`). The catalog lists the records on `GET /management/v1/maintenance/due` to
+  a caller holding `can_maintain`; the list is advisory. **Expiry is commit-driven**: the write-event lane
+  (`/maintenance-arrival`) expires the table just written once it has `minVersionsToExpire` (20) reclaimable
+  versions, and the sweep, every 30 minutes, is the backstop that also writes the clone list and the due records.
+  Both ask one eligibility rule, `service_kit.lakehouse.version_retention`, which the catalog's GC preview shares.
+  Compaction, index builds and index optimize are a bring-your-own job's, committed through `version/create` (below);
+  `CreateTableIndex` answers 406 naming that path. Erasure keeps its in-catalog rewrite as ADR 0156 C6's named
+  exception (parked: LH-493, #637). The maintain vend tier goes to the maintenance identity only (LH-473, #599).
+  `catalog/api/maintenance_mode.py` is read-only maintenance MODE (503 + Retry-After), not this. Version reclamation
+  has ONE owner, maintenance's expiry: Lance's commit-path auto-cleanup (`lance.auto_cleanup.*`) deletes inside
+  whichever writer commits, past a hold and a protected base. No door arms it (the property guard refuses the keys),
+  `version/create` refuses a commit that does, every committing catalog door disarms the ref first
+  (`core/namespace.disarm_commit_path_cleanup`; erasure every ref), the restore door refuses an armed version, and the
+  expiry pass deletes every such key before its refusal gates, as the backstop for a table nobody commits on (LH-245).
+- **Maintenance does not read a tier.** The due list plans a compaction at the #50 policy's
   `target_rows_per_fragment`, else Lance's own sizing. There are no per-tier defaults: a tier is the
   namespace's `rask.tier` property, which a dataset path does not carry, and a size guessed from a path is
   applied silently forever (ADR 0160).
 - The reconciler reports cross-store drift and deletes nothing until its report runs clean. It runs on
   its OWN Dapr cron binding (`maintenance-reconcile-cron`), separate from the sweep's — a read-only
-  drift report must not inherit the data-rewriting sweep's cadence.
+  drift report answers a different question than the expiry backstop, on its own cadence.
 - **OpenFGA rejects a bare-type Read.** `read_tuples(obj="project:")` with no user is HTTP 400
   (*"the object id and user cannot be empty"*), and the wrapper reports it as
   `ServiceUnavailableError` — so it presents as a permanent outage on a healthy server. To enumerate
@@ -394,8 +388,16 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   rewrite's `require_compactable`. The finalize is announced with `emit_measured_write`. A branch commit is refused
   406 (branches are created at `branches/create` and written through `insert`/`merge_insert?branch=`). Pinned by
   `services/catalog/tests/test_a_stock_client_commits_every_operation_through_version_create.py` and
-  `tests/integration/test_a_forged_fragment_is_refused_and_the_table_is_unchanged.py`. `/compaction_commit` and
-  `register` still judge file versions on their own doors.
+  `tests/integration/test_a_forged_fragment_is_refused_and_the_table_is_unchanged.py`. `register` still judges file
+  versions on its own door.
+  **A compaction or an index commits here too** (ADR 0162). Lance's compaction protocol makes two commits,
+  `ReserveFragments` (which may only advance `max_fragment_id`) then `Rewrite` (every row kept, by stable row id or
+  by count; `require_compactable`), and both need `can_maintain` beyond the writer rung. A `CreateIndex` (a build or
+  an `optimize_indices`) needs the writer rung, changes no data, and each new segment lives under the table's own
+  `_indices/<uuid>/` with its declared files present and the index opening. A compaction is refused 503 while the
+  sweep's clone list is missing or older than `cloneListMaxAgeSeconds` (an hour), and 406 when the table is a
+  clone's source. Measured on pylance 13.0.0, Lance itself commits a rewrite that loses or duplicates rows and an
+  index naming a base or an empty directory, so the judge is what refuses them.
   **Provenance travels in the spec Context** ([[LH-225]]): the staged manifest's `rask.*` transaction properties name
   the run, `version/create` refuses a silver or gold commit adding data without a run and inputs, and the finalize's
   lineage event names the inputs at their versions. See the tier bullet under "rask's hierarchy layer".
@@ -515,13 +517,12 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   was still restorable. The latest version, row count, `published` tag and undrop all survived, so
   cleanup was working correctly — the sweep was right to decline and the operator was wrong to
   override it. Tags are not the check; the trash record is.
-- **A governed tier's maintenance run is emitted only when the sweep does MATERIAL work.**
-  `sweep.py::_did_material_work` gates the emit on `fragments_removed or old_versions_removed`, so a
-  correctly-idle estate records nothing — deliberately, since a 120s cron would otherwise flood the
-  graph with no-op compaction runs. Consequence for verification: a stamped tier dataset does NOT
-  produce a `(:Run)-[:WROTE]->(:Dataset)` node just by being written and swept. The read half is
-  witnessed in AGE for `silver$emitproof`; a tier sweep whose result is `fragments_removed: 0,
-  versions_removed: 0` emits nothing, which is the gate behaving correctly, not a defect.
+- **A governed tier's maintenance run is emitted only when expiry does MATERIAL work.**
+  `sweep.py::_did_material_work` gates the `expire_versions` emit on `old_versions_removed`, so a
+  correctly-idle estate records nothing — deliberately, since every write and every backstop tick would
+  otherwise flood the graph with no-op runs. Consequence for verification: a stamped tier dataset does NOT
+  produce a `(:Run)-[:WROTE]->(:Dataset)` node just by being written and swept; a pass whose result is
+  `versions_removed: 0` emits nothing, which is the gate behaving correctly, not a defect.
 
   **A DERIVED TIER INHERITS ITS UPSTREAM'S `lineage.dataset_id` UNLESS THE STAMP DROPS IT.** The sweep
   names a dataset by its PATH first and by the stamp only where the path is silent ([[LH-208]]), and
@@ -603,25 +604,15 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   widen for the other. Measured on pylance 9.0.0: plain `(0,0)`,
   `delete()` `(1,1)`, `enable_stable_row_ids` `(2,2)`, `add_bases`/`shallow_clone` set 16, a committed
   `LanceOperation.DataOverlay` sets 64.
-  **TWO GATES, NOT ONE.** `compact_one` runs both in order, before touching a byte
-  (`optimize.py::compact_one` — that seam is under active edit, so read it rather than trusting a line
-  number): `describe_gc_unsupported_flags` against **`SUPPORTED_FOR_GC` (= `SUPPORTED` | 16)** refuses
-  the whole dataset, and then `describe_compaction_unsupported_flags` refuses only the COMPACTION
-  step, while root-scoped work (`optimize_indices`, `cleanup_old_versions`) still runs. So flag 16 is
-  NOT refused outright: such a dataset is maintained, minus the rewrite, because root-scoped
-  operations are safe on a shallow clone while compacting one silently materialises the base into it.
-  The ORPHAN scan keeps the narrow flags-only `describe_unsupported_flags`/`SUPPORTED` mask, where the
-  refusal is genuinely required. **The catalog's on-demand doors ask the SAME TWO GATES the sweep
-  asks, per verb** — `require_compactable` (the evidence gate) in front of `POST
-  /v1/table/{id}/maintenance/compact`, `require_reclaimable` (the root-scoped gate) in front of
-  `…/maintenance/run`, plus the `base_refs` guard in front of both. They kept the flags-only mask
-  until the maintenance-door audit (2026-09-02), which made the BUTTON stricter than the CRON — it
-  refused every `initial_bases` table (every table carrying an external blob prefix) while
-  telling the operator "the sweep refuses it for the same reason", and the sweep was compacting them
-  on the next tick. Strictness there protected nothing: the cron performs these same operations
-  unattended on the same datasets, so the button only withheld the operator's remedy. The cost of the old blanket refusal was measured: 17 of the estate's datasets were refused
-  on flag 16, exactly the ones with fragments and version history, so the 120s sweep did no work at
-  all.
+  **TWO GATES, NOT ONE, each asked per verb.** `describe_gc_unsupported_flags` against
+  **`SUPPORTED_FOR_GC` (= `SUPPORTED` | 16)** gates version reclamation: maintenance's expiry pass and the catalog's
+  `maintenance/run` (`require_reclaimable`, plus the `base_refs` guard). `describe_compaction_unsupported_flags` gates
+  compaction alone: the due list will not list a table it refuses, and `version/create` refuses a client's `Rewrite`
+  through `require_compactable` (the evidence gate). So flag 16 is NOT refused outright: such a dataset is still
+  expired, because root-scoped operations are safe on a shallow clone while compacting one silently materialises the
+  base into it. The ORPHAN scan keeps the narrow flags-only `describe_unsupported_flags`/`SUPPORTED` mask, where the
+  refusal is genuinely required. The cost of a blanket flag-16 refusal was measured: 17 of the estate's datasets were
+  refused, exactly the ones with fragments and version history, so a sweep did no work on them at all.
   **The COMPACTION gate asks about the BASES, not about the flag — it is the one gate here that is not
   flags-only.** Refusing every flag-16 dataset was still over-broad by exactly the shape of a table with
   one external blob prefix: `initial_bases` registers ONE external
@@ -642,8 +633,8 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
      `write_dataset(..., target_bases=[...])`, where the base is a dataset root by neither reading yet
      compaction pulls the files home (measured: local root 3,540 -> 5,991 bytes, the base's three
      files orphaned).
-  A registered-but-unused bare prefix is now COMPACTED (`add_bases` at an empty prefix); the "the next
-  write may land under that base" worry is answered by reading (3) again on the next tick, not by
+  A registered-but-unused bare prefix may be compacted (`add_bases` at an empty prefix); the "the next
+  write may land under that base" worry is answered by reading (3) again at the next commit, not by
   refusing today.
   The sweep reports refusals as their own
   `summarize()` line + `compaction.datasets.refused` counter — never inside `errors` or `skipped`.

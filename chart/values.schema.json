@@ -888,12 +888,20 @@
         "maintenance": {
             "type": "object",
             "properties": {
+                "arrivalDlqTopic": {
+                    "description": "Dead-letter topic of the write-event lane, for deliveries that exhaust their retries.",
+                    "type": "string"
+                },
+                "arrivalEnabled": {
+                    "description": "Subscribe the write-event lane: expire the written table and refresh its due record between sweep ticks.",
+                    "type": "boolean"
+                },
                 "bindingName": {
                     "description": "Name of the Dapr cron binding that fires the sweep tick (`MAINTENANCE_BINDING_NAME`).",
                     "type": "string"
                 },
-                "compactThreads": {
-                    "description": "Compaction read threads. Memory ceiling is scanBatchSize x row size x compactThreads; set the two together.",
+                "cloneListMaxAgeSeconds": {
+                    "description": "Oldest clone list, in seconds, the catalog judges a compaction against and the write-event lane expires against.",
                     "type": "integer"
                 },
                 "controlEmit": {
@@ -905,81 +913,16 @@
                     "type": "string"
                 },
                 "daprAppId": {
-                    "description": "Dapr app-id of the maintenance planner and workers; also prefixes their durable consumer names.",
+                    "description": "Dapr app-id of the maintenance service; also names its durable consumer.",
                     "type": "string"
                 },
                 "declaredPlatformRoots": {
                     "description": "Platform-owned store roots the catalog cannot resolve (e.g. medallion models) that the reconciler accounts for instead of reporting as unreadable.",
                     "type": "string"
                 },
-                "dedicatedWorkers": {
-                    "type": "object",
-                    "properties": {
-                        "enabled": {
-                            "description": "Run compaction and index units on a separate worker Deployment and stop the planner consuming its own work queue. Needs `workTopic`.",
-                            "type": "boolean"
-                        },
-                        "indexConcurrentUnits": {
-                            "description": "Slice of `maxConcurrentUnits` reserved for index builds per worker; compaction gets the remainder.",
-                            "type": "integer"
-                        },
-                        "maxConcurrentCompactions": {
-                            "description": "Memory bound: how many compaction rewrites one worker holds resident at once. No-op units never take one.",
-                            "type": "integer"
-                        },
-                        "maxConcurrentUnits": {
-                            "description": "Throughput bound: units one worker executes at once across both lanes; the lanes' maxAckPending split this number.",
-                            "type": "integer"
-                        },
-                        "recycleAfterPasses": {
-                            "description": "Retire a worker after this many committed rewrites to shed retained memory; 0 disables.",
-                            "type": "integer"
-                        },
-                        "recycleAtMemoryFraction": {
-                            "description": "Retire a worker when resident memory reaches this fraction of its cgroup limit (0.70 = ~2.87 GiB of 4Gi); 0 disables.",
-                            "type": "number"
-                        },
-                        "replicas": {
-                            "description": "Number of worker pods; they are competing consumers of the work and index queues. More than 1 also renders a PDB.",
-                            "type": "integer"
-                        },
-                        "resources": {
-                            "description": "CPU/memory requests and limits of each worker pod, sized for the compaction work rather than the planner's 512Mi.",
-                            "type": "object",
-                            "properties": {
-                                "limits": {
-                                    "type": "object",
-                                    "properties": {
-                                        "cpu": {
-                                            "type": "integer"
-                                        },
-                                        "memory": {
-                                            "type": "string"
-                                        }
-                                    }
-                                },
-                                "requests": {
-                                    "type": "object",
-                                    "properties": {
-                                        "cpu": {
-                                            "type": "string"
-                                        },
-                                        "memory": {
-                                            "type": "string"
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                },
                 "discoveryMaxDepth": {
                     "description": "How deep the bucket walk descends looking for a dataset's `_versions/`; a subtree it stops inside is an IncompleteScan that blocks the purge.",
                     "type": "integer"
-                },
-                "distributedCompaction": {
-                    "description": "Let the catalog plan and commit compaction while this pod only rewrites, signed by a vended credential; falls back to in-pod compaction. Off by default.",
-                    "type": "boolean"
                 },
                 "driftRepair": {
                     "description": "Revoke OpenFGA tuples whose object no registry names (ghost projects/warehouses/tables); deletes tuples only. Off by default.",
@@ -994,12 +937,8 @@
                     "type": "integer"
                 },
                 "enabled": {
-                    "description": "Deploy the maintenance service (planner, sweep and reconcile crons) and, with its other switches, the dedicated workers.",
+                    "description": "Deploy the maintenance service (sweep, reconcile crons and the write-event lane).",
                     "type": "boolean"
-                },
-                "expectedDatasets": {
-                    "description": "Estate size the work lane is sized for; with `schedule` and `secondsPerUnit` it declares the required drain rate.",
-                    "type": "integer"
                 },
                 "floorRaise": {
                     "description": "Write one metadata-only commit per stranded dataset to raise its Lance listing floor so residue becomes reclaimable. Off by default.",
@@ -1013,28 +952,12 @@
                     "description": "Maximum datasets the floor raise commits to per tick; the remainder is reported as capped.",
                     "type": "integer"
                 },
-                "indexAckWait": {
-                    "description": "Ack window for one index build unit (a duration, default 3600s); too short redelivers a build mid-flight to a second worker.",
-                    "type": "string"
-                },
-                "indexDlqTopic": {
-                    "description": "Dead-letter topic for index build units that exhaust their retries.",
-                    "type": "string"
-                },
-                "indexPubsub": {
-                    "description": "Dapr pub/sub component name of the index build lane.",
-                    "type": "string"
-                },
-                "indexTopic": {
-                    "description": "Topic the catalog's create-index doors publish build units to for the workers. Empty builds the index inside the catalog request.",
-                    "type": "string"
-                },
                 "lineageEmit": {
                     "description": "Emit a lineage event per materially compacted dataset and a FAIL event per errored one; covers catalog-laid-out tables only.",
                     "type": "boolean"
                 },
-                "maxSourceBytes": {
-                    "description": "Byte bound on what one compaction rewrite reads (default 256 MiB); fits together with the worker memory limit and concurrency.",
+                "minVersionsToExpire": {
+                    "description": "Expiry runs on a table only once it has at least this many reclaimable versions.",
                     "type": "integer"
                 },
                 "olderThanDays": {
@@ -1050,7 +973,7 @@
                     "type": "string"
                 },
                 "port": {
-                    "description": "HTTP port of the maintenance planner and worker containers.",
+                    "description": "HTTP port of the maintenance container.",
                     "type": "integer"
                 },
                 "reconcileBindingName": {
@@ -1061,17 +984,9 @@
                     "description": "Cadence of the drift reconciler, which only reads OpenFGA, the control-root registries and the bucket listing.",
                     "type": "string"
                 },
-                "scanBatchSize": {
-                    "description": "Rows per compaction read batch (Lance defaults to 8192); with large blob rows this bounds memory, set together with `compactThreads`.",
-                    "type": "integer"
-                },
                 "schedule": {
-                    "description": "Sweep cron cadence. With `workTopic` set it is a backstop: relax to hourly but no slower than 75 minutes.",
+                    "description": "Backstop sweep cadence: writes the clone list and due records and expires unwritten tables; must stay under `cloneListMaxAgeSeconds`.",
                     "type": "string"
-                },
-                "secondsPerUnit": {
-                    "description": "Measured end-to-end seconds per work unit (dispatch, ack and queueing included), used with `expectedDatasets` to size the lane.",
-                    "type": "integer"
                 },
                 "sweepBudgetSeconds": {
                     "description": "Wall-clock ceiling for one sweep tick, checked between datasets; 0 means unlimited.",
@@ -1114,20 +1029,8 @@
                     "type": "integer"
                 },
                 "vendWriteCredentials": {
-                    "description": "Sign each compaction write with a per-table credential vended by the catalog instead of the deployment's S3 key; falls back per dataset.",
+                    "description": "Sign maintenance's writes (version expiry) with a per-table credential vended by the catalog instead of the deployment's S3 key; falls back per dataset.",
                     "type": "boolean"
-                },
-                "workDlqTopic": {
-                    "description": "Dead-letter topic for compaction work units that exhaust their retries.",
-                    "type": "string"
-                },
-                "workPubsub": {
-                    "description": "Dapr pub/sub component name of the compaction work lane.",
-                    "type": "string"
-                },
-                "workTopic": {
-                    "description": "Topic the sweep publishes one unit per dataset to. Empty runs the whole sweep inside the cron request (the serial lane).",
-                    "type": "string"
                 }
             }
         },
@@ -1221,6 +1124,22 @@
                                                     }
                                                 },
                                                 "subscribe": {
+                                                    "type": "array",
+                                                    "items": {
+                                                        "type": "string"
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                },
+                                "maintenance.arrivalEnabled": {
+                                    "type": "object",
+                                    "properties": {
+                                        "maintenance": {
+                                            "type": "object",
+                                            "properties": {
+                                                "publish": {
                                                     "type": "array",
                                                     "items": {
                                                         "type": "string"

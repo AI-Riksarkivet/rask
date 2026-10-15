@@ -45,13 +45,7 @@ explorer:
 # A value the estate depends on lives in a FILE: a `--set` does not survive into `helm get values`, so
 # an upgrade reusing the live values drops it — measured 2026-08-25, when two upgrades reverted a setting
 # the estate depended on.
-#
-# Distributed compaction was live as a hand-set env and would have been reverted that way: declared at
-# `values.yaml:1598`, defaulting false, inside a `vendWriteCredentials` conditional. The catalog plans
-# and commits under its own key and only the byte rewrite happens in maintenance, signed by the
-# table-scoped credential the vend issues.
 maintenance:
-  distributedCompaction: true
   # RECLAMATION ON, for THIS estate only — the chart default stays false and should, because
   # `trashPurge` is the permission to make an expired drop permanently unrecoverable and no shared
   # default should carry it. Authorised by the owner 2026-09-20 and exercised the same day: the first

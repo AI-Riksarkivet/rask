@@ -122,20 +122,13 @@ spec:
             {{- end }}
             - { name: LANCE_CONTROL_EMIT_ENABLED, value: {{ hasKey .Values.catalog "controlEmit" | ternary .Values.catalog.controlEmit false | quote }} }
             - { name: LANCE_CONTROL_PUBSUB, value: {{ .Values.pubsub.controlName | default "catalog-control-pubsub" | quote }} }
-            {{- if and $.Values.maintenance.enabled $.Values.maintenance.workTopic }}
-            - { name: LANCE_MAINTENANCE_WORK_PUBSUB, value: {{ printf "%s-%s" $.Values.maintenance.workPubsub $.Values.services.catalog.daprAppId | quote }} }
-            - { name: LANCE_MAINTENANCE_WORK_TOPIC, value: {{ $.Values.maintenance.workTopic | quote }} }
-            {{- if $.Values.maintenance.indexTopic }}
-            - { name: LANCE_MAINTENANCE_INDEX_TOPIC, value: {{ $.Values.maintenance.indexTopic | quote }} }
-            - { name: LANCE_MAINTENANCE_INDEX_PUBSUB, value: {{ printf "%s-%s" $.Values.maintenance.indexPubsub $.Values.services.catalog.daprAppId | quote }} }
-            {{- end }}
-            {{- end }}
             {{- if and .Values.catalog.controlEmit .Values.catalog.controlOutbox.enabled }}
             - { name: LANCE_CONTROL_OUTBOX_URI, value: "s3://{{ .Values.minio.bucket }}/_control_outbox" }
             - { name: LANCE_CONTROL_RELAY_BINDING_NAME, value: {{ .Values.catalog.controlOutbox.bindingName | quote }} }
             {{- end }}
             - { name: LANCE_ERASURE_RELEASE_GRACE_DAYS, value: {{ required "catalog.erasure.releaseGraceDays is required" .Values.catalog.erasure.releaseGraceDays | quote }} }
             - { name: LANCE_ERASURE_CLEANUP_WINDOW_DAYS, value: {{ required "maintenance.olderThanDays is required" .Values.maintenance.olderThanDays | quote }} }
+            - { name: LANCE_CLONE_LIST_MAX_AGE_SECONDS, value: {{ required "maintenance.cloneListMaxAgeSeconds is unset — upgrade with --reset-then-reuse-values, not --reuse-values" .Values.maintenance.cloneListMaxAgeSeconds | quote }} }
             {{- if .Values.dapr.enabled }}
             - { name: LANCE_ERASURE_RELEASE_BINDING_NAME, value: {{ .Values.catalog.erasure.bindingName | quote }} }
             - { name: LANCE_PROMOTION_EXPIRY_BINDING_NAME, value: {{ .Values.catalog.promotion.bindingName | quote }} }

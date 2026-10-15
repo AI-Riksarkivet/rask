@@ -2877,44 +2877,22 @@
         "title": "CommitTableResult",
         "type": "object"
       },
-      "CompactAccepted": {
-        "description": "The 202 body: the door enqueued the rewrite rather than performing it.\n\nIt reports no fragment counts because it has none \u2014 the executor that will produce them is another\nprocess, and inventing zeroes here would make an accepted request indistinguishable from a\ncompleted no-op. ``protected_by`` is returned because it is the one verdict that can turn the\nenqueued unit into a refusal at execution time, and a caller watching a table that never compacts\notherwise has nothing to read.",
+      "CompactionDue": {
+        "description": "What made a table due for a compaction: Lance's own planner, run under the winning policy's fragment size.",
         "properties": {
-          "accepted": {
-            "default": true,
-            "title": "Accepted",
-            "type": "boolean"
+          "candidate_fragments": {
+            "minimum": 1.0,
+            "title": "Candidate Fragments",
+            "type": "integer"
           },
-          "protected_by": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Protected By"
+          "fragments": {
+            "minimum": 0.0,
+            "title": "Fragments",
+            "type": "integer"
           },
-          "uri": {
-            "title": "Uri",
-            "type": "string"
-          }
-        },
-        "required": [
-          "uri"
-        ],
-        "title": "CompactAccepted",
-        "type": "object"
-      },
-      "CompactRequest": {
-        "description": "Optional #76 target-size override for a one-off compaction (None \u2192 Lance's default fragment sizing).",
-        "properties": {
           "target_rows_per_fragment": {
             "anyOf": [
               {
-                "maximum": 10000000.0,
-                "minimum": 1024.0,
                 "type": "integer"
               },
               {
@@ -2922,217 +2900,19 @@
               }
             ],
             "title": "Target Rows Per Fragment"
-          }
-        },
-        "title": "CompactRequest",
-        "type": "object"
-      },
-      "CompactResult": {
-        "properties": {
-          "fragments_added": {
-            "title": "Fragments Added",
-            "type": "integer"
-          },
-          "fragments_removed": {
-            "title": "Fragments Removed",
-            "type": "integer"
-          },
-          "ok": {
-            "title": "Ok",
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "ok",
-          "fragments_removed",
-          "fragments_added"
-        ],
-        "title": "CompactResult",
-        "type": "object"
-      },
-      "CompactionCommitRequest": {
-        "additionalProperties": false,
-        "description": "The workers' rewrite results, come back to be committed as one metadata-only version.",
-        "properties": {
-          "results": {
-            "items": {
-              "type": "string"
-            },
-            "minItems": 1,
-            "title": "Results",
-            "type": "array"
-          }
-        },
-        "required": [
-          "results"
-        ],
-        "title": "CompactionCommitRequest",
-        "type": "object"
-      },
-      "CompactionCommitResponse": {
-        "properties": {
-          "files_added": {
-            "title": "Files Added",
-            "type": "integer"
-          },
-          "files_removed": {
-            "title": "Files Removed",
-            "type": "integer"
-          },
-          "fragments_added": {
-            "title": "Fragments Added",
-            "type": "integer"
-          },
-          "fragments_removed": {
-            "title": "Fragments Removed",
-            "type": "integer"
-          },
-          "version": {
-            "title": "Version",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "version",
-          "fragments_added",
-          "fragments_removed",
-          "files_added",
-          "files_removed"
-        ],
-        "title": "CompactionCommitResponse",
-        "type": "object"
-      },
-      "CompactionPlanRequest": {
-        "additionalProperties": false,
-        "description": "Ask the catalog what compaction this table needs \u2014 a metadata read that mints nothing.\n\nMost knobs are POLICY: what shape the table should end up in, each optional. Three are MECHANICS \u2014\nhow much memory the rewrite may use \u2014 and all three are REQUIRED, because **Lance bakes them into\nthe task at plan time**. Measured on pylance 12.0.0 (2026-09-25): a planned task's JSON carries an\n``options`` object holding ``batch_size``, ``num_threads`` and ``max_source_bytes``, and\n``CompactionTask.execute`` takes only the dataset. So the plan is the executor's one chance to\nstate them.\n\nLeft out, they become Lance's defaults, and that is an unbounded read: the scanner's default batch\nis counted in ROWS, and rows are not a unit of memory \u2014 against the ~1.8 MB bronze rows measured\nhere it is ~15 GB *per compute thread*, times a thread count taken from the HOST's cores, over a\nplan with no byte limit at all. So the door refuses a plan missing any of them with 400\n``InvalidInput``, naming all three.\nrask's own executor sends ``MAINTENANCE_SCAN_BATCH_SIZE``, ``MAINTENANCE_COMPACT_THREADS`` and\n``MAINTENANCE_MAX_SOURCE_BYTES``; a bring-your-own executor sends the bounds it runs under.\n\nThe catalog does not INTERPRET them \u2014 it forwards the executor's own numbers into the plan. An\nunrecognized field is refused rather than dropped \u2014 see ``dataplane.plan_compaction``.",
-        "properties": {
-          "batch_size": {
-            "description": "Required. Rows per scan batch in each rewrite task.",
-            "maximum": 8192.0,
-            "minimum": 1.0,
-            "title": "Batch Size",
-            "type": "integer"
-          },
-          "compaction_mode": {
-            "anyOf": [
-              {
-                "enum": [
-                  "reencode",
-                  "try_binary_copy",
-                  "force_binary_copy"
-                ],
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "How each rewrite task moves the bytes. Unset, Lance re-encodes.",
-            "title": "Compaction Mode"
-          },
-          "materialize_deletions": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Materialize Deletions"
-          },
-          "materialize_deletions_threshold": {
-            "anyOf": [
-              {
-                "maximum": 1.0,
-                "minimum": 0.0,
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Materialize Deletions Threshold"
-          },
-          "max_bytes_per_file": {
-            "anyOf": [
-              {
-                "exclusiveMinimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Max Bytes Per File"
-          },
-          "max_rows_per_group": {
-            "anyOf": [
-              {
-                "exclusiveMinimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Max Rows Per Group"
-          },
-          "max_source_bytes": {
-            "description": "Required. Source bytes one plan may take on, summed over its tasks; Lance stops adding tasks at this limit.",
-            "maximum": 1073741824.0,
-            "minimum": 1048576.0,
-            "title": "Max Source Bytes",
-            "type": "integer"
-          },
-          "num_threads": {
-            "description": "Required. Compute threads per rewrite task.",
-            "maximum": 64.0,
-            "minimum": 1.0,
-            "title": "Num Threads",
-            "type": "integer"
-          },
-          "target_rows_per_fragment": {
-            "anyOf": [
-              {
-                "exclusiveMinimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Target Rows Per Fragment"
-          }
-        },
-        "required": [
-          "batch_size",
-          "num_threads",
-          "max_source_bytes"
-        ],
-        "title": "CompactionPlanRequest",
-        "type": "object"
-      },
-      "CompactionPlanResponse": {
-        "description": "The planned work. ``tasks`` are opaque strings for a queue \u2014 one worker, one task.",
-        "properties": {
-          "read_version": {
-            "title": "Read Version",
-            "type": "integer"
           },
           "tasks": {
-            "items": {
-              "type": "string"
-            },
+            "minimum": 1.0,
             "title": "Tasks",
-            "type": "array"
+            "type": "integer"
           }
         },
         "required": [
-          "read_version",
+          "fragments",
+          "candidate_fragments",
           "tasks"
         ],
-        "title": "CompactionPlanResponse",
+        "title": "CompactionDue",
         "type": "object"
       },
       "CountTableRowsRequest": {
@@ -6393,6 +6173,64 @@
         "title": "DropTableResponse",
         "type": "object"
       },
+      "DueTable": {
+        "description": "One table a compaction or an index optimize is due on, as the maintenance sweep measured it (ADR 0162).",
+        "properties": {
+          "clones": {
+            "default": 0,
+            "title": "Clones",
+            "type": "integer"
+          },
+          "compaction": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CompactionDue"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "evaluated_at": {
+            "format": "date-time",
+            "title": "Evaluated At",
+            "type": "string"
+          },
+          "indices": {
+            "items": {
+              "$ref": "#/components/schemas/IndexDue"
+            },
+            "title": "Indices",
+            "type": "array"
+          },
+          "policy": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Policy"
+          },
+          "table": {
+            "title": "Table",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "table",
+          "version",
+          "evaluated_at"
+        ],
+        "title": "DueTable",
+        "type": "object"
+      },
       "ErasureReport": {
         "description": "One subject's erasure across every surface the catalog serves this table from.",
         "properties": {
@@ -7419,6 +7257,32 @@
         "title": "IndexContent",
         "type": "object"
       },
+      "IndexDue": {
+        "description": "One index an optimize is due on: rows it does not cover, or more delta segments than a query should fan out over.",
+        "properties": {
+          "deltas": {
+            "minimum": 0.0,
+            "title": "Deltas",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "unindexed_rows": {
+            "minimum": 0.0,
+            "title": "Unindexed Rows",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "unindexed_rows",
+          "deltas"
+        ],
+        "title": "IndexDue",
+        "type": "object"
+      },
       "InsertIntoTableResponse": {
         "description": "Response from inserting records into a table",
         "properties": {
@@ -7973,6 +7837,34 @@
         ],
         "title": "LivenessStatus",
         "type": "string"
+      },
+      "MaintenanceDueResponse": {
+        "description": "A page of :class:`DueTable`, in table order; ``page_token`` continues it.",
+        "properties": {
+          "page_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Page Token"
+          },
+          "tables": {
+            "items": {
+              "$ref": "#/components/schemas/DueTable"
+            },
+            "title": "Tables",
+            "type": "array"
+          }
+        },
+        "required": [
+          "tables"
+        ],
+        "title": "MaintenanceDueResponse",
+        "type": "object"
       },
       "ManagedAccessRequest": {
         "description": "Turn managed access on or off for one container.",
@@ -10433,109 +10325,6 @@
           }
         },
         "title": "RegisterTableResponse",
-        "type": "object"
-      },
-      "ReindexAccepted": {
-        "description": "The 202 body: the rebuild was enqueued onto the index lane rather than performed here.\n\nIt reports no version because it has none \u2014 the worker that will produce it is another process,\nand inventing the current version would make an accepted request indistinguishable from a\ncompleted rebuild. The resolved shape IS returned: it is what the unit will be built from, and it\nis the only chance a caller gets to see that the readback found the parameters it expected.",
-        "properties": {
-          "accepted": {
-            "default": true,
-            "title": "Accepted",
-            "type": "boolean"
-          },
-          "column": {
-            "title": "Column",
-            "type": "string"
-          },
-          "index_name": {
-            "title": "Index Name",
-            "type": "string"
-          },
-          "index_type": {
-            "title": "Index Type",
-            "type": "string"
-          },
-          "kind": {
-            "title": "Kind",
-            "type": "string"
-          },
-          "params": {
-            "additionalProperties": true,
-            "title": "Params",
-            "type": "object"
-          },
-          "transaction_id": {
-            "title": "Transaction Id",
-            "type": "string"
-          }
-        },
-        "required": [
-          "index_name",
-          "column",
-          "kind",
-          "index_type",
-          "transaction_id"
-        ],
-        "title": "ReindexAccepted",
-        "type": "object"
-      },
-      "ReindexRequest": {
-        "description": "[[LH-105]] rebuild one named index in place, keeping the parameterisation it already has.\n\n``index_name`` is the only required field because the point of the door is REPAIR: the shape is\nread off the live index rather than restated by the caller, so a repair cannot silently re-tune\nwhat it repairs. ``params`` is the escape hatch for the case the readback cannot serve \u2014 a vector\nindex being deliberately re-partitioned, or one whose `num_partitions` could not be read \u2014 and is\nMERGED OVER the readback rather than replacing it, so overriding one value does not drop the rest.",
-        "properties": {
-          "index_name": {
-            "minLength": 1,
-            "title": "Index Name",
-            "type": "string"
-          },
-          "params": {
-            "additionalProperties": true,
-            "title": "Params",
-            "type": "object"
-          }
-        },
-        "required": [
-          "index_name"
-        ],
-        "title": "ReindexRequest",
-        "type": "object"
-      },
-      "ReindexResult": {
-        "description": "The 200 body: the rebuild ran in this pod and the index is already back.",
-        "properties": {
-          "column": {
-            "title": "Column",
-            "type": "string"
-          },
-          "index_name": {
-            "title": "Index Name",
-            "type": "string"
-          },
-          "index_type": {
-            "title": "Index Type",
-            "type": "string"
-          },
-          "kind": {
-            "title": "Kind",
-            "type": "string"
-          },
-          "ok": {
-            "default": true,
-            "title": "Ok",
-            "type": "boolean"
-          },
-          "version": {
-            "title": "Version",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "index_name",
-          "column",
-          "kind",
-          "index_type",
-          "version"
-        ],
-        "title": "ReindexResult",
         "type": "object"
       },
       "RelationGrants": {
@@ -13829,6 +13618,109 @@
         "summary": "Poll Control Events",
         "tags": [
           "events"
+        ]
+      }
+    },
+    "/management/v1/maintenance/due": {
+      "get": {
+        "description": "The tables a compaction or an index optimize is due on, in table order, listed to a caller holding\n``can_maintain`` on each: what made each due, the policy record that governed it, and how many datasets resolve\ntheir files through it.",
+        "operationId": "list_due_maintenance_management_v1_maintenance_due_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Continue after this table id (the previous page's `page_token`).",
+            "in": "query",
+            "name": "page_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Continue after this table id (the previous page's `page_token`).",
+              "title": "Page Token"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-caller-app-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Caller-App-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MaintenanceDueResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Due Maintenance",
+        "tags": [
+          "maintenance"
         ]
       }
     },
@@ -17932,258 +17824,6 @@
         ]
       }
     },
-    "/management/v1/table/{id}/compaction_commit": {
-      "post": {
-        "description": "Commit the workers' rewrite results as ONE metadata-only version.\n\nEvery data file this publishes was written by the worker that executed the task and already exists\nwhen this is called, so no data byte transits the catalog. Conflict taxonomy is shared: a result that lost a race to an Overwrite\nis a NON-retryable 400 telling the caller to re-plan (its plan is void, not just its commit), a\nmalformed result is a 400, a store outage a 503 (``dataplane._classify_commit_error``).\n\nThe lineage emit is ``compact_table``, deliberately not a data op: a compaction changes no row, and\nrecording it as one would put phantom writes on the graph at every maintenance pass.",
-        "operationId": "commit_table_compaction_management_v1_table__id__compaction_commit_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "title": "Id",
-              "type": "string"
-            }
-          },
-          {
-            "description": "The ref the plan was made on. Omit for main; the commit applies the worker's results to this ref.",
-            "in": "query",
-            "name": "branch",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "The ref the plan was made on. Omit for main; the commit applies the worker's results to this ref.",
-              "title": "Branch"
-            }
-          },
-          {
-            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
-            "in": "query",
-            "name": "delimiter",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
-              "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-caller-app-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Caller-App-Id"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-originator",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Originator"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CompactionCommitRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CompactionCommitResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Commit Table Compaction",
-        "tags": [
-          "data-management"
-        ]
-      }
-    },
-    "/management/v1/table/{id}/compaction_plan": {
-      "post": {
-        "description": "Plan a compaction and hand the work to a queue \u2014 the catalog does NOT execute it.\n\nRewriting a table's data files is unbounded work whose cost is set by the table rather than by the\nrequest. Doing it here would make this pod's memory ceiling a function of the largest table anyone\nowns and turn a maintenance pass into an availability incident for every other door on it. So the\nprotocol is split by credential: this door plans under ROOT creds (a manifest read \u2014 no data byte,\nno new version), a WORKER holding vended table-scoped creds runs each task and writes every byte,\nand ``/compaction_commit`` folds the results back in. See `docs/adr/0045-the-lakehouse-cloud-native-cutover-2026-09-03-04.md`, \"The lakehouse cloud-native cutover\".\n\nMaintainer tier: the router ``authorize`` gate maps this to ``can_maintain``\n(``fga_deps._MAINTENANCE_ACTIONS``), because only the maintenance plane calls it.\n\nThe body must state ``batch_size``, ``num_threads`` and ``max_source_bytes``, the executor's memory\nbounds. Lance bakes them into every task and the worker cannot set them afterwards, so a plan\nmissing any is refused 400 (``InvalidInput``, code 13) with all three named. ``compaction_mode`` is\nbaked the same way and is optional: unset, Lance re-encodes.\n\nAn empty ``tasks`` list is a successful answer: the table is already at target and there is nothing\nto queue.",
-        "operationId": "plan_table_compaction_management_v1_table__id__compaction_plan_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "title": "Id",
-              "type": "string"
-            }
-          },
-          {
-            "description": "The ref to plan against. Omit for main; the plan reads this ref's fragments and its `read_version`.",
-            "in": "query",
-            "name": "branch",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "The ref to plan against. Omit for main; the plan reads this ref's fragments and its `read_version`.",
-              "title": "Branch"
-            }
-          },
-          {
-            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
-            "in": "query",
-            "name": "delimiter",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
-              "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-caller-app-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Caller-App-Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CompactionPlanRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CompactionPlanResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Plan Table Compaction",
-        "tags": [
-          "data-management"
-        ]
-      }
-    },
     "/management/v1/table/{id}/credentials": {
       "post": {
         "description": "Vend scoped ``storage_options`` for direct object-store access to this table at ``tier``.\n\n``web_identity_token`` is the caller's raw bearer JWT (via the shared HTTPBearer seam), forwarded to the\nobject store for the web_identity flow (AssumeRoleWithWebIdentity exchanges it); other vendors ignore it.",
@@ -18517,166 +18157,6 @@
         ]
       }
     },
-    "/management/v1/table/{id}/maintenance/compact": {
-      "post": {
-        "description": "Compact small fragments on demand (#76 'compact now'). Owner-gated (``can_drop``) \u2014 the same bar as\nthe retention policy that schedules maintenance. Non-destructive: writes a new version, removes none.\n\nWHERE THE REWRITE HAPPENS depends on whether this deployment has a maintenance queue, and the two\nanswers are not a feature flag \u2014 they are the same choice ``services/maintenance`` already makes for\nthe scheduled lane, read off the same topic name so the two cannot disagree about whether a worker\nexists. With a queue: publish one unit, 202, done in milliseconds. Without one: nothing would ever\nexecute that unit, so the rewrite runs here as it always has.\n\nWhat stays in the handler either way is the BOUNDED half \u2014 parsing the identifier, opening the\ndataset, and the ``sibling_base_refs`` pre-pass (one non-recursive listing). What leaves is the half\nwhose cost is a property of the data rather than of the request: rewriting every fragment of a table\nwhose fragment count nobody bounded.",
-        "operationId": "compact_maintenance_management_v1_table__id__maintenance_compact_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "title": "Id",
-              "type": "string"
-            }
-          },
-          {
-            "description": "The ref to compact. A branch is answered by the evidence gate, which refuses on COST when fragments still resolve through the parent.",
-            "in": "query",
-            "name": "branch",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "The ref to compact. A branch is answered by the evidence gate, which refuses on COST when fragments still resolve through the parent.",
-              "title": "Branch"
-            }
-          },
-          {
-            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
-            "in": "query",
-            "name": "delimiter",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
-              "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-caller-app-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Caller-App-Id"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-originator",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Originator"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CompactRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/components/schemas/CompactResult"
-                    },
-                    {
-                      "$ref": "#/components/schemas/CompactAccepted"
-                    }
-                  ],
-                  "title": "Response Compact Maintenance Management V1 Table  Id  Maintenance Compact Post"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "202": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CompactAccepted"
-                }
-              }
-            },
-            "description": "Enqueued onto the maintenance work queue; no fragment counts exist yet."
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Compact Maintenance",
-        "tags": [
-          "maintenance"
-        ]
-      }
-    },
     "/management/v1/table/{id}/maintenance/preview": {
       "post": {
         "description": "Dry-run the old-version cleanup \u2014 the versions GC would reclaim + the tags protecting others. Owner-\ngated (``can_drop``); never mutates.\n\n``branch`` IS HONOURED, as on every door here (see the module header), and this is the one that\nneeds no containment argument: it calls ``_base_refs`` zero times and mutates nothing \u2014\n``preview_gc`` reads ``ds.version``, ``ds.versions()`` and the tag and child-branch pins and returns.\n\nPreviewing MAIN and labelling it the branch's answer is the failure this replaces, not a lesser\nversion of it: the caller acts on the version list, so\n``test_the_gc_preview_names_exactly_what_the_run_deletes.py`` compares the ANSWER, per ref, with\nwhat ``/run`` deletes on that ref rather than asserting the branch reached ``open_dataset``.",
@@ -18782,166 +18262,6 @@
           }
         ],
         "summary": "Preview Maintenance",
-        "tags": [
-          "maintenance"
-        ]
-      }
-    },
-    "/management/v1/table/{id}/maintenance/reindex": {
-      "post": {
-        "description": "Rebuild one named index in place ([[LH-105]]). Owner-gated (``can_drop``, declared in\n``fga_deps._OWNER_SUFFIX_RELATION``) \u2014 it destroys the index that is there.\n\n**IT REPLACES; IT DOES NOT DROP AND RECREATE**, which is the whole design and was measured rather\nthan assumed. `LanceDataset.create_index` carries ``replace: bool = False`` and\n`create_scalar_index` carries ``replace: bool = True`` (pylance 11.0.0, 2026-09-15): a same-name\nvector rebuild is refused at the default \u2014 ``LanceError(Index): Index name 'x' already exists`` \u2014\nand accepted under ``replace=True``. So the vector index, the one that cannot repair itself\nthrough the create doors, is repaired by a flag pylance already has. Dropping first would open a\nwindow in which the table has NO index \u2014 a search silently degrading to a full scan \u2014 and would\nleave it with none if the rebuild then failed, which is worse than the mis-parameterised index\nbeing repaired.\n\n**THE SHAPE IS READ, NOT RESTATED.** `index_specs.describe_index_for_rebuild` reads the live\nindex's own parameterisation, so a repair cannot quietly re-tune what it repairs; `body.params`\nmerges OVER that reading for the caller who is deliberately changing something.\n\nWHERE IT RUNS follows the compact door beside it, off the same topic name the maintenance service\nreads, so the two cannot disagree about whether a worker exists. With a queue: publish one\n`IndexWorkItem` and answer 202. Without one: nothing would ever execute the unit, so the rebuild\nruns here.",
-        "operationId": "reindex_maintenance_management_v1_table__id__maintenance_reindex_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "title": "Id",
-              "type": "string"
-            }
-          },
-          {
-            "description": "The ref to rebuild on. Omit for main; the ref travels with the work item so the worker opens what you named.",
-            "in": "query",
-            "name": "branch",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "The ref to rebuild on. Omit for main; the ref travels with the work item so the worker opens what you named.",
-              "title": "Branch"
-            }
-          },
-          {
-            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
-            "in": "query",
-            "name": "delimiter",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
-              "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-caller-app-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Caller-App-Id"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-originator",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Originator"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ReindexRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/components/schemas/ReindexResult"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ReindexAccepted"
-                    }
-                  ],
-                  "title": "Response Reindex Maintenance Management V1 Table  Id  Maintenance Reindex Post"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "202": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ReindexAccepted"
-                }
-              }
-            },
-            "description": "Enqueued onto the index lane; the rebuilt version does not exist yet."
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Reindex Maintenance",
         "tags": [
           "maintenance"
         ]
@@ -24376,7 +23696,7 @@
     },
     "/v1/table/{id}/create_index": {
       "post": {
-        "description": "Build a vector index on a table's column \u2014 wraps the native ``create_table_index`` op; emits a\nCREATE_INDEX lineage event at the new version.",
+        "description": "Refused 406: a vector index is built on the caller's compute and committed through ``version/create``.",
         "operationId": "create_index_v1_table__id__create_index_post",
         "parameters": [
           {
@@ -24408,22 +23728,6 @@
           },
           {
             "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -24436,22 +23740,6 @@
                 }
               ],
               "title": "Dapr-Caller-App-Id"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-originator",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Originator"
             }
           }
         ],
@@ -24500,7 +23788,7 @@
     },
     "/v1/table/{id}/create_scalar_index": {
       "post": {
-        "description": "Build a scalar index on a table's column \u2014 wraps the native ``create_table_scalar_index`` op; emits a\nCREATE_INDEX lineage event at the new version.",
+        "description": "Refused 406: a scalar index is built on the caller's compute and committed through ``version/create``.",
         "operationId": "create_scalar_index_v1_table__id__create_scalar_index_post",
         "parameters": [
           {
@@ -24532,22 +23820,6 @@
           },
           {
             "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -24560,22 +23832,6 @@
                 }
               ],
               "title": "Dapr-Caller-App-Id"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-originator",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Originator"
             }
           }
         ],
@@ -26276,7 +25532,7 @@
     },
     "/v1/table/{id}/merge_insert": {
       "post": {
-        "description": "Upsert Arrow-IPC rows \u2014 ``merge_insert_into_table``; emits a MERGE_INSERT lineage event.\nThe ``*_filt`` SQL filters, ``timeout``, ``use_index`` and ``branch`` are spec-0.9 query params.\n\nThe run the request's Context names is stamped into the commit, on main only, and its inputs become the\nevent's version-pinned inputs ([[LH-225]]).\n\nIMPLICIT DDL (\u00a74): after the merge commits, a best-effort BTREE index is ensured on the ``on``\nkey (pylance's ``use_index`` only helps *if an index exists*, and nothing else ever builds one \u2014\nwithout it every upsert full-scans). The FIRST merge on a ``(table, on)`` pays the build\nsynchronously; later merges pay one cheap list call. Passing ``use_index=false`` opts out of the\nimplicit build too (a caller declining index USAGE shouldn't be charged index CREATION). The\nbuild commits its OWN Lance version with no lineage event (consistent with\n``/create_scalar_index`` today), so the first indexed merge leaves the table at\n``response.version + 1`` while the MERGE_INSERT lineage points at ``response.version`` \u2014 a\nversion gap, not a lost write.",
+        "description": "Upsert Arrow-IPC rows \u2014 ``merge_insert_into_table``; emits a MERGE_INSERT lineage event.\nThe ``*_filt`` SQL filters, ``timeout``, ``use_index`` and ``branch`` are spec-0.9 query params.\n\nThe run the request's Context names is stamped into the commit, on main only, and its inputs become the\nevent's version-pinned inputs ([[LH-225]]).\n\nThe merge builds no index: a writer builds one on the ``on`` key with its own pylance, committed through\n``version/create``, and the maintenance sweep lists a table whose index no longer covers its rows (ADR 0162).",
         "operationId": "merge_insert_into_table_v1_table__id__merge_insert_post",
         "parameters": [
           {

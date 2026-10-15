@@ -7,9 +7,8 @@ permanently). The sweep vended `tier=write` for every PLANNED dataset, before an
 dataset needed rewriting, against an estate whose own history is that almost nothing is ever rewritten
 (`fragments_removed_total=0` across 785 ticks).
 
-`credentials.py` argues NO CACHE because maintenance "vends once per WORK ITEM". That reasoning is
-sound and this restores its premise rather than replacing it: a unit that will not write is not a work
-item.
+`credentials.py` argues NO CACHE because maintenance vends once per dataset that has something to expire, and
+this check is what makes that true: a dataset expiry will not write to is not vended for.
 
 THE CHECK IS CONSERVATIVE BY CONSTRUCTION, and that direction is the whole safety argument. Skipping a
 vend for a dataset that WOULD have been maintained means a dataset silently stops being maintained —
@@ -28,7 +27,12 @@ from pathlib import Path
 import lance
 import pyarrow as pa
 
+from maintenance.services.expiry import ExpiryPolicy
 from maintenance.services.sweep import _probe_before_vending
+
+
+#: Keep the newest version, so every superseded one is reclaimable.
+KEEP_ONE = ExpiryPolicy(older_than=None, retain_versions=1)
 
 
 def _dataset(tmp: Path, name: str, *, fragments: int = 1) -> str:
@@ -47,7 +51,7 @@ def test_cleanup_enabled_on_a_dataset_with_history_may_reclaim_so_it_vends(tmp_p
     """Reclamation is a write, and a dataset with superseded versions has something to reclaim."""
     uri = _dataset(tmp_path, "versioned", fragments=2)
 
-    assert _probe_before_vending(uri, {}, cleanup_enabled=True, optimize_indices_enabled=False).may_write is True
+    assert _probe_before_vending(uri, {}, policy=KEEP_ONE).may_write is True
 
 
 def test_an_unreadable_dataset_says_MAY_WRITE(tmp_path: Path) -> None:
@@ -56,4 +60,4 @@ def test_an_unreadable_dataset_says_MAY_WRITE(tmp_path: Path) -> None:
     A wasted credential is a cost; a dataset that quietly stops being compacted and reclaimed is the
     failure this whole service exists to prevent.
     """
-    assert _probe_before_vending(str(tmp_path / "does-not-exist"), {}, cleanup_enabled=True, optimize_indices_enabled=True).may_write is True
+    assert _probe_before_vending(str(tmp_path / "does-not-exist"), {}, policy=KEEP_ONE).may_write is True

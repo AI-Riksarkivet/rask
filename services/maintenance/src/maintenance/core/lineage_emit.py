@@ -1,12 +1,11 @@
 """Best-effort OpenLineage emission from the maintenance service to the lineage graph (#7b).
 
-A maintenance sweep compacts small fragments + GCs old versions of each Lance dataset; when
-``lineage_emit_enabled`` is on it records each *materially-compacted* dataset as an OpenLineage
-``RunEvent`` (output = the dataset, ``operation=compaction``) — and each ``maintain:``-FAILED dataset
-as a ``FAIL`` event with the standard ``errorMessage`` facet (§4 failure visibility; deterministic
-per-dataset run id as the flood guard) — published to the **Dapr** ``pubsub.jetstream`` component —
-the SAME pubsub component + topic the catalog publishes to and the lineage service subscribes to, so
-compaction runs (and failures) show up in ``producers()`` alongside the writes.
+A maintenance sweep expires each Lance dataset's superseded versions; when ``lineage_emit_enabled`` is on it records
+each dataset whose versions it reclaimed as an OpenLineage ``RunEvent`` (output = the dataset,
+``operation=expire_versions``) — and each ``maintain:``-FAILED dataset as a ``FAIL`` event with the standard
+``errorMessage`` facet (§4 failure visibility; deterministic per-dataset run id as the flood guard) — published to the
+**Dapr** ``pubsub.jetstream`` component, the SAME pubsub component + topic the catalog publishes to and the lineage
+service subscribes to, so expiry runs (and failures) show up in ``producers()`` alongside the writes.
 The sidecar owns retry/backoff + trace-propagation (no DLQ — see docs/RESILIENCE.md gap #2) as component
 config (no broker client here).
 
@@ -16,14 +15,13 @@ lineage ``Dataset`` name == the OpenFGA object id == the catalog table id across
 
 Two deliberate choices:
 
-* **Versionless.** A compaction is *maintenance*, not a data write, so the event asserts no data version —
-  the lineage repository records a ``(:Run)-[:WROTE]->(:Dataset)`` with no version and (no inputs →) no
-  ``DERIVED_FROM``. This also keeps it out of ``reconcile``'s ``latest_write_version`` (which must track
-  real writes), so a compaction never makes the graph look "ahead" of the last data write.
+* **Versionless.** Expiry is *maintenance*, not a data write, so the event asserts no data version — the lineage
+  repository records a ``(:Run)-[:WROTE]->(:Dataset)`` with no version and (no inputs →) no ``DERIVED_FROM``. This also
+  keeps it out of ``reconcile``'s ``latest_write_version`` (which must track real writes).
 * **Best-effort.** A sidecar/broker outage logs + drops; auditing must never fail a maintenance sweep.
 
 This layer is **pure** (builders + emitter transports only); the per-sweep orchestration that needs the
-:class:`~maintenance.services.optimize.DatasetResult` type lives in ``maintenance.services.sweep`` so ``core``
+:class:`~maintenance.services.expiry.DatasetResult` type lives in ``maintenance.services.sweep`` so ``core``
 never imports up into ``services``.
 """
 
@@ -52,7 +50,6 @@ from service_kit.openlineage import (
     DATASOURCE_FACET_SCHEMA_URL,
     ERROR_MESSAGE_FACET_SCHEMA_URL,
     RUN_EVENT_SCHEMA_URL,
-    VERSION_FACET_SCHEMA_URL,
     custom_facet,
     run_id_for,
 )
@@ -60,18 +57,11 @@ from service_kit.openlineage import (
 
 log = logging.getLogger(__name__)
 
-#: OpenLineage ``lance`` run-facet operation marker for a maintenance pass. Distinct from the catalog's
-#: write operations (``create_table`` / ``insert`` / ...); the lineage repository records it as a
-#: versionless ``WROTE`` run on the dataset (no ``DERIVED_FROM`` — a compaction has no inputs — and, since
-#: it is not ``create_table``, no ``CREATED`` edge).
-COMPACTION = "compaction"
-
-#: The same marker for an INDEX BUILD, which is a maintenance run of a different kind. Its own value
-#: rather than `COMPACTION`, because the repository reads this to decide what the run means and
-#: recording a build as a compaction is a wrong fact on the graph rather than a missing one. It
-#: matches the catalog door's own operation, so an in-process build and a queued one land as the
-#: same thing — which is the only way the two paths are comparable.
-CREATE_INDEX = "create_index"
+#: OpenLineage ``lance`` run-facet operation marker for a maintenance pass: the versions it reclaimed. Distinct from the
+#: catalog's write operations (``create_table`` / ``insert`` / ...); the lineage repository records it as a versionless
+#: ``WROTE`` run on the dataset (no ``DERIVED_FROM`` — expiry has no inputs — and, since it is not ``create_table``,
+#: no ``CREATED`` edge). It names what the run did: maintenance compacts nothing (ADR 0155).
+EXPIRE_VERSIONS = "expire_versions"
 
 #: OpenLineage ``producer`` URI — identifies the software that emitted the event (spec-required).
 _PRODUCER = "https://github.com/AI-Riksarkivet/rask/tree/main/services/maintenance/src/maintenance/core/lineage_emit.py"
@@ -237,26 +227,19 @@ def build_maintenance_event(
     job_namespace: str,
     run_id: str,
     event_time: str,
-    operation: str = COMPACTION,
     author: str = "",
-    version: int | None = None,
-    branch: str | None = None,
-    branch_identifier: str | None = None,
 ) -> dict[str, Any]:
-    """Build the OpenLineage ``RunEvent`` (wire JSON) for one dataset's compaction/GC pass or index build.
+    """Build the OpenLineage ``RunEvent`` (wire JSON) for one dataset's expiry pass.
 
-    Input-less: a maintenance pass produces no new logical data and derives from nothing, so the lineage
-    repository records a ``(:Run)-[:WROTE]->(:Dataset)`` with no ``DERIVED_FROM`` — ``producers()`` then
-    surfaces the run next to the data writes. A sweep pass is versionless; a unit that made ONE commit it
-    can name (an index build) passes ``version``, with ``branch`` and ``branch_identifier`` when it built
-    on a branch — the ``lance.ref`` / ``lance.branchIdentifier`` the catalog's write events carry, because
-    a branch's version number names another snapshot on main, and a recreated branch restarts its
-    numbering. ``run_id`` / ``event_time`` are injected so the builder is pure and deterministically testable.
+    Input-less and versionless: a maintenance pass produces no new logical data and derives from nothing, so the
+    lineage repository records a ``(:Run)-[:WROTE]->(:Dataset)`` with no ``DERIVED_FROM`` — ``producers()`` then
+    surfaces the run next to the data writes. ``run_id`` / ``event_time`` are injected so the builder is pure and
+    deterministically testable.
 
     ``author`` IS THE SERVICE'S OWN IDENTITY, NEVER A PERSON'S. A maintenance pass is nobody's request;
     signing it as the service is the only claim this emitter is entitled to make, and it is the claim
     the lineage bus door can later authorize against. Measured on the deployed graph 2026-09-08: 664 of
-    5 644 runs carried no author, 518 of them from here — so the graph could not say who compacted a
+    5 644 runs carried no author, 518 of them from here — so the graph could not say who maintained a
     dataset while the CATALOG, which this same service calls through its own service door, could.
 
     EMPTY MEANS ABSENT, and that asymmetry is deliberate. An unconfigured identity emits NO author facet
@@ -264,67 +247,39 @@ def build_maintenance_event(
     unverified, and its rule is that anonymous beats misattributed. A fabricated subject would be worse
     than none — a later bus gate would authorize it.
     """
-    lance_fields: dict[str, Any] = {"operation": operation}
-    if version is not None:
-        lance_fields["version"] = version
-    if branch:
-        lance_fields["ref"] = branch
-        if branch_identifier:
-            lance_fields["branchIdentifier"] = branch_identifier
-    facets: dict[str, Any] = {"lance": custom_facet(_PRODUCER, **lance_fields)}
+    facets: dict[str, Any] = {"lance": custom_facet(_PRODUCER, operation=EXPIRE_VERSIONS)}
     if author:
         facets["author"] = custom_facet(_PRODUCER, name=author, sub=author)
-    output: dict[str, Any] = {"namespace": namespace, "name": table_id}
-    if version is not None:
-        output["facets"] = {"version": {"_producer": _PRODUCER, "_schemaURL": VERSION_FACET_SCHEMA_URL, "datasetVersion": str(version)}}
     return {
         "eventType": "COMPLETE",
         "eventTime": event_time,
         "producer": _PRODUCER,
         "schemaURL": RUN_EVENT_SCHEMA_URL,
         "run": {"runId": run_id, "facets": facets},
-        # Per-table job identity (like the catalog write emitter) — else every dataset's compaction lumps
-        # into one ``compaction`` Job node whose output set spans the whole lakehouse.
-        "job": {"namespace": job_namespace, "name": f"{COMPACTION}.{table_id}"},
+        # Per-table job identity (like the catalog write emitter) — else every dataset's expiry lumps into one Job node
+        # whose output set spans the whole lakehouse.
+        "job": {"namespace": job_namespace, "name": f"{EXPIRE_VERSIONS}.{table_id}"},
         "inputs": [],
-        "outputs": [output],
+        "outputs": [{"namespace": namespace, "name": table_id}],
     }
 
 
 @runtime_checkable
 class MaintenanceEmitter(Protocol):
-    """Emits compaction maintenance events (success + failure) to the lineage service (best-effort)."""
+    """Emits expiry maintenance events (success + failure) to the lineage service (best-effort)."""
 
-    async def emit_maintenance(
-        self,
-        *,
-        table_id: str,
-        namespace: str,
-        operation: str = COMPACTION,
-        version: int | None = None,
-        branch: str | None = None,
-        branch_identifier: str | None = None,
-    ) -> None: ...
+    async def emit_maintenance(self, *, table_id: str, namespace: str) -> None: ...
 
-    async def emit_maintenance_failed(self, *, table_id: str, namespace: str, error: str, operation: str = COMPACTION) -> None: ...
+    async def emit_maintenance_failed(self, *, table_id: str, namespace: str, error: str) -> None: ...
 
 
 class NoopEmitter:
     """The emitter used when lineage emission is disabled (or unwired) — does nothing."""
 
-    async def emit_maintenance(
-        self,
-        *,
-        table_id: str,
-        namespace: str,
-        operation: str = COMPACTION,
-        version: int | None = None,
-        branch: str | None = None,
-        branch_identifier: str | None = None,
-    ) -> None:
+    async def emit_maintenance(self, *, table_id: str, namespace: str) -> None:
         return None
 
-    async def emit_maintenance_failed(self, *, table_id: str, namespace: str, error: str, operation: str = COMPACTION) -> None:
+    async def emit_maintenance_failed(self, *, table_id: str, namespace: str, error: str) -> None:
         return None
 
 
@@ -368,33 +323,20 @@ class DaprMaintenanceEmitter:
         self._outbox_uri = outbox_uri
         self._storage_options = storage_options or {}
 
-    async def emit_maintenance(
-        self,
-        *,
-        table_id: str,
-        namespace: str,
-        operation: str = COMPACTION,
-        version: int | None = None,
-        branch: str | None = None,
-        branch_identifier: str | None = None,
-    ) -> None:
-        # uuid4 ON PURPOSE: each materially-compacting tick is a distinct successful run (§4 decided —
+    async def emit_maintenance(self, *, table_id: str, namespace: str) -> None:
+        # uuid4 ON PURPOSE: each tick that reclaims versions is a distinct successful run (§4 decided —
         # do NOT make COMPLETE deterministic; only the FAIL path below needs the flood guard).
         event = build_maintenance_event(
             table_id=table_id,
             namespace=namespace,
             job_namespace=self._job_namespace,
-            operation=operation,
             run_id=str(uuid.uuid4()),
             event_time=datetime.now(UTC).isoformat(),
             author=self._author,
-            version=version,
-            branch=branch,
-            branch_identifier=branch_identifier,
         )
         await self._publish(event, table_id)
 
-    async def emit_maintenance_failed(self, *, table_id: str, namespace: str, error: str, operation: str = COMPACTION) -> None:
+    async def emit_maintenance_failed(self, *, table_id: str, namespace: str, error: str) -> None:
         # DETERMINISTIC run id — the flood guard: the cron re-sweeps every ~2 min, so a persistently
         # failing dataset would otherwise mint a fresh never-pruned (:Run) node per tick. One id per
         # dataset → every tick MERGEs onto ONE node in AGE, and the /events partial-unique
@@ -408,7 +350,7 @@ class DaprMaintenanceEmitter:
             table_id=table_id,
             namespace=namespace,
             job_namespace=self._job_namespace,
-            run_id=run_id_for(f"compaction-fail-{table_id}"),
+            run_id=run_id_for(f"{EXPIRE_VERSIONS}-fail-{table_id}"),
             event_time=datetime.now(UTC).isoformat(),
             error=error,
             author=self._author,
@@ -437,7 +379,7 @@ class DaprMaintenanceEmitter:
             # logged, and never a failed sweep.
             event = self._signed(event)
             # STAGED, then published, then dropped on ack (#4) — the twin of the catalog's emit. A
-            # sweep's lineage event describes a committed write, so losing one leaves the graph
+            # sweep's lineage event describes a committed reclamation, so losing one leaves the graph
             # under-reporting work that really happened. Degrades to exactly the previous plain publish
             # when `outbox_uri` is unset, which is the default, and stays bounded either way so a hung
             # sidecar cannot stall the sweep.

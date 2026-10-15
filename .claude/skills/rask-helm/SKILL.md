@@ -146,7 +146,7 @@ it at boot (CrashLoopBackOff, contained only because the rolling update kept the
 - Use `--reset-then-reuse-values` (helm ≥ 3.14; this estate runs 3.20): chart defaults, then the
   release's values, then any `--set`.
 - Guard every value a typed setting depends on with `required`, so absence fails the RENDER with a
-  message rather than a pod: see `chart/templates/maintenance-worker.yaml`.
+  message rather than a pod: see `LANCE_ERASURE_RELEASE_GRACE_DAYS` in `chart/templates/services.yaml`.
 - `helm diff upgrade` shows a `''` before it ships.
 - Never kill a running upgrade — it leaves the release in `pending-upgrade`, which refuses every later
   one until `helm rollback`.
@@ -220,7 +220,7 @@ catalog, lineage, maintenance, the medallion, OpenBao and Dex ran as `default` w
   every injected pod sets `dapr.io/disable-builtin-k8s-secret-store`.
 - **Every first-party pod names its own SA**, and the NATS fixture's server and nats-box run as their own
   (`serviceAccount` values in deploy/fixtures/nats). A shared SA is allowed only where the sharers are one identity (`sa-web`
-  for the zones, `sa-maintenance` for the sweep and its executor); one-shot Jobs share `sa-jobs`.
+  for the zones, `sa-maintenance` for the maintenance service); one-shot Jobs share `sa-jobs`.
 - **A binding names its subject through the helper the pod uses** (`lance.openbaoServiceAccount` for
   the auth-delegator), never through a free value with a `default` fallback: an unset value then puts
   the grant on the shared identity. Likewise a pod names its SA with the prefix `security-sa.yaml`

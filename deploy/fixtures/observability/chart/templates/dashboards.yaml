@@ -449,7 +449,7 @@ data:
       "kind": "Dashboard",
       "metadata": { "name": "maintenance", "project": "rask" },
       "spec": {
-        "display": { "name": "Table maintenance — the sweep", "description": "What the 120s sweep actually did: datasets covered, what it refused, and what it RECLAIMED. Counters are compaction_* (the service was renamed to maintenance; the metric names were not)." },
+        "display": { "name": "Table maintenance — the sweep", "description": "What the 120s sweep actually did: datasets covered, what it refused, and the versions and bytes it RECLAIMED. Maintenance compacts nothing (ADR 0155); its counters carry the compaction_* prefix." },
         "duration": "6h",
         "panels": {
           "runs": {
@@ -483,23 +483,21 @@ data:
           "reclaimed": {
             "kind": "Panel",
             "spec": {
-              "display": { "name": "RECLAIMED per hour — fragments merged + versions GC'd (flat zero means the sweep is doing no work)" },
+              "display": { "name": "Versions reclaimed per hour (flat zero means expiry is doing no work)" },
               "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
               "queries": [
-                { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
-                  "query": "sum(increase(compaction_fragments_removed_total[1h]))", "seriesNameFormat": "fragments removed" } } } },
                 { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
                   "query": "sum(increase(compaction_versions_removed_total[1h]))", "seriesNameFormat": "versions removed" } } } }
               ]
             }
           },
-          "indices": {
+          "bytes": {
             "kind": "Panel",
             "spec": {
-              "display": { "name": "Indices optimized per hour" },
+              "display": { "name": "Bytes reclaimed per hour" },
               "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
               "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
-                "query": "sum(increase(compaction_indices_optimized_total[1h]))", "seriesNameFormat": "indices optimized" } } } } ]
+                "query": "sum(increase(compaction_bytes_reclaimed_total[1h]))", "seriesNameFormat": "bytes reclaimed" } } } } ]
             }
           }
         },
@@ -512,7 +510,7 @@ data:
                 { "x": 0, "y": 0, "width": 12, "height": 8, "content": { "$ref": "#/spec/panels/runs" } },
                 { "x": 12, "y": 0, "width": 12, "height": 8, "content": { "$ref": "#/spec/panels/coverage" } },
                 { "x": 0, "y": 8, "width": 12, "height": 8, "content": { "$ref": "#/spec/panels/reclaimed" } },
-                { "x": 12, "y": 8, "width": 12, "height": 8, "content": { "$ref": "#/spec/panels/indices" } }
+                { "x": 12, "y": 8, "width": 12, "height": 8, "content": { "$ref": "#/spec/panels/bytes" } }
               ]
             }
           }

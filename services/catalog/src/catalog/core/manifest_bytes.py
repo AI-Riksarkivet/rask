@@ -1,8 +1,8 @@
-"""Read and edit a Lance manifest file's bytes (Lance ``protos/table.proto`` at v13.0.0).
+"""Read and edit a Lance manifest file's bytes (Lance ``protos/table.proto`` and ``protos/transaction.proto`` at v13.0.0).
 
-pylance exposes neither a manifest's own ``version`` field nor its ``next_row_id``, and a manifest copied into another
-version slot must say that slot's version, so the catalog reads and writes those varints itself. Every other byte is
-kept as it was.
+pylance exposes neither a manifest's own ``version`` field, its ``next_row_id``, its ``max_fragment_id`` nor the
+operation of a transaction it models no class for, and a manifest copied into another version slot must say that
+slot's version, so the catalog reads and writes those fields itself. Every other byte is kept as it was.
 """
 
 from __future__ import annotations
@@ -32,6 +32,24 @@ _LENGTH: Final = struct.Struct("<I")
 
 #: ``uint64 version = 3`` of ``message Manifest`` (Lance ``protos/table.proto`` at v13.0.0): a varint, wire type 0.
 VERSION_FIELD: Final = 3
+
+#: ``optional uint32 max_fragment_id = 11`` of ``message Manifest``: measured on pylance 13.0.0, 3 after three appends,
+#: 4 after a one-fragment ``ReserveFragments``, and 4 still after the ``Rewrite`` that used it.
+MAX_FRAGMENT_ID_FIELD: Final = 11
+
+#: ``optional uint64 transaction_section = 21`` of ``message Manifest``: the file offset of the version's transaction,
+#: stored inline as ``<u32 length><Transaction>``. Measured on pylance 13.0.0: 0 on an Append's manifest, 56 on a
+#: CreateIndex's (its index section comes first); ``read_transaction`` reads this copy, not the ``_transactions/`` file.
+TRANSACTION_SECTION_FIELD: Final = 21
+
+#: The ``Transaction.operation`` oneof's field numbers pylance models no class for, by operation name. Measured on
+#: pylance 13.0.0 transaction files: ``Append`` 100, ``Overwrite`` 102, ``CreateIndex`` 103, ``Rewrite`` 104 and
+#: ``ReserveFragments`` 107; ``read_transaction`` answers the last with ``LanceOperation.BaseOperation``.
+UNMODELLED_OPERATIONS: Final = {107: "ReserveFragments"}
+
+#: The oneof's field numbers lie in this range; the transaction's own fields (``read_version``, ``uuid``, ``tag``,
+#: ``transaction_properties``) are below it.
+_OPERATION_FIELDS: Final = range(100, 200)
 
 
 def _read_varint(buffer: bytes, at: int) -> tuple[int, int]:
@@ -101,33 +119,62 @@ def with_manifest_version(manifest: bytes, version: int) -> bytes:
     if len(manifest) < _FOOTER.size or manifest[-4:] != _MAGIC:
         raise InvalidInputError("the staged manifest is not a Lance manifest (no LANC footer)")
     offset, major, minor, _ = _FOOTER.unpack(manifest[-_FOOTER.size :])
-    if offset + _LENGTH.size > len(manifest) - _FOOTER.size:
-        raise InvalidInputError("the staged manifest's footer points outside the file")
-    (length,) = _LENGTH.unpack_from(manifest, offset)
-    body = _with_version_field(manifest[offset + _LENGTH.size : offset + _LENGTH.size + length], version)
+    body = _with_version_field(_length_prefixed(manifest, offset, section="Manifest message"), version)
     return manifest[:offset] + _LENGTH.pack(len(body)) + body + _FOOTER.pack(offset, major, minor, _MAGIC)
 
 
-def varint_field(message: bytes, number: int) -> int | None:
-    """The value of top-level varint field ``number`` in ``message``, or ``None`` when it is absent (proto3's zero)."""
-    at, found = 0, None
+def _fields(message: bytes) -> list[tuple[int, int | bytes]]:
+    """Every top-level field of ``message`` in order: a varint's value, or a length-delimited field's bytes."""
+    at, found = 0, []
     while at < len(message):
         key, at = _read_varint(message, at)
-        wire = key & 0x7
+        number, wire = key >> 3, key & 0x7
         if wire == 0:
             value, at = _read_varint(message, at)
-            if key >> 3 == number:
-                found = value
+            found.append((number, value))
         elif wire == 1:
             at += 8
         elif wire == 2:
             length, at = _read_varint(message, at)
+            if at + length > len(message):
+                raise InvalidInputError("a Lance protobuf message is truncated")
+            found.append((number, message[at : at + length]))
             at += length
         elif wire == 5:
             at += 4
         else:
-            raise InvalidInputError(f"a Manifest message has an unsupported wire type {wire}")
+            raise InvalidInputError(f"a Lance protobuf message has an unsupported wire type {wire}")
     return found
+
+
+def varint_field(message: bytes, number: int) -> int | None:
+    """The value of top-level varint field ``number`` in ``message``, or ``None`` when it is absent (proto3's zero)."""
+    found = None
+    for field, value in _fields(message):
+        if field == number and isinstance(value, int):
+            found = value
+    return found
+
+
+def transaction_section(manifest: bytes) -> bytes | None:
+    """The ``Transaction`` message ``manifest`` carries inline, or ``None`` when it carries none.
+
+    Raises:
+        InvalidInputError: ``manifest`` is not a Lance manifest, or its section lies outside it.
+    """
+    offset = varint_field(manifest_message(manifest), TRANSACTION_SECTION_FIELD)
+    if offset is None:
+        return None
+    return _length_prefixed(manifest, offset, section="transaction section")
+
+
+def operation_name(transaction: bytes) -> str | None:
+    """The operation a ``Transaction`` message carries when it is one pylance models no class for, else ``None``."""
+    numbers = {field for field, _ in _fields(transaction) if field in _OPERATION_FIELDS}
+    if len(numbers) != 1:
+        return None
+    (number,) = numbers
+    return UNMODELLED_OPERATIONS.get(number)
 
 
 def manifest_message(manifest: bytes) -> bytes:
@@ -138,8 +185,20 @@ def manifest_message(manifest: bytes) -> bytes:
     """
     if len(manifest) < _FOOTER.size or manifest[-4:] != _MAGIC:
         raise InvalidInputError("not a Lance manifest (no LANC footer)")
-    offset = _FOOTER.unpack(manifest[-_FOOTER.size :])[0]
-    if offset + _LENGTH.size > len(manifest) - _FOOTER.size:
-        raise InvalidInputError("the manifest's footer points outside the file")
+    return _length_prefixed(manifest, _FOOTER.unpack(manifest[-_FOOTER.size :])[0], section="Manifest message")
+
+
+def _length_prefixed(manifest: bytes, offset: int, *, section: str) -> bytes:
+    """The ``<u32 length><bytes>`` section of ``manifest`` at ``offset``, every byte of it before the footer.
+
+    Raises:
+        InvalidInputError: The section begins or ends past the file's footer.
+    """
+    body_end = len(manifest) - _FOOTER.size
+    if offset + _LENGTH.size > body_end:
+        raise InvalidInputError(f"the manifest's {section} points outside the file")
     (length,) = _LENGTH.unpack_from(manifest, offset)
-    return manifest[offset + _LENGTH.size : offset + _LENGTH.size + length]
+    start = offset + _LENGTH.size
+    if start + length > body_end:
+        raise InvalidInputError(f"the manifest's {section} runs past the file")
+    return manifest[start : start + length]

@@ -2,23 +2,22 @@
 
 THE DEFECT, in both of its forms. A shallow clone is a metadata-only copy: its manifest declares the
 SOURCE in ``base_paths[]`` and its ``DataFile``s resolve through it, so the source's data files are
-the only copy either dataset has. Two operations in this service will happily destroy them:
+the only copy either dataset has. Two kinds of operation will happily destroy them:
 
   * **#128d — purge.** ``delete_location`` deletes the recorded dataset directory outright. Purging
     the source of a live clone deletes data the clone still resolves through.
-  * **#114 — the sweep.** ``compact_one`` runs compact → optimize_indices → cleanup as ONE pass, and
-    the pass deletes the source's data files out from under the clone. MEASURED, and the mechanism is
-    not what the issue title says — compaction is not the step that does the damage:
+  * **#114 — a rewrite followed by reclamation.** MEASURED, and the mechanism is not what the issue
+    title says — compaction is not the step that does the damage:
 
         4 data files -> compact_files()        -> 5 files (it ADDS the merged file, deletes nothing)
                                                -> clone opens fine in a fresh process
                      -> cleanup_old_versions() -> 1 file  (the obsoleted originals are removed)
                                                -> clone fails: ArrowInvalid, in a FRESH PROCESS
 
-    That is why the refusal sits in front of the whole pass rather than in front of compaction: a
-    guard on compaction alone would be walked straight past by the step that actually deletes. And it
-    must be checked in a cold process — Lance caches dataset state per process, so an in-process read
-    can keep succeeding against files that are gone.
+    That is why the refusal (:func:`rewrite_refusal`) guards reclamation as well as the rewrite: a guard
+    on compaction alone would be walked straight past by the step that actually deletes. And it must be
+    checked in a cold process — Lance caches dataset state per process, so an in-process read can keep
+    succeeding against files that are gone.
 
 WHY THE PER-DATASET FEATURE CHECK CANNOT SEE IT. Flag 16 marks the dataset that SPANS bases — the
 clone. That is the right gate for the scan (subtracting a prefix listing from a clone is nonsense),
@@ -31,16 +30,14 @@ carries no flag and no ``base_paths`` at all; it looks completely ordinary. Meas
 The evidence lives only on the referring side, so no check that opens one dataset can find it. It has
 to be collected ACROSS the estate first — hence a pre-pass.
 
-WHY ONE PRE-PASS SERVES BOTH. #128d and #114 are the same question ("does anything else resolve
-through these bytes?") asked by two callers. Fixing either alone re-opens the other: a purge guard
-leaves compaction free to rewrite the source, and a compaction guard leaves purge free to delete it.
+WHY ONE PRE-PASS SERVES EVERY CALLER. #128d and #114 are the same question ("does anything else resolve
+through these bytes?") asked by several callers: maintenance's purge, maintenance's version expiry, and the
+catalog's ``version/create`` judge, which reads the sweep's clone list (``maintenance_due.CloneList``) before it
+finalizes a bring-your-own job's compaction. Fixing one alone re-opens the others.
 
-AND WHY IT LIVES IN SERVICE-KIT rather than inside the maintenance service, where it began. There is
-a THIRD caller: the catalog's on-demand maintenance doors run the same three verbs behind a UI button
-(``catalog/services/maintenance.py``), and a guard the cron has and the button does not is not a
-guard — it is a slower path to the same deleted bytes. The catalog cannot import the maintenance
-service, so leaving this there meant either an unguarded door or a second copy of the compare, and a
-duplicated "two spellings of one path" comparator is the failure mode :func:`normalise` documents:
+AND WHY IT LIVES IN SERVICE-KIT rather than inside the maintenance service, where it began: the catalog cannot
+import the maintenance service, so leaving this there meant either an unguarded commit or a second copy of the
+compare, and a duplicated "two spellings of one path" comparator is the failure mode :func:`normalise` documents:
 one that silently never matches looks exactly like having no guard at all.
 
 WHAT THIS DELIBERATELY DOES NOT DO. It does not try to be complete across an estate it cannot
@@ -130,6 +127,8 @@ class BaseRefs(BaseModel):
     #: is not the referrer's own, not operator-configured and not in the catalog's record is a claim
     #: nobody with authority made — honouring it froze the table it named (lh279 p1/p3).
     findings: list[BaseFinding] = Field(default_factory=list)
+    #: Each referenced root (protected or pinned) -> the datasets whose manifests resolve through it.
+    referrers: dict[str, set[str]] = Field(default_factory=dict)
 
     def is_protected(self, location: str) -> str | None:
         """The referencing root when ``location`` is one, or lies UNDER one; else ``None`` — the DELETE answer.
@@ -202,6 +201,35 @@ def containment_of(location: str, root: str) -> str:
     if here.startswith(f"{there}/"):
         return "branch" if _BRANCH_SEGMENT in here[len(there) :] else "under"
     return "ancestor"
+
+
+#: Why a rewrite or reclaim is refused, per :func:`containment_of` relation; ``branch`` has none, because a branch is
+#: Lance's own business inside one root.
+_WHY_PROTECTED = {
+    "is": "another dataset resolves its files through {root} (shallow clone / multi-base) — compacting or reclaiming here would break it",
+    "under": "this lies inside {root}, whose files another dataset resolves through — deleting or rewriting anything at or beneath it breaks the referrer",
+    "ancestor": "{root} lies beneath this location and another dataset resolves its files through it — reclaiming here would take the referenced bytes with it",
+}
+
+
+def rewrite_refusal(refs: BaseRefs, location: str, tags: Iterable[str]) -> str | None:
+    """Why compacting or reclaiming ``location`` would break a dataset that resolves its files through it, else ``None``.
+
+    A branch inside its own root is permitted, and so is a root every referrer of which is a pinned recorded relation
+    whose tag ``location`` still carries (``tags``, its tag names) ([[LH-279]]): reclamation keeps a tagged version's
+    files, and a pinned relation reads through exactly that version (measured on pylance 12.0.0, lh279 p4: the clone
+    read cold after its source was compacted and cleaned). Anything else another dataset resolves through is refused.
+    """
+    root = refs.is_protected(location)
+    if root is None:
+        return None
+    relation = containment_of(location, root)
+    if relation == "branch":
+        return None
+    pins = refs.pin_tags(root)
+    if relation == "is" and pins and pins <= set(tags):
+        return None
+    return _WHY_PROTECTED[relation].format(root=root)
 
 
 def normalise(uri: str) -> str:
@@ -468,6 +496,7 @@ def classify_base_refs(
                 refs.pinned.setdefault(base, set()).add(entry.tag)
             else:
                 refs.protected.add(base)
+            refs.referrers.setdefault(base, set()).add(uri)
             log.info("maintenance_base_ref", extra={"referrer": uri, "protects": base, "standing": judgement.standing.value})
     return refs
 
@@ -485,11 +514,9 @@ def sibling_base_refs(
     ``record_of`` are the same two inputs, so the on-demand doors and the sweep cannot disagree about
     whether a planted base freezes its victim.
 
-    Lives here rather than in either consumer because BOTH need the identical refusal: the catalog's
-    on-demand maintenance doors (`require_compactable` / `require_reclaimable`) and the maintenance
-    service's event lane, which resolves one dataset per write event and cannot run the sweep's
-    whole-estate pre-pass. A per-service copy of this would drift, which is the same reasoning that
-    put `protected_roots` and the policy registry in service-kit.
+    Lives here beside :func:`protected_roots` because the catalog's per-request doors need the sweep's refusal
+    and cannot run its whole-estate pre-pass: a copy in the catalog would drift, which is the same reasoning
+    that put `protected_roots` and the policy registry in service-kit.
 
     THE BOUND IS ONE DIRECTORY LISTING, and it is stated rather than implied: ``root`` is the dataset's
     own PARENT, so a referrer under any other parent is invisible here — in another warehouse, or
@@ -509,9 +536,9 @@ def sibling_base_refs(
     ``<dataset>/tree/<name>`` while the dataset it protects sits at the bucket's top level, so neither
     appears in the other's parent listing. That gap is bounded to the callers here: the SWEEP does not
     use this function, `sweep.py::_protected_roots` opens every discovered dataset in every bucket and
-    `discover_datasets` descends into ``tree/``. Closing it for the on-demand lane needs the referrer
-    edge recorded AT CREATION (§ C3), not a wider listing — walking every warehouse on every event pays
-    the sweep's cost on every write.
+    `discover_datasets` lists every branch. Closing it for a per-request door needs the referrer edge
+    recorded AT CREATION (§ C3), not a wider listing — walking every warehouse on every request pays the
+    sweep's cost on every write.
 
     Computed PER CALL, never cached: a clone created a minute ago must protect its source on the next
     event, which is also why an hourly backstop cannot stand in for this check.

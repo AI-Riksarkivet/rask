@@ -33,8 +33,6 @@ from lance_namespace import (
     DeclareTableRequest,
     DescribeTableRequest,
     InvalidInputError,
-    ServiceUnavailableError,
-    TableNotFoundError,
     connect,
 )
 
@@ -177,41 +175,3 @@ def test_a_BRANCHED_table_renames_because_nothing_moves(tmp_path: Path) -> None:
     assert location == source, "the rename relocated a branched dataset"
     assert lance.dataset(location).branches.list() == before, "the branch listing changed under a pointer move"
     assert ns.describe_table(DescribeTableRequest(id=new_segments)).location == source
-
-
-@pytest.mark.parametrize(
-    "message",
-    [
-        pytest.param(
-            "LanceError(IO): Generic S3 error: Error performing list request: Error performing GET http://s/b?list-type=2 in 1ms - "
-            'Server returned non-2xx status code: 404 Not Found: <?xml version="1.0" encoding="UTF-8"?><Error><Code>NoSuchBucket'
-            "</Code><Message>The specified bucket does not exist</Message></Error>",
-            id="the warehouse BUCKET does not exist",
-        ),
-    ],
-)
-def test_plan_compaction_does_not_call_a_STORAGE_FAULT_a_missing_table(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, message: str) -> None:
-    """The catch was `except ValueError`, and pylance raises `ValueError` for far more than absence.
-
-    A configuration fault, a deleted bucket and a permission failure all reached one handler that
-    reported "declared or registered but was never written", so each was rendered as a missing table,
-    sending the operator to look for data that was there all along. The bucket case
-    is not hypothetical: § Q8-15 measured 79 datasets registered into buckets that do not exist.
-
-    They answer `ServiceUnavailableError` (503) and not a bare re-raise, because a bare one returned a
-    500 and a 500 says the CATALOG is broken. Nothing about the request is wrong; the store did not
-    answer, which is what the sibling `_already_committed` has always said for the same condition.
-    """
-    ns = _namespace(tmp_path)
-    written = _written(ns, ["ns1", "real"])
-
-    def _fault(*_a: object, **_k: object) -> object:
-        raise ValueError(message)
-
-    monkeypatch.setattr(dataplane.lance, "dataset", _fault)
-    with pytest.raises(ServiceUnavailableError) as caught:
-        dataplane.plan_compaction(written, {}, batch_size=64, num_threads=2, max_source_bytes=256 * 1024 * 1024)
-
-    assert "never written" not in str(caught.value), f"a storage fault was reported as a missing table: {caught.value}"
-    assert not isinstance(caught.value, TableNotFoundError), "a storage fault was given the not-found code"
-    assert message.split(",")[0][:40] in str(caught.value), "the underlying cause was swallowed rather than carried"

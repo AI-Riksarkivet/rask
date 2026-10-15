@@ -13,9 +13,9 @@ PUBLISH-only component: the catalog publishes through it. Consumer
 metadata (queue group / deliver policy) lives on the per-SUBSCRIBER components below, never here.
 Every pub/sub component is one app's NATS connection, with that app's credential (values.yaml `nats.auth`).
 
-## `{{- if and .Values.maintenance.enabled .Values.maintenance.lineageEmit (not .Values.maintenance.workTopic) }}`
+## `{{- if and .Values.maintenance.enabled .Values.maintenance.lineageEmit (not .Values.maintenance.arrivalEnabled) }}`
 
-Maintenance publishes its lineage through its own component; one is rendered for it below when no queue lane gives it one.
+Maintenance publishes its lineage through its own component; one is rendered for it here when the write-event lane does not give it one.
 
 ## `apiVersion: dapr.io/v1alpha1`
 
@@ -103,16 +103,15 @@ name already in use", a silently dead subscription the drift reconcile cannot se
 maxDeliver/backOff still match). `notifications-durable` on LINEAGE is new; the reconcile loop
 (nats-stream-job.yaml) adopts it by its `-durable` suffix from the first tick.
 
-## `{{- if and .Values.maintenance.enabled .Values.maintenance.workTopic }}`
+## `{{- if and .Values.maintenance.enabled .Values.maintenance.arrivalEnabled }}`
 
-MAINTENANCE's write-event subscription — the primary maintenance trigger, replacing the sweep's
-120s whole-estate walk. Gated on `workTopic` because the route is: the subscription plans a unit
-and publishes it to the work queue, so without a queue there is nowhere to put the result.
+MAINTENANCE's write-event subscription: a write refreshes that table's due record (the tables needing
+compaction or reindexing, ADR 0162) between sweep ticks. It schedules no work; the rewrite is the
+user's job. Its dead letters go to `maintenance.arrivalDlqTopic`.
 
-`new`, for the notifications reason sharpened: replaying the retained stream on a pod restart
-would re-plan maintenance for every write in the window — hundreds of manifest opens to reach the
-same converged answer, since anything genuinely outstanding is still outstanding and the hourly
-backstop re-plans it anyway. A missed window costs at most one backstop tick; a replayed one costs
+`new`, for the notifications reason sharpened: replaying the retained stream on a pod restart would
+refresh the due record of every table written in the window, hundreds of manifest opens to reach the
+answer the next sweep tick writes anyway. A missed window costs at most one tick; a replayed one costs
 the walk this lane exists to avoid.
 
 ## `{{- range $subscribers }}`
@@ -206,84 +205,3 @@ ONE derivation, in `lance.secretScopes`, because this list has a SECOND reader:
 through the environment, and it decides by membership HERE. Restating the computation would
 let the two agree at review and diverge later — a pod pointed at a store its app-id cannot
 reach gets ERR_SECRET_STORES_NOT_CONFIGURED and fails closed at boot.
-
-## `apiVersion: dapr.io/v1alpha1`
-
-THE MAINTENANCE WORK QUEUE. Its OWN component rather than a scope on a shared one, for the reason
-`queueGroupName` forces: that key lives on the COMPONENT, so adding maintenance as a scope to a
-broadcast component would split the broadcast into a competing-consumer group instead of joining one.
-
-NO `deliverPolicy` — a WORKQUEUE stream refuses anything but deliver-all, and JetStream says so:
-`nats: consumer must be deliver all on workqueue stream` (measured 2026-09-03, the subscription
-retried forever and bound to nothing). The rule follows from the retention: an acked unit is REMOVED,
-so whatever remains is by definition still outstanding and replaying it is the point, not a hazard.
-
-What that does expose is unit STALENESS — a unit can sit here up to the stream's max-age, and its
-protection verdict was computed at plan time. That is answered at the EXECUTOR (`work.py` re-checks
-`sibling_base_refs` before acting), not by skipping the backlog, because a skipped unit is work
-silently dropped while a stale verdict is work done against the wrong facts.
-
-## `{{- if .Values.dapr.resiliency.enabled }}`
-
-ackWait is sized by the WORK, not by convention, and it is the one number here that a growing
-estate can invalidate. It must exceed the longest single dataset's compact + index-optimize + GC,
-because an ack that expires mid-compaction redelivers the unit to a second worker and two
-concurrent passes then race `compact_files`/`cleanup_old_versions` on one dataset — one committing
-a rewrite while the other GCs the versions it is reading. That race is precisely what the
-in-process single-flight lock exists to prevent, so letting the broker reintroduce it would undo
-the guarantee rather than move it.
-
-The same first-backOff-step rule the sibling components carry applies: the broker's first step
-must exceed the sidecar's total resiliency retry window (7.5 min, asserted by .dagger/charts.go),
-or the broker redelivers while the sidecar is still mid-retry and one unit runs twice at once.
-
-## `- { name: maxAckPending, value: "{{ include "lance.maintenanceMaxAckPending" . }}" }`
-
-DELIVER NO MORE THAN THE FLEET CAN RUN, which is why this is DERIVED and not chosen. `ackWait`
-above runs from DELIVERY, so a unit queued behind others burns its whole 720s window while idle
-and is then redelivered — and two concurrent passes over one dataset is exactly the race the
-executor's single-flight lock exists to prevent. Setting nothing here means NATS's default of
-1,000 in flight against an execution ceiling of `maxConcurrentUnits x replicas`; measured live
-2026-09-22 as `Max Ack Pending: 1,000` versus 40 x 2, and a manual sweep drove `Ack Pending`
-181 -> 721 with a redelivery.
-
-It bounds DELIVERY, not memory: the same number of units still execute at once. Pinned by
-tests/unit/test_a_work_unit_is_not_delivered_before_it_can_run.py.
-
-## `{{- include "lance.publishPubsub" (list . (printf "%s-%s" .Values.maintenance.workPubsub .Values.services.c...`
-
-The catalog's `maintenance/compact` door enqueues here as itself, on its own publish-only component.
-
-## `apiVersion: dapr.io/v1alpha1`
-
-THE INDEX-BUILD LANE — its own component, not just its own topic.
-
-`ackWait`, `durableName` and `queueGroupName` are per-COMPONENT in Dapr's JetStream pubsub, so an
-index build sharing the work component would inherit the work queue's 720s window. That window is
-sized for one dataset's compact + index-optimize + GC; a vector index over a large table can exceed
-it, and an ack that expires mid-build redelivers the unit to a second worker which then builds the
-same index concurrently. The separation is what buys a window sized for the actual work.
-
-## `- { name: ackWait, value: {{ .Values.maintenance.indexAckWait | quote }} }`
-
-Sized for an INDEX, which is the whole reason this component exists. The same first-backOff-step
-rule the sibling components carry applies: the broker's first step must exceed the sidecar's
-total resiliency retry window, or the broker redelivers while the sidecar is still mid-retry and
-one build runs twice at once.
-
-## `- { name: maxAckPending, value: "{{ include "lance.maintenanceIndexMaxAckPending" . }}" }`
-
-THE INDEX LANE'S SHARE OF ONE POOL, not a second full allowance. `api/index_work.py` and
-`api/work.py` both reach `run_in_threadpool`, whose limiter is process-GLOBAL, so the two
-components' `maxAckPending` values sum to `maxConcurrentUnits x replicas` rather than each
-taking it — bounding both to the full capacity would admit twice what can run, which is the
-defect the bound exists to remove.
-
-The share is small ON PURPOSE. A build holds its token for up to `indexAckWait` (3600s) against
-the work queue's 720s, so index units taking the pool would starve a lane that runs every 120s.
-And the delivery bound matters MORE here than on the work lane: an hour-long window burning on
-a unit that cannot start redelivers a whole index build. [[LH-188]].
-
-## `{{- include "lance.publishPubsub" (list . (printf "%s-%s" .Values.maintenance.indexPubsub .Values.services....`
-
-The catalog's create_index doors enqueue here as itself, on its own publish-only component.

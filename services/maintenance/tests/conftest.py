@@ -1,8 +1,9 @@
-"""Shared fixtures for the maintenance suite: the catalog's own app, and recorders for the refusal counters."""
+"""Shared fixtures for the maintenance suite: the catalog's own app, one dataset's pass, and recorders for the counters."""
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +12,12 @@ from fastapi.testclient import TestClient
 from lance_namespace import connect
 
 from maintenance.core import metrics
+from maintenance.core.config import MaintenanceSettings
+from maintenance.services import sweep
+from maintenance.services.expiry import DatasetResult
+from maintenance.services.plan import DatasetPlan, PlanContext
+from service_kit.lakehouse.base_refs import BaseRefs
+from service_kit.lakehouse.maintenance_due import CloneList
 
 
 @pytest.fixture
@@ -40,11 +47,26 @@ def catalog(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestCli
 
 
 @pytest.fixture
-def plan_refused_added(monkeypatch: pytest.MonkeyPatch) -> list[int]:
-    """Every amount `compaction.plan.refused` is asked to add."""
-    seen: list[int] = []
-    monkeypatch.setattr(metrics._plan_refused, "add", lambda amount, attributes=None, **_: seen.append(amount))
-    return seen
+def maintain_one(monkeypatch: pytest.MonkeyPatch) -> Callable[..., DatasetResult]:
+    """One dataset's pass through the sweep's real per-dataset path (`sweep.maintain_dataset`), outside a tick.
+
+    ``protected`` stands in for the tick's whole-estate pre-pass and ``plan`` for what the policy registry resolves to.
+    No ``__manifest`` names the dataset, so no due record is written.
+    """
+
+    def _maintain(uri: str, settings: MaintenanceSettings, *, protected: BaseRefs | None = None, plan: DatasetPlan | None = None) -> DatasetResult:
+        if plan is not None:
+            monkeypatch.setattr(sweep, "resolve_plan", lambda *_a, **_k: plan.model_copy())
+        now = datetime.now(UTC)
+        tick = sweep.SweepPlan(
+            uris=[uri],
+            protected=protected or BaseRefs(),
+            clones=CloneList(taken_at=now),
+            context=PlanContext(policies=[], now=now, older_than=timedelta(days=settings.older_than_days)),
+        )
+        return sweep.maintain_dataset(uri, sweep=tick, settings=settings)
+
+    return _maintain
 
 
 @pytest.fixture

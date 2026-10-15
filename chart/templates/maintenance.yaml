@@ -93,23 +93,11 @@ spec:
             - { name: MAINTENANCE_CATALOG_URL, value: {{ printf "http://%s-catalog:%v" (include "lance.fullname" $root) $root.Values.services.catalog.port | quote }} }
             - { name: MAINTENANCE_AUDIT_ENABLED, value: {{ hasKey $root.Values.auth "audit" | ternary $root.Values.auth.audit true | quote }} }
             - { name: MAINTENANCE_CATALOG_SERVICE_IDENTITY, value: {{ include "lance.saSubject" (list $root "maintenance") | quote }} }
-            {{- if $root.Values.maintenance.distributedCompaction }}
-            - { name: MAINTENANCE_DISTRIBUTED_COMPACTION, value: "true" }
             {{- end }}
-            {{- end }}
-            {{- if .Values.maintenance.workTopic }}
-            - { name: MAINTENANCE_WORK_PUBSUB, value: {{ .Values.maintenance.workPubsub | quote }} }
-            - { name: MAINTENANCE_WORK_TOPIC, value: {{ .Values.maintenance.workTopic | quote }} }
-            - { name: MAINTENANCE_WORK_DLQ_TOPIC, value: {{ .Values.maintenance.workDlqTopic | quote }} }
+            - { name: MAINTENANCE_ARRIVAL_ENABLED, value: {{ .Values.maintenance.arrivalEnabled | quote }} }
+            {{- if .Values.maintenance.arrivalEnabled }}
+            - { name: MAINTENANCE_ARRIVAL_DLQ_TOPIC, value: {{ .Values.maintenance.arrivalDlqTopic | quote }} }
             {{- with include "lance.doorEnv" (list $root false) }}{{ . | nindent 12 }}{{- end }}
-            {{- if .Values.maintenance.indexTopic }}
-            - { name: MAINTENANCE_INDEX_TOPIC, value: {{ .Values.maintenance.indexTopic | quote }} }
-            - { name: MAINTENANCE_INDEX_PUBSUB, value: {{ .Values.maintenance.indexPubsub | quote }} }
-            - { name: MAINTENANCE_INDEX_DLQ_TOPIC, value: {{ .Values.maintenance.indexDlqTopic | quote }} }
-            {{- end }}
-            {{- if .Values.maintenance.dedicatedWorkers.enabled }}
-            - { name: MAINTENANCE_EXECUTE_WORK, value: "false" }
-            {{- end }}
             {{- end }}
             {{- if .Values.maintenance.lineageEmit }}
             - { name: MAINTENANCE_LINEAGE_EMIT_ENABLED, value: "true" }
@@ -143,9 +131,9 @@ spec:
             {{- end }}
             - { name: MAINTENANCE_BINDING_NAME, value: {{ .Values.maintenance.bindingName | quote }} }
             - { name: MAINTENANCE_OLDER_THAN_DAYS, value: {{ .Values.maintenance.olderThanDays | quote }} }
+            - { name: MAINTENANCE_CLONE_LIST_MAX_AGE_SECONDS, value: {{ required "maintenance.cloneListMaxAgeSeconds is unset — upgrade with --reset-then-reuse-values, not --reuse-values" .Values.maintenance.cloneListMaxAgeSeconds | quote }} }
+            - { name: MAINTENANCE_MIN_VERSIONS_TO_EXPIRE, value: {{ required "maintenance.minVersionsToExpire is unset — upgrade with --reset-then-reuse-values, not --reuse-values" .Values.maintenance.minVersionsToExpire | quote }} }
             - { name: MAINTENANCE_SWEEP_BUDGET_SECONDS, value: {{ hasKey .Values.maintenance "sweepBudgetSeconds" | ternary .Values.maintenance.sweepBudgetSeconds 0 | quote }} }
-            - { name: MAINTENANCE_SCAN_BATCH_SIZE, value: {{ .Values.maintenance.scanBatchSize | quote }} }
-            - { name: MAINTENANCE_COMPACT_THREADS, value: {{ .Values.maintenance.compactThreads | quote }} }
             - { name: MAINTENANCE_S3_ENDPOINT, value: "{{ include "lance.s3Endpoint" . }}" }
 
 

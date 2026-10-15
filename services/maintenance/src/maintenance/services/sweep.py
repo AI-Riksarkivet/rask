@@ -1,11 +1,17 @@
-"""The maintenance sweep: discover every dataset in the bucket, compact + GC each, aggregate the result.
+"""The maintenance sweep: discover every dataset, expire its versions, decide what needs compacting or reindexing.
 
-Since #50, a per-table/namespace maintenance policy (from the catalog's ``_policies/`` registry) can skip
-a dataset (``policy_disabled`` / ``policy_interval``) or override its old-version retention; #84 adds a
-project-level record as the tenant-wide fallback (resolution: table > namespace > project > global
-defaults, all inside ``maintenance_policies.resolve_policy``); a policy-less dataset keeps the global
-defaults. Keeps the blocking S3/Lance orchestration out of the route so the cron
-handler stays a thin shell and the aggregation (:func:`summarize`) stays unit-testable without S3.
+Maintenance decides and does not rewrite (ADR 0155, ADR 0156 C4 and C6, ADR 0162). One serial lane per tick:
+
+1. **Plan** — the policies and the trash exclusions (either unreadable ABORTS the tick: both are protective), every
+   swept bucket, discovery, the whole-estate base-reference pre-pass, and the catalog's table ids.
+2. **The clone list**, written before any due record, so a job reading a record is judged against the pre-pass that
+   wrote it.
+3. **Per dataset**, inside the tick's budget: version expiry under a table-scoped vend
+   (:func:`maintenance.services.expiry.expire_versions`), then the due evaluation that writes or deletes the table's
+   record (:mod:`maintenance.services.due`).
+4. **The due records of tables no manifest names** are deleted.
+
+Blocking S3/Lance work; the cron route runs :func:`run_sweep` in the threadpool.
 """
 
 from __future__ import annotations
@@ -16,8 +22,7 @@ import random
 import sys
 import time
 from collections import Counter
-from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping
-from dataclasses import dataclass, replace  # noqa: TID251
+from collections.abc import Awaitable, Callable, Iterable, Iterator
 from datetime import UTC, datetime, timedelta
 from functools import partial
 from time import perf_counter
@@ -27,6 +32,7 @@ import lance
 import pyarrow.fs as pafs
 from opentelemetry import trace
 from opentelemetry.trace import StatusCode
+from pydantic import BaseModel, Field
 
 from maintenance.core.config import MaintenanceSettings, get_settings, shared_lance_session
 from maintenance.core.lineage_emit import MaintenanceEmitter, declared_table_id, table_id_from_uri
@@ -34,7 +40,6 @@ from maintenance.core.metrics import (
     record_dataset_swept,
     record_failed,
     record_mixed_file_versions,
-    record_plan_refused,
     record_reclaimed,
     record_refused,
     record_run,
@@ -43,153 +48,47 @@ from maintenance.core.metrics import (
     record_trashed_skipped,
     record_unrecorded_bases,
 )
-from maintenance.services import catalog_compaction, compaction_executor, credentials, purge
-from maintenance.services.optimize import DatasetResult, Rewriter, compact_one, discover_datasets, summarize_refusals
+from maintenance.services import credentials, purge
+from maintenance.services.discovery import discover_datasets
+from maintenance.services.due import TableIds, refresh_due, table_ids
+from maintenance.services.expiry import DatasetResult, DueVerdict, ExpiryPolicy, ExpiryTarget, count_reclaimable, expire_versions, summarize_refusals
+from maintenance.services.plan import DatasetPlan, PlanContext, buckets_to_sweep, cadence_skip, load_policies, resolve_plan
 from service_kit.governed import fga
 from service_kit.governed.audit import SUCCESS, audit
-from service_kit.lakehouse import auto_cleanup, base_refs, base_registry, maintenance_policies, trash, warehouse_records
+from service_kit.lakehouse import auto_cleanup, base_refs, base_registry, maintenance_policies, trash
 from service_kit.lakehouse.features import flags_from_open_error, manifest_feature_flags, mixes_data_file_versions
 from service_kit.lakehouse.lance_session import affordable_cache_bytes
+from service_kit.lakehouse.maintenance_due import CloneList, delete_due, list_due, write_clone_list
 from service_kit.lakehouse.objectfs import s3_filesystem
-from service_kit.lakehouse.work_items import DatasetPlan, DatasetWorkItem
 
 
 log = logging.getLogger(__name__)
 
 
-#: Per-tick cap on FAIL-event publishes. Each publish is already bounded by the emitter's 5s timeout and
-#: the batch is gathered concurrently, but an unbounded fan-out over a bucket where EVERYTHING is failing
-#: could still push the cron handler past the 30s Dapr ack window — cap it, and LOG what was dropped
-#: (a silent cap would read as "covered everything"). The over-cap set is SHUFFLED before the cut: the
-#: discovery listing order is deterministic, so a fixed head-slice would re-drop the SAME datasets every
-#: tick and their FAIL would never emit — shuffling gets every failing dataset through within a few ticks,
-#: converging on its deterministic run id (review 2026-07-10).
-#:
-#: THE CAP APPLIES TO THE FAIL LANE ONLY, and that asymmetry is now a decision rather than an accident
-#: (MAINT-04). A FAIL condition persists: a dataset that failed this tick fails the next one too, so a
-#: dropped FAIL emit is re-attempted in ~2 minutes and converges on its own deterministic run id. A
-#: COMPLETE emit has no second chance — the material work it reports happened ONCE, and next tick that
-#: dataset has nothing left to reclaim and produces no event at all. Capping it would not delay a
-#: maintenance run in the lineage graph, it would erase it. So the COMPLETE lane is bounded by
-#: CONCURRENCY (below) instead of by count: same protection against a fan-out of publishes, no loss.
+#: Per-tick cap on FAIL-event publishes. The over-cap set is SHUFFLED before the cut: discovery order is deterministic,
+#: so a fixed head-slice would re-drop the SAME datasets every tick. The cap applies to the FAIL lane only: a FAIL
+#: condition persists and converges on its deterministic run id next tick, while a COMPLETE reports work that happened
+#: ONCE, so the COMPLETE lane is bounded by concurrency instead of by count.
 _MAX_FAIL_EMITS_PER_TICK = 25
 
-#: How many publishes may be in flight at once, in EITHER lane. The lanes used to disagree about this
-#: too: FAIL gathered its whole (capped) batch while COMPLETE was awaited one dataset at a time inside
-#: the discovery loop, so an estate where every dataset reclaimed something paid the emitter's 5s
-#: timeout serially, once per dataset. Bounded rather than unbounded because a whole-estate gather is a
-#: fan-out of HTTP publishes at one sidecar, which is the hazard the FAIL cap was reaching for.
+#: How many publishes may be in flight at once, in EITHER lane: a whole-estate gather is a fan-out of HTTP publishes at
+#: one sidecar.
 _MAX_CONCURRENT_EMITS = 25
 
-# Each compact+GC is blocking Lance/S3 work invisible to auto-instrumentation — a per-dataset INTERNAL
-# span lets a slow or failing compaction be localized in the trace instead of hiding in the cron handler.
 tracer = trace.get_tracer(__name__)
 
 
 def _s3fs(settings: MaintenanceSettings) -> pafs.S3FileSystem:
-    """A pyarrow S3 filesystem over the RustFS endpoint — used only to LIST the bucket."""
+    """A pyarrow S3 filesystem over the store endpoint — used only to LIST the buckets."""
     return s3_filesystem(settings.storage_options())
-
-
-def _policy_skip_reason(
-    policy: dict[str, object],
-    *,
-    settings: MaintenanceSettings,
-    options: dict[str, str],
-    now: datetime,
-    uri: str,
-) -> str | None:
-    """Why the policy says to skip this dataset this tick, or ``None`` to maintain it.
-
-    Keyword-only past the policy it is deciding about: five positional parameters, two of them a
-    ``dict`` each and two of them describing the same dataset from different angles, is a call site
-    nobody can check by reading it (MAINT-16).
-
-    ``compact_enabled=False`` opts the target out entirely; ``compact_interval_hours`` skips until the
-    interval has elapsed since the sweep's own per-dataset ``last_maintained_at`` stamp (an unreadable,
-    absent, or malformed stamp maintains — never the other way, or a lost stamp would silence maintenance
-    forever — and is logged, so a persistently broken state prefix is visible, not just ineffective).
-    """
-    if not policy.get("compact_enabled", True):
-        return "policy_disabled"
-    interval = policy.get("compact_interval_hours")
-    if interval:
-        try:
-            stamped = maintenance_policies.read_state(settings.resolved_policy_root, options, policy, uri)
-        except Exception as exc:
-            log.warning(
-                "compaction_policy_state_unreadable",
-                extra={"policy": policy.get("id"), "uri": uri, "error": str(exc)},
-            )
-            stamped = None
-        if stamped is not None:
-            # TypeError covers a naive stamp: `now` is aware, and aware-minus-naive raises.
-            try:
-                last = datetime.fromisoformat(stamped)
-                if now - last < timedelta(hours=int(str(interval))):
-                    return "policy_interval"
-            except (ValueError, TypeError):
-                log.warning(
-                    "compaction_policy_state_malformed",
-                    extra={"policy": policy.get("id"), "uri": uri, "stamp": stamped},
-                )
-    return None
-
-
-def _load_policies(settings: MaintenanceSettings, options: dict[str, str]) -> list[dict[str, Any]]:
-    """The #50 maintenance policies, loaded once per tick; a policy-less dataset keeps the global defaults.
-
-    A registry we cannot read at all ABORTS the tick (fail toward not deleting, audit 2026-07-16):
-    policies are the protective surface (retention extensions, opt-outs), so sweeping without them would
-    GC version history an owner explicitly kept. The next cron fire retries; one bad record inside a
-    readable registry is skipped-with-warning by ``list_policies``, not fatal.
-    """
-    try:
-        policy_records = maintenance_policies.list_policies(settings.resolved_policy_root, options)
-    except Exception:
-        log.error("compaction_policies_unreadable_tick_aborted")
-        raise
-    # The count distinguishes "no policies set" from "policies invisible" (e.g. the catalog's control
-    # root moved without MAINTENANCE_POLICY_ROOT following — a wrong root lists cleanly as empty).
-    log.info("compaction_policies_loaded", extra={"policies": len(policy_records)})
-    return policy_records
-
-
-def _buckets_to_sweep(settings: MaintenanceSettings, options: dict[str, str]) -> list[str]:
-    """#81 EVERY warehouse the registry knows, not just the configured list.
-
-    ``sweep_buckets`` is the primary bucket plus a static env var — but a per-warehouse bucket is created
-    by an API CALL at runtime, so every tenant provisioned since the last config edit was invisible to
-    maintenance and its tables accumulated superseded versions and small fragments forever. A storage
-    leak created by the very feature that introduces new buckets, and silent: the sweep reported success
-    over the buckets it did know.
-
-    An unreadable registry is NOT fatal here (unlike the policy registry, whose absence would mean
-    sweeping without protective retention overrides) — it degrades to the configured list, which is
-    exactly the old behaviour, and says so.
-    """
-    buckets = list(settings.sweep_buckets)
-    try:
-        registry = warehouse_records.list_warehouse_records(settings.resolved_control_root, options)
-        discovered = [b for b in warehouse_records.maintainable_buckets(registry) if b not in buckets]
-        buckets.extend(discovered)
-        log.info("sweep_registry_buckets", extra={"configured": len(settings.sweep_buckets), "from_registry": len(discovered)})
-    except Exception as exc:  # noqa: BLE001 — a missing registry must not stop maintaining what we know
-        log.warning("sweep_registry_unreadable", extra={"error": str(exc)})
-    return buckets
 
 
 def _discover_all(fs: pafs.FileSystem, buckets: list[str], *, max_depth: int) -> list[str]:
     """Every dataset URI across every swept bucket, reporting the prefixes the walk could not reach.
 
-    A bucket that does not exist (or is unreadable) is skipped, not fatal: one missing tenant bucket
-    must not stop the sweep for everyone else.
-
-    The truncation set is accumulated AND CONSUMED, which it was not: it was collected here and read by
-    nothing, so ``Discovery``'s own docstring — "the sweep counts it, the reconciler files an
-    IncompleteScan" — was true of the reconciler and false of the sweep. A tick that never walked a
-    prefix was indistinguishable from one that walked everything, which is exactly the "0 that means we
-    did not look" this module's docstrings forbid elsewhere.
+    A bucket that does not exist (or is unreadable) is skipped, not fatal: one missing tenant bucket must not stop the
+    sweep for everyone else. A truncated prefix is logged, so a tick that never walked a prefix is distinguishable from
+    one that walked everything.
     """
     uris: list[str] = []
     truncated: list[str] = []
@@ -199,623 +98,365 @@ def _discover_all(fs: pafs.FileSystem, buckets: list[str], *, max_depth: int) ->
         except Exception as exc:  # noqa: BLE001 — one unreadable bucket must not stop the whole sweep
             log.warning("compaction_bucket_skipped", extra={"bucket": bucket, "error": str(exc)})
             continue
-        log.info(
-            "compaction_bucket_discovered",
-            extra={"bucket": bucket, "datasets": len(found.uris), "truncated": len(found.truncated)},
-        )
+        log.info("compaction_bucket_discovered", extra={"bucket": bucket, "datasets": len(found.uris), "truncated": len(found.truncated)})
         uris.extend(found.uris)
         truncated.extend(found.truncated)
     if truncated:
-        log.warning(
-            "maintenance_discovery_truncated",
-            # The bound is READ, never restated: it was a literal beside a call that passed nothing, so
-            # the line would have kept reporting 3 while the walk used something else.
-            extra={"prefixes": len(truncated), "examples": sorted(truncated)[:5], "max_depth": max_depth},
-        )
+        log.warning("maintenance_discovery_truncated", extra={"prefixes": len(truncated), "examples": sorted(truncated)[:5], "max_depth": max_depth})
     return uris
 
 
 def _trash_exclusions(settings: MaintenanceSettings, options: dict[str, str]) -> dict[str, str]:
-    """``{normalised path: why}`` for every dataset in the trash — the datasets this tick may NOT rewrite.
+    """``{normalised path: why}`` for every dataset in the trash — the datasets this tick may NOT touch.
 
-    #75 trash expiry is REPORT ONLY **in the sweep**, permanently. #79's purge lives on the RECONCILE
-    tick instead, because its gate is that tick's drift report: a reclaimer earns its delete permission
-    by first proving the report runs clean, and the sweep does not produce that report. So the sweep
-    keeps naming which recoverable drops are past their deadline and keeps deleting NOTHING.
+    #75 trash expiry is REPORT ONLY in the sweep; #79's purge lives on the reconcile tick, whose drift report gates it.
 
-    ONE read of the trash index per tick, TWO consumers (F6(d)). The CONTROL root, not the policy root:
-    the catalog writes ``_trash/`` under its registry root (``LANCE_CONTROL_ROOT``). These default to the
-    same bucket, so a mismatch is invisible.
-
-    THE POSTURE HERE IS DELIBERATE. This read used to be except-wrapped with "the trash report must never
-    abort a maintenance tick" — correct while the only consumer was a log line. It is not correct now
-    that the same read decides WHICH DATASETS THIS TICK MAY REWRITE. An unreadable trash index would
-    silently restore the exact defect this exclusion exists to close: the sweep compacting and
-    version-cleaning datasets an owner was told are frozen and recoverable. So it follows the policy
-    registry's rule verbatim: a PROTECTIVE registry we cannot read at all ABORTS the tick, failing toward
-    not-rewriting. The next cron fire retries; one unparseable record inside a readable index is already
-    skipped-with-warning by ``trash.list_all``, not fatal.
-
-    EVERY record, not just the expired ones. An expired-but-unpurged record is still frozen data:
-    ``undrop`` deliberately does not consult the clock, so a passed deadline is not permission to
-    rewrite — it only means the purge is entitled to reclaim it, and until it has, the bytes stand.
+    An unreadable trash index ABORTS the tick, the policy registry's rule: the same read decides which datasets this
+    tick may reclaim versions on, and reading it as empty would expire datasets an owner was told are frozen and
+    recoverable. EVERY record counts, not just the expired ones: ``undrop`` does not consult the clock, so a passed
+    deadline is not permission to touch the bytes.
     """
     try:
         trash_records = trash.list_all(settings.resolved_control_root, options)
     except Exception:
         log.error("compaction_trash_index_unreadable_tick_aborted")
         raise
-    # Guarded against the empty location: a trashed NAMESPACE record and a declared-only table both
-    # carry `location=""`, and `normalise("")` is `""`, which is a prefix of everything.
-    trashed_by_path: dict[str, str] = {}
-    for record in trash_records:
-        location = str(record.get("location") or "")
-        if not location:
-            continue
-        trashed_by_path[base_refs.normalise(location)] = f"in trash as {record.get('id') or '?'} (expires_at={record.get('expires_at') or '?'})"
-    # Selection goes through `purge.due_from` so ONE rule decides what "expired" means: the set this
-    # logs and the set the purge deletes cannot be two different answers. Fed from the records already
-    # in hand — a second `list_all` here would double the index read for nothing.
     if due := purge.due_from(trash_records):
-        log.info(
-            "trash_expiry_due_report_only",
-            extra={"count": len(due), "ids": [str(r.get("id")) for r in due][:20]},
-        )
-    return trashed_by_path
+        log.info("trash_expiry_due_report_only", extra={"count": len(due), "ids": [str(r.get("id")) for r in due][:20]})
+    return trashed_locations(trash_records)
+
+
+def trashed_locations(trash_records: list[dict[str, Any]]) -> dict[str, str]:
+    """``{normalised path: why}`` for every trash record naming bytes.
+
+    A trashed NAMESPACE record and a declared-only table both carry `location=""`, and `normalise("")` is a prefix of
+    everything, so a record naming no location excludes nothing.
+    """
+    return {
+        base_refs.normalise(str(record["location"])): f"in trash as {record.get('id') or '?'} (expires_at={record.get('expires_at') or '?'})"
+        for record in trash_records
+        if record.get("location")
+    }
 
 
 def base_record_reader(settings: MaintenanceSettings, options: dict[str, str]) -> Callable[[str], base_registry.BaseRecord | None]:
     """How this service reads the catalog's base record for a table root ([[LH-279]]).
 
-    Off the CONTROL root, where the catalog writes ``_bases/`` beside ``_trash/`` and ``_warehouses/``,
-    with the same credential those reads use. The reader RAISES on a record it cannot read: answering
-    "no record" would demote a recorded clone source to a finding and hand its bytes to compaction.
+    The reader RAISES on a record it cannot read: answering "no record" would demote a recorded clone source to a
+    finding and hand its bytes to reclamation.
     """
     registry = base_registry.BaseRegistry(control_root=settings.resolved_control_root, storage_options=options)
     return partial(base_registry.read_base_record, registry)
 
 
-def protection_for(refs: base_refs.BaseRefs, uri: str) -> tuple[str | None, list[str]]:
-    """The verdict a work item carries for ``uri``: the protecting root, and the tags that alone pin it.
-
-    Empty tags with a root is an unconditional protection; a root with tags is protected only against
-    deletion, and compactable while every tag is on it.
-    """
-    root = refs.is_protected(uri)
-    if root is None:
-        return None, []
-    return root, sorted(refs.pin_tags(root) or ())
-
-
-def protection_of(item: DatasetWorkItem) -> base_refs.BaseRefs:
-    """The single-root ``BaseRefs`` a work item's verdict stands for."""
-    if not item.protected_by:
-        return base_refs.BaseRefs()
-    root = base_refs.normalise(item.protected_by)
-    if item.pin_tags:
-        return base_refs.BaseRefs(pinned={root: set(item.pin_tags)})
-    return base_refs.BaseRefs(protected={root})
-
-
-def with_fresh_protection(item: DatasetWorkItem, fresh: base_refs.BaseRefs) -> DatasetWorkItem:
-    """``item`` with a re-read verdict UNIONED in: a protection either side finds survives, the strongest wins.
-
-    Unconditional beats pinned; two pinned verdicts need both sets of tags.
-    """
-    root, tags = protection_for(fresh, item.uri)
-    if root is None:
-        return item
-    if item.protected_by is None:
-        return item.model_copy(update={"protected_by": root, "pin_tags": tags})
-    pins = sorted({*item.pin_tags, *tags}) if item.pin_tags and tags else []
-    return item.model_copy(update={"pin_tags": pins})
-
-
 def _protected_roots(uris: list[str], options: dict[str, str], settings: MaintenanceSettings) -> base_refs.BaseRefs:
-    """#128d/#114 THE PRE-PASS — over every discovered dataset in EVERY bucket, before one is compacted.
+    """#128d/#114 THE PRE-PASS — over every discovered dataset in EVERY bucket, before one is touched.
 
-    It has to be whole-estate and it has to be first: a shallow clone in bucket B is the only thing that
-    knows bucket A's dataset must not be touched, so a per-bucket or per-dataset check cannot see it. The
-    SOURCE carries no feature flag and no ``base_paths`` of its own (measured), which is why the flag
-    gate inside ``compact_one`` misses this entirely.
-
-    ONLY A SANCTIONED BASE PROTECTS ([[LH-279]]): the referrer's own root, a configured external blob
-    base, or one in the catalog's base record for the referrer's root. Anything else a manifest declares
-    is a writer's claim — a planted base froze every table it named (lh279 p1/p3) — so it is reported as
-    ``maintenance_unrecorded_base`` and counted, and protects nothing. A record that cannot be read
-    ABORTS the tick, the rule the trash and policy registries follow: a protective record read as absent
-    would free a recorded clone source's bytes.
-
-    Cost is one manifest read per dataset and no data file is opened — the same order as discovery
-    itself, paid once per tick — plus one record read per root declaring a base neither its own nor
-    configured. The SERVICE's session, not one minted per call:
-    ``MAINTENANCE_LANCE_METADATA_CACHE_MB`` / ``_INDEX_CACHE_MB`` are the operator's cap, and this
-    pre-pass is the one loop that opens EVERY dataset in the estate. Omitting it let base_refs mint its
-    own default-sized session, so a tuned-down cap silently did not apply here and a second session
-    competed with the tick's.
+    Whole-estate and first: a shallow clone in bucket B is the only thing that knows bucket A's dataset is referenced,
+    and the SOURCE carries no flag and no ``base_paths`` of its own. ONLY A SANCTIONED BASE PROTECTS ([[LH-279]]): the
+    referrer's own root, a configured external blob base, or one in the catalog's base record. Anything else a manifest
+    declares is reported as ``maintenance_unrecorded_base`` and protects nothing. A base record that cannot be read
+    ABORTS the tick. Uses the SERVICE's Lance session, so the operator's cache caps apply to the one loop that opens
+    every dataset in the estate.
     """
     try:
         protected = base_refs.protected_roots(
-            uris,
-            options,
-            configured=settings.external_blob_base_list,
-            record_of=base_record_reader(settings, options),
-            session=shared_lance_session(),
+            uris, options, configured=settings.external_blob_base_list, record_of=base_record_reader(settings, options), session=shared_lance_session()
         )
     except base_registry.UnreadableBaseRecordError:
         log.error("maintenance_base_record_unreadable_tick_aborted")
         raise
+    _report_base_refs(protected)
+    return protected
+
+
+def _report_base_refs(protected: base_refs.BaseRefs) -> None:
+    """Log what the pre-pass found and count its unrecorded bases. An unreadable dataset is named, never fatal."""
     if protected.protected or protected.pinned:
         log.info(
             "maintenance_protected_bases", extra={"count": len(protected.protected), "pinned": len(protected.pinned), "roots": sorted(protected.protected)[:20]}
         )
     record_unrecorded_bases(len(protected.findings))
     if protected.findings:
-        log.warning(
-            "maintenance_unrecorded_base",
-            extra={
-                "count": len(protected.findings),
-                "bases": [{"referrer": finding.referrer, "base": finding.base, "relation": finding.relation.value} for finding in protected.findings[:20]],
-            },
-        )
+        bases = [{"referrer": finding.referrer, "base": finding.base, "relation": finding.relation.value} for finding in protected.findings[:20]]
+        log.warning("maintenance_unrecorded_base", extra={"count": len(protected.findings), "bases": bases})
     if protected.unreadable:
-        # NOT fatal, and not silent either. An unreadable dataset might have been the referrer whose
-        # base_paths protect a dataset this tick is about to rewrite, so the gap is named — the same
-        # rule the orphan scan follows with `checked=False`. Escalating to a refusal of the whole tick
-        # would let one corrupt dataset stop maintenance estate-wide.
-        log.warning(
-            "maintenance_base_refs_incomplete",
-            extra={"count": len(protected.unreadable), "datasets": [uri for uri, _ in protected.unreadable][:20]},
-        )
-    return protected
+        log.warning("maintenance_base_refs_incomplete", extra={"count": len(protected.unreadable), "datasets": [uri for uri, _ in protected.unreadable][:20]})
 
 
 def _exclude_trashed(uris: list[str], trashed_by_path: dict[str, str]) -> tuple[list[str], list[DatasetResult]]:
-    """Split the discovered URIs into the ones this tick may rewrite and a result per excluded dataset.
+    """Split the discovered URIs into the ones this tick may touch and a result per excluded dataset (F6(d)).
 
-    F6(d) THE TRASH EXCLUSION, and its POSITION is the load-bearing part.
-
-    A recoverable drop deregisters the table's ``__manifest`` row and files a trash record. It moves no
-    byte: the dataset directory keeps its ``_versions/`` child, which is the ONLY thing
-    ``discover_datasets`` consults to decide "this is a Lance dataset". So a dropped table was
-    rediscovered on the very next tick, indistinguishable from a live one, and compacted +
-    index-remapped + ``cleanup_old_versions``'d every 30 minutes for its whole grace window — silently
-    rewriting the history the window promises, and counting it as a successful maintenance pass.
-
-    AFTER :func:`_protected_roots` and BEFORE the maintenance loop, never inside ``discover_datasets``:
-
-     * The pre-pass must keep the FULL discovered list. A trashed shallow CLONE's manifest base_paths
-       are the only evidence protecting its LIVE source from compaction (#114/#128d). Filtering before
-       the pre-pass would re-open that data-loss defect from the trash side.
-     * ``discover_datasets`` has three other callers — the orphan scan (``reconcile.py``), the purge's
-       ``_estate_base_refs``, and this sweep. Excluding there would be a silent coverage reduction in
-       the first and would remove the same protection evidence from the second.
-
-    COUNTED, never silently dropped — a tick that maintains 40 of 42 datasets has to say what happened
-    to the other two, and at cron frequency with nobody watching, a bare count is not actionable. Each
-    result carries the record id and its deadline, so an exclusion that has outlived its deadline (a
-    record the purge keeps refusing) reads as permanent rather than transient.
+    A recoverable drop deregisters the table and moves no byte, so discovery still finds it. AFTER
+    :func:`_protected_roots`: a trashed shallow clone's base_paths are the only evidence protecting its LIVE source.
+    COUNTED, never silently dropped, and each result names the record and its deadline.
     """
-    skipped_trashed = [(uri, trashed_by_path[base_refs.normalise(uri)]) for uri in uris if base_refs.normalise(uri) in trashed_by_path]
-    record_trashed_skipped(len(skipped_trashed))
-    if not skipped_trashed:
+    skipped = [(uri, trashed_by_path[base_refs.normalise(uri)]) for uri in uris if base_refs.normalise(uri) in trashed_by_path]
+    record_trashed_skipped(len(skipped))
+    if not skipped:
         return uris, []
-    log.info(
-        "maintenance_trashed_excluded",
-        extra={"count": len(skipped_trashed), "datasets": [uri for uri, _ in skipped_trashed][:20]},
+    log.info("maintenance_trashed_excluded", extra={"count": len(skipped), "datasets": [uri for uri, _ in skipped][:20]})
+    kept = [uri for uri in uris if base_refs.normalise(uri) not in trashed_by_path]
+    return kept, [DatasetResult(uri=uri, trashed=reason) for uri, reason in skipped]
+
+
+class SweepPlan(BaseModel):
+    """What one tick decided before touching a dataset."""
+
+    #: The datasets to expire and evaluate, shuffled.
+    uris: list[str]
+    #: The datasets decided without work: the trash exclusions.
+    decided: list[DatasetResult] = Field(default_factory=list)
+    protected: base_refs.BaseRefs = Field(default_factory=base_refs.BaseRefs)
+    clones: CloneList
+    table_ids: TableIds = Field(default_factory=TableIds)
+    context: PlanContext
+
+
+def _emit_zero_baselines() -> None:
+    """Create every per-dataset series at 0 from the first tick: an estate with no datasets runs no dataset, and a
+    counter nothing adds to is a series that does not exist — an alert on it reads "no data"."""
+    record_reclaimed(versions_removed=0)
+    record_refused(0)
+    record_mixed_file_versions(0)
+    record_unrecorded_bases(0)
+
+
+def plan_sweep(settings: MaintenanceSettings) -> SweepPlan:
+    """Decide what this tick covers, WITHOUT touching a dataset.
+
+    ``record_run_started`` fires here, BEFORE discovery: a pass killed at dataset 400 of 900 is otherwise identical to a
+    tick that never arrived, and started-minus-completed is the lost-pass count.
+    """
+    record_run_started()
+    _emit_zero_baselines()
+    options = settings.storage_options()
+    now = datetime.now(UTC)
+    policies = load_policies(settings, options)
+    trashed_by_path = _trash_exclusions(settings, options)
+    buckets = buckets_to_sweep(settings, options)
+    uris = _discover_all(_s3fs(settings), buckets, max_depth=settings.discovery_max_depth)
+    protected = _protected_roots(uris, options, settings)
+    uris, decided = _exclude_trashed(uris, trashed_by_path)
+    # Discovery order is deterministic, so a pass that consistently dies at dataset N would never reach what follows.
+    random.shuffle(uris)
+    return SweepPlan(
+        uris=uris,
+        decided=decided,
+        protected=protected,
+        clones=CloneList.taken(protected, at=now),
+        table_ids=table_ids({f"s3://{bucket}" for bucket in buckets}, options),
+        context=PlanContext(policies=policies, now=now, older_than=timedelta(days=settings.older_than_days)),
     )
-    return (
-        [uri for uri in uris if base_refs.normalise(uri) not in trashed_by_path],
-        [DatasetResult(uri=uri, trashed=reason) for uri, reason in skipped_trashed],
-    )
 
 
-def maintain_one_item(item: DatasetWorkItem, *, settings: MaintenanceSettings, options: dict[str, str]) -> DatasetResult:
-    """Execute ONE work item. The worker entry point — takes nothing computed across the estate.
-
-    The absence of a whole-estate parameter here is load-bearing rather than incidental, and
-    ``test_a_work_item_is_self_contained.py`` pins the signature: reintroducing one would put the
-    queue in front of work that cannot actually be distributed.
-
-    ``protected_by`` is rehydrated into the single-root ``BaseRefs`` ``compact_one`` expects.
-    ``is_protected`` matches by containment, so reconstructing from the MATCHED root returns that same
-    root for this uri — the verdict is preserved exactly, not approximated.
-
-    It is NORMALISED on the way in, and that is not defensive tidying. ``is_protected`` normalises the
-    location it is asked about but compares against ``protected`` verbatim, so a root that reaches this
-    unnormalised — a hand-built item, or a producer that stores the URI it read rather than the verdict
-    it was given — matches nothing, and base_refs names that outcome precisely: "the failure mode that
-    looks exactly like having no guard at all". A work item crosses a queue, so it will eventually be
-    built by something other than :func:`plan_sweep`.
-    """
-    protected = protection_of(item)
-    # THE REWRITE IS SIGNED PER TABLE, not by the root key. `options` — the deployment's ambient
-    # credential — reaches every bucket in the estate, and a compaction is a WRITE. What signs these
-    # bytes becomes a credential scoped to this one table prefix and expiring in 900s, falling back to
-    # `options` wherever no credential is on offer (see `services/credentials.py`; a hardening that can
-    # fail a maintenance run would be a new way to stop reclaiming disk).
-    #
-    # HERE rather than at plan time, because a credential minted at planning would be as old as the
-    # unit — and the work stream is `workqueue` retention, so a unit can sit for up to the stream's
-    # max-age before a worker takes it. That is the same staleness argument the protection re-check
-    # above this makes, applied to the thing that expires by design.
-    # ASK BEFORE PAYING. A vend mints a 900-second STS identity record on the store and nothing prunes
-    # them — measured 2026-09-11 at 280/minute, against a previous store that became unable to restart
-    # at 107,485 — so a credential minted for a unit that writes nothing is not merely waste, it is the
-    # thing that takes the object store down. The probe is conservative: anything it cannot answer, or
-    # cannot read, counts as "may write", because skipping a dataset that WOULD have been maintained is
-    # the failure this service exists to prevent while a spare credential is only a cost.
-    probe = _probe_before_vending(item.uri, options, cleanup_enabled=item.plan.cleanup_enabled, optimize_indices_enabled=item.plan.optimize_indices_enabled)
-    if not probe.may_write:
-        return _maintain_one(item.uri, item.plan, settings=settings, options=options, protected=protected)
-    # THE PATH FIRST, THE STAMP ONLY WHERE THE PATH IS SILENT. `item.table_id` is derived from where
-    # the bytes actually are; the stamp is what a producer claimed, and [[LH-141]] is a catalogue of
-    # wrong stamps — so the stamp must never displace an answer the layout could give. It fills the gap
-    # the parser cannot read (every composed `medallion/<tier>` path), and the vend then checks it
-    # against the catalog's own location for that id rather than trusting it.
-    # DERIVATION IS THE THIRD ANSWER, not an absent one. `write_options_for` already falls back to
-    # `table_id_from_location` internally, so leaving it out here made the CREDENTIAL door see an id
-    # the rewrite door never did — measured 2026-09-21, that gap put 123 of 151 unstamped datasets on
-    # the in-pod rewrite while their bytes were signed by a table-scoped credential vended under the
-    # very id the gate was told did not exist. Resolving once, here, is what makes the two agree.
-    table_id = item.table_id or probe.declared_table_id or table_id_from_uri(item.uri)
-    # What every refusal below returns. The probe already read the manifest, so its census rides along.
-    refused = DatasetResult(uri=item.uri, data_storage_version=probe.data_storage_version, mixed_data_file_versions=probe.mixed_data_file_versions)
-    try:
-        write_options = credentials.write_options_for(item.uri, settings, fallback=options, declared_table_id=table_id)
-    except compaction_executor.GovernedElsewhere as exc:
-        # FIRST, because it is a `MaintenanceDenied` that the catalog did not give: the vend door answered
-        # 200 for a table that lives elsewhere. Refused against this DATASET only; the table the id names is
-        # healthy, so counting it under that id would page an operator to grant what is already granted.
-        log.warning("maintenance_governed_elsewhere", extra={"uri": item.uri, "table_id": table_id, "reason": str(exc)})
-        refused.refused = str(exc)
-        refused.refused_by = "governed_elsewhere"
-        return refused
-    except compaction_executor.MaintenanceUnauthenticated as exc:
-        # The vend door's 401: this service's credential, refused at every table alike, so never counted under
-        # this one's id. The dataset still stops: the ambient key would sign what the catalog has not authorized.
-        log.warning("maintenance_unauthenticated", extra={"uri": item.uri, "table_id": table_id, "reason": str(exc)})
-        refused.refused = str(exc)
-        refused.refused_by = "unauthenticated"
-        return refused
-    except compaction_executor.MaintenanceDenied as exc:
-        # The catalog refused this identity a write credential for this table. Maintaining it anyway
-        # means maintaining it under `options` — the ambient key, which reaches every bucket in the
-        # estate — so the refusal has to stop the dataset, not just the vend. Refused rather than
-        # errored: nothing is broken, a grant is missing, and the two must not read alike. NAMED, like
-        # every other gate: a missing grant and an unsupported manifest flag are a permissions fix and a
-        # dependency upgrade, and one number cannot say which.
-        log.warning("maintenance_vend_denied", extra={"uri": item.uri, "table_id": table_id, "reason": str(exc)})
-        refused.park(str(exc), gate="vend_denied", table_id=table_id)
-        return refused
-    except compaction_executor.TableNotGoverned as exc:
-        # The vend door's 404: no table or namespace by this id. On the default lane the plan door is never
-        # asked, so this is the only place that answer arrives, and the ambient key must not touch the dataset.
-        log.warning("maintenance_table_not_governed", extra={"uri": item.uri, "table_id": table_id, "reason": str(exc)})
-        refused.park(str(exc), gate="table_not_governed", table_id=table_id)
-        return refused
-    except compaction_executor.VendUndecided as exc:
-        # The vend door's 5xx: asked, and undecided. A FAILURE of this unit, not a refusal — `ack_for` redelivers
-        # a `maintain:` error and the serial sweep retries next tick — and never the ambient key ([[LH-279]]).
-        log.warning("maintenance_vend_undecided", extra={"uri": item.uri, "table_id": table_id, "reason": str(exc)})
-        refused.error, refused.error_type = f"maintain: {exc}", type(exc).__name__
-        return refused
-    return _maintain_one(item.uri, item.plan, settings=settings, options=write_options, protected=protected, table_id=table_id)
-
-
-def _resolve_plan(
-    uri: str,
-    *,
-    policy_records: list[dict[str, Any]],
-    settings: MaintenanceSettings,
-    options: dict[str, str],
-    now: datetime,
-    older_than: timedelta,
-) -> DatasetPlan:
-    """Resolve this dataset's #50/#84 policy record into one plan.
-
-    Fragment size is Lance's own unless a policy names ``target_rows_per_fragment``. A dataset's tier is
-    not read here: it is a namespace property the catalog judges (ADR 0160), and a size read from the
-    dataset's path would be a guess applied silently forever.
-
-    ``scan_batch_size`` starts at the SETTINGS default (#93) rather than ``None``, so an estate with no
-    policy anywhere is still bounded; a policy that names the field overrides it.
-
-    #60 ``index_columns`` — the columns this target's queries depend on being indexed. Reporting only,
-    and unreachable until a policy could name them: ``compact_one`` has accepted this argument all along
-    and no caller ever supplied one, so the dropped-index check was dead code.
-
-    A policy that cannot be resolved or parsed falls back to the GLOBAL defaults, including the settings
-    batch size — not ``None``: a malformed policy must not be the one path that hands compaction Lance's
-    unbounded 8192-row read (#93). "We could not read the tuning" is the worst moment to become unbounded.
-    """
-    plan = DatasetPlan(
-        older_than=older_than,
-        scan_batch_size=settings.scan_batch_size,
-        max_source_bytes=settings.max_source_bytes,
-        repack_mode=settings.repack_mode,
-    )
-    # ONE guard over the whole resolution, exactly as the inlined version had it: resolving the record,
-    # asking the cadence and parsing the fields are all "reading the tuning", and any of them failing
-    # means this dataset is maintained on the GLOBAL defaults rather than not maintained at all.
-    try:
-        policy = maintenance_policies.resolve_policy(policy_records, uri, logical_id=table_id_from_uri(uri), delimiter=settings.delimiter)
-        if policy is None:
-            return plan
-        if skipped := _policy_skip_reason(policy, settings=settings, options=options, now=now, uri=uri):
-            return DatasetPlan(skipped=skipped, policy=policy)
-        plan.policy = policy
-        if policy.get("retain_versions"):
-            plan.retain_versions = int(str(policy["retain_versions"]))
-        if policy.get("retention_days"):
-            plan.older_than = timedelta(days=int(str(policy["retention_days"])))
-        elif plan.retain_versions is not None:
-            # "retain_versions: N" alone means exactly keep-last-N — an age bound on top would silently
-            # keep everything younger than the global default and make the policy a no-op on fresh
-            # datasets. Tag-pinned versions stay exempt either way.
-            plan.older_than = None
-        if policy.get("target_rows_per_fragment"):
-            plan.target_rows_per_fragment = int(str(policy["target_rows_per_fragment"]))
-        if policy.get("scan_batch_size"):
-            plan.scan_batch_size = int(str(policy["scan_batch_size"]))
-        if policy.get("max_source_bytes"):
-            plan.max_source_bytes = int(str(policy["max_source_bytes"]))
-        if policy.get("repack_mode"):
-            plan.repack_mode = str(policy["repack_mode"])  # ty: ignore[invalid-assignment] — the policy record is a str map; the Literal is validated at the catalog door
-        if policy.get("index_columns"):
-            declared = policy["index_columns"]
-            plan.index_columns = [str(c) for c in declared] if isinstance(declared, list) else None
-        # Per-STEP opt-outs from the resolved policy. Winner-takes-all, like every other field: the
-        # record that matched supplies these, and a record that leaves them unset gets the default (on)
-        # rather than inheriting from the record it shadowed.
-        plan.cleanup_enabled = bool(policy.get("cleanup_enabled", True))
-        plan.optimize_indices_enabled = bool(policy.get("optimize_indices_enabled", True))
-    except Exception as exc:  # noqa: BLE001 — unreadable tuning maintains on the defaults, never unbounded
-        log.warning("compaction_policy_ignored", extra={"uri": uri, "error": str(exc)})
-        # Back to the SETTINGS batch size, not None: a malformed policy must not be the one path that
-        # hands compaction Lance's unbounded 8192-row read (#93).
-        return DatasetPlan(
-            older_than=older_than,
-            scan_batch_size=settings.scan_batch_size,
-            max_source_bytes=settings.max_source_bytes,
-            repack_mode=settings.repack_mode,
-        )
-    return plan
-
-
-def _stamp_cadence(uri: str, plan: DatasetPlan, result: DatasetResult, *, settings: MaintenanceSettings, options: dict[str, str], now: datetime) -> None:
-    """Record this dataset's ``last_maintained_at`` — only after a pass that could actually DO something.
-
-    ``refused is None`` is load-bearing and was missing. A refusal carries ``error=None`` by construction
-    (``optimize.py`` returns ``DatasetResult(uri=…, refused=…)`` with no error), so a dataset the sweep
-    can never maintain was stamped as freshly maintained — and for the whole ``compact_interval_hours``
-    window it then reported as a transient ``policy_interval`` skip rather than a standing refusal. A
-    permanent condition wearing a temporary label, on the one surface an operator would use to notice it.
-
-    Deliberately NOT extended to policy skips: those are the cadence working as intended.
-    """
-    policy = plan.policy
-    # `plan.skipped` FIRST: a `policy_interval` skip carries the very record whose cadence produced it,
-    # and re-stamping there would push the next maintenance out by another full interval on every tick —
-    # a dataset frozen forever by the mechanism that exists to pace it. In the inlined version this was
-    # implicit (the skip `continue`d past the stamp); extracted, it has to be said.
-    if plan.skipped is not None or policy is None or not policy.get("compact_interval_hours") or result.error is not None or result.refused is not None:
-        return
-    try:
-        maintenance_policies.write_state(settings.resolved_policy_root, options, policy, uri, now.isoformat())
-    except Exception as exc:  # noqa: BLE001 — a lost stamp re-paces one dataset; it must not fail the tick
-        log.warning("compaction_policy_stamp_failed", extra={"policy": policy.get("id"), "uri": uri, "error": str(exc)})
-
-
-def _rewriter(settings: MaintenanceSettings, write_options: dict[str, str]) -> Rewriter | None:
-    """The off-pod rewrite, or ``None`` when this deployment does not do it.
-
-    Gated on BOTH the flag and a catalog URL, because the two metadata halves are the catalog's own
-    doors: the flag alone would produce a worker that plans against nothing. `None` leaves the in-pod
-    `compact_files()` exactly as it was, which is what an estate that has not opted in must get.
-
-    Built per unit rather than held, matching what `credentials.write_options_for` does one line
-    above its caller and for the same reason: a unit can wait in the queue for as long as the
-    stream's max-age, and anything resolved at planning time is that stale by the time it is used.
-    """
-    if not (settings.distributed_compaction and settings.catalog_url):
-        return None
-
-    def _rewrite(uri: str, *, table_id: str, options: Mapping[str, Any]) -> compaction_executor.DistributedOutcome:
-        # `options` is `_compact_files`' `size_kw`: exactly what the in-pod rewrite would pass, so the
-        # plan carries all of it. The three memory bounds and the repack mode ride the PLAN because
-        # Lance bakes them into each task and `CompactionTask.execute` takes only the dataset (measured
-        # on pylance 12.0.0, 2026-09-25). The bounds are INDEXED, never `.get()`: `size_kw` always
-        # carries the floored settings, and a missing key must fail here rather than at the door.
-        policy = {name: options[name] for name in ("target_rows_per_fragment", "compaction_mode") if options.get(name) is not None}
-        outcome = compaction_executor.compact_distributed(
-            uri,
-            table_id=table_id,
-            # The SAME credential the in-pod rewrite would have used — vended and table-scoped where
-            # the door offers one, ambient otherwise. Resolved by the caller, never re-derived here.
-            write_options=write_options,
-            plan=lambda tid, pol: catalog_compaction.plan_via_catalog(tid, pol, settings=settings),
-            commit=lambda tid, results: catalog_compaction.commit_via_catalog(tid, results, settings=settings),
-            policy=policy,
-            batch_size=int(options["batch_size"]),
-            num_threads=int(options["num_threads"]),
-            max_source_bytes=int(options["max_source_bytes"]),
-            # The MEMORY bound, and deliberately not `max_concurrent_units`, which is the THROUGHPUT
-            # one. Only the rewrite holds bytes; a no-op unit never reaches it.
-            rewrite_slots=settings.max_concurrent_compactions,
-        )
-        if outcome is None:  # pragma: no cover - `compact_distributed` returns an outcome or raises
-            raise compaction_executor.CompactionPlaneUnavailable(f"no outcome for {table_id}")
-        return outcome
-
-    return _rewrite
-
-
-@dataclass(frozen=True, slots=True)
-class WriteProbe:
-    """What one pre-vend open of a dataset tells us: whether it can write, and what it calls itself.
-
-    BOTH ANSWERS COME FROM THE SAME OPEN, which is the only reason the second one is affordable. The
-    sweep walks 552 datasets a tick and this probe already opens every one of them that is about to be
-    vended for; reading the schema metadata the handle already holds costs nothing, while a second open
-    per dataset would be the shape this probe exists to avoid.
-    """
+class WriteProbe(BaseModel):
+    """What one pre-vend open of a dataset tells us: whether expiry could write, and what the dataset calls itself."""
 
     may_write: bool
-    #: The ``lineage.dataset_id`` the producer stamped, or ``None``. NEVER a guess — see
-    #: :class:`~service_kit.lakehouse.work_items.DatasetWorkItem` on why inventing one vends a
-    #: credential for the wrong table rather than for none.
+    #: The ``lineage.dataset_id`` the producer stamped, or ``None``. Never a guess.
     declared_table_id: str | None = None
-    #: Read off the same open, so a unit stopped at the vend is still counted in the mixed-version census.
     data_storage_version: str | None = None
     mixed_data_file_versions: bool = False
 
 
-def _probe_before_vending(uri: str, options: dict[str, str], *, cleanup_enabled: bool, optimize_indices_enabled: bool) -> WriteProbe:
-    """Could this unit write anything at all, and what does the dataset call itself?
+def _probe_before_vending(uri: str, options: dict[str, str], *, policy: ExpiryPolicy) -> WriteProbe:
+    """Could expiry write anything at all on this dataset, and what does it call itself?
 
-    THE SECOND QUESTION IS HERE BECAUSE THE TWO DOORS WERE ASKED ABOUT DIFFERENT TABLES. [[LH-141]]:
-    the credential door received ``item.table_id`` — filled from ``table_id_from_uri``, which answers
-    ``None`` for every composed ``medallion/<tier>`` path — while the compaction-plan door received the
-    dataset's own stamp, read inside ``compact_one``. Measured on the live estate 2026-09-16, one tick:
-    59 datasets wrote, 56 under a vended table-scoped credential and 3 under the ambient one with no
-    vend decision at all, all three composed paths. The window's totals say the same thing from the
-    other side: 1,310 SCOPED vend lines, 0 AMBIENT, 0 ``vend_skipped_unresolvable_location`` — the
-    skipped branch is a ``logger.debug`` that makes no HTTP call, so every observable read as total
-    coverage.
+    THE COST IT REMOVES, measured 2026-09-11: the store mints one STS identity record per vend and prunes none — 280 per
+    minute on this estate — and the previous store became unable to restart at 107,485 of them. Expiry writes only
+    when commit-path cleanup is armed (the disarm commits) or the policy's threshold of reclaimable versions is met,
+    counted by the same rule the pass itself applies.
 
-    THE COST IT REMOVES, measured 2026-09-11: the store mints one STS identity record per vend and
-    prunes none — 280 per minute on this estate — and the previous store became unable to restart at
-    107,485 of them, its IAM bootstrap walking the whole prefix inside a 5-second disk timeout and then
-    giving up permanently. The sweep vended `tier=write` for every PLANNED dataset before anything had
-    decided the dataset needed rewriting, against an estate whose own history is that almost nothing is
-    ever rewritten (`fragments_removed_total=0` across 785 ticks).
-
-    IT RESTORES `credentials.py`'s PREMISE rather than contradicting it. That module argues NO CACHE
-    because maintenance "vends once per WORK ITEM"; the argument is sound and the premise was not true,
-    because the vend was per PLANNED item. A unit that will not write is not a work item.
-
-    CONSERVATIVE BY CONSTRUCTION, and that direction is the entire safety argument: answering "no" for
-    a dataset that WOULD have been maintained means a dataset silently stops being maintained, which is
-    the failure this service exists to prevent. A wasted credential is only a cost. So every uncertain
-    answer — an unreadable dataset above all — is `True`.
+    CONSERVATIVE BY CONSTRUCTION: an unreadable dataset answers `True`, because skipping a dataset that WOULD have been
+    maintained is the failure this service exists to prevent while a spare credential is only a cost. Logged, never
+    silent: the conservative answer otherwise hides a real fault as an extra credential.
     """
     try:
         ds = lance.dataset(uri, storage_options=options, session=shared_lance_session())
-        found = WriteProbe(
-            may_write=False,
+        armed = bool(auto_cleanup.armed_keys(ds.config()))
+        reclaimable = policy.cleanup_enabled and count_reclaimable(ds, uri, policy) >= policy.min_reclaimable
+        return WriteProbe(
+            may_write=armed or reclaimable,
             declared_table_id=declared_table_id(ds),
             data_storage_version=ds.data_storage_version,
             mixed_data_file_versions=mixes_data_file_versions(manifest_feature_flags(ds)[0]),
         )
-        if auto_cleanup.armed_keys(ds.config()):
-            return replace(found, may_write=True)  # the commit path is armed, and disarming it commits
-        if len(ds.get_fragments()) > 1:
-            return replace(found, may_write=True)  # compaction can merge them
-        if cleanup_enabled and len(ds.versions()) > 1:
-            return replace(found, may_write=True)  # a superseded version is something to reclaim
-        if optimize_indices_enabled and any(not str(ix.name).startswith("__") for ix in ds.describe_indices()):
-            return replace(found, may_write=True)  # an index optimize commits
     except Exception as exc:
-        # Unreadable, absent, or a pylance refusal: cannot tell, so do not decide. `compact_one` runs
-        # its own refusal ladder over exactly these cases and reports them honestly; short-circuiting
-        # here would turn a reported refusal into silence.
-        #
-        # LOGGED, never silent. The conservative answer makes every failure here look like a healthy
-        # estate paying for one extra credential, so a real fault would never surface — and it already
-        # hid one: `lance` was not imported in this module, so the probe raised NameError on every
-        # dataset and the whole check reported "may write" while appearing to work.
         log.debug("maintenance_write_probe_unreadable", extra={"uri": uri, "error": f"{type(exc).__name__}: {exc}"})
-        # A pylance that refuses the open over flag 256 still names it, the same rule compact_one applies.
         return WriteProbe(may_write=True, mixed_data_file_versions=mixes_data_file_versions(flags_from_open_error(exc) or 0))
-    return found
 
 
-def _maintain_one(
-    uri: str,
-    plan: DatasetPlan,
-    *,
-    settings: MaintenanceSettings,
-    options: dict[str, str],
-    protected: base_refs.BaseRefs,
-    #: The id `options` was vended under, where one was resolved. Carried so `compact_one` addresses
-    #: the catalog's plan/commit doors by the same identifier — a rewrite planned for one table and
-    #: signed for another is the disagreement this parameter exists to make impossible.
-    table_id: str | None = None,
-) -> DatasetResult:
-    """One dataset's compact + index-optimize + GC pass, inside its own span.
+def _on_governed_elsewhere(result: DatasetResult, exc: Exception, _table_id: str | None) -> None:
+    result.refuse(str(exc), gate="governed_elsewhere")
 
-    Each compact+GC is blocking Lance/S3 work invisible to auto-instrumentation — a per-dataset INTERNAL
-    span lets a slow or failing compaction be localized in the trace instead of hiding in the cron
-    handler. ``compact_one`` never raises (it captures the per-dataset error), so a failure and a refusal
-    are both reflected on the span explicitly; otherwise a failed dataset looks identical to a clean one
-    in the trace, and a refusal (#64) would be invisible there entirely.
+
+def _on_unauthenticated(result: DatasetResult, exc: Exception, _table_id: str | None) -> None:
+    result.refuse(str(exc), gate="unauthenticated")
+
+
+def _on_vend_denied(result: DatasetResult, exc: Exception, table_id: str | None) -> None:
+    result.park(str(exc), gate="vend_denied", table_id=table_id)
+
+
+def _on_table_not_governed(result: DatasetResult, exc: Exception, table_id: str | None) -> None:
+    result.park(str(exc), gate="table_not_governed", table_id=table_id)
+
+
+def _on_vend_undecided(result: DatasetResult, exc: Exception, _table_id: str | None) -> None:
+    result.error, result.error_type = f"maintain: {exc}", type(exc).__name__
+
+
+#: How each answer of the vend door that stops the dataset is recorded, and the line it logs. A refusal and a park are
+#: not failures: nothing broke, a grant is missing or a stamp is wrong. Only an undecided door is a failure, retried
+#: next tick. Every one of them stops the dataset: anything done after it would be signed by the ambient key.
+_VEND_ANSWERS: dict[type[Exception], tuple[str, Callable[[DatasetResult, Exception, str | None], None]]] = {
+    credentials.GovernedElsewhere: ("maintenance_governed_elsewhere", _on_governed_elsewhere),
+    credentials.MaintenanceUnauthenticated: ("maintenance_unauthenticated", _on_unauthenticated),
+    credentials.MaintenanceDenied: ("maintenance_vend_denied", _on_vend_denied),
+    credentials.TableNotGoverned: ("maintenance_table_not_governed", _on_table_not_governed),
+    credentials.VendUndecided: ("maintenance_vend_undecided", _on_vend_undecided),
+}
+
+
+def _stopped_by_vend(probe: WriteProbe, target: ExpiryTarget, exc: Exception) -> DatasetResult:
+    """The result of a dataset the vend door's answer stopped, carrying the census the probe already read."""
+    event, record = _VEND_ANSWERS[type(exc)]
+    log.warning(event, extra={"uri": target.uri, "table_id": target.table_id, "reason": str(exc)})
+    stopped = DatasetResult(uri=target.uri, data_storage_version=probe.data_storage_version, mixed_data_file_versions=probe.mixed_data_file_versions)
+    record(stopped, exc, target.table_id)
+    return stopped
+
+
+def _expire(uri: str, plan: DatasetPlan, *, sweep: SweepPlan, settings: MaintenanceSettings) -> DatasetResult:
+    """One dataset's expiry, signed by a table-scoped vend where expiry may write.
+
+    The id the catalog's ``__manifest`` names comes first, then the one the path's layout carries; the producer's stamp
+    answers only where both are silent, because a stamp is a claim and [[LH-141]] is a catalogue of wrong ones. One
+    resolution feeds the vend and the result, so the id a credential is scoped to and the id events name cannot
+    disagree.
     """
-    with tracer.start_as_current_span("compaction.compact") as span:
+    options = settings.storage_options()
+    policy = plan.expiry_policy(min_reclaimable=settings.min_versions_to_expire)
+    probe = _probe_before_vending(uri, options, policy=policy)
+    table_id = sweep.table_ids.of(uri) or table_id_from_uri(uri) or probe.declared_table_id
+    target = ExpiryTarget(uri=uri, storage_options=options, protected=sweep.protected, table_id=table_id)
+    if probe.may_write:
+        try:
+            target.storage_options = credentials.write_options_for(uri, settings, fallback=options, declared_table_id=table_id)
+        except (credentials.MaintenanceDenied, credentials.TableNotGoverned, credentials.VendUndecided) as exc:
+            return _stopped_by_vend(probe, target, exc)
+    return expire_versions(target, policy)
+
+
+def _expire_in_span(uri: str, plan: DatasetPlan, *, sweep: SweepPlan, settings: MaintenanceSettings) -> DatasetResult:
+    """:func:`_expire` inside its own span, timed around the work: a failure and a refusal are both on the span."""
+    with tracer.start_as_current_span("maintenance.expire_versions") as span:
         span.set_attribute("lance.maintenance.dataset_uri", uri)
-        if plan.skipped:
-            span.set_attribute("lance.maintenance.policy_skipped", plan.skipped)
-            # LOGGED HERE TOO, because this return bypasses the one at the bottom. A cadence skip is an
-            # outcome a reader asks about — "why did this dataset not move this tick" — so omitting it
-            # would make the per-dataset record answer only for the datasets that ran.
-            skipped_result = DatasetResult(uri=uri, skipped=plan.skipped)
-            _record_dataset_outcome(skipped_result, subject=settings.catalog_service_identity)
-            return skipped_result
-        # TIMED AROUND THE REWRITE ITSELF, not the whole span: the skip above returns before any
-        # dataset is opened, and [[LH-098]] wants "how long did this pass take" to mean the work, not
-        # the decision not to do it. `perf_counter` rather than wall time because this measures a
-        # DURATION — it is monotonic and immune to a clock step mid-compaction.
         started = perf_counter()
-        result = compact_one(
-            uri,
-            options,
-            plan.older_than,
-            # THE SAME credential the in-pod rewrite uses — vended and table-scoped where the door
-            # offers one. `options` reached here already resolved; re-deriving it for the distributed
-            # path would be a second answer to "what signs these bytes".
-            rewrite=_rewriter(settings, options),
-            retain_versions=plan.retain_versions,
-            target_rows_per_fragment=plan.target_rows_per_fragment,
-            cleanup_enabled=plan.cleanup_enabled,
-            optimize_indices_enabled=plan.optimize_indices_enabled,
-            scan_batch_size=plan.scan_batch_size,
-            max_source_bytes=plan.max_source_bytes,
-            repack_mode=plan.repack_mode,
-            compact_threads=settings.compact_threads,
-            # The MEMORY bound on the in-pod path, matching the distributed one above.
-            rewrite_slots=settings.max_concurrent_compactions,
-            protected=protected,
-            index_columns=plan.index_columns,
-            table_id=table_id,
-        )
+        result = _expire(uri, plan, sweep=sweep, settings=settings)
         result.duration_seconds = round(perf_counter() - started, 3)
         span.set_attribute("lance.maintenance.duration_seconds", result.duration_seconds)
         if result.refused is not None:
             span.set_attribute("lance.maintenance.refused", result.refused)
         if result.error is not None:
             span.set_status(StatusCode.ERROR, result.error)
-            if result.error_type:  # error.type: stable class name so error spans aggregate
-                span.set_attribute("error.type", result.error_type)
-        _record_dataset_outcome(result, subject=settings.catalog_service_identity)
+            span.set_attribute("error.type", result.error_type or "Unknown")
         return result
 
 
+def _evaluate_due(uri: str, plan: DatasetPlan, *, sweep: SweepPlan, settings: MaintenanceSettings) -> DueVerdict:
+    """Write or delete the due record of the table this dataset is; ``unnamed`` when no ``__manifest`` row names it."""
+    table = sweep.table_ids.of(uri)
+    if table is None:
+        return "unnamed"
+    question = plan.due_question(table=table, location=uri, clones=sweep.clones.clones_of(uri))
+    return refresh_due(question, settings, now=sweep.context.now)
+
+
+def _plan_for(uri: str, *, sweep: SweepPlan, settings: MaintenanceSettings) -> DatasetPlan:
+    """The dataset's plan, with the policy cadence applied."""
+    plan = resolve_plan(uri, context=sweep.context, table_id=sweep.table_ids.of(uri) or table_id_from_uri(uri), settings=settings)
+    if plan.policy is not None and (skipped := cadence_skip(plan.policy, settings=settings, uri=uri, now=sweep.context.now)):
+        plan.skipped = skipped
+    return plan
+
+
+def maintain_dataset(uri: str, *, sweep: SweepPlan, settings: MaintenanceSettings) -> DatasetResult:
+    """One dataset's sweep pass: expiry, then the due evaluation, then its cadence stamp and counters."""
+    record_dataset_swept()
+    plan = _plan_for(uri, sweep=sweep, settings=settings)
+    if plan.skipped is not None:
+        return _skipped(uri, plan, settings=settings)
+    result = _expire_in_span(uri, plan, sweep=sweep, settings=settings)
+    result.due = _evaluate_due(uri, plan, sweep=sweep, settings=settings)
+    _finish(result, plan=plan, now=sweep.context.now, settings=settings)
+    return result
+
+
+def expire_dataset(uri: str, *, sweep: SweepPlan, settings: MaintenanceSettings) -> DatasetResult:
+    """One dataset's expiry, with the cadence, stamp and counters a sweep pass carries: what the event lane runs after
+    a commit, ``sweep`` holding that one table."""
+    plan = _plan_for(uri, sweep=sweep, settings=settings)
+    if plan.skipped is not None:
+        return _skipped(uri, plan, settings=settings)
+    result = _expire_in_span(uri, plan, sweep=sweep, settings=settings)
+    _finish(result, plan=plan, now=sweep.context.now, settings=settings)
+    return result
+
+
+def _skipped(uri: str, plan: DatasetPlan, *, settings: MaintenanceSettings) -> DatasetResult:
+    skipped = DatasetResult(uri=uri, skipped=plan.skipped)
+    _record_dataset_outcome(skipped, subject=settings.catalog_service_identity)
+    return skipped
+
+
+def _finish(result: DatasetResult, *, plan: DatasetPlan, now: datetime, settings: MaintenanceSettings) -> None:
+    _stamp_cadence(result, plan=plan, settings=settings, now=now)
+    _record_dataset_metrics(result)
+    _record_dataset_outcome(result, subject=settings.catalog_service_identity)
+
+
+def _stamp_cadence(result: DatasetResult, *, plan: DatasetPlan, settings: MaintenanceSettings, now: datetime) -> None:
+    """Record this dataset's ``last_maintained_at`` — only after a pass that could actually DO something.
+
+    A refusal carries ``error=None``, so without ``refused is None`` a dataset the sweep can never maintain would read
+    as a transient ``policy_interval`` skip for the whole interval rather than a standing refusal.
+    """
+    policy = plan.policy
+    if policy is None or not policy.get("compact_interval_hours") or result.error is not None or result.refused is not None:
+        return
+    try:
+        maintenance_policies.write_state(settings.resolved_policy_root, settings.storage_options(), policy, result.uri, now.isoformat())
+    except Exception as exc:  # noqa: BLE001 — a lost stamp re-paces one dataset; it must not fail the tick
+        log.warning("compaction_policy_stamp_failed", extra={"policy": policy.get("id"), "uri": result.uri, "error": str(exc)})
+
+
+def _record_dataset_metrics(result: DatasetResult) -> None:
+    """The per-dataset counters, keyed by the STABLE error class and the refusing gate, never a message or a URI."""
+    record_reclaimed(versions_removed=result.old_versions_removed, bytes_removed=result.bytes_removed)
+    record_refused(1 if result.refused else 0, result.refused_by)
+    _record_parked(result)
+    record_mixed_file_versions(1 if result.mixed_data_file_versions else 0)
+    if result.error is not None:
+        record_failed({result.error_type or "Unknown": 1})
+
+
+def _record_parked(result: DatasetResult) -> None:
+    """Count a catalog refusal under the table id it refused, which `MaintenanceTableParked` pages on. Only the
+    catalog's answers: a layout refusal can land on a location that names no table."""
+    if result.refused_table_id is None:
+        return
+    match result.refused_by:
+        case "vend_denied" | "table_not_governed" as gate:
+            record_table_parked(table_id=result.refused_table_id, refused_by=gate)
+        case _:
+            return
+
+
 def _record_dataset_outcome(result: DatasetResult, *, subject: str) -> None:
-    """One structured line per dataset per tick — §H5's first clause.
-
-    THE SWEEP WAS THE ONE PATH IN THIS SERVICE THAT LEFT NO PER-OBJECT TRACE. The purge emits a
-    `table_purged` control event; compaction and version reclamation emitted nothing per dataset, so an
-    hourly pass over the whole estate was visible only as an aggregate — and "reclaimed 0 versions
-    across 440 datasets" cannot be told apart from "declined 440 datasets" without opening the code.
-
-    EVERY outcome is logged, including the uneventful one, because a dataset the sweep looked at and
-    left alone is the answer to a real question. This module's own docstrings call the alternative "the
-    0 that means we did not look".
-
-    The fields are `DatasetResult`'s, which already carried them — this is a call site, not a new
-    model. They ride `extra=`, so they are absent from `kubectl logs` (the pod formatter renders
-    `%(message)s` only) and present in GreptimeDB as `log_attributes`, which is where a per-dataset
-    question is actually asked:
+    """One structured line per dataset per tick, the uneventful ones included: a dataset the sweep looked at and left
+    alone is the answer to a real question. The fields ride `extra=`, so they land in GreptimeDB as `log_attributes`:
 
         SELECT log_attributes FROM opentelemetry_logs WHERE body = 'maintenance_dataset_outcome'
     """
@@ -824,16 +465,9 @@ def _record_dataset_outcome(result: DatasetResult, *, subject: str) -> None:
         extra={
             "dataset": result.uri,
             "table_id": result.table_id,
-            "mode": result.compaction_mode,
-            "fragments_removed": result.fragments_removed,
-            "fragments_added": result.fragments_added,
             "old_versions_removed": result.old_versions_removed,
             "bytes_removed": result.bytes_removed,
-            "indices_optimized": result.indices_optimized,
-            # The three NON-outcomes are carried separately on purpose: a refusal is about the
-            # dataset's LAYOUT, a skip about this tick's cadence, a trash exclusion about its
-            # governance state — folding them into one "reason" is what made a shallow clone's
-            # silent materialisation invisible.
+            "due": result.due,
             "refused": result.refused,
             "skipped": result.skipped,
             "trashed": result.trashed,
@@ -843,152 +477,7 @@ def _record_dataset_outcome(result: DatasetResult, *, subject: str) -> None:
             "mixed_data_file_versions": result.mixed_data_file_versions,
         },
     )
-    # AND ON THE COMPLIANCE STREAM, for the material ones. The record above is an app log — rich,
-    # queryable, and gone with `observability.enabled=false`, on a TTL chosen for traces. A rewrite is
-    # a security-relevant action on a named object, so it also belongs where the estate's other such
-    # actions live. One funnel rather than a call beside each of this function's two callers, which is
-    # the shape that drifts.
     audit_material_work(result, subject=subject)
-
-
-def execute_unit(item: DatasetWorkItem, *, settings: MaintenanceSettings, options: dict[str, str], now: datetime) -> DatasetResult:
-    """Do ONE unit and record what it cost — the whole of a worker's job, and of a serial iteration's.
-
-    Both lanes call this so they cannot drift: a queued unit and a serially-executed one must maintain
-    the dataset, stamp its cadence and move the same counters, or "execution moved onto a queue" would
-    quietly also mean "and changed what maintenance does".
-
-    The counters here are the PER-DATASET ones, and they are all monotonic `.add()`, so N unit
-    recordings total exactly what one aggregate recording of N results did. ``record_run`` is
-    deliberately NOT among them: it is the tick's completion half of the ``record_run_started`` pair, and
-    firing it per unit would report N completed passes for one tick and destroy the lost-pass count that
-    pair exists to give. The zero baseline those series need is emitted per tick by :func:`plan_sweep`,
-    for the same reason.
-
-    On ``record_refused`` the zero carries the most weight of any counter in this service: ``SUPPORTED``
-    is a whitelist, so a rising refusal count after a pylance upgrade is the ONLY signal that maintenance
-    quietly stopped covering the estate. The FAILURE series is keyed by the STABLE error class, never the
-    message, which carries URIs and would make the series unbounded.
-    """
-    record_dataset_swept()
-    result = maintain_one_item(item, settings=settings, options=options)
-    _stamp_cadence(item.uri, item.plan, result, settings=settings, options=options, now=now)
-    record_reclaimed(
-        fragments_removed=result.fragments_removed,
-        versions_removed=result.old_versions_removed,
-        indices_optimized=result.indices_optimized,
-        bytes_removed=result.bytes_removed,
-    )
-    record_refused(1 if result.refused else 0, result.refused_by)
-    _record_parked(result)
-    record_mixed_file_versions(1 if result.mixed_data_file_versions else 0)
-    record_plan_refused(1 if result.plan_refused else 0)
-    if result.error is not None:
-        record_failed({result.error_type or "Unknown": 1})
-    return result
-
-
-def _record_parked(result: DatasetResult) -> None:
-    """Count a catalog refusal under the table id it refused, which `MaintenanceTableParked` pages on.
-
-    Only the catalog's three answers: a layout refusal can land on a location that names no table.
-    """
-    table_id = result.refused_table_id
-    if table_id is None:
-        return
-    match result.refused_by:
-        case "vend_denied" | "plan_denied" | "table_not_governed" as gate:
-            record_table_parked(table_id=table_id, refused_by=gate)
-        case _:
-            return
-
-
-def plan_sweep(settings: MaintenanceSettings) -> tuple[list[DatasetWorkItem], list[DatasetResult]]:
-    """Decide what this tick should do, WITHOUT doing any of it. Returns ``(work, already-decided)``.
-
-    Every phase here is a metadata read — registries, a bucket listing, one manifest open per dataset —
-    and none of them rewrites a byte or mints a version. That is what makes this half safe to keep in a
-    request handler while the other half moves to a worker, and it is the same split the catalog's
-    ``/compaction_plan`` door draws.
-
-    The phases, each its own function above and each ordered for a reason that function states: read the
-    protective registries (:func:`_load_policies`, :func:`_trash_exclusions` — either one unreadable
-    ABORTS the tick), enumerate the buckets (:func:`_buckets_to_sweep`), discover (:func:`_discover_all`),
-    take the whole-estate base-reference pre-pass (:func:`_protected_roots`), then remove what the trash
-    freezes (:func:`_exclude_trashed`).
-
-    The pre-pass is the one thing that cannot be per-dataset, and it is REDUCED here rather than carried:
-    ``compact_one`` asks it exactly one question per dataset, so each work item leaves with that
-    question's answer and the whole-estate value stays behind.
-
-    The second return is the datasets already decided without work — the trash exclusions — which are
-    results, not units, and must not be enqueued.
-
-    ``record_run_started`` fires here, BEFORE discovery, for the reason it always did: a pass killed at
-    dataset 400 of 900 was observationally identical to a tick that never arrived, and started-minus-
-    completed is the lost-pass count.
-    """
-    record_run_started()
-    # THE ZERO BASELINE, emitted per TICK because per-unit recording alone cannot: an estate with no
-    # datasets runs no unit, and a counter nothing ever adds to is a series that does not exist — a
-    # dashboard or alert on `rate(compaction_*_total[5m])` reads "no data" rather than "nothing to
-    # reclaim". Adding zero is a no-op for the totals and creates the series from the first tick, which
-    # is the rule `record_reclaimed` states and the sharper one `record_refused` states: a whitelist
-    # that silently starts refusing the whole estate must be visible from the first tick after the
-    # upgrade that caused it. Each unit then adds its own.
-    record_reclaimed(fragments_removed=0, versions_removed=0, indices_optimized=0)
-    record_refused(0)
-    record_mixed_file_versions(0)
-    record_plan_refused(0)
-    record_unrecorded_bases(0)
-    options = settings.storage_options()
-    older_than = timedelta(days=settings.older_than_days)
-    policy_records = _load_policies(settings, options)
-    trashed_by_path = _trash_exclusions(settings, options)
-    uris = _discover_all(_s3fs(settings), _buckets_to_sweep(settings, options), max_depth=settings.discovery_max_depth)
-    protected = _protected_roots(uris, options, settings)
-    uris, decided = _exclude_trashed(uris, trashed_by_path)
-    now = datetime.now(UTC)
-    # The discovery listing order is deterministic across ticks, so a pass that consistently dies at
-    # dataset N never maintained anything after N — silently, forever. Shuffling rotates which datasets
-    # sit behind a recurring failure point. It is a mitigation for the absence of a per-dataset failure
-    # boundary, and it stops being needed once these units are executed independently rather than in
-    # one serial pass; until then it still holds, and per-dataset pacing lives in the policy stamps,
-    # which do not care about order.
-    random.shuffle(uris)
-    items: list[DatasetWorkItem] = []
-    for uri in uris:
-        plan = _resolve_plan(uri, policy_records=policy_records, settings=settings, options=options, now=now, older_than=older_than)
-        # A POLICY SKIP IS A DECISION, SO IT IS DECIDED HERE ([[LH-191]]). The plan already knows —
-        # `compact_enabled=False`, or a `compact_interval_hours` that has not elapsed — and publishing
-        # the unit anyway made every cadence a queue hop that answered SUCCESS for doing nothing.
-        # Measured 2026-09-23: `planned=570 published=570` over 27 policies, against a lane that needs
-        # ~127s to clear one tick's injection and gets 120.
-        #
-        # WITHHOLDING LOSES NOTHING, and `_stamp_policy_state` is why: it returns early on
-        # `plan.skipped is not None`, because re-stamping a paced dataset "would push the next
-        # maintenance out by another full interval on every tick". So a skipped unit's only effect at
-        # the worker was the round trip.
-        #
-        # The reason travels into `decided` rather than evaporating, exactly as the trash exclusions
-        # do — that list is what the tick's `skipped_by` is built from, so a cadence that is working
-        # becomes visible instead of being indistinguishable from one that is not configured.
-        if plan.skipped is not None:
-            decided.append(DatasetResult(uri=uri, skipped=plan.skipped))
-            continue
-        protected_by, pin_tags = protection_for(protected, uri)
-        items.append(
-            DatasetWorkItem(
-                uri=uri,
-                plan=plan,
-                protected_by=protected_by,
-                pin_tags=pin_tags,
-                # Same derivation and same limit as `plan_one`: the flat layout yields an identity, every
-                # other layout yields None rather than a guess.
-                table_id=table_id_from_uri(uri),
-            )
-        )
-    return items, decided
 
 
 def execute_within_budget[T, R](
@@ -998,27 +487,15 @@ def execute_within_budget[T, R](
     budget_seconds: float,
     monotonic: Callable[[], float] = time.monotonic,
 ) -> Iterator[R]:
-    """Run each item, stopping BETWEEN items once ``budget_seconds`` is spent.
+    """Run each item, stopping BETWEEN items once ``budget_seconds`` is spent ([[LH-101]]).
 
-    [[LH-101]]. The tick executes every planned dataset in one serial pass, so at estate scale the tail
-    is maintained only if the pass happens to have time left. The dataset shuffle above rotates WHICH
-    datasets sit behind that point; it does not bound the pass.
-
-    THE CUT IS BETWEEN ITEMS, NEVER INSIDE ONE. A budget that interrupted a compaction would leave a
-    rewrite half-done — worse than an unmaintained dataset — so the check runs before starting the next
-    unit and the one already started always finishes.
-
-    ZERO IS UNLIMITED AND IS THE DEFAULT: an estate that sets no budget behaves exactly as before. The
-    VALUE is an operator decision, not something to infer — too small and a large estate never completes
-    a pass, too large and the bound is decorative.
-
-    AND IT SAYS WHAT IT DID NOT REACH. Stopping quietly would be the same silent starvation with a
-    setting attached, so exhaustion logs the executed and remaining counts.
+    The cut is between items, never inside one: a reclaim interrupted half-way is worse than one not started. Zero is
+    unlimited and the default. Exhaustion logs the executed and remaining counts, so a truncated tick says what it did
+    not reach.
     """
     if budget_seconds <= 0:
         yield from (run(item) for item in items)
         return
-
     remaining = list(items)
     started = monotonic()
     executed = 0
@@ -1031,27 +508,16 @@ def execute_within_budget[T, R](
 
 
 def report_bucket_coverage(*, planned: Iterable[str], maintained: Iterable[str]) -> None:
-    """Log what the tick MAINTAINED per bucket, beside what discovery already reports it found.
+    """Log what the tick MAINTAINED per bucket, beside what discovery reports it found ([[LH-101]]).
 
-    [[LH-101]]. `_discover_all` logs `compaction_bucket_discovered` so an operator can see what a tick
-    FOUND; nothing said what it maintained, and the two differ for reasons that matter — a refusal, a
-    failure, or a pass that stopped before reaching the bucket at all.
-
-    THE GAP IS THE SIGNAL, which is why a bucket with nothing maintained still reports rather than being
-    omitted: absence reads as "no such bucket", and that is precisely what made the starvation
-    invisible. With a budget set, the buckets at the tail of a truncated pass report their planned count
-    against `maintained=0`.
-
-    Per BUCKET because that is the unit an operator reasons about when a whole warehouse looks stale —
-    and because the dataset shuffle deliberately breaks bucket ordering, so a truncated tick starves
-    buckets PARTIALLY and only a per-bucket count shows it.
+    A bucket with nothing maintained still reports: absence reads as "no such bucket", and a truncated tick starves
+    buckets PARTIALLY because the dataset shuffle breaks bucket ordering.
     """
     counts: dict[str, list[int]] = {}
     for uri in planned:
         counts.setdefault(_bucket_of(uri), [0, 0])[0] += 1
     for uri in maintained:
-        entry = counts.get(_bucket_of(uri))
-        if entry is not None:
+        if (entry := counts.get(_bucket_of(uri))) is not None:
             entry[1] += 1
     for bucket, (planned_n, maintained_n) in sorted(counts.items()):
         log.info("compaction_bucket_maintained", extra={"bucket": bucket, "planned": planned_n, "maintained": maintained_n})
@@ -1062,162 +528,73 @@ def _bucket_of(uri: str) -> str:
     return uri.removeprefix("s3://").split("/", 1)[0] if uri.startswith("s3://") else uri
 
 
-def plan_one(uri: str, settings: MaintenanceSettings) -> DatasetWorkItem | None:
-    """Plan ONE dataset, named by a write event — the event lane's half of :func:`plan_sweep`.
+def clear_stale_due(settings: MaintenanceSettings, *, named: TableIds) -> int:
+    """Delete the due record of every table no ``__manifest`` names any more; how many were deleted.
 
-    Returns the unit to enqueue, or ``None`` when this dataset must not be maintained right now. It
-    applies the same three refusals the sweep applies, because an event lane that skipped any of them
-    would be a second, weaker door onto the same bytes:
-
-    * **the trash record** — a recoverably-dropped dataset is frozen until undrop or purge, and
-      rewriting it destroys time-travel someone can still restore. This is the refusal the estate has
-      already paid for by hand-overriding it once;
-    * **the policy** — `compact_enabled` and the cadence stamp, resolved winner-takes-all;
-    * **the base references** — whether another manifest resolves through these bytes.
-
-    The protection check is :func:`sibling_base_refs`, not the sweep's whole-estate pre-pass, and that
-    is a deliberate narrowing with the bound stated at that function: a referrer in another warehouse
-    is invisible here exactly as a referrer outside the configured buckets is invisible to the sweep.
-    It is computed PER CALL, so a clone created a minute ago protects its source on the next event.
-
-    An unreadable trash index refuses rather than proceeds. The sweep aborts the whole tick on one;
-    here the blast radius is one dataset, so the same fail-toward-not-deleting choice costs a single
-    skipped event that the hourly backstop will re-plan.
+    A table this tick evaluated is one a manifest names, so "evaluated nothing for it and no manifest names it" is "no
+    manifest names it". Skipped when a manifest could not be read: a table missing from an incomplete read may exist.
     """
+    if not named.complete:
+        log.warning("maintenance_due_clear_skipped_incomplete_manifests")
+        return 0
     options = settings.storage_options()
-    try:
-        trashed_by_path = _trash_exclusions(settings, options)
-    except Exception as exc:  # noqa: BLE001 — an unreadable trash index must refuse, never proceed
-        log.warning("arrival_trash_index_unreadable", extra={"uri": uri, "error": str(exc)})
-        return None
-    if base_refs.normalise(uri) in trashed_by_path:
-        return None
-
-    plan = _resolve_plan(
-        uri,
-        policy_records=_load_policies(settings, options),
-        settings=settings,
-        options=options,
-        now=datetime.now(UTC),
-        older_than=timedelta(days=settings.older_than_days),
-    )
-    if plan.skipped:
-        return None
-    try:
-        siblings = base_refs.sibling_base_refs(uri, options, configured=settings.external_blob_base_list, record_of=base_record_reader(settings, options))
-    except base_registry.UnreadableBaseRecordError as exc:
-        # The sweep aborts its tick on one; the blast radius here is one dataset, and the backstop re-plans it.
-        log.warning("arrival_base_record_unreadable", extra={"uri": uri, "error": str(exc)[:300]})
-        return None
-    protected_by, pin_tags = protection_for(siblings, uri)
-    return DatasetWorkItem(
-        uri=uri,
-        plan=plan,
-        protected_by=protected_by,
-        pin_tags=pin_tags,
-        # Derived where the flat layout allows it, left unset where it does not. This lane starts from
-        # a bare URI, so it is the one producer that cannot always know — and an id guessed from a path
-        # the parser cannot read would vend a credential for a DIFFERENT table, which is worse than
-        # vending none.
-        table_id=table_id_from_uri(uri),
-    )
+    live = named.names()
+    stale = [record.table for record in list_due(settings.resolved_control_root, options) if record.table not in live]
+    for table in stale:
+        delete_due(settings.resolved_control_root, options, table)
+    if stale:
+        log.info("maintenance_due_cleared_unnamed", extra={"count": len(stale), "tables": stale[:20]})
+    return len(stale)
 
 
 def run_sweep(settings: MaintenanceSettings) -> list[DatasetResult]:
-    """Plan the tick, then execute every unit it produced, in one process. Returns what was reclaimed.
+    """One tick: plan, write the clone list, maintain each dataset within the budget, clear the stale due records.
 
-    :func:`plan_sweep` decides (registries, discovery, the base-reference pre-pass, per-dataset policy)
-    and :func:`maintain_one_item` does one dataset's work; this is the two composed. It is the SERIAL
-    execution of a set of units that are individually independent — which is what makes moving the
-    execution half onto a queue a wiring change rather than a redesign.
-
-    #50/#84 policies: a per-table/namespace/project record from the catalog's ``_policies/`` registry can
-    disable a dataset's maintenance, re-pace it (cadence stamp per dataset), or override its old-version
-    retention (a table record beats a namespace record beats a project record); everything else keeps the
-    global defaults. The resolution happens in the planner; each unit arrives carrying its verdict.
-
-    MULTI-BUCKET (audit 2026-07-14). This used to sweep exactly ONE bucket, so every #3-A per-warehouse
-    bucket and #3-B multi-base data bucket was invisible to GC — their tables accumulated superseded
-    manifest versions and small fragments FOREVER. A storage leak created by the very features that
-    introduce new buckets.
+    The clone list is written BEFORE any due record: the catalog's commit judge reads it to refuse a compaction that
+    would break a clone, so a record must never be newer than the list it is judged against. A write that fails aborts
+    the tick before a record is written.
     """
-    items, results = plan_sweep(settings)
-    options = settings.storage_options()
-    now = datetime.now(UTC)
+    sweep = plan_sweep(settings)
+    write_clone_list(settings.resolved_control_root, settings.storage_options(), sweep.clones)
+    results = list(sweep.decided)
     results.extend(
-        execute_within_budget(
-            items,
-            run=lambda item: execute_unit(item, settings=settings, options=options, now=now),
-            budget_seconds=settings.sweep_budget_seconds,
-        )
+        execute_within_budget(sweep.uris, run=partial(maintain_dataset, sweep=sweep, settings=settings), budget_seconds=settings.sweep_budget_seconds)
     )
-    # Coverage is reported from the PLANNED list against what actually came back, so a tick the budget
-    # truncated shows its untouched buckets at `maintained=0` rather than omitting them.
-    report_bucket_coverage(planned=[item.uri for item in items], maintained=[r.uri for r in results])
-    # The completion half of the `record_run_started` pair the planner opened. Started minus completed
-    # is the lost-pass count, so this fires once per tick and only after every unit has been executed.
+    clear_stale_due(settings, named=sweep.table_ids)
+    report_bucket_coverage(planned=sweep.uris, maintained=[result.uri for result in results])
+    # The completion half of the `record_run_started` pair: started minus completed is the lost-pass count.
     record_run()
     return results
 
 
+def _did_material_work(result: DatasetResult) -> bool:
+    """Did the pass reclaim any version? Only then is a maintenance run recorded: a cron re-sweeping every dataset
+    would otherwise flood the lineage graph and the compliance trail with no-op runs."""
+    return result.old_versions_removed > 0
+
+
 def audit_material_work(result: DatasetResult, *, subject: str) -> None:
-    """Record a rewrite on the `lance.audit` compliance stream, keyed on the object it rewrote.
+    """Record a reclamation on the `lance.audit` compliance stream, keyed on the object it reclaimed.
 
-    THE ESTATE AUDITS EVERY DECISION AND FORGOT THE ONE THAT MOVES BYTES. `governed/audit.py` carries
-    authn, authz and credential vending; `services/maintenance` held zero call sites, so compaction —
-    which merges fragments, reclaims versions and deletes files — reached the trail through nothing.
-    `audit_read` makes the same argument for reads and states the stake: attribution the estate
-    decided on and then did not keep is a zero-trust gap as much as a feature one.
-
-    GATED ON MATERIAL WORK, reusing `_did_material_work` rather than restating it. The sweep walks
-    hundreds of datasets a tick and most are converged; a record each is thousands an hour that say
-    nothing, in the very stream that flood was measured in (§ Q17-26). Sharing the gate with the
-    lineage emit also keeps the two agreeing about what counted as work, which a second predicate
-    would not.
-
-    The RESOURCE is the FGA object (`table:<id>`), not the URI: a compliance query joins on the object
-    the rest of the trail already names, and a dataset with no declared id has nothing to join to — so
-    it is recorded under its URI instead of being dropped, since the rewrite still happened.
+    The RESOURCE is the FGA object (`table:<id>`), not the URI: a compliance query joins on the object the rest of the
+    trail names. A dataset with no id is recorded under its URI, since the reclamation still happened.
     """
     if not _did_material_work(result):
         return
-    table_id = result.table_id
     audit(
-        "compact_dataset",
+        "expire_versions",
         SUCCESS,
         subject=subject,
-        resource=f"table:{table_id}" if table_id else result.uri,
+        resource=f"table:{result.table_id}" if result.table_id else result.uri,
         dataset=result.uri,
-        mode=result.compaction_mode,
-        fragments_removed=result.fragments_removed,
-        fragments_added=result.fragments_added,
         old_versions_removed=result.old_versions_removed,
         bytes_removed=result.bytes_removed,
-        indices_optimized=result.indices_optimized,
-        # [[LH-098]]: what the pass ACHIEVED was recorded and how long it took was not, so a tenant
-        # asking "which compaction rewrote my table, and was it slow" had only the counts. Absent on a
-        # record whose pass was never timed rather than reported as 0.
         duration_seconds=result.duration_seconds,
     )
 
 
-def _did_material_work(result: DatasetResult) -> bool:
-    """Did the pass actually reclaim anything (fragments merged or old versions GC'd)?
-
-    We record a maintenance event only when something material happened — a cron that re-sweeps every
-    dataset on each tick would otherwise flood the lineage graph with no-op compaction runs.
-    """
-    return bool(result.fragments_removed or result.old_versions_removed)
-
-
 async def _emit_complete(emitter: MaintenanceEmitter, *, table_id: str, namespace: str) -> None:
-    """The COMPLETE publish, as a coroutine function so the attribute lookup happens INSIDE the guard.
-
-    Not `partial(emitter.emit_maintenance, …)`: that resolves the method eagerly, at the point the job
-    list is built, which is outside :func:`_publish_all`'s try — so an emitter that predates one half of
-    the protocol raised an `AttributeError` straight into the cron handler, which is the exact failure
-    the guardrail exists to make impossible.
-    """
+    """The COMPLETE publish, a coroutine function so the attribute lookup happens INSIDE :func:`_publish_all`'s guard."""
     await emitter.emit_maintenance(table_id=table_id, namespace=namespace)
 
 
@@ -1227,15 +604,7 @@ async def _emit_failed(emitter: MaintenanceEmitter, *, table_id: str, namespace:
 
 
 async def _publish_all(kind: str, jobs: list[tuple[str, Callable[[], Awaitable[None]]]]) -> None:
-    """Run every publish in ``jobs`` concurrently, at most ``_MAX_CONCURRENT_EMITS`` in flight.
-
-    ONE helper for both lanes, because the guarantee has to be the same for both and it was not: the
-    FAIL lane was raise-proof "by construction, not by convention" while the COMPLETE lane awaited each
-    publish bare inside the discovery loop, so one mis-wired publish (an ``AttributeError`` building the
-    coro, a raise inside it) aborted the emit phase — taking every COMPLETE emit queued behind it AND
-    the entire FAIL batch with it, and answering the cron tick 500. Each job is ``(table_id, factory)``;
-    the factory is called inside the limiter so nothing is constructed until it may run.
-    """
+    """Run every publish in ``jobs`` concurrently, at most ``_MAX_CONCURRENT_EMITS`` in flight, raise-proof per publish."""
     if not jobs:
         return
     limiter = asyncio.Semaphore(_MAX_CONCURRENT_EMITS)
@@ -1247,8 +616,6 @@ async def _publish_all(kind: str, jobs: list[tuple[str, Callable[[], Awaitable[N
     try:
         outcomes = await asyncio.gather(*(_one(factory) for _table_id, factory in jobs), return_exceptions=True)
     except Exception as exc:
-        # The gather itself failing (rather than one publish inside it) is not something a publish
-        # guardrail should ever surface to the cron handler either.
         log.warning(f"maintenance_{kind}_emit_error", extra={"error": str(exc)})
         return
     for (table_id, _factory), outcome in zip(jobs, outcomes, strict=True):
@@ -1256,44 +623,12 @@ async def _publish_all(kind: str, jobs: list[tuple[str, Callable[[], Awaitable[N
             log.warning(f"maintenance_{kind}_emit_error", extra={"table": table_id, "error": str(outcome)})
 
 
-async def emit_sweep_lineage(emitter: MaintenanceEmitter, results: list[DatasetResult], *, delimiter: str) -> None:
-    """Emit a best-effort maintenance event per swept dataset: COMPLETE for material work, FAIL for a
-    terminal per-dataset failure (#7b + the §4 failure-visibility item).
-
-    Selection:
-
-    * ``maintain:``-errored → a **FAIL** event (compact/GC escaped Lance's own auto-retry — terminal for
-      this tick; before this, a persistently failing dataset surfaced only in OTel spans + a cron response
-      body nobody reads).
-    * ``open:``-errored → **no event** (unreadable / declared-only dir — transient non-dataset noise).
-    * **REFUSED** (#64, an unsupported manifest feature flag) → **no event**, by construction: a
-      refusal carries ``error=None`` and did no material work, so it falls through both branches
-      below. Deliberate — nothing FAILED, we declined before touching a byte, and a FAIL event would
-      claim a maintenance run went wrong. Its visibility is the WARNING log, the ``lance.refused``
-      span attribute, the ``compaction.datasets.refused`` counter and ``summarize``'s own line.
-    * material work, under any error but ``maintain:`` or ``open:`` → the **COMPLETE** event; no-op
-      ticks skipped.
-      A ``compaction:`` error skipped or cut short the rewrite (a refused plan, a partial compaction)
-      and an ``auto_cleanup:`` one failed to disarm the commit path, but the versions reclaimed or fragments
-      merged changed the table all the same.
-    * URI not the catalog's ``<uuid>_<table_id>`` layout → skipped either way (no id to key on). This is
-      the DOCUMENTED blind spot for the medallion-nested datasets (``s3://<bucket>/medallion/<ns>`` has no
-      catalog id to reconstruct — a URI→id map is out of proportion here).
-
-    The parent namespace is derived via :func:`service_kit.governed.fga.parent_namespace_id` so events land on the SAME
-    ``(:Dataset)`` the catalog created. BOTH lanes are then published through :func:`_publish_all`:
-    gathered, bounded at ``_MAX_CONCURRENT_EMITS`` in flight, and raise-proof per publish. Only the FAIL
-    lane is additionally CAPPED at ``_MAX_FAIL_EMITS_PER_TICK`` — see that constant for why capping the
-    COMPLETE lane would erase a maintenance run rather than delay it. Nothing here raises into the sweep.
-    """
-    # One pass derives (table_id, namespace) for BOTH branches — the cap below then counts actual emits
-    # (an unparseable maintain:-errored URI must not consume a cap slot while emitting nothing).
-    complete: list[tuple[str, str]] = []  # (table_id, namespace)
-    failed: list[tuple[str, str, str]] = []  # (table_id, namespace, error)
+def _emit_selection(results: list[DatasetResult], *, delimiter: str) -> tuple[list[tuple[str, str]], list[tuple[str, str, str]]]:
+    """``(complete, failed)``: ``(table_id, namespace)`` per dataset that reclaimed versions, and ``(table_id, namespace,
+    error)`` per ``maintain:`` failure. An ``open:`` error, a refusal and a dataset no id names emit nothing."""
+    complete: list[tuple[str, str]] = []
+    failed: list[tuple[str, str, str]] = []
     for result in results:
-        # `compact_one` resolved the name path-first, the producer's stamp only where the path is
-        # silent: a URI like `medallion/bronze` names two different objects and cannot be resolved,
-        # which is why the producer stamps it. The derivation here covers a result no pass named.
         table_id = result.table_id or table_id_from_uri(result.uri)
         if table_id is None:
             continue
@@ -1303,140 +638,63 @@ async def emit_sweep_lineage(emitter: MaintenanceEmitter, results: list[DatasetR
             failed.append((table_id, namespace, error))
         elif not error.startswith("open:") and _did_material_work(result):
             complete.append((table_id, namespace))
+    return complete, failed
 
+
+async def emit_sweep_lineage(emitter: MaintenanceEmitter, results: list[DatasetResult], *, delimiter: str) -> None:
+    """Emit a best-effort maintenance event per swept dataset: COMPLETE for reclaimed versions, FAIL for a terminal
+    per-dataset failure (#7b + §4 failure visibility). Nothing here raises into the sweep.
+
+    The parent namespace is derived via :func:`service_kit.governed.fga.parent_namespace_id`, so events land on the SAME
+    ``(:Dataset)`` the catalog created. Only the FAIL lane is capped at ``_MAX_FAIL_EMITS_PER_TICK``.
+    """
+    complete, failed = _emit_selection(results, delimiter=delimiter)
     if len(failed) > _MAX_FAIL_EMITS_PER_TICK:
-        log.warning(
-            "maintenance_fail_emits_capped",
-            extra={"failing": len(failed), "emitted": _MAX_FAIL_EMITS_PER_TICK},
-        )
-        random.shuffle(failed)  # fairness under a mass incident — see the cap constant's comment
+        log.warning("maintenance_fail_emits_capped", extra={"failing": len(failed), "emitted": _MAX_FAIL_EMITS_PER_TICK})
+        random.shuffle(failed)
         failed = failed[:_MAX_FAIL_EMITS_PER_TICK]
     await _publish_all("complete", [(t, partial(_emit_complete, emitter, table_id=t, namespace=ns)) for t, ns in complete])
     await _publish_all("fail", [(t, partial(_emit_failed, emitter, table_id=t, namespace=ns, error=err)) for t, ns, err in failed])
 
 
 def summarize(results: list[DatasetResult]) -> dict[str, Any]:
-    """Aggregate one sweep's per-dataset results into the cron response. Failures keep their MESSAGE
-    (not just the URI) — a cron sweep has no human watching, so the *why* is the only debugging signal."""
+    """Aggregate one sweep's results into the cron response. Failures keep their MESSAGE: a cron sweep has no human
+    watching, so the *why* is the only debugging signal. A refusal and a trash exclusion are their own lines, never
+    folded into ``errors`` or ``skipped``: ``SUPPORTED`` is a whitelist, so a pylance upgrade that adds a legitimate flag
+    shows up only here and in ``compaction.datasets.refused``."""
     return {
         "datasets": len(results),
         "skipped": sum(1 for r in results if r.skipped),
-        # #64 — a REFUSAL is its own line, never folded into `errors` or `skipped`. It is neither: a
-        # skip is "not this tick" and an error is "something failed", while a refusal is permanent and
-        # nothing failed. It also has to be LOUD, because `SUPPORTED` is a whitelist: a pylance
-        # upgrade that adds a legitimate flag would otherwise stop maintaining every dataset that
-        # sets it while this summary still reported a clean sweep.
         "refused": sum(1 for r in results if r.refused),
         "refusals": {r.uri: r.refused for r in results if r.refused},
-        # WHICH GATE, not just how many — the payload of the one WARNING that replaced a line per
-        # dataset. `protected_base` is someone else's clone and stays true forever; `manifest_flags` is
-        # a pylance upgrade away from being supported, which is a different thing to act on.
         "refused_by": summarize_refusals(results),
-        # F6(d) — its own line for the same reason `refused` has one. These datasets were discovered,
-        # were maintainable, and were deliberately left alone because they are in the trash: dropped
-        # with a grace window and therefore frozen until undrop or purge. Naming them (not just
-        # counting) is what makes a stuck record — one whose deadline has passed and which the purge
-        # keeps refusing — visible as a PERMANENT exclusion rather than a transient one.
         "trashed": sum(1 for r in results if r.trashed),
         "trashed_datasets": {r.uri: r.trashed for r in results if r.trashed},
-        "fragments_removed": sum(r.fragments_removed for r in results),
-        "indices_optimized": sum(r.indices_optimized for r in results),
         "versions_removed": sum(r.old_versions_removed for r in results),
-        # `bytes_removed` was WRITE-ONLY until 2026-08-15: `compact_one` assigned it from the Lance
-        # cleanup stats and nothing ever read it, so every tick measured how much it had reclaimed and
-        # discarded the number while reporting three counts that do not answer the question. "How much
-        # did we get back" is the one thing a reclaimer exists to tell you.
         "bytes_removed": sum(r.bytes_removed for r in results),
-        # [[LH-245]] — the datasets whose commit path this tick found armed and switched off. Non-zero
-        # means a writer armed Lance's auto-cleanup on that many datasets since the last tick.
         "auto_cleanup_disarmed": sum(1 for r in results if r.auto_cleanup_disarmed),
-        # #60 — what `optimize_indices()` could NOT put right: rows left unindexed, delta
-        # proliferation, params drift, a dropped index. This was computed on every tick — a
-        # `describe_indices` + `index_stats` pass per index per dataset, the call that PANICS and needed
-        # two separate BaseException guards to contain — and then discarded, surfacing only as a count
-        # in one warning. The estate paid for the diagnosis every 120s and never received it.
-        "index_findings": {r.uri: r.index_findings for r in results if r.index_findings},
+        "due": dict(Counter(r.due for r in results if r.due is not None)),
         "errors": {r.uri: r.error for r in results if r.error},
-        # WHAT THIS TICK IS HOLDING, beside what it reclaimed — the only number the OOM turns on and
-        # the one the summary never carried. `shared_lance_session`'s caps are LRU SOFT bounds ("the
-        # size the cache grows toward, not a ceiling it stops at"), so the estate needs the occupancy
-        # AND its denominator to tell "the cache is the problem" from "the cache is fine and something
-        # else is resident". Measured in the pod 2026-09-21: cgroup 512 MB, caps clamped from 128+256
-        # to 68+136 MB — a denominator no values file carries, because `affordable_cache_bytes`
-        # derives it from the cgroup at runtime.
-        # THE THREE READINGS TOGETHER, via one seam both lanes call. They are the measurement only as a
-        # set — a lane carrying `python_blocks` without RSS carries a series with nothing to compare it
-        # to — and `summarize` is the SERIAL lane, while every deployment runs the queue one.
         **memory_readings(),
     }
 
 
-def skip_attribution(decided: Iterable[DatasetResult]) -> dict[str, int]:
-    """How many datasets this tick skipped, BY WHICH MECHANISM — three stories behind one integer.
-
-    The queue lane's ``skipped`` counts everything ``plan_sweep`` decided without work, and the three
-    kinds mean opposite things: a trash exclusion is permanent and correct, ``policy_disabled`` is a
-    deliberate opt-out, and ``policy_interval`` is the CADENCE working — the one [[LH-191]] closes on
-    and the one the estate has never reported, because all 27 registered policies carry
-    ``compact_interval_hours: null``.
-
-    The serial lane's :func:`summarize` already splits ``skipped`` from ``trashed``, so the same key
-    means different things on the two lanes; this reports the reason literal each result already
-    carries rather than inventing a second classification.
-
-    ``unattributed`` is not padding: it keeps the breakdown summing to the total, so a result kind
-    nobody anticipated shows up as a number to chase instead of making the two disagree in production.
-    """
-    counts: Counter[str] = Counter()
-    for result in decided:
-        if result.trashed:
-            counts["trashed"] += 1
-        elif result.skipped:
-            counts[result.skipped] += 1
-        else:
-            counts["unattributed"] += 1
-    return dict(counts)
-
-
 def memory_readings() -> dict[str, int]:
-    """The three numbers [[LH-183]] turns on, for whichever lane is reporting.
-
-    ONE SEAM BECAUSE THEY ARE ONE MEASUREMENT. The row's method is a comparison, not three facts:
-    ``python_blocks`` tracking RSS means Python retention, flat while RSS climbs means native
-    allocation that no heap fix will touch. A caller that reports a subset reports nothing.
-
-    IT EXISTS BECAUSE THE LANE THAT RUNS WAS NOT REPORTING. The readings rode ``summarize``, which
-    only ``run_sweep`` — the serial lane — calls; the queue lane builds its own summary in
-    ``routes.on_cron``, and on the deployed estate 2026-09-22 that line carried five counters and no
-    memory at all. The planner still does the accused work either way: ``plan_sweep`` opens one
-    manifest per dataset, 568 a tick, in a 512Mi pod.
-    """
+    """The three numbers [[LH-183]] turns on: ``python_blocks`` tracking RSS means Python retention, flat while RSS
+    climbs means native allocation. ONE SEAM because they are one measurement; a subset reports nothing."""
     return {**_session_occupancy(), "python_blocks": _python_heap_blocks(), "rss_bytes": _rss_bytes()}
 
 
 def _rss_bytes() -> int:
-    """Resident set size of THIS process, from ``/proc/self/status``.
+    """Resident set size of THIS process, from ``/proc/self/status``; ``-1`` where procfs is absent.
 
-    ON THE TICK LINE RATHER THAN FROM A SAMPLER, and that is the whole reason it is here: the
-    comparison above needs both series at the same instant. Read from outside, RSS arrives on its own
-    cadence and has to be joined to a tick by timestamp — and this row already measured ~10Mi of
-    spread between two samplers reading the SAME tick seconds apart, which is larger than several of
-    the per-tick steps being argued about.
-
-    ``VmRSS`` AND NOT ``resource.getrusage(RUSAGE_SELF).ru_maxrss``, which is a HIGH-WATER mark: it
-    can never come back down, so it cannot distinguish a tick that grew and released from one that
-    retained — the exact question. (The row used it once as a deliberate upper bound, to REFUTE a
-    candidate; an upper bound is sound for refuting and useless for tracking.)
-
-    NEVER RAISES, on the same terms as :func:`_session_occupancy`: this is diagnostics riding a cron
-    tick that reclaims disk, so a kernel without procfs costs the estate a metric rather than the
-    sweep, and ``-1`` keeps the field's presence a fixed contract.
+    ``VmRSS`` and not ``ru_maxrss``, which is a HIGH-WATER mark and so cannot tell a tick that grew and released from
+    one that retained.
     """
     try:
         with open("/proc/self/status", encoding="utf-8") as handle:
             for line in handle:
                 if line.startswith("VmRSS:"):
-                    # `VmRSS:\t  123456 kB` — procfs reports kB for this field on every supported arch.
                     return int(line.split()[1]) << 10
     except (OSError, IndexError, ValueError):  # pragma: no cover - a platform without procfs
         return -1
@@ -1444,49 +702,17 @@ def _rss_bytes() -> int:
 
 
 def _python_heap_blocks() -> int:
-    """Blocks held by CPython's allocator — the reading that separates retention from native allocation.
-
-    [[LH-183]] measured eight ticks on the deployed estate: the Lance session held at 14.6 MB for six of
-    them while RSS went 192 -> 260Mi, so something retains and it is not the cache. Exactly two things
-    it can be, wanting different fixes: Python objects held between passes (the per-tick `DatasetResult`
-    set and the four side maps below), or native buffers Lance and pyarrow never charge to the session.
-    Comparing THIS series against RSS is what tells them apart — tracking RSS means Python, flat while
-    RSS climbs means native.
-
-    `sys.getallocatedblocks()` AND NOT `len(gc.get_objects())`, which was the first choice and is blind
-    to the objects this hunts: measured on the CPython 3.13.12 in this image, `gc.is_tracked({"n": 1})`
-    is **False** — a dict whose keys and values are all atomic is untracked — so holding 50,000 of them
-    moved `gc.get_objects()` by **-188** while `getallocatedblocks()` moved by **+149,728** and returned
-    to baseline on release. The gc reading would have said "flat", which reads as "native", which is the
-    wrong answer arrived at confidently.
-
-    It is also the cheaper call: O(1) against a full heap walk, and `tracemalloc` would cost a hook on
-    every allocation in a service that opens 585 datasets every 120 s.
-
-    A COUNT of blocks, not bytes — bytes are what RSS already reports. The measurement is the two series
-    moving together or not.
-    """
+    """Blocks held by CPython's allocator. `sys.getallocatedblocks()` and not `len(gc.get_objects())`, which is blind
+    to untracked atomic dicts (measured on CPython 3.13.12: 50,000 of them moved it by -188)."""
     return sys.getallocatedblocks()
 
 
 def _session_occupancy() -> dict[str, int]:
-    """The shared Lance session's current size and the cap it is growing toward, in bytes.
-
-    NEVER RAISES, and that is deliberate: this is diagnostics riding the summary of a cron tick that
-    reclaims disk, so a pylance version whose `Session` drops `size_bytes` must cost the estate a
-    metric rather than the sweep. Answering -1 rather than omitting the key keeps the field's presence
-    a fixed contract — a reader can tell "unavailable" from "nobody reported it", which a missing key
-    cannot.
-
-    The session is process-wide (`lance_session` is `@cache`d on the two cap ints, so equal caps share
-    one object), so one number describes the whole process rather than this call site.
-    """
+    """The shared Lance session's current size and the cap it is growing toward, in bytes; ``-1`` when unreadable."""
     settings = get_settings()
     metadata, index = affordable_cache_bytes(settings.lance_metadata_cache_mb << 20, settings.lance_index_cache_mb << 20)
     try:
-        # CALLED, not read: `Session.size_bytes` is a method_descriptor on pylance 11.0.0, so reading it
-        # yields a bound method and `int()` of that raises — which the guard below would then report as
-        # -1 forever, a diagnostic that is always "unavailable" and therefore worse than none.
+        # CALLED, not read: `Session.size_bytes` is a method on pylance 11.0.0.
         size = int(shared_lance_session().size_bytes())
     except (AttributeError, TypeError, ValueError):  # pragma: no cover - a pylance that moved the accessor
         size = -1

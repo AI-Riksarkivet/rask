@@ -1,8 +1,9 @@
-"""Read a live index's parameterisation back, well enough to rebuild the SAME index.
+"""Read a live index's parameterisation back, well enough to rebuild the SAME index, and rebuild it.
 
-[[LH-105]]. A repair that re-tunes what it repairs is the failure this module exists to prevent: the
-table keeps answering queries, so the only symptom of a silently re-partitioned vector index is recall
-or latency that nobody attributes to the repair.
+[[LH-105]]. Erasure is the one caller (ADR 0156 C6's named exception, ADR 0162): an index segment can hold the
+erased subject's keys, so the erasure rewrites the data and rebuilds every user index over it. A rebuild that
+re-tunes what it rebuilds is the failure this module exists to prevent: the table keeps answering queries, so the
+only symptom of a silently re-partitioned vector index is recall or latency that nobody attributes to the erasure.
 
 **IT TAKES TWO CALLS, and that is the non-obvious part.** Measured on pylance 11.0.0 and again on
 13.0.0 (2026-10-12), `describe_indices()` — the non-deprecated call — carries `.name`,
@@ -15,20 +16,13 @@ is a rebuild that quietly re-partitions.
 **THE KIND IS OBSERVED, NOT INFERRED.** `.type_url` is ``/lance.index.pb.VectorIndexDetails`` for a
 vector index and ``/lance.table.<Kind>IndexDetails`` for every scalar one, so the vector/scalar
 decision comes off the live index rather than from a list of type names that a newly-added index type
-would silently fall out of — the failure `IndexWorkItem.kind` warns about, where a worker guessing
-between the two builds an index that answers queries wrongly rather than not at all.
+would silently fall out of, where a rebuild guessing between the two builds an index that answers
+queries wrongly rather than not at all.
 
-**WHAT WAS ASKED FOR IS RECORDED, because Lance no longer builds it on a small table.** From pylance
-13.0.0 a vector index on a table too small to train is built with fewer IVF partitions than requested
-and only a warning says so (lance #9134; measured 512 rows asking 4 -> 2, 768 -> 3, 1024 -> 4). The
-readback then reports what was built, and a later rebuild on the grown table would keep the shrunken
-count. So the parameters a rebuild request names are kept in the dataset's own config under
-:data:`REQUESTED_PARAMS_KEY_PREFIX` (:func:`record_requested_params`), on the ref they were asked on, and
-merge over the readback for as long as the index keeps the column and type they were asked for; the
-index drop door removes the record (:func:`forget_requested_params`). Config rather than a control-root
-record because it travels with the dataset and its branches through a rename and dies with the table;
-the commit it costs is an `UpdateConfig`, which `lineage.core.reconcile.MAINTENANCE_OPERATIONS` already
-treats as maintenance.
+**A SHRUNKEN INDEX STAYS SHRUNKEN.** From pylance 13.0.0 a vector index on a table too small to train is
+built with fewer IVF partitions than requested and only a warning says so (lance #9134; measured 512 rows
+asking 4 -> 2, 768 -> 3, 1024 -> 4). The readback reports what was built, so a rebuild keeps that count.
+Re-tuning an index is its owner's build on their own compute, committed through ``version/create``.
 
 `runtime_hints` are deliberately NOT carried back: they are the tuning of the build that ran
 (k-means iteration counts, sample rates, shuffle concurrency), not of the index that resulted, and
@@ -40,21 +34,21 @@ All IO is blocking; callers threadpool it.
 from __future__ import annotations
 
 import json
-import logging
-from typing import Any
+from typing import Any, Literal, cast
 
 from lance.query import DocumentGranularity
 from lance_namespace import TableIndexNotFoundError
 from pydantic import BaseModel, ConfigDict
 
-from service_kit.lakehouse.work_items import SCALAR_INDEX, SCALAR_INDEX_TYPES, VECTOR_INDEX
 
+#: Which pylance call builds an index: ``create_index`` for a vector index, ``create_scalar_index`` for the rest.
+type IndexKind = Literal["vector", "scalar"]
 
-log = logging.getLogger(__name__)
+#: pylance's ``create_scalar_index`` types its ``index_type`` as this Literal union.
+type ScalarIndexType = Literal["BTREE", "BITMAP", "LABEL_LIST", "INVERTED", "FTS", "NGRAM", "ZONEMAP", "BLOOMFILTER", "RTREE"]
 
-#: Dataset-config key prefix for the build parameters a rebuild request named, one key per index name.
-#: Namespaced under `rask.` so an operator reading the config can tell it from Lance's own keys.
-REQUESTED_PARAMS_KEY_PREFIX = "rask.index.requested."
+#: The scalar index types pylance accepts, as its ``create_scalar_index`` signature spells them.
+SCALAR_INDEX_TYPES = frozenset({"BTREE", "BITMAP", "LABEL_LIST", "INVERTED", "FTS", "NGRAM", "ZONEMAP", "BLOOMFILTER", "RTREE"})
 
 #: `.type_url`'s vector marker. Scalar kinds each carry their own `/lance.table.<Kind>IndexDetails`,
 #: so the discriminator is written as "vector, else scalar" rather than as a list of scalar spellings
@@ -73,7 +67,7 @@ _NON_KEYWORD_DETAILS = frozenset({"runtime_hints", "compression"})
 #: `BLOOMFILTER`->`BloomFilter` — and `LABEL_LIST`->`LabelList`, which upper-cases to `LABELLIST` and
 #: is the one spelling `SCALAR_INDEX_TYPES` does not contain. Underscores are dropped on both sides
 #: rather than a hand-written map, so a scalar type added upstream lands correctly without an edit
-#: here; anything genuinely unknown falls through unchanged and the worker refuses it by name.
+#: here; anything genuinely unknown falls through unchanged and pylance refuses it by name.
 _SCALAR_TYPE_BY_READBACK = {kind.replace("_", "").lower(): kind for kind in SCALAR_INDEX_TYPES}
 
 #: Readback keys whose VALUE has to be rebuilt into the type the signature declares.
@@ -110,8 +104,8 @@ class RebuildSpec(BaseModel):
 
     name: str
     column: str
-    #: ``vector`` or ``scalar`` — which pylance call, read off `.type_url`.
-    kind: str
+    #: Which pylance call, read off `.type_url`.
+    kind: IndexKind
     #: Lance's own vocabulary (``IVF_PQ``, ``BTREE``, ``Inverted``, …), forwarded verbatim. Measured
     #: accepted in the spelling `describe_indices()` reports it, mixed case included.
     index_type: str
@@ -146,72 +140,26 @@ def describe_index_for_rebuild(dataset: Any, index_name: str) -> RebuildSpec:
     # repaired, so it is refused rather than truncated.
     column = _sole_column(described.field_names, index_name)
     index_type = described.index_type if is_vector else _scalar_type(described.index_type)
-    requested = _requested(dataset, index_name)
-    if requested is not None and (requested.column, requested.index_type) == (column, index_type):
-        params = {**params, **_usable_details(requested.params)}
-    return RebuildSpec(name=described.name, column=column, kind=VECTOR_INDEX if is_vector else SCALAR_INDEX, index_type=index_type, params=params)
+    return RebuildSpec(name=described.name, column=column, kind="vector" if is_vector else "scalar", index_type=index_type, params=params)
 
 
-class RequestedParams(BaseModel):
-    """The build parameters a rebuild request named for one index, and the index they were named for.
+def rebuild_index(dataset: Any, spec: RebuildSpec) -> None:
+    """Build ``spec``'s index again on the open ``dataset``, replacing the one of that name.
 
-    ``column`` and ``index_type`` are kept so a record follows only the index it was asked for: one
-    recreated under the same name on another column, or as another type, does not inherit it.
+    ``replace`` is named because the two calls default it differently: ``create_scalar_index`` replaces,
+    ``create_index`` refuses a duplicate name (measured on pylance 11.0.0).
     """
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    column: str
-    index_type: str
-    params: dict[str, Any]
-
-
-def record_requested_params(dataset: Any, spec: RebuildSpec, params: dict[str, Any]) -> None:
-    """Keep ``params`` as what was asked for ``spec``'s index, merged over any earlier request.
-
-    Commits only when the record changes, so a rebuild that names no parameter, or names the ones
-    already recorded, writes no version. Called BEFORE the rebuild is run or queued: what is kept is
-    the request, so a build that fails or shrinks still leaves the next rebuild asking for it.
-    """
-    if not params:
+    if spec.kind == "vector":
+        dataset.create_index(spec.column, index_type=spec.index_type, name=spec.name, replace=True, **spec.params)
         return
-    earlier = _requested(dataset, spec.name)
-    carried = earlier.params if earlier is not None and (earlier.column, earlier.index_type) == (spec.column, spec.index_type) else {}
-    record = RequestedParams(column=spec.column, index_type=spec.index_type, params={**carried, **params})
-    if record == earlier:
-        return
-    dataset.update_config({REQUESTED_PARAMS_KEY_PREFIX + spec.name: record.model_dump_json()})
-
-
-def forget_requested_params(dataset: Any, index_name: str) -> None:
-    """Remove ``index_name``'s recorded request, committing only when there is one."""
-    key = REQUESTED_PARAMS_KEY_PREFIX + index_name
-    if key in dataset.config():
-        dataset.update_config({key: None})
-
-
-def _requested(dataset: Any, index_name: str) -> RequestedParams | None:
-    """The recorded request for ``index_name``, or ``None`` when there is none or it cannot be read.
-
-    An unreadable record is logged and ignored rather than raised: failing the repair over it would
-    withhold the remedy, and the readback still rebuilds the index that exists.
-    """
-    raw = dataset.config().get(REQUESTED_PARAMS_KEY_PREFIX + index_name)
-    if raw is None:
-        return None
-    try:
-        return RequestedParams.model_validate_json(raw)
-    except ValueError as exc:
-        log.warning("index_requested_params_unreadable", extra={"index": index_name, "error": str(exc)})
-        return None
+    dataset.create_scalar_index(spec.column, index_type=cast("ScalarIndexType", spec.index_type), name=spec.name, replace=True, **spec.params)
 
 
 def _usable_details(details: dict[str, Any]) -> dict[str, Any]:
     """The readback, as values pylance will accept back.
 
-    A `None` is DROPPED rather than forwarded, the same rule `indices._pylance_kwargs` states for the
-    create doors: pylance's defaults are meaningful, and an explicit `None` overrides them with
-    something nobody asked for. Here it is also indistinguishable from "this index did not set it" —
+    A `None` is DROPPED rather than forwarded: pylance's defaults are meaningful, and an explicit `None`
+    overrides them with something nobody asked for. It is also indistinguishable from "this index did not set it" —
     an inverted index reads back `lance_tokenizer: None` and `custom_stop_words: None` whether or not
     they were ever chosen.
     """
@@ -225,7 +173,7 @@ def _usable_details(details: dict[str, Any]) -> dict[str, Any]:
 
 
 def _scalar_type(reported: str) -> str:
-    """pylance's display spelling, as the vocabulary the work item carries and the worker accepts."""
+    """pylance's display spelling, as the vocabulary ``create_scalar_index`` accepts."""
     return _SCALAR_TYPE_BY_READBACK.get(reported.replace("_", "").lower(), reported)
 
 

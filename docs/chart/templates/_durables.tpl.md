@@ -37,17 +37,8 @@ The literal the component uses, not a values lookup: `dapr-component.yaml:191` a
 `(dict "appId" "notifications")` unconditionally, while its CONTROL-lane sibling at :139 carries a
 guard. Two different conditions on one service, so they are listed separately.
 
-## `{{- if and .Values.maintenance.enabled .Values.maintenance.workTopic -}}`
+## `{{- if and .Values.maintenance.enabled .Values.maintenance.arrivalEnabled -}}`
 
-Maintenance's write-event subscription exists only with a work queue to put the result in — and
-that is exactly the conditional [[LH-127]] asks for on `maintenance-durable`: it leaves this set the
-moment `workTopic` empties, so the orphan pass removes the residue instead of leaving it to replay
-stale events into `plan_one` on the day somebody re-enables the lane.
-
-## `{{- if and .Values.dapr.enabled .Values.maintenance.enabled .Values.maintenance.indexTopic -}}`
-
-The index lane's durable, on the same conditional shape as the work queue's and for the same
-reason [[LH-127]] gives: it renders only while `indexTopic` is set, so emptying that value takes it
-out of this set and the orphan pass reclaims the consumer rather than leaving one bound to a
-subject nobody publishes. Listed separately from the work durable because the two components carry
-different ackWaits and either lane can be enabled without the other.
+Maintenance's write-event durable, on the conditional [[LH-127]] asks for: it leaves this set the
+moment `arrivalEnabled` turns off, so the orphan pass removes the residue instead of leaving it to
+replay stale events on the day somebody re-enables the lane.

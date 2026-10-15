@@ -90,17 +90,14 @@ def _control_emitters(values: Path) -> frozenset[str]:
 PUBLISHERS: dict[str, frozenset[str]] = {
     "lineage.events.v1": frozenset({"catalog", "lineage", "maintenance"}),
     "catalog.control.v1": frozenset({"catalog", *_control_emitters(_values())}),
-    "maintenance.work.v1": frozenset({"catalog", "maintenance"}),
-    "maintenance.index.v1": frozenset({"catalog"}),
     "dlq.lineage.events": frozenset({"lineage"}),
     "dlq.notifications": frozenset({"notifications"}),
-    "dlq.maintenance.work": frozenset({"maintenance"}),
-    "dlq.maintenance.index": frozenset({"maintenance"}),
+    "dlq.maintenance.arrival": frozenset({"maintenance"}),
 }
 
 #: What each sidecar subscribes, as (durableName, topic); None is the catalog's ephemeral broadcast consumer.
 #: catalog/api/dapr.py; lineage/api/dapr.py;
-#: notifications/api/{subscriptions,dlq}.py; maintenance/api/{arrival,work,index_work}.py.
+#: notifications/api/{subscriptions,dlq}.py; maintenance/api/arrival.py.
 DAPR_SUBSCRIPTIONS: dict[str, tuple[tuple[str | None, str], ...]] = {
     "catalog": ((None, "catalog.control.v1"),),
     "lineage": (("lineage-durable", "lineage.events.v1"), ("lineage-dlq-durable", "dlq.lineage.events")),
@@ -109,11 +106,7 @@ DAPR_SUBSCRIPTIONS: dict[str, tuple[tuple[str | None, str], ...]] = {
         ("notifications-durable", "dlq.notifications"),
         ("notifications-control-durable", "catalog.control.v1"),
     ),
-    "maintenance": (
-        ("maintenance-durable", "lineage.events.v1"),
-        ("maintenance-work-durable", "maintenance.work.v1"),
-        ("maintenance-index-durable", "maintenance.index.v1"),
-    ),
+    "maintenance": (("maintenance-durable", "lineage.events.v1"),),
 }
 
 #: The non-Dapr clients the table must also name: the stream Job and nats-box.
@@ -386,21 +379,20 @@ async def _replay_subscriptions(url: str, mint_: Mint, components: list[dict[str
 
 
 async def _stream_job_repairs(tools: Tools, docs: tuple[dict, ...], broker: Broker, mint_: Mint, rig: Client, home: Path) -> list[str]:
-    """The Job's second run, over an orphan durable and a drifted bound it must delete and converge as `admin`."""
-    work = component_metadata(_subscriber_component(_pubsub_components(docs), "maintenance", "maintenance-work-durable")[0])
+    """The Job's second run, over an orphan durable and a durable whose redelivery config drifted, both of which it must
+    delete as `admin` (the sidecar re-creates the drifted one with the component's config)."""
+    arrival = component_metadata(_subscriber_component(_pubsub_components(docs), "maintenance", "maintenance-durable")[0])
     orphan = {"durable_name": "orphan-durable", "ack_policy": "explicit", "deliver_policy": "new", "filter_subject": "lineage.events.v1"}
     await rig.request("$JS.API.CONSUMER.CREATE.LINEAGE.orphan-durable.lineage.events.v1", {"stream_name": "LINEAGE", "config": orphan})
-    drifted = ((await rig.request("$JS.API.CONSUMER.INFO.MAINTENANCE_WORK.maintenance-work-durable")) or {}).get("config", {})
-    drifted["max_ack_pending"] = int(work["maxAckPending"]) + 1000
-    update = {"stream_name": "MAINTENANCE_WORK", "config": drifted, "action": "update"}
-    await rig.request("$JS.API.CONSUMER.CREATE.MAINTENANCE_WORK.maintenance-work-durable.maintenance.work.v1", update)
+    drifted = ((await rig.request("$JS.API.CONSUMER.INFO.LINEAGE.maintenance-durable")) or {}).get("config", {})
+    drifted["max_deliver"] = int(arrival["maxDeliver"]) + 1
+    update = {"stream_name": "LINEAGE", "config": drifted, "action": "update"}
+    await rig.request("$JS.API.CONSUMER.CREATE.LINEAGE.maintenance-durable.lineage.events.v1", update)
     findings = await asyncio.to_thread(_stream_job, tools, docs, broker, mint_, home)
-    gone = (await rig.request("$JS.API.CONSUMER.INFO.LINEAGE.orphan-durable") or {}).get("error") or {}
-    converged = (await rig.request("$JS.API.CONSUMER.INFO.MAINTENANCE_WORK.maintenance-work-durable") or {}).get("config", {})
-    if gone.get("err_code") != 10014:
-        findings.append("the stream Job did not delete the orphan durable as admin")
-    if converged.get("max_ack_pending") != int(work["maxAckPending"]):
-        findings.append(f"the stream Job did not converge maintenance-work-durable to {work['maxAckPending']} as admin: {converged.get('max_ack_pending')}")
+    for durable in ("orphan-durable", "maintenance-durable"):
+        gone = (await rig.request(f"$JS.API.CONSUMER.INFO.LINEAGE.{durable}") or {}).get("error") or {}
+        if gone.get("err_code") != 10014:
+            findings.append(f"the stream Job did not delete {durable} as admin")
     return findings
 
 

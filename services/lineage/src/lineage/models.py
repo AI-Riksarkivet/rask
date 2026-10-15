@@ -53,9 +53,10 @@ class OutputStatistics(BaseModel):
 
 #: The run operations that maintain a table rather than write it: they need `can_maintain` at the ingest
 #: door, and they prove nothing about whether the table exists (a compaction after a drop is not a
-#: recreate). `cy.DATASET_LAST_EXISTENCE_RUN` spells the same set as a Cypher literal, pinned equal by
+#: recreate). `expire_versions` is maintenance's version reclamation; `compact_table` and `create_index` are the
+#: catalog's names for a bring-your-own job's compaction and index commits. `cy.DATASET_LAST_EXISTENCE_RUN` spells the same set as a Cypher literal, pinned equal by
 #: `tests/unit/test_lineage.py`.
-MAINTENANCE_OPERATIONS: Final = frozenset({"compaction", "compact_table", "create_index"})
+MAINTENANCE_OPERATIONS: Final = frozenset({"expire_versions", "compact_table", "create_index"})
 
 
 def vertex_name_for(namespace: str, name: str) -> str:

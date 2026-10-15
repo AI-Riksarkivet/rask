@@ -15,14 +15,13 @@ from datetime import datetime
 from typing import Annotated, Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from pydantic.json_schema import JsonDict
 
 from catalog.core.vending import VendedCredentials
 from catalog.services import models as registry
 from catalog.services.changes import ChangeKind
-from catalog.services.dataplane import COMPACTION_EXECUTOR_BOUNDS
 from service_kit.control_events import CASCADE_ID_MAX_LENGTH, ORIGINATOR_MAX_LENGTH, CatalogControlEvent
 from service_kit.governed.user_state import UserStateDocument
+from service_kit.lakehouse.maintenance_due import CompactionDue, IndexDue
 
 
 # --------------------------------------------------------------------------- #
@@ -401,10 +400,26 @@ class GcRunResult(BaseModel):
     bytes_removed: int
 
 
-class CompactRequest(BaseModel):
-    """Optional #76 target-size override for a one-off compaction (None → Lance's default fragment sizing)."""
+class DueTable(BaseModel):
+    """One table a compaction or an index optimize is due on, as the maintenance sweep measured it (ADR 0162)."""
 
-    target_rows_per_fragment: int | None = Field(default=None, ge=1024, le=10_000_000)
+    table: str
+    version: int
+    #: What Lance's planner would rewrite under the winning policy; ``None`` when no compaction is due.
+    compaction: CompactionDue | None = None
+    indices: list[IndexDue] = Field(default_factory=list)
+    #: The policy record that governed the evaluation, ``None`` when none matched.
+    policy: str | None = None
+    #: How many datasets resolve their files through this table; a compaction of it is refused while any does.
+    clones: int = 0
+    evaluated_at: datetime
+
+
+class MaintenanceDueResponse(BaseModel):
+    """A page of :class:`DueTable`, in table order; ``page_token`` continues it."""
+
+    tables: list[DueTable]
+    page_token: str | None = None
 
 
 class ErasureRequest(BaseModel):
@@ -417,72 +432,6 @@ class ErasureRequest(BaseModel):
     #: at an old version has not erased them, so a caller preserving unrelated history opts INTO it
     #: rather than having to remember to opt out.
     retain_days: Annotated[int, Field(ge=0, le=36500)] = 0
-
-
-class CompactResult(BaseModel):
-    ok: bool
-    fragments_removed: int
-    fragments_added: int
-
-
-class CompactAccepted(BaseModel):
-    """The 202 body: the door enqueued the rewrite rather than performing it.
-
-    It reports no fragment counts because it has none — the executor that will produce them is another
-    process, and inventing zeroes here would make an accepted request indistinguishable from a
-    completed no-op. ``protected_by`` is returned because it is the one verdict that can turn the
-    enqueued unit into a refusal at execution time, and a caller watching a table that never compacts
-    otherwise has nothing to read.
-    """
-
-    accepted: bool = True
-    uri: str
-    protected_by: str | None = None
-
-
-class ReindexRequest(BaseModel):
-    """[[LH-105]] rebuild one named index in place, keeping the parameterisation it already has.
-
-    ``index_name`` is the only required field because the point of the door is REPAIR: the shape is
-    read off the live index rather than restated by the caller, so a repair cannot silently re-tune
-    what it repairs. ``params`` is the escape hatch for the case the readback cannot serve — a vector
-    index being deliberately re-partitioned, or one whose `num_partitions` could not be read — and is
-    MERGED OVER the readback rather than replacing it, so overriding one value does not drop the rest.
-    """
-
-    index_name: str = Field(min_length=1)
-    params: dict[str, Any] = Field(default_factory=dict)
-
-
-class ReindexResult(BaseModel):
-    """The 200 body: the rebuild ran in this pod and the index is already back."""
-
-    ok: bool = True
-    index_name: str
-    column: str
-    kind: str
-    index_type: str
-    #: The dataset version the rebuilt index was committed at, so a caller can tell a real rebuild
-    #: from a no-op.
-    version: int
-
-
-class ReindexAccepted(BaseModel):
-    """The 202 body: the rebuild was enqueued onto the index lane rather than performed here.
-
-    It reports no version because it has none — the worker that will produce it is another process,
-    and inventing the current version would make an accepted request indistinguishable from a
-    completed rebuild. The resolved shape IS returned: it is what the unit will be built from, and it
-    is the only chance a caller gets to see that the readback found the parameters it expected.
-    """
-
-    accepted: bool = True
-    index_name: str
-    column: str
-    kind: str
-    index_type: str
-    params: dict[str, Any] = Field(default_factory=dict)
-    transaction_id: str
 
 
 # --------------------------------------------------------------------------- #
@@ -795,129 +744,6 @@ class CredentialResponse(BaseModel):
     credentials: VendedCredentials | None = None
     location: str | None = None
     read_version: int | None = None
-
-
-def _publish_the_executor_bounds_as_required(schema: JsonDict) -> None:
-    """Publish the executor bounds as the required, non-null integers the door enforces.
-
-    The MODEL keeps them optional because a field Pydantic requires is refused 422 by the framework on
-    this rask-only route, and the ruled answer is 400 ``InvalidInput`` from ``dataplane.plan_compaction``.
-    So the published schema declares the rule and the dataplane enforces it.
-    """
-    properties = schema["properties"]
-    if not isinstance(properties, dict):
-        raise TypeError(f"expected a properties mapping, got {type(properties).__name__}")
-    required = schema.get("required", [])
-    if not isinstance(required, list):
-        raise TypeError(f"expected a required list, got {type(required).__name__}")
-    schema["required"] = [*required, *(name for name in COMPACTION_EXECUTOR_BOUNDS if name not in required)]
-    for name in COMPACTION_EXECUTOR_BOUNDS:
-        published = properties[name]
-        alternatives = published.pop("anyOf") if isinstance(published, dict) else None
-        if not isinstance(published, dict) or not isinstance(alternatives, list):
-            raise TypeError(f"expected {name} to be published as an optional field, got {published!r}")
-        (bound,) = [alternative for alternative in alternatives if isinstance(alternative, dict) and alternative.get("type") != "null"]
-        if not isinstance(bound, dict):
-            raise TypeError(f"expected {name}'s non-null alternative to be a schema, got {bound!r}")
-        published.update(bound)
-        published.pop("default", None)
-
-
-def publish_the_plan_body_as_required(schema: JsonDict) -> None:
-    """Publish the plan door's body as the request model alone, without FastAPI's ``null`` alternative.
-
-    The handler takes ``CompactionPlanRequest | None`` so an absent or ``null`` body meets the same 400
-    ``InvalidInput`` as missing bounds rather than FastAPI's 422. The published body is required, so
-    ``null`` is not a value a client may send.
-    """
-    alternatives = schema.pop("anyOf")
-    if not isinstance(alternatives, list):
-        raise TypeError(f"expected the body to be published as an optional model, got {alternatives!r}")
-    (model,) = [alternative for alternative in alternatives if isinstance(alternative, dict) and alternative.get("type") != "null"]
-    if not isinstance(model, dict):
-        raise TypeError(f"expected the body's non-null alternative to be a schema, got {model!r}")
-    schema.update(model)
-    schema.pop("title", None)
-
-
-class CompactionPlanRequest(BaseModel):
-    """Ask the catalog what compaction this table needs — a metadata read that mints nothing.
-
-    Most knobs are POLICY: what shape the table should end up in, each optional. Three are MECHANICS —
-    how much memory the rewrite may use — and all three are REQUIRED, because **Lance bakes them into
-    the task at plan time**. Measured on pylance 12.0.0 (2026-09-25): a planned task's JSON carries an
-    ``options`` object holding ``batch_size``, ``num_threads`` and ``max_source_bytes``, and
-    ``CompactionTask.execute`` takes only the dataset. So the plan is the executor's one chance to
-    state them.
-
-    Left out, they become Lance's defaults, and that is an unbounded read: the scanner's default batch
-    is counted in ROWS, and rows are not a unit of memory — against the ~1.8 MB bronze rows measured
-    here it is ~15 GB *per compute thread*, times a thread count taken from the HOST's cores, over a
-    plan with no byte limit at all. So the door refuses a plan missing any of them with 400
-    ``InvalidInput``, naming all three.
-    rask's own executor sends ``MAINTENANCE_SCAN_BATCH_SIZE``, ``MAINTENANCE_COMPACT_THREADS`` and
-    ``MAINTENANCE_MAX_SOURCE_BYTES``; a bring-your-own executor sends the bounds it runs under.
-
-    The catalog does not INTERPRET them — it forwards the executor's own numbers into the plan. An
-    unrecognized field is refused rather than dropped — see ``dataplane.plan_compaction``.
-    """
-
-    model_config = ConfigDict(extra="forbid", json_schema_extra=_publish_the_executor_bounds_as_required)
-
-    #: Merge fragments until each holds about this many rows. ``None`` leaves Lance's own default.
-    target_rows_per_fragment: int | None = Field(default=None, gt=0)
-    max_rows_per_group: int | None = Field(default=None, gt=0)
-    max_bytes_per_file: int | None = Field(default=None, gt=0)
-    #: Rewrite fragments to drop soft-deleted rows, not just to merge small files.
-    materialize_deletions: bool | None = None
-    #: The deleted-row fraction above which a fragment is rewritten for deletions alone. Lance's own
-    #: name, ``materialize_deletions_threshold`` (``lance/optimize.py:44``, pylance 12.0.0).
-    materialize_deletions_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
-    #: HOW the bytes move. Baked at plan time like the bounds, and optional because Lance defines the
-    #: default: ``"reencode"`` (``lance/optimize.py``, pylance 12.0.0), which is what the in-pod rewrite
-    #: runs when ``MAINTENANCE_REPACK_MODE`` is unset.
-    compaction_mode: Literal["reencode", "try_binary_copy", "force_binary_copy"] | None = Field(
-        default=None, description="How each rewrite task moves the bytes. Unset, Lance re-encodes."
-    )
-    #: The executor's memory bounds (see the class docstring). OPTIONAL IN THE MODEL on purpose: a
-    #: field Pydantic requires is refused 422 by the framework on this rask-only route, and absence is
-    #: the domain refusal `dataplane.plan_compaction` owns — 400, code 13, the same answer an in-process
-    #: caller gets. The PUBLISHED schema marks them required (`_publish_the_executor_bounds_as_required`).
-    #: The ranges are the maintenance settings' own, so a caller cannot ask the plan for a read the
-    #: sweep's configuration forbids.
-    batch_size: int | None = Field(default=None, ge=1, le=8192, description="Required. Rows per scan batch in each rewrite task.")
-    num_threads: int | None = Field(default=None, ge=1, le=64, description="Required. Compute threads per rewrite task.")
-    max_source_bytes: int | None = Field(
-        default=None,
-        ge=1024 * 1024,
-        le=1024 * 1024 * 1024,
-        description="Required. Source bytes one plan may take on, summed over its tasks; Lance stops adding tasks at this limit.",
-    )
-
-
-class CompactionPlanResponse(BaseModel):
-    """The planned work. ``tasks`` are opaque strings for a queue — one worker, one task."""
-
-    read_version: int
-    tasks: list[str]
-
-
-class CompactionCommitRequest(BaseModel):
-    """The workers' rewrite results, come back to be committed as one metadata-only version."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    #: Lance's serialized ``RewriteResult`` strings, one per executed task. Opaque to the catalog and
-    #: client-controlled: a malformed one is a 400, never a 500.
-    results: list[str] = Field(min_length=1)
-
-
-class CompactionCommitResponse(BaseModel):
-    version: int
-    fragments_added: int
-    fragments_removed: int
-    files_added: int
-    files_removed: int
 
 
 class PublishRequest(BaseModel):

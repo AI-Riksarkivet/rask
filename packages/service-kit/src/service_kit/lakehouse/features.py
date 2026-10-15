@@ -12,7 +12,7 @@ a read refuses a dataset over a bit only a writer must understand.
 **Why this exists, concretely.** Two flags were measured against real datasets on pylance 9.0.0:
 
 * **Flag 16 (``base_paths`` — shallow clone / multi-base) is unsafe to COMPACT when this dataset's
-  files live under the base.** A shallow clone opens fine and ``compact_one`` happily rewrote it: an
+  files live under the base.** A shallow clone opens fine and a compaction happily rewrites it: an
   8-fragment clone with **no ``data/`` directory at all** came back with its own full copy of every
   row. That is silent storage amplification which defeats the entire point of the feature, and
   ``cleanup_old_versions`` then ran on the result. **The flag alone does not say which kind of base a
@@ -49,9 +49,13 @@ from typing import TYPE_CHECKING, Final, Protocol
 
 from pydantic import BaseModel, Field
 
+from service_kit.lakehouse.objectfs import dataset_root_probe
+
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Sequence
+
+    from service_kit.lakehouse.objectfs import StorageOptions
 
 
 log = logging.getLogger(__name__)
@@ -691,6 +695,21 @@ def describe_compaction_unsupported_flags(reader: int, writer: int, bases: Compa
         return None
     reason = f"unsupported manifest feature flags: {_named(unknown)} (reader={reader}, writer={writer})"
     return f"{reason} — {clause}" if clause is not None else reason
+
+
+def compaction_refusal(ds: FragmentCarrier, location: str, storage_options: StorageOptions) -> str | None:
+    """Why compacting the dataset at ``location`` is refused, or ``None``: the ONE gate maintenance's due list and the
+    catalog's ``version/create`` judge both ask, so a table listed as due is one whose compaction the judge admits.
+
+    The base readings are gathered only when flag 16 is set: it is the one place the gate costs IO (one probe per
+    declared base), and ``dataset_root_probe`` binds the probe to this dataset's store, because a scheme-less base probed
+    directly reads as a local path, finds nothing and answers "not a dataset root", a wrong permit on a real clone. A
+    dataset with no location cannot be probed, so its bases stay unknown and flag 16 refuses.
+    """
+    reader, writer = manifest_feature_flags(ds)
+    declares_bases = bool(location) and bool((reader | writer) & FLAG_BASE_PATHS)
+    bases = gather_compaction_bases(ds, dataset_root_probe(location, storage_options)) if declares_bases else None
+    return describe_compaction_unsupported_flags(reader, writer, bases)
 
 
 def _base_paths_compaction_refusal(bases: CompactionBases | None) -> str | None:

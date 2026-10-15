@@ -6,9 +6,9 @@ That includes a FAIL: it was authorless, which a verifier could never accept, an
 person is most likely to have to chase. The control event a trash purge announces names the service as its actor and is
 signed the same way, with no delegation: maintenance never signs for a person.
 
-A SIGNER WITHOUT ITS KEY EMITS NOTHING and reports itself not ready, and every delivery that would make it emit (a unit
-of work, an index build, a write arrival, the sweep's own tick) is answered before the delivery is read, so it is
-redelivered or retried rather than lost. The sweep and the purge emit after the work they describe, so a signature that
+A SIGNER WITHOUT ITS KEY EMITS NOTHING and reports itself not ready, and every delivery that would make it act (a write
+arrival, the sweep's own tick) is answered before the delivery is read, so it is redelivered or retried rather than
+lost. The sweep and the purge emit after the work they describe, so a signature that
 cannot be made is a withheld event and never a failed pass; maintenance stages no control event, so nothing signs one
 later.
 
@@ -32,9 +32,7 @@ from fastapi.testclient import TestClient
 
 from lineage_kit import RefusalReason, SignatureError, SigningKey, parse_published_keys, verify_control_signature, verify_signature
 from maintenance.api.arrival import register_arrival_route
-from maintenance.api.index_work import register_index_route
 from maintenance.api.routes import build_router
-from maintenance.api.work import register_work_route
 from maintenance.core.config import MaintenanceSettings
 from maintenance.core.lineage_emit import DaprMaintenanceEmitter, NoopEmitter
 from maintenance.services.purge import ACTOR
@@ -127,7 +125,7 @@ def _emit(client: TestClient, kind: str) -> None:
             )
         )
     elif kind == "failure":
-        portal.call(lambda: lineage.emit_maintenance_failed(table_id="acme$events", namespace="acme", error="compaction failed"))
+        portal.call(lambda: lineage.emit_maintenance_failed(table_id="acme$events", namespace="acme", error="maintain: failed"))
     else:
         portal.call(lambda: lineage.emit_maintenance(table_id="acme$events", namespace="acme"))
 
@@ -148,7 +146,7 @@ def _signed(event: dict[str, Any], public: str) -> tuple[str, str, str] | Refusa
 @pytest.mark.parametrize(
     ("kind", "signed"),
     [
-        pytest.param("compaction", (IDENTITY, IDENTITY, "COMPLETE"), id="a-compaction"),
+        pytest.param("expiry", (IDENTITY, IDENTITY, "COMPLETE"), id="an-expiry"),
         pytest.param("failure", (IDENTITY, IDENTITY, "FAIL"), id="a-failure"),
         pytest.param("purge", (IDENTITY, ACTOR, "table_purged"), id="a-trash-purge"),
     ],
@@ -180,8 +178,6 @@ RETRY = {"status": "RETRY"}
 @pytest.mark.parametrize(
     ("route", "body", "answer"),
     [
-        pytest.param("/maintenance-work", {"data": {"not": "a unit"}}, RETRY, id="a-unit-of-work"),
-        pytest.param("/maintenance-index", {"data": {"not": "a unit"}}, RETRY, id="an-index-build"),
         pytest.param("/maintenance-arrival", {"data": {"not": "an event"}}, RETRY, id="a-write-arrival"),
         pytest.param("/maintenance-cron", {}, {"status": "skipped", "reason": "signing key unresolved"}, id="the-sweeps-tick"),
     ],
@@ -191,8 +187,7 @@ def test_every_delivery_that_would_emit_is_answered_before_it_is_read_while_the_
 ) -> None:
     settings = MaintenanceSettings.model_validate(
         {
-            "MAINTENANCE_WORK_TOPIC": "maintenance-work",
-            "MAINTENANCE_INDEX_TOPIC": "maintenance-index",
+            "MAINTENANCE_ARRIVAL_ENABLED": "true",
             "MAINTENANCE_BINDING_NAME": "maintenance-cron",
             "MAINTENANCE_S3_ACCESS_KEY_ID": "test",
         }
@@ -201,9 +196,7 @@ def test_every_delivery_that_would_emit_is_answered_before_it_is_read_while_the_
     app.state.lineage_emitter = NoopEmitter()
     attach_signing(app, SigningKeyHolder(identity=IDENTITY, store="lance-secrets", load_key=SigningKey.from_seed, parse_published=parse_published_keys))
     app.include_router(build_router(settings))
-    wrapper = register_work_route(app, settings)
-    register_arrival_route(app, settings, wrapper)
-    register_index_route(app, settings, wrapper)
+    register_arrival_route(app, settings)
 
     answered = TestClient(app).post(route, json=body)
 

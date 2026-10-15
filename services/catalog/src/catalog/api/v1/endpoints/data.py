@@ -6,7 +6,7 @@ import json
 import logging
 import re
 from functools import partial
-from typing import Annotated, Any
+from typing import Annotated
 
 from fastapi import APIRouter, Body, Header, Query
 from fastapi.concurrency import run_in_threadpool
@@ -17,12 +17,9 @@ from lance_namespace import (
     CreateTableResponse,
     DeleteFromTableRequest,
     DeleteFromTableResponse,
-    DescribeTableRequest,
-    DescribeTableResponse,
     ExplainTableQueryPlanRequest,
     InsertIntoTableRequest,
     InsertIntoTableResponse,
-    InvalidInputError,
     MergeInsertIntoTableRequest,
     MergeInsertIntoTableResponse,
     QueryTableRequest,
@@ -48,19 +45,12 @@ from catalog.api.security import CurrentToken, Principal
 from catalog.core import provenance_guard, run_context
 from catalog.core.formats import reject_unsupported_properties
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
-from catalog.core.lineage_emit import COMPACT_TABLE, DELETE, INSERT, MERGE_INSERT, OVERWRITE_TABLE, UPDATE
+from catalog.core.lineage_emit import DELETE, INSERT, MERGE_INSERT, OVERWRITE_TABLE, UPDATE
 from catalog.core.modes import CreateMode, InsertMode
 from catalog.core.namespace import judged_native_dataset, judged_native_version
 from catalog.core.run_context import RunContext
 from catalog.core.serialization import dump
-from catalog.schemas import (
-    CompactionCommitRequest,
-    CompactionCommitResponse,
-    CompactionPlanRequest,
-    CompactionPlanResponse,
-    TableChangesRequest,
-    publish_the_plan_body_as_required,
-)
+from catalog.schemas import TableChangesRequest
 from catalog.services import blob_serving, dataplane, native, table_create
 from service_kit.governed import fga
 from service_kit.governed.audit import audit_read
@@ -73,9 +63,6 @@ log = logging.getLogger(__name__)
 
 ARROW_FILE = "application/vnd.apache.arrow.file"
 
-#: FastAPI types `Body(json_schema_extra=)` as a dict, while the pydantic `FieldInfo` it forwards to
-#: also takes a callable (`pydantic/fields.py`). One named alias absorbs that stub gap.
-_PLAN_BODY_SCHEMA: Any = publish_the_plan_body_as_required
 _OCTET_STREAM = "application/octet-stream"
 
 
@@ -207,114 +194,6 @@ async def create_table(
 
 # The published contract requires a body; the handler still accepts none, so a missing body meets the
 # same 400 `InvalidInput` as missing bounds instead of FastAPI's 422.
-@management_router.post("/{id}/compaction_plan", response_model_exclude_none=True, openapi_extra={"requestBody": {"required": True}})
-async def plan_table_compaction(
-    id: str,
-    ns: NamespaceDep,
-    settings: SettingsDep,
-    so: StorageOptionsDep,
-    body: Annotated[CompactionPlanRequest | None, Body(json_schema_extra=_PLAN_BODY_SCHEMA)] = None,
-    branch: Annotated[
-        str | None, Query(description="The ref to plan against. Omit for main; the plan reads this ref's fragments and its `read_version`.")
-    ] = None,
-) -> CompactionPlanResponse:
-    """Plan a compaction and hand the work to a queue — the catalog does NOT execute it.
-
-    Rewriting a table's data files is unbounded work whose cost is set by the table rather than by the
-    request. Doing it here would make this pod's memory ceiling a function of the largest table anyone
-    owns and turn a maintenance pass into an availability incident for every other door on it. So the
-    protocol is split by credential: this door plans under ROOT creds (a manifest read — no data byte,
-    no new version), a WORKER holding vended table-scoped creds runs each task and writes every byte,
-    and ``/compaction_commit`` folds the results back in. See `docs/adr/0045-the-lakehouse-cloud-native-cutover-2026-09-03-04.md`, "The lakehouse cloud-native cutover".
-
-    Maintainer tier: the router ``authorize`` gate maps this to ``can_maintain``
-    (``fga_deps._MAINTENANCE_ACTIONS``), because only the maintenance plane calls it.
-
-    The body must state ``batch_size``, ``num_threads`` and ``max_source_bytes``, the executor's memory
-    bounds. Lance bakes them into every task and the worker cannot set them afterwards, so a plan
-    missing any is refused 400 (``InvalidInput``, code 13) with all three named. ``compaction_mode`` is
-    baked the same way and is optional: unset, Lance re-encodes.
-
-    An empty ``tasks`` list is a successful answer: the table is already at target and there is nothing
-    to queue.
-    """
-    segments = parse_identifier(id, settings.delimiter)
-    # HONOURED, not refused: the pair now opens the ref the request names. It stayed refused while
-    # `lance.dataset(location)` resolved MAIN whatever the caller asked, because planning against main and
-    # reporting it as the branch's work compacts the wrong dataset with a 200.
-    described: DescribeTableResponse = await run_in_threadpool(native.call, ns, "describe_table", DescribeTableRequest(id=segments))
-    if not described.location:
-        raise InvalidInputError("table has no object-store location to compact")
-    request = body or CompactionPlanRequest()
-    policy = request.model_dump(exclude_none=True, exclude=set(dataplane.COMPACTION_EXECUTOR_BOUNDS))
-    plan = await run_in_threadpool(
-        lambda: dataplane.plan_compaction(
-            described.location or "",
-            so,
-            batch_size=request.batch_size,
-            num_threads=request.num_threads,
-            max_source_bytes=request.max_source_bytes,
-            branch=branch,
-            **policy,
-        )
-    )
-    return CompactionPlanResponse(read_version=plan.read_version, tasks=plan.tasks)
-
-
-@management_router.post("/{id}/compaction_commit", response_model_exclude_none=True)
-async def commit_table_compaction(
-    id: str,
-    ns: NamespaceDep,
-    settings: SettingsDep,
-    so: StorageOptionsDep,
-    token: CurrentToken,
-    emitter: LineageEmitterDep,
-    body: CompactionCommitRequest,
-    authorization: Annotated[str | None, Header()] = None,
-    branch: Annotated[
-        str | None, Query(description="The ref the plan was made on. Omit for main; the commit applies the worker's results to this ref.")
-    ] = None,
-) -> CompactionCommitResponse:
-    """Commit the workers' rewrite results as ONE metadata-only version.
-
-    Every data file this publishes was written by the worker that executed the task and already exists
-    when this is called, so no data byte transits the catalog. Conflict taxonomy is shared: a result that lost a race to an Overwrite
-    is a NON-retryable 400 telling the caller to re-plan (its plan is void, not just its commit), a
-    malformed result is a 400, a store outage a 503 (``dataplane._classify_commit_error``).
-
-    The lineage emit is ``compact_table``, deliberately not a data op: a compaction changes no row, and
-    recording it as one would put phantom writes on the graph at every maintenance pass.
-    """
-    segments = parse_identifier(id, settings.delimiter)
-    described: DescribeTableResponse = await run_in_threadpool(native.call, ns, "describe_table", DescribeTableRequest(id=segments))
-    if not described.location:
-        raise InvalidInputError("table has no object-store location to compact")
-    outcome = await run_in_threadpool(partial(dataplane.commit_compaction, described.location, so, body.results, branch=branch))
-    await lineage_deps.emit_measured_write(
-        emitter,
-        segments,
-        ns=ns,
-        so=so,
-        settings=settings,
-        token=token,
-        operation=COMPACT_TABLE,
-        pin_version=outcome.version,
-        # THE REF THE WRITE COMMITTED TO. Without it the trailer reads the commit back off MAIN, and
-        # with `pin_version` set that is worse than versionless: a branch's version NUMBER opened on
-        # main is a DIFFERENT snapshot, so the WROTE edge carries some other commit's schema. Both
-        # `read_version_and_schema` and `emit_measured_write` state the rule; no caller held it.
-        branch=branch,
-        authorization=authorization,
-    )
-    return CompactionCommitResponse(
-        version=outcome.version,
-        fragments_added=outcome.fragments_added,
-        fragments_removed=outcome.fragments_removed,
-        files_added=outcome.files_added,
-        files_removed=outcome.files_removed,
-    )
-
-
 @router.post("/{id}/insert", response_model_exclude_none=True)
 async def insert_into_table(
     id: str,
@@ -410,15 +289,8 @@ async def merge_insert_into_table(
     The run the request's Context names is stamped into the commit, on main only, and its inputs become the
     event's version-pinned inputs ([[LH-225]]).
 
-    IMPLICIT DDL (§4): after the merge commits, a best-effort BTREE index is ensured on the ``on``
-    key (pylance's ``use_index`` only helps *if an index exists*, and nothing else ever builds one —
-    without it every upsert full-scans). The FIRST merge on a ``(table, on)`` pays the build
-    synchronously; later merges pay one cheap list call. Passing ``use_index=false`` opts out of the
-    implicit build too (a caller declining index USAGE shouldn't be charged index CREATION). The
-    build commits its OWN Lance version with no lineage event (consistent with
-    ``/create_scalar_index`` today), so the first indexed merge leaves the table at
-    ``response.version + 1`` while the MERGE_INSERT lineage points at ``response.version`` — a
-    version gap, not a lost write."""
+    The merge builds no index: a writer builds one on the ``on`` key with its own pylance, committed through
+    ``version/create``, and the maintenance sweep lists a table whose index no longer covers its rows (ADR 0162)."""
     segments = parse_identifier(id, settings.delimiter)
     req = MergeInsertIntoTableRequest(
         id=segments,
@@ -454,12 +326,6 @@ async def merge_insert_into_table(
         branch=branch,
         run=run,
     )
-    # AFTER the merge and the emit (matching the emit pattern; §0 forbids BackgroundTasks): ensure the
-    # merge key is BTREE-indexed so subsequent upserts stop full-scanning. Best-effort inside — no
-    # exception reaches this response (the merge above already committed). use_index=False is the
-    # caller's explicit opt-out of index acceleration → also skips the implicit build.
-    if use_index is not False:
-        await run_in_threadpool(dataplane.ensure_merge_key_index, ns, segments, on, so=so, branch=branch)
     return response
 
 

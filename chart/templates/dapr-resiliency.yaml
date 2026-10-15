@@ -17,7 +17,7 @@ spec:
 
 {{- $subscribers = append $subscribers (dict "appId" "notifications") }}
 
-{{- if and .Values.maintenance.enabled .Values.maintenance.workTopic }}
+{{- if and .Values.maintenance.enabled .Values.maintenance.arrivalEnabled }}
 {{- $subscribers = append $subscribers (dict "appId" .Values.maintenance.daprAppId) }}
 {{- end }}
 {{- range $subscribers }}
@@ -32,16 +32,6 @@ spec:
           retry: pubsubDeliveryRetry
 {{- end }}
 
-{{- if and .Values.maintenance.enabled .Values.maintenance.workTopic }}
-      {{ .Values.maintenance.workPubsub }}:
-        inbound:
-          retry: pubsubDeliveryRetry
-{{- end }}
-{{- if and .Values.maintenance.enabled .Values.maintenance.indexTopic }}
-      {{ .Values.maintenance.indexPubsub }}:
-        inbound:
-          retry: pubsubDeliveryRetry
-{{- end }}
 scopes:
 {{- range $subscribers }}
   - {{ .appId }}

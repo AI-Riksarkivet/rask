@@ -354,15 +354,10 @@ def _erase_watching(uri: str) -> list[tuple[str, Any]]:
     return log
 
 
-def test_the_erasure_COMPACTION_carries_the_bound_the_compact_door_already_applies(table: str) -> None:
-    """`compact_now` in `services/maintenance.py` pins `batch_size=64, num_threads=2` and says why:
-    "rows are not a unit of memory, and the default batch size on a blob tier read ~15 GB/thread — the
-    OOM measured on the maintenance pod is just as available to the catalog pod through this button".
-
-    Erasure is a second such button on the same pod, and it reached pylance unbounded. An erasure runs
-    over exactly the tables most likely to carry a blob column, so the unbounded default is not the
-    cheaper path here — it is the same hazard through a door nobody had counted.
-    """
+def test_the_erasure_compaction_reads_under_its_bound(table: str) -> None:
+    """Erasure compacts in the catalog's own pod, so every pass carries `erasure.COMPACTION_BOUND`: rows are not a
+    unit of memory (Lance's default batch read ~15 GB per thread on a blob tier), and an erasure runs over exactly the
+    tables most likely to carry a blob column."""
     log = _erase_watching(table)
 
     compactions = [kwargs for name, kwargs in log if name == "compact_files"]

@@ -23,8 +23,8 @@ import respx
 
 from maintenance.core import config as maintenance_config
 from maintenance.core.config import MaintenanceSettings
-from maintenance.services import credentials, optimize
-from maintenance.services.optimize import Discovery
+from maintenance.services import credentials, discovery
+from maintenance.services.discovery import Discovery
 from service_kit.governed import secrets
 from service_kit.lakehouse import objectfs, warehouse_records
 
@@ -55,7 +55,7 @@ def _one_bucket_holding_both(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(warehouse_records, "list_warehouse_records", lambda *_a, **_k: [])
     monkeypatch.setattr(warehouse_records, "maintainable_buckets", lambda _registry: [])
     monkeypatch.setattr(objectfs, "s3_filesystem", lambda _options: object())
-    monkeypatch.setattr(optimize, "discover_datasets", lambda _fs, _bucket: Discovery(uris=[REFUSED, HEALTHY]))
+    monkeypatch.setattr(discovery, "discover_datasets", lambda _fs, _bucket: Discovery(uris=[REFUSED, HEALTHY]))
     monkeypatch.setattr(credentials, "service_headers", lambda _settings: {})
 
 

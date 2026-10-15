@@ -13,7 +13,7 @@ recorded only in a log line is recorded for as long as the log lives.
 THIS HALF NEEDS NO DECISION, and the row says so. The control-EVENT question beside it — whether a
 person should be TOLD a table was compacted — is a separate owner call and is not touched here.
 
-ZERO IS EMITTED, which is the rule `record_reclaimed` already states for its three siblings and which
+ZERO IS EMITTED, which is the rule `record_reclaimed` already states for its sibling and which
 matters more for bytes than for any of them: "nothing was reclaimed this tick" and "the sweep never
 ran" must not look identical on a dashboard, and the second is what a broken reclaimer looks like.
 """
@@ -44,6 +44,6 @@ def bytes_counter(monkeypatch: pytest.MonkeyPatch) -> _Spy:
 
 def test_a_reclaiming_sweep_records_its_bytes(bytes_counter: _Spy) -> None:
     """The defect: 71,295 bytes reclaimed on the deployed estate reached no series at all."""
-    metrics.record_reclaimed(fragments_removed=0, versions_removed=97, bytes_removed=71_295)
+    metrics.record_reclaimed(versions_removed=97, bytes_removed=71_295)
 
     assert bytes_counter.added == [71_295]

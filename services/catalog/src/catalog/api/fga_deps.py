@@ -127,22 +127,6 @@ _READ_RELATIONS: Final = frozenset({"can_get_metadata", "can_read_data", "can_re
 #: `tests/integration/test_the_maintainer_rung_opens_the_maintain_tier_vend.py`.
 _ALTERNATIVE_RUNGS: dict[tuple[str, str], str] = {("table", "credentials"): "can_maintain"}
 
-#: The two doors distributed compaction calls, and the ONLY callers are the maintenance plane.
-#:
-#: E2 bootstrapped the sweep as a `maintainer` rather than a `writer` — a deliberate narrowing — so these
-#: doors ask for `can_maintain`. At the writer rung the two rules are individually right and jointly
-#: deny: the router refuses before the endpoint runs.
-#:
-#: MEASURED ON THE LIVE ESTATE 2026-09-09, and none of it was red. `maintenance.distributedCompaction`
-#: was True in the running pod while 7,920 of 7,920 dataset outcomes reported `mode: in_pod`, and the
-#: catalog audited ~5,200 `can_write_data` DENY an hour for `service-maintenance` — no `tier` attribute,
-#: so from THIS gate rather than the vending door. The sweep compacted in-pod and reported success, so
-#: the only symptom was the memory ceiling the feature exists to remove.
-#:
-#: `can_maintain` rather than a second alternative rung: unlike `credentials` — a data read for every
-#: other caller, which is why that one keeps `can_read_data` as its primary — these two doors have no
-#: audience but maintenance. A door only a maintainer calls asks for the maintainer rung outright.
-_MAINTENANCE_ACTIONS = frozenset({"compaction_plan", "compaction_commit"})
 
 # Full route suffixes that create a NEW child -> authorize the parent (create-on-parent).
 _CREATE_ON_PARENT_SUFFIXES: dict[str, frozenset[str]] = {
@@ -229,16 +213,10 @@ _OWNER_SUFFIX_RELATION: dict[str, dict[str, str]] = {
         # #81 authorization graph: one hop of the relationship graph discloses principals + the cascade,
         # the same disclosure as access/list — owner bar.
         "access/graph": "can_drop",
-        # #75/#76 on-demand maintenance: previewing/reclaiming version history + compacting are the drop
-        # rung, like the retention policy that schedules them.
+        # #75 on-demand maintenance: previewing and reclaiming version history are the drop rung, like the
+        # retention policy that schedules them.
         "maintenance/preview": "can_drop",
         "maintenance/run": "can_drop",
-        "maintenance/compact": "can_drop",
-        # [[LH-105]] rebuilding an index REPLACES the one that is there, so the index the table had is
-        # gone whether or not the new one lands — the drop rung, like every other verb under this
-        # sub-path. The writer rung would let a plain data writer replace an owner's tuned index with a
-        # default-shaped one and leave the table answering queries the whole time.
-        "maintenance/reindex": "can_drop",
         # [[LH-073]] erasure destroys the table's PAST — every ref's rows, the tags pinning the versions
         # that held them, and the history itself. That is a stronger claim than a drop, and `can_drop`
         # is the highest rung there is, so it gates here. The writer rung would let a plain data writer
@@ -301,7 +279,7 @@ _OWNER_SUFFIX_RELATION: dict[str, dict[str, str]] = {
 }
 
 #: The WRITER rung, declared door by door on the FULL suffix exactly like the owner map above, because a
-#: suffix that neither map, the read vocabulary nor the maintenance doors name is REFUSED rather than
+#: suffix that neither map nor the read vocabulary names is REFUSED rather than
 #: defaulted. A default rung is a permission nobody chose. At the writer rung it is one every plain data
 #: writer already holds, so a new destructive verb would ship open to all of them with nothing red; and
 #: a new read door would refuse its whole audience while the audit trail recorded a write. The refusal
@@ -434,8 +412,7 @@ def _record_undeclared(path: str, fga_type: str, suffix: str, *, user: str, obj:
 def _action_relation(fga_type: str, suffix: str) -> str:
     """The ``can_*`` relation to check for a non-create op, by object type + route suffix.
 
-    Owner- and writer-tier doors are declared on the FULL suffix; reads and the maintenance doors are
-    classified by the trailing segment. Every returned relation exists on ``fga_type`` in the model.
+    Owner- and writer-tier doors are declared on the FULL suffix; reads are classified by the trailing segment. Every returned relation exists on ``fga_type`` in the model.
 
     Raises:
         InternalError: Nothing declares ``suffix`` for ``fga_type`` (see :func:`_undeclared_door`).
@@ -452,8 +429,6 @@ def _action_relation(fga_type: str, suffix: str) -> str:
             return "can_get_metadata"
     # `transaction` and `classification` resolve in `authorize`'s own branches, so neither is served here.
     if fga_type == "table":
-        if action in _MAINTENANCE_ACTIONS:
-            return "can_maintain"
         if action in _DATA_READ_ACTIONS:
             return "can_read_data"
         if action in _META_READ_ACTIONS:
@@ -1693,13 +1668,14 @@ async def require_can_drop_table(
 
 #: The rung a staged commit's operation needs at ``version/create`` beyond the router's ``can_write_data`` ([[LH-471]]).
 #: Each is the rung the catalog's own door for that operation asks, so staging an operation never clears a lower bar
-#: than doing it through the door: restore is ``restore``'s owner rung, a rewrite is compaction's maintainer rung, and
-#: an Overwrite of a table that already has a version is drop-then-recreate (``require_can_drop_table``). The writer
-#: operations need nothing more than the router's rung.
+#: than doing it through the door: restore is ``restore``'s owner rung, a compaction's two commits (the ``ReserveFragments``
+#: and the ``Rewrite`` after it) are the maintainer rung, and an Overwrite of a table that already has a version is
+#: drop-then-recreate (``require_can_drop_table``). The writer operations need nothing more than the router's rung.
 _STAGED_OPERATION_RELATION: Final[dict[str, str | None]] = {
     **dict.fromkeys(("Append", "Delete", "Update", "Merge", "Project", "CreateIndex", "DataReplacement", "DataOverlay", "UpdateConfig")),
     "Restore": "can_restore",
     "Rewrite": "can_maintain",
+    "ReserveFragments": "can_maintain",
     "Overwrite": "can_drop",
 }
 

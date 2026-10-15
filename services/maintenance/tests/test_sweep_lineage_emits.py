@@ -14,8 +14,7 @@ import asyncio
 
 import pytest
 
-from maintenance.core.lineage_emit import COMPACTION
-from maintenance.services.optimize import DatasetResult
+from maintenance.services.expiry import DatasetResult
 from maintenance.services.sweep import emit_sweep_lineage
 
 
@@ -40,25 +39,16 @@ class _RecordingEmitter:
         finally:
             self.in_flight -= 1
 
-    async def emit_maintenance(
-        self,
-        *,
-        table_id: str,
-        namespace: str,
-        operation: str = COMPACTION,
-        version: int | None = None,
-        branch: str | None = None,
-        branch_identifier: str | None = None,
-    ) -> None:
+    async def emit_maintenance(self, *, table_id: str, namespace: str) -> None:
         await self._publish(table_id, self.completed)
 
-    async def emit_maintenance_failed(self, *, table_id: str, namespace: str, error: str, operation: str = COMPACTION) -> None:
+    async def emit_maintenance_failed(self, *, table_id: str, namespace: str, error: str) -> None:
         await self._publish(table_id, self.failed)
 
 
 def _material(n: int) -> list[DatasetResult]:
     """`n` datasets that each reclaimed something — the COMPLETE lane's trigger."""
-    return [DatasetResult(uri=f"s3://b/{i:04d}_ns.tbl{i}", table_id=f"ns.tbl{i}", fragments_removed=1) for i in range(n)]
+    return [DatasetResult(uri=f"s3://b/{i:04d}_ns.tbl{i}", table_id=f"ns.tbl{i}", old_versions_removed=1) for i in range(n)]
 
 
 @pytest.mark.asyncio
@@ -83,22 +73,20 @@ async def test_a_raising_complete_publish_does_not_abort_the_emit_phase() -> Non
     ("result", "lane"),
     [
         pytest.param(
-            DatasetResult(
-                uri="s3://b/0001_ns.t", table_id="ns.t", fragments_removed=4, error="compaction: 1 of 3 task(s) failed", error_type="PartialCompaction"
-            ),
+            DatasetResult(uri="s3://b/0001_ns.t", table_id="ns.t", old_versions_removed=4, error="auto_cleanup: denied", error_type="OSError"),
             "complete",
-            id="a-partial-compaction-that-committed",
+            id="a-failed-disarm-beside-a-reclaim",
         ),
         pytest.param(
-            DatasetResult(uri="s3://b/0001_ns.t", table_id="ns.t", error="compaction: refused", error_type="CompactionPlanRefused"),
+            DatasetResult(uri="s3://b/0001_ns.t", table_id="ns.t", error="auto_cleanup: denied", error_type="OSError"),
             None,
-            id="a-skipped-rewrite-that-reclaimed-nothing",
+            id="a-failed-disarm-that-reclaimed-nothing",
         ),
     ],
 )
 @pytest.mark.asyncio
 async def test_the_lane_is_decided_by_the_work_done_unless_the_pass_failed(result: DatasetResult, lane: str | None) -> None:
-    """A `compaction:` error skipped or cut short the rewrite, but whatever the pass reclaimed still changed the table."""
+    """A failed disarm leaves the commit path armed, but whatever the pass reclaimed still changed the table."""
     emitter = _RecordingEmitter()
     await emit_sweep_lineage(emitter, [result], delimiter=".")
 

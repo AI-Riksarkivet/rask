@@ -1,9 +1,8 @@
-"""End-to-end test for the compaction/GC service against REAL Lance datasets.
+"""End-to-end test for the maintenance sweep against REAL Lance datasets.
 
-The unit tests cover discovery + summary logic with fakes; this proves the part that can't be unit-tested:
-the service actually lists the lakehouse bucket, opens the real Lance datasets the catalog wrote on
-RustFS, and runs compact_files() + cleanup_old_versions() without error — and that the OTel sweep metric
-lands in GreptimeDB. This is the only signal that the Dapr-cron maintenance path works against real
+The offline suite drives the sweep over moto; this proves what only the deployed release can: the service lists the
+lakehouse bucket, opens the real Lance datasets the catalog wrote, expires their versions and evaluates their due
+records without error (it compacts nothing, ADR 0155) — and the OTel sweep metric lands in GreptimeDB. This is the only signal that the Dapr-cron maintenance path works against real
 storage. (The cron route is invoked directly here; the Dapr binding fires the same route on schedule.)
 
 Run (port-forward maintenance + greptime), or `make e2e-compaction`:
@@ -58,13 +57,13 @@ def urls() -> tuple[str, str]:
     return MAINTENANCE.rstrip("/"), GREPTIME.rstrip("/")
 
 
-def test_sweep_compacts_real_datasets_and_meters(urls: tuple[str, str]) -> None:
-    compaction, _greptime = urls  # _prom_sum reads the module-level GREPTIME
+def test_the_sweep_expires_real_datasets_and_meters(urls: tuple[str, str]) -> None:
+    maintenance, _greptime = urls  # _prom_sum reads the module-level GREPTIME
     before = _prom_sum("sum(compaction_runs_total)")
 
     # Trigger one sweep (the same route the Dapr cron binding POSTs on schedule),
     # authenticating exactly like the sidecar does (dapr-api-token header).
-    # `plan_sweep` opens one manifest per dataset, so a tick costs what the estate is worth:
+    # The tick opens one manifest per dataset, so it costs what the estate is worth:
     # measured 288 datasets at ~12 s, and 30 s left no headroom on a busier one.
     # RETRY WHILE THE CRON HOLDS THE LOCK, which a single blind trigger cannot survive on a live
     # estate. The sweep is single-flight: a tick that finds one in progress answers 200 `skipped` and
@@ -75,33 +74,18 @@ def test_sweep_compacts_real_datasets_and_meters(urls: tuple[str, str]) -> None:
     body: dict[str, Any] = {}
     deadline = time.monotonic() + 900
     while time.monotonic() < deadline:
-        resp = requests.post(f"{compaction}/{BINDING}", headers=_TOKEN_HEADER, timeout=600)
+        resp = requests.post(f"{maintenance}/{BINDING}", headers=_TOKEN_HEADER, timeout=600)
         assert resp.status_code == 200, resp.text
         body = resp.json()
         if body.get("status") != "skipped":
             break
         time.sleep(10)
 
-    # TWO LANES answer this route and they report different things, because on one of them the tick
-    # maintains nothing itself. `on_cron` chooses on `MAINTENANCE_WORK_TOPIC`: SET — as the deployed
-    # release sets it — the tick PLANS and publishes one unit per dataset and a subscription compacts
-    # each later, so this leg covers discovery and enqueue and the reclamation counts are not its to
-    # report. UNSET (the chart default, and every local run) it compacts serially and reports what it
-    # reclaimed. Asserting the serial shape against the queue lane is how this leg read as "the sweep
-    # is broken" while the sweep was fine.
     assert body.get("status") != "skipped", f"an overlapping sweep was still running: {body}"
-    if body.get("status") == "enqueued":
-        # `planned` is the units, `skipped` the trash exclusions decided WITHOUT work — together they
-        # are everything discovered.
-        assert body["planned"] + body["skipped"] >= 1, f"no datasets discovered in the bucket: {body}"
-        # `not_queued` is this lane's `errors`: a unit that never reached the broker is a dataset that
-        # goes unmaintained this tick.
-        assert body["not_queued"] == 0, f"units never reached the broker: {body}"
-        assert body["published"] == body["planned"], f"published does not account for every unit: {body}"
-    else:
-        assert body["datasets"] >= 1, f"no datasets discovered in the bucket: {body}"
-        assert body["errors"] == {} or body["errors"] == [], f"a dataset failed to compact: {body['errors']}"
-        assert "fragments_removed" in body and "versions_removed" in body
+    assert body["datasets"] >= 1, f"no datasets discovered in the bucket: {body}"
+    assert body["errors"] == {}, f"a dataset failed its pass: {body['errors']}"
+    assert "versions_removed" in body and "due" in body, f"the tick reports neither its reclamation nor its due decisions: {body}"
+    assert "failed" not in body["due"], f"a due evaluation could not decide: {body['due']}"
 
     # The OTel sweep counter incremented in GreptimeDB (the maintenance path is observable).
     deadline = time.monotonic() + 30.0

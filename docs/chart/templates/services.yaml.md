@@ -103,20 +103,6 @@ under topic catalog.control.v1; every replica buffers every event for GET /manag
 ternary (NOT `| default`, which treats false as empty) so a key missing under
 `helm upgrade --reuse-values` renders the default, not "" (pydantic bool_parsing crash).
 
-## `- { name: LANCE_MAINTENANCE_WORK_PUBSUB, value: {{ printf "%s-%s" $.Values.maintenance.workPubsub $.Values....`
-
-The on-demand compaction door publishes ONE work item here instead of rewriting fragments
-in the request handler. Rendered from the SAME values the maintenance service reads, so a
-202 is only ever returned where an executor is actually subscribed: `register_work_route`
-is gated on this topic too, and a door that accepted work no worker consumes would be
-strictly worse than the synchronous rewrite it replaced.
-
-## `- { name: LANCE_MAINTENANCE_INDEX_TOPIC, value: {{ $.Values.maintenance.indexTopic | quote }} }`
-
-Set, create_index / create_scalar_index publish one unit and answer with its id rather
-than building inside this handler — the spec's own asynchronous model. The maintenance
-service reads the SAME value, so neither side can believe a worker exists when it does not.
-
 ## `- { name: LANCE_CONTROL_OUTBOX_URI, value: "s3://{{ .Values.minio.bucket }}/_control_outbox" }`
 
 #4 transactional outbox on the CONTROL lane + the cron that RELAYS it. A control event lost

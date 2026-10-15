@@ -38,7 +38,7 @@ Two language-pure planes: Python at the repo root, all JS/TS under `frontend/`.
   - **lakehouse**: `catalog` (governed Lance REST catalog — projects → warehouses → namespaces →
     tables, and the bronze→silver→gold tier governance a pipeline's writes pass through), `lineage`
     (OpenLineage → AGE, and the durable `GET /events` log), `maintenance` (version expiry, trash purge, the orphan
-    scan, cross-store reconcile; it still compacts and rebuilds indices until LH-467 #587 moves those rewrites out)
+    scan, cross-store reconcile, and the list of tables due for a bring-your-own compaction or index optimize; ADR 0162)
   - **media**: `viewer`, `search`, `annotator`
   - **fleet**: `gateway` (reverse proxy `:8888`), `flows` (the studio flow-builder's server half),
     `notifications` (the per-subject inbox), and `compute` (Ray introspection + Serve proxy), the companion of a

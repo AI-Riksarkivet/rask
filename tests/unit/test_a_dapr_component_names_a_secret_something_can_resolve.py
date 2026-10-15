@@ -58,13 +58,13 @@ _POLICY_PATH = re.compile(r'path "[^"/]+/data/([^"]+)"')
 #: only the catalog's publication advances a tier. Granting it would let a stage runner wake the next tier past that door.
 _NOT_A_TOPIC_THE_APP_USES = frozenset({"MEDALLION_PUB_TOPIC"})
 #: The renders where a component two apps would share is split only under a flag: the control topic's optional publishers, and
-#: maintenance's lineage with no queue lane to give it a component.
+#: maintenance's lineage with no write-event lane to give it a component.
 _SPLIT_UNDER_A_FLAG = [
     (
         "every-optional-publisher",
         (*DEFAULT_ARGS, "--set", "maintenance.controlEmit=true", "--set", "explorer.enabled=true", "--set", "explorer.controlEmit=true"),
     ),
-    ("no-queue-lane", (*DEFAULT_ARGS, "--set", "maintenance.workTopic=", "--set", "maintenance.dedicatedWorkers.enabled=false")),
+    ("no-write-event-lane", (*DEFAULT_ARGS, "--set", "maintenance.arrivalEnabled=false")),
 ]
 
 

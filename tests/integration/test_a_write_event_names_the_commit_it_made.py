@@ -148,16 +148,11 @@ def test_every_branch_door_emits_its_branch_and_that_branchs_version(real_ns_cli
 
     Main is moved ahead of the branch first, so a version number read off main is a different number
     rather than a coincidentally equal one.
-
-    The two compaction lanes (``maintenance/compact`` and ``compaction_commit``) are not driven: their
-    evidence gate refuses every branch on pylance 12.0.0, because a branch's data files resolve through
-    main's root (flag 16), so no branch compaction reaches its emit.
     """
     client = real_ns_client
     assert client.post(f"/v1/table/{TABLE}/branches/create", json={"name": BRANCH}).status_code == 200
     for ids in ((4,), (5,), (6,)):
         assert client.post(f"/v1/table/{TABLE}/insert", content=_ipc(_rows(*ids)), headers=ARROW).status_code == 200
-    _head(location).create_scalar_index("id", index_type="BTREE", name="id_idx")
     restore_to = _head(location).version
     expected_ref = {"ref": BRANCH, "branchIdentifier": _identifier(location)}
 
@@ -198,7 +193,6 @@ def test_every_branch_door_emits_its_branch_and_that_branchs_version(real_ns_cli
             _nothing,
             lambda: client.post(f"/v1/table/{TABLE}/schema_metadata/update", json={"metadata": {"owner": "dev"}, "branch": BRANCH}),
         ),
-        ("create_index", _nothing, lambda: client.post(f"/management/v1/table/{TABLE}/maintenance/reindex?branch={BRANCH}", json={"index_name": "id_idx"})),
         ("restore_table", _nothing, lambda: client.post(f"/v1/table/{TABLE}/restore", json={"branch": BRANCH, "version": restore_to})),
     ]
 

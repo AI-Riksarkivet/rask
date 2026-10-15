@@ -33,7 +33,6 @@ READS = [
     "/v1/table/pages/describe",
     "/v1/table/pages/count_rows",
     "/management/v1/table/pages/changes",
-    "/management/v1/table/pages/compaction_plan",
     "/management/v1/table/pages/credentials?tier=read",
     "/management/v1/access/list-objects",
     "/management/v1/access/expand",

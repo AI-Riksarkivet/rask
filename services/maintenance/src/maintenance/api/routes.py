@@ -6,13 +6,10 @@ cron tick may trigger them. Blocking Lance/S3 IO runs in the threadpool so the e
 
 Two bindings, not one route doing both:
 
-* the **sweep** (`binding_name`) compacts, optimizes indices and cleans up old versions — it REWRITES
-  data files and is expensive;
+* the **sweep** (`binding_name`) expires every dataset's superseded versions and writes the due records
+  of the tables a bring-your-own job should compact or reindex — it opens every dataset and is expensive;
 * the **reconcile** pass (`reconcile_binding_name`) reads three stores and reports their
   disagreements — cheap — and then, gated on THAT report running clean, reclaims expired trash (#79).
-
-One binding would force the cheap read onto the expensive write's schedule, which is exactly the
-constraint that keeps drift reports rare enough to be useless.
 
 The purge rides the reconcile binding rather than the sweep's precisely because its permission comes
 from the report: it consumes the report object the same tick produced, never a stored one. It is off by
@@ -29,19 +26,17 @@ from fastapi import APIRouter, Depends
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
-from maintenance.api.dependencies import ControlEmitterDep, DaprClientDep, FgaClientDep, LineageEmitterDep, S3ClientDep, SettingsDep
+from maintenance.api.dependencies import ControlEmitterDep, FgaClientDep, LineageEmitterDep, S3ClientDep, SettingsDep
 from maintenance.core.config import MaintenanceSettings
-from maintenance.core.metrics import record_run
+from maintenance.services.expiry import summarize_refusals
 from maintenance.services.floor import raise_listing_floors
-from maintenance.services.optimize import summarize_refusals
 from maintenance.services.purge import purge_expired_trash, refusal_log_entry
 from maintenance.services.rebuild import rebuild_tuples
 from maintenance.services.reconcile import CATEGORIES, ReconcileReport, reconcile
 from maintenance.services.reconcile import Sources as ReconcileSources
 from maintenance.services.repair import repair_drift
-from maintenance.services.sweep import emit_sweep_lineage, memory_readings, plan_sweep, run_sweep, skip_attribution, summarize
+from maintenance.services.sweep import emit_sweep_lineage, run_sweep, summarize
 from maintenance.services.tombstones import Tombstone, sweep_tombstones
-from maintenance.services.work_queue import enqueue_units
 from service_kit.governed.dapr_auth import require_dapr_token
 from service_kit.governed.signing_key import retry_until_signed
 from service_kit.lakehouse import trash
@@ -50,54 +45,27 @@ from service_kit.lakehouse.objectfs import fs_and_base
 
 log = logging.getLogger(__name__)
 
-# Single-flight guard: the sweep is unbounded (it discovers + compacts EVERY dataset), so a slow sweep can
-# outlast the cron interval. Without this, the next tick starts a SECOND concurrent sweep and the two race
-# compact_files()/cleanup_old_versions() on the same datasets (concurrent commits + a GC deleting versions
-# the other is reading). Module-level asyncio.Lock created without binding a loop (py3.10+); with
-# ONE replica this is cluster-wide single-flight. What pins the one replica is
-# `chart/templates/maintenance.yaml`, which HARDCODES `replicas: 1` — scaling is not reachable through
-# values at all, only by a kubectl scale or a template edit — and rolls out with `Recreate`, so no surge
-# pod runs a second sweep mid-deploy. Anyone who parameterises the replica count without also making this
-# lock distributed silently gets two concurrent sweeps racing compact_files()/cleanup_old_versions() on
-# the same datasets.
-# `tests/unit/test_a_correctness_pinned_replica_does_not_surge.py::test_the_maintenance_deployment_uses_Recreate`
-# fails the moment the rendered deployment stops being one replica rolled out with `Recreate`. It reads
-# the render, not this lock, so a distributed lock is what would let that pin go.
-# The reconcile sweep does the same
-# with a pg advisory lock — maintenance is stateless (no DB), so an in-process lock is the analog. A tick
-# that finds a sweep already running SKIPS (does not queue): the running sweep already covers every dataset,
-# so re-running is redundant, and queuing would pile ticks up behind a long sweep.
+# Single-flight guard: a slow sweep can outlast the cron interval, and two concurrent sweeps would race
+# `cleanup_old_versions()` on the same datasets and write the same due records twice. Module-level asyncio.Lock;
+# with ONE replica this is cluster-wide single-flight. What pins the one replica is
+# `chart/templates/maintenance.yaml`, which HARDCODES `replicas: 1` and rolls out with `Recreate`, so no surge pod
+# runs a second sweep mid-deploy (`tests/unit/test_a_correctness_pinned_replica_does_not_surge.py` reads the render).
+# A tick that finds a sweep already running SKIPS (does not queue): the running sweep already covers every dataset.
 _sweep_lock = asyncio.Lock()
 
 
 async def on_cron(
     settings: SettingsDep,
     emitter: LineageEmitterDep,
-    dapr: DaprClientDep,
     signing: Annotated[dict[str, str] | None, Depends(retry_until_signed)] = None,
 ) -> dict[str, Any]:
-    """One maintenance tick, triggered by a Dapr cron tick (POST /<binding-name>).
+    """One maintenance tick, triggered by a Dapr cron tick (POST /<binding-name>): :func:`run_sweep`, then its lineage.
 
-    TWO LANES, and which one runs is decided by whether there IS a queue rather than by a flag — so a
-    production deployment has exactly one path instead of two that can drift:
+    The emit phase is awaited as one bounded, concurrent batch, so every publish reaches the durable Dapr/JetStream
+    transport before we return, and it is best-effort throughout: a publish failure never fails the tick.
 
-    * **A work topic is configured** → this tick PLANS and enqueues, and maintains nothing itself. It
-      returns as soon as the units are published, so the handler's cost is the estate's dataset COUNT
-      rather than its size. A unit that fails to publish is reported in the response, not swallowed:
-      it is simply not maintained this tick and the next one re-plans it.
-    * **No work topic** (local runs, the test suite) → the serial sweep, unchanged.
-
-    Single-flight either way: an overlapping tick SKIPS. It matters less on the queue lane — planning is
-    bounded — but two concurrent planners would enqueue every dataset twice, and duplicate units are
-    wasted work even though they are safe (compaction and GC are convergent).
-
-    The serial lane's emit phase is awaited as one bounded, concurrent batch — per-dataset serial awaits
-    were the MAINT-04 defect — so every publish reaches the durable Dapr/JetStream transport before we
-    return, and it is best-effort throughout, so a publish failure never fails the tick. On the queue
-    lane each unit emits its own lineage from the subscription that executed it.
-
-    A tick is SKIPPED while this service's signing key is unresolved: the lineage this sweep emits could not be
-    signed, an unsigned event is refused and lost, and the next tick re-plans every dataset anyway.
+    A tick is SKIPPED while this service's signing key is unresolved: the lineage this sweep emits could not be signed,
+    an unsigned event is refused and lost, and the next tick re-covers every dataset anyway.
     """
     if signing is not None:
         return {"status": "skipped", "reason": "signing key unresolved"}
@@ -105,61 +73,13 @@ async def on_cron(
         log.warning("maintenance_sweep_skipped", extra={"reason": "previous sweep still running"})
         return {"status": "skipped", "reason": "overlapping sweep still running"}
     async with _sweep_lock:
-        if settings.work_topic and dapr is not None:
-            items, decided = await run_in_threadpool(plan_sweep, settings)
-            published, not_queued = await enqueue_units(
-                dapr, items, pubsub=settings.work_pubsub, topic=settings.work_topic, timeout_seconds=settings.publish_timeout_seconds
-            )
-            # The trash exclusions are decided WITHOUT work and are results, not units — they must not be
-            # enqueued, and their lineage is emitted here because no subscription will ever see them.
-            await emit_sweep_lineage(emitter, decided, delimiter=settings.delimiter)
-            # `memory_readings()` BESIDE THE COUNTERS, because this lane is the one that runs and
-            # [[LH-183]] is a live row about THIS pod. Enqueueing moved the compaction to a worker
-            # sized for it; it did not move the discovery pass, which still opens one manifest per
-            # dataset here. The readings rode `summarize` — the SERIAL lane's summary — so the
-            # diagnostic for the OOM was absent from every tick the estate actually emits.
-            summary = {
-                "status": "enqueued",
-                "planned": len(items),
-                "published": published,
-                "not_queued": len(not_queued),
-                "skipped": len(decided),
-                # WHICH KIND, beside the total. [[LH-191]] closes on a non-zero CADENCE skip, and one
-                # integer counting trash exclusions, opt-outs and cadence together cannot report it —
-                # an interval taking effect would read exactly like one more dataset reaching the trash.
-                "skipped_by": skip_attribution(decided),
-                **memory_readings(),
-            }
-            # THE COMPLETION HALF OF THE PAIR `plan_sweep` OPENED. `record_run_started` fires inside
-            # `plan_sweep`, which both lanes call; `record_run` used to fire only inside `run_sweep`,
-            # which only the serial lane calls — so on the lane every deployment actually runs, the pair
-            # opened and never closed and `compaction_runs_total` never existed. Measured on the deployed
-            # estate 2026-09-06: started 54, datasets swept 7937, `absent(compaction_runs_total)` = 1, so
-            # the critical MaintenanceSweepMetricsMissing was paging while nothing was wrong and
-            # MaintenanceSweepNotCompleting could not fire at all.
-            #
-            # A QUEUE TICK COMPLETES WHEN THE ESTATE IS PLANNED AND THE UNITS ARE DURABLY PUBLISHED, not
-            # when they finish: the units are executed later by subscriptions that ack for themselves.
-            # Both alerts ask "is the sweep running at all", and on this lane the planner IS the sweep.
-            # Counting unit execution would emit hundreds of completions per tick and break the pairing
-            # with `started` that the rules' lost-pass arithmetic depends on.
-            record_run()
-            log.info("maintenance_tick_enqueued", extra=summary)
-            return summary
         results = await run_in_threadpool(run_sweep, settings)
         await emit_sweep_lineage(emitter, results, delimiter=settings.delimiter)
         summary = summarize(results)
         log.info("maintenance_sweep", extra=summary)
-        # ONE WARNING FOR THE WHOLE SWEEP, and only when there is something to say. Measured on the
-        # deployed estate 2026-09-18: the per-dataset refusal fired 116 times in this one tick and was
-        # roughly half of every WARN the estate emitted, all of it the same permanent fact about the
-        # same datasets. The per-dataset line is DEBUG now; this is where an operator hears it, with
-        # the gate breakdown that says which of the two causes it was. `summary["refusals"]` still
-        # carries every dataset and its reason for whoever needs the list.
-        #
-        # Counted off `results`, not off `summary`: the summary is a SERIALIZED report whose keys are
-        # its callers' contract, and reading one back to make a decision couples this line to that
-        # shape for no gain when the results are in hand.
+        # ONE WARNING FOR THE WHOLE SWEEP, and only when there is something to say: measured on the deployed estate
+        # 2026-09-18, a per-dataset refusal line was roughly half of every WARN the estate emitted. The breakdown says
+        # which gate it was; `summary["refusals"]` carries every dataset and its reason.
         if by_gate := summarize_refusals(results):
             log.warning("maintenance_refusals", extra={"refused": sum(by_gate.values()), "by_gate": by_gate, "datasets": len(results)})
         return summary
@@ -522,10 +442,8 @@ def build_router(settings: MaintenanceSettings) -> APIRouter:
         (settings.binding_name, on_cron, ack_binding),
         (settings.reconcile_binding_name, on_reconcile_cron, ack_reconcile_binding),
     ):
-        # AN UNNAMED BINDING MOUNTS NOTHING. Unconditional, this served `f"/{''}"` — a token-guarded
-        # cron door at the pod ROOT — which an EXECUTOR pod (M1: no cron, work queue only) would have
-        # published by simply not configuring a binding. Opt-in on a configured name is the same rule
-        # the control relay already follows.
+        # AN UNNAMED BINDING MOUNTS NOTHING: unconditional, it would serve `f"/{''}"`, a token-guarded cron door at
+        # the pod ROOT. Opt-in on a configured name is the same rule the control relay follows.
         if not name:
             continue
         router.add_api_route(f"/{name}", on_post, methods=["POST"], dependencies=[Depends(require_dapr_token)])

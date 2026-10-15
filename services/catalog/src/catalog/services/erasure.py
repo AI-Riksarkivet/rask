@@ -31,13 +31,13 @@ order changes nothing measured.)
 **A BRANCH'S REWRITE COPIES WHAT IT INHERITS, deliberately.** Compacting through a branch handle writes
 the inherited fragments it selects into `tree/<name>/data/` — up to `COMPACTION_BOUND`'s 64 MiB of source
 per ref, the owner's cap (2026-09-26) — beside the fragments that hold the subject, which it rewrites
-whatever their size (owner, 2026-10-05: an erasure may rewrite past that cap), and each `compact:<ref>` surface reports the bytes. The
-compact door refuses that materialisation as a COST (`maintenance.require_compactable`); here it is what
+whatever their size (owner, 2026-10-05: an erasure may rewrite past that cap), and each `compact:<ref>` surface reports the bytes.
+`version/create` refuses a client's rewrite that materialises it, as a COST (`maintenance.require_compactable`); here it is what
 releases the fork pin, because the parent's cleanup takes the subject's version only once no branch
 version stands on its files.
 
 **A TABLE ANOTHER DATASET RESOLVES ITS FILES THROUGH IS NEITHER REWRITTEN NOR RECLAIMED** (#114, the
-compact and GC doors' own gate): its reclaim would delete the only copy a shallow clone reads, and the
+gate `version/create` and the GC door ask): its reclaim would delete the only copy a shallow clone reads, and the
 clone's own copy of the subject is its own surface ([[LH-263]]). Every ref's `compact:` and `history:`
 surface then fails, and the residuals are reported as not reclaimed rather than attributed to a ref
 whose deletion could not finish the erasure.
@@ -71,7 +71,7 @@ concurrent compaction made stale on a table without stable row ids.
 **A REWRITE TAKES EVERY FRAGMENT HOLDING THE SUBJECT.** Compaction's default 10% threshold leaves a fragment
 holding a few of the subject's rows behind a deletion vector with their bytes still in its data file
 (measured: a 20-row fragment holding one subject row rewrote nothing), so the rewrite materialises every
-deletion. The compact door's byte bound caps a whole compaction run, not one fragment (measured: beside
+deletion. `COMPACTION_BOUND`'s byte bound caps a whole compaction run, not one fragment (measured: beside
 three 150 KB fragments, a 349-byte fragment holding the subject was not rewritten under a 64 KiB bound), so a
 second pass rewrites the fragments still holding the subject with every other fragment excluded and the
 bound raised to their size: a bound below it leaves those bytes in a live file behind a deletion vector.
@@ -126,8 +126,8 @@ from lance_namespace import InvalidInputError, ServiceUnavailableError, Unsuppor
 from pydantic import BaseModel, Field
 
 from catalog.services.dataplane import MAIN_BRANCH, caller_sql, clean_lance_message, recorded_branch, refuse_an_unbounded_boolean_chain
-from catalog.services.index_specs import describe_index_for_rebuild
-from catalog.services.maintenance import COMPACTION_BOUND, rebuild_index_now, refuse_a_referring_datasets_source
+from catalog.services.index_specs import describe_index_for_rebuild, rebuild_index
+from catalog.services.maintenance import refuse_a_referring_datasets_source
 from service_kit.lakehouse.base_refs import BaseRefs, normalise
 from service_kit.lakehouse.blobs import EXTERNAL_KIND, blob_field_names
 from service_kit.lakehouse.features import (
@@ -140,11 +140,16 @@ from service_kit.lakehouse.features import (
     manifest_feature_flags,
 )
 from service_kit.lakehouse.objectfs import StorageOptions, dataset_root_probe, fs_and_base
-from service_kit.lakehouse.work_items import IndexWorkItem
 from service_kit.lancekit.commit_verdict import CommitVerdict, classify_commit_failure
 
 
 log = logging.getLogger(__name__)
+
+#: The read bound erasure's compaction passes carry in the catalog's own pod. Rows are not a unit of memory (Lance's
+#: default batch of 8192 rows read ~15 GB per thread on a blob tier, #93), and Lance's thread count is the host's, which
+#: a container limit does not bound. Measured 2026-09-22: the catalog runs at 248Mi of a 512Mi limit and a pass bounded
+#: at B peaks near 1.7xB resident ([[LH-185]]), so 64 MiB of source peaks ~109 MiB.
+COMPACTION_BOUND: Final[dict[str, int]] = {"batch_size": 64, "num_threads": 2, "max_source_bytes": 64 * 1024 * 1024}
 
 
 class SurfaceResult(BaseModel):
@@ -295,7 +300,7 @@ def erase(
     """Delete every row matching ``predicate`` from every ref, then reclaim what no longer pins it.
 
     ``dataset`` is a handle on main; every branch is reached through it. ``storage_options`` binds the
-    compact gate's base probe to the store the table lives in, which is why it has no default (see
+    compaction gate's base probe to the store the table lives in, which is why it has no default (see
     ``maintenance.require_compactable``). ``protected`` is the #114
     pre-pass's map of roots other datasets resolve their files through (``base_refs.sibling_base_refs``),
     or None when the caller collected none; it has no default so every caller says which. ``reopen``
@@ -1113,11 +1118,11 @@ def _referred(dataset: _Dataset, protected: BaseRefs | None) -> str | None:
 
 
 def _compaction_refusal(handle: _Dataset, storage_options: StorageOptions) -> str | None:
-    """Why the compact door's gate refuses rewriting ``handle``'s ref, or None — with ONE allowance.
+    """Why the compaction gate (`maintenance.require_compactable`) refuses rewriting ``handle``'s ref, or None — with ONE allowance.
 
     A branch sets flag 16 and names this table's root, and a branch of a branch its parent's
     `tree/<name>` too, as dataset-root bases its inherited files resolve through (measured on pylance
-    12.0.0), so the gate as the door asks it refuses every branch. Those bases are the table's own
+    12.0.0), so the gate as `version/create` asks it refuses every branch. Those bases are the table's own
     history, which the rewrite copies from on purpose, so the gate weighs only the others: a base
     outside this table, and whether any data file resolves through one. A branch of a shallow clone
     names the clone's source as well (measured), and is refused with the clone.
@@ -1150,7 +1155,7 @@ def _compact(handle: _Dataset, predicate: str) -> str:
     """Rewrite ``handle``'s ref and say what it cost: the bytes of the data files the rewrite added,
     which on a branch are the inherited fragments it copied.
 
-    THE FIRST PASS CARRIES THE COMPACT DOOR'S BOUND, imported rather than restated: it rewrites whatever
+    THE FIRST PASS CARRIES :data:`COMPACTION_BOUND`: it rewrites whatever
     compaction selects, on a branch the inherited fragments it copies, and the owner capped that copy at
     64 MiB of source per ref (2026-09-26); an erasure may rewrite past it (owner, 2026-10-05). THE SECOND PASS TAKES EVERY FRAGMENT STILL HOLDING THE SUBJECT,
     every other fragment excluded, its byte bound raised to their size: those fragments are the erasure, and
@@ -1174,9 +1179,8 @@ def _rebuild_indices(report: ErasureReport, dataset: _Dataset, ref: str | None, 
     """Rebuild every user index on ``ref``'s head from its own description; the segment UUIDs it built, or
     None when one could not be rebuilt (recorded as a failed `index:<ref>` surface).
 
-    The parameters are read off the live index (`index_specs.describe_index_for_rebuild`) and the build
-    goes through the reindex door's own call (`maintenance.rebuild_index_now`), so the rebuild neither
-    re-tunes the index nor differs from what that door builds. A ref with no user index records nothing.
+    The parameters are read off the live index (`index_specs.describe_index_for_rebuild`), so the rebuild does
+    not re-tune it. A ref with no user index records nothing.
     """
     surface = f"index:{_label(ref)}"
     try:
@@ -1185,19 +1189,7 @@ def _rebuild_indices(report: ErasureReport, dataset: _Dataset, ref: str | None, 
         if not names:
             return frozenset()
         for name in names:
-            spec = describe_index_for_rebuild(handle, name)
-            item = IndexWorkItem(
-                uri=str(handle.uri),
-                branch=ref or "",
-                table_id=table,
-                column=spec.column,
-                kind=spec.kind,
-                index_type=spec.index_type,
-                name=spec.name,
-                replace=True,
-                params=spec.params,
-            )
-            rebuild_index_now(handle, item)
+            rebuild_index(handle, describe_index_for_rebuild(handle, name))
         segments = _segments(handle)
     except Exception as exc:  # noqa: BLE001 — one ref's failure must not hide the others
         log.warning("erasure_index_rebuild_failed", extra={"table": table, "ref": _label(ref), "error": str(exc)})
@@ -1241,7 +1233,7 @@ def _record_held(report: ErasureReport, dataset: _Dataset, refs: Sequence[str | 
       base survived the delete, the materialising rewrite and `cleanup_old_versions(0)` byte for byte. The
       base is the source's, so this erasure never deletes there.
     * `data_base:<name>` — a data file of a fragment holding the subject that lives under a plain base outside
-      the table (`target_bases`). The compact gate refuses that rewrite, and the `compact:` surface says why;
+      the table (`target_bases`). The compaction gate refuses that rewrite, and the `compact:` surface says why;
       this one says where the bytes are.
     * `mem_wal` — any object under `_mem_wal/`. Measured on pylance 12.0.0, a row put through a MemWAL shard
       writer sits in the shard's WAL entry and its flushed generation while the base table answers zero for

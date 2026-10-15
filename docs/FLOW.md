@@ -64,11 +64,12 @@ feed a forward cursor (LH-472, #598).
 
 ## 5. Maintenance — data lifecycle
 
-The maintenance service (`services/maintenance`) runs version expiry, trash purge, the orphan scan, cross-store
-reconcile and protection, and compacts tables by policy; each materially-changed dataset gets a versionless
-`compaction` maintenance run so the work shows up in `producers()`. ADR 0155 and ADR 0156 decide that maintenance
-keeps the policy of what needs compacting or reindexing while the rewrites leave for a bring-your-own job that commits
-through catalog doors (LH-467, #587).
+The maintenance service (`services/maintenance`) decides and rewrites nothing (ADR 0162). It expires a table's old
+versions right after a write that leaves 20 reclaimable, runs trash purge, the orphan scan, cross-store reconcile and
+protection, and every 30 minutes lists the tables due for compaction or an index optimize
+(`GET /management/v1/maintenance/due`). Each expiry that reclaims versions gets a versionless `expire_versions`
+maintenance run, so the work shows up in `producers()`. Compaction and index builds are a bring-your-own job's, on its
+own compute, committed through `version/create`, which judges them.
 
 → [`DURABILITY.md`](DURABILITY.md) · code: `services/maintenance`
 

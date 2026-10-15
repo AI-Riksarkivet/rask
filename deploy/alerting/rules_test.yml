@@ -635,13 +635,13 @@ tests:
         alertname: LineageIngestRefusingProvenance
         exp_alerts: []
 
-  # M24 f. Sweep failures accumulating over 30m → MaintenanceDatasetsFailing fires.
+  # M24 f. A dataset failing on every 30-minute tick → MaintenanceDatasetsFailing fires once the hour has held.
   - interval: 1m
     input_series:
       - series: "compaction_datasets_failed_total"
-        values: "0+1x44"
+        values: "0+0x29 1+0x29 2+0x29 3+0x29 4+0x29"
     alert_rule_test:
-      - eval_time: 35m
+      - eval_time: 145m
         alertname: MaintenanceDatasetsFailing
         exp_alerts:
           - exp_labels:
@@ -649,32 +649,32 @@ tests:
               service: "maintenance"
             exp_annotations:
               summary: "Table maintenance is failing on one or more datasets"
-              description: "The sweep could not complete one or more datasets. Sustained failure means those datasets accumulate fragments and superseded versions indefinitely while every tick still reports a successful run. Break down by error.type; the per-dataset URI is on the trace span and in the maintenance_sweep log line, deliberately not on the metric (unbounded cardinality)."
+              description: "The sweep could not complete one or more datasets. Sustained failure means those datasets accumulate superseded versions indefinitely while every tick still reports a successful run. Break down by error.type; the per-dataset URI is on the trace span and in the maintenance_sweep log line, deliberately not on the metric (unbounded cardinality)."
 
-  # M24 g. A sweep that COMPLETES nothing for 30m — a FLAT counter, not a missing one. The rule is
+  # M24 g. A sweep that COMPLETES nothing for 2h30m — a FLAT counter, not a missing one. The rule is
   #        `== 0`, so the series must exist and not move; a deleted series would make it vacuous instead.
   - interval: 1m
     input_series:
       - series: "compaction_runs_total"
-        values: "7+0x44"
+        values: "7+0x180"
     alert_rule_test:
-      - eval_time: 35m
+      - eval_time: 155m
         alertname: MaintenanceSweepNotCompleting
         exp_alerts:
           - exp_labels:
               severity: "critical"
               service: "maintenance"
             exp_annotations:
-              summary: "No table-maintenance sweep has COMPLETED in 30 minutes"
-              description: "At a 120s cadence roughly fifteen passes should have completed. Either the Dapr cron binding is not delivering or every pass is dying mid-flight — compare with compaction_runs_started_total, whose excess over compaction_runs_total is the lost-pass count."
+              summary: "No table-maintenance sweep has COMPLETED in two hours"
+              description: "At a 30-minute cadence roughly four passes should have completed. Either the Dapr cron binding is not delivering or every pass is dying mid-flight — compare with compaction_runs_started_total, whose excess over compaction_runs_total is the lost-pass count."
 
-  # M24 h. A sweep that keeps completing must not page.
+  # M24 h. A sweep completing once every 30-minute tick must not page.
   - interval: 1m
     input_series:
       - series: "compaction_runs_total"
-        values: "0+1x44"
+        values: "0+0x29 1+0x29 2+0x29 3+0x29 4+0x29 5+0x29"
     alert_rule_test:
-      - eval_time: 35m
+      - eval_time: 170m
         alertname: MaintenanceSweepNotCompleting
         exp_alerts: []
 
@@ -694,7 +694,7 @@ tests:
               service: "maintenance"
             exp_annotations:
               summary: "More than half of swept datasets are being REFUSED"
-              description: "The supported-manifest-flag whitelist is rejecting most of the estate, so maintenance is running without maintaining. Usually a pylance upgrade introducing a flag the guard does not know. Check the refusal reasons in the maintenance_sweep log line."
+              description: "The supported-manifest-flag whitelist is rejecting most of the estate, so maintenance is running without reclaiming. Usually a pylance upgrade introducing a flag the guard does not know. Check the refusal reasons in the maintenance_sweep log line."
 
   # M24 j. Refusals well under half of swept → silent. The ratio, not the absolute count, is the rule.
   - interval: 1m
@@ -723,15 +723,15 @@ tests:
               service: "maintenance"
             exp_annotations:
               summary: "A Lance table's data files are at more than one file version"
-              description: "The sweep found a table whose manifest carries reader flag 256 (mixed data file versions). The flag is sticky: no Lance operation removes it. pylance 11 and lancedb 0.34 (lance core 8) cannot open the table, and maintenance refuses it on every tick. The only measured heal is recreating it into a new dataset, which re-mints _rowid and drops history, tags, branches and indices. Find the table in the maintenance_dataset_outcome records where mixed_data_file_versions is true, and the writer that appended at another data_storage_version."
+              description: "The sweep found a table whose manifest carries reader flag 256 (mixed data file versions). The flag is sticky: no Lance operation removes it. pylance 11 and lancedb 0.34 (lance core 8) cannot open the table (pylance 12+ and lancedb 0.40 can), and maintenance refuses it on every tick. The only measured heal is recreating it into a new dataset, which re-mints _rowid and drops history, tags, branches and indices. Find the table in the maintenance_dataset_outcome records where mixed_data_file_versions is true, and the writer that appended at another data_storage_version."
 
-  # The only count is 19 minutes old at evaluation (longer than ackWait, 720s): the 30m window must still hold.
+  # The only count is 49 minutes old at evaluation, longer than one 30-minute tick: the 1h window must still hold.
   - interval: 1m
     input_series:
       - series: "compaction_datasets_mixed_file_versions_total"
-        values: "0+0x5 1+0x10 1+0x15"
+        values: "0+0x5 1+0x55"
     alert_rule_test:
-      - eval_time: 25m
+      - eval_time: 55m
         alertname: LanceMixedDataFileVersions
         exp_alerts:
           - exp_labels:
@@ -739,7 +739,7 @@ tests:
               service: "maintenance"
             exp_annotations:
               summary: "A Lance table's data files are at more than one file version"
-              description: "The sweep found a table whose manifest carries reader flag 256 (mixed data file versions). The flag is sticky: no Lance operation removes it. pylance 11 and lancedb 0.34 (lance core 8) cannot open the table, and maintenance refuses it on every tick. The only measured heal is recreating it into a new dataset, which re-mints _rowid and drops history, tags, branches and indices. Find the table in the maintenance_dataset_outcome records where mixed_data_file_versions is true, and the writer that appended at another data_storage_version."
+              description: "The sweep found a table whose manifest carries reader flag 256 (mixed data file versions). The flag is sticky: no Lance operation removes it. pylance 11 and lancedb 0.34 (lance core 8) cannot open the table (pylance 12+ and lancedb 0.40 can), and maintenance refuses it on every tick. The only measured heal is recreating it into a new dataset, which re-mints _rowid and drops history, tags, branches and indices. Find the table in the maintenance_dataset_outcome records where mixed_data_file_versions is true, and the writer that appended at another data_storage_version."
 
   # A flat zero is the healthy estate and must stay quiet.
   - interval: 1m
@@ -749,32 +749,6 @@ tests:
     alert_rule_test:
       - eval_time: 8m
         alertname: LanceMixedDataFileVersions
-        exp_alerts: []
-
-  # The first refused plan request: the per-tick zero steps to 1 and it pages on that evaluation.
-  - interval: 1m
-    input_series:
-      - series: "compaction_plan_refused_total"
-        values: "0+0x5 1+0x10"
-    alert_rule_test:
-      - eval_time: 8m
-        alertname: CompactionPlanRequestRefused
-        exp_alerts:
-          - exp_labels:
-              severity: "warning"
-              service: "maintenance"
-            exp_annotations:
-              summary: "The catalog refused a compaction plan request as malformed"
-              description: "The maintenance executor sent a plan request the catalog refused as malformed, so that table was not compacted and nothing rewrote it in-pod. The request is the executor's bug. The compaction_plan_refused ERROR log line names the table, the status and the problem detail."
-
-  # No refusal: silent.
-  - interval: 1m
-    input_series:
-      - series: "compaction_plan_refused_total"
-        values: "0+0x15"
-    alert_rule_test:
-      - eval_time: 8m
-        alertname: CompactionPlanRequestRefused
         exp_alerts: []
 
   # One table refused on every 2-minute tick for 26 hours pages once the day has passed.
@@ -792,14 +766,14 @@ tests:
               table_id: "acme$events"
             exp_annotations:
               summary: "The catalog has refused maintenance of acme$events for 24 hours"
-              description: "For a day the catalog has refused this table id, so the table is neither compacted nor cleaned. Break down by refused_by. vend_denied and plan_denied are a 403: this identity holds no can_maintain on the id, or the id names no table, which is what a rename leaves when maintenance derives the id from the location or the lineage.dataset_id stamp. table_not_governed is a 404. Grant the id, or fix the stamp or the location. The maintenance_vend_denied, maintenance_rewrite_denied and maintenance_table_not_governed WARNING lines name the dataset."
+              description: "For a day the catalog has refused this table id, so its superseded versions are not reclaimed. Break down by refused_by. vend_denied is a 403: this identity holds no can_maintain on the id, or the id names no table, which is what a stale lineage.dataset_id stamp leaves. table_not_governed is a 404. Grant the id, or fix the stamp or the location. The maintenance_vend_denied and maintenance_table_not_governed WARNING lines name the dataset."
 
-  # The SAME table refused at the vend door, then at the plan door: one table, one clock.
+  # The SAME table refused 403, then 404 once it is dropped: one table, one clock.
   - interval: 2m
     input_series:
       - series: 'compaction_tables_parked_total{table_id="acme$events",refused_by="vend_denied"}'
         values: "0+1x390 390+0x390"
-      - series: 'compaction_tables_parked_total{table_id="acme$events",refused_by="plan_denied"}'
+      - series: 'compaction_tables_parked_total{table_id="acme$events",refused_by="table_not_governed"}'
         values: "_x360 0+1x420"
     alert_rule_test:
       - eval_time: 25h
@@ -811,12 +785,12 @@ tests:
               table_id: "acme$events"
             exp_annotations:
               summary: "The catalog has refused maintenance of acme$events for 24 hours"
-              description: "For a day the catalog has refused this table id, so the table is neither compacted nor cleaned. Break down by refused_by. vend_denied and plan_denied are a 403: this identity holds no can_maintain on the id, or the id names no table, which is what a rename leaves when maintenance derives the id from the location or the lineage.dataset_id stamp. table_not_governed is a 404. Grant the id, or fix the stamp or the location. The maintenance_vend_denied, maintenance_rewrite_denied and maintenance_table_not_governed WARNING lines name the dataset."
+              description: "For a day the catalog has refused this table id, so its superseded versions are not reclaimed. Break down by refused_by. vend_denied is a 403: this identity holds no can_maintain on the id, or the id names no table, which is what a stale lineage.dataset_id stamp leaves. table_not_governed is a 404. Grant the id, or fix the stamp or the location. The maintenance_vend_denied and maintenance_table_not_governed WARNING lines name the dataset."
 
-  # The hourly backstop cadence: one count an hour must hold the clock.
+  # An hourly cadence: one count an hour must hold the clock.
   - interval: 1h
     input_series:
-      - series: 'compaction_tables_parked_total{table_id="acme$events",refused_by="plan_denied"}'
+      - series: 'compaction_tables_parked_total{table_id="acme$events",refused_by="table_not_governed"}'
         values: "0+1x26"
     alert_rule_test:
       - eval_time: 25h
@@ -828,10 +802,10 @@ tests:
               table_id: "acme$events"
             exp_annotations:
               summary: "The catalog has refused maintenance of acme$events for 24 hours"
-              description: "For a day the catalog has refused this table id, so the table is neither compacted nor cleaned. Break down by refused_by. vend_denied and plan_denied are a 403: this identity holds no can_maintain on the id, or the id names no table, which is what a rename leaves when maintenance derives the id from the location or the lineage.dataset_id stamp. table_not_governed is a 404. Grant the id, or fix the stamp or the location. The maintenance_vend_denied, maintenance_rewrite_denied and maintenance_table_not_governed WARNING lines name the dataset."
+              description: "For a day the catalog has refused this table id, so its superseded versions are not reclaimed. Break down by refused_by. vend_denied is a 403: this identity holds no can_maintain on the id, or the id names no table, which is what a stale lineage.dataset_id stamp leaves. table_not_governed is a 404. Grant the id, or fix the stamp or the location. The maintenance_vend_denied and maintenance_table_not_governed WARNING lines name the dataset."
 
-  # Hourly ticks shared by two workers, both replaced at 12h. A worker's series first appears at 1, which
-  # increase() cannot see, so the deploy leaves 3h between visible counts (11h to 14h): the window holds it.
+  # Hourly ticks across pods replaced at 12h. A new pod's series first appears at 1, which increase() cannot
+  # see, so the replacement leaves 3h between visible counts (11h to 14h): the window holds it.
   - interval: 5m
     input_series:
       - series: 'compaction_tables_parked_total{table_id="acme$events",refused_by="vend_denied",pod="a"}'
@@ -852,7 +826,7 @@ tests:
               table_id: "acme$events"
             exp_annotations:
               summary: "The catalog has refused maintenance of acme$events for 24 hours"
-              description: "For a day the catalog has refused this table id, so the table is neither compacted nor cleaned. Break down by refused_by. vend_denied and plan_denied are a 403: this identity holds no can_maintain on the id, or the id names no table, which is what a rename leaves when maintenance derives the id from the location or the lineage.dataset_id stamp. table_not_governed is a 404. Grant the id, or fix the stamp or the location. The maintenance_vend_denied, maintenance_rewrite_denied and maintenance_table_not_governed WARNING lines name the dataset."
+              description: "For a day the catalog has refused this table id, so its superseded versions are not reclaimed. Break down by refused_by. vend_denied is a 403: this identity holds no can_maintain on the id, or the id names no table, which is what a stale lineage.dataset_id stamp leaves. table_not_governed is a 404. Grant the id, or fix the stamp or the location. The maintenance_vend_denied and maintenance_table_not_governed WARNING lines name the dataset."
 
   # Two tables, each refused for half the day: no table has been refused for 24 hours.
   - interval: 2m
@@ -869,7 +843,7 @@ tests:
   # Granted after 19 hours: the 4h window holds the clock to 23h, short of the day, so nothing fires by 25h.
   - interval: 2m
     input_series:
-      - series: 'compaction_tables_parked_total{table_id="acme$events",refused_by="plan_denied"}'
+      - series: 'compaction_tables_parked_total{table_id="acme$events",refused_by="table_not_governed"}'
         values: "0+1x570 570+0x210"
     alert_rule_test:
       - eval_time: 22h30m
@@ -976,9 +950,9 @@ tests:
   - interval: 1m
     input_series:
       - series: "compaction_runs_total"
-        values: "_x40"
+        values: "_x70"
     alert_rule_test:
-      - eval_time: 35m
+      - eval_time: 65m
         alertname: MaintenanceSweepMetricsMissing
         exp_alerts:
           - exp_labels:
@@ -987,7 +961,7 @@ tests:
             exp_annotations:
               summary: "The maintenance sweep has stopped reporting entirely"
               description: "No `compaction_runs_total` series exists. The sweep pod is gone or its OTLP export is broken. Storage reclamation has stopped and nothing else in this file can tell you."
-      - eval_time: 35m
+      - eval_time: 65m
         alertname: MaintenanceSweepNotCompleting
         exp_alerts: []
 
@@ -1177,33 +1151,33 @@ tests:
               summary: "Flow nodes are failing"
               description: "A node in a flow graph ended failed. Dapr's own workflow family reports success for these runs — the orchestrator returns a failed VALUE rather than raising — so this counter is the only signal that distinguishes them. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled"
 
-  # The measured failure: every rewrite ambient, and NO `tier="scoped"` series at all. The absent-series
+  # The measured failure: every pass ambient, and NO `tier="scoped"` series at all. The absent-series
   # case is the one that matters — a rule comparing two vectors would match nothing here and never fire.
   - interval: 1m
     input_series:
       - series: 'compaction_credential_tier_total{tier="ambient"}'
-        values: "0+5x39"
+        values: "0+5x69"
     alert_rule_test:
-      - eval_time: 35m
+      - eval_time: 65m
         alertname: CompactionSigningWithAmbientCredential
         exp_alerts:
           - exp_labels:
               severity: "warning"
               service: "maintenance"
             exp_annotations:
-              summary: "Most rewrites are signed by the ambient credential, not a vended one"
-              description: "Credential vending is failing, so maintenance is rewriting data under its process credential instead of a per-table 900-second vended one. The blast radius of every rewrite becomes the maintenance identity's whole scope rather than one table prefix, and the STS machinery the estate's storage rule is built on is doing nothing. Check the vend refusals in `maintenance.services.credentials` — a 401 there is an identity that cannot present its own token, a 403 is one that may not maintain the table."
+              summary: "Most expiry passes are signed by the ambient credential, not a vended one"
+              description: "Credential vending is failing, so maintenance is reclaiming versions under its process credential instead of a per-table 900-second vended one. The blast radius of every pass becomes the maintenance identity's whole scope rather than one table prefix, and the STS machinery the estate's storage rule is built on is doing nothing. Check the vend refusals in `maintenance.services.credentials` — a 401 there is an identity that cannot present its own token, a 403 is one that may not maintain the table."
 
   # The healthy estate must NOT page. LH-078's measured posture was 8 ambient against 277 scoped; an
   # alert firing on that is one nobody reads by the second week.
   - interval: 1m
     input_series:
       - series: 'compaction_credential_tier_total{tier="ambient"}'
-        values: "0+1x39"
+        values: "0+1x69"
       - series: 'compaction_credential_tier_total{tier="scoped"}'
-        values: "0+35x39"
+        values: "0+35x69"
     alert_rule_test:
-      - eval_time: 35m
+      - eval_time: 65m
         alertname: CompactionSigningWithAmbientCredential
         exp_alerts: []
 
@@ -1473,31 +1447,55 @@ tests:
         alertname: HttpServerLatencyHigh
         exp_alerts: []
 
-  # AND THE SWEEP'S OWN RULE FIRES when it overruns the 120s schedule it runs on. Nothing at or below
-  # 120s, everything between 120s and 300s — only representable at all because the histogram's tail now
-  # reaches 300s; with the default 10s ceiling this expression would cap at 10000 and never trip.
+  # AND THE SWEEP'S OWN RULE FIRES when its passes reach the histogram's 300s top bucket, and only on the
+  # sweep's route: the same durations on the write-event lane's route stay silent.
   - interval: 1m
     input_series:
-      - series: 'http_server_duration_milliseconds_bucket{service_name="maintenance", le="120000"}'
-        values: "0+0x80"
-      - series: 'http_server_duration_milliseconds_bucket{service_name="maintenance", le="300000"}'
-        values: "0+10x80"
-      - series: 'http_server_duration_milliseconds_bucket{service_name="maintenance", le="+Inf"}'
-        values: "0+10x80"
+      - series: 'http_server_duration_milliseconds_bucket{service_name="maintenance", http_target="/maintenance-cron", le="120000"}'
+        values: "0+0x160"
+      - series: 'http_server_duration_milliseconds_bucket{service_name="maintenance", http_target="/maintenance-cron", le="300000"}'
+        values: "0+0x160"
+      - series: 'http_server_duration_milliseconds_bucket{service_name="maintenance", http_target="/maintenance-cron", le="+Inf"}'
+        values: "0+1x160"
+      - series: 'http_server_duration_milliseconds_bucket{service_name="maintenance", http_target="/maintenance-arrival", le="120000"}'
+        values: "0+0x160"
+      - series: 'http_server_duration_milliseconds_bucket{service_name="maintenance", http_target="/maintenance-arrival", le="300000"}'
+        values: "0+0x160"
+      - series: 'http_server_duration_milliseconds_bucket{service_name="maintenance", http_target="/maintenance-arrival", le="+Inf"}'
+        values: "0+1x160"
     alert_rule_test:
-      - eval_time: 70m
-        alertname: MaintenanceSweepOverrunsItsSchedule
+      - eval_time: 150m
+        alertname: MaintenanceSweepRunsLong
         exp_alerts:
           - exp_labels:
               severity: warning
               service: maintenance
               service_name: maintenance
             exp_annotations:
-              summary: "The maintenance sweep is taking longer than the interval it runs on"
+              summary: "The maintenance sweep's passes reach five minutes"
               description: >-
-                p95 sweep duration is above the 120s cron interval, so ticks overlap and two sweeps share
-                one container's memory budget. Expect RSS to climb and the worker to be OOMKilled.
+                p95 sweep duration has reached 300s, the top of what its histogram measures. Each pass writes the
+                clone list the catalog judges compactions against; a pass that outgrows the 30-minute schedule lets
+                that list age past an hour, and every bring-your-own compaction is refused 503 until a pass completes.
                 Runbook: docs/runbooks/RUNBOOK-oncall.md#readyz-degraded--pool-or-graph
+  - interval: 1m
+    input_series:
+      - series: 'http_server_duration_milliseconds_bucket{service_name="maintenance", http_target="/maintenance-cron", le="120000"}'
+        values: "0+1x160"
+      - series: 'http_server_duration_milliseconds_bucket{service_name="maintenance", http_target="/maintenance-cron", le="300000"}'
+        values: "0+1x160"
+      - series: 'http_server_duration_milliseconds_bucket{service_name="maintenance", http_target="/maintenance-cron", le="+Inf"}'
+        values: "0+1x160"
+      - series: 'http_server_duration_milliseconds_bucket{service_name="maintenance", http_target="/maintenance-arrival", le="120000"}'
+        values: "0+0x160"
+      - series: 'http_server_duration_milliseconds_bucket{service_name="maintenance", http_target="/maintenance-arrival", le="300000"}'
+        values: "0+0x160"
+      - series: 'http_server_duration_milliseconds_bucket{service_name="maintenance", http_target="/maintenance-arrival", le="+Inf"}'
+        values: "0+1x160"
+    alert_rule_test:
+      - eval_time: 150m
+        alertname: MaintenanceSweepRunsLong
+        exp_alerts: []
 
   # LH-050'S TRIPWIRE, both directions. The row is parked on a NUMBER, so the rule that re-reads it has
   # to be proven at the threshold rather than merely valid: a tripwire that cannot trip re-creates the

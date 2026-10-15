@@ -21,9 +21,9 @@ still report. A drift report that 500s on one bad store tells you nothing about 
 anything capped silently — a truncated scan that reads as "all clear" is worse than no scan, so every
 page ceiling, unreadable record and paginated listing lands in :attr:`ReconcileReport.incomplete`.
 
-Why the registries are re-read here rather than imported from the catalog: compaction has no catalog
-client BY DESIGN, and declaring one would put the whole catalog closure in the compaction image, because
-`uv sync --package` installs a member's declared closure. This is the same catalog↔compaction shape as
+Why the registries are re-read here rather than imported from the catalog: maintenance has no catalog
+client BY DESIGN, and declaring one would put the whole catalog closure in the maintenance image, because
+`uv sync --package` installs a member's declared closure. This is the same catalog↔maintenance shape as
 :mod:`service_kit.lakehouse.maintenance_policies` and :mod:`service_kit.lakehouse.warehouse_registry`:
 one service writes the records, another reads them straight off the bucket. The record layout is the
 shared contract, and the reader below is deliberately the *tolerant* half of it — a record it cannot
@@ -46,7 +46,7 @@ from pydantic import BaseModel, Field
 
 from maintenance.core import metrics
 from maintenance.core.config import MaintenanceSettings, shared_lance_session
-from maintenance.services.optimize import discover_datasets
+from maintenance.services.discovery import discover_datasets
 from maintenance.services.orphans import OrphanFile, scan_datasets
 from service_kit.governed import fga
 from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base
@@ -1222,8 +1222,8 @@ def _registration_drift(
     GUARDED ON THE TABLE LISTING: both findings are an ABSENCE from one of the two sets, so a catalog
     read failure would otherwise report every dataset in the estate as unregistered.
 
-    `declared_roots` is REQUIRED rather than defaulted, for the reason `rewrite_slots` is: a defaulted
-    parameter makes an un-wired chain look clean. Measured here — removing the call site's
+    `declared_roots` is REQUIRED rather than defaulted: a defaulted parameter makes an un-wired chain
+    look clean. Measured here — removing the call site's
     `declared_roots=settings.declared_platform_root_list` left all 377 tests green.
 
     Measured 2026-09-19: `orphan_files` counted an unknown dataset's files while no category said the

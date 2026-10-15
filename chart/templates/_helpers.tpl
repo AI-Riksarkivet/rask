@@ -119,18 +119,6 @@ dapr.io/config: "lance-tracing"
 {{- end }}
 {{- end -}}
 
-{{- define "lance.maintenanceMaxAckPending" -}}
-
-{{- if ge (int .Values.maintenance.dedicatedWorkers.indexConcurrentUnits) (int .Values.maintenance.dedicatedWorkers.maxConcurrentUnits) -}}
-{{- fail (printf "maintenance.dedicatedWorkers.indexConcurrentUnits (%v) must be LESS than maxConcurrentUnits (%v): the two lanes share one thread limiter, and the index share is carved OUT of the total, so this leaves the compaction lane with no capacity at all" .Values.maintenance.dedicatedWorkers.indexConcurrentUnits .Values.maintenance.dedicatedWorkers.maxConcurrentUnits) -}}
-{{- end -}}
-{{- mul (sub .Values.maintenance.dedicatedWorkers.maxConcurrentUnits .Values.maintenance.dedicatedWorkers.indexConcurrentUnits) (int .Values.maintenance.dedicatedWorkers.replicas) -}}
-{{- end -}}
-
-{{- define "lance.maintenanceIndexMaxAckPending" -}}
-{{- mul .Values.maintenance.dedicatedWorkers.indexConcurrentUnits (int .Values.maintenance.dedicatedWorkers.replicas) -}}
-{{- end -}}
-
 {{- define "lance.fullname" -}}{{ .Release.Name }}{{- end -}}
 
 {{- define "rask.bootstrapRev" -}}r{{ .Release.Revision }}{{- end -}}

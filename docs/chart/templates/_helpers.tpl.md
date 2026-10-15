@@ -218,7 +218,7 @@ services, eight times the Dapr workflow keepalive. Each probe costs SEVERAL span
 instrumentation emits a child per send/receive, which is why `GET /api/health http send`
 outnumbered `GET /api/health` three to one.
 
-## `{{- define "lance.maintenanceMaxAckPending" -}}`
+## `{{- define "lance.fullname" -}}{{ .Release.Name }}{{- end -}}`
 
 ---------------------------------------------------------------------------------------------------
 lance-ns — grafted verbatim from lance-ns main@083b49a chart/templates/_helpers.tpl.
@@ -241,29 +241,6 @@ LIST) and lance's templates read `minio.bucket` (a STRING) — both must exist.
 ---------------------------------------------------------------------------------------------------
 
 Release name is the fullname (install as `helm install rask ./chart` → all names = rask-*).
-
-HOW MANY WORK UNITS MAY BE IN FLIGHT — derived, never chosen, and defined once because TWO files need
-the same answer: the Dapr component that sets it at consumer CREATION, and the stream Job that
-converges a consumer created before the setting existed.
-
-`ackWait` runs from DELIVERY, not from the start of execution, so a unit queued behind others burns
-its window while idle and is redelivered — two concurrent passes over one dataset, which is the race
-the executor's single-flight lock exists to prevent. Delivering no more than the fleet can RUN is what
-stops a window opening on a unit that cannot start. [[LH-188]].
-
-## `{{- if ge (int .Values.maintenance.dedicatedWorkers.indexConcurrentUnits) (int .Values.maintenance.dedicate...`
-
-REFUSED AT RENDER, because the runtime symptom is unreadable. An index share at or above the
-total leaves the compaction lane with a zero or NEGATIVE maxAckPending, which the broker reports
-as a lane that delivers nothing or as an invalid consumer config — neither of which names the
-values file that caused it. The same reasoning as the multibase allowlist cross-check: a
-configuration error belongs where an operator is reading, not where a consumer is failing.
-
-## `{{- define "lance.maintenanceIndexMaxAckPending" -}}`
-
-The INDEX lane's share of the same pool. The two defines SUM to `maxConcurrentUnits x replicas`
-because both handlers reach the one process-global thread limiter — bounding each lane to the full
-capacity would admit twice what can run.
 
 ## `{{- define "rask.bootstrapRev" -}}r{{ .Release.Revision }}{{- end -}}`
 

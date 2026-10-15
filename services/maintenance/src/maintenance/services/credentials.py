@@ -1,43 +1,42 @@
-"""Per-table WRITE credentials for the maintenance plane, from the catalog's vending door.
+"""Per-table credentials for the maintenance plane, from the catalog's vending door ([[LH-473]]).
 
-WHY THIS SERVICE, WHICH IS NOT OBVIOUS: maintenance holds the root object-store key and rewrites
-fragments with it. Compaction is a write — it lands new data files and commits a new manifest — so a
-service performing it with a long-lived key that reaches every bucket is the exact posture the vending
-door exists to end. What it holds at any moment becomes a credential scoped to ONE table prefix,
-expiring in 900s, and issued against an audited decision (`vend_credentials` records who asked, for
-what table, at what tier).
+Version expiry deletes files: ``cleanup_old_versions`` removes superseded manifests and the data files only they
+reference, and disarming commit-path cleanup commits a config change. Both are writes, so what signs them is a
+``maintain``-tier credential scoped to ONE table prefix, expiring in 900s, issued against an audited decision
+(`vend_credentials` records who asked, for what table, at what tier). That tier opens to this service's identity alone
+(``can_vend_maintain``, ADR 0156 C4).
 
-**NO CACHE, deliberately, and the access pattern is the reason.** The ingest worker vends once and
-writes millions of units behind it, so it needs a cache that refreshes before expiry
-(`ingest/credentials.py`). Maintenance vends once per WORK ITEM — one dataset, one compaction — and
-the broker's `ackWait` is 720s against a 900s credential, so a unit that outlives its credential has
-already outlived its delivery. A cache here would hold credentials for datasets this replica may never
-see again.
+**NO CACHE, deliberately.** Maintenance vends once per dataset per tick, and only for a dataset that has something to
+expire (``sweep._probe_before_vending``); a cache would hold credentials for datasets this tick has finished with.
 
-**WHAT STAYS ON THE ROOT KEY, stated rather than glossed:** discovery and the protection pre-pass.
-`sweep._protected_roots` must open every manifest in every bucket before ANY dataset is compacted,
-because a shallow clone in bucket B is the only thing that knows bucket A's dataset must not be
-rewritten — no per-table credential can express a whole-estate read, and narrowing it would silently
-turn the guard off. Those are READS. The clause this serves is that no service holds a root key on a
-WRITE path, and the write path is here.
+**WHAT STAYS ON THE ROOT KEY, stated rather than glossed:** discovery, the protection pre-pass and the due evaluation.
+`sweep._protected_roots` must open every manifest in every bucket, because a shallow clone in bucket B is the only
+thing that knows bucket A's dataset is referenced — no per-table credential can express a whole-estate read. Those are
+READS. The clause this serves is that no service holds a root key on a write path, and the write path is here.
 
-A door that could not be ASKED — unreachable, or answering a body that does not parse — degrades to the
-ambient credential and says so. Vending is a hardening, and a hardening that can fail a maintenance run
-turns an optional improvement into a new way to stop reclaiming disk. An answer refuses instead: a 401
-about this service's own credential (`MaintenanceUnauthenticated`), and three about the id — a 403
-(`MaintenanceDenied`), a 404 naming no table or namespace (`TableNotGoverned`), or a location that does not
-cover the dataset (`GovernedElsewhere`). A 5xx is the door failing to decide (`VendUndecided`): the unit
-stops and is retried, because the catalog's own fail-closed refusals are 5xx too ([[LH-279]]).
+A door that could not be ASKED — unreachable, or answering a body that does not parse — degrades to the ambient
+credential and says so. An answer refuses instead: a 401 about this service's own credential
+(`MaintenanceUnauthenticated`), and three about the id — a 403 (`MaintenanceDenied`), a 404 naming no table or namespace
+(`TableNotGoverned`), or a location that does not cover the dataset (`GovernedElsewhere`). A 5xx is the door failing to
+decide (`VendUndecided`): the dataset is retried next tick, because the catalog's own fail-closed refusals are 5xx too
+([[LH-279]]).
+
+THE CREDENTIAL MAINTENANCE PRESENTS IS THE POD'S OWN SERVICE-ACCOUNT TOKEN, projected by the kubelet with audience
+`rask-catalog` and read from the file on EVERY call (:func:`service_headers`): the kubelet rewrites it at ~515 s of a
+600 s lifetime (measured, LH-220 probe d). An unreadable token stops the dataset as unauthenticated and nothing is sent.
 """
 
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass  # noqa: TID251
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 import httpx
+from lance_namespace.errors import ErrorCode
 
+from maintenance.core.metrics import record_credential_tier
+from service_kit.governed.machine_identity import IdentityTokenUnavailableError, identity_bearer
 from service_kit.lakehouse.base_refs import normalise
 from service_kit.lakehouse.endpoint_scheme import allow_http_for
 from service_kit.lakehouse.table_locations import table_id_from_location
@@ -45,17 +44,6 @@ from service_kit.lakehouse.table_locations import table_id_from_location
 
 if TYPE_CHECKING:
     from maintenance.core.config import MaintenanceSettings
-from maintenance.core.metrics import record_credential_tier
-from maintenance.services.catalog_compaction import table_in_invalid_state, table_not_governed
-from maintenance.services.catalog_identity import service_headers
-from maintenance.services.compaction_executor import (
-    GovernedElsewhere,
-    MaintenanceDenied,
-    MaintenanceUnauthenticated,
-    VendUndecided,
-    denial_remedy,
-    unauthenticated_remedy,
-)
 
 
 logger = logging.getLogger(__name__)
@@ -64,6 +52,133 @@ logger = logging.getLogger(__name__)
 #: blocks longer than this on ONE credential should proceed on the ambient one rather than stall the
 #: dataset behind it.
 _TIMEOUT_SECONDS = 10.0
+
+#: The 404 codes that answer about the TABLE rather than the request: spec.yaml `ErrorResponse.code` 1 and 4 name an
+#: absence, where 13 is the malformed request and 0 a path no door serves.
+_ABSENT: Final = frozenset({ErrorCode.NAMESPACE_NOT_FOUND, ErrorCode.TABLE_NOT_FOUND})
+
+
+class MaintenanceDenied(RuntimeError):
+    """The catalog answered NO — this identity may not maintain this table.
+
+    THE CONDITIONS ARE DIFFERENT QUESTIONS AND ONLY ONE PERMITS A FALLBACK:
+
+        timeout / unparseable         we could not ASK    -> degrade to the ambient credential.
+        401 / 403                     the answer is NO    -> refuse. Doing the work anyway with the deployment's
+                                                             ambient key is an authorization bypass.
+        a 5xx                         it could not DECIDE -> stop and retry (:class:`VendUndecided`).
+
+    MEASURED ON THE LIVE ESTATE 2026-09-10: a client classifying on `status_code >= 400` took the outage branch on a
+    403, and eight refused tables were then maintained under the root credential, visible only as an INFO line.
+    """
+
+
+class MaintenanceUnauthenticated(MaintenanceDenied):
+    """A door answered 401, or maintenance could not present its own service credential at all.
+
+    About this service, not the table: a broken, unmapped or unreadable token is refused at every table alike, so it is
+    never counted under a table's id. No fallback, because the ambient key would sign what the catalog has not
+    authorized.
+    """
+
+
+class GovernedElsewhere(MaintenanceDenied):
+    """The catalog vended a credential for this dataset's table id at a location that does not cover the dataset.
+
+    [[LH-141]]: a stale ``lineage.dataset_id`` stamp, or a path id left behind by a re-registration. The vend door
+    answered 200 and the table it names is healthy, so this is maintenance's own refusal of the DATASET, never counted
+    under the table's id.
+    """
+
+
+class VendUndecided(RuntimeError):
+    """The vend door answered 5xx: it was asked and could not decide whether to issue this credential.
+
+    Neither a credential nor a refusal: the dataset stops as a failure and the next tick retries it. Never the ambient
+    key: the catalog answers 503 when a table's base record cannot be read ([[LH-279]]), and signing anyway is the
+    bypass of the refusal the door would have given.
+    """
+
+
+class TableNotGoverned(RuntimeError):
+    """The vend door answered 404 TableNotFound or NamespaceNotFound for the id this dataset is addressed by.
+
+    An answer about the id, not the request (spec.yaml:2413 and :2416). With authorization on, the catalog's gate runs
+    before existence resolution, so an id that holds no tuples is answered 403 and parks as ``vend_denied`` instead
+    (measured 2026-09-26, OIDC and FGA on). This 404 then means a table trashed after the tick planned it, a grant that
+    outlived its table, or a declared table never written. It stops the dataset for the tick, as a 403 does.
+    """
+
+
+def denial_remedy(*, table_id: str, identity: str) -> str:
+    """The sentence a maintenance 403 ends with, naming BOTH causes, because the sweep cannot tell them apart.
+
+    The catalog's authorization gate runs BEFORE existence resolution, so "this identity holds no `can_maintain`" and
+    "no such table exists" are the SAME 403 on the wire. Measured 2026-09-15: a refusal advised *"Grant can_maintain on
+    table:lakehouse$silver"*, and `lakehouse$silver` is a NAMESPACE.
+    """
+    return (
+        f"Either {identity!r} holds no can_maintain on table:{table_id}, or no such table is registered "
+        f"and this dataset is ungoverned — the catalog answers both the same way, because its authorization "
+        f"gate runs before existence resolution. Check that the id names a TABLE before granting on it."
+    )
+
+
+def unauthenticated_remedy(*, table_id: str, identity: str) -> str:
+    """The sentence a maintenance 401 carries: the table it was asked for, and the credential to repair."""
+    return (
+        f"the catalog did not accept the service credential of {identity!r} when asked for {table_id} (401) — this is "
+        f"maintenance's own identity, not the table: check its projected rask-catalog token (audience rask-catalog, "
+        f"signed by the catalog's RASK_SA_ISSUER) and that {identity!r} is this pod's service-account subject."
+    )
+
+
+def service_headers(settings: MaintenanceSettings) -> dict[str, str]:
+    """The `Authorization` header carrying this pod's `rask-catalog` token, read now.
+
+    Raises `MaintenanceUnauthenticated` when the projected file cannot be read or is empty.
+    """
+    try:
+        return identity_bearer(settings.catalog_identity_token_file)
+    except IdentityTokenUnavailableError as exc:
+        raise MaintenanceUnauthenticated(f"maintenance cannot present its catalog credential: {exc}") from exc
+
+
+def _problem(response: httpx.Response) -> tuple[int | None, str]:
+    """The door's RFC 9457 lance-namespace ``code`` and ``detail``; the head of the body stands in for a missing detail."""
+    try:
+        body = response.json()
+    except ValueError:
+        return None, response.text[:200]
+    if not isinstance(body, dict):
+        return None, response.text[:200]
+    code, detail = body.get("code"), body.get("detail")
+    return (code if isinstance(code, int) else None), (str(detail) if detail is not None else response.text[:200])
+
+
+def table_not_governed(response: httpx.Response, *, table_id: str) -> TableNotGoverned | None:
+    """`TableNotGoverned` when ``response`` is a 404 naming the table or namespace absent; ``None`` for any other answer."""
+    if response.status_code != 404:
+        return None
+    code, detail = _problem(response)
+    if code is None or code not in _ABSENT:
+        return None
+    return TableNotGoverned(f"the catalog answered 404 {ErrorCode(code).name} (code {code}) for {table_id}: {detail}")
+
+
+def table_in_invalid_state(response: httpx.Response, *, table_id: str) -> MaintenanceDenied | None:
+    """`MaintenanceDenied` when ``response`` is the catalog's 409 ``InvalidTableState`` (code 19); ``None`` otherwise.
+
+    [[LH-279]] The catalog answers 19 for a table whose manifest declares a base it never sanctioned, and a credential
+    for it would carry READ on the base. So it stops the dataset exactly as a 403 does, never reaching the "unavailable"
+    arm whose fallback signs with the ambient key.
+    """
+    if response.status_code != 409:
+        return None
+    code, detail = _problem(response)
+    if code != ErrorCode.INVALID_TABLE_STATE:
+        return None
+    return MaintenanceDenied(f"the catalog refused {table_id} as in an invalid state (409 code {code}): {detail}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,7 +207,7 @@ def write_options_for(uri: str, settings: MaintenanceSettings, *, fallback: dict
     preconditions are checked in the order that makes a misconfiguration readable:
 
     1. a catalog URL is configured. Unset means this deployment has no vending door;
-    2. a table identifier is available. ``declared_table_id`` — the id the WORK ITEM carries — is
+    2. a table identifier is available. ``declared_table_id`` — the id the sweep resolved — is
        preferred over deriving one from the path, and the difference is most of the estate rather than
        an edge case. Measured on the live warehouse: of eleven top-level roots in
        ``s3://lance-catalog/``, :func:`table_id_from_location` answers for six, and the five it cannot
@@ -100,7 +215,7 @@ def write_options_for(uri: str, settings: MaintenanceSettings, *, fallback: dict
        ``bronze$events`` at ``medallion/bronze`` and ``bronze$pages`` at ``bronze/pages`` both answer a
        write-tier vend with 200 — so deriving alone would leave the highest-churn writer in the estate
        signing with the root key while reporting no fault at all. Derivation stays as the fallback for
-       a unit produced before the field existed, or by a planner that genuinely does not know;
+       a dataset the sweep could not name;
     3. the door answers ``direct``. ``server_mediated`` is a supported posture (`mode_b`), not a fault.
 
     A FOURTH condition is checked on the way OUT rather than the way in, because it needs the catalog's
@@ -110,7 +225,7 @@ def write_options_for(uri: str, settings: MaintenanceSettings, *, fallback: dict
 
     Raises ``MaintenanceDenied`` (or its ``MaintenanceUnauthenticated`` or ``GovernedElsewhere``) or
     ``TableNotGoverned`` where the door answered, and ``VendUndecided`` where it answered 5xx; each stops
-    the caller's unit, which must not fall back to ``fallback``.
+    the caller's dataset, which must not fall back to ``fallback``.
 
     A DECLARED id is never repaired or second-guessed here. If a producer stamps a wrong one the vend
     fails on a table that does exist, which is a visible 403 in the log — whereas silently falling back
@@ -133,19 +248,19 @@ def write_options_for(uri: str, settings: MaintenanceSettings, *, fallback: dict
         # a documented way back to the tenant root, which is exactly why the identity has to be read
         # rather than guessed. Matches `vended_credentials.py`'s own wording.
         logger.info(
-            "write credential AMBIENT for %s — nothing vended; this rewrite is signed by the process credential %s",
+            "write credential AMBIENT for %s — nothing vended; this pass is signed by the process credential %s",
             table_id,
             settings.s3_access_key_id or "<ambient environment>",
         )
         # ON THE SERIES as well as the log. Per-dataset `info` was the only signal, and an estate where
-        # EVERY rewrite took this branch read as routine traffic for long enough to be cited as evidence
+        # EVERY pass took this branch read as routine traffic for long enough to be cited as evidence
         # that something else was working.
         record_credential_tier(tier="ambient")
         return fallback
     # AFTER the vend and BEFORE handing it over: the catalog's answer is what says where this table
     # lives, so the crossing is only detectable once there is an answer to read.
     _refuse_a_credential_that_does_not_cover(uri=uri, table_id=table_id, location=vended.location)
-    logger.info("write credential SCOPED for %s — this rewrite is signed by a table-scoped credential", table_id)
+    logger.info("write credential SCOPED for %s — this pass is signed by a table-scoped credential", table_id)
     record_credential_tier(tier="scoped")
     return _at_own_store(vended.options, settings.s3_endpoint)
 
@@ -163,13 +278,13 @@ def _at_own_store(options: dict[str, str], endpoint: str) -> dict[str, str]:
 
 
 def _refuse_a_credential_that_does_not_cover(*, uri: str, table_id: str, location: str | None) -> None:
-    """Stop the unit when the catalog's location for ``table_id`` is not the dataset being maintained.
+    """Stop the dataset when the catalog's location for ``table_id`` is not the dataset being maintained.
 
     [[LH-141]]. A stale ``lineage.dataset_id`` stamp makes the sweep hold one tenant's dataset while
     addressing another tenant's table. Measured 2026-09-16: ``s3://bind86-wh/medallion/silver`` and
     ``s3://lance-catalog/medallion/gold`` both stamped ``bronze$events``, a table the catalog governs at
-    ``s3://lance-catalog/medallion/bronze``. The compaction-plan door answered 200 to every one of
-    those — correctly, because it was asked about a table and not about the dataset the caller holds.
+    ``s3://lance-catalog/medallion/bronze``. The vend door answers 200 to every one of those — correctly,
+    because it is asked about a table and not about the dataset the caller holds.
 
     CONTAINMENT, NOT EQUALITY, and getting that backwards would refuse the healthy majority: a branch
     dataset is swept at ``<root>/tree/<branch>`` while the catalog answers with the root, and the live
@@ -183,7 +298,7 @@ def _refuse_a_credential_that_does_not_cover(*, uri: str, table_id: str, locatio
     """
     if location is None:
         logger.warning(
-            "vended credential for %s carries no location, so it cannot be checked against %s — this rewrite proceeds unverified",
+            "vended credential for %s carries no location, so it cannot be checked against %s — this pass proceeds unverified",
             table_id,
             uri,
         )
@@ -193,7 +308,7 @@ def _refuse_a_credential_that_does_not_cover(*, uri: str, table_id: str, locatio
         return
     raise GovernedElsewhere(
         f"the dataset at {uri} declares the table id {table_id!r}, which the catalog governs at {location} — "
-        "the two name different locations, so a rewrite here would be signed for one tenant's table and land in "
+        "the two name different locations, so a pass here would be signed for one tenant's table and land in "
         "another's. Repair the dataset's `lineage.dataset_id` stamp, or register the id the dataset really is."
     )
 
@@ -212,13 +327,13 @@ def _reset_vending_notice() -> None:
 
 
 def _announce_vending_is_off(subject: str, *, key_id: str) -> None:
-    """Say, once, that every rewrite from here is signed by the root key.
+    """Say, once, that every pass from here is signed by the root key.
 
     THIS BRANCH USED TO BE THE SILENT ONE, and it is the branch that covers a whole-service
     misconfiguration — so the module kept its "degrades and says so" promise for a single unreachable
     table and broke it for an entire estate running unhardened. Measured 2026-09-09: the live
     maintenance pod held ``catalog_url = ''`` (``maintenance.vendWriteCredentials`` was the chart
-    default), so every compaction signed with the root object-store key and the only evidence was the
+    default), so every pass signed with the root object-store key and the only evidence was the
     ABSENCE of a stream nobody was watching.
     """
     global _vending_off_announced
@@ -226,7 +341,7 @@ def _announce_vending_is_off(subject: str, *, key_id: str) -> None:
         return
     _vending_off_announced = True
     logger.warning(
-        "write credential vending is NOT CONFIGURED (no catalog URL) — every rewrite from this process, "
+        "write credential vending is NOT CONFIGURED (no catalog URL) — every pass from this process, "
         "starting with %s, is signed by the process credential %s. Set maintenance.vendWriteCredentials to scope it.",
         subject,
         key_id or "<ambient environment>",
@@ -242,10 +357,10 @@ def _vend(table_id: str, settings: MaintenanceSettings) -> Vended | None:
     try:
         # `params`, NOT a body. The door declares `tier: Annotated[Tier, Query()] = "read"`, and
         # FastAPI ignores an unknown body on a query parameter — a body-borne tier came back READ with
-        # a 200, and the rewrite then failed at the object store as `403 AccessDenied` on a PUT.
+        # a 200, and the write then failed at the object store as `403 AccessDenied` on a PUT.
         # Measured in-cluster 2026-09-03 on the ingest client, which had exactly this bug.
-        # `maintain`, the tier `can_vend_maintain` opens to this identity alone ([[LH-202]], [[LH-473]]): a rewrite commits versions and a reclaim
-        # deletes them, and the writer tier reaches `data/` only.
+        # `maintain`, the tier `can_vend_maintain` opens to this identity alone ([[LH-202]], [[LH-473]]): a disarm commits a version and a reclaim
+        # deletes versions, and the writer tier reaches `data/` only.
         response = httpx.post(url, params={"tier": "maintain"}, headers=headers, timeout=_TIMEOUT_SECONDS)
     except httpx.HTTPError as exc:
         logger.info("credential vending unreachable for %s (%s)", table_id, exc)
@@ -253,13 +368,13 @@ def _vend(table_id: str, settings: MaintenanceSettings) -> Vended | None:
     if response.status_code == 401:
         raise MaintenanceUnauthenticated(f"no write credential vended: {unauthenticated_remedy(table_id=table_id, identity=settings.catalog_service_identity)}")
     if response.status_code == 403:
-        # A DENIAL, NOT AN OUTAGE — and the difference decides whether a rewrite may proceed. Falling
+        # A DENIAL, NOT AN OUTAGE — and the difference decides whether a pass may proceed. Falling
         # back here hands the caller the deployment's ambient key, which reaches every bucket in the
         # estate, in answer to the catalog saying this identity may not write this one table. Measured
         # live 2026-09-10: eight tables were refused and rewritten under the root credential anyway,
         # visible only as an INFO line nobody reads.
         raise MaintenanceDenied(
-            f"the catalog REFUSED a write credential for {table_id} ({response.status_code}) — this rewrite is not "
+            f"the catalog REFUSED a write credential for {table_id} ({response.status_code}) — this pass is not "
             f"authorized, and signing it with the ambient key would be a bypass. "
             f"{denial_remedy(table_id=table_id, identity=settings.catalog_service_identity)}"
         )
@@ -269,13 +384,13 @@ def _vend(table_id: str, settings: MaintenanceSettings) -> Vended | None:
         raise absent
     if (invalid := table_in_invalid_state(response, table_id=table_id)) is not None:
         # AN ANSWER ABOUT THE TABLE ([[LH-279]]): its manifest declares a base the catalog never sanctioned.
-        # Falling through to the generic arm below would sign this rewrite with the ambient key — the
+        # Falling through to the generic arm below would sign this pass with the ambient key — the
         # bypass of a refusal this client exists to prevent.
         raise invalid
     if response.status_code >= 500:
         # ASKED AND UNDECIDED ([[LH-279]]): the catalog answers 503 when the base record it must judge cannot
         # be read, and 500 when the store fails under it — the ambient key standing in for either signs a
-        # rewrite the door may be about to refuse. The unit stops and is retried.
+        # pass the door may be about to refuse. The dataset stops and is retried.
         raise VendUndecided(f"the catalog could not decide a write credential for {table_id} ({response.status_code}): {response.text[:200]}")
     if response.status_code >= 400:
         logger.info("credential vending unavailable for %s (%s)", table_id, response.status_code)

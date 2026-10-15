@@ -42,7 +42,7 @@ from pydantic import SecretStr
 
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import sweep as sweep_mod
-from maintenance.services.optimize import Discovery, discover_datasets
+from maintenance.services.discovery import Discovery, discover_datasets
 
 
 class _NoBuckets:
@@ -286,7 +286,7 @@ def test_a_distributed_runs_STAGING_set_is_not_discovered_as_a_governed_dataset(
     """
     import pyarrow.fs as pafs
 
-    from maintenance.services.optimize import discover_datasets
+    from maintenance.services.discovery import discover_datasets
 
     root = tmp_path / "bucket"
     # The window: a destination that is not yet a dataset, holding a staged one.

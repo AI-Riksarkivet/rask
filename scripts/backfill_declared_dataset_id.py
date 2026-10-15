@@ -53,8 +53,8 @@ def _plan() -> list[tuple[str, str, dict[str, str] | None]]:
     those are REPORTED and skipped rather than renamed on a guess.
     """
     from maintenance.core.config import MaintenanceSettings
-    from maintenance.services import compaction_executor, credentials
-    from maintenance.services.optimize import discover_datasets
+    from maintenance.services import credentials
+    from maintenance.services.discovery import discover_datasets
     from service_kit.governed.secrets import apply_dapr_secrets
     from service_kit.lakehouse import warehouse_records
     from service_kit.lakehouse.objectfs import s3_filesystem
@@ -83,7 +83,7 @@ def _plan() -> list[tuple[str, str, dict[str, str] | None]]:
             if not table_id:
                 print(f"  -  {uri}: names no catalog table — skipped rather than renamed on a guess")
                 continue
-            # The SAME table-scoped credential the sweep signs a rewrite with, falling back to the
+            # The SAME table-scoped credential the sweep signs an expiry pass with, falling back to the
             # ambient one wherever the vending door offers NONE.
             #
             # AN ANSWER ABOUT THE ID IS NOT A FALLBACK: a 401/403, a 404 naming no table or namespace (a
@@ -94,10 +94,10 @@ def _plan() -> list[tuple[str, str, dict[str, str] | None]]:
             # that stops at the first table it may not touch has repaired nothing.
             try:
                 write_options = credentials.write_options_for(uri, settings, fallback=options, declared_table_id=None)
-            except compaction_executor.GovernedElsewhere as exc:
+            except credentials.GovernedElsewhere as exc:
                 print(f"  x  {table_id}: governed at another location — skipped, not signed with the ambient key: {exc}")
                 continue
-            except (compaction_executor.MaintenanceDenied, compaction_executor.TableNotGoverned) as exc:
+            except (credentials.MaintenanceDenied, credentials.TableNotGoverned) as exc:
                 print(f"  x  {table_id}: skipped, not signed with the ambient key — {exc}")
                 continue
             plan.append((uri, table_id, dict(write_options) if write_options else None))

@@ -113,6 +113,7 @@ _AUTHN_IS_ENOUGH: dict[str, str] = {
     "/management/v1/me": "describes the caller's OWN identity, and 401s an anonymous call itself",
     "/management/v1/model": "FGA-filtered per model (can_get_metadata), like the governed table listing",
     "/management/v1/promotions": "FGA-filtered per hold (can_get_metadata on the held table)",
+    "/management/v1/maintenance/due": "FGA-filtered per table (can_maintain)",
     "/management/v1/projects": "FGA-filtered to the caller's own projects (member), every tenant only for an estate observer",
     "/v1/table": "FGA-filtered per table (can_read_data)",
     "/management/v1/warehouses": "FGA-filtered per warehouse (can_get_metadata), and reports X-Authorization-Truncated",

@@ -33,9 +33,8 @@ already has an owner.
 
 ## 3 · Optional: NACK for the streams
 
-The NATS operator's declarative `Stream` CRDs could replace the imperative stream Job that creates `LINEAGE`, `DLQ`,
-`CATALOG_CONTROL`, `MAINTENANCE_WORK` and `MAINTENANCE_INDEX` (Dapr's jetstream component does not auto-create
-streams). The Job works and is idempotent; NACK would remove a boot-ordering foot-gun, nothing more, and it would be
+The NATS operator's declarative `Stream` CRDs could replace the imperative stream Job that creates `LINEAGE`, `DLQ`
+and `CATALOG_CONTROL` (Dapr's jetstream component does not auto-create streams). The Job works and is idempotent; NACK would remove a boot-ordering foot-gun, nothing more, and it would be
 the platform's operator, not rask's.
 
 ## 4 · Do Dapr or Lance need an operator story? (asked 2026-07-11)
@@ -84,7 +83,7 @@ DOES have are already owned elsewhere:
 
 | Concern | Owner today | Status |
 |---|---|---|
-| background maintenance (version expiry, trash purge, orphan scan, reconcile) | `services/maintenance` sweep (cron-driven, FAIL-visible) | shipped; its compaction and index rewrites leave for a bring-your-own job under LH-467 (#587) |
+| background maintenance (version expiry, trash purge, orphan scan, reconcile, the due list) | `services/maintenance`: commit-driven expiry plus a 30-minute backstop sweep (FAIL-visible) | shipped; compaction and index builds are a bring-your-own job's, judged at `version/create` (ADR 0162) |
 | orphan-artifact GC (`models/<m>/<token>/` from crashed runs; blob-pointer lifecycle) | `scripts/model_artifact_janitor.py` — dry-run default, referenced⇒never-collected unit-pinned | shipped 2026-07-11 (models lane); live drive + the broader pointer-aware-GC posture remain §9 |
 | stream/bucket/grant provisioning | chart Jobs + seed scripts (idempotent) | shipped; NACK could absorb the stream half |
 | version/feature pinning (`pylance`, `lance-ray`, data_storage_version) | image pins + probe-before-callsite (§0) + `lance_docs/` | process, not software |

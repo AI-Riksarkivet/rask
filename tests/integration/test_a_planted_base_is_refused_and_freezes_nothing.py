@@ -55,13 +55,14 @@ from lineage.core.config import LineageSettings, storage_options
 from lineage.schemas import DatasetSummary
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import purge, sweep
-from maintenance.services.optimize import DatasetResult, compact_one
-from maintenance.services.work_queue import RETRY, ack_for
+from maintenance.services.due import TableIds
+from maintenance.services.expiry import DatasetResult, ExpiryPolicy, ExpiryTarget, expire_versions
+from maintenance.services.plan import PlanContext
 from service_kit.lakehouse import base_registry
-from service_kit.lakehouse.base_refs import normalise
+from service_kit.lakehouse.base_refs import BaseRefs, normalise
 from service_kit.lakehouse.features import manifest_base_path_refs
+from service_kit.lakehouse.maintenance_due import CloneList
 from service_kit.lakehouse.objectfs import lance_storage_options
-from service_kit.lakehouse.work_items import DatasetPlan, DatasetWorkItem
 from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from storage import S3Client
 
@@ -212,7 +213,7 @@ class _ThrottledRecords:
 
 
 def _maintained_through(client: TestClient, estate: _Estate, token_file: Path) -> DatasetResult:
-    """Maintenance's real unit on the attacker, its credential asked of this catalog's own vend door over HTTP.
+    """Maintenance's real pass on the attacker, its credential asked of this catalog's own vend door over HTTP.
 
     ``token_file`` stands in for the pod's projected `rask-catalog` token: without one maintenance sends no request.
     """
@@ -222,11 +223,18 @@ def _maintained_through(client: TestClient, estate: _Estate, token_file: Path) -
         return httpx.Response(answer.status_code, content=answer.content, headers={"content-type": answer.headers.get("content-type", "")})
 
     token_file.write_text("sa-token\n")
-    settings = estate.maintenance(catalog_url="http://catalog.test", catalog_identity_token_file=str(token_file))
-    item = DatasetWorkItem(uri=estate.attacker, table_id="db$attacker", plan=DatasetPlan(older_than=timedelta(days=7)))
+    # Every version but the current one reclaimable, and one enough to expire: the pass asks for a credential.
+    settings = estate.maintenance(catalog_url="http://catalog.test", catalog_identity_token_file=str(token_file), min_versions_to_expire=1)
+    now = datetime.now(UTC)
+    tick = sweep.SweepPlan(
+        uris=[estate.attacker],
+        clones=CloneList(taken_at=now),
+        table_ids=TableIds(by_location={normalise(estate.attacker): "db$attacker"}),
+        context=PlanContext(policies=[], now=now, older_than=timedelta(0)),
+    )
     with respx.mock(base_url="http://catalog.test") as catalog:
         catalog.post("/management/v1/table/db$attacker/credentials").mock(side_effect=_forward)
-        return sweep.maintain_one_item(item, settings=settings, options=settings.storage_options())
+        return sweep.maintain_dataset(estate.attacker, sweep=tick, settings=settings)
 
 
 def test_the_vend_and_read_doors_refuse_the_planting_table(estate: _Estate, planted: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -234,7 +242,7 @@ def test_the_vend_and_read_doors_refuse_the_planting_table(estate: _Estate, plan
 
     Nor through the deployment's ambient key: maintenance, the one consumer holding it, stops on the refusal,
     and on a door that could not decide — a 5xx, the catalog's own when the record behind the judge cannot be
-    read — rather than signing the rewrite itself.
+    read — rather than signing the pass itself.
     """
     _splice(estate, planted)
 
@@ -242,7 +250,7 @@ def test_the_vend_and_read_doors_refuse_the_planting_table(estate: _Estate, plan
     _refused(estate.client.post("/v1/table/db$attacker/describe", params={"vend_credentials": "true"}), _INVALID_TABLE_STATE)
     _refused(estate.client.post("/v1/table/db$attacker/query", json=_QUERY), _INVALID_TABLE_STATE)
     catalog = TestClient(estate.client.app, raise_server_exceptions=False)
-    assert _maintained_through(catalog, estate, tmp_path / "rask-catalog-token").refused_by == "vend_denied", "the refusal became an ambient-key rewrite"
+    assert _maintained_through(catalog, estate, tmp_path / "rask-catalog-token").refused_by == "vend_denied", "the refusal became an ambient-key pass"
 
     # The table's own path in another store is not its own: a `file://` base reads the catalog pod's disk. On a
     # table declaring no other base, so nothing but that base's standing decides whether it is judged at all.
@@ -274,24 +282,23 @@ def test_the_vend_and_read_doors_refuse_the_planting_table(estate: _Estate, plan
     _refused(estate.client.post("/v1/table/db$escape/describe", params={"vend_credentials": "true"}), _INVALID_TABLE_STATE)
     _refused(estate.client.post("/v1/table/db$escape/query", json=_QUERY), _INVALID_TABLE_STATE)
 
-    # A store failing under the record the judge must read: a typed, retryable 503, and the unit stops.
+    # A store failing under the record the judge must read: a typed, retryable 503, and the pass stops as a failure.
     real_client = storage.s3_client
     monkeypatch.setattr(storage, "s3_client", lambda *args, **kwargs: _ThrottledRecords(real_client(*args, **kwargs)))
     unjudged = catalog.post("/management/v1/table/db$attacker/credentials")
     assert unjudged.status_code == 503 and unjudged.json()["title"] == "ServiceUnavailableError", unjudged.text
     stopped = _maintained_through(catalog, estate, tmp_path / "rask-catalog-token")
-    assert (ack_for(stopped), stopped.error_type) == (RETRY, "VendUndecided"), f"a door that could not decide was signed around: {stopped}"
+    assert (stopped.error or "").startswith("maintain:") and stopped.error_type == "VendUndecided", f"a door that could not decide was signed around: {stopped}"
 
 
 def test_the_victim_is_maintained_and_deletable_under_the_plant(estate: _Estate, planted: str) -> None:
-    """Closes-when (3), at each consumer of the protection verdict: the sweep, the catalog's compact door, the purge."""
+    """Closes-when (3), at each consumer of the protection verdict: the sweep and the purge."""
     settings = estate.maintenance()
 
     swept = {result.uri: result for result in sweep.run_sweep(settings)}
     for table in (estate.victim, estate.bystander):
         assert swept[table].refused_by != "protected_base", f"{table} is frozen by the plant: {swept[table].refused}"
-        assert swept[table].fragments_removed > 0, f"precondition: {table} had fragments to merge, so a pass that ran is visible"
-    assert estate.client.post("/management/v1/table/db$victim/maintenance/compact", json={}).status_code == 200
+        assert swept[table].due == "due", f"precondition: {table} had fragments to merge, so the sweep lists it for compaction"
 
     deleted, files = purge.delete_location(estate.victim, estate.key, protected=purge._estate_base_refs({estate.root}, estate.key, settings=settings))
 
@@ -382,9 +389,9 @@ def test_a_recorded_clone_source_is_still_protected(estate: _Estate) -> None:
 
     Deletion is always refused. Compaction AND version reclamation with ``older_than=0`` are permitted while
     the tag is on bronze — reclamation keeps a tagged version's files, and silver reads through exactly that
-    version (lh279 p4) — so silver must still read cold afterwards. Without the tag, compaction is refused.
+    version (lh279 p4) — so silver must still read cold afterwards. Without the tag, reclamation is refused.
     A branch is the relation that needs no record: its base is its parent's root, in the parent's store, so
-    the parent is neither deleted nor compacted beside it.
+    the parent is neither deleted nor reclaimed beside it.
 
     A name the catalog percent-encodes into its location (``bronze tier`` -> ``bronze%20tier``, ``räksmörgås``
     -> ``r%C3%A4ksm%C3%B6rg%C3%A5s``, ``a b`` -> ``a%20b``) is protected exactly as ``bystander`` is. The
@@ -418,19 +425,25 @@ def test_a_recorded_clone_source_is_still_protected(estate: _Estate) -> None:
     refs = purge._estate_base_refs({estate.root}, estate.key, settings=settings)
 
     for parent in parents:
-        assert compact_one(parent, estate.key, timedelta(0), protected=refs).refused_by == "protected_base", f"{parent} was reclaimed under its live branch"
+        assert _expire(estate=estate, uri=parent, older_than=timedelta(0), refs=refs).refused_by == "protected_base", (
+            f"{parent} was reclaimed under its live branch"
+        )
     for location in (bronze, *parents):
         with pytest.raises(purge.ProtectedBaseError):
             purge.delete_location(location, estate.key, protected=refs)
-    compacted = compact_one(bronze, estate.key, timedelta(0), protected=refs)
-    assert compacted.refused_by is None, compacted.refused
-    assert compacted.fragments_removed > 0 and compacted.old_versions_removed > 0, "precondition: bronze was compacted AND reclaimed"
+    expired = _expire(estate=estate, uri=bronze, older_than=timedelta(0), refs=refs)
+    assert expired.refused_by is None, expired.refused
+    assert expired.old_versions_removed > 0, "precondition: bronze was reclaimed"
     assert _reads_cold(silver, estate.key) == sorted([1, 2, 3] * 3), "the pinned relation did not keep silver readable"
 
     estate.open(bronze).tags.delete("silver-src")
 
-    unpinned = compact_one(bronze, estate.key, timedelta(days=7), protected=purge._estate_base_refs({estate.root}, estate.key, settings=settings))
-    assert unpinned.refused_by == "protected_base", "a pin with no tag must not permit compacting the source"
+    unpinned = _expire(estate=estate, uri=bronze, older_than=timedelta(days=7), refs=purge._estate_base_refs({estate.root}, estate.key, settings=settings))
+    assert unpinned.refused_by == "protected_base", "a pin with no tag must not permit reclaiming the source"
+
+
+def _expire(*, estate: _Estate, uri: str, older_than: timedelta, refs: BaseRefs) -> DatasetResult:
+    return expire_versions(ExpiryTarget(uri=uri, storage_options=estate.key, protected=refs), ExpiryPolicy(older_than=older_than))
 
 
 def _registered(estate: _Estate, table: str, location: str) -> str:

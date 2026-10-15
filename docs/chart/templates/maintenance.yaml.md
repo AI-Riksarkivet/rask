@@ -74,24 +74,12 @@ hasKey+ternary for the reason recorded at the catalog's copy: `| default` makes 
 explicit false un-settable, and a bare reference renders "" on a `--reuse-values`
 upgrade, which is a bool_parsing crash at boot.
 
-## `- { name: MAINTENANCE_DISTRIBUTED_COMPACTION, value: "true" }`
+## `- { name: MAINTENANCE_ARRIVAL_ENABLED, value: {{ .Values.maintenance.arrivalEnabled | quote }} }`
 
-THE REWRITE'S BYTES LEAVE THIS POD. `compact_files()` plans, executes and commits in one
-call, so this pod's memory ceiling is a function of the largest table anyone owns rather
-than of its request rate. With this on, the catalog plans and commits (metadata only,
-under its own key) and only the byte rewrite happens here, signed by the table-scoped
-credential the block above vends. Gated on the vending flag because the plan and commit
-doors are the catalog's — the flag alone would plan against nothing.
-
-## `- { name: MAINTENANCE_INDEX_TOPIC, value: {{ .Values.maintenance.indexTopic | quote }} }`
-
-The index-build lane. Its own topic beside the work queue: one ackWait cannot serve both a
-minutes-long compaction and a vector index over a large table.
-
-## `- { name: MAINTENANCE_EXECUTE_WORK, value: "false" }`
-
-THE PLANNER PUBLISHES AND DOES NOT CONSUME. It still needs the topic — it enqueues onto
-it — which is exactly why `workTopic` cannot express this and a second switch exists.
+The write-event lane: a write refreshes that table's due record between sweep ticks (ADR 0162).
+Rendered on and off, so the service reads the chart's decision rather than its own default. Its
+dead-letter topic and the signature door settings (`lance.doorEnv`, the `/maintenance-arrival`
+door) render only with the lane on, because only then is the route registered.
 
 ## `- { name: MAINTENANCE_LINEAGE_PUBSUB, value: {{ include "lance.subPubsub" (list $ .Values.maintenance.daprA...`
 
@@ -100,7 +88,7 @@ COMPONENT, so subscribing through `pubsub.name` gives every replica every event 
 a competing-consumer group — measured 2026-09-03, the arrival route bound to
 `pubsub=lineage-pubsub` and would have planned the same dataset once per replica. Used for
 publishing too (`lance.subPubsub`): the queue group affects
-subscription only. With no queue lane it is a publish-only component, maintenance's own
+subscription only. With the write-event lane off it is a publish-only component, maintenance's own
 connection either way (values.yaml `nats.auth`).
 
 ## `- { name: MAINTENANCE_LINEAGE_OUTBOX_URI, value: "s3://{{ .Values.minio.bucket }}/_lineage_outbox" }`

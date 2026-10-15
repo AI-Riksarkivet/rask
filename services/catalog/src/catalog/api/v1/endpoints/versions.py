@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import timedelta
 from functools import partial
 from typing import Annotated
 
@@ -38,12 +39,13 @@ from catalog.api.rask_params import RaskFlag
 from catalog.api.security import CurrentToken
 from catalog.core import run_context
 from catalog.core.base_judge import BaseJudge
+from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.core.namespace import open_dataset_unchecked
 from catalog.services import dataplane, maintenance, managed_versions, native
 from service_kit.governed import fga
 from service_kit.governed.audit import SUCCESS, audit
-from service_kit.lakehouse import protection
+from service_kit.lakehouse import maintenance_due, protection
 
 
 log = logging.getLogger(__name__)
@@ -227,7 +229,14 @@ async def create_table_version(
         run = run_context.from_properties(staged.properties)
         run_context.require_caller_authored(staged.properties, run, caller=token.sub if token is not None else None)
         adds_data = await run_in_threadpool(
-            partial(managed_versions.judge, base_judge=judge, external_bases=record.entries if record is not None else ()), staged, so
+            partial(
+                managed_versions.judge,
+                base_judge=judge,
+                external_bases=record.entries if record is not None else (),
+                clone_evidence=await _clone_evidence_for(staged, settings),
+            ),
+            staged,
+            so,
         )
         await fga_deps.judge_staged_run(settings, token, client, ns=ns, segments=segments, run=run, adds_data=adds_data)
     except BaseException:
@@ -258,6 +267,16 @@ async def create_table_version(
         run=run,
     )
     return response
+
+
+async def _clone_evidence_for(staged: managed_versions.StagedVersion, settings: Settings) -> managed_versions.CloneEvidence | None:
+    """The maintenance sweep's clone list, for a compaction's two commits only (ADR 0162); ``None`` when there is none."""
+    if staged.operation not in managed_versions.COMPACTION_OPERATIONS:
+        return None
+    clones = await run_in_threadpool(maintenance_due.read_clone_list, settings.registry_root, settings.storage_options())
+    if clones is None:
+        return None
+    return managed_versions.CloneEvidence(clones=clones, max_age=timedelta(seconds=settings.clone_list_max_age_seconds))
 
 
 @router.post("/{id}/version/describe", response_model_exclude_none=True)

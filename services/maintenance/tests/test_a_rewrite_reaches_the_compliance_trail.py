@@ -1,10 +1,9 @@
-"""The one component that REWRITES BYTES must appear in the compliance trail.
+"""The one component that RECLAIMS VERSIONS must appear in the compliance trail.
 
 `governed/audit.py` exists so a security-relevant action is a filterable, retainable record: `audit_read`
 opens with the argument — *"the estate already authorizes every read and then forgot it happened … that
-is a zero-trust gap as much as a feature one"*. Compaction is the same argument with more at stake: it
-merges fragments, reclaims versions and deletes files, and `services/maintenance` held **zero** `audit()`
-call sites, so none of it reached the stream (§ Q17-36, and § Q17-27's stated residual).
+is a zero-trust gap as much as a feature one"*. Version expiry is the same argument with more at stake: it
+deletes superseded manifests and the files only they reference (§ Q17-36, and § Q17-27's stated residual).
 
 WHY NOT EVERY DATASET. The sweep walks ~423 datasets a tick and most are already converged, so a record
 per dataset per tick is thousands an hour that say nothing — the § Q17-26 flood, in the very stream that
@@ -14,7 +13,7 @@ and the graph agree about what counted as work.
 
 WHAT THIS DOES NOT CLOSE. § Q17-36 also wants attempt counts, duration and a per-object FGA-gated fact a
 TENANT can query. This record is operator-global and lives on a 14-day trace TTL, so it answers "did the
-estate rewrite anything, when, and to what" and not "how many times did MY table's compaction fail".
+estate reclaim anything, when, and from what" and not "how many times did MY table's expiry fail".
 That half needs a durable record kind and is an owner decision, not a call site.
 """
 
@@ -28,7 +27,7 @@ from service_kit.governed.audit import AUDIT_LOGGER, configure_audit
 
 
 if TYPE_CHECKING:
-    from maintenance.services.optimize import DatasetResult
+    from maintenance.services.expiry import DatasetResult
 
 
 class _Result:
@@ -40,12 +39,9 @@ class _Result:
 
     uri = "s3://lance-catalog/medallion/bronze"
     table_id = "bronze$events"
-    compaction_mode = "in_pod"
-    fragments_removed = 3
-    fragments_added = 1
     old_versions_removed = 5
     bytes_removed = 7567
-    indices_optimized = 2
+    due = "clear"
     # THE DOUBLE CARRIES WHAT THE RECORD NAMES, and this field is why that rule is written above: the
     # record gained `duration_seconds` ([[LH-098]]) and every test here failed with AttributeError
     # rather than passing on a double that had quietly fallen behind the real model.
@@ -62,7 +58,6 @@ class _Result:
 
 
 class _Idle(_Result):
-    fragments_removed = 0
     old_versions_removed = 0
 
 

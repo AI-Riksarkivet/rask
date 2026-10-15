@@ -1,8 +1,8 @@
 """OpenTelemetry domain metrics for the maintenance service (exported OTLP-direct to GreptimeDB).
 
-The counters keep their ``compaction.*`` names on purpose: they count the compaction OPERATION the
-sweep performs, and renaming a metric orphans its history. Only the instrumentation scope names the
-service."""
+The sweep's counters carry the ``compaction.*`` prefix the alert rules and dashboards query; maintenance compacts
+nothing (ADR 0155), and what they count is the sweep: its passes, the versions it reclaimed, the datasets it refused or
+failed. Only the instrumentation scope names the service."""
 
 from __future__ import annotations
 
@@ -13,22 +13,16 @@ from opentelemetry import metrics
 from lineage_kit.signing import RefusalReason
 
 
-#: The refusals the catalog gives for a TABLE ID, and the closed `refused_by` set of
-#: `compaction.tables.parked`: the vend door's 403, the plan door's 403, and the plan door's 404 naming
-#: the table or namespace absent.
-type CatalogRefusal = Literal["vend_denied", "plan_denied", "table_not_governed"]
+#: The refusals the catalog gives for a TABLE ID, and the closed `refused_by` set of `compaction.tables.parked`: the
+#: vend door's 403, and its 404 naming the table or namespace absent.
+type CatalogRefusal = Literal["vend_denied", "table_not_governed"]
 
 _meter = metrics.get_meter("lance.maintenance")
 
 _runs = _meter.create_counter(
     "compaction.runs",
     unit="{run}",
-    description="Compaction sweeps triggered by the Dapr cron binding.",
-)
-_fragments_removed = _meter.create_counter(
-    "compaction.fragments.removed",
-    unit="{fragment}",
-    description="Small Lance fragments merged away by compaction.",
+    description="Maintenance sweeps triggered by the Dapr cron binding.",
 )
 _versions_removed = _meter.create_counter(
     "compaction.versions.removed",
@@ -44,11 +38,6 @@ _bytes_reclaimed = _meter.create_counter(
     "compaction.bytes.reclaimed",
     unit="By",
     description="Bytes freed by GC'ing superseded Lance versions during the sweep.",
-)
-_indices_optimized = _meter.create_counter(
-    "compaction.indices.optimized",
-    unit="{index}",
-    description="Secondary indices (vector/scalar/FTS) re-optimized to cover new fragments.",
 )
 #: #64 — datasets the pass REFUSED, labelled by the gate that refused them (`record_refused` names each).
 #: Its own series, not a sub-case of an error counter: nothing failed, and the number that matters is the
@@ -89,16 +78,6 @@ _mixed_file_versions = _meter.create_counter(
 )
 
 
-#: Plan requests the catalog's plan door refused 4xx as malformed (not 401/403, not 408/429). Its own
-#: series because it names the EXECUTOR as the fault: the table is not compacted and nothing rewrites it
-#: in-pod, so one is a bug to fix rather than a failure to watch the rate of.
-_plan_refused = _meter.create_counter(
-    "compaction.plan.refused",
-    unit="{request}",
-    description="Compaction plan requests the catalog refused as malformed; the executor built a request the plan door does not accept.",
-)
-
-
 #: THE FAILURE SERIES, and its absence was the gap. Seven instruments here counted what the sweep
 #: ACHIEVED and not one counted what it could not do, so a dataset failing every tick forever was
 #: indistinguishable from a healthy estate on every surface that can raise an alarm. The error reached
@@ -129,7 +108,7 @@ _trashed_skipped = _meter.create_counter(
 )
 
 
-#: #79 reclamation. Separate series from the compaction counters above because they answer a different
+#: #79 reclamation. Separate series from the sweep counters above because they answer a different
 #: question: those say how much history was folded away, these say how many DROPPED objects had their
 #: bytes destroyed — the only irreversible thing this service does.
 _trash_purged = _meter.create_counter(
@@ -182,7 +161,7 @@ _KINDS = ("table", "namespace")
 _runs_started = _meter.create_counter(
     "compaction.runs.started",
     unit="{run}",
-    description="Compaction sweep passes STARTED (before discovery). started minus compaction.runs = passes lost mid-flight.",
+    description="Maintenance sweep passes STARTED (before discovery). started minus compaction.runs = passes lost mid-flight.",
 )
 _datasets_swept = _meter.create_counter(
     "compaction.datasets.swept",
@@ -191,18 +170,16 @@ _datasets_swept = _meter.create_counter(
 )
 
 
-#: WHICH credential signed each rewrite. Measured 2026-09-11, 600 records in one window: 300 vends
-#: answered 401 and 300 rewrites took the ambient fallback, with zero scoped — a state that had gone
-#: unnoticed long enough to be quoted in a closed row as evidence a different fix was working, because
-#: the only signal was an `info` line per dataset.
+#: WHICH credential signed each expiry pass. Measured 2026-09-11, 600 records in one window: 300 vends answered 401
+#: and 300 passes took the ambient fallback, with zero scoped, and the only signal was an `info` line per dataset.
 #:
 #: ONE series with a `tier` attribute rather than two counters: the number an operator wants is the
 #: RATIO. "8 ambient of 285" is a posture; "8 ambient" alone is not, and it is the ratio reaching 1
 #: that names the failure this exists to catch.
 _credential_tier = _meter.create_counter(
     "compaction.credential.tier",
-    unit="{rewrite}",
-    description="Rewrites by how their storage credential was obtained (table-scoped vend vs the ambient process credential).",
+    unit="{pass}",
+    description="Expiry passes by how their storage credential was obtained (table-scoped vend vs the ambient process credential).",
 )
 
 
@@ -290,20 +267,16 @@ def record_trash_purge(
     _trash_bytes.add(bytes_reclaimed, attributes)
 
 
-def record_reclaimed(*, fragments_removed: int, versions_removed: int, indices_optimized: int = 0, bytes_removed: int = 0) -> None:
-    """Record what one sweep reclaimed + re-optimized across all datasets. Always emit — adding 0 is a valid
-    no-op that still CREATES the counter series, so a dashboard/alert on ``rate(compaction_*_total[5m])``
-    has data from the first sweep instead of reading "no data" until the first non-zero reclaim (obs audit
-    2026-07-13).
+def record_reclaimed(*, versions_removed: int, bytes_removed: int = 0) -> None:
+    """Record what expiry reclaimed. Always emit — adding 0 is a valid no-op that still CREATES the counter series, so a
+    dashboard/alert on ``rate(compaction_*_total[5m])`` has data from the first sweep instead of reading "no data"
+    until the first non-zero reclaim (obs audit 2026-07-13).
 
-    ``bytes_removed`` is the one an operator asks for and the one that was missing: counts of fragments
-    and versions say how much WORK happened, never how much disk came back. The always-emit rule binds
-    hardest here — a reclaimer whose byte series is flat at zero is either idle or broken, and those
-    must be distinguishable from a series that does not exist.
+    ``bytes_removed`` is the one an operator asks for: a version count says how much WORK happened, never how much
+    disk came back. A reclaimer whose byte series is flat at zero is either idle or broken, and those must be
+    distinguishable from a series that does not exist.
     """
-    _fragments_removed.add(fragments_removed)
     _versions_removed.add(versions_removed)
-    _indices_optimized.add(indices_optimized)
     _bytes_reclaimed.add(bytes_removed)
 
 
@@ -330,7 +303,7 @@ def record_refused(datasets: int, refused_by: str | None = None) -> None:
     ~600 datasets a tick. A number that large and that flat is a standing condition, and the
     unlabelled series could not say whether it was somebody else's clone (`protected_base`, true
     forever), a manifest feature a pylance upgrade would support (`manifest_flags`), an unparseable
-    branch directory (`invalid_ref`), a denied credential or plan (`vend_denied`, `plan_denied`), an
+    branch directory (`invalid_ref`), a denied credential (`vend_denied`), an
     id the catalog governs no table by (`table_not_governed`), an id the catalog governs at another
     location (`governed_elsewhere`) or maintenance's own service credential rejected with a 401
     (`unauthenticated`). `DatasetResult.refused_by`
@@ -378,15 +351,6 @@ def record_unrecorded_bases(bases: int) -> None:
     _unrecorded_bases.add(bases)
 
 
-def record_plan_refused(requests: int) -> None:
-    """Record how many plan requests the door refused as malformed.
-
-    Always emits, including zero, for `record_mixed_file_versions`' reason: the alert's `increase()`
-    must see the first refusal as a step from 0, not as a series appearing.
-    """
-    _plan_refused.add(requests)
-
-
 def record_failed(errors_by_type: dict[str, int]) -> None:
     """Record this tick's per-dataset FAILURES, keyed by stable error class.
 
@@ -404,7 +368,7 @@ def record_failed(errors_by_type: dict[str, int]) -> None:
 
 
 def record_credential_tier(*, tier: str) -> None:
-    """Record that one rewrite was signed by a ``scoped`` or ``ambient`` credential.
+    """Record that one expiry pass was signed by a ``scoped`` or ``ambient`` credential.
 
     Keyword-only because the argument is a vocabulary, not a value: a positional string here would
     accept a table id as readily as a tier and the series would be unreadable before anyone noticed.

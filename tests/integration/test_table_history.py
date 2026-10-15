@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import io
 
+import lance
 import pyarrow as pa
 import pyarrow.ipc as ipc
 from fastapi.testclient import TestClient
@@ -110,8 +111,9 @@ def test_history_reports_restore_index_and_column_changes(real_ns_client: TestCl
     assert added.status_code == 200, added.text
     dropped = real_ns_client.post("/v1/table/h1$t/drop_columns", json={"columns": ["double_id"]})
     assert dropped.status_code == 200, dropped.text
-    indexed = real_ns_client.post("/v1/table/h1$t/create_scalar_index", json={"column": "id", "index_type": "BTREE"})
-    assert indexed.status_code == 200, indexed.text
+    # The catalog builds no index (ADR 0162); an owner's own pylance does.
+    location = real_ns_client.post("/v1/table/h1$t/describe", json={}).json()["table_uri"]
+    lance.dataset(location).create_scalar_index("id", index_type="BTREE")
     restored = real_ns_client.post("/v1/table/h1$t/restore", json={"version": 1})
     assert restored.status_code == 200, restored.text
 

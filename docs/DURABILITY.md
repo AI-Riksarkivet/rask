@@ -74,9 +74,9 @@ the apps at the external endpoint:
 The S3 store is permanent **infrastructure**; the *data within it* has a lifecycle:
 
 - **Every governed tier** is a Lance table with immutable versions; old versions age out under the table's
-  maintenance policy. The **maintenance** service (Dapr cron) runs version expiry (`cleanup_old_versions`), trash
-  purge, the orphan scan and cross-store reconcile, honouring protection. It also compacts and rebuilds indices
-  today; ADR 0156 moves those rewrites to a bring-your-own job that commits through catalog doors (LH-467, #587).
+  maintenance policy. The **maintenance** service runs version expiry (`cleanup_old_versions`) after each write and
+  on a 30-minute backstop, trash purge, the orphan scan and cross-store reconcile, honouring protection. It rewrites no
+  data: compaction and index builds are a bring-your-own job's, committed through `version/create` (ADR 0162).
 - **`gold` + the catalog's registered tables** are what downstream consumers and the lineage reconcile
   (`/reconcile`) are anchored to.
 

@@ -128,32 +128,15 @@ def test_run_gc_passes_bounds_and_reports_stats() -> None:
     assert ds.cleaned["retain_versions"] == 1
 
 
-def test_compact_now_passes_target_and_optimizes_indices() -> None:
-    ds = _FakeDs(version=1, versions=_versions(1), tags={})
-    out = maintenance.compact_now(ds, target_rows_per_fragment=1_000_000, storage_options={})
-    assert out == {"ok": True, "fragments_removed": 4, "fragments_added": 1, "version": 1}
-    assert ds.optimize.compact_kw == {"target_rows_per_fragment": 1_000_000, **maintenance.COMPACTION_BOUND}
-    assert ds.optimize.indices_optimized is True  # indices kept covering the new fragments
-
-
-# ---------------------------------------------------------------- #121 the on-demand doors ask the SWEEP'S gate, per verb
-
-
 def test_the_flag_16_refusal_is_FAIL_CLOSED_when_the_bases_cannot_be_read() -> None:
-    """The sweep got this gate at #64; these doors are the SAME operations wired to a UI button and
-    shipped with no gate at all. Measured then: compacting a flag-16 clone reported success and
-    silently materialised a full local copy of data it had only referenced.
-
-    The gate now weighs EVIDENCE about the bases rather than the flag alone (row 6) — and this
-    dataset offers none: it sets flag 16 and cannot even say where it lives, so no base can be
-    probed. Unknown resolves to refusal, in this door exactly as in the sweep.
-    """
+    """The compaction gate `version/create` asks of a Rewrite weighs EVIDENCE about the bases, and this
+    dataset offers none: it sets flag 16 and cannot say where it lives, so no base can be probed. Unknown
+    resolves to refusal."""
     from lance_namespace import UnsupportedOperationError
 
     ds = _FakeDs(version=1, versions=[], tags={}, feature_flags=(16, 16))
     with pytest.raises(UnsupportedOperationError, match="base_paths .shallow clone"):
-        maintenance.compact_now(ds, target_rows_per_fragment=None, storage_options={})
-    assert ds.optimize.compact_kw is None, "the rewrite ran anyway — the refusal came too late"
+        maintenance.require_compactable(ds, storage_options={})
 
 
 def test_run_gc_REFUSES_an_unknown_flag() -> None:
@@ -178,27 +161,6 @@ class _LocatedDs(_FakeDs):
         self.uri = uri
 
 
-def test_compact_now_REFUSES_a_dataset_another_one_RESOLVES_ITS_FILES_THROUGH() -> None:
-    """#114 one click away. The sweep got this guard; the UI button running the same three verbs did not.
-
-    The dataset in danger carries NO flag of its own: flag 16 marks the CLONE, while the SOURCE looks
-    completely ordinary (measured: source `(0, 0)` with no base_paths, clone `(16, 16)` naming the
-    source). So the per-dataset feature check these doors perform cannot see it, and this
-    door had nothing else — one operator clicking "compact now" on the source rewrites the files the
-    clone is the only other reference to, and the clone then fails to open in a fresh process.
-    """
-    from lance_namespace import UnsupportedOperationError
-
-    from service_kit.lakehouse.base_refs import BaseRefs
-
-    ds = _LocatedDs("s3://wh/src.lance")
-    protected = BaseRefs(protected={"wh/src.lance"})
-
-    with pytest.raises(UnsupportedOperationError, match="resolves its files through"):
-        maintenance.compact_now(ds, target_rows_per_fragment=None, storage_options={}, protected=protected)
-    assert ds.optimize.compact_kw is None, "the rewrite ran anyway — the refusal came too late"
-
-
 def test_run_gc_REFUSES_the_same_source() -> None:
     """Cleanup is the step that actually deletes: measured, `compact_files` ADDS the merged file
     (4 -> 5, the clone still opens) and `cleanup_old_versions` then removes the obsoleted originals
@@ -215,12 +177,11 @@ def test_run_gc_REFUSES_the_same_source() -> None:
 
 
 def test_an_UNPROTECTED_dataset_still_passes_the_base_ref_guard() -> None:
-    """The negative that makes the two refusals above mean something: a guard that refused everything
-    would satisfy them both."""
+    """The negative that makes the refusal above mean something: a guard that refused everything would satisfy it."""
     from service_kit.lakehouse.base_refs import BaseRefs
 
     ds = _LocatedDs("s3://wh/other.lance")
-    result = maintenance.compact_now(ds, target_rows_per_fragment=None, storage_options={}, protected=BaseRefs(protected={"wh/src.lance"}))
+    result = maintenance.run_gc(ds, retention_days=7, retain_versions=2, protected=BaseRefs(protected={"wh/src.lance"}))
     assert result["ok"] is True
 
 
@@ -235,53 +196,8 @@ def test_a_protected_map_with_NO_LOCATION_to_check_it_against_refuses() -> None:
 
     ds = _FakeDs(version=1, versions=[], tags={})  # no `uri`
     with pytest.raises(UnsupportedOperationError, match="location"):
-        maintenance.compact_now(ds, target_rows_per_fragment=None, storage_options={}, protected=BaseRefs(protected={"wh/src.lance"}))
-
-
-# ---------------------------------------------------------------- a pyo3 PANIC is not an Exception
-
-
-class _Panic(BaseException):
-    """Stands in for `pyo3_runtime.PanicException`, which derives from BaseException — not Exception."""
-
-
-class _RaisingOptimize(_Optimize):
-    """`ds.optimize` whose index step raises the given BaseException after a successful compaction."""
-
-    def __init__(self, error: BaseException) -> None:
-        super().__init__()
-        self._error = error
-
-    def optimize_indices(self) -> None:
-        raise self._error
-
-
-def test_compact_now_survives_a_PANICKING_index_report() -> None:
-    """`contextlib.suppress(Exception)` cannot catch a Rust panic, and `index_stats` panics for real:
-    an unimplemented arm (`lance-index/src/scalar/json.rs`) on a JSON index. Measured on the sweep,
-    where it answered the whole run HTTP 500 — which is why `compact_one` and `inspect_indices` each
-    guard with `except BaseException` and re-raise only KeyboardInterrupt/SystemExit.
-
-    This door had the weaker guard, so the same panic would have thrown away a compaction that had
-    ALREADY happened and reported the button as failed. Index work is best-effort here by design; the
-    compaction it follows is not.
-    """
-    ds = _FakeDs(version=1, versions=[], tags={})
-    ds.optimize = _RaisingOptimize(_Panic("not yet implemented"))
-
-    result = maintenance.compact_now(ds, target_rows_per_fragment=None, storage_options={})
-
-    assert result == {"ok": True, "fragments_removed": 4, "fragments_added": 1, "version": 1}
-
-
-def test_compact_now_still_lets_a_KEYBOARD_INTERRUPT_through() -> None:
-    """The two BaseExceptions that must never be swallowed — a caught SystemExit turns a shutdown into
-    a hang, and the sweep's own guards make the same exception."""
-    ds = _FakeDs(version=1, versions=[], tags={})
-    ds.optimize = _RaisingOptimize(KeyboardInterrupt())
-
-    with pytest.raises(KeyboardInterrupt):
-        maintenance.compact_now(ds, target_rows_per_fragment=None, storage_options={})
+        maintenance.run_gc(ds, retention_days=7, retain_versions=2, protected=BaseRefs(protected={"wh/src.lance"}))
+    assert ds.cleaned is None, "the delete ran anyway — the refusal came too late"
 
 
 def test_sibling_base_refs_FINDS_a_real_clone_reference(tmp_path: Any) -> None:
@@ -320,67 +236,6 @@ def _rows(n: int = 20) -> Any:
     import pyarrow as pa
 
     return pa.table({"id": pa.array(range(n), pa.int64())})
-
-
-def test_compact_now_PERMITS_an_external_blob_base_exactly_as_the_SWEEP_does(tmp_path: Any) -> None:
-    """Row 13. The button gated all three verbs on the flags-only `unsupported_features`, which refuses
-    `base_paths` in every form — while the sweep (row 6) had moved compaction onto evidence about the
-    bases. So the button was the STRICTER of the two, and its refusal said the sweep agreed.
-
-    The shape below is not exotic, it is what the cascade writes: `ingest/lander.py::create_empty` and
-    `medallion/services/compute.py` register one external blob prefix through `initial_bases`, which
-    sets flag 16 while every data file stays under this dataset's own root. So "compact now" answered
-    a refusal on every ingest bronze table and every medallion tier — the estate's most-fragmented
-    rows — with a sentence that was false about the dataset AND false about the sweep.
-
-    The premise is asserted first: this test would be worthless if the sweep refused it too.
-    """
-    import lance
-    from lance.dataset import DatasetBasePath
-
-    from service_kit.lakehouse.features import describe_compaction_unsupported_flags, gather_compaction_bases, manifest_feature_flags
-    from service_kit.lakehouse.objectfs import dataset_root_probe
-
-    blob = tmp_path / "payloads"
-    blob.mkdir()
-    uri = str(tmp_path / "bronze.lance")
-    lance.write_dataset(_rows(), uri, initial_bases=[DatasetBasePath(str(blob), "payloads")])
-    for _ in range(3):
-        lance.write_dataset(_rows(), uri, mode="append")
-    ds = lance.dataset(uri)
-    assert manifest_feature_flags(ds)[1] & 16, "fixture assumption: initial_bases sets flag 16"
-    assert len(ds.get_fragments()) > 1, "fixture assumption: there is something to compact"
-    assert describe_compaction_unsupported_flags(*manifest_feature_flags(ds), gather_compaction_bases(ds, dataset_root_probe(uri, {}))) is None, (
-        "premise gone: the CRON refuses this dataset too, so the button matching it proves nothing"
-    )
-
-    result = maintenance.compact_now(ds, target_rows_per_fragment=None, storage_options={})
-
-    assert result["ok"] is True
-    assert len(lance.dataset(uri).get_fragments()) == 1, "the door reported success without compacting"
-    assert sorted(p.name for p in blob.iterdir()) == [], "compaction wrote into the external base — the refusal was right after all"
-
-
-def test_compact_now_STILL_REFUSES_a_real_shallow_clone(tmp_path: Any) -> None:
-    """The negative that keeps the permit above honest: a gate that answered `None` for every flag-16
-    dataset would satisfy it. A clone's data files resolve through the source's root, so compacting
-    materialises the shared bytes into the clone (measured: 1,072 -> 108,199 bytes against a
-    119,693-byte base) — a cost refusal, and still a refusal."""
-    import lance
-    from lance_namespace import UnsupportedOperationError
-
-    source = str(tmp_path / "src.lance")
-    src = lance.write_dataset(_rows(), source)
-    clone = str(tmp_path / "clone.lance")
-    src.shallow_clone(clone, reference=src.version)
-    ds = lance.dataset(clone)
-    before = sorted(p.name for p in (tmp_path / "clone.lance" / "data").iterdir()) if (tmp_path / "clone.lance" / "data").exists() else []
-
-    with pytest.raises(UnsupportedOperationError, match="base_paths"):
-        maintenance.compact_now(ds, target_rows_per_fragment=None, storage_options={})
-
-    after = sorted(p.name for p in (tmp_path / "clone.lance" / "data").iterdir()) if (tmp_path / "clone.lance" / "data").exists() else []
-    assert after == before, "the clone materialised data anyway — the refusal came too late"
 
 
 def test_run_gc_PERMITS_a_clone_the_SWEEP_reclaims_on_EVERY_TICK(tmp_path: Any) -> None:

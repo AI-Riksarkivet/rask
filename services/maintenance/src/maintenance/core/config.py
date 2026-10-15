@@ -6,13 +6,13 @@ human door — its routes are gated by the Dapr app token and it only ever READS
 
 The signature door's knobs are the estate's too ([[XC-078]]): ``SignatureDoorSettings`` reads
 ``RASK_SIGNATURE_DOORS``, ``RASK_EVENT_SIGNERS`` and ``RASK_EVENT_DELEGATORS``, which decide how
-``/maintenance-arrival`` treats the signature of a write event before it plans anything.
+``/maintenance-arrival`` treats the signature of a write event before it evaluates anything.
 """
 
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import TYPE_CHECKING, Final, Literal
+from typing import TYPE_CHECKING
 
 from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -24,20 +24,6 @@ from service_kit.lakehouse.objectfs import lance_storage_options
 
 if TYPE_CHECKING:
     import lance
-
-
-# THE FLOOR A COMPACTION RUNS UNDER, named once because two consumers read it: the `Settings` fields
-# below (what the estate configures) and `optimize.compact_one`'s parameter defaults (what a caller
-# that names nothing gets). Two spellings of 64 is how a bound gets raised in one place and kept in
-# the other. Their rationale is on the fields; these are the numbers.
-#: Lance's own default is 8192 ROWS, and rows are not a unit of memory — against ~1.8 MB bronze rows
-#: (measured) that is ~15 GB per compute thread.
-DEFAULT_SCAN_BATCH_SIZE: Final = 64
-#: Lance defaults to the machine's parallelism, which is the HOST's core count and not the pod's
-#: `limits.cpu`, so it multiplies the read batch by a number the cgroup never agreed to.
-DEFAULT_COMPACT_THREADS: Final = 2
-#: The bound in the unit that matters: what one pass may pull in at all, in bytes.
-DEFAULT_MAX_SOURCE_BYTES: Final = 256 * 1024 * 1024
 
 
 class MaintenanceSettings(SignatureDoorSettings, FgaSettings, BaseSettings):
@@ -60,9 +46,8 @@ class MaintenanceSettings(SignatureDoorSettings, FgaSettings, BaseSettings):
     # bindings.cron Component's metadata.name). Default matches the chart.
     binding_name: str = Field(default="maintenance-cron", alias="MAINTENANCE_BINDING_NAME")
     # The reconciler's OWN cron binding, separate from the sweep's. Two bindings rather than one route
-    # doing both because they have genuinely different cadences: the sweep rewrites data files and is
-    # expensive, while the drift report only reads three stores and is cheap enough to run often. One
-    # binding would force the cheap read to inherit the expensive write's schedule.
+    # doing both because they have genuinely different cadences: the sweep opens every dataset and
+    # reclaims versions, while the drift report only reads three stores and is cheap enough to run often.
     reconcile_binding_name: str = Field(default="maintenance-reconcile-cron", alias="MAINTENANCE_RECONCILE_BINDING_NAME")
     # Serve /docs + /openapi.json (default on for dev; prod sets false, like the catalog's LANCE_REST_DOCS).
     #: OFF by default. It defaulted to True and NO deployment path ever set it — `grep -rn DOCS
@@ -85,140 +70,33 @@ class MaintenanceSettings(SignatureDoorSettings, FgaSettings, BaseSettings):
     # threshold — to GC aggressively, use a small positive value, not 0.
     older_than_days: int = Field(default=7, ge=1, alias="MAINTENANCE_OLDER_THAN_DAYS")
 
-    # --- The compaction READ bound (#93). Two knobs, because the memory is their PRODUCT and bounding
-    # one alone bounds nothing.
-    #
-    # `scan_batch_size` shipped as a per-tier policy field with no global default, so out of the box
-    # `compact_files` used Lance's own 8192-ROW batch. Rows are not a unit of memory: against ~1.8 MB
-    # bronze page-image rows (measured) that is ~15 GB per compute thread, and the chart runs this
-    # sweep every 120s over the medallion buckets with `maintenance.enabled: true` and no policy
-    # anywhere. The pod names no `resources` tier, so it inherits `resources.default` — a 512Mi LIMIT.
-    # A 15 GB read is a 30x overshoot of the whole container; the first blob-tier tick OOM-kills it,
-    # and a maintenance pod in CrashLoopBackOff means NOTHING is being maintained.
-    #
-    # 64 rows x ~1.8 MB x 2 threads is ~230 MB worst case, which fits 512Mi with room for the
-    # process itself. On tiers where rows are small this is slower than Lance's default and that is
-    # the deliberate trade: slow compaction is recoverable, an OOM-killed sweep is an outage. Raise
-    # both per tier via the maintenance policy (`scan_batch_size`) once a tier's row size is known —
-    # that is what the per-tier surface is FOR; this only stops the UNPOLICIED estate killing itself.
-    scan_batch_size: int = Field(default=DEFAULT_SCAN_BATCH_SIZE, ge=1, le=8192, alias="MAINTENANCE_SCAN_BATCH_SIZE")
-    # Lance's `num_threads` defaults to the machine's parallelism, which is the HOST's core count, not
-    # the pod's `limits.cpu: "1"` — so on a 64-core node the batch bound above would have been
-    # multiplied by 64 while the cgroup still allowed one core's worth of work. Pinning it makes the
-    # ceiling a number someone can actually compute.
-    compact_threads: int = Field(default=DEFAULT_COMPACT_THREADS, ge=1, le=64, alias="MAINTENANCE_COMPACT_THREADS")
-    # THE BOUND THE TWO ABOVE WERE REACHING FOR. `scan_batch_size` bounds the READ, in rows, and the
-    # note above says plainly why that is a proxy rather than the thing itself: "Rows are not a unit of
-    # memory". pylance 11 exposes a bound on the PASS in the unit that actually matters — how many
-    # source bytes one compaction may pull in — so the ceiling stops depending on knowing every tier's
-    # row size in advance.
-    #
-    # 256 MiB against the pod's inherited 512Mi limit: it composes with the read bound rather than
-    # replacing it (the read batch still caps a single chunk), and it is the half that survives a tier
-    # whose rows turn out larger than whoever set the row count assumed — the exact way incident #93
-    # happened. `max_source_rows` and `max_source_fragments` are deliberately not mirrored: they are
-    # more row-count proxies, and one honest bound beats three that need reconciling.
-    #
-    # AT MOST 1 GiB, the largest power of two ONE rewrite can hold in the chart's 4Gi worker: a pass
-    # peaks at ~1.7x its byte bound resident (measured, `rewrite_slot.py`), and the worker gate grants
-    # 0.75 x 4096 - 320 MiB = 2752 MiB, so 1 GiB peaks ~1741 MiB and 2 GiB ~3482 MiB. The catalog's plan
-    # door, `PolicyRequest` and `DatasetPlan` carry the same range, so no hop accepts what another refuses.
-    max_source_bytes: int = Field(default=DEFAULT_MAX_SOURCE_BYTES, ge=1024 * 1024, le=1024 * 1024 * 1024, alias="MAINTENANCE_MAX_SOURCE_BYTES")
-    # HOW a compaction moves the bytes, not how many. Read off pylance 11's own signature rather than a
-    # summary: `Literal["reencode", "try_binary_copy", "force_binary_copy"]`, and its docstring —
-    # reencode decodes and re-encodes (Lance's default), `try_binary_copy` copies the encoded pages
-    # when the fragments are compatible and falls back to reencode when they are not,
-    # `force_binary_copy` fails instead of falling back.
-    #
-    # OPT-IN, default None, and that is the whole point of shipping it as a knob: `try_binary_copy` is
-    # strictly cheaper where it applies, but it changes the byte path of every compaction in the estate,
-    # and this sweep rewrites governed data unattended every 120s. A default nobody measured is how
-    # incident #93 happened. Set it per estate once a tier's fragments have been looked at.
-    #
-    # NAMED `repack_mode` on this side deliberately: `DatasetResult.compaction_mode` already means
-    # in-pod vs distributed, and one word for two questions is how a reader learns the wrong thing.
-    repack_mode: Literal["reencode", "try_binary_copy", "force_binary_copy"] | None = Field(default=None, alias="MAINTENANCE_REPACK_MODE")
-
     # Behind a Dapr sidecar? — when true, boot fails closed if the app-token is unset (the cron route would
     # otherwise be an open forged-sweep path). Symmetric with the lineage service. Off in dev (no sidecar).
     dapr_enabled: bool = Field(default=False, alias="MAINTENANCE_DAPR_ENABLED")
 
-    # --- The WORK QUEUE. When set, the cron tick PLANS and enqueues instead of maintaining the estate
-    # inside its own request; a subscription executes one dataset per delivery. That is the whole of what
-    # this buys, and each part is a thing the serial tick cannot do: an overrunning tick is queued rather
-    # than DROPPED by the single-flight guard, a poison dataset fails its own message instead of stopping
-    # everything discovered after it, and work outlives a pod restart because JetStream holds it.
-    #
-    # Empty topic => the serial path, which is what local runs and the test suite take. There is no
-    # separate on/off flag: the queue is used when there IS one, so production has exactly one path
-    # rather than two that can drift.
-    #
-    # Delivery is AT-LEAST-ONCE and that is safe here rather than merely tolerated: compaction and GC are
-    # both convergent — a redelivered unit finds the fragments already merged and the versions already
-    # reclaimed, and does nothing. A unit is not a transaction and must never be treated as one.
-    #: How many versions must accumulate before the EVENT lane re-plans one dataset — Lakekeeper's
-    #: `min-snapshots-to-expire`, in rask's own registry. It exists because a plan is not cheap:
-    #: `sibling_base_refs` opens every sibling manifest in the warehouse, so without a threshold a write
-    #: burst drives one whole-warehouse sweep per write. The hourly backstop covers whatever this skips,
-    #: which is what makes a threshold safe rather than a way to lose maintenance.
+    # --- The write-event lane (`/maintenance-arrival`). A write a signed producer announced on `lineage.events.v1`
+    # refreshes that table's due record between ticks, so a bring-your-own compaction removes the table from the due
+    # list on its own commit rather than at the next sweep, and expires the table's versions once enough are
+    # reclaimable (`min_versions_to_expire`), through the same pass the sweep runs.
+    #: Subscribe the write-event lane. Off by default: an estate opts in by naming the lane in the chart.
+    arrival_enabled: bool = Field(default=False, alias="MAINTENANCE_ARRIVAL_ENABLED")
+    #: Where an event the lane could not decide on parks once its redeliveries are spent, so a poison event leaves the
+    #: subscription instead of recirculating.
+    arrival_dlq_topic: str = Field(default="", alias="MAINTENANCE_ARRIVAL_DLQ_TOPIC")
+    #: How many versions must accumulate before the event lane re-evaluates one dataset: the debounce that keeps a burst
+    #: of writes from paying an evaluation each. A compaction's or an index's commit skips it. The sweep covers
+    #: whatever this skips, which is what makes a threshold safe rather than a way to lose a refresh.
     event_min_versions: int = Field(default=10, ge=1, alias="MAINTENANCE_EVENT_MIN_VERSIONS")
-    work_pubsub: str = Field(default="maintenance-work-pubsub", alias="MAINTENANCE_WORK_PUBSUB")
-    work_topic: str = Field(default="", alias="MAINTENANCE_WORK_TOPIC")
-    #: Does THIS pod consume the work queue? (docs/adr/0049-maintenance-leaves-the-planner-pod-2026-09-04.md "Maintenance leaves the planner pod".)
-    #:
-    #: `work_topic` cannot express this, and that is the whole reason the switch exists: a PLANNER
-    #: needs the topic to PUBLISH onto and must not also subscribe, or splitting the deployment
-    #: achieves nothing. An EXECUTOR sets no cron binding names and consumes.
-    #:
-    #: TRUE by default, so an estate that has not opted in keeps one pod doing both — the split is a
-    #: chart decision, never a code default. Mirrors Lakekeeper, which disables workers on its API pods
-    #: with `LAKEKEEPER__TASK_EXPIRE_SNAPSHOTS_WORKERS=0` and runs dedicated worker pods beside them.
-    execute_work: bool = Field(default=True, alias="MAINTENANCE_EXECUTE_WORK")
-    #: How many work units this pod may EXECUTE at once — the ceiling the broker's `maxAckPending` is
-    #: derived from (`maxConcurrentUnits x replicas`, rendered in `dapr-component.yaml`).
-    #:
-    #: IT EXISTS TO MAKE THE CEILING A DECISION. `execute_unit` runs through `run_in_threadpool`, so
-    #: without this the real limit is anyio's default thread limiter — 40 — which nobody chose and an
-    #: upstream change could move underneath the delivery bound derived from it.
-    #:
-    #: DEFAULT 40 IS TODAY'S EFFECTIVE CEILING, deliberately, so declaring it changes no throughput.
-    #: It is NOT sized for memory: 40 concurrent compactions in a 4Gi pod is ~100MB each before the
-    #: limit, and no tier here has yet run a compaction that rewrites fragments, so there is no
-    #: per-unit figure to size against ([[LH-188]]).
-    #: How many units this pod may EXECUTE at once — a THROUGHPUT bound, applied to anyio's thread
-    #: limiter. The sweep plans ~568 units a tick and all but a handful are no-ops of two HTTP calls,
-    #: so the lane needs this wide to drain 4.7 units/sec; measured 2026-09-22, cutting it to the
-    #: memory-safe figure took the lane to ~0.67 units/sec and the backlog grew without bound.
-    max_concurrent_units: int = Field(default=40, gt=0, alias="MAINTENANCE_MAX_CONCURRENT_UNITS")
-    #: How many REWRITES may be resident at once — the MEMORY bound, and deliberately not the number
-    #: above. Only a rewrite holds bytes; a no-op unit never reaches it. Measured: one rewrite bounded
-    #: at `max_source_bytes` peaked at ~1.7x that bound resident, so this times that product is what
-    #: the pod must hold ([[LH-185]]'s gate does the arithmetic against the declared limit).
-    max_concurrent_compactions: int = Field(default=4, gt=0, alias="MAINTENANCE_MAX_CONCURRENT_COMPACTIONS")
-    #: Retire this worker after N committed rewrites, so it leaves before it is OOMKilled ([[LH-183]]).
-    #: The two bounds above cap what is resident AT ONCE; this one caps what is never given back.
-    #: Measured: a pass leaves ~10-14 MiB permanently resident in the native allocator while its
-    #: 400-700Mi peak returns every time. The ceiling is `((limit x 0.75) - baseline) / 14 MiB`, which
-    #: on a 4Gi worker is ~196 passes — not the ~300 raw headroom suggests. 150 sits below it with the
-    #: margin the figure deserves, and the chart's gate refuses anything that does not fit.
-    #:
-    #: `ge=0` and not `gt=0` — 0 means never, which an estate that has not measured its own retention
-    #: must be able to say. Affordable only because a restart is cheap: measured on the live lane
-    #: 2026-09-22 ([[LH-190]]), delivery resumes ~5s after readiness and the units redeliver at once.
-    recycle_after_passes: int = Field(default=150, ge=0, alias="MAINTENANCE_RECYCLE_AFTER_PASSES")
-    #: Retire this worker when its RESIDENT set reaches this fraction of the container's own limit
-    #: ([[LH-183]]). The pass count above bounds the COMMITTING lane and this estate's workers commit
-    #: nothing, so that count stays 0 and its retirement never fires: measured live 2026-09-25, both
-    #: workers at 866 and 861 MiB against a 4Gi limit, ZERO restarts in 34.5 hours, and
-    #: `maintenance_worker_retiring` never logged. The resident set is what both lanes share and what
-    #: the OOM killer reads.
-    #:
-    #: 0.70 LEAVES ROOM FOR THE PEAK, which is why it is well under 1: a rewrite's transient peak is
-    #: 400-700 MiB above the floor and returns every time, so a worker retiring at the floor alone is
-    #: still killed by the next one. On a 4Gi worker this leaves at ~2.87 GiB, affording the largest
-    #: measured peak twice over. `ge=0.0` and 0 means never, the same posture as the pass mark: a
-    #: misconfiguration fails toward NOT recycling.
-    recycle_at_memory_fraction: float = Field(default=0.70, ge=0.0, le=1.0, alias="MAINTENANCE_RECYCLE_AT_MEMORY_FRACTION")
+    #: Expire a table's versions only once at least this many are RECLAIMABLE under its policy — Lakekeeper's
+    #: `min-snapshots-to-expire`. Both lanes ask it: an expiry pass that reclaims one version a tick costs a vend, a
+    #: manifest commit read and a listing for almost nothing. Eligibility is
+    #: :func:`service_kit.lakehouse.version_retention.reclaimable_versions`, the rule the catalog's GC preview shows.
+    min_versions_to_expire: int = Field(default=20, ge=1, alias="MAINTENANCE_MIN_VERSIONS_TO_EXPIRE")
+    #: How old the sweep's clone list may be before the event lane stops trusting it to expire a table. The list is the
+    #: only evidence of which tables another dataset resolves its files through, so an older one leaves expiry to the
+    #: sweep, which takes a fresh one first. The catalog's commit judge holds the same bound
+    #: (`LANCE_CLONE_LIST_MAX_AGE_SECONDS`, default 3600).
+    clone_list_max_age_seconds: int = Field(default=3600, ge=60, alias="MAINTENANCE_CLONE_LIST_MAX_AGE_SECONDS")
     #: Stores the PLATFORM owns and the catalog deliberately cannot resolve ([[LH-164]]). Today that is
     #: the model registry: it lives at `<root>/medallion/models/<model>`, an explicit location, and
     #: the catalog's promote/describe doors open it by EXPLICIT URI, because native namespace resolution
@@ -235,41 +113,17 @@ class MaintenanceSettings(SignatureDoorSettings, FgaSettings, BaseSettings):
         multi-value setting in this file is."""
         return tuple(part.strip() for part in self.declared_platform_roots.split(",") if part.strip())
 
-    #: Where an exhausted unit parks. A dataset that fails every redelivery must LEAVE the queue — it
-    #: would otherwise be redelivered forever, and a poison unit that recirculates is the failure the
-    #: per-dataset boundary was supposed to fix.
-    work_dlq_topic: str = Field(default="", alias="MAINTENANCE_WORK_DLQ_TOPIC")
-    #: The INDEX-BUILD lane, on its own topic beside the maintenance work queue.
-    #:
-    #: Separate because of the ACK, not for tidiness: a compaction unit is minutes, a vector index over
-    #: a large table is not, and one `ackWait` cannot serve both — sized for the index a stuck
-    #: compaction stays invisible for as long, sized for compaction every large build redelivers
-    #: mid-flight. That is why it takes its own COMPONENT (`index_pubsub`) and not merely its own
-    #: topic: the ack window is a component-level setting.
-    #:
-    #: Empty leaves the catalog building indices in its own request handler, which is what an estate
-    #: with no broker must get. The catalog reads the SAME topic name, so neither side can believe a
-    #: worker exists when it does not.
-    index_topic: str = Field(default="", alias="MAINTENANCE_INDEX_TOPIC")
-    #: Its own COMPONENT, not just its own topic. `ackWait`, `durableName` and `queueGroupName` are
-    #: per-component in Dapr's JetStream pubsub, so a second topic on the work component would share
-    #: the work queue's 720s ack window — the very thing the separation exists to avoid.
-    index_pubsub: str = Field(default="maintenance-index-pubsub", alias="MAINTENANCE_INDEX_PUBSUB")
-    index_dlq_topic: str = Field(default="", alias="MAINTENANCE_INDEX_DLQ_TOPIC")
-
-    # --- Lineage emission (opt-in, best-effort) — record a maintenance run on each materially-compacted
-    # dataset to the lineage graph via Dapr pub/sub. Publishes to the SAME pubsub component + topic the
-    # catalog publishes to and the lineage service subscribes to, so a compaction shows up in producers()
+    # --- Lineage emission (opt-in, best-effort) — record a maintenance run on each dataset whose versions
+    # were reclaimed, to the lineage graph via Dapr pub/sub. Publishes to the SAME pubsub component + topic the
+    # catalog publishes to and the lineage service subscribes to, so an expiry run shows up in producers()
     # next to the writes. Off by default; the sidecar owns retry (no DLQ), so a publish never fails a sweep.
     lineage_emit_enabled: bool = Field(default=False, alias="MAINTENANCE_LINEAGE_EMIT_ENABLED")
     # Bound each Dapr publish so a hung sidecar can't stall a sweep (best-effort → the outage is swallowed).
     publish_timeout_seconds: float = Field(default=5.0, gt=0, alias="MAINTENANCE_PUBLISH_TIMEOUT_SECONDS")
     lineage_pubsub: str = Field(default="lineage-pubsub", alias="MAINTENANCE_LINEAGE_PUBSUB")
     lineage_topic: str = Field(default="lineage.events.v1", alias="MAINTENANCE_LINEAGE_TOPIC")
-    # "maintenance", the SERVICE, not "compaction", the operation: the namespace lands on every
-    # emitted RunEvent's job and is persisted into AGE — the pre-rename default meant a service named
-    # `maintenance` signed the graph as a service that no longer exists. (The job NAME keeps its
-    # `compaction.<table_id>` form — that half names the operation.)
+    # "maintenance", the SERVICE: the namespace lands on every emitted RunEvent's job and is persisted into
+    # AGE. The job NAME, `expire_versions.<table_id>`, names the operation.
     lineage_job_namespace: str = Field(default="maintenance", alias="MAINTENANCE_LINEAGE_JOB_NAMESPACE")
     # The catalog id delimiter — to derive a dataset's parent namespace from its table id (matches the
     # catalog's LANCE_DELIMITER default). The catalog lays tables out as <uuid>_<table_id>; table_id is the
@@ -287,7 +141,7 @@ class MaintenanceSettings(SignatureDoorSettings, FgaSettings, BaseSettings):
     s3_access_key_id: str = Field(default="", alias="MAINTENANCE_S3_ACCESS_KEY_ID")
     # Default "" so the chart can omit the plaintext env when the store is the source; apply_dapr_secrets
     # fails closed if neither the store nor env provides it (the audit's secret-consumption fix — the
-    # compaction pod is a real S3 consumer (compacts/GCs the lakehouse), so it must NOT ship the key plain).
+    # maintenance pod is a real S3 consumer (it reclaims versions in the lakehouse), so it must NOT ship the key plain).
     # SecretStr so it's redacted in repr/model_dump (parity with the catalog) — .get_secret_value() to read.
     s3_secret_access_key: SecretStr = Field(default=SecretStr(""), alias="MAINTENANCE_S3_SECRET_ACCESS_KEY")
     s3_bucket: str = Field(default="lance-catalog", alias="MAINTENANCE_S3_BUCKET")
@@ -487,11 +341,11 @@ class MaintenanceSettings(SignatureDoorSettings, FgaSettings, BaseSettings):
     #
     # BOUNDED at both ends deliberately. 0 maintains nothing; an unbounded walk is not a freedom but a
     # foot-gun, because `sweep.py::_protected_roots` opens every discovered dataset in every bucket
-    # before one is compacted, so the walk is the sweep's dominant cost.
+    # before one is expired, so the walk is the sweep's dominant cost.
     discovery_max_depth: int = Field(default=3, ge=1, le=16, alias="MAINTENANCE_DISCOVERY_MAX_DEPTH")
-    #: [[LH-101]]. Wall-clock ceiling for ONE sweep tick, checked BETWEEN work items — never inside one,
-    #: because a budget that interrupted a compaction would leave a rewrite half-done. 0 (the default)
-    #: means unlimited, so an estate that sets nothing behaves exactly as it did before. The value is an
+    #: [[LH-101]]. Wall-clock ceiling for ONE sweep tick, checked BETWEEN datasets — never inside one,
+    #: because a budget that interrupted a reclaim would leave it half-done. 0 (the default)
+    #: means unlimited. The value is an
     #: operator decision: too small and a large estate never completes a pass, too large and the bound is
     #: decorative, and exhausting it logs what was executed and what remains rather than stopping quietly.
     sweep_budget_seconds: float = Field(default=0.0, ge=0.0, alias="MAINTENANCE_SWEEP_BUDGET_SECONDS")
@@ -522,26 +376,11 @@ class MaintenanceSettings(SignatureDoorSettings, FgaSettings, BaseSettings):
     dapr_secret_store: str = Field(default="lance-secrets", validation_alias=AliasChoices("MAINTENANCE_DAPR_SECRET_STORE", "RASK_SECRET_STORE"))
     dapr_secret_key: str = Field(default="lance", alias="MAINTENANCE_DAPR_SECRET_KEY")
 
-    # THE CATALOG'S CREDENTIAL DOOR. Unset (the default) = no vending, and every rewrite is signed by
-    # the ambient root key exactly as it always was — this adds a capability without removing one, and
-    # a deployment on `mode_b` vends nothing by design. Set, a compaction's WRITE is signed by a
-    # credential scoped to that one table and expiring in 900s. See `services/credentials.py` for what
+    # THE CATALOG'S CREDENTIAL DOOR. Unset (the default) = no vending, and every expiry pass is signed by
+    # the ambient credential; a deployment on `mode_b` vends nothing by design. Set, an expiry pass is signed by a
+    # `maintain`-tier credential scoped to that one table and expiring in 900s ([[LH-473]]). See `services/credentials.py` for what
     # deliberately STAYS on the root key (the whole-estate protection pre-pass, which is a read).
     catalog_url: str = Field(default="", alias="MAINTENANCE_CATALOG_URL")
-    #: Rewrite fragments through the catalog's PLAN/EXECUTE/COMMIT protocol instead of one in-pod
-    #: ``compact_files()``. Off by default and gated on ``catalog_url``, because the two metadata
-    #: halves are the catalog's doors.
-    #:
-    #: What it buys is not a nicety: ``compact_files`` does all three phases here, so this pod's
-    #: memory ceiling is a function of the largest table anyone owns rather than of its request rate.
-    #: With this on, the only phase performed here is the byte rewrite, and it is signed by the
-    #: table-scoped credential rather than the root key.
-    #:
-    #: FALLS BACK to the in-pod rewrite when the plan door cannot answer — nothing has been planned
-    #: at that point, so nothing has been written, and a hardening that could stop a maintenance run
-    #: would be a new way to stop reclaiming disk. It does NOT fall back once a task has run: see
-    #: `compaction_executor.CompactionPlaneUnavailable`.
-    distributed_compaction: bool = Field(default=False, alias="MAINTENANCE_DISTRIBUTED_COMPACTION")
     #: The subject this service acts as: the author of the lineage it signs, the actor on the tuples it
     #: repairs, and the name its refusals report. It is never sent as a claim. The catalog derives the
     #: caller from the verified service-account token, so this must be this pod's service-account subject
@@ -595,7 +434,7 @@ def shared_lance_session() -> lance.Session:
     tick's second dataset (and the orphan scan's 500 version checkouts) HIT the cache instead of
     minting and discarding Lance's default 1 GiB + 6 GiB ceilings per open — ceilings that dwarf
     the pod's own 512Mi limit. Caps are LRU soft bounds; session keys carry (uri, version, etag),
-    so a compaction bumping a version writes new keys and a new version is never served stale. An old
+    so a commit bumping a version writes new keys and a new version is never served stale. An old
     version whose data files were reclaimed can be (`service_kit.lakehouse.lance_session`)."""
     from service_kit.lakehouse.lance_session import affordable_cache_bytes, lance_session
 
@@ -614,5 +453,5 @@ def shared_lance_session() -> lance.Session:
 
 @lru_cache
 def get_settings() -> MaintenanceSettings:
-    """The process-wide compaction settings (read once from env)."""
+    """The process-wide maintenance settings (read once from env)."""
     return MaintenanceSettings()

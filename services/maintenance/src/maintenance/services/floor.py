@@ -40,10 +40,9 @@ reclaimed `c6t115034-wh/medallion/bronze` (19 files gone, 32 -> 13) and REFUSED
 Both guards below exist for that measurement.
 
 THE COMMIT IS SIGNED BY A VENDED, TABLE-SCOPED CREDENTIAL, and a catalog denial REFUSES the raise.
-`optimize.py` states the rule for the rewrite — "compacting locally would perform it under whatever
-credential opened `ds`, which on a denied table is the deployment's ambient key. That is the bypass
-this class exists to stop" — and a config commit is a write to the same governed table, so it is the
-same bypass. `write_options_for` returns a scoped credential where the door vends one, raises
+A config commit on a table the catalog refused, signed by whatever opened the dataset, is signed by the
+deployment's ambient key: the bypass `credentials.MaintenanceDenied` exists to stop, and version expiry
+refuses for the same reason. `write_options_for` returns a scoped credential where the door vends one, raises
 `MaintenanceDenied` on a 401/403, `TableNotGoverned` on a 404 naming no table and `VendUndecided` on a 5xx,
 and falls back to the ambient options only when vending is unconfigured or unreachable, which is the
 deployment posture it already counts.
@@ -64,8 +63,7 @@ import lance
 from pydantic import BaseModel, Field
 
 from maintenance.core.config import shared_lance_session
-from maintenance.services.compaction_executor import MaintenanceDenied, TableNotGoverned, VendUndecided
-from maintenance.services.credentials import write_options_for
+from maintenance.services.credentials import MaintenanceDenied, TableNotGoverned, VendUndecided, write_options_for
 from maintenance.services.orphans import OrphanFile
 from service_kit.lancekit.versions import committed_at
 

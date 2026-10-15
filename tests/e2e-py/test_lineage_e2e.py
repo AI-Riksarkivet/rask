@@ -850,8 +850,8 @@ def test_terminal_lifecycle_and_column_gc_against_age(dsn: str) -> None:
             await repo.ingest_dataset_event(static("create_table", "2026-07-11T09:15:00Z"))
             seen["tied_create"] = await repo.dropped_at(name)
             await repo.ingest_dataset_event(static("drop_table", "2026-07-11T09:20:00Z"))
-            await repo.ingest_event(event(f"lc-4-{unique}", "compaction", "2026-07-11T09:25:00Z", None, "3"))
-            seen["after_compaction"] = await repo.dropped_at(name)
+            await repo.ingest_event(event(f"lc-4-{unique}", "expire_versions", "2026-07-11T09:25:00Z", None, "3"))
+            seen["after_maintenance"] = await repo.dropped_at(name)
             await repo.ingest_event(event(f"lc-5-{unique}", "insert", "2026-07-11T09:30:00Z", None, "4"))
             seen["after_write"] = await repo.dropped_at(name)
             seen["observed_elsewhere"] = await repo.record_observed_drop(name, "s3://e2e/somewhere-else", "2026-07-11T09:35:00.000000+00:00")
@@ -867,7 +867,7 @@ def test_terminal_lifecycle_and_column_gc_against_age(dsn: str) -> None:
     inventory, after_stale = seen["inventory"], seen["after_stale"]
     assert seen["catalog_drop"] == "2026-07-11T09:15:00.000000+00:00", seen  # (4)
     assert seen["stale_create"] is not None and seen["tied_create"] is None, seen  # (5)
-    assert seen["after_compaction"] is not None and seen["after_write"] is None, seen  # (6)
+    assert seen["after_maintenance"] is not None and seen["after_write"] is None, seen  # (6)
     assert seen["observed_elsewhere"] is False and seen["observed_here"] is True and seen["after_observed"] is not None, seen  # (7)
     assert inventory == ["x", "y"]  # (3) the replaced columns are GONE from the CURRENT inventory
     assert after_stale == ["x", "y"]  # …and a stale redelivery cannot bring them back

@@ -39,7 +39,7 @@ import lance
 import pyarrow as pa
 import pyarrow.fs as pafs
 
-from maintenance.services.optimize import discover_datasets
+from maintenance.services.discovery import discover_datasets
 
 
 def _dir(path: str) -> pafs.FileInfo:

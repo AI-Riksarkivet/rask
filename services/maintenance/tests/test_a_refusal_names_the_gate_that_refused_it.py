@@ -19,7 +19,6 @@ gate. `sum(rate(...))` is unaffected; `sum by (refused_by)` reads the breakdown.
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -29,8 +28,7 @@ import pytest
 
 from maintenance.core import metrics
 from maintenance.core.config import MaintenanceSettings
-from maintenance.services import sweep
-from service_kit.lakehouse.work_items import DatasetPlan, DatasetWorkItem
+from maintenance.services.expiry import DatasetResult
 
 
 @pytest.fixture
@@ -71,12 +69,12 @@ def _table_on_a_data_base(root: Path) -> str:
     ("build", "gate"),
     [pytest.param(_mixed_table, "manifest_flags", id="manifest-flags"), pytest.param(_table_on_a_data_base, "foreign_data_base", id="foreign-data-base")],
 )
-def test_a_refusal_carries_the_gate(tmp_path: Path, build: Callable[[Path], str], gate: str, added: list[tuple[int, dict[str, Any] | None]]) -> None:
+def test_a_refusal_carries_the_gate(
+    *, tmp_path: Path, maintain_one: Callable[..., DatasetResult], build: Callable[[Path], str], gate: str, added: list[tuple[int, dict[str, Any] | None]]
+) -> None:
     uri = build(tmp_path)
 
-    result = sweep.execute_unit(
-        DatasetWorkItem(uri=uri, plan=DatasetPlan()), settings=MaintenanceSettings.model_validate({"s3_bucket": "b"}), options={}, now=datetime.now(UTC)
-    )
+    result = maintain_one(uri, MaintenanceSettings.model_validate({"s3_bucket": "b"}))
 
     assert result.refused_by == gate, f"the dataset was not refused by {gate}: {result}"
     assert added == [(1, {"refused_by": gate})], f"the gate did not reach the series: {added}"

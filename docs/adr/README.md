@@ -174,3 +174,4 @@ before they had a record here; each names its source document and the date of th
 | [0159](0159-four-owner-rulings-recorded-from-agent-memory.md) | LH-063 | Four owner rulings of 2026-09-25/26 that no ADR recorded: branch writes, the principal key, catalog drop events, an unplannable compaction (2026-10-12) |
 | [0160](0160-the-tier-judge-owns-the-write-rung-and-a-tier-is-declared-once.md) | LH-470 | The tier judge owns the write rung, and a tier is declared once (2026-10-13) |
 | [0161](0161-the-tag-gate-runs-at-publish.md) | LH-466 | The tag gate runs when a version is published, so a hold is the publish door's answer (2026-10-15) |
+| [0162](0162-the-lakehouse-builds-nothing-maintenance-decides.md) | LH-467 | The lakehouse builds nothing: compaction and indexing commit through `version/create`, and maintenance decides (2026-10-15) |

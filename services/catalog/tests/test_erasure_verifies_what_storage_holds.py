@@ -38,8 +38,7 @@ from catalog.core import base_judge
 from catalog.core.config import Settings, get_settings
 from catalog.core.namespace import open_dataset
 from catalog.services.dataplane import create_table, read_arrow_body
-from catalog.services.erasure import ErasureReport, erase
-from catalog.services.maintenance import COMPACTION_BOUND
+from catalog.services.erasure import COMPACTION_BOUND, ErasureReport, erase
 from service_kit.lakehouse import base_registry
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 

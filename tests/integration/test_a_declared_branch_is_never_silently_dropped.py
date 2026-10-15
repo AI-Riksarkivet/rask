@@ -54,11 +54,12 @@ def table(real_ns_client: TestClient) -> tuple[TestClient, str]:
     )
     created = client.post(f"{_T}/create?mode=overwrite", content=_ipc(rows), headers={"content-type": "application/vnd.apache.arrow.stream"})
     assert created.status_code == 200, created.text
-    indexed = client.post(f"{_T}/create_scalar_index", json={"column": "id", "index_type": "BTREE", "name": "id_idx"})
-    assert indexed.status_code == 200, indexed.text
     described = client.post(f"{_T}/describe", json={})
     assert described.status_code == 200, described.text
-    return client, described.json()["table_uri"]
+    location = described.json()["table_uri"]
+    # The catalog builds no index (ADR 0162); an owner's own pylance does.
+    lance.dataset(location).create_scalar_index("id", index_type="BTREE", name="id_idx")
+    return client, location
 
 
 @pytest.mark.parametrize(

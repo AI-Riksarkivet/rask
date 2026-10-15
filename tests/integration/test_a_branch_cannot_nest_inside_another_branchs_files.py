@@ -29,7 +29,7 @@ import pyarrow.ipc as ipc
 import pytest
 from fastapi.testclient import TestClient
 
-from maintenance.services.optimize import compact_one
+from maintenance.services.expiry import ExpiryPolicy, ExpiryTarget, expire_versions
 
 
 ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
@@ -88,7 +88,7 @@ def _sweep(client: TestClient, location: str) -> None:
     # A positive threshold, as the sweep runs it (MAINTENANCE_OLDER_THAN_DAYS forbids 0), passed in a few
     # milliseconds so every planted version is past it.
     time.sleep(0.05)
-    compact_one(f"{location}/tree/a", {}, timedelta(milliseconds=1))
+    expire_versions(ExpiryTarget(uri=f"{location}/tree/a", storage_options={}), ExpiryPolicy(older_than=timedelta(milliseconds=1)))
 
 
 def _gc_door(client: TestClient, location: str) -> None:

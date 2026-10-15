@@ -34,12 +34,3 @@ all, so a burst that clears the utilization target takes the replica count to ma
 the pass of that burst takes it straight back — repeatedly, on an I/O-bound service whose CPU
 is spiky by nature. kubernetes.md's own worked example carries this exact field with a
 five-minute cooldown, and the template had no `behavior` block at all.
-
-## `{{- if and .Values.maintenance.enabled .Values.maintenance.dedicatedWorkers.enabled .Values.maintenance.wor...`
-
-THE MAINTENANCE WORKER, which renders from its own template and is outside `.Values.services` —
-and a workload outside that map stays invisible to chart-wide fixes unless it gets its own block. It runs
-`dedicatedWorkers.replicas` (2) and executes every compaction in the estate, so a drain taking
-both at once stops maintenance entirely. The PLANNER deliberately gets none: it is one replica,
-and `minAvailable: 1` over one replica blocks every voluntary drain — the inverse hazard this
-file's header records.

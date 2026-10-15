@@ -1,8 +1,8 @@
 <script lang="ts">
-	// The maintenance plane, in one section because its three workflows share state on purpose:
-	// the #50 policy (owner-gated set/delete) feeds the #76 compact-now target, and compaction
-	// reports its refusals through the same error strip as the #75 on-demand GC (preview → two-click
-	// destructive reclaim) — one door, one wording, per the original page.
+	// The maintenance plane: the #50 policy (owner-gated set/delete) and the #75 on-demand GC
+	// (preview → two-click destructive reclaim). The catalog compacts nothing — compaction and index
+	// rebuilds are bring-your-own compute, which the policy's compaction fields steer through the
+	// maintenance sweep's due list.
 	//
 	// Split out of TableDetail.svelte (#98). Mounted under the parent's `{#key table}`, so the
 	// instance never survives a navigation — an open editor or an armed GC confirm dies with it.
@@ -11,7 +11,6 @@
 	import { fmtBytes } from '../history';
 	import { policyRequestFrom } from '../namespace';
 	import {
-		compactTable,
 		deleteTablePolicy,
 		previewMaintenance,
 		runMaintenance,
@@ -147,29 +146,6 @@
 			gcBusy = false;
 		}
 	}
-
-	// #76 compact-now — merge small fragments (non-destructive), using the policy's target size if set.
-	let compactBusy = $state(false);
-	let compactResult = $state<string | null>(null);
-
-	async function runCompact(): Promise<void> {
-		if (compactBusy) return;
-		compactBusy = true;
-		gcError = null;
-		compactResult = null;
-		try {
-			const res = await compactTable({
-				table,
-				targetRowsPerFragment: policy?.target_rows_per_fragment ?? null,
-			});
-			if (res.ok) {
-				compactResult = `Compacted · ${res.data.fragments_removed} fragment(s) → ${res.data.fragments_added}.`;
-				await onchanged(); // compaction wrote a new version — refresh
-			} else gcFail(res.status, res.detail);
-		} finally {
-			compactBusy = false;
-		}
-	}
 </script>
 
 <section>
@@ -238,7 +214,7 @@
 			</button>
 		</div>
 		<p class="mut">
-			Enforced by the compaction sweep; tag-pinned versions (e.g. blessed) are never cleaned up.
+			Enforced by the maintenance sweep; tag-pinned versions (e.g. blessed) are never cleaned up.
 		</p>
 	{:else}
 		<p class="mut">
@@ -305,14 +281,6 @@
 			{/if}
 		{/if}
 		{#if gcResult}<p class="mut">{gcResult}</p>{/if}
-
-		<!-- #76 compact-now: merge small fragments (non-destructive), using the policy's target size. -->
-		<div class="row gc-compact">
-			<button class="btn ghost" disabled={compactBusy} onclick={runCompact}>
-				{compactBusy ? 'compacting…' : 'Compact now'}
-			</button>
-			{#if compactResult}<span class="mut">{compactResult}</span>{/if}
-		</div>
 		{#if gcError}<p class="error">{gcError}</p>{/if}
 	</div>
 </section>
@@ -396,10 +364,6 @@
 		gap: 3px;
 		font-size: 12px;
 		color: var(--mut);
-	}
-	.gc-compact {
-		align-items: center;
-		margin-top: 8px;
 	}
 	.row {
 		display: flex;

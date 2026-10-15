@@ -116,11 +116,12 @@ done
 spread=$(grep -c "topologySpreadConstraints:" "$OUT" || true)
 [ "$spread" -ge 4 ] || fail "prod must spread the 4 multi-replica services across nodes (>=4), got $spread"
 
-# 6. Resource tiers: the memory-heavy workloads (catalog Arrow buffer, the object store's data plane)
-# get a 1Gi limit above the shared 512Mi default. The default render tiers NOTHING to 1Gi (verified), so a
-# non-zero count here proves the per-workload tiers apply on the prod overlay only.
+# 6. Resource tiers: the memory-heavy workload in the release (the catalog's Arrow buffer) gets a 1Gi limit
+# above the shared 512Mi default; the object store is the platform's and outside the release. The default
+# render tiers NOTHING to 1Gi (verified), so a non-zero count here proves the per-workload tier applies on
+# the prod overlay only.
 tiers=$(grep -c "memory: 1Gi" "$OUT" || true)
-[ "$tiers" -ge 2 ] || fail "prod must tier the memory-heavy workloads (catalog, the object store) to 1Gi, got $tiers"
+[ "$tiers" -ge 1 ] || fail "prod must tier the memory-heavy workload (the catalog) to 1Gi, got $tiers"
 
 # 7. The Collector exports to the endpoint the deployer names, and rask ships no store or alert engine of its own
 # (ADR 0153): the alert rules are deploy/alerting/rules.yml, for the platform's evaluator.
