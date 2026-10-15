@@ -1049,10 +1049,15 @@ catalog:
     # is empty in the healthy case.
     # -- Dapr cron schedule of the control outbox relay; bounds how long a control event stays undelivered after a bus outage.
     schedule: "@every 60s"
+  # ADR 0163 (LH-493): an erasure is an obligation a bring-your-own job fulfils; the catalog records it with this
+  # deadline and shows it overdue once the deadline passes, and nothing in the catalog acts on it. GDPR asks for
+  # erasure "without undue delay and in any event within one month" (Art. 12(3)).
   # ADR 0138 (LH-178): an erasure whose residual a tag or branch pins tells the requester and the table's
-  # owners, then releases the pins when this grace period ends (tags deleted, branches deleted and
+  # owners, then releases the pins when the grace period ends (tags deleted, branches deleted and
   # recreated at main's head). Owner-set; nothing cancels or extends one release.
   erasure:
+    # -- Days after an erasure obligation is recorded that it is due; an obligation still open past it is shown overdue (LANCE_ERASURE_DEADLINE_DAYS). Required.
+    deadlineDays: 30
     # -- Days after an erasure blocked by a tag or branch pin, during which owners are told, before the pins are released (LANCE_ERASURE_RELEASE_GRACE_DAYS). Required.
     releaseGraceDays: 7
     # ONE STRING, as for controlOutbox: the Component (catalog-erasure-release-cron.yaml), the app's

@@ -16,20 +16,23 @@ That misreads in both directions, and each is its own harm:
   reproducibility pointer the module keeps on purpose.
 
 Driven on real Lance for the reason ``test_erasure_reaches_every_surface.py`` gives: the claim is about
-how the format numbers refs, and a fake would restate the belief under test.
+how the format numbers refs, and a fake would restate the belief under test. The bring-your-own job rewrites
+every ref first (the conftest's ``ErasureJob``, [[LH-493]]); the tag's fate is the verification's.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import timedelta
 from pathlib import Path
+from typing import Any
 
 import lance
 import pyarrow as pa
 import pytest
 from lance.dataset import Tags
 
-from catalog.services.erasure import ErasureReport, erase
+from catalog.services.erasure import ErasureReport, ref_heads, verify
 
 
 _SUBJECT = "alice"
@@ -41,23 +44,35 @@ def _rows(*names: str) -> pa.Table:
     return pa.table({"pii": pa.array(list(names))})
 
 
-def _erase(uri: str) -> ErasureReport:
-    return erase(
-        lance.dataset(uri),
-        storage_options={},
-        protected=None,
-        reopen=lambda: lance.dataset(uri),
-        table="acme-bronze$subjects",
-        predicate=_PREDICATE,
-        retention=_NOW,
-    )
+type _Erase = Callable[..., ErasureReport]
+
+
+@pytest.fixture
+def erase(erasure_job: Any) -> _Erase:  # noqa: ANN401 — conftest.ErasureJob
+    """The job rewrites every ref, then the catalog verifies."""
+
+    def _erase(uri: str, retention: timedelta = _NOW) -> ErasureReport:
+        recorded = ref_heads(lance.dataset(uri))
+        erasure_job(uri, _PREDICATE).run()
+        return verify(
+            lance.dataset(uri),
+            storage_options={},
+            protected=None,
+            reopen=lambda: lance.dataset(uri),
+            table="acme-bronze$subjects",
+            predicate=_PREDICATE,
+            retention=retention,
+            trusted=recorded,
+        )
+
+    return _erase
 
 
 def _holds_subject(uri: str, reference: str | tuple[str | None, int]) -> bool:
     return bool(lance.dataset(uri).checkout_version(reference).count_rows(filter=_PREDICATE))
 
 
-def test_a_BRANCH_tag_pinning_the_subject_is_not_kept_on_mains_evidence(tmp_path: Path) -> None:
+def test_a_BRANCH_tag_pinning_the_subject_is_not_kept_on_mains_evidence(tmp_path: Path, erase: _Erase) -> None:
     """``work`` v3 holds the subject and main v3 does not; the tag names ``work`` v3."""
     uri = str(tmp_path / "subjects")
     lance.write_dataset(_rows("bob"), uri)
@@ -69,7 +84,7 @@ def test_a_BRANCH_tag_pinning_the_subject_is_not_kept_on_mains_evidence(tmp_path
     assert _holds_subject(uri, ("work", 3)), "the tagged branch version must hold the subject for this to be the right test"
     assert not _holds_subject(uri, (None, 3)), "main's same-numbered version must be clean for this to be the right test"
 
-    report = _erase(uri)
+    report = erase(uri)
 
     survivors = lance.dataset(uri).tags.list()
     assert "pinned" not in survivors, f"the tag still pins a version holding the subject: {survivors.get('pinned')}"
@@ -95,7 +110,7 @@ def _clean_branch_tag_beside_a_pinning_branch(tmp_path: Path) -> str:
     return uri
 
 
-def test_pinned_by_names_only_the_refs_that_pin_a_residual(tmp_path: Path) -> None:
+def test_pinned_by_names_only_the_refs_that_pin_a_residual(tmp_path: Path, erase: _Erase) -> None:
     """A retained tag names a version of ITS branch, so ``trained`` on ``clean`` v2 pins nothing on main v2.
 
     Main v2 survives holding the subject because ``kept`` keeps work v3, which stands on its files; work v3
@@ -106,14 +121,14 @@ def test_pinned_by_names_only_the_refs_that_pin_a_residual(tmp_path: Path) -> No
     """
     uri = _clean_branch_tag_beside_a_pinning_branch(tmp_path)
 
-    report = _erase(uri)
+    report = erase(uri)
 
     assert report.residual_versions == ["main@2", "work@3"], report.residual_versions
     assert [(pin.ref, pin.holds) for pin in report.pinned_by] == [("tag:kept", "work@3")]
 
 
 @pytest.mark.parametrize("names", [("work", "deeper"), ("alpha", "zulu")], ids=["child-sorts-first", "child-sorts-last"])
-def test_pinned_by_does_not_name_a_branch_cut_from_ANOTHER_branch(tmp_path: Path, names: tuple[str, str]) -> None:
+def test_pinned_by_does_not_name_a_branch_cut_from_ANOTHER_branch(tmp_path: Path, names: tuple[str, str], erase: _Erase) -> None:
     """The child stands on the parent's v3, not main v3; main v2 and v3 survive by the retention window alone.
 
     A fork point is a ``(parent branch, version)`` reference (``parent_branch`` in ``branches.list()``,
@@ -132,22 +147,14 @@ def test_pinned_by_does_not_name_a_branch_cut_from_ANOTHER_branch(tmp_path: Path
     fork = lance.dataset(uri).branches.list()[child]
     assert (fork["parent_branch"], fork["parent_version"]) == (parent, 3), f"the child must stand on the parent's v3 for this to be the right test: {fork}"
 
-    report = erase(
-        lance.dataset(uri),
-        storage_options={},
-        protected=None,
-        reopen=lambda: lance.dataset(uri),
-        table="acme-bronze$subjects",
-        predicate=_PREDICATE,
-        retention=timedelta(days=1),
-    )
+    report = erase(uri, timedelta(days=1))
 
     assert report.residual_versions == ["main@2", "main@3"], "main v2 and v3 must survive holding the subject for this to be the right test"
     assert (report.pinned_by, report.held_by_retention) == ([], ["main@2", "main@3"])
 
 
-def test_a_tag_whose_delete_FAILED_is_named_as_the_pin_on_its_own_version(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """``kept`` names main v2, the one version holding the subject, and step 4 cannot delete it.
+def test_a_tag_whose_delete_FAILED_is_named_as_the_pin_on_its_own_version(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, erase: _Erase) -> None:
+    """``kept`` names main v2, the one version holding the subject, and step 2 cannot delete it.
 
     No branch stands on main v2, so the surviving tag alone keeps it from cleanup, and it is the whole
     of what an operator must delete to finish. Only ``tags.delete("kept")`` fails; the rest is real Lance.
@@ -167,7 +174,7 @@ def test_a_tag_whose_delete_FAILED_is_named_as_the_pin_on_its_own_version(tmp_pa
 
     monkeypatch.setattr(Tags, "delete", _refuse_kept)
 
-    report = _erase(uri)
+    report = erase(uri)
 
     assert any(s.surface == "tag:kept" and s.outcome == "failed" for s in report.surfaces), report.surfaces
     assert report.residual_versions == ["main@2"], "only the tagged version may survive for this to be the right test"

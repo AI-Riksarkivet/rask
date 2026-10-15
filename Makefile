@@ -1091,12 +1091,17 @@ e2e-container-deletes: ## Warehouse/project delete, cascade and the gate-before-
 # not a CI lane. `make e2e-ci` remains the governed-kind-stack entry point, and wiring the
 # security-shaped ones (gateway, cas) into CI is the follow-up — it needs an edit to
 # `.github/workflows/ci.yml`, which a concurrent session is holding.
-E2E_SUITES = byo-pipeline cas chaos compaction gateway media-catalog observability spec-conformance track-a user-state
+E2E_SUITES = byo-erasure byo-pipeline cas chaos compaction gateway media-catalog observability spec-conformance track-a user-state
 .PHONY: $(addprefix e2e-,$(E2E_SUITES))   # declared HERE, not up with the other .PHONY: make
                                           # expands a rule's prerequisites AS IT READS the line,
                                           # so referencing E2E_SUITES before this assignment
                                           # expands to nothing and silently declares no target.
 
+e2e-byo-erasure:    ## LH-493 live proof: the erasure door records an obligation and commits nothing, a writer+maintainer job rewrites through version/create, a skipped compaction stays named, and the catalog releases what it verified (needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_DEX; `bash scripts/e2e_live.sh tests/e2e-py/test_an_erasure_is_rewritten_by_a_bring_your_own_job.py` discovers them)
+	@test -n "$(LANCE_E2E_CATALOG_URL)" || { echo "  !! e2e-byo-erasure needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_DEX — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	@test -n "$(LANCE_E2E_LINEAGE_URL)" || { echo "  !! e2e-byo-erasure needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_DEX — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	@test -n "$(LANCE_E2E_DEX)" || { echo "  !! e2e-byo-erasure needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_DEX — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	LANCE_E2E_CATALOG_URL=$(LANCE_E2E_CATALOG_URL) LANCE_E2E_LINEAGE_URL=$(LANCE_E2E_LINEAGE_URL) LANCE_E2E_DEX=$(LANCE_E2E_DEX) uv run pytest tests/e2e-py -m byo_erasure -v --require-live
 e2e-byo-pipeline:   ## LH-478 live proof: a stock-client pipeline seeds bronze, derives silver with provenance, is held behind `published`, approved and followed on /events?since= (needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_NOTIFICATIONS_URL, LANCE_E2E_DEX; `bash scripts/e2e_live.sh tests/e2e-py/test_a_bring_your_own_pipeline_runs_end_to_end.py` discovers them)
 	@test -n "$(LANCE_E2E_CATALOG_URL)" || { echo "  !! e2e-byo-pipeline needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_NOTIFICATIONS_URL, LANCE_E2E_DEX — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
 	@test -n "$(LANCE_E2E_LINEAGE_URL)" || { echo "  !! e2e-byo-pipeline needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_NOTIFICATIONS_URL, LANCE_E2E_DEX — a live drive with no live target is a failed invocation, not a pass"; exit 1; }

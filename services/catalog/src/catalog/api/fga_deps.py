@@ -222,6 +222,11 @@ _OWNER_SUFFIX_RELATION: dict[str, dict[str, str]] = {
         # is the highest rung there is, so it gates here. The writer rung would let a plain data writer
         # reclaim an owner's history under a compliance-shaped verb.
         "erasure": "can_drop",
+        # [[LH-493]] verifying an erasure obligation reclaims the history the requester's `retain_days` already ordered
+        # reclaimed and releases the obligation. It is the bring-your-own job's step, so it sits at the maintainer rung
+        # the job holds beside `writer` (ADR 0163); the owner holds it too. The caller's word decides nothing: the
+        # catalog reads storage itself and holds the predicate to the obligation's digest.
+        "erasure/{obligation_id}/verify": "can_maintain",
         # #73 deletion protection: arming/disarming the safety on an object is a statement about its
         # DESTRUCTION, so it clears the same owner bar as the drop it guards — a writer must not be
         # able to disarm protection they could never act on.

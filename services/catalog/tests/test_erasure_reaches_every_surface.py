@@ -1,7 +1,9 @@
-"""An erasure request removes the subject from every ref the catalog serves ([[LH-073]]).
+"""An erasure's verification reaches every surface the catalog serves ([[LH-073]], [[LH-493]]).
 
 A plain `delete_from_table` reaches ONE of the four surfaces a table serves (main) and leaves the other
-three live: a branch, a tag and the version history.
+three live: a branch, a tag and the version history. The bring-your-own job rewrites every ref (the
+conftest's ``ErasureJob``); the catalog's verification judges every head, drops the tags pinning the
+subject, reclaims the history and proves what survives.
 
 THESE DRIVE REAL LANCE, not a fake, because the claim is about the format's behaviour — that a branch
 pins the parent's history, that a tag pins a version against reclamation — and a fake would restate
@@ -14,15 +16,16 @@ estate could report an erasure that reclaimed exactly zero bytes and looked succ
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import lance
 import pyarrow as pa
 import pytest
 
-from catalog.services.erasure import ErasureReport, Pin, erase
+from catalog.services.erasure import ErasureReport, Pin, ref_heads, verify
 
 
 _SUBJECT = "alice"
@@ -59,8 +62,12 @@ def _pii(handle: Any) -> list[str]:
     return list(handle.to_table().to_pydict()["pii"])
 
 
-def _erase(uri: str, retention: timedelta = _NOW) -> ErasureReport:
-    return erase(
+type _Erase = Callable[..., ErasureReport]
+
+
+def _verify(uri: str, retention: timedelta = _NOW, trusted: dict[str, int] | None = None) -> ErasureReport:
+    """The verification of an obligation recorded at ``trusted``'s heads, by default the table's heads now."""
+    return verify(
         lance.dataset(uri),
         storage_options={},
         protected=None,
@@ -68,7 +75,20 @@ def _erase(uri: str, retention: timedelta = _NOW) -> ErasureReport:
         table="acme-bronze$subjects",
         predicate=_PREDICATE,
         retention=retention,
+        trusted=trusted if trusted is not None else ref_heads(lance.dataset(uri)),
     )
+
+
+@pytest.fixture
+def erase(erasure_job: Any) -> _Erase:  # noqa: ANN401 — conftest.ErasureJob
+    """The job rewrites every ref, then the catalog verifies."""
+
+    def _erase(uri: str, retention: timedelta = _NOW) -> ErasureReport:
+        recorded = ref_heads(lance.dataset(uri))
+        erasure_job(uri, _PREDICATE).run()
+        return _verify(uri, retention, recorded)
+
+    return _erase
 
 
 def _follow(uri: str, report: ErasureReport) -> None:
@@ -80,55 +100,60 @@ def _follow(uri: str, report: ErasureReport) -> None:
 
 
 @pytest.mark.parametrize("branch", ["work", "review"])
-def test_the_subject_is_gone_from_every_branch(table: str, branch: str) -> None:
-    """EVERY branch, not the one the request named — an erasure is about the subject, not a ref."""
-    _erase(table)
+def test_a_branch_the_job_leaves_is_named_and_the_others_are_clean(table: str, branch: str, erasure_job: Any) -> None:  # noqa: ANN401 — conftest.ErasureJob
+    """EVERY branch is judged, not the ones a job chose to reach: an erasure is about the subject, not a ref."""
+    job = erasure_job(table, _PREDICATE)
+    for ref in ("work", "review", None):
+        if ref != branch:
+            job.delete(ref)
+            job.compact(ref)
 
-    assert _SUBJECT not in _pii(lance.dataset(table).checkout_version((branch, None)))
+    report = _verify(table)
+
+    owed = sorted(s.surface for s in report.surfaces if s.outcome == "failed" and s.surface.startswith(("main", "branch:", "compact:", "index:")))
+    assert (owed, report.settled) == ([f"branch:{branch}"], False), [(s.surface, s.outcome) for s in report.surfaces]
 
 
-def test_with_no_branch_pinning_it_nothing_surviving_answers(tmp_path: Path) -> None:
+def test_with_no_branch_pinning_it_nothing_surviving_answers(tmp_path: Path, erase: _Erase) -> None:
     """The control, and the proof the capability works: the same erasure on a table with a tag and
     history but no branch reaches every surface, and verify comes back clean."""
     uri = str(tmp_path / "unpinned")
     dataset = lance.write_dataset(pa.table({"id": pa.array([1, 2]), "pii": pa.array([_SUBJECT, "bob"])}), uri)
     dataset.tags.create("pinned", dataset.version)
 
-    report = _erase(uri)
+    report = erase(uri)
 
     surviving = {v["version"]: _pii(lance.dataset(uri).checkout_version(v["version"])) for v in lance.dataset(uri).versions()}
     assert report.residual_versions == [], surviving
-    assert report.complete is True
+    assert (report.complete, report.settled) == (True, True)
 
 
-def test_one_failed_surface_does_not_stop_the_others(table: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Stopping at the first error leaves the rest both un-erased AND unreported, so the caller cannot
+def test_one_failed_surface_does_not_stop_the_others(table: str, monkeypatch: pytest.MonkeyPatch, erase: _Erase) -> None:
+    """Stopping at the first error leaves the rest both unjudged AND unreported, so the caller cannot
     say what is left — which, with a deadline attached, is the worst of the three outcomes."""
-    dataset = lance.dataset(table)
-    broken = type(dataset.tags)
+    broken = type(lance.dataset(table).tags)
 
     def _boom(self: Any, name: str) -> None:
         raise RuntimeError("tag store unavailable")
 
     monkeypatch.setattr(broken, "delete", _boom)
-    report = erase(dataset, storage_options={}, protected=None, reopen=lambda: lance.dataset(table), table="t", predicate=_PREDICATE, retention=_NOW)
+    report = erase(table)
 
-    assert report.complete is False
-    assert [s.outcome for s in report.surfaces if s.surface == "main"] == ["deleted"], "main was skipped because a tag failed"
-    assert _SUBJECT not in _pii(lance.dataset(table))
+    assert (report.complete, report.settled) == (False, False)
+    assert [s.outcome for s in report.surfaces if s.surface in ("main", "history:main")] == ["clean", "reclaimed"], "main was skipped because a tag failed"
     assert Pin(ref="tag:pinned", holds="main@1") in report.pinned_by, "the tag whose delete failed still holds main v1"
 
 
-def test_retention_is_honoured_rather_than_forced_to_zero(table: str) -> None:
-    """An erasure is not a licence to destroy unrelated history. A caller that means to reclaim
-    everything passes zero; one that passes a window keeps it."""
-    report = _erase(table, retention=timedelta(days=3650))
+def test_retention_is_honoured_rather_than_forced_to_zero(table: str, erase: _Erase) -> None:
+    """An erasure is not a licence to destroy unrelated history. A requester that means to reclaim
+    everything passes zero; one that passes a window keeps it, and the obligation stays open while it does."""
+    report = erase(table, retention=timedelta(days=3650))
 
-    assert report.versions_reclaimed == 0
-    assert _SUBJECT not in _pii(lance.dataset(table)), "the rows must still be deleted even when nothing is reclaimed"
+    assert (report.versions_reclaimed, report.settled) == (0, False)
+    assert "main@1" in report.held_by_retention
 
 
-def test_the_window_is_judged_against_the_cutoff_the_cleanup_measured(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_window_is_judged_against_the_cutoff_the_cleanup_measured(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, erase: _Erase) -> None:
     """`cleanup_old_versions` measures its cutoff when it is called (measured on pylance 12.0.0), so an
     instant taken before the call can place inside the window a version the cleanup was free to take.
     The cleanup here is slowed until main v1 is older than its cutoff: the tag whose delete failed keeps
@@ -150,13 +175,13 @@ def test_the_window_is_judged_against_the_cutoff_the_cleanup_measured(tmp_path: 
 
     monkeypatch.setattr(lance.LanceDataset, "cleanup_old_versions", _slow)
     monkeypatch.setattr(type(lance.dataset(uri).tags), "delete", _boom)
-    report = _erase(uri, retention=datetime.now(UTC) - committed + timedelta(seconds=1))
+    report = erase(uri, retention=datetime.now(UTC) - committed + timedelta(seconds=1))
 
     assert report.residual_versions == ["main@1"], "the failed tag delete must keep v1 for this to be the right test"
     assert (report.pinned_by, report.held_by_retention) == ([Pin(ref="tag:pinned", holds="main@1")], [])
 
 
-def test_the_report_names_the_TAG_that_keeps_the_residual(pinned: str) -> None:
+def test_the_report_names_the_TAG_that_keeps_the_residual(pinned: str, erase: _Erase) -> None:
     """`residual_versions` says the erasure is incomplete; only this says what to delete to finish it.
 
     Lance records the fork point in `_refs/branches/<name>.json` (`parentVersion`), so which branch
@@ -165,26 +190,27 @@ def test_the_report_names_the_TAG_that_keeps_the_residual(pinned: str) -> None:
     deadline to destroy a working ref that frees nothing. Work v2 is a residual too: the subject's row sits
     in its data file behind the deletion vector work's delete wrote.
     """
-    report = _erase(pinned)
+    report = erase(pinned)
 
     assert report.residual_versions == ["main@1", "work@2"]
     assert [(pin.ref, pin.holds) for pin in report.pinned_by] == [("tag:trained", "work@2")]
+    assert report.settled is True, "every head is clean and only the tag keeps the residual, so its scheduled release finishes the erasure"
     _follow(pinned, report)
-    assert _erase(pinned).complete is True
+    assert erase(pinned).complete is True
     assert "work" in lance.dataset(pinned).branches.list()
 
 
-def test_a_tag_the_erasure_already_removed_is_not_named(pinned: str) -> None:
-    """Tags are read AFTER step 4: naming one step 4 dropped would make following `pinned_by` fail."""
+def test_a_tag_the_erasure_already_removed_is_not_named(pinned: str, erase: _Erase) -> None:
+    """Tags are read AFTER step 2: naming one step 2 dropped would make following `pinned_by` fail."""
     lance.dataset(pinned).tags.create("snapshot", 1)
 
-    report = _erase(pinned)
+    report = erase(pinned)
 
-    assert "snapshot" not in lance.dataset(pinned).tags.list(), "step 4 must drop the tag for this to be the right test"
+    assert "snapshot" not in lance.dataset(pinned).tags.list(), "step 2 must drop the tag for this to be the right test"
     assert [pin.ref for pin in report.pinned_by] == ["tag:trained"]
 
 
-def test_a_tag_that_never_held_the_subject_is_RETAINED(tmp_path: Path) -> None:
+def test_a_tag_that_never_held_the_subject_is_RETAINED(tmp_path: Path, erase: _Erase) -> None:
     """A TAG IS A REPRODUCIBILITY POINTER, and erasing one is not part of erasing a person.
 
     A tagged version is exempt from cleanup by design, which is how a training run records the exact
@@ -198,7 +224,7 @@ def test_a_tag_that_never_held_the_subject_is_RETAINED(tmp_path: Path) -> None:
     clean = lance.dataset(uri)
     clean.tags.create("trained-on-this", clean.version)
 
-    report = _erase(uri)
+    report = erase(uri)
 
     tags = lance.dataset(uri).tags.list()
     assert "trained-on-this" in tags, "a tag pinning a version without the subject was destroyed"
@@ -206,23 +232,23 @@ def test_a_tag_that_never_held_the_subject_is_RETAINED(tmp_path: Path) -> None:
     assert any(s.surface == "tag:trained-on-this" and s.outcome == "retained" for s in report.surfaces)
 
 
-def test_an_unreadable_tag_is_dropped_rather_than_assumed_clean(table: str, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_an_unreadable_tag_is_dropped_rather_than_assumed_clean(table: str, monkeypatch: pytest.MonkeyPatch, erase: _Erase) -> None:
     """Unreadable is not evidence of absence. A probe that fails must resolve AGAINST the tag, or an
     erasure quietly keeps alive exactly the versions it could not inspect."""
     import catalog.services.erasure as module
 
     monkeypatch.setattr(module, "_answers", lambda *_args, **_kwargs: None)
-    report = _erase(table)
+    report = erase(table)
 
     assert any(s.surface == "tag:pinned" and s.outcome == "untagged" for s in report.surfaces)
 
 
-def test_a_RETAINED_tag_does_not_break_reclamation(tmp_path: Path) -> None:
+def test_a_RETAINED_tag_does_not_break_reclamation(tmp_path: Path, erase: _Erase) -> None:
     """FOUND BY DRIVING THE DEPLOYED DOOR, not by a unit test.
 
     Keeping a tag over a clean version (the step above) made `cleanup_old_versions` refuse the ENTIRE
     call — pylance errors by default when any tagged version falls in range. So doing the right thing
-    in step 4 cost the estate every byte of reclamation in step 5, and the erasure answered
+    in step 2 cost the estate every byte of reclamation in step 3, and the erasure answered
     `history: failed` as a direct consequence of preserving model provenance. Observed live before the
     fix: `Cleanup error: 1 tagged version(s) have been marked for cleanup`.
     """
@@ -231,54 +257,17 @@ def test_a_RETAINED_tag_does_not_break_reclamation(tmp_path: Path) -> None:
     dataset.tags.create("trained-on-v1", dataset.version)  # clean: the subject is not here yet
     lance.write_dataset(pa.table({"id": pa.array([1]), "pii": pa.array([_SUBJECT])}), uri, mode="append")
 
-    report = _erase(uri)
+    report = erase(uri)
 
     assert [s.outcome for s in report.surfaces if s.surface == "history:main"] == ["reclaimed"]
     assert "trained-on-v1" in lance.dataset(uri).tags.list(), "the clean tag had to survive for this to be the right test"
     assert report.complete is True, [(s.surface, s.outcome, s.detail) for s in report.surfaces]
 
 
-class _MovedAfterResolving:
-    """A real main handle; right after the erasure resolves the subject's row ids, another writer moves the
-    subject's row off the predicate, as a concurrent update would."""
-
-    def __init__(self, inner: Any, uri: str) -> None:
-        self._inner, self._uri, self._moved = inner, uri, False
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._inner, name)
-
-    def to_table(self, *args: Any, **kwargs: Any) -> Any:
-        resolved = self._inner.to_table(*args, **kwargs)
-        if kwargs.get("with_row_id") and "limit" not in kwargs and not self._moved:
-            self._moved = True
-            lance.dataset(self._uri).update({"pii": "'moved'"}, where="pii = 'alice'")
-        return resolved
-
-
-def test_a_row_another_writer_moves_off_the_predicate_is_not_deleted(tmp_path: Path) -> None:
-    """Under stable row ids an update keeps a row's id, and Lance's own retry re-runs a delete's ids on the
-    newer version, so a stale `_rowid IN (...)` deleted the moved row; the erasure resolves again instead."""
-    uri = str(tmp_path / "moving")
-    lance.write_dataset(pa.table({"id": [1, 2], "pii": ["alice", "bob"]}), uri, data_storage_version="2.2", enable_stable_row_ids=True)
-
-    report = erase(
-        cast("Any", _MovedAfterResolving(lance.dataset(uri), uri)),
-        storage_options={},
-        protected=None,
-        reopen=lambda: lance.dataset(uri),
-        table="t",
-        predicate="pii = 'alice'",
-        retention=_NOW,
-    )
-
-    assert (sorted(lance.dataset(uri).to_table().column("pii").to_pylist()), report.complete) == (["bob", "moved"], True)
-
-
-def test_erasure_reclaims_a_subjects_BLOB_SIDECAR_with_its_version(tmp_path: Path) -> None:
+def test_erasure_reclaims_a_subjects_BLOB_SIDECAR_with_its_version(tmp_path: Path, erase: _Erase) -> None:
     # A row delete leaves the payload bytes in `data/<stem>/*.blob`. Measured on pylance 11.0.0:
-    # `cleanup_old_versions` takes the sidecar with its data file, so step 4 already reclaims them —
-    # an erasure that reclaimed only the .lance would leave the subject's payload on storage.
+    # `cleanup_old_versions` takes the sidecar with its data file, so step 3 reclaims them once the job's
+    # rewrite has left them unreferenced — reclaiming only the .lance would leave the payload on storage.
     from lance import blob_array
 
     uri = str(tmp_path / "blobs")
@@ -286,82 +275,7 @@ def test_erasure_reclaims_a_subjects_BLOB_SIDECAR_with_its_version(tmp_path: Pat
     lance.write_dataset(pa.table({"id": pa.array([1, 2]), "payload": blob_array([big, b"B" * (5 * 1024 * 1024)])}), uri, data_storage_version="2.2")
     assert list(Path(uri).rglob("*.blob")), "the fixture produced no sidecar — raise the payload past the dedicated threshold"
 
-    report = _erase(uri)
+    report = erase(uri)
 
     assert report.complete is True, [(s.surface, s.outcome, s.detail) for s in report.surfaces]
     assert report.bytes_reclaimed > 1024 * 1024, f"only {report.bytes_reclaimed} bytes freed — the sidecar was left behind"
-
-
-class _Optimize:
-    """Records the bound the erasure hands pylance, then does the real compaction."""
-
-    def __init__(self, inner: Any, log: list[tuple[str, Any]]) -> None:
-        self._inner, self._log = inner, log
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._inner, name)
-
-    def compact_files(self, **kwargs: Any) -> Any:
-        self._log.append(("compact_files", dict(kwargs)))
-        return self._inner.compact_files(**kwargs)
-
-
-class _Probe:
-    """A REAL dataset that also records HOW it was asked.
-
-    Wrapping rather than faking, for the reason this whole file gives: the claims here are about
-    Lance's behaviour, and a stand-in that answers from a dict would restate the belief under test.
-    `checkout_version` re-wraps so the per-version residual check is visible too — a probe that
-    stopped at the first handle would see none of the calls this exists to count.
-    """
-
-    def __init__(self, inner: Any, log: list[tuple[str, Any]]) -> None:
-        self._inner, self._log = inner, log
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._inner, name)
-
-    @property
-    def optimize(self) -> _Optimize:
-        return _Optimize(self._inner.optimize, self._log)
-
-    def checkout_version(self, version: Any) -> _Probe:
-        return _Probe(self._inner.checkout_version(version), self._log)
-
-    def count_rows(self, *args: Any, **kwargs: Any) -> Any:
-        self._log.append(("count_rows", kwargs.get("filter", args[0] if args else None)))
-        return self._inner.count_rows(*args, **kwargs)
-
-    def to_table(self, *args: Any, **kwargs: Any) -> Any:
-        self._log.append(("to_table", kwargs.get("filter")))
-        return self._inner.to_table(*args, **kwargs)
-
-
-def _erase_watching(uri: str) -> list[tuple[str, Any]]:
-    log: list[tuple[str, Any]] = []
-    # CAST, not a suppression: `_Probe.__getattr__` forwards every member of the protocol to a real
-    # dataset, which no static check can see. Declaring each forwarded member instead would be a
-    # second copy of `_Dataset` that drifts from it silently — the opposite of what the probe is for.
-    erase(
-        cast("Any", _Probe(lance.dataset(uri), log)),
-        storage_options={},
-        protected=None,
-        reopen=lambda: cast("Any", _Probe(lance.dataset(uri), log)),
-        table="acme-bronze$subjects",
-        predicate=_PREDICATE,
-        retention=_NOW,
-    )
-    return log
-
-
-def test_the_erasure_compaction_reads_under_its_bound(table: str) -> None:
-    """Erasure compacts in the catalog's own pod, so every pass carries `erasure.COMPACTION_BOUND`: rows are not a
-    unit of memory (Lance's default batch read ~15 GB per thread on a blob tier), and an erasure runs over exactly the
-    tables most likely to carry a blob column."""
-    log = _erase_watching(table)
-
-    compactions = [kwargs for name, kwargs in log if name == "compact_files"]
-    assert compactions, "the erasure did not compact at all — the subject's bytes stay in a live data file"
-    for kwargs in compactions:
-        assert kwargs.get("batch_size") == 64, f"unbounded read: {kwargs}"
-        assert kwargs.get("num_threads") == 2, f"unbounded parallelism: {kwargs}"

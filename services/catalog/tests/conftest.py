@@ -8,6 +8,7 @@ from collections.abc import Iterator
 from typing import Any
 
 import boto3
+import lance
 import pytest
 from fastapi.testclient import TestClient
 from moto import settings as moto_settings
@@ -159,3 +160,59 @@ def two_store_catalog(two_stores: TwoStores, monkeypatch: pytest.MonkeyPatch) ->
     app.dependency_overrides.clear()
     get_settings.cache_clear()
     warehouse_credentials.resolve.cache_clear()
+
+
+class ErasureJob:
+    """A bring-your-own erasure job's three steps, pylance straight on a local table's files ([[LH-493]], ADR 0163).
+
+    What the catalog's verification judges: on each ref, the subject's rows deleted by row id ([[LH-281]]: the history
+    then records ids, never the identifier), every fragment that held them compacted with deletions materialised, and
+    every user index dropped, since no segment the job commits is taken as proof; the job rebuilds its indexes once the
+    obligation is released. The commit path a deployed job takes, through ``version/create``, is the stock-client
+    suite's claim; this one is the verification's.
+    """
+
+    def __init__(self, uri: str, predicate: str) -> None:
+        self.uri = uri
+        self.predicate = predicate
+
+    def head(self, ref: str | None = None) -> Any:  # noqa: ANN401 — a lance.LanceDataset
+        dataset = lance.dataset(self.uri)
+        return dataset if ref is None else dataset.checkout_version((ref, None))
+
+    def delete(self, ref: str | None = None) -> None:
+        head = self.head(ref)
+        ids = head.to_table(columns=[], filter=self.predicate, with_row_id=True).column("_rowid").to_pylist()
+        if ids:
+            head.delete(f"_rowid IN ({', '.join(str(row_id) for row_id in ids)})")
+
+    def compact(self, ref: str | None = None) -> None:
+        self.head(ref).optimize.compact_files(materialize_deletions_threshold=0.0)
+
+    def drop_indices(self, ref: str | None = None) -> None:
+        for name in self._user_indices(ref):
+            self.head(ref).drop_index(name)
+
+    def rebuild_indices(self, ref: str | None = None) -> None:
+        """What the job does after the release, and what no verification takes as proof before it."""
+        head = self.head(ref)
+        for index in head.describe_indices():
+            if not str(index.name).startswith("__"):
+                (column,) = index.field_names
+                head.create_scalar_index(column, index_type=str(index.index_type).upper(), name=index.name, replace=True)
+
+    def run(self) -> None:
+        """Every step on every ref: each branch, then main."""
+        for ref in [*lance.dataset(self.uri).branches.list(), None]:
+            self.delete(ref)
+            self.compact(ref)
+            self.drop_indices(ref)
+
+    def _user_indices(self, ref: str | None) -> list[str]:
+        return sorted(str(index.name) for index in self.head(ref).describe_indices() if not str(index.name).startswith("__"))
+
+
+@pytest.fixture
+def erasure_job() -> type[ErasureJob]:
+    """The job's stand-in, constructed per table: ``erasure_job(uri, predicate).run()``."""
+    return ErasureJob

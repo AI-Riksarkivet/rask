@@ -309,6 +309,10 @@ class CatalogMaintenanceSettings(BaseSettings):
     #: ADR 0138's grace period: how long after an erasure's notice its pinning tags and branches are released
     #: (`catalog.services.erasure_release`). An owner-set chart value; nothing cancels or extends one release.
     erasure_release_grace_days: int = Field(default=7, ge=0, alias="LANCE_ERASURE_RELEASE_GRACE_DAYS")
+    #: How long after an erasure obligation is recorded it is due ([[LH-493]], ADR 0163). GDPR asks for erasure "without
+    #: undue delay and in any event within one month" (Art. 12(3)). An owner-set chart value; an obligation still open past
+    #: it is shown overdue, and nothing in the catalog acts on it.
+    erasure_deadline_days: int = Field(default=30, ge=1, alias="LANCE_ERASURE_DEADLINE_DAYS")
     #: The cron binding that releases what is due (`catalog/api/erasure_release.py`). The Component's name,
     #: this value and the served path are one string, as for the control relay. Empty = no release route, so a
     #: deployment without the Component schedules releases that nothing performs: the chart renders both.

@@ -1,4 +1,7 @@
-"""An erasure rewrites, reclaims and verifies EVERY ref's history, and names what is left per ref ([[LH-263]]).
+"""An erasure's verification judges, reclaims and verifies EVERY ref's history, and names what is left per ref ([[LH-263]]).
+
+The bring-your-own job rewrites every ref (the conftest's ``ErasureJob``, [[LH-493]]); the claims here are the
+catalog's: what it judges, what it reclaims, and what the report says keeps the rest.
 
 A branch keeps its own history under ``tree/<name>/`` (``lance_docs/file_format.md`` "Branch Dataset
 Layout"), numbered in its own line (``lance_docs/guide.md`` Branches: "version numbers may overlap across
@@ -24,11 +27,9 @@ from typing import Any, cast
 
 import lance
 import pyarrow as pa
-import pyarrow.compute as pc
 import pytest
-from lance.dataset import DatasetOptimizer
 
-from catalog.services.erasure import ErasureReport, erase
+from catalog.services.erasure import ErasureReport, ref_heads, verify
 
 
 _SUBJECT = "alice"
@@ -40,8 +41,12 @@ def _rows(*names: str) -> pa.Table:
     return pa.table({"pii": pa.array(list(names))})
 
 
-def _erase(uri: str, retention: timedelta = _NOW) -> ErasureReport:
-    return erase(
+type _Erase = Callable[..., ErasureReport]
+
+
+def _verify(uri: str, retention: timedelta = _NOW, trusted: dict[str, int] | None = None) -> ErasureReport:
+    """The verification of an obligation recorded at ``trusted``'s heads, by default the table's heads now."""
+    return verify(
         lance.dataset(uri),
         storage_options={},
         protected=None,
@@ -49,7 +54,20 @@ def _erase(uri: str, retention: timedelta = _NOW) -> ErasureReport:
         table="acme-bronze$subjects",
         predicate=_PREDICATE,
         retention=retention,
+        trusted=trusted if trusted is not None else ref_heads(lance.dataset(uri)),
     )
+
+
+@pytest.fixture
+def erase(erasure_job: Any) -> _Erase:  # noqa: ANN401 — conftest.ErasureJob
+    """The job rewrites every ref, then the catalog verifies."""
+
+    def _erase(uri: str, retention: timedelta = _NOW) -> ErasureReport:
+        recorded = ref_heads(lance.dataset(uri))
+        erasure_job(uri, _PREDICATE).run()
+        return _verify(uri, retention, recorded)
+
+    return _erase
 
 
 def _surviving(uri: str) -> set[str]:
@@ -85,21 +103,21 @@ def _subject_on_a_branch(tmp_path: Path) -> str:
     return uri
 
 
-def test_no_version_of_any_ref_answers_after_the_erasure(tmp_path: Path) -> None:
+def test_no_version_of_any_ref_answers_after_the_erasure(tmp_path: Path, erase: _Erase) -> None:
     uri = _subject_on_a_branch(tmp_path)
 
-    report = _erase(uri)
+    report = erase(uri)
 
     assert _surviving(uri) == set(), [(s.surface, s.outcome) for s in report.surfaces]
-    assert report.complete is True
+    assert (report.complete, report.settled) == (True, True)
 
 
 @pytest.mark.parametrize("retention", [timedelta(days=1)], ids=["inside-the-window"])
-def test_the_report_names_exactly_what_survives_on_every_ref(tmp_path: Path, retention: timedelta) -> None:
+def test_the_report_names_exactly_what_survives_on_every_ref(tmp_path: Path, retention: timedelta, erase: _Erase) -> None:
     """Inside the retention window work v3 and v4 legitimately survive; the report must say so, per ref."""
     uri = _subject_on_a_branch(tmp_path)
 
-    report = _erase(uri, retention)
+    report = erase(uri, retention)
 
     surviving = _surviving(uri)
     assert set(report.residual_versions) == surviving
@@ -107,7 +125,7 @@ def test_the_report_names_exactly_what_survives_on_every_ref(tmp_path: Path, ret
 
 
 @pytest.mark.parametrize("ref", ["work"], ids=["branch"])
-def test_a_write_staged_while_the_erasure_runs_still_commits_readable(tmp_path: Path, ref: str | None) -> None:
+def test_a_write_staged_while_the_erasure_runs_still_commits_readable(tmp_path: Path, ref: str | None, erase: _Erase) -> None:
     """Every ref's reclaim leaves another writer's uncommitted files alone.
 
     Lance keeps an unreferenced file younger than 7 days "because they may be part of an in-progress
@@ -120,35 +138,19 @@ def test_a_write_staged_while_the_erasure_runs_still_commits_readable(tmp_path: 
     writer = lance.dataset(uri) if ref is None else lance.dataset(uri).checkout_version((ref, None))
     staged = lance.fragment.write_fragments(_rows("zed"), writer)
 
-    _erase(uri)
+    erase(uri)
     lance.LanceDataset.commit(writer, lance.LanceOperation.Append(staged), read_version=writer.version)
 
     head = lance.dataset(uri) if ref is None else lance.dataset(uri).checkout_version((ref, None))
     assert "zed" in head.to_table().column("pii").to_pylist()
 
 
-def test_a_branch_rewrite_reports_the_bytes_it_copied(tmp_path: Path) -> None:
-    """``work`` owns no data, so every byte under ``tree/work/data`` after the erasure is an inherited
-    fragment its rewrite copied — the materialisation the compact door refuses as a cost."""
-    uri = str(tmp_path / "copied")
-    for names in (("bob",), ("carol",), (_SUBJECT, "dan")):
-        lance.write_dataset(_rows(*names), uri, mode="append" if Path(uri).exists() else "create")
-    lance.dataset(uri).create_branch("work", 3)
-
-    report = _erase(uri)
-
-    detail = next(s.detail for s in report.surfaces if s.surface == "compact:work")
-    on_disk = sum(p.stat().st_size for p in (Path(uri) / "tree" / "work" / "data").rglob("*.lance"))
-    assert on_disk > 0, "the rewrite must have copied inherited fragments for this to be the right test"
-    assert detail == f"3 fragments rewritten into 1, {on_disk} bytes written"
-
-
-def test_the_subjects_bytes_leave_the_branchs_own_data_files(tmp_path: Path) -> None:
+def test_the_subjects_bytes_leave_the_branchs_own_data_files(tmp_path: Path, erase: _Erase) -> None:
     """A delete leaves the subject's bytes in the branch's live data file behind a deletion vector.
 
     Measured on pylance 12.0.0: after the delete and the branch's own cleanup the file under
-    ``tree/work/data`` still holds them; compacting through the branch handle first rewrites it, and the
-    same cleanup then removes the original.
+    ``tree/work/data`` still holds them; once the job has compacted through the branch handle, the
+    verification's reclaim of the branch removes the original.
     """
     uri = str(tmp_path / "bytes")
     lance.write_dataset(_rows("bob"), uri)
@@ -161,21 +163,9 @@ def test_the_subjects_bytes_leave_the_branchs_own_data_files(tmp_path: Path) -> 
 
     assert holding(), "the subject's bytes must sit in a branch-owned data file for this to be the right test"
 
-    _erase(uri)
+    erase(uri)
 
     assert holding() == []
-
-
-def _keep_fragment_zero_out_of_every_rewrite(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Exclude fragment 0 from every `compact_files` call, the erasure's two passes included, as a store
-    that cannot rewrite one fragment would."""
-    compact = DatasetOptimizer.compact_files
-
-    def _without_zero(self: DatasetOptimizer, **options: Any) -> Any:
-        kwargs: dict[str, Any] = {**options, "excluded_fragment_ids": sorted({0, *(options.get("excluded_fragment_ids") or [])})}
-        return compact(self, **kwargs)
-
-    monkeypatch.setattr(DatasetOptimizer, "compact_files", _without_zero)
 
 
 #: A parent and the branch cut from it. Both orders, because the reclaim and `pinned_by` must run a child
@@ -195,7 +185,7 @@ def _chain(tmp_path: Path, names: tuple[str, str]) -> str:
 
 
 @_NAMES
-def test_a_chain_every_ref_rewrites_is_erased_without_deleting_a_branch(tmp_path: Path, names: tuple[str, str]) -> None:
+def test_a_chain_every_ref_rewrites_is_erased_without_deleting_a_branch(tmp_path: Path, names: tuple[str, str], erase: _Erase) -> None:
     """A fork pin lasts while a retained branch version references the fork version's files.
 
     Every fragment here is small enough to be rewritten, so once the child, then the parent, have been
@@ -204,7 +194,7 @@ def test_a_chain_every_ref_rewrites_is_erased_without_deleting_a_branch(tmp_path
     """
     uri = _chain(tmp_path, names)
 
-    report = _erase(uri)
+    report = erase(uri)
 
     assert _surviving(uri) == set(), report.residual_versions
     assert report.complete is True
@@ -240,7 +230,7 @@ def _clean_descendant(tmp_path: Path, names: tuple[str, str]) -> str:
 
 
 @_NAMES
-def test_a_tag_on_a_descendant_is_named_and_no_branch_is(tmp_path: Path, names: tuple[str, str]) -> None:
+def test_a_tag_on_a_descendant_is_named_and_no_branch_is(tmp_path: Path, names: tuple[str, str], erase: _Erase) -> None:
     """``trained`` keeps the child's v4, which stands on the parent's v3 and main v2, both holding the subject.
 
     The branches' heads were rewritten, so neither stands on those files: deleting the tag alone lets
@@ -250,7 +240,7 @@ def test_a_tag_on_a_descendant_is_named_and_no_branch_is(tmp_path: Path, names: 
     """
     uri = _pinned_chain(tmp_path, names)
 
-    report = _erase(uri)
+    report = erase(uri)
 
     assert "trained" in lance.dataset(uri).tags.list(), "the clean tag must survive the erasure itself"
     assert report.residual_versions == ["main@2", *sorted([f"{names[0]}@3", f"{names[1]}@4"])]
@@ -258,10 +248,10 @@ def test_a_tag_on_a_descendant_is_named_and_no_branch_is(tmp_path: Path, names: 
 
 
 @_NAMES
-def test_a_descendant_that_holds_nothing_is_not_named(tmp_path: Path, names: tuple[str, str]) -> None:
+def test_a_descendant_that_holds_nothing_is_not_named(tmp_path: Path, names: tuple[str, str], erase: _Erase) -> None:
     uri = _clean_descendant(tmp_path, names)
 
-    report = _erase(uri)
+    report = erase(uri)
 
     assert report.residual_versions == ["main@2", f"{names[0]}@3"]
     assert report.model_dump()["pinned_by"] == [{"ref": "tag:trained", "holds": f"{names[0]}@3"}]
@@ -276,13 +266,13 @@ def test_a_descendant_that_holds_nothing_is_not_named(tmp_path: Path, names: tup
     ],
 )
 def test_following_pinned_by_finishes_the_erasure_and_keeps_every_branch(
-    tmp_path: Path, build: Callable[[Path, tuple[str, str]], str], names: tuple[str, str]
+    tmp_path: Path, build: Callable[[Path, tuple[str, str]], str], names: tuple[str, str], erase: _Erase
 ) -> None:
     uri = build(tmp_path, names)
     branches = set(lance.dataset(uri).branches.list())
 
-    _follow(uri, _erase(uri))
-    report = _erase(uri)
+    _follow(uri, erase(uri))
+    report = erase(uri)
 
     assert report.complete is True, [(s.surface, s.outcome, s.detail) for s in report.surfaces]
     assert _surviving(uri) == set()
@@ -290,20 +280,20 @@ def test_following_pinned_by_finishes_the_erasure_and_keeps_every_branch(
 
 
 @pytest.mark.parametrize("names", [("work", "deeper")], ids=["child-sorts-first"])
-def test_inside_the_retention_window_no_ref_is_named(tmp_path: Path, names: tuple[str, str]) -> None:
+def test_inside_the_retention_window_no_ref_is_named(tmp_path: Path, names: tuple[str, str], erase: _Erase) -> None:
     """Every version here is minutes old, so a 1-day window keeps them all — the branches hold nothing
     the window does not. The report says so, and an erasure at retention 0 finishes with both intact."""
     uri = _chain(tmp_path, names)
 
-    report = _erase(uri, timedelta(days=1))
+    report = erase(uri, timedelta(days=1))
 
     assert report.residual_versions, "the window must keep a residual for this to be the right test"
     assert (report.pinned_by, report.held_by_retention) == ([], report.residual_versions)
-    assert _erase(uri).complete is True
+    assert erase(uri).complete is True
     assert set(lance.dataset(uri).branches.list()) == set(names)
 
 
-def test_a_residual_whose_reclaim_failed_names_no_ref(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_residual_whose_reclaim_failed_names_no_ref(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, erase: _Erase) -> None:
     """``trained`` stands on main v2's files, and would be named had the reclaim run. It did not, so
     deleting the tag cannot finish the erasure: the report says the reclaim is what is missing."""
     uri = _tagged_branch(tmp_path, ("work", "deeper"))
@@ -312,7 +302,7 @@ def test_a_residual_whose_reclaim_failed_names_no_ref(tmp_path: Path, monkeypatc
         raise RuntimeError("object store unavailable")
 
     monkeypatch.setattr(lance.LanceDataset, "cleanup_old_versions", _boom)
-    report = _erase(uri)
+    report = erase(uri)
 
     verify = next(s.detail for s in report.surfaces if s.surface == "verify")
     assert [s.outcome for s in report.surfaces if s.surface.startswith("history:")] == ["failed", "failed"]
@@ -337,75 +327,67 @@ def _heads_on_the_subjects_file(tmp_path: Path, names: tuple[str, str]) -> str:
 
 
 @_NAMES
-@pytest.mark.parametrize("rewrites_take_the_file", [False, True], ids=["heads-stand-on-it", "a-tag-two-branches-down"])
-def test_pinned_by_names_what_stands_on_the_residual(
-    tmp_path: Path, names: tuple[str, str], rewrites_take_the_file: bool, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """No cleanup takes a head, so when no rewrite can take main v1's file (here every rewrite keeps
-    it out), only deleting the branches whose heads stand on it frees it — after every descendant and every tag on them, deepest first, because Lance refuses to delete a branch another branch is cut from or a
-    tag names. Main's own head then still holds the subject behind a deletion vector, since no rewrite
-    takes its fragment either, and the erasure says so rather than completing. When every rewrite takes
-    the file, ``parent``'s fork version is reclaimed and the tag on ``child``'s version, which still
-    reads main v1's file, is the one thing keeping it."""
-    parent, child = names
+def test_pinned_by_names_what_stands_on_the_residual(tmp_path: Path, names: tuple[str, str], erase: _Erase) -> None:
+    """Every head is rewritten off main v1's file, so ``parent``'s fork version is reclaimed and the tag on
+    ``child``'s version, which still reads main v1's file, is the one thing keeping it: the obligation settles
+    on that pin, and following it finishes the erasure."""
+    _, child = names
     uri = _heads_on_the_subjects_file(tmp_path, names)
-    if not rewrites_take_the_file:
-        _keep_fragment_zero_out_of_every_rewrite(monkeypatch)
 
-    report = _erase(uri)
+    report = erase(uri)
 
-    held_by_heads = [(f"branch:{child}-rewrite", f"{child}@2"), (f"branch:{child}", f"{parent}@1"), (f"branch:{parent}", "main@1")]
-    hidden = [f"{child}@2"] if rewrites_take_the_file else ["main@2", *sorted([f"{parent}@2", f"{child}@2"])]
-    assert report.residual_versions == ["main@1", *hidden]
-    assert [(pin.ref, pin.holds) for pin in report.pinned_by] == [("tag:kept", f"{child}@2"), *([] if rewrites_take_the_file else held_by_heads)]
+    assert report.residual_versions == ["main@1", f"{child}@2"]
+    assert ([(pin.ref, pin.holds) for pin in report.pinned_by], report.settled) == ([("tag:kept", f"{child}@2")], True)
     _follow(uri, report)
-    again = _erase(uri)
-    unrewritten = "heads whose rewrite did not take the subject's fragments" in next(s.detail for s in again.surfaces if s.surface == "verify")
-    assert (again.residual_versions, again.complete, unrewritten) == (([], True, False) if rewrites_take_the_file else (["main@2"], False, True))
+    again = erase(uri)
+    assert (again.residual_versions, again.complete) == ([], True)
 
 
-def test_a_branch_whose_fork_point_cannot_be_read_is_still_erased(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_branch_whose_fork_point_cannot_be_read_is_still_erased(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, erase: _Erase) -> None:
     uri = _subject_on_a_branch(tmp_path)
     monkeypatch.setattr(type(lance.dataset(uri).branches), "list", lambda self: {"work": {}})
 
-    report = _erase(uri)
+    report = erase(uri)
 
     assert _surviving(uri) == set(), [(s.surface, s.outcome, s.detail) for s in report.surfaces]
     assert report.complete is True
 
 
-def test_an_unlistable_branch_set_is_not_verified_clean(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_an_unlistable_branch_set_is_not_verified_clean(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, erasure_job: Any) -> None:  # noqa: ANN401 — conftest.ErasureJob
     """Verification covers the refs it can list, so a table whose branches cannot be listed is not proved clean."""
     uri = str(tmp_path / "unlisted")
     dataset = lance.write_dataset(_rows(_SUBJECT, "bob"), uri)
+    job = erasure_job(uri, _PREDICATE)
+    job.delete()
+    job.compact()
 
     def _boom(self: Any) -> None:
         raise RuntimeError("branch store unavailable")
 
     monkeypatch.setattr(type(dataset.branches), "list", _boom)
-    report = erase(dataset, storage_options={}, protected=None, reopen=lambda: lance.dataset(uri), table="t", predicate=_PREDICATE, retention=_NOW)
+    report = _verify(uri)
 
     assert [s.outcome for s in report.surfaces if s.surface == "branches"] == ["failed"]
-    assert report.complete is False
+    assert (report.complete, report.settled) == (False, False)
 
 
-def test_an_unreadable_fork_point_is_named_when_something_survives(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_an_unreadable_fork_point_is_named_when_something_survives(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, erase: _Erase) -> None:
     """What keeps a residual is walked through fork points, so one that cannot be read may hide a holder."""
     uri = _tagged_branch(tmp_path, ("work", "deeper"))
     monkeypatch.setattr(type(lance.dataset(uri).branches), "list", lambda self: {"work": {}})
 
-    report = _erase(uri)
+    report = erase(uri)
 
     assert report.residual_versions == ["main@2", "work@3"], "the tag must keep main v2 for this to be the right test"
     assert "the fork point of ['work'] could not be read" in next(s.detail for s in report.surfaces if s.surface == "verify")
 
 
-def test_a_branch_cut_while_the_erasure_runs_is_verified(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_branch_cut_while_the_verification_runs_is_verified(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, erase: _Erase) -> None:
     """Branches are listed again for the verification: one cut from a pre-delete version after step 1
     listed them holds the subject at its head, and the report must say so rather than miss it. Its head is
-    a residual the delete never reached, so erasing again takes it and releases main v2 with it: the branch
-    is not named in ``pinned_by``, since that would send its owners a notice to lose a working ref for
-    nothing ([[LH-178]])."""
+    a residual the job never reached, so the job and a verification after it take it and release main v2 with
+    it: the branch is not named in ``pinned_by``, since that would send its owners a notice to lose a working
+    ref for nothing ([[LH-178]])."""
     uri = str(tmp_path / "late")
     lance.write_dataset(_rows("bob"), uri)
     lance.write_dataset(_rows(_SUBJECT), uri, mode="append")
@@ -418,70 +400,36 @@ def test_a_branch_cut_while_the_erasure_runs_is_verified(tmp_path: Path, monkeyp
         delete(self, name)
 
     monkeypatch.setattr(tags, "delete", _someone_branches_first)
-    report = _erase(uri)
+    report = erase(uri)
 
     verify = next(s.detail for s in report.surfaces if s.surface == "verify")
     assert report.residual_versions == ["main@2", "late@2"]
-    assert "['late'] appeared during the erasure" in verify
-    assert "['late@2'] are heads the delete did not reach: erase again" in verify
-    assert report.pinned_by == []
-    assert report.complete is False
+    assert "['late'] appeared during the verification: verify again" in verify
+    assert "['late@2'] are heads whose rows still answer" in verify
+    assert (report.pinned_by, report.complete, report.settled) == ([], False, False)
 
 
-class _MainDeleteFails:
-    """A real main handle whose row delete fails, as a commit conflict would."""
-
-    def __init__(self, inner: Any) -> None:
-        self._inner = inner
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._inner, name)
-
-    def delete(self, predicate: str | pc.Expression, *, conflict_retries: int = 10, retry_timeout: timedelta = timedelta(seconds=30)) -> None:
-        raise OSError("commit conflict")
-
-
-def test_a_ref_whose_delete_fails_keeps_its_tags_and_history_and_names_no_branch(tmp_path: Path) -> None:
-    """``work`` is cut from main v1, which a reproducibility tag names. Main's delete fails, so main v1 is
-    main's own head: no cleanup takes it and deleting ``work`` frees nothing, so the report must say erase
-    again rather than name the branch. Dropping the tag, rewriting main or reclaiming its history would
-    each destroy something while the subject stays ([[LH-210]])."""
+def test_a_ref_the_job_leaves_keeps_its_tags_and_history_and_names_no_branch(tmp_path: Path, erasure_job: Any) -> None:  # noqa: ANN401 — conftest.ErasureJob
+    """``work`` is cut from main v1, which a reproducibility tag names. The job erases ``work`` and not main, so
+    main v1 is main's own head: no cleanup takes it and deleting ``work`` frees nothing, so the report must name
+    main's head rather than the branch. Dropping the tag or reclaiming main's history would each destroy something
+    while the subject stays ([[LH-210]])."""
     uri = str(tmp_path / "head")
     lance.write_dataset(_rows(_SUBJECT, *(f"x-{i}" for i in range(20_000))), uri)
     lance.dataset(uri).create_branch("work", 1)
     lance.dataset(uri).tags.create("snap", 1)
+    job = erasure_job(uri, _PREDICATE)
+    job.delete("work")
+    job.compact("work")
 
-    report = erase(
-        cast("Any", _MainDeleteFails(lance.dataset(uri))),
-        storage_options={},
-        protected=None,
-        reopen=lambda: lance.dataset(uri),
-        table="t",
-        predicate=_PREDICATE,
-        retention=_NOW,
-    )
+    report = _verify(uri)
 
     assert report.residual_versions == ["main@1"]
     assert report.pinned_by == []
-    assert "['main@1'] are heads the delete did not reach: erase again" in next(s.detail for s in report.surfaces if s.surface == "verify")
-    kept = {s.surface: s.outcome for s in report.surfaces if s.surface in ("tag:snap", "compact:main", "history:main")}
-    assert (kept, "snap" in lance.dataset(uri).tags.list()) == ({"tag:snap": "skipped", "compact:main": "skipped", "history:main": "skipped"}, True)
-
-
-def test_a_rewrite_prices_only_the_files_it_wrote(tmp_path: Path) -> None:
-    """``work`` keeps main's first 1,048,576-row fragment, which no compaction selects, beside the small
-    ones its rewrite merges: the bytes are the merged file's, not the untouched fragment's too."""
-    uri = str(tmp_path / "priced")
-    lance.write_dataset(pa.table({"pii": pa.array([f"bob-{i}" for i in range(1_100_000)])}), uri)
-    lance.write_dataset(_rows(_SUBJECT, "carol"), uri, mode="append")
-    lance.dataset(uri).create_branch("work", 2)
-
-    report = _erase(uri)
-
-    detail = next(s.detail for s in report.surfaces if s.surface == "compact:work")
-    written = sum(p.stat().st_size for p in (Path(uri) / "tree" / "work" / "data").rglob("*.lance"))
-    assert 0 < written < min(p.stat().st_size for p in (Path(uri) / "data").rglob("*.lance") if p.stat().st_size > 1 << 20)
-    assert detail.endswith(f", {written} bytes written"), detail
+    assert "['main@1'] are heads whose rows still answer" in next(s.detail for s in report.surfaces if s.surface == "verify")
+    kept = {s.surface: s.outcome for s in report.surfaces if s.surface in ("main", "tag:snap", "compact:main", "history:main")}
+    expected = {"main": "failed", "tag:snap": "skipped", "compact:main": "skipped", "history:main": "skipped"}
+    assert (kept, "snap" in lance.dataset(uri).tags.list()) == (expected, True)
 
 
 @pytest.mark.timeout(10)

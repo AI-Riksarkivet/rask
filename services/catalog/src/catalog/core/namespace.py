@@ -180,11 +180,12 @@ def disarm_commit_path_cleanup(dataset: lance.LanceDataset, table_id: list[str])
 
 
 def disarm_every_ref(dataset: lance.LanceDataset, table_id: list[str]) -> lance.LanceDataset:
-    """:func:`disarm_commit_path_cleanup` on main and on every branch head, for a door that commits on all of them.
+    """:func:`disarm_commit_path_cleanup` on main and on every branch head, so commits on any of them are admitted.
 
-    The erasure door deletes and compacts on every ref, and each of those commits would reclaim behind its
-    retention window on an armed ref. A branch list that cannot be read disarms main only; the door reports
-    the branches it could not reach on its own.
+    The erasure door runs it before it records an obligation: the bring-your-own job then deletes, compacts and drops
+    indexes on every ref, and `version/create` refuses a commit whose manifest config arms Lance's auto-cleanup, which
+    would reclaim behind the obligation's retention window. A branch list that cannot be read disarms main only; the
+    verification reports the branches it could not reach on its own.
     """
     try:
         branches = list(dataset.branches.list() or {})

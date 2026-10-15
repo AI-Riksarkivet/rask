@@ -269,6 +269,46 @@ def test_the_index_door_refuses_and_a_writers_own_index_build_commits_through_ve
     assert committed == [(2, "CreateIndex"), (3, "Append"), (4, "CreateIndex")]
 
 
+def test_an_erasure_job_commits_every_rewrite_through_version_create_and_the_catalog_releases_what_it_verifies(
+    served_on_s3: Served, caplog: pytest.LogCaptureFixture
+) -> None:
+    """[[LH-493]], ADR 0163: the erasure door records an obligation, and every rewrite is a bring-your-own job's.
+
+    The job holds ``writer`` and ``maintainer`` and no owner rung. With stock pylance it deletes the subject by row id,
+    compacts with Lance's own protocol and drops the index, each a commit judged here; the catalog's verification then
+    releases the obligation, no version lands that a stock commit did not make, and the job rebuilds its index."""
+    stock = _created(served_on_s3)
+    options = served_on_s3.storage_options
+    lance.write_dataset(_keyed([4, 5], ["d", "e"]), namespace_client=stock, table_id=_TABLE, mode="append", storage_options=options)
+    _opened(stock, options).create_scalar_index("v", index_type="BTREE", name="v_idx")
+    _sweep_wrote_a_clone_list(stock, clones_of_the_table=[])
+    served_on_s3.granted = frozenset({*_WRITER_AND_MAINTAINER, "can_drop"})
+    recorded = httpx.post(f"{served_on_s3.url}/management/v1/table/db$t/erasure", json={"predicate": "id = 2"}, headers=_TOKEN)
+    assert recorded.status_code == 202, recorded.text
+    before = _opened(stock, options).version
+    served_on_s3.granted = _WRITER_AND_MAINTAINER
+    caplog.clear()
+
+    with caplog.at_level(logging.INFO, logger="lance.audit"):
+        job = _opened(stock, options)
+        ids = job.to_table(columns=[], filter="id = 2", with_row_id=True).column("_rowid").to_pylist()
+        job.delete(f"_rowid IN ({', '.join(str(row_id) for row_id in ids)})")
+        job = _opened(stock, options)
+        Compaction.commit(job, [task.execute(job) for task in Compaction.plan(job, {"materialize_deletions_threshold": 0.0}).tasks])
+        _opened(stock, options).drop_index("v_idx")
+        verified = httpx.post(
+            f"{served_on_s3.url}/management/v1/table/db$t/erasure/{recorded.json()['obligation_id']}/verify", json={"predicate": "id = 2"}, headers=_TOKEN
+        )
+        _opened(stock, options).create_scalar_index("v", index_type="BTREE", name="v_idx")
+
+    assert verified.status_code == 200, verified.text
+    assert (verified.json()["obligation"]["state"], verified.json()["report"]["complete"]) == ("released", True), verified.json()["report"]["surfaces"]
+    committed = [getattr(r, "audit.operation") for r in caplog.records if getattr(r, "audit.action", None) == "commit_version"]
+    assert committed == ["Delete", "ReserveFragments", "Rewrite", "CreateIndex", "CreateIndex"]
+    assert _opened(stock, options).version == before + len(committed), "a version no stock commit made has landed"
+    assert _rows(_opened(stock, options)) == [(1, "a"), (3, "c"), (4, "d"), (5, "e")]
+
+
 def _append_at_file_version_2_1(stock: lance_namespace.LanceNamespace) -> None:
     lance.write_dataset(_keyed([9], ["z"]), namespace_client=stock, table_id=_TABLE, mode="append", data_storage_version="2.1")
 

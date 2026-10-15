@@ -9,8 +9,9 @@ commits disarms the ref first, and the append rebases onto that config-only comm
 
 The table is armed out of band, straight through pylance, the way a maintain-tier credential can: no catalog
 door writes manifest config, and the property doors refuse the keys. Driven through the real catalog app on
-a real pylance ``dir`` backend, through the append door ``/insert`` (the catalog writes the rows) and the erasure door, whose
-deletes and compactions are commits too and whose ``retain_days`` window is the only reclamation it may do.
+a real pylance ``dir`` backend, through the append door ``/insert`` (the catalog writes the rows) and the erasure door,
+which disarms every ref so that the bring-your-own job's commits are admitted at ``version/create`` ([[LH-493]]) and
+commits nothing else.
 """
 
 from __future__ import annotations
@@ -61,7 +62,7 @@ def test_door_commits_on_an_armed_table_keep_every_version(real_ns_client: TestC
 
     if door == "erasure":
         erased = real_ns_client.post(f"/management/v1/table/{TABLE}/erasure", json={"predicate": "id = 2", "retain_days": 30})
-        assert erased.status_code == 200, erased.text
+        assert erased.status_code == 202, erased.text
     else:
         for marker in (10, 11, 12):
             _append(real_ns_client, marker)
@@ -71,4 +72,4 @@ def test_door_commits_on_an_armed_table_keep_every_version(real_ns_client: TestC
         f"a commit through /{door} deleted versions {sorted(kept - {v['version'] for v in after.versions()})}"
     )
     assert not [key for key in after.config() if key.startswith("lance.auto_cleanup.")], f"/{door} left the table armed: {after.config()}"
-    assert sorted(after.to_table()["id"].to_pylist()) == ([1] if door == "erasure" else [1, 2, 10, 11, 12])
+    assert sorted(after.to_table()["id"].to_pylist()) == ([1, 2] if door == "erasure" else [1, 2, 10, 11, 12])

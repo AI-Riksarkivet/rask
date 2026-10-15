@@ -314,6 +314,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/management/v1/erasures": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Erasure Obligations
+         * @description The erasure obligations, open and released, listed to a caller holding ``can_maintain`` on each one's table, the
+         *     earliest deadline first: what each still owes, whether it is overdue, and the release it scheduled.
+         */
+        get: operations["list_erasure_obligations_management_v1_erasures_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/management/v1/events": {
         parameters: {
             query?: never;
@@ -1444,46 +1465,61 @@ export interface paths {
         put?: never;
         /**
          * Erase Subject
-         * @description Remove every row matching the predicate from every ref, then reclaim what no longer pins it.
+         * @description Record an erasure obligation for every row matching the predicate on every ref; 202 with the obligation.
          *
-         *     Owner-gated (``can_drop``) — it destroys history, which is a stronger claim than the drop rung
+         *     Owner-gated (``can_drop``): the erasure it starts destroys history, which is a stronger claim than the drop rung
          *     guards, and there is no rung above it.
          *
-         *     **THE RESPONSE IS THE POINT, and a 200 is not the answer.** `complete` is False whenever a retained
-         *     version of any ref still answers the predicate after every step ran — which happens when a retained
-         *     branch version still stands on the files of the version it was cut from ([[LH-178]]). The residual
-         *     is named per ref (`main@2`, `work@3`) with what keeps it: `pinned_by` the tags, and a branch only
-         *     when its head stands on the residual's files, in an order Lance accepts; `held_by_retention` what
-         *     the `retain_days` window keeps. A caller reporting completion to a data subject reads `complete`; a
-         *     caller reading the status code reports the wrong thing. The one status that does answer is the refusal
-         *     before anything is touched: 400 for a predicate Lance refuses, 503 when the store cannot plan it.
+         *     It commits no data. The predicate is planned on main first, so one Lance refuses answers 400 and one the store
+         *     cannot plan answers 503, with nothing recorded. Every ref is disarmed ([[LH-245]]): `version/create` refuses a
+         *     commit whose manifest config arms Lance's auto-cleanup, so the job's commits on an armed ref would all be refused.
+         *     The obligation keeps the predicate's digest, never the predicate, and is due the chart's
+         *     `erasure.deadlineDays` from now; it is listed on `GET /management/v1/erasures` and released by
+         *     `POST /management/v1/table/{id}/erasure/{obligation_id}/verify`.
          *
-         *     When `pinned_by` names anything, the release of it is scheduled (ADR 0138, [[LH-178]]): `release` carries
-         *     its deadline, the refs it deletes and who was told, and the requester and each table owner receive a
-         *     targeted `erasure_release_scheduled` event. At the deadline every named tag is deleted and every named
-         *     branch is deleted and recreated at main's head; what they held is then reclaimed by the next erasure, or by
-         *     the maintenance sweep's cleanup once its window passes (`release.bound`).
-         *
-         *     `complete` can be True beside `dangling:<ref>@<n>` surfaces. Each is a version that stays listed and
-         *     fails to read, because a branch standing on some of its files kept its manifest when the rest were
-         *     reclaimed; no fragment of it that still reads holds the subject. It stays listed, and time travel to
-         *     it fails, until what its detail names lets go: that branch deleted or its head rewritten.
-         *
-         *     `complete` is evidence about every retained version of every ref, and about nothing else: a data
-         *     file no version references that is younger than 7 days, an aborted write's residue, is neither
-         *     reclaimed nor probed, because Lance keeps it as possibly an in-flight write's
-         *     (`lance_docs/lance_sdk.md` cleanup_old_versions `delete_unverified`).
-         *
-         *     A table a shallow clone resolves its files through is neither rewritten nor reclaimed, because the
-         *     clone would break: its `compact:` and `history:` surfaces fail and `complete` is False. The subject's
-         *     bytes outside the table's own files, an external payload, a data file under a data base or a MemWAL
-         *     shard, are named by a `held` surface and never touched, and `complete` is False while they stay.
-         *
-         *     ``branch`` is accepted and IGNORED rather than refused, and the description says so on the wire.
-         *     Refusing would suggest a per-ref erasure exists; honouring it would let a caller believe they had
-         *     erased a subject when they had narrowed the operation to one ref.
+         *     ``branch`` is accepted and IGNORED rather than refused, and the description says so on the wire. Refusing would
+         *     suggest a per-ref erasure exists; honouring it would let a caller believe they had erased a subject when they had
+         *     narrowed the obligation to one ref.
          */
         post: operations["erase_subject_management_v1_table__id__erasure_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/table/{id}/erasure/{obligation_id}/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Verify Erasure
+         * @description Verify what the bring-your-own job left, and release the obligation when nothing but a scheduled release remains.
+         *
+         *     Maintainer-gated (``can_maintain``): the job that rewrites holds it, and so does the table's owner. The caller
+         *     supplies nothing the verification trusts but the predicate, and only once its digest matches the obligation's:
+         *     a predicate nothing matches would verify clean, so one other than the requester's is refused 400. An obligation
+         *     of another table, or one already released, answers 409.
+         *
+         *     **THE RESPONSE IS THE POINT, and a 200 is not the answer.** `report.settled` is True only when every ref's head
+         *     is clean on bytes (no row that answers, none behind a deletion vector, no index segment the catalog cannot prove:
+         *     one committed since the obligation was recorded never proves itself, so the job drops its indexes and rebuilds
+         *     them after the release) and every residual left is held by the refs `report.pinned_by` names and nothing else. The obligation
+         *     is then released and, when anything pins a residual, the release of it is scheduled (ADR 0138): the requester and
+         *     each table owner receive a targeted `erasure_release_scheduled` event. Otherwise the obligation stays open and
+         *     `obligation.open_surfaces` names every surface the job still owes or the catalog could not settle.
+         *
+         *     `report.complete` is evidence about every retained version of every ref, and about nothing else: a data file no
+         *     version references that is younger than 7 days, an aborted write's residue, is neither reclaimed nor probed,
+         *     because Lance keeps it as possibly an in-flight write's (`lance_docs/lance_sdk.md` cleanup_old_versions
+         *     `delete_unverified`).
+         */
+        post: operations["verify_erasure_management_v1_table__id__erasure__obligation_id__verify_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -6443,6 +6479,88 @@ export interface components {
             version: number;
         };
         /**
+         * ErasureObligationView
+         * @description An erasure obligation as the doors show it: its predicate's digest and its storage location stay on the record.
+         */
+        ErasureObligationView: {
+            /**
+             * Deadline
+             * Format: date-time
+             * @description When the erasure is due. Nothing extends it, and nothing acts on it when it passes.
+             */
+            deadline: string;
+            /**
+             * Obligation Id
+             * @description The obligation's id, which the verification door names.
+             */
+            obligation_id: string;
+            /**
+             * Open Surfaces
+             * @description Every surface the last verification left open: what the job still owes, a step that did not go through, bytes nothing rewrites.
+             */
+            open_surfaces: components["schemas"]["SurfaceResult"][];
+            /**
+             * Overdue
+             * @description True while the obligation is open past its deadline.
+             */
+            overdue: boolean;
+            /**
+             * Refs
+             * @description `main` and every branch the table listed when the obligation was recorded, each with its head version then: an index segment committed after it is never taken as proof, so the job drops its indexes and rebuilds them after the release.
+             */
+            refs: {
+                [key: string]: number;
+            };
+            /** @description The release of the refs that pinned a residual, scheduled when the obligation was released. */
+            release: components["schemas"]["PinRelease"] | null;
+            /**
+             * Released At
+             * @description When a verification released it; null while open.
+             */
+            released_at: string | null;
+            /**
+             * Requested At
+             * Format: date-time
+             * @description When the obligation was recorded.
+             */
+            requested_at: string;
+            /**
+             * Requested By
+             * @description Who asked for the erasure, as `user:<sub>`.
+             */
+            requested_by: string | null;
+            /**
+             * Retain Days
+             * @description The version history the requester keeps, in days: each verification reclaims everything older.
+             */
+            retain_days: number;
+            /** @description `open` until a verification settles it, then `released`. */
+            state: components["schemas"]["ObligationState"];
+            /**
+             * Table
+             * @description The table id the erasure was asked of.
+             */
+            table: string;
+            /**
+             * Verified At
+             * @description When the last verification ran; null before the first.
+             */
+            verified_at: string | null;
+        };
+        /**
+         * ErasureObligations
+         * @description One page of the obligations a caller may maintain, the earliest deadline first.
+         */
+        ErasureObligations: {
+            /** Obligations */
+            obligations: components["schemas"]["ErasureObligationView"][];
+            /**
+             * Page Token
+             * @description Pass back to read the next page; null on the last one.
+             */
+            page_token?: string | null;
+        };
+        /**
          * ErasureReport
          * @description One subject's erasure across every surface the catalog serves this table from.
          */
@@ -6461,7 +6579,7 @@ export interface components {
             complete?: boolean;
             /**
              * Held By Retention
-             * @description Residuals the retention window keeps, itself or through a newer branch version on their files: an erasure with `retain_days=0`, or one after the window has passed, reclaims them.
+             * @description Residuals the retention window keeps, itself or through a newer branch version on their files: a verification after the window has passed reclaims them.
              */
             held_by_retention?: string[];
             /**
@@ -6474,7 +6592,7 @@ export interface components {
              * @description The filter every matching row was deleted by.
              */
             predicate: string;
-            /** @description Set when `pinned_by` is non-empty: the release scheduled for it and who was told. Null when nothing pins a residual. */
+            /** @description Set when this verification settled the obligation and `pinned_by` is non-empty: the release scheduled for it and who was told. Null otherwise. */
             release?: components["schemas"]["PinRelease"] | null;
             /**
              * Residual Versions
@@ -6482,8 +6600,14 @@ export interface components {
              */
             residual_versions?: string[];
             /**
+             * Settled
+             * @description True when every head is clean and every residual left is held only by the refs `pinned_by` names, whose release the catalog schedules: the obligation is released then. False while any surface the job owes, any retention window, any unread version or any `held` surface remains.
+             * @default false
+             */
+            settled?: boolean;
+            /**
              * Surfaces
-             * @description Every surface the erasure attempted, in the order it attempted them.
+             * @description Every surface the verification judged or acted on, in that order.
              */
             surfaces?: components["schemas"]["SurfaceResult"][];
             /**
@@ -6500,7 +6624,7 @@ export interface components {
         };
         /**
          * ErasureRequest
-         * @description What to erase, and how much history the caller means to take with it ([[LH-073]]).
+         * @description What to erase, and how much history the caller means to take with it ([[LH-073]], [[LH-493]]).
          */
         ErasureRequest: {
             /** Predicate */
@@ -6510,6 +6634,22 @@ export interface components {
              * @default 0
              */
             retain_days?: number;
+        };
+        /**
+         * ErasureVerification
+         * @description What one verification found, and the obligation as it stands after it.
+         */
+        ErasureVerification: {
+            obligation: components["schemas"]["ErasureObligationView"];
+            report: components["schemas"]["ErasureReport"];
+        };
+        /**
+         * ErasureVerifyRequest
+         * @description The predicate an erasure obligation was recorded with, which the catalog holds only as a digest ([[LH-493]]).
+         */
+        ErasureVerifyRequest: {
+            /** Predicate */
+            predicate: string;
         };
         /**
          * EstateBindingsResponse
@@ -7539,6 +7679,8 @@ export interface components {
             id?: string[] | null;
             identity?: components["schemas"]["Identity"] | null;
         };
+        /** @enum {string} */
+        ObligationState: "open" | "released";
         /**
          * PhraseQuery
          * @description PhraseQuery
@@ -8546,18 +8688,18 @@ export interface components {
         SurfaceResult: {
             /**
              * Detail
-             * @description Why, in words: the error, what a rewrite cost, what a residual needs.
+             * @description Why, in words: the error, what the job still owes, what a residual needs.
              * @default
              */
             detail?: string;
             /**
              * Outcome
-             * @description What the estate did there: `deleted`, `untagged`, `retained`, `rewritten`, `rebuilt`, `reclaimed`, `clean`, `failed`, `skipped` — not attempted because an earlier step on that ref did not go through, so it would destroy history while the subject stays — `held` — the subject's bytes stay in files this erasure neither rewrites nor deletes, named in the detail — or `dangling` — a listed version that fails to read and is proved not to hold the subject; it stays listed until what its detail names lets go.
+             * @description What the verification found or did there: `clean`, `untagged`, `retained`, `reclaimed`, `failed` — a head surface the job still owes, or a step that did not go through — `skipped` — not attempted because it would destroy history while the subject stays — `held` — the subject's bytes stay in files nothing here rewrites or deletes, named in the detail — or `dangling` — a listed version that fails to read and is proved not to hold the subject; it stays listed until what its detail names lets go.
              */
             outcome: string;
             /**
              * Surface
-             * @description `branch:<name>`, `tag:<name>`, `main`, `compact:<ref>`, `index:<ref>`, `history:<ref>`, `dangling:<ref>@<version>`, `branches`, `verify`, a surface outside the table's own files: `data_base:<name>`, `external_base:<name>`, `mem_wal`, `bases:<ref>`, or the scheduling of what pins a residual: `release` (its record) and `notice` (who is told).
+             * @description A ref's head as the job left it: `main` or `branch:<name>` (its rows deleted), `compact:<ref>` (no row of the subject behind a deletion vector), `index:<ref>` (every user index segment built from clean data); `tag:<name>`, `history:<ref>`, `dangling:<ref>@<version>`, `branches`, `verify`, a surface outside the table's own files: `data_base:<name>`, `external_base:<name>`, `mem_wal`, `bases:<ref>`, or the scheduling of what pins a residual: `release` (its record) and `notice` (who is told).
              */
             surface: string;
         };
@@ -9712,6 +9854,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AccessGrantResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_erasure_obligations_management_v1_erasures_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                /** @description Continue after this obligation (the previous page's `page_token`). */
+                page_token?: string | null;
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-caller-app-id"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErasureObligations"];
                 };
             };
             /** @description Validation Error */
@@ -11569,13 +11748,12 @@ export interface operations {
     erase_subject_management_v1_table__id__erasure_post: {
         parameters: {
             query?: {
-                /** @description IGNORED: an erasure acts on every ref by construction, so naming one would narrow it. */
+                /** @description IGNORED: an erasure covers every ref by construction, so naming one would narrow it. */
                 branch?: string | null;
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
             header?: {
-                authorization?: string | null;
                 "dapr-caller-app-id"?: string | null;
             };
             path: {
@@ -11590,12 +11768,53 @@ export interface operations {
         };
         responses: {
             /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErasureObligationView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    verify_erasure_management_v1_table__id__erasure__obligation_id__verify_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+                obligation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ErasureVerifyRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErasureReport"];
+                    "application/json": components["schemas"]["ErasureVerification"];
                 };
             };
             /** @description Validation Error */

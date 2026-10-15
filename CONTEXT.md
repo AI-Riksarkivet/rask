@@ -68,3 +68,9 @@ _Avoid_: promotion saga, review workflow
 A version the promotion gate kept from readers for a person to decide: approving it publishes it, rejecting it returns
 the table to its published version, and a hold nobody decides in time expires with nothing published.
 _Avoid_: pending promotion, review
+
+**Erasure obligation**:
+A data subject's erasure the catalog has accepted for one table, open until the catalog has itself read that the
+subject is gone from everything the table's owner can rewrite. The owner's own job does the rewriting; the catalog
+never does it, never retries it, and shows the obligation overdue once its deadline passes.
+_Avoid_: erasure job, erasure task, GDPR request

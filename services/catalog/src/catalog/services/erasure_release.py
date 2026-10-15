@@ -37,7 +37,6 @@ import logging
 from collections.abc import Callable, Sequence
 from datetime import datetime, timedelta
 from typing import Any, Literal, Protocol
-from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -45,7 +44,7 @@ from catalog.services.dataplane import recorded_branch
 from catalog.services.erasure import Pin
 from service_kit.lakehouse.objectfs import StorageOptions
 from service_kit.lakehouse.record_store import delete_record, list_records
-from service_kit.lakehouse.records import RecordChangedError, RecordMissingError, create_json, mutate_json
+from service_kit.lakehouse.records import RecordChangedError, RecordMissingError, create_json, mutate_json, read_json
 
 
 log = logging.getLogger(__name__)
@@ -119,10 +118,12 @@ def record_key(release_id: str) -> str:
 
 
 def new_release(
-    pins: Sequence[Pin], *, table: str, location: str, object_id: str, requested_by: str | None, notified: list[str], due_at: datetime
+    pins: Sequence[Pin], *, release_id: str, table: str, location: str, object_id: str, requested_by: str | None, notified: list[str], due_at: datetime
 ) -> ReleaseRecord:
+    """The release of everything ``pins`` names, under ``release_id``: the erasure obligation's own id, so a second
+    verification that settles the same obligation meets the first one's record rather than scheduling it again."""
     return ReleaseRecord(
-        release_id=uuid4().hex,
+        release_id=release_id,
         table=table,
         location=location,
         object_id=object_id,
@@ -134,8 +135,18 @@ def new_release(
 
 
 def schedule(control_root: str, storage_options: StorageOptions, record: ReleaseRecord) -> None:
-    """Write ``record`` where the release tick finds it; raises when the store does not take it."""
+    """Write ``record`` where the release tick finds it; raises when the store does not take it.
+
+    Raises:
+        RecordExistsError: A release under the same id is already scheduled.
+    """
     create_json(control_root, storage_options, record_key(record.release_id), record.model_dump(mode="json"))
+
+
+def scheduled(control_root: str, storage_options: StorageOptions, release_id: str) -> ReleaseRecord | None:
+    """The release scheduled under ``release_id``, or None when none is (never scheduled, or already run)."""
+    found = read_json(control_root, storage_options, record_key(release_id))
+    return None if found is None else ReleaseRecord.model_validate(found[0])
 
 
 def completion_bound(due_at: datetime, cleanup_window_days: int) -> str:

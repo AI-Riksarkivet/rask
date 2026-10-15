@@ -75,6 +75,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | catalog.controlOutbox.enabled | bool | `true` | Stage control events in a durable S3 outbox and run the relay cron that drains it; carries `table_published` to its subscribers. Requires `controlEmit`. |
 | catalog.controlOutbox.schedule | string | `"@every 60s"` | Dapr cron schedule of the control outbox relay; bounds how long a control event stays undelivered after a bus outage. |
 | catalog.erasure.bindingName | string | `"catalog-erasure-release-cron"` | Name of the erasure-release Dapr cron Component; also the catalog's LANCE_ERASURE_RELEASE_BINDING_NAME and the route it serves. |
+| catalog.erasure.deadlineDays | int | `30` | Days after an erasure obligation is recorded that it is due; an obligation still open past it is shown overdue (LANCE_ERASURE_DEADLINE_DAYS). Required. |
 | catalog.erasure.releaseGraceDays | int | `7` | Days after an erasure blocked by a tag or branch pin, during which owners are told, before the pins are released (LANCE_ERASURE_RELEASE_GRACE_DAYS). Required. |
 | catalog.erasure.schedule | string | `"@every 300s"` | Dapr cron schedule on which due erasure pin releases run; lateness only costs time. |
 | catalog.maxBodyBytes | int | `268435456` | Maximum request-body bytes on any catalog route (LANCE_MAX_BODY_BYTES); larger bodies get 413 before buffering. Default 256 MiB. |

@@ -30,7 +30,7 @@ something adjacent.
 | **Q4** | Does it give a specific person access? | `GRANT_ADDED` | `CatalogControlEvent`, `extra.subject` = the principal |
 | **Q5** | Does it take access away from a specific person? | `GRANT_REVOKED` | the same envelope, `action="grant_revoked"` |
 | **Q6** | Does it hand a person work, or take work away from them? | `TASK_ASSIGNED` / `TASK_UNASSIGNED` / `TASK_CHANGES_REQUESTED` / `TASK_DROPPED` / `TASK_LEASE_EXPIRED` | the same envelope; `extra.subject` is the WORKER, never the manager who clicked |
-| **Q7** | Will a scheduled act take something from a person unless they act first? | `ERASURE_RELEASE_SCHEDULED` | the same envelope, one per person (the erasure's requester and each table owner); `extra.due_at` is the deadline (ADR 0138) |
+| **Q7** | Will a scheduled act take something from a person unless they act first? | `ERASURE_RELEASE_SCHEDULED` | the same envelope, one per person (the erasure obligation's requester and each table owner), when a verification settles the obligation; `extra.due_at` is the deadline (ADR 0138, ADR 0163) |
 
 **Q2 is the one people miss, and it exists because Q1 is unreachable for most long work.** Expensive
 runs execute detached, hours after the request, and post their own lineage as a service. `enforce_author`

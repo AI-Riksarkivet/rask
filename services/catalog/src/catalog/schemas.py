@@ -423,15 +423,21 @@ class MaintenanceDueResponse(BaseModel):
 
 
 class ErasureRequest(BaseModel):
-    """What to erase, and how much history the caller means to take with it ([[LH-073]])."""
+    """What to erase, and how much history the caller means to take with it ([[LH-073]], [[LH-493]])."""
 
     #: The rows to remove, as a Lance filter expression — the same dialect `delete_from_table` takes.
     predicate: str
-    #: How much version history to KEEP, in days. DEFAULTS TO NONE, which is the opposite of every
-    #: other retention knob in the estate and is the point: an erasure that leaves the subject readable
-    #: at an old version has not erased them, so a caller preserving unrelated history opts INTO it
-    #: rather than having to remember to opt out.
+    #: How much version history to KEEP, in days, held on the obligation and applied by every verification of it.
+    #: DEFAULTS TO NONE, which is the opposite of every other retention knob in the estate and is the point: an
+    #: erasure that leaves the subject readable at an old version has not erased them, so a caller preserving
+    #: unrelated history opts INTO it rather than having to remember to opt out.
     retain_days: Annotated[int, Field(ge=0, le=36500)] = 0
+
+
+class ErasureVerifyRequest(BaseModel):
+    """The predicate an erasure obligation was recorded with, which the catalog holds only as a digest ([[LH-493]])."""
+
+    predicate: str
 
 
 # --------------------------------------------------------------------------- #

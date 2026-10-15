@@ -253,13 +253,14 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   versions, and the sweep, every 30 minutes, is the backstop that also writes the clone list and the due records.
   Both ask one eligibility rule, `service_kit.lakehouse.version_retention`, which the catalog's GC preview shares.
   Compaction, index builds and index optimize are a bring-your-own job's, committed through `version/create` (below);
-  `CreateTableIndex` answers 406 naming that path. Erasure keeps its in-catalog rewrite as ADR 0156 C6's named
-  exception (parked: LH-493, #637). The maintain vend tier goes to the maintenance identity only (LH-473, #599).
+  `CreateTableIndex` answers 406 naming that path. An erasure's rewrite is a bring-your-own job's too (ADR 0163,
+  [[LH-493]], below). The maintain vend tier goes to the maintenance identity only (LH-473, #599).
   `catalog/api/maintenance_mode.py` is read-only maintenance MODE (503 + Retry-After), not this. Version reclamation
   has ONE owner, maintenance's expiry: Lance's commit-path auto-cleanup (`lance.auto_cleanup.*`) deletes inside
   whichever writer commits, past a hold and a protected base. No door arms it (the property guard refuses the keys),
   `version/create` refuses a commit that does, every committing catalog door disarms the ref first
-  (`core/namespace.disarm_commit_path_cleanup`; erasure every ref), the restore door refuses an armed version, and the
+  (`core/namespace.disarm_commit_path_cleanup`; the erasure door every ref, so the job's commits are admitted), the
+  restore door refuses an armed version, and the
   expiry pass deletes every such key before its refusal gates, as the backstop for a table nobody commits on (LH-245).
 - **Maintenance does not read a tier.** The due list plans a compaction at the #50 policy's
   `target_rows_per_fragment`, else Lance's own sizing. There are no per-tier defaults: a tier is the
@@ -423,15 +424,37 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   `tags/update` or `branches/create` with a reclaim: measured with concurrent races, a tag created
   mid-reclaim named a deleted version (31 of 60), and `maintenance/run` loses the same race (59 of 60).
   Parked as LH-308, which covers every reclaim path, the sweep included.
-- **An erasure's pins are released on a schedule, not on request** ([[LH-178]], ADR 0138). When
-  `ErasureReport.pinned_by` is non-empty, the erasure door writes a release record
-  (`catalog.services.erasure_release`, `_erasure_releases/<id>.json` on the control root) BEFORE it tells
-  anyone, then emits one targeted `erasure_release_scheduled` per person (requester, table owners). The
-  `catalog-erasure-release-cron` tick claims a due record by an ETag-guarded lease, RECORDS each branch's
-  recreate reference before deleting any, deletes the tags and the branch subtree leaf-first (re-read live,
-  so a branch cut during the grace period goes too) and recreates it top-down from main's head. No door
-  cancels or extends one, and protection does not block it (ADR 0150). A branch whose head the delete
-  never reached is not named in `pinned_by`: erasing again takes it. Pinned by
+- **An erasure is an obligation a bring-your-own job fulfils and the catalog verifies** ([[LH-493]], ADR 0163).
+  `POST /management/v1/table/{id}/erasure` (owner rung) plans the predicate (400 with nothing recorded when Lance
+  refuses it), disarms every ref and records the obligation (`catalog.services.erasure_obligations`,
+  `_erasure_obligations/<id>.json`: the predicate's SHA-256, never the predicate, `retain_days`, each ref with its head
+  version then, the requester and a deadline, chart `catalog.erasure.deadlineDays`), answering 202; it commits no data.
+  A job holding `writer` and `maintainer` deletes the subject by row id, compacts with deletions materialised and drops
+  every user index (a stock `drop_index` is a `CreateIndex` removing it), each commit judged at `version/create`, and
+  rebuilds its indexes after the release. `POST .../erasure/{obligation_id}/verify` (`can_maintain`) refuses a
+  predicate whose digest differs (400) and another table's or a released obligation (409), then `erasure.verify`
+  judges every head on bytes (`main`/`branch:<b>`, `compact:<ref>`, `index:<ref>` are what the job owes). It reads
+  `CreateIndex` provenance only up to each ref's recorded head: a segment committed since is the job's own claim (a
+  copied or crafted one could hold the subject's key) and is never proof (owner, 2026-10-15). It proves each clean
+  head's segments BEFORE any reclaim (a reclaim deletes the transactions that prove them), drops the tags pinning the
+  subject once every head is clean, reclaims each clean ref deepest first and verifies every retained version. Every predicate probe
+  reads the data with `use_scalar_index=False`: measured on pylance 13.0.0, a BTREE rebuilt after the delete answers 0
+  rows behind the deletion vector where the data answers 1. The obligation is released (digest wiped) only when every
+  head is clean and every residual is held by `pinned_by` alone; else it stays open naming each open surface. A release
+  an earlier verification scheduled under the obligation's id is reused only while it names every current pin.
+  `GET /management/v1/erasures` lists them to `can_maintain` holders with `overdue`; nothing acts on a missed deadline.
+  A branch commit is not served yet (LH-490, #632), so an obligation on a table whose branch head holds the subject
+  stays open. Pinned by `services/catalog/tests/test_an_erasure_is_an_obligation_the_catalog_verifies.py` and the
+  stock job in `test_a_stock_client_commits_every_operation_through_version_create.py`.
+- **An erasure's pins are released on a schedule, not on request** ([[LH-178]], ADR 0138). When a verification
+  settles an obligation and `ErasureReport.pinned_by` is non-empty, the verification door writes a release record
+  under the obligation's id (`catalog.services.erasure_release`, `_erasure_releases/<id>.json` on the control root)
+  BEFORE it tells anyone, then emits one targeted `erasure_release_scheduled` per person (the obligation's requester,
+  table owners). The `catalog-erasure-release-cron` tick claims a due record by an ETag-guarded lease, RECORDS each
+  branch's recreate reference before deleting any, deletes the tags and the branch subtree leaf-first (re-read live,
+  so a branch cut during the grace period goes too) and recreates it top-down from main's head. No door cancels or
+  extends one, and protection does not block it (ADR 0150). With every head clean, what a settled release names is
+  tags: a branch head standing on a residual's files would hold the subject itself. Pinned by
   `services/catalog/tests/test_erasure_releases_a_pinning_branch_after_its_notice.py`.
 - `deregister` keeps bytes ON PURPOSE (external data); `drop` removes them. Neither leaves Lance
   orphans — but partially-failed writes and unpurged buckets do, and nothing reclaims those yet.

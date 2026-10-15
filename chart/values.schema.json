@@ -238,6 +238,10 @@
                             "description": "Name of the erasure-release Dapr cron Component; also the catalog's LANCE_ERASURE_RELEASE_BINDING_NAME and the route it serves.",
                             "type": "string"
                         },
+                        "deadlineDays": {
+                            "description": "Days after an erasure obligation is recorded that it is due; an obligation still open past it is shown overdue (LANCE_ERASURE_DEADLINE_DAYS). Required.",
+                            "type": "integer"
+                        },
                         "releaseGraceDays": {
                             "description": "Days after an erasure blocked by a tag or branch pin, during which owners are told, before the pins are released (LANCE_ERASURE_RELEASE_GRACE_DAYS). Required.",
                             "type": "integer"
