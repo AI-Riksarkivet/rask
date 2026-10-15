@@ -135,11 +135,14 @@ export const fetchTableDetail = query(
 	async ({ table }): Promise<ApiResult<TableDetail>> => {
 		const { fetch, locals } = getRequestEvent();
 		const base = `${CATALOG_API}/v1/table/${enc(table)}`;
+		// The policy is rask's, so it is served under the management mount, not the spec's `/v1`.
+		const management = `${CATALOG_API}/management/v1/table/${enc(table)}`;
 		// Raw fetch on purpose: the per-part 404→null / 5xx→{error} mapping below cannot ride the
 		// JSON door, so this fan-out carries its own bearer.
 		const bearer = locals.session?.accessToken;
 		const headers: Record<string, string> = bearer ? { authorization: `Bearer ${bearer}` } : {};
-		const read = (path: string) => fetch(`${base}/${path}`, { method: 'POST', headers });
+		const read = (path: string, at: string = base) =>
+			fetch(`${at}/${path}`, { method: 'POST', headers });
 		const part = async (res: Response): Promise<unknown> => {
 			if (res.ok) return res.json();
 			return res.status === 404 ? null : { error: res.status };
@@ -162,7 +165,7 @@ export const fetchTableDetail = query(
 				read('tags/list').then(part),
 				read('branches/list').then(part),
 				read('index/list').then(part),
-				read('policy/describe').then(part),
+				read('policy/describe', management).then(part),
 			]);
 			return {
 				ok: true,
@@ -454,5 +457,8 @@ export const readUserStateDoc = query(
 export const writeUserStateDoc = command(
 	v.object({ ...UserStateArg.entries, value: v.unknown() }),
 	async ({ document, value }): Promise<ApiResult<unknown>> =>
-		catalogJSON(`/management/v1/user-state/${document}`, { method: 'PUT', body: JSON.stringify(value) }),
+		catalogJSON(`/management/v1/user-state/${document}`, {
+			method: 'PUT',
+			body: JSON.stringify(value),
+		}),
 );
