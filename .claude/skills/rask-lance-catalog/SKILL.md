@@ -362,7 +362,11 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   server decide), write on `can_write_data` (judged by the tier judge), read on `can_read_data`, otherwise none.
   Every mint, at all three doors, writes the `vend_credentials` audit record with its `tier` and `door`. A stock
   client opening through the namespace therefore signs with the vended credential, not its own
-  (`services/catalog/tests/test_a_stock_client_opens_on_the_vended_credential.py`). The maintain tier opens to
+  (`services/catalog/tests/test_a_stock_client_opens_on_the_vended_credential.py`). The endpoint a vend names
+  is `LANCE_S3_VENDED_ENDPOINT` (chart `vending.endpoint`), else the catalog's own `LANCE_S3_ENDPOINT` ([[LH-489]]):
+  pylance applies vended options over the client's own, so an off-cluster writer reaches only what is vended. The
+  dev estate vends the minio fixture's node port (`DEV_VENDED_ENDPOINT`); the warehouse scope probe keeps the
+  catalog's own address. The maintain tier opens to
   `can_vend_maintain` alone ([[LH-473]], ADR 0156 C4): the model's `maintenance` relation, which the catalog writes
   for `LANCE_FGA_MAINTAINERS` on every warehouse (`cascade_tuples`, backfilled at startup, and the chart's
   `bootstrap-admin` hook) and no grant door hands out. The list holds subjects, maintenance's service-account subject

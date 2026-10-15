@@ -770,6 +770,11 @@ CORPUS_ACCESS_MODE ?= ReadWriteOnce
 # Override them from the environment for a differently-addressed dev cluster.
 DEV_ISSUER          ?= http://localhost:8080/dex
 DEV_ORIGIN          ?= http://localhost:8080
+# The store address the catalog vends (LH-489): the minio fixture's node port on the node's own address, which a pod
+# and this host both reach, where `rask-minio:9000` resolves only in the cluster.
+DEV_NODE_IP         ?= $(shell $(KUBECTL) get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null)
+DEV_STORE_NODE_PORT := $(shell sed -n 's/^nodePort: *//p' deploy/fixtures/minio/chart/values.yaml)
+DEV_VENDED_ENDPOINT ?= http://$(DEV_NODE_IP):$(DEV_STORE_NODE_PORT)
 
 # THE CREDENTIAL KEYS A RELEASE MAY STILL CARRY from before [[XC-004]], dropped from every upgrade that
 # re-feeds the live values (`-f $$LIVE`). templates/prod-credentials.yaml refuses each of them as a value,
@@ -815,6 +820,7 @@ k3s-crds: ## Apply the vendored CRDs no release owns (see chart/.helmignore), be
 # `helm get values requires 1 argument` from the orphaned `-o yaml`. A comment that breaks the recipe
 # it documents is worse than no comment; keep prose out of the continuation.
 k3s-up: k3s-crds k3s-fixtures k3s-deps k3s-stem-check ## Apply CRDs, install fixtures, vendor deps, then install/upgrade the release and wait for the gateway
+	@case '$(DEV_VENDED_ENDPOINT)' in http://:*|*:) echo "DEV_VENDED_ENDPOINT '$(DEV_VENDED_ENDPOINT)' names no node address or port: is kubectl pointed at the cluster?" >&2; exit 1;; esac
 	@set -a; [ -f .env ] && . ./.env; set +a; \
 	if [ -z "$$HF_TOKEN" ] && [ -r "$${HF_HOME:-$$HOME/.cache/huggingface}/token" ]; then \
 	  HF_TOKEN="$$(cat "$${HF_HOME:-$$HOME/.cache/huggingface}/token")"; \
@@ -851,6 +857,7 @@ k3s-up: k3s-crds k3s-fixtures k3s-deps k3s-stem-check ## Apply CRDs, install fix
 	  --set-string frontend.oidc.publicIssuer=$(DEV_ISSUER) \
 	  --set-string frontend.oidc.publicOrigin=$(DEV_ORIGIN) \
 	  --set-string dex.issuer=$(DEV_ISSUER) \
+	  --set-string vending.endpoint=$(DEV_VENDED_ENDPOINT) \
 	  --set explorer.corpus.mode=$(CORPUS) \
 	  --set explorer.corpus.accessMode=$(CORPUS_ACCESS_MODE) \
 	  $(DROP_CREDENTIAL_VALUES) \

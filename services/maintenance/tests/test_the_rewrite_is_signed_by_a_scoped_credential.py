@@ -41,7 +41,8 @@ _SCOPED = {
     "aws_access_key_id": "VENDEDKEY",
     "aws_secret_access_key": "vended-secret-9f3a",
     "aws_session_token": "vended-token-7c1e",
-    "endpoint": "http://rustfs:9000",
+    "endpoint": "https://s3.public.example",
+    "allow_http": "false",
 }
 _AMBIENT = {"aws_access_key_id": "minioadmin", "aws_secret_access_key": "minioadmin", "endpoint": "http://rustfs:9000"}
 
@@ -76,8 +77,11 @@ def door(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
 
 
 def test_the_rewrite_is_signed_by_the_vended_credential(door: list[dict[str, Any]]) -> None:
-    options = credentials.write_options_for("s3://acme-bucket/4c49d010_acme-bronze$events", _settings(), fallback=_AMBIENT)
-    assert options == _SCOPED
+    """[[LH-489]] At maintenance's own store address: the catalog vends the one a client off the cluster reaches."""
+    settings = _settings()
+    options = credentials.write_options_for("s3://acme-bucket/4c49d010_acme-bronze$events", settings, fallback=_AMBIENT)
+    assert settings.s3_endpoint.startswith("http://")
+    assert options == {**_SCOPED, "endpoint": settings.s3_endpoint, "allow_http": "true"}
     assert options["aws_access_key_id"] != "minioadmin"
 
 

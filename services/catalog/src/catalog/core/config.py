@@ -105,6 +105,18 @@ class CatalogStorageSettings(BaseSettings):
     s3_sse_kms_key_id: str | None = Field(default=None, alias="LANCE_S3_SSE_KMS_KEY_ID")
     s3_sse_bucket_key_enabled: bool | None = Field(default=None, alias="LANCE_S3_SSE_BUCKET_KEY_ENABLED")
     s3_sts_endpoint: str | None = Field(default=None, alias="LANCE_S3_STS_ENDPOINT")
+    #: The object-store endpoint every vended credential names, for a client reaching the store from where it
+    #: runs ([[LH-489]]). The catalog's own `s3_endpoint` may be an address only the cluster resolves
+    #: (`rask-minio:9000`), and pylance applies a vended `endpoint` over the client's own (measured on pylance
+    #: 13.0.0, both `endpoint` and `aws_endpoint` lose), so a client off the cluster writes only to what is
+    #: vended here. Unset, the catalog vends its own `s3_endpoint`. In production the platform names the
+    #: store's public address.
+    s3_vended_endpoint: str | None = Field(default=None, alias="LANCE_S3_VENDED_ENDPOINT")
+
+    @property
+    def vended_store_endpoint(self) -> str:
+        """The endpoint a vended credential names: `s3_vended_endpoint`, else the catalog's own."""
+        return self.s3_vended_endpoint or self.s3_endpoint
 
 
 class CatalogReadBounds(BaseSettings):

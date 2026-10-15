@@ -97,6 +97,9 @@ spec:
             - { name: LANCE_S3_STS_ENDPOINT, value: "{{ include "lance.s3Endpoint" . }}" }
             - { name: LANCE_S3_ASSUME_ROLE_ARN, value: {{ .Values.vending.assumeRoleArn | quote }} }
             - { name: LANCE_VENDING_TTL_SECONDS, value: {{ .Values.vending.ttlSeconds | quote }} }
+            {{- with .Values.vending.endpoint }}
+            - { name: LANCE_S3_VENDED_ENDPOINT, value: {{ . | quote }} }
+            {{- end }}
             {{- end }}
 
             {{- with .Values.vending.encryption }}

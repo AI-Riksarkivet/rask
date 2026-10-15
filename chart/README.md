@@ -371,6 +371,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | vending.allowExternalBlobs | bool | `false` | Allow blob-v2 columns to reference arbitrary external objects (Blob.from_uri) on create. Off by default: an SSRF and dangling-pointer risk; prefer `externalBlobBases`. |
 | vending.assumeRoleArn | string | `"arn:aws:iam::000000000000:role/lance-vend"` | Role ARN passed on AssumeRole in `sts`/`web_identity` mode (LANCE_S3_ASSUME_ROLE_ARN); stores with inherited policies ignore it but boto3 requires it. |
 | vending.encryption | object | `{}` | Server-side encryption for direct writes, carried in vended storage options: `algorithm` (AES256, aws:kms, aws:kms:dsse) and `kmsKeyId` (kms only). Empty = bucket default. |
+| vending.endpoint | string | `""` | Object-store endpoint every vended credential names (LANCE_S3_VENDED_ENDPOINT). Empty = the catalog's own store endpoint. |
 | vending.externalBlobBases | string | `""` | Comma-separated allowlist of base URIs external blob pointers may live under (LANCE_EXTERNAL_BLOB_BASES). Empty = `s3://<minio.bucket>/models/`; a value replaces that default. |
 | vending.mode | string | `"sts"` | How the catalog vends storage credentials for direct object I/O: `mode_b` (none, server-mediated), `web_identity`, `sts` (default, scoped AssumeRole) or `static`. |
 | vending.ttlSeconds | int | `900` | Lifetime in seconds of a vended STS / web-identity credential (LANCE_VENDING_TTL_SECONDS). |

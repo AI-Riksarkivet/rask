@@ -2406,6 +2406,10 @@
                     "description": "Server-side encryption for direct writes, carried in vended storage options: `algorithm` (AES256, aws:kms, aws:kms:dsse) and `kmsKeyId` (kms only). Empty = bucket default.",
                     "type": "object"
                 },
+                "endpoint": {
+                    "description": "Object-store endpoint every vended credential names (LANCE_S3_VENDED_ENDPOINT). Empty = the catalog's own store endpoint.",
+                    "type": "string"
+                },
                 "externalBlobBases": {
                     "description": "Comma-separated allowlist of base URIs external blob pointers may live under (LANCE_EXTERNAL_BLOB_BASES). Empty = `s3://\u003cminio.bucket\u003e/models/`; a value replaces that default.",
                     "type": "string"

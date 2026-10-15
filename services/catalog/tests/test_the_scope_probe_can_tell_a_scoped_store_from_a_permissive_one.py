@@ -131,7 +131,7 @@ def store_factory(monkeypatch: pytest.MonkeyPatch) -> Callable[..., _Installed]:
 
 
 def _run(vendor: _Vendor) -> list[ProbeCheck]:
-    return endpoint._run_scope_probe(ROOT, vendor, {})  # noqa: SLF001 — the unit under test
+    return endpoint._run_scope_probe(ROOT, vendor, "http://store:9000")  # noqa: SLF001 — the unit under test
 
 
 def _named(checks: list[ProbeCheck]) -> dict[str, str]:
@@ -182,7 +182,7 @@ class TestAnUnexercisedControlIsUNKNOWNNotHealthy:
         vendor = _Vendor(credentials=None)
         store_factory(scoped=True)
 
-        checks = endpoint._run_scope_probe(ROOT, vendor, {})  # noqa: SLF001
+        checks = endpoint._run_scope_probe(ROOT, vendor, "http://store:9000")  # noqa: SLF001
 
         outcomes = _named(checks)
         assert outcomes["issue"] == "skip"
@@ -193,7 +193,7 @@ class TestAnUnexercisedControlIsUNKNOWNNotHealthy:
         vendor = _Vendor(credentials=None, error=RuntimeError("STS unreachable"))
         store_factory(scoped=True)
 
-        checks = endpoint._run_scope_probe(ROOT, vendor, {})  # noqa: SLF001
+        checks = endpoint._run_scope_probe(ROOT, vendor, "http://store:9000")  # noqa: SLF001
 
         assert _named(checks)["issue"] == "fail"
         assert "STS unreachable" in next(c.detail for c in checks if c.name == "issue")

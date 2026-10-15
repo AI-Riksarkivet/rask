@@ -732,6 +732,7 @@ class StsVendor:
         role_arn: str,
         region: str,
         endpoint: str | None = None,
+        store_endpoint: str | None = None,
         ttl_seconds: int = 900,
         assume_role: Callable[..., dict[str, object]] | None = None,
         access_key: str | None = None,
@@ -748,6 +749,9 @@ class StsVendor:
         self._role_arn = role_arn
         self._region = region
         self._endpoint = endpoint
+        #: The object-store address the credential is used at, which a client off the cluster reaches and the
+        #: STS endpoint need not be ([[LH-489]]). ``None`` is the STS endpoint's own address.
+        self._store_endpoint = endpoint if store_endpoint is None else store_endpoint
         self._ttl = ttl_seconds
         #: The credential this vendor DELEGATES FROM. Required, not optional in practice: AssumeRole is
         #: a signed call and botocore's default chain finds nothing here, because the S3 secret reaches
@@ -788,14 +792,14 @@ class StsVendor:
         # somewhere else. `lance_storage_options`' own docstring names this — "one omitted key in a
         # hand-rolled copy is exactly the drift this builder exists to prevent".
         opts = lance_storage_options(
-            self._endpoint or "",
+            self._store_endpoint or "",
             str(creds["AccessKeyId"]),
             str(creds["SecretAccessKey"]),
             self._region,
             session_token=str(creds["SessionToken"]),
             **self._encryption.as_options(),  # ty: ignore[invalid-argument-type]
         )
-        if not self._endpoint:
+        if not self._store_endpoint:
             # AWS proper: botocore resolves the regional endpoint, and an empty string would pin the
             # client to nothing. The builder always emits the key, so it is removed rather than skipped.
             opts.pop("endpoint", None)
@@ -819,6 +823,7 @@ class WebIdentityVendor:
         *,
         region: str,
         endpoint: str | None = None,
+        store_endpoint: str | None = None,
         role_arn: str = _DEFAULT_VEND_ROLE_ARN,
         ttl_seconds: int = 900,
         assume: Callable[..., dict[str, object]] | None = None,
@@ -832,6 +837,8 @@ class WebIdentityVendor:
         self._sanctioned_bases = tuple(sanctioned_bases)
         self._region = region
         self._endpoint = endpoint
+        #: See :class:`StsVendor`.
+        self._store_endpoint = endpoint if store_endpoint is None else store_endpoint
         self._role_arn = role_arn  # RustFS ignores it; boto3 requires the param
         self._ttl = ttl_seconds
         self._assume = assume or self._default_assume
@@ -867,14 +874,14 @@ class WebIdentityVendor:
         # measured in-cluster 2026-09-03). It also silently omitted `allow_http` and
         # `virtual_hosted_style_request`, which RustFS needs.
         opts = lance_storage_options(
-            self._endpoint or "",
+            self._store_endpoint or "",
             str(creds["AccessKeyId"]),
             str(creds["SecretAccessKey"]),
             self._region,
             session_token=str(creds["SessionToken"]),
             **self._encryption.as_options(),  # ty: ignore[invalid-argument-type]
         )
-        if not self._endpoint:
+        if not self._store_endpoint:
             opts.pop("endpoint", None)
         return VendedCredentials(storage_options=dict(opts), expires_at_millis=_expiry_millis(creds.get("Expiration"), self._ttl))
 
@@ -884,6 +891,7 @@ def make_vendor(
     *,
     region: str = "us-east-1",
     sts_endpoint: str | None = None,
+    store_endpoint: str | None = None,
     assume_role_arn: str | None = None,
     ttl_seconds: int = 900,
     access_key: str | None = None,
@@ -905,6 +913,7 @@ def make_vendor(
             role_arn=assume_role_arn,
             region=region,
             endpoint=sts_endpoint,
+            store_endpoint=store_endpoint,
             ttl_seconds=ttl_seconds,
             access_key=access_key,
             secret_key=secret_key,
@@ -915,6 +924,7 @@ def make_vendor(
         return WebIdentityVendor(
             region=region,
             endpoint=sts_endpoint,
+            store_endpoint=store_endpoint,
             role_arn=assume_role_arn or _DEFAULT_VEND_ROLE_ARN,
             ttl_seconds=ttl_seconds,
             encryption=encryption,

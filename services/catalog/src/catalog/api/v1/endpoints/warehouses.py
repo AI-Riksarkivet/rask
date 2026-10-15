@@ -239,7 +239,7 @@ async def create_warehouse(
     # guarantee is the request's problem, 400, and retrying changes nothing. A probe that could not reach the
     # store or its STS learned nothing about it, 503, and the retry is the right move; a GitOps re-POST of a
     # live warehouse must not read a store blip as a verdict on its store.
-    report = summarize_probe(await run_in_threadpool(_run_scope_probe, root_uri, vendor, so))
+    report = summarize_probe(await run_in_threadpool(_run_scope_probe, root_uri, vendor, settings.s3_endpoint))
     failed = [c.name for c in report.checks if c.outcome == "fail"]
     if broken := [name for name in failed if name in _CONFORMANCE_CHECKS]:
         log.warning("warehouse_store_failed_probe", extra={"warehouse": warehouse_id, "bucket": bucket, "failed": broken})
@@ -1130,12 +1130,16 @@ async def validate_warehouse_credentials(
     # a record naming another store it would vend and write against the wrong store entirely.
     require_estate_store(record.get("endpoint"), estate=settings.s3_endpoint, subject=f"warehouse {warehouse_id!r}")
 
-    checks = await run_in_threadpool(_run_scope_probe, str(record["root_uri"]), vendor, so)
+    checks = await run_in_threadpool(_run_scope_probe, str(record["root_uri"]), vendor, settings.s3_endpoint)
     return summarize_probe(checks)
 
 
-def _run_scope_probe(root_uri: str, vendor: CredentialVendor, storage_options: dict[str, str]) -> list[ProbeCheck]:
+def _run_scope_probe(root_uri: str, vendor: CredentialVendor, store_endpoint: str) -> list[ProbeCheck]:
     """The IO half: vend, write in, read in, write OUT (must fail), clean up.
+
+    The probe signs with the vended credential and reaches the store at ``store_endpoint``, the catalog's own
+    address: the vended endpoint is the one a client reaches from where it runs ([[LH-489]]), which the catalog's
+    pod need not resolve.
 
     Every step records its own outcome and the ones it makes impossible are SKIPPED rather than
     reported as failures — a probe that could not write has learned nothing about scope, and saying so
@@ -1172,7 +1176,7 @@ def _run_scope_probe(root_uri: str, vendor: CredentialVendor, storage_options: d
 
     options = vended.storage_options
     s3 = s3_client(
-        options.get("endpoint") or options.get("aws_endpoint"),
+        store_endpoint or None,
         access_key=options.get("aws_access_key_id") or options.get("access_key_id"),
         secret_key=options.get("aws_secret_access_key") or options.get("secret_access_key"),
         session_token=options.get("aws_session_token") or options.get("session_token"),

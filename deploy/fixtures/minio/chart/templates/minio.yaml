@@ -12,9 +12,12 @@ metadata:
   name: {{ .Values.name }}
   labels: {{- toYaml $labels | nindent 4 }}
 spec:
+  {{- if .Values.nodePort }}
+  type: NodePort
+  {{- end }}
   selector: {{- toYaml $labels | nindent 4 }}
   ports:
-    - { name: s3, port: {{ .Values.port }}, targetPort: s3 }
+    - { name: s3, port: {{ .Values.port }}, targetPort: s3{{ with .Values.nodePort }}, nodePort: {{ . }}{{ end }} }
     - { name: console, port: {{ .Values.consolePort }}, targetPort: console }
 ---
 apiVersion: v1

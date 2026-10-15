@@ -16,6 +16,10 @@ image:
 servers: 1
 volumesPerServer: 4
 port: 9000
+# -- The node port the S3 API is also reached on, so a client off the cluster reaches the store at the address rask's
+# catalog vends for it (`vending.endpoint`, LH-489): the node's address answers a pod and this host alike. Empty keeps
+# the Service ClusterIP.
+nodePort: 30900
 consolePort: 9001
 storage: 15Gi
 # "" uses the cluster's default StorageClass.

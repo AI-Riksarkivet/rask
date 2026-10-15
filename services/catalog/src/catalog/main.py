@@ -186,6 +186,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         settings.vending_mode,
         region=settings.s3_region,
         sts_endpoint=settings.s3_sts_endpoint,
+        store_endpoint=settings.vended_store_endpoint,
         assume_role_arn=settings.s3_assume_role_arn,
         ttl_seconds=settings.vending_ttl_seconds,
         # The credential the vendor DELEGATES FROM. Built AFTER `apply_dapr_secrets`, so this is the

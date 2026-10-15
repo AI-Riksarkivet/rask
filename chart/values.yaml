@@ -896,6 +896,12 @@ vending:
   mode: sts # mode_b | web_identity | sts | static
   # -- Lifetime in seconds of a vended STS / web-identity credential (LANCE_VENDING_TTL_SECONDS).
   ttlSeconds: 900
+  # A vended credential names the object store's address, and a stock client writes to that address and not
+  # its own (pylance applies vended options over the client's, measured on pylance 13.0.0). The catalog's
+  # own address may resolve only in the cluster (`rask-minio:9000`), so a client elsewhere needs the address
+  # it reaches the store at. In production the platform names the store's public address here (LH-489).
+  # -- Object-store endpoint every vended credential names (LANCE_S3_VENDED_ENDPOINT). Empty = the catalog's own store endpoint.
+  endpoint: ""
   # -- Role ARN passed on AssumeRole in `sts`/`web_identity` mode (LANCE_S3_ASSUME_ROLE_ARN); stores with inherited policies ignore it but boto3 requires it.
   assumeRoleArn: "arn:aws:iam::000000000000:role/lance-vend" # inherited-policy stores ignore it; boto3 requires the param
   # ENCRYPTION AT REST for every DIRECT write, carried in the vended storage options (§ J5). A vended

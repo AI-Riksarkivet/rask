@@ -39,6 +39,7 @@ from typing import TYPE_CHECKING
 import httpx
 
 from service_kit.lakehouse.base_refs import normalise
+from service_kit.lakehouse.endpoint_scheme import allow_http_for
 from service_kit.lakehouse.table_locations import table_id_from_location
 
 
@@ -146,7 +147,19 @@ def write_options_for(uri: str, settings: MaintenanceSettings, *, fallback: dict
     _refuse_a_credential_that_does_not_cover(uri=uri, table_id=table_id, location=vended.location)
     logger.info("write credential SCOPED for %s — this rewrite is signed by a table-scoped credential", table_id)
     record_credential_tier(tier="scoped")
-    return vended.options
+    return _at_own_store(vended.options, settings.s3_endpoint)
+
+
+def _at_own_store(options: dict[str, str], endpoint: str) -> dict[str, str]:
+    """The vended credential, used at maintenance's own store address ([[LH-489]]).
+
+    The catalog vends the address a client off the cluster reaches the store at, which may be the store's
+    public edge; maintenance runs in the cluster and reaches the store where its own settings say. The key, the
+    scope and the encryption stay the vend's. A vend naming no endpoint is AWS proper and is used as vended.
+    """
+    if "endpoint" not in options:
+        return options
+    return {**options, "endpoint": endpoint, "allow_http": allow_http_for(endpoint)}
 
 
 def _refuse_a_credential_that_does_not_cover(*, uri: str, table_id: str, location: str | None) -> None:
