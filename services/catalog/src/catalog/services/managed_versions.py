@@ -1,8 +1,9 @@
 """The catalog's ``CreateTableVersion``: judge a client-staged manifest, then finalize it ([[LH-471]], ADR 0157).
 
 Under ``managed_versioning`` a stock writer puts its data, transaction and deletion files and a staged
-``_versions/<n>.manifest-<uuid>``, and asks the catalog to finalize it. The catalog judges the version that manifest
-describes before anything is final, so a refusal leaves the table at its version.
+``_versions/<n>.manifest-<uuid>`` (under ``tree/<branch>/`` for a commit on a branch, [[LH-490]]), and asks the catalog
+to finalize it. The catalog judges the version that manifest describes before anything is final, so a refusal leaves
+the ref at its version.
 
 pylance opens no staged manifest, but it opens a DETACHED one: ``_versions/d<id>.manifest`` with the top bit of ``id``
 set is read by ``lance.dataset(location, version=id)`` and never becomes the latest version. The staged manifest is
@@ -33,6 +34,7 @@ from lance_namespace import (
     InvalidInputError,
     LanceNamespace,
     ServiceUnavailableError,
+    TableBranchNotFoundError,
     UnsupportedOperationError,
 )
 from pydantic import BaseModel, InstanceOf
@@ -41,16 +43,77 @@ from catalog.core import lineage_emit, manifest_bytes, provenance_guard
 from catalog.core.base_judge import BaseJudge, require_sanctioned_bases
 from catalog.services import client_fragments, dataplane, maintenance, native, primary_keys
 from service_kit.lakehouse import base_refs, base_registry, features, maintenance_due
+from service_kit.lakehouse.branch_layout import BRANCH_CONTAINER
 from service_kit.lakehouse.objectfs import StorageOptions
+from service_kit.lancekit.outage import reads_as_store_outage
 
 
 log = logging.getLogger(__name__)
 
 
+class CommitRef(BaseModel):
+    """The ref a stock client's staged commit continues: main, or a branch of the table rooted at ``table_location``.
+
+    A branch keeps its own version history, data, transaction, deletion and index files under ``tree/<name>/``
+    (``lance_docs/file_format.md`` § Branch Dataset Layout; measured on pylance 13.0.0, a stock client stages a branch
+    commit there and names the branch in ``CreateTableVersion``), and reads its parent's files through bases on the
+    table's root.
+    """
+
+    table_location: str
+    branch: str | None = None
+
+    @property
+    def location(self) -> str:
+        """Where the ref's own versions and files live: the table's root, or its ``tree/<branch>``."""
+        root = self.table_location.rstrip("/")
+        return root if self.branch is None else f"{root}/{BRANCH_CONTAINER}/{self.branch}"
+
+
+def commit_ref(table_location: str, so: StorageOptions, branch: str | None) -> CommitRef:
+    """The ref ``branch`` names on the table rooted at ``table_location``: main for ``None``, else a branch it lists.
+
+    A branch is created through ``CreateTableBranch``, which writes its ref; a stock client's own ``create_branch``
+    commits a ``Clone`` here and then writes ``_refs/branches/<name>.json`` itself (Lance ``rust/lance/src/dataset.rs``
+    ``create_branch`` at v13.0.0), and no writer is vended a put under ``_refs/``.
+
+    Raises:
+        TableBranchNotFoundError: The table lists no branch named ``branch``.
+        ServiceUnavailableError: The object store did not answer, which says nothing about the table's branches.
+    """
+    if branch is None:
+        return CommitRef(table_location=table_location)
+    if branch not in _listed_branches(table_location, so):
+        raise TableBranchNotFoundError(
+            f"branch {branch!r} does not exist: a branch is created through CreateTableBranch (POST /v1/table/{{id}}/branches/create), "
+            "and each later version of it is committed here"
+        )
+    return CommitRef(table_location=table_location, branch=branch)
+
+
+def _listed_branches(table_location: str, so: StorageOptions) -> set[str]:
+    """The branches the table lists; none when it has no readable dataset, from which no branch was ever taken.
+
+    A store that did not answer raises rather than reading as no branches ([[LH-247]]): pylance reports it as the same
+    bare error as an absent dataset.
+    """
+    try:
+        return set(lance.dataset(table_location, storage_options=dict(so) if so else None).branches.list())
+    except (OSError, ValueError) as exc:
+        if reads_as_store_outage(exc):
+            raise ServiceUnavailableError("the object store did not answer listing the table's branches") from exc
+        return set()
+
+
 class StagedVersion(BaseModel):
     """A staged manifest planted as a detached version, and what its transaction says."""
 
+    #: The ref's own location (:attr:`CommitRef.location`), where its versions and the files it adds live.
     location: str
+    #: The table's root, which the ref's bases are judged against.
+    table_location: str
+    #: ``None`` for main.
+    branch: str | None = None
     detached_id: int
     #: The catalog-written copy the backend finalizes from: the writer can put over its own staged key until the
     #: finalize, and the write tier's explicit Deny on ``_versions/*.manifest`` keeps it off this one.
@@ -67,20 +130,20 @@ class StagedVersion(BaseModel):
     @property
     def creates(self) -> bool:
         """The table's first version: there is no committed version for it to follow."""
-        return self.version == 1
+        return self.branch is None and self.version == 1
 
 
 def _staged_uri(location: str, manifest_path: str) -> str:
-    """The staged manifest's URI, refusing any path but one staged name directly under this table's ``_versions/``.
+    """The staged manifest's URI, refusing any path but one staged name directly under the ref's ``_versions/``.
 
-    pylance sends ``manifest_path`` as an object-store path (measured on 13.0.0: the table's path with no scheme and
+    pylance sends ``manifest_path`` as an object-store path (measured on 13.0.0: the ref's path with no scheme and
     no leading slash, then ``_versions/<n>.manifest-<uuid>``), so it is compared in that form.
     """
     root = location.rstrip("/")
     prefix = f"{dataplane.object_store_path(root)}/_versions/"
     name = manifest_path.removeprefix(prefix) if manifest_path.startswith(prefix) else ""
     if not name or "/" in name or ".manifest-" not in name or name.endswith(".manifest"):
-        raise InvalidInputError(f"manifest_path {manifest_path!r} is not a staged manifest under this table's _versions/")
+        raise InvalidInputError(f"manifest_path {manifest_path!r} is not a staged manifest under the ref's _versions/")
     return f"{root}/_versions/{name}"
 
 
@@ -98,21 +161,22 @@ def _write(location: str, so: StorageOptions, name: str, body: bytes) -> None:
         sink.write(body)
 
 
-def stage(location: str, so: StorageOptions, request: CreateTableVersionRequest) -> StagedVersion:
+def stage(ref: CommitRef, so: StorageOptions, request: CreateTableVersionRequest) -> StagedVersion:
     """Read the staged manifest ``request`` names once, plant it for judging and for the finalize, and read its operation.
 
-    The request must name the version after the table's latest and say so in the manifest's own ``version`` field: a
+    The request must name the version after the ref's latest and say so in the manifest's own ``version`` field: a
     put into an older slot a cleanup emptied would rewrite history, and a manifest whose version is not its slot's is
     one Lance refuses to read. The caller must :func:`discard` once judged, whatever the verdict.
 
     Raises:
-        InvalidInputError: The manifest path is not a staged manifest under this table, it is not a Lance manifest, it
-            cannot be opened, or its version is not the one after the table's latest.
+        InvalidInputError: The manifest path is not a staged manifest under the ref, it is not a Lance manifest, it
+            cannot be opened, or its version is not the one after the ref's latest.
     """
+    location = ref.location
     staged = _staged_uri(location, request.manifest_path)
     latest = _latest_version(location, so)
     if request.version != latest + 1:
-        raise InvalidInputError(f"commit refused: version {request.version} does not follow the table's latest version {latest}")
+        raise InvalidInputError(f"commit refused: version {request.version} does not follow the latest version {latest}")
     if request.naming_scheme not in (None, "V2"):
         raise InvalidInputError(f"commit refused: the table's manifests are named V2, not {request.naming_scheme}")
     fs, _ = dataplane.dataset_fs(location, so)
@@ -140,6 +204,8 @@ def stage(location: str, so: StorageOptions, request: CreateTableVersionRequest)
     properties = dict(transaction.transaction_properties or {}) if transaction is not None else {}
     return StagedVersion(
         location=location,
+        table_location=ref.table_location,
+        branch=ref.branch,
         detached_id=detached_id,
         finalize_id=finalize_id,
         staged_uri=staged,
@@ -328,7 +394,7 @@ def _refuse_bases(version: _Judged, judge: BaseJudge) -> None:
         ref.model_dump_json() for ref in features.manifest_base_path_refs(version.current)
     ):
         raise InvalidInputError("commit refused: a commit may not add, remove or repoint the table's bases")
-    require_sanctioned_bases(version.staged.location, refs, judge=judge)
+    require_sanctioned_bases(version.staged.table_location, refs, judge=judge)
     based = [data_file.path for _, data_file in version.split.added_files if data_file.base_id is not None]
     if based:
         raise InvalidInputError(
@@ -551,7 +617,7 @@ def _refuse_a_rewrite_that_changes_rows(version: _Judged) -> None:
     if reused:
         raise InvalidInputError(f"commit refused: a Rewrite writes its fragments afresh, and new fragment(s) {reused[:5]} carry a deletion file or an overlay")
     _refuse_rows_not_carried(version, replaced=before.keys() - after.keys(), written=after.keys() - before.keys())
-    maintenance.require_compactable(version.followed, version.so)
+    maintenance.require_compactable(version.followed, version.staged.table_location, version.so)
     _refuse_a_compaction_others_read_through(version)
 
 

@@ -176,3 +176,4 @@ before they had a record here; each names its source document and the date of th
 | [0161](0161-the-tag-gate-runs-at-publish.md) | LH-466 | The tag gate runs when a version is published, so a hold is the publish door's answer (2026-10-15) |
 | [0162](0162-the-lakehouse-builds-nothing-maintenance-decides.md) | LH-467 | The lakehouse builds nothing: compaction and indexing commit through `version/create`, and maintenance decides (2026-10-15) |
 | [0163](0163-an-erasure-is-an-obligation-a-job-fulfils-and-the-catalog-verifies.md) | LH-493 | An erasure is an obligation a bring-your-own job fulfils and the catalog verifies (2026-10-15) |
+| [0164](0164-a-stock-client-commits-on-a-branch-through-create-table-version.md) | LH-490 | A stock client commits on a branch through `CreateTableVersion`; `CreateTableBranch` creates it (2026-10-15) |

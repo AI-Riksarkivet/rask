@@ -2,7 +2,8 @@
 
 **Status:** accepted. Source: owner, 2026-10-15, un-parking LH-493 (#637) right after LH-467, and the same day, through
 the multi-question tool, on how an erasure reaches a branch and how an index segment is proved. Amends ADR 0162 §6,
-ADR 0156 C6 and ADR 0100, and moves when ADR 0138's notice is sent.
+ADR 0156 C6 and ADR 0100, and moves when ADR 0138's notice is sent. §5 is amended by ADR 0164: branch commits are
+served, so a job fulfils a branch head through them.
 
 ## Context
 

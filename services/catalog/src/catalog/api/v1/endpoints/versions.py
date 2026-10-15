@@ -201,27 +201,23 @@ async def create_table_version(
     emitter: LineageEmitterDep,
     authorization: Annotated[str | None, Header()] = None,
 ) -> CreateTableVersionResponse:
-    """Finalize a client-staged manifest as the table's next version, after judging it ([[LH-471]], ADR 0157).
+    """Finalize a client-staged manifest as the next version of the table or of one of its branches, after judging it
+    ([[LH-471]], [[LH-490]], ADR 0157).
 
-    The catalog answers ``managed_versioning=true``, so a stock writer stages ``_versions/<n>.manifest-<uuid>`` and
-    asks here; ``managed_versions`` judges the version it describes and finalizes the judged bytes through
-    the backend's put-if-not-exists. A refusal leaves the table at its version and answers a typed spec error.
+    The catalog answers ``managed_versioning=true``, so a stock writer stages ``_versions/<n>.manifest-<uuid>`` (under
+    ``tree/<branch>/`` for a branch, which ``branch`` names) and asks here; ``managed_versions`` judges the version it
+    describes against the one it follows on that ref and finalizes the judged bytes through the backend's
+    put-if-not-exists. A refusal leaves the ref at its version and answers a typed spec error. A branch is created
+    through ``CreateTableBranch``, and a branch this table does not list answers 404 (code 22).
     """
     segments = parse_identifier(id, settings.delimiter)
     body.id = reconcile_body_id(segments, body.id)
-    if body.branch is not None:
-        # A branch's versions live under ``tree/<branch>/`` and its first one needs the owner rung; neither is judged
-        # here, so a branch is created at ``branches/create`` and written through ``insert`` / ``merge_insert``
-        # with ``branch``, the doors that already judge a branch write.
-        raise UnsupportedOperationError(
-            "CreateTableVersion on a branch is not served: create the branch with POST /v1/table/{id}/branches/create "
-            "and write it through insert or merge_insert with branch"
-        )
     described: DescribeTableResponse = await run_in_threadpool(native.call, ns, "describe_table", DescribeTableRequest(id=segments))
     if not described.location:
         raise InvalidInputError("table has no object-store location to commit a version to")
     canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
-    staged = await run_in_threadpool(managed_versions.stage, described.location, so, body)
+    ref = await run_in_threadpool(managed_versions.commit_ref, described.location, so, dataplane.recorded_branch(body.branch))
+    staged = await run_in_threadpool(managed_versions.stage, ref, so, body)
     try:
         await fga_deps.require_staged_operation(client, settings, token, segments=segments, operation=staged.operation, creates=staged.creates)
         judge = BaseJudge.from_settings(settings)
@@ -252,6 +248,7 @@ async def create_table_version(
         resource=f"table:{canonical}",
         version=staged.version,
         operation=staged.operation,
+        branch=staged.branch,
     )
     await lineage_deps.emit_measured_write(
         emitter,
@@ -263,7 +260,7 @@ async def create_table_version(
         operation=managed_versions.lineage_operation(staged),
         authorization=authorization,
         pin_version=staged.version,
-        branch=None,
+        branch=staged.branch,
         run=run,
     )
     return response

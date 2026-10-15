@@ -136,7 +136,7 @@ def test_the_flag_16_refusal_is_FAIL_CLOSED_when_the_bases_cannot_be_read() -> N
 
     ds = _FakeDs(version=1, versions=[], tags={}, feature_flags=(16, 16))
     with pytest.raises(UnsupportedOperationError, match="base_paths .shallow clone"):
-        maintenance.require_compactable(ds, storage_options={})
+        maintenance.require_compactable(ds, table_location="", storage_options={})
 
 
 def test_run_gc_REFUSES_an_unknown_flag() -> None:

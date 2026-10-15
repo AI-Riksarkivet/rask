@@ -25,7 +25,7 @@ from maintenance.services.expiry import DueVerdict
 from maintenance.services.index_health import due_indices
 from maintenance.services.purge import manifest_rows, table_location
 from service_kit.lakehouse.base_refs import normalise
-from service_kit.lakehouse.features import compaction_refusal
+from service_kit.lakehouse.compaction_gate import compaction_refusal
 from service_kit.lakehouse.maintenance_due import CompactionDue, DueRecord, IndexDue, delete_due, write_due
 from service_kit.lakehouse.objectfs import StorageOptions
 

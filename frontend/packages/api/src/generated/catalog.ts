@@ -3615,11 +3615,14 @@ export interface paths {
         put?: never;
         /**
          * Create Table Version
-         * @description Finalize a client-staged manifest as the table's next version, after judging it ([[LH-471]], ADR 0157).
+         * @description Finalize a client-staged manifest as the next version of the table or of one of its branches, after judging it
+         *     ([[LH-471]], [[LH-490]], ADR 0157).
          *
-         *     The catalog answers ``managed_versioning=true``, so a stock writer stages ``_versions/<n>.manifest-<uuid>`` and
-         *     asks here; ``managed_versions`` judges the version it describes and finalizes the judged bytes through
-         *     the backend's put-if-not-exists. A refusal leaves the table at its version and answers a typed spec error.
+         *     The catalog answers ``managed_versioning=true``, so a stock writer stages ``_versions/<n>.manifest-<uuid>`` (under
+         *     ``tree/<branch>/`` for a branch, which ``branch`` names) and asks here; ``managed_versions`` judges the version it
+         *     describes against the one it follows on that ref and finalizes the judged bytes through the backend's
+         *     put-if-not-exists. A refusal leaves the ref at its version and answers a typed spec error. A branch is created
+         *     through ``CreateTableBranch``, and a branch this table does not list answers 404 (code 22).
          */
         post: operations["create_table_version_v1_table__id__version_create_post"];
         delete?: never;

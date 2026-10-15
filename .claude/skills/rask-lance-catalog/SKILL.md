@@ -347,10 +347,15 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   `vending.build_session_policy`). Every tier lists and gets `<prefix>/*`. `write` (`can_write_data`) is a
   managed-versioning writer (ADR 0157): put on what a commit needs under the ref it writes
   (`service_kit.lakehouse.table_layout.WRITER_PUT_GLOBS`: `data/`, `_transactions/`, `_deletions/`, `_indices/` and a
-  staged `_versions/<n>.manifest-<uuid>`) and an explicit Deny on a final `_versions/*.manifest`; nothing under
-  `_refs/`, no version hint, no delete. The Deny is load-bearing, measured on MinIO and on the deployed `rask-minio`
-  (LH-469, #594): the staged Allow also matches `<n>.manifest-<uuid>.manifest`, which pylance reads as a final
-  manifest. The catalog finalizes what the writer staged (`version/create`, below). `maintain` (`can_maintain`) gets put/delete on the whole prefix for compaction and
+  staged `_versions/<n>.manifest-<uuid>`) and an explicit Deny on every final manifest under it at any depth
+  (`*.manifest`); nothing under `_refs/`, no version hint, no delete. The table's own write credential also puts
+  under `tree/*` ([[LH-490]], ADR 0164): a stock client opens a branch with the table's `DescribeTable` and stages
+  the branch's commits with it, and `can_write_data` writes every branch. Measured on MinIO
+  `RELEASE.2025-04-22T22-12-26Z`, that grant leaves a write credential fitting a table prefix of 89 characters at a
+  63-character bucket (109 before), inside MinIO's 2,048-byte session policy. The Deny is load-bearing, measured on
+  MinIO and on the deployed `rask-minio` (LH-469, #594): the staged Allow also matches
+  `<n>.manifest-<uuid>.manifest`, which pylance reads as a final manifest, and `tree/*` reaches every branch's
+  `_versions/`. The catalog finalizes what the writer staged (`version/create`, below). `maintain` (`can_maintain`) gets put/delete on the whole prefix for compaction and
   cleanup, and is also the shape for the warehouse scope probe. The management vend door checks the one rung its
   tier names, never either. A put over an existing key is the residue no session policy can refuse.
   **The spec doors vend the highest tier FGA grants the caller** (ADR 0156 C3, `fga_deps.spec_vend_tier`):
@@ -386,8 +391,15 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   overlay, a deletion file or row ids below the table's `next_row_id`; each added file well formed, present at its
   declared size and agreeing with its footer, at the table's file version ([[LH-211]], `client_fragments`); blob
   sidecars against the table's recorded external bases; the primary key across new rows and carried rows; a
-  rewrite's `require_compactable`. The finalize is announced with `emit_measured_write`. A branch commit is refused
-  406 (branches are created at `branches/create` and written through `insert`/`merge_insert?branch=`). Pinned by
+  rewrite's `require_compactable`. The finalize is announced with `emit_measured_write`. **A branch commit is served
+  the same way** ([[LH-490]], ADR 0164): pylance stages it under `tree/<branch>/` and names `branch`; the judge opens
+  it at the branch's own location (`managed_versions.CommitRef`) against the branch version it follows, judges its
+  bases against the table's root, and finalizes with `branch`. A branch is created through `CreateTableBranch`
+  (`branches/create`), which writes its ref: Lance's own `create_branch` commits a `Clone` and then writes
+  `_refs/branches/<name>.json` itself, which no writer is vended, so `version/create` answers it 404 (code 22) naming
+  the door. The compaction gate (`service_kit.lakehouse.compaction_gate`, shared with maintenance's due list) weighs
+  only bases outside the table, because a branch reads its parent through a dataset-root base on the table's own
+  root. Pinned by
   `services/catalog/tests/test_a_stock_client_commits_every_operation_through_version_create.py` and
   `tests/integration/test_a_forged_fragment_is_refused_and_the_table_is_unchanged.py`. `register` still judges file
   versions on its own door.
@@ -443,8 +455,7 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   head is clean and every residual is held by `pinned_by` alone; else it stays open naming each open surface. A release
   an earlier verification scheduled under the obligation's id is reused only while it names every current pin.
   `GET /management/v1/erasures` lists them to `can_maintain` holders with `overdue`; nothing acts on a missed deadline.
-  A branch commit is not served yet (LH-490, #632), so an obligation on a table whose branch head holds the subject
-  stays open. Pinned by `services/catalog/tests/test_an_erasure_is_an_obligation_the_catalog_verifies.py` and the
+  The job rewrites a branch head through branch commits (ADR 0164) exactly as it rewrites main. Pinned by `services/catalog/tests/test_an_erasure_is_an_obligation_the_catalog_verifies.py` and the
   stock job in `test_a_stock_client_commits_every_operation_through_version_create.py`.
 - **An erasure's pins are released on a schedule, not on request** ([[LH-178]], ADR 0138). When a verification
   settles an obligation and `ErasureReport.pinned_by` is non-empty, the verification door writes a release record
@@ -615,7 +626,7 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   `a` deleted `a/_versions`'s manifests; deleting `a/_versions` deleted `a`'s history). So the create
   door refuses a layout segment (400) and a name that nests with an existing branch (409, code 19); a
   branch-maintain vend grants only `tree/<b>/{_versions,_transactions,_deletions,_indices,data}/*`
-  and a branch-write vend only `tree/<b>/data/*`;
+  and a branch-write vend only what a commit stages under `tree/<b>/` (`table_layout.WRITER_PUT_GLOBS`);
   delete goes through nested branches deepest first, refused whole (409) when a branch outside them is
   forked from one; every reclaim (the sweep's `nested_branch` gate,
   `maintenance/run`, `version/delete`) refuses a branch with another inside it; and the sweep lists

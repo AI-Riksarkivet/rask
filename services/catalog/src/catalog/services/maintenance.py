@@ -24,7 +24,8 @@ from lance_namespace import InvalidInputError, InvalidTableStateError, Unsupport
 
 from service_kit.lakehouse import branch_layout
 from service_kit.lakehouse.base_refs import BaseRefs
-from service_kit.lakehouse.features import FragmentCarrier, ManifestCarrier, compaction_refusal, describe_gc_unsupported_flags, manifest_feature_flags
+from service_kit.lakehouse.compaction_gate import compaction_refusal
+from service_kit.lakehouse.features import FragmentCarrier, ManifestCarrier, describe_gc_unsupported_flags, manifest_feature_flags
 from service_kit.lakehouse.version_retention import Retention, fork_versions, reclaimable_versions, recorded_branch, tag_versions
 
 
@@ -90,22 +91,23 @@ class VersionDeletableDataset(VersionedDataset, ManifestCarrier, Protocol):
     def cleanup_old_versions(self, *, versions: list[int], error_if_tagged_old_versions: bool) -> Any: ...  # noqa: ANN401 — pylance returns an untyped stats object
 
 
-def require_compactable(ds: FragmentCarrier, storage_options: StorageOptions) -> None:
+def require_compactable(ds: FragmentCarrier, table_location: str, storage_options: StorageOptions) -> None:
     """Refuse compacting a dataset whose layout makes a rewrite copy bytes it does not own (#121).
 
     The gate maintenance asks before it lists a table as due for compaction, one function
-    (:func:`~service_kit.lakehouse.features.compaction_refusal`), so a compaction is judged by the evidence that listed
-    it: :func:`~service_kit.lakehouse.features.describe_compaction_unsupported_flags` over three readings
+    (:func:`~service_kit.lakehouse.compaction_gate.compaction_refusal`), so a compaction is judged by the evidence that
+    listed it: :func:`~service_kit.lakehouse.features.describe_compaction_unsupported_flags` over three readings
     (the manifest's ``BasePath.is_dataset_root``, an object-store probe of each base, and whether any ``DataFile``
     resolves through one). It fails closed on every unknown and refuses a real shallow clone, whose compaction
     materialises the shared data into its own root (measured: 1,072 -> 108,199 bytes against a 119,693-byte base).
-    ``storage_options`` binds the probe to the dataset's own store: a base stated as ``/bucket/ns/t.lance`` and probed
-    as a local path finds nothing, which would permit a real clone.
+    ``table_location`` is the root of the table ``ds`` belongs to, for a branch's handle too: a branch's bases inside
+    the table are its own history. ``storage_options`` binds the probe to the table's store: a base stated as
+    ``/bucket/ns/t.lance`` and probed as a local path finds nothing, which would permit a real clone.
 
     Raises:
         UnsupportedOperationError: The layout is one a compaction must not rewrite, or the evidence is unreadable.
     """
-    if (reason := compaction_refusal(ds, str(getattr(ds, "uri", "") or ""), storage_options)) is not None:
+    if (reason := compaction_refusal(ds, table_location, storage_options)) is not None:
         raise UnsupportedOperationError(f"compaction refused: {reason}. Compacting here could rewrite bytes this dataset does not own.")
 
 

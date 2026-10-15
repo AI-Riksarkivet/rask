@@ -17,12 +17,10 @@ discovers every address from the release, or `make e2e-byo-erasure` with the add
 
 from __future__ import annotations
 
-import base64
-import json
 import os
 import time
 import uuid
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from typing import Any
 
 import boto3
@@ -30,18 +28,12 @@ import lance
 import lance_namespace
 import pyarrow as pa
 import pytest
-import requests
 from botocore.config import Config
 from lance.optimize import Compaction
+from scratch_tenant import CATALOG, DEX, Identity, Tenant, ok, provisioned
 
 
-CATALOG = os.environ.get("LANCE_E2E_CATALOG_URL", "").rstrip("/")
 LINEAGE = os.environ.get("LANCE_E2E_LINEAGE_URL", "").rstrip("/")
-DEX = os.environ.get("LANCE_E2E_DEX", "").rstrip("/")
-DEX_CLIENT = os.environ.get("LANCE_E2E_OIDC_CLIENT_ID", "lance-catalog")
-DEX_SECRET = os.environ.get("LANCE_E2E_DEX_SECRET", "lance-catalog-secret")
-ADMIN_USER = os.environ.get("LANCE_E2E_USER", "alice@example.com")
-JOB_USER = os.environ.get("LANCE_E2E_PIPELINE_USER", "publisher@rask.internal")
 #: How long a committed write may take to reach lineage's feed.
 SETTLE_SECONDS = float(os.environ.get("LANCE_E2E_SETTLE_SECONDS", "120"))
 
@@ -56,89 +48,9 @@ pytestmark = [
 ]
 
 
-class Identity:
-    """One Dex user: its bearer, and the subject the estate's grants name."""
-
-    def __init__(self, email: str) -> None:
-        answer = requests.post(
-            f"{DEX}/token",
-            data={
-                "grant_type": "password",
-                "client_id": DEX_CLIENT,
-                "client_secret": DEX_SECRET,
-                "username": email,
-                "password": "password",
-                "scope": "openid email",
-            },
-            timeout=20,
-        )
-        answer.raise_for_status()
-        self.bearer = str(answer.json()["id_token"])
-        claims = self.bearer.split(".")[1]
-        self.sub = str(json.loads(base64.urlsafe_b64decode(claims + "=" * (-len(claims) % 4)))["sub"])
-        self.http = requests.Session()
-        self.http.headers["authorization"] = f"Bearer {self.bearer}"
-
-    def namespace(self) -> lance_namespace.LanceNamespace:
-        """The stock client a job off the cluster gets."""
-        return lance_namespace.connect("rest", {"uri": CATALOG, "headers.Authorization": f"Bearer {self.bearer}"})
-
-
-def _ok(answer: requests.Response) -> dict[str, Any]:
-    assert answer.status_code == 200, f"{answer.request.method} {answer.request.url} -> {answer.status_code}: {answer.text[:500]}"
-    return answer.json()
-
-
-class Tenant:
-    """The scratch tenant one run drives, and what it must take down again."""
-
-    def __init__(self) -> None:
-        self.admin = Identity(ADMIN_USER)
-        self.job = Identity(JOB_USER)
-        self.project = f"erasure-{uuid.uuid4().hex[:8]}"
-        self.bronze = f"{self.project}-bronze"
-        self.tables: list[str] = []
-
-    def create(self) -> None:
-        admin = self.admin
-        _ok(admin.http.post(f"{CATALOG}/management/v1/projects", json={"id": self.project}))
-        _ok(admin.http.post(f"{CATALOG}/management/v1/warehouses", json={"id": self.project, "project": self.project}))
-        body = {"namespace": self.bronze, "properties": {"rask.tier": "bronze"}}
-        _ok(admin.http.post(f"{CATALOG}/management/v1/warehouses/{self.project}/namespaces", json=body))
-        for relation in ("writer", "maintainer"):
-            _ok(admin.http.post(f"{CATALOG}/management/v1/namespace/{self.bronze}/access/grant", json={"user": self.job.sub, "relation": relation}))
-
-    def tear_down(self) -> list[str]:
-        """Drop every table, then the warehouse with its bucket, then the project; what failed."""
-        failed: list[str] = []
-        attempts: list[tuple[str, Callable[[], requests.Response]]] = [
-            (table, lambda t=table: self.admin.http.post(f"{CATALOG}/v1/table/{t}/drop", json={}, timeout=60)) for table in self.tables
-        ]
-        attempts.append(
-            (
-                "warehouse",
-                lambda: self.admin.http.delete(
-                    f"{CATALOG}/management/v1/warehouses/{self.project}", params={"cascade": "true", "purge_bucket": "true"}, timeout=120
-                ),
-            )
-        )
-        attempts.append(("project", lambda: self.admin.http.delete(f"{CATALOG}/management/v1/projects/{self.project}", timeout=60)))
-        for what, attempt in attempts:
-            answer = attempt()
-            if answer.status_code != 200:
-                failed.append(f"{what}: {answer.status_code} {answer.text[:200]}")
-        return failed
-
-
 @pytest.fixture(scope="module")
 def tenant() -> Iterator[Tenant]:
-    made = Tenant()
-    try:
-        made.create()
-        yield made
-    finally:
-        left = made.tear_down()
-        assert not left, f"the scratch tenant {made.project} was not fully removed: {left}"
+    yield from provisioned("erasure", grants=("writer", "maintainer"))
 
 
 def _people(names: list[str]) -> pa.Table:
@@ -146,12 +58,12 @@ def _people(names: list[str]) -> pa.Table:
 
 
 def _verify(identity: Identity, table: str, obligation_id: str) -> dict[str, Any]:
-    return _ok(identity.http.post(f"{CATALOG}/management/v1/table/{table}/erasure/{obligation_id}/verify", json={"predicate": PREDICATE}, timeout=300))
+    return ok(identity.http.post(f"{CATALOG}/management/v1/table/{table}/erasure/{obligation_id}/verify", json={"predicate": PREDICATE}, timeout=300))
 
 
 def _feed_start(identity: Identity) -> int:
     """Where a follower that has read nothing yet starts: the newest row it may see, else the oldest held."""
-    body = _ok(identity.http.get(f"{LINEAGE}/events", params={"limit": 1}, timeout=30))
+    body = ok(identity.http.get(f"{LINEAGE}/events", params={"limit": 1}, timeout=30))
     events = body.get("events") or []
     return int(events[0]["seq"]) if events else max(int(body.get("oldest_seq") or 1) - 1, 0)
 
@@ -162,7 +74,7 @@ def _authors_of(identity: Identity, *, since: int, table: str, versions: set[int
     cursor = since
     deadline = time.monotonic() + SETTLE_SECONDS
     while not versions <= set(authors):
-        body = _ok(identity.http.get(f"{LINEAGE}/events", params={"since": cursor, "table": table, "limit": 500}, timeout=30))
+        body = ok(identity.http.get(f"{LINEAGE}/events", params={"since": cursor, "table": table, "limit": 500}, timeout=30))
         for row in body["events"]:
             # A write's facets ride its run; a definition change's, an index built or dropped among them, ride its
             # dataset (`docs/COMMIT-EVENTS.md` § A dataset change).
@@ -244,7 +156,7 @@ def test_a_job_rewrites_every_surface_and_the_catalog_releases_what_it_verifies(
     assert (len(authors), set(authors.values())) == (5, {job.sub}), authors
 
     # 5. The listing shows the obligation released, and no object under the table's prefix holds the subject's bytes.
-    listed = _ok(job.http.get(f"{CATALOG}/management/v1/erasures", params={"limit": 1000}, timeout=30))["obligations"]
+    listed = ok(job.http.get(f"{CATALOG}/management/v1/erasures", params={"limit": 1000}, timeout=30))["obligations"]
     assert [(entry["state"], entry["overdue"]) for entry in listed if entry["obligation_id"] == obligation["obligation_id"]] == [("released", False)]
     assert _objects_holding(admin, table_id, SUBJECT.encode()) == []
     assert sorted(lance.dataset(namespace_client=owner, table_id=table_id).to_table().column("pii").to_pylist()) == ["ann", "ben", "cat", "dan"]

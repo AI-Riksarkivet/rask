@@ -54,7 +54,7 @@ from service_kit.lakehouse.base_registry import BaseJudgement, BaseRole, BaseSta
 from service_kit.lakehouse.branch_layout import BRANCH_CONTAINER, BRANCH_FILE_DIRS
 from service_kit.lakehouse.features import BasePathRef
 from service_kit.lakehouse.objectfs import lance_storage_options
-from service_kit.lakehouse.table_layout import FINAL_MANIFEST_GLOB, WRITER_PUT_GLOBS
+from service_kit.lakehouse.table_layout import BRANCH_STAGING_GLOB, FINAL_MANIFEST_GLOB, WRITER_PUT_GLOBS
 
 
 log = logging.getLogger(__name__)
@@ -490,13 +490,18 @@ def build_session_policy(
     * ``write`` (``can_write_data``): put and abort-upload on what a managed-versioning writer stages under
       the ref it writes (``service_kit.lakehouse.table_layout.WRITER_PUT_GLOBS``: ``data/``,
       ``_transactions/``, ``_deletions/``, ``_indices/`` and a staged ``_versions/<n>.manifest-<uuid>``), and
-      an explicit Deny on a final ``_versions/*.manifest`` (``FINAL_MANIFEST_GLOB``). Nothing under ``_refs/``,
-      ``_mem_wal/`` or another ref's ``tree/``, and no delete. The catalog commits the version under its own
-      credential, so a writer that could put a final manifest could commit Overwrite, Restore, UpdateBases or
-      a DataReplacement around it, and one that could put under ``_refs/`` could move a tag or forge a branch.
-      The Deny is load-bearing, measured (LH-469, #594): the staged Allow also matches
+      an explicit Deny on every final manifest under it, at any depth (``FINAL_MANIFEST_GLOB``). The table's
+      own credential (no ``branch``) also puts under ``tree/`` ([[LH-490]]): a stock client opens a branch
+      with the table's ``DescribeTable`` and stages the branch's commit with it (measured on pylance 13.0.0),
+      and ``can_write_data`` on the table writes every branch. Nothing under ``_refs/`` or ``_mem_wal/``,
+      and no delete. The catalog commits the version under its own credential, so a writer that could put a
+      final manifest could commit Overwrite, Restore, UpdateBases or a DataReplacement around it, and one
+      that could put under ``_refs/`` could move a tag, forge a branch or fail every ref listing with a child
+      prefix. The Deny is load-bearing, measured (LH-469, #594): the staged Allow also matches
       ``<n>.manifest-<uuid>.manifest``, a name pylance reads as final, and a session policy's explicit Deny
-      overrides any Allow on MinIO and on AWS S3 alike.
+      overrides any Allow on MinIO and on AWS S3 alike. Measured on MinIO ``RELEASE.2025-04-22T22-12-26Z``,
+      the ``tree/`` grant costs 20 characters of the table prefix a write credential fits within MinIO's
+      2,048-byte session policy (109 to 89 at a 63-character bucket).
     * ``maintain`` (``can_vend_maintain``, the maintenance identity alone): get, put, delete and abort-upload on ``<prefix>/*``: compaction
       commits versions and cleanup deletes them, and an object store cannot tell a rewrite from a write.
 
@@ -589,13 +594,15 @@ def build_session_policy(
     # (`branch_layout.BRANCH_FILE_DIRS`) stops at `a`'s own files.
     ref_root = f"{root}/{BRANCH_CONTAINER}/{branch}" if branch else root
     if tier == "write":
-        # The same rung on a branch as on main, scoped to the ref the writer writes.
+        # The same rung on a branch as on main, scoped to the ref the writer writes; the table's own credential also
+        # stages every branch's commits, because a stock client opens a branch with the table's DescribeTable.
+        staged = [f"arn:aws:s3:::{ref_root}/{glob}" for glob in WRITER_PUT_GLOBS]
         statements.append(
             {
                 "Sid": "StagedCommit",
                 "Effect": "Allow",
                 "Action": list(_APPEND_ACTIONS),
-                "Resource": [f"arn:aws:s3:::{ref_root}/{glob}" for glob in WRITER_PUT_GLOBS],
+                "Resource": staged if branch else [*staged, f"arn:aws:s3:::{root}/{BRANCH_STAGING_GLOB}"],
             }
         )
         statements.append(

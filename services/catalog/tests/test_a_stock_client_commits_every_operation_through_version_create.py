@@ -272,15 +272,17 @@ def test_the_index_door_refuses_and_a_writers_own_index_build_commits_through_ve
 def test_an_erasure_job_commits_every_rewrite_through_version_create_and_the_catalog_releases_what_it_verifies(
     served_on_s3: Served, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """[[LH-493]], ADR 0163: the erasure door records an obligation, and every rewrite is a bring-your-own job's.
+    """[[LH-493]], [[LH-490]], ADR 0163: the erasure door records an obligation, and every rewrite is a bring-your-own job's.
 
     The job holds ``writer`` and ``maintainer`` and no owner rung. With stock pylance it deletes the subject by row id,
-    compacts with Lance's own protocol and drops the index, each a commit judged here; the catalog's verification then
-    releases the obligation, no version lands that a stock commit did not make, and the job rebuilds its index."""
+    compacts with Lance's own protocol and drops the index, on main and on the branch that inherited the subject, each
+    a commit judged here; the catalog's verification then releases the obligation, no version lands that a stock
+    commit did not make, and the job rebuilds its index."""
     stock = _created(served_on_s3)
     options = served_on_s3.storage_options
     lance.write_dataset(_keyed([4, 5], ["d", "e"]), namespace_client=stock, table_id=_TABLE, mode="append", storage_options=options)
     _opened(stock, options).create_scalar_index("v", index_type="BTREE", name="v_idx")
+    stock.create_table_branch(lance_namespace.CreateTableBranchRequest(id=_TABLE, name="work"))
     _sweep_wrote_a_clone_list(stock, clones_of_the_table=[])
     served_on_s3.granted = frozenset({*_WRITER_AND_MAINTAINER, "can_drop"})
     recorded = httpx.post(f"{served_on_s3.url}/management/v1/table/db$t/erasure", json={"predicate": "id = 2"}, headers=_TOKEN)
@@ -290,12 +292,13 @@ def test_an_erasure_job_commits_every_rewrite_through_version_create_and_the_cat
     caplog.clear()
 
     with caplog.at_level(logging.INFO, logger="lance.audit"):
-        job = _opened(stock, options)
-        ids = job.to_table(columns=[], filter="id = 2", with_row_id=True).column("_rowid").to_pylist()
-        job.delete(f"_rowid IN ({', '.join(str(row_id) for row_id in ids)})")
-        job = _opened(stock, options)
-        Compaction.commit(job, [task.execute(job) for task in Compaction.plan(job, {"materialize_deletions_threshold": 0.0}).tasks])
-        _opened(stock, options).drop_index("v_idx")
+        for head in (lambda: _opened(stock, options), lambda: _branch(stock, options)):
+            job = head()
+            ids = job.to_table(columns=[], filter="id = 2", with_row_id=True).column("_rowid").to_pylist()
+            job.delete(f"_rowid IN ({', '.join(str(row_id) for row_id in ids)})")
+            job = head()
+            Compaction.commit(job, [task.execute(job) for task in Compaction.plan(job, {"materialize_deletions_threshold": 0.0}).tasks])
+            head().drop_index("v_idx")
         verified = httpx.post(
             f"{served_on_s3.url}/management/v1/table/db$t/erasure/{recorded.json()['obligation_id']}/verify", json={"predicate": "id = 2"}, headers=_TOKEN
         )
@@ -303,10 +306,66 @@ def test_an_erasure_job_commits_every_rewrite_through_version_create_and_the_cat
 
     assert verified.status_code == 200, verified.text
     assert (verified.json()["obligation"]["state"], verified.json()["report"]["complete"]) == ("released", True), verified.json()["report"]["surfaces"]
-    committed = [getattr(r, "audit.operation") for r in caplog.records if getattr(r, "audit.action", None) == "commit_version"]
-    assert committed == ["Delete", "ReserveFragments", "Rewrite", "CreateIndex", "CreateIndex"]
-    assert _opened(stock, options).version == before + len(committed), "a version no stock commit made has landed"
-    assert _rows(_opened(stock, options)) == [(1, "a"), (3, "c"), (4, "d"), (5, "e")]
+    rewrite = ["Delete", "ReserveFragments", "Rewrite", "CreateIndex"]
+    assert [(branch, operation) for branch, _, operation in _commits(caplog)] == [
+        *((None, operation) for operation in rewrite),
+        *(("work", operation) for operation in rewrite),
+        (None, "CreateIndex"),
+    ]
+    assert _opened(stock, options).version == before + len(rewrite) + 1, "a version no stock commit made has landed"
+    assert _rows(_opened(stock, options)) == _rows(_branch(stock, options)) == [(1, "a"), (3, "c"), (4, "d"), (5, "e")]
+
+
+def _branch(stock: lance_namespace.LanceNamespace, storage_options: dict[str, str] | None = None) -> lance.LanceDataset:
+    """The head of branch ``work``, opened as a stock client opens it: a main ``DescribeTable``, then the ref."""
+    return _opened(stock, storage_options).checkout_version(("work", None))
+
+
+def _commits(caplog: pytest.LogCaptureFixture) -> list[tuple[str | None, int, str]]:
+    """Each version the catalog finalized, as ``(branch, version, operation)``; ``None`` names main."""
+    return [
+        (getattr(r, "audit.branch", None), getattr(r, "audit.version"), getattr(r, "audit.operation"))
+        for r in caplog.records
+        if getattr(r, "audit.action", None) == "commit_version"
+    ]
+
+
+def test_a_stock_client_commits_on_a_branch_through_version_create_and_main_is_unchanged(served_on_s3: Served, caplog: pytest.LogCaptureFixture) -> None:
+    """[[LH-490]]: the spec's ``CreateTableBranch`` creates the branch, and every commit a stock client then makes on it is
+    staged under ``tree/<branch>/`` and judged at ``version/create`` with ``branch`` (``lance_docs/ns_catalog/spec.yaml``
+    § CreateTableVersion; the branch layout is ``lance_docs/file_format.md`` § Branch Dataset Layout).
+
+    A branch reads its parent's fragments through a dataset-root base on the table's own root, so the compaction copies
+    them into the branch, and that base is the table's own history, not a clone's source."""
+    stock = _created(served_on_s3)
+    options = served_on_s3.storage_options
+    stock.create_table_branch(lance_namespace.CreateTableBranchRequest(id=_TABLE, name="work"))
+    _sweep_wrote_a_clone_list(stock, clones_of_the_table=[])
+    served_on_s3.granted = _WRITER_AND_MAINTAINER
+    caplog.clear()
+
+    with caplog.at_level(logging.INFO, logger="lance.audit"):
+        lance.write_dataset(_keyed([4], ["d"]), _branch(stock, options), mode="append")
+        _branch(stock, options).delete("id = 2")
+        _branch(stock, options).update({"v": "'A'"}, where="id = 1")
+        work = _branch(stock, options)
+        Compaction.commit(work, [task.execute(work) for task in Compaction.plan(work, {"materialize_deletions_threshold": 0.0}).tasks])
+        _branch(stock, options).create_scalar_index("v", index_type="BTREE", name="v_idx")
+        _branch(stock, options).drop_index("v_idx")
+
+    assert _commits(caplog) == [
+        ("work", 2, "Append"),
+        ("work", 3, "Delete"),
+        ("work", 4, "Update"),
+        ("work", 5, "ReserveFragments"),
+        ("work", 6, "Rewrite"),
+        ("work", 7, "CreateIndex"),
+        ("work", 8, "CreateIndex"),
+    ]
+    branch = _branch(stock, options)
+    assert (branch.version, len(branch.get_fragments()), _rows(branch)) == (8, 1, [(1, "A"), (3, "c"), (4, "d")])
+    main = _opened(stock, options)
+    assert (main.version, _rows(main)) == (1, [(1, "a"), (2, "b"), (3, "c")])
 
 
 def _append_at_file_version_2_1(stock: lance_namespace.LanceNamespace) -> None:
@@ -543,20 +602,68 @@ def test_a_refused_commit_leaves_the_table_at_its_version_and_answers_a_spec_err
     assert _opened(stock).version == 3
 
 
-def _answer_to_the_staged_commit(served: Served, table: str, version: int) -> tuple[int, int, str]:
-    """The status, spec code and detail the catalog answers the one staged manifest of ``table`` at ``version``.
+def _answer_to_the_staged_commit(served: Served, table: str, version: int, *, branch: str | None = None) -> tuple[int, int, str]:
+    """The status, spec code and detail the catalog answers the one staged manifest of ``table`` (or of its ``branch``)
+    at ``version``.
 
     pylance reports a refused finalize as an unknown outcome and keeps its staged manifest; asking for it again shows
     the answer the client was given.
     """
     assert served.root is not None, "a staged manifest is read back from a local root"
-    pending = list(served.root.glob(f"*_{table}/_versions/*.manifest-*"))
+    ref = f"tree/{branch}/" if branch is not None else ""
+    pending = list(served.root.glob(f"*_{table}/{ref}_versions/*.manifest-*"))
     assert len(pending) == 1, f"one staged manifest of {table} awaits its answer, found {pending}: none means the commit landed"
     (staged,) = pending
-    path = staged.relative_to("/").as_posix()
-    again = httpx.post(f"{served.url}/v1/table/{table}/version/create", json={"version": version, "manifest_path": path}, headers=_TOKEN)
+    request = {"version": version, "manifest_path": staged.relative_to("/").as_posix(), **({"branch": branch} if branch is not None else {})}
+    again = httpx.post(f"{served.url}/v1/table/{table}/version/create", json=request, headers=_TOKEN)
     body = again.json()
     return again.status_code, body.get("code"), body.get("detail", "")
+
+
+def _create_a_branch_with_pylance(stock: lance_namespace.LanceNamespace) -> None:
+    """Lance's own ``create_branch``: a ``Clone`` committed on a branch no ref names yet, then the ref written by the client."""
+    _opened(stock).create_branch("new")
+
+
+def _append_a_held_key_on_the_branch(stock: lance_namespace.LanceNamespace) -> None:
+    lance.write_dataset(_keyed([1], ["again"]), _branch(stock), mode="append")
+
+
+@pytest.mark.parametrize(
+    ("stage", "staged_at", "answer", "names"),
+    [
+        pytest.param(_create_a_branch_with_pylance, ("new", 1), (404, 22), "CreateTableBranch", id="a-branch-is-created-through-create-table-branch"),
+        pytest.param(_append_a_held_key_on_the_branch, ("work", 3), (400, 13), "primary key", id="a-held-primary-key-is-refused-on-a-branch"),
+        pytest.param(
+            _append_a_held_key_on_the_branch,
+            ("work", 2),
+            (400, 13),
+            "does not follow the latest version 2",
+            id="a-version-that-does-not-follow-the-branch-head-is-refused",
+        ),
+    ],
+)
+def test_a_refused_branch_commit_leaves_the_branch_at_its_version_and_answers_a_spec_error(
+    served: Served, stage: Callable[[lance_namespace.LanceNamespace], None], staged_at: tuple[str, int], answer: tuple[int, int], names: str
+) -> None:
+    """[[LH-490]]: a branch commit is judged like main's, and a refusal leaves every ref at its version. A branch is created
+    through ``CreateTableBranch``: a stock ``create_branch`` would write ``_refs/branches/<name>.json`` itself after its
+    commit (Lance ``rust/lance/src/dataset.rs`` ``create_branch`` at v13.0.0), and no writer is vended ``_refs/``."""
+    stock = _created(served)
+    stock.create_table_branch(lance_namespace.CreateTableBranchRequest(id=_TABLE, name="work"))
+    lance.write_dataset(_keyed([4], ["d"]), _branch(stock), mode="append")
+
+    # pylance reports a refused finalize as an OSError; the catalog's own answer is read back below.
+    with contextlib.suppress(OSError):
+        stage(stock)
+
+    branch, version = staged_at
+    status, code, detail = _answer_to_the_staged_commit(served, "db$t", version, branch=branch)
+    assert ((status, code), names in detail) == (answer, True), detail
+    assert list(_opened(stock).branches.list()) == ["work"]
+    work = _branch(stock)
+    assert (work.version, _rows(work)) == (2, [(1, "a"), (2, "b"), (3, "c"), (4, "d")])
+    assert _opened(stock).version == 1
 
 
 def test_what_lands_is_what_was_judged_whatever_the_writer_puts_over_its_staged_manifest_meanwhile(served: Served, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -27729,7 +27729,7 @@
     },
     "/v1/table/{id}/version/create": {
       "post": {
-        "description": "Finalize a client-staged manifest as the table's next version, after judging it ([[LH-471]], ADR 0157).\n\nThe catalog answers ``managed_versioning=true``, so a stock writer stages ``_versions/<n>.manifest-<uuid>`` and\nasks here; ``managed_versions`` judges the version it describes and finalizes the judged bytes through\nthe backend's put-if-not-exists. A refusal leaves the table at its version and answers a typed spec error.",
+        "description": "Finalize a client-staged manifest as the next version of the table or of one of its branches, after judging it\n([[LH-471]], [[LH-490]], ADR 0157).\n\nThe catalog answers ``managed_versioning=true``, so a stock writer stages ``_versions/<n>.manifest-<uuid>`` (under\n``tree/<branch>/`` for a branch, which ``branch`` names) and asks here; ``managed_versions`` judges the version it\ndescribes against the one it follows on that ref and finalizes the judged bytes through the backend's\nput-if-not-exists. A refusal leaves the ref at its version and answers a typed spec error. A branch is created\nthrough ``CreateTableBranch``, and a branch this table does not list answers 404 (code 22).",
         "operationId": "create_table_version_v1_table__id__version_create_post",
         "parameters": [
           {

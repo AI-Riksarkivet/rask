@@ -456,8 +456,7 @@ def _judge_head(report: ErasureReport, history: _History, listing: _StorageListi
 
 def _owed(head: _Reference, verdict: _Verdict) -> str:
     """A head surface's detail: the head, and what the job still owes there."""
-    owed = f"{_name(head)} {_OWED[verdict]}"
-    return owed if head[0] is None else f"{owed}; {_NO_BRANCH_COMMIT}"
+    return f"{_name(head)} {_OWED[verdict]}"
 
 
 def _label_surface(ref: str | None) -> str:
@@ -630,9 +629,6 @@ _OWED: Final[dict[_Verdict, str]] = {
         "proof: the job drops every user index, and rebuilds them once the obligation is released"
     ),
 }
-
-#: Why a branch head is owed until a stock client can commit on a branch (LH-490 #632).
-_NO_BRANCH_COMMIT: Final = "version/create does not yet take a commit on a branch, so this obligation stays open while the branch holds the subject"
 
 #: A head surface not judged because the step before it is still owed.
 _UNJUDGED: Final = "not judged: an earlier step on this ref is still owed"
