@@ -13,7 +13,7 @@ separate ARTIFACT — an Avro schema in a Kafka schema registry, a dbt model con
 `datacontract.yaml` — that some gate validates against.
 
 **This platform deliberately has no schema registry.** The contract is *structural*: it falls out
-of three properties the storage and bus already have, plus three enforcement points that check it.
+of three properties the storage and bus already have, plus two enforcement points that check it.
 
 ## 2 · Our contract, in one table
 
@@ -21,7 +21,7 @@ of three properties the storage and bus already have, plus three enforcement poi
 |---|---|---|
 | **Storage** | **The Lance manifest IS the schema; the version IS the handshake.** Every write commits an immutable, numbered version whose manifest embeds the full schema — data is self-describing, so there is nothing separate to register or drift from. A consumer that pins `(dataset, version)` gets bit-identical data + schema forever (time travel). | Lance format itself; CAS commit (put-if-not-exists), proven per store by `tests/e2e/test_object_store_cas_e2e.py` (`make e2e-cas`), verdict in `docs/DURABILITY.md` |
 | **Bus** | **Events carry POINTERS, never data** (claim-check): a catalog write announcement names the table, its Lance version, its branch and its author; a control event names an object and an action. The OpenLineage facets' `_schemaURL`s ARE the event-shape contract — official spec URLs, pinned in code. | `catalog/core/lineage_emit.py`; facet URLs in `packages/service-kit/src/service_kit/openlineage.py` |
-| **Identity** | One string threads all planes: `table:<id>` is the catalog id, the OpenFGA object, and the lineage graph node — so the contract's subject is never ambiguous. | catalog + `model.fga` + AGE ingest |
+| **Identity** | One string threads all planes: `table:<id>` is the catalog id, the OpenFGA object, and the name lineage's feed and edge list record — so the contract's subject is never ambiguous. | catalog + `model.fga` + `lineage/models.py` (`Dataset.lineage_name`) |
 
 The **handshake in practice**: the catalog announces every committed write on lineage, naming the table and the
 version it produced; a user's pipeline reads the upstream at a version, writes downstream through the catalog
@@ -29,13 +29,12 @@ producing a NEW version, and names its inputs at their versions in its own OpenL
 announcements from lineage's durable `GET /events` with its own token; the forward `since=` cursor and a documented
 commit-event shape are LH-472 (#598).
 
-## 3 · The three enforcement points (who checks the contract, when)
+## 3 · The two enforcement points (who checks the contract, when)
 
 | When | Gate | What it enforces | Code |
 |---|---|---|---|
 | **Publish-time** | The project's quality gate, declared on the catalog's gates door and run by the publish door | the DATA is good enough to publish: `row_count_positive` + `not_null(key_column)` + `blob_resolves` per blob column (one real byte read from the first and last rows' payloads, so a dangling external pointer is caught at publish rather than at first read) + `column_declared` per column the gate declares a consumer depends on | `catalog/services/publication.py`, `packages/service-kit/src/service_kit/lakehouse/quality.py` |
 | **Access-time** | OpenFGA (fail-closed) | WHO may read/write/promote: concentric owner⊇writer⊇reader rungs + the separate `validator` rung for promotion, checked at every catalog door | `packages/service-kit/src/service_kit/governed/fga.py`, `catalog/api/fga_deps.py` |
-| **Drift-time** | B4 reconcile (cron) | the GRAPH matches STORAGE: back-fills Lance writes whose lineage event was lost; flags `missing_on_storage`; and probes blob-POINTER health (`dangling_blob_columns` — an external payload deleted after publication changes no Lance version, so only the 1-byte probe sees it; the same shared probe as the quality gate) | `services/lineage/api/v1/endpoints/reconcile.py` |
 
 Plus the provenance guard: a writer cannot drop, rename or rewrite the provenance columns (`stage`, `lineage`,
 `source_rowid`) or the `lineage.*` / `rask.*` schema-metadata keys (`catalog/core/provenance_guard.py`).
@@ -46,19 +45,19 @@ Plus the provenance guard: a writer cannot drop, rename or rewrite the provenanc
 - Immutable versions + CAS commits — the storage half of the contract rests on put-if-not-exists, which the
   3-tier contended-write harness proved against RustFS (`docs/DURABILITY.md`); the same harness is the check for
   MinIO, the store now in use, and no MinIO run is recorded there.
-- The publish-time quality gate, FGA gates, the provenance guard, reconcile back-fill — all shipped with tests.
+- The publish-time quality gate, FGA gates and the provenance guard — all shipped with tests.
 - **Additive** schema evolution is safe *by construction*: `add_columns` makes a new version;
-  old versions stay readable; per-version schemas ride the lineage `WROTE` edge.
+  old versions stay readable; each version's manifest carries its own schema.
 
 **NOT yet prod-grade (tracked, deliberate):**
-- **Freshness** is an opt-in clause: set `services.lineage.freshnessBudgetHours` (>0) and the reconcile sweep +
-  per-dataset GET flag `stale: true` for any dataset whose newest version commit (storage truth — the version
-  manifests, so a write that bypassed lineage still counts as fresh) is older than the budget, WARN-logged
-  `lineage_reconcile_stale` per tick. 0 (default) = the axis is off, zero extra reads.
+- **Freshness** has no enforcement point: nothing in the estate flags a table whose newest version is older than
+  a budget.
+- **Drift between a commit and its announcement.** A crash between the Lance commit and the catalog's outbox stage
+  loses that write's announcement, and nothing detects it yet (LH-497, #641). An external payload deleted after
+  publication changes no Lance version, so only the publish gate's `blob_resolves` probe sees it, at publish.
 - **Breaking changes.** A gate's declared columns turn a dropped or renamed column into a publish-time
-  `column_declared` failure. The estate-wide patrol of the same declarations (`missing_declared_columns`, WARN
-  `lineage_reconcile_contract_violation`) reads `LINEAGE_DECLARED_COLUMNS`, which the chart does not render, so the
-  patrol is off. Additive evolution is never blocked. The wider schema-declaration item is tracked in
+  `column_declared` failure; nothing patrols the same declarations between publishes. Additive evolution is never
+  blocked. The wider schema-declaration item is tracked in
   `docs/adr/0012-schema-declaration-claim-check-hardening.md`.
 - **Inputs are declared by the writer.** Today a silver or gold write is authorized like any write, and its inputs
   are named only in the writer's own OpenLineage run. ADR 0156 makes the run and inputs part of the write itself,
@@ -96,7 +95,7 @@ No — related species, different format and bigger scope on our side:
 | What it is | Apache **Iceberg** REST catalog (Rust) | **Lance** REST catalog + lineage + governance, with the medallion as tier governance in the catalog |
 | The "contract" | the Iceberg spec: snapshots, schema evolution via column IDs, hidden partitioning — metadata JSON managed by the catalog | the Lance manifest + immutable versions (§2) — self-describing storage, catalog is a thin adapter |
 | AuthZ | OpenFGA (same choice — we studied theirs) | OpenFGA, threaded through the SAME `table:<id>` identity as lineage |
-| Lineage | none | OpenLineage → AGE graph, column-level, reconcile back-fill |
+| Lineage | none | OpenLineage intake, a durable commit feed and a table-level edge list as catalog-governed Lance tables, every event forwarded to a bring-your-own graph backend |
 | Change events | CloudEvents emitted on every change | OpenLineage events on lineage's durable `GET /events` feed |
 | Change approval | a `ContractVerification` trait inside the catalog that can refuse a table change that would break a data contract or quality SLO | the same idea on the Lance write path: tier governance and the publish-time gate in the catalog (ADR 0155, ADR 0156) |
 | Data movement | none (catalog only) | none either: moving data between tiers is the user's pipeline (ADR 0155) |

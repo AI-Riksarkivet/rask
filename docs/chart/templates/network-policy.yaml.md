@@ -13,7 +13,7 @@ component's scope (dapr-component.yaml) cannot drift.
 
 the dev seed reads the signing pairs from the outgoing OpenBao pod (openbao.yaml)
 
-## `{{- $ageClients := list "lineage" "catalog" "openfga-migrate" "backup-pg" }}`
+## `{{- $ageClients := list "catalog" "openfga-migrate" "backup-pg" }}`
 
 stateStore.scopes appended + uniq'd, same derivation as the openbao rule above.
 

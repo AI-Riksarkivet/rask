@@ -1,11 +1,11 @@
-"""Best-effort OpenLineage emission from the maintenance service to the lineage graph (#7b).
+"""Best-effort OpenLineage emission from the maintenance service to lineage's commit feed (#7b).
 
 A maintenance sweep expires each Lance dataset's superseded versions; when ``lineage_emit_enabled`` is on it records
 each dataset whose versions it reclaimed as an OpenLineage ``RunEvent`` (output = the dataset,
 ``operation=expire_versions``) — and each ``maintain:``-FAILED dataset as a ``FAIL`` event with the standard
 ``errorMessage`` facet (§4 failure visibility; deterministic per-dataset run id as the flood guard) — published to the
 **Dapr** ``pubsub.jetstream`` component, the SAME pubsub component + topic the catalog publishes to and the lineage
-service subscribes to, so expiry runs (and failures) show up in ``producers()`` alongside the writes.
+service subscribes to, so expiry runs (and failures) land in the feed alongside the writes.
 The sidecar owns retry/backoff + trace-propagation (no DLQ — see docs/RESILIENCE.md gap #2) as component
 config (no broker client here).
 
@@ -15,9 +15,9 @@ lineage ``Dataset`` name == the OpenFGA object id == the catalog table id across
 
 Two deliberate choices:
 
-* **Versionless.** Expiry is *maintenance*, not a data write, so the event asserts no data version — the lineage
-  repository records a ``(:Run)-[:WROTE]->(:Dataset)`` with no version and (no inputs →) no ``DERIVED_FROM``. This also
-  keeps it out of ``reconcile``'s ``latest_write_version`` (which must track real writes).
+* **Versionless.** Expiry is *maintenance*, not a data write, so the event asserts no data version, and with no
+  inputs it asserts no edge (``lineage.services.provenance.edges_of``): the feed records the run, and the edge list
+  stays the record of what derives from what.
 * **Best-effort.** A sidecar/broker outage logs + drops; auditing must never fail a maintenance sweep.
 
 This layer is **pure** (builders + emitter transports only); the per-sweep orchestration that needs the
@@ -29,7 +29,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 import uuid
 from datetime import UTC, datetime
 from typing import Any, Protocol, runtime_checkable
@@ -46,8 +45,6 @@ from service_kit.lakehouse import outbox
 from service_kit.lakehouse.stage_stamp import LINEAGE_DATASET_ID_KEY
 from service_kit.lakehouse.table_locations import table_id_from_location
 from service_kit.openlineage import (
-    DATASET_EVENT_SCHEMA_URL,
-    DATASOURCE_FACET_SCHEMA_URL,
     ERROR_MESSAGE_FACET_SCHEMA_URL,
     RUN_EVENT_SCHEMA_URL,
     custom_facet,
@@ -58,9 +55,8 @@ from service_kit.openlineage import (
 log = logging.getLogger(__name__)
 
 #: OpenLineage ``lance`` run-facet operation marker for a maintenance pass: the versions it reclaimed. Distinct from the
-#: catalog's write operations (``create_table`` / ``insert`` / ...); the lineage repository records it as a versionless
-#: ``WROTE`` run on the dataset (no ``DERIVED_FROM`` — expiry has no inputs — and, since it is not ``create_table``,
-#: no ``CREATED`` edge). It names what the run did: maintenance compacts nothing (ADR 0155).
+#: catalog's write operations (``create_table`` / ``insert`` / ...); the feed records it as a versionless run on the
+#: dataset, with no edge, since expiry has no inputs. It names what the run did: maintenance compacts nothing (ADR 0155).
 EXPIRE_VERSIONS = "expire_versions"
 
 #: OpenLineage ``producer`` URI — identifies the software that emitted the event (spec-required).
@@ -101,8 +97,8 @@ def build_maintenance_fail_event(
 ) -> dict[str, Any]:
     """The FAIL twin of :func:`build_maintenance_event` — a per-dataset maintenance FAILURE (§4).
 
-    Same job identity and the same BARE output (name only — the lineage repo then makes the ``WROTE``
-    edge so ``producers()``/``/runs`` surface the failing maintenance next to the writes) but
+    Same job identity and the same BARE output (name only — so the feed holds the failing maintenance next to
+    the writes on the same dataset) but
     ``eventType=FAIL`` and the standard ``errorMessage`` run facet carrying why. NO version / schema /
     statistics facets and no inputs — a failed maintenance pass must never fabricate lineage. The
     best-effort ``retryable`` classification rides the facet as a custom extra field (the lineage model
@@ -118,8 +114,8 @@ def build_maintenance_fail_event(
     if retryable is not None:
         error_facet["retryable"] = retryable
     # Derive from the COMPLETE builder rather than duplicating the envelope: the two events MUST share the
-    # job identity + bare-output key or a dataset's failures and successes split across different Job /
-    # Dataset nodes in the graph — building on one core makes that drift impossible.
+    # job identity + bare-output key or a dataset's failures and successes split across different jobs and
+    # datasets in the feed and in a forwarded graph backend — building on one core makes that drift impossible.
     event = build_maintenance_event(
         table_id=table_id,
         namespace=namespace,
@@ -159,65 +155,11 @@ def table_id_from_uri(uri: str) -> str | None:
 
     Delegates to the shared crossing rather than restating it. This function used to have its own
     implementation that split the leaf on its first underscore unconditionally, so
-    ``aa3bed10_transcripts_v2$t1`` emitted as ``v2$t1`` — an id naming no table, written into the
-    lineage graph as though it did, on a namespace that exists in this estate. The credential path
+    ``aa3bed10_transcripts_v2$t1`` emitted as ``v2$t1`` — an id naming no table, written into
+    lineage's feed as though it did, on a namespace that exists in this estate. The credential path
     needs the identical crossing, and two implementations of one convention is how that drift happened.
     """
     return table_id_from_location(uri)
-
-
-RESTAMP = "restamp"
-
-#: A location the reconcile can act on names a scheme. Anything else is a path fragment relative to a
-#: base only the writer knew, which is the whole defect being repaired.
-_ABSOLUTE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.\-]*://")
-
-
-def build_restamp_event(*, table_id: str, namespace: str, source_uri: str, event_time: str, author: str = "") -> dict[str, Any]:
-    """Build the OpenLineage ``DatasetEvent`` (wire JSON) that corrects one dataset's stored location.
-
-    [[LH-141]]. A `:Dataset` carrying a RELATIVE `source_uri` fails the reconcile's readability crossing
-    on every tick — "names no storage location, a relative path cannot say whether the data is there" —
-    and nothing ever rewrites it, because `ensure_declared_dataset_id` runs only from the medallion's
-    write paths and a dataset whose bytes are never rewritten is never re-stamped. The guard is correct;
-    what was missing is a way to say "this is where it actually lives" without pretending work happened.
-
-    A STATIC EVENT, NOT A RUN, and that is the reason this is not `build_maintenance_event` with a
-    different operation. That builder emits a `RunEvent` with a per-table `job`, so restamping the
-    population would plant one `(:Run)` for an operation nobody performed and one `(:Job)` per dataset —
-    and the `/jobs` governance fold makes a Job's output set an access handle, so each phantom is an
-    access-control object. The spec's `DatasetEvent` is exactly "a dataset change that no job
-    performed"; `repository.ingest_dataset_event` mints neither.
-
-    THE FACET IS `dataSource` BECAUSE THAT IS WHERE THE REPOSITORY LOOKS. `_merge_dataset` reads
-    `Dataset.source_uri`, which reads `facet("dataSource")["uri"]`, and then runs
-    ``MATCH (d:Dataset) WHERE d.name = $name SET d.source_uri=$src`` — an unconditional SET, so a
-    correct absolute URI replaces a relative one with no create-vs-update distinction to get wrong.
-    Putting the location anywhere else would emit cleanly and correct nothing.
-
-    AUTHOR IS THE SERVICE, NEVER A PERSON, for the reason `build_maintenance_event` states: a repair is
-    nobody's request, and the service's own identity is the only claim this emitter is entitled to make.
-    Empty means ABSENT rather than a placeholder — a fabricated subject is worse than none, because a
-    bus gate would authorize it.
-
-    Raises `ValueError` if `source_uri` is not absolute: restamping one relative value with another is
-    indistinguishable from success at every later hop — the node keeps failing the same guard on the
-    same tick — so the refusal belongs here, where the caller can still fix it.
-    """
-    if not _ABSOLUTE.match(source_uri):
-        raise ValueError(f"a restamp must carry an absolute location, got {source_uri!r}: a relative path repairs nothing and the node fails the same crossing")
-    facets: dict[str, Any] = {
-        "dataSource": {"_producer": _PRODUCER, "_schemaURL": DATASOURCE_FACET_SCHEMA_URL, "name": source_uri, "uri": source_uri},
-        "lance": custom_facet(_PRODUCER, operation=RESTAMP),
-    }
-    if author:
-        facets["author"] = custom_facet(_PRODUCER, name=author, sub=author)
-    return {
-        "eventTime": event_time,
-        "producer": _PRODUCER,
-        "schemaURL": DATASET_EVENT_SCHEMA_URL,
-        "dataset": {"namespace": namespace, "name": table_id, "facets": facets},
-    }
 
 
 def build_maintenance_event(
@@ -232,14 +174,13 @@ def build_maintenance_event(
     """Build the OpenLineage ``RunEvent`` (wire JSON) for one dataset's expiry pass.
 
     Input-less and versionless: a maintenance pass produces no new logical data and derives from nothing, so the
-    lineage repository records a ``(:Run)-[:WROTE]->(:Dataset)`` with no ``DERIVED_FROM`` — ``producers()`` then
-    surfaces the run next to the data writes. ``run_id`` / ``event_time`` are injected so the builder is pure and
+    feed records the run next to the data writes and the edge list gains no edge. ``run_id`` / ``event_time`` are injected so the builder is pure and
     deterministically testable.
 
     ``author`` IS THE SERVICE'S OWN IDENTITY, NEVER A PERSON'S. A maintenance pass is nobody's request;
     signing it as the service is the only claim this emitter is entitled to make, and it is the claim
-    the lineage bus door can later authorize against. Measured on the deployed graph 2026-09-08: 664 of
-    5 644 runs carried no author, 518 of them from here — so the graph could not say who maintained a
+    the lineage bus door can later authorize against. Measured on the deployed lineage store 2026-09-08: 664 of
+    5 644 runs carried no author, 518 of them from here — so lineage could not say who maintained a
     dataset while the CATALOG, which this same service calls through its own service door, could.
 
     EMPTY MEANS ABSENT, and that asymmetry is deliberate. An unconfigured identity emits NO author facet
@@ -256,7 +197,7 @@ def build_maintenance_event(
         "producer": _PRODUCER,
         "schemaURL": RUN_EVENT_SCHEMA_URL,
         "run": {"runId": run_id, "facets": facets},
-        # Per-table job identity (like the catalog write emitter) — else every dataset's expiry lumps into one Job node
+        # Per-table job identity (like the catalog write emitter) — else every dataset's expiry lumps into one job
         # whose output set spans the whole lakehouse.
         "job": {"namespace": job_namespace, "name": f"{EXPIRE_VERSIONS}.{table_id}"},
         "inputs": [],
@@ -338,14 +279,11 @@ class DaprMaintenanceEmitter:
 
     async def emit_maintenance_failed(self, *, table_id: str, namespace: str, error: str) -> None:
         # DETERMINISTIC run id — the flood guard: the cron re-sweeps every ~2 min, so a persistently
-        # failing dataset would otherwise mint a fresh never-pruned (:Run) node per tick. One id per
-        # dataset → every tick MERGEs onto ONE node in AGE, and the /events partial-unique
-        # (run_id, event_type) index dedups the redelivered FAIL rows. Accepted consequences (§4 +
-        # 2026-07-10 review): (a) after recovery the FAIL node stays until the Run-retention prune
-        # (LINEAGE_RUN_RETENTION_DAYS — enable it alongside lineageEmit) sweeps it; (b) across DISTINCT
-        # failure episodes the split is: the (:Run) node is last-wins (/runs shows the LATEST error),
-        # while /events keeps the FIRST FAIL row (its keep-first terminal contract) — /runs is the live
-        # view, /events the first-observation log.
+        # failing dataset would otherwise mint a fresh run, and a fresh feed row, per tick. One id per
+        # dataset → the feed's key for a terminal state (`<run_id>@FAIL`) is the same on every tick, and its
+        # insert-only merge lands the first FAIL row and nothing after. Accepted consequence (§4): across
+        # DISTINCT failure episodes the feed keeps the FIRST FAIL row (its keep-first terminal contract)
+        # until the feed's retention (`eventsRetentionDays`) prunes it; the next failure after that lands anew.
         event = build_maintenance_fail_event(
             table_id=table_id,
             namespace=namespace,
@@ -379,7 +317,7 @@ class DaprMaintenanceEmitter:
             # logged, and never a failed sweep.
             event = self._signed(event)
             # STAGED, then published, then dropped on ack (#4) — the twin of the catalog's emit. A
-            # sweep's lineage event describes a committed reclamation, so losing one leaves the graph
+            # sweep's lineage event describes a committed reclamation, so losing one leaves the feed
             # under-reporting work that really happened. Degrades to exactly the previous plain publish
             # when `outbox_uri` is unset, which is the default, and stays bounded either way so a hung
             # sidecar cannot stall the sweep.

@@ -4,15 +4,14 @@ THE ASYMMETRY THIS CLOSES. `endpoints/ingest.py` applies `enforce_author` (bind 
 principal) and `enforce_output_authz` (may that principal write these outputs). `api/dapr.py` applied
 neither: it was guarded only by the sidecar's shared app-api-token, which authenticates a TRANSPORT and
 not a producer. Any holder of that one credential could therefore record any provenance about any
-dataset — including an `operation: drop_table` on a table it had never seen, which the reconcile sweep
-then honours.
+dataset — including an `operation: drop_table` on a table it had never seen.
 
 THE ORDERING RULE THIS ROW SET, and why the gate is only now safe: "a consumer-side gate is only safe
 once the producers sign". Measured 2026-09-08, 664 of 5 644 runs carried no author and 518 of those were
 the maintenance sweep's, so this gate would have silently deleted the whole maintenance plane's
 provenance. Re-measured 2026-09-09 after the producer half landed: every maintenance run since the roll
-carries `service-maintenance`, and the only unauthored runs left are e2e fixture rows written straight
-to the repository, which never pass through this door.
+carries `service-maintenance`, and the only unauthored runs left were e2e fixture rows written straight
+to the store, which never pass through this door.
 """
 
 from __future__ import annotations
@@ -44,13 +43,13 @@ class _Repo:
     def __init__(self) -> None:
         self.ingested: list[RunEvent] = []
 
-    async def ingest_event(self, event: RunEvent) -> None:
+    async def record(self, event: RunEvent) -> None:
         self.ingested.append(event)
 
 
 class _RepoWithOutputs(_Repo):
-    """The capturing double plus BOTH reads the authz path makes: the run-mutation lookup and the
-    replay comparison.
+    """The capturing double plus BOTH reads the authz path makes: the run's author and the replay
+    comparison.
 
     A double that LACKS either does not fail the same way — the AttributeError lands in the consumer's
     outage branch and the delivery answers RETRY, so the test would pass for the wrong reason and could
@@ -58,8 +57,8 @@ class _RepoWithOutputs(_Repo):
     FIRST delivery, which has nothing to have replayed.
     """
 
-    async def run_output_names(self, _run_id: str) -> list[str]:
-        return []
+    async def run_author(self, _run_id: str) -> str | None:
+        return None
 
     async def recorded_event(self, _run_id: str, _event_type: str | None) -> dict[str, Any] | None:
         return None
@@ -128,7 +127,7 @@ def test_the_ROUTE_itself_refuses_an_unauthorized_delivery(monkeypatch: pytest.M
     get_settings.cache_clear()
 
     repo = _RepoWithOutputs()
-    app.state.repository = repo
+    app.state.provenance = repo
     app.state.fga = object()
 
     payload = {"data": _event(author={"name": "mallory", "sub": "mallory"}).model_dump(by_alias=True)}
@@ -136,7 +135,7 @@ def test_the_ROUTE_itself_refuses_an_unauthorized_delivery(monkeypatch: pytest.M
 
     assert response.status_code == 200, "a refusal must be an ACK, not an error the sidecar retries"
     assert response.json() == {"status": "DROP"}, f"the door recorded provenance it never authorized: {response.json()}"
-    assert repo.ingested == [], "an unauthorized delivery reached the graph"
+    assert repo.ingested == [], "an unauthorized delivery reached the feed"
 
 
 # --------------------------------------------------------------------------- #
@@ -150,15 +149,15 @@ class _Settings:
     signing = Signing(signers=frozenset(), delegators=frozenset())
 
 
-def _request(repository: object) -> Any:
+def _request(provenance: object) -> Any:
     class _App:
-        state = type("S", (), {"fga": object(), "repository": repository})()
+        state = type("S", (), {"fga": object(), "provenance": provenance})()
 
     return type("R", (), {"app": _App()})()
 
 
 class _Feed:
-    """A repository double holding exactly one recorded event."""
+    """A store double holding exactly one recorded event."""
 
     def __init__(self, stored: dict[str, Any] | None) -> None:
         self._stored = stored
@@ -166,8 +165,8 @@ class _Feed:
     async def recorded_event(self, _run_id: str, _event_type: str | None) -> dict[str, Any] | None:
         return self._stored
 
-    async def run_output_names(self, _run_id: str) -> list[str]:
-        return []
+    async def run_author(self, _run_id: str) -> str | None:
+        return None
 
 
 def _deny_all(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -198,10 +197,9 @@ def test_a_BYTE_IDENTICAL_redelivery_is_not_a_new_assertion(monkeypatch: pytest.
 def test_a_replay_that_DIFFERS_IN_ANY_FIELD_is_still_refused(monkeypatch: pytest.MonkeyPatch) -> None:
     """THE HOLE THIS AVOIDS, and it is the reason the check is byte-identical rather than a key match.
 
-    The graph MERGEs on run id and SETs `author`, `operation` and `event_type` last-wins, so exempting
-    anything whose `(run_id, event_type)` merely EXISTS would let a forger take a known run id, restamp
-    it with their own author — or as a `drop_table` the reconcile sweep then honours — and have the gate
-    wave it through as a redelivery.
+    Exempting anything whose `(run_id, event_type)` merely EXISTS would let a forger take a known run id,
+    restamp it with their own author — or as a `drop_table` — and have the gate wave it through as a
+    redelivery on the strength of the honest row beside it.
     """
     from lineage.api import fga_deps
 

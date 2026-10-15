@@ -36,9 +36,9 @@ def parse_staged(event_json: str) -> RunEvent | DatasetEvent:
 
 
 async def republish_staged(publisher: object | None, settings: LineageSettings, event_json: str) -> None:
-    """Re-announce a recovered event on the lineage topic, so its SUBSCRIBERS act on it as well as the graph.
+    """Re-announce a recovered event on the lineage topic, so its SUBSCRIBERS act on it as well as the feed.
 
-    Ingesting alone repairs the graph and leaves its subscribers unaware: a recovered RUN never reaches
+    Recording alone repairs the feed and leaves its subscribers unaware: a recovered RUN never reaches
     maintenance's arrival door or the notifications inbox, and a recovered DDL change never reaches the
     notifications bus lane. ``None`` is a deployment without the outbox, which has
     nothing to re-announce (`api.dependencies.get_publisher`).

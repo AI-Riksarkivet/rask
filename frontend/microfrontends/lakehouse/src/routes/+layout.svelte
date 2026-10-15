@@ -6,10 +6,8 @@
 	import { ModeWatcher } from 'mode-watcher';
 	import { Toaster } from 'svelte-sonner';
 	import { AppShell, ForbiddenPage } from '@rask/ui/shell';
-	import { base } from '$app/paths';
 	import { onMount, type Snippet } from 'svelte';
 	import { areaOf, lakehouseSidebar } from '$lib/nav';
-	import { lineageFeed, type LineagePulse } from '$lib/live/feeds.remote';
 	import { dismiss, markSeen, readInboxFeed, readInboxState } from '$lib/live/inbox.remote';
 	import type { LayoutData } from './$types';
 
@@ -25,27 +23,15 @@
 	const PRIVILEGED_AREAS = new Set(['admin']);
 
 	// The navbar's notification bell (@rask/ui's NotificationCenter, mounted by AppShell). The shell owns
-	// the surface and never fetches — the zone owns the transport — so this is the transport: the ONE
-	// `lineageFeed` stream, which re-reads `GET /runs` when a run actually changes state and hands back
-	// only the newest window, trimmed server-side (see `$lib/live/feeds.remote`). Every lineage-backed
-	// panel under this layout reads its cursor off the SAME stream, so the bell and the page beneath it
-	// can never be a poll apart. Mounted on the ROOT layout, so it follows the user across all four areas.
-	//
-	// Opened ON MOUNT, never at init: a live query touched during render makes the SERVER hold the page
-	// until the feed's first value — a run-board read on the critical path of every page in the zone.
-	// Same rule (and the same reason) as `$lib/live/tick.svelte`.
-	//
-	// `.current` is undefined until the first value lands; an empty feed and a not-yet-connected one both
-	// render as "no notifications", which is the honest reading of both.
-	let feed = $state<{ current: LineagePulse | undefined } | null>(null);
+	// the surface and never fetches — the zone owns the transport, the inbox remote functions below.
 
 	// The bell's read state: per SUBJECT for the rows the inbox holds, per TAB for the rest. The
 	// component exposes both as bindable with `onseen`/`ondismiss` as "the persistence seam"; this is
 	// the zone giving that seam its backend (`$lib/live/inbox.remote`).
 	let seen = $state<string[]>([]);
 	let dismissed = $state<string[]>([]);
-	// The panel's Inbox tab renders THESE, not the run rows. `null` = un-wired (no session, no
-	// service) and the bell falls back to a single run list with no tabs — the auth-off dev shape.
+	// The panel renders THESE. `null` = un-wired (no session, no
+	// service) and the bell has no inbox to render — the auth-off dev shape.
 	// The query OBJECT, held once — not a $state snapshot refilled by re-calling the query.
 	// Re-calling a remote `query()` hands back the CACHED value, so a `readInboxFeed()` after a write
 	// re-read exactly what was already there and the badge never moved. `.refresh()` is the only thing
@@ -56,8 +42,7 @@
 	const inbox = $derived(inboxQuery?.current ?? null);
 
 	onMount(() => {
-		feed = lineageFeed();
-		// Seeded on mount, never during render, and for the same reason the feed is: no page in this
+		// Seeded on mount, never during render: no page in this
 		// zone may wait on the notification plane to paint.
 		inboxQuery = readInboxFeed();
 		// UNION, not replace — anything this tab marked while the read was in flight stays marked.
@@ -79,7 +64,6 @@
 	// restart surfaces on the next RELOAD, where the seeded set is missing it and the following close
 	// sends it again.
 	const notifications = $derived({
-		runs: feed?.current?.runs ?? [],
 		// `undefined`, never `[]`, when the inbox did not answer: an EMPTY inbox is a fact worth
 		// rendering ("nothing addressed to you"), while an ABSENT one means this stack has no inbox at
 		// all and the bell must not claim otherwise by showing an empty Inbox tab.
@@ -101,7 +85,6 @@
 				.then(() => inboxQuery?.refresh())
 				.catch(() => {});
 		},
-		allHref: `${base}/lineage/runs`,
 	});
 
 	// The ADMIN area's door, which used to be the admin zone's own root layout. Fail-closed on a
@@ -120,15 +103,12 @@
 	// were denied.
 	const zoneNav = $derived(lakehouseSidebar(!data.authEnabled || (me?.estate_admin ?? false)));
 
-	// The lineage area's Graph and Columns canvases set height:100% and must fill a SIZED flex item
-	// rather than scroll inside an auto-height one; every other area wants the plain scroll wrapper.
-	//
-	// The WORKBENCH is the same shape, and belongs here for a second reason. A dock lays its grid out
-	// in PIXELS, so inside the plain `overflow-y-auto` wrapper it would both size to nothing (its
+	// The WORKBENCH must fill a SIZED flex item rather than scroll inside an auto-height one; every
+	// other area wants the plain scroll wrapper. A dock lays its grid out in PIXELS, so inside the plain `overflow-y-auto` wrapper it would both size to nothing (its
 	// `flex: 1 1 0` resolving against a block parent — the exact defect that made the explorer's dock
 	// mount three groups and paint none) and hand its scrolling to the PAGE, which would scroll the
 	// whole dock rather than the panel under the cursor. Panels own their own overflow.
-	const canvasArea = $derived(area === 'lineage' || area === 'workbench');
+	const canvasArea = $derived(area === 'workbench');
 
 	// Animate soft navs via the View Transitions API; SSR-safe. Since the four lakehouse areas merged
 	// into this one zone, a hop between them (catalog -> lineage -> models -> admin) is a soft nav and

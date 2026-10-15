@@ -1,6 +1,6 @@
 """In-service authz for the lineage read + ingest endpoints.
 
-The lineage service owns the audit graph, so it must protect it itself (in-service, not
+The lineage service owns the commit feed and the edge list, so it must protect them itself (in-service, not
 via a gateway). It mirrors the catalog's authz guard (``services/catalog/api/fga_deps.py``) and **reuses
 the catalog's core** — :func:`service_kit.governed.fga.check` / ``batch_check`` — so the OpenFGA check has
 one source of truth. The thin FastAPI authz + filter dependencies are re-derived here
@@ -10,10 +10,9 @@ and the shared OpenFGA store, read-only.)
 
 Three holes this closes (audit ``w8u4rc2tg``):
 
-* **Reads** (``upstream``/``downstream``/``producers``/``graph``) leaked the entire data
-  estate. Each is now gated on OpenFGA ``can_get_metadata`` of ``table:<dataset>`` — the
-  same permission the catalog requires to ``describe`` that table.
-* **Transitive disclosure.** A neighbor/graph read also returns *related* dataset names, so
+* **Reads** leaked the entire data estate. Each is now gated on OpenFGA ``can_get_metadata`` of
+  ``table:<dataset>`` — the same permission the catalog requires to ``describe`` that table.
+* **Transitive disclosure.** A feed or edge read also returns *related* dataset names, so
   :class:`DatasetFilter` (and :func:`governed`) batch-check each and drop the ones the caller
   may not see — mirroring the catalog's ``list_objects``-filtered enumerations.
 * **Ingest** was unauthenticated and the run ``author`` was a producer-supplied facet, so
@@ -38,10 +37,10 @@ from lance_namespace import (
 )
 from openfga_sdk import OpenFgaClient
 
-from lineage.api.dependencies import RepositoryDep, SettingsDep
+from lineage.api.dependencies import SettingsDep
 from lineage.api.security import CurrentToken, Principal
 from lineage.core.config import LineageSettings
-from lineage.models import MAINTENANCE_OPERATIONS, DatasetEvent, RunEvent, UnauthoredRunError, UngovernedOutputError, author_sub_from_payload
+from lineage.models import MAINTENANCE_OPERATIONS, DatasetEvent, ForeignRunError, RunEvent, UnauthoredRunError, UngovernedOutputError, author_sub_from_payload
 from lineage.services.signature import verify_arrived_event
 from lineage_kit.signing import VerifiedSignature
 from service_kit.governed import fga
@@ -64,9 +63,8 @@ log = logging.getLogger(__name__)
 #: An operation missing here falls to the data-write rule and demands `can_write_data`, the rung the owner's
 #: zero-trust ruling refuses the sweep, so its event is refused terminally. Measured 2026-09-11: 9 of 9
 #: `compact_table` messages on the LINEAGE stream were rejected `can_write_data required on outputs`, none
-#: reached the graph, and each is refused again on every restart replay. Nothing downstream notices: this
-#: path does not dead-letter a refusal, the outbox has already dropped its staged copy, and the reconciler
-#: excludes `Rewrite` from holes.
+#: was recorded, and each is refused again on every restart replay. Nothing downstream notices: this
+#: path does not dead-letter a refusal, and the outbox has already dropped its staged copy.
 
 #: The relation a data write demands. Named once so the two doors cannot drift on it.
 _WRITE_RELATIONS: Final = ("can_write_data",)
@@ -201,29 +199,6 @@ async def require_metadata_access(name: str, request: Request, settings: Setting
     await _require_relation("can_get_metadata", name, request, settings, token)
 
 
-async def require_write_access(name: str, request: Request, settings: SettingsDep, token: CurrentToken) -> None:
-    """Gate a governance write (tags/description, #49) on OpenFGA ``can_write_data`` for ``<type>:<name>``
-    — the same writer rung :func:`enforce_output_authz` requires of a producer recording provenance:
-    curating a dataset's governance metadata is a write on that dataset."""
-    await _require_relation("can_write_data", name, request, settings, token)
-
-
-async def audit_read(name: str, settings: SettingsDep, token: CurrentToken, repository: RepositoryDep) -> None:
-    """Record a read-audit row (WHO read this dataset) on a gated read — best-effort, off by default (#6).
-
-    Complements the write provenance in the AGE graph with an access log. No-op when ``read_audit_enabled``
-    is off or the request is unauthenticated (no subject to attribute). An audit-write failure is logged,
-    never raised — auditing must never break a read. Runs AFTER :func:`require_metadata_access`, so only an
-    authorized read is logged.
-    """
-    if not settings.read_audit_enabled or token is None:
-        return
-    try:
-        await repository.record_read(reader=token.sub, dataset=name)
-    except Exception as exc:
-        log.warning("read_audit_failed", extra={"reader": token.sub, "dataset": name, "error": str(exc)})
-
-
 def enforce_author(event: RunEvent | DatasetEvent, token: Principal | None) -> None:
     """Bind the author to the *verified* principal — never trust the request body.
 
@@ -233,8 +208,8 @@ def enforce_author(event: RunEvent | DatasetEvent, token: Principal | None) -> N
 
     THE FACET LIVES SOMEWHERE ELSE ON A STATIC EVENT, and stamping the wrong place is silent: a
     `DatasetEvent` has no run, so its author rides the DATASET's `author` facet — which is exactly
-    where :attr:`DatasetEvent.author` reads it and where the repository takes the
-    ``(:User)-[:CREATED]->(:Dataset)`` edge from. Writing a run facet onto it would leave the
+    where :attr:`DatasetEvent.author` reads it, and so where the feed's `author` column and the
+    notifications plane's targeting take it from. Writing a run facet onto it would leave the
     verified subject unread and the create attributed to whatever the body claimed.
     """
     if token is None:
@@ -258,8 +233,8 @@ def is_external_source(namespace: str, name: str) -> bool:
         403 "can_get_metadata required on inputs: bind86-src/run1"
 
     on the ingest plane's START event, whose input is the S3 prefix the run reads. The run landed its
-    data, the terminal event was authorized fine, and the graph stayed empty because the run was never
-    opened. Ten configuration causes were investigated before the service's own message was read.
+    data, the terminal event was authorized fine, and the run was never recorded as opened. Ten
+    configuration causes were investigated before the service's own message was read.
 
     The discriminator has TWO forms and lives in `service_kit.lakehouse.naming`, because it is a
     convention this service and every producer must agree on — the `project_namespace` precedent. A
@@ -270,20 +245,17 @@ def is_external_source(namespace: str, name: str) -> bool:
     Testing the scheme ALONE was a one-sided failure that looked like nothing. Of ingest's three source
     kinds only `s3-prefix` mints a scheme; `local-dir` mints ``file`` and `lance-append` mints
     ``lance``, so both were authorized as governed and both had their START event refused — while the
-    terminal event, which carries no inputs, was accepted. The run reached the graph with half its
+    terminal event, which carries no inputs, was accepted. The run was recorded with half its
     provenance and every check that asks "does a run exist" passed (measured on the deployed estate
-    2026-09-10: ``ingest_input_denied ... inputs=['/tmp/ingest-fixtures']``, 403). Pinned by
-    `tests/unit/test_an_external_source_is_one_the_graph_does_not_authorize.py`, which reads the source
-    registry itself so a fourth kind is covered without anyone remembering to add it.
+    2026-09-10: ``ingest_input_denied ... inputs=['/tmp/ingest-fixtures']``, 403).
 
     **This does not reopen the forgery hole it sits next to.** The guard exists so an authenticated
-    reader cannot record "I read ``gold$catalog``" into the audit graph. A namespace is PART OF A
-    DATASET'S IDENTITY, so a caller who fakes ``s3://anything`` as the namespace of ``gold$catalog``
-    creates an *external* node named ``s3://anything / gold$catalog`` — a different node from the
-    governed ``gold / gold$catalog``, connected to nothing that resolves. It cannot impersonate a
-    governed dataset; it can only assert an edge to a node that is, correctly, outside the estate. What
-    remains protected is exactly what the guard was written to protect: claiming to have read a
-    GOVERNED dataset you cannot see.
+    reader cannot record "I read ``gold$catalog``" into the feed. A namespace is PART OF A DATASET'S
+    IDENTITY (`Dataset.lineage_name`), so a caller who fakes ``s3://anything`` as the namespace of
+    ``gold$catalog`` names an *external* dataset ``s3://anything/gold$catalog`` — a different identity from
+    the governed ``gold$catalog``, on no governed table's edges. It cannot impersonate a governed dataset; it
+    can only assert an edge from a source that is, correctly, outside the estate. What remains protected is
+    exactly what the guard was written to protect: claiming to have read a GOVERNED dataset you cannot see.
 
     Outputs are deliberately NOT filtered this way. Writing is the direction that mutates the estate,
     and this plane never writes outside it — an output naming an external namespace is a producer
@@ -319,10 +291,10 @@ async def enforce_bus_authz(event: RunEvent | DatasetEvent, request: Request, se
     (`enforce_output_authz`); the bus door could do neither, because it has no principal — it is
     authenticated by the sidecar's shared credential and reads the author off the payload. So a
     producer holding that one token could record any provenance it liked about any dataset, including
-    a `drop_table` operation on a table it has never seen, which the reconcile sweep then honours.
+    a `drop_table` operation on a table it has never seen.
 
     THE SAME FUNCTION, not a second copy: this delegates to `enforce_output_authz` with a synthetic
-    principal, so the run-mutation check and the output check apply identically at both doors. Two
+    principal, so the run-author check and the output check apply identically at both doors. Two
     implementations of "may you record this" would drift, and the asymmetry between the doors is the
     defect this closes.
 
@@ -402,26 +374,25 @@ async def _is_replay(event: RunEvent | DatasetEvent, payload: dict[str, object],
 
     A REPLAY RE-PRESENTS EVERY RETAINED EVENT. Lineage's `deliverPolicy: all` consumer starts at the
     stream's first message on its first attach and on a rebuild, which is the estate's recovery story,
-    so an authorization gate meets the whole history again each time. Those runs are already in the
-    graph — measured 2026-09-09, a full 2 161-message replay left the durable feed flat at 3 248 rows —
+    so an authorization gate meets the whole history again each time. Those events are already in the
+    feed — measured 2026-09-09, a full 2 161-message replay left the durable feed flat at 3 248 rows —
     so refusing them loses nothing and merely turns a replay into a burst of refusals
     indistinguishable from a producer under attack.
 
     CHECKED ONLY AFTER A DENIAL, so the authorized path pays no extra read: a replay of an event that
     still authorizes cleanly never reaches here.
 
-    BYTE-IDENTICAL, never a key match. The graph MERGEs on run id and SETs `author`, `operation` and
-    `event_type` last-wins, so exempting anything whose `(run_id, event_type)` merely EXISTS would let a
-    forger rewrite an existing run's author, or restamp it as a `drop_table` the reconcile sweep then
-    honours — precisely the mutation the run check above exists to refuse. An event that differs in any
-    field is a new assertion and stays refused.
+    BYTE-IDENTICAL, never a key match. Exempting anything whose `(run_id, event_type)` merely EXISTS would
+    admit a forged event that shares a recorded one's key — another subject's extension of a run, a different
+    operation — on the strength of the honest row beside it, which is precisely what the run-author check
+    exists to refuse. An event that differs in any field is a new assertion and stays refused.
     """
     # THE FEED'S OWN KEY, never `run_id`: a static change has no run id and is stored under the id
     # derived from its content, so looking it up by run id answered "not a replay" for every DatasetEvent.
-    repository = getattr(request.app.state, "repository", None)
-    if repository is None or not event.feed_id:
+    provenance = getattr(request.app.state, "provenance", None)
+    if provenance is None or not event.feed_id:
         return False
-    stored = await repository.recorded_event(event.feed_id, event.feed_event_type)
+    stored = await provenance.recorded_event(event.feed_id, event.feed_event_type)
     return stored is not None and stored == payload
 
 
@@ -442,53 +413,29 @@ async def enforce_output_authz(
     if not settings.fga_enabled:
         return
     # Fail-closed FIRST — BEFORE any empty-set short-circuit: an authenticated but unauthorized caller must
-    # not be able to ingest a run (forging graph state) merely by declaring no outputs. (bug hunt 2026-07-13)
+    # not be able to record a run merely by declaring no outputs. (bug hunt 2026-07-13)
     client = getattr(request.app.state, "fga", None)
     if client is None:
         raise ServiceUnavailableError("authorization service is not available")
     if token is None:
         raise UnauthenticatedError("authentication required")
     object_type = settings.fga_object_type
-    # MUTATING AN EXISTING RUN IS AUTHORIZED BY THE DATA THAT RUN WROTE.
+    # AN EXISTING RUN IS EXTENDED ONLY BY ITS AUTHOR ([[LIN-5]]).
     #
-    # `MERGE (r:Run {run_id:$rid})` merges on the run id alone and last-event-wins-SETs `event_type`,
-    # `author`, `producer`, `error_message` and `operation` — and run ids are PUBLIC (`/runs`,
-    # `/events`, `/producers` serve them; the in-repo ones are deterministic UUID5 seeds). Both checks
-    # below are gated on a non-empty list, so an event naming NO dataset used to be authorized having
-    # checked nothing and still rewrote the run: set `operation` to `drop_table` and the reconcile
-    # sweep skips that dataset forever, or set FAIL and serve an invented author to every viewer.
-    #
-    # KEYED ON DATA, NOT IDENTITY, and the difference is not cosmetic. Author equality is the obvious
-    # rule and is wrong here: the HTTP door overwrites the author with the caller's verified sub
-    # (`enforce_author`) while the BUS handler applies neither that nor this check — it is gated only
-    # by the shared Dapr token. One run's events can therefore legitimately carry different authors
-    # depending on the door, and an identity rule would refuse honest traffic. "May you write what this
-    # run wrote" is stable across both.
-    #
-    # A run that does not exist yet returns NO outputs and is created freely — refusing that would
-    # re-break ingest's START event, whose only input is an external prefix it cannot authorize.
-    repository = getattr(request.app.state, "repository", None)
-    if repository is not None and event.run_id:
-        prior = await repository.run_output_names(event.run_id)
-        if prior:
-            refused = await _denied_objects(client, user=token.sub, relations=relations, names=prior, object_type=object_type)
-            # AN UNGOVERNED PRIOR CANNOT GATE, because it cannot be satisfied. A name carrying no
-            # tuples is holdable by no subject, so a run that recorded one is unamendable by EVERYONE,
-            # for ever, and no grant repairs it — there is no object to grant on. The output check
-            # below already draws this line (`UngovernedOutputError`: "there is nothing to grant on" is
-            # a different answer from "you may not"); this one did not.
-            #
-            # THE PROPERTY IS UNCHANGED FOR EVERYTHING ANYONE CAN HOLD: every GOVERNED prior still
-            # refuses, so a subject must still be able to write everything this run wrote that is
-            # writable at all, and the event's OWN outputs are authorized by the check below either
-            # way. Dropping an unsatisfiable term grants nobody anything.
-            #
-            # Measured on the deployed estate 2026-09-20: `ingest_run_mutation_denied … run_id=
-            # '36944760…' outputs=['e2e_outbox_ds']` — a bare id no catalog object ever carried,
-            # recorded by an earlier run, refusing its staged event on every sweep for six days.
-            if refused and not await _none_are_governed(client, names=refused, object_type=object_type):
-                log.info("ingest_run_mutation_denied", extra={"sub": token.sub, "run_id": event.run_id, "outputs": refused})
-                raise PermissionDeniedError(f"{' or '.join(relations)} required to amend run {event.run_id}: {', '.join(refused)}")
+    # An event naming a recorded run is recorded as that run's next state, and run ids are public (every feed row
+    # serves one), so a caller who could name any run could restate it — its state, its operation, its error — for
+    # every reader of the feed. Authorizing the extension by the data the run wrote left two holes: a run that
+    # recorded no output had nothing to authorize against, and a run that did could be extended by anyone else who
+    # may write those outputs. The author is the verified subject of the run's first recorded event: the HTTP door
+    # stamps the caller's token subject (`enforce_author`), and the bus, the outbox and the DLQ present the subject a
+    # listed signer verified, so one rule holds at every door. A run the feed does not hold yet has no author, and
+    # its first event founds it.
+    provenance = getattr(request.app.state, "provenance", None)
+    if provenance is not None and event.run_id:
+        author = await provenance.run_author(event.run_id)
+        if author is not None and author != token.sub:
+            log.info("ingest_run_mutation_denied", extra={"sub": token.sub, "run_id": event.run_id, "author": author})
+            raise ForeignRunError(f"run {event.run_id} was founded by another subject; only its author may extend it")
     outputs = [d.name for d in event.outputs if d.name]
     if outputs:
         denied = await _denied_objects(client, user=token.sub, relations=relations, names=outputs, object_type=object_type)
@@ -499,22 +446,21 @@ async def enforce_output_authz(
                 raise UngovernedOutputError(reason)
             raise PermissionDeniedError(reason)
     # Inputs: you may only RECORD reading a dataset you can SEE — else an authenticated reader (e.g. the
-    # service-web read identity) could forge READ-edge provenance like "service-web read gold$catalog" into
-    # the governed audit graph. `writer ⊇ reader` in model.fga, so writers and readers
+    # service-web read identity) could forge provenance like "service-web read gold$catalog" into the
+    # feed and the edge list. `writer ⊇ reader` in model.fga, so writers and readers
     # still pass; only a claim to have read an unreachable dataset is refused. (bug hunt 2026-07-13)
-    # THE AUTHZ SET MUST COVER THE WRITE SET, and it did not.
+    # THE AUTHZ SET MUST COVER EVERY DATASET THE EVENT ASSERTS READING.
     #
-    # `ingest_event` merges dataset vertices from THREE sources: `inputs`, `outputs`, and the column
-    # upstreams inside `outputs[].facets.columnLineage.fields[*].inputFields[]`. Only the first two
-    # were ever checked. So a caller holding `can_write_data` on one sandbox table could name a
-    # GOVERNED table as a column upstream and have the ingest merge that vertex and assert a
-    # `DERIVED_FROM` into it — the governed name never reaching a single FGA check.
+    # An event names datasets in THREE places: `inputs`, `outputs`, and the column upstreams inside
+    # `outputs[].facets.columnLineage.fields[*].inputFields[]`. The feed stores the whole event and the
+    # forwarder sends it to the configured graph backend, so a column upstream naming a GOVERNED table is
+    # a claim to have read it whether or not lineage keeps a column plane of its own.
     #
     # The column upstreams join the INPUT set rather than getting a check of their own: recording
     # "my column came from yours" is a claim to have READ your column, which is exactly what
     # `can_get_metadata` on the input side already governs. Same exemption too — an external upstream
-    # has no `table:` object, and (since `vertex_name`) cannot collide with a governed vertex either.
-    column_upstreams = {edge.name for out in event.outputs for edge in out.column_edges if edge.name and not is_external_source(edge.namespace, edge.name)}
+    # has no `table:` object, and (since `lineage_name`) cannot be recorded as a governed table either.
+    column_upstreams = {up.name for out in event.outputs for up in out.column_upstreams if not is_external_source(up.namespace, up.name)}
     inputs = sorted({d.name for d in event.inputs if d.name and not is_external_source(d.namespace, d.name)} | column_upstreams)
     if inputs:
         objs = [f"{object_type}:{n}" for n in inputs]
@@ -531,7 +477,7 @@ async def enforce_output_authz(
 class DatasetFilter:
     """Drop datasets the caller may not see from a lineage result (fail-closed).
 
-    A neighbor/graph read returns *related* dataset names beyond the requested one; without
+    A feed row or an edge read names *related* datasets beyond the one asked about; without
     filtering, one table grant would disclose the existence of every table in its lineage
     neighborhood. This batch-checks ``can_get_metadata`` (fail-closed: an OpenFGA outage →
     503) and returns only the authorized names — the lineage analogue of the catalog's
@@ -554,9 +500,9 @@ class DatasetFilter:
         if self._token is None:
             raise UnauthenticatedError("authentication required")
         object_type = self._settings.fga_object_type
-        # Dedupe before the round trip: callers legitimately pass per-item dataset names (one per
-        # column in the subgraph view), and a duplicate-laden batch payload is pure wasted checks. A
-        # name whose `<type>:<name>` is no object id (an external `s3://` vertex, say) is answered False
+        # Dedupe before the round trip: callers legitimately pass per-item dataset names, and a
+        # duplicate-laden batch payload is pure wasted checks. A
+        # name whose `<type>:<name>` is no object id (an external `s3://` source, say) is answered False
         # by `fga.batch_check` without being sent; other external names are sent and answered not granted.
         unique = list(dict.fromkeys(names))
         allowed = await fga.batch_check(

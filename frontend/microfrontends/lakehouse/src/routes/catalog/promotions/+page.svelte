@@ -47,16 +47,4 @@
 			inside its running workflow, not in a table, so this page cannot enumerate them.
 		</p>
 	</Card>
-
-	<Card class="flex flex-col gap-2 p-4">
-		<h2 class="text-sm font-semibold">Where a hold shows up</h2>
-		<p class="text-muted-foreground text-sm">
-			A held promotion emits its own FAIL run, whose message reads
-			<em>“quality gate HELD the promotion into …”</em>. Both surfaces below list it, newest first.
-		</p>
-		<div class="flex flex-wrap gap-2">
-			<Button variant="outline" href="{base}/lineage/runs">Runs board</Button>
-			<Button variant="outline" href="{base}/lineage">Lineage graph</Button>
-		</div>
-	</Card>
 </div>

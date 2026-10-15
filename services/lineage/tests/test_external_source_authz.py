@@ -1,13 +1,13 @@
 """An EXTERNAL source is not a governed object, and authorizing it as one refuses every honest producer.
 
-THE MEASURED FAILURE. An ingest run lands its data in bronze and opens its run in the graph with a START
-event naming where the data came from — an S3 prefix. The service answered:
+THE MEASURED FAILURE. An ingest run lands its data in bronze and opens its run with a START event naming
+where the data came from — an S3 prefix. The service answered:
 
     403 {"detail": "can_get_metadata required on inputs: bind86-src/run1"}
 
 and because START was refused, the run was never opened. The terminal event that follows was authorized
-perfectly well (measured: `201 ingested`), so bronze filled up over nine runs while the lineage graph
-held zero ingest events. Nothing reported it: the ingest plane's I8 guard is *required* never to raise,
+perfectly well (measured: `201 ingested`), so bronze filled up over nine runs while lineage held zero
+ingest events. Nothing reported it: the ingest plane's I8 guard is *required* never to raise,
 so the emit failure is a log line, and every other check asks whether the DATA landed.
 
 WHY NO TUPLE COULD EVER FIX IT. The guard composes `table:<input name>` and checks `can_get_metadata`.
@@ -122,7 +122,7 @@ def request_with(monkeypatch):
 @pytest.mark.anyio
 async def test_a_GOVERNED_input_the_caller_cannot_see_is_STILL_refused(settings, request_with) -> None:
     """The half the fix must not cost. This is the forgery the guard exists to stop: an authenticated
-    reader recording `I read gold$catalog` into the authoritative audit graph."""
+    reader recording `I read gold$catalog` into the feed."""
     request, _ = request_with(set())
     event = _event(inputs=[_dataset("gold", "gold$catalog")])
 
@@ -135,10 +135,10 @@ async def test_a_FORGED_external_namespace_cannot_launder_a_governed_name(settin
     """The attack the exemption invites, and why it does not land.
 
     A caller could name `gold$catalog` under an `s3://` namespace to skip the check. It skips — and buys
-    nothing, because a NAMESPACE IS PART OF A DATASET'S IDENTITY. The recorded node is
-    `s3://anything / gold$catalog`, which is a different node from the governed `gold / gold$catalog`
-    and connects to nothing that resolves. The assertion is on the resulting graph identity, not on the
-    check being skipped, because the skip is the mechanism and the identity is the guarantee.
+    nothing, because a NAMESPACE IS PART OF A DATASET'S IDENTITY. The recorded identity is
+    `s3://anything/gold$catalog`, a different one from the governed `gold$catalog`, on no governed table's
+    edges. The assertion is on the identity edges are keyed on, not on the check being skipped, because the
+    skip is the mechanism and the identity is the guarantee.
     """
     request, _ = request_with(set())
     forged = _dataset("s3://anything", "gold$catalog")
@@ -146,13 +146,10 @@ async def test_a_FORGED_external_namespace_cannot_launder_a_governed_name(settin
 
     await enforce_output_authz(event, request, settings, _Principal())
 
-    # ASSERTED ON THE VERTEX KEY, which is what the docstring above always claimed and what this
-    # assertion never checked: it used to compare `(forged.namespace, forged.name)` — the fixture two
-    # lines up — to a different literal, which is unconditionally true and could not fail. The property
-    # it names was false the whole time (`MERGE (d:Dataset {name:$name})` keys on NAME ALONE), so the
-    # forged input landed on the governed vertex. `vertex_name` is what makes the claim true.
+    # ASSERTED ON THE IDENTITY KEY the edges use, never on `(forged.namespace, forged.name)` against a literal,
+    # which is unconditionally true and cannot fail.
     governed = _dataset("gold", "gold$catalog")
-    assert forged.vertex_name != governed.vertex_name, "the forged input resolved to the governed node's identity — the exemption IS a laundering path"
+    assert forged.lineage_name != governed.lineage_name, "the forged input resolved to the governed table's identity — the exemption IS a laundering path"
 
 
 @pytest.mark.anyio
@@ -208,8 +205,8 @@ def test_the_discriminator_is_a_URI_SCHEME_OR_A_DECLARED_NAMESPACE(namespace: st
 # Everything above is the WRITE path: `enforce_output_authz` exempts an external input, because R23
 # says raw is the external world and no tuple could ever be written for it.
 #
-# The READ path never got the same treatment, and it cannot apply the rule as written: `consumer.py`
-# persists `[d.name for d in event.inputs]` — the NAMESPACE is discarded — so by the time `GET /events`
+# The READ path never got the same treatment, and it cannot apply the rule as written: the feed's `inputs`
+# column keeps `[d.name for d in event.inputs]` — the NAMESPACE is discarded — so by the time `GET /events`
 # governs a row it has only bare names, and `is_external_source` needs the namespace. Every event with
 # an external input is therefore governed against `table:<bare name>`, which nobody holds a grant on,
 # and the whole row is hidden from EVERY caller. Not just from notifications: the lakehouse events
@@ -220,20 +217,20 @@ def test_the_discriminator_is_a_URI_SCHEME_OR_A_DECLARED_NAMESPACE(namespace: st
 
 
 def _record(*, inputs: list[str], outputs: list[str], event: dict) -> EventRecord:
-    """A real `EventRecord`, not a stand-in — `_governed_datasets` takes the type the repository yields,
+    """A real `EventRecord`, not a stand-in — `_governed_datasets` takes the type the store yields,
     and a duck-typed double would only prove the helper works on a shape production never sends."""
     return EventRecord(seq=1, inputs=inputs, outputs=outputs, event=event)
 
 
 def test_the_read_path_can_recover_the_namespace_the_columns_dropped() -> None:
     """The fix's precondition, stated as a test: the payload still knows what the columns forgot."""
-    from lineage.api.v1.endpoints.runs import _governed_datasets
+    from lineage.api.v1.endpoints.events import _governed_datasets
 
     payload = _event(
         inputs=[_dataset("s3://lake/batch", "img.png")],
         outputs=[_dataset("bronze", "bronze-media$objects")],
     ).model_dump(by_alias=True)
-    # `inputs` is what consumer.py persists: the bare NAME, namespace discarded.
+    # `inputs` is what the feed keeps: the bare NAME, namespace discarded.
     record = _record(inputs=["img.png"], outputs=["bronze-media$objects"], event=payload)
 
     governed_on = _governed_datasets(record)
@@ -243,12 +240,12 @@ def test_the_read_path_can_recover_the_namespace_the_columns_dropped() -> None:
 
 
 def test_a_summary_row_keeps_todays_behaviour() -> None:
-    """`summary=true` drops the payload at the SQL layer, so the namespace genuinely is not there.
+    """`summary=true` leaves the payload out of the read, so the namespace genuinely is not there.
 
     Governing on the bare names is then the only option, and it is what happens today — so this fix
     must not change that path, only the one where the information exists.
     """
-    from lineage.api.v1.endpoints.runs import _governed_datasets
+    from lineage.api.v1.endpoints.events import _governed_datasets
 
     record = _record(inputs=["img.png"], outputs=["bronze-media$objects"], event={})
 
@@ -256,19 +253,12 @@ def test_a_summary_row_keeps_todays_behaviour() -> None:
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
-# THE GUARANTEE, ASSERTED WHERE IT LIVES — the vertex key, not the pydantic object
+# THE IDENTITY THE EDGES ARE KEYED ON — `Dataset.lineage_name`, not the pydantic object
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 #
-# `test_a_forged_external_namespace_cannot_launder_a_governed_dataset` above claims in its docstring to
-# assert "the resulting graph identity". It does not. It compares the fixture it just built
-# (`("s3://anything", "gold$catalog")`) to a different literal, which is unconditionally true and can
-# never fail. The guarantee it names was never tested, and it is FALSE:
-#
-#     repository.py:245   MERGE (d:Dataset {name:$name}) SET d.namespace=$ns
-#
-# The vertex is keyed on NAME ALONE and the namespace is overwritten, so a forged external input lands
-# on the governed vertex and rewrites it — the exact laundering the exemption's docstring says is
-# impossible. These tests assert the identity the storage layer actually uses.
+# An external source is qualified by its namespace, so it can never name a governed table's edges
+# ([[LIN-3]], pinned through the real store by
+# `tests/integration/test_an_erasure_finds_every_table_derived_from_a_source.py`).
 
 
 def test_two_external_sources_with_the_same_name_stay_distinct_by_namespace() -> None:
@@ -278,22 +268,18 @@ def test_two_external_sources_with_the_same_name_stay_distinct_by_namespace() ->
     a = Dataset(namespace="s3://bucket-a", name="run1")
     b = Dataset(namespace="s3://bucket-b", name="run1")
 
-    assert a.vertex_name != b.vertex_name
+    assert a.lineage_name != b.lineage_name
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
-# THE AUTHZ SET MUST COVER THE WRITE SET
+# THE AUTHZ SET MUST COVER EVERY DATASET THE EVENT ASSERTS READING
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 #
-# `enforce_output_authz` authorizes two sets: `event.outputs`, and non-external `event.inputs`.
-# `ingest_event` writes a THIRD: dataset names appearing only inside
-# `outputs[].facets.columnLineage.fields[*].inputFields[]`, which it MERGEs as stub vertices and links
-# `DERIVED_FROM` edges against (`repository.py` — the `stub_ns` pass).
-#
-# So a caller holding `can_write_data` on ONE sandbox table can name a GOVERNED dataset as a column
-# upstream and have the ingest merge that governed vertex and assert a derivation into it — with the
-# governed name never presented to a single FGA check. The gap is not the exemption (these are
-# governed namespaces, not external ones); it is that the check never enumerated this set at all.
+# An event names datasets in a THIRD place besides `event.outputs` and `event.inputs`: inside
+# `outputs[].facets.columnLineage.fields[*].inputFields[]`. The feed stores the whole event and the forwarder
+# sends it to the configured graph backend, so a caller holding `can_write_data` on ONE sandbox table could
+# otherwise name a GOVERNED dataset as a column upstream and have a derivation from it recorded and forwarded —
+# with the governed name never presented to a single FGA check.
 
 
 def _event_with_column_upstream(output: Dataset, up_ns: str, up_name: str) -> RunEvent:
@@ -320,7 +306,7 @@ def _event_with_column_upstream(output: Dataset, up_ns: str, up_name: str) -> Ru
 @pytest.mark.anyio
 async def test_a_GOVERNED_column_upstream_is_AUTHORIZED_not_written_blind(settings, request_with) -> None:
     """The defect: the caller may write `mine$table` and holds nothing on `gold$catalog`, yet naming it
-    as a column upstream makes the ingest merge the governed vertex and assert a derivation into it."""
+    as a column upstream would record and forward a derivation from it."""
     request, _fake = request_with({"table:mine$table"})  # write on the sandbox only
     event = _event_with_column_upstream(_dataset("mine", "mine$table"), "gold", GOVERNED)
 
@@ -343,103 +329,9 @@ async def test_a_column_upstream_the_caller_CAN_see_passes(settings, request_wit
 @pytest.mark.anyio
 async def test_an_EXTERNAL_column_upstream_stays_exempt(settings, request_with) -> None:
     """Same rule as inputs, and for the same reason: an external source has no `table:` object, so
-    authorizing it is unsatisfiable rather than strict. Its vertex is namespace-qualified, so it cannot
-    reach a governed node either way."""
+    authorizing it is unsatisfiable rather than strict. Its identity is namespace-qualified, so it cannot
+    name a governed table either way."""
     request, _fake = request_with({"table:mine$table"})
     event = _event_with_column_upstream(_dataset("mine", "mine$table"), "s3://raw", "gold$catalog")
-
-    await enforce_output_authz(event, request, settings, _Principal())
-
-
-# ══════════════════════════════════════════════════════════════════════════════════════════════════
-# MUTATING AN EXISTING RUN IS AUTHORIZED BY THE DATA THAT RUN WROTE
-# ══════════════════════════════════════════════════════════════════════════════════════════════════
-#
-# `MERGE (r:Run {run_id:$rid})` merges on the run id ALONE and last-event-wins-SETs `event_type`,
-# `author`, `producer`, `error_message` and `operation`. Run ids are PUBLIC — `/runs`, `/events` and
-# `/producers` serve them, and the in-repo ones are deterministic UUID5 seeds. Both existing authz
-# blocks are gated on a non-empty list, so an event naming NO dataset is authorized having checked
-# nothing, and still rewrites the run.
-#
-# Two harms, both silent: set `operation` to `drop_table` and the reconcile sweep skips that dataset
-# FOREVER (dropped-ness is derived from the last successful run's operation), so storage loss and
-# contract violations on a live governed table stop being reported; or set `eventType: FAIL` and serve
-# an attacker-chosen author and error to every authorized viewer of `/datasets/<name>/producers`.
-#
-# THE CHECK KEYS ON DATA ENTITLEMENT, NOT ON IDENTITY, and that is the load-bearing choice. Author
-# equality looks like the obvious rule and is WRONG here: the HTTP door overwrites the author with the
-# caller's verified sub (`enforce_author`) while the BUS handler (`on_lineage_event`) applies neither
-# that nor this check — it is gated only by the shared Dapr token. So one run's events can legitimately
-# carry different author strings depending on which door they arrived through, and an identity rule
-# would refuse honest traffic. "May you write what this run wrote" is stable across both doors.
-#
-# A run that does NOT yet exist is untouched by this: creating a run is harmless, and refusing it would
-# re-break the ingest plane's START event, whose only input is an external S3 prefix and which
-# therefore authorizes nothing by design.
-
-
-class _FakeRepo:
-    """Answers the one question the guard asks: what did this run already write?"""
-
-    def __init__(self, outputs_by_run: dict[str, list[str]]) -> None:
-        self._outputs = outputs_by_run
-        self.asked: list[str] = []
-
-    async def run_output_names(self, run_id: str) -> list[str]:
-        self.asked.append(run_id)
-        return list(self._outputs.get(run_id, []))
-
-
-def _with_repo(request, repo: _FakeRepo):
-    request.app.state.repository = repo
-    return request
-
-
-VICTIM_RUN = "11111111-2222-4333-8444-555555555555"
-
-
-def _bare_event(run_id: str) -> RunEvent:
-    """Names no dataset at all — the shape both existing blocks skip."""
-    return RunEvent.model_validate(
-        {
-            "eventType": "COMPLETE",
-            "eventTime": "2026-08-16T12:00:00Z",
-            "producer": "rask://attacker",
-            "job": {"namespace": "test", "name": "j"},
-            "run": {"runId": run_id, "facets": {"lance": {"operation": "drop_table"}}},
-            "inputs": [],
-            "outputs": [],
-        }
-    )
-
-
-@pytest.mark.anyio
-async def test_overwriting_a_run_that_WROTE_a_governed_table_is_refused(settings, request_with) -> None:
-    """The attack: a principal with no grants rewrites a run that wrote `gold$catalog`, flipping its
-    operation to `drop_table` so the reconcile sweep abandons that dataset permanently."""
-    request, _fake = request_with(set())
-    _with_repo(request, _FakeRepo({VICTIM_RUN: [GOVERNED]}))
-
-    with pytest.raises(PermissionDeniedError):
-        await enforce_output_authz(_bare_event(VICTIM_RUN), request, settings, _Principal())
-
-
-@pytest.mark.anyio
-async def test_a_principal_who_MAY_write_that_table_still_may_amend_its_run(settings, request_with) -> None:
-    """The legitimate case this must not cost: the producer that wrote the outputs sends its own
-    terminal event for the same run. Keyed on the data, so it passes through EITHER door."""
-    request, _fake = request_with({f"table:{GOVERNED}"})
-    _with_repo(request, _FakeRepo({VICTIM_RUN: [GOVERNED]}))
-
-    await enforce_output_authz(_bare_event(VICTIM_RUN), request, settings, _Principal())
-
-
-@pytest.mark.anyio
-async def test_an_EXTERNAL_only_START_still_opens_its_run(settings, request_with) -> None:
-    """The exact event the exemption was created for, driven end to end: an external input, no outputs,
-    a run that does not exist. It must pass, or the ingest plane goes dark again."""
-    request, _fake = request_with(set())
-    _with_repo(request, _FakeRepo({}))
-    event = _event(inputs=[_dataset("s3://raw", "bind86-src/run1")])
 
     await enforce_output_authz(event, request, settings, _Principal())

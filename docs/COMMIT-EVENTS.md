@@ -25,14 +25,18 @@ Authorization: Bearer <token>
 - **Always pass `next_cursor` back as `since`.** It is the last seq this page covered, including events
   your filters or your grants hid, so the next poll never re-reads or skips one.
 - **`next_cursor` equal to the `since` you sent, with no events, means you are caught up.** Poll again later.
-- **`seq` is the only ordering promise.** Seq order is the order events became visible in the feed: no
-  event appears with a smaller seq than one you have already read. Seq numbers have holes; a hole is not
-  a lost event.
+- **`seq` is the only ordering promise.** A row's seq is its Lance stable row id plus one, which Lance assigns
+  in commit order (`lance_docs/file_format.md`, "Row ID Assignment"): no event appears with a smaller seq
+  than one you have already read. Seq numbers can have holes; a hole is not a lost event.
 - **Where to start.** To read everything the feed still holds, start at `since = oldest_seq - 1`; to read
   only what arrives from now on, start at the highest `seq` of a newest-first read (`GET /events?limit=1`).
 - **A cursor below `oldest_seq - 1` may have lost events to retention.** The feed deletes old rows, and a
   seq hole just below `oldest_seq` looks the same, so this is a possible loss rather than proof. Treat it as
   one: reconcile the tables you follow from the catalog (`DescribeTable`, `ListTableVersions`).
+- **A cursor beyond the feed's head came from another feed.** A `since` larger than the newest seq the feed
+  holds is answered with no events and `next_cursor` equal to that newest seq, lower than the `since` you
+  sent. The feed was rebuilt or restored; re-read it from `oldest_seq - 1`, and expect to see events again
+  that you have already handled. The notifications reconciler does exactly this.
 
 ## What you can see
 
@@ -86,17 +90,7 @@ this row when it should read only what readers of `@published` read.
 
 A schema or lifecycle change that committed no rows (create, drop, ...). `event_type` is `COMPLETE`, `job`
 is `null`, and `event` is an OpenLineage `DatasetEvent` with no `run`: the table is `dataset.name`, and the
-`lance` and `author` facets sit on `dataset.facets`. The same row kind records a drop that lineage's
-reconcile observed on storage: `author` is `reconcile` and `dataset.facets.lance` carries
-`operation: "drop_table"` and `observed: "absent on storage"`.
-
-### A write recovered by reconcile
-
-A committed write whose event never reached the feed (see Delivery) is back-filled by lineage's reconcile.
-`event_type` is `RECONCILED`, `author` is `reconcile`, and `event` is a `RunEvent` with `eventType: OTHER`,
-`producer` lineage's reconcile, job namespace `lance-reconcile`, and `run.facets.lance` carrying
-`operation: "reconcile"`, the committed `version` and the `ref`. It names no author facet, no project and no
-`outputs[0].facets.version`: act on `run.facets.lance.version`.
+`lance` and `author` facets sit on `dataset.facets`.
 
 ### Events from other producers
 
@@ -106,8 +100,10 @@ Their `author.sub` is bound to the posting token; every other facet is that prod
 ## Delivery
 
 - The catalog stages each write's event in its outbox (the chart sets `LANCE_LINEAGE_OUTBOX_URI`) before
-  publishing; from there, delivery into the feed is at least once, and lineage drops redeliveries of the
-  same event.
-- A crash between the Lance commit and the stage loses the event until lineage's reconcile back-fills it.
-  A back-filled event takes a new, larger seq, so it can arrive after events for later commits. Order the
-  writes of one table by `lance.version`, not by `seq`.
+  publishing; from there, delivery into the feed is at least once, and lineage records each event once
+  (an insert-only merge on the row's key), so a redelivery lands no second row.
+- A crash between the Lance commit and the stage loses the event: nothing in the estate detects that commit
+  yet (LH-497, #641). An event the outbox drain recovers takes a new, larger seq, so it can arrive after
+  events for later commits. Order the writes of one table by `lance.version`, not by `seq`.
+- The feed keeps rows for `services.lineage.eventsRetentionDays` of arrival time (default 7), so a follower
+  that stops for longer can find its cursor below `oldest_seq - 1` (see the cursor rule).

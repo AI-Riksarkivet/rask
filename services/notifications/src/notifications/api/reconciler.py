@@ -3,16 +3,16 @@
 **The bus is provably incomplete, and that is measured rather than defensive.** The ingest service
 emits lineage over HTTP only and refuses the topic outright; so do Ray TRAIN and every external
 OpenLineage producer posting to `/api/v1/lineage`. Those lanes reach lineage's durable feed
-(`public.lineage_events`) and never `lineage.events.v1`. The one place both paths converge is this
+(`provenance$events`, a Lance table the catalog keeps, ADR 0158) and never `lineage.events.v1`. The one place both paths converge is this
 feed — so a plane that subscribes and stops there is a plane that silently never notifies a whole
 class of run.
 
 **Three properties of lineage's feed shape this walk, none of them obvious from the endpoint name:**
 
-1. `?since=<seq>` follows FORWARD, oldest first, and lineage makes seq order the order rows become
-   visible (`FEED_ORDER_LOCK_KEY` in lineage's store), so the mark is simply the last row handled:
+1. `?since=<seq>` follows FORWARD, oldest first, and a row's seq is its stable Lance row id, assigned
+   in commit order (`lineage.services.provenance`), so the mark is simply the last row handled:
    every row at or below it was offered, and no row below it can still appear (LH-472).
-2. Each row's payload is lineage's TARGETING VIEW of the event (`runs.py::targeting_view`): the run id,
+2. Each row's payload is lineage's TARGETING VIEW of the event (`events.py::targeting_view`): the run id,
    its `author` and `lance` facets, the state and time, and the output names — exactly what
    `lineage_events.py` reads, and nothing describing data. The feed row carries no `run_id` column, so
    the payload is the only place a notification id can come from.
@@ -332,6 +332,14 @@ async def _walk(
     """Offer every row after the mark, oldest first, until caught up, a retry, or `max_pages`."""
     for _ in range(max_pages):
         page = await client.page(since=progress.mark)
+        # A FEED REBUILT BENEATH THE MARK. Lineage answers a `since` past its newest row with that row's seq, which
+        # no cursor of this feed can exceed, so a lower `next_cursor` means the mark was taken on another feed
+        # (lineage's store moved, or was restored). Re-read this feed from its oldest row: a row offered twice is
+        # absorbed by the inbox's idempotent ids, and a row never offered is the loss this lane exists to prevent.
+        if page.next_cursor is not None and page.next_cursor < progress.mark:
+            log.warning("lineage_feed_cursor_ahead_of_feed", extra={"cursor": progress.mark, "head": page.next_cursor})
+            progress.mark = page.oldest_seq - 1 if page.oldest_seq is not None else 0
+            continue
         # DID THE FEED DELETE ROWS WE HAD NOT READ? Lineage serves rows at or above `oldest_seq`; if that
         # is past the row after our mark, the rows between were pruned before this lane reached them.
         # The loss is unrecoverable, so the mark moves past it and it is reported this once.
@@ -390,11 +398,12 @@ async def _settle(store: LineageCursorStore, stored: LineageCursor, progress: _P
 
 
 def _report_gap(stored: LineageCursor, progress: _Progress) -> None:
-    """Retention may have deleted rows this lane had not read. ERROR because the loss is unrecoverable,
-    and every tick that hid it would make the estate look healthier than it is.
+    """Retention deleted rows this lane had not read. ERROR because the loss is unrecoverable, and every
+    tick that hid it would make the estate look healthier than it is.
 
-    "May": lineage's `oldest_seq` cannot tell a pruned row from a seq the feed never filled (a lost
-    `ON CONFLICT` still draws one), so a hole just below the retained floor reads the same as a loss.
+    Every seq below lineage's `oldest_seq` was a row: a seq is one more than a stable Lance row id, and Lance advances
+    its `next_row_id` by exactly the rows a commit adds, reassigning them when a conflict rebases the
+    commit (`lance_docs/file_format.md`, "Row ID Assignment"), so the feed issues no seq it never filled.
     """
     if progress.gapped:
         log.error("lineage_feed_pruned_below_cursor", extra={"cursor": stored.seq, "scanned": progress.scanned})

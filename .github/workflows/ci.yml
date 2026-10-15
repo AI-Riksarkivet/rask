@@ -88,8 +88,8 @@ jobs:
       # combined job calling `dagger call test-pg` ("alembic upgrade head from zero against a real
       # postgres:16, then the core suite with DATABASE_URL") — but P7a deleted that whole plane (no app
       # DB, no Alembic, no fleet DATABASE_URL; see CLAUDE.md) and the dagger module has no TestPg
-      # function to call. It could only ever fail, and it did. The surviving relational stores (lineage
-      # AGE, OpenFGA) are proved by the e2e-lineage and e2e-stack jobs below.
+      # function to call. It could only ever fail, and it did. The surviving relational store (OpenFGA's
+      # and Dapr state's Postgres) is proved by the e2e-stack job below.
 
   # The remaining hermetic gates, one runner each. `fail-fast: false` is the whole point of the matrix
   # here: the default (true) cancels the siblings the moment one leg fails, which would rebuild
@@ -618,49 +618,6 @@ jobs:
           done
           exit $fail
 
-  # AGE-backed lineage e2e (§7): the graph repository's REAL Cypher runs against a real Apache AGE
-  # Postgres — the unit fakes can't catch AGE dialect behavior (the int-vs-string $ver at-version
-  # match, the RETURN-less DETACH DELETE prune, the functional-index DDL). Runs via the Dagger module
-  # (AGE as a hermetic service container) so `make e2e-lineage` == `dagger call test-lineage` == this
-  # job, byte-for-byte. Engine version pinned by dagger.json. Same fork-gating as e2e-auth.
-  e2e-lineage:
-    runs-on: ubuntu-latest
-    needs: ms-test
-    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Dagger CLI (pinned to the module's engineVersion)
-        run: |
-          curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.8 BIN_DIR=/usr/local/bin sh
-      # STARTING THE ENGINE IS A NETWORK CALL, and it was failing often enough to make this CI's verdict
-      # about the weather. Measured 2026-09-24: four Dagger jobs across two runs died on
-      # `start engine: failed to pull image ... read: connection reset by peer` from registry.dagger.io,
-      # while that same manifest answered 200 from elsewhere — so the image is fine and the runner's
-      # route to it is not. Warming the engine in its own step keeps the retry on the PULL and off the
-      # work: a genuine failure still fails on the last attempt, with its own error, and a test that
-      # fails is never retried into passing — `ms-charts` proved that half, skipping `dagger call
-      # charts` rather than running it against a half-started engine.
-      #
-      # FIVE ATTEMPTS OVER ~150s, because three over ~30s was measured too short the same day: the
-      # same registry answered `504 Gateway Timeout` for longer than that window and took the job
-      # with it. The backoff is linear rather than exponential so the ceiling stays legible.
-      - name: Warm the Dagger engine (a transient registry pull is retried, the work is not)
-        env:
-          DAGGER_NO_NAG: "1"
-        run: |
-          for attempt in 1 2 3 4 5; do
-            if dagger core version; then exit 0; fi
-            echo "!! engine start failed (attempt $attempt/5) — retrying" >&2
-            sleep $((attempt * 15))
-          done
-          dagger core version
-
-      - name: Lineage e2e (real AGE graph, hermetic via Dagger)
-        env:
-          DAGGER_NO_NAG: "1"
-        run: dagger call test-lineage
-
   # THE GUARDED LIVE PROOF (docs/GOAL-prove-it.md P0.1 — the gap that made every "live-verified" claim
   # in this repo an anecdote). Until now `test` ran `-m "not e2e"`, so the outbox / warehouse-isolation /
   # multibase / client-direct / CAS suites were NEVER guarded: they passed once in a terminal and nothing
@@ -668,7 +625,7 @@ jobs:
   # (Dex OIDC + OpenFGA + Dapr + RustFS + AGE, with the #3-A/#3-B/#4 flags on) and runs all five.
   #
   # `make e2e-ci` == this job, byte-for-byte — both shell out to scripts/e2e_stack.sh, so "green in CI"
-  # and "green on my machine" cannot diverge (same contract as e2e-lineage == `dagger call test-lineage`).
+  # and "green on my machine" cannot diverge.
   # Fork-gated like the other live jobs (no infra guarantees / untrusted docker builds on forked PRs).
   e2e-stack:
     runs-on: ubuntu-latest
@@ -815,7 +772,7 @@ jobs:
         run: |
           curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.8 BIN_DIR=/usr/local/bin sh
 
-      # STARTING THE ENGINE IS A NETWORK CALL — see e2e-lineage for the measurement. The retry stays
+      # STARTING THE ENGINE IS A NETWORK CALL — see e2e-stack for the measurement. The retry stays
       # on the PULL and off the work, so a lane that genuinely fails is never retried into passing.
       - name: Warm the Dagger engine (a transient registry pull is retried, the work is not)
         env:

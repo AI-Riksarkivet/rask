@@ -10,10 +10,7 @@ but never sees the route. Everything between the sidecar and that function was u
   before ``dapr.resiliency.enabled``.
 * the **token guard on the delivery route**. ``on_lineage_event`` declares
   ``Depends(require_dapr_token)``, which a direct call to ``handle_cloud_event`` cannot exercise —
-  drop the dependency and every direct-call test still passes while the graph becomes forgeable.
-* **redelivery**. Dapr is at-least-once and the handler answers ``RETRY``, so duplicates are the
-  NORMAL case, and the whole design rests on "the graph is idempotent (nodes/edges MERGE)". That
-  claim was only checked against real AGE in the e2e tier (``test_lineage_e2e.py``), i.e. never in CI.
+  drop the dependency and every direct-call test still passes while the feed becomes forgeable.
 * the **DLQ parking route** for lineage. Its subscription *declaration* was pinned; its behaviour
   (ERROR-log + ACK + the terminal-loss counter + the 403) was only pinned for medallion's twin.
 
@@ -25,14 +22,14 @@ Live shape this file mirrors (kind cluster ``lance``, 2026-07-26)::
      {"pubsubname": "lineage-pubsub-lineage", "topic": "dlq.lineage.events",
       "route": "/lineage-dlq"}]
 
-Infra-free: no sidecar, no NATS, no database.
+Infra-free: no sidecar, no NATS, no catalog. That a redelivery lands nothing twice is the store's claim,
+pinned through the real catalog by ``tests/integration/test_the_commit_feed_is_a_lance_table_followed_forward.py``.
 """
 
 from __future__ import annotations
 
-import asyncio
 import logging
-from typing import Any, cast
+from typing import Any
 
 import pytest
 from fastapi import FastAPI
@@ -64,7 +61,7 @@ _CLOUD_EVENT = {"id": "ce-1", "source": "catalog", "type": "com.dapr.event.sent"
 
 
 class _FakeRepo:
-    """Stands in for the AGE-backed repository at the ROUTE tier (the graph itself is exercised below)."""
+    """Stands in for the provenance store at the ROUTE tier."""
 
     def __init__(self) -> None:
         self.ingested: list[RunEvent] = []
@@ -72,18 +69,18 @@ class _FakeRepo:
 
     async def record_refusal(self, *, outbox_key: str, run_id: str | None, author: str | None, reason: str, event_json: str) -> None:
         """[[LH-182]] The drain now RECORDS a settled refusal before retiring the object, so a double
-        that cannot record one no longer stands in for the repository. Captured rather than ignored:
+        that cannot record one no longer stands in for the store. Captured rather than ignored:
         several of these tests assert what the refusal path did, and a silent no-op would let a drain
         that recorded nothing pass as one that did."""
         self.refusals.append({"outbox_key": outbox_key, "run_id": run_id, "author": author, "reason": reason, "event_json": event_json})
 
-    async def ingest_event(self, event: RunEvent) -> None:
-        # Graph AND durable /events row, in one transaction — one call, nothing to stub twice.
+    async def record(self, event: RunEvent) -> None:
+        # The edges AND the feed row — one call, nothing to stub twice.
         self.ingested.append(event)
 
 
 def _delivery_app(monkeypatch: pytest.MonkeyPatch, *, dlq_topic: str | None = None) -> tuple[TestClient, _FakeRepo]:
-    """A real ``register_dapr``-wired app: the production wiring, minus the sidecar and the database."""
+    """A real ``register_dapr``-wired app: the production wiring, minus the sidecar and the catalog."""
     monkeypatch.setenv("APP_API_TOKEN", "s3cret")
     monkeypatch.setenv("LINEAGE_DAPR_ENABLED", "true")
     if dlq_topic is None:
@@ -100,7 +97,7 @@ def _delivery_app(monkeypatch: pytest.MonkeyPatch, *, dlq_topic: str | None = No
     register_dapr(app)
     get_settings.cache_clear()
     repo = _FakeRepo()
-    app.state.repository = repo
+    app.state.provenance = repo
     return TestClient(app), repo
 
 
@@ -122,7 +119,7 @@ def test_default_subscription_contract_is_the_one_the_publisher_uses(
 
     This is the whole durable ingest path in three strings, and it is a CROSS-PROCESS contract: the
     catalog publishes to that (component, topic) and the sidecar POSTs that route. Renaming any of them
-    on one side alone loses every event silently — no error, no metric, just an empty graph."""
+    on one side alone loses every event silently — no error, no metric, just an empty feed."""
     client, _ = _delivery_app(monkeypatch)
     subs = _subs(client)
     assert set(subs) == {"lineage.events.v1"}  # exactly one subscription without a DLQ configured
@@ -156,11 +153,11 @@ def test_dapr_disabled_registers_no_ingest_route_at_all(monkeypatch: pytest.Monk
 # --------------------------------------------------------------------------- #
 
 
-def test_sidecar_delivery_reaches_the_repository_through_the_route(
+def test_sidecar_delivery_reaches_the_store_through_the_route(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A sidecar-shaped POST to the REGISTERED route ingests and ACKs — the seam the handler-only tests
-    skip (route registration + the ``Depends`` chain + ``request.app.state.repository`` lookup)."""
+    skip (route registration + the ``Depends`` chain + ``request.app.state.provenance`` lookup)."""
     client, repo = _delivery_app(monkeypatch)
     response = client.post("/lineage-events", json=_CLOUD_EVENT, headers={"dapr-api-token": "s3cret"})
     assert response.status_code == 200
@@ -168,119 +165,24 @@ def test_sidecar_delivery_reaches_the_repository_through_the_route(
     assert [e.run.run_id for e in repo.ingested] == ["r1"]
 
 
-def test_forged_delivery_without_the_app_token_is_403_before_the_repository(
+def test_forged_delivery_without_the_app_token_is_403_before_the_store(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """CONTRACT (the security audit's prod-blocker): the delivery route is co-mounted on the public API
     app, so an unauthenticated POST would let anyone inject fabricated nodes into the authoritative
-    graph — self-asserting any ``author`` — EVEN WITH OIDC/FGA on. Only the route tier can prove the
+    feed — self-asserting any ``author`` — EVEN WITH OIDC/FGA on. Only the route tier can prove the
     guard is attached: ``handle_cloud_event`` has no idea the dependency exists."""
     client, repo = _delivery_app(monkeypatch)
     forged = client.post("/lineage-events", json=_CLOUD_EVENT)
     assert forged.status_code == 403
     wrong = client.post("/lineage-events", json=_CLOUD_EVENT, headers={"dapr-api-token": "nope"})
     assert wrong.status_code == 403
-    assert repo.ingested == []  # nothing reached the graph
+    assert repo.ingested == []  # nothing reached the feed
 
 
 # --------------------------------------------------------------------------- #
 # Redelivery — the NORMAL case for at-least-once delivery
 # --------------------------------------------------------------------------- #
-
-
-def test_redelivery_acks_and_writes_the_identical_idempotent_statements(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """CONTRACT: a redelivered event converges instead of duplicating.
-
-    The handler answers ``RETRY`` on a transient failure, so Dapr redelivery is DESIGNED-FOR, not
-    exceptional — and the docstring's justification is "the authoritative graph is idempotent
-    (nodes/edges MERGE on ``run_id``)". That claim was only ever checked against real AGE in the e2e
-    tier, so CI could not catch a ``CREATE`` slipping into the ingest transaction (which would fork a
-    duplicate vertex on every redelivery, corrupting the graph).
-
-    Driven through the REAL :class:`LineageRepository` over a capturing ``run_cypher`` (the harness
-    ``test_lineage.py`` uses), twice, from the Dapr entry point:
-
-    1. both deliveries ACK ``SUCCESS`` — a duplicate is never mistaken for a failure and re-queued;
-    2. no graph write is a bare ``CREATE`` — every vertex/edge write is a ``MERGE`` (or a
-       ``MATCH ... SET`` behind one), so replaying converges;
-    3. the second delivery emits a statement sequence IDENTICAL to the first — the write set is a pure
-       function of the event, which is what makes (2) sufficient.
-    """
-    import lineage.services.repository as repo_mod
-    from lineage.core.metrics import Door
-    from lineage.services.consumer import handle_cloud_event
-
-    calls: list[tuple[str, dict[str, object]]] = []
-
-    async def _capture(_conn: object, _graph: str, query: str, params: dict[str, object], *, columns: int = 1) -> list[list[object]]:
-        del columns  # signature parity with the real helper
-        calls.append((query, params))
-        return []  # governance reads see "no node yet"
-
-    class _Conn:
-        """The transaction speaks BOTH dialects — the AGE Cypher through `run_cypher`, and the plain-SQL
-        `lineage_events` INSERT on this same connection, because the durable feed row is part of the
-        ingest rather than a projection after it. `sql` is captured for the same convergence assertion
-        the Cypher is: a redelivery must issue the identical statements."""
-
-        def __init__(self) -> None:
-            self.sql: list[tuple[str, object]] = []
-
-        def transaction(self) -> Any:
-            return _Ctx()
-
-        async def execute(self, statement: str, params: object = None) -> None:
-            self.sql.append((statement, params))
-
-    class _Ctx:
-        async def __aenter__(self) -> None:
-            return None
-
-        async def __aexit__(self, *_a: object) -> bool:
-            return False
-
-    class _PoolCM:
-        def __init__(self, conn: _Conn) -> None:
-            self._conn = conn
-
-        async def __aenter__(self) -> _Conn:
-            return self._conn
-
-        async def __aexit__(self, *_a: object) -> bool:
-            return False
-
-    class _Pool:
-        """ONE connection for the pool's lifetime, so both deliveries' SQL lands in one place."""
-
-        def __init__(self) -> None:
-            self.conn = _Conn()
-
-        def connection(self) -> _PoolCM:
-            return _PoolCM(self.conn)
-
-    monkeypatch.setattr(repo_mod, "run_cypher", _capture)
-    pool = _Pool()
-    repo = repo_mod.LineageRepository(cast(Any, pool), "g")
-
-    first_status = asyncio.run(handle_cloud_event(repo, _CLOUD_EVENT, door=Door.SUBSCRIBER))
-    first, first_sql = list(calls), list(pool.conn.sql)
-    calls.clear()
-    pool.conn.sql.clear()
-    second_status = asyncio.run(handle_cloud_event(repo, _CLOUD_EVENT, door=Door.SUBSCRIBER))
-    second, second_sql = list(calls), list(pool.conn.sql)
-
-    assert first_status == second_status == {"status": "SUCCESS"}
-    assert first, "the ingest issued no Cypher — the capture harness drifted"
-    creates = sorted({q for q, _ in first if "CREATE (" in q})
-    assert not creates, f"ingest must MERGE, never CREATE — a redelivery would duplicate: {creates}"
-    assert second == first, "redelivery is not a pure function of the event — convergence is unproven"
-    # The feed row rides the same transaction and must converge on the same terms — it is what makes a
-    # redelivery safe to fail into: ON CONFLICT DO NOTHING on the natural key, issued identically twice.
-    inserts = [q for q, _ in first_sql if q.startswith("INSERT")]
-    assert inserts and all("ON CONFLICT DO NOTHING" in q for q in inserts), f"the feed INSERT is not idempotent: {first_sql}"
-    assert second_sql == first_sql, "the durable feed row is not a pure function of the event either"
 
 
 # --------------------------------------------------------------------------- #
@@ -302,7 +204,7 @@ def test_dlq_subscription_and_parking_route_are_declared_together(
 def test_dlq_route_parks_with_an_error_log_acks_and_counts_the_loss(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """CONTRACT: a parked delivery is ACKed (never re-fired blind — it already exhausted the schedule),
     ERROR-logged, and COUNTED as ``dead_lettered``. The counter is the only dashboardable signal that
-    the graph is missing events; without it the loss is a log line that scrolls away."""
+    the feed is missing events; without it the loss is a log line that scrolls away."""
     import lineage.api.dapr as dapr_mod
     from lineage.core.metrics import Door, Outcome
 

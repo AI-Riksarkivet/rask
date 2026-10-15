@@ -8,6 +8,4 @@ export * from './components/select/index.js';
 export * from './motion.js';
 export * from './components/chip/index.js';
 export * from './components/search-bar/index.js';
-export * from './components/status-board/index.js';
-export * from './runs/index.js';
 export * from './components/grants-panel/index.js';

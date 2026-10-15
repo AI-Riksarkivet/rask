@@ -125,7 +125,6 @@ export const SERVICES_SEED: Record<string, unknown> = {
 	'GET /api/datasets/demo/descriptor': DESCRIPTOR,
 	'GET /api/health': HEALTH,
 	'GET /events?limit=1&summary=true': CURSOR_PROBE,
-	'GET /runs': { runs: [] },
 
 	'GET /api/search': SEARCH_HITS,
 

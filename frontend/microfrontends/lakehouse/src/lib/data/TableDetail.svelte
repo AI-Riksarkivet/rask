@@ -18,8 +18,6 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import AccessGraph from './AccessGraph.svelte';
-	import { fetchProducers } from '$lib/api';
-	import type { ProducerInfo } from '@rask/api/lineage';
 	import {
 		checkAccess,
 		fetchAccess,
@@ -27,8 +25,6 @@
 		grantAccess,
 		revokeAccess,
 	} from './remote/access-objects.remote';
-	import { deriveQuality, type QualityBadge } from '$lib/quality';
-	import ReadersPanel from '$lib/ReadersPanel.svelte';
 	import { partErrored, type Policy, type TableStats, type TableDetail } from './catalog';
 	import { fetchTableDetail } from './remote/catalog.remote';
 	import DetailTabs from './DetailTabs.svelte';
@@ -94,26 +90,6 @@
 	// #81 the SvelteFlow authorization graph is lazy-mounted (heavy) behind this toggle.
 	let showGraph = $state(false);
 
-	// scope #6 quality gate — the validator's latest dataQualityAssertions verdict for this dataset, from
-	// the lineage service's producing runs (medallion stages record it; a plain catalog table has none).
-	let quality = $state<QualityBadge>(null);
-	// The same runs, kept rather than thrown away: #113's "by whom" column joins them to versions, so the
-	// commit log costs no extra request. `null` = the lineage store did not answer at all.
-	let producerRuns = $state<ProducerInfo[] | null>(null);
-
-	async function loadQuality(): Promise<void> {
-		const current = table;
-		const res = await fetchProducers(current);
-		if (table !== current) return; // latest-wins
-		// `fetchProducers` is status-aware now (a 403 must not read as "no runs"). This surface
-		// already renders its own denied/unauthorized/offline states off `lastStatus` for the DETAIL
-		// read, so here the unsuccessful cases collapse to `null` — "the store did not answer" — which
-		// is exactly what `producerRuns`'s own comment above already promised.
-		const producers = res.ok ? res.data : null;
-		quality = deriveQuality(producers);
-		producerRuns = producers?.producers ?? null;
-	}
-
 	const unauthorized = $derived(detail === null && lastStatus === 401);
 	const notInCatalog = $derived(detail === null && lastStatus === 404);
 	const denied = $derived(detail === null && lastStatus === 403);
@@ -141,10 +117,7 @@
 		detail = null;
 		lastStatus = 0;
 		showGraph = false;
-		quality = null;
-		producerRuns = null;
 		load();
-		loadQuality();
 	});
 
 	// Split each part into "resolved value" vs "upstream failed" so the markup can render an honest
@@ -232,12 +205,7 @@
 	{:else if denied}
 		<div class="empty">
 			<ShieldAlert size={16} />
-			<p>
-				You don't have read access to this table's catalog metadata — its lineage is on the <a
-					href="/lakehouse/lineage"
-					data-sveltekit-reload>explorer</a
-				>.
-			</p>
+			<p>You don't have read access to this table's catalog metadata.</p>
 		</div>
 	{:else if offline}
 		<div class="empty">
@@ -252,16 +220,14 @@
 		{#if tab === 'preview'}
 			<TablePreview {table} />
 		{:else if tab === 'history'}
-			<!-- #113 the commit log. `producers` is the SAME fetch the quality badge already made, so the
-			     author join costs no extra request. Keyed by table so a navigation REMOUNTS it: every
-			     selection, armed confirm and filter belongs to one table and resets by construction. -->
+			<!-- #113 the commit log. Keyed by table so a navigation REMOUNTS it: every selection, armed
+			     confirm and filter belongs to one table and resets by construction. -->
 			{#key table}
 				<TableHistory
 					{table}
 					manifests={versions}
 					{tags}
 					{branches}
-					producers={producerRuns}
 					currentVersion={detail.describe.version ?? null}
 					onchange={load}
 				/>
@@ -270,7 +236,6 @@
 			<section>
 				<h2>Access</h2>
 				<GrantsPanel dataset={table} client={grantsClient} />
-				<ReadersPanel dataset={table} />
 				<!-- #81 the relationship graph is heavy (SvelteFlow) — lazy-mount behind a toggle. -->
 				<button class="btn ghost graphtoggle" onclick={() => (showGraph = !showGraph)}>
 					{showGraph ? 'Hide' : 'Show'} authorization graph
@@ -301,21 +266,6 @@
 								class="fmt"
 								title="This catalog stores Lance only; format-selecting properties are rejected."
 								>{detail.format.name} · storage v{detail.format.storage_version}</span
-							>
-						{/if}
-						<!-- scope #6 quality gate — the validator's dataQualityAssertions verdict on the latest
-					     producing run (from lineage). A plain catalog table has none, stated honestly. -->
-						{#if quality}
-							<span
-								class="qual {quality.passed ? 'ok' : 'bad'}"
-								title="Validator dataQualityAssertions on the latest producing run (lineage)."
-								>quality {quality.passed ? 'passed' : 'blocked'}{quality.assertions
-									? ` · ${quality.assertions} check${quality.assertions === 1 ? '' : 's'}`
-									: ''}</span
-							>
-						{:else}
-							<span class="qual none" title="No producing run has recorded dataQualityAssertions."
-								>no quality gate</span
 							>
 						{/if}
 						{#if detail.describe.location}<span class="loc">{detail.describe.location}</span>{/if}
@@ -399,22 +349,6 @@
 		border-radius: var(--radius-sm);
 		padding: 0 6px;
 		color: var(--mut);
-	}
-	.qual {
-		border-radius: var(--radius-sm);
-		padding: 0 6px;
-		border: 1px solid var(--line);
-	}
-	.qual.ok {
-		color: var(--ok);
-		border-color: color-mix(in srgb, var(--ok) 45%, var(--line));
-	}
-	.qual.bad {
-		color: var(--fail);
-		border-color: color-mix(in srgb, var(--fail) 45%, var(--line));
-	}
-	.qual.none {
-		color: var(--faint);
 	}
 	.mut {
 		color: var(--faint);

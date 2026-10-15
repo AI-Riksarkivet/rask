@@ -6,7 +6,6 @@
 		runLifecycle,
 		type LifecycleResult,
 	} from '$lib/remote/ingest.remote';
-	import { bronzeDatasetId } from '$lib/remote/ingest-job';
 	import { liveRead, lineageTick } from '$lib/live/tick.svelte';
 	import { Button } from '@rask/ui/button';
 	import { Card } from '@rask/ui/card';
@@ -75,13 +74,6 @@
 		failed !== undefined || (run !== undefined && TERMINAL.includes(run.status)),
 	);
 	const errorEntries = $derived(Object.entries(run?.errors ?? {}));
-
-	// THE LINEAGE LINK MUST CARRY THE GRAPH'S ID, NOT THE USER'S WORDS. `run.dataset` is what a person
-	// typed into the ETL form ("item3proof"); the graph stores what the write actually landed under
-	// ("acme-bronze$item3proof"). Linking with the bare name resolved to a real route that reported
-	// "No producing runs recorded for this dataset yet" — a link whose destination denied the run it
-	// came from. Measured 2026-08-24: bare name 0 runs, qualified name 8.
-	const lineageDatasetId = $derived(bronzeDatasetId(run?.project, run?.dataset));
 
 	// PROGRESS. `units_total` was fetched and never rendered, so the page could say "4 done" and never
 	// "4 of 500" — no progress bar was possible for exactly the long harvest where one matters. The
@@ -191,9 +183,9 @@
 		<div class="space-y-1">
 			<a
 				class="text-muted-foreground hover:text-foreground inline-flex items-center gap-1 text-xs"
-				href="{base}/ingest"
+				href="{base}/etl"
 			>
-				<ArrowLeft class="h-3 w-3" /> Ingest runs
+				<ArrowLeft class="h-3 w-3" /> ETL
 			</a>
 			<div class="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
 				<div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
@@ -388,25 +380,6 @@
 							{#if run.from_version != null && run.to_version != null}
 								<span class="text-muted-foreground">(v{run.from_version} → v{run.to_version})</span>
 							{/if}
-						</dd>
-					{/if}
-
-					<!-- WHERE THE RUN'S PROVENANCE LIVES. Cross-zone (lineage is a lakehouse surface), so
-					     `data-sveltekit-reload` is mandatory: without it SvelteKit soft-navigates into a
-					     route this zone does not own and the link 404s. `@rask/zone-contract`'s
-					     cross-zone-reload test is what enforces that, not a lint rule.
-
-					     Rendered only when the wire names a dataset. A run recorded before the service
-					     exposed it has none, and a guessed link is worse than no link. -->
-					{#if lineageDatasetId}
-						<dt class="text-muted-foreground">Lineage</dt>
-						<dd class="font-mono">
-							<a
-								href={`/lakehouse/lineage/datasets/${encodeURIComponent(lineageDatasetId)}`}
-								data-sveltekit-reload
-								data-slot="run-lineage"
-								class="hover:underline">{run.project ? `${run.project}/` : ''}{run.dataset}</a
-							>
 						</dd>
 					{/if}
 				</dl>

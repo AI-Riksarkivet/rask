@@ -85,25 +85,25 @@ def test_assert_noop_when_disabled_or_configured(monkeypatch: pytest.MonkeyPatch
     assert_app_token_configured(dapr_enabled=True)
 
 
-def test_lineage_boot_fails_when_only_the_reconcile_route_mounts(
+def test_lineage_boot_fails_when_only_the_relay_route_mounts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """CONTRACT: the lineage assert covers ANY sidecar-delivered mount — the cron reconcile binding
+    """CONTRACT: the lineage assert covers ANY sidecar-delivered mount — the relay's cron binding
     alone (pub/sub ingest OFF) must still refuse to boot without the token, else the flag divergence
-    leaves a token-less graph-mutating route (the audit's mount/assert decoupling hole). The assert
-    runs before the pool opens, so this is infra-free."""
+    leaves a token-less route that re-publishes the outbox (the audit's mount/assert decoupling hole).
+    The assert runs before the store is built, so this is infra-free."""
     from lineage import main as lineage_main
 
     monkeypatch.delenv("APP_API_TOKEN", raising=False)
 
-    # Keep it infra-free EVEN UNDER the regression: the assert must fire before the pool opens, so make
-    # make_pool blow up loudly if it's ever reached — else a regressed assert would fall through to a
-    # real DB connect and hang ~30s on PoolTimeout (or hit a live dev DB) instead of failing clean.
-    def _no_pool(*_a: Any, **_k: Any) -> Any:
-        raise AssertionError("make_pool reached — the boot app-token assert did not fire first")
+    # Keep it infra-free EVEN UNDER the regression: the assert must fire before the store is built, so make
+    # building it blow up loudly if it's ever reached — else a regressed assert would fall through to a
+    # catalog connect and retry for its whole boot deadline instead of failing clean.
+    def _no_store(*_a: Any, **_k: Any) -> Any:
+        raise AssertionError("the provenance store was built — the boot app-token assert did not fire first")
 
-    monkeypatch.setattr(lineage_main, "make_pool", _no_pool)
-    settings = LineageSettings.model_validate({"reconcile_binding_name": "lineage-reconcile-cron"})
+    monkeypatch.setattr(lineage_main.ProvenanceStore, "from_settings", _no_store)
+    settings = LineageSettings.model_validate({"relay_binding_name": "lineage-relay-cron"})
     assert not settings.dapr_enabled  # the divergence under test: binding on, pub/sub ingest off
     monkeypatch.setattr(lineage_main, "get_settings", lambda: settings)
     with pytest.raises(RuntimeError, match="APP_API_TOKEN"):

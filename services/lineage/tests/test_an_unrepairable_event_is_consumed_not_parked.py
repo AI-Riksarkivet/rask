@@ -47,7 +47,7 @@ def _event(run_id: str = "11111111-2222-3333-4444-555555555555") -> dict[str, An
 
 
 class _Repo:
-    """A repository that records what it was asked to ingest.
+    """A store that keeps what it was asked to record.
 
     Typed on `RunEvent` rather than `Any` because that IS the contract under test: every arm below
     asserts the event did or did not reach the graph, and a fake that accepts anything cannot fail
@@ -57,7 +57,7 @@ class _Repo:
     def __init__(self) -> None:
         self.ingested: list[RunEvent] = []
 
-    async def ingest_event(self, event: RunEvent) -> None:
+    async def record(self, event: RunEvent) -> None:
         self.ingested.append(event)
 
 

@@ -157,16 +157,23 @@ spec:
                 "Version": "2012-10-17",
                 "Statement": [
                   {
-                    "Sid": "ReadAnythingItReconciles",
+                    "Sid": "FindTheBucket",
                     "Effect": "Allow",
-                    "Action": ["s3:ListBucket", "s3:GetBucketLocation", "s3:GetObject"],
-                    "Resource": ["arn:aws:s3:::*", "arn:aws:s3:::*/*"]
+                    "Action": ["s3:GetBucketLocation"],
+                    "Resource": ["arn:aws:s3:::*"]
+                  },
+                  {
+                    "Sid": "ListItsOwnOutbox",
+                    "Effect": "Allow",
+                    "Action": ["s3:ListBucket"],
+                    "Resource": ["arn:aws:s3:::*"],
+                    "Condition": { "StringLike": { "s3:prefix": ["_lineage_outbox", "_lineage_outbox/*"] } }
                   },
                   {
                     "Sid": "DrainItsOwnOutboxAndNothingElse",
                     "Effect": "Allow",
-                    "Action": ["s3:DeleteObject"],
-                    "Resource": ["arn:aws:s3:::*/_lineage_outbox/*"]
+                    "Action": ["s3:GetObject", "s3:DeleteObject"],
+                    "Resource": ["arn:aws:s3:::*/_lineage_outbox", "arn:aws:s3:::*/_lineage_outbox/*"]
                   }
                 ]
               }

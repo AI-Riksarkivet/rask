@@ -1,8 +1,8 @@
 /** The inbox plane's row shape, structurally — `@rask/ui` must not import `@rask/api`.
  *
- * The same rule `RunStatusLike` follows and for the same reason: the design system takes the shape
- * it renders, never the client that fetched it, so it stays testable with a literal and free of any
- * transport coupling. `@rask/api`'s `InboxNotification` is assignable to this by construction.
+ * The design system takes the shape it renders, never the client that fetched it, so it stays
+ * testable with a literal and free of any transport coupling. `@rask/api`'s `InboxNotification` is
+ * assignable to this by construction.
  *
  * WHY THIS EXISTS AT ALL — the two planes the bell was conflating.
  * Until now the panel rendered `GET /runs`, governed by DATASET visibility: every run whose outputs
@@ -13,8 +13,7 @@
  * and the persistence agree, and it closes the gap by construction rather than by adding a field.
  */
 export type InboxNotificationLike = {
-	/** `run_id@STATE` — the same id the run feed mints (`runNotificationId`), which is what lets the
-	 *  two planes share one seen/dismissed vocabulary. */
+	/** `run_id@STATE` — the key the seen/dismissed sets are written in. */
 	notification_id: string;
 	/** Why this subject was told. An OPEN string: v2 (project watch) and v3 (governance) add members,
 	 *  and a renderer that pinned today's single `author` would break on the day the backend grew one. */

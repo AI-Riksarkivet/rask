@@ -40,11 +40,11 @@ BASE_FACET_SCHEMA_URL = "https://openlineage.io/spec/2-0-2/OpenLineage.json#/$de
 SCHEMA_FACET_SCHEMA_URL = "https://openlineage.io/spec/facets/1-2-0/SchemaDatasetFacet.json#/$defs/SchemaDatasetFacet"
 
 #: Standard ``DatasetVersionDatasetFacet`` schema URL — the Lance version stamped on inputs/outputs (the
-#: WROTE-edge version, training pins, reconcile cross-checks). Single-homed for the same no-drift reason.
+#: version each lineage edge records, training pins). Single-homed for the same no-drift reason.
 VERSION_FACET_SCHEMA_URL = "https://openlineage.io/spec/facets/1-0-1/DatasetVersionDatasetFacet.json#/$defs/DatasetVersionDatasetFacet"
 
-#: Standard ``DatasourceDatasetFacet`` schema URL — the physical storage URI on outputs (what lets
-#: reconcile find the on-disk dataset and back-fill lost writes).
+#: Standard ``DatasourceDatasetFacet`` schema URL — the physical storage URI on outputs (where a graph backend
+#: the lineage feed is forwarded to records the dataset lives).
 DATASOURCE_FACET_SCHEMA_URL = "https://openlineage.io/spec/facets/1-0-1/DatasourceDatasetFacet.json#/$defs/DatasourceDatasetFacet"
 
 #: Standard ``ErrorMessageRunFacet`` schema URL — the FAIL emitters' error payload (medallion + compaction).
@@ -59,8 +59,8 @@ def run_id_for(seed: str) -> str:
     """A spec-valid UUID ``runId`` that is STABLE for ``seed`` (e.g. ``"<operation>-<token>"``).
 
     OpenLineage requires ``runId`` to be a UUID (Marquez rejects anything else), but the medallion
-    cascade and the reconcile back-fill need DETERMINISTIC ids so an at-least-once redelivery MERGEs
-    onto the same ``(:Run)`` instead of duplicating it. ``uuid5`` gives both: the same seed always
+    cascade and maintenance's per-dataset FAIL run need DETERMINISTIC ids so an at-least-once redelivery
+    lands on the same feed key instead of duplicating the run. ``uuid5`` gives both: the same seed always
     yields the same UUID. Keep the human-readable seed as a run facet / job name for correlation —
     never as the ``runId`` itself.
     """
@@ -81,8 +81,7 @@ def custom_facet(producer: str, **fields: object) -> dict[str, object]:
 #: the FACET ITSELF large (metadata bloat, not data bloat) and pushes the whole event toward the
 #: bus payload ceiling the claim-check guard enforces. 512 fields ≈ tens of KiB worst-case — far
 #: under the 64 KiB publish warning for the facet's share. Consumers needing the FULL schema of a
-#: wider table read it from storage (the manifest IS the schema — /schema, reconcile's
-#: read_storage_schema), never from the event.
+#: wider table read it from storage (the manifest IS the schema), never from the event.
 FACET_MAX_FIELDS = 512
 
 
@@ -90,7 +89,7 @@ def schema_facet(producer: str, fields: object) -> dict[str, object]:
     """The standard ``SchemaDatasetFacet`` payload for an output dataset's column schema.
 
     One builder for every emitter so the ``_schemaURL`` spec version can never drift between the
-    catalog and the medallion compute (both stamp the per-version schema onto the WROTE edge, #24).
+    catalog and the medallion compute (both stamp the per-version schema onto the output dataset, #24).
     Caps at ``FACET_MAX_FIELDS`` (loudly): the facet stays spec-true (a shorter ``fields`` list is
     still a valid SchemaDatasetFacet), and the full schema remains readable from storage.
     """
@@ -152,7 +151,7 @@ def lifecycle_state(operation: str) -> str | None:
     Split out of :func:`lifecycle_facet` because the same question — did this change the table's
     DEFINITION rather than its rows — also decides whether the catalog emits a ``DatasetEvent``. Two
     lists would be two places for a new operation to be forgotten, and the one that keeps emitting a
-    run mints a Job node nobody sees until they count. ``OVERWRITE`` is the one state that also wrote
+    run mints a phantom run nobody sees until they count. ``OVERWRITE`` is the one state that also wrote
     rows, so the catalog keeps it a run (``catalog.core.lineage_emit._is_ddl``).
     """
     return _LIFECYCLE_BY_OPERATION.get(operation.lower())
@@ -175,7 +174,7 @@ def lifecycle_facet(producer: str, operation: str) -> dict[str, object]:
 #: has more than one write path: the catalog commits through pylance in-process, the medallion's stage
 #: lanes write through Ray, and a query engine is a stated direction. Without this facet every one of
 #: them is an anonymous producer, and the question "what wrote this, and can I reproduce it" has no
-#: answer in the graph. ``version`` is the only REQUIRED field in the spec.
+#: answer in lineage's feed or the graph backend it is forwarded to. ``version`` is the only REQUIRED field in the spec.
 PROCESSING_ENGINE_FACET_SCHEMA_URL = "https://openlineage.io/spec/facets/1-1-1/ProcessingEngineRunFacet.json#/$defs/ProcessingEngineRunFacet"
 
 
@@ -186,7 +185,8 @@ def processing_engine_facet(producer: str, *, name: str, version: str) -> dict[s
 
 #: Standard ``ColumnLineageDatasetFacet`` schema URL — field-to-field provenance (#24 store / #1 emit).
 #: One builder so the ``_schemaURL`` version can never drift between emitters (the medallion cascade + the
-#: catalog DDL path); the lineage consumer persists each input→output pair as a ``DERIVED_FROM_COLUMN`` edge.
+#: catalog DDL path). Lineage keeps the facet inside the recorded event, its ingest authorizer and ``/events`` gate
+#: on the column sources it names, and a forwarded graph backend draws its column edges from it.
 COLUMN_LINEAGE_FACET_SCHEMA_URL = "https://openlineage.io/spec/facets/1-2-0/ColumnLineageDatasetFacet.json#/$defs/ColumnLineageDatasetFacet"
 
 #: One flattened input→output column dependency, as the emitters declare it:
@@ -226,7 +226,7 @@ def column_lineage_facet(producer: str, edges: Iterable[ColumnEdge]) -> dict[str
 #: Standard ``CatalogDatasetFacet`` schema URL — WHICH CATALOG governs this dataset.
 #:
 #: A lakehouse that publishes lineage to a shared consumer has to say whose catalog a dataset belongs
-#: to; without it, two estates writing `bronze$events` are indistinguishable in one graph.
+#: to; without it, two estates writing `bronze$events` are indistinguishable in one graph backend.
 CATALOG_FACET_SCHEMA_URL = "https://openlineage.io/spec/facets/1-1-0/CatalogDatasetFacet.json#/$defs/CatalogDatasetFacet"
 
 #: The storage framework, and it is a CONSTANT rather than a parameter because the estate's format is
@@ -241,7 +241,7 @@ def catalog_facet(producer: str, *, impl: str, name: str, warehouse_uri: str = "
 
     ``impl`` is the Lance Namespace implementation (``dir``, ``rest``, …) — the spec's ``type``, whose
     own examples are ``jdbc``/``glue``/``polaris``, i.e. HOW the catalog is reached. ``name`` is the
-    catalog's identity in the graph, which this estate already fixes as the lineage job namespace, so
+    catalog's identity in a graph backend, which this estate already fixes as the lineage job namespace, so
     the facet and the events it rides on cannot disagree about who is speaking.
 
     **``metadataUri`` IS DELIBERATELY ABSENT, and the omission carries the architecture.** The spec's
@@ -308,8 +308,8 @@ def static_event_id(*, producer: str, namespace: str, name: str, operation: str,
     """The identity of a ``DatasetEvent`` — derived from its content, never minted.
 
     A static metadata event carries no run id, and two things downstream need one anyway: the durable
-    feed dedups on ``(run_id, event_type, event_time)`` where SQL NULL never equals NULL, so a run-less
-    row would be appended again on every at-least-once redelivery; and the notifications plane keys a
+    feed keys a static change's row on this id (``lineage.services.provenance.feed_key``), so a minted id
+    would land the row again on every at-least-once redelivery; and the notifications plane keys a
     pointer by ``${run_id}@${state}``, so a minted id would put two rows in an inbox for one change.
 
     DERIVED HERE BECAUSE IT HAS TWO INDEPENDENT READERS SEEING DIFFERENT COPIES. The notifications bus

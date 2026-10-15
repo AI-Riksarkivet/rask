@@ -160,22 +160,17 @@ grep is what let the old shape render green.
 
 ## `mc admin policy create rfs rask-lineage /tmp/lineage.json`
 
-THE TIGHTEST OF THE FOUR, and it is tight because the SURFACE is small — measured
-2026-09-07 against the source rather than inferred from the service's importance.
+THE TIGHTEST OF THE FOUR: its own outbox prefix, and nothing else in the store. Lineage reads no
+dataset (ADR 0158): its feed and edge list are catalog-governed tables it reaches through the
+catalog's doors as its own principal, never with a storage credential. What it does with this one
+is the relay's drain: list `_lineage_outbox/`, read each staged event, and DELETE the object once
+the event is recorded (`outbox.drop_event`).
 
-NO PutObject ANYWHERE, which no other plane here can say. Lineage opens datasets
-READ-ONLY to probe versions, schema and dangling blobs (`core/reconcile.py:58,76,93,108`,
-`demo.py:112`), and the only bytes it changes are DELETES of outbox objects the relay has
-already re-ingested (`outbox.drop_event`). `outbox.stage_event` — the write half — is
-called by the PRODUCERS (the catalog, maintenance) and never here, so granting this
-identity a write would grant a capability it has no code to use.
-
-THE READ IS DELIBERATELY UNSCOPED, for the reason the maintenance policy above already records:
-the bucket set is not knowable at render time. Lineage reconciles whatever datasets the
-graph names, across warehouses this chart does not enumerate, so a narrowed read is a
-reconciler that silently stops seeing part of the estate — and a reconciler that cannot
-read reports `known=False`, which publishes nothing and looks exactly like a healthy
-estate. That failure mode is why the read stays wide and the WRITE is what gets scoped.
+NO PutObject ANYWHERE. `outbox.stage_event`, the write half, is called by the PRODUCERS (the
+catalog, maintenance) and never here, so granting this identity a write would grant a capability
+it has no code to use. The list is held to the prefix by an `s3:prefix` condition, and the object
+grant names both the prefix object and what is under it, because pyarrow's S3 filesystem probes
+the prefix itself before listing it.
 
 ## `mc admin policy create rfs rask-catalog /tmp/catalog.json`
 
@@ -189,7 +184,7 @@ assumes AND has the session policy enforced, so the requirement is gone.
 
 The DATA grant cannot be narrowed by bucket: warehouse buckets are minted at RUNTIME by
 `POST /management/v1/warehouses`, so a render-time list is stale by construction — the same reason
-recorded above for the maintenance and lineage policies. `s3:CreateBucket`/`s3:DeleteBucket` are here because provisioning and purge
+recorded above for the maintenance policy. `s3:CreateBucket`/`s3:DeleteBucket` are here because provisioning and purge
 are this service's own doors, and no other identity in the estate holds them.
 
 WHAT ROOT HAD AND THIS DOES NOT: the admin API. No `mc admin user`, no

@@ -9,11 +9,12 @@ these are found by watching the Perses dashboards (`make dashboards`) or a user 
 ## Orientation
 
 - **Services** (FastAPI): `catalog` (REST catalog, tier governance and the model registry), `lineage`
-  (OpenLineage → Apache AGE graph, plus the durable `GET /events` log), `maintenance` (planner + worker),
+  (OpenLineage intake into the commit feed and edge list, Lance tables in the catalog's `provenance` namespace;
+  the durable `GET /events` log; the relay tick that drains the outbox and forwards to the graph backend), `maintenance` (planner + worker),
   `notifications`, `flows`, `gateway`, and the zones (`web-<zone>`). The lakehouse runs no stage and no pipeline: moving data
   between tiers is the user's job on their own compute ([ADR 0155](../adr/0155-the-medallion-is-tier-governance-in-the-catalog.md)).
-- **Stores**: `age-postgres` (the lineage graph **AND** OpenFGA's datastore — one pod, dual-purpose),
-  the object store (MinIO in development: every Lance table and the registries), `openfga` (authz), `openbao` (secrets,
+- **Stores**: `age-postgres` (OpenFGA's datastore **AND** the Dapr state store — one pod, dual-purpose),
+  the object store (MinIO in development: every Lance table, lineage's provenance tables included, and the registries), `openfga` (authz), `openbao` (secrets,
   prod = sealed file backend), `greptimedb` (metrics), `dex` (OIDC).
 - **Signals**: Perses panels (`make dashboards`), `kubectl logs`, and the domain metrics —
   `lineage_events_processed_total{lance_lineage_outcome}` (incl. `DEAD_LETTERED`),
@@ -28,12 +29,12 @@ these are found by watching the Perses dashboards (`make dashboards`) or a user 
 | Everything returns 503 / auth failures across the board | [OpenFGA down](#openfga-down--503-everywhere) |
 | App pods stuck `0/1` "waiting for application startup" after a restart/drain | [OpenBao sealed](#openbao-sealed-on-restart--boot-deadlock) |
 | A pod `CrashLoopBackOff` shortly after boot | [Slow boot / startupProbe](#crashloop-on-boot) |
-| `/readyz` = 503 `{"database":"unavailable"}`, pod `NotReady` | [readyz degraded](#readyz-degraded--pool-or-graph) |
+| lineage `/readyz` = 503 `{"catalog":"unavailable"}`, pod `NotReady` | [Lineage not ready](#lineage-not-ready--catalog-unreachable) |
 | `dapr_dead_letter_parked` ERROR logs | [DLQ parking](#dlq-parking--a-delivery-gave-up) |
 | `LineageSignatureRefusedForAListedSigner` firing, `lineage_signature_refused` WARN logs | [Lineage refusing a signer's events](#lineage-refusing-a-signers-events) |
 | `outbox_depth` sustained > 0, `outbox_oldest_age_seconds` climbing | [Outbox not draining](#outbox-not-draining) |
 | Catalog reads/writes fail, Lance data unreachable | [Object store down](#object-store-down--data-plane) |
-| No lineage, `/runs` empty or erroring, FGA also failing | [AGE down](#age-postgres-down--lineage--fga) |
+| FGA failing, notifications' inbox state unreadable | [AGE down](#age-postgres-down--fga--dapr-state) |
 | `DaprWorkflowHistoryNotCollected` / `DaprWorkflowStateMetricsMissing` firing | [Workflow history not collected](#workflow-history-not-collected) |
 
 ---
@@ -48,10 +49,10 @@ single-replica OpenFGA (kind) that is drained/OOMed/rescheduling takes the whole
 returns. The prod overlay runs 3 replicas + a PDB, which makes this a quorum event, not a total outage.
 
 **Diagnose.** `kubectl get pods -l app.kubernetes.io/name=openfga`; check its datastore (`age-postgres`) is
-up — OpenFGA stores tuples in the same Postgres as the lineage graph.
+up — OpenFGA stores tuples in the `rask-age` Postgres, beside the Dapr state store.
 
 **Act.** Wait for reschedule / scale it back up; if the datastore is the real cause, see
-[AGE down](#age-postgres-down--lineage--fga). Never "fix" a fail-closed 503 by disabling auth in prod.
+[AGE down](#age-postgres-down--fga--dapr-state). Never "fix" a fail-closed 503 by disabling auth in prod.
 
 ## OpenBao sealed-on-restart → boot deadlock
 
@@ -73,28 +74,30 @@ auto-unseal operator before calling the secret tier prod-ready.
 
 **Symptom.** An app pod restarts repeatedly shortly after scheduling; logs show the lifespan never finishing.
 
-**Cause.** The FastAPI lifespan (Dapr secret fetch ~80s worst case + AGE pool + DDL + FGA provision) runs
-**before** uvicorn serves. The `startupProbe` gives 300s for this; if boot exceeds it, a dependency is
-genuinely stuck — usually OpenBao sealed (above) or AGE unreachable.
+**Cause.** The FastAPI lifespan (Dapr secret fetch ~80s worst case + FGA provision; on lineage, creating its
+provenance tables through the catalog, retried until the catalog answers) runs **before** uvicorn serves. The
+`startupProbe` gives 300s for this; if boot exceeds it, a dependency is genuinely stuck — usually OpenBao sealed
+(above), OpenFGA unreachable, or, for lineage, the catalog (`lineage_provenance_tables_not_ready` WARN lines).
 
-**Diagnose.** `kubectl logs <pod> --previous` for where the lifespan stalls; check OpenBao + AGE.
+**Diagnose.** `kubectl logs <pod> --previous` for where the lifespan stalls; check OpenBao, OpenFGA and the catalog.
 
 **Act.** Fix the upstream dependency; the pod recovers on its own once boot can complete.
 
-## /readyz degraded → pool or graph
+## Lineage not ready → catalog unreachable
 
-**Symptom.** `/readyz` returns 503 `{"status":"degraded","database":"unavailable"}`; the pod goes `NotReady`
-and is pulled from rotation (correct — it stops serving 500s).
+**Symptom.** Lineage's `/readyz` returns 503 with `{"catalog":"unavailable"}`; the pod goes `NotReady` and is
+pulled from rotation, and `readyz_catalog_unavailable` WARN lines appear.
 
-**Cause.** `/readyz` gates on BOTH the AGE pool (`SELECT 1`) and the **graph** (`RETURN 1`). A graph
-failure (an external managed-PG that was never bootstrapped, a failed `create_graph`, a bad restore) now
-fails readiness LOUDLY instead of silently discarding events.
+**Cause.** Lineage keeps no database: its commit feed and edge list are Lance tables in the catalog's
+`provenance` namespace, read and written through the catalog's doors as lineage's own principal. `/readyz`
+gates on the feed table answering through the catalog within 2 s. While it cannot, every delivery answers
+`RETRY`, so the bus keeps the events and nothing is lost.
 
-**Diagnose.** `kubectl exec <age-pod> -- psql -c "LOAD 'age'; SELECT count(*) FROM ag_catalog.ag_graph;"` —
-is the `lineage` graph present? Is the pool reachable?
+**Diagnose.** Catalog pod health and logs; whether the catalog created the provenance namespace at boot (it
+retries until it holds); a 403 from the catalog means lineage's subject is not among `LANCE_PROVENANCE_WRITERS`
+or its projected `rask-catalog` token (`RASK_CATALOG_IDENTITY_TOKEN_FILE`) is not mounted.
 
-**Act.** If the graph is absent on managed PG, lineage self-heals via `ensure_graph()` on next boot —
-restart the pod. If the pool is down, see [AGE down](#age-postgres-down--lineage--fga).
+**Act.** Restore the catalog; lineage returns to Ready on its own and the bus redelivers.
 
 ## DLQ parking → a delivery gave up
 
@@ -192,10 +195,11 @@ mean something other than the catalog wrote under `_control_outbox`: treat that 
 
 **Act.** Recover the pod/volume; for prod durability, use the platform's managed S3.
 
-## AGE Postgres down → lineage + FGA
+## AGE Postgres down → FGA + Dapr state
 
-**Symptom.** Lineage ingest stalls, `/runs` errors, AND authz fails — because this one pod is both the
-lineage graph store and OpenFGA's datastore.
+**Symptom.** Authz fails across the estate (lineage's ingest gate answers `RETRY`, so events stay on the bus)
+AND notifications cannot read or write inbox state — because this one pod is both OpenFGA's datastore and the
+Dapr state store.
 
 **Cause.** Single StatefulSet replica (kind), a dual-purpose SPOF. Prod answer is managed Postgres
 (`age.externalHost` / CloudNativePG — see [docs/adr/0033-p4-p7-backups-structural-spofs-the-prod-answer-is.md "P4/P7"](../adr/0033-p4-p7-backups-structural-spofs-the-prod-answer-is.md) and docs/CNPG-AGE.md) —
@@ -203,7 +207,7 @@ sized via the `resources.age` tier (1Gi in prod).
 
 **Diagnose.** `kubectl get pods -l app.kubernetes.io/component=age-postgres`; `pg_isready`; PVC bound?
 
-**Act.** Recover the pod/volume; lineage self-bootstraps the graph on reconnect (`ensure_graph()`). For
+**Act.** Recover the pod/volume; OpenFGA and the sidecars reconnect on their own. For
 prod, externalize to a replicated managed Postgres and take real backups
 ([RUNBOOK-restore.md](RUNBOOK-restore.md)).
 

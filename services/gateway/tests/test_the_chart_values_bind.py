@@ -25,7 +25,7 @@ _RENDERED = {
     "RASK_NOTIFICATIONS_URL": "http://rask-notifications:8850",
     "RASK_CATALOG_API_URL": "http://rask-catalog:2333",
     "RASK_LINEAGE_API_URL": "http://rask-lineage:8000",
-    "RASK_LINEAGE_SIDECAR_ONLY_ROUTES": "lineage-events,lineage-reconcile-cron",
+    "RASK_LINEAGE_SIDECAR_ONLY_ROUTES": "lineage-events,lineage-relay-cron",
 }
 
 
@@ -36,7 +36,7 @@ def test_the_rendered_configmap_binds() -> None:
     assert settings.docs_enabled is False
     assert settings.dapr_enabled is True
     assert settings.compute_url == "http://rask-compute:8804"
-    assert settings.sidecar_only_routes == ("lineage-events", "lineage-reconcile-cron")
+    assert settings.sidecar_only_routes == ("lineage-events", "lineage-relay-cron")
 
 
 def test_a_trailing_slash_on_the_prefix_does_not_double_up() -> None:

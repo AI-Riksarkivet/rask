@@ -1,16 +1,14 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
-import { ME_ADMIN, mockMe, signIn, TOKEN } from './session';
+import { mockMe, signIn, TOKEN } from './session';
 import { MOCK_CATALOG } from '../ports';
 
 // #113 the commit log, hermetic. Every fixture below is a REAL payload, not an imagined one:
 //  · the history rows are what `GET /management/v1/table/{id}/history` returned when driven through the real dir
 //    backend and real pylance writes (create → insert → delete → update → create_scalar_index) — note
 //    `operation` is Lance's vocabulary, the detail keys are ABSENT rather than null per operation, the
-//    predicate is verbatim, and `fields_modified` is 0 on an Update that did modify a column;
-//  · the producers are the shape `GET /datasets/{name}/producers` returns live — an opaque OIDC `sub` as
-//    the author, a compaction run whose author is an EMPTY STRING, and a FAIL run with no version.
-// What this suite guards is the honesty of the rendering: never claim a 0, never invent an actor, never
-// reinterpret the offset-less timestamp, and never list a version the format does not report.
+//    predicate is verbatim, and `fields_modified` is 0 on an Update that did modify a column.
+// What this suite guards is the honesty of the rendering: never claim a 0, never reinterpret the
+// offset-less timestamp, and never list a version the format does not report.
 //
 // TRANSPORT (the transport ruling, area 1): the detail aggregate and the restore are remote functions and
 // run on the zone SERVER, so they are seeded on — and asserted through — the mock catalog. The commit
@@ -23,11 +21,6 @@ const json = (route: Route, body: unknown, status = 200) =>
 type Body = Record<string, unknown>;
 
 const TABLE = 'db1%24t';
-
-// MY sub is the signed-in e2e identity itself, so the "(you)" resolution is asserted against the same
-// identity the shell reads — whichever side serves `/management/v1/me`.
-const MY_SUB = ME_ADMIN.sub;
-const BOB_SUB = 'CiQxYjZlMmY1YS03YzRkLTRlOWItOWYxYS0yZDNjNGI1YTZlN2YSBWxvY2Fs';
 
 /** The real `/history` payload (scratchpad/histpayload.py, dir backend + pylance). */
 const HISTORY = {
@@ -77,7 +70,7 @@ const HISTORY = {
 };
 
 /** The manifest list the detail aggregate carries — the format's own version list, with UNAMBIGUOUS
- *  epoch-millis commit times. Note v1 is absent: GC reclaimed it, and a producing run still names it. */
+ *  epoch-millis commit times. Note v1 is absent: GC reclaimed it. */
 const MANIFESTS = [
 	{ version: 2, timestamp_millis: 1_700_000_100_000, manifest_size: 1024 },
 	{ version: 3, timestamp_millis: 1_700_000_200_000, manifest_size: 2048 },
@@ -107,92 +100,10 @@ const DETAIL_ROUTES: Record<string, unknown> = {
 	[`POST /v1/table/${TABLE}/restore`]: { version: 6 },
 };
 
-/** Live producer shapes: my own sub on v5, another user's sub on v4, a compaction run with an EMPTY
- *  author on v3, nothing at all on v2, a run naming the GC'd v1, and a FAIL with no version. */
-const PRODUCERS = [
-	{
-		run_id: 'r5',
-		author: MY_SUB,
-		event_time: '2026-07-26T14:18:04.105289+00:00',
-		event_type: 'COMPLETE',
-		dataset_version: '5',
-		operation: 'create_index',
-		row_count: 3,
-		size_bytes: 286,
-		quality_passed: true,
-		quality_assertions: [{ assertion: 'row_count' }],
-	},
-	{
-		run_id: 'r4-retry',
-		author: BOB_SUB,
-		event_time: '2026-07-26T14:18:04.060495+00:00',
-		event_type: 'COMPLETE',
-		dataset_version: '4',
-		operation: 'update',
-		row_count: 3,
-		size_bytes: 280,
-		quality_passed: null,
-		quality_assertions: [],
-	},
-	{
-		run_id: 'r4-first',
-		author: MY_SUB,
-		event_time: '2026-07-26T13:00:00.000000+00:00',
-		event_type: 'COMPLETE',
-		dataset_version: '4',
-		operation: 'update',
-		row_count: null,
-		size_bytes: null,
-		quality_passed: null,
-		quality_assertions: [],
-	},
-	{
-		run_id: 'r3',
-		author: '',
-		event_time: '2026-07-26T14:18:04.048439+00:00',
-		event_type: 'COMPLETE',
-		dataset_version: '3',
-		operation: 'compaction',
-		row_count: null,
-		size_bytes: null,
-		quality_passed: null,
-		quality_assertions: [],
-	},
-	{
-		// A whitespace-only author: the run recorded a field, but it names nobody. Rendering it verbatim
-		// paints a BLANK cell, which reads as "we know, and it is nothing" — the exact failure the
-		// normalization exists to prevent.
-		run_id: 'r1-gcd',
-		author: '   ',
-		event_time: '2026-07-26T12:00:00.000000+00:00',
-		event_type: 'COMPLETE',
-		dataset_version: '1',
-		operation: 'create_table',
-		row_count: 3,
-		size_bytes: 200,
-		quality_passed: null,
-		quality_assertions: [],
-	},
-	{
-		run_id: 'r-fail',
-		author: MY_SUB,
-		event_time: '2026-07-26T14:30:00.000000+00:00',
-		event_type: 'FAIL',
-		dataset_version: null,
-		operation: 'insert',
-		error_message: 'schema mismatch on column v',
-		row_count: null,
-		size_bytes: null,
-		quality_passed: null,
-		quality_assertions: [],
-	},
-];
-
 // Per-test knobs.
 let token: string;
 let historyStatus: number;
 let historyBody: unknown;
-let producersBody: unknown;
 let historyCalls: string[];
 
 const seed = async (page: Page, routes: Record<string, unknown>): Promise<void> => {
@@ -210,26 +121,6 @@ const restoreCall = async (page: Page): Promise<Body | undefined> =>
 	(await calls(page)).find((c) => c.path === `/v1/table/${TABLE}/restore`);
 
 async function stub(page: Page): Promise<void> {
-	await page.route('**/api/datasets/**/producers', (route) =>
-		json(route, { producers: producersBody }),
-	);
-	await page.route('**/api/datasets/**/schema**', (route) => {
-		const version = new URL(route.request().url()).searchParams.get('version');
-		// v2 gained a column relative to v1's schema; v5 retyped it. Real lineage shape: name/type only.
-		const fields =
-			version === '2'
-				? [{ name: 'id', type: 'int64' }]
-				: version === '4'
-					? [
-							{ name: 'id', type: 'int64' },
-							{ name: 'price', type: 'int64' },
-						]
-					: [
-							{ name: 'id', type: 'int64' },
-							{ name: 'price', type: 'double' },
-						];
-		return json(route, { dataset: 'db1$t', version: Number(version), fields });
-	});
 	// The commit log's own read — a GET through the keep-bytes proxy, so it stays interceptable here.
 	await page.route('**/capi/management/v1/table/*/history*', (route) => {
 		historyCalls.push(new URL(route.request().url()).search);
@@ -243,7 +134,6 @@ test.beforeEach(async ({ context, page }, testInfo) => {
 	token = `${TOKEN.admin}:${testInfo.testId}`;
 	historyStatus = 200;
 	historyBody = HISTORY;
-	producersBody = PRODUCERS;
 	historyCalls = [];
 	await signIn(context, { token });
 	await mockMe(page);
@@ -269,9 +159,6 @@ test('the log reads newest-first in the FORMAT’s own vocabulary (#113)', async
 	const rows = page.getByTestId('commit-log').locator('tbody tr');
 	await expect(rows.first()).toContainText('v5');
 	await expect(rows.first()).toContainText('CreateIndex');
-	// Lance's names, not the catalog's — the same commit is `create_index` to the catalog and
-	// `CreateIndex` to the format, and both are on the row.
-	await expect(rows.first()).toContainText('via create_index');
 	await expect(rowFor(page, 2)).toContainText('Append');
 	await expect(rowFor(page, 1)).toContainText('Overwrite');
 });
@@ -293,56 +180,12 @@ test('an Update that reports fields_modified: 0 never claims 0 fields (#113)', a
 	await expect(row).not.toContainText('-0 fragment');
 });
 
-test('the actor is my email when the sub is mine, and verbatim when it is not (#113)', async ({
-	page,
-}) => {
+test('a version the format no longer reports is not listed (#113)', async ({ page }) => {
 	await openLog(page);
-	await expect(rowFor(page, 5)).toContainText(`${ME_ADMIN.email} (you)`);
-	// Another user's opaque sub is truncated, never guessed at — and the full value stays in the title.
-	const other = rowFor(page, 4).locator('[title*="OIDC subject"]').first();
-	await expect(other).toHaveAttribute('title', `OIDC subject ${BOB_SUB}`);
-	await expect(rowFor(page, 4)).not.toContainText(ME_ADMIN.email);
-});
-
-test('an empty author and a missing run both read as an explicit dash (#113)', async ({ page }) => {
-	await openLog(page);
-	// v3's compaction run records author "" — an empty STRING, not null. v2 has no run at all.
-	await expect(
-		rowFor(page, 3).locator('[title="no governed run recorded this version"]'),
-	).toBeVisible();
-	await expect(
-		rowFor(page, 2).locator('[title="no governed run recorded this version"]'),
-	).toBeVisible();
-	// …and a whitespace-only author is an absence too, not a blank cell.
-	await expect(
-		rowFor(page, 1).locator('[title="no governed run recorded this version"]'),
-	).toBeVisible();
-	await expect(page.locator('section.hist')).toContainText(
-		'means no governed run recorded that version',
-	);
-});
-
-test('rows/bytes are shown only where the writer measured them (#113)', async ({ page }) => {
-	await openLog(page);
-	await expect(rowFor(page, 5)).toContainText('3 rows');
-	await expect(rowFor(page, 5)).toContainText('286 B');
-	// v3's run measured nothing: a dash, never a 0 that reads as "it emptied the table".
-	await expect(
-		rowFor(page, 3).locator(
-			'[title="the run that wrote this version measured no output statistics"]',
-		),
-	).toBeVisible();
-	await expect(rowFor(page, 3)).not.toContainText('0 rows');
-});
-
-test('a version the format no longer reports is not listed because a run names it (#113)', async ({
-	page,
-}) => {
-	await openLog(page);
-	// The producers name v1 (GC reclaimed its manifest, the transaction log still has the commit) — the log
-	// is driven by the FORMAT, so v1 appears exactly because /history reports it…
+	// GC reclaimed v1's manifest, the transaction log still has the commit — the log is driven by the
+	// FORMAT, so v1 appears exactly because /history reports it…
 	await expect(rowFor(page, 1)).toBeVisible();
-	// …and when /history is unavailable, the manifest list is the source and v1 is NOT invented from lineage.
+	// …and when /history is unavailable, the manifest list is the source and v1 is NOT invented.
 	historyStatus = 404;
 	await page.reload();
 	await page.getByRole('tab', { name: 'history' }).click();
@@ -388,18 +231,6 @@ test('the raw transaction fields are shown uninterpreted (#113)', async ({ page 
 	await expect(panel).toContainText('fields_modified');
 	await expect(panel).toContainText('update_mode');
 	await expect(panel).toContainText('rewrite_rows');
-	// The retry that also claims v4 is disclosed here, not merged into the row.
-	await expect(panel).toContainText('r4-first');
-});
-
-test('a failed run appears as an attempted write, never as a version (#113)', async ({ page }) => {
-	await openLog(page);
-	const section = page.locator('section.hist');
-	await expect(section).toContainText('Attempted writes that produced no version');
-	await expect(section).toContainText('schema mismatch on column v');
-	// It has no dataset_version, so it can never be a row in the log itself.
-	await expect(page.getByTestId('commit-log').locator('tbody tr')).toHaveCount(5);
-	await expect(page.getByTestId('commit-log')).not.toContainText('schema mismatch');
 });
 
 test('history 404 states the missing route and keeps the manifest rows (#113)', async ({
@@ -413,7 +244,6 @@ test('history 404 states the missing route and keeps the manifest rows (#113)', 
 	// The manifest half still renders — degraded, not blank.
 	await expect(page.getByTestId('commit-log').locator('tbody tr')).toHaveCount(4);
 	await expect(rowFor(page, 5)).toContainText('2023-11-14 22:20Z');
-	await expect(rowFor(page, 5)).toContainText(`${ME_ADMIN.email} (you)`);
 });
 
 test('history 403 is a different message from 404 (#113)', async ({ page }) => {
@@ -462,50 +292,6 @@ test('the read limit is a real page size, not a client-side slice (#113)', async
 	await page.getByLabel('How many commits to read').click();
 	await page.getByRole('option', { name: 'newest 200' }).click();
 	await expect.poll(() => historyCalls).toContain('?limit=200');
-});
-
-test('comparing two versions diffs their recorded schemas (#113)', async ({ page }) => {
-	await openLog(page);
-	// The row action seeds the base, so "compare from here" is a property of the commit you are looking at.
-	await page.getByRole('button', { name: 'details for v2', exact: true }).click();
-	await page.getByRole('button', { name: 'Compare from v2' }).click();
-	await page.getByLabel('Compare version').click();
-	await page.getByRole('option', { name: 'v5', exact: true }).click();
-	const cmp = page.locator('.cmp');
-	await expect(cmp).toContainText('v2 → v5');
-	await expect(cmp.locator('tr[data-status="added"]')).toContainText('price');
-	await expect(cmp).toContainText('matched by name');
-	// v2 has no measured run, so there is NO delta tile — an absent measurement is not a zero.
-	await expect(cmp.locator('[data-metric="rows"]')).toHaveCount(0);
-	await expect(cmp).toContainText('No measured statistics on either side');
-});
-
-test('a delta tile appears only where both sides measured, and a retype reads as one (#113)', async ({
-	page,
-}) => {
-	await openLog(page);
-	const cmp = page.locator('.cmp');
-	await cmp.getByLabel('Base version').click();
-	await page.getByRole('option', { name: 'v4', exact: true }).click();
-	await cmp.getByLabel('Compare version').click();
-	await page.getByRole('option', { name: 'v5', exact: true }).click();
-	// v4 and v5 both measured: 3→3 rows and 280→286 bytes.
-	await expect(cmp.locator('[data-metric="rows"]')).toContainText('rows · 3 → 3');
-	await expect(cmp.locator('[data-metric="bytes"]')).toContainText('+6 B');
-	await expect(cmp.locator('tr[data-status="retyped"]')).toContainText('price');
-	await expect(cmp.locator('tr[data-status="retyped"]')).toContainText('int64');
-	await expect(cmp.locator('tr[data-status="retyped"]')).toContainText('double');
-});
-
-test('the compare direction cannot be inverted (#113)', async ({ page }) => {
-	await openLog(page);
-	const cmp = page.locator('.cmp');
-	await cmp.getByLabel('Base version').click();
-	await page.getByRole('option', { name: 'v4', exact: true }).click();
-	await cmp.getByLabel('Compare version').click();
-	// Only versions NEWER than the base are offered, so "compare" is always the later one.
-	await expect(page.getByRole('option')).toHaveCount(1);
-	await expect(page.getByRole('option').first()).toHaveText('v5');
 });
 
 test('the history tab is deep-linkable (#113)', async ({ page }) => {

@@ -1,0 +1,21 @@
+# NOT FOR PRODUCTION (deploy/fixtures/README.md).
+
+# -- The Service and Deployment name: what deploy/values-local.yaml points rask's `services.lineage.forward.url` at.
+name: rask-marquez
+# The Marquez API, the OpenLineage reference consumer: POST /api/v1/lineage takes events, GET /api/v1/events/lineage
+# lists them. Built by rask onto a multi-arch JRE (.docker/marquez.dockerfile), because the published image is
+# linux/amd64 only; push it to the dev registry before installing this fixture:
+#   scripts/dagger-image.sh --name marquez --push 172.17.0.1:5000/marquez:0.51.1
+image: localhost:5000/marquez:0.51.1
+# Marquez's own Postgres, the major its upstream compose file runs; Marquez migrates it at startup.
+postgresImage: postgres:14.23
+# The claim the graph lives on, so a restart keeps what was forwarded: rask's forwarder does not send an event twice
+# once its cursor has moved past it.
+storage: 1Gi
+resources:
+  api:
+    requests: { cpu: 100m, memory: 512Mi }
+    limits: { cpu: "1", memory: 1Gi }
+  db:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { cpu: 500m, memory: 512Mi }

@@ -34,6 +34,8 @@ from collections.abc import Callable
 import pyarrow as pa
 import requests
 
+from lineage.models import author_sub_from_payload
+
 
 CATALOG = os.environ.get("CATALOG_URL", "http://localhost:2333").rstrip("/")
 LINEAGE = os.environ.get("LINEAGE_URL", "http://localhost:8000").rstrip("/")
@@ -84,10 +86,13 @@ def ipc(table: pa.Table) -> bytes:
     return sink.getvalue().to_pybytes()
 
 
-def get_json(url: str) -> dict:
-    """GET + parse JSON, degrading to ``{}`` on any transport/non-JSON error (clean poll failure)."""
+def get_json(url: str, headers: dict[str, str] | None = None) -> dict:
+    """GET + parse JSON, degrading to ``{}`` on any transport/non-JSON error (clean poll failure).
+
+    Lineage's reads are governed per table where its auth is on, so a caller forwards the reader's bearer.
+    """
     try:
-        return requests.get(url, timeout=10).json()
+        return requests.get(url, headers=headers, timeout=10).json()
     except Exception:
         return {}
 
@@ -130,9 +135,14 @@ def main() -> int:
     r = requests.post(f"{CATALOG}/v1/table/{bronze}/describe", headers=ah, timeout=10)
     check(r.status_code == 200, f"alice describe {bronze} -> {r.status_code} (want 200, cascade from owner)")
 
-    step("how/who: the catalog (which verified alice's token) recorded her as the creator")
-    creator = poll(lambda: get_json(f"{LINEAGE}/datasets/{bronze}/creator").get("creator"), alice_sub)
-    check(creator == alice_sub, f"lineage creator of {bronze} = {creator} (want {alice_sub})")
+    step("how/who: the catalog (which verified alice's token) recorded her as the author of the create")
+
+    def bronze_authors() -> set[str | None]:
+        rows = get_json(f"{LINEAGE}/events?table={bronze}&limit=500", ah).get("events", [])
+        return {author_sub_from_payload(row.get("event")) for row in rows}
+
+    recorded = poll(lambda: alice_sub in bronze_authors(), True)
+    check(recorded is True, f"lineage feed authors of {bronze} = {bronze_authors()} (want {alice_sub} among them)")
 
     step("a pipeline job promotes bronze -> silver and emits OpenLineage")
     promote = {
@@ -146,15 +156,15 @@ def main() -> int:
         "inputs": [{"namespace": ns, "name": bronze}],
         "outputs": [{"namespace": ns, "name": silver}],
     }
-    r = requests.post(f"{LINEAGE}/api/v1/lineage", json=promote, timeout=10)
+    r = requests.post(f"{LINEAGE}/api/v1/lineage", json=promote, headers=ah, timeout=10)
     check(r.status_code == 201, f"emit promote run -> {r.status_code} (want 201)")
 
-    step("how: silver's provenance points back to bronze (the medallion lineage)")
-    up = poll(
-        lambda: [d["name"] for d in get_json(f"{LINEAGE}/datasets/{silver}/upstream").get("related", [])],
-        [bronze],
+    step("how: silver is derived from bronze (the medallion lineage, off lineage's edge list)")
+    down = poll(
+        lambda: [d["table"] for d in get_json(f"{LINEAGE}/tables/{bronze}/derived", ah).get("derived", [])],
+        [silver],
     )
-    check(isinstance(up, list) and bronze in up, f"upstream({silver}) = {up} (want it to include {bronze})")
+    check(isinstance(down, list) and silver in down, f"derived({bronze}) = {down} (want it to include {silver})")
 
     summary = f"{RED}{_failures} check(s) FAILED{RESET}" if _failures else f"{GREEN}ALL GOVERNANCE INVARIANTS HELD{RESET}"
     print(f"\n{summary}")

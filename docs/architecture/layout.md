@@ -60,7 +60,7 @@ plane, and language purity is what lets both workspaces glob their members.
 
 | Path | Type | Purpose |
 |---|---|---|
-| `services/{catalog,lineage,maintenance,notifications}` | FastAPI | The lakehouse: the governed Lance Namespace catalog with tier governance, OpenLineage → AGE and the durable `GET /events` feed, maintenance (expiry, purge, orphan scan, reconcile), and the targeted inbox. |
+| `services/{catalog,lineage,maintenance,notifications}` | FastAPI | The lakehouse: the governed Lance Namespace catalog with tier governance, OpenLineage intake, the durable `GET /events` feed and edge list (Lance tables the catalog governs) and the forwarder to a graph backend, maintenance (expiry, purge, orphan scan, reconcile), and the targeted inbox. |
 | `services/{viewer,search,annotator}` | FastAPI | The media plane (`:8101`–`:8103`, public `/api/explorer/*`). The viewer also serves the S3 object browser. |
 | `services/gateway` | FastAPI | Reverse proxy on `:8888` — path-routes `/api/*` to per-domain services (longest-prefix-first, no catch-all). |
 | `services/flows` | FastAPI | The studio flow-builder's server half (`/api/flows`). |

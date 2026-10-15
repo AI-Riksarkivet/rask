@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"strconv"
+	"strings"
 	"time"
 
 	"dagger/rask/internal/dagger"
@@ -14,12 +16,27 @@ const (
 	fgaPostgresIm = "postgres:16-alpine"
 )
 
-// governedStack is the shared scaffolding behind the auth and governance e2es.
-//
-// Three scripts drove overlapping `docker compose` stacks — `auth_e2e.sh`, `governance_e2e.sh` and
-// `medallion_demo.sh` — and converting them one at a time would have produced three near-identical
-// 150-line functions. The pieces they share are here once: an object store with the catalog's bucket,
-// OpenFGA on its own Postgres, and Dex.
+// The identity the lanes' lineage service presents to the catalog, and the namespace the catalog keeps for
+// provenance (ADR 0158). In the chart lineage presents its projected service-account token; these lanes run no
+// Kubernetes, so the lane's own Dex mints lineage a token for a user that exists for that purpose alone, and the
+// catalog lists that user's subject in `LANCE_PROVENANCE_WRITERS` exactly as the chart lists the account's.
+const (
+	lineageIdentity     = "lineage@rask.internal"
+	provenanceNamespace = "provenance"
+	lineageTokenPath    = "/var/run/rask/catalog-token"
+)
+
+// lineageDexUser is the static Dex password entry for `lineageIdentity`, appended to `.docker/dex.config.yaml`'s
+// `staticPasswords` (the file's last key), with the hash alice and bob share ("password").
+const lineageDexUser = `  - email: lineage@rask.internal
+    hash: "$2b$10$BP/xHXQM78bAKb09HQLIjuryXCFo72R5DQJITLd5Nql0KCU2zib/."
+    username: lineage
+    userID: lineage
+`
+
+// governedStack is the shared scaffolding behind the auth and governance e2es: the pieces both lanes
+// need, built here once rather than as a near-identical function per lane — an object store with the
+// catalog's bucket, OpenFGA on its own Postgres, and Dex.
 //
 // ORDERING IS EXPLICIT AND EACH STEP EARNED ITS PLACE. Compose said
 // `depends_on: {condition: service_completed_successfully}`; Dagger has no such thing on a binding,
@@ -50,8 +67,8 @@ type governedStack struct {
 // runs ago in cache terms, and every run since reused the result.
 //
 // A per-run name gives both properties at once: durable within the run, fresh between runs. The cost
-// is re-running the OpenFGA migration and the AGE init each time, which is the correct cost for an
-// e2e — `make dagger-gc` reclaims the volumes.
+// is re-running the OpenFGA migration each time, which is the correct cost for an e2e — `make dagger-gc`
+// reclaims the volumes.
 func runToken() string {
 	return strconv.FormatInt(time.Now().UnixNano(), 36)
 }
@@ -135,9 +152,16 @@ func (m *Rask) governedStack(ctx context.Context, src *dagger.Directory) (*gover
 		WithDefaultArgs([]string{"/openfga", "run"}).
 		AsService()
 
+	dexConfig, err := src.File(".docker/dex.config.yaml").Contents(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !strings.HasSuffix(dexConfig, "\n") {
+		dexConfig += "\n"
+	}
 	dex := dag.Container().
 		From(dexImage).
-		WithFile("/etc/dex/config.yaml", src.File(".docker/dex.config.yaml")).
+		WithNewFile("/etc/dex/config.yaml", dexConfig+lineageDexUser).
 		WithExposedPort(5556).
 		WithDefaultArgs([]string{"dex", "serve", "/etc/dex/config.yaml"}).
 		AsService()
@@ -145,11 +169,18 @@ func (m *Rask) governedStack(ctx context.Context, src *dagger.Directory) (*gover
 	return &governedStack{Store: store, OpenFGA: openfga, Dex: dex}, nil
 }
 
+// provenanceWiring is what a catalog needs to announce its writes to lineage and keep lineage's tables: the
+// hostname lineage answers on, and the subjects that may write the provenance namespace.
+type provenanceWiring struct {
+	LineageHost string
+	Writers     []string
+}
+
 // catalogService builds the REST catalog from its own dockerfile and points it at a governed stack.
 //
 // `auth` decides whether OIDC + OpenFGA are enforced. Both e2es want the same image and differ only
 // in that flag, which is exactly why this is one function rather than two near-copies.
-func (m *Rask) catalogService(src *dagger.Directory, stack *governedStack, auth bool, lineage *dagger.Service) *dagger.Service {
+func (m *Rask) catalogService(src *dagger.Directory, stack *governedStack, auth bool, prov *provenanceWiring) (*dagger.Service, error) {
 	c := m.Image(src, "rest-catalog", "", "", "", nil).
 		WithServiceBinding("store", stack.Store).
 		WithEnvVariable("LANCE_REST_IMPL", "dir").
@@ -183,90 +214,94 @@ func (m *Rask) catalogService(src *dagger.Directory, stack *governedStack, auth 
 		// exited 3 before serving anything. An unauthenticated lane must SAY that is what it meant.
 		c = c.WithEnvVariable("RASK_INSECURE_ALLOW_UNAUTHENTICATED", "true")
 	}
-	if lineage != nil {
+	if prov != nil {
 		// The governance stack turns catalog->lineage emission ON. Without this the catalog runs
 		// perfectly and simply records nothing, so the provenance assertions fail against a healthy
 		// service — the emit is the thing under test, not a side effect of it.
 		//
-		// THE SERVICE BINDING IS AS LOAD-BEARING AS THE URL, and passing only the URL is how this
-		// failed the first time. `LANCE_LINEAGE_URL` pointed at `http://lineage-api:8000`, a name the
-		// catalog's container could not resolve because nothing bound it — and the emit is
-		// BEST-EFFORT, so the failure was swallowed exactly as designed. The catalog ran perfectly,
-		// the lineage service ran perfectly, and the only symptom was a governance assertion reading
-		// `expected lineage creator=…, got None`. A misconfigured emit target and a missing author
-		// are indistinguishable from the far end.
+		// LINEAGE IS REACHED BY ITS SESSION HOSTNAME, not a binding: lineage keeps its tables in this
+		// catalog and binds it, and a binding cannot run both ways. The hostname must resolve when the
+		// first write emits, and the emit is BEST-EFFORT, so a target that does not resolve is
+		// swallowed exactly as designed: the only symptom is a provenance assertion finding no author.
+		writers, err := json.Marshal(prov.Writers)
+		if err != nil {
+			return nil, err
+		}
 		c = c.
-			WithServiceBinding("lineage-api", lineage).
 			WithEnvVariable("LANCE_LINEAGE_EMIT_ENABLED", "true").
-			WithEnvVariable("LANCE_LINEAGE_URL", "http://lineage-api:8000/api/v1/lineage")
+			WithEnvVariable("LANCE_LINEAGE_URL", "http://"+prov.LineageHost+":8000/api/v1/lineage").
+			WithEnvVariable("LANCE_PROVENANCE_NAMESPACE", provenanceNamespace).
+			WithEnvVariable("LANCE_PROVENANCE_WRITERS", string(writers))
 	}
-	return c.WithExposedPort(2333).AsService()
+	return c.WithExposedPort(2333).AsService(), nil
 }
 
-// lineageService is the AGE-backed provenance store plus the service that writes to it.
+// lineageToken mints the token lineage presents to the catalog: a password grant for `lineageIdentity` against the
+// lane's Dex. Answers the token file and the subject it names, which the catalog lists as a provenance writer.
 //
-// The graph lives in Apache AGE (Postgres), initialised by `.docker/lineage-init.sql` — which
-// `docker-entrypoint-initdb.d` runs ONCE, on first init. With the cache volume below that means once
-// per volume rather than once per run, which is correct and is also why the volume is not optional:
-// the same reference-counting that lost the catalog's bucket and the OpenFGA migration would drop
-// this Postgres between the init and the first read, and the graph would simply not exist.
-func (m *Rask) lineageService(src *dagger.Directory) (*dagger.Service, error) {
-	pg := dag.Container().
-		From(ageImage).
-		WithEnvVariable("POSTGRES_USER", "lineage").
-		WithEnvVariable("POSTGRES_PASSWORD", "lineage").
-		WithEnvVariable("POSTGRES_DB", "lineage").
-		WithEnvVariable("POSTGRES_HOST_AUTH_METHOD", "trust").
-		WithFile("/docker-entrypoint-initdb.d/10-age.sql", src.File(".docker/lineage-init.sql")).
-		WithMountedCache("/var/lib/postgresql/data", dag.CacheVolume("rask-governed-lineage-pg-"+runToken())).
-		WithExposedPort(5432).
-		WithDefaultArgs([]string{"docker-entrypoint.sh", "postgres"}).
-		AsService()
-
-	// WAIT FOR POSTGRES TO BE READY, not merely listening. `docker-entrypoint.sh` starts a TEMPORARY
-	// server to run `/docker-entrypoint-initdb.d` and then restarts into the real one, so the port is
-	// accepting during a window when the database is not usable — and Dagger's service binding waits
-	// on the port. The lineage service then dies in its lifespan at `ensure_events_table()`, deep in
-	// psycopg's pool, which reads as a lineage bug rather than a startup race.
-	//
-	// It is also why this failed INTERMITTENTLY before the wait existed: with the cache volume already
-	// initialised the init scripts are skipped and the race usually loses, so the first symptom was a
-	// gate that passed and then stopped passing for no visible reason.
-	if _, err := dag.Container().
-		From(ageImage).
-		WithServiceBinding("lineage-postgres", pg).
-		WithExec([]string{"sh", "-c", "until pg_isready -h lineage-postgres -U lineage -d lineage; do sleep 1; done"}).
-		Sync(context.Background()); err != nil {
-		return nil, err
+// DEX MUST STAY UP FROM THE MINT TO THE LAST CHECK. Its signing keys live in memory, so a Dex that stops when
+// this step drops its last reference comes back with new keys, and the catalog then refuses the minted token
+// as signed by no key it can fetch. The caller starts Dex explicitly before minting.
+func (m *Rask) lineageToken(ctx context.Context, src *dagger.Directory, dex *dagger.Service) (*dagger.File, string, error) {
+	minted := m.base(src).
+		WithServiceBinding("dex", dex).
+		WithExec([]string{"uv", "run", "--no-sync", "python", "-c", `
+import base64, json, pathlib, time, urllib.parse, urllib.request
+form = urllib.parse.urlencode({"grant_type": "password", "client_id": "lance-catalog", "username": "` + lineageIdentity + `", "password": "password", "scope": "openid email"}).encode()
+for _ in range(60):
+    try:
+        body = json.load(urllib.request.urlopen("http://dex:5556/dex/token", form, timeout=5))
+        break
+    except Exception:
+        time.sleep(2)
+else:
+    raise SystemExit("dex never minted lineage's token")
+token = body["id_token"]
+claims = token.split(".")[1]
+claims += "=" * (-len(claims) % 4)
+out = pathlib.Path("/out")
+out.mkdir(exist_ok=True)
+(out / "token").write_text(token)
+(out / "sub").write_text(json.loads(base64.urlsafe_b64decode(claims))["sub"])
+`})
+	sub, err := minted.File("/out/sub").Contents(ctx)
+	if err != nil {
+		return nil, "", err
 	}
+	return minted.File("/out/token"), sub, nil
+}
 
-	api := m.Image(src, "rest-catalog", "", "", "", nil).
-		WithServiceBinding("lineage-postgres", pg).
+// lineageService is the lineage service, keeping its feed and edge list as tables of `catalog`'s provenance
+// namespace (ADR 0158) and presenting `token` to it. It answers on the session hostname `host`, so the catalog
+// it binds can reach it back without a binding cycle; the caller starts it.
+func (m *Rask) lineageService(src *dagger.Directory, catalog *dagger.Service, token *dagger.File, host string) *dagger.Service {
+	return m.Image(src, "rest-catalog", "", "", "", nil).
+		WithServiceBinding("catalog", catalog).
 		// Lineage calls `assert_authentication_configured` exactly as the catalog does, and refuses to
 		// boot unless a posture is named. The authorization under test in these lanes is the CATALOG's;
-		// lineage is the store it emits to, reached over a service binding nothing else can address.
+		// lineage's own doors are open here.
 		WithEnvVariable("RASK_INSECURE_ALLOW_UNAUTHENTICATED", "true").
-		WithEnvVariable("LINEAGE_DATABASE_URL", "postgresql://lineage:lineage@lineage-postgres:5432/lineage").
-		WithEnvVariable("LINEAGE_GRAPH", "lineage").
+		WithEnvVariable("LINEAGE_CATALOG_URL", "http://catalog:2333").
+		WithEnvVariable("LINEAGE_PROVENANCE_NAMESPACE", provenanceNamespace).
+		WithFile(lineageTokenPath, token).
+		WithEnvVariable("RASK_CATALOG_IDENTITY_TOKEN_FILE", lineageTokenPath).
 		WithExposedPort(8000).
-		// The SAME image as the catalog, run with a different command — the compose overlay says so
-		// explicitly ("same image as the catalog (now ships the lineage service too)"), and building
-		// it twice would let the two drift.
+		// The SAME image as the catalog, run with a different command; building it twice would let the
+		// two drift.
 		//
 		// SHARING THE IMAGE MEANS INHERITING ITS HEALTHCHECK, and `.docker/rest-catalog.dockerfile`
 		// bakes one that connects to 127.0.0.1:2333 — the CATALOG's port. Nothing listens on 2333
 		// here, so the probe fails, Dagger refuses to start the service, and the run dies with
 		// `health check errored` plus a `ConnectionRefusedError` naming a port this service was never
-		// supposed to serve. The compose overlay hit the same thing and solved it the same way, by
-		// overriding the healthcheck rather than dropping it.
+		// supposed to serve. Overridden rather than dropped. The start period covers lineage's lifespan,
+		// which retries creating its tables through the catalog for up to 120 s.
 		WithDockerHealthcheck(
 			[]string{"python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/livez').read()"},
-			dagger.ContainerWithDockerHealthcheckOpts{Interval: "5s", Timeout: "3s", StartPeriod: "30s", Retries: 20},
+			dagger.ContainerWithDockerHealthcheckOpts{Interval: "5s", Timeout: "3s", StartPeriod: "150s", Retries: 20},
 		).
 		WithDefaultArgs([]string{"uvicorn", "lineage.main:app", "--host", "0.0.0.0", "--port", "8000"}).
-		AsService()
-
-	return api, nil
+		AsService().
+		WithHostname(host)
 }
 
 // AuthChain runs the app-side-seeding authorization chain against a real Dex and a real OpenFGA.
@@ -289,7 +324,10 @@ func (m *Rask) AuthChain(
 	if err != nil {
 		return "", err
 	}
-	catalog := m.catalogService(src, stack, true, nil)
+	catalog, err := m.catalogService(src, stack, true, nil)
+	if err != nil {
+		return "", err
+	}
 
 	return m.base(src).
 		WithServiceBinding("catalog", catalog).
@@ -330,8 +368,8 @@ func (m *Rask) AuthChain(
 // medallion lineage — with real Dex id_tokens and not one hand-written tuple.
 //
 // It replaces `scripts/governance_e2e.sh`, which layered FOUR compose files (base + auth + lineage +
-// governance) to assemble the same thing. Everything it needs beyond the auth stack is the AGE graph
-// and the lineage service, so it is the auth stack plus two bindings rather than a second stack.
+// governance) to assemble the same thing. Everything it needs beyond the auth stack is the lineage
+// service, which keeps its tables in the catalog it is wired to, so it is the auth stack plus one service.
 //
 // The catalog runs with emission ON. That is the distinction from `AuthChain`: authorization alone
 // passes with emission off, so a run that forgot it would prove the authz half and silently skip the
@@ -349,15 +387,24 @@ func (m *Rask) GovernanceChain(
 	if err != nil {
 		return "", err
 	}
-	lineage, err := m.lineageService(src)
+	if stack.Dex, err = stack.Dex.Start(ctx); err != nil {
+		return "", err
+	}
+	token, lineageSub, err := m.lineageToken(ctx, src, stack.Dex)
 	if err != nil {
 		return "", err
 	}
-	catalog := m.catalogService(src, stack, true, lineage)
+	catalog, err := m.catalogService(src, stack, true, &provenanceWiring{LineageHost: "lineage-api", Writers: []string{lineageSub}})
+	if err != nil {
+		return "", err
+	}
+	// Started rather than bound: the catalog reaches it by hostname, and the test below does too.
+	if _, err := m.lineageService(src, catalog, token, "lineage-api").Start(ctx); err != nil {
+		return "", err
+	}
 
 	return m.base(src).
 		WithServiceBinding("catalog", catalog).
-		WithServiceBinding("lineage-api", lineage).
 		WithServiceBinding("dex", stack.Dex).
 		WithServiceBinding("openfga", stack.OpenFGA).
 		WithEnvVariable("LANCE_E2E_AUTH_SERVER", "http://catalog:2333").
@@ -372,8 +419,8 @@ func (m *Rask) GovernanceChain(
 		// password`), so the lane reported an authorization result it had never reached.
 		WithEnvVariable("LANCE_E2E_OUTSIDER", "bob@example.com").
 		// Wait for BOTH, not just the ports: uvicorn accepts before either lifespan is built, and the
-		// lineage service additionally has to reach AGE. A racing first request reads as a wrong
-		// answer rather than as an unready service.
+		// lineage service additionally has to create its tables through the catalog. A racing first
+		// request reads as a wrong answer rather than as an unready service.
 		WithExec([]string{"sh", "-c", `
 for i in $(seq 1 90); do
   python -c "import urllib.request,sys; urllib.request.urlopen('http://catalog:2333/livez',timeout=2)" 2>/dev/null && break
@@ -403,100 +450,4 @@ echo "lineage-api never became ready"; exit 1`}).
 			return c.WithExec([]string{"sh", "-c", "LANCE_E2E_DEX_SECRET= uv run --no-sync pytest tests/e2e-py/test_governance_e2e.py -v"})
 		}).
 		Stdout(ctx)
-}
-
-// MedallionDemo is the live medallion walkthrough: real Lance datasets on RustFS, a real OpenLineage
-// event after each step, and the DAG building in front of you at http://localhost:8000/ui/.
-//
-//	make medallion-demo        # then open the UI and watch bronze -> silver -> gold appear
-//
-// It replaces `scripts/medallion_demo.sh`, which could not run: that script did
-// `compose up -d --build rustfs-perms rustfs lineage-postgres lineage-api web`, and NONE of the five
-// compose files it layers defines a `web` service — compose fails on an unknown service name. (Its
-// other apparent problem, the missing `lakehouse` bucket, is not one: the driver's `ensure_bucket()`
-// creates it.)
-//
-// SELF-DRIVING, and that is what preserves the demo. The point is watching the DAG build, not reading
-// a finished one — but Dagger services are per-invocation, so a driver running in a separate call
-// would address a different stack. Instead the service's own command starts uvicorn, waits for it,
-// and then runs the driver in the same container, so `up` gives a live UI that fills in as it goes.
-func (m *Rask) MedallionDemo(
-	ctx context.Context,
-	// +defaultPath="/"
-	// +optional
-	src *dagger.Directory,
-	// Seconds between steps — the walkthrough's pacing.
-	// +optional
-	// +default="2.5"
-	stepDelay string,
-) (*dagger.Service, error) {
-	run := runToken()
-
-	store := dag.Container().
-		From(rustfsImage).
-		WithEnvVariable("RUSTFS_ACCESS_KEY", "rustfsadmin").
-		WithEnvVariable("RUSTFS_SECRET_KEY", "rustfsadmin").
-		WithEnvVariable("RUSTFS_ADDRESS", ":9000").
-		WithMountedCache("/data", dag.CacheVolume("rask-demo-store-"+run)).
-		WithExposedPort(9000).
-		AsService()
-
-	pg := dag.Container().
-		From(ageImage).
-		WithEnvVariable("POSTGRES_USER", "lineage").
-		WithEnvVariable("POSTGRES_PASSWORD", "lineage").
-		WithEnvVariable("POSTGRES_DB", "lineage").
-		WithEnvVariable("POSTGRES_HOST_AUTH_METHOD", "trust").
-		WithFile("/docker-entrypoint-initdb.d/10-age.sql", src.File(".docker/lineage-init.sql")).
-		WithMountedCache("/var/lib/postgresql/data", dag.CacheVolume("rask-demo-lineage-pg-"+run)).
-		WithExposedPort(5432).
-		WithDefaultArgs([]string{"docker-entrypoint.sh", "postgres"}).
-		AsService()
-
-	if _, err := dag.Container().
-		From(ageImage).
-		WithServiceBinding("lineage-postgres", pg).
-		WithExec([]string{"sh", "-c", "until pg_isready -h lineage-postgres -U lineage -d lineage; do sleep 1; done"}).
-		Sync(ctx); err != nil {
-		return nil, err
-	}
-
-	return m.Image(src, "rest-catalog", "", "", "", nil).
-		WithServiceBinding("lineage-postgres", pg).
-		WithServiceBinding("rustfs", store).
-		// The demo is a walkthrough on a throwaway stack — open is what it means, and it has to say so
-		// or the service exits 3 before the UI it exists to show ever listens. See `lineageService`.
-		WithEnvVariable("RASK_INSECURE_ALLOW_UNAUTHENTICATED", "true").
-		WithEnvVariable("LINEAGE_DATABASE_URL", "postgresql://lineage:lineage@lineage-postgres:5432/lineage").
-		WithEnvVariable("LINEAGE_GRAPH", "lineage").
-		// The demo overlay's own settings: the lineage service reads the same store the driver writes.
-		WithEnvVariable("LINEAGE_DEMO_DATA_ENABLED", "true").
-		WithEnvVariable("LINEAGE_S3_ENDPOINT", "http://rustfs:9000").
-		WithEnvVariable("LINEAGE_S3_ACCESS_KEY_ID", "rustfsadmin").
-		WithEnvVariable("LINEAGE_S3_SECRET_ACCESS_KEY", "rustfsadmin").
-		WithEnvVariable("LINEAGE_S3_REGION", "us-east-1").
-		WithEnvVariable("LINEAGE_S3_BUCKET", "lakehouse").
-		// What the driver reads. The script exported the same set from the host.
-		WithEnvVariable("S3_ENDPOINT", "http://rustfs:9000").
-		WithEnvVariable("S3_ACCESS_KEY", "rustfsadmin").
-		WithEnvVariable("S3_SECRET_KEY", "rustfsadmin").
-		WithEnvVariable("S3_REGION", "us-east-1").
-		WithEnvVariable("S3_BUCKET", "lakehouse").
-		WithEnvVariable("LINEAGE_URL", "http://localhost:8000").
-		WithEnvVariable("STEP_DELAY", stepDelay).
-		WithDirectory("/srv/scripts", src.Directory("scripts")).
-		WithExposedPort(8000).
-		// The image's baked HEALTHCHECK probes the CATALOG's port 2333 — see lineageService above.
-		WithDockerHealthcheck(
-			[]string{"python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/livez').read()"},
-			dagger.ContainerWithDockerHealthcheckOpts{Interval: "5s", Timeout: "3s", StartPeriod: "60s", Retries: 30},
-		).
-		WithDefaultArgs([]string{"sh", "-c", `
-uvicorn lineage.main:app --host 0.0.0.0 --port 8000 &
-until python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/livez')" 2>/dev/null; do sleep 1; done
-echo "== UI is live at http://localhost:8000/ui/ — the DAG builds as the driver runs =="
-python /srv/scripts/medallion_demo.py || echo "driver exited non-zero"
-echo "== walkthrough complete — the stack stays up so you can explore it =="
-wait`}).
-		AsService(), nil
 }

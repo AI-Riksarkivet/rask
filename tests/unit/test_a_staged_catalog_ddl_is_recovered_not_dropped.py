@@ -30,7 +30,7 @@ import respx
 from lance_namespace import PermissionDeniedError, ServiceUnavailableError, TransactionNotFoundError, UnsupportedOperationError
 
 from catalog.core.lineage_emit import INSERT, build_write_event
-from lineage.api import fga_deps, reconcile_cron
+from lineage.api import fga_deps, relay_cron
 from lineage.api.v1.endpoints import dlq
 from lineage.core.config import LineageSettings, Signing
 from lineage.models import DatasetEvent, UnverifiedEventError
@@ -76,18 +76,15 @@ class _Publisher:
 
 
 class _Repo:
-    """Both ingest doors, so the assertion is WHICH one the relay took."""
+    """The store, filing what it records by the shape it was parsed into, so the assertion is WHICH shape the relay recorded."""
 
     def __init__(self) -> None:
         self.runs: list[Any] = []
         self.datasets: list[DatasetEvent] = []
         self.refusals: list[dict[str, str | None]] = []
 
-    async def ingest_event(self, event: Any) -> None:  # noqa: ANN401 — the doors' own shape
-        self.runs.append(event)
-
-    async def ingest_dataset_event(self, event: DatasetEvent) -> None:
-        self.datasets.append(event)
+    async def record(self, event: Any) -> None:  # noqa: ANN401 — the store's own shape
+        (self.datasets if isinstance(event, DatasetEvent) else self.runs).append(event)
 
     async def record_refusal(self, *, outbox_key: str, run_id: str | None, author: str | None, reason: str, event_json: str) -> None:
         self.refusals.append({"outbox_key": outbox_key, "run_id": run_id, "author": author, "reason": reason, "event_json": event_json})
@@ -107,7 +104,6 @@ def _settings(tmp_path: Path, *, fga_enabled: bool, signers: frozenset[str] = fr
     auth = {"oidc_enabled": True, "oidc_issuer": "https://dex.example", "oidc_audience": "lance", "fga_store_id": "s", "fga_model_id": "m"}
     return LineageSettings.model_validate(
         {
-            "database_url": "postgresql://x/y",
             "outbox_uri": str(tmp_path / "outbox"),
             "fga_enabled": fga_enabled,
             "signing": Signing(signers=signers, delegators=frozenset({_CATALOG})),
@@ -190,8 +186,8 @@ def _restamped(catalog: Any, author: str) -> dict[str, Any]:  # noqa: ANN401 - t
     return doc
 
 
-def _drain(settings: LineageSettings, repo: _Repo, publisher: _Publisher) -> reconcile_cron.DrainOutcome:
-    return asyncio.run(reconcile_cron._drain_outbox(_request(), cast("Any", repo), settings, {}, publisher))
+def _drain(settings: LineageSettings, repo: _Repo, publisher: _Publisher) -> relay_cron.DrainOutcome:
+    return asyncio.run(relay_cron._drain_outbox(_request(), cast("Any", repo), settings, {}, publisher))
 
 
 def _stage_a_run_behind(settings: LineageSettings, create_key: str) -> str:
@@ -218,14 +214,16 @@ async def _admit(*_args: object) -> None:
 
 class _CreateDoorDown(_Repo):
     @override
-    async def ingest_dataset_event(self, event: DatasetEvent) -> None:
-        raise ConnectionError("graph unreachable")
+    async def record(self, event: Any) -> None:  # noqa: ANN401 — the store's own shape
+        if isinstance(event, DatasetEvent):
+            raise ConnectionError("catalog unreachable")
+        await super().record(event)
 
 
 class _RefusalLedgerDown(_Repo):
     @override
     async def record_refusal(self, *, outbox_key: str, run_id: str | None, author: str | None, reason: str, event_json: str) -> None:
-        raise ConnectionError("postgres unreachable")
+        raise ConnectionError("catalog unreachable")
 
 
 # --------------------------------------------------------------------------- #
@@ -271,7 +269,7 @@ def test_a_staged_create_the_gate_refuses_is_refused_and_never_ingested(
     outcome = _drain(settings, repo, publisher)
 
     assert outcome.refused == outcome.recorded == 1 and outcome.drained == 0, f"a refused create was not handled as a refusal: {outcome}"
-    assert repo.datasets == [] and repo.runs == [] and publisher.published == [], "a refused create reached the graph or the bus"
+    assert repo.datasets == [] and repo.runs == [] and publisher.published == [], "a refused create reached the feed or the bus"
     # No run to name: the key is what identifies a static change, and `run_id` stays empty rather than lying.
     [refusal] = repo.refusals
     assert reason_names in str(refusal["reason"]), f"the recorded reason does not say what was refused: {refusal['reason']}"
@@ -345,7 +343,7 @@ def test_a_create_whose_ingest_fails_is_stranded_and_the_run_behind_it_still_dra
     settings = _settings(tmp_path, fga_enabled=False)
     key, _ = _stage_a_create(settings, catalog)
     run_id = _stage_a_run_behind(settings, key)
-    monkeypatch.setattr(reconcile_cron, "enforce_bus_authz", _admit)
+    monkeypatch.setattr(relay_cron, "enforce_bus_authz", _admit)
     repo = _CreateDoorDown()
 
     outcome = _drain(settings, repo, _Publisher())
@@ -395,7 +393,7 @@ def test_a_refusal_whose_record_fails_stays_staged_and_the_tick_goes_on(tmp_path
     event. The verdict stands and is counted; the object stays staged until its record lands."""
     settings = _settings(tmp_path, fga_enabled=False)
     key, run_id = _stage_a_refusable_first(settings, kind, catalog)
-    monkeypatch.setattr(reconcile_cron, "enforce_bus_authz", _refusing(key, settings))
+    monkeypatch.setattr(relay_cron, "enforce_bus_authz", _refusing(key, settings))
     repo = _RefusalLedgerDown()
 
     outcome = _drain(settings, repo, _Publisher())
@@ -411,7 +409,7 @@ def test_a_refusal_whose_retirement_fails_is_recorded_and_the_tick_goes_on(tmp_p
     """The other half of the same try: the record lands, the delete raises, and the next event still drains."""
     settings = _settings(tmp_path, fga_enabled=False)
     key, run_id = _stage_a_refusable_first(settings, "create", catalog)
-    monkeypatch.setattr(reconcile_cron, "enforce_bus_authz", _refusing(key, settings))
+    monkeypatch.setattr(relay_cron, "enforce_bus_authz", _refusing(key, settings))
     real_drop = outbox.drop_event
 
     def drop(uri: str, opts: dict[str, str], dropped: str) -> None:
@@ -434,7 +432,7 @@ def test_a_poison_object_whose_delete_fails_does_not_stop_the_create_behind_it(t
     settings = _settings(tmp_path, fga_enabled=False)
     _stage_a_create(settings, catalog)
     hostile = _stage_hostile_first(settings, _HOSTILE["bigint"])
-    monkeypatch.setattr(reconcile_cron, "enforce_bus_authz", _admit)
+    monkeypatch.setattr(relay_cron, "enforce_bus_authz", _admit)
     real_drop = outbox.drop_event
 
     def drop(uri: str, opts: dict[str, str], key: str) -> None:
@@ -465,9 +463,9 @@ def test_a_create_the_feed_already_holds_is_a_replay_and_not_a_loss(tmp_path: Pa
             return held.model_dump(by_alias=True) if (run_id, event_type) == (held.feed_id, held.feed_event_type) else None
 
     repo = _FeedHoldsIt()
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(fga=object(), repository=repo)))
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(fga=object(), provenance=repo)))
 
-    outcome = asyncio.run(reconcile_cron._drain_outbox(cast("Any", request), cast("Any", repo), settings, {}, _Publisher()))
+    outcome = asyncio.run(relay_cron._drain_outbox(cast("Any", request), cast("Any", repo), settings, {}, _Publisher()))
 
     assert (outcome.drained, outcome.refused) == (1, 0), f"a redelivered create was filed as lost provenance: {outcome}"
     assert repo.refusals == []
@@ -498,7 +496,7 @@ def test_the_dlq_replay_refuses_a_create_it_may_not_record_and_leaves_it_staged(
         asyncio.run(dlq.replay_dlq(key, _request(), cast("Any", repo), settings, operator, fga_deps.DatasetFilter(_request(), settings, operator), publisher))
 
     assert isinstance(refused.value, UnverifiedEventError) is unsigned, f"the refusal came from the wrong gate: {refused.value!r}"
-    assert repo.datasets == [] and repo.runs == [] and publisher.published == [], "a refused replay reached the graph or the bus"
+    assert repo.datasets == [] and repo.runs == [] and publisher.published == [], "a refused replay reached the feed or the bus"
     assert outbox.resolve_event(settings.outbox_uri, {}, key) is not None, "a refused replay must leave the object staged"
 
 

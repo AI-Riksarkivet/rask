@@ -31,20 +31,20 @@ log = logging.getLogger(__name__)
 
 
 async def on_lineage_event(event: dict[str, Any], request: Request, _: Annotated[None, Depends(require_dapr_token)]) -> dict[str, str]:
-    """Ingest one Dapr-delivered OpenLineage CloudEvent into the graph; returns the Dapr ack status.
+    """Record one Dapr-delivered OpenLineage CloudEvent in the feed; returns the Dapr ack status.
 
     TWO GUARDS, ANSWERING TWO DIFFERENT QUESTIONS (§ E2).
 
     ``require_dapr_token`` answers *may this TRANSPORT deliver* — without it the route was an
     unauthenticated, publicly-reachable ingest path co-mounted on the query app, and a forged POST could
-    self-assert any ``author`` and inject fabricated nodes/edges into the authoritative AGE graph even
-    with OIDC/FGA on (the security-audit prod-blocker).
+    self-assert any ``author`` and inject fabricated provenance even with OIDC/FGA on (the security-audit
+    prod-blocker).
 
     ``enforce_bus_authz`` answers *may the stamped subject record THIS* — which the token cannot,
     because it is shared by every producer that holds it. Its absence was the asymmetry E2 names: the
     HTTP twin applies ``enforce_author`` and ``enforce_output_authz`` and this door applied neither, so
     one shared credential authorized any provenance about any dataset — including a ``drop_table``
-    operation on a table the producer had never seen, which the reconcile sweep then honours.
+    operation on a table the producer had never seen.
 
     Passed as a callback rather than a dependency because the subject is INSIDE the payload: there is no
     principal to resolve before the body is parsed, and the parse is the consumer's (it owns the
@@ -53,14 +53,14 @@ async def on_lineage_event(event: dict[str, Any], request: Request, _: Annotated
     async def authorize(parsed: RunEvent | DatasetEvent, arrived: Mapping[str, Any]) -> None:
         await enforce_bus_authz(parsed, request, get_settings(), arrived)
 
-    return await handle_cloud_event(request.app.state.repository, event, authorize, door=Door.SUBSCRIBER)
+    return await handle_cloud_event(request.app.state.provenance, event, authorize, door=Door.SUBSCRIBER)
 
 
-async def _graph_already_holds(request: Request, run_id: str | None) -> bool:
-    """Does the graph already have this run? Anything short of a clear YES is ``False``.
+async def _feed_already_holds(request: Request, run_id: str | None) -> bool:
+    """Does the feed already hold this run? Anything short of a clear YES is ``False``.
 
     Every fallback leans toward reporting LOSS. A parking route that cannot ask must not answer
-    "nothing was lost", and an unreachable graph is the moment the signal matters most; a false loss
+    "nothing was lost", and an unreachable feed is the moment the signal matters most; a false loss
     costs an operator one lookup, a false all-clear costs them the event.
 
     The exception is deliberately broad and must stay that way: this route's only job is to ACK. A
@@ -69,18 +69,18 @@ async def _graph_already_holds(request: Request, run_id: str | None) -> bool:
     """
     if run_id is None:
         return False
-    repository = getattr(request.app.state, "repository", None)
-    if repository is None:
+    provenance = getattr(request.app.state, "provenance", None)
+    if provenance is None:
         return False
     try:
-        return await repository.run_status(run_id) is not None
+        return await provenance.run_recorded(run_id)
     except Exception as exc:  # noqa: BLE001 — see the docstring: this route must always ack
-        log.warning("dapr_dead_letter_graph_unreachable", extra={"run_id": run_id, "error": str(exc)})
+        log.warning("dapr_dead_letter_feed_unreachable", extra={"run_id": run_id, "error": str(exc)})
         return False
 
 
 async def _reingest_from_the_park(event: dict[str, Any], request: Request, run_id: str | None) -> bool:
-    """Give a parked delivery ONE more presentation to the ingest path. True when the graph then holds it.
+    """Give a parked delivery ONE more presentation to the ingest path. True when the feed then holds it.
 
     THE GAP THIS CLOSES was named in this module's own prose: "a dead letter older than the stream's
     retention has no path back, because nothing re-ingests the DLQ stream itself". The DLQ stream is
@@ -90,30 +90,30 @@ async def _reingest_from_the_park(event: dict[str, Any], request: Request, run_i
 
     THE SAME FUNCTION THE LIVE SUBSCRIPTION USES, deliberately: `handle_cloud_event` carries the same
     authorization (`enforce_bus_authz` — may the stamped subject record THIS, and where signing is enforced
-    does a listed signer's key verify it) and the same idempotence (`ingest_event` MERGEs on a deterministic
-    run id). So this is a re-PRESENTATION, not a second ingest path with its own policy, and a role-literal
+    does a listed signer's key verify it) and the same idempotence (every row is written under its key).
+    So this is a re-PRESENTATION, not a second ingest path with its own policy, and a role-literal
     author is refused here exactly as it was on the bus — which is why this does not pre-empt the open ruling
     on that population. It names its own door, so a refusal here is counted as the parking route's and not as
     a second arrival on the subscription.
 
-    IT PUBLISHES NOTHING. The write goes to the repository directly, so a recovered event never lands
+    IT PUBLISHES NOTHING. The write goes to the provenance store directly, so a recovered event never lands
     back on `lineage.events.v1`. That is what separates this from the reconcile relay's drain, which
     re-publishes by design and therefore cannot be used here.
 
     FAIL-QUIET, because the caller is a parking route that must ACK. Any failure leaves the outcome
     exactly as it was before this existed — parked and counted — so the worst case is today's behaviour.
     """
-    repository = getattr(request.app.state, "repository", None)
-    if repository is None or not run_id:
+    provenance = getattr(request.app.state, "provenance", None)
+    if provenance is None or not run_id:
         return False
     try:
-        await handle_cloud_event(repository, event, lambda parsed, arrived: enforce_bus_authz(parsed, request, get_settings(), arrived), door=Door.DEAD_LETTER)
+        await handle_cloud_event(provenance, event, lambda parsed, arrived: enforce_bus_authz(parsed, request, get_settings(), arrived), door=Door.DEAD_LETTER)
     except Exception as exc:  # noqa: BLE001 — a replay must never turn a park into a 500 or a retry loop
         log.info("dapr_dead_letter_replay_failed", extra={"run_id": run_id, "error": str(exc)})
         return False
-    # ASK THE GRAPH, never the ack status: `handle_cloud_event` answers SUCCESS for a committed write AND
+    # ASK THE FEED, never the ack status: `handle_cloud_event` answers SUCCESS for a committed write AND
     # for an unrepairable discard, so only a second read can tell recovery from a shrug.
-    return await _graph_already_holds(request, run_id)
+    return await _feed_already_holds(request, run_id)
 
 
 async def on_dead_letter(event: dict[str, Any], request: Request, _: Annotated[None, Depends(require_dapr_token)]) -> dict[str, str]:
@@ -129,12 +129,12 @@ async def on_dead_letter(event: dict[str, Any], request: Request, _: Annotated[N
     to the retention window on every restart and parks whatever still fails — so an unconditional ERROR
     per parking counts restarts rather than losses, and buries the real ones among them. Measured on the
     live estate 2026-09-13: 8,515 parked deliveries of `lineage.events.v1` against a stream whose last
-    sequence was 5,860, and 17 of 21 distinct parked run ids already present in the graph. Run ids are
-    deterministic and `ingest_event` MERGEs on them, so a stage that runs again heals its own gap.
+    sequence was 5,860, and 17 of 21 distinct parked run ids already recorded. A feed row is
+    written under its key, so a stage that runs again heals its own gap.
     """
     payload = event.get("data") if isinstance(event, dict) else None
     run_id = run_id_from_payload(payload)
-    already_recorded = await _graph_already_holds(request, run_id)
+    already_recorded = await _feed_already_holds(request, run_id)
     recovered = False if already_recorded else await _reingest_from_the_park(event, request, run_id)
     log.log(
         logging.WARNING if already_recorded else logging.ERROR,
@@ -155,7 +155,7 @@ async def on_dead_letter(event: dict[str, Any], request: Request, _: Annotated[N
     )
     # Without this counter the retries all counted RETRIED and the parking vanished from the metrics
     # (audit 2026-07-15). The split is what makes the number readable: a non-zero `DEAD_LETTERED` means
-    # the graph is missing that run, which is the claim an alert on it is making.
+    # the feed is missing that run, which is the claim an alert on it is making.
     if recovered:
         record_outcome(Outcome.RECOVERED, door=Door.DEAD_LETTER)
     else:
@@ -169,7 +169,7 @@ def register_dapr(app: FastAPI) -> None:
     ``DaprApp(app)`` is always constructed (it adds GET ``/dapr/subscribe``). The subscription itself is
     registered ONLY when Dapr ingest is enabled, so an HTTP-only deployment carries no always-live ingest
     route. Combined with the token guard above, the pubsub component's publisher scopes, and the gateway
-    blocking this route, a forged external event cannot reach the graph. When ``dapr_dlq_topic`` is set
+    blocking this route, a forged external event cannot reach the feed. When ``dapr_dlq_topic`` is set
     (chart: ``dapr.resiliency.enabled``), the subscription declares a Dapr ``deadLetterTopic`` and the
     parking route is registered — exhausted deliveries become visible instead of vanishing.
 
@@ -187,7 +187,7 @@ def register_dapr(app: FastAPI) -> None:
         )(on_lineage_event)
         if settings.dapr_dlq_topic:
             # The parking route rides its OWN durable component (deliverPolicy=new), never the main
-            # ingest component: that one is deliverPolicy=all so a replay can rebuild the graph, and
+            # ingest component: that one is deliverPolicy=all so a replay can rebuild the feed, and
             # riding it would re-park up to 168h of already-parked dead letters on a replay, spiking
             # the terminal-loss metric with no new loss. The fallback keeps a dev stack without the
             # component working.

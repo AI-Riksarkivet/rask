@@ -1,0 +1,128 @@
+{{- $api := dict "app.kubernetes.io/name" "marquez" "app.kubernetes.io/instance" .Release.Name "app.kubernetes.io/component" "marquez" }}
+{{- $db := dict "app.kubernetes.io/name" "marquez" "app.kubernetes.io/instance" .Release.Name "app.kubernetes.io/component" "marquez-db" }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.name }}
+  labels: {{- toYaml $api | nindent 4 }}
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.name }}-db
+  labels: {{- toYaml $db | nindent 4 }}
+spec:
+  ports:
+    - { name: postgres, port: 5432, targetPort: 5432 }
+  selector: {{- toYaml $db | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ .Values.name }}-db
+  labels: {{- toYaml $db | nindent 4 }}
+spec:
+  serviceName: {{ .Values.name }}-db
+  replicas: 1
+  selector:
+    matchLabels: {{- toYaml $db | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- toYaml $db | nindent 8 }}
+    spec:
+      serviceAccountName: {{ .Values.name }}
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: postgres
+          image: {{ .Values.postgresImage }}
+          env:
+            # Marquez connects as `marquez` to the database `marquez`; its image's config fixes both.
+            - { name: POSTGRES_USER, value: marquez }
+            - { name: POSTGRES_DB, value: marquez }
+            # No password anywhere: the server is reachable only inside the namespace, and the password Marquez's
+            # image sends is its own config's literal, which trust authentication ignores.
+            - { name: POSTGRES_HOST_AUTH_METHOD, value: trust }
+            - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
+          ports:
+            - { name: postgres, containerPort: 5432 }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/postgresql/data }
+            - { name: run, mountPath: /var/run/postgresql }
+          readinessProbe:
+            exec: { command: ["pg_isready", "-U", "marquez", "-d", "marquez"] }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources: {{- toYaml .Values.resources.db | nindent 12 }}
+      volumes:
+        - name: run
+          emptyDir: {}
+  volumeClaimTemplates:
+    - metadata: { name: data }
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources: { requests: { storage: {{ .Values.storage }} } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.name }}
+  labels: {{- toYaml $api | nindent 4 }}
+spec:
+  ports:
+    - { name: http, port: 5000, targetPort: 5000 }
+    - { name: admin, port: 5001, targetPort: 5001 }
+  selector: {{- toYaml $api | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.name }}
+  labels: {{- toYaml $api | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {{- toYaml $api | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- toYaml $api | nindent 8 }}
+    spec:
+      serviceAccountName: {{ .Values.name }}
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: marquez
+          image: {{ .Values.image }}
+          env:
+            - { name: POSTGRES_HOST, value: {{ .Values.name }}-db }
+            - { name: POSTGRES_PORT, value: "5432" }
+            # The image's config searches through OpenSearch unless told not to, and this fixture runs none.
+            - { name: SEARCH_ENABLED, value: "false" }
+          ports:
+            - { name: http, containerPort: 5000 }
+            - { name: admin, containerPort: 5001 }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+          readinessProbe:
+            httpGet: { path: /healthcheck, port: 5001 }
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          resources: {{- toYaml .Values.resources.api | nindent 12 }}
+      volumes:
+        - name: tmp
+          emptyDir: {}

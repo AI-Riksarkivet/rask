@@ -111,10 +111,12 @@ def _store(seq: int | None = None) -> tuple[LineageCursorStore, _MemoryCursor]:
 def _forward(*rows: int | dict[str, Any], oldest_seq: int | None = None) -> Callable[[httpx.Request], httpx.Response]:
     """Lineage's `/events/projection` over `rows`, answering the request's own `since` and `limit`.
 
-    Forward pages oldest first with lineage's cursor rule (`runs.py::_forward_cursor`); a request with
-    no `since` gets the newest page, which is the priming read.
+    Forward pages oldest first with lineage's cursor rule (`events.py::_forward_cursor`), a `since` past the
+    newest row answered with that row's seq; a request with no `since` gets the newest page, which is the
+    priming read.
     """
     events = sorted((row if isinstance(row, dict) else _event(row) for row in rows), key=lambda event: event["seq"])
+    head = events[-1]["seq"] if events else 0
 
     def respond(request: httpx.Request) -> httpx.Response:
         limit = int(request.url.params["limit"])
@@ -122,7 +124,8 @@ def _forward(*rows: int | dict[str, Any], oldest_seq: int | None = None) -> Call
         if since is None:
             return httpx.Response(200, json={"events": events[::-1][:limit], "next_cursor": None, "oldest_seq": oldest_seq})
         page = [event for event in events if event["seq"] > int(since)][:limit]
-        return httpx.Response(200, json={"events": page, "next_cursor": page[-1]["seq"] if page else int(since), "oldest_seq": oldest_seq})
+        next_cursor = page[-1]["seq"] if page else min(int(since), head)
+        return httpx.Response(200, json={"events": page, "next_cursor": next_cursor, "oldest_seq": oldest_seq})
 
     return respond
 
@@ -264,6 +267,21 @@ async def test_the_walk_follows_forward_from_the_mark_until_caught_up() -> None:
     assert [row["notification_id"] for row in plane.boxes["alice"]] == ["run-6@FAIL", "run-7@FAIL", "run-8@FAIL", "run-9@FAIL"]
     assert (result.scanned, result.behind, memory.seq) == (4, False, 9)
     assert route.calls[0].request.url.params.get("since") == "5"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_mark_taken_on_another_feed_rereads_this_one_from_its_oldest_row() -> None:
+    """A mark this feed never issued (lineage's store moved, or was restored) is re-read from the feed's oldest row,
+    rather than waiting for the new feed to climb past a seq it never had."""
+    respx.get(f"{LINEAGE}/events/projection").mock(side_effect=_forward(1, 2, 3, oldest_seq=1))
+    plane = _Plane()
+    store, memory = _store(121_000)
+
+    result = await reconcile(client=_feed_client(), store=store, visibility=OPEN, open_inbox=plane.open, max_pages=5, budget_seconds=10)
+
+    assert [row["notification_id"] for row in plane.boxes["alice"]] == ["run-1@FAIL", "run-2@FAIL", "run-3@FAIL"]
+    assert (result.gapped, memory.seq) == (False, 3)
 
 
 @pytest.mark.asyncio

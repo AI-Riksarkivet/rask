@@ -2,19 +2,18 @@
 
 A producer commits its Lance write and then does a FIRE-AND-FORGET Dapr publish (the sidecar accepts the
 RPC but there is no broker/consumer ack). A crash between the commit and a durable delivery loses the
-lineage event: the data landed but the graph never learns of it. The DLQ only catches events that were
-published *then* failed delivery; the reconcile back-fill only recovers version+schema, not the full event.
+lineage event: the data landed but the feed never learns of it. The DLQ only catches events that were
+published *then* failed delivery.
 
 The outbox narrows it: the producer stages the FULL event JSON — a ``RunEvent``, or the ``DatasetEvent``
 every catalog DDL change is — under ``<outbox_uri>/<key>.json`` (:func:`_object_key`) BEFORE the publish,
 and deletes it once the publish returns. Because the stage happens AFTER the commit, every surviving object
 corresponds to a real committed write (no phantoms). If the process crashes before the delete — or the
-publish never lands — the object survives and the lineage service's reconcile relay re-ingests it
-idempotently and deletes it. Strictly richer than the version+schema back-fill: inputs, author, and
-columnLineage are all preserved.
+publish never lands — the object survives and the lineage service's relay tick re-ingests it
+idempotently and deletes it, with inputs, author and columnLineage all preserved.
 
-NARROWED, NOT CLOSED. A crash between the commit and the stage loses the event to everything but the
-version+schema back-fill. A stage that fails is counted and the call degrades to a plain publish, so that
+NARROWED, NOT CLOSED. A crash between the commit and the stage loses the event, and nothing detects the
+loss ([[LH-497]]). A stage that fails is counted and the call degrades to a plain publish, so that
 event is unprotected and is lost only if the publish fails too.
 
 Storage-agnostic: an ``s3://`` outbox uses an ``S3FileSystem`` built from the SAME ``storage_options`` the
@@ -137,7 +136,7 @@ def drop_event(outbox_uri: str, storage_options: StorageOptions, key: str) -> No
         lineage_outbox_event_stranded error="When creating key '_lineage_outbox/' in bucket
         'lance-catalog': AWS Error ACCESS_DENIED during PutObject operation" (measured 2026-09-10)
 
-    The consequence was not a stranded object. `reconcile_cron` ingests, re-publishes, THEN drops —
+    The consequence was not a stranded object. The relay tick ingests, re-publishes, THEN drops —
     the first two succeed, so every staged event was redelivered to `lineage.events.v1` on every tick
     for the lifetime of the estate. The drop
     is the only thing that ends that loop.
@@ -227,7 +226,7 @@ def backlog(outbox_uri: str, storage_options: StorageOptions) -> tuple[int, floa
     """``(depth, oldest_age_seconds)`` — the saturation snapshot (#4 observability, docs/adr/0003-p1-1-outbox-observability-the-four-signals.md P1.1
     (outbox observability, the four signals)).
 
-    A metadata-only LIST: no object bodies are read, so this is cheap enough to run on every reconcile tick
+    A metadata-only LIST: no object bodies are read, so this is cheap enough to run on every relay tick
     even when the outbox is healthy and empty (which is exactly when it must still report depth=0, or the
     gauge would go stale at its last non-zero reading and alert forever).
     """
@@ -252,7 +251,7 @@ def list_events(outbox_uri: str, storage_options: StorageOptions, *, limit: int 
 
     BOUNDED (audit finding, docs/adr/0004-p1-2-bounded-oldest-first-outbox-drain.md P1.2 (bounded drain)): the drain previously materialised the
     ENTIRE prefix into memory inside the single-flight lock, so a backlog (exactly the situation the outbox
-    exists for) could OOM or stall the reconcile tick — the relay would fail hardest precisely when it was
+    exists for) could OOM or stall the relay tick — the relay would fail hardest precisely when it was
     needed most. The cap
     makes each tick's work bounded; the remainder drains on the next tick, oldest-first, so nothing starves.
     An absent prefix yields nothing. Blocking IO; the caller threadpools the whole drain.
@@ -265,7 +264,7 @@ def list_events(outbox_uri: str, storage_options: StorageOptions, *, limit: int 
         key = info.path.rsplit("/", 1)[-1].removesuffix(".json")
         # TOCTOU: a publishing writer stages-then-drops on this SAME prefix continuously, so an object
         # listed above can vanish before we open it. A concurrently-dropped event was already published
-        # (that's why it's being dropped) — skip it, don't let the race 500 the whole reconcile tick.
+        # (that's why it's being dropped) — skip it, don't let the race 500 the whole relay tick.
         try:
             stream = fs.open_input_stream(info.path)
         except FileNotFoundError:

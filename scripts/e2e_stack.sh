@@ -250,9 +250,6 @@ kubectl port-forward "svc/$RELEASE-lineage" 18000:8000 >/tmp/pf-lin.log 2>&1 & P
 kubectl port-forward "svc/$RELEASE-minio"  9900:9000 >/tmp/pf-rfs.log 2>&1 & PF_PIDS+=($!)
 kubectl port-forward "svc/$RELEASE-dex"     5556:5556 >/tmp/pf-dex.log 2>&1 & PF_PIDS+=($!)
 kubectl port-forward "svc/$RELEASE-openfga" 8081:8080 >/tmp/pf-fga.log 2>&1 & PF_PIDS+=($!)
-# The AGE Postgres itself. The outbox-crash suite asserts RECOVERY at the source of truth (the run landed in
-# the graph AND on the durable /events feed) — a non-zero `outbox_drained` only proves the relay counted it.
-kubectl port-forward "svc/$RELEASE-age"     5433:5432 >/tmp/pf-age.log 2>&1 & PF_PIDS+=($!)
 for i in $(seq 1 40); do
   c=$(curl -s -o /dev/null -w '%{http_code}' -m2 http://localhost:2333/livez 2>/dev/null || true)
   l=$(curl -s -o /dev/null -w '%{http_code}' -m2 http://localhost:18000/livez 2>/dev/null || true)
@@ -355,13 +352,7 @@ export LANCE_E2E_DELIM='$'
 export LANCE_E2E_BASE_A="$BASE_A"
 export LANCE_E2E_BASE_B="$BASE_B"
 export LANCE_E2E_OUTBOX_URI="s3://lance-catalog/_lineage_outbox"
-export LANCE_E2E_RECONCILE_BINDING=lineage-reconcile-cron
-# The AGE Postgres, for the outbox-crash suite's recovery assertions (graph + /events feed at the source).
-# User/db/password are READ FROM THE CLUSTER, never hardcoded — the password lives in the infra secret.
-PG_USER=$(kubectl get sts "$RELEASE-age" -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="POSTGRES_USER")].value}')
-PG_DB=$(kubectl get sts "$RELEASE-age" -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="POSTGRES_DB")].value}')
-PG_PASS=$(kubectl get secret "$RELEASE-infra-credentials" -o jsonpath='{.data.postgres-password}' | base64 -d)
-export LINEAGE_DATABASE_URL="postgresql://${PG_USER}:${PG_PASS}@localhost:5433/${PG_DB}"
+export LANCE_E2E_RELAY_BINDING=lineage-relay-cron
 
 # ---- a SECOND tenant, so the credential-isolation legs can run ----------------------------------
 # Five legs in `test_credential_isolation_e2e.py` assert that a credential vended for tenant A is
@@ -467,23 +458,6 @@ if [ "${E2E_CHAOS:-1}" = "1" ]; then
   [ "$up" = "200" ] || { echo "!! create did not recover after RustFS restored (got $up)"; exit 1; }
   echo "   RustFS restored → governed create 200 (recovered) ✓"
   echo "   ✓ chaos drill: both dependency outages fail closed + recover"
-fi
-
-# --- P4 restore drill: PROVE the AGE backup is restorable. docs/runbooks/RUNBOOK-restore.md warns that a plain
-# pg_dump of an Apache AGE database can restore the ag_catalog metadata but LOSE the graph's labels/data.
-# Run the drill INSIDE the age-postgres pod (it has psql/pg_dump) on a throwaway DB, so it never touches the
-# real lineage graph. A red here is a genuine finding (switch backup-pg.yaml to an AGE-aware dump), not a
-# flake — E2E_RESTORE_DRILL=0 disables it while that follow-up is built. ---------------------------------
-if [ "${E2E_RESTORE_DRILL:-1}" = "1" ]; then
-  step "restore drill: AGE pg_dump → restore round-trips the graph (P4)"
-  # The AGE StatefulSet ($RELEASE-age, 1 replica) → pod $RELEASE-age-0 deterministically (StatefulSet naming),
-  # more robust than a label guess. Wait for it to be Ready (the suites already used it, so it is).
-  AGE_POD="$RELEASE-age-0"
-  kubectl wait --for=condition=ready "pod/$AGE_POD" --timeout=60s >/dev/null 2>&1 \
-    || { echo "!! $AGE_POD not ready for the restore drill"; kubectl get pods | grep age || true; exit 1; }
-  kubectl cp scripts/age_restore_drill.sh "$AGE_POD:/tmp/age_restore_drill.sh"
-  kubectl exec "$AGE_POD" -- bash /tmp/age_restore_drill.sh
-  echo "   ✓ restore drill passed — RUNBOOK-restore.md is proven, not just authored"
 fi
 
 echo

@@ -23,8 +23,7 @@ import {
 } from '@rask/api';
 
 // Compute (Ray/cluster) microfrontend data layer — SvelteKit remote functions
-// (server-only). The batches/chunks reads died at P7a with the batches table — the
-// landing's pipeline surface is the lineage runs feed (lib/live/feeds.remote.ts).
+// (server-only).
 //
 // THE ONE PATTERN: every read is a `query()` whose body calls a `@rask/api`
 // function, passing `getRequestEvent().fetch`. That `event.fetch` is SvelteKit's

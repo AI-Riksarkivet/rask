@@ -1,16 +1,16 @@
 """Governance end-to-end: catalog authz + lineage provenance, one flow.
 
 Runs against the full governance stack (``make governance-chain``):
-catalog (OIDC + OpenFGA) **+** lineage-api (OpenLineage → Apache AGE), with the catalog's
-``LANCE_LINEAGE_EMIT_ENABLED`` on. Skipped unless ``LANCE_E2E_AUTH_SERVER`` and
+catalog (OIDC + OpenFGA) **+** lineage-api (OpenLineage → its feed and edge list, Lance tables in the
+catalog's provenance namespace), with the catalog's ``LANCE_LINEAGE_EMIT_ENABLED`` on. Skipped unless ``LANCE_E2E_AUTH_SERVER`` and
 ``LANCE_E2E_LINEAGE_URL`` are set and reachable.
 
 Asserts the dataops/governance story end to end:
   1. anon create → 401 (OIDC enforced);
   2. alice creates namespace + bronze table → 200 (app seeds owner);
   3. an outsider (no grant) describe → 403; alice (owner) describe → 200 (authz cascade);
-  4. the catalog recorded alice as the **verified** creator of bronze in the lineage graph;
-  5. a promote run (bronze → silver, as a user's pipeline emits) makes silver's upstream = bronze.
+  4. the catalog recorded alice as the **verified** author of bronze's create on lineage's ``/events`` feed;
+  5. a promote run (bronze → silver, as a user's pipeline emits) makes silver derived from bronze.
 
 (The lineage service runs with its own auth OFF in this overlay; the gate is unit-tested +
 has its own e2e. This test focuses on catalog authz + provenance authorship + tier lineage.)
@@ -30,6 +30,7 @@ import pytest
 import requests
 from topology import OUTSIDER, assert_parent_exists, create_top_level
 
+from lineage.models import author_sub_from_payload
 from service_kit.openlineage import RUN_EVENT_SCHEMA_URL, custom_facet, run_id_for
 
 
@@ -94,8 +95,8 @@ def _ipc(table: pa.Table) -> bytes:
 def _get_json(url: str, headers: dict | None = None) -> dict:
     """GET + parse JSON, degrading to ``{}`` on any transport/non-JSON error (so polls fail cleanly).
 
-    The lineage dataset reads (/creator, /upstream, …) are GOVERNED (``require_metadata_access`` on the
-    router), so a bearer MUST be forwarded — an anonymous read 401s and would poll forever on ``None``.
+    Lineage's reads (``/events``, ``/tables/{name}/derived``) are GOVERNED per table, so a bearer MUST be
+    forwarded — an anonymous read 401s and would poll forever on ``None``.
     """
     try:
         return requests.get(url, headers=headers, timeout=10).json()
@@ -105,8 +106,8 @@ def _get_json(url: str, headers: dict | None = None) -> dict:
 
 def _poll(fn: Callable[[], object], want: object, *, tries: int = 60, delay: float = 1.0) -> object:
     """Poll ``fn`` until it equals ``want`` — emission is async/fire-and-forget — or give up. Generous
-    window (40s): on kind the create-lineage crosses Dapr → NATS JetStream → lineage → AGE, slower than the
-    docker-compose direct-HTTP path this test was originally written against."""
+    window: on kind the create's announcement crosses Dapr → NATS JetStream → lineage → the catalog's
+    provenance namespace, slower than a direct HTTP emit."""
     last: object = None
     for _ in range(tries):
         last = fn()
@@ -150,10 +151,14 @@ def test_governance_flow(stack: tuple[str, str]) -> None:
     assert requests.post(f"{server}/v1/table/{bronze}/describe", headers=bh, timeout=10).status_code == 403
     assert requests.post(f"{server}/v1/table/{bronze}/describe", headers=ah, timeout=10).status_code == 200
 
-    # 4. lineage recorded alice as the VERIFIED creator (emission is async -> poll).
-    # The read is GOVERNED (require_metadata_access), so forward alice's bearer — an anon read 401s -> None.
-    creator = _poll(lambda: _get_json(f"{lineage}/datasets/{bronze}/creator", ah).get("creator"), alice_sub)
-    assert creator == alice_sub, f"expected lineage creator={alice_sub}, got {creator}"
+    # 4. lineage recorded alice as the VERIFIED author of bronze's create (emission is async -> poll).
+    # The feed is GOVERNED per table, so forward alice's bearer — an anon read 401s -> None.
+    def _bronze_authors() -> set[str | None]:
+        rows = _get_json(f"{lineage}/events?table={bronze}&limit=500", ah).get("events", [])
+        return {author_sub_from_payload(row.get("event")) for row in rows}
+
+    authors = _poll(lambda: alice_sub in _bronze_authors(), True)
+    assert authors is True, f"expected a feed row for {bronze} authored by {alice_sub}, got authors {_bronze_authors()}"
 
     # 5. a promote run (bronze -> silver), as a user's pipeline would emit.
     # Spec-true on purpose: this fixture is our stand-in for a real producer, so it has to carry what the
@@ -177,11 +182,11 @@ def test_governance_flow(stack: tuple[str, str]) -> None:
     }
     assert requests.post(f"{lineage}/api/v1/lineage", json=promote, headers=ah, timeout=10).status_code == 201
 
-    # 6. silver's upstream includes bronze (the tier lineage). Governed read → forward alice's bearer;
-    # alice can read silver via her ownership of the parent namespace ``ns`` (create-on-parent cascade).
-    def _silver_upstream() -> list[str]:
-        related = _get_json(f"{lineage}/datasets/{silver}/upstream", ah).get("related", [])
-        return [r["name"] for r in related]
+    # 6. silver is derived from bronze (the tier lineage, off the edge list). Governed read → forward alice's
+    # bearer; alice reads both via her ownership of the parent namespace ``ns`` (create-on-parent cascade).
+    def _bronze_derived() -> list[str]:
+        derived = _get_json(f"{lineage}/tables/{bronze}/derived", ah).get("derived", [])
+        return [d["table"] for d in derived]
 
-    up = _poll(_silver_upstream, [bronze])
-    assert isinstance(up, list) and bronze in up, f"expected {bronze} in silver upstream, got {up}"
+    down = _poll(_bronze_derived, [silver])
+    assert isinstance(down, list) and silver in down, f"expected {silver} derived from {bronze}, got {down}"

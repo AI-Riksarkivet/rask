@@ -44,7 +44,7 @@ _FULL_AUTH = {
 
 
 def _settings(tmp: Path, **overrides: Any) -> LineageSettings:
-    return LineageSettings.model_validate({"database_url": "postgresql://x/y", "outbox_uri": str(tmp), **overrides})
+    return LineageSettings.model_validate({"outbox_uri": str(tmp), **overrides})
 
 
 def _event_json(
@@ -71,13 +71,13 @@ class _Repo:
 
     async def record_refusal(self, *, outbox_key: str, run_id: str | None, author: str | None, reason: str, event_json: str) -> None:
         """[[LH-182]] The drain now RECORDS a settled refusal before retiring the object, so a double
-        that cannot record one no longer stands in for the repository. Captured rather than ignored:
+        that cannot record one no longer stands in for the store. Captured rather than ignored:
         several of these tests assert what the refusal path did, and a silent no-op would let a drain
         that recorded nothing pass as one that did."""
         self.refusals.append({"outbox_key": outbox_key, "run_id": run_id, "author": author, "reason": reason, "event_json": event_json})
 
-    async def ingest_event(self, event: Any) -> None:
-        # Graph and durable /events row in one transaction — a replay has one call to make, not two.
+    async def record(self, event: Any) -> None:
+        # One call records the edges and the feed row — a replay has one call to make, not two.
         self.ingested.append(event)
 
 
@@ -122,7 +122,7 @@ def test_list_surfaces_a_poison_object(tmp_path: Path) -> None:
 
 
 def test_list_empty_when_no_outbox_configured() -> None:
-    s = LineageSettings.model_validate({"database_url": "postgresql://x/y"})  # outbox_uri = ""
+    s = LineageSettings.model_validate({})  # outbox_uri = ""
     out = asyncio.run(dlq.list_dlq(s, None, _filter(_request(), s, None), limit=100))
     assert out.depth == 0 and out.events == []
 

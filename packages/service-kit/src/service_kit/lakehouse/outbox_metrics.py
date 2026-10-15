@@ -57,14 +57,14 @@ _stage_failed = _meter.create_counter(
 _drained = _meter.create_counter(
     "outbox.events.drained",
     unit="{event}",
-    description="Staged survivors the reconcile relay re-ingested into the graph + durable feed.",
+    description="Staged survivors the relay tick re-ingested into the lineage feed.",
 )
 _stranded = _meter.create_counter(
     "outbox.events.stranded",
     unit="{event}",
     description=(
         "Staged events a tick FAILED on and deliberately LEFT staged — a store outage, an expired "
-        "credential, a graph that did not answer. Distinct from poison_dropped: the object is intact and "
+        "credential, a catalog that did not answer. Distinct from poison_dropped: the object is intact and "
         "is retried next tick. Distinct from refused: that one is a settled governance answer rather than "
         "a failure, and counting the two together made this number report an outage that was not happening."
     ),
@@ -73,7 +73,7 @@ _refused = _meter.create_counter(
     "outbox.events.refused",
     unit="{event}",
     description=(
-        "Staged events the GRAPH refuses to record — a producer staged provenance it is not authorized to "
+        "Staged events lineage refuses to record — a producer staged provenance it is not authorized to "
         "write. Deterministic, so every tick re-refuses the same events and the count is a floor rather "
         "than a rate: it means N events need a human, NOT that the relay is failing. Split out because "
         "`drained=0 stranded=6` held for 2.1 days on a healthy relay and read as a wedged one."
@@ -177,7 +177,7 @@ def record_poison_dropped() -> None:
 def observe_backlog(depth: int, oldest_age_seconds: float) -> None:
     """Publish the saturation snapshot the relay measured this tick.
 
-    Called on EVERY reconcile tick — including a tick that finds an EMPTY outbox, which is what makes
+    Called on EVERY relay tick — including a tick that finds an EMPTY outbox, which is what makes
     ``depth`` fall back to 0 instead of going stale at its last non-zero reading. A gauge that only reports
     when non-zero would alert forever after a single transient spike.
     """

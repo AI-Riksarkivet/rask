@@ -696,10 +696,10 @@ def test_the_render_runs_no_development_stand_in(stand_in: str) -> None:
 
 
 def test_a_render_with_external_openfga_and_postgres_runs_neither_and_dials_the_platforms() -> None:
-    """[[XC-132]]: OpenFGA and the Postgres behind AGE and OpenFGA are optional; production turns them off and names the
-    platform's instances (ADR 0153). Such a render runs no OpenFGA or Postgres workload or identity, every FGA client
-    and every Postgres client dials the named endpoint, and no credential rides along in an env value: the FGA token is
-    a projected file and the Postgres password the store's `postgres-password`, both by reference."""
+    """[[XC-132]]: OpenFGA and the Postgres behind OpenFGA and the Dapr state store are optional; production turns them off
+    and names the platform's instances (ADR 0153). Such a render runs no OpenFGA or Postgres workload or identity, every
+    FGA client and every Postgres client dials the named endpoint, and no credential rides along in an env value: the FGA
+    token is a projected file and the Postgres password the store's `postgres-password`, both by reference."""
     fga, pg = "https://fga.platform.example", "pg.platform.example"
     docs = chart_render.render(
         *chart_render.DEFAULT_ARGS, *chart_render.OBSERVABILITY_ARGS,
@@ -721,10 +721,6 @@ def test_a_render_with_external_openfga_and_postgres_runs_neither_and_dials_the_
     )
     fga_urls = {env[k] for _, _, c in chart_render.containers(docs) for k in ("RASK_FGA_API_URL", "FGA_API_URL") if k in (env := chart_render.env_of(c))}
     assert fga_urls == {fga}, fga_urls
-    lineage_db = {
-        chart_render.env_of(c)["LINEAGE_DATABASE_URL"] for _, _, c in chart_render.containers(docs) if "LINEAGE_DATABASE_URL" in chart_render.env_of(c)
-    }
-    assert {urllib.parse.urlsplit(u).hostname for u in lineage_db} == {pg}, lineage_db
     assert f"host={pg} " in text, "the Collector's state-store scrape does not dial the platform's Postgres"
 
     leaked = sorted(

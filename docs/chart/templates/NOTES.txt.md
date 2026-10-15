@@ -17,7 +17,7 @@ on an explicit 0, so numeric fallbacks use `hasKey` + `ternary`.
 
 ## `{{- with .Values.services.lineage }}`
 
-The #4 durability chain is stage (outbox) -> publish -> drain (reconcile sweep). BOTH default ON
+The #4 durability chain is stage (outbox) -> publish -> drain (the relay tick). BOTH default ON
 now, so this only fires when an operator deliberately broke the chain — and then it says exactly
 WHICH half is missing and what is lost, instead of the old generic line that every default install
 printed and everyone learned to scroll past (live-proof 2026-07-28, defect 7).

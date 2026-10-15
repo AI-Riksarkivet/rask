@@ -19,8 +19,9 @@ the root workspace (`uv sync --package <name>`), one dockerfile each under
 flowchart LR
     pipe["A user's pipeline<br/><sub>on its own compute</sub>"] -->|"namespace doors"| cat["Catalog<br/><sub>tier governance · FGA</sub>"]
     cat --> store[("Lance tables<br/>S3")]
-    cat -->|"commit announcement"| lin["Lineage<br/><sub>GET /events · graph</sub>"]
+    cat -->|"commit announcement"| lin["Lineage<br/><sub>GET /events · edge list</sub>"]
     lin --> notif["Notifications"]
+    lin -->|"OpenLineage"| graph["Graph backend<br/><sub>bring your own</sub>"]
     maint["Maintenance<br/><sub>expiry · purge · reconcile</sub>"] --> store
     ui["SvelteKit (SSR) zones"] --> cat
     ui --> lin
@@ -28,8 +29,9 @@ flowchart LR
 
 1. A client (the user's pipeline, an ingest job, a notebook) writes through the catalog's **Lance Namespace** doors;
    the catalog authorizes it on **OpenFGA** and governs the bronze → silver → gold tiers in its own write path.
-2. The catalog announces every committed write as an **OpenLineage** event; lineage records it and serves the
-   durable `GET /events` feed a pipeline polls, and **notifications** tells the right person.
+2. The catalog announces every committed write as an **OpenLineage** event; lineage records it, serves the
+   durable `GET /events` feed a pipeline polls and forwards it to a graph backend of the operator's choice, and
+   **notifications** tells the right person.
 3. **Maintenance** expires versions, purges trash, scans for orphans and reconciles stores.
 4. The **SvelteKit** zones read the catalog, lineage and the media services (viewer, search, annotator) through the
    gateway on `:8888`.

@@ -5,9 +5,9 @@ pipeline AND its observability. ONE catalog table-create drives the real path, a
 the four things that make this system trustworthy — exercising the *deployed* services and the *real*
 GreptimeDB store, not mocks:
 
-  1. Durable graph data in Apache AGE       — the dataset node landed (the pipeline actually works)
+  1. Durable provenance                    — the create's event landed on lineage's feed (the pipeline actually works)
   2. The custom domain metric in GreptimeDB — lineage_events_processed_total by lance_lineage_outcome went UP
-  3. A distributed trace in GreptimeDB      — ONE trace spans catalog → Dapr publish → lineage → AGE
+  3. A distributed trace in GreptimeDB      — ONE trace spans catalog → Dapr publish → lineage → its feed write
   4. Logs in GreptimeDB                      — apps (OTLP) + infra (Collector filelog) → opentelemetry_logs
 
 Run (port-forward the three services first), or `make e2e-obs`:
@@ -198,7 +198,7 @@ def test_custom_metric_incremented(pipeline_run: dict[str, Any]) -> None:
 
 @pytest.mark.usefixtures("pipeline_run")
 def test_distributed_trace_spans_catalog_to_lineage() -> None:
-    """3. ONE trace spans catalog → Dapr publish → lineage → AGE write — true distributed tracing."""
+    """3. ONE trace spans catalog → Dapr publish → lineage → its feed write — true distributed tracing."""
 
     def joined_trace() -> str | None:
         rows = _gt_sql("SELECT trace_id, service_name FROM opentelemetry_traces ORDER BY timestamp DESC LIMIT 200")

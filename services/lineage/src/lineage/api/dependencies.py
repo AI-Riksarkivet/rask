@@ -7,18 +7,18 @@ from typing import Annotated
 from fastapi import Depends, Request
 
 from lineage.core.config import LineageSettings, get_settings
-from lineage.services.repository import LineageRepository
+from lineage.services.provenance import ProvenanceStore
 
 
 SettingsDep = Annotated[LineageSettings, Depends(get_settings)]
 
 
-def get_repository(request: Request) -> LineageRepository:
-    """The lineage repository, built once in the lifespan over the AGE pool."""
-    return request.app.state.repository
+def get_provenance(request: Request) -> ProvenanceStore:
+    """The provenance store — the feed and the edge list the catalog keeps — built once in the lifespan."""
+    return request.app.state.provenance
 
 
-RepositoryDep = Annotated[LineageRepository, Depends(get_repository)]
+ProvenanceDep = Annotated[ProvenanceStore, Depends(get_provenance)]
 
 
 def get_publisher(request: Request) -> object | None:

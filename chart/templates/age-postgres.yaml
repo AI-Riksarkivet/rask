@@ -1,8 +1,6 @@
 {{- if .Values.age.enabled }}
-# Apache AGE Postgres — the OpenLineage graph store (graph 'lineage') AND OpenFGA's datastore (db
-# 'openfga'). CNPG's image lacks the AGE extension, so this is a plain StatefulSet on the apache/age
-# image (postgres 16 + AGE). initdb scripts (alphabetical) load AGE + create the graph, then the
-# openfga database.
+# Apache AGE Postgres — OpenFGA's datastore (db 'openfga') and the Dapr state store (db 'daprstate'). Lineage keeps
+# no database (ADR 0158). initdb scripts (alphabetical) load AGE into the bootstrap database, then create the two.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -10,37 +8,8 @@ metadata:
   labels: {{- include "lance.labels" . | nindent 4 }}
 data:
   10-age.sql: |
+    -- The bootstrap database (POSTGRES_DB) holds nothing, and carries the extension for the reason the two below do.
     CREATE EXTENSION IF NOT EXISTS age;
-    LOAD 'age';
-    SET search_path = ag_catalog, "$user", public;
-    SELECT create_graph('{{ .Values.age.lineageDb }}');
-    -- Pre-create the vertex labels + a UNIQUE index on each MERGE key (item 6): AGE's MERGE is
-    -- MATCH-then-CREATE, so two concurrent writers (the cron reconcile racing live ingest) could each miss
-    -- and both CREATE a duplicate vertex. The unique index makes the loser's insert fail instead. Fresh-DB
-    -- declarative guarantee; the lineage service ALSO applies these idempotently at boot (existing DBs,
-    -- retained PVC) via ensure_graph_constraints. ag_catalog.agtype_access_operator(...) is AGE's immutable
-    -- property-access expression for a functional index.
-    SELECT create_vlabel('{{ .Values.age.lineageDb }}', 'Run');
-    SELECT create_vlabel('{{ .Values.age.lineageDb }}', 'Job');
-    SELECT create_vlabel('{{ .Values.age.lineageDb }}', 'Dataset');
-    -- Index NAMES are double-quoted (like the schema/table already are, and matching the boot-time Python
-    -- sibling's psycopg.sql.Identifier) so a hyphenated lineageDb (e.g. "lineage-prod") can't produce an
-    -- unquoted identifier that breaks initdb SQL and CrashLoops the AGE StatefulSet.
-    CREATE UNIQUE INDEX IF NOT EXISTS "{{ .Values.age.lineageDb }}_run_uniq" ON "{{ .Values.age.lineageDb }}"."Run"
-      (ag_catalog.agtype_access_operator(VARIADIC ARRAY[properties, '"run_id"'::agtype]));
-    CREATE UNIQUE INDEX IF NOT EXISTS "{{ .Values.age.lineageDb }}_dataset_uniq" ON "{{ .Values.age.lineageDb }}"."Dataset"
-      (ag_catalog.agtype_access_operator(VARIADIC ARRAY[properties, '"name"'::agtype]));
-    CREATE UNIQUE INDEX IF NOT EXISTS "{{ .Values.age.lineageDb }}_job_uniq" ON "{{ .Values.age.lineageDb }}"."Job"
-      (ag_catalog.agtype_access_operator(VARIADIC ARRAY[properties, '"namespace"'::agtype]),
-       ag_catalog.agtype_access_operator(VARIADIC ARRAY[properties, '"name"'::agtype]));
-    -- Column gets a PLAIN (non-unique) lookup index on its MERGE key: uniqueness is deliberately NOT
-    -- enforced (duplicate column vertices from a rare concurrent first-create are benign, collapsed by
-    -- DISTINCT reads; a unique index would add abort/retry churn to the hot column path) — but without
-    -- any index every column MERGE seq-scans a label table that grows with the estate (§4).
-    SELECT create_vlabel('{{ .Values.age.lineageDb }}', 'Column');
-    CREATE INDEX IF NOT EXISTS "{{ .Values.age.lineageDb }}_column_lookup" ON "{{ .Values.age.lineageDb }}"."Column"
-      (ag_catalog.agtype_access_operator(VARIADIC ARRAY[properties, '"dataset"'::agtype]),
-       ag_catalog.agtype_access_operator(VARIADIC ARRAY[properties, '"field"'::agtype]));
   20-openfga.sql: |
     -- Quoted identifier (same reason as the index names above) so a hyphenated openfgaDb can't break initdb.
     CREATE DATABASE "{{ .Values.age.openfgaDb }}";
@@ -60,9 +29,8 @@ data:
     -- actor and workflow state) that Lance must not hold — a per-task state flip would be a dataset
     -- version, so hundreds of manifests a minute and a history that is noise rather than provenance.
     --
-    -- Its own database rather than a table in `lineage`: Dapr owns this schema completely (it creates and
-    -- migrates its own tables), and mixing that with AGE's graph would make a Dapr migration a risk to the
-    -- lineage store. Same isolation argument as openfga's.
+    -- Its own database: Dapr owns this schema completely (it creates and migrates its own tables), so a Dapr
+    -- migration can reach nothing else. Same isolation argument as openfga's.
     CREATE DATABASE "{{ .Values.age.stateDb }}";
     ALTER DATABASE "{{ .Values.age.stateDb }}" SET search_path = public;
     -- Same ag_catalog-must-exist rule as openfga above, and it matters MORE here: Dapr migrates this
@@ -135,7 +103,7 @@ spec:
             - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef: { name: {{ include "lance.fullname" . }}-infra-credentials, key: postgres-password }
-            - { name: POSTGRES_DB, value: {{ .Values.age.lineageDb | quote }} }
+            - { name: POSTGRES_DB, value: {{ .Values.age.bootstrapDb | quote }} }
             - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
           ports:
             - { name: postgres, containerPort: 5432 }
@@ -143,7 +111,7 @@ spec:
             - { name: data, mountPath: /var/lib/postgresql/data }
             - { name: init, mountPath: /docker-entrypoint-initdb.d }
           readinessProbe:
-            exec: { command: ["pg_isready", "-U", {{ .Values.age.user | quote }}, "-d", {{ .Values.age.lineageDb | quote }}] }
+            exec: { command: ["pg_isready", "-U", {{ .Values.age.user | quote }}, "-d", {{ .Values.age.bootstrapDb | quote }}] }
             initialDelaySeconds: 5
             periodSeconds: 10
           resources: {{- include "lance.resources" (dict "root" . "comp" "age") | nindent 12 }}

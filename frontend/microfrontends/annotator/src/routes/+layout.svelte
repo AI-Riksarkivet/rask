@@ -10,16 +10,13 @@
 	import { ANNOTATOR_ZONE_NAV } from '$lib/nav';
 	import { base } from '$app/paths';
 	import { reviewSelection } from '$lib/labeling/review-selection.svelte';
-	import { lineageFeed, type LineagePulse } from '$lib/live/feeds.remote';
 	import { dismiss, markSeen, readInboxFeed, readInboxState } from '$lib/live/inbox.remote';
 	import type { LayoutData } from './$types';
 
 	let { children, data }: { children: Snippet; data: LayoutData } = $props();
 
 	// The navbar's notification bell (@rask/ui's NotificationCenter, mounted by AppShell). The shell owns
-	// the surface and never fetches — the zone owns the transport — and the transport is now shared
-	// (`@rask/api/runs-feed`), so a run that started, finished or FAILED reaches whoever is in this zone
-	let feed = $state<{ current: LineagePulse | undefined } | null>(null);
+	// the surface and never fetches — the zone owns the transport, the inbox remote functions below.
 
 	// The read state: per SUBJECT for the rows the inbox holds, per TAB for the rest. The shared bell
 	// has always exposed these two sets as bindable with `onseen`/`ondismiss` as "the persistence
@@ -28,8 +25,8 @@
 	let seen = $state<string[]>([]);
 	let dismissed = $state<string[]>([]);
 
-	// The panel's Inbox tab renders THESE, not the run rows. `null` = un-wired (no session, no
-	// service) and the bell falls back to a single run list with no tabs — the auth-off dev shape.
+	// The panel renders THESE. `null` = un-wired (no session, no
+	// service) and the bell has no inbox to render — the auth-off dev shape.
 	// The query OBJECT, held once — not a $state snapshot refilled by re-calling the query.
 	// Re-calling a remote `query()` hands back the CACHED value, so a `readInboxFeed()` after a write
 	// re-read exactly what was already there and the badge never moved. `.refresh()` is the only thing
@@ -40,7 +37,6 @@
 	const inbox = $derived(inboxQuery?.current ?? null);
 
 	onMount(() => {
-		feed = lineageFeed();
 		// Seeded on mount, never during render: a remote read touched while rendering makes the SERVER
 		// hold the page until it answers, and the canvas must not wait on the notification plane.
 		inboxQuery = readInboxFeed();
@@ -57,14 +53,10 @@
 				/* the per-tab fallback stands — a bell that cannot persist still has to ring */
 			});
 	});
-	// `.current` is undefined until the first value lands; an empty feed and a not-yet-connected one both
-	// render as "no notifications", which is the honest reading of both.
-	//
 	// The two writes are optimistic and best-effort: the local set moves first so the badge never waits
 	// on a round trip, and a refused write leaves this tab consistent with itself (it re-sends on the
 	// next close that has something new to mark, and on the next reload otherwise).
 	const notifications = $derived({
-		runs: feed?.current?.runs ?? [],
 		// `undefined`, never `[]`, when the inbox did not answer: an EMPTY inbox is a fact worth
 		// rendering ("nothing addressed to you"), while an ABSENT one means this stack has no inbox to
 		// speak of and the bell must not claim otherwise by showing an empty Inbox tab.
@@ -87,7 +79,6 @@
 				.then(() => inboxQuery?.refresh())
 				.catch(() => {});
 		},
-		allHref: '/lakehouse/lineage/runs',
 	});
 
 	// Only while the canvas is actually showing: on the landing and detail pages the path already

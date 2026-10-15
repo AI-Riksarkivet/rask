@@ -60,52 +60,6 @@ export const CATALOG_SEED: Record<string, unknown> = {
 	// shadow the correct shape with one the catalog never sends.
 };
 
-/** The runs the LINEAGE mock serves — the navbar bell's feed and the lineage run board.
- *
- *  NOT a `/__mock/seed` payload. `lineage/mock-lineage.ts` is not the generic seed-driven kind: it is
- *  a STATEFUL mock with its own API (`POST /__mock/runs` replaces its run list and bumps the cursor,
- *  because a run changing state IS a lineage event), and it answers 502 "not mocked" to everything it
- *  does not implement — which is what the BFF returns for a dead upstream, so a spec cannot mistake an
- *  unmocked route for a live one. Posting the generic envelope at it earned exactly that 502.
- *
- *  Every field of `Run` is spelled out including the nulls: the type has nine members and the board
- *  reads progress and timestamps, so a partial row renders as a half-empty row rather than an error. */
-export const LINEAGE_RUNS = [
-	{
-		run_id: 'dev-run-1',
-		job: 'medallion.bronze',
-		state: 'COMPLETE',
-		progress_done: 120,
-		progress_total: 120,
-		error_message: null,
-		started_at: '2026-08-07T09:00:00Z',
-		updated_at: '2026-08-07T09:02:00Z',
-		operation: 'ingest-iiif',
-	},
-	{
-		run_id: 'dev-run-2',
-		job: 'medallion.silver',
-		state: 'RUNNING',
-		progress_done: 41,
-		progress_total: 120,
-		error_message: null,
-		started_at: '2026-08-07T09:05:00Z',
-		updated_at: '2026-08-07T09:06:30Z',
-		operation: 'htr-transcribe',
-	},
-	{
-		run_id: 'dev-run-3',
-		job: 'medallion.gold',
-		state: 'FAILED',
-		progress_done: 3,
-		progress_total: 120,
-		error_message: 'alto export rejected 2 pages',
-		started_at: '2026-08-07T08:40:00Z',
-		updated_at: '2026-08-07T08:41:10Z',
-		operation: 'alto-export',
-	},
-] as const;
-
 /** Seeds for the OBSERVABILITY mock (`GREPTIME_API` + `NATS_MONITOR_API`).
  *
  *  Prometheus answers `status: "success"` — which the mocks' `{status, body}` envelope detection
@@ -138,5 +92,7 @@ export const DEV_SEEDS: {
 }[] = [
 	{ env: 'CATALOG_API', routes: CATALOG_SEED },
 	{ env: 'GREPTIME_API', routes: OBS_SEED },
-	{ env: 'LINEAGE_API', path: '/__mock/runs', body: { runs: LINEAGE_RUNS } },
+	// The LINEAGE mock is not the generic seed-driven kind: it is a STATEFUL mock with its own API, and
+	// `POST /__mock/bump` advances its cursor so the zone's live surfaces open and read.
+	{ env: 'LINEAGE_API', path: '/__mock/bump', body: {} },
 ];

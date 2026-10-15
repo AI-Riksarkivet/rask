@@ -1,5 +1,4 @@
 {{- $root := . }}
-{{- $age := include "lance.ageConnectHost" . }}
 {{- if and .Values.catalog.controlEmit (not .Values.dapr.enabled) }}
 {{- fail "catalog.controlEmit=true requires dapr.enabled=true: the /control-events broadcast ingest publishes + receives via the Dapr sidecar and is authenticated by the sidecar-injected APP_API_TOKEN — without it the catalog fails closed at boot. Enable dapr.enabled, or set catalog.controlEmit=false." }}
 {{- end }}
@@ -120,6 +119,7 @@ spec:
             {{- if .Values.services.lineage.outbox.enabled }}
             - { name: LANCE_LINEAGE_OUTBOX_URI, value: "s3://{{ .Values.minio.bucket }}/_lineage_outbox" }
             {{- end }}
+            - { name: LANCE_PROVENANCE_NAMESPACE, value: {{ .Values.services.lineage.provenanceNamespace | quote }} }
             - { name: LANCE_CONTROL_EMIT_ENABLED, value: {{ hasKey .Values.catalog "controlEmit" | ternary .Values.catalog.controlEmit false | quote }} }
             - { name: LANCE_CONTROL_PUBSUB, value: {{ .Values.pubsub.controlName | default "catalog-control-pubsub" | quote }} }
             {{- if and .Values.catalog.controlEmit .Values.catalog.controlOutbox.enabled }}
@@ -155,6 +155,7 @@ spec:
               {{- $maintainers = append $maintainers (include "lance.saSubject" (list $root "maintenance")) }}
             {{- end }}
             - { name: LANCE_FGA_MAINTAINERS, value: {{ toJson (compact $maintainers) | quote }} }
+            - { name: LANCE_PROVENANCE_WRITERS, value: {{ toJson (list (include "lance.saSubject" (list $root "lineage"))) | quote }} }
             {{- with include "lance.governedFgaPins" . }}{{- . | nindent 12 }}{{- end }}
             - { name: LANCE_AUDIT_ENABLED, value: {{ hasKey .Values.auth "audit" | ternary .Values.auth.audit true | quote }} }
             - { name: LANCE_FGA_LOCK_ROOT_CREATE, value: {{ hasKey .Values.auth "lockRootCreate" | ternary .Values.auth.lockRootCreate (include "rask.isRealDeployment" . | eq "true") | quote }} }
@@ -183,17 +184,17 @@ spec:
   ports: [{ name: http, port: {{ .Values.services.catalog.port }}, targetPort: http }]
   selector: { app.kubernetes.io/component: catalog, app.kubernetes.io/instance: {{ .Release.Name }} }
 ---
-{{- if and .Values.dapr.enabled .Values.services.lineage.reconcile.enabled }}
+{{- if and .Values.dapr.enabled .Values.services.lineage.relay.enabled }}
 apiVersion: dapr.io/v1alpha1
 kind: Component
 metadata:
-  name: {{ .Values.services.lineage.reconcile.bindingName }}
+  name: {{ .Values.services.lineage.relay.bindingName }}
   labels: {{- include "lance.labels" . | nindent 4 }}
 spec:
   type: bindings.cron
   version: v1
   metadata:
-    - { name: schedule, value: {{ .Values.services.lineage.reconcile.schedule | quote }} }
+    - { name: schedule, value: {{ .Values.services.lineage.relay.schedule | quote }} }
 scopes:
   - {{ .Values.services.lineage.daprAppId }}
 ---
@@ -223,14 +224,6 @@ spec:
       {{- if .Values.podDisruptionBudget.enabled }}
       {{- include "lance.spreadConstraints" "lineage" | nindent 6 }}
       {{- end }}
-      initContainers:
-        - name: wait-age
-          image: busybox:1.36
-          resources:
-            requests: { cpu: "10m", memory: "16Mi" }
-            limits: { cpu: "100m", memory: "64Mi" }
-          command: ["sh", "-c", "until nc -z {{ $age }} {{ .Values.age.port }}; do echo wait-age; sleep 3; done"]
-          {{- include "lance.rootlessSecurityContext" 65532 | nindent 10 }}
       serviceAccountName: {{ include "lance.fullname" . }}-sa-lineage
       {{- with $.Values.imagePullSecrets }}
       imagePullSecrets:
@@ -262,13 +255,18 @@ spec:
 
 {{- include "lance.appTokenEnv" (list $root $root.Values.services.lineage.daprAppId) | nindent 12 }}
             {{- end }}
-            - { name: LINEAGE_DATABASE_URL, value: "postgresql://{{ .Values.age.user }}@{{ include "lance.ageConnectHost" . }}:{{ .Values.age.port }}/{{ .Values.age.lineageDb }}" }
+            - { name: LINEAGE_CATALOG_URL, value: {{ printf "http://%s-catalog:%v" (include "lance.fullname" $root) $root.Values.services.catalog.port | quote }} }
+            - { name: RASK_CATALOG_IDENTITY_TOKEN_FILE, value: /var/run/secrets/rask/identity/rask-catalog/token }
+            - { name: LINEAGE_PROVENANCE_NAMESPACE, value: {{ .Values.services.lineage.provenanceNamespace | quote }} }
             - { name: LINEAGE_SECRETS_FROM_DAPR, value: "true" }
-            - { name: LINEAGE_GRAPH, value: {{ .Values.age.lineageDb | quote }} }
             - { name: LINEAGE_DOCS, value: {{ .Values.docs.enabled | quote }} }
-            - { name: LINEAGE_RUN_RETENTION_DAYS, value: {{ .Values.services.lineage.runRetentionDays | quote }} }
             - { name: LINEAGE_EVENTS_RETENTION_DAYS, value: {{ .Values.services.lineage.eventsRetentionDays | quote }} }
-            - { name: LINEAGE_AGE_STATEMENT_TIMEOUT_SECONDS, value: {{ .Values.services.lineage.ageStatementTimeoutSeconds | quote }} }
+            {{- with .Values.services.lineage.forward }}
+            - { name: LINEAGE_FORWARD_URL, value: {{ .url | quote }} }
+            - { name: LINEAGE_FORWARD_ENDPOINT, value: {{ .endpoint | quote }} }
+            - { name: LINEAGE_FORWARD_API_KEY_SECRET, value: {{ .authSecret.name | quote }} }
+            - { name: LINEAGE_FORWARD_API_KEY_FIELD, value: {{ .authSecret.key | quote }} }
+            {{- end }}
             - { name: LINEAGE_DAPR_ENABLED, value: {{ .Values.dapr.enabled | quote }} }
             - { name: LINEAGE_DAPR_PUBSUB, value: {{ include "lance.subPubsub" (list $root .Values.services.lineage.daprAppId) | quote }} }
             - { name: LINEAGE_DAPR_TOPIC, value: {{ .Values.pubsub.topic | quote }} }
@@ -276,13 +274,9 @@ spec:
             - { name: LINEAGE_DLQ_TOPIC, value: "dlq.lineage.events" }
             - { name: LINEAGE_DLQ_PUBSUB, value: "{{ include "lance.subPubsub" (list $root .Values.services.lineage.daprAppId) }}-dlq" }
             {{- end }}
-            {{- if .Values.services.lineage.freshnessBudgetHours }}
-            - { name: LINEAGE_FRESHNESS_BUDGET_HOURS, value: {{ .Values.services.lineage.freshnessBudgetHours | quote }} }
-            {{- end }}
             - { name: DAPR_API_TIMEOUT_SECONDS, value: {{ .Values.dapr.apiTimeoutSeconds | quote }} }
-            - { name: LINEAGE_DEMO_DATA_ENABLED, value: {{ hasKey .Values.services.lineage "demoData" | ternary .Values.services.lineage.demoData false | quote }} }
-            {{- if .Values.services.lineage.reconcile.enabled }}
-            - { name: LINEAGE_RECONCILE_BINDING_NAME, value: {{ .Values.services.lineage.reconcile.bindingName | quote }} }
+            {{- if .Values.services.lineage.relay.enabled }}
+            - { name: LINEAGE_RELAY_BINDING_NAME, value: {{ .Values.services.lineage.relay.bindingName | quote }} }
             {{- end }}
             - { name: LINEAGE_S3_ENDPOINT, value: "{{ include "lance.s3Endpoint" . }}" }
 
@@ -291,9 +285,6 @@ spec:
             {{- if $linScoped }}
             - { name: LINEAGE_DAPR_SECRET_S3_FIELD, value: "lineage-s3-secret-key" }
             {{- end }}
-            - { name: LINEAGE_S3_BUCKET, value: {{ .Values.minio.bucket | quote }} }
-            - { name: LINEAGE_CONTROL_ROOT, value: {{ .Values.maintenance.controlRoot | default "" | quote }} }
-            - { name: LANCE_EXTERNAL_BLOB_BASES, value: {{ include "lance.externalBlobBases" . | quote }} }
             {{- if .Values.services.lineage.outbox.enabled }}
             - { name: LINEAGE_OUTBOX_URI, value: "s3://{{ .Values.minio.bucket }}/_lineage_outbox" }
             {{- end }}
@@ -315,7 +306,6 @@ spec:
             {{- with .Values.auth.fgaModelId }}
             - { name: RASK_FGA_MODEL_ID, value: {{ . | quote }} }
             {{- end }}
-            - { name: LINEAGE_READ_AUDIT_ENABLED, value: {{ hasKey .Values.services.lineage "readAudit" | ternary .Values.services.lineage.readAudit true | quote }} }
             - { name: LANCE_AUDIT_ENABLED, value: {{ hasKey .Values.auth "audit" | ternary .Values.auth.audit true | quote }} }
             {{- include "lance.saVerifier" (list $root "env" "lineage") | nindent 12 }}
 
@@ -330,10 +320,12 @@ spec:
           resources: {{- include "lance.resources" (dict "root" . "comp" "lineage") | nindent 12 }}
           volumeMounts:
             {{- include "lance.tmpMount" . | nindent 12 }}
+            {{- include "lance.identityTokens" (list "mounts" "rask-catalog") | nindent 12 }}
             {{- include "lance.saVerifier" (list $root "mounts" "lineage") | nindent 12 }}
             {{- if .Values.auth.enabled }}{{ include "lance.fgaToken" (list "mounts") | nindent 12 }}{{ end }}
       volumes:
         {{- include "lance.tmpVolume" . | nindent 8 }}
+        {{- include "lance.identityTokens" (list "volumes" "rask-catalog") | nindent 8 }}
         {{- include "lance.saVerifier" (list $root "volumes" "lineage") | nindent 8 }}
         {{- if .Values.auth.enabled }}{{ include "lance.fgaToken" (list "volumes") | nindent 8 }}{{ end }}
 ---

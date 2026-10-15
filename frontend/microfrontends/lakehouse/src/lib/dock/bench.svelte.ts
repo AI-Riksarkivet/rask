@@ -1,18 +1,36 @@
 /**
- * The lakehouse dock's shared lineage state — ONE `LineageState`, polled once, read by every panel.
- *
- * This is the per-zone dock's whole advantage: the graph, the run board and the event feed are the
- * zone's own components sharing the zone's own store through ordinary context, so they can never be
- * a poll apart, and the store reaches the lineage service through the zone's own client.
+ * The lakehouse dock's shared lineage event feed — ONE `EventFeed`, read once, rendered by the Events
+ * panel through ordinary context.
  */
 import { createContext } from 'svelte';
-import { createLineageClient } from '@rask/api/lineage';
+import { createLineageClient, type EventRecord } from '@rask/api/lineage';
 import { bff } from '$lib/http';
-import { LineageState } from '$lib/lineage/store.svelte';
 
-export function createBench(): LineageState {
-	// The zone binds the client; the store takes it injected — the same wiring the /lineage page uses.
-	return new LineageState(createLineageClient(bff));
+/** How many recent events the panel shows. */
+const EVENTS_WINDOW = 200;
+
+/** The OpenLineage event feed, read through the zone's own client. */
+export class EventFeed {
+	events = $state<EventRecord[]>([]);
+	/** True once the FIRST read settled (success or failure) — before that the panel says
+	 * "connecting", never "no events". */
+	settled = $state(false);
+
+	#client = createLineageClient(bff);
+
+	async poll(): Promise<void> {
+		try {
+			// `getJSON` maps any failure to null: a failed read PRESERVES the last good rows.
+			const res = await this.#client.fetchEvents({ limit: EVENTS_WINDOW, summary: true });
+			if (res) this.events = res.events ?? [];
+		} finally {
+			this.settled = true;
+		}
+	}
 }
 
-export const [getBench, setBench] = createContext<LineageState>();
+export function createBench(): EventFeed {
+	return new EventFeed();
+}
+
+export const [getBench, setBench] = createContext<EventFeed>();

@@ -23,7 +23,7 @@
 #     single instance cannot safely play both roles, and two instances would be two new pods.
 #
 # And this one needs NO new infrastructure: `lance-ns-age` is already deployed, already backed up
-# (backup-pg.yaml), already monitored, and already holds the lineage graph and the OpenFGA datastore.
+# (backup-pg.yaml), already monitored, and already holds the OpenFGA datastore.
 # One component, one extra database, zero extra pods.
 #
 # `actorStateStore: "true"` is not optional decoration: it is the prerequisite for Dapr ACTORS *and*

@@ -1,4 +1,4 @@
-import { expect, test, type Page, type Route } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import { Int32, Table, Utf8, tableToIPC, vectorFromArray } from 'apache-arrow';
 import { mockMe, signIn, TOKEN } from './session';
 import { MOCK_CATALOG } from '../ports';
@@ -10,9 +10,6 @@ import { MOCK_CATALOG } from '../ports';
 //
 // The registry list and the detail aggregate are remote functions now (the transport ruling, area 1),
 // so they are seeded on the mock catalog; the Arrow query keeps its bytes route and its intercept.
-
-const json = (route: Route, body: unknown, status = 200) =>
-	route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
 
 const TABLE = 'raw%24events';
 const ABSENT = { status: 404, body: { detail: 'none' } };
@@ -48,7 +45,6 @@ test.beforeEach(async ({ context, page }, testInfo) => {
 	token = `${TOKEN.admin}:${testInfo.testId}`;
 	await signIn(context, { token });
 	await mockMe(page);
-	await page.route('**/api/datasets/**/producers', (route) => json(route, { producers: [] }));
 	await page.route('**/capi/v1/table/*/query', (route) =>
 		route.fulfill({
 			status: 200,

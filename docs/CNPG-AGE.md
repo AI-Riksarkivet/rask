@@ -1,16 +1,17 @@
-# Running the AGE graph on CloudNativePG
+# Running the AGE Postgres on CloudNativePG
 
-The lance-ns state of record is Postgres: the **Apache AGE** lineage graph + the **OpenFGA** datastore, today
-a single in-chart StatefulSet (`chart/templates/age-postgres.yaml`). For prod you want managed HA + PITR —
-CloudNativePG (CNPG). The one blocker is that AGE is a Postgres **extension** (a compiled `.so` + control/SQL
-files per PG major) and **stock CNPG images don't ship it**. Two ways to solve it; the first is preferred.
+The chart's Postgres server, `rask-age` (a single in-chart StatefulSet, `chart/templates/age-postgres.yaml`), serves
+the **OpenFGA** datastore and the **Dapr state store** (notifications' inbox read state, workflow and actor state).
+Lineage keeps no database ([ADR 0158](adr/0158-provenance-is-a-service-the-lineage-graph-is-bring-your-own.md)): its feed and edge list are
+Lance tables in the catalog's `provenance` namespace. The server runs on the `apache/age` image, and its databases
+load the `age` extension at init (`age-postgres.yaml`). In production the platform's Postgres replaces it
+(`age.enabled=false` + `age.externalHost`); the server itself leaves the chart under LH-496. For a CNPG-managed copy
+with HA + PITR, the one blocker is that AGE is a Postgres **extension** (a compiled `.so` + control/SQL files per PG
+major) and **stock CNPG images don't ship it**. Two ways to solve it; the first is preferred.
 
 ## The headline win (either path)
-CNPG does **physical** backups + PITR (barman-cloud → object store). That is strictly **safer for AGE** than
-the in-chart `pg_dump` CronJob: physical replication captures the whole data directory, so the "does a logical
-`pg_dump` round-trip the AGE graph labels?" hazard — which `scripts/age_restore_drill.sh` exists to prove —
-simply **disappears**. Moving AGE to CNPG isn't only HA; it removes a real DR risk. Set
-`backups.pgDump.enabled=false` and let CNPG own backups.
+CNPG does **physical** backups + PITR (barman-cloud → object store), which capture the whole data directory, so
+nothing depends on a logical `pg_dump` round-trip. Set `backups.pgDump.enabled=false` and let CNPG own backups.
 
 ## Preferred: AGE as a CNPG ImageVolume extension (stock Postgres image)
 Since **Apache AGE reached PostgreSQL 18** (v1.7.0, 2026-01; also 1.8.0), you can use CNPG's declarative
@@ -54,8 +55,8 @@ than a build log: three layers matching the three `COPY` lines — 8,559 B of `/
 reads as an empty image; the same command lists `alpine:3.20` normally, so the manifest is the check
 to trust.
 
-What remains is the CUTOVER, which is a data migration rather than a proof: the lineage graph and
-OpenFGA's tables live in the StatefulSet's PVC, and `age-cluster.yaml` deliberately fails the render
+What remains is the CUTOVER, which is a data migration rather than a proof: OpenFGA's and the Dapr state
+store's tables live in the StatefulSet's PVC, and `age-cluster.yaml` deliberately fails the render
 if both stores are on.
 
 ### The 2026-07-20 proof status, kept as the record
@@ -77,7 +78,7 @@ environment snag, not an AGE one.
    currently idle for want of a `Cluster` to manage. Every environment requirement above is met on
    this cluster: **K8s v1.36.2** (ImageVolume default-on since 1.35), **containerd 2.3.2-k3s2** (≥2.1),
    **CNPG 1.29.1** (≥1.27). So the remaining gap is the extension image and then the CUTOVER ITSELF,
-   which is a data migration rather than a proof — the lineage graph and OpenFGA's tables live in the
+   which is a data migration rather than a proof — OpenFGA's and the Dapr state store's tables live in the
    StatefulSet's PVC, and `age-cluster.yaml` deliberately fails the render if both stores are on.
 
    **The 2026-07-20 investigation below stands as the record of a KIND-HOST problem**, kept because it

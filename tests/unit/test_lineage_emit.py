@@ -120,9 +120,8 @@ def test_build_write_event_omits_an_unsafe_project_rather_than_qualifying_with_i
 
 
 def test_build_write_event_attaches_schema_facet_and_round_trips() -> None:
-    # #24 coverage fix: a catalog write now carries the per-version column schema (blob/vector-aware) as the
-    # standard SchemaDatasetFacet, so the lineage consumer materialises real columns — previously the catalog
-    # emitted NO schema and a catalog-created table showed empty columns until a compute job re-asserted it.
+    # #24 coverage fix: a catalog write carries the per-version column schema (blob/vector-aware) as the
+    # standard SchemaDatasetFacet, so a graph backend the event is forwarded to shows real columns.
     fields = [{"name": "id", "type": "int64"}, {"name": "payload", "type": "blob"}]
     event = build_write_event(
         table_id="db$images",
@@ -138,9 +137,6 @@ def test_build_write_event_attaches_schema_facet_and_round_trips() -> None:
     schema = _written(event)["facets"]["schema"]
     assert schema["fields"] == fields
     assert schema["_producer"] and schema["_schemaURL"].endswith("SchemaDatasetFacet")
-    # The lineage model reads it back off the standard facet → real per-version columns on the WROTE edge.
-    parsed = _parsed(event)
-    assert [f.model_dump(exclude_none=True) for f in parsed.outputs[0].fields] == fields
 
 
 def test_build_write_event_without_schema_omits_facet() -> None:
@@ -174,8 +170,6 @@ def test_emitted_event_round_trips_into_lineage_model() -> None:
     assert parsed.operation == "create_table"
     assert parsed.author == "alice"
     assert parsed.outputs[0].name == "alpha$bronze$images"
-    # #20: the version the lineage service folds onto the WROTE edge (was None before this fix).
-    assert parsed.output_version("alpha$bronze$images") == "1"
 
 
 class _Resp:
@@ -310,8 +304,8 @@ def test_build_write_event_records_derived_from_inputs() -> None:
 
 def test_a_derived_write_event_pins_each_input_at_its_version_and_branch() -> None:
     # A write derived from inputs names each at the version it consumed (the standard DatasetVersionDatasetFacet,
-    # which the lineage service reads back as input_version), and an input read off a branch names that branch,
-    # because a branch numbers its versions apart from main.
+    # which lineage records on the edge), and an input read off a branch names that branch, because a branch
+    # numbers its versions apart from main.
     event = build_write_event(
         table_id="db$gold",
         namespace="db",
@@ -326,7 +320,15 @@ def test_a_derived_write_event_pins_each_input_at_its_version_and_branch() -> No
     on_main, on_branch = event["inputs"]
     assert (on_main["facets"]["version"]["datasetVersion"], "lance" in on_main["facets"]) == ("4", False)
     assert (on_branch["facets"]["version"]["datasetVersion"], on_branch["facets"]["lance"]["ref"]) == ("2", "draft")
-    assert _parsed(event).input_version("db$silver") == "4"
+    from datetime import UTC, datetime
+
+    from lineage.services.provenance import edges_of
+
+    edges = edges_of(_parsed(event), received_at=datetime.now(UTC))
+    assert sorted((e["in_table"], e["in_version"], e["in_branch"], e["out_table"], e["out_version"]) for e in edges) == [
+        ("db$review", 2, "draft", "db$gold", 7),
+        ("db$silver", 4, None, "db$gold", 7),
+    ]
 
 
 def test_emit_write_event_maps_input_pins_to_canonical_dataset_ids() -> None:

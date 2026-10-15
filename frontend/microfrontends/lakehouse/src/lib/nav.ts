@@ -1,16 +1,12 @@
 import { base } from '$app/paths';
 import {
-	Activity,
 	Boxes,
-	Columns3,
-	Cpu,
 	Database,
 	Gauge,
 	HardDrive,
 	LayoutDashboard,
 	Inbox,
 	Layers,
-	Network,
 	Radio,
 	ShieldCheck,
 	Warehouse,
@@ -41,7 +37,7 @@ import { exact, seg, type ZoneNav } from '@rask/ui/shell';
  *
  *  `/lakehouse` used to 307 into the catalog, so the rail's first entry was an AREA and the zone had
  *  no landing at all. It has one now: the active project's overview — its hierarchy and the
- *  warehouses claiming it. That is not a member of Catalog, Lineage, Models or Operations; it
+ *  warehouses claiming it. That is not a member of Catalog or Operations; it
  *  summarises what all of them hang beneath, which is exactly what `ZoneNav.root` exists for (the
  *  compute zone's Overview is the precedent, and it was moved out of "Cluster" for the same reason).
  *
@@ -105,7 +101,7 @@ const LAKEHOUSE_GROUPS: ZoneNav['groups'] = [
 			{
 				// A held promotion is a CATALOG concern, not a lineage one: the rung a decision is gated
 				// on is `can_promote` on `namespace:<project>-<to_namespace>` (medallion promotions.py),
-				// which is this zone's own hierarchy. Lineage is a READ of the graph; this one ACTS.
+				// which is this zone's own hierarchy.
 				title: 'Promotions',
 				href: '/lakehouse/catalog/promotions',
 				match: seg('/lakehouse/catalog/promotions'),
@@ -113,48 +109,10 @@ const LAKEHOUSE_GROUPS: ZoneNav['groups'] = [
 			},
 		],
 	},
-	{
-		label: 'Lineage',
-		items: [
-			{
-				title: 'Graph',
-				href: '/lakehouse/lineage',
-				match: exact('/lakehouse/lineage'),
-				icon: Network,
-			},
-			{
-				title: 'Datasets',
-				href: '/lakehouse/lineage/datasets',
-				match: seg('/lakehouse/lineage/datasets'),
-				icon: Boxes,
-			},
-			{
-				title: 'Jobs',
-				href: '/lakehouse/lineage/jobs',
-				match: seg('/lakehouse/lineage/jobs'),
-				icon: Cpu,
-			},
-			{
-				title: 'Runs',
-				href: '/lakehouse/lineage/runs',
-				match: seg('/lakehouse/lineage/runs'),
-				icon: Activity,
-			},
-			{
-				title: 'Columns',
-				href: '/lakehouse/lineage/columns',
-				match: seg('/lakehouse/lineage/columns'),
-				icon: Columns3,
-			},
-		],
-	},
 	// NO 'Models' GROUP. The registry and its experiments were `/lakehouse/models/*` until they moved
 	// to the MODELS zone, which owns what a model IS — training, registry, blessing. (Two surfaces that
 	// moved with them have since gone: inference to `/compute/inference` at #131, and the `/pipeline`
-	// cascade-trigger door deleted outright.) What stays here is model LINEAGE: which run wrote which version, and off
-	// which datasets. That is a lineage question about a graph this zone owns, so it is answered by
-	// the Lineage group above and not by a second models rail that would only ever be half the story.
-	// A cross-zone leaf pointing at /models was considered and rejected — the top navbar owns
+	// cascade-trigger door deleted outright.) A cross-zone leaf pointing at /models was considered and rejected — the top navbar owns
 	// cross-zone hops (it is the one surface that applies `data-sveltekit-reload` itself), and the
 	// sidebar has been kept zone-local for exactly that reason.
 	{
@@ -196,11 +154,9 @@ const LAKEHOUSE_GROUPS: ZoneNav['groups'] = [
 	},
 ];
 
-/** PINNED to the rail's bottom, outside `groups`. The dock briefly sat as the last leaf of
- *  "Lineage", which made a ZONE-level surface read as a lineage feature and hid it from anyone
- *  standing in catalog or models. It composes the whole zone — graph + runs + events over ONE
- *  LineageState, plus the catalog's own table registry and object browser — so it belongs below the
- *  areas rather than among them. Not privilege-filtered: every identity that can see the zone can
+/** PINNED to the rail's bottom, outside `groups`. It composes the whole zone — the lineage event
+ *  feed plus the catalog's own table registry and object browser — so it belongs below the areas
+ *  rather than among them. Not privilege-filtered: every identity that can see the zone can
  *  open its dock. */
 const LAKEHOUSE_FOOTER: ZoneNav['footer'] = {
 	label: 'Workspace',
@@ -225,7 +181,7 @@ const LAKEHOUSE_FOOTER: ZoneNav['footer'] = {
 const PRIVILEGED_GROUPS = new Set(['Operations']);
 
 /** The area segment right after this zone's base — `''` on the zone root. Still load-bearing: the
- *  root layout gates the admin door on it and sizes the lineage canvas with it. */
+ *  root layout gates the admin door on it. */
 export function areaOf(pathname: string): string {
 	const rest = pathname.startsWith(base) ? pathname.slice(base.length) : pathname;
 	return rest.split('/').filter(Boolean)[0] ?? '';

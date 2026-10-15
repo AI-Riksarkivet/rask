@@ -11,60 +11,51 @@ from typing import Any, Final
 from lance_namespace import PermissionDeniedError
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from lineage.schemas import SchemaField
 from lineage_kit.signing import SIGNATURE_FACET, RefusalReason
 from service_kit.openlineage import static_event_id
 
 
 _MODEL = ConfigDict(extra="allow", populate_by_name=True)
 
+#: The most datasets one event may name as inputs, and as outputs ([[LIN-6]]). A successful run records an edge per
+#: (input, output) pair, so the two bounds are what one event can cost the edge list; 64 is the catalog's own bound on
+#: a run's inputs (`catalog.core.run_context.MAX_INPUTS`), so no event the catalog emits is refused for it.
+MAX_DATASETS: Final = 64
+#: The most one event may weigh as JSON, all of which its feed row stores ([[LIN-6]]). The bus carries at most NATS's
+#: default `max_payload`, 1 MiB, which the NATS fixture does not raise, so this refuses at the HTTP door only an event
+#: the bus could never have carried.
+MAX_EVENT_BYTES: Final = 1024 * 1024
 
-class ColumnLineageEdge(BaseModel):
-    """One *input column -> output column* dependency declared by a ``columnLineage`` facet (#24).
 
-    ``(name, field)`` identify the SOURCE column and ``out_field`` the produced one; ``type``/``subtype``
-    carry the transformation kind and ``masking`` the governance bit. A model rather than the flat dict
-    this used to be: the repository's ingest and the FGA dependency-collector index seven of these keys
-    between them, and a mistyped key is a ``KeyError`` raised on a live event at ingest time.
+def _within_weight(event: BaseModel) -> None:
+    """Refuse ``event`` when its JSON outweighs :data:`MAX_EVENT_BYTES`; raised inside validation, it is a malformed event."""
+    weight = len(event.model_dump_json(by_alias=True).encode())
+    if weight > MAX_EVENT_BYTES:
+        raise ValueError(f"the event weighs {weight} bytes as JSON; lineage keeps at most {MAX_EVENT_BYTES}")
+
+
+class ColumnUpstream(BaseModel):
+    """A dataset a ``columnLineage`` facet names as the source of one of an output's columns.
+
+    The ingest authorizer reads these: recording "my column came from yours" is a claim to have read yours.
     """
 
-    out_field: str
     namespace: str = ""
     name: str
-    field: str
-    type: str = ""
-    subtype: str = ""
-    description: str = ""
-    masking: bool = False
-
-
-class OutputStatistics(BaseModel):
-    """Runtime-measured ``(row_count, size_bytes)`` for one written dataset, from ``outputStatistics``.
-
-    Named rather than a positional 2-tuple: the one call site that persists these writes them into two
-    separate Cypher params, and swapping the pair there would record a size as a row count while passing
-    every type check. Either half may be absent — the spec makes both fields optional — but never both
-    (the property returns ``None`` for the whole facet then, rather than a pair of nulls).
-    """
-
-    row_count: int | None = None
-    size_bytes: int | None = None
 
 
 #: The run operations that maintain a table rather than write it: they need `can_maintain` at the ingest
-#: door, and they prove nothing about whether the table exists (a compaction after a drop is not a
-#: recreate). `expire_versions` is maintenance's version reclamation; `compact_table` and `create_index` are the
-#: catalog's names for a bring-your-own job's compaction and index commits. `cy.DATASET_LAST_EXISTENCE_RUN` spells the same set as a Cypher literal, pinned equal by
-#: `tests/unit/test_lineage.py`.
+#: door. `expire_versions` is maintenance's version reclamation; `compact_table` and `create_index` are the
+#: catalog's names for a bring-your-own job's compaction and index commits.
 MAINTENANCE_OPERATIONS: Final = frozenset({"expire_versions", "compact_table", "create_index"})
 
 
-def vertex_name_for(namespace: str, name: str) -> str:
-    """The `:Dataset` vertex key for a (namespace, name) pair — see :attr:`Dataset.vertex_name`.
+def lineage_name_for(namespace: str, name: str) -> str:
+    """The identity a dataset is recorded under for a (namespace, name) pair — see :attr:`Dataset.lineage_name`.
 
-    Module-level because the column-lineage upstreams arrive as raw facet dicts rather than `Dataset`
-    models, and the two must derive identity through ONE rule: a second copy of this expression is how
-    a stub vertex ends up under a different key than the node it is meant to be.
+    Module-level so every place that derives a dataset's identity, a `Dataset` model or a raw facet dict,
+    goes through ONE rule: a second copy of this expression is how an edge ends up under a different key
+    than the table it is meant to name.
     """
     from lineage.api.fga_deps import is_external_source
 
@@ -74,18 +65,15 @@ def vertex_name_for(namespace: str, name: str) -> str:
 class Dataset(BaseModel):
     """An OpenLineage dataset (a Lance table / source); ``name`` is the catalog id.
 
-    ``facets`` carries the standard OpenLineage dataset facets; we read several:
-    ``version`` (which Lance version a run produced), ``dataSource`` (where the table
-    physically lives — the S3-compatible location), and ``tags`` (governance labels).
+    ``facets`` carries the standard OpenLineage dataset facets; lineage reads ``version`` (which Lance
+    version a run produced or read), the catalog's ``lance`` facet (the ref an input was read on) and
+    ``columnLineage`` (whose upstreams the ingest authorizer checks).
 
     The spec splits dataset metadata across THREE slots, by the facet's base type: plain
     ``DatasetFacet``s ride ``facets``, ``InputDatasetFacet``s ride ``inputFacets`` on an input, and
-    ``OutputDatasetFacet``s ride ``outputFacets`` on an output. Two facets we consume are not plain
-    ``DatasetFacet``s — ``OutputStatisticsOutputDatasetFacet`` is an output facet and
-    ``DataQualityAssertionsDatasetFacet`` is an input facet — so the official ``openlineage-python``
-    client (and therefore Spark/Airflow/dbt/Marquez producers, and our own ``lineage.seed``) serialises
-    them into the typed slots, NOT into ``facets``. Reading only ``facets`` silently dropped them from
-    every such producer; :meth:`facet` looks in all three.
+    ``OutputDatasetFacet``s ride ``outputFacets`` on an output. The official ``openlineage-python`` client
+    (and therefore Spark/Airflow/dbt/Marquez producers) serialises the typed facets into the typed slots,
+    NOT into ``facets``; :meth:`facet` looks in all three.
     """
 
     model_config = _MODEL
@@ -94,30 +82,21 @@ class Dataset(BaseModel):
     facets: dict[str, Any] = Field(default_factory=dict)
 
     @property
-    def vertex_name(self) -> str:
-        """The `:Dataset` vertex key — bare for a governed table, NAMESPACE-QUALIFIED for an external one.
+    def lineage_name(self) -> str:
+        """The identity a dataset is recorded under — bare for a governed table, NAMESPACE-QUALIFIED for an external one.
 
         **This is a security boundary, not a naming preference.** `enforce_output_authz` exempts inputs
         whose namespace carries a URI scheme, because an external source has no catalog entry and so no
         tuple that could ever authorize it — refusing them was unsatisfiable and refused every honest
         producer permanently. That exemption is safe ONLY IF an unauthorized external reference cannot
-        reach a governed vertex.
-
-        It could. The vertex is MERGEd on `{name}` ALONE (`_MERGE_DATASET`) with the namespace merely
-        SET, so an input `{namespace: "s3://evil", name: "gold$catalog"}` skipped the check and then
-        landed on the REAL `gold$catalog` — rewriting its namespace and `source_uri`, unioning attacker
-        tags into the human-curated governance property, and attaching the forged READ edge the
-        exemption's own docstring called impossible. That docstring asserted this very property ("a
-        different node from the governed `gold / gold$catalog`") while the storage layer did not have
-        it, and the test that claimed to pin it compared its own fixture to a literal — unconditionally
-        true, unable to fail.
+        name a governed table: an input `{namespace: "s3://evil", name: "gold$catalog"}` skips the check, so
+        an edge keyed on its bare name would claim that `gold$catalog` fed the attacker's table ([[LIN-3]]).
 
         Qualifying makes the property STRUCTURAL rather than heuristic: no name a caller can choose
-        collides, because the discriminator being prefixed is the same one the exemption keys on.
-        Governed vertices are UNCHANGED — their bare catalog id is what every read door, every edge and
-        every stored row already uses, so this is not a migration of governed data.
+        collides, because the discriminator being prefixed is the same one the exemption keys on. A governed
+        table keeps its bare catalog id, which is what every read door and every stored row uses.
         """
-        return vertex_name_for(self.namespace, self.name)
+        return lineage_name_for(self.namespace, self.name)
 
     def facet(self, name: str) -> dict[str, Any] | None:
         """The named facet from whichever spec slot the producer used, else ``None``.
@@ -138,150 +117,27 @@ class Dataset(BaseModel):
         return None
 
     @property
-    def source_uri(self) -> str | None:
-        """Where this dataset physically lives, from the standard ``dataSource`` facet.
+    def column_upstreams(self) -> list[ColumnUpstream]:
+        """The datasets this (output) dataset's standard ``columnLineage`` facet names as column sources.
 
-        For a Lance table this is the S3-compatible URI (e.g. ``s3://lakehouse/silver/features``).
-        """
-        facet = self.facet("dataSource")
-        uri = facet.get("uri") if facet else None
-        return uri if isinstance(uri, str) and uri else None
-
-    @property
-    def fields(self) -> list[SchemaField]:
-        """Column schema from the standard ``schema`` facet, as the read path's own :class:`SchemaField`.
-
-        This is the per-version schema the lineage service persists onto the ``WROTE`` edge (#24
-        prerequisite); previously the ``SchemaDatasetFacet`` was received and discarded. The SAME model
-        ``dataset_schema`` validates the persisted JSON back into — one description of a column, not a
-        write-path dict and a read-path model that can drift apart. ``description`` stays ``None`` when
-        the producer omitted it, so ``model_dump(exclude_none=True)`` reproduces the stored wire form
-        byte for byte.
-        """
-        facet = self.facet("schema")
-        items = facet.get("fields") if facet else None
-        if not isinstance(items, list):
-            return []
-        out: list[SchemaField] = []
-        for item in items:
-            if not isinstance(item, dict) or not item.get("name"):
-                continue
-            description = str(item["description"]) if item.get("description") else None
-            out.append(SchemaField(name=str(item["name"]), type=str(item.get("type") or ""), description=description))
-        return out
-
-    @property
-    def column_edges(self) -> list[ColumnLineageEdge]:
-        """Flattened column-lineage edges from the standard ``columnLineage`` facet (#24).
-
-        Each entry is one *input→output* column dependency on THIS (output) dataset — see
-        :class:`ColumnLineageEdge`. The first transformation (modern
-        ``inputFields[].transformations``) carries the kind (``DIRECT``/``IDENTITY`` vs a real change)
-        and the ``masking`` governance flag. Previously this facet was received and discarded on ingest.
+        Each ``fields[<column>].inputFields[]`` entry names one; an entry without a ``name`` or ``field`` names
+        nothing and is skipped.
         """
         facet = self.facet("columnLineage")
         fields = facet.get("fields") if facet else None
         if not isinstance(fields, dict):
             return []
-        edges: list[ColumnLineageEdge] = []
-        for out_field, spec in fields.items():
-            # Guard the output key too (symmetric with the input name/field + schema-name guards): a
-            # malformed facet with an empty key must not materialise a junk ``(:Column {field:""})``.
-            if not isinstance(out_field, str) or not out_field:
-                continue
+        upstreams: list[ColumnUpstream] = []
+        for spec in fields.values():
             inputs = spec.get("inputFields") if isinstance(spec, dict) else None
             if not isinstance(inputs, list):
                 continue
-            # Deprecated Fields-level transformation (older / Marquez-style producers that don't emit the
-            # modern per-InputField ``transformations[]``); used as a fallback so their info isn't lost.
-            dep_type = str(spec.get("transformationType") or "") if isinstance(spec, dict) else ""
-            dep_desc = str(spec.get("transformationDescription") or "") if isinstance(spec, dict) else ""
-            for inp in inputs:
-                if not isinstance(inp, dict) or not inp.get("name") or not inp.get("field"):
-                    continue
-                transforms = inp.get("transformations")
-                transforms = [t for t in transforms if isinstance(t, dict)] if isinstance(transforms, list) else []
-                first = transforms[0] if transforms else {}
-                # masking is a governance bit — true if ANY transformation masks (never lost to a non-first
-                # one), with a fallback for the deprecated facet's MASKED transformation type.
-                masking = any(t.get("masking") for t in transforms) or dep_type.upper().startswith("MASK")
-                edges.append(
-                    ColumnLineageEdge(
-                        out_field=str(out_field),
-                        namespace=str(inp.get("namespace") or ""),
-                        name=str(inp["name"]),
-                        field=str(inp["field"]),
-                        type=str(first.get("type") or "") or dep_type,
-                        subtype=str(first.get("subtype") or ""),
-                        description=str(first.get("description") or "") or dep_desc,
-                        masking=bool(masking),
-                    )
-                )
-        return edges
-
-    @property
-    def statistics(self) -> OutputStatistics | None:
-        """Observed :class:`OutputStatistics` from the standard ``outputStatistics`` facet, else ``None``.
-
-        Present only on a real measured write (a producer that reads back the exact rows + on-disk bytes it
-        produced); a dummy emit or an input dataset omits the facet. These are the
-        runtime-measured numbers that move our lineage from producer-declared toward Marquez-grade. Both
-        fields are optional in the spec, so a partial facet (only one present) reports ``None`` for the
-        absent half — never a fabricated ``-1`` that ``producers()`` would serve as a real measurement.
-        Returns ``None`` (the whole tuple) only when NEITHER field is present.
-        """
-        facet = self.facet("outputStatistics")
-        if facet is None:
-            return None
-        row_count, size = facet.get("rowCount"), facet.get("size")
-        if not isinstance(row_count, int) and not isinstance(size, int):
-            return None
-        return OutputStatistics(
-            row_count=row_count if isinstance(row_count, int) else None,
-            size_bytes=size if isinstance(size, int) else None,
-        )
-
-    @property
-    def quality_assertions(self) -> list[dict[str, Any]]:
-        """Validator checks from the standard ``dataQualityAssertions`` facet — ``[{assertion, success,
-        column?}]``.
-
-        Emitted by a medallion stage that validated the dataset it produced (the quality gate). Empty when
-        the run carried no assertions (gate off / no compute). A ``success: false`` entry is the durable
-        record of a batch the gate BLOCKED from promotion — the WROTE edge keeps both the failed assertion
-        and the version it wrote, so the bad batch is auditable.
-        """
-        facet = self.facet("dataQualityAssertions")
-        items = facet.get("assertions") if facet else None
-        if not isinstance(items, list):
-            return []
-        out: list[dict[str, Any]] = []
-        for item in items:
-            if not isinstance(item, dict) or not item.get("assertion"):
-                continue
-            entry: dict[str, Any] = {
-                "assertion": str(item["assertion"]),
-                "success": bool(item.get("success")),
-            }
-            if item.get("column"):
-                entry["column"] = str(item["column"])
-            out.append(entry)
-        return out
-
-    @property
-    def tags(self) -> list[str]:
-        """Governance labels from the standard ``tags`` facet, as ``key=value`` strings."""
-        facet = self.facet("tags")
-        items = facet.get("tags") if facet else None
-        if not isinstance(items, list):
-            return []
-        labels: list[str] = []
-        for item in items:
-            if not isinstance(item, dict) or not item.get("key"):
-                continue
-            value = item.get("value")
-            labels.append(f"{item['key']}={value}" if value not in (None, "") else str(item["key"]))
-        return labels
+            upstreams.extend(
+                ColumnUpstream(namespace=str(inp.get("namespace") or ""), name=str(inp["name"]))
+                for inp in inputs
+                if isinstance(inp, dict) and inp.get("name") and inp.get("field")
+            )
+        return upstreams
 
 
 class Job(BaseModel):
@@ -296,27 +152,6 @@ class Job(BaseModel):
     namespace: str
     name: str
     facets: dict[str, Any] = Field(default_factory=dict)
-
-    @property
-    def source_location(self) -> dict[str, str] | None:
-        """Where the job's code lives, from the standard ``sourceCodeLocation`` facet — ``{type, url,
-        path?, branch?, …}``.
-
-        Whatever the producer stamps (e.g. its repository + pipeline path). ``None`` when the event carries
-        no such facet. ``type`` + ``url`` are required; other string keys pass through.
-        """
-        facet = (self.facets or {}).get("sourceCodeLocation")
-        if not isinstance(facet, dict):
-            return None
-        typ, url = facet.get("type"), facet.get("url")
-        if not (isinstance(typ, str) and typ and isinstance(url, str) and url):
-            return None
-        out = {"type": typ, "url": url}
-        for key in ("repoUrl", "path", "branch", "tag", "version"):
-            value = facet.get(key)
-            if isinstance(value, str) and value:
-                out[key] = value
-        return out
 
 
 class Run(BaseModel):
@@ -342,6 +177,15 @@ class UnauthoredRunError(PermissionDeniedError):
 
     It stops being unrepairable when the producers sign ([[LH-064]]), at which point this arm should
     stop firing rather than begin discarding more.
+    """
+
+
+class ForeignRunError(PermissionDeniedError):
+    """An event extending a run another subject founded — refused, and no grant can change that ([[LIN-5]]).
+
+    Its own type for the reason :class:`UnauthoredRunError` has one: the ack differs. A named person who lacks a
+    grant can be granted one, so that refusal keeps the DROP that parks it for repair; whose run this is cannot be
+    granted, so re-presenting the event buys nothing, and the bus acks it and counts it unrepairable.
     """
 
 
@@ -416,13 +260,12 @@ class DatasetEvent(BaseModel):
     change: there is no run to name and nothing executed. Its ``"not": { "required": ["job", "run"] }``
     refuses the two TOGETHER rather than either alone — `required` is satisfied only when every listed
     property is present, so a payload carrying just one passes the schema. This model refuses EITHER,
-    deliberately stricter: one of them is enough to make a static change look like something that ran. Emitting one as a ``RunEvent`` mints a Job node
-    for an operation nobody performed, and the ``/jobs`` governance fold makes that Job's output set an
-    access handle — so a phantom is an access-control object, not only untidy.
+    deliberately stricter: one of them is enough to make a static change look like something that ran, and
+    a forwarded graph backend records a run and a job for an operation nobody performed.
 
     THE FORBIDDEN MEMBERS ARE REFUSED RATHER THAN IGNORED. ``extra="allow"`` keeps this model
     forward-compatible with spec fields it does not read yet, and that same tolerance would accept a
-    ``run`` as an unread extra — re-admitting the phantom through the new door while every test here
+    ``run`` as an unread extra — re-admitting the phantom run through the new door while every test here
     passed.
 
     It answers ``run_id`` / ``inputs`` / ``outputs`` so the ingest authorizer needs no second
@@ -434,6 +277,11 @@ class DatasetEvent(BaseModel):
     event_time: str = Field(alias="eventTime")
     producer: str | None = Field(default=None)
     dataset: Dataset
+
+    @model_validator(mode="after")
+    def _bounded(self) -> DatasetEvent:
+        _within_weight(self)
+        return self
 
     @model_validator(mode="before")
     @classmethod
@@ -482,10 +330,9 @@ class DatasetEvent(BaseModel):
     def feed_id(self) -> str:
         """The id the durable feed stores this change under — derived from its content, never minted.
 
-        A static change has no run id, and the feed dedups on ``(run_id, event_type, event_time)``, so it
-        is stored under :func:`service_kit.openlineage.static_event_id`. ONE derivation for the writer
-        (`LineageRepository.ingest_dataset_event`) and the reader that asks whether this exact event is
-        already there (`api.fga_deps._is_replay`), so the two cannot look in different places.
+        A static change has no run id, so the feed keys it under :func:`service_kit.openlineage.static_event_id`.
+        ONE derivation for the writer (`services.provenance.feed_key`) and the reader that asks whether this
+        exact event is already there (`api.fga_deps._is_replay`), so the two cannot look in different places.
         """
         return static_event_id(
             producer=self.producer or "",
@@ -503,14 +350,6 @@ class DatasetEvent(BaseModel):
         this event exactly as it does on a run's, rather than needing a second copy gated differently.
         """
         return True
-
-    def output_version(self, name: str) -> str | None:
-        """The Lance version this change produced for ``name``, from the standard ``version`` facet."""
-        if name != self.dataset.name:
-            return None
-        facet = self.dataset.facet("version")
-        version = facet.get("datasetVersion") if facet else None
-        return str(version) if version is not None else None
 
     @property
     def author(self) -> str | None:
@@ -600,10 +439,10 @@ def run_id_from_payload(raw: object) -> str | None:
     model is unavailable exactly where the answer is needed.
 
     A blank or wrong-typed id reads as "no run id", and what that buys is narrower than it looks: the
-    VERDICT is the same either way — `_graph_already_holds` answers ``False`` for ``None``, and
-    `run_status("")` would answer ``None`` and reach the same ``False`` — so both paths record
-    ``DEAD_LETTERED``. What it actually avoids is a graph query for an id that cannot match, and a
-    `run_id` log field presenting a malformed value as though it were an id.
+    VERDICT is the same either way — `_feed_already_holds` answers ``False`` for ``None``, and a feed
+    lookup of ``""`` finds nothing and reaches the same ``False`` — so both paths record ``DEAD_LETTERED``.
+    What it actually avoids is a feed query for an id that cannot match, and a `run_id` log field
+    presenting a malformed value as though it were an id.
     """
     if not isinstance(raw, dict):
         return None
@@ -623,8 +462,13 @@ class RunEvent(BaseModel):
     producer: str | None = Field(default=None)
     run: Run
     job: Job
-    inputs: list[Dataset] = Field(default_factory=list)
-    outputs: list[Dataset] = Field(default_factory=list)
+    inputs: list[Dataset] = Field(default_factory=list, max_length=MAX_DATASETS)
+    outputs: list[Dataset] = Field(default_factory=list, max_length=MAX_DATASETS)
+
+    @model_validator(mode="after")
+    def _bounded(self) -> RunEvent:
+        _within_weight(self)
+        return self
 
     @property
     def feed_event_type(self) -> str:
@@ -670,32 +514,6 @@ class RunEvent(BaseModel):
         return None
 
     @property
-    def error_message(self) -> str | None:
-        """The failure message from the standard ``errorMessage`` run facet, if any."""
-        facet = (self.run.facets or {}).get("errorMessage")
-        if isinstance(facet, dict):
-            message = facet.get("message")
-            return message if isinstance(message, str) and message else None
-        return None
-
-    @property
-    def progress(self) -> tuple[int, int] | None:
-        """Batch progress ``(done, total)`` from our custom ``progress`` run facet, if present.
-
-        The facet rides RUNNING events (OpenLineage has no standard progress facet); the live
-        run-status board reads it to render a % bar. Returns ``None`` when the event omits it —
-        or carries non-numeric fields: a raise here would poison-message the Dapr ingest (RETRY
-        redelivers the same malformed event forever), so malformed means no progress, never a 500.
-        """
-        facet = (self.run.facets or {}).get("progress")
-        if isinstance(facet, dict):
-            try:
-                return int(facet["done"]), int(facet["total"])
-            except (KeyError, TypeError, ValueError):
-                return None
-        return None
-
-    @property
     def is_success(self) -> bool:
         """A terminal *successful* run — only these assert produced data / lineage."""
         return self.event_type.upper() == "COMPLETE"
@@ -704,8 +522,8 @@ class RunEvent(BaseModel):
     def operation(self) -> str | None:
         """The catalog operation (e.g. ``create_table``) from the ``lance`` run facet, if any.
 
-        Set by the catalog's emitter (``catalog.core.lineage_emit``); used to attach the
-        ``(:User)-[:CREATED]->(:Dataset)`` edge on a table-create event.
+        Set by the catalog's emitter (``catalog.core.lineage_emit``); it decides which rung may record the
+        event (``api.fga_deps.relations_for_operation``).
         """
         lance = (self.run.facets or {}).get("lance")
         return lance.get("operation") if isinstance(lance, dict) else None
@@ -717,8 +535,7 @@ class RunEvent(BaseModel):
         The version number alone does not identify a snapshot: a branch is a whole parallel dataset with
         its OWN version sequence, so one number names two different states. Measured on pylance 11.0.0 —
         main at v2, a branch write gives branch v3, a later main write gives main v3, different contents.
-        Stored on the WROTE edge so `(dataset, version)` is disambiguated, and so the reads that answer
-        "what is this table's current version" can exclude writes that landed on a branch.
+        Stored on each edge the run asserts, so `(table, version)` names one commit.
 
         ``None`` for main rather than the literal ``"main"``, matching what the catalog emits: every write
         recorded before the ref existed carries none, and a literal would make them all read as some other
@@ -727,119 +544,3 @@ class RunEvent(BaseModel):
         lance = (self.run.facets or {}).get("lance")
         ref = lance.get("ref") if isinstance(lance, dict) else None
         return str(ref) if ref else None
-
-    @property
-    def cascade_id(self) -> str | None:
-        """The BATCH this run belongs to, from the ``lance`` run facet (``cascade_id``).
-
-        One bronze write is one cascade, and `ingest_trigger` mints this id where
-        that cascade begins so every tier below carries the same value. Without it in the graph the
-        hops of one batch are unrelated `Run` nodes sharing only a dataset name, and the question the
-        id exists for — which runs belong to this batch — has no query.
-
-        STRING ONLY, and non-empty. The value is compared for EQUALITY when joining, so a number that
-        merely parses would join to nothing while looking like a batch, and ``""`` would join every
-        batch-less run to every other. ``isinstance(value, str)`` also rejects ``True``, which a bare
-        truthiness test would not: `bool` is a subclass of `int`, not of `str`.
-        """
-        lance = (self.run.facets or {}).get("lance")
-        value = lance.get("cascade_id") if isinstance(lance, dict) else None
-        return value if isinstance(value, str) and value else None
-
-    @property
-    def promotion_status(self) -> str | None:
-        """WHY a promotion did not advance, from the ``lance`` run facet — HELD / BLOCKED / REFUSED.
-
-        The medallion emits ``eventType=FAIL`` for all three, correctly: the promotion genuinely did
-        not advance, and every existing FAIL consumer must keep meaning exactly that. This is the one
-        bit that separates "a validator may approve this" from "corrupt, and no approval can waive
-        it" — opposite instructions that the run board rendered identically until it crossed the wire.
-        The review's own outcomes (PROMOTED / REJECTED / BLOCKED / EXPIRED) use the same field, so it
-        is one vocabulary rather than two.
-        """
-        lance = (self.run.facets or {}).get("lance")
-        value = lance.get("promotion_status") if isinstance(lance, dict) else None
-        return value if isinstance(value, str) and value else None
-
-    @property
-    def consumed_to_version(self) -> int | None:
-        """The highest SOURCE version this run consumed, from the ``lance`` run facet (``to_version``).
-
-        Distinct from :meth:`output_version`, which is what the run WROTE. This is the delta boundary it
-        READ — the other half of the cascade's lag predicate, and unanswerable before the medallion
-        began stamping it: the range lived on the acked trigger and in the Ray job's ``BASE_VERSION``
-        env, and neither survived the run.
-
-        STRICTLY an ``int``, and negatives are refused. The facet is producer-supplied, so a string that
-        merely parses would let an external producer write a version no catalog ever published; and
-        ``-1`` is the sentinel the run-node SET uses for "this event did not say", which a producer must
-        not be able to send as data and thereby mean "keep the old value".
-        """
-        lance = (self.run.facets or {}).get("lance")
-        value = lance.get("to_version") if isinstance(lance, dict) else None
-        # `bool` first: it is an `int` subclass, and `True` would otherwise record as version 1.
-        return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
-
-    @property
-    def consumed_from_version(self) -> int | None:
-        """The source version this run's delta STARTED after, from the ``lance`` run facet
-        (``from_version``). Exclusive, matching the filter the stage applies.
-
-        The floor to :meth:`consumed_to_version`'s ceiling, and the half a lag detector cannot work
-        without: a ceiling alone answers "how far did this run read to", never "did it start where the
-        last one stopped". A cascade's lost hop lives in exactly that difference, because the skipped
-        rows fall outside every later hop's filter while the ceiling keeps climbing.
-
-        ``None`` on a first publication, where the facet omits the key and the meaning is "everything up
-        to ``to_version``". Zero would assert a prior publication at version 0 that did not happen.
-        Refuses the same shapes the ceiling refuses, for the same reason: the facet is producer-supplied
-        and ``-1`` is the SET's own "this event did not say" sentinel.
-        """
-        lance = (self.run.facets or {}).get("lance")
-        value = lance.get("from_version") if isinstance(lance, dict) else None
-        return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
-
-    @property
-    def source_run_id(self) -> str | None:
-        """The PRODUCER'S OWN run id, from the ``lance`` run facet (``run_id``).
-
-        The graph's ``run_id`` is the emitter's DERIVED id — a one-way UUID5 over
-        ``ingest:<id>`` — so nothing downstream can map a graph run back to the run the producing
-        service knows. Measured consequence: every row on the compute zone's ingest board linked to
-        a dead detail page ("No such run"), because the board listed graph ids and the detail door
-        answers only to ingest ids. The producer therefore states its own id as data, and the board
-        links with THAT.
-        """
-        lance = (self.run.facets or {}).get("lance")
-        value = lance.get("run_id") if isinstance(lance, dict) else None
-        return str(value) if value else None
-
-    def output_version(self, name: str) -> str | None:
-        """The Lance dataset version this run produced for output ``name`` (``version`` facet).
-
-        Ties a provenance run to the exact dataset version it wrote, so two refinement passes
-        over the same table (e.g. add a column, then another) are distinguishable.
-        """
-        for ds in self.outputs:
-            if ds.name == name:
-                facet = ds.facet("version")
-                version = facet.get("datasetVersion") if facet else None
-                return str(version) if version is not None else None
-        return None
-
-    def input_version(self, name: str) -> str | None:
-        """The Lance dataset version this run CONSUMED for input ``name`` (``version`` facet).
-
-        The read twin of :meth:`output_version`. A producer that pins its inputs — the Ray TRAIN job
-        pins every feature dataset (#115 D1: training on floating LATEST is not reproducible) — says
-        so with the same spec ``version`` facet on the input. Without persisting it the pin is emitted
-        and then dropped, and the graph can no longer answer the question the pin exists to answer:
-        *which exact feature versions produced this model?* (Found live 2026-07-13: 280 READ edges,
-        zero versions.) Producers that read floating LATEST simply omit the facet → ``None``.
-        """
-        for ds in self.inputs:
-            if ds.name == name:
-                facet = ds.facet("version")
-                version = facet.get("datasetVersion") if facet else None
-                return str(version) if version is not None else None
-        return None

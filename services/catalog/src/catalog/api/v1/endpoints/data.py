@@ -380,8 +380,8 @@ async def delete_from_table(
     segments = parse_identifier(id, settings.delimiter)
     body.id = reconcile_body_id(segments, body.id)
     response: DeleteFromTableResponse = await run_in_threadpool(dataplane.delete_from_table, ns, so, body)
-    # A row-delete doesn't change columns, but the WROTE edge at this new version still records the
-    # (unchanged) schema so dataset_schema(version=N) is populated for every version, not just writes.
+    # A row-delete doesn't change columns, but the event at this new version still carries the
+    # (unchanged) schema, so every version the feed records has one, not just writes.
     await lineage_deps.emit_measured_write(
         emitter,
         segments,

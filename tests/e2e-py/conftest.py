@@ -48,11 +48,9 @@ __all__ = ["pytest_addoption", "pytest_sessionfinish"]
 def _unbind_what_this_run_bound() -> Iterator[None]:
     """Remove the namespaces this run BOUND, and say plainly what it could not.
 
-    THE RESIDUE HAS A SOURCE, and it is here. These suites write into the estate's real catalog and
-    lineage graph, and nothing removed what they left: § Q8-15 measured 1,163 Dataset nodes and a
-    reconcile that fires `storage_loss` and `unreadable` on every 5-minute tick with dead rows in them,
-    so a REAL storage loss arrives invisible among them. Retention converges the graph eventually; the
-    BINDINGS have no retention at all, which is § Q15-1 — three stale ones hijacking medallion names.
+    THE RESIDUE HAS A SOURCE, and it is here. These suites write into the estate's real catalog, and
+    nothing removed what they left. Lineage's feed converges by retention; the BINDINGS have no
+    retention at all, which is § Q15-1 — three stale ones hijacking medallion names.
 
     Autouse and session-scoped so a suite cannot forget it, and `topology.create_top_level` is the one
     door they all bind through.
@@ -60,7 +58,7 @@ def _unbind_what_this_run_bound() -> Iterator[None]:
     WHAT IT WILL NOT DO is force. A namespace still holding tables answers 409 naming them, and that
     refusal is correct — unbinding it would leave real tables unresolvable. Those are reported as a
     warning rather than swallowed or escalated: a cleanup that deletes what a guard refused is worse
-    than the residue, and residue nobody is told about is how the graph got to 1,163.
+    than the residue, and residue nobody is told about grows unseen.
     """
     yield
     from topology import unbind_created

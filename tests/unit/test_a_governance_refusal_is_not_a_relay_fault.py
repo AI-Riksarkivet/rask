@@ -4,7 +4,7 @@
 stranded=6`, with 24 `lineage_outbox_event_unauthorized` lines in twenty minutes across 6 distinct
 `run_id`s, all `author='e2e'`, against `e2e_crash_ds` and `e2e_outbox_ds`. Those six have been staged
 for 2.1 days (`outbox_oldest_age_seconds` = 179206 on the `rask-lineage` lane) and will strand forever:
-the graph's answer is deterministic, so every tick re-refuses them.
+the gate's answer is deterministic, so every tick re-refuses them.
 
 `DrainOutcome`'s own docstring says the pair exists so that "drained alone says a tick succeeded while a
 specific event has been refused on every tick since the estate came up; stranded alone says a tick
@@ -17,11 +17,11 @@ WHY NOT MOVE THE EVENT ASIDE to a `<outbox>/_refused/` prefix: that is a PutObje
 the relay exactly `s3:DeleteObject` on its own outbox (`DrainItsOwnOutboxAndNothingElse` in
 `chart/templates/minio-scoped-users.yaml`). Widening that grant to tidy a counter would trade a real
 least-privilege boundary for a cosmetic one. The durable copy of a refusal is a row instead: the verdict
-and the event go to `lineage_outbox_refusals` first ([[LH-182]]), and only then is the object dropped.
+and the event go to the provenance store's refusals table first ([[LH-182]]), and only then is the object dropped.
 Never destroy the only durable copy of a committed write's provenance to answer "you may not record this".
 
 STAGING AN EVENT IS NOT A WAY AROUND THE GATE PUBLISHING ONE HAS TO CLEAR. Four paths reach
-`repository.ingest_event`: the HTTP door (`enforce_author` then `enforce_output_authz`), the bus
+`ProvenanceStore.record`: the HTTP door (`enforce_author` then `enforce_output_authz`), the bus
 (`authorize(event)`, DROP on denial), the DLQ replay door (`enforce_output_authz`), and this outbox
 relay. The outbox is writable by the producers that stage there through the vended outbox credential
 (ingest, maintenance, medallion), so a relay that ingested unchecked would let a stager that cannot get
@@ -41,7 +41,7 @@ import pytest
 from lance_namespace import PermissionDeniedError
 
 from catalog.core.lineage_emit import INSERT, build_write_event
-from lineage.api import reconcile_cron
+from lineage.api import relay_cron
 from lineage.core.config import LineageSettings
 from service_kit.lakehouse import outbox
 from service_kit.openlineage import run_id_for
@@ -72,12 +72,12 @@ class _Repo:
 
     async def record_refusal(self, *, outbox_key: str, run_id: str | None, author: str | None, reason: str, event_json: str) -> None:
         """[[LH-182]] The drain now RECORDS a settled refusal before retiring the object, so a double
-        that cannot record one no longer stands in for the repository. Captured rather than ignored:
+        that cannot record one no longer stands in for the store. Captured rather than ignored:
         several of these tests assert what the refusal path did, and a silent no-op would let a drain
         that recorded nothing pass as one that did."""
         self.refusals.append({"outbox_key": outbox_key, "run_id": run_id, "author": author, "reason": reason, "event_json": event_json})
 
-    async def ingest_event(self, ev: Any) -> None:  # noqa: ANN401 — the drain's own shape
+    async def record(self, ev: Any) -> None:  # noqa: ANN401 — the drain's own shape
         self.ingested.append(ev.run.run_id)
 
 
@@ -95,13 +95,13 @@ def _settings(uri: str) -> Any:  # noqa: ANN401 — a stand-in for the drain's s
 
 def _drive(uri: str) -> Any:  # noqa: ANN401 — DrainOutcome
     request = cast("Any", SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace())))
-    return asyncio.run(reconcile_cron._drain_outbox(request, cast("Any", _Repo()), _settings(uri), {}))
+    return asyncio.run(relay_cron._drain_outbox(request, cast("Any", _Repo()), _settings(uri), {}))
 
 
 def _governed_settings(outbox_uri: str) -> LineageSettings:
     """The real settings, FGA on — the whole point: the other executing tests leave it off."""
     auth = {"oidc_enabled": True, "oidc_issuer": "https://dex.example", "oidc_audience": "lance", "fga_store_id": "s", "fga_model_id": "m"}
-    return LineageSettings.model_validate({"database_url": "postgresql://x/y", "outbox_uri": outbox_uri, "fga_enabled": True, **auth})
+    return LineageSettings.model_validate({"outbox_uri": outbox_uri, "fga_enabled": True, **auth})
 
 
 def test_a_refused_event_is_counted_apart_and_dropped_only_after_its_record(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -123,21 +123,21 @@ def test_a_refused_event_is_counted_apart_and_dropped_only_after_its_record(tmp_
         steps.append("drop")
         real_drop(*args)
 
-    monkeypatch.setattr(reconcile_cron, "enforce_bus_authz", _refuse)
+    monkeypatch.setattr(relay_cron, "enforce_bus_authz", _refuse)
     monkeypatch.setattr(outbox, "drop_event", _drop)
 
     uri = f"file://{tmp_path}/_lineage_outbox"
     _staged(uri, author="mallory", run="bronze$events", token="order-probe")
 
     class _OrderRepo:
-        async def ingest_event(self, _ev: Any) -> None:  # noqa: ANN401
+        async def record(self, _ev: Any) -> None:  # noqa: ANN401
             steps.append("ingest")
 
         async def record_refusal(self, *, outbox_key: str, run_id: str | None, author: str | None, reason: str, event_json: str) -> None:
             steps.append("record")
 
     request = cast("Any", SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace())))
-    outcome = asyncio.run(reconcile_cron._drain_outbox(request, cast("Any", _OrderRepo()), _governed_settings(uri), {}))
+    outcome = asyncio.run(relay_cron._drain_outbox(request, cast("Any", _OrderRepo()), _governed_settings(uri), {}))
 
     assert (outcome.refused, outcome.stranded, outcome.drained) == (1, 0, 0), (
         f"a refusal must land on its OWN counter; folding it into `stranded` reports a relay fault that is not happening: {outcome}"
@@ -151,9 +151,9 @@ def test_a_TRANSIENT_failure_still_strands(tmp_path: Any, monkeypatch: pytest.Mo
     class — otherwise the new number absorbs the old one and nothing is distinguishable again."""
 
     async def _blow_up(*_args: object, **_kwargs: object) -> None:
-        raise TimeoutError("the graph did not answer")
+        raise TimeoutError("the feed did not answer")
 
-    monkeypatch.setattr(reconcile_cron, "enforce_bus_authz", _blow_up)
+    monkeypatch.setattr(relay_cron, "enforce_bus_authz", _blow_up)
     uri = f"file://{tmp_path}/_lineage_outbox"
     _staged(uri, author="e2e", run="bronze$transient", token="transient-probe")
 
@@ -175,7 +175,7 @@ def test_one_refusal_does_not_decide_anything_about_the_others(tmp_path: Any, mo
         if any("refused" in name for name in names):
             raise PermissionDeniedError("can_write_data required to amend run")
 
-    monkeypatch.setattr(reconcile_cron, "enforce_bus_authz", _refuse_one)
+    monkeypatch.setattr(relay_cron, "enforce_bus_authz", _refuse_one)
     uri = f"file://{tmp_path}/_lineage_outbox"
     _staged(uri, author="e2e", run="bronze$refused", token="refused-probe")
     _staged(uri, author="alice", run="bronze$fine", token="fine-probe")

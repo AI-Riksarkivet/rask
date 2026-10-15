@@ -18,7 +18,7 @@ not wait for it to turn Ready. It may also name `SET_FILES`: space-separated `<v
 chart that declares upstream `dependencies:` has them vendored from its committed `Chart.lock` before the install.
 
 `scripts/fixtures.sh <name>... [-- <helm args>]` installs them in the order named. `make k3s-up` runs it with `FIXTURES`
-(default `external-secrets dapr nats cloudnative-pg dex minio openbao kuberay-operator ray-cluster observability`) before the rask release. A GPU node on which nothing advertises `nvidia.com/gpu` yet adds `nvidia-device-plugin`:
+(default `external-secrets dapr nats cloudnative-pg dex minio openbao kuberay-operator ray-cluster compute observability marquez`) before the rask release. A GPU node on which nothing advertises `nvidia.com/gpu` yet adds `nvidia-device-plugin`:
 
 ```bash
 kubectl get nodes -o jsonpath='{.items[*].status.allocatable}' | tr ' ' '\n' | grep nvidia   # empty: no plugin runs
@@ -50,6 +50,7 @@ says everything in it is throwaway.
 | `ray-cluster` | the engine owner's Ray cluster: one head named `<rask>-ray`, run as `<rask>-sa-ray`, reaching rask by the names a release called `rask` creates (`rask.release`); `HEAD.md` explains each setting |
 | `compute` | the Ray engine's companion service (local chart, release `compute` in rask's namespace): the `compute` image as Deployment, Service and ServiceAccount `rask-compute` / `rask-sa-compute`, its Dapr annotations and the `compute-prune-jobs-cron` Component. It reads by reference what rask owns: the Dapr app token and `lance-tracing` Configuration, Dex, OpenFGA (which admits it only when rask's `auth.externalFgaClients` names its account), the OTel Collector and the Ray auth token, so `WAIT=false`: on an empty cluster it starts once rask is installed. `values-live-pins.yaml`, written by `scripts/k3s-pins.sh`, names the tag it runs |
 | `nvidia-device-plugin` | a GPU node's device plugin, only where nothing advertises `nvidia.com/gpu` yet |
+| `marquez` | the platform's OpenLineage graph backend (local chart over Marquez 0.51.1, release `marquez` in rask's namespace): the Marquez API at `rask-marquez:5000`, built by rask onto a multi-arch JRE (`.docker/marquez.dockerfile`, pushed to the dev registry before the install, because upstream publishes linux/amd64 only), over its own Postgres (`rask-marquez-db`, trust authentication inside the namespace, a 1 Gi claim). `deploy/values-local.yaml` points rask's `services.lineage.forward.url` here, so the relay tick forwards every event lineage records to it (ADR 0158); `GET /api/v1/events/lineage` lists what it took |
 | `observability` | the platform's telemetry chain (namespace `observability`): GreptimeDB on a local volume at `greptimedb:4000`, the endpoint `deploy/values-local.yaml` names in rask's `observability.export` and `query`; Perses with rask's dashboards; vmalert evaluating `deploy/alerting/rules.yml`; Alertmanager. `docs/` explains its templates |
 
 The ray-cluster head's image is a dev registry's: `make k3s-pins` records the running one in

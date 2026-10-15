@@ -53,7 +53,7 @@ and every rask user, so Dapr's pubsub.jetstream can authenticate with a user JWT
 
 ## Prerequisite: the CloudNativePG operator, for the AGE-on-CNPG path
 
-The default graph store is the `rask-age` StatefulSet, which needs no operator. The AGE-on-CNPG path
+The default Postgres (OpenFGA's datastore and the Dapr state store) is the `rask-age` StatefulSet, which needs no operator. The AGE-on-CNPG path
 (`age.cnpgCluster.enabled`, docs/CNPG-AGE.md) renders a CloudNativePG `Cluster`, so for it the **CloudNativePG operator
 is a prerequisite** (ADR 0153): the chart installs no operator, and with `age.cnpgCluster.enabled` on it refuses to
 render for a cluster that does not serve `postgresql.cnpg.io/v1` (a cluster-less `helm template` names it:
@@ -66,8 +66,8 @@ release `cloudnative-pg` in `cnpg-system`): chart 0.28.3, operator 1.29.1, CRDs 
 
 ## Prerequisites in production: OpenFGA and its Postgres
 
-The chart can run OpenFGA (the `openfga` subchart) and the Postgres behind the lineage graph, OpenFGA and the Dapr state
-store (the `rask-age` StatefulSet). Development runs both. **Production names the platform's** ([[XC-132]], ADR 0153),
+The chart can run OpenFGA (the `openfga` subchart) and the Postgres behind OpenFGA and the Dapr state store (the
+`rask-age` StatefulSet). Development runs both. **Production names the platform's** ([[XC-132]], ADR 0153),
 and `deploy/values-prod.yaml` turns both off (`openfga.enabled: false`, `age.enabled: false`):
 
 - `auth.fgaApiUrl` is the platform's OpenFGA HTTP API. Every FGA client, the `openfga-model` hook and the
@@ -77,8 +77,8 @@ and `deploy/values-prod.yaml` turns both off (`openfga.enabled: false`, `age.ena
   mirror and subject ConfigMap serve only the in-chart OpenFGA. The subjects to admit are the ones
   `lance.openfgaSubjects` (chart/templates/_helpers.tpl) computes for the overlay. A render with `openfga.enabled=true`
   prints them in the `<release>-openfga-authn` ConfigMap.
-- `age.externalHost` is the platform's Postgres, which needs the Apache AGE extension (docs/CNPG-AGE.md) and the
-  `lineage`, `openfga` and `daprstate` databases owned by `age.user`. Its password is the secret store's
+- `age.externalHost` is the platform's Postgres, which needs the `openfga` and `daprstate` databases owned by
+  `age.user`; lineage keeps no database (ADR 0158). Its password is the secret store's
   `postgres-password`, which ESO delivers, and the Dapr state store reads its whole DSN from the store's
   `dapr-state-connection-string` (`postgres://<age.user>:<password>@<age.externalHost>:<age.port>/<age.stateDb>`),
   which the platform writes beside it. No chart value carries either.
@@ -105,6 +105,10 @@ Development runs stand-ins from `deploy/fixtures` (ADR 0153), and the chart rend
   the chart renders the seed scripts into `<release>-openbao-seed` (the dev credentials, every signing identity's
   Ed25519 pair, the bus trust root and users, ESO's policy), and the fixture's pod runs them beside the server. Without
   `devMode` the chart renders the sealed, file-backed server itself.
+- **Marquez** (`deploy/fixtures/marquez`, release `marquez`, Service `rask-marquez:5000`): the graph backend, with its
+  own Postgres. The lineage graph is bring-your-own (ADR 0158), and `deploy/values-local.yaml` points lineage's
+  forwarder (`services.lineage.forward.url`) at it, as a platform would point it at its own Marquez, DataHub or
+  OpenMetadata.
 
 ## Local deploy (k3s)
 
@@ -184,7 +188,7 @@ with `--address ray://…:10001`.
 - **frontend zones** — SvelteKit SSR apps on `:3000` each.
 - **Ingress** (Traefik) — `/api` → gateway:8888, `/` → the zone services.
 - **Optional, in-chart for development and the platform's in production** ([[XC-132]]): `openfga.enabled` (the
-  OpenFGA subchart) and `age.enabled` (the apache/age Postgres StatefulSet); see *Prerequisites in production*.
+  OpenFGA subchart) and `age.enabled` (the apache/age Postgres StatefulSet behind OpenFGA and the Dapr state store); see *Prerequisites in production*.
 - **Its own configuration of what it does not run**: the Dapr Components, Configurations and Resiliency, the NATS stream
   Job, the ExternalSecrets and SecretStore, the MinIO bucket and user hooks, and the dev OpenBao's seed scripts.
 - **The OTel Collector**, with `observability.enabled` (see below).
@@ -261,7 +265,7 @@ Sensitive config comes from an operator-created Secret (`existingSecret`, defaul
 ## CI
 
 - **`.github/workflows/ci.yml`** calls the Dagger module's functions (`lint`, `typecheck`, `openapi`, `test`,
-  `test-pg`, `charts`, `frontend`, `test-lineage`, `scan-*`, `zone-smoke`) plus the kind-backed live jobs
+  `test-pg`, `charts`, `frontend`, `scan-*`, `zone-smoke`) plus the kind-backed live jobs
   (`make e2e-ci`) and the per-zone Playwright suites; `dagger call <fn>` locally is the CI step.
 - **`.github/workflows/docs.yml`** builds this Zensical site (`zensical build --clean`) and Storybook, and deploys
   both to GitHub Pages.
@@ -269,8 +273,8 @@ Sensitive config comes from an operator-created Secret (`existingSecret`, defaul
 ## State stores
 
 - **The object store** (MinIO in development, the platform's S3 in production): every Lance table the catalog
-  governs, the outbox, the trash and the registries. Lance puts its commit CAS in the store, so the catalog needs no
-  relational database.
-- **Postgres**: the lineage graph (Apache AGE) and OpenFGA's datastore, plus the Dapr state store, served by the
-  `rask-age` StatefulSet in development and by the platform in production. ADR 0158 moves the lineage graph out of
-  rask (LH-468, #592), leaving OpenFGA's database as the estate's only Postgres.
+  governs (lineage's commit feed, edge list, outbox refusals and forwarder cursors among them, in the catalog's
+  provenance namespace, ADR 0158), the outbox, the trash and the registries. Lance puts its commit CAS in the store,
+  so neither the catalog nor lineage needs a relational database.
+- **Postgres**: OpenFGA's datastore and the Dapr state store, served by the `rask-age` StatefulSet in development and
+  by the platform in production. Lineage keeps no database (ADR 0158, LH-468 #592).

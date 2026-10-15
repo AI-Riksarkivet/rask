@@ -1,58 +1,18 @@
 // @rask/api/lineage — the typed browser client for the lineage plane, served through a zone's own
 // same-origin `/api/*` BFF proxy.
 //
-// The admin, data and lineage zones each carried a byte-identical (admin/data) or near-identical
-// (lineage) 111-line copy of this file. It is one client now, parameterised by the zone's `BffClient`
-// (which carries the base path) — the only thing that ever actually differed between the copies.
+// It covers what the lineage service serves to a zone: the event feed and the DLQ admin pair. One
+// client, parameterised by the zone's `BffClient` (which carries the base path).
 //
 // Two fetch postures, deliberately: `getJSON` swallows errors to `null` for reads where an empty state
 // and an outage read the same to the user, while `requestJSON` keeps the status for anything where
 // 401 ("sign in") ≠ 403 (rung denial) ≠ 0 (offline) must render differently.
 import type { ApiResult, BffClient } from '../client';
-import type {
-	ColumnGraph,
-	ColumnNeighbors,
-	Creator,
-	DatasetGovernance,
-	DatasetSchema,
-	Datasets,
-	DemoDatasets,
-	DlqBacklog,
-	DlqReplayResponse,
-	EstateGraph,
-	Events,
-	Jobs,
-	LineageGraph,
-	Namespaces,
-	Neighbors,
-	Producers,
-	Readers,
-	RunInputs,
-	Runs,
-	SearchResults,
-} from './types';
+import type { DlqBacklog, DlqReplayResponse, Events } from './types';
 
 const enc = encodeURIComponent;
 
 export interface LineageClient {
-	/** The ROOTED read: the neighbourhood around one dataset, bounded server-side by `depth` hops in
-	 *  each direction. Omitting `depth` returns the whole connected component, which is a real answer
-	 *  and stays the default. Nodes carry the same version/failed rollup `fetchEstateGraph` attaches,
-	 *  so a card renders identically whichever read fed it. */
-	fetchGraph: (name: string, depth?: number) => Promise<LineageGraph | null>;
-	/** The bulk estate read: every visible node + DERIVED_FROM edge (with per-node version/failed
-	 *  rollups) in ONE request — replaces the per-dataset /producers + /graph fan-out that cost
-	 *  hundreds of requests per refresh at estate scale. */
-	fetchEstateGraph: (limit: number) => Promise<EstateGraph | null>;
-	/** The runs that wrote this dataset. STATUS-AWARE for the same reason `fetchReaders` below is:
-	 *  `getJSON` maps 401/403/offline all to `null`, and a page that renders `null` as an empty list
-	 *  states "no producing runs recorded for this dataset yet" to a caller who is simply not allowed
-	 *  to see them. Measured on the deployed estate: a non-admin was told 0 runs where there were 5. */
-	fetchProducers: (name: string) => Promise<ApiResult<Producers>>;
-	/** The read-audit query (#41): who READ this dataset. Owner-gated (stricter than /producers), so
-	 *  it's status-aware — a 403 ("owner access required") must read differently from offline or an
-	 *  empty log. */
-	fetchReaders: (name: string) => Promise<ApiResult<Readers>>;
 	fetchEvents: (opts?: {
 		after?: number;
 		limit?: number;
@@ -65,59 +25,9 @@ export interface LineageClient {
 	 *  forwards the user's bearer, never the service token). Writer-gated at the lineage service
 	 *  (can_write_data on outputs). */
 	replayDlq: (runId: string) => Promise<ApiResult<DlqReplayResponse>>;
-	fetchDemo: () => Promise<DemoDatasets | null>;
-	fetchRuns: () => Promise<Runs | null>;
-	/** The inputs a run consumed, each with the version it PINNED (#115 D1 reproducibility) — "which
-	 *  exact feature versions produced this output". Fetched per-run on demand (kept off the hot /runs
-	 *  board to avoid N+1), so it's a plain read: null on any error, an empty list when the run pinned
-	 *  nothing. */
-	fetchRunInputs: (runId: string) => Promise<RunInputs | null>;
-	fetchDatasets: (opts?: {
-		namespace?: string;
-		tag?: string;
-		limit?: number;
-	}) => Promise<Datasets | null>;
-	/** Direct dataset-level neighbors (the backend's own /upstream + /downstream reads) — what a dataset
-	 *  was derived from / what derives from it, without assembling the whole subgraph client-side. */
-	/** what this dataset was derived FROM. Status-aware — see `fetchProducers`: a denial rendered as "none" is a false
-	 *  statement about the graph, not a missing edge. */
-	fetchUpstream: (name: string) => Promise<ApiResult<Neighbors>>;
-	/** what derives FROM this dataset. Status-aware — see `fetchProducers`: a denial rendered as "none" is a false
-	 *  statement about the graph, not a missing edge. */
-	fetchDownstream: (name: string) => Promise<ApiResult<Neighbors>>;
-	fetchSearch: (q: string, limit?: number) => Promise<SearchResults | null>;
-	fetchJobs: () => Promise<Jobs | null>;
-	fetchNamespaces: () => Promise<Namespaces | null>;
-	/** The field-to-field subgraph around a dataset. `depth` counts DATASET hops outward and
-	 *  defaults to the single-hop answer, so an omitted depth is the behaviour that predates it. */
-	fetchColumnGraph: (name: string, depth?: number) => Promise<ColumnGraph | null>;
-	/** Who ORIGINATED a dataset — the verified catalog principal recorded at create time (provenance,
-	 *  not "who wrote the latest version"). Reader-gated like the rest of the dataset reads. */
-	fetchCreator: (name: string) => Promise<Creator | null>;
-	/** The persisted column schema for a dataset AT a given Lance version — time-travel (#24). Omit
-	 *  version for the latest. Reader-gated. The per-version schema rides the WROTE edge, so this
-	 *  answers "what did this dataset's columns look like at version N". */
-	fetchSchema: (name: string, version?: number) => Promise<DatasetSchema | null>;
-	/** Per-FIELD provenance (upstream) / impact (downstream) — the field-level analogue of the dataset
-	 *  graph's neighbors, gated by require_metadata_access (a GET read → the read-only proxy). */
-	fetchColumnUpstream: (name: string, field: string) => Promise<ColumnNeighbors | null>;
-	fetchColumnDownstream: (name: string, field: string) => Promise<ColumnNeighbors | null>;
-	fetchGovernance: (name: string) => Promise<DatasetGovernance | null>;
-	addDatasetTag: (name: string, tag: string) => Promise<ApiResult<DatasetGovernance>>;
-	removeDatasetTag: (name: string, tag: string) => Promise<ApiResult<DatasetGovernance>>;
-	setDatasetDescription: (
-		name: string,
-		description: string,
-	) => Promise<ApiResult<DatasetGovernance>>;
-	/** Status-aware list reads for the DataTable pages — a governed stack without a session must render
-	 *  "sign in" (401), not the same empty state as an open stack with no data (the TableRegistry
-	 *  pattern). */
-	listDatasets: () => Promise<ApiResult<Datasets>>;
-	listJobs: () => Promise<ApiResult<Jobs>>;
-	listRuns: () => Promise<ApiResult<Runs>>;
 }
 
-/** Bind the lineage client to a zone's `BffClient` (see `src/lib/api.ts` in each zone).
+/** Bind the lineage client to a zone's `BffClient` (see `src/lib/http.ts` in the zone).
  *
  *  Only the two JSON verbs are taken, so the SAME client can also be bound SERVER-side — a zone's
  *  `.remote.ts` supplies a `getJSON`/`requestJSON` pair that reaches the lineage service directly with
@@ -127,16 +37,7 @@ export function createLineageClient({
 	getJSON,
 	requestJSON,
 }: Pick<BffClient, 'getJSON' | 'requestJSON'>): LineageClient {
-	// Governance metadata (#49) — the writes need the status (401 sign-in vs 403 rung-denial vs
-	// offline), so they use the status-aware helper instead of getJSON's null-on-error.
-	const write = <T>(path: string, init: RequestInit) => requestJSON<T>('/api', path, init);
-
 	return {
-		fetchGraph: (name, depth) =>
-			getJSON<LineageGraph>(`datasets/${enc(name)}/graph${depth ? `?depth=${depth}` : ''}`),
-		fetchEstateGraph: (limit) => getJSON<EstateGraph>(`graph?limit=${limit}`),
-		fetchProducers: (name) => requestJSON<Producers>('/api', `datasets/${enc(name)}/producers`),
-		fetchReaders: (name) => requestJSON<Readers>('/api', `datasets/${enc(name)}/readers`),
 		fetchEvents: (opts = {}) => {
 			const p = new URLSearchParams();
 			if (opts.after) p.set('after', String(opts.after));
@@ -148,48 +49,5 @@ export function createLineageClient({
 		fetchDlq: (limit = 100) => requestJSON<DlqBacklog>('/api', `admin/dlq?limit=${limit}`),
 		replayDlq: (runId) =>
 			requestJSON<DlqReplayResponse>('/api', `admin/dlq/${enc(runId)}/replay`, { method: 'POST' }),
-		fetchDemo: () => getJSON<DemoDatasets>('demo/datasets'),
-		fetchRuns: () => getJSON<Runs>('runs'),
-		fetchRunInputs: (runId) => getJSON<RunInputs>(`runs/${enc(runId)}/inputs`),
-		fetchDatasets: (opts = {}) => {
-			const p = new URLSearchParams();
-			if (opts.namespace) p.set('namespace', opts.namespace);
-			if (opts.tag) p.set('tag', opts.tag);
-			if (opts.limit) p.set('limit', String(opts.limit));
-			const qs = p.toString();
-			return getJSON<Datasets>(`datasets${qs ? `?${qs}` : ''}`);
-		},
-		fetchUpstream: (name) => requestJSON<Neighbors>('/api', `datasets/${enc(name)}/upstream`),
-		fetchDownstream: (name) => requestJSON<Neighbors>('/api', `datasets/${enc(name)}/downstream`),
-		fetchSearch: (q, limit = 10) => getJSON<SearchResults>(`search?q=${enc(q)}&limit=${limit}`),
-		fetchJobs: () => getJSON<Jobs>('jobs'),
-		fetchNamespaces: () => getJSON<Namespaces>('namespaces'),
-		fetchColumnGraph: (name, depth) =>
-			getJSON<ColumnGraph>(
-				`datasets/${enc(name)}/columns${depth && depth > 1 ? `?depth=${depth}` : ''}`,
-			),
-		fetchCreator: (name) => getJSON<Creator>(`datasets/${enc(name)}/creator`),
-		fetchSchema: (name, version) =>
-			getJSON<DatasetSchema>(
-				`datasets/${enc(name)}/schema${version === undefined ? '' : `?version=${version}`}`,
-			),
-		fetchColumnUpstream: (name, field) =>
-			getJSON<ColumnNeighbors>(`datasets/${enc(name)}/columns/${enc(field)}/upstream`),
-		fetchColumnDownstream: (name, field) =>
-			getJSON<ColumnNeighbors>(`datasets/${enc(name)}/columns/${enc(field)}/downstream`),
-		fetchGovernance: (name) => getJSON<DatasetGovernance>(`datasets/${enc(name)}/governance`),
-		addDatasetTag: (name, tag) =>
-			write<DatasetGovernance>(`datasets/${enc(name)}/tags/${enc(tag)}`, { method: 'PUT' }),
-		removeDatasetTag: (name, tag) =>
-			write<DatasetGovernance>(`datasets/${enc(name)}/tags/${enc(tag)}`, { method: 'DELETE' }),
-		setDatasetDescription: (name, description) =>
-			write<DatasetGovernance>(`datasets/${enc(name)}/description`, {
-				method: 'PUT',
-				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({ description }),
-			}),
-		listDatasets: () => requestJSON<Datasets>('/api', 'datasets?limit=500'),
-		listJobs: () => requestJSON<Jobs>('/api', 'jobs'),
-		listRuns: () => requestJSON<Runs>('/api', 'runs'),
 	};
 }

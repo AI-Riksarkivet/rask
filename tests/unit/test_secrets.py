@@ -1,20 +1,14 @@
 """Secret consumption from the Dapr store — the audit's 'wired but never read' / 'plaintext still
-ships' fix. Verifies the store is the SOLE source (no plaintext fallback when on), the fail-closed
-behaviour, and that the AGE DB password is spliced into the connection string from the store."""
+ships' fix. Verifies the store is the SOLE source (no plaintext fallback when on) and the fail-closed
+behaviour, on the settings lineage boots with."""
 
 from __future__ import annotations
 
 import httpx
 import pytest
 
-from lineage.core.config import LineageSettings, _with_db_password, apply_lineage_secrets
-from service_kit.governed.secrets import fetch_dapr_secret
-
-
-def test_with_db_password_url_encodes_special_chars() -> None:
-    url = "postgresql://lance@age:5432/lineage"
-    # A password with URL-significant chars must be percent-encoded so the DSN stays parseable.
-    assert _with_db_password(url, "p@ss/w:rd") == "postgresql://lance:p%40ss%2Fw%3Ard@age:5432/lineage"
+from lineage.core.config import LineageSettings
+from service_kit.governed.secrets import apply_dapr_secrets, fetch_dapr_secret
 
 
 def test_fetch_dapr_secret_fails_fast_on_4xx_but_retries_transient(
@@ -47,7 +41,7 @@ def test_fetch_dapr_secret_fails_fast_on_4xx_but_retries_transient(
     assert flaky["n"] == 3  # two transient failures retried, then the success returned
 
 
-def test_apply_lineage_secrets_noop_when_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_lineage_reads_no_store_when_secrets_from_dapr_is_off(monkeypatch: pytest.MonkeyPatch) -> None:
     called = False
 
     def _fail(*_args: object, **_kwargs: object) -> dict[str, str]:
@@ -59,34 +53,23 @@ def test_apply_lineage_secrets_noop_when_disabled(monkeypatch: pytest.MonkeyPatc
     # model_validate (not LineageSettings(...)) so field-name keys validate cleanly past ty: the fields
     # carry LINEAGE_* aliases and populate_by_name accepts the names only at runtime.
     settings = LineageSettings.model_validate({"secrets_from_dapr": False})
-    apply_lineage_secrets(settings)
+    apply_dapr_secrets(settings)
     assert not called  # off → never touches the store
 
 
-def test_apply_lineage_secrets_consumes_store_as_sole_source(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_lineage_takes_the_outbox_secret_from_the_store_alone(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "service_kit.governed.secrets.fetch_dapr_secret",
-        lambda *_a, **_k: {"minio-secret-key": "from-store", "postgres-password": "db-from-store"},
+        lambda *_a, **_k: {"minio-secret-key": "from-store"},
     )
-    settings = LineageSettings.model_validate({"secrets_from_dapr": True, "database_url": "postgresql://lance@age:5432/lineage"})
-    apply_lineage_secrets(settings)
+    settings = LineageSettings.model_validate({"secrets_from_dapr": True})
+    apply_dapr_secrets(settings)
     assert settings.s3_secret_access_key.get_secret_value() == "from-store"  # SecretStr now
-    assert settings.database_url == "postgresql://lance:db-from-store@age:5432/lineage"
 
 
-def test_apply_lineage_secrets_fails_closed_without_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_lineage_refuses_to_boot_without_the_outbox_secret(monkeypatch: pytest.MonkeyPatch) -> None:
     # Store empty AND no env fallback → must raise, never boot with an empty S3 key.
     monkeypatch.setattr("service_kit.governed.secrets.fetch_dapr_secret", lambda *_a, **_k: {})
     settings = LineageSettings.model_validate({"secrets_from_dapr": True, "s3_secret_access_key": ""})
     with pytest.raises(RuntimeError, match="failing closed"):
-        apply_lineage_secrets(settings)
-
-
-def test_apply_lineage_secrets_keeps_db_url_when_store_lacks_password(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # S3 secret present (so it doesn't fail closed) but no DB password in the bundle → URL unchanged.
-    monkeypatch.setattr("service_kit.governed.secrets.fetch_dapr_secret", lambda *_a, **_k: {"minio-secret-key": "x"})
-    settings = LineageSettings.model_validate({"secrets_from_dapr": True, "database_url": "postgresql://lance:envpw@age:5432/lineage"})
-    apply_lineage_secrets(settings)
-    assert settings.database_url == "postgresql://lance:envpw@age:5432/lineage"
+        apply_dapr_secrets(settings)

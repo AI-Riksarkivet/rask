@@ -28,9 +28,6 @@ test.beforeEach(async ({ context, page }, testInfo) => {
 	token = `${TOKEN.admin}:${testInfo.testId}`;
 	await signIn(context, { token });
 	await mockMe(page, ME_ALICE);
-	await page.route('**/api/datasets/**/producers', (route) =>
-		route.fulfill({ status: 200, contentType: 'application/json', body: '{"producers":[]}' }),
-	);
 	await page.request.post(`${MOCK_CATALOG}/__mock/seed`, {
 		data: {
 			bearer: token,

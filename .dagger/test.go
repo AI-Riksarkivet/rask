@@ -9,7 +9,7 @@ import (
 
 // natsImage matches the server the NATS fixture deploys (deploy/fixtures/nats pins the nats chart at 2.14.2,
 // whose appVersion is the same), so the broker CI tests against cannot drift from the broker the estate
-// runs. The AGE binding in e2e.go pins its image for the same reason.
+// runs.
 const natsImage = "nats:2.14.2-alpine"
 
 // TestPackage runs ONE workspace member's suite against a SCOPED sync — the fast lane.

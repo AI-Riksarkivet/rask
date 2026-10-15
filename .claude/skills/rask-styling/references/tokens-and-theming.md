@@ -49,7 +49,7 @@ Fonts: `--font-sans: 'Inter'`, `--font-mono: 'JetBrains Mono'`.
 
 These names predate the shadcn migration and were referenced by ~800 sites across 45 components **while undefined**. An undefined custom property makes the whole declaration invalid: `background: var(--panel)` fell back to transparent, and `border-color: var(--line)` fell back to `currentColor` — every hairline painted in full text colour. The bridge repairs all of them in both themes at once, because the targets are themselves re-declared under `.dark`.
 
-Migration is opportunistic: when you touch a component still on a legacy name, swap it for the token. `StatusBoard` — an exported component — still uses `var(--fail)/var(--ok)/var(--amber)/var(--mut)` (`status-board.svelte:26-31`). Delete the block when `grep -r "var(--ink" frontend/` is empty.
+Migration is opportunistic: when you touch a component still on a legacy name, swap it for the token. Delete the block when `grep -r "var(--ink" frontend/` is empty.
 
 ## Per-zone `@source`
 

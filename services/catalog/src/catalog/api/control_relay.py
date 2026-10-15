@@ -25,8 +25,8 @@ A catalog that does not sign has no key to verify against and adds nothing to wh
 which is no more than any publisher on the topic could put there itself.
 
 **WHY HERE, IN THE CATALOG.** The lineage relay lives in the lineage service because its drain is an
-INGEST — it writes each recovered event into the AGE graph and the durable feed, work only that service
-can do. A control event has no graph to re-ingest into; the only thing owed to it is delivery onto the
+INGEST — it records each recovered event in the commit feed and the edge list, work only that service
+can do. A control event has no feed to re-ingest into; the only thing owed to it is delivery onto the
 topic it never reached. That makes the producer the right host: the catalog already owns the prefix
 (``LANCE_CONTROL_OUTBOX_URI``), the component name (``LANCE_CONTROL_PUBSUB``), the S3 credentials that
 address the prefix, and a Dapr sidecar. Any other service would have to be taught all four, and a

@@ -168,3 +168,10 @@ observability:
 nats:
   url: nats://rask-nats:4222
   monitorUrl: http://rask-nats-headless:8222
+
+services:
+  lineage:
+    forward:
+      # The development graph backend, the marquez fixture (deploy/fixtures/marquez): lineage forwards every event it
+      # records there, as it would to a platform's own (ADR 0158).
+      url: http://rask-marquez:5000

@@ -13,8 +13,8 @@ import { MOCK_CATALOG } from '../ports';
 // the upstream path is now the operation's own name (`add_columns`, `drop_columns`, `tags/create`)
 // rather than this zone's `[op]`/`[action]` allowlist segment.
 //
-// Two things stay at the browser boundary and stay on `page.route`: the Arrow-IPC row insert (a
-// keep-bytes route by verdict) and the lineage producers read behind the quality badge.
+// One thing stays at the browser boundary and stays on `page.route`: the Arrow-IPC row insert (a
+// keep-bytes route by verdict).
 
 const json = (route: Route, body: unknown, status = 200) =>
 	route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
@@ -125,9 +125,6 @@ const RENAMED_ROUTES: Record<string, unknown> = {
 };
 
 let token: string;
-// scope #6 — the latest producing run(s) for the quality badge; the lineage /api proxy is stubbed
-// with this, and it is still a BROWSER-side read.
-let producersFixture: Array<Record<string, unknown>>;
 
 const seed = async (page: Page, routes: Record<string, unknown>): Promise<void> => {
 	await page.request.post(`${MOCK_CATALOG}/__mock/seed`, { data: { bearer: token, routes } });
@@ -150,13 +147,8 @@ const bodyOf = async (page: Page, path: string): Promise<unknown> =>
 
 test.beforeEach(async ({ context, page }, testInfo) => {
 	token = `${TOKEN.admin}:${testInfo.testId}`;
-	producersFixture = []; // default: no quality-bearing runs → honest "no quality gate"
 	await signIn(context, { token });
 	await mockMe(page);
-	// The #6 quality badge reads producing runs through the lineage BFF; stub it to stay hermetic.
-	await page.route('**/api/datasets/**/producers', (route) =>
-		json(route, { producers: producersFixture }),
-	);
 	await seed(page, {
 		...DETAIL_ROUTES,
 		...WRITE_ROUTES,
@@ -474,36 +466,6 @@ test('surfaces the Lance file format badge (#78)', async ({ page }) => {
 	await page.goto('/lakehouse/catalog/tables/db1%24t');
 	const stats = page.locator('section', { hasText: 'Stats' }).first();
 	await expect(stats).toContainText('Lance · storage v2.2');
-});
-
-test('surfaces the validator quality gate when a run passed it (#82)', async ({ page }) => {
-	producersFixture = [
-		{ run_id: 'r1', quality_passed: true, quality_assertions: [{ assertion: 'row_count' }] },
-	];
-	await page.goto('/lakehouse/catalog/tables/db1%24t');
-	const stats = page.locator('section', { hasText: 'Stats' }).first();
-	await expect(stats).toContainText('quality passed · 1 check');
-});
-
-test('surfaces a blocked quality gate (#82)', async ({ page }) => {
-	producersFixture = [
-		{
-			run_id: 'r1',
-			quality_passed: false,
-			quality_assertions: [{ assertion: 'not_null' }, { assertion: 'unique' }],
-		},
-	];
-	await page.goto('/lakehouse/catalog/tables/db1%24t');
-	const stats = page.locator('section', { hasText: 'Stats' }).first();
-	await expect(stats).toContainText('quality blocked · 2 checks');
-});
-
-test("states 'no quality gate' honestly when no run recorded assertions (#82)", async ({
-	page,
-}) => {
-	await page.goto('/lakehouse/catalog/tables/db1%24t'); // producersFixture defaults to []
-	const stats = page.locator('section', { hasText: 'Stats' }).first();
-	await expect(stats).toContainText('no quality gate');
 });
 
 // --- #85 danger zone: drop / deregister (AlertDialog confirm) + rename (navigates) ---

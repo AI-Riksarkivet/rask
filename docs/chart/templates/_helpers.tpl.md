@@ -235,7 +235,7 @@ VALUES THEY REQUIRE (the values.yaml merge must land these or the render breaks)
   medallion.buckets · nats.url ·
   observability.{enabled,environment} · openbao.{enabled,port,externalAddr} · pubsub.name ·
   resources.{default,<component>} · minio.{bucket,port,externalEndpoint} · security.readOnlyRootFilesystem ·
-  services.{catalog,lineage}.{port,daprAppId,reconcile.bindingName}
+  services.{catalog,lineage}.{port,daprAppId} · services.lineage.relay.bindingName
 `minio.bucket` (singular) is the one that is easy to lose: rask's values ship `minio.buckets` (a
 LIST) and lance's templates read `minio.bucket` (a STRING) — both must exist.
 ---------------------------------------------------------------------------------------------------
@@ -430,14 +430,14 @@ the external Vault WITHOUT falling back to plaintext secrets in pod env (the clo
 
 ## `{{- define "lance.lineageSidecarOnlyRoutes" -}}`
 
-Sidecar-only lineage routes: Dapr-delivered (pub/sub ingest + the cron reconcile binding), auth'd by
+Sidecar-only lineage routes: Dapr-delivered (pub/sub ingest + the relay cron binding), auth'd by
 the app-api-token the sidecar stamps — they must NEVER be reachable through the public edge, which would
 otherwise proxy them via the gateway's own sidecar (stamping that same trusted token). ONE source for the
 gateway's 403 blocks — add any new Dapr-delivered lineage route here. Since the nginx gateway retired
 (docs/adr/0117-nginx-is-retired-and-the-fastapi-gateway-is-the-in-cluster.md) this renders a COMMA-separated list into the fleet ConfigMap's
 RASK_LINEAGE_SIDECAR_ONLY_ROUTES, consumed by the FastAPI gateway's `lineage_sidecar_guard` middleware
 (services/gateway). `lineage-events` matches the app's subscription route (lineage/api/dapr.py). The
-reconcile binding is blocked even when reconcile is disabled (the route isn't mounted then — belt and
+relay binding is blocked even when the relay is disabled (the route isn't mounted then — belt and
 suspenders). On the kgateway/Envoy migration these become "no HTTPRoute declared" (allow-list by
 construction) — the service-side token check is the load-bearing guard either way.
 
@@ -1136,6 +1136,12 @@ parses.
 ## `{{- range (include "lance.natsUsers" $cfgRoot | splitList " " | compact) }}`
 
 Every bus credential (values.yaml `nats.auth`): a Component's secretKeyRef is resolved without these scopes.
+
+## `{{- with $cfgRoot.Values.services.lineage.forward.authSecret.name }}`
+
+The graph backend's API key (values.yaml `services.lineage.forward.authSecret`), which only lineage's forwarder reads:
+every other app's sidecar is denied it. Rendered only when a key is named, so an estate without one keeps every
+Configuration's spec, and therefore its name, unchanged.
 
 ## `{{- define "lance.daprAppConfigName" -}}`
 

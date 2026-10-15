@@ -22,7 +22,7 @@ from typing import Any, cast
 import httpx
 import respx
 
-from lineage.api import reconcile_cron
+from lineage.api import relay_cron
 from lineage.core.config import LineageSettings, Signing
 from service_kit.lakehouse import outbox
 
@@ -52,7 +52,7 @@ class _Repo:
     async def record_refusal(self, *, outbox_key: str, run_id: str | None, author: str | None, reason: str, event_json: str) -> None:
         self.refusals.append(reason)
 
-    async def ingest_event(self, event: Any) -> None:  # noqa: ANN401 - the drain's own shape
+    async def record(self, event: Any) -> None:  # noqa: ANN401 - the drain's own shape
         self.ingested.append(event.run.run_id)
 
 
@@ -66,7 +66,7 @@ def test_the_relay_drains_a_staged_event_whose_signature_covers_exactly_the_stag
     repo = _Repo()
     request = cast("Any", SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace())))
 
-    outcome = asyncio.run(reconcile_cron._drain_outbox(request, cast("Any", repo), settings, {}, None))
+    outcome = asyncio.run(relay_cron._drain_outbox(request, cast("Any", repo), settings, {}, None))
 
     assert (outcome.drained, outcome.refused) == (1, 0), f"the staged event never drained: {outcome}, refused for {repo.refusals}"
     assert repo.ingested == [RUN_ID]

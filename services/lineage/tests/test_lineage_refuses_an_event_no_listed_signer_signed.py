@@ -76,16 +76,16 @@ def refusals(monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[[], dict[str,
 
 
 class _Feed:
-    """The repository surface the bus door reaches on a first delivery: it records, and has nothing to replay."""
+    """The store surface the bus door reaches on a first delivery: it records, and has nothing to replay."""
 
     def __init__(self) -> None:
         self.recorded: list[str] = []
 
-    async def ingest_event(self, event: Any) -> None:
+    async def record(self, event: Any) -> None:
         self.recorded.append(event.run_id)
 
-    async def run_output_names(self, _run_id: str) -> list[str]:
-        return []
+    async def run_author(self, _run_id: str) -> str | None:
+        return None
 
     async def recorded_event(self, _run_id: str, _event_type: str | None) -> dict[str, Any] | None:
         return None
@@ -124,7 +124,7 @@ def door(monkeypatch: pytest.MonkeyPatch, refusals: Callable[[], dict[str, int]]
     install_problem_handlers(app, logging.getLogger(__name__))
     register_dapr(app)
     feed = _Feed()
-    app.state.repository = feed
+    app.state.provenance = feed
     return TestClient(app), feed
 
 

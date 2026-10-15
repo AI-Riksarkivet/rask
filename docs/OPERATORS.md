@@ -26,7 +26,8 @@ estate runs a Ray engine from the `kuberay-operator`, `ray-cluster` and `compute
 ## 2 · What we never build: a custom lakehouse operator
 
 An operator earns its complexity when state of record lives in CRDs and needs reconciling. Ours does not: catalog and
-lakehouse state lives in **Lance manifests on S3**, authz and lineage in **Postgres** (OpenFGA, AGE), and every
+lakehouse state, lineage's commit feed and edge list included, lives in **Lance manifests on S3**, authz in
+**Postgres** (OpenFGA, on the `rask-age` server), and every
 control loop we need is either an existing service (the maintenance sweep), an existing Job (stream, bucket and seed
 provisioning), or one of the operators above. A lakehouse operator would be a second reconciler over state that
 already has an owner.

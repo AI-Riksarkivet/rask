@@ -6,10 +6,9 @@
 	import { formatAbsolute, formatRelative } from '../utils/timestamp.js';
 	import { orderedInbox, type InboxNotificationLike } from './inbox.js';
 
-	// The INBOX rows — what was addressed to this subject, as opposed to the activity projection the
-	// sibling list renders. Split out for the same reason `notification-list` was: the bell's popover
-	// content is portalled and a portal renders nothing on the server, so markup that lives only
-	// inside the centre cannot be asserted on its own.
+	// The INBOX rows — what was addressed to this subject. Split out of the centre because the bell's
+	// popover content is portalled and a portal renders nothing on the server, so markup that lives
+	// only inside the centre cannot be asserted on its own.
 	//
 	// Pure presentation. It takes rows, never fetches, and reports dismissal UP so the owner of the
 	// dismissed set stays the owner.
@@ -61,9 +60,7 @@
 	<div class="text-muted-foreground px-3 py-6 text-center text-sm">
 		<Inbox class="mx-auto mb-2 size-5 opacity-60" aria-hidden="true" />
 		<p>Nothing addressed to you yet.</p>
-		<p class="mt-1 text-xs">
-			Runs you start appear here when they finish — the Activity tab shows everything you can see.
-		</p>
+		<p class="mt-1 text-xs">Runs you start appear here when they finish.</p>
 	</div>
 {:else}
 	<ul class={cn('divide-border/60 divide-y', className)} data-slot="inbox-list">

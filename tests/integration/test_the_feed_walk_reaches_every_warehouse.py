@@ -10,7 +10,7 @@ holds nothing on is filtered out before the walk sees it, while the tick answers
 Driven end to end: the reconciler's own feed client over HTTP into lineage's real router, its real
 authentication-then-FGA gate, and the real ingress behind the walk. What stands in, and why each may:
 
-* the AGE-backed repository, as a feed of two rows: the feed table is Postgres, which no offline lane runs;
+* the provenance store, as a feed of two rows: what the feed holds is not this claim, who may walk all of it is;
 * the verified caller, as lineage's `authenticate` overridden to the principal the reconciler's projected
   `rask-lineage` token maps to (the token's own verification is [[LH-220]]'s, not this claim);
 * OpenFGA, as a client answering from the one relation the chart's grant derives for that subject. The
@@ -92,7 +92,7 @@ DEFAULT_RUN = {
 
 
 class _Feed:
-    """Lineage's durable feed as the repository serves it: oldest first after `since`, else newest first."""
+    """Lineage's durable feed as the store serves it: oldest first after `since`, else newest first."""
 
     def __init__(self, rows: list[EventRecord]) -> None:
         self._rows = sorted(rows, key=lambda row: row.seq)
@@ -104,8 +104,8 @@ class _Feed:
             rows = [row for row in reversed(self._rows) if after is None or row.seq < after][:limit]
         return [row.model_copy(update={"event": {}}) for row in rows] if summary else rows
 
-    async def oldest_event_seq(self) -> int | None:
-        return min((row.seq for row in self._rows), default=None)
+    async def feed_bounds(self) -> tuple[int, int] | None:
+        return (self._rows[0].seq, self._rows[-1].seq) if self._rows else None
 
 
 class _OpenFga:
@@ -163,7 +163,7 @@ def lineage(monkeypatch: pytest.MonkeyPatch) -> Iterator[FastAPI]:
     app.include_router(api_router)
     app.dependency_overrides[authenticate] = lambda: RECONCILER
     app.state.fga = cast(OpenFgaClient, _OpenFga())
-    app.state.repository = _Feed(
+    app.state.provenance = _Feed(
         [
             EventRecord(seq=2, outputs=["acme-gold$catalog"], inputs=["acme-silver$pages"], event=TENANT_RUN),
             EventRecord(seq=1, outputs=["gold$catalog"], inputs=[], event=DEFAULT_RUN),

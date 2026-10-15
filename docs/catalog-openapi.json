@@ -23013,7 +23013,7 @@
     },
     "/v1/table/{id}/add_columns": {
       "post": {
-        "description": "Add SQL-expression-computed columns to the table \u2014 wraps ``alter_table_add_columns``; emits an\nADD_COLUMNS event carrying the NEW per-version schema so the graph's column inventory follows the add.",
+        "description": "Add SQL-expression-computed columns to the table \u2014 wraps ``alter_table_add_columns``; emits an\nADD_COLUMNS event carrying the NEW per-version schema, so the feed records the add at its version.",
         "operationId": "add_columns_v1_table__id__add_columns_post",
         "parameters": [
           {
@@ -23137,7 +23137,7 @@
     },
     "/v1/table/{id}/alter_columns": {
       "post": {
-        "description": "Rename, re-type, or change nullability of existing columns \u2014 wraps ``alter_table_alter_columns``;\nemits an ALTER_COLUMNS event with the post-evolution schema (renames/re-types show in the graph).",
+        "description": "Rename, re-type, or change nullability of existing columns \u2014 wraps ``alter_table_alter_columns``;\nemits an ALTER_COLUMNS event with the post-evolution schema, so renames and re-types reach the feed.",
         "operationId": "alter_columns_v1_table__id__alter_columns_post",
         "parameters": [
           {
@@ -23351,7 +23351,7 @@
     },
     "/v1/table/{id}/backfill_column": {
       "post": {
-        "description": "Backfill values into columns via the native driver \u2014 wraps ``alter_table_backfill_columns``.\n\nNo lineage is emitted here: the response carries a ``job_id`` (the backfill runs asynchronously), so the\nLance version it eventually produces isn't known at request time \u2014 a synchronous emit would assert a\nversion that hasn't been written. The version bump is recovered by #23 reconcile when the job lands.",
+        "description": "Backfill values into columns via the native driver \u2014 wraps ``alter_table_backfill_columns``.\n\nNo lineage is emitted here: the response carries a ``job_id`` (the backfill runs asynchronously), so the\nLance version it eventually produces isn't known at request time \u2014 a synchronous emit would assert a\nversion that hasn't been written. The version the job lands is not announced from here.",
         "operationId": "backfill_column_v1_table__id__backfill_column_post",
         "parameters": [
           {
@@ -25047,7 +25047,7 @@
     },
     "/v1/table/{id}/drop_columns": {
       "post": {
-        "description": "Drop the named columns from the table \u2014 wraps ``alter_table_drop_columns``; emits a DROP_COLUMNS\nevent with the reduced schema so the dropped columns leave the graph's per-version inventory.",
+        "description": "Drop the named columns from the table \u2014 wraps ``alter_table_drop_columns``; emits a DROP_COLUMNS\nevent with the reduced schema, so the feed records the version without the dropped columns.",
         "operationId": "drop_columns_v1_table__id__drop_columns_post",
         "parameters": [
           {
@@ -26456,7 +26456,7 @@
     },
     "/v1/table/{id}/rename": {
       "post": {
-        "description": "Rename the table at ``id`` by moving its POINTER, then migrate its FGA ownership and emit lineage.\n\nLance has no format-level rename (table rename is a namespace-layer remap, not a data-plane commit) and\nthe ``dir`` backend's ``rename_table`` is a hard 501, which is also off-spec \u2014 the Namespace REST spec\nmakes rename a first-class Metadata op. It is served here as what the spec describes: the destination id\nis registered at the SOURCE's existing location and the source id is deregistered. **No data byte is\nread, written or deleted**, so the cost is O(1) rather than the dataset's size \u2014 see\n``dataplane.rename_table`` for the lance-ns V2 naming rule that makes this correct and for the one\nshape (a V1 root-namespace table) it refuses.\n\nThe caller must hold ``can_drop`` on the source (owner tier, gated by the router ``authorize``) AND\n``can_create_table`` on the DESTINATION parent \u2014 else a source owner could plant their table into a\nnamespace/tenant they lack create rights on. FGA tuples migrate from the old id to the new; a\nversionless REGISTER marker records the attachment at the new id so the destination appears in the\ngraph with its provenance (#23 reconcile back-fills its on-disk version). Source missing \u2192 404\n``TableNotFound``; destination name taken \u2192 409 ``TableAlreadyExists``; the location held by a\nconcurrent rename or registration \u2192 409 ``ConcurrentModification`` (code 14, [[LH-204]]).",
+        "description": "Rename the table at ``id`` by moving its POINTER, then migrate its FGA ownership and emit lineage.\n\nLance has no format-level rename (table rename is a namespace-layer remap, not a data-plane commit) and\nthe ``dir`` backend's ``rename_table`` is a hard 501, which is also off-spec \u2014 the Namespace REST spec\nmakes rename a first-class Metadata op. It is served here as what the spec describes: the destination id\nis registered at the SOURCE's existing location and the source id is deregistered. **No data byte is\nread, written or deleted**, so the cost is O(1) rather than the dataset's size \u2014 see\n``dataplane.rename_table`` for the lance-ns V2 naming rule that makes this correct and for the one\nshape (a V1 root-namespace table) it refuses.\n\nThe caller must hold ``can_drop`` on the source (owner tier, gated by the router ``authorize``) AND\n``can_create_table`` on the DESTINATION parent \u2014 else a source owner could plant their table into a\nnamespace/tenant they lack create rights on. FGA tuples migrate from the old id to the new; a\nversionless REGISTER marker records the attachment at the new id, with the source as its input, so the\ndestination's provenance continues from the source's. Source missing \u2192 404\n``TableNotFound``; destination name taken \u2192 409 ``TableAlreadyExists``; the location held by a\nconcurrent rename or registration \u2192 409 ``ConcurrentModification`` (code 14, [[LH-204]]).",
         "operationId": "rename_table_v1_table__id__rename_post",
         "parameters": [
           {
@@ -27637,7 +27637,7 @@
     },
     "/v1/table/{id}/update_field_metadata": {
       "post": {
-        "description": "Merge or replace per-field metadata for the given field paths \u2014 wraps ``update_field_metadata``;\nemits an UPDATE_FIELD_METADATA event at the new version (columns unchanged, but the WROTE edge keeps\nthe per-version schema populated for every version).",
+        "description": "Merge or replace per-field metadata for the given field paths \u2014 wraps ``update_field_metadata``;\nemits an UPDATE_FIELD_METADATA event at the new version (columns unchanged, but the event still\ncarries the schema, so every version the feed records has one).",
         "operationId": "update_field_metadata_v1_table__id__update_field_metadata_post",
         "parameters": [
           {

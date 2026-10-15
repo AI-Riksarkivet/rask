@@ -30,7 +30,8 @@ structured event (who / what / resource / outcome) on the dedicated `lance.audit
 OTLP to GreptimeDB and queryable by `audit.action` / `audit.outcome` / `audit.subject`. Scope: the catalog
 service (the policy-decision point); lineage-read governance is enforced by its own FGA gates and logged
 through the standard service logs, and durable data/model-mutation provenance (who created/wrote/promoted
-what, when) additionally lives in the lineage graph. Retention: audit records currently share the
+what, when) additionally lives in lineage's commit feed, for `services.lineage.eventsRetentionDays`, and in the
+graph backend lineage forwards every event to. Retention: audit records currently share the
 observability store's TTL (`observability.retention`, default `14d`) — raise it for compliance deploys;
 routing `lance.audit` to an independently-retained table is a known open enhancement.
 
@@ -58,17 +59,15 @@ routing `lance.audit` to an independently-retained table is a known open enhance
 
 ## Lineage service
 
-Read gates on `can_get_metadata` for the addressed dataset; the ingest accepts either an OIDC human or the
-service-door principal (app token + allowlisted subject — how a service's self-emitted events land).
+Lineage keeps provenance; the full lineage graph is the bring-your-own backend it forwards to (ADR 0158). Reads gate
+on `can_get_metadata` for every dataset they name; the HTTP ingest takes the author from the verified bearer token.
 
 | Capability | Endpoints | Notes |
 |---|---|---|
-| **Ingest** | `POST /api/v1/lineage`, `GET /dapr/subscribe` | HTTP + Dapr-subscription transports into the AGE graph |
-| **Dataset graph** | `GET /datasets`, `GET /datasets/{name}/{upstream,downstream,graph,creator,producers,schema,reconcile}` | dataset-level DERIVED_FROM lineage |
-| **Column lineage** | `GET /datasets/{name}/columns`, `.../columns/{field}/{upstream,downstream}` | field-to-field `columnLineage` |
-| **Runs & events** | `GET /runs`, `GET /runs/{run_id}/inputs`, `GET /events`, `GET /events/projection`, `GET /jobs`, `GET /namespaces` | a run's pinned input dataset versions; `GET /events` is the durable commit feed a pipeline polls ([LINEAGE.md](LINEAGE.md#the-commit-feed-get-events-is-a-pipelines-contract); forward cursor: LH-472 #598) |
-| ★ **Governance metadata (#49)** | `GET /datasets/{name}/governance`, `PUT,DELETE /datasets/{name}/tags/{tag}`, `PUT /datasets/{name}/description` | human-curated tags + description; reads on the reader rung, writes on `can_write_data` (fail-closed), every change attributable (who/when on the node); producer facet tags UNION with curated ones |
-| **Search** | `GET /search` | |
+| **Ingest** | `POST /api/v1/lineage`, `GET /dapr/subscribe` | HTTP + Dapr-subscription transports into the commit feed and the edge list |
+| **Commit feed** | `GET /events`, `GET /events/projection` | the durable feed a pipeline polls ([COMMIT-EVENTS.md](COMMIT-EVENTS.md)); the projection is notifications', gated on `can_read_event_feed` |
+| **Derived tables** | `GET /tables/{name}/derived?depth=` | every table derived from `name`, over the edge list; how an erasure finds them |
+| **Dead letters** | `GET /admin/dlq`, `POST /admin/dlq/{run_id}/replay` | parked deliveries |
 | **Health** | `GET /livez`, `GET /readyz` | |
 
 The maintenance sweep is Dapr/queue-driven (no public REST surface), so it is not in these specs; its contract is

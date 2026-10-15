@@ -798,8 +798,8 @@
 
       <div class="node" data-role="vector" data-id="age" style="left:78%; top:80%;">
         <div class="icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="5" cy="6" r="2"/><circle cx="19" cy="6" r="2"/><circle cx="12" cy="18" r="2"/><path d="M6.7 7.3 10.6 16M17.3 7.3 13.4 16"/></svg></div>
-        <div class="label">AGE graph</div>
-        <div class="tech">Apache AGE · Postgres</div>
+        <div class="label">Provenance tables</div>
+        <div class="tech">Lance · catalog-governed</div>
         <span class="step-badge">·</span>
       </div>
 
@@ -883,7 +883,7 @@ Content-Type: application/vnd.apache.arrow.stream`, chips:["Arrow IPC","OIDC"] }
   ("namespace:alpha$bronze", "parent", "table:alpha$bronze$images")
 ]`, chips:["grant_on_create"] },
       { from:"catalog", to:"lineage", color:"--c-orch", title:"Record creator (async)", route:"POST /api/v1/lineage",
-        desc:"<em>P0 #3:</em> the catalog emits OpenLineage with <em>author = the verified token sub</em> → a <code>(:User)-[:CREATED]->(:Dataset)</code> edge, so 'who created this table' is an <em>audit</em> fact (queryable at <code>/datasets/{id}/creator</code>) — distinct from the OpenFGA owner <em>access</em> tuple. <em>Fire-and-forget + best-effort</em> (runs after the response; a down lineage service never blocks/fails the create). Default OFF.",
+        desc:"<em>P0 #3:</em> the catalog emits OpenLineage with <em>author = the verified token sub</em> recorded on its commit feed row, so 'who created this table' is an <em>audit</em> fact (read from <code>GET /events?table=</code>) — distinct from the OpenFGA owner <em>access</em> tuple. <em>Fire-and-forget + best-effort</em> (runs after the response; a down lineage service never blocks/fails the create). Default OFF.",
         payload:`{ "eventType":"COMPLETE",
   "run":{ "facets":{
     "author":{ "sub":"alice" },
@@ -972,38 +972,40 @@ Idempotency-Key: <run-uuid>      // check can_write_data`, chips:["can_write_dat
   "run":{ "facets":{ "author":{ "name":"dee" } } },
   "inputs":[{"name":"alpha$bronze$images"}],
   "outputs":[{"name":"alpha$silver$features"}] }`, chips:["OpenLineage","author verified","job: P1 #6"] },
-      { from:"lineage", to:"age", color:"--c-vector", title:"MERGE graph", route:"openCypher",
-        desc:"Lineage upserts Run/Job/Dataset nodes + READ/WROTE/DERIVED_FROM edges. Dataset node name = catalog table:<id> — one identity across all three axes.",
-        payload:`MERGE (r:Run)-[:WROTE]->(d:Dataset {name:"alpha$silver$features"})
-MERGE (d)-[:DERIVED_FROM]->(:Dataset {name:"alpha$bronze$images"})`, chips:["Apache AGE"] }
+      { from:"lineage", to:"age", color:"--c-vector", title:"Record provenance", route:"POST merge_insert",
+        desc:"Lineage records the event as a <code>provenance$events</code> row and its table-level edge in <code>provenance$edges</code>, through the catalog's <code>merge_insert</code> door as its own principal (insert-only on a primary key, so a redelivery lands nothing). A governed dataset is named by its catalog id — one identity across all three axes. Every recorded event is then forwarded to the bring-your-own graph backend.",
+        payload:`provenance$edges += { in_table:"alpha$bronze$images",
+                      out_table:"alpha$silver$features" }`, chips:["Lance","catalog-governed"] }
     ]
   },
 
   lineage_query: {
-    name:"Lineage query", note:"GET upstream — provenance over the AGE graph (read-authz: OIDC + can_get_metadata)",
+    name:"Lineage query", note:"GET derived — what was built from a table, over the edge list (read-authz: OIDC + can_get_metadata)",
     steps:[
-      { from:"client", to:"lineage", color:"--c-user", title:"Ask provenance", route:"GET upstream",
-        desc:"Where did gold come from? Query the provenance axis.",
-        payload:`GET /datasets/alpha$gold$catalog/upstream
+      { from:"client", to:"lineage", color:"--c-user", title:"Ask provenance", route:"GET derived",
+        desc:"What was built from bronze? Query the provenance axis (how an erasure finds every derived table).",
+        payload:`GET /tables/alpha$bronze$images/derived
 Authorization: Bearer <JWT>`, chips:["provenance"] },
       { from:"lineage", to:"oidc", color:"--c-embed", title:"Verify token", route:"JWKS verify",
         desc:"<em>Implemented (P0 #1):</em> when <code>RASK_OIDC_ENABLED</code>, the bearer JWT is verified first (401 if absent), reusing the catalog's verifier. On in the chart.",
         payload:`verify(JWT) -> { sub: "ana" }`, chips:["JWKS"] },
       { from:"lineage", to:"openfga", color:"--c-vector", title:"Authorize", route:"check can_get_metadata",
-        desc:"<em>Implemented (P0 #1):</em> same permission as describe-table — you see lineage only if you may see the table's metadata. Reuses the shared OpenFGA store read-only; related/graph datasets you can't see are filtered out (<code>batch_check</code>).",
+        desc:"<em>Implemented (P0 #1):</em> same permission as describe-table — you see lineage only if you may see the table's metadata. Reuses the shared OpenFGA store read-only; derived tables you can't see are filtered out (<code>batch_check</code>).",
         payload:`check {
   user:     "user:ana",
   relation: "can_get_metadata",
-  object:   "table:alpha$gold$catalog"
+  object:   "table:alpha$bronze$images"
 }`, chips:["reuse OpenFGA","default OFF"] },
-      { from:"lineage", to:"age", color:"--c-vector", title:"Traverse graph", route:"Cypher *1..",
-        desc:"openCypher transitive upstream over DERIVED_FROM. Injection-safe: the dataset name flows as an agtype bind param, never interpolated.",
-        payload:`MATCH (d:Dataset {name:$name})-[:DERIVED_FROM*1..]->(u:Dataset)
-RETURN DISTINCT u.name`, chips:["openCypher"] },
+      { from:"lineage", to:"age", color:"--c-vector", title:"Walk the edge list", route:"POST query",
+        desc:"Lineage reads the edge list through the catalog's <code>query</code> door and walks it, nearest first, to at most 20 hops.",
+        payload:`depth 1: alpha$silver$features
+depth 2: alpha$gold$catalog`, chips:["edge list"] },
       { from:"lineage", to:"client", color:"--c-user", title:"Lineage result", route:"200",
-        desc:"The datasets gold derives from, transitively — the audit/provenance answer.",
-        payload:`{ "upstream": ["alpha$silver$features",
-              "alpha$bronze$images", "raw_images"] }`, chips:["DAG"] }
+        desc:"The tables derived from bronze, transitively, that the caller may see; <code>complete</code> is false when the walk stopped short. The full graph is the bring-your-own backend's.",
+        payload:`{ "table": "alpha$bronze$images",
+  "derived": [{ "table": "alpha$silver$features", "depth": 1 },
+              { "table": "alpha$gold$catalog", "depth": 2 }],
+  "complete": true }`, chips:["derived"] }
     ]
   },
 };

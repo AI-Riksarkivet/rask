@@ -30,11 +30,11 @@ class _Feed:
     def __init__(self) -> None:
         self.recorded: list[str] = []
 
-    async def ingest_event(self, event: Any) -> None:
+    async def record(self, event: Any) -> None:
         self.recorded.append(event.run_id)
 
-    async def run_output_names(self, _run_id: str) -> list[str]:
-        return []
+    async def run_author(self, _run_id: str) -> str | None:
+        return None
 
     async def recorded_event(self, _run_id: str, _event_type: str | None) -> dict[str, Any] | None:
         return None
@@ -80,7 +80,7 @@ def test_lineage_verifies_the_previous_key_after_a_rotation_and_refuses_an_unpub
     install_problem_handlers(app, logging.getLogger(__name__))
     register_dapr(app)
     feed = _Feed()
-    app.state.repository = feed
+    app.state.provenance = feed
     current, previous, unpublished = event_signer(SIGNER), event_signer(SIGNER), event_signer(SIGNER)
     respx.get(f"{SECRETS}/signing-public-{SIGNER}").mock(return_value=httpx.Response(200, json={"keys": f"{current.public},{previous.public}"}))
     event = (previous if signed_with == "previous" else unpublished).sign(_event())

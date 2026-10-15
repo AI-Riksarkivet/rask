@@ -5,7 +5,7 @@ a deny, the bus door parks a delivery as a refusal (or consumes it as unrepairab
 provenance) and the read filter hides a dataset the caller may hold a grant on.
 
 The other half: a name whose ``table:<name>`` is no object id (an external ``s3://bucket/prefix``
-vertex, a URI-named input) is not a question to send at all. ``fga.batch_check`` answers it False
+source, a URI-named input) is not a question to send at all. ``fga.batch_check`` answers it False
 unasked; sent, OpenFGA v1.18.3 fails the item on the default Check engine and answers it false on the
 deployed ``weighted_graph_check`` one (both measured), and a space or tab in it fails the whole request.
 
@@ -35,8 +35,6 @@ from starlette.testclient import TestClient
 from lineage.api import fga_deps
 from lineage.core.config import LineageSettings
 from lineage.models import RunEvent
-from lineage.schemas import DatasetRef, Neighbors
-from lineage.services.repository import LineageRepository
 from service_kit.governed.oidc import IDToken
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 
@@ -80,16 +78,16 @@ def _event(*, outputs: tuple[str, ...] = ("bronze$pages",), inputs: tuple[str, .
 
 
 class _Repo:
-    """The capturing repository plus both reads the bus door's authz path makes."""
+    """The capturing store plus both reads the bus door's authz path makes."""
 
     def __init__(self) -> None:
         self.ingested: list[RunEvent] = []
 
-    async def ingest_event(self, event: RunEvent) -> None:
+    async def record(self, event: RunEvent) -> None:
         self.ingested.append(event)
 
-    async def run_output_names(self, _run_id: str) -> list[str]:
-        return []
+    async def run_author(self, _run_id: str) -> str | None:
+        return None
 
     async def recorded_event(self, _run_id: str, _event_type: str | None) -> dict[str, Any] | None:
         return None
@@ -113,7 +111,7 @@ def _bus_door(monkeypatch: pytest.MonkeyPatch, fga_client: _OpenFga) -> tuple[Te
     register_dapr(app)
     get_settings.cache_clear()
     repo = _Repo()
-    app.state.repository = repo
+    app.state.provenance = repo
     app.state.fga = fga_client
     return TestClient(app), repo
 
@@ -183,24 +181,3 @@ def _filter(fga_client: _OpenFga) -> fga_deps.DatasetFilter:
 def test_a_dataset_openfga_could_not_answer_is_a_503_not_hidden() -> None:
     with pytest.raises(ServiceUnavailableError):
         asyncio.run(_filter(_OpenFga(unanswered={"table:b"})).visible(["a", "b"]))
-
-
-class _Graph:
-    """The upstream walk of an ingested table: one governed parent and the external sources it read."""
-
-    async def upstream(self, name: str, depth: int | None = None) -> Neighbors:
-        del depth
-        related = [DatasetRef(name="bronze$pages", namespace="bronze"), DatasetRef(name="s3://images-batch/run1/", namespace="s3://images-batch")]
-        return Neighbors(dataset=name, related=[*related, DatasetRef(name="lance/s3://lane-src/tbl.lance", namespace="lance")])
-
-
-def test_an_external_source_on_a_graph_read_is_hidden_without_asking() -> None:
-    """The upstream of an ingested table reaches its external sources; they stay out of the answer, and
-    OpenFGA is asked only about the object it can evaluate."""
-    from lineage.api.v1.endpoints.datasets import get_upstream
-
-    fga_client = _OpenFga(unanswered=set())
-    result = asyncio.run(get_upstream("silver$pages", cast(LineageRepository, _Graph()), _filter(fga_client)))
-
-    assert [ref.name for ref in result.related] == ["bronze$pages"]
-    assert fga_client.asked == ["table:bronze$pages"]

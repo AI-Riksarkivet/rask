@@ -31,12 +31,12 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
+| age.bootstrapDb | string | `"lineage"` | Name of the database the AGE server initialises and probes; no client reads it. |
 | age.cnpgCluster.enabled | bool | `false` | Render the AGE-on-CNPG `Cluster` (templates/age-cluster.yaml); mutually exclusive with `age.enabled`. Needs an extension image, K8s 1.33+ and the CloudNativePG operator (>= 1.27), a prerequisite: the render refuses on a cluster that does not serve postgresql.cnpg.io/v1. |
 | age.cnpgCluster.extensionImage | string | `""` | The built AGE extension image for the CNPG cluster (e.g. ghcr.io/<org>/age-cnpg-ext:1.7.0-18); required when `cnpgCluster.enabled`, no default. |
-| age.enabled | bool | `true` | Run the in-cluster apache/age Postgres StatefulSet that serves the lineage graph, OpenFGA and the Dapr state store databases. |
-| age.externalHost | string | `""` | Postgres host lineage, OpenFGA and the Dapr state store use instead of the in-cluster AGE; the render refuses it empty with age.enabled=false. |
+| age.enabled | bool | `true` | Run the in-cluster apache/age Postgres StatefulSet that serves the OpenFGA and Dapr state store databases. |
+| age.externalHost | string | `""` | Postgres host OpenFGA and the Dapr state store use instead of the in-cluster AGE; the render refuses it empty with age.enabled=false. |
 | age.image | string | `"apache/age:release_PG16_1.6.0"` | Postgres+AGE image for the StatefulSet and the pg_dump backup job (PG16; 1.6.0 is multi-arch amd64+arm64). |
-| age.lineageDb | string | `"lineage"` | Name of the AGE graph and database holding the OpenLineage graph. |
 | age.openfgaDb | string | `"openfga"` | Name of the database OpenFGA uses as its datastore. |
 | age.port | int | `5432` | Postgres port of the AGE store, used by every client DSN, the backup job and the network policy. |
 | age.stateDb | string | `"daprstate"` | Name of the database the Dapr Postgres state store owns and migrates itself. |
@@ -63,7 +63,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | backups.controlRoot.enabled | bool | `false` | Schedule a CronJob that backs up the control root (project, warehouse, binding and bucket-claim registries). Off by default. |
 | backups.controlRoot.keep | int | `14` | Number of newest control-root backups kept after each successful copy; 0 keeps every run. |
 | backups.controlRoot.schedule | string | `"0 1 * * *"` | Cron schedule of the control-root backup (default daily 01:00, ahead of the pg dump). |
-| backups.pgDump.enabled | bool | `false` | Schedule a CronJob that pg_dumps the lineage, OpenFGA and Dapr state databases (gzip) to `_backups/pg/<date>/` in the lakehouse bucket. Off by default. |
+| backups.pgDump.enabled | bool | `false` | Schedule a CronJob that pg_dumps the OpenFGA and Dapr state databases (gzip) to `_backups/pg/<date>/` in the lakehouse bucket. Off by default. |
 | backups.pgDump.keep | int | `7` | Number of newest daily pg dumps kept; older ones are pruned on each run. |
 | backups.pgDump.schedule | string | `"0 2 * * *"` | Cron schedule of the pg dump (default daily 02:00). |
 | backups.volumeSnapshot.enabled | bool | `false` | Schedule a CronJob that creates a CSI VolumeSnapshot of the lakehouse PVC; needs a CSI snapshotter and a VolumeSnapshotClass. Off by default. |
@@ -310,20 +310,20 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | services.gateway.readyPath | string | `"/readyz"` | Readiness probe path of the gateway (default `/readyz`); it asks no upstream, so the gateway stays Ready without backends. |
 | services.gateway.replicas | int | `1` | Replica count of the gateway Deployment; 0 scales it to zero. |
 | services.gateway.waitFor | list | `[]` | List of dependencies the gateway waits for in an init container; only `minio` is honoured (when minio.enabled). |
-| services.lineage.ageStatementTimeoutSeconds | int | `30` | Server-side per-statement timeout in seconds on lineage's AGE pool; bounds a runaway Cypher traversal. |
-| services.lineage.daprAppId | string | `"lineage"` | Dapr app-id of lineage; also names its pubsub, DLQ and durable consumers and scopes its reconcile cron. |
-| services.lineage.demoData | bool | `false` | Mounts the unauthenticated /demo/* data-peek router. Demo only; off by default. |
-| services.lineage.eventsRetentionDays | int | `7` | Days of arrival time the durable /events feed keeps, pruned on the reconcile tick; bounds how long a notifications outage it survives. 0 is unbounded. |
-| services.lineage.freshnessBudgetHours | int | `48` | Hours after which a dataset with no new version is flagged `stale` by reconcile and the dataset GET. 0 turns the check off. |
+| services.lineage.daprAppId | string | `"lineage"` | Dapr app-id of lineage; also names its pubsub, DLQ and durable consumers and scopes its relay cron. |
+| services.lineage.eventsRetentionDays | int | `7` | Days of arrival time the durable /events feed keeps, pruned on the relay tick; bounds how long a notifications outage it survives. 0 is unbounded. |
+| services.lineage.forward.authSecret.key | string | `"api-key"` | Field of that secret the API key is under. |
+| services.lineage.forward.authSecret.name | string | `""` | Secret in the Dapr secret store holding the backend's API key, sent as `Authorization: Bearer`. Empty sends none. |
+| services.lineage.forward.endpoint | string | `"api/v1/lineage"` | Path the events are POSTed to under `url` (the transport's `endpoint`). |
+| services.lineage.forward.url | string | `""` | Base URL of the graph backend the relay forwards every recorded event to (the OpenLineage HTTP transport's `url`). Empty forwards nothing. |
 | services.lineage.module | string | `"lineage.main:app"` | uvicorn import path the lineage Deployment runs (templates/services.yaml). |
-| services.lineage.outbox.enabled | bool | `true` | Stages each lineage event to `s3://<minio.bucket>/_lineage_outbox` before publishing, drained by reconcile. Requires reconcile.enabled. |
+| services.lineage.outbox.enabled | bool | `true` | Stages each lineage event to `s3://<minio.bucket>/_lineage_outbox` before publishing, drained by the relay. Requires relay.enabled. |
 | services.lineage.port | int | `8000` | Container and Service port of the lineage service. |
-| services.lineage.readAudit | bool | `true` | Records every allowed FGA-gated data read (feeds GET /datasets/{name}/readers). Rendered only when auth.enabled. |
-| services.lineage.reconcile.bindingName | string | `"lineage-reconcile-cron"` | Name of the reconcile cron binding; the sidecar POSTs to /<bindingName>. |
-| services.lineage.reconcile.enabled | bool | `true` | Renders the storage-to-graph reconcile cron, which back-fills lost lineage events, drains the outbox and prunes. Needs dapr.enabled. |
-| services.lineage.reconcile.schedule | string | `"@every 300s"` | Schedule of the reconcile sweep (Dapr cron syntax, e.g. `@every 300s` or a cron expression). |
+| services.lineage.provenanceNamespace | string | `"provenance"` | Namespace the catalog keeps for lineage's feed and edge list (`LANCE_PROVENANCE_NAMESPACE`, `LINEAGE_PROVENANCE_NAMESPACE`). |
+| services.lineage.relay.bindingName | string | `"lineage-relay-cron"` | Name of the relay cron binding; the sidecar POSTs to /<bindingName>. |
+| services.lineage.relay.enabled | bool | `true` | Renders the relay cron, which drains the lineage outbox, prunes the feed and forwards it. Needs dapr.enabled. |
+| services.lineage.relay.schedule | string | `"@every 30s"` | Schedule of the relay tick (Dapr cron syntax, e.g. `@every 30s` or a cron expression). |
 | services.lineage.replicas | int | `1` | Replica count of lineage; replicas form a competing-consumer group, so it scales freely. |
-| services.lineage.runRetentionDays | int | `30` | Days after which reconcile prunes graph :Run nodes and the Dataset nodes that leaves orphaned. 0 keeps everything. |
 | services.notifications.channels.email.enabled | bool | `false` | Renders the `notifications-email` Dapr SMTP binding and adds `email` to RASK_NOTIFICATIONS_CHANNELS. Off by default. |
 | services.notifications.channels.email.from | string | `""` | Sender address the email channel sends from. |
 | services.notifications.channels.email.host | string | `""` | SMTP server host for the email channel. |

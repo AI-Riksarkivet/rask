@@ -26,7 +26,7 @@ import { FRONTEND_ROOT, zoneDirs } from './manifest';
 /** Panels that render data no route renders, so there is no component to share. Each needs a reason. */
 const NO_PAGE_COUNTERPART: Record<string, string> = {
 	'lakehouse/EventsPanel.svelte':
-		'renders LineageState.events (the OpenLineage feed). No route renders it — /admin/events is ' +
+		"renders the dock's EventFeed (lineage's OpenLineage feed, GET /events). No route renders it — /admin/events is " +
 		'ControlEventsFeed over the governance plane, a different source. Pairing them would invent a ' +
 		'relationship that does not exist.',
 };

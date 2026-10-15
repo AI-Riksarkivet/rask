@@ -54,7 +54,7 @@ CONTROL_ID_RE = re.compile(rf"^{CONTROL_ID_PATTERN}\Z")
 #: `project_namespace` moved here. A PRODUCER names these on a run's input dataset; LINEAGE decides from
 #: them whether to authorize that input at all. When the two disagree the failure is silent and
 #: one-sided: the START event is refused 403, the terminal event carries no inputs and is accepted, so
-#: the run reaches the graph missing exactly half of itself.
+#: the run reaches the feed missing exactly half of itself.
 #:
 #: `s3-prefix` mints `s3://<bucket>`, which a URI-scheme test catches. `local-dir` mints `file` and
 #: `lance-append` mints `lance` — bare identifiers, indistinguishable by shape from a catalog namespace

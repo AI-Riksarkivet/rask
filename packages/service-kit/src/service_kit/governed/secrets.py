@@ -164,8 +164,7 @@ def apply_dapr_secrets(settings: SupportsDaprSecrets) -> dict[str, str]:
     when off.
 
     Returns the whole bundle, so a service that needs a SECOND field from the same secret reads it off
-    THIS fetch instead of issuing another one — that is how lineage's AGE password reaches
-    ``apply_lineage_secrets`` (see ``lineage.core.config``). Empty dict when the flag is off.
+    THIS fetch instead of issuing another one. Empty dict when the flag is off.
 
     SYNC by design (the fetch retries while the store seeds, ~80s worst case), so async lifespans call
     it through ``run_in_threadpool``.

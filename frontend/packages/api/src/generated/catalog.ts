@@ -2688,7 +2688,7 @@ export interface paths {
         /**
          * Add Columns
          * @description Add SQL-expression-computed columns to the table — wraps ``alter_table_add_columns``; emits an
-         *     ADD_COLUMNS event carrying the NEW per-version schema so the graph's column inventory follows the add.
+         *     ADD_COLUMNS event carrying the NEW per-version schema, so the feed records the add at its version.
          */
         post: operations["add_columns_v1_table__id__add_columns_post"];
         delete?: never;
@@ -2709,7 +2709,7 @@ export interface paths {
         /**
          * Alter Columns
          * @description Rename, re-type, or change nullability of existing columns — wraps ``alter_table_alter_columns``;
-         *     emits an ALTER_COLUMNS event with the post-evolution schema (renames/re-types show in the graph).
+         *     emits an ALTER_COLUMNS event with the post-evolution schema, so renames and re-types reach the feed.
          */
         post: operations["alter_columns_v1_table__id__alter_columns_post"];
         delete?: never;
@@ -2753,7 +2753,7 @@ export interface paths {
          *
          *     No lineage is emitted here: the response carries a ``job_id`` (the backfill runs asynchronously), so the
          *     Lance version it eventually produces isn't known at request time — a synchronous emit would assert a
-         *     version that hasn't been written. The version bump is recovered by #23 reconcile when the job lands.
+         *     version that hasn't been written. The version the job lands is not announced from here.
          */
         post: operations["backfill_column_v1_table__id__backfill_column_post"];
         delete?: never;
@@ -3103,7 +3103,7 @@ export interface paths {
         /**
          * Drop Columns
          * @description Drop the named columns from the table — wraps ``alter_table_drop_columns``; emits a DROP_COLUMNS
-         *     event with the reduced schema so the dropped columns leave the graph's per-version inventory.
+         *     event with the reduced schema, so the feed records the version without the dropped columns.
          */
         post: operations["drop_columns_v1_table__id__drop_columns_post"];
         delete?: never;
@@ -3355,8 +3355,8 @@ export interface paths {
          *     The caller must hold ``can_drop`` on the source (owner tier, gated by the router ``authorize``) AND
          *     ``can_create_table`` on the DESTINATION parent — else a source owner could plant their table into a
          *     namespace/tenant they lack create rights on. FGA tuples migrate from the old id to the new; a
-         *     versionless REGISTER marker records the attachment at the new id so the destination appears in the
-         *     graph with its provenance (#23 reconcile back-fills its on-disk version). Source missing → 404
+         *     versionless REGISTER marker records the attachment at the new id, with the source as its input, so the
+         *     destination's provenance continues from the source's. Source missing → 404
          *     ``TableNotFound``; destination name taken → 409 ``TableAlreadyExists``; the location held by a
          *     concurrent rename or registration → 409 ``ConcurrentModification`` (code 14, [[LH-204]]).
          */
@@ -3601,8 +3601,8 @@ export interface paths {
         /**
          * Update Field Metadata
          * @description Merge or replace per-field metadata for the given field paths — wraps ``update_field_metadata``;
-         *     emits an UPDATE_FIELD_METADATA event at the new version (columns unchanged, but the WROTE edge keeps
-         *     the per-version schema populated for every version).
+         *     emits an UPDATE_FIELD_METADATA event at the new version (columns unchanged, but the event still
+         *     carries the schema, so every version the feed records has one).
          */
         post: operations["update_field_metadata_v1_table__id__update_field_metadata_post"];
         delete?: never;

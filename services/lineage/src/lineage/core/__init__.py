@@ -1,1 +1,1 @@
-"""Cross-cutting infra for the lineage service (config, AGE client, reconcile, metrics) — no FastAPI."""
+"""Cross-cutting infra for the lineage service (config, metrics) — no FastAPI."""

@@ -184,8 +184,8 @@ def project_namespace(project: str, name: str) -> str:
     """Project-qualify a lineage namespace or dataset name — ``("acme", "bronze")`` → ``"acme-bronze"``.
 
     Empty ``project`` → ``name`` unchanged (the single-tenant default, byte-identical). Qualification
-    keeps per-project lineage on DISTINCT graph nodes — the lineage repository MERGEs ``Dataset`` nodes
-    on name alone, so two tenants both emitting ``bronze$events`` would otherwise collide onto one node
+    keeps per-project lineage under DISTINCT names — lineage's edge list keys a governed dataset on its
+    name alone, so two tenants both emitting ``bronze$events`` would otherwise collide onto one identity
     (#84 risk 1) — and the ``-`` join keeps the result inside the established ``[A-Za-z0-9_-]`` segment
     shape (``acme-bronze$events`` is still a valid ``stage$name`` dataset id).
 

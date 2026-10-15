@@ -8,7 +8,7 @@ those. The HTTP ingest door recorded `INGESTED` on success and nothing at all on
 THE ASYMMETRY IS NOT COSMETIC, because the HTTP door is the ONLY door for a producer with no Dapr
 sidecar: the whole Ray lane, every runner, and any external OpenLineage producer. Measured live
 2026-09-21, a dummy-lane job wrote 64 rows to `acme-silver$dummy` and its provenance was refused
-`ingest_denied … relation='can_write_data'`; the write is governed, the run is absent from the graph,
+`ingest_denied … relation='can_write_data'`; the write is governed, the run is absent from the feed,
 and the job exited SUCCEEDED ([[LH-184]]).
 
 THE COUNT IS NOT REDUNDANT WITH THE HTTP STATUS CODE, which is what the old reasoning assumed by
@@ -24,13 +24,16 @@ answer the same exception with the same outcome, and only running them shows tha
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 import pytest
+from fastapi import Request
 from lance_namespace import PermissionDeniedError
 
+from lineage.core.config import LineageSettings
 from lineage.core.metrics import Door, Outcome
 from lineage.models import UnauthoredRunError, UngovernedOutputError
+from lineage.services.provenance import ProvenanceStore
 
 
 #: A minimal spec-valid ``RunEvent``. The HTTP door PARSES its own body now — one discriminator
@@ -82,7 +85,13 @@ async def test_the_http_door_counts_a_refusal_the_way_the_subscriber_does(error:
     monkeypatch.setattr(ingest, "record_outcome", _record)
 
     with pytest.raises(type(error)):
-        await ingest.ingest_event(body=_RUN_BODY, request=object(), repository=object(), settings=object(), token=object())  # ty: ignore[invalid-argument-type]
+        await ingest.ingest_event(
+            body=_RUN_BODY,
+            request=cast("Request", object()),
+            provenance=cast("ProvenanceStore", object()),
+            settings=cast("LineageSettings", object()),
+            token=None,
+        )
 
     assert recorded == [(expected, Door.HTTP)], (
         f"the HTTP door recorded {recorded or 'nothing'} for {type(error).__name__}; the subscriber records {expected.value}"
@@ -99,8 +108,8 @@ async def test_a_SUCCESSFUL_ingest_still_counts_exactly_once(monkeypatch: pytest
     def _record(outcome: Outcome, *, door: Door) -> None:
         recorded.append((outcome, door))
 
-    class _Repo:
-        async def ingest_event(self, _event: Any) -> None:
+    class _Store:
+        async def record(self, _event: Any) -> None:
             return None
 
     monkeypatch.setattr(ingest, "enforce_author", lambda *_a, **_k: None)
@@ -111,7 +120,9 @@ async def test_a_SUCCESSFUL_ingest_still_counts_exactly_once(monkeypatch: pytest
     monkeypatch.setattr(ingest, "enforce_output_authz", _allow)
     monkeypatch.setattr(ingest, "record_outcome", _record)
 
-    answer = await ingest.ingest_event(body=_RUN_BODY, request=object(), repository=_Repo(), settings=object(), token=object())  # ty: ignore[invalid-argument-type]
+    answer = await ingest.ingest_event(
+        body=_RUN_BODY, request=cast("Request", object()), provenance=cast("ProvenanceStore", _Store()), settings=cast("LineageSettings", object()), token=None
+    )
 
     assert recorded == [(Outcome.INGESTED, Door.HTTP)]
     assert answer["status"] == "ingested"

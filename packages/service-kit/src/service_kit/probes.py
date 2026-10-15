@@ -14,7 +14,7 @@ work and fails exactly when the pod is busiest. One home, one shape, ``async def
 
 Mount the module-level :data:`router` when readiness is pure lifecycle gating; call
 :func:`make_probes_router` with a ``ready_check`` when the service has a hard dependency
-(lineage's AGE graph) or a fact worth reporting (the catalog's resolved namespace id).
+(lineage's feed, read through the catalog) or a fact worth reporting (the catalog's resolved namespace id).
 """
 
 from __future__ import annotations

@@ -11,15 +11,15 @@ id of the maintenance event.
 Those two had separate implementations, and the second one was wrong in a way nothing could notice: it
 split the leaf on its FIRST underscore unconditionally, so a namespace carrying an underscore lost its
 first segment — ``aa3bed10_transcripts_v2$t1`` became ``v2$t1``, an id naming no table, emitted into
-the lineage graph as though it did. ``transcripts_v2`` is a real namespace in this estate. The uuid8
+lineage's feed as though it did. ``transcripts_v2`` is a real namespace in this estate. The uuid8
 prefix is therefore CHECKED rather than assumed.
 
 ``None`` is a first-class answer meaning "this location names no catalog table" — a stray directory, a
 nested layout whose namespace is a parent directory rather than part of the leaf. Callers must degrade:
 the credential caller falls back to the ambient credential, the lineage caller emits nothing. Guessing
 would be worse than both — a wrong id vends a credential for a different table (surfacing as a 403 on
-the right one, naming nothing about the guess) and attaches a maintenance run to a dataset node that
-does not exist.
+the right one, naming nothing about the guess) and attaches a maintenance run to a dataset that does
+not exist.
 """
 
 from __future__ import annotations
@@ -38,8 +38,8 @@ def table_id_from_location(dataset_uri: str) -> str | None:
     # The leaf is taken VERBATIM — no `.lance` suffix is stripped. A catalog-laid-out table has none
     # (`4750a5b9_acme-bronze$events`, measured live); a `.lance` suffix appears only on datasets the
     # catalog did not lay out, which are exactly the UNDECLARED ones whose id here is a fallback label
-    # already recorded in the lineage graph under that name. Stripping it would silently rename
-    # existing Dataset nodes for no benefit to any caller.
+    # already recorded in lineage's feed under that name. Stripping it would silently rename
+    # datasets the feed already names for no benefit to any caller.
     leaf = dataset_uri.rstrip("/").split("/")[-1]
     prefix, separator, remainder = leaf.partition("_")
     if separator and _is_uuid8(prefix):

@@ -412,17 +412,14 @@
 			<Skeleton class="size-8 rounded-full" />
 		{:else}
 			{#if notifications}
-				<!-- Run lifecycle, beside the account cluster and in the same box size — the one place in
-				     the estate that says a run started, finished, or failed. -->
+				<!-- The subject's inbox, beside the account cluster and in the same box size. -->
 				<NotificationCenter
-					runs={notifications.runs}
 					inbox={notifications.inbox}
 					inboxUnread={notifications.inboxUnread}
 					seen={notifications.seen}
 					dismissed={notifications.dismissed}
 					onseen={notifications.onseen}
 					ondismiss={notifications.ondismiss}
-					allHref={notifications.allHref}
 				/>
 			{/if}
 			<NavbarUser {user} {authEnabled} {pathname} />

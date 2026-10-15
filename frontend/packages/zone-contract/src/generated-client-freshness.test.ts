@@ -146,7 +146,7 @@ describe('generated API clients track their specs', () => {
 			it('the spec declares something to check', () => {
 				// Same anti-vacuity guard, one level down: an empty or unparsed spec would satisfy every
 				// assertion below by having nothing to assert.
-				expect(declared.operation!.size).toBeGreaterThan(10);
+				expect(declared.operation!.size).toBeGreaterThan(0);
 				expect(declared.schema!.size).toBeGreaterThan(10);
 			});
 

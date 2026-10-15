@@ -121,10 +121,6 @@
 			"types": "./dist/components/resizable-split/index.d.ts",
 			"svelte": "./dist/components/resizable-split/index.js"
 		},
-		"./runs": {
-			"types": "./dist/runs/index.d.ts",
-			"default": "./dist/runs/index.js"
-		},
 		"./search-bar": {
 			"types": "./dist/components/search-bar/index.d.ts",
 			"svelte": "./dist/components/search-bar/index.js"
@@ -160,10 +156,6 @@
 		"./sort-header": {
 			"types": "./dist/components/sort-header/index.d.ts",
 			"svelte": "./dist/components/sort-header/index.js"
-		},
-		"./status-board": {
-			"types": "./dist/components/status-board/index.d.ts",
-			"svelte": "./dist/components/status-board/index.js"
 		},
 		"./styles/tokens.css": "./dist/styles/tokens.css",
 		"./switch": {

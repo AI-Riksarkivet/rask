@@ -25,12 +25,11 @@ services:
     replicas: 2
   lineage:
     replicas: 2
-    demoData: false # the /demo data-peek router carries no OIDC/FGA guard — never mount it in prod
-    # #4's durability ON where it matters (audit claim-drift #1: was OFF in every shipped profile
-    # while documented "live-verified" — the exact loss window it exists to close stood open).
+    # #4's durability ON where it matters: the outbox closes the window between a Lance commit and its publish,
+    # and the relay is what drains it.
     outbox:
       enabled: true
-    reconcile:
+    relay:
       enabled: true
   # The ONE gateway (the fleet's uvicorn gateway:app on :8888 — the nginx gateway is retired,
   # docs/adr/0117-nginx-is-retired-and-the-fastapi-gateway-is-the-in-cluster.md). fleet.yaml reads services.gateway; ha.yaml's PDB matches
@@ -75,9 +74,9 @@ podDisruptionBudget:
 # render refuses either empty. No credential is a value: an FGA client presents its projected `rask-openfga`
 # ServiceAccount token, which the platform's OpenFGA admits by OIDC against the cluster's ServiceAccount issuer for the
 # subjects `lance.openfgaSubjects` lists, and the Postgres password is the store's `postgres-password`, which ESO
-# delivers. The platform's Postgres carries the Apache AGE extension for the lineage graph (docs/CNPG-AGE.md) and the
-# `lineage`, `openfga` and `daprstate` databases; OpenFGA is the authz chokepoint every governed call fails closed
-# through, so the platform runs it highly available.
+# delivers. The platform's Postgres carries the `openfga` and `daprstate` databases; lineage keeps no database
+# (ADR 0158). OpenFGA is the authz chokepoint every governed call fails closed through, so the platform runs it highly
+# available.
 openfga:
   enabled: false
 age:

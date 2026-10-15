@@ -106,7 +106,7 @@
 	<div class="empty">
 		<p>
 			Not a catalog-registered table — storage-managed datasets (medallion zones) have no catalog
-			detail. Its lineage is on the <a href="/lakehouse/lineage" data-sveltekit-reload>explorer</a>.
+			detail.
 		</p>
 	</div>
 {/if}

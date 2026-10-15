@@ -21,16 +21,16 @@ Two properties make it safe:
 
 1. **Durable buffer.** Both streams use **Limits retention** (messages persist after ack, up to `max-age`
    168h), so an event survives the subscriber being down.
-2. **Idempotent ingest.** The graph **MERGEs on `run_id`**. So redelivery / replay of the same event is a
-   **no-op** — never a duplicate, never corruption. The worst failure mode is *under-reporting* (a lost event), never a corrupt or doubled one.
+2. **Idempotent ingest.** Lineage records each event in the commit feed (`provenance$events`) and the edge list
+   (`provenance$edges`) with an insert-only merge on each table's unenforced primary key, through the catalog's
+   `merge_insert` door (`lineage/services/provenance.py`). So redelivery / replay of the same event lands no
+   second row — never a duplicate, never corruption. The worst failure mode is *under-reporting* (a lost event), never a corrupt or doubled one.
 
 ## Chaos experiments (all recovered with zero loss)
 
 | Experiment | What happened | Result |
 | ---------- | ------------- | ------ |
 | **Pull `lineage` (scale 0), publish 3 events, restart** | events buffered in JetStream (70→73); on restart the **ephemeral consumer replayed** them | **3/3 ingested** — no loss |
-| **Kill `AGE` (Postgres) mid-ingest, restart** | ingest returned `RETRY`; Dapr redelivered per `backOff` until the DB was back | **ingested on redelivery** — no loss |
-| **Idempotency** (replays re-deliver old events) | fixed `run_id`s re-MERGE | `gaptest1` has **exactly 1** producer run — no duplication |
 | **Poison-inject 2026-09-14: a NON-CloudEvent body** (`rawPayload`) | the sidecar could not deserialize the envelope, dead-lettered it in **21ms with ZERO retries** (ahead of any retry policy), and the dead letter reached the DLQ topic as the same unreadable bytes | **parked INVISIBLY** — `/dlq-event` never ran, so no ERROR log and nothing for a dead-lettering alert to fire on. Tracked as LH-151 |
 
 So: **a service going down delays the pipeline; it does not lose or corrupt data.** Transient dependency
@@ -46,7 +46,7 @@ semantics, so it must not undercut the slowest handler. Either way the window co
 > **Delivery semantics per subscriber.** Each subscriber has its **own** pubsub component with
 > `queueGroupName=<app-id>` (replicas = competing consumers → single delivery per app) and a `durableName`, so
 > the consumer cursor survives pod death and redeploys. `deliverPolicy` is **`all` for lineage** (replay into the
-> idempotent MERGE is the durability story, and the first chaos row holds) and **`new`** for notifications and
+> insert-only merge is the durability story, and the first chaos row holds) and **`new`** for notifications and
 > maintenance, whose durable cursor delivers an event published while they were down on recovery
 > (`chart/templates/dapr-component.yaml`).
 
@@ -57,16 +57,15 @@ semantics, so it must not undercut the slowest handler. Either way the window co
    BackgroundTasks fire-and-forget) so the event reaches the durable Dapr/JetStream transport before the
    response returns, but its errors are swallowed so a lineage outage never fails the write. If the catalog
    crashes (or its sidecar is down) **between the S3 write and the publish**, the data exists on storage but
-   **the lineage event is lost** — the graph under-reports that write. No corruption, but a provenance hole.
-   *Mitigation (shipped):* the **B4 storage→graph reconcile** back-fills exactly this loss mode — a Dapr-cron
-   sweep reads on-disk Lance versions and stamps any write the graph is missing (`/datasets/{name}/reconcile`
-   + `services.lineage.reconcile`). The **object-store outbox** (`service_kit.lakehouse.outbox`, opt-in via the
-   catalog's `LANCE_LINEAGE_OUTBOX_URI` and the relay's `LINEAGE_OUTBOX_URI`) narrows the window to commit→stage for producers that stage the event before
-   publishing — a crash between the write and the stage is still left to the back-fill. *Ops surface (#83):* the outbox
+   **the lineage event is lost** — the feed under-reports that write. No corruption, but a provenance hole.
+   *Mitigation (shipped):* the **object-store outbox** (`service_kit.lakehouse.outbox`, opt-in via the
+   catalog's `LANCE_LINEAGE_OUTBOX_URI` and the relay's `LINEAGE_OUTBOX_URI`) narrows the window to commit→stage
+   for producers that stage the event before publishing. A crash between the write and the stage is not detected:
+   nothing compares on-disk versions with the feed (parked as LH-497, "the commit is the outbox"). *Ops surface (#83):* the outbox
    backlog is now viewable + replayable on demand — `GET /admin/dlq` (the saturation snapshot + the governed
    at-risk events) and `POST /admin/dlq/{run_id}/replay` (re-ingest one event, re-publish it, then drop; same `can_write_data`
    authz as a fresh ingest, audited), surfaced in the frontend at `/dlq`. This is the manual twin of the
-   reconcile relay's drain — an operator no longer waits for the next tick.
+   relay tick's drain, for an operator who does not want to wait for the next tick.
 
 2. **No dead-letter queue; `maxDeliver=5` — FIXED 2026-07-12 (`dapr.resiliency.enabled`, DEFAULT ON;
    `false` = the exact pre-existing broker-only behavior).** The gap as it stood: a genuinely poison
@@ -100,20 +99,25 @@ semantics, so it must not undercut the slowest handler. Either way the window co
    post-redeploy consumption clean). Lineage is durable too, with `deliverPolicy: all` ([[LH-303]]):
    an ephemeral consumer dies with a NATS restart and the sidecar does not re-create it (measured
    2026-09-26: lineage heard nothing from the bus until its pod restarted). Its first attach replays the
-   retained stream into the idempotent ingest; to REBUILD the graph from the stream, remove the durable
+   retained stream into the idempotent ingest; to REBUILD the feed from the stream, remove the durable
    and restart lineage — `nats consumer rm LINEAGE lineage-durable`, then
    `kubectl rollout restart deploy/rask-lineage` — and the new durable replays from the first message. With NATS auth on, run it as `admin` ([OPERATORS.md](OPERATORS.md) § 7): nats-box itself runs as the read-only `monitor`.
    Residual: gap #2's poison/no-DLQ window, which durable cursors do not change; and the catalog's own
    broadcast consumer, still ephemeral by design (one per replica), which a NATS restart also removes.
 
-4. **Best-effort durable feed.** The `/events` feed table write is best-effort (logged on failure); the
-   AGE graph is authoritative. The feed can lag the graph — visibility, not correctness.
+4. **The feed is the record.** Lineage writes the edges, then the feed row, each keyed; a failed write answers
+   `RETRY`, and the redelivery lands what is missing and nothing twice. The feed keeps `eventsRetentionDays`
+   (default 7) and is pruned on the relay tick; the long-lived graph is the forwarded backend's
+   (`services.lineage.forward.url`), fed at least once, in feed order, from a cursor in `provenance$cursors`.
 
 5. **Single points of failure (single-node infra).** Every stateful backing store runs as **one replica** on
    kind — this is a **demo topology, not an HA one**. If any of these pods dies, the pipeline stalls until it
    restarts (no data loss — PVCs persist — but no availability either):
-   - **AGE / Postgres** — one StatefulSet pod; the whole lineage graph + the durable `/events` + `/runs` fold
-     live here. Down → all ingest returns `RETRY` (buffered) and every lineage read fails.
+   - **AGE / Postgres** — one StatefulSet pod serving OpenFGA's datastore and the Dapr state store. Down →
+     authz checks fail (lineage's ingest gate answers `RETRY`, so events stay buffered) and notifications' inbox
+     state is unreadable. Lineage keeps no database: its tables live in the object store behind the catalog.
+   - **The catalog** — lineage's feed and edge list are read and written through its doors. Down → lineage
+     ingest answers `RETRY` (buffered) and lineage's `/readyz` reports the catalog unavailable.
    - **NATS / JetStream** — one node, `streamReplicas=1`; the Dapr pub/sub backbone. Down → no event flows at
      all (catalog emits swallow, notifications and maintenance hear nothing).
    - **The object store** (the MinIO fixture in development) — the S3 data plane. Down → no Lance read/write.
@@ -122,11 +126,8 @@ semantics, so it must not undercut the slowest handler. Either way the window co
    *Fix (prod):* multi-replica + `streamReplicas=3` for NATS, a real Postgres HA (Patroni/CNPG), a replicated
    object store. Tracked as infra work; **the app tier is already `replicas`-ready** (stateless, PDBs shipped).
 
-6. **Lineage lifecycle-emit gaps (deferred, see `docs/adr/0007-7a-live-verification-residuals.md`).** Overwrite leaves stale column nodes on
-   the reused id; reconcile false-flags a *deliberately* dropped table as `MISSING_ON_STORAGE` (stale
-   `source_uri`). Both are provenance-visibility issues, not corruption. **deregister** now emits a lineage
-   marker (was silent — fixed + live-verified). **rename** is unsupported on the `dir` backend (501), so it
-   emits nothing — moot, not a gap.
+6. **Lineage lifecycle emits.** **deregister** emits a lineage marker. **rename** is unsupported on the `dir`
+   backend (501), so it emits nothing — moot, not a gap.
 
 7. **Durable-consumer config drift wedges every durable subscription at upgrade — self-heals in
    ~20–25 min (observed live 2026-07-13).** JetStream durables are create-once: upgrading a
@@ -155,7 +156,7 @@ Cloud-native guards on the *deployment*, complementing the event-path guarantees
 chart and live-verified on kind.
 
 - **No plaintext secrets in the render.** OpenFGA's datastore DSN comes from `secretKeyRef`
-  (`datastore.existingSecret`), not a hardcoded `postgres://lance:lance@…`; the S3 secret + AGE password are
+  (`datastore.existingSecret`), not a hardcoded `postgres://lance:lance@…`; the S3 secrets are
   consumed from OpenBao at boot when a secret store is configured. `helm template -f values-prod.yaml` shows
   zero plaintext secret values in env/args.
 - **Graceful rollout drain.** Every app Deployment has a `preStop` sleep + `terminationGracePeriodSeconds`
@@ -170,13 +171,10 @@ chart and live-verified on kind.
   `USER` — uid 10001 — so the kubelet can verify non-root at admission), drop **ALL**
   capabilities, no privilege escalation, `seccompProfile: RuntimeDefault`, and `readOnlyRootFilesystem`
   with a writable `/tmp` emptyDir for scratch (`lance.securityContext`, `security.readOnlyRootFilesystem`).
-- **Single-flight reconcile.** The B4 reconcile sweep runs under a Postgres
-  advisory lock (`repository.reconcile_lock`) so the per-replica cron can't double-drive a back-fill. And a
-  **UNIQUE index on every AGE vertex label's MERGE key** (`ensure_graph_constraints` at boot + the age-init
-  SQL) makes AGE's MATCH-then-CREATE safe under concurrency — a racing duplicate `CREATE` is rejected by the
-  DB (`duplicate key value violates unique constraint "lineage_run_uniq"`) instead of leaving a dup vertex.
-  Ingest MERGEs datasets in a **deterministic name-sorted order** so two concurrent ingests that first-create
-  the same vertices acquire the index locks in the same order — no deadlock (the index's only new failure mode).
+- **A relay tick needs no lock.** The relay cron fires on every lineage replica's sidecar, and every step is
+  idempotent (`lineage/api/relay_cron.py`): a drained event is recorded under its feed key, so a second record
+  lands no row; two prunes delete the same rows once; the forwarder's cursor moves only forward, so a slower
+  replica's tick never undoes a faster one's.
 
 ## Invariants of the lakehouse's own background work
 
@@ -210,7 +208,7 @@ PSA would reject `lineage`/`openfga-migrate` until their root init containers ar
 
 ## Bottom line
 
-- **Corruption:** not possible on the event path — idempotent MERGE on `run_id`.
+- **Corruption:** not possible on the event path — insert-only merges on each provenance table's primary key.
 - **Loss:** only in the commit->stage window the outbox narrows the gap to (a crash between the write and
   the stage, or a stage that fails AND a publish that fails). Everything staged or successfully published is
   durable + replayed.

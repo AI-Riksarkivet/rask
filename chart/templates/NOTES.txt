@@ -117,22 +117,21 @@ Reminders:
 {{- end }}
 
 {{- with .Values.services.lineage }}
-{{- $reconcile := .reconcile.enabled }}
+{{- $relay := .relay.enabled }}
 {{- $outbox := .outbox.enabled }}
-{{- if not (and $reconcile $outbox) }}
+{{- if not (and $relay $outbox) }}
 
   !! DATA LOSS WINDOW OPEN — the #4 lineage durability chain is broken.
-     A lineage event is staged to the outbox, published fire-and-forget, then dropped; the reconcile
-     sweep drains whatever a crash left behind. Both halves are ON by default; this install disabled:
+     A lineage event is staged to the outbox, published fire-and-forget, then dropped; the relay
+     drains whatever a crash left behind. Both halves are ON by default; this install disabled:
 {{- if not $outbox }}
        - services.lineage.outbox.enabled=false  -> nothing is staged, so a crash between the Lance
-         commit and the publish loses the event's author, inputs and column lineage PERMANENTLY.
-         Reconcile can then only back-fill that a version exists.
+         commit and the publish loses the event, its author and its inputs PERMANENTLY.
 {{- end }}
-{{- if not $reconcile }}
-       - services.lineage.reconcile.enabled=false -> nothing drains the outbox and nothing back-fills.
+{{- if not $relay }}
+       - services.lineage.relay.enabled=false -> nothing drains the outbox, prunes the feed or forwards it.
          A lost event stays lost, and staged events accumulate in s3://{{ $.Values.minio.bucket }}/_lineage_outbox forever.
 {{- end }}
-     Re-enable with: helm upgrade ... --set services.lineage.outbox.enabled=true --set services.lineage.reconcile.enabled=true
+     Re-enable with: helm upgrade ... --set services.lineage.outbox.enabled=true --set services.lineage.relay.enabled=true
 {{- end }}
 {{- end }}

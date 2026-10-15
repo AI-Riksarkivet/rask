@@ -51,30 +51,11 @@ export const COMPUTE_ZONE_NAV: ZoneNav = {
 					// route was `/compute/new` ("new" names the action, not the thing) and sat in no
 					// sidebar group at all, reachable only by typing the URL; renaming the route to
 					// `/compute/etl` then labelling the row "New run" just moved the same mistake up a
-					// layer. The row is the noun; "Runs" beside it is the same noun's history.
+					// layer. The row is the noun.
 					title: 'ETL',
 					href: '/compute/etl',
 					match: seg('/compute/etl'),
 					icon: Import,
-				},
-				{
-					// The run board. It was REMOVED for a while, because this row pointed at a route
-					// that did not exist and `nav-truth.test.ts` ("every sidebar href resolves to a
-					// real route") caught it — a row linking to a 404 advertises a capability the
-					// estate does not have.
-					//
-					// It is back because the page is back, and the page reads LINEAGE rather than the
-					// ingest service: that service still cannot list its own runs (three routes; a
-					// `RunStore` with only get/put, backed by a per-pod dict that is deliberately not
-					// durable). The graph every run writes to at START and COMPLETE/FAIL is the
-					// durable record of which runs exist.
-					//
-					// `seg` not `exact`: it lights up for `/compute/ingest/<run_id>` too, which is the
-					// detail page this list links into.
-					title: 'Ingest runs',
-					href: '/compute/ingest',
-					match: seg('/compute/ingest'),
-					icon: ListTree,
 				},
 			],
 		},

@@ -4,8 +4,8 @@ The OpenLineage HTTP-transport default path: any producer (our emitter, Airflow,
 configured with ``OPENLINEAGE_URL`` pointed here ingests with no glue — the lightweight-Marquez
 contract. Durable catalog→lineage delivery rides the Dapr subscription (``lineage.api.dapr``) instead.
 
-**THIS DOOR RECORDS; IT DOES NOT TRIGGER.** An event ingested here lands in AGE and the durable feed
-and drives NOTHING — the whole handler is authorize, ``ingest_event``, return, with no publish
+**THIS DOOR RECORDS; IT DOES NOT TRIGGER.** An event ingested here lands in the commit feed and the edge
+list and drives NOTHING — the whole handler is authorize, ``ingest_event``, return, with no publish
 anywhere on the path. The subscribers on the ``lineage.events.v1`` TOPIC (maintenance's arrival
 door, the notifications inbox) hear only what is published there, and nothing republishes from HTTP
 ingest onto that topic.
@@ -28,11 +28,11 @@ from fastapi.exceptions import RequestValidationError
 from lance_namespace import PermissionDeniedError
 from pydantic import ValidationError
 
-from lineage.api.dependencies import RepositoryDep, SettingsDep
+from lineage.api.dependencies import ProvenanceDep, SettingsDep
 from lineage.api.fga_deps import enforce_author, enforce_output_authz
 from lineage.api.security import CurrentToken
 from lineage.core.metrics import Door, Outcome, record_ingest_duration, record_outcome
-from lineage.models import DatasetEvent, RunEvent, UnauthoredRunError, UngovernedOutputError, parse_event, without_signature_facet
+from lineage.models import DatasetEvent, ForeignRunError, RunEvent, UnauthoredRunError, UngovernedOutputError, parse_event, without_signature_facet
 
 
 # Unversioned like every sibling router — the composition layer (api/v1/router.py) mounts this one
@@ -102,7 +102,7 @@ _EVENT_BODY = {
 
 @router.post("/lineage", status_code=201, openapi_extra=_EVENT_BODY)
 async def ingest_event(
-    body: Annotated[dict[str, Any], Body()], request: Request, repository: RepositoryDep, settings: SettingsDep, token: CurrentToken
+    body: Annotated[dict[str, Any], Body()], request: Request, provenance: ProvenanceDep, settings: SettingsDep, token: CurrentToken
 ) -> dict[str, str | None]:
     """Ingest one OpenLineage event — a ``RunEvent``, or a ``DatasetEvent`` for a change no job performed.
 
@@ -128,7 +128,7 @@ async def ingest_event(
     """
     # A REFUSAL IS COUNTED HERE, not left to the status code. This is the ONLY door for a producer with
     # no Dapr sidecar — the whole Ray lane, every runner, and any external OpenLineage producer — so a
-    # refusal here is a governed write whose run never reaches the graph while the producer exits
+    # refusal here is a governed write whose run never reaches the feed while the producer exits
     # successfully. `Outcome.REFUSED` exists because that loss "can be a silent, deliberate loss, so it
     # gets its own alert"; counting it only on the subscriber made the same loss alertable on one door
     # and invisible on the other.
@@ -153,23 +153,16 @@ async def ingest_event(
     try:
         enforce_author(event, token)
         await enforce_output_authz(event, request, settings, token)
-    except (UnauthoredRunError, UngovernedOutputError):
+    except (UnauthoredRunError, UngovernedOutputError, ForeignRunError):
         record_outcome(Outcome.UNREPAIRABLE, door=Door.HTTP)
         raise
     except PermissionDeniedError:
         record_outcome(Outcome.REFUSED, door=Door.HTTP)
         raise
     started = time.perf_counter()
-    # ONE transaction: the AGE graph and the durable /events row. A feed write that fails takes the
-    # ingest down with it, so the caller retries and the two can never disagree (see `ingest_event`).
-    # TWO DOORS, exactly as `services/consumer.py` routes them, because a static metadata change has
-    # no run and no job to record. Routing it through the run door is what mints a `(:Job)` for an
-    # operation nobody performed, one per table per operation — and the `/jobs` fold makes that Job's
-    # output set an access handle, so a phantom is an access-control object, not merely untidy.
-    if isinstance(event, DatasetEvent):
-        await repository.ingest_dataset_event(event)
-    else:
-        await repository.ingest_event(event)
+    # The edges, then the feed row, each keyed: a failure answers an error, the producer retries, and the
+    # retry lands what is missing and nothing twice (see `ProvenanceStore.record`).
+    await provenance.record(event)
     # Domain metrics for the HTTP transport too — every external producer lands here, so counting only the Dapr subscriber undercounted real ingest (audit 2026-07-15).
     # A 401 or a 422 still never reaches this point and needs no domain outcome: neither names a run the
     # graph should have held. An authorization refusal does, and is counted above.

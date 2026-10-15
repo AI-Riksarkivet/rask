@@ -195,7 +195,7 @@ type estate
         # (docs/audits/2026-09-25/lakekeeper-deep-read/authz.md §8 items 2 and 4).
         #
         # What the door sends is narrower than the feed row: the run, its state and time, the `author` and
-        # `lance` facets, and the output names (`lineage/api/v1/endpoints/runs.py::targeting_view`).
+        # `lance` facets, and the output names (`lineage/api/v1/endpoints/events.py::targeting_view`).
         define can_read_event_feed: owner or event_reader
 
 type warehouse

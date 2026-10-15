@@ -2,13 +2,11 @@
 
 The catalog publishes OpenLineage events to the Dapr ``pubsub.jetstream`` component; the Dapr sidecar
 persists them to NATS JetStream and delivers each to this service over HTTP (a CloudEvent envelope). The
-handler ingests into Apache AGE and returns a Dapr status: ``SUCCESS`` (ack), ``RETRY`` (transient — the
+handler records it in the commit feed and the edge list and returns a Dapr status: ``SUCCESS`` (ack), ``RETRY`` (transient — the
 sidecar redelivers per the component's ``backOff``/``maxDeliver``, then dead-letter-parks (see below); the
 stream retains it and this consumer's ``deliverPolicy: all`` re-sees it on restart), or ``DROP`` (a
-malformed payload that redelivery can't fix). Redelivery is safe: the authoritative graph is idempotent
-(nodes/edges MERGE on ``run_id``) and the durable events feed dedups on its ``(run_id, event_type,
-event_time)`` natural key — only the ``Run.events_count`` is a plain delivery counter (so a redelivery
-bumps it). The sidecar owns retry/backoff/trace-propagation as component config, not app code (the
+malformed payload that redelivery can't fix). Redelivery is safe: every feed row and edge is written under
+its key with an insert-only merge, so a redelivered event lands nothing new (``ProvenanceStore.record``). The sidecar owns retry/backoff/trace-propagation as component config, not app code (the
 decoupled microservice path — microservices.md). On retry exhaustion the sidecar DEAD-LETTER-PARKS the
 delivery on this app's ``dlq.*`` topic (Dapr-native DLQ, default-on via the ``dapr.resiliency.enabled``
 chart resiliency); the ``/dlq-event`` route ERROR-logs + acks it — a park-and-alert backstop, NOT
@@ -32,8 +30,8 @@ from lance_namespace import PermissionDeniedError
 from pydantic import ValidationError
 
 from lineage.core.metrics import Door, Outcome, record_ingest_duration, record_outcome
-from lineage.models import DatasetEvent, RunEvent, UnauthoredRunError, UngovernedOutputError, UnverifiedEventError, parse_event
-from lineage.services.repository import LineageRepository
+from lineage.models import DatasetEvent, ForeignRunError, RunEvent, UnauthoredRunError, UngovernedOutputError, UnverifiedEventError, parse_event
+from lineage.services.provenance import ProvenanceStore
 
 
 log = logging.getLogger(__name__)
@@ -45,7 +43,7 @@ _DROP = {"status": "DROP"}
 
 
 async def handle_cloud_event(
-    repository: LineageRepository,
+    provenance: ProvenanceStore,
     body: Any,
     authorize: Callable[[RunEvent | DatasetEvent, Mapping[str, Any]], Awaitable[None]] | None = None,
     *,
@@ -131,6 +129,11 @@ async def handle_cloud_event(
             log.warning("lineage_event_unauthored", extra={"run": event.run_id, "reason": str(exc)})
             record_outcome(Outcome.UNREPAIRABLE, door=door)
             return _SUCCESS
+        except ForeignRunError as exc:
+            # UNREPAIRABLE, so it is consumed rather than parked: no grant makes a run another subject's.
+            log.warning("lineage_event_foreign_run", extra={"run": event.run_id, "reason": str(exc)})
+            record_outcome(Outcome.UNREPAIRABLE, door=door)
+            return _SUCCESS
         except UngovernedOutputError as exc:
             # UNREPAIRABLE, so it is consumed rather than parked — a grant needs an OBJECT, and every
             # output this names carries zero tuples. Measured on the deployed estate 2026-09-19: all 7
@@ -149,16 +152,9 @@ async def handle_cloud_event(
             return _RETRY
     started = time.perf_counter()
     try:
-        # Graph and durable feed in one transaction — a failure here retries BOTH, which is what makes
-        # /events a complete projection rather than a subset (see `ingest_event`).
-        #
-        # TWO DOORS, because a static metadata change has no run and no job to record. Routing it
-        # through the run door is what mints a `(:Job)` for an operation nobody performed, one per
-        # table per operation — and the `/jobs` fold makes that Job's output set an access handle.
-        if isinstance(event, DatasetEvent):
-            await repository.ingest_dataset_event(event)
-        else:
-            await repository.ingest_event(event)
+        # The edges, then the feed row, each keyed: a failure here retries the delivery, and the retry lands
+        # what is missing and nothing twice (see `ProvenanceStore.record`).
+        await provenance.record(event)
     except Exception as exc:
         log.warning("lineage_ingest_failed", extra={"run": event.run_id, "error": str(exc)})
         record_outcome(Outcome.RETRIED, door=door)

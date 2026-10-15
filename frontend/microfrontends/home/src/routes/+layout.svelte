@@ -6,7 +6,6 @@
 	import { Toaster } from 'svelte-sonner';
 	import { AppShell } from '@rask/ui/shell';
 	import { onMount } from 'svelte';
-	import { lineageFeed, type LineagePulse } from '$lib/live/feeds.remote';
 	import { dismiss, markSeen, readInboxFeed, readInboxState } from '$lib/live/inbox.remote';
 	import type { Snippet } from 'svelte';
 	import { HOME_ZONE_NAV } from '$lib/nav';
@@ -15,29 +14,17 @@
 	let { children, data }: { children: Snippet; data: LayoutData } = $props();
 
 	// The navbar's notification bell (@rask/ui's NotificationCenter, mounted by AppShell). The shell owns
-	// the surface and never fetches — the zone owns the transport — and the transport is now shared
-	// (`@rask/api/runs-feed`), so a run that started, finished or FAILED reaches whoever is in this zone
-	// rather than only whoever happens to be on the run board. Opened ON MOUNT, never at init: a live
-	// query touched during render makes the SERVER hold the page until the feed's first value.
-	let feed = $state<{ current: LineagePulse | undefined } | null>(null);
+	// the surface and never fetches — the zone owns the transport, the inbox remote functions below.
 
 	// The read state: per SUBJECT for the rows the inbox holds, per TAB for the rest. The component has
 	// always exposed these two sets as bindable with `onseen`/`ondismiss` documented as "the persistence
 	// seam"; this is the zone giving that seam its backend (`services/notifications`, one inbox actor
 	// per subject).
-	//
-	// THE BOUND, and it is wider than it looks because no gate can see it. The rows below come from
-	// `GET /runs`, governed by DATASET visibility — every run whose outputs you can `can_get_metadata`,
-	// whoever ran it. The inbox is filled by AUTHORSHIP (D4's v1 targeting: `audience_for` is
-	// `(notice.author,)`) and only on terminal states. So a stage runner's FAILED run you can see but did not
-	// start has no pointer in your inbox: marking it read persists nothing and it is unread again after
-	// a reload, exactly as before S1. S3 is what closes that — it makes the panel render inbox rows
-	// instead of run rows, so the two sets stop being different sets.
 	let seen = $state<string[]>([]);
 	let dismissed = $state<string[]>([]);
 
-	// S3: the panel's Inbox tab renders THESE, not the run rows. `null` = un-wired (no session, no
-	// service) and the bell falls back to a single run list with no tabs — the auth-off dev shape.
+	// The panel renders THESE. `null` = un-wired (no session, no
+	// service) and the bell has no inbox to render — the auth-off dev shape.
 	// The query OBJECT, held once — not a $state snapshot refilled by re-calling the query.
 	// Re-calling a remote `query()` hands back the CACHED value, so a `readInboxFeed()` after a write
 	// re-read exactly what was already there and the badge never moved. `.refresh()` is the only thing
@@ -48,9 +35,8 @@
 	const inbox = $derived(inboxQuery?.current ?? null);
 
 	onMount(() => {
-		feed = lineageFeed();
 		inboxQuery = readInboxFeed();
-		// Seeded on mount, never during render, and for the same reason the feed is: the landing page
+		// Seeded on mount, never during render: the landing page
 		// must not wait on the notification plane to paint. UNION, not replace — anything this tab has
 		// already marked while the read was in flight stays marked.
 		void readInboxState()
@@ -66,9 +52,6 @@
 			});
 	});
 
-	// `.current` is undefined until the first value lands; an empty feed and a not-yet-connected one both
-	// render as "no notifications", which is the honest reading of both.
-	//
 	// The two writes are optimistic and best-effort: the local set moves first so the badge never waits
 	// on a round trip, and a refused write leaves this tab consistent with itself.
 	//
@@ -79,7 +62,6 @@
 	// is not is a repair loop. A write lost to a restart therefore surfaces on the next RELOAD, where
 	// the seeded set is missing it and the following close sends it again.
 	const notifications = $derived({
-		runs: feed?.current?.runs ?? [],
 		// `undefined`, never `[]`, when the inbox did not answer: an EMPTY inbox is a fact worth
 		// rendering ("nothing addressed to you"), while an ABSENT one means this stack has no inbox to
 		// speak of and the bell must not claim otherwise by showing an empty Inbox tab.
@@ -102,7 +84,6 @@
 				.then(() => inboxQuery?.refresh())
 				.catch(() => {});
 		},
-		allHref: '/lakehouse/lineage/runs',
 	});
 </script>
 

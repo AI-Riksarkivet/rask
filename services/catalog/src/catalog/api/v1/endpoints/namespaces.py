@@ -848,13 +848,11 @@ async def drop_namespace(
     # grants are: undrop rebuilds the subtree and the binding must still be there to route it.
     if not recoverable and len(segments) == 1:
         await run_in_threadpool(warehouses.unbind_namespace, settings.registry_root, settings.storage_options(), segments[0])
-    # RECORD THE DELETION OF EVERY TABLE THIS CASCADE DETACHED, exactly as the single-table door does ("the dataset
-    # node persists in the graph, named a `drop_table` run"); a destroyed subtree announced each table as it went.
-    # `repository.dropped_at` reads a drop from these events ([[LH-144]]), so a table nothing records stays
-    # indistinguishable from a live one and `lineage_reconcile_ungoverned` names it every tick. Measured 2026-09-18:
-    # 20 datasets reported ungoverned on the live estate, 8 of them tables this repo's own suites had cascade-dropped
-    # hours earlier. Emitted for a recoverable drop too, matching that door — the undrop emits a `register_table`
-    # marker per table, which lineage reads as the table existing again.
+    # RECORD THE DELETION OF EVERY TABLE THIS CASCADE DETACHED, exactly as the single-table door does (a `drop_table`
+    # event per table); a destroyed subtree announced each table as it went. A follower of the feed learns a table
+    # is gone only from these events ([[LH-144]]), so a table nothing records stays indistinguishable from a live
+    # one. Emitted for a recoverable drop too, matching that door — the undrop emits a `register_table` marker per
+    # table, which a follower reads as the table existing again.
     if recoverable:
         for resource, child_segments in descendants:
             if resource == "table":

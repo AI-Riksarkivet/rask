@@ -1,10 +1,6 @@
 import * as v from 'valibot';
 import { error } from '@sveltejs/kit';
 import { command, query, getRequestEvent } from '$app/server';
-import { env } from '$env/dynamic/private';
-import { lineageAuthHeaders } from '@rask/api/runs-feed';
-import { isIngestJob } from './ingest-job';
-import { readSecretFile } from '@rask/api/bff';
 import {
 	getIngestRun,
 	IngestRefusal,
@@ -45,9 +41,6 @@ function bearerHeaders(): Record<string, string> {
 
 /** A run id. Parsed at the boundary so a malformed id is refused before it reaches the gateway. */
 const RunId = v.pipe(v.string(), v.trim(), v.minLength(1));
-
-/** Same default as this zone's notification feed — one zone, one lineage endpoint. */
-const LINEAGE_API = env.LINEAGE_API ?? 'http://localhost:8001';
 
 /**
  * One ingest run's live status.
@@ -169,12 +162,11 @@ const LifecycleInput = v.object({
  *
  * A `command()` and not a `query()` because it MUTATES — and a single-flight refresh is attached for
  * exactly the reason `startIngest`'s comment says one was not: there IS something on screen this
- * staleness-invalidates now. The run's own status and the runs list both change the moment the door
- * accepts, and a remote `query()` re-CALLED returns its cached value — so without the explicit
+ * staleness-invalidates now. The run's own status changes the moment the door accepts, and a remote `query()` re-CALLED returns its cached value — so without the explicit
  * `.refresh()` the button would work, the door would act, and the page would keep showing the old
  * state until a reload. That is the estate's most-repeated remote-function trap.
  *
- * `void` on the refreshes deliberately: a refresh that fails must not fail the mutation the user
+ * `void` on the refresh deliberately: a refresh that fails must not fail the mutation the user
  * already succeeded at. The catch keeps an unhandled rejection from evicting the query from cache,
  * which is what silently kills a poll loop.
  */
@@ -192,9 +184,6 @@ export const runLifecycle = command(
 		void getIngestRunStatus(runId)
 			.refresh()
 			.catch(() => {});
-		void listIngestRuns()
-			.refresh()
-			.catch(() => {});
 
 		const value: IngestLifecycle = res.value;
 		return {
@@ -207,89 +196,3 @@ export const runLifecycle = command(
 		};
 	},
 );
-
-/** One ingest run as the LIST renders it — deliberately fewer fields than the detail page. */
-export interface IngestRunRow {
-	run_id: string;
-	/** The INGEST run id — the id `/ingests/{id}` answers to — from the producer's lance facet.
-	 *  `run_id` above is the graph's DERIVED id (a one-way UUID5): linking with it produced a board
-	 *  where every row 404'd. Null for runs recorded before producers stated it; the page renders
-	 *  those unlinked with the reason, never guesses. */
-	source_run_id: string | null;
-	/** What the run wrote (the terminal event's outputs) — the human handle for a row. */
-	table: string | null;
-	state: string | null;
-	progress_done: number | null;
-	progress_total: number | null;
-	error_message: string | null;
-	started_at: string | null;
-	updated_at: string | null;
-}
-
-// The job matcher lives in a sibling module: it is namespace-qualified in the graph, it needed a test,
-// and a `.remote.ts` may export only remote functions. See `ingest-job.ts` for why a bare-name
-// comparison left this board permanently empty.
-
-/** How many rows the list shows. Trimmed on the SERVER, and that is not a nicety: `/runs` measured
- *  330_103 bytes for 875 runs on the live estate (`@rask/api/runs-feed:156`). Shipping that to a
- *  browser to filter it there would send a third of a megabyte to render twenty rows. */
-const WINDOW = 50;
-
-/**
- * The ingest plane's RUN LIST.
- *
- * It reads LINEAGE, not the ingest service, and that is the whole reason this exists at all: the
- * ingest service cannot list its own runs. It has three routes (`/sources`, `POST /ingests`,
- * `GET /ingests/{run_id}`) and its `RunStore` has only `get`/`put` — and the production store is
- * `InMemoryRunStore`, a per-pod dict that is DELIBERATELY not durable ("run truth is the workflow's,
- * not this cache"). So there is no index to add a `list()` to; the durable record of which runs
- * exist is the lineage graph, which every ingest run writes to at START and again at COMPLETE/FAIL.
- *
- * The trade is worth naming: lineage rows are generic runs, so this list carries state and progress
- * but NOT the ingest-specific half (committed version, the §D2 publication fields, per-unit errors).
- * Those live on the detail page, which reads the ingest door directly. A list that lies about having
- * them would be worse than one that links to where they are.
- *
- * Auth prefers the USER's bearer and falls back to the zone's read-only service identity, exactly
- * like the notification feed — so a signed-in operator sees what they are entitled to and an
- * anonymous page load still renders the read-only board.
- */
-export const listIngestRuns = query(async (): Promise<IngestRunRow[]> => {
-	const { fetch, locals } = getRequestEvent();
-	const res = await fetch(`${LINEAGE_API}/runs`, {
-		headers: lineageAuthHeaders({
-			accessToken: locals.session?.accessToken,
-			serviceToken: readSecretFile(env.LINEAGE_SERVICE_TOKEN_FILE),
-		}),
-	});
-	// A governed refusal and an outage are both "no board" to this page, and neither is worth
-	// throwing across the remote boundary — the caller renders an empty list with its own honest
-	// message rather than a boundary error over a feed that is merely unavailable.
-	if (!res.ok) return [];
-
-	// Field-typed picks, not casts (#94): `(r.state as string) ?? null` would hand a NUMBER through
-	// typed as string — a lie the board renders. A wrong-typed field degrades to null instead.
-	const str = (u: unknown): string | null => (typeof u === 'string' ? u : null);
-	const num = (u: unknown): number | null => (typeof u === 'number' ? u : null);
-	const body: unknown = await res.json().catch(() => null);
-	const rows =
-		body !== null && typeof body === 'object' && 'runs' in body && Array.isArray(body.runs)
-			? body.runs
-			: [];
-	return rows
-		.filter((r): r is Record<string, unknown> => typeof r === 'object' && r !== null)
-		.filter((r) => isIngestJob(r.job))
-		.slice(0, WINDOW)
-		.map((r) => ({
-			run_id: String(r.run_id ?? ''),
-			source_run_id: str(r.source_run_id),
-			table: Array.isArray(r.outputs) && typeof r.outputs[0] === 'string' ? r.outputs[0] : null,
-			state: str(r.state),
-			progress_done: num(r.progress_done),
-			progress_total: num(r.progress_total),
-			error_message: str(r.error_message),
-			started_at: str(r.started_at),
-			updated_at: str(r.updated_at),
-		}))
-		.filter((r) => r.run_id);
-});

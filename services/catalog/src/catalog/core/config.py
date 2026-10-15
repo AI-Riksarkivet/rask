@@ -292,6 +292,15 @@ class CatalogLineageSettings(BaseSettings):
     #: user's pipeline reads off lineage's `GET /events` to start its next hop, a lost one does not merely
     #: under-report provenance: the next tier's run silently never happens.
     lineage_outbox_uri: str = Field(default="", alias="LANCE_LINEAGE_OUTBOX_URI")
+    #: The namespace this catalog keeps for provenance (ADR 0158): lineage's commit feed and edge list are tables
+    #: in it, governed like any other. The catalog creates it at boot, protects it, and never announces a write
+    #: under it on lineage, because lineage records every announcement as a row of those tables. Empty, the code
+    #: default, keeps no such namespace; the chart names one whenever it deploys lineage.
+    provenance_namespace: str = Field(default="", alias="LANCE_PROVENANCE_NAMESPACE")
+    #: The subjects that write the provenance namespace: lineage's service-account subject
+    #: (`kubernetes~system:serviceaccount:<ns>:<sa>`). Each is granted `writer` on the namespace at boot, which
+    #: reaches every table in it and nothing outside it.
+    provenance_writers: list[str] = Field(default_factory=list, alias="LANCE_PROVENANCE_WRITERS")
 
 
 class CatalogMaintenanceSettings(BaseSettings):

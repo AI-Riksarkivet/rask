@@ -33,7 +33,7 @@ from catalog.core.control_signing import control_sign
 from catalog.core.lineage_emit import make_emitter
 from catalog.core.namespace import build_namespace
 from catalog.core.vending import EncryptionAtRest, make_vendor
-from catalog.services import warehouses
+from catalog.services import provenance_namespace, warehouses
 from lineage_kit import SigningKey, parse_published_keys
 from service_kit.body_limit import BodySizeLimitMiddleware
 from service_kit.control_emit import make_control_emitter
@@ -53,6 +53,30 @@ log = logging.getLogger(__name__)
 configure_app_logging()  # INFO audit/lifecycle logs reach OTLP (obs audit 2026-07-13)
 
 PROBLEM_JSON = "application/problem+json"
+#: The backoff of the provenance namespace's boot task: doubling from the first delay, capped at the second.
+_PROVENANCE_RETRY_FIRST_SECONDS = 1.0
+_PROVENANCE_RETRY_MAX_SECONDS = 60.0
+
+
+async def _ensure_provenance_namespace(app: FastAPI) -> None:
+    """Keep the namespace lineage's feed and edge list live in, retrying until it holds (`services.provenance_namespace`).
+
+    Retried rather than tried once: lineage writes nothing until the namespace exists and grants it `writer`, and
+    the store or OpenFGA this needs may still be starting when the catalog is. Every step is idempotent.
+    """
+    from catalog.services.provenance_namespace import ensure_provenance_namespace
+
+    delay = _PROVENANCE_RETRY_FIRST_SECONDS
+    while True:
+        try:
+            await ensure_provenance_namespace(app.state.namespace, app.state.settings, getattr(app.state, "fga", None))
+            return
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.warning("provenance_namespace_error", extra={"error": str(exc), "retry_in_seconds": delay})
+        await asyncio.sleep(delay)
+        delay = min(delay * 2, _PROVENANCE_RETRY_MAX_SECONDS)
 
 
 async def _backfill_cascade_grants(app: FastAPI) -> None:
@@ -265,6 +289,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         job_namespace=settings.lineage_job_namespace,
         timeout_seconds=settings.lineage_emit_timeout_seconds,
         project_resolver=_resolve_project,
+        # The provenance namespace's own rows are never announced (`services.provenance_namespace`).
+        unannounced=lambda namespace: provenance_namespace.is_provenance(namespace, settings),
         outbox_uri=settings.lineage_outbox_uri,
         storage_options=settings.storage_options(),
         # The catalog's self-description for the standard `catalog` facet ([[LIN-002]]): the Lance
@@ -336,12 +362,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     #   * Per-replica repetition is harmless: every write is idempotent (`write_tuples` retries
     #     one-by-one past a duplicate), so replicas racing land the same tuples.
     backfill_task = asyncio.create_task(_backfill_cascade_grants(app))
+    # The namespace lineage keeps its tables in, in the background for the backfill's reasons: lineage retries
+    # its tables until the namespace exists, so a slow OpenFGA or store must not delay this catalog's readiness.
+    provenance_task = asyncio.create_task(_ensure_provenance_namespace(app))
     try:
         yield
     finally:
         app.state.shutting_down = True
         base_judge.install(None)
         backfill_task.cancel()
+        provenance_task.cancel()
         if signing is not None:
             await signing.stop()
         fga_client = getattr(app.state, "fga", None)

@@ -177,9 +177,6 @@ test('below the breakpoint the zone links collapse into one overflow menu that s
 		'/lakehouse/catalog',
 		'/lakehouse/catalog/tables',
 		'/lakehouse/catalog/warehouses',
-		'/lakehouse/lineage',
-		'/lakehouse/lineage/runs',
-		'/lakehouse/lineage/columns',
 		// The MODELS zone's root — a zone entry in this bar now, not a `/lakehouse/models` row. Zone
 		// roots carry the trailing slash for the same 308 reason as the two below.
 		'/models/',
@@ -246,7 +243,6 @@ test('the wide Lakehouse panel carries NO filler self-row — its sub-area rows 
 		'/lakehouse/catalog/tables',
 		'/lakehouse/catalog/namespaces',
 		'/lakehouse/catalog/warehouses',
-		'/lakehouse/lineage',
 	]) {
 		await expect(panel.locator(`a[href="${href}"]`)).toHaveCount(1);
 	}
@@ -272,7 +268,7 @@ test('the wide Lakehouse panel carries NO filler self-row — its sub-area rows 
 	// inactive siblings', which is how "alice sees the Governance column" passed against a 69px panel.
 	// innerText reflects RENDERED text, and the group labels are CSS-uppercased, so compare case-insensitively.
 	const visible = (await panel.innerText()).toLowerCase();
-	for (const group of ['catalog', 'models', 'lineage']) {
+	for (const group of ['catalog', 'models']) {
 		expect(visible, `the ${group} column is not visible in the panel`).toContain(group);
 	}
 });

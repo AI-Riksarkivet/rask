@@ -25,10 +25,10 @@ in OpenFGA before anyone reads it; the maintenance policy, the protection record
 
 ## How a pipeline learns a tier changed
 
-The catalog announces every committed write as an OpenLineage event on lineage, which records it in its durable event
-log. Lineage's `GET /events` is the feed a pipeline reads with its own token; today it pages newest-first with an
-`after` cursor, and the forward `since=` cursor and a documented commit-event shape are LH-472 (#598). The NATS topics
-the announcement travels on are internal to the estate.
+The catalog announces every committed write as an OpenLineage event on lineage, which records it in its durable commit
+feed. Lineage's `GET /events` is the feed a pipeline follows forward with its own token, from a `since=` cursor; the
+contract is [`COMMIT-EVENTS.md`](COMMIT-EVENTS.md). The NATS topics the announcement travels on are internal to the
+estate.
 
 A pipeline emits its own OpenLineage run events (`POST /api/lineage/api/v1/lineage`, the OpenLineage HTTP transport's
 default path) for the work it does, and notifications target a person from those events' `author.sub`
@@ -81,10 +81,6 @@ default path) for the work it does, and notifications target a person from those
   code.
 
 ## Try it
-
-`make medallion-demo` runs `scripts/medallion_demo.py`, a client that writes bronze, silver and gold as a pipeline
-would and emits an OpenLineage event per step, against a local stack with the lineage UI
-([LINEAGE.md](LINEAGE.md)).
 
 `make e2e-byo-pipeline` proves the whole contract on a deployed estate
 (`tests/e2e-py/test_a_bring_your_own_pipeline_runs_end_to_end.py`): a stock pylance client seeds bronze through the

@@ -1,5 +1,5 @@
 <script lang="ts">
-	// #113 the commit log — one scannable table answering what changed, by whom, and when, for every version
+	// #113 the commit log — one scannable table answering what changed and when, for every version
 	// of a catalog table. It replaces the old three-column "Versions, branches & tags" block, which showed
 	// `version | committed | manifest` for the newest ten and hid the rest.
 	//
@@ -12,14 +12,9 @@
 	//  · WHEN — the manifest's `timestamp_millis` (unambiguous epoch → `…Z`). The history row's own
 	//    `timestamp` is an offset-less local-clock string; handing it to `new Date()` would silently render
 	//    every commit in the browser's zone. It is only ever shown verbatim, as the fallback.
-	//  · WHO — the lineage store's producing run, joined on the version number. Lance has no notion of a
-	//    user and must not grow one; identity is our concern. An unjoined version renders `—`, never a
-	//    guess: maintenance (GC/compact) writes versions with no governed run, the compaction service
-	//    records an EMPTY author, and a client-direct write has no author to record.
-	//  · ROWS/BYTES — the same run's measured output statistics. `—` when it measured nothing, never `0`.
 	//
-	// The rows themselves come from the FORMAT, not from lineage: a producing run can name a version the GC
-	// has since reclaimed, and a log that listed those would be listing commits that no longer exist.
+	// The rows themselves come from the FORMAT: the versions the catalog reports are the only versions
+	// that exist.
 	import { Badge } from '@rask/ui/badge';
 	import {
 		createSvelteTable,
@@ -36,9 +31,6 @@
 	} from '@rask/ui/data-table';
 	import { Select } from '@rask/ui/select';
 	import { ChevronDown, ChevronRight, RefreshCw } from '@lucide/svelte';
-	import type { ProducerInfo } from '@rask/api/lineage';
-	import type { Me } from '@rask/api';
-	import { fetchMeViaBff } from '$lib/http';
 	import { fetchTableHistory, type CatalogResult, type HistoryRow } from './catalog';
 	import {
 		createTableBranch,
@@ -49,20 +41,14 @@
 		restoreTableVersion,
 	} from './remote/catalog.remote';
 	import {
-		authorFor,
-		displayAuthor,
-		failedAttempts,
 		fmtBytes,
 		fmtEpoch,
-		fmtInstant,
 		isSchemaChange,
 		opTone,
 		rawFields,
 		summarizeChange,
-		type Authorship,
 		type ChangeBit,
 	} from './history';
-	import VersionCompare from './VersionCompare.svelte';
 
 	type Manifest = {
 		version?: number;
@@ -76,7 +62,6 @@
 		manifests,
 		tags,
 		branches,
-		producers,
 		currentVersion,
 		onchange,
 	}: {
@@ -86,10 +71,6 @@
 		manifests: Manifest[];
 		tags: [string, { version?: number }][];
 		branches: [string, { createAt?: number; manifestSize?: number | null }][];
-		/** The producing runs for this dataset, already fetched by the page for its quality badge (so the
-		 *  author join costs no extra request). `null` means the lineage store did not answer at all — a
-		 *  different fact from "no run recorded this version", and shown as one. */
-		producers: ProducerInfo[] | null;
 		/** The version the page believes is current, for the restore staleness check. */
 		currentVersion: number | null;
 		/** Reload the page's aggregate after a write (a restore/tag/branch changes it). */
@@ -117,10 +98,6 @@
 		const forTable = table;
 		const forLimit = Number(limit);
 		const mine = ++historyToken;
-		if (!meAsked) {
-			meAsked = true;
-			void fetchMeViaBff().then((res) => (me = res));
-		}
 		loading = true;
 		history = null;
 		historyStatus = 0;
@@ -152,11 +129,6 @@
 		void loadHistory();
 	});
 
-	// Our own identity, for resolving OUR OWN sub in the author column. Fetched once per mount alongside the
-	// first log read — `meAsked` is a plain flag, not state, so reading it here cannot re-trigger the effect.
-	let me = $state<Me | null>(null);
-	let meAsked = false;
-
 	const txnByVersion = $derived(new Map((history ?? []).map((row) => [row.version, row])));
 	const manifestByVersion = $derived(
 		new Map(
@@ -183,11 +155,10 @@
 		operation: string | null;
 		change: ChangeBit[];
 		schemaChange: boolean;
-		who: Authorship | null;
 	};
 
 	// The log's rows are the versions the FORMAT reports, newest first: the history endpoint when it answers
-	// (it is the paginated source), else the detail aggregate's manifest list. Lineage only ever enriches.
+	// (it is the paginated source), else the detail aggregate's manifest list.
 	const rows = $derived.by((): LogRow[] => {
 		const versions =
 			history !== null
@@ -207,7 +178,6 @@
 				operation: txn?.operation ?? null,
 				change: txn ? summarizeChange(txn) : [],
 				schemaChange: txn ? isSchemaChange(txn) : false,
-				who: authorFor(version, producers),
 			};
 		});
 	});
@@ -231,8 +201,6 @@
 			`v${row.version}`,
 			row.operation ?? '',
 			row.change.map((b) => b.text).join(' '),
-			row.who?.author ?? '',
-			row.who?.operation ?? '',
 			row.refs.join(' '),
 		]
 			.join(' ')
@@ -389,10 +357,6 @@
 	const versionOptions = $derived(
 		rows.map((r) => ({ value: String(r.version), label: `v${r.version}` })),
 	);
-	const attempted = $derived(failedAttempts(producers));
-	// The rows that could not be attributed — the legend is only worth showing when something needs it.
-	const unattributed = $derived(rows.filter((r) => r.who?.author == null).length);
-	let compareBase = $state('');
 
 	// ── the DataTable (the shared @rask/ui shell over tanstack: sorting + a real page size) ──
 	let sorting = $state<SortingState>([]);
@@ -424,12 +388,6 @@
 			cell: ({ row }) => renderSnippet(changeCell, row.original),
 		},
 		{
-			id: 'who',
-			header: 'by whom',
-			cell: ({ row }) => renderSnippet(whoCell, row.original),
-			meta: { headerClass: 'w-36' },
-		},
-		{
 			id: 'when',
 			accessorFn: (r) => r.committed ?? 0,
 			header: ({ column }) =>
@@ -440,12 +398,6 @@
 				}),
 			cell: ({ row }) => renderSnippet(whenCell, row.original),
 			meta: { headerClass: 'w-36' },
-		},
-		{
-			id: 'size',
-			header: 'rows / bytes',
-			cell: ({ row }) => renderSnippet(sizeCell, row.original),
-			meta: { headerClass: 'w-28' },
 		},
 		{
 			id: 'actions',
@@ -535,23 +487,6 @@
 	{/if}
 {/snippet}
 
-{#snippet whoCell(row: LogRow)}
-	{#if row.who?.author}
-		{@const shown = displayAuthor(row.who.author, me)}
-		<span class="who">
-			<span class:mono={!shown.isMe} title={shown.title}>{shown.text}</span>
-			{#if row.who.operation}<span class="via">via {row.who.operation}</span>{/if}
-			{#if row.who.qualityPassed !== null}
-				<span class="qual" class:bad={!row.who.qualityPassed}>
-					{row.who.qualityPassed ? 'quality passed' : 'quality blocked'}
-				</span>
-			{/if}
-		</span>
-	{:else}
-		<span class="mut" title="no governed run recorded this version">—</span>
-	{/if}
-{/snippet}
-
 {#snippet whenCell(row: LogRow)}
 	{#if row.committed != null}
 		<span class="mono when">{fmtEpoch(row.committed, 'ms')}</span>
@@ -567,20 +502,8 @@
 	{/if}
 {/snippet}
 
-{#snippet sizeCell(row: LogRow)}
-	{#if row.who?.rowCount != null || row.who?.sizeBytes != null}
-		<span class="mono size">
-			{row.who.rowCount != null ? `${row.who.rowCount} rows` : '— rows'}
-			<span class="sep">·</span>
-			{fmtBytes(row.who.sizeBytes)}
-		</span>
-	{:else}
-		<span class="mut" title="the run that wrote this version measured no output statistics">—</span>
-	{/if}
-{/snippet}
-
 {#snippet actionsCell(row: LogRow)}
-	<!-- A chevron, not the word "details": seven columns of real content already fill the card, and the
+	<!-- A chevron, not the word "details": five columns of real content already fill the card, and the
 	     word cost more width than the whole actions column is worth. The accessible name still says what it
 	     opens, and the row itself is clickable. -->
 	<button
@@ -599,8 +522,7 @@
 <section class="hist">
 	<h2>Commit log</h2>
 	<p class="mut">
-		Every version of this table, newest first — read out of the Lance transaction log, with the
-		governed run that wrote each version joined on the version number.
+		Every version of this table, newest first — read out of the Lance transaction log.
 	</p>
 
 	{#if historyDrift}
@@ -658,7 +580,7 @@
 		<input
 			class="mono search"
 			bind:value={search}
-			placeholder="search predicate, author…"
+			placeholder="search predicate, tag…"
 			aria-label="Search the log"
 		/>
 		<Select bind:value={limit} ariaLabel="How many commits to read" options={LIMITS} />
@@ -692,23 +614,8 @@
 		<p class="mut">{restoreNote}</p>
 	{/if}
 
-	{#if unattributed > 0}
-		<p class="mut legend">
-			<strong>—</strong> in <em>by whom</em> means no governed run recorded that version ({unattributed}
-			of {rows.length}): garbage collection and compaction write versions without one (the
-			compaction service records an empty author), and a write that bypassed the catalog has no
-			author to record. It is never a guess.
-		</p>
-	{/if}
-	{#if producers === null}
-		<p class="mut legend">
-			The lineage store did not answer, so no author could be joined for any version — this is a
-			missing answer, not an absence of authors.
-		</p>
-	{/if}
-
 	{#if selected}
-		<!-- The selected commit: its raw transaction fields (uninterpreted), the run that wrote it, and the
+		<!-- The selected commit: its raw transaction fields (uninterpreted) and the
 		     actions that act on THIS version. -->
 		<div class="panel" data-testid="commit-panel">
 			<div class="phead">
@@ -729,27 +636,6 @@
 				<dd class="mono">
 					{fmtBytes(selected.manifestSize)}{selected.eTag ? ` · etag ${selected.eTag}` : ''}
 				</dd>
-				{#if selected.who}
-					<dt>run</dt>
-					<dd class="mono">
-						{selected.who.author ?? '—'}
-						{#if selected.who.operation}<span class="mut"> · {selected.who.operation}</span>{/if}
-						{#if selected.who.runId}<span class="mut"> · {selected.who.runId}</span>{/if}
-						{#if selected.who.eventTime}<span class="mut">
-								· {fmtInstant(selected.who.eventTime)}</span>{/if}
-					</dd>
-					{#if selected.who.others.length > 0}
-						<dt>other runs</dt>
-						<dd class="mono">
-							{#each selected.who.others as run (run.run_id)}
-								<div>
-									{run.run_id} · {run.event_type ?? '—'} · {fmtInstant(run.event_time)} · {run.author ||
-										'—'}
-								</div>
-							{/each}
-						</dd>
-					{/if}
-				{/if}
 			</dl>
 
 			<h3>Raw transaction fields</h3>
@@ -785,11 +671,6 @@
 						onclick={() => runTag(selected.version)}
 					>
 						{tagBusy ? '…' : `Tag v${selected.version}`}
-					</button>
-				</div>
-				<div class="act">
-					<button class="btn tiny ghost" onclick={() => (compareBase = String(selected.version))}>
-						Compare from v{selected.version}
 					</button>
 				</div>
 				<div class="act">
@@ -834,32 +715,6 @@
 			{#if restoreError}<p class="error">{restoreError}</p>{/if}
 		</div>
 	{/if}
-
-	{#if attempted.length > 0}
-		<!-- A FAIL/ABORT run carries no version (it produced no data), so it can never be a row in the log.
-		     It is still part of the record and belongs beside it, not interleaved into it. -->
-		<h3>Attempted writes that produced no version</h3>
-		<table class="raw">
-			<tbody>
-				{#each attempted as run (run.run_id)}
-					<tr>
-						<td class="mono">{run.event_type}</td>
-						<td class="mono">{fmtInstant(run.event_time)}</td>
-						<td class="mono">{run.author || '—'}</td>
-						<td>{run.error_message ?? ''}</td>
-					</tr>
-				{/each}
-			</tbody>
-		</table>
-	{/if}
-
-	<h3>Compare two versions</h3>
-	<VersionCompare
-		{table}
-		{producers}
-		bind:base={compareBase}
-		versions={rows.map((r) => r.version)}
-	/>
 
 	<h3>Branches</h3>
 	<div class="refs">
@@ -994,9 +849,6 @@
 		font-size: 12px;
 		margin: 0 0 8px;
 	}
-	.legend {
-		margin-top: 8px;
-	}
 	.banner {
 		border: 1px solid var(--line);
 		border-radius: var(--radius-sm);
@@ -1117,26 +969,11 @@
 		color: var(--warn);
 		font-size: 10px;
 	}
-	.bits,
-	.who,
-	.size {
-		font-size: 12px;
-	}
-	/* The log stays scannable only if no single cell can stretch the table: an opaque subject, a long
-	   predicate and a long index name are all unbroken strings. Each is capped and ellipsised, with the
-	   full text in the cell's title (and, uncut, in the commit panel below). */
-	.who {
-		display: inline-flex;
-		align-items: baseline;
-		gap: 4px;
-		max-width: 17ch;
-	}
-	.who > span:first-child {
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
+	/* The log stays scannable only if no single cell can stretch the table: a long predicate and a long
+	   index name are unbroken strings. Each is capped and ellipsised, with the full text in the cell's
+	   title (and, uncut, in the commit panel below). */
 	.bits {
+		font-size: 12px;
 		display: inline-block;
 		max-width: 20ch;
 		overflow: hidden;
@@ -1147,21 +984,6 @@
 	.sep {
 		color: var(--faint);
 		padding: 0 3px;
-	}
-	.via {
-		color: var(--mut);
-		font-size: 11px;
-	}
-	.qual {
-		border: 1px solid color-mix(in oklab, var(--ok) 45%, transparent);
-		border-radius: 999px;
-		color: var(--ok);
-		font-size: 10px;
-		padding: 0 5px;
-	}
-	.qual.bad {
-		border-color: color-mix(in oklab, var(--fail) 45%, transparent);
-		color: var(--fail);
 	}
 	.naive {
 		border-bottom: 1px dotted var(--faint);

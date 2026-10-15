@@ -240,8 +240,8 @@ gate for readers), are in [`TIER-GOVERNANCE.md`](TIER-GOVERNANCE.md).
 | Medallion model + tests (bronze/silver/gold + persona roles) | ✅ done (model + `model.fga.yaml`) |
 | Tier movement (bronze→silver→gold) | the user's pipeline, on its own compute ([ADR 0155](adr/0155-the-medallion-is-tier-governance-in-the-catalog.md)); the catalog runs the publish-time quality gate, and the ADR 0156 tier rules are tracked in [`TIER-GOVERNANCE.md`](TIER-GOVERNANCE.md) |
 | `project` type + 3-axis governance (teams × projects × tiers) | ✅ modeled (`model.fga`: project/warehouse/team/validator) + fga-tested |
-| Orchestration | the lakehouse runs none ([ADR 0154](adr/0154-the-lakehouse-runs-no-ingest-and-no-workflow-engine.md)); Dapr cron bindings drive maintenance and lineage's reconcile, and NATS/Dapr pub-sub carries the internal events |
-| Lineage (OpenLineage ingest + graph queries over Apache AGE; producer-side emitter) | ✅ service built & deployed; read-side authz implemented + SvelteKit UI (see §9, `docs/LINEAGE.md`) |
+| Orchestration | the lakehouse runs none ([ADR 0154](adr/0154-the-lakehouse-runs-no-ingest-and-no-workflow-engine.md)); Dapr cron bindings drive maintenance and lineage's relay tick, and NATS/Dapr pub-sub carries the internal events |
+| Lineage (authenticated OpenLineage intake, the commit feed and table-level edges as catalog-governed Lance tables, a forwarder to a bring-your-own graph backend; producer-side emitter) | ✅ service built & deployed; read-side authz implemented (see §9, `docs/LINEAGE.md`) |
 | OTel observability (OTel Collector + GreptimeDB + Perses) | ✅ built, deployed, `make e2e-obs`-verified |
 
 ---
@@ -256,7 +256,7 @@ client's `CreateTableVersion`). In a governed catalog you want a commit to be **
 |---|---|---|---|
 | **(a) Authorization** | "May this caller commit to this table?" | **OpenFGA** — `authorize` checks `can_write_data` (or `can_commit`) on the table before the handler runs | ✅ already wired |
 | **(b) Audit trail** | "What versions exist; what changed?" | **Lance versioning** — every commit is an immutable, time-travelable version | ✅ free from the format |
-| **(c) Lineage** | "Where did this data come from?" | **OpenLineage** (emit on commit) → the in-service Apache AGE graph | ✅ built & deployed (see §9 + `docs/LINEAGE.md`) |
+| **(c) Lineage** | "Where did this data come from?" | **OpenLineage** (emit on commit) → lineage's commit feed and edge list, forwarded to a bring-your-own graph backend | ✅ built & deployed (see §9 + `docs/LINEAGE.md`) |
 
 So **commit auth already exists**: committing goes through the same `authorize` dependency that gates every write,
 checking `can_write_data` on `table:<id>`. A stock client commits through the spec's `CreateTableVersion`: the
@@ -276,9 +276,9 @@ about — and it's **provenance/observability, not access control**:
 - **OpenLineage** = an open standard for emitting "a job *run* read inputs X, wrote outputs Y" events. A user's
   pipeline emits its own runs; the catalog emits an event for every write it commits, and on governed tiers ADR 0156
   makes that emission mandatory.
-- **Backend** = where events land and become a queryable graph. Today that is rask's lineage service over Apache AGE;
-  ADR 0158 keeps provenance (an authenticated intake, the durable commit feed and table-level edges) as a rask service
-  and makes the full lineage graph bring-your-own, fed by a forwarder (LH-468, #592).
+- **Backend** = where events land. rask's lineage service keeps provenance (ADR 0158, LH-468 #592): an authenticated
+  intake, the durable commit feed and the table-level edge list. The full lineage graph is bring-your-own (Marquez,
+  DataHub, OpenMetadata), fed every recorded event by lineage's forwarder.
 
 How it relates to commit auth: **complementary, not the same.** On a governed commit: OpenFGA says *may you*
 (authz), Lance records *a new version* (audit), OpenLineage records *derived-from bronze@v3* (lineage).
@@ -286,14 +286,16 @@ How it relates to commit auth: **complementary, not the same.** On a governed co
 ```
 commit  ──▶  OpenFGA check (may you?)        ← access control      [done]
         ──▶  Lance new version (what/when)   ← audit trail         [free]
-        ──▶  OpenLineage event (from where?) ← lineage graph       [built]
+        ──▶  OpenLineage event (from where?) ← provenance feed     [built]
 ```
 
-**Built as a lightweight Marquez.** Rather than Marquez (Java/Dropwizard + relational
-Postgres) or Neo4j, the `services/lineage/` service is a small FastAPI app that ingests OpenLineage
-events at the standard `POST /api/v1/lineage` path and stores them in **Apache AGE** (a
-Postgres graph extension), so lineage traversal is native openCypher. Producers emit via the
-official `openlineage-python` client (`services/lineage/src/lineage/seed.py` emits a synthetic set for development).
+**Provenance as a service, the graph bring-your-own.** `services/lineage/` is a small FastAPI app that keeps no
+database. It ingests OpenLineage events at the standard `POST /api/v1/lineage` path (and from the bus and the outbox),
+and records each as a row of `provenance$events` and its table-level edges in `provenance$edges`: Lance tables in the
+catalog's provenance namespace, written through the catalog's `merge_insert` door as lineage's own principal, so every
+write is authorized, tier-judged and audited like any writer's. `GET /tables/{name}/derived` walks the edge list (how an
+erasure finds every derived table), and a relay tick forwards every recorded event as standard OpenLineage to the
+configured graph backend (Marquez in development). Producers emit via the official `openlineage-python` client.
 Full design + API in [`docs/LINEAGE.md`](LINEAGE.md).
 
 ---

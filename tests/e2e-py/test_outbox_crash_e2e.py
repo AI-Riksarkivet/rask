@@ -12,7 +12,7 @@ What this drives, for real:
      `publish_lineage_with_outbox` does, in the window AFTER the Lance commit,
   2. the OS kills it with SIGKILL (-9) before it can publish or drop — no cleanup, no finally, no flush,
   3. the staged object must SURVIVE on object storage (the durable copy is all that is left),
-  4. the reconcile relay must drain it into BOTH the AGE graph and the durable `/events` feed,
+  4. the relay tick must drain it into lineage's durable `/events` feed,
   5. the outbox must end empty (the recovered object is removed, not left to re-ingest forever).
 
 THE STAGED EVENT IS SIGNED, because an estate that enforces signing ([[LH-064]]) refuses and retires an event no listed signer's
@@ -27,7 +27,6 @@ Skipped unless the live stack env is set. Run via `make e2e-ci` / the CI `e2e-st
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import shutil
@@ -41,7 +40,7 @@ from datetime import UTC, datetime
 
 import pytest
 import requests
-from outbox_probe import owned_output_table
+from outbox_probe import bearer, owned_output_table
 
 from catalog.core.lineage_emit import INSERT, InputRef, build_write_event
 from lineage_kit.signing import SigningKey, attach_signature
@@ -51,15 +50,9 @@ from service_kit.lakehouse import outbox
 
 LINEAGE = os.environ.get("LANCE_E2E_LINEAGE_URL", "").rstrip("/")
 DAPR_TOKEN = os.environ.get("LANCE_E2E_DAPR_TOKEN", "")
-BINDING = os.environ.get("LANCE_E2E_RECONCILE_BINDING", "lineage-reconcile-cron")
+BINDING = os.environ.get("LANCE_E2E_RELAY_BINDING", "lineage-relay-cron")
 OUTBOX_URI = os.environ.get("LANCE_E2E_OUTBOX_URI", "s3://lance-catalog/_lineage_outbox")
 S3 = os.environ.get("LANCE_E2E_S3", "http://localhost:9900")
-# The AGE Postgres behind the lineage service. Needed to prove RECOVERY, not just drainage: a non-zero
-# `outbox_drained` only says the relay counted the event — it does not say the run reached the graph, nor
-# that it reached the durable `/events` feed. Those are SEPARATE writes and one landing without the other
-# is a real bug this repo has already shipped once (a drained run visible on /runs but SILENTLY absent from
-# /events). Assert both, at the source of truth.
-DSN = os.environ.get("LINEAGE_DATABASE_URL", "")
 
 #: The job namespace the catalog stamps on its own events (`LANCE_LINEAGE_JOB_NAMESPACE`, default `lance-catalog`).
 #: The staged event is the one the catalog's insert announces, so it names the job the way the catalog does.
@@ -82,29 +75,18 @@ PROBE_TABLE = "e2e_crash_ds"
 pytestmark = pytest.mark.e2e
 
 
-def _read_back(run_id: str) -> tuple[list, list]:
-    """``(graph_rows, feed_rows)`` for ``run_id`` — read straight out of AGE + the feed table."""
-    from lineage.core.age import make_pool, run_cypher
+def _feed_rows(lineage: str, run_id: str) -> list[dict]:
+    """The `/events` rows for ``run_id``, read through lineage's governed feed as the probe table's owner.
 
-    async def go() -> tuple[list, list]:
-        pool = make_pool(DSN)
-        try:
-            await pool.open()
-            async with pool.connection() as conn:
-                graph = await run_cypher(
-                    conn,
-                    "lineage",
-                    "MATCH (r:Run {run_id:$rid}) RETURN r.run_id, r.job",
-                    {"rid": run_id},
-                    columns=2,
-                )
-                cur = await conn.execute("SELECT event_type FROM public.lineage_events WHERE run_id = %s", (run_id,))
-                feed = await cur.fetchall()
-            return graph, feed
-        finally:
-            await pool.close()
-
-    return asyncio.run(go())
+    RECOVERY, NOT DRAINAGE: a non-zero `outbox_drained` only says the relay counted the event, and the feed
+    row is what a follower of `/events` acts on. Scoped to the probe's table, newest first, so a fresh run is
+    on the first page.
+    """
+    token = bearer()
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
+    resp = requests.get(f"{lineage}/events", params={"table": f"{PROBE_NAMESPACE}${PROBE_TABLE}", "limit": 500}, headers=headers, timeout=30)
+    assert resp.status_code == 200, f"GET /events answered {resp.status_code}: {resp.text[:300]}"
+    return [row for row in resp.json()["events"] if (row.get("event", {}).get("run") or {}).get("runId") == run_id]
 
 
 def _signing_key() -> SigningKey | None:
@@ -152,8 +134,6 @@ def _so() -> dict[str, str]:
 def lineage() -> str:
     if not LINEAGE or not DAPR_TOKEN:
         pytest.skip("set LANCE_E2E_LINEAGE_URL + LANCE_E2E_DAPR_TOKEN (deployed stack, outbox enabled)")
-    if not DSN:
-        pytest.skip("set LINEAGE_DATABASE_URL (the AGE Postgres) — recovery is asserted at the source")
     try:
         requests.get(f"{LINEAGE}/livez", timeout=5).raise_for_status()
     except Exception:
@@ -218,19 +198,13 @@ def _drive_the_relay(lineage: str, run_id: str, *, budget_seconds: float = 420.0
     """Wait for the relay to recover this run, nudging it along the way.
 
     THE CLAIM UNDER TEST IS THE OUTCOME, NOT THE CALLER. "A SIGKILLed producer loses nothing" is a
-    statement about the event reaching the graph; whether this POST or the cron's own tick did the
-    work is not a property the estate has or needs. Asserting ownership of the drain is what made this
-    leg fragile in two different ways, both measured live 2026-09-07.
+    statement about the event reaching the feed; whether this POST or the cron's own tick did the
+    work is not a property the estate has or needs. `lineage-relay-cron` fires on every replica's
+    sidecar and every step of a tick is idempotent, so another tick may drain this run first: this call
+    then reports `outbox_drained: 0` and the empty outbox is what says the run left.
 
-    A SKIP IS NOT A FAILURE. `lineage-reconcile-cron` fires every 30 s and the relay refuses an
-    overlapping sweep — `{"skipped": true, ...}`, HTTP 200. Treating that as a failure reported a
-    durability defect that did not exist.
-
-    NEITHER IS A TIMEOUT. The drain is the LAST step of a tick that first reconciles every dataset
-    against storage — `checked: 400` on this estate — all under the single-flight lock. So a call that
-    DOES acquire the lock outlives any sane HTTP read timeout, and the sweep it started keeps running
-    server-side after the client gives up. Both outcomes mean "a sweep is in progress"; the honest
-    response to either is to keep watching the outbox.
+    A TIMEOUT IS NOT A FAILURE EITHER. A tick that drains a backlog can outlive the HTTP read timeout and
+    keeps running server-side after the client gives up, so the outbox is what to watch.
     """
     deadline = time.monotonic() + budget_seconds
     while time.monotonic() < deadline:
@@ -239,16 +213,16 @@ def _drive_the_relay(lineage: str, run_id: str, *, budget_seconds: float = 420.0
             if resp.status_code == 200 and resp.json().get("outbox_drained", 0) >= 1:
                 return True
         except requests.exceptions.ReadTimeout:
-            pass  # we hold the lock and the sweep is running — the object is what to watch, not this socket
+            pass  # the tick is still running server-side; the object is what to watch, not this socket
         if not _staged_keys_for(run_id):
-            return True  # some sweep drained it; §4b decides whether it landed where it had to
+            return True  # another tick drained it; §4b decides whether it landed where it had to
         time.sleep(gap)
     return False
 
 
 def test_sigkilled_producer_loses_nothing(lineage: str) -> None:
-    # A FRESH run id per invocation. A run id that repeated across runs would already be in the graph after
-    # the first run, and "the relay recovered it into the graph" would then pass VACUOUSLY even if the relay
+    # A FRESH run id per invocation. A run id that repeated across runs would already be in the feed after
+    # the first run, and "the relay recovered it into the feed" would then pass VACUOUSLY even if the relay
     # did nothing at all. The pre-flight assertion below is what catches that; keep both.
     run_id = str(uuid.uuid4())
     # THE AUTHOR MUST BE A SUBJECT AND THE OUTPUT MUST EXIST, or the relay can never drain what this
@@ -294,23 +268,19 @@ def test_sigkilled_producer_loses_nothing(lineage: str) -> None:
     # 3. The durable copy is all that survived the kill. If this fails, #4 does not work at all.
     assert _staged_keys_for(run_id), "the SIGKILLed producer left NO staged event — the commit→publish loss window is still open"
 
-    # Nothing may have reached the graph yet — the producer died BEFORE publishing. If the run is already
+    # Nothing may have reached the feed yet — the producer died BEFORE publishing. If the run is already
     # there, the test is not proving recovery (something else delivered it) and every assert below is vacuous.
-    pre_graph, pre_feed = _read_back(run_id)
-    assert not pre_graph and not pre_feed, "the run reached the graph without the relay — test is vacuous"
+    assert not _feed_rows(lineage, run_id), "the run reached the feed without the relay — test is vacuous"
 
     # 4. The relay recovers it.
     drained = _drive_the_relay(lineage, run_id)
     assert drained, (
-        "the relay never drained this run: every sweep skipped, or an estate that enforces signing refused an event this harness "
+        "the relay never drained this run within its budget, or an estate that enforces signing refused an event this harness "
         f"{'signed' if key is not None else 'could not sign (no seed for ' + SIGNING_IDENTITY + ': set LANCE_E2E_SIGNING_SEED)'}"
     )
 
-    # 4b. ...into BOTH surfaces. `outbox_drained` only proves the relay COUNTED it. The graph and the durable
-    # feed are separate writes, and one landing without the other is a bug this repo has actually shipped.
-    graph, feed = _read_back(run_id)
-    assert graph, f"SIGKILLed producer's run {run_id} never reached the AGE graph — lineage was LOST"
-    assert feed, f"run {run_id} reached the graph but is ABSENT from the /events feed — the audit trail lies"
+    # 4b. ...into the feed. `outbox_drained` only proves the relay COUNTED it; the feed row is the recovery.
+    assert _feed_rows(lineage, run_id), f"SIGKILLed producer's run {run_id} never reached the /events feed — its provenance was LOST"
 
     # 5. ...and cleans up, so the object cannot be re-ingested forever.
     assert not _staged_keys_for(run_id), "the relay ingested the event and left it staged — it will be re-ingested every tick"

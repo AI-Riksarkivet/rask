@@ -44,11 +44,11 @@ export interface paths {
          *     A replay IS a re-ingest, so it carries the SAME authz as a fresh ingest, twice over: the relay's gate on
          *     the staged bytes (:func:`enforce_bus_authz` — signature and stamped author) and the ingest door's on the
          *     operator (:func:`enforce_output_authz` — ``can_write_data`` on the outputs, ``can_get_metadata`` on the
-         *     inputs, fail-closed). Both doors are idempotent: a run MERGEs on its run id, a static change on its
-         *     derived feed id, and the durable feed insert is ON CONFLICT DO NOTHING. The staged bytes are re-published
+         *     inputs, fail-closed). The record is idempotent: every feed row and edge is written under its key. The
+         *     staged bytes are re-published
          *     to the lineage topic exactly as the relay re-publishes them, so subscribers hear of the event as well as
-         *     the graph. The drop is only reached on success — a failed re-ingest or re-publish leaves the object
-         *     staged for the relay to retry, and a failed re-publish answers 503 because the graph is already
+         *     the feed. The drop is only reached on success — a failed re-ingest or re-publish leaves the object
+         *     staged for the relay to retry, and a failed re-publish answers 503 because the feed is already
          *     repaired.
          *
          *     Non-disclosure (audit 2026-07-20): replay must not become an oracle for events ``list_dlq`` hid. So a
@@ -120,416 +120,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/datasets": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Datasets
-         * @description Browse every dataset the caller may see — the lineage catalog's landing list.
-         *
-         *     Governed (a dataset is shown only if the caller ``can_get_metadata`` on it), optionally filtered by
-         *     ``?namespace=`` / ``?tag=``, and paginated over the *visible* set. This is the entry point the graph
-         *     reads (``/datasets/{name}/...``) needed but could not provide — you no longer must know a name first.
-         */
-        get: operations["list_datasets_datasets_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/datasets/{name}/columns": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Dataset Columns
-         * @description The column-level lineage subgraph around ``name`` (#24) — the field-to-field analogue of
-         *     ``/graph``, for a DAG view of how each column was produced.
-         *
-         *     ``depth`` counts DATASET hops outward; 1 is the single-hop answer this returned before the
-         *     parameter existed, so every existing caller is unaffected. The bound is FastAPI's here AND the
-         *     repository's — governance below runs over whatever the walk returned, so a depth the service did
-         *     not agree to would enlarge the set being filtered, not the set being disclosed.
-         *
-         *     Nodes/edges touching a dataset the caller can't see are dropped (an edge needs BOTH endpoints'
-         *     datasets visible); ``name``'s own columns are always shown (the route gate authorized it).
-         */
-        get: operations["get_dataset_columns_datasets__name__columns_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/datasets/{name}/columns/{field}/downstream": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Column Downstream
-         * @description Column-level impact (#24): the columns (transitively) derived from ``name.field``. Gated +
-         *     governed exactly like the column upstream view — related columns in datasets the caller can't see
-         *     are dropped.
-         */
-        get: operations["get_column_downstream_datasets__name__columns__field__downstream_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/datasets/{name}/columns/{field}/upstream": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Column Upstream
-         * @description Column-level provenance (#24): the columns ``name.field`` was (transitively) derived from.
-         *
-         *     Our deepest moat — field-to-field lineage a format-unaware catalog cannot derive. Gated on
-         *     ``can_get_metadata`` for the owning ``name``; related columns whose *owning dataset* the caller can't
-         *     see are dropped (a column has no ACL of its own — it inherits its table's), closing the same
-         *     transitive-disclosure hole at column resolution. Auth off → pass-through.
-         */
-        get: operations["get_column_upstream_datasets__name__columns__field__upstream_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/datasets/{name}/creator": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Creator
-         * @description Who created ``name`` (the verified catalog principal). Gated on ``can_get_metadata``.
-         */
-        get: operations["get_creator_datasets__name__creator_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/datasets/{name}/description": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        /**
-         * Set Description
-         * @description Set the dataset's description (an empty string clears it).
-         */
-        put: operations["set_description_datasets__name__description_put"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/datasets/{name}/downstream": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Downstream
-         * @description What derives from ``name`` (impact). Gated; non-visible related datasets are dropped.
-         *
-         *     ``depth`` bounds the walk exactly as on `/upstream` — impact is the direction that fans OUT, so a
-         *     hub dataset is where an unbounded walk costs most.
-         */
-        get: operations["get_downstream_datasets__name__downstream_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/datasets/{name}/governance": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Governance
-         * @description The dataset's curated tags + description with last-writer attribution (who/when per field).
-         */
-        get: operations["get_governance_datasets__name__governance_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/datasets/{name}/graph": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Graph
-         * @description The connected lineage subgraph around ``name`` (nodes + edges) for a DAG view.
-         *
-         *     ``depth`` bounds the walk to that many hops in each direction, making this a ROOTED
-         *     NEIGHBOURHOOD rather than a whole connected component — the shape Marquez serves at
-         *     ``/lineage?nodeId=&depth=N``. Omitted, the walk is unbounded, which is the previous behaviour and
-         *     still what an un-rooted caller wants.
-         *
-         *     Bounding here rather than in the client is the point: a UI depth control that filters an
-         *     already-fetched window cannot reach anything the window excluded, however small the depth.
-         *
-         *     `ge=1, le=MAX_WALK_DEPTH` is the FIRST of two guards and the one that answers the caller: a bad
-         *     depth is a 422 here rather than a 500 from the repository. The repository re-checks anyway,
-         *     because the hop range is interpolated into Cypher and that check must not depend on every caller
-         *     having gone through this route.
-         *
-         *     Nodes the caller may not see (and edges touching them) are dropped; the requested ``name``
-         *     is already authorized by the route gate.
-         */
-        get: operations["get_graph_datasets__name__graph_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/datasets/{name}/producers": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Producers
-         * @description The runs that wrote ``name`` — who / when / how. Gated on ``can_get_metadata``.
-         *
-         *     Bounded like ``/readers`` beside it: newest-first, so the page a caller gets is the part that
-         *     answers "what wrote this", and the tail it loses is history the run board serves instead.
-         */
-        get: operations["get_producers_datasets__name__producers_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/datasets/{name}/readers": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Readers
-         * @description Who has READ ``name`` — the read-audit log's query surface (#41 was capture-only until now).
-         *
-         *     Owner/writer-gated (``require_write_access``, on TOP of the router's ``can_get_metadata``): an access
-         *     log reveals *who* touched a dataset, so only a data owner may audit it — a casual reader can trace the
-         *     dataset's provenance but not enumerate who else viewed it. Aggregated per principal (last read + count,
-         *     newest first). Empty when read-auditing is/was off (the log table exists but has no rows).
-         */
-        get: operations["get_readers_datasets__name__readers_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/datasets/{name}/reconcile": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Reconcile
-         * @description Does the lineage graph agree with the **actual Lance file on storage**? (#23)
-         *
-         *     Our moat over format-unaware catalogs: because we own a Lance lakehouse we
-         *     read the real on-disk version and cross-check it against the version the graph recorded on the
-         *     ``WROTE`` edge — surfacing a write that bypassed lineage (``storage_ahead``) or a lineage claim
-         *     with no data behind it (``missing_on_storage``). Gated on ``can_get_metadata`` for ``name``; the
-         *     Lance read runs in the threadpool so the blocking object-store I/O never stalls the event loop.
-         *
-         *     ``versions_without_lineage`` is the axis the version comparison cannot answer: it compares two
-         *     MAXIMA, so a write whose event was lost and which a later write superseded leaves both equal and the
-         *     dataset reports ``in_sync``. Measured on the live estate 2026-09-11, ``bronze$events`` answered
-         *     in_sync at 87/87 with four retained versions carrying no lineage at all. READ-ONLY here — this door
-         *     reports the holes and the cron sweep is what recovers them, so an operator asking a question never
-         *     mutates the graph as a side effect. ``branch_versions_without_lineage`` is the same axis on each
-         *     branch, by name ([[LH-282]]).
-         */
-        get: operations["get_reconcile_datasets__name__reconcile_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/datasets/{name}/schema": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Schema
-         * @description The persisted column schema for ``name`` — at ``?version=N`` if given, else the latest. (#24)
-         *
-         *     Captured from the standard ``SchemaDatasetFacet`` at ingest and stored per-version on the ``WROTE``
-         *     edge (previously the facet was received and discarded). Gated on ``can_get_metadata`` for ``name``;
-         *     this is the prerequisite for column-level lineage and powers schema-diffing between Lance versions.
-         */
-        get: operations["get_schema_datasets__name__schema_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/datasets/{name}/tags/{tag}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        /**
-         * Add Tag
-         * @description Add one governance tag (idempotent — re-adding an existing tag is a no-op re-stamp).
-         */
-        put: operations["add_tag_datasets__name__tags__tag__put"];
-        post?: never;
-        /**
-         * Remove Tag
-         * @description Remove one governance tag (idempotent — removing an absent tag is a no-op re-stamp).
-         *
-         *     Deliberately unvalidated: removal only filters an existing element out of storage, so any string is
-         *     safe — and it lets a curator purge a non-conforming tag (e.g. an old producer label) that the add
-         *     path would refuse.
-         */
-        delete: operations["remove_tag_datasets__name__tags__tag__delete"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/datasets/{name}/upstream": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Upstream
-         * @description What ``name`` was derived from (provenance).
-         *
-         *     Gated on ``can_get_metadata`` for ``name``; related datasets the caller may not see are
-         *     dropped so the graph can't disclose tables outside its reach.
-         *
-         *     ``depth`` bounds the walk, the same shape and ceiling `/graph` already offers. The repository has
-         *     accepted it since the helper landed; only this door never declared it, so every request reached the
-         *     unbounded `*1..` statement whatever the caller wanted. Omitted it stays unbounded — the previous
-         *     behaviour, and what an un-rooted caller asks for — but it is now a caller's CHOICE rather than the
-         *     only thing the door can do. `age.py` names that unbounded path over a grown graph as the reason a
-         *     pooled connection cannot be pinned.
-         */
-        get: operations["get_upstream_datasets__name__upstream_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/demo/datasets": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Demo Datasets
-         * @description The medallion datasets as they currently exist on S3 — schema per Lance version + rows.
-         *
-         *     GOVERNED (audit: this endpoint reads real medallion schemas/row-counts + gold's lineage JSONB from S3
-         *     with the SERVICE root credentials, so it must not disclose a dataset the caller cannot see). Every
-         *     other lineage read gates on ``can_get_metadata``; this does the same via the shared batch filter —
-         *     ONE ``batch_check`` over the layout, not a per-dataset round-trip loop (F-LIN-13). The ladder is
-         *     unchanged: 401 unauthenticated / 503 FGA unwired propagate; a denied dataset is dropped, not fatal.
-         *     FGA off → pass-through (the dev demo).
-         */
-        get: operations["demo_datasets_demo_datasets_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/events": {
         parameters: {
             query?: never;
@@ -543,19 +133,20 @@ export interface paths {
          *
          *     **Following (LH-472).** ``since=<seq>`` returns the events with a larger seq, oldest first, and
          *     ``next_cursor`` is always the ``since`` to pass next; it equals the one passed when nothing new has
-         *     committed. Seq order is commit order (``pg.FEED_ORDER_LOCK_KEY``), so a follower that always passes
+         *     committed. Seq order is commit order (a row's stable Lance row id, assigned when its commit lands; see
+         *     ``lineage.services.provenance``), so a follower that always passes
          *     ``next_cursor`` back reads every row it may see exactly once. ``table=`` keeps the rows whose inputs or
          *     outputs name that table id; ``namespace=`` the rows naming a table under it. The contract a pipeline
          *     polls is ``docs/COMMIT-EVENTS.md``.
          *
-         *     **Durable** (read from Postgres, survives restart / replica-shared) and **governed**: when auth is
+         *     **Durable** (a Lance table the catalog keeps, shared by every replica) and **governed**: when auth is
          *     on the feed is filtered like the per-dataset reads — an event is shown only if the caller
          *     ``can_get_metadata`` on *every* dataset it references (and a dataset-less event is hidden), so the
          *     audit feed never discloses a table outside the caller's reach. Auth off → pass-through. (#22)
          *
          *     Pagination (additive, defaults = the old behavior): ``after`` = keyset cursor (the previous
-         *     page's ``next_cursor``); ``limit`` ≤ 500 (server-capped); ``summary=true`` drops the full-JSONB
-         *     ``event`` payload at the SQL layer. The governance filter ALWAYS runs before the slice —
+         *     page's ``next_cursor``); ``limit`` ≤ 500 (server-capped); ``summary=true`` drops the full
+         *     ``event`` payload from the read itself. The governance filter ALWAYS runs before the slice —
          *     pagination can never disclose a hidden row's CONTENT. ``next_cursor`` is a WINDOW FLOOR, not
          *     necessarily a visible row's seq (on a hidden-dense page it is the fetch window's last seq —
          *     exclusive, so the hidden row itself is never returned; bare seq numbers were already inferable
@@ -614,56 +205,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/graph": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Estate Graph
-         * @description The whole visible lineage graph in ONE response — the graph page's bulk read.
-         *
-         *     Before this the UI recomposed the estate graph client-side from the per-``{name}`` reads —
-         *     one ``/datasets/{name}/graph`` (plus ``/producers``) per dataset per refresh, a 2N+-request
-         *     storm at N datasets. Governance is identical to ``/datasets``: a node the caller may not see
-         *     is dropped, and an edge needs BOTH endpoints visible (the same transitive-disclosure
-         *     guarantee as the per-dataset graph). Nodes are capped at ``limit`` deterministically (sorted
-         *     by name) with ``total``/``capped`` reporting the truth.
-         */
-        get: operations["estate_graph_graph_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/jobs": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Jobs
-         * @description The jobs (compute identities) that have run — governed by the datasets each wrote.
-         *
-         *     A job is shown only if the caller can see every dataset it wrote (a read-only / output-less job is
-         *     hidden when auth is on, mirroring how ``/events`` drops a dataset-less row). Auth off → pass-through.
-         */
-        get: operations["list_jobs_jobs_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/livez": {
         parameters: {
             query?: never;
@@ -673,28 +214,6 @@ export interface paths {
         };
         /** Livez */
         get: operations["livez_livez_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/namespaces": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Namespaces
-         * @description The namespaces containing at least one dataset the caller may see (for a namespace-tree browse).
-         *
-         *     Derived from the governed dataset set, so a namespace the caller can see no dataset in never appears.
-         */
-        get: operations["list_namespaces_namespaces_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -720,7 +239,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/runs": {
+    "/tables/{name}/derived": {
         parameters: {
             query?: never;
             header?: never;
@@ -728,109 +247,12 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Get Runs
-         * @description Live run-status board — each run's current state folded onto its ``(:Run)`` node in Apache AGE.
+         * Get Derived
+         * @description Every table derived from ``name`` the caller may see, nearest first, to ``depth`` hops.
          *
-         *     **Durable** (survives restart / replica-shared) and **governed** like ``/events`` and the per-dataset
-         *     reads: a run is shown only if the caller ``can_get_metadata`` on every dataset it wrote, so the board
-         *     can't enumerate dataset names / creators / errors outside the caller's reach. Auth off → pass-through.
-         *
-         *     **BOUNDED AT THE QUERY, newest first.** The board is polled every two seconds and the graph has no run
-         *     retention, so an unbounded read grows without limit: measured live 2026-09-07 it answered 5,122 runs /
-         *     2.65 MB, against 272 rows fifteen days earlier. A limit applied here rather than in the Cypher would
-         *     change nothing — the cost is the READ, and asking for one run took 2.5 s while asking for a hundred
-         *     took 1.4 s.
-         *
-         *     The over-fetch window is ``/events``' answer, for the same reason: governance drops rows AFTER the
-         *     read, so a page cut to size first comes back short — or empty — while visible runs sit below it. With
-         *     auth off the filter is pass-through and the headroom is pure waste, so the fetch is exactly ``limit``.
+         *     ``complete`` is false when the walk stopped short or a derived table is hidden from the caller.
          */
-        get: operations["get_runs_runs_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/runs/{run_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Run
-         * @description ONE run's state — the point read the board is not.
-         *
-         *     "Is this run in the graph?" was answered by downloading `/runs` and scanning it, which is
-         *     O(estate) for a one-row question and became WRONG once the board was bounded: a run outside the
-         *     newest page is missing from the response while present in the graph, so the caller concluded
-         *     ABSENT and reported a provenance defect that did not exist.
-         *
-         *     GOVERNED EXACTLY LIKE THE BOARD — visible only if the caller `can_get_metadata` on every dataset
-         *     the run wrote — and an invisible run answers 404, the same as one that is not there. Deliberately
-         *     the same answer: distinguishing them would let a caller enumerate runs it may not see by watching
-         *     which ids give a different refusal.
-         */
-        get: operations["get_run_runs__run_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/runs/{run_id}/inputs": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Run Inputs
-         * @description The inputs a run consumed, each with the version it PINNED — the per-run reproducibility answer.
-         *
-         *     The pinned version rides the graph's ``READ`` edge (the Ray TRAIN job pins every feature — #115
-         *     D1); this endpoint is its API surface (before, Cypher-only). Kept OFF the 2s-polled ``/runs`` board
-         *     — it's a per-run drill-in, and adding a per-run READ-edge fetch to the board would be N+1 on the hot
-         *     path. Governed like every read: an input the caller can't ``can_get_metadata`` is dropped (an empty
-         *     list for a run the caller can't see into is itself non-disclosing). Auth off → pass-through.
-         */
-        get: operations["get_run_inputs_runs__run_id__inputs_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/search": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Search
-         * @description Governed search over the discovery estate (P1 Search tier 1, 2026-07-11).
-         *
-         *     Case-insensitive substring over dataset NAMES, NAMESPACES, governance TAGS, and the CURRENT
-         *     COLUMN inventory — each hit says WHY it matched (``name`` / ``namespace`` / ``tag:…`` /
-         *     ``column:…``), so "which tables have an embedding column" and "what's in layer=gold" are one
-         *     query. Governance is identical to ``/datasets``: the visibility filter runs over the FULL hit
-         *     set BEFORE the limit, so search can never disclose (or even count) tables outside the caller's
-         *     reach. 📌 Tier 2 (Lance FTS + FLAT vector content search, the rask pattern) stays decision-
-         *     pinned in docs/adr/0008-9-feature-gaps-the-open-backlog.md §9 behind its measured recall gate — this tier is metadata-only
-         *     by design.
-         */
-        get: operations["search_search_get"];
+        get: operations["get_derived_tables__name__derived_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -844,240 +266,29 @@ export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         /**
-         * ColumnEdge
-         * @description A field-to-field derivation edge (data flows ``source`` → ``target``); the transformation kind +
-         *     the ``masking`` governance bit ride the edge.
-         */
-        ColumnEdge: {
-            /**
-             * Description
-             * @default
-             */
-            description?: string;
-            /**
-             * Kind
-             * @default derived_from_column
-             */
-            kind?: string;
-            /**
-             * Masking
-             * @default false
-             */
-            masking?: boolean;
-            /** Source Dataset */
-            source_dataset: string;
-            /** Source Field */
-            source_field: string;
-            /** Target Dataset */
-            target_dataset: string;
-            /** Target Field */
-            target_field: string;
-            /**
-             * Transformation Subtype
-             * @default
-             */
-            transformation_subtype?: string;
-            /**
-             * Transformation Type
-             * @default
-             */
-            transformation_type?: string;
-        };
-        /**
-         * ColumnGraph
-         * @description The column-level lineage subgraph around ``root`` (nodes + edges) — the column analogue of the
-         *     dataset ``LineageGraph``, for a field-to-field DAG view.
-         */
-        ColumnGraph: {
-            /** Columns */
-            columns?: components["schemas"]["ColumnNode"][];
-            /** Edges */
-            edges?: components["schemas"]["ColumnEdge"][];
-            /** Root */
-            root: string;
-        };
-        /**
-         * ColumnNeighbors
-         * @description Columns related to ``(dataset, field)`` — its column-level provenance (upstream) or impact.
-         */
-        ColumnNeighbors: {
-            /** Dataset */
-            dataset: string;
-            /** Field */
-            field: string;
-            /** Related */
-            related?: components["schemas"]["ColumnRef"][];
-        };
-        /**
-         * ColumnNode
-         * @description A column node in the column-lineage subgraph.
-         */
-        ColumnNode: {
-            /** Dataset */
-            dataset: string;
-            /** Field */
-            field: string;
-            /** Type */
-            type?: string | null;
-        };
-        /**
-         * ColumnRef
-         * @description A column identified by its owning dataset + field name (#24).
+         * Derived
+         * @description Every table derived from ``table`` that the caller may see, nearest first.
          *
-         *     ``dataset`` is REQUIRED and is the governance handle: a column is visible iff the caller can read
-         *     its owning ``table:<dataset>``, so column queries filter on it (never on the field).
+         *     ``complete`` is false when the walk stopped at its depth with tables still to follow, or when a derived table is
+         *     hidden from the caller, so an answer that is not everything says so.
          */
-        ColumnRef: {
-            /** Dataset */
-            dataset: string;
-            /** Field */
-            field: string;
-            /** Namespace */
-            namespace?: string | null;
-            /** Type */
-            type?: string | null;
+        Derived: {
+            /** Complete */
+            complete: boolean;
+            /** Derived */
+            derived: components["schemas"]["DerivedTable"][];
+            /** Table */
+            table: string;
         };
         /**
-         * Creator
-         * @description Who created ``dataset`` — the verified catalog principal at create time (or ``None``).
+         * DerivedTable
+         * @description A table derived from the source, and how many derivation hops from it: 1 for a table a run wrote from the source.
          */
-        Creator: {
-            /** Creator */
-            creator?: string | null;
-            /** Dataset */
-            dataset: string;
-        };
-        /**
-         * DatasetGovernance
-         * @description A dataset's human-curated governance metadata (#49): tags + description, with last-writer
-         *     attribution per field family (who/when persisted on the node — the auditable trail for curation).
-         */
-        DatasetGovernance: {
-            /** Description */
-            description?: string | null;
-            /** Description Updated At */
-            description_updated_at?: string | null;
-            /** Description Updated By */
-            description_updated_by?: string | null;
-            /** Name */
-            name: string;
-            /** Tags */
-            tags?: string[];
-            /** Tags Updated At */
-            tags_updated_at?: string | null;
-            /** Tags Updated By */
-            tags_updated_by?: string | null;
-        };
-        /**
-         * DatasetRef
-         * @description A dataset node returned from a graph traversal.
-         */
-        DatasetRef: {
-            /** Name */
-            name: string;
-            /** Namespace */
-            namespace?: string | null;
-        };
-        /**
-         * DatasetSchema
-         * @description The column schema recorded for ``dataset`` at ``version`` (the ``WROTE`` edge's schema). (#24)
-         *
-         *     ``version`` is the Lance version this schema belongs to; ``None`` with empty ``fields`` means no
-         *     schema has been persisted for the dataset (or the requested version) yet.
-         */
-        DatasetSchema: {
-            /** Dataset */
-            dataset: string;
-            /** Fields */
-            fields?: components["schemas"]["SchemaField"][];
-            /** Version */
-            version?: number | null;
-        };
-        /**
-         * DatasetSummary
-         * @description A dataset as it appears in the browse list — its id, namespace, and governance tags.
-         */
-        DatasetSummary: {
-            /** Name */
-            name: string;
-            /** Namespace */
-            namespace?: string | null;
-            /** Tags */
-            tags?: string[];
-        };
-        /**
-         * Datasets
-         * @description A governed, paginated page of datasets the caller may see (the lineage catalog landing list).
-         *
-         *     ``total`` is the count of *visible* datasets before the page slice — so a UI can show "X–Y of total".
-         */
-        Datasets: {
-            /** Datasets */
-            datasets: components["schemas"]["DatasetSummary"][];
-            /** Total */
-            total: number;
-        };
-        /**
-         * DemoDataset
-         * @description A peek at a real Lance dataset on S3 — what's actually in storage and how it evolved.
-         */
-        DemoDataset: {
-            /** Current Version */
-            current_version?: number | null;
-            /** Error */
-            error?: string | null;
-            /** Exists */
-            exists: boolean;
-            /** Lineage Jsonb */
-            lineage_jsonb?: {
-                [key: string]: unknown;
-            } | null;
-            /** Name */
-            name: string;
-            /** Row Count */
-            row_count?: number | null;
-            /** Uri */
-            uri: string;
-            /** Versions */
-            versions?: components["schemas"]["DemoVersion"][];
-        };
-        /**
-         * DemoDatasets
-         * @description The medallion datasets as they currently exist on S3 (demo data peek).
-         */
-        DemoDatasets: {
-            /** Datasets */
-            datasets: components["schemas"]["DemoDataset"][];
-        };
-        /**
-         * DemoField
-         * @description A column of a Lance dataset version (name + Arrow type).
-         */
-        DemoField: {
-            /** Name */
-            name: string;
-            /** Type */
-            type: string;
-        };
-        /**
-         * DemoVersion
-         * @description One Lance version of a dataset — its number, time, and schema at that version.
-         */
-        DemoVersion: {
-            /** Fields */
-            fields?: components["schemas"]["DemoField"][];
-            /** Timestamp */
-            timestamp?: string | null;
-            /** Version */
-            version: number;
-        };
-        /**
-         * DescriptionUpdate
-         * @description The ``PUT /datasets/{name}/description`` body. An empty string clears the description.
-         */
-        DescriptionUpdate: {
-            /** Description */
-            description: string;
+        DerivedTable: {
+            /** Depth */
+            depth: number;
+            /** Table */
+            table: string;
         };
         /**
          * DlqBacklog
@@ -1102,9 +313,9 @@ export interface components {
          * @description One staged-but-not-yet-drained lineage event in the transactional outbox (#83 ops view).
          *
          *     A file's presence in the outbox means "committed write, lineage not yet confirmed delivered" — the
-         *     at-risk set the reconcile relay drains. ``parseable=False`` marks a poison object (the relay would drop
-         *     it): its run_id is the filename, the rest is unknown. A catalog DDL change (a ``DatasetEvent``) names no
-         *     run, so it lists under its staged key too, with its event time and dataset but no type, job or inputs.
+         *     at-risk set the relay drains. ``parseable=False`` marks a poison object (the relay would drop it): its
+         *     run_id is the filename, the rest is unknown. A catalog DDL change (a ``DatasetEvent``) names no run, so it
+         *     lists under its staged key too, with its event time and dataset but no type, job or inputs.
          */
         DlqEvent: {
             /** Event Time */
@@ -1127,34 +338,13 @@ export interface components {
         };
         /**
          * DlqReplayResponse
-         * @description The result of re-ingesting one staged event (#83): idempotent MERGE on ``run_id``, then drop.
+         * @description The result of re-ingesting one staged event (#83): recorded under its key, then dropped.
          */
         DlqReplayResponse: {
             /** Run Id */
             run_id: string;
             /** Status */
             status: string;
-        };
-        /**
-         * EstateGraph
-         * @description The whole visible lineage graph in one response — the graph page's bulk read.
-         *
-         *     ``total`` is the full visible node count; when it exceeds the requested limit the node list
-         *     is truncated and ``capped`` says so, so a UI can render "N of M" honestly instead of
-         *     pretending the window is the estate.
-         */
-        EstateGraph: {
-            /**
-             * Capped
-             * @default false
-             */
-            capped?: boolean;
-            /** Edges */
-            edges: components["schemas"]["GraphEdge"][];
-            /** Nodes */
-            nodes: components["schemas"]["GraphNode"][];
-            /** Total */
-            total: number;
         };
         /**
          * EventRecord
@@ -1211,91 +401,10 @@ export interface components {
             /** Oldest Seq */
             oldest_seq?: number | null;
         };
-        /**
-         * GraphEdge
-         * @description A dataset-level lineage edge: ``source`` is derived from ``target``.
-         */
-        GraphEdge: {
-            /**
-             * Kind
-             * @default derived_from
-             */
-            kind?: string;
-            /** Source */
-            source: string;
-            /** Target */
-            target: string;
-        };
-        /**
-         * GraphNode
-         * @description A dataset node in the lineage graph (``id`` is the catalog table id).
-         *
-         *     ``source_uri`` is where the table physically lives (the S3-compatible location, from
-         *     the ``dataSource`` facet) and ``tags`` are its governance labels (from the ``tags`` facet).
-         */
-        GraphNode: {
-            /**
-             * Failed
-             * @default false
-             */
-            failed?: boolean;
-            /** Id */
-            id: string;
-            /**
-             * Kind
-             * @default dataset
-             */
-            kind?: string;
-            /** Namespace */
-            namespace?: string | null;
-            /** Source Uri */
-            source_uri?: string | null;
-            /** Tags */
-            tags?: string[];
-            /** Versions */
-            versions?: string[];
-        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
-        };
-        /**
-         * JobSummary
-         * @description A job (compute identity) that has run, with the datasets it wrote — its governance handle.
-         */
-        JobSummary: {
-            /** Name */
-            name: string;
-            /** Namespace */
-            namespace?: string | null;
-            /** Outputs */
-            outputs?: string[];
-        };
-        /**
-         * Jobs
-         * @description The jobs the caller may see (governed by the datasets each wrote).
-         */
-        Jobs: {
-            /** Jobs */
-            jobs: components["schemas"]["JobSummary"][];
-            /** Total */
-            total: number;
-        };
-        /**
-         * LineageGraph
-         * @description The connected lineage subgraph around ``root`` — nodes + edges for a DAG view.
-         *
-         *     Mirrors what Marquez's graph endpoint feeds its UI, trimmed to the dataset-level
-         *     ``DERIVED_FROM`` lineage we model.
-         */
-        LineageGraph: {
-            /** Edges */
-            edges: components["schemas"]["GraphEdge"][];
-            /** Nodes */
-            nodes: components["schemas"]["GraphNode"][];
-            /** Root */
-            root: string;
         };
         /** Liveness */
         Liveness: {
@@ -1308,87 +417,6 @@ export interface components {
          */
         LivenessStatus: "ok";
         /**
-         * Namespaces
-         * @description The namespaces containing at least one dataset the caller may see.
-         */
-        Namespaces: {
-            /** Namespaces */
-            namespaces: string[];
-        };
-        /**
-         * Neighbors
-         * @description Datasets related to ``dataset`` (upstream provenance or downstream impact).
-         */
-        Neighbors: {
-            /** Dataset */
-            dataset: string;
-            /** Related */
-            related: components["schemas"]["DatasetRef"][];
-        };
-        /**
-         * ProducerInfo
-         * @description A run that wrote (or attempted to write) a dataset — who / when / how / version / measured size.
-         *
-         *     A **failed** run (``event_type`` FAIL/ABORT) appears here too, with no
-         *     ``dataset_version`` and an ``error_message`` — it tried but produced no data.
-         *
-         *     ``row_count`` / ``size_bytes`` are the runtime-measured output statistics the compute recorded for
-         *     this write (the rows + on-disk bytes it actually produced, from the standard ``outputStatistics``
-         *     facet); ``None`` when the run was a dummy emit (no compute) or a failure (no data produced).
-         *
-         *     ``quality_passed`` is the validator gate's verdict (all assertions succeeded) and ``quality_assertions``
-         *     the checks it ran (from the standard ``dataQualityAssertions`` facet); ``quality_passed=False`` with a
-         *     real ``dataset_version`` is the auditable record of a batch the gate blocked from promotion. Both are
-         *     ``None`` / empty when the quality gate did not run.
-         *
-         *     ``consumed_from_version`` / ``consumed_to_version`` are the Lance version RANGE this run consumed
-         *     to produce the write, when it pinned one. They ride the per-dataset read so "what has this lane
-         *     consumed?" is a question about the DATASET — a scan of the whole run board answers it only while
-         *     every relevant run is still on the board, which is a property of the data rather than of the code.
-         */
-        ProducerInfo: {
-            /** Author */
-            author?: string | null;
-            /** Consumed From Version */
-            consumed_from_version?: number | null;
-            /** Consumed To Version */
-            consumed_to_version?: number | null;
-            /** Dataset Version */
-            dataset_version?: string | null;
-            /** Error Message */
-            error_message?: string | null;
-            /** Event Time */
-            event_time?: string | null;
-            /** Event Type */
-            event_type?: string | null;
-            /** Operation */
-            operation?: string | null;
-            /** Producer */
-            producer?: string | null;
-            /** Quality Assertions */
-            quality_assertions?: {
-                [key: string]: unknown;
-            }[];
-            /** Quality Passed */
-            quality_passed?: boolean | null;
-            /** Row Count */
-            row_count?: number | null;
-            /** Run Id */
-            run_id: string;
-            /** Size Bytes */
-            size_bytes?: number | null;
-        };
-        /**
-         * Producers
-         * @description The runs that produced ``dataset``.
-         */
-        Producers: {
-            /** Dataset */
-            dataset: string;
-            /** Producers */
-            producers: components["schemas"]["ProducerInfo"][];
-        };
-        /**
          * ProjectedEvent
          * @description One feed row as the unfiltered projection serves it: its seq, and the event cut to what targeting reads.
          */
@@ -1399,37 +427,6 @@ export interface components {
             };
             /** Seq */
             seq: number;
-        };
-        /**
-         * ReaderInfo
-         * @description One principal who READ ``dataset`` — the access-audit twin of :class:`ProducerInfo` (who WROTE it).
-         *
-         *     Aggregated per reader: the verified subject, when they last read it, and how many times. Sourced from
-         *     the append-only ``lineage_reads`` audit log (#6/#41), not the AGE graph — reads are access events, not
-         *     provenance edges, so they never mint a graph vertex.
-         */
-        ReaderInfo: {
-            /** Last Read */
-            last_read?: string | null;
-            /** Reader */
-            reader: string;
-            /**
-             * Reads
-             * @default 0
-             */
-            reads?: number;
-        };
-        /**
-         * Readers
-         * @description Who has READ ``dataset`` — the access-audit surface that turns the #41 read log (capture-only until
-         *     now) into a query. Owner/writer-gated (stricter than reader-gated ``/producers``): an access log
-         *     reveals who touched a dataset, so only a data owner may audit it, not any casual reader.
-         */
-        Readers: {
-            /** Dataset */
-            dataset: string;
-            /** Readers */
-            readers?: components["schemas"]["ReaderInfo"][];
         };
         /** Readiness */
         Readiness: {
@@ -1444,176 +441,6 @@ export interface components {
          * @enum {string}
          */
         ReadinessStatus: "starting" | "ready" | "shutting_down" | "degraded";
-        /**
-         * ReconcileState
-         * @description Result of reconciling the lineage graph's recorded version against the on-disk Lance version.
-         * @enum {string}
-         */
-        ReconcileState: "in_sync" | "storage_ahead" | "graph_ahead" | "untracked" | "missing_on_storage" | "absent" | "unreadable" | "ungoverned" | "ungoverned_live" | "drop_observed";
-        /**
-         * ReconcileStatus
-         * @description Whether a dataset's lineage-graph version matches its actual on-disk Lance version (#23).
-         *
-         *     ``dangling_blob_columns`` (§9 P1 lifecycle, 2026-07-12) is the POINTER-health axis the version
-         *     comparison can't see: a blob-v2 column whose payloads no longer dereference (external object
-         *     deleted, bucket wiped) leaves the version untouched — a dataset can be ``in_sync`` and still
-         *     unreadable. Non-empty = those columns failed a real 1-byte probe read.
-         */
-        ReconcileStatus: {
-            /** Branch Versions Without Lineage */
-            branch_versions_without_lineage?: {
-                [key: string]: number[];
-            };
-            /** Dangling Blob Columns */
-            dangling_blob_columns?: string[];
-            /** Dataset */
-            dataset: string;
-            /** Graph Version */
-            graph_version?: number | null;
-            /** In Sync */
-            in_sync: boolean;
-            /** Missing Declared Columns */
-            missing_declared_columns?: string[];
-            /**
-             * Stale
-             * @default false
-             */
-            stale?: boolean;
-            status: components["schemas"]["ReconcileState"];
-            /** Storage Version */
-            storage_version?: number | null;
-            /** Unreadable Reason */
-            unreadable_reason?: string | null;
-            /** Unrecorded Bases */
-            unrecorded_bases?: string[];
-            /** Versions Without Lineage */
-            versions_without_lineage?: number[];
-        };
-        /**
-         * RunInput
-         * @description One dataset a run consumed, with the PINNED version it read (``None`` = read floating LATEST).
-         *
-         *     The version is the OpenLineage ``version`` facet the producer stamped on the input — the Ray TRAIN
-         *     job pins every feature (#115 D1: training on floating LATEST is not reproducible). It rides the
-         *     graph's ``READ`` edge; this is the API surface for it (before, it was reachable only by Cypher).
-         */
-        RunInput: {
-            /** Name */
-            name: string;
-            /** Version */
-            version?: string | null;
-        };
-        /**
-         * RunInputs
-         * @description The inputs a run consumed, with their pinned versions — the reproducibility answer for one run.
-         *
-         *     Governed like every other read: an input the caller can't ``can_get_metadata`` is dropped, so this
-         *     can't enumerate datasets outside the caller's reach. For a training run this answers exactly *which
-         *     feature versions produced this model*.
-         */
-        RunInputs: {
-            /** Inputs */
-            inputs?: components["schemas"]["RunInput"][];
-            /** Run Id */
-            run_id: string;
-        };
-        /**
-         * RunStatus
-         * @description The *current* status of a run, folded from its OpenLineage lifecycle events.
-         *
-         *     Unlike the provenance graph (terminal-only), this is the live "where are we now" view:
-         *     ``state`` is the latest run state (START→RUNNING→COMPLETE/FAIL), with progress + error.
-         */
-        RunStatus: {
-            /** Attempts */
-            attempts?: number | null;
-            /** Author */
-            author?: string | null;
-            /** Cascade Id */
-            cascade_id?: string | null;
-            /** Consumed From Version */
-            consumed_from_version?: number | null;
-            /** Consumed To Version */
-            consumed_to_version?: number | null;
-            /** Error Message */
-            error_message?: string | null;
-            /**
-             * Events
-             * @default 0
-             */
-            events?: number;
-            /** Job */
-            job?: string | null;
-            /** Operation */
-            operation?: string | null;
-            /** Outputs */
-            outputs?: string[];
-            /** Progress Done */
-            progress_done?: number | null;
-            /** Progress Total */
-            progress_total?: number | null;
-            /** Promotion Status */
-            promotion_status?: string | null;
-            /** Run Id */
-            run_id: string;
-            /** Source Run Id */
-            source_run_id?: string | null;
-            /** Started At */
-            started_at?: string | null;
-            /** State */
-            state?: string | null;
-            /** Updated At */
-            updated_at?: string | null;
-        };
-        /**
-         * Runs
-         * @description Live run-status board (most-recently-active first).
-         */
-        Runs: {
-            /** Runs */
-            runs: components["schemas"]["RunStatus"][];
-        };
-        /**
-         * SchemaField
-         * @description One column in a dataset's persisted per-version schema (from the standard ``schema`` facet).
-         */
-        SchemaField: {
-            /** Description */
-            description?: string | null;
-            /** Name */
-            name: string;
-            /**
-             * Type
-             * @default
-             */
-            type?: string;
-        };
-        /**
-         * SearchHit
-         * @description One /search result: the dataset + WHY it matched (name / namespace / tag:* / column:*).
-         */
-        SearchHit: {
-            /** Matches */
-            matches?: string[];
-            /** Name */
-            name: string;
-            /** Namespace */
-            namespace?: string | null;
-            /** Tags */
-            tags?: string[];
-        };
-        /**
-         * SearchResults
-         * @description Governed search results (P1 Search tier 1 — substring over the discovery estate).
-         */
-        SearchResults: {
-            /** Query */
-            query: string;
-            /** Results */
-            results: components["schemas"]["SearchHit"][];
-            /** Total */
-            total: number;
-        };
         /** ValidationError */
         ValidationError: {
             /** Context */
@@ -1789,18 +616,15 @@ export interface operations {
                      * Dataset
                      * @description An OpenLineage dataset (a Lance table / source); ``name`` is the catalog id.
                      *
-                     *     ``facets`` carries the standard OpenLineage dataset facets; we read several:
-                     *     ``version`` (which Lance version a run produced), ``dataSource`` (where the table
-                     *     physically lives — the S3-compatible location), and ``tags`` (governance labels).
+                     *     ``facets`` carries the standard OpenLineage dataset facets; lineage reads ``version`` (which Lance
+                     *     version a run produced or read), the catalog's ``lance`` facet (the ref an input was read on) and
+                     *     ``columnLineage`` (whose upstreams the ingest authorizer checks).
                      *
                      *     The spec splits dataset metadata across THREE slots, by the facet's base type: plain
                      *     ``DatasetFacet``s ride ``facets``, ``InputDatasetFacet``s ride ``inputFacets`` on an input, and
-                     *     ``OutputDatasetFacet``s ride ``outputFacets`` on an output. Two facets we consume are not plain
-                     *     ``DatasetFacet``s — ``OutputStatisticsOutputDatasetFacet`` is an output facet and
-                     *     ``DataQualityAssertionsDatasetFacet`` is an input facet — so the official ``openlineage-python``
-                     *     client (and therefore Spark/Airflow/dbt/Marquez producers, and our own ``lineage.seed``) serialises
-                     *     them into the typed slots, NOT into ``facets``. Reading only ``facets`` silently dropped them from
-                     *     every such producer; :meth:`facet` looks in all three.
+                     *     ``OutputDatasetFacet``s ride ``outputFacets`` on an output. The official ``openlineage-python`` client
+                     *     (and therefore Spark/Airflow/dbt/Marquez producers) serialises the typed facets into the typed slots,
+                     *     NOT into ``facets``; :meth:`facet` looks in all three.
                      */
                     dataset: {
                         /** Facets */
@@ -1862,594 +686,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
-                };
-            };
-        };
-    };
-    list_datasets_datasets_get: {
-        parameters: {
-            query?: {
-                namespace?: string | null;
-                tag?: string | null;
-                offset?: number;
-                limit?: number;
-            };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Datasets"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_dataset_columns_datasets__name__columns_get: {
-        parameters: {
-            query?: {
-                depth?: number;
-            };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                name: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ColumnGraph"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_column_downstream_datasets__name__columns__field__downstream_get: {
-        parameters: {
-            query?: {
-                depth?: number | null;
-            };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                name: string;
-                field: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ColumnNeighbors"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_column_upstream_datasets__name__columns__field__upstream_get: {
-        parameters: {
-            query?: {
-                depth?: number | null;
-            };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                name: string;
-                field: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ColumnNeighbors"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_creator_datasets__name__creator_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                name: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Creator"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    set_description_datasets__name__description_put: {
-        parameters: {
-            query?: never;
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                name: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["DescriptionUpdate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DatasetGovernance"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_downstream_datasets__name__downstream_get: {
-        parameters: {
-            query?: {
-                depth?: number | null;
-            };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                name: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Neighbors"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_governance_datasets__name__governance_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                name: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DatasetGovernance"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_graph_datasets__name__graph_get: {
-        parameters: {
-            query?: {
-                depth?: number | null;
-            };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                name: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["LineageGraph"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_producers_datasets__name__producers_get: {
-        parameters: {
-            query?: {
-                limit?: number;
-            };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                name: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Producers"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_readers_datasets__name__readers_get: {
-        parameters: {
-            query?: {
-                limit?: number;
-            };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                name: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Readers"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_reconcile_datasets__name__reconcile_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                name: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ReconcileStatus"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_schema_datasets__name__schema_get: {
-        parameters: {
-            query?: {
-                version?: number | null;
-            };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                name: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DatasetSchema"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    add_tag_datasets__name__tags__tag__put: {
-        parameters: {
-            query?: never;
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                name: string;
-                tag: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DatasetGovernance"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    remove_tag_datasets__name__tags__tag__delete: {
-        parameters: {
-            query?: never;
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                name: string;
-                tag: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DatasetGovernance"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_upstream_datasets__name__upstream_get: {
-        parameters: {
-            query?: {
-                depth?: number | null;
-            };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                name: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Neighbors"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    demo_datasets_demo_datasets_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DemoDatasets"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -2527,70 +763,6 @@ export interface operations {
             };
         };
     };
-    estate_graph_graph_get: {
-        parameters: {
-            query?: {
-                limit?: number;
-            };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["EstateGraph"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_jobs_jobs_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Jobs"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     livez_livez_get: {
         parameters: {
             query?: never;
@@ -2607,37 +779,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Liveness"];
-                };
-            };
-        };
-    };
-    list_namespaces_namespaces_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Namespaces"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -2662,47 +803,16 @@ export interface operations {
             };
         };
     };
-    get_runs_runs_get: {
+    get_derived_tables__name__derived_get: {
         parameters: {
             query?: {
-                limit?: number;
+                depth?: number;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Runs"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_run_runs__run_id__get: {
-        parameters: {
-            query?: never;
             header?: {
                 "dapr-caller-app-id"?: string | null;
             };
             path: {
-                run_id: string;
+                name: string;
             };
             cookie?: never;
         };
@@ -2714,74 +824,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["RunStatus"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_run_inputs_runs__run_id__inputs_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                run_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RunInputs"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    search_search_get: {
-        parameters: {
-            query: {
-                q: string;
-                limit?: number;
-            };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SearchResults"];
+                    "application/json": components["schemas"]["Derived"];
                 };
             };
             /** @description Validation Error */

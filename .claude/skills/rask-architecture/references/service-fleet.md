@@ -46,8 +46,9 @@ bring-your-own client job (a sealed runner, CP-061) that commits through the cat
 user's pipeline, on their own compute and orchestrator, writing each tier through the catalog's doors.
 The catalog announces every committed write as an OpenLineage `COMPLETE` on lineage, and the NATS
 topics stay internal. A pipeline follows committed writes on lineage's durable `GET /events`, which
-ADR 0156 C7 gives a forward `since=` cursor and a documented commit-event shape (LH-472, #598; today it
-pages only backwards).
+follows forward from a `since=` cursor in the commit-event shape `docs/COMMIT-EVENTS.md` documents (ADR 0156 C7,
+LH-472). Lineage keeps that feed as a Lance table in the catalog's provenance namespace and answers no graph
+query; the graph is bring-your-own, fed by its forwarder (ADR 0158).
 
 ## Why the fleet services never grow heavy deps
 

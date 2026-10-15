@@ -48,7 +48,7 @@ func (m *Rask) pythonBase(src *dagger.Directory) *dagger.Container {
 }
 
 // base is the synced python-gate base the merged lance-ns functions (Lint,
-// Typecheck, Openapi, TestLineage) build on: the uv container + the repo
+// Typecheck, Openapi) build on: the uv container + the repo
 // source with the artefact excludes (chartsBase extends this exclude set with
 // `.localbin`) + `uv sync --all-packages` — which is why those gates run
 // `uv run --no-sync`. Unexported = shared helper, not a Dagger Function.

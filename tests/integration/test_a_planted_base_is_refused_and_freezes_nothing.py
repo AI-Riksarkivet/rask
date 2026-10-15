@@ -3,14 +3,12 @@
 THE PLANT is the confused-deputy write the row closes: with the table's own write credential (here the
 estate key, as a write vend could), ``add_bases`` lands an ``UpdateBases`` commit naming another table's
 root or the bucket root. Measured on pylance 12.0.0 (lh279 m2/m4/p1/p3): the planting table answered a
-query with the victim's rows, ``/commit`` accepted a fragment spliced through the base, the sweep and the
-purge refused the victim as a "shallow-clone source", and the lineage reconcile laundered the version as
-maintenance.
+query with the victim's rows, ``/commit`` accepted a fragment spliced through the base, and the sweep and
+the purge refused the victim as a "shallow-clone source".
 
 ONE ESTATE, ON MOTO: a fresh bucket per test holding the catalog's ``dir`` namespace, its control root
 (the shipped chart roots both at the bucket) and the configured external blob base ``models/``; the
-real catalog app over its HTTP doors; the real sweep, purge pre-pass and lineage reconcile over the same
-bucket. Every table below is created through the catalog's create door, so its base record is written by
+real catalog app over its HTTP doors; the real sweep and purge pre-pass over the same bucket. Every table below is created through the catalog's create door, so its base record is written by
 the production writer. Each plant is asserted to be in the manifest before anything is judged, because a
 fixture that fails to plant proves nothing.
 
@@ -19,7 +17,7 @@ The clauses (design.md §3), each one test:
 (1) ``/commit`` of a fragment spliced through the planted base is refused and the table is unchanged;
 (2) ``/credentials``, ``describe(vend)`` and ``query_table`` refuse the planting table 409;
 (3) the victim is compacted by the sweep and at the catalog's compact door, and deletable by the purge;
-(4) the reconcile names the plant — its version as a provenance hole, and the tip's base as drift;
+(4) the maintenance pass names the plant: the tip's base is reported as unrecorded;
 (5) the LH-097 relation — silver shallow-cloned from bronze at a tag, recorded as ``derived_from`` —
     still keeps bronze from deletion, permits compaction while the tag holds, and refuses it without;
 and, from the row's How, register location-exclusivity.
@@ -37,7 +35,7 @@ import uuid
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 from urllib.parse import quote
 
 import boto3
@@ -50,9 +48,6 @@ from botocore.exceptions import ClientError
 from fastapi.testclient import TestClient
 
 import storage
-from lineage.api import reconcile_cron
-from lineage.core.config import LineageSettings, storage_options
-from lineage.schemas import DatasetSummary
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import purge, sweep
 from maintenance.services.due import TableIds
@@ -305,70 +300,26 @@ def test_the_victim_is_maintained_and_deletable_under_the_plant(estate: _Estate,
     assert deleted > 0 and files > 0, "the victim's bytes were kept for a relation nobody sanctioned"
 
 
-class _Graph:
-    """The lineage graph as the reconcile reads it: every version of every table up to the plant, and what it back-fills."""
+def test_the_maintenance_pass_names_the_plant(estate: _Estate, planted: str) -> None:
+    """Closes-when (4), on the pass that reads every manifest: the planted base is reported as unrecorded.
 
-    def __init__(self, estate: _Estate) -> None:
-        self.names = {"db$victim": estate.victim, "db$bystander": estate.bystander, "db$attacker": estate.attacker}
-        self.versions = {name: set(range(1, estate.open(uri).version + 1)) for name, uri in self.names.items()}
-        self.versions["db$attacker"] = set(range(1, estate.clean_version + 1))
-
-    async def list_datasets(self, namespace: str | None = None, tag: str | None = None) -> list[DatasetSummary]:
-        return [DatasetSummary(name=name) for name in self.names]
-
-    async def source_uri(self, name: str) -> str | None:
-        return self.names[name]
-
-    async def dropped_at(self, name: str) -> str | None:
-        return None
-
-    async def record_observed_drop(self, name: str, uri: str, observed_at: str) -> bool:
-        return True
-
-    async def latest_write_version(self, name: str) -> int | None:
-        return max(self.versions[name])
-
-    async def write_versions(self, name: str, ref: str | None = None) -> set[int]:
-        return set(self.versions[name])
-
-    async def backfill_write(self, name: str, version: int, schema: object | None = None, ref: str | None = None) -> None:
-        self.versions[name].add(version)
-
-
-def test_the_reconcile_names_the_plant(estate: _Estate, planted: str) -> None:
-    """Closes-when (4), through the cron's own sweep reading the catalog's control root and configured bases.
-
-    Two axes, because retention separates them. The planting version changes no data counter, so only its
-    bases tell it from compaction's; it must be reported, never back-filled as maintenance. And after an
-    append and ``cleanup_old_versions(older_than=0)`` that version is gone while the tip still declares the
-    base (lh279 p2), so the drift is a state compare against the record.
+    A state compare against the table's base record, not a version count: after an append and
+    ``cleanup_old_versions(older_than=0)`` the planting version is gone while the tip still declares the base
+    (lh279 p2), and the base is still named.
     """
-    settings = LineageSettings.model_validate(
-        {
-            "LINEAGE_S3_ENDPOINT": estate.url,
-            "LINEAGE_S3_ACCESS_KEY_ID": "test",
-            "LINEAGE_S3_SECRET_ACCESS_KEY": "test",
-            "LINEAGE_S3_BUCKET": estate.bucket,
-            "LINEAGE_CONTROL_ROOT": estate.root,
-            "LANCE_EXTERNAL_BLOB_BASES": estate.models,
-        }
-    )
-    opts = storage_options(settings)
-    graph = _Graph(estate)
+    settings = estate.maintenance()
     plant_version = estate.open(estate.attacker).version
 
-    report = reconcile_cron.summarize_sweep(asyncio.run(reconcile_cron._sweep(cast(Any, graph), settings, opts)))
+    def unrecorded() -> set[tuple[str, str]]:
+        return {(normalise(finding.referrer), normalise(finding.base)) for finding in sweep.plan_sweep(settings).protected.findings}
 
-    assert report.provenance_holes == {"db$attacker": {"main": [plant_version]}}, "the planting version was laundered as maintenance"
-    assert report.base_drift == {"db$attacker": [normalise(planted)]}
+    assert (normalise(estate.attacker), normalise(planted)) in unrecorded(), "the planted base was not reported"
 
     estate.open(estate.attacker).insert(_MINE)
     estate.open(estate.attacker).cleanup_old_versions(older_than=timedelta(0), error_if_tagged_old_versions=False)
     assert plant_version not in {v["version"] for v in estate.open(estate.attacker).versions()}, "precondition: retention reclaimed the plant"
 
-    report = reconcile_cron.summarize_sweep(asyncio.run(reconcile_cron._sweep(cast(Any, graph), settings, opts)))
-
-    assert report.base_drift == {"db$attacker": [normalise(planted)]}
+    assert (normalise(estate.attacker), normalise(planted)) in unrecorded(), "the tip still declares the base, and it went unreported"
 
 
 def _reads_cold(uri: str, key: dict[str, str]) -> list[int]:

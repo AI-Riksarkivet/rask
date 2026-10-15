@@ -10,15 +10,7 @@ config: enabling a layer without the inputs it needs raises at startup, never si
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
-
-if TYPE_CHECKING:
-    # Type-only: `lance` is heavy and this module is read at boot.
-    import lance
-
 from functools import lru_cache
-from urllib.parse import quote, urlsplit, urlunsplit
 
 from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -54,7 +46,7 @@ class Signing(BaseSettings):
 
 
 class LineageSettings(GovernedAuthSettings, BaseSettings):
-    """Config for the lineage service, its Apache AGE graph store, and its auth gate."""
+    """Config for the lineage service, the catalog that keeps its tables, and its auth gate."""
 
     # `populate_by_name` also teaches the env source the bare FIELD NAME as a second lookup, so
     # every alias below silently gained an un-namespaced twin (MedallionSettings.ray_address
@@ -63,27 +55,43 @@ class LineageSettings(GovernedAuthSettings, BaseSettings):
     # deliberately-bare ones (DAPR_HTTP_PORT) still land.
     # See tests/unit/test_settings_env_namespace.py.
     model_config = SettingsConfigDict(populate_by_name=True, env_prefix="LINEAGE_", extra="ignore")
-    #: The bounded Lance caches this process holds ([[LH-096]]). Lance's own defaults are 1 GiB + 6 GiB,
-    #: which dwarf the 512 Mi limit every lakehouse pod runs under. Settings rather than literals because
-    #: a literal cannot track `resources.limits.memory`; `shared_lance_session` clamps them to the cgroup.
-    lance_metadata_cache_mb: int = Field(default=128, ge=8, alias="LINEAGE_LANCE_METADATA_CACHE_MB")
-    lance_index_cache_mb: int = Field(default=256, ge=8, alias="LINEAGE_LANCE_INDEX_CACHE_MB")
 
-    database_url: str = Field(
-        default="postgresql://lineage:lineage@localhost:5433/lineage",
-        alias="LINEAGE_DATABASE_URL",
-    )
-    graph: str = Field(default="lineage", alias="LINEAGE_GRAPH")
-    # Server-side per-statement timeout on every pooled AGE connection — bounds a runaway Cypher traversal
-    # so it can't pin a pooled connection forever (§4). Generous: normal statements are point MERGEs.
-    age_statement_timeout_seconds: float = Field(default=30.0, ge=1.0, alias="LINEAGE_AGE_STATEMENT_TIMEOUT_SECONDS")
+    # --- The catalog that keeps the feed and the edge list (ADR 0158) ---------------------------------
+    #: The catalog's base URL. The feed, the edge list and the outbox refusals are Lance tables it governs, and
+    #: every read and write of them goes through its doors, so lineage cannot start without it.
+    catalog_url: str = Field(default="", alias="LINEAGE_CATALOG_URL")
+    #: This pod's projected service-account token for the catalog's doors (audience `rask-catalog`), re-read on
+    #: every call because the kubelet rotates it at about 515 s of its 600 s life. Empty sends no bearer, which
+    #: only a catalog with authentication off accepts.
+    catalog_identity_token_file: str = Field(default="", alias="RASK_CATALOG_IDENTITY_TOKEN_FILE")
+    #: The namespace the catalog keeps for provenance (its `LANCE_PROVENANCE_NAMESPACE`), where this service
+    #: creates its tables. The two must name the same namespace.
+    provenance_namespace: str = Field(default="provenance", alias="LINEAGE_PROVENANCE_NAMESPACE")
+    #: Bounds each catalog call, so a hung catalog cannot pin a delivery for ever.
+    catalog_timeout_seconds: float = Field(default=30.0, gt=0, alias="LINEAGE_CATALOG_TIMEOUT_SECONDS")
+
+    # --- The forwarder (ADR 0158): every recorded event, as standard OpenLineage, to a bring-your-own graph -------
+    #: The graph backend's base URL, the OpenLineage HTTP transport's `url`. Empty forwards nothing.
+    forward_url: str = Field(default="", alias="LINEAGE_FORWARD_URL")
+    #: The path events are POSTed to under `forward_url`, the transport's `endpoint`.
+    forward_endpoint: str = Field(default="api/v1/lineage", alias="LINEAGE_FORWARD_ENDPOINT")
+    #: The secret in the Dapr secret store holding the backend's API key, sent as `Authorization: Bearer`. Empty
+    #: sends none. Read on every relay tick, so a rotated key is taken without a restart.
+    forward_api_key_secret: str = Field(default="", alias="LINEAGE_FORWARD_API_KEY_SECRET")
+    #: The field of that secret the key is under.
+    forward_api_key_field: str = Field(default="api-key", alias="LINEAGE_FORWARD_API_KEY_FIELD")
+    #: The most events one relay tick forwards; the rest follow on the next. At the relay's 30 s schedule, 100 a tick
+    #: is 12,000 an hour, against a feed measured at about 450 rows a day.
+    forward_batch: int = Field(default=100, ge=1, alias="LINEAGE_FORWARD_BATCH")
+    #: Bounds each POST to the backend, so a hung backend cannot pin a tick.
+    forward_timeout_seconds: float = Field(default=10.0, gt=0, alias="LINEAGE_FORWARD_TIMEOUT_SECONDS")
 
     # --- OpenFGA (authz) — reuses the catalog's store READ-ONLY -------------------------
     # The OIDC/FGA field-set itself is `GovernedAuthSettings`' (`RASK_OIDC_*` / `RASK_FGA_*`); only the
     # knob below is lineage's own. It used to be declared here under `LINEAGE_*`, and the copy had
     # already lost the shared HTTPS-issuer validator.
-    # The FGA object type a Lance dataset maps to. A lineage Dataset node's ``name`` is the
-    # catalog ``table:<id>``, so a read is gated on ``can_get_metadata`` of ``table:<name>``.
+    # The FGA object type a Lance dataset maps to. A feed row names datasets by their catalog
+    # ``table:<id>``, so a read is gated on ``can_get_metadata`` of ``table:<name>``.
     fga_object_type: str = Field(default="table", alias="LINEAGE_FGA_OBJECT_TYPE")
     #: Who may sign what the bus and the outbox carry; see `Signing`. Built by its own env aliases
     #: (`LINEAGE_SIGNERS`, `LINEAGE_DELEGATORS`), so a settings object made by `model_validate` reads them too.
@@ -96,10 +104,9 @@ class LineageSettings(GovernedAuthSettings, BaseSettings):
     dapr_enabled: bool = Field(default=False, alias="LINEAGE_DAPR_ENABLED")
     dapr_pubsub: str = Field(default="lineage-pubsub", alias="LINEAGE_DAPR_PUBSUB")
     dapr_topic: str = Field(default="lineage.events.v1", alias="LINEAGE_DAPR_TOPIC")
-    #: Bounds the relay's re-publish of a drained event. The drain runs inside the tick's single-flight
-    #: lock, so an unbounded publish against a hung sidecar would hold that lock and stall every later
-    #: tick — the relay failing hardest exactly when a backlog means it matters most, which is the same
-    #: failure the bounded drain was introduced to avoid.
+    #: Bounds the relay's re-publish of a drained event. An unbounded publish against a hung sidecar would
+    #: stall the tick — the relay failing hardest exactly when a backlog means it matters most, which is the
+    #: same failure the bounded drain was introduced to avoid.
     dapr_publish_timeout_seconds: float = Field(default=5.0, ge=0.1, alias="LINEAGE_DAPR_PUBLISH_TIMEOUT_SECONDS")
     # Dead-letter topic for the ingest subscription (Dapr-native DLQ). "" (default) = none — the
     # pre-existing behavior. Ships together with the chart's Resiliency retry policy (a DLQ without
@@ -109,75 +116,37 @@ class LineageSettings(GovernedAuthSettings, BaseSettings):
     dapr_dlq_topic: str = Field(default="", alias="LINEAGE_DLQ_TOPIC")
     # The PARKING subscription's own pubsub component (durable, deliverPolicy=new). "" (default) falls
     # back to `dapr_pubsub` — but that component starts at the stream's first message (a replay rebuilds
-    # the graph), so riding it would re-park the whole retained DLQ backlog on a replay. The chart
+    # the feed), so riding it would re-park the whole retained DLQ backlog on a replay. The chart
     # always sets this alongside LINEAGE_DLQ_TOPIC; the fallback only
     # exists so a dev stack without the extra component keeps working.
     dapr_dlq_pubsub: str = Field(default="", alias="LINEAGE_DLQ_PUBSUB")
-    # Freshness budget in hours (data-contract gap #2): 0 (default) = the axis is OFF (no probe).
-    # >0 = the reconcile sweep + per-dataset GET flag `stale: true` for any dataset whose newest
-    # version commit is older — arrival cadence becomes an ASSERTED contract clause, not a dashboard.
-    freshness_budget_hours: float = Field(default=0, alias="LINEAGE_FRESHNESS_BUDGET_HOURS")
-    # Declared consumer dependencies per dataset (data-contract, Batch 23): a JSON map
-    # {"dataset": ["col", ...]} the chart supplies. The reconcile
-    # sweep compares each declared dataset's STORAGE schema against it and reports
-    # missing_declared_columns — the estate-patrol half of the gate's column_declared assertion
-    # (same two-enforcement-point pattern as the blob probe). "" (default) = no checks, no reads.
-    declared_columns: str = Field(default="", alias="LINEAGE_DECLARED_COLUMNS")
-    # Periodic storage->graph reconciliation (B4) — a Dapr cron binding POSTs to /<name> on a schedule to
-    # back-fill Lance writes whose lineage event was lost (the outbox gap). Empty = the cron route isn't
-    # mounted (the /datasets/{name}/reconcile read endpoint is always available regardless).
-    reconcile_binding_name: str = Field(default="", alias="LINEAGE_RECONCILE_BINDING_NAME")
+    # The relay tick: a Dapr cron binding POSTs to /<name> on a schedule, and the tick drains the outbox,
+    # prunes the feed and forwards to the configured graph backend. Empty = the route isn't mounted.
+    relay_binding_name: str = Field(default="", alias="LINEAGE_RELAY_BINDING_NAME")
 
-    # --- Demo data peek (DEMO ONLY) — reads the real Lance datasets on S3 so the UI can show
-    # what is changing in storage (schema/versions/rows). Off by default; never enable in prod.
-    demo_data_enabled: bool = Field(default=False, alias="LINEAGE_DEMO_DATA_ENABLED")
-    # Cap on how many (newest) Lance versions the peek reports per dataset — the peek's cost grew
-    # LINEARLY with total versions (one S3 dataset-open per version, polled every 2s) before the
-    # 2026-07-11 version-keyed cache; the cap bounds the very first (cold) tick too.
-    demo_max_versions: int = Field(default=50, ge=1, alias="LINEAGE_DEMO_MAX_VERSIONS")
+    # --- The outbox the relay drains: object storage the producers stage to and this service deletes from.
     s3_endpoint: str | None = Field(default=None, alias="LINEAGE_S3_ENDPOINT")
     s3_access_key_id: str | None = Field(default=None, alias="LINEAGE_S3_ACCESS_KEY_ID")
     # SecretStr so the value is redacted in repr/model_dump (parity with the catalog) — read it with
     # .get_secret_value() at the object-store call site.
     s3_secret_access_key: SecretStr = Field(default=SecretStr(""), alias="LINEAGE_S3_SECRET_ACCESS_KEY")
     s3_region: str = Field(default="us-east-1", alias="LINEAGE_S3_REGION")
-    s3_bucket: str = Field(default="lakehouse", alias="LINEAGE_S3_BUCKET")
-    #: THE CATALOG'S CONTROL ROOT, where each table's base record lives under ``_bases/`` ([[LH-279]]).
-    #: Empty = ``s3://{LINEAGE_S3_BUCKET}``, which is where the catalog keeps it when its own
-    #: ``LANCE_CONTROL_ROOT`` is unset (its namespace root), the shipped chart's shape.
-    control_root: str = Field(default="", alias="LINEAGE_CONTROL_ROOT")
-    #: THE CATALOG'S ``LANCE_EXTERNAL_BLOB_BASES``, under the same name: a plain base inside one of these
-    #: is sanctioned by configuration, so the base-drift axis never reports it.
-    external_blob_bases: str = Field(default="", validation_alias="LANCE_EXTERNAL_BLOB_BASES")
 
-    @property
-    def resolved_control_root(self) -> str:
-        """The catalog's control root — ``LINEAGE_CONTROL_ROOT`` or the primary bucket."""
-        return self.control_root or f"s3://{self.s3_bucket}"
-
-    @property
-    def external_blob_base_list(self) -> list[str]:
-        """The configured external blob bases, parsed as the catalog parses them."""
-        return [base.strip() for base in self.external_blob_bases.split(",") if base.strip()]
-
-    # #4: the durable lineage-outbox prefix (shared with the producers that stage there). When set, the reconcile
-    # sweep also DRAINS it — re-ingesting any event a producer staged but whose publish never got acked
-    # (a crash between the Lance commit and the publish), then deleting it. Empty = drain disabled. Must
-    # point at the SAME object-store prefix as ``LANCE_LINEAGE_OUTBOX_URI`` and ``MAINTENANCE_LINEAGE_OUTBOX_URI``.
+    # #4: the durable lineage-outbox prefix (shared with the producers that stage there). When set, the relay
+    # tick DRAINS it — re-ingesting any event a producer staged but whose publish never got acked (a crash
+    # between the Lance commit and the publish), then deleting it. Empty = drain disabled. Must point at the
+    # SAME object-store prefix as ``LANCE_LINEAGE_OUTBOX_URI`` and ``MAINTENANCE_LINEAGE_OUTBOX_URI``.
     outbox_uri: str = Field(default="", alias="LINEAGE_OUTBOX_URI")
-    # Max staged events one reconcile tick drains, OLDEST FIRST (docs/adr/0004-p1-2-bounded-oldest-first-outbox-drain.md P1.2 (bounded drain)).
-    # The drain used to materialise the ENTIRE prefix in memory inside the single-flight lock, so a backlog
-    # — precisely the situation the outbox exists to survive — could OOM or stall the tick, making the relay
-    # fail hardest
-    # exactly when it was needed most. The remainder drains on the next tick; oldest-first means nothing
-    # starves behind a steady arrival rate. 0 = unbounded (the old behavior; not recommended).
+    # Max staged events one relay tick drains, OLDEST FIRST (docs/adr/0004-p1-2-bounded-oldest-first-outbox-drain.md P1.2 (bounded drain)).
+    # The drain used to materialise the ENTIRE prefix in memory, so a backlog — precisely the situation the
+    # outbox exists to survive — could OOM or stall the tick. The remainder drains on the next tick;
+    # oldest-first means nothing starves behind a steady arrival rate. 0 = unbounded (not recommended).
     outbox_drain_limit: int = Field(default=500, alias="LINEAGE_OUTBOX_DRAIN_LIMIT")
 
     # --- Secret consumption from the Dapr secret store (OpenBao) — the audit's 'wired but never read' /
-    # 'plaintext still ships' fix, symmetric with the catalog. When on, the S3 secret (reconcile reads the
-    # real Lance file with it) and the AGE DB password come from the store at boot, NOT plaintext env: the
-    # chart omits both from pod env. apply_lineage_secrets() splices them in (over the shared
-    # service_kit.governed.secrets.apply_dapr_secrets seam) and fails closed on the S3 secret.
+    # 'plaintext still ships' fix, symmetric with the catalog. When on, the outbox's S3 secret comes from
+    # the store at boot, NOT plaintext env: the chart omits it from pod env, and
+    # service_kit.governed.secrets.apply_dapr_secrets splices it in and fails closed.
     secrets_from_dapr: bool = Field(default=False, alias="LINEAGE_SECRETS_FROM_DAPR")
     #: THE ONE STORE, NAMED ONCE (DUP-17). The estate runs a single Dapr secret-store component and
     #: seven env vars named it, each defaulting to the same literal and none of them set by the chart —
@@ -187,41 +156,18 @@ class LineageSettings(GovernedAuthSettings, BaseSettings):
     dapr_secret_store: str = Field(default="lance-secrets", validation_alias=AliasChoices("LINEAGE_DAPR_SECRET_STORE", "RASK_SECRET_STORE"))
     dapr_secret_key: str = Field(default="lance", alias="LINEAGE_DAPR_SECRET_KEY")
     dapr_secret_s3_field: str = Field(default="minio-secret-key", alias="LINEAGE_DAPR_SECRET_S3_FIELD")
-    dapr_secret_db_field: str = Field(default="postgres-password", alias="LINEAGE_DAPR_SECRET_DB_FIELD")
 
-    # --- Durable /events feed retention, in DAYS of arrival time (the estate's own `received_at`, never
-    # the producer-supplied eventTime). 0 = unbounded. Pruned once per reconcile tick under that sweep's
-    # cluster-wide lock, never on the ingest path.
+    # --- Feed retention, in DAYS of arrival time (the estate's own `received_at`, never the
+    # producer-supplied eventTime). 0 = unbounded. Pruned once per relay tick, never on the ingest path.
     #
     # DAYS BECAUSE THE CONSUMER REASONS IN DAYS. `services/notifications` walks this feed from a persisted
     # cursor as the estate's catch-up path after an outage, so the only question an operator needs a
     # retention knob to answer is "how long an outage does the feed survive". A count cannot answer it at
-    # any volume, and `postgres.PRUNE_EVENTS` carries the measurement of what a seq-denominated bound
-    # does instead.
+    # any volume.
     #
     # 7 DAYS IS THE HORIZON THE DEPLOYED FEED WAS MEASURED HOLDING (2026-08-31 → 2026-09-07, 3 133 rows),
     # so the default states the working estate's horizon rather than changing it.
     events_retention_days: int = Field(default=7, ge=0, alias="LINEAGE_EVENTS_RETENTION_DAYS")
-
-    # --- Run-node retention (§4) — prune graph :Run nodes older than this many days on each reconcile
-    # sweep (under its cluster-wide lock). 0 = off (the dev/demo default: keep full provenance). Pruning a
-    # run deletes its WROTE edges — per-version schema/stats history goes with it, which is what retention
-    # means; the next sweep back-fills a fresh reconcile run for any dataset left without a versioned edge.
-    #: Days of :Run history to keep; 0 keeps everything. The CHART sets 30 (owner ruling 2026-09-08);
-    #: this CODE default stays 0 on purpose, and the asymmetry is deliberate rather than an oversight.
-    #:
-    #: Today's other defaults moved the other way — `lineageAccessKey`, `lockRootCreate` — under the rule
-    #: that "a guard reachable only by remembering an opt-in protects the installs that did not need
-    #: protecting". That rule is about PROTECTIVE controls, where the failure of a missing default is an
-    #: estate left open. Retention is DESTRUCTIVE: its failure is deleted history. So the safe direction
-    #: inverts — a deployment nobody configured must not start erasing provenance because it inherited a
-    #: number, and the chart is where an operator says how long to keep it.
-    run_retention_days: int = Field(default=0, ge=0, alias="LINEAGE_RUN_RETENTION_DAYS")
-
-    # --- Read/access audit (#6) — record WHO READ which dataset on the gated read endpoints (an access
-    # log, complementing the write provenance in the graph). Off by default; needs an authenticated subject,
-    # so it is effectively a no-op unless OIDC is on. Best-effort: an audit-write failure never fails a read.
-    read_audit_enabled: bool = Field(default=False, alias="LINEAGE_READ_AUDIT_ENABLED")
 
     # Compliance audit trail (#41): gate the dedicated `lance.audit` stream (the DLQ-replay record) exactly
     # like the catalog — the SHARED LANCE_AUDIT_ENABLED env (not a LINEAGE_* twin), so one flag governs the
@@ -229,7 +175,6 @@ class LineageSettings(GovernedAuthSettings, BaseSettings):
     # silently OFF (the logger inherits root WARNING and the INFO records drop before any handler).
     audit_enabled: bool = Field(default=True, alias="LANCE_AUDIT_ENABLED")
 
-    # Serve /docs + /openapi.json (default on for dev; prod sets false, like the catalog's LANCE_REST_DOCS).
     #: OFF by default. It defaulted to True and NO deployment path ever set it — `grep -rn DOCS
     #: chart/ .docker/ scripts/` matched nothing — so the flag documented a choice nobody was making
     #: and the schemas shipped openly. A security default every deployment must remember to disable is
@@ -243,59 +188,11 @@ def get_settings() -> LineageSettings:
     return LineageSettings()
 
 
-def _with_db_password(url: str, password: str) -> str:
-    """Return ``url`` with its userinfo password set to ``password`` — so the AGE password comes from the
-    secret store, not a plaintext connection string in pod env (the chart ships the URL password-less)."""
-    parts = urlsplit(url)
-    userinfo = f"{parts.username or ''}:{quote(password, safe='')}"
-    host = parts.hostname or ""
-    netloc = f"{userinfo}@{host}{f':{parts.port}' if parts.port else ''}"
-    return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
-
-
-def apply_lineage_secrets(settings: LineageSettings) -> None:
-    """The shared store consumption PLUS the one field only lineage needs: the AGE DB password.
-
-    The S3 half is ``service_kit.governed.secrets.apply_dapr_secrets`` — the estate's one
-    implementation (DUP-09) — and this reads the DB password off the SAME bundle rather than issuing a
-    second fetch. Named for the service rather than sharing the seam's name so a reader can tell at the
-    call site which one they are looking at.
-
-    The DB password is spliced only when present: the chart ships a password-less URL, so a missing
-    password leaves an unusable DSN that ``pool.open()`` rejects — still fail-closed. Both halves are
-    no-ops when ``secrets_from_dapr`` is off, and the import is lazy so dev/tests never pull the
-    dependency in.
-    """
-    from service_kit.governed.secrets import apply_dapr_secrets
-
-    bundle = apply_dapr_secrets(settings)
-    db_password = bundle.get(settings.dapr_secret_db_field)
-    if db_password:
-        settings.database_url = _with_db_password(settings.database_url, db_password)
-
-
-def declared_columns_map(settings: LineageSettings) -> dict[str, list[str]]:
-    """The parsed dataset→declared-columns map — fail-safe: malformed JSON logs and yields {} (the
-    contract check silently OFF beats a lineage service that won't boot over a values typo)."""
-    import json as _json
-    import logging as _logging
-
-    if not settings.declared_columns:
-        return {}
-    try:
-        raw = _json.loads(settings.declared_columns)
-        return {str(dataset): [str(c) for c in columns] for dataset, columns in raw.items() if isinstance(columns, list)}
-    except Exception as exc:
-        _logging.getLogger(__name__).warning("declared_columns_unparseable", extra={"error": str(exc)})
-        return {}
-
-
 def storage_options(settings: LineageSettings) -> dict[str, str]:
-    """Object-store options for reading Lance datasets directly (reconcile #23, demo peek).
+    """Object-store options for the outbox the relay drains.
 
-    The same S3-compatible config the catalog writes with, so the lineage service reads the *actual*
-    on-disk version to cross-check the graph. Empty strings let the object-store client fall back to
-    its default credential chain (e.g. real AWS) when the ``LINEAGE_S3_*`` env vars are unset.
+    The same S3-compatible config the producers stage with. Empty strings let the object-store client fall
+    back to its default credential chain (e.g. real AWS) when the ``LINEAGE_S3_*`` env vars are unset.
     """
     return lance_storage_options(
         settings.s3_endpoint or "",
@@ -303,27 +200,3 @@ def storage_options(settings: LineageSettings) -> dict[str, str]:
         settings.s3_secret_access_key.get_secret_value(),
         settings.s3_region,
     )
-
-
-def shared_lance_session() -> lance.Session:
-    """The process-wide bounded Lance session every lineage open threads ([[LH-096]]).
-
-    A bare `lance.dataset(uri)` takes Lance's default 1 GiB metadata + 6 GiB index ceilings, serves one
-    call and discards the cache WITH the handle — so inside the 512 Mi limit this pod runs under, the
-    process both carries caps describing a container it is not in and never caches anything. Measured:
-    repeated opens grow a shared session's `size_bytes` and leave a bare open's flat.
-
-    NOT A HANDLE CACHE. Caching a DATASET pins a version; a `Session`'s keys carry `(uri, version, etag)`,
-    so a compaction writes NEW keys and a new version is never served stale — which is why this needs no
-    freshness contract. An old version whose data files were reclaimed can still be answered from it;
-    `service_kit.lakehouse.lance_session` records that measurement and its thread-safety.
-
-    Clamped from the cgroup rather than by lowering the defaults, because a literal cannot track
-    `resources.limits.memory`. `rask-maintenance` was OOMKilled (exit 137) on 2026-09-10 before it
-    clamped, which is why this is the shape the estate already uses.
-    """
-    from service_kit.lakehouse.lance_session import affordable_cache_bytes, lance_session
-
-    settings = get_settings()
-    metadata, index = affordable_cache_bytes(settings.lance_metadata_cache_mb << 20, settings.lance_index_cache_mb << 20)
-    return lance_session(metadata, index)

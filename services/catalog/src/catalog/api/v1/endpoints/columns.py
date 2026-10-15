@@ -1,7 +1,7 @@
 """Column / schema endpoints (data-plane add/alter/drop + native backfill).
 
-Every op that changes the schema or bumps the Lance version emits a best-effort lineage ``WROTE`` event so
-the graph's per-version column inventory follows the evolution (``/datasets/{id}/schema`` + ``/columns``).
+Every op that changes the schema or bumps the Lance version emits a best-effort lineage write event carrying
+the per-version schema facet, so the feed and a forwarded graph backend see the evolution at that version.
 The shared ``lineage_deps.emit_measured_write`` trailer reads version + schema off ONE dataset open —
 pinned to the response's version when it carries one — and never fails the already-committed mutation.
 ``backfill_column`` is the one exception: it returns a ``job_id`` (the backfill runs asynchronously), so the
@@ -132,7 +132,7 @@ async def add_columns(
     authorization: Annotated[str | None, Header()] = None,
 ) -> AlterTableAddColumnsResponse:
     """Add SQL-expression-computed columns to the table — wraps ``alter_table_add_columns``; emits an
-    ADD_COLUMNS event carrying the NEW per-version schema so the graph's column inventory follows the add."""
+    ADD_COLUMNS event carrying the NEW per-version schema, so the feed records the add at its version."""
     segments = parse_identifier(id, settings.delimiter)
     body.id = reconcile_body_id(segments, body.id)
     response = await run_in_threadpool(dataplane.add_columns, ns, so, body)
@@ -163,7 +163,7 @@ async def alter_columns(
     authorization: Annotated[str | None, Header()] = None,
 ) -> AlterTableAlterColumnsResponse:
     """Rename, re-type, or change nullability of existing columns — wraps ``alter_table_alter_columns``;
-    emits an ALTER_COLUMNS event with the post-evolution schema (renames/re-types show in the graph)."""
+    emits an ALTER_COLUMNS event with the post-evolution schema, so renames and re-types reach the feed."""
     segments = parse_identifier(id, settings.delimiter)
     body.id = reconcile_body_id(segments, body.id)
     response = await run_in_threadpool(dataplane.alter_columns, ns, so, body)
@@ -194,7 +194,7 @@ async def drop_columns(
     authorization: Annotated[str | None, Header()] = None,
 ) -> AlterTableDropColumnsResponse:
     """Drop the named columns from the table — wraps ``alter_table_drop_columns``; emits a DROP_COLUMNS
-    event with the reduced schema so the dropped columns leave the graph's per-version inventory."""
+    event with the reduced schema, so the feed records the version without the dropped columns."""
     segments = parse_identifier(id, settings.delimiter)
     body.id = reconcile_body_id(segments, body.id)
     response = await run_in_threadpool(dataplane.drop_columns, ns, so, body)
@@ -224,7 +224,7 @@ def backfill_column(
 
     No lineage is emitted here: the response carries a ``job_id`` (the backfill runs asynchronously), so the
     Lance version it eventually produces isn't known at request time — a synchronous emit would assert a
-    version that hasn't been written. The version bump is recovered by #23 reconcile when the job lands.
+    version that hasn't been written. The version the job lands is not announced from here.
     """
     body.id = reconcile_body_id(parse_identifier(id, settings.delimiter), body.id)
     judged_native_version(ns, so, list(body.id or []), version=None)
@@ -244,8 +244,8 @@ async def update_field_metadata(
     authorization: Annotated[str | None, Header()] = None,
 ) -> UpdateFieldMetadataResponse:
     """Merge or replace per-field metadata for the given field paths — wraps ``update_field_metadata``;
-    emits an UPDATE_FIELD_METADATA event at the new version (columns unchanged, but the WROTE edge keeps
-    the per-version schema populated for every version)."""
+    emits an UPDATE_FIELD_METADATA event at the new version (columns unchanged, but the event still
+    carries the schema, so every version the feed records has one)."""
     segments = parse_identifier(id, settings.delimiter)
     body.id = reconcile_body_id(segments, body.id)
     updates = [u.model_dump() for u in (body.updates or [])]

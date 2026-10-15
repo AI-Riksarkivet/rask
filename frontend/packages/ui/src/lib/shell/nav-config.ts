@@ -10,25 +10,21 @@ import {
 	Settings,
 } from '@lucide/svelte';
 import type { InboxNotificationLike } from './inbox.js';
-import type { RunStatusLike } from '../runs/run-status.js';
 
 /** All lucide icons share one component signature, so any icon's type fits. */
 export type IconComponent = typeof Database;
 
 /** What a zone hands the shell to light up the navbar's notification bell.
  *
- *  One optional object rather than six threaded props, so a zone opts in with a single `notifications=`
+ *  One optional object rather than threaded props, so a zone opts in with a single `notifications=`
  *  and a zone that has not wired the feed yet renders no bell at all (rather than an empty one that
- *  looks broken). The shell never fetches it: `runs` is the zone's own `GET /runs` read, and the read
+ *  looks broken). The shell never fetches it: the rows are the zone's own inbox read, and the read
  *  state comes back through the callbacks so the zone — which owns a per-subject store — can persist
- *  it. Ids in `seen`/`dismissed` are NOTIFICATION ids (`run_id@STATE`), from `runNotificationId`. */
+ *  it. Ids in `seen`/`dismissed` are NOTIFICATION ids. */
 export type NotificationFeed = {
-	/** The run rows, as the lineage service's `GET /runs` returns them — the ACTIVITY plane: every
-	 *  run whose outputs you may read, whoever started it. Per-tab read state. */
-	runs: RunStatusLike[];
 	/** The INBOX plane: rows addressed to this subject, durable per subject. `undefined` means this
 	 *  zone has no inbox transport — a different statement from an empty inbox, and the bell renders
-	 *  it differently (no tabs, and the badge falls back to the run feed). */
+	 *  it differently. */
 	inbox?: InboxNotificationLike[];
 	/** The server's unread count for the WHOLE inbox, not the page above. */
 	inboxUnread?: number;
@@ -36,8 +32,6 @@ export type NotificationFeed = {
 	dismissed?: string[];
 	onseen?: (seen: string[]) => void;
 	ondismiss?: (notificationId: string, dismissed: string[]) => void;
-	/** Optional "see everything" destination — the zone's own runs page. */
-	allHref?: string;
 };
 
 /** A leaf route inside the CURRENT zone's sidebar — same-zone (soft nav) unless `reload` says
@@ -79,7 +73,7 @@ export type ZoneNavLeaf = {
 
 /** One labelled section of the sidebar — a `Sidebar.Group` with its own `GroupLabel`. */
 export type ZoneNavGroup = {
-	/** The section heading (e.g. "Catalog", "Lineage", "Governance"). */
+	/** The section heading (e.g. "Catalog", "Governance"). */
 	label: string;
 	items: ZoneNavLeaf[];
 	/** Collapsible via the label (default true). Set false to pin a section open. */
@@ -103,7 +97,7 @@ export type ZoneNavRoot = ZoneNavLeaf;
  *
  *  GROUPED, not flat. This was `{ title, leaves[] }` — one unlabelled list — which forced Lakehouse
  *  to swap the WHOLE sidebar per area, keyed off the pathname, so standing in the catalog you
- *  could not see lineage, models, governance or admin at all. Storage was reachable only by typing
+ *  could not see models, governance or admin at all. Storage was reachable only by typing
  *  its URL, because no area's flat list could mention another area's route. Groups let one zone
  *  present its whole surface at once, which is what the shadcn sidebar primitives were built for
  *  and what the estate already had installed but never used. */
@@ -174,7 +168,7 @@ export const norm = (p: string) => (p.length > 1 && p.endsWith('/') ? p.slice(0,
 export const seg = (href: string) => (p: string) =>
 	norm(p) === href || norm(p).startsWith(href + '/');
 /** exact match: active ONLY on this exact path. Used for a root leaf whose href equals its own
- *  zone's href (e.g. Registry=/models, Graph=/lineage) — `seg` there would over-match every sibling
+ *  zone's href (e.g. Registry=/models) — `seg` there would over-match every sibling
  *  sub-route (/models/experiments would light up Registry too), so those leaves match exactly. */
 export const exact = (href: string) => (p: string) => norm(p) === href;
 /** domain match: active when the path is under any of the given prefixes. */
@@ -188,7 +182,7 @@ export const under =
 export type TopNavItem = { title: string; href: string; description: string };
 
 /** A labelled column inside a navbar panel. A trigger that gathers SEVERAL concerns (Lakehouse:
- *  catalog + models + lineage + operations) needs its rows grouped under headings, or the panel is just a
+ *  catalog + models + operations) needs its rows grouped under headings, or the panel is just a
  *  long undifferentiated list — the multi-column NavigationMenu.Content shape. */
 export type TopNavGroup = { label: string; items: TopNavItem[] };
 
@@ -205,7 +199,7 @@ export type TopNavEntry = {
 	 *  this is the cross-zone jump list, not a mirror of in-zone navigation. */
 	items?: TopNavItem[];
 	/** Grouped alternative to `items` — rendered as labelled columns. Used by Lakehouse, whose panel
-	 *  spans the catalog, the model registry, lineage and the operational surfaces. */
+	 *  spans the catalog, the model registry and the operational surfaces. */
 	groups?: TopNavGroup[];
 	/** Visual weight in the ZONE bar. 'primary' is where the work happens — the lakehouse you govern
 	 *  and the compute that fills it — and those lead the bar. Everything else is a real zone but a
@@ -256,34 +250,6 @@ const DATA_ITEMS: TopNavItem[] = [
 		title: 'Storage',
 		href: '/lakehouse/catalog/storage/',
 		description: 'Objects in the warehouse buckets — browse and preview.',
-	},
-];
-
-const LINEAGE_ITEMS: TopNavItem[] = [
-	{
-		title: 'Datasets',
-		href: '/lakehouse/lineage/datasets',
-		description: 'Every dataset the cascade has read or written.',
-	},
-	{
-		title: 'Jobs',
-		href: '/lakehouse/lineage/jobs',
-		description: 'The compute identities that produce them.',
-	},
-	{
-		title: 'Runs',
-		href: '/lakehouse/lineage/runs',
-		description: 'Individual executions, with state and errors.',
-	},
-	{
-		title: 'Columns',
-		href: '/lakehouse/lineage/columns',
-		description: 'Field-level lineage across the estate.',
-	},
-	{
-		title: 'Graph',
-		href: '/lakehouse/lineage',
-		description: 'The whole medallion DAG on one canvas.',
 	},
 ];
 
@@ -395,7 +361,7 @@ const WORKSPACE_ITEMS: TopNavItem[] = [
 	{
 		title: 'Workbench',
 		href: '/lakehouse/workbench',
-		description: 'Lineage, runs, events, tables and storage in one arrangeable dock.',
+		description: 'Events, tables and storage in one arrangeable dock.',
 	},
 ];
 
@@ -447,9 +413,8 @@ const OPERATIONS_ITEMS: TopNavItem[] = [
 /**
  * The top-navbar IA. Seven zones — home, lakehouse, explorer, annotator, compute, models, studio — and
  * the bar carries an entry for EVERY one of them (R15: a zone missing from the shared navbar is a
- * defect, regardless of scaffold status). Lakehouse and Lineage stay two views of the ONE merged
- * estate zone rather than two apps — a hop from the catalog to the lineage graph, or to the DLQ,
- * is a soft navigation inside one router; every OTHER entry crosses a zone boundary and
+ * defect, regardless of scaffold status). A hop from the catalog to the DLQ is a soft navigation
+ * inside one router; every OTHER entry crosses a zone boundary and
  * hard-navigates. The sidebar renders the current zone's routes (`ZoneNav`).
  *
  * A zone with sub-areas carries `items`, and the navbar renders it as a NavigationMenu trigger with
@@ -541,7 +506,7 @@ export function isMainMenu(pathname: string): boolean {
 
 export function topNav(estateAdmin: boolean): TopNavEntry[] {
 	// LAKEHOUSE gathers everything that describes or governs the one governed estate: the catalog
-	// (projects → warehouses → namespaces → tables), the lineage over it, and, for an estate admin,
+	// (projects → warehouses → namespaces → tables) and, for an estate admin,
 	// the operational surfaces on top. The model registry used to be a column here — models ARE
 	// catalog objects (models$<model> carries the same rungs), which is why it sat here at all — but
 	// R17's migration has now happened: the routes physically moved, so the column moved with them and
@@ -551,22 +516,13 @@ export function topNav(estateAdmin: boolean): TopNavEntry[] {
 	// only a new ZONE earns a new entry (R15). The project switcher sits at the head of the bar on
 	// every zone (global context belongs in global chrome).
 	const lakehouse: TopNavGroup[] = [
-		// WORKSPACE first, and its own column rather than a row of Lineage. The dock composes the whole
-		// zone (lineage graph + runs + events + the catalog's tables and object browser), so filing it
+		// WORKSPACE first, and its own column rather than a row of an area. The dock composes the whole
+		// zone (the event feed + the catalog's tables and object browser), so filing it
 		// under one area is what made it invisible from the others — the placement that was reverted.
 		{ label: 'Workspace', items: WORKSPACE_ITEMS },
 		{ label: 'Catalog', items: DATA_ITEMS },
 		// NO 'Models' COLUMN — the area left this zone for the MODELS zone, which is its own trigger
-		// below. What the lakehouse keeps is model LINEAGE (which run wrote which version), and that is
-		// already a Lineage row.
-		//
-		// Lineage is an AREA of this zone (/lakehouse/lineage) — so it is a column, not a trigger of
-		// its own. It used to be top-level,
-		// which forced the Lakehouse trigger to carve lineage out of its own match to stop both
-		// lighting up, and left a bar where one entry was a zone and another was an area inside it
-		// with no way for a reader to tell why. Trigger = zone, column = area; the bar is now
-		// Lakehouse + Media, and a new route is a row in a column.
-		{ label: 'Lineage', items: LINEAGE_ITEMS },
+		// below. Trigger = zone, column = area: a new route is a row in a column.
 	];
 	// OPERATIONS stays with the lakehouse; GOVERNANCE does not — by ruling (2026-08-03): "governance
 	// and other setting stuff, more in terms of auth, should be part of the topnavbar when in main
@@ -601,7 +557,7 @@ export function topNav(estateAdmin: boolean): TopNavEntry[] {
 			// same reason as `/compute/` below.
 			href: '/lakehouse/',
 			icon: Database,
-			// The whole merged zone — catalog, models, lineage, and (for an admin) operations. No
+			// The whole merged zone — catalog and (for an admin) operations. No
 			// carve-out: every area is a column of this one trigger.
 			match: under('/lakehouse'),
 			groups: lakehouse,

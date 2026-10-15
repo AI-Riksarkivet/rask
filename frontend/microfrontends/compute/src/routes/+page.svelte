@@ -11,11 +11,9 @@
 		getServe,
 		getTasks,
 	} from '$lib/remote/compute.remote';
-	import { lineageFeed, type RunNotice } from '$lib/live/feeds.remote';
 	import RayStatus from '$lib/components/ray-status.svelte';
 	import { Card } from '@rask/ui/card';
 	import { Badge, type BadgeVariant } from '@rask/ui/badge';
-	import { runPhase, runPhaseLabel } from '@rask/ui/runs';
 	import { Button } from '@rask/ui/button';
 	import {
 		Boxes,
@@ -29,24 +27,18 @@
 		TriangleAlert,
 	} from '@lucide/svelte';
 
-	// The compute landing — the Ray-plane summary merged with the PIPELINE RUNS feed. The
-	// batches/HTR dashboard died at P7a (the batches table + orchestrator plane are gone):
-	// ingestion is `POST /api/ingest` (the /new page) and the cascade's progress is the
-	// lineage runs feed — the same `query.live` pulse that backs the shell's bell, so the
-	// landing and the bell can never disagree about the estate.
+	// The compute landing — the Ray-plane summary.
 	//
 	// THE ONE PATTERN (see lib/remote/compute.remote.ts):
 	//  - Live Ray reads (events/cluster/jobs/actors/tasks/serve) are the SAME query objects the
 	//    other compute views use, polled below via `.refresh().catch()` and read imperatively
 	//    (`.current`) so refresh is flicker-free and a single 500 can't kill the poll loop.
-	//  - The runs panel rides `lineageFeed` (query.live) — change-driven, no poll here.
 	const overviewQuery = getOverview();
 	const clusterQuery = getRayCluster();
 	const jobsQuery = getRayJobs();
 	const actorsQuery = getActors();
 	const tasksQuery = getTasks();
 	const serveQuery = getServe();
-	const runsQuery = lineageFeed();
 
 	// Polled Ray reads — imperative `.current` (undefined until first resolve). All dashboard
 	// proxies are offline-safe (never 5xx), so each resolves even when Ray is down.
@@ -56,12 +48,8 @@
 	const actors = $derived(actorsQuery.current ?? []);
 	const taskRows = $derived(tasksQuery.current ?? []);
 	const serve = $derived(serveQuery.current ?? null);
-	const runs = $derived(runsQuery.current?.runs ?? []);
 
-	// SIX READS, ONE CLOCK — and the split on this page is the estate's clearest example of the rule.
-	// The runs feed is NOT here: it is a live query driven by the lineage cursor, because a run
-	// reaching a terminal state IS published. Everything below is the Ray plane, which publishes
-	// nothing, so it rides `$lib/live/ray-clock` — one interval for the whole zone, holding the single
+	// SIX READS, ONE CLOCK. Everything below is the Ray plane, which publishes nothing, so it rides `$lib/live/ray-clock` — one interval for the whole zone, holding the single
 	// POLL REASON. This page alone used to issue 72 requests a minute per open tab on its own timer,
 	// beside a seventh owned by `RayStatus`.
 	//
@@ -150,31 +138,6 @@
 		}
 	}
 
-	// Derived from the SHARED phase, not from the raw state. This was a local switch on `state`, which
-	// is a second copy of `runPhase` — and the copy could not see a promotion verdict, so a promotion
-	// the quality gate HELD rendered `destructive` / "FAIL", identical to an outage. A hold is a
-	// question for a validator; BLOCKED and REFUSED stay destructive because no approval waives them.
-	function runBadgeVariant(r: RunNotice): BadgeVariant {
-		switch (runPhase(r)) {
-			case 'complete':
-				return 'success';
-			case 'running':
-			case 'started':
-				return 'warning';
-			case 'held':
-				return 'warning';
-			case 'failed':
-				return 'destructive';
-			default:
-				return 'secondary';
-		}
-	}
-
-	function runProgress(r: RunNotice): number | null {
-		if (r.progress_total == null || r.progress_done == null || r.progress_total === 0) return null;
-		return (r.progress_done / r.progress_total) * 100;
-	}
-
 	function sevVariant(s: string) {
 		if (s === 'ERROR') return { icon: CircleAlert, cls: 'text-destructive' };
 		if (s === 'WARNING') return { icon: TriangleAlert, cls: 'text-amber-600 dark:text-amber-400' };
@@ -188,20 +151,6 @@
 		if (secs < 90) return `${secs.toFixed(0)}s`;
 		if (secs < 5400) return `${(secs / 60).toFixed(1)}m`;
 		return `${(secs / 3600).toFixed(1)}h`;
-	}
-
-	function fmtWhen(iso: string | null): string {
-		if (!iso) return '—';
-		const d = new Date(iso);
-		const sameDay = d.toDateString() === new Date().toDateString();
-		return sameDay
-			? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-			: d.toLocaleString([], {
-					month: 'short',
-					day: 'numeric',
-					hour: '2-digit',
-					minute: '2-digit',
-				});
 	}
 </script>
 
@@ -242,62 +191,6 @@
 				</a>
 			{/each}
 		</section>
-
-		<!-- Pipeline runs — the lineage runs feed (failures first, the same pulse as the bell).
-		     This replaced the P7a-retired batches/chunks dashboard: cascade progress IS run state. -->
-		<Card class="overflow-hidden">
-			<div class="flex items-center justify-between border-b px-4 py-2">
-				<div class="text-muted-foreground text-[11px] font-medium tracking-wide uppercase">
-					Pipeline runs
-				</div>
-				<span class="text-muted-foreground text-[11px]">failures first · live</span>
-			</div>
-			{#if !runs.length}
-				<div class="text-muted-foreground px-4 py-6 text-center">
-					No runs yet — ingest a volume to start the cascade.
-				</div>
-			{:else}
-				<div class="divide-border flex max-h-72 flex-col divide-y overflow-auto">
-					{#each runs as r (r.run_id)}
-						{@const pctVal = runProgress(r)}
-						<div class="flex items-center gap-3 px-4 py-1.5 text-xs">
-							<Badge
-								variant={runBadgeVariant(r)}
-								class={`min-w-[72px] justify-center ${(r.state ?? '').toUpperCase() === 'RUNNING' ? 'animate-pulse' : ''}`}
-							>
-								{runPhaseLabel(r)}
-							</Badge>
-							<span class="text-foreground truncate font-mono" title={r.run_id}>
-								{r.operation ?? r.job ?? r.run_id.slice(0, 12)}
-							</span>
-							{#if r.author}
-								<span class="text-muted-foreground">by {r.author}</span>
-							{/if}
-							{#if pctVal !== null}
-								<div class="bg-muted h-1.5 w-28 overflow-hidden rounded-full">
-									<div
-										class="h-full bg-emerald-500 transition-all"
-										style:width={`${pctVal}%`}
-									></div>
-								</div>
-								<span class="text-muted-foreground font-mono tabular-nums">
-									{r.progress_done}/{r.progress_total}
-								</span>
-							{/if}
-							{#if r.error_message}
-								<span
-									class={`truncate ${runPhase(r) === 'held' ? 'text-muted-foreground' : 'text-destructive'}`}
-									title={r.error_message}
-								>
-									{r.error_message}
-								</span>
-							{/if}
-							<span class="text-muted-foreground ml-auto shrink-0">{fmtWhen(r.updated_at)}</span>
-						</div>
-					{/each}
-				</div>
-			{/if}
-		</Card>
 
 		<!-- Recent RayJobs -->
 		{#if jobsPayload?.ok && jobList.length}

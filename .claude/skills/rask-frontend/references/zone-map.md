@@ -27,21 +27,19 @@ Data: `+layout.server.ts` awaits `fetchMe({catalogUrl: CATALOG_API})` — `env.C
 
 ## `lakehouse` — base `/lakehouse`, port 5174
 
-Six areas that used to be separate apps, merged under one router: `catalog`, `lineage`, `models`, `admin`, `governance`, `workbench`. Area resolution is path-segment-based, so a hop between areas is a soft nav. 47 route files; `+layout.ts` sets `ssr = true, prerender = false` zone-wide.
+Five areas that used to be separate apps, merged under one router: `catalog`, `models`, `admin`, `governance`, `workbench`. Area resolution is path-segment-based, so a hop between areas is a soft nav. 36 route files (measured 2026-10-16); `+layout.ts` sets `ssr = true, prerender = false` zone-wide.
 
 **`data` was renamed `catalog`** — `/lakehouse/data` no longer resolves anywhere in the estate. The zone root's `+page.ts` 307s to `${base}/catalog`; that redirect was missed during the rename, so `/lakehouse` 404'd for every visitor (and so did the "Lakehouse" breadcrumb on every page beneath it) while `nav-truth.test.ts` stayed green — a redirect target is not a nav entry. `redirect-truth.test.ts` exists to cover exactly that gap.
 
-`+layout.svelte` is the control tower: `me` fetched **on mount** via `fetchMeViaBff()`, one `lineageFeed()` live query opened in `onMount`, a client-side estate-admin gate that renders `ForbiddenPage` and nulls `zoneNav` so admin routes are not advertised, `canvasArea = area === 'lineage'` to give SvelteFlow a sized flex parent, and `onNavigate → document.startViewTransition`.
+`+layout.svelte` is the control tower: `me` fetched **on mount** via `fetchMeViaBff()`, the bell's inbox query (`readInboxFeed()`) opened in `onMount`, a client-side estate-admin gate that renders `ForbiddenPage` and nulls `zoneNav` so admin routes are not advertised, `canvasArea = area === 'workbench'` to give the dock a sized flex parent, and `onNavigate → document.startViewTransition`.
 
 **`catalog`** — table registry, table detail (`TableDetail.svelte`, 1821 lines, tabs derived from `?tab=`), namespaces (derived from `<ns>$<table>` ids — there is no list endpoint), projects, warehouses, and the **object browser at `catalog/storage`** (+ `catalog/storage/tiers`). The **warehouse + project** registry (list/describe/create/activate/bind) rides `lib/data/remote/warehouses.remote.ts`; its three `/capi/v1/warehouses*` routes are gone. The **table lifecycle** rides `lib/data/remote/catalog.remote.ts` (the transport ruling area 1): the registry list, the `fetchTableDetail` aggregate (still a six-read server-side fan-out — just no longer a route), policy/GC/compaction, tags/branches/restore, schema evolution, indexes, drop/deregister/rename/declare and the row update/delete; 17 `/capi/v1/table*` routes are gone with it, allowlist segments and all. Tabular reads (table preview/query, insert) stay Arrow on `+server.ts`, as does the `[id]/[...rest]` GET proxy that serves blob `<img>` bytes and the #113 commit log.
-
-**`lineage`** — Svelte Flow DAG explorer (depth layout with longest-path + iteration cap, theme-live via `useColorMode()`), datasets, dataset detail (governance, grants, read audit, upstream/downstream), jobs, job detail (a **two-read split**: 200 events with `summary:true` ≈46 kB, plus one raw event for facets), runs, column-level lineage.
 
 **`models`** is an area here, not a zone; **storage is not even an area** — it is `catalog/storage`. **`governance`** (access, audit) split out of `admin` (events, streams, dlq, tenants) so the breadcrumb stops contradicting the rail, but both sit behind the same estate-admin door (`PRIVILEGED_AREAS` in `+layout.svelte:32`). The model registry (list/describe/**promote**) rides `lib/models/remote/models.remote.ts` — the `capi/v1/model/[model]/promote` route is gone.
 
 7 `+server.ts` routes — 4 keep-bytes (`capi/v1/table/[id]/query` + `/insert` Arrow, `capi/v1/table/[id]/[...rest]` for blob bytes and the #113 commit log, and `api/explorer/[...rest]`, the R18 storage-browser seam that rides to the GATEWAY with its path unchanged), 1 keep-flow (`capi/management/v1/me`), 2 catch-alls (`api/[...path]` → lineage, `capi/[...path]` → catalog). The `/api/audit` shim is **gone**; its logic survives in `lib/server/audit-core.ts`, consumed only by `admin/remote/audit.remote.ts`.
 
-15 `.remote.ts` modules — and the estate's only `requestJSON` residual; the four sites and the convergence rule are in SKILL § Fetching data (b).
+11 `.remote.ts` modules (measured 2026-10-16) — and the estate's only `requestJSON` residual; the four sites and the convergence rule are in SKILL § Fetching data (b).
 
 ## `explorer` — base `/explorer`, port 5173, labelled **Explorer**
 
@@ -65,7 +63,7 @@ It renders `AppShell` with **`canvas={true}`** — drops sidebar and breadcrumb,
 
 ## `compute` — base `/compute`, port 5175
 
-**13 pages + a dock** (measured 2026-08-07 — `find src/routes -name '+page.svelte'`): `/` (overview), `/jobs`, `/jobs/[id]`, `/actors`, `/cluster`, `/serve`, `/gpu`, `/logviewer`, `/api-docs` (iframes `/api/docs`), `/etl` (the ingest form, which reads its source kinds from `GET /api/ingest/sources` — a route with no gateway row and no backend, since the lakehouse runs no ingest service (ADR 0154), so the form 404s), `/ingest` (the run board, read from LINEAGE), `/ingest/[run_id]` (that run's detail), `/query` (scaffold — no query backend yet), and `/workbench`. The views themselves live in `$lib/boards/*` per the panel-is-the-page rule, so the routes stay thin and the dock's panels render the page's component.
+**13 pages + a dock** (measured 2026-08-07 — `find src/routes -name '+page.svelte'`): `/` (overview), `/jobs`, `/jobs/[id]`, `/actors`, `/cluster`, `/serve`, `/gpu`, `/logviewer`, `/api-docs` (iframes `/api/docs`), `/etl` (the ingest form, which reads its source kinds from `GET /api/ingest/sources` — a route with no gateway row and no backend, since the lakehouse runs no ingest service (ADR 0154), so the form 404s), `/ingest/[run_id]` (one ingest run's detail), `/query` (scaffold — no query backend yet), and `/workbench`. The views themselves live in `$lib/boards/*` per the panel-is-the-page rule, so the routes stay thin and the dock's panels render the page's component.
 
 Two routes this list used to name are gone, and both are worth knowing: **`/new`** became `/etl` (a stale nav row pointing at `/new` also named an unimported icon, so evaluating `nav.ts` threw and took EVERY compute page down with a 500 — not just the dead link), and **`/inference`** was deleted 2026-08-07 with its `api/infer` route and `COMPUTE_SERVE_URL` — a single-app, HTR-only duplicate of studio's flow canvas. **The zone now has NO `+server.ts` and no acting surface at all**: it observes Ray, it does not drive it.
 
@@ -94,7 +92,7 @@ Mini-app launcher with exactly one tenant: a GSAP vs `svelte/transition` A/B.
 
 | title | href | panel |
 |---|---|---|
-| Lakehouse | `/lakehouse/catalog` | groups: Workspace, Catalog, Models, Lineage (+ Operations for admins) |
+| Lakehouse | `/lakehouse/` | groups: Workspace, Catalog (+ Operations for admins) |
 | Compute | `/compute/` | items: Overview, Workbench, Jobs, Cluster, Actors, Serve, Logs, API docs |
 | Explorer | `/explorer/` | items: Search, Atlas, Tree, Graph, Workbench, Workflow |
 | Annotate | `/annotator/` | plain link |
@@ -109,4 +107,4 @@ Matchers exported for zones to build configs: `norm` (drops one trailing slash),
 
 `prefetchDocument(href)` / `prefetchOnIntent(href)` inject `<link rel="prefetch">` on pointerenter/focus, once per href, SSR no-op — honoured by Chromium and Firefox, not Safari. Implemented as a native `addEventListener` inside an `{@attach}` so Bits UI's own pointer handlers on the node survive.
 
-Notifications: `NotificationFeed { runs, seen?, dismissed?, onseen?, ondismiss?, allHref? }`. `null` renders **no bell**, not an empty one. Identity is `run_id@STATE`, so a run read at START re-rings on COMPLETE/FAIL while progress ticks inside RUNNING stay quiet. `visibleRuns` sorts **failures first, then newest** — across 891 real runs the first FAIL sat at position 445, so a newest-8 panel never showed a failure.
+Notifications: `NotificationFeed { inbox?, inboxUnread?, seen?, dismissed?, onseen?, ondismiss? }`. `null` renders **no bell**, not an empty one; `inbox` absent renders "No notification inbox on this stack", which is a different statement from an empty inbox. Identity is the row's `notification_id` (`run_id@STATE`), so a run read at START re-rings on COMPLETE/FAIL. The badge is the server's `inboxUnread`, never a count of the page.

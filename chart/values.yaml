@@ -278,110 +278,66 @@ services:
     module: lineage.main:app
     # -- Container and Service port of the lineage service.
     port: 8000
-    # -- Dapr app-id of lineage; also names its pubsub, DLQ and durable consumers and scopes its reconcile cron.
+    # -- Dapr app-id of lineage; also names its pubsub, DLQ and durable consumers and scopes its relay cron.
     daprAppId: lineage
-    # Freshness budget in HOURS (data-contract gap #2): >0 makes the reconcile sweep + per-dataset
-    # GET flag `stale: true` for any dataset whose newest version commit is older — arrival cadence
-    # becomes an ASSERTED contract clause (WARN `lineage_reconcile_stale` on the tick). 0 = off.
-    #
-    # 48 IS THE OWNER'S NUMBER (2026-09-11), and it is a policy rather than a measurement: a lane that
-    # has landed nothing in two days has stopped, while a quiet weekend day has not. It was 0 — the axis
-    # OFF estate-wide — so no dataset had ever been reported stale and the clause the reconciler
-    # advertises was asserted against nothing.
-    # -- Hours after which a dataset with no new version is flagged `stale` by reconcile and the dataset GET. 0 turns the check off.
-    freshnessBudgetHours: 48
     # Safe to scale: the app's own pubsub component carries queueGroupName=lineage, so replicas form a
-    # competing-consumer group (single delivery per event); ingest is idempotent anyway (MERGE on run_id).
+    # competing-consumer group (single delivery per event), and every record is idempotent anyway: an insert-only
+    # merge on the event's key in the feed table lands a redelivery as nothing.
     # -- Replica count of lineage; replicas form a competing-consumer group, so it scales freely.
     replicas: 1
-    # Demo data-peek router (/demo/*: live Lance schema/versions/rows for the UI) — DEMO ONLY: the
-    # endpoints carry no OIDC/FGA guard, so they'd disclose dataset metadata past the governance layer
-    # (reachable unauthenticated through the web BFF — bug hunt 2026-07-13). SECURE-BY-DEFAULT off; a demo
-    # opts in with `--set services.lineage.demoData=true`. The router is only mounted when true.
-    # -- Mounts the unauthenticated /demo/* data-peek router. Demo only; off by default.
-    demoData: false
-    # Read-side audit trail: every allowed FGA-gated data read is recorded (the lineage_reads table),
-    # feeding GET /datasets/{name}/readers + the ReadersPanel in the data/lineage zones. Rendered into
-    # LINEAGE_READ_AUDIT_ENABLED only when auth.enabled (that is where a real subject exists to record) —
-    # the read-side mirror of auth.audit; set false to keep the panel dark even with auth on.
-    # -- Records every allowed FGA-gated data read (feeds GET /datasets/{name}/readers). Rendered only when auth.enabled.
-    readAudit: true
-    # Periodic storage->graph reconciliation (B4) — a Dapr cron binding POSTs to /<bindingName> on
-    # `schedule` to back-fill Lance writes whose lineage event was lost, and to DRAIN the #4 outbox.
-    #
-    # DEFAULT ON (was off, which the helm NOTES then had to warn about on every single install — "a
-    # lineage event lost between the Lance commit and the publish stays lost"; live-proof 2026-07-28,
-    # defect 7. A default that every install is told to change is a wrong default, and the thing it
-    # protects is the provenance graph's completeness, i.e. the whole point of the lineage plane.)
-    #
-    # Why default-ON is safe, not just desirable:
-    #   * IDEMPOTENT — ingest MERGEs on run_id, so re-ingesting an event the graph already has is a
-    #     no-op; the sweep cannot duplicate provenance.
-    #   * SINGLE-FLIGHTED — the sweep holds a lock, so overlapping ticks (or multiple lineage replicas
-    #     in the competing-consumer group) cannot run it concurrently.
-    #   * NON-DESTRUCTIVE by default — the only deleting behaviour is :Run pruning, gated separately by
-    #     runRetentionDays (0 = off, below), and staleness only WARNs (freshnessBudgetHours, 0 = off).
-    #   * RENDER-GATED — the cron binding renders only with dapr.enabled, so a
-    #     sidecar-less install silently gets nothing new rather than a dangling component.
-    #   * BOUNDED — one sweep per `schedule` (300s here; prod wants a cron expression), reading Lance
-    #     versions the graph already tracks.
-    # Set false only for a deliberately inert demo; the /datasets/{name}/reconcile READ endpoint is
-    # available either way.
-    reconcile:
-      # -- Renders the storage-to-graph reconcile cron, which back-fills lost lineage events, drains the outbox and prunes. Needs dapr.enabled.
+    # Lineage keeps no database (ADR 0158): its commit feed, table-level edge list and outbox refusals are Lance
+    # tables in this namespace, written and read through the catalog's doors as lineage's own principal. The
+    # catalog creates the namespace at boot, protects it, grants lineage `writer` on it, and never announces a
+    # write under it (each of those rows records an announcement). Rendered into both services, so the two
+    # cannot name different namespaces.
+    # -- Namespace the catalog keeps for lineage's feed and edge list (`LANCE_PROVENANCE_NAMESPACE`, `LINEAGE_PROVENANCE_NAMESPACE`).
+    provenanceNamespace: provenance
+    # The relay tick: a Dapr cron binding POSTs to /<bindingName> on `schedule`. Each tick drains the outbox
+    # (records and re-publishes every event a producer staged but never saw acknowledged), prunes the feed past
+    # eventsRetentionDays, and forwards the feed to the graph backend `forward.url` names. Every step is
+    # idempotent, so overlapping ticks and several replicas need no lock. Render-gated on dapr.enabled.
+    # Every 30 s, the notifications reconciler's cadence: the forwarder is the graph backend's only feed, so the
+    # schedule bounds how far behind the graph runs.
+    relay:
+      # -- Renders the relay cron, which drains the lineage outbox, prunes the feed and forwards it. Needs dapr.enabled.
       enabled: true
-      # -- Name of the reconcile cron binding; the sidecar POSTs to /<bindingName>.
-      bindingName: lineage-reconcile-cron
-      # -- Schedule of the reconcile sweep (Dapr cron syntax, e.g. `@every 300s` or a cron expression).
-      schedule: "@every 300s" # demo cadence (prod: e.g. "0 */15 * * * *")
-    # #4 transactional outbox: producers stage each lineage event to s3://<minio.bucket>/_lineage_outbox
-    # BEFORE the fire-and-forget publish; the reconcile sweep DRAINS any survivor (a crash between the Lance
-    # commit and the publish), re-ingesting the FULL event (inputs/author/columnLineage) — narrowing the loss
-    # window to commit->stage, which the DLQ + version-only back-fill cannot. Requires reconcile.enabled (the
-    # drain runs in the sweep).
-    #
-    # DEFAULT ON, with reconcile above: staging and draining are ONE mechanism, and half of it is worse
-    # than either half alone — reconcile without the outbox can only back-fill that a version EXISTS
-    # (author, inputs and column lineage are gone), and the outbox without reconcile stages events that
-    # nothing ever drains. Cost is one S3 PUT + DELETE per lineage event against the already-provisioned
-    # `minio.bucket`; the whole thing is a no-op when the URI env isn't rendered.
+      # -- Name of the relay cron binding; the sidecar POSTs to /<bindingName>.
+      bindingName: lineage-relay-cron
+      # -- Schedule of the relay tick (Dapr cron syntax, e.g. `@every 30s` or a cron expression).
+      schedule: "@every 30s"
+    # The transactional outbox: producers stage each lineage event to s3://<minio.bucket>/_lineage_outbox
+    # BEFORE the fire-and-forget publish, and the relay drains any survivor (a crash between the Lance commit
+    # and the publish), recording the FULL event. Staging and draining are one mechanism: the outbox without
+    # the relay stages events nothing ever drains. The cost is one S3 PUT and DELETE per lineage event.
     outbox:
-      # -- Stages each lineage event to `s3://<minio.bucket>/_lineage_outbox` before publishing, drained by reconcile. Requires reconcile.enabled.
+      # -- Stages each lineage event to `s3://<minio.bucket>/_lineage_outbox` before publishing, drained by the relay. Requires relay.enabled.
       enabled: true
-    # Run-node retention (§4): the reconcile cron prunes graph :Run nodes older than this many days
-    # (batched DETACH DELETE under the sweep's single-flight lock), and then the Dataset nodes that
-    # prune ORPHANS. Only meaningful with reconcile.enabled (the cron is the pruner).
-    #
-    # 30 BY OWNER RULING 2026-09-08, and 0 (keep everything) is what it replaced. Keeping everything
-    # was not free: it is a RETENTION knob whose real cost is a CONTROL. The reconcile probes every
-    # dataset node the graph holds, so residue makes `storage_loss` and `unreadable` fire on every tick
-    # carrying dead rows, and a REAL bucket deletion arrives invisible among them — measured on this
-    # estate at 1,271 Dataset nodes against 5,692 runs, the datasets every one still edge-reachable.
-    #
-    # Thirty days is long enough to investigate an incident that surfaced late and short enough that
-    # the graph actually converges; a quarter would have left the current residue in place for months.
-    # -- Days after which reconcile prunes graph :Run nodes and the Dataset nodes that leaves orphaned. 0 keeps everything.
-    runRetentionDays: 30
-    # Durable /events feed retention, in DAYS of ARRIVAL time (`received_at`, stamped by the database —
-    # never the producer-supplied eventTime, which lineage stores as an unparsed string). Pruned batched
-    # on the same reconcile tick, under the same single-flight lock. 0 = unbounded.
+    # Durable /events feed retention, in DAYS of ARRIVAL time (`received_at`, the estate's clock, never the
+    # producer-supplied eventTime). Pruned on the relay tick. 0 = unbounded.
     #
     # DAYS, BECAUSE THE CONSUMER OF THIS FEED REASONS IN DAYS. `services/notifications` walks it from a
-    # persisted cursor as the estate's catch-up path after an outage — the bus alone provably misses
-    # Ray TRAIN and every external OpenLineage producer — so what an operator needs from this
-    # number is *how long an outage the feed survives*. A row- or seq-denominated bound cannot say:
-    # measured 2026-09-08, a 20 000-seq window held 3 133 rows because every ON CONFLICT-rejected
-    # redelivery consumes a sequence value without leaving a row, so the horizon contracted precisely
-    # when redelivery rose. `notifications_feed_gaps_total` recorded 559 lossy reconciler passes on
-    # 2026-08-29 and 1 537 on 2026-08-30.
-    #
-    # 7 is the horizon the deployed feed was measured holding, so the default states it rather than
-    # changes it. Raise it if this estate's acceptable notifications outage is longer than a week.
-    # -- Days of arrival time the durable /events feed keeps, pruned on the reconcile tick; bounds how long a notifications outage it survives. 0 is unbounded.
+    # persisted cursor as the estate's catch-up path after an outage (the bus alone provably misses every
+    # external OpenLineage producer), so what an operator needs from this number is how long an outage the
+    # feed survives. 7 is the horizon the deployed feed was measured holding (2026-08-31 to 2026-09-07,
+    # 3,133 rows). Raise it if this estate's acceptable notifications outage is longer than a week.
+    # -- Days of arrival time the durable /events feed keeps, pruned on the relay tick; bounds how long a notifications outage it survives. 0 is unbounded.
     eventsRetentionDays: 7
-    # Server-side per-statement timeout (seconds) on the AGE pool — bounds a runaway Cypher traversal.
-    # -- Server-side per-statement timeout in seconds on lineage's AGE pool; bounds a runaway Cypher traversal.
-    ageStatementTimeoutSeconds: 30
+    # The forwarder (ADR 0158): the lineage graph is bring-your-own, and the relay tick sends every event lineage
+    # records, as standard OpenLineage over the HTTP transport, to the backend `url` names (Marquez, DataHub,
+    # OpenMetadata). At least once and in feed order, from a cursor the catalog keeps. Empty forwards nothing. A
+    # backend outside rask's namespace needs a `networkPolicy.extraEgress` entry when network policies enforce.
+    forward:
+      # -- Base URL of the graph backend the relay forwards every recorded event to (the OpenLineage HTTP transport's `url`). Empty forwards nothing.
+      url: ""
+      # -- Path the events are POSTed to under `url` (the transport's `endpoint`).
+      endpoint: api/v1/lineage
+      # The backend's API key is a secret in the estate's secret store, never a value: lineage reads it on every
+      # tick, so a rotated key needs no restart, and every other app's sidecar is denied it.
+      authSecret:
+        # -- Secret in the Dapr secret store holding the backend's API key, sent as `Authorization: Bearer`. Empty sends none.
+        name: ""
+        # -- Field of that secret the API key is under.
+        key: api-key
 
 # Image registry/tag shared by every fleet + migration container, PLUS the per-image lance-ns block so
 image:
@@ -1617,7 +1573,7 @@ stateStore:
 backups:
   # pg_dump the lineage + OpenFGA DBs (gzip) → the lakehouse S3 under _backups/pg/<date>/.
   pgDump:
-    # -- Schedule a CronJob that pg_dumps the lineage, OpenFGA and Dapr state databases (gzip) to `_backups/pg/<date>/` in the lakehouse bucket. Off by default.
+    # -- Schedule a CronJob that pg_dumps the OpenFGA and Dapr state databases (gzip) to `_backups/pg/<date>/` in the lakehouse bucket. Off by default.
     enabled: false
     # -- Cron schedule of the pg dump (default daily 02:00).
     schedule: "0 2 * * *" # daily 02:00
@@ -2371,20 +2327,24 @@ openfga:
 # has no AGE extension, so this is a plain StatefulSet on apache/age. See docs/CNPG-AGE.md for the
 # ImageVolume path that eventually folds it into CloudNativePG.
 age:
-  # -- Run the in-cluster apache/age Postgres StatefulSet that serves the lineage graph, OpenFGA and the Dapr state store databases.
+  # -- Run the in-cluster apache/age Postgres StatefulSet that serves the OpenFGA and Dapr state store databases.
   enabled: true
   # PG16 THROUGHOUT, and the patch is chosen for the PLATFORM rather than for features: 1.5.0 ships
   # `linux/amd64` ONLY — read from the image's config blob, since a v2 manifest carries no top-level
   # architecture — while 1.6.0 is a manifest list carrying amd64 AND arm64 ([[XC-070]], measured
-  # against the registry 2026-09-23). This StatefulSet serves BOTH the lineage graph and OpenFGA, so
-  # on the older pin nothing governed comes up on an arm64 host at all.
+  # against the registry 2026-09-23). This StatefulSet serves OpenFGA, so on the older pin nothing
+  # governed comes up on an arm64 host at all.
   # -- Postgres+AGE image for the StatefulSet and the pg_dump backup job (PG16; 1.6.0 is multi-arch amd64+arm64).
   image: apache/age:release_PG16_1.6.0
   # -- Postgres user every AGE client connects as; its password is the store's `postgres-password` secret, never a value.
   user: lance
   # No password value: the AGE password is the store's `postgres-password` ([[XC-004]]).
-  # -- Name of the AGE graph and database holding the OpenLineage graph.
-  lineageDb: lineage
+  # The database the server initialises (`POSTGRES_DB`) and its readiness probe names. No client reads it: lineage
+  # keeps no database (ADR 0158), and OpenFGA and the Dapr state store each have their own below. It keeps the name
+  # the deployed volume was initialised with, because a new one rolls the StatefulSet that serves both; it leaves
+  # with this StatefulSet (LH-496).
+  # -- Name of the database the AGE server initialises and probes; no client reads it.
+  bootstrapDb: lineage
   # -- Name of the database OpenFGA uses as its datastore.
   openfgaDb: openfga
   # The Dapr state store's database (see stateStore above). Dapr owns this schema outright — it creates
@@ -2393,11 +2353,11 @@ age:
   stateDb: daprstate
   # -- Postgres port of the AGE store, used by every client DSN, the backup job and the network policy.
   port: 5432
-  # Externalize ([[XC-132]]): with age.enabled=false every client (lineage, the in-chart OpenFGA's datastore DSN, the
+  # Externalize ([[XC-132]]): with age.enabled=false every client (the in-chart OpenFGA's datastore DSN, the
   # Dapr state store, the Collector's state-store scrape, the dump) dials THIS host. user and the database names must
   # match the platform's; the password is never a value: it is the secret store's `postgres-password`, which ESO
   # delivers and the dev seed writes into its DSNs.
-  # -- Postgres host lineage, OpenFGA and the Dapr state store use instead of the in-cluster AGE; the render refuses it empty with age.enabled=false.
+  # -- Postgres host OpenFGA and the Dapr state store use instead of the in-cluster AGE; the render refuses it empty with age.enabled=false.
   externalHost: "" # e.g. rask-postgres-rw (the CNPG Cluster's -rw service)
   # Effectively immutable after first install: StatefulSet volumeClaimTemplates can't be updated in
   # place, so the chart fails the upgrade if this differs from the deployed StatefulSet instead of

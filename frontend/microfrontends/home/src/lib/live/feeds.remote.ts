@@ -12,15 +12,14 @@ import {
 import * as v from 'valibot';
 import { readSecretFile } from '@rask/api/bff';
 
-export type { LineagePulse, RunNotice } from '@rask/api/runs-feed';
+export type { LineagePulse } from '@rask/api/runs-feed';
 
 /**
  * This zone's LIVE feeds — the run-notification bell, and the control-plane cursor the estate-settings
  * surfaces re-read on.
  *
  * The whole body of `lineageFeed` is `@rask/api/runs-feed`, shared with every other zone — probe the
- * lineage cursor, re-read `/runs` when it moves, failures first, trim to the window, keep the stream
- * alive. What cannot be shared is exactly this file: `query.live` must be declared inside an app to get
+ * lineage cursor and keep the stream alive. What cannot be shared is exactly this file: `query.live` must be declared inside an app to get
  * its own endpoint, and `getRequestEvent` only exists there. So a zone's cost of having the bell is four
  * lines, which is why it had no business shipping in one zone out of four.
  *

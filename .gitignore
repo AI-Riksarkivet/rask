@@ -27,11 +27,6 @@ site/
 batches.db
 scripts/batch_ids.txt
 
-# Demo runtime endpoints (machine-specific). `make medallion-demo` no longer writes this —
-# the driver runs inside the Dagger service and reads its endpoints from the environment — but a
-# hand-run `python scripts/medallion_demo.py` against your own stack still can.
-.medallion-demo.env
-
 .localbin/
 
 # playwright-cli skill scratch logs (tool artifacts, not source)

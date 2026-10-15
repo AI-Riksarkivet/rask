@@ -84,12 +84,12 @@ describe('topNav', () => {
 		// The governance guarantee, both polarities: a non-admin's panel cannot even name them.
 		// 'Models' left this list when the registry and experiments routes physically moved to the
 		// MODELS zone — the column went with its routes.
-		expect(labels(false)).toEqual(['Workspace', 'Catalog', 'Lineage']);
+		expect(labels(false)).toEqual(['Workspace', 'Catalog']);
 		// Operations — streams, events, dead letters — is an operation ON the lakehouse, so it stays a
 		// column here. Governance is not a lakehouse feature and no longer appears in this panel at
 		// all; asserted as an ABSENCE so it cannot quietly return and exist in two places. Models is
 		// pinned the same way, for the same reason.
-		expect(labels(true)).toEqual(['Workspace', 'Catalog', 'Lineage', 'Operations']);
+		expect(labels(true)).toEqual(['Workspace', 'Catalog', 'Operations']);
 		expect(labels(true)).not.toContain('Governance');
 		expect(labels(true)).not.toContain('Models');
 	});
@@ -213,7 +213,7 @@ describe('topNav', () => {
 		expect(isMainMenu('/projects/')).toBe(true);
 	});
 
-	it('active-match: Lakehouse lights across every area of its zone, lineage included', () => {
+	it('active-match: Lakehouse lights across every area of its zone', () => {
 		// One trigger owns the whole zone, so there is no subtree to subtract and no pair of entries
 		// that can light up together.
 		const lakehouse = topNav(true).find((e) => e.title === 'Lakehouse')!;
@@ -228,21 +228,10 @@ describe('topNav', () => {
 		// `/lakehouse/governance/*` is deliberately absent from that list rather than merely unlisted:
 		// the segment left this zone with #105, so the zone that lights for it is home's Settings entry.
 		expect(lakehouse.match('/settings/audit')).toBe(false);
-		expect(lakehouse.match('/lakehouse/lineage')).toBe(true);
-		expect(lakehouse.match('/lakehouse/lineage/runs')).toBe(true);
 		expect(lakehouse.match('/')).toBe(false);
 		expect(lakehouse.match('/explorer')).toBe(false);
 		expect(lakehouse.match('/annotator')).toBe(false);
 		expect(lakehouse.match('/compute')).toBe(false);
-	});
-
-	it('lineage is a COLUMN of the lakehouse panel, never a trigger of its own', () => {
-		expect(topNav(true).map((e) => e.title)).not.toContain('Lineage');
-		const lakehouse = topNav(true).find((e) => e.title === 'Lakehouse')!;
-		expect(lakehouse.groups!.find((g) => g.label === 'Lineage')).toBeDefined();
-		// …and the trigger claims the lineage routes, so it lights up while you are in there.
-		expect(lakehouse.match('/lakehouse/lineage')).toBe(true);
-		expect(lakehouse.match('/lakehouse/lineage/runs')).toBe(true);
 	});
 
 	it('Explorer and Annotate are separate zones, so separate triggers', () => {
@@ -392,7 +381,7 @@ describe('topNav', () => {
 		// the platform rows…' above. Pinned as an absence so the rows cannot come to exist in both places.
 		expect(groups.Governance).toBeUndefined();
 		expect(groups.Operations).toEqual(['Events', 'Streams', 'DLQ']);
-		expect(groups.Lineage).toEqual(['Datasets', 'Jobs', 'Runs', 'Columns', 'Graph']);
+		expect(groups.Lineage).toBeUndefined();
 	});
 
 	it('Explorer carries its rows too — the panel that was never pinned', () => {

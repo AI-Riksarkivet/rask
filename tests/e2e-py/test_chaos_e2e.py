@@ -6,7 +6,7 @@ Nothing proved that automatically; the row it closes was hand-driven only.
 
 The events are produced by real catalog writes, never hand-published. A synthetic author is refused by
 `enforce_bus_authz` and bumps a watched refusal counter, and an authorized one injects fabricated
-provenance into the governed graph — so the only honest producer is the catalog itself.
+provenance into the governed feed — so the only honest producer is the catalog itself.
 
 Needs a deployed release and kubectl: this scales a Deployment to 0 and back. Env-gated, and out of
 `e2e-ci`'s suite list on purpose.

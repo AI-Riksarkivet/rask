@@ -42,11 +42,6 @@ governed = [
     "lance-namespace>=0.11.0,<0.12",
 ]
 lakehouse = ["pyarrow", "lance-namespace>=0.11.0,<0.12"]
-# The image derivers (B14). An OPTIONAL extra because this library is dependency-light on purpose —
-# a consumer that wants the settings helpers should not install an image codec. Both the medallion
-# service and the baked Ray stage job take it, which is what lets them share ONE implementation
-# instead of a drift-pinned copy each.
-media = ["pillow>=10"]
 lancekit = [
     "pyarrow",
     # Every Lance reader and writer moves together: pylance 8 could not read a 9-written blob-v2

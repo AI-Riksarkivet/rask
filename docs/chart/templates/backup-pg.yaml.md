@@ -14,8 +14,8 @@ them. Running the rask image makes it an ordinary first-party workload.
 THE ESTATE'S OWN S3 SEAM, not a third-party CLI. `minio/mc` refuses ANONYMOUS
 pulls on every registry this estate can reach — measured 2026-09-24 with the
 bearer decoded, Docker Hub answers `access: []` and quay.io `actions: []`, both
-401 ([[XC-075]]). What this uploads is the lineage graph (AGE) and the
-authorization store (OpenFGA), so on a node that pulls fresh the estate's two
+401 ([[XC-075]]). What this uploads is the authorization store (OpenFGA) and
+the Dapr state store, so on a node that pulls fresh the estate's two
 most irreplaceable databases back up NOWHERE, and a CronJob that cannot start
 says so once in an event nobody reads. Every verb was plain S3: `cp` is
 `put_object`, `ls` + `rm` are the retention walk that

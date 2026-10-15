@@ -27,9 +27,8 @@ frontend/
   .oxfmtrc.json     # rsvelte-fmt + oxfmt — every extension
   microfrontends/
     home/           # catch-all zone (base '/'); owns the OIDC /auth/{login,callback,logout} routes
-    lakehouse/      # /lakehouse — the governed estate, four AREAS in one router:
+    lakehouse/      # /lakehouse — the governed estate, its AREAS in one router:
                     #     /lakehouse/catalog     projects, tables, namespaces, warehouses
-                    #     /lakehouse/lineage  the lineage graph explorer
                     #     /lakehouse/models   model registry, experiments, pipeline
                     #     /lakehouse/admin    access, tenants, audit, events, streams, DLQ
                     #                         (estate-admin gated, fail-closed, in the root layout)

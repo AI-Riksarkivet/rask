@@ -17,7 +17,7 @@ claim below was verified against the render or the code (2026-08-28), not inheri
 | Service invocation | ✅ | gateway `_target_base` → `/v1.0/invoke/{app_id}/method` (direct-httpx fallback when Dapr off); `invoke/lineage`, `invoke/compute` |
 | State | ✅ | `state.postgresql` ×1 (the actor state store; scopes are load-bearing — see traps) |
 | Pub/sub | ✅ | `pubsub.jetstream`, one Component per app-id that publishes or subscribes, each scoped to ONE app-id and naming that app's NATS user from the store (`jwt`/`seedKey` secretKeyRef to `nats-user-<app>`, `auth.secretStore: lance-secrets`; the permission table is `nats.auth.users` in values.yaml, [[XC-078]]); `DaprApp.subscribe` incl. a DLQ route; `queueGroupName` makes replicas competing consumers |
-| Bindings | ✅ | `bindings.cron` ×7 in the product chart: `maintenance-cron` (the sweep), `maintenance-reconcile-cron`, `lineage-reconcile-cron`, `notifications-reconcile-cron`, `catalog-control-relay-cron`, `catalog-erasure-release-cron` (ADR 0138, releasing an erasure's pinning tags and branches when due), `catalog-promotion-expiry-cron` (ADR 0161, expiring promotion holds past their review deadline); the compute fixture chart (`deploy/fixtures/compute`, ADR 0155) renders a seventh, `compute-prune-jobs-cron` — read the cluster for what runs, not the templates. Plus `bindings.smtp`, `bindings.http` — all delivered to `POST /<component-name>` at the pod ROOT |
+| Bindings | ✅ | `bindings.cron` ×7 in the product chart: `maintenance-cron` (the sweep), `maintenance-reconcile-cron`, `lineage-relay-cron` (drains the outbox, prunes the feed, forwards to the graph backend), `notifications-reconcile-cron`, `catalog-control-relay-cron`, `catalog-erasure-release-cron` (ADR 0138, releasing an erasure's pinning tags and branches when due), `catalog-promotion-expiry-cron` (ADR 0161, expiring promotion holds past their review deadline); the compute fixture chart (`deploy/fixtures/compute`, ADR 0155) renders a seventh, `compute-prune-jobs-cron` — read the cluster for what runs, not the templates. Plus `bindings.smtp`, `bindings.http` — all delivered to `POST /<component-name>` at the pod ROOT |
 | Actors | ✅ | `DaprActor` ×17, `ActorProxy` ×28 (notifications inbox, project tasks) |
 | Secrets | ✅ | `secretstores.hashicorp.vault` → OpenBao. THE estate rule: sole source, fail-closed, never env fallback |
 | Workflow | ✅ | `DaprWorkflowClient`, `WorkflowRuntime` in `services/flows` only. The lakehouse runs no workflow: the import contract `the-lakehouse-is-not-built-on-a-workflow-engine` forbids it (ADR 0154). The promotion gate is a tag, not a saga: readers read `@published`, approval moves the tag, rejection restores main, a cron sweep expires stale holds (ADR 0156 C1, ADR 0161, [[LH-466]]) |
@@ -173,8 +173,8 @@ sidecar.
   verbatim: *"No coordination – each replica runs the schedule independently, causing duplicate
   triggers"* and *"when the target app is scaled to multiple replicas, the schedule will fire on every
   instance"*. There is no lease anywhere in the path, so every multi-replica service must buy the
-  guarantee itself, and the estate answers it FIVE different ways: lineage takes a Postgres advisory
-  lock (`RECONCILE_LOCK_KEY`); notifications and maintenance are pinned to `replicas: 1`; catalog's
+  guarantee itself, and the estate answers it FIVE different ways: lineage's relay tick makes every step idempotent (an
+  insert-only merge on each feed row, a forwarder cursor that only moves forward); notifications and maintenance are pinned to `replicas: 1`; catalog's
   control relay accepts duplicates because a duplicate publish dedupes on `event_id`; catalog's erasure
   release and promotion expiry move each record by an ETag-guarded write, so one replica wins it; compute's
   prune accepts them because the operation is convergent (`9489d5e1`: a job another replica had

@@ -23,7 +23,7 @@ from fastapi import APIRouter, Query, Request
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import ServiceUnavailableError, TransactionNotFoundError, UnauthenticatedError, UnsupportedOperationError
 
-from lineage.api.dependencies import PublisherDep, RepositoryDep, SettingsDep
+from lineage.api.dependencies import ProvenanceDep, PublisherDep, SettingsDep
 from lineage.api.fga_deps import FilterDep, enforce_bus_authz, enforce_output_authz, governed
 from lineage.api.security import CurrentToken
 from lineage.core.config import storage_options
@@ -98,7 +98,7 @@ async def list_dlq(
 async def replay_dlq(
     run_id: str,
     request: Request,
-    repository: RepositoryDep,
+    provenance: ProvenanceDep,
     settings: SettingsDep,
     token: CurrentToken,
     datasets: FilterDep,
@@ -109,11 +109,11 @@ async def replay_dlq(
     A replay IS a re-ingest, so it carries the SAME authz as a fresh ingest, twice over: the relay's gate on
     the staged bytes (:func:`enforce_bus_authz` — signature and stamped author) and the ingest door's on the
     operator (:func:`enforce_output_authz` — ``can_write_data`` on the outputs, ``can_get_metadata`` on the
-    inputs, fail-closed). Both doors are idempotent: a run MERGEs on its run id, a static change on its
-    derived feed id, and the durable feed insert is ON CONFLICT DO NOTHING. The staged bytes are re-published
+    inputs, fail-closed). The record is idempotent: every feed row and edge is written under its key. The
+    staged bytes are re-published
     to the lineage topic exactly as the relay re-publishes them, so subscribers hear of the event as well as
-    the graph. The drop is only reached on success — a failed re-ingest or re-publish leaves the object
-    staged for the relay to retry, and a failed re-publish answers 503 because the graph is already
+    the feed. The drop is only reached on success — a failed re-ingest or re-publish leaves the object
+    staged for the relay to retry, and a failed re-publish answers 503 because the feed is already
     repaired.
 
     Non-disclosure (audit 2026-07-20): replay must not become an oracle for events ``list_dlq`` hid. So a
@@ -152,20 +152,16 @@ async def replay_dlq(
     # door's, over the operator: a caller may only replay what they could have written in the first place.
     await enforce_bus_authz(event, request, settings, json.loads(event_json))
     await enforce_output_authz(event, request, settings, token)
-    # The door the event's shape names, exactly as the bus and the relay route it.
-    if isinstance(event, DatasetEvent):
-        await repository.ingest_dataset_event(event)
-    else:
-        await repository.ingest_event(event)  # idempotent — MERGE on run_id, and the /events row in the same transaction
-    # BEFORE the drop: the staged object is the only copy the relay could still re-publish. The graph is
+    await provenance.record(event)  # idempotent: every row under its key
+    # BEFORE the drop: the staged object is the only copy the relay could still re-publish. The feed is
     # already repaired when this fails, so the answer says so, and the partial outcome is audited: a 503
-    # the operator can retry (the ingest is idempotent) rather than an unexplained 500 with no record.
+    # the operator can retry (the record is idempotent) rather than an unexplained 500 with no record.
     try:
         await republish_staged(publisher, settings, event_json)
     except Exception as exc:
         audit.audit("dlq_replay", FAILURE, subject=token.sub if token else "", resource=_audited(event, run_id))
         log.warning("lineage_dlq_replay_unannounced", extra={"run_id": run_id, "error": str(exc)})
-        raise ServiceUnavailableError(f"replayed {run_id} into the graph, but re-announcing it failed; it stays staged for the relay to retry") from exc
+        raise ServiceUnavailableError(f"replayed {run_id} into the feed, but re-announcing it failed; it stays staged for the relay to retry") from exc
     # Drop exactly what was replayed — dropping by run id would miss it and leave a redundant object.
     await run_in_threadpool(outbox.drop_event, settings.outbox_uri, opts, staged_key)
     # A completed ACTION records SUCCESS unconditionally (house vocabulary: ALLOW/DENY belong to authz

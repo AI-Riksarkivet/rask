@@ -71,31 +71,31 @@ _emit_failed = _meter.create_counter(
     "catalog.lineage_emit.failed",
     unit="{event}",
     description="Best-effort catalog lineage emits that failed terminally, by transport. On `http` the "
-    "event is simply gone unless reconcile back-fills it; on `dapr` the publish goes through the staged "
+    "event is simply gone; on `dapr` the publish goes through the staged "
     "outbox, so a failure AFTER staging leaves a durable copy the relay can still drain and a failure "
     "at staging does not. The counter cannot tell those apart, which is why any increase is worth a look.",
 )
 
-#: Operation markers carried in the OpenLineage ``lance`` run facet. The lineage service keys the
-#: ``(:User)-[:CREATED]->(:Dataset)`` edge off ``create_table`` specifically, so the two sides share
-#: these contract strings (see ``lineage/repository.py``); the rest just record a versioned ``WROTE``.
+#: Operation markers carried in the OpenLineage ``lance`` run facet. Lineage's ingest authorizer reads them to
+#: pick the relation a write needs and to admit a drop (``lineage.api.fga_deps``), and the notifications plane
+#: renders them, so the producers and those readers share these contract strings.
 CREATE_TABLE = "create_table"
 INSERT = "insert"
 MERGE_INSERT = "merge_insert"
 UPDATE = "update"
 DELETE = "delete"
-#: A table drop — recorded as a versionless run on the dataset (it has no version after the drop). The
-#: Dataset node PERSISTS in the graph as a historical provenance record (Marquez keeps dropped datasets too);
-#: the operation names it a drop so a reader can tell it was deleted, not just last-written.
+#: A table drop — recorded as a versionless run on the dataset (it has no version after the drop). The feed
+#: keeps it as a historical provenance record, as a forwarded graph backend keeps the dropped dataset (Marquez
+#: does); the operation names it a drop so a reader can tell it was deleted, not just last-written.
 DROP_TABLE = "drop_table"
 #: A table deregister — detaches the table from the catalog WITHOUT deleting its data. Recorded as a
 #: versionless run (asymmetric with drop, which deletes) so the detach has a provenance marker instead of
-#: leaving the Dataset node looking like a still-live, never-touched table.
+#: leaving the dataset looking like a still-live, never-touched table.
 DEREGISTER_TABLE = "deregister_table"
-#: Schema-evolution ops. Each bumps the Lance version; add/alter/drop change the column set, so their WROTE
-#: edge carries the NEW per-version schema facet (the payoff: ``/datasets/{id}/schema`` + ``/columns`` follow
-#: the evolution instead of freezing at create-time). ``update_field_metadata`` / ``update_schema_metadata``
-#: bump the version without changing columns but still record a versioned WROTE for provenance completeness.
+#: Schema-evolution ops. Each bumps the Lance version; add/alter/drop change the column set, so their event
+#: carries the NEW per-version schema facet, and a reader of the feed or a forwarded graph backend follows the
+#: evolution instead of freezing at create-time. ``update_field_metadata`` / ``update_schema_metadata`` bump the
+#: version without changing columns but still record a versioned write for provenance completeness.
 ADD_COLUMNS = "add_columns"
 ALTER_COLUMNS = "alter_columns"
 DROP_COLUMNS = "drop_columns"
@@ -108,21 +108,18 @@ DROP_INDEX = "drop_index"
 #: A compaction landed: fragments were merged and the table got a new version. Recorded for the same
 #: reason the index ops are — the version moved and an operator asking "what touched this table at
 #: 03:00?" must get an answer — but kept DISTINCT from the data ops on purpose. A compaction changes
-#: no row, so folding it into ``insert``/``update`` would put a content change in the graph where none
-#: happened, and a downstream consumer replaying WROTE edges would see phantom writes on every
-#: maintenance pass.
+#: no row, so folding it into ``insert``/``update`` would put a content change in the feed where none
+#: happened, and a consumer replaying the writes would see phantom writes on every maintenance pass.
 COMPACT_TABLE = "compact_table"
 #: Restore moves the table's current version to a prior one — a real version-state change, recorded as a
-#: versioned WROTE at the new (restored) version.
+#: versioned write at the new (restored) version.
 RESTORE_TABLE = "restore_table"
 #: A create or an insert in Overwrite mode that replaced an EXISTING table's contents ([[LH-242]]): a new
 #: version of the same table, its history and grants intact. Distinct from ``create_table`` because no table
-#: came into being, so it keys no ``(:User)-[:CREATED]->(:Dataset)`` edge, and from ``insert`` because the
-#: rows before it are gone from the tip; it carries the standard ``OVERWRITE`` lifecycle state.
+#: came into being, and from ``insert`` because the rows before it are gone from the tip; it carries the standard ``OVERWRITE`` lifecycle state.
 OVERWRITE_TABLE = "overwrite_table"
 #: Declare reserves a table id with no data yet (versionless); register attaches an existing storage
-#: location. Both are "the table came into existence in this catalog" events, so — like ``create_table`` —
-#: they key a ``(:User)-[:CREATED]->(:Dataset)`` edge (see ``lineage/repository.py`` ``_CREATE_OPS``).
+#: location. Both are "the table came into existence in this catalog" events, like ``create_table``.
 DECLARE_TABLE = "declare_table"
 REGISTER_TABLE = "register_table"
 #: #17 model promotion: the ``blessed`` tag on a model registry (``models$<model>``) was moved to a candidate
@@ -141,16 +138,14 @@ PUBLISH_TABLE = "publish_table"
 _PRODUCER = "https://github.com/AI-Riksarkivet/rask/tree/main/services/catalog/src/catalog/core/lineage_emit.py"
 
 #: OpenLineage standard ``DatasetVersionDatasetFacet`` schema URL. The output dataset carries this
-#: facet so the lineage service records the Lance version on the ``WROTE`` edge
-#: (``repository.output_version`` reads ``outputs[].facets.version.datasetVersion``) — without it a real
-#: ``create_table`` persists a versionless edge (the custom ``lance`` run facet is not read for version).
+#: facet so the lineage service records the Lance version on every edge the write asserts
+#: (``lineage.services.provenance.edges_of`` reads ``outputs[].facets.version.datasetVersion``) — without it
+#: the edge is versionless (the custom ``lance`` run facet is not read for version).
 _VERSION_FACET_SCHEMA = VERSION_FACET_SCHEMA_URL
 
 #: OpenLineage standard ``DatasourceDatasetFacet`` schema URL. The output dataset carries this facet with
-#: the **physical storage URI** so the lineage service can find the real Lance file on object storage and
-#: cross-check the on-disk version (#23 reconcile — ``lineage.models.Dataset.source_uri`` reads
-#: ``facets.dataSource.uri``). Without it, reconcile has no URI to read → every real table looks
-#: ``missing_on_storage`` (the moat was broken).
+#: the **physical storage URI**, the standard field a graph backend the feed is forwarded to records as where
+#: the dataset lives.
 _DATASOURCE_FACET_SCHEMA = DATASOURCE_FACET_SCHEMA_URL
 
 
@@ -179,7 +174,7 @@ class InputRef(NamedTuple):
 
 
 def input_refs(pins: list[InputPin] | None, *, delimiter: str) -> list[InputRef] | None:
-    """``pins`` resolved to the canonical ids the lineage graph and FGA key on, so an edge meets the real node."""
+    """``pins`` resolved to the canonical ids the feed, the edge list and FGA key on, so an edge names the real table."""
     refs = [
         InputRef(
             fga.parent_namespace_id(pin.segments, delimiter=delimiter) or "",
@@ -232,10 +227,10 @@ def _is_ddl(operation: str) -> bool:
     Read off `_LIFECYCLE_BY_OPERATION` rather than restated: that map already answers "is this DDL" for
     the standard lifecycle facet, and a second list is a second place for a new operation to be
     forgotten — it would keep emitting a run, and the phantom it mints is invisible until someone
-    counts Job nodes.
+    counts the feed's runs.
 
-    ``OVERWRITE`` is not DDL here: an overwrite committed rows at a version, and only a run's ``WROTE``
-    edge records the version a write made (``ingest_dataset_event`` mints no run and writes none).
+    ``OVERWRITE`` is not DDL here: an overwrite committed rows at a version, and only a run asserts edges
+    at the version a write made (``edges_of`` reads none off a ``DatasetEvent``).
     """
     state = lifecycle_state(operation)
     return state is not None and state != "OVERWRITE"
@@ -245,10 +240,10 @@ def _as_dataset_event(*, output: dict[str, Any], run_facets: dict[str, Any], eve
     """The same write, shaped as the spec's ``DatasetEvent``: no run, no job, no event type.
 
     THE RUN FACETS MOVE ONTO THE DATASET, they are not dropped. `author` and `lance` are rask's OWN
-    custom facets rather than spec-typed run facets, and three readers depend on them: the ingest
+    custom facets rather than spec-typed run facets, and two readers depend on them: the ingest
     authorizer takes `author.sub` (and refuses the standard `ownership` facet, so there is nowhere else
-    for it to go), the notifications plane takes `author.sub`, `lance.project` and `lance.originator`,
-    and the graph keys its `(:User)-[:CREATED]->(:Dataset)` edge off `lance.operation`. Leaving them on
+    for it to go) and `lance.operation` (the relation the change needs, and whether it is a drop), and
+    the notifications plane takes `author.sub`, `lance.project`, `lance.originator` and `lance.operation`. Leaving them on
     a run that no longer exists would silently unauthor every DDL change and silence the person it
     belongs to.
 
@@ -297,11 +292,11 @@ def build_write_event(
     governance axes. ``operation`` is the catalog op (``create_table`` / ``insert`` / ``merge_insert``
     / ``update`` / ``delete``). ``version`` is the Lance version the write produced; when it is ``None``
     (e.g. an insert whose response carries no version) the standard version facet is omitted so the
-    ``WROTE`` edge records the run without asserting a version. ``run_id`` / ``event_time`` are injected
+    event records the run without asserting a version. ``run_id`` / ``event_time`` are injected
     so the builder is pure and deterministically testable.
 
     ``inputs`` names the ``(namespace, table_id)`` datasets this write is DERIVED FROM — a rename passes the
-    SOURCE table so the destination's provenance chain is not severed (the graph shows dest←source instead
+    SOURCE table so the destination's provenance chain is not severed (the edge list holds dest←source instead
     of the renamed table appearing as an orphan with no history). Default ``None`` → no input edge, the
     normal case for a fresh write.
 
@@ -319,9 +314,8 @@ def build_write_event(
     # whole parallel dataset under `tree/<name>/` with its OWN version sequence
     # (`core/namespace.py::open_dataset`), so one number names two different states. Measured on the
     # installed pylance: main at v2, a branch write gives branch v3, a later main write gives main v3 —
-    # same dataset, same number, different contents. The graph's `LATEST_WRITE_VERSION` orders by
-    # `event_time DESC` alone, so without this the most recent write wins whichever ref it landed on,
-    # and the reconciler then compares that number against MAIN's on-disk version.
+    # same dataset, same number, different contents. The edge list records the ref beside the version
+    # (`out_branch`), so `(table, ref, version)` names one commit.
     #
     # ABSENT for main rather than the literal "main": every historical write carries no ref, so a literal
     # would make them all look like a different one, and a consumer asking "was this a branch write?" by
@@ -355,7 +349,7 @@ def build_write_event(
     run_facets: dict[str, Any] = {"lance": custom_facet(_PRODUCER, **lance_fields)}
     # WHICH ENGINE WROTE THIS, in the field a non-rask consumer reads. The catalog commits through
     # pylance in-process while the medallion's stage lanes write through Ray, so "what produced this
-    # table" has two answers and, without this facet, no way to tell them apart in the graph. Stamped
+    # table" has two answers and, without this facet, no way for a forwarded graph backend to tell them apart. Stamped
     # beside `lance` rather than inside it: `lance.operation` is rask's own vocabulary and opaque to
     # anyone else, and the engine is exactly the part that is not rask-specific.
     run_facets["processing_engine"] = processing_engine_facet(_PRODUCER, name="lance", version=lance.__version__)
@@ -364,14 +358,14 @@ def build_write_event(
     output: dict[str, Any] = {"namespace": namespace, "name": table_id}
     facets: dict[str, Any] = {}
     if version is not None:
-        # Standard version facet → the lineage WROTE edge carries the Lance version (#20).
+        # Standard version facet → the edges this write asserts carry the Lance version (#20).
         facets["version"] = {
             "_producer": _PRODUCER,
             "_schemaURL": _VERSION_FACET_SCHEMA,
             "datasetVersion": str(version),
         }
     if source_uri:
-        # Standard dataSource facet → the physical Lance URI, so #23 reconcile can read the on-disk file.
+        # Standard dataSource facet → the physical Lance URI, where a graph backend records the dataset lives.
         facets["dataSource"] = {
             "_producer": _PRODUCER,
             "_schemaURL": _DATASOURCE_FACET_SCHEMA,
@@ -385,25 +379,25 @@ def build_write_event(
     if lifecycle := lifecycle_facet(_PRODUCER, operation):
         facets["lifecycleStateChange"] = lifecycle
     if schema_fields:
-        # Standard schema facet → the per-version column schema (blob/vector-aware) on the WROTE edge (#24),
-        # so a catalog-written table has real columns in the graph, not empty until a compute job re-asserts.
+        # Standard schema facet → the per-version column schema (blob/vector-aware) (#24), so a
+        # catalog-written table carries its real columns in the feed and in a forwarded graph backend.
         # Built by the SHARED service_kit.openlineage helper — one spec version across all emitters.
         facets["schema"] = schema_facet(_PRODUCER, schema_fields)
-    # WHICH CATALOG GOVERNS THIS, so two estates writing `bronze$events` are not one node in a shared
-    # graph. `job_namespace` is reused as the catalog's NAME rather than taking a second parameter:
+    # WHICH CATALOG GOVERNS THIS, so two estates writing `bronze$events` are not one dataset in a shared
+    # graph backend. `job_namespace` is reused as the catalog's NAME rather than taking a second parameter:
     # it is already this catalog's identity on every event it emits, and a separate value could drift
     # into the facet and the job disagreeing about who is speaking.
     if catalog := catalog_facet(_PRODUCER, impl=catalog_impl, name=job_namespace, warehouse_uri=warehouse_uri):
         facets["catalog"] = catalog
     # WHAT KIND of thing this is. Unconditionally TABLE: this builder serves CATALOG writes, and the
-    # catalog writes governed Lance tables and nothing else — an external source reaches the graph as
+    # catalog writes governed Lance tables and nothing else — an external source reaches the feed as
     # an INPUT ref, never as something this event wrote.
     facets["datasetType"] = dataset_type_facet(_PRODUCER, external=False)
     if facets:
         output["facets"] = facets
     # A DDL change that DERIVED the table from another one keeps its run, and the spec is why: a
-    # `DatasetEvent` has only `dataset` — no `inputs` — and the graph builds every `DERIVED_FROM` edge
-    # from a run's inputs (`repository.ingest_event`). A rename passes its SOURCE precisely so the
+    # `DatasetEvent` has only `dataset` — no `inputs` — and the edge list builds every edge from a run's
+    # inputs (`lineage.services.provenance.edges_of`). A rename passes its SOURCE precisely so the
     # destination is not an orphan with no history, so moving it would sever the chain this event
     # exists to preserve. There is no phantom in that case either: something really did derive one
     # table from another.
@@ -416,9 +410,8 @@ def build_write_event(
         "schemaURL": RUN_EVENT_SCHEMA_URL,
         "run": {"runId": run_id, "facets": run_facets},
         # Job identity is per-TABLE (``<operation>.<table_id>``), not the bare op — else every table's
-        # writes lump into one Job node (``insert``), which the /jobs governance fold then makes visible
-        # to anyone who can see ANY of those tables. Per-table keeps the Job's output set — its access
-        # handle — scoped to the one table it wrote.
+        # writes lump into one job (``insert``) whose output set spans every table, in the feed and in a
+        # forwarded graph backend. Per-table keeps a job's output set scoped to the one table it wrote.
         "job": {"namespace": job_namespace, "name": f"{operation}.{table_id}"},
         "inputs": [_input_dataset(ref) for ref in (inputs or [])],
         "outputs": [output],
@@ -463,9 +456,9 @@ class EmitFields(TypedDict, total=False):
     run_id: str | None
     #: The caller's bearer, forwarded so lineage ingest accepts it when the lineage service has OIDC on.
     authorization: str | None
-    #: The physical Lance URI → the standard ``dataSource`` facet, which #23 reconcile reads.
+    #: The physical Lance URI → the standard ``dataSource`` facet.
     source_uri: str | None
-    #: The per-version column schema for the ``WROTE`` edge (#24).
+    #: The per-version column schema → the standard ``schema`` facet (#24).
     schema_fields: SchemaFields | None
     #: The version-pinned source dataset(s) this write DERIVES FROM.
     inputs: list[InputRef] | None
@@ -616,6 +609,10 @@ class _BaseLineageEmitter:
     #: emitter built without them honest instead of claiming an unnamed catalog.
     _catalog_impl: str = ""
     _warehouse_uri: str = ""
+    #: Whether a write under this parent namespace goes unannounced: the namespace the catalog keeps for
+    #: provenance (`catalog.services.provenance_namespace`), whose rows ARE the announcements lineage recorded,
+    #: so announcing their own commits would record them again, without end. Set by `make_emitter`.
+    _unannounced: Callable[[str], bool] | None = None
 
     async def project_for(self, top_ns: str) -> str | None:
         """Resolve the tenant, swallowing failure. BEST-EFFORT LIKE THE EMIT ITSELF: this runs on a
@@ -655,6 +652,9 @@ class _BaseLineageEmitter:
         operation: str,
         **fields: Unpack[EmitFields],
     ) -> None:
+        # HERE, the one place every catalog emit passes through, so no door can announce a provenance row.
+        if self._unannounced is not None and self._unannounced(namespace):
+            return
         # Resolved here rather than per call site: the mapping is mechanical, and a per-caller kwarg
         # is a rule every future endpoint eventually forgets (none ever passed one). Best-effort —
         # this runs on a committed write, so an unresolvable tenant costs a notification, not a request.
@@ -779,7 +779,7 @@ class DaprEmitter(_BaseLineageEmitter):
             event = self._signed(event)
             # STAGED, then published, then dropped on ack (#4). The emit is inline-awaited and
             # best-effort AFTER the Lance write commits, so an unstaged event is lost outright to a crash
-            # between the write and the publish: the data exists on storage and the graph never learns of
+            # between the write and the publish: the data exists on storage and the feed never records
             # it. Worse than a provenance hole — a user's pipeline reads this announcement off lineage's
             # `GET /events` to start its next hop, so a lost one means the next tier's run silently never
             # happens. Staging narrows that window to commit→stage; it does not close it.
@@ -824,9 +824,13 @@ def make_emitter(
     catalog_impl: str = "",
     warehouse_uri: str = "",
     signing: SigningKeyHolder[SigningKey] | None = None,
+    unannounced: Callable[[str], bool] | None = None,
 ) -> LineageEmitter:
     """Select the lineage transport: ``dapr`` (durable pub/sub via the sidecar) or ``http`` (direct POST);
-    no-op when disabled or unwired (a half-configured transport must never silently become the other)."""
+    no-op when disabled or unwired (a half-configured transport must never silently become the other).
+
+    ``unannounced`` answers, for a write's parent namespace, whether its writes go unannounced (the provenance
+    namespace's own rows)."""
     if not enabled:
         return NoopEmitter()
     if transport == "dapr" and dapr is not None:
@@ -846,12 +850,14 @@ def make_emitter(
         emitter._project_resolver = project_resolver
         emitter._catalog_impl = catalog_impl
         emitter._warehouse_uri = warehouse_uri
+        emitter._unannounced = unannounced
         return emitter
     if transport == "http" and url and client is not None:
         http_emitter = HttpLineageEmitter(client, url, job_namespace=job_namespace)
         http_emitter._project_resolver = project_resolver
         http_emitter._catalog_impl = catalog_impl
         http_emitter._warehouse_uri = warehouse_uri
+        http_emitter._unannounced = unannounced
         return http_emitter
     return NoopEmitter()
 
@@ -872,15 +878,15 @@ async def emit_write_event(
     inputs: list[InputPin] | None = None,
     run: RunContext | None = None,
 ) -> None:
-    """Publish a best-effort lineage ``WROTE`` event for a catalog mutation, awaited INLINE in the handler.
+    """Publish a best-effort lineage event for a catalog mutation, awaited INLINE in the handler.
 
     Awaited (not queued via FastAPI ``BackgroundTasks``) so the event reaches the durable Dapr/JetStream
     transport BEFORE the response returns — ``BackgroundTasks`` have no retry and die with the worker
     (fastapi anti-pattern). ``emit_write`` is best-effort (it swallows a publish failure), so awaiting it
-    never fails the catalog write; JetStream message-durability + the lineage consumer's idempotent
-    MERGE-on-``run_id`` give the at-least-once delivery. ``version=None`` records the run without a version.
-    ``source_uri`` attaches the standard dataSource facet (the physical storage URI) so #23 reconcile can
-    find the on-disk file — passed by ops that (re)attach a location, e.g. ``register``/``declare``.
+    never fails the catalog write; JetStream message-durability + the feed's insert-only merge on its key
+    give at-least-once delivery that lands one row. ``version=None`` records the run without a version.
+    ``source_uri`` attaches the standard dataSource facet (the physical storage URI) — passed by ops that
+    (re)attach a location, e.g. ``register``/``declare``.
     ``inputs`` names the source dataset(s) this write is DERIVED FROM, each optionally version-pinned (a
     rename passes its source; a pipeline's write passes the inputs its run names); ``run`` names that run's id and job.
     Ids come from ``fga`` so the lineage Dataset == the OpenFGA object.

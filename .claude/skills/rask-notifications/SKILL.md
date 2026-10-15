@@ -1,6 +1,6 @@
 ---
 name: rask-notifications
-description: How a feature gets a person told — the targeted inbox behind the estate's bell. The six targeting sources (AUTHOR/ORIGINATOR/WATCH/GRANT_ADDED/GRANT_REVOKED/TASK_ASSIGNED+TASK_UNASSIGNED), the producer contract for the lineage and control lanes, and the five silent-drop traps (an emitted event that reaches nobody, or reaches the bell and not the graph). Use when adding a feature whose outcome a person should hear about; when a notification "should have fired" and did not; when adding a `ControlAction` or a `NotificationReason`; when emitting an OpenLineage run event from any service; or when wiring a new service into `lineage.events.v1` / `catalog.control.v1`.
+description: How a feature gets a person told — the targeted inbox behind the estate's bell. The six targeting sources (AUTHOR/ORIGINATOR/WATCH/GRANT_ADDED/GRANT_REVOKED/TASK_ASSIGNED+TASK_UNASSIGNED), the producer contract for the lineage and control lanes, and the five silent-drop traps (an emitted event that reaches nobody, or reaches the bell and not lineage's feed). Use when adding a feature whose outcome a person should hear about; when a notification "should have fired" and did not; when adding a `ControlAction` or a `NotificationReason`; when emitting an OpenLineage run event from any service; or when wiring a new service into `lineage.events.v1` / `catalog.control.v1`.
 ---
 
 # rask notifications — how a feature gets a person told
@@ -52,9 +52,10 @@ so it is delivered by WATCH like any catalog write. Lineage records it only beca
 `publish_table` run on `can_update_tag` or `can_promote` rather than the writer rung (`lineage/api/fga_deps.py`): a
 validator's approval demanded `can_write_data`, was refused and dead-lettered, and still rang the watcher's bell, the
 class of trap 5. Lineage's `GET /events` follows forward from `since=` with the commit-event shape in
-`docs/COMMIT-EVENTS.md` (C7, [[LH-472]]). Decided and not yet built, so do not design against it as if it exists:
-lineage shrinks to an authenticated OpenLineage intake, a Lance-stored commit feed and edge list, and a forwarder to a
-bring-your-own graph (ADR 0158, LH-468 #592). Today the feed and the graph are lineage's Postgres+AGE.
+`docs/COMMIT-EVENTS.md` (C7, [[LH-472]]). Lineage is an authenticated OpenLineage intake, a commit feed and table-level
+edge list kept as Lance tables in the catalog's provenance namespace, and a forwarder to a bring-your-own graph backend
+(ADR 0158). It answers no graph query: a notification cannot be targeted on an upstream or downstream walk, only on what
+the event itself names.
 
 **Long-running jobs need the identity in TWO places, and they are not interchangeable.** Ray's own
 `metadata` (`rask.originator`, returned by `GET /api/jobs/<id>`) is how an OUTSIDE observer recovers who
@@ -115,7 +116,7 @@ the `rask_signature` of every event on the bus and in the outbox (`signing.enfor
 does not verify. Notifications' `/lineage-events` checks the same signature against the same signer sets for every event
 `notifiable()` would deliver, as `RASK_SIGNATURE_DOORS` says: `enforce` refuses it (acked, told to nobody, counted in
 `notifications_signature_refused_total`), `observe` delivers it and counts it, and `off`, the default, verifies nothing,
-so an unsigned event still rings the bell for a run the graph never recorded (trap 5, `docs/LINEAGE.md` § Signed events).
+so an unsigned event still rings the bell for a run lineage's feed never recorded (trap 5, `docs/LINEAGE.md` § Signed events).
 
 ```python
 event = {
@@ -264,7 +265,7 @@ so it must read as a reason a person would accept; and `notification-center.stor
    for a person), or bytes that do not verify. The refusal is an ACK counted in `lineage_signature_refused_total{reason}`:
    never retried, parked or recorded, and the only alert excludes `unsigned` and `signer`. Notifications' signature door
    (`notifications/api/signature_door.py`) applies the same check at `/lineage-events` and refuses the event only under
-   `RASK_SIGNATURE_DOORS=enforce`; under `observe` or `off` the person is told about a run the graph does not hold.
+   `RASK_SIGNATURE_DOORS=enforce`; under `observe` or `off` the person is told about a run lineage's feed does not hold.
    **A new lineage-lane producer is a
    `lance.signers` entry in the chart** (it mints the pair, sets `RASK_SIGNING_IDENTITY` and lists the identity in
    `LINEAGE_SIGNERS`) that calls `attach_signature` on every event it emits and emits nothing while its key is

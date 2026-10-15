@@ -13,7 +13,7 @@ import {
 import * as v from 'valibot';
 import { readSecretFile } from '@rask/api/bff';
 
-export type { LineagePulse, RunNotice } from '@rask/api/runs-feed';
+export type { LineagePulse } from '@rask/api/runs-feed';
 
 /**
  * The zone's LIVE CURSORS — `query.live` generators that say *when the estate changed*, so a panel can
@@ -184,7 +184,7 @@ export const jetstreamCursor = query.live(async function* (): AsyncGenerator<num
 });
 
 /**
- * THE lineage feed — the cursor every panel in this zone re-reads on, and the runs behind the shell's bell.
+ * THE lineage feed — the cursor every panel in this zone re-reads on.
  *
  * The generator itself is `@rask/api/runs-feed`, shared with the other three zones: the bell shipped in one
  * zone out of four because the COMPONENT was shared and the TRANSPORT was not. What stays here is the

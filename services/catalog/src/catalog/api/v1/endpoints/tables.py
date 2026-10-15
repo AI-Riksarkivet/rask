@@ -790,11 +790,11 @@ async def deregister_table(
     if guard:  # only when one existed — a clear on nothing is a guaranteed-wasted S3 DELETE per drop
         await run_in_threadpool(protection.clear_protection, settings.registry_root, settings.storage_options(), "table", canonical)
     # Record the detach as best-effort lineage — asymmetric with drop (which deletes data), deregister
-    # only detaches, so without this marker the Dataset node looks like a still-live, never-touched table.
+    # only detaches, so without this marker the feed reads it as a still-live, never-touched table.
     # Versionless (no data was written), inline-awaited so it reaches the durable transport before the
     # reply. Emitted BEFORE the revoke: on the http transport the caller's bearer authorizes ingest against
     # their (still-live) write grant — revoking first would 403 the very marker this endpoint exists to
-    # record, and the graph would keep showing the table as live.
+    # record, and the feed would keep showing the table as live.
     await emit_write_event(
         emitter,
         segments,
@@ -838,10 +838,10 @@ def absolute_table_location(ns: LanceNamespace, segments: list[str], registered:
     table answers `/<root>/t.lance`. Emitting the echo puts a relative URI on the CREATED edge and on the
     control event's `location` extra.
 
-    WHAT THAT COSTS IS A PERMANENT FALSE ALARM, measured rather than reasoned: the reconcile sweep opens
-    that `source_uri`, a relative path opens as nothing, and `read_storage_version` answers `None` —
-    which classifies MISSING_ON_STORAGE and reports a live registered table as storage loss on every
-    tick, with no re-run that clears it because the graph keeps the URI it was given.
+    WHAT THAT COSTS IS A LOCATION NO READER CAN OPEN: the `source_uri` rides the event into the feed
+    and on to a forwarded graph backend as the dataset's dataSource, and a relative path there names
+    nothing outside the caller's own working directory. Nothing re-runs to correct it, because the feed
+    keeps the event it was given.
 
     THE BACKEND RESOLVES IT AGAINST THE RIGHT ROOT, which is why this asks rather than joining against a
     configured one: a warehouse-bound table belongs to its warehouse's root, and a caller-side join would
@@ -1065,12 +1065,10 @@ async def register_table(
         await run_in_threadpool(base_registry.release_data_directories, context.registry, verdict.directories, context.holder)
 
     await fga_deps.seed_ownership_or_compensate(client, settings, token, resource="table", segments=segments, undo=_undo_register, created=True)
-    # RESOLVED, not echoed — `response.location` is the caller's own relative path and a relative
-    # `source_uri` reports this table as storage loss on every sweep tick; the flag judgement above
-    # already resolved it.
-    # Versionless + source_uri=the attached location, keying the CREATED edge (register_table ∈ _CREATE_OPS).
-    # The registered table already holds data at some version, and #23 reconcile reads that source_uri and
-    # back-fills the real on-disk version (UNTRACKED → in-sync).
+    # RESOLVED, not echoed — `response.location` is the caller's own relative path, which names nothing a
+    # reader of the feed can open; the flag judgement above already resolved it.
+    # Versionless + source_uri=the attached location (register_table ∈ _CREATE_OPS, so the feed records it as a
+    # create). The registered table already holds data at some version, which this marker does not name.
     await emit_write_event(
         emitter,
         segments,
@@ -1307,8 +1305,8 @@ async def rename_table(
     The caller must hold ``can_drop`` on the source (owner tier, gated by the router ``authorize``) AND
     ``can_create_table`` on the DESTINATION parent — else a source owner could plant their table into a
     namespace/tenant they lack create rights on. FGA tuples migrate from the old id to the new; a
-    versionless REGISTER marker records the attachment at the new id so the destination appears in the
-    graph with its provenance (#23 reconcile back-fills its on-disk version). Source missing → 404
+    versionless REGISTER marker records the attachment at the new id, with the source as its input, so the
+    destination's provenance continues from the source's. Source missing → 404
     ``TableNotFound``; destination name taken → 409 ``TableAlreadyExists``; the location held by a
     concurrent rename or registration → 409 ``ConcurrentModification`` (code 14, [[LH-204]])."""
     # SAME AMPLIFIER AS create (see `catalog.api.idempotency`): a replay re-enters a door that
@@ -1421,8 +1419,8 @@ async def rename_table(
     except Exception as policy_exc:
         log.warning("rename_policy_migrate_failed", extra={"source": canonical, "error": str(policy_exc)})
     # …then the DESTINATION's (re)attachment at its new location — AFTER its ownership is seeded, so the
-    # emit's own ``can_write_data`` check passes on the http transport. Versionless: #23 reconcile back-fills
-    # the real on-disk version, which the relocate preserved along with the whole version history.
+    # emit's own ``can_write_data`` check passes on the http transport. Versionless: the relocate preserved
+    # the on-disk version along with the whole version history, and the marker names none of it.
     await emit_write_event(
         emitter,
         new_segments,
@@ -1432,10 +1430,10 @@ async def rename_table(
         operation=REGISTER_TABLE,
         authorization=authorization,
         source_uri=location,
-        # DERIVED_FROM: the destination is the renamed SOURCE, so record the source table as this event's
-        # input — otherwise the rename severs the provenance chain and the renamed table appears in the graph
-        # as an orphan with no history (audit 2026-07-14). The source's DROP marker above ends its own line;
-        # this input edge stitches the destination onto it.
+        # The destination is the renamed SOURCE, so record the source table as this event's input — otherwise
+        # the rename severs the provenance chain and a follower of the feed or a forwarded graph backend sees the
+        # renamed table as an orphan with no history (audit 2026-07-14). The source's DROP marker above ends its
+        # own line; this input stitches the destination onto it.
         inputs=[InputPin(segments=segments)],
     )
     await emit_control(

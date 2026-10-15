@@ -69,7 +69,7 @@ class GatewaySettings(BaseSettings):
     #: Comma-separated lineage route-name prefixes that must never be reachable from the public edge
     #: (`chart/templates/_helpers.tpl`'s `lance.lineageSidecarOnlyRoutes` renders this).
     lineage_sidecar_only_routes: str = Field(
-        default="lineage-events,lineage-reconcile-cron",
+        default="lineage-events,lineage-relay-cron",
         alias="RASK_LINEAGE_SIDECAR_ONLY_ROUTES",
     )
 

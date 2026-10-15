@@ -4,8 +4,8 @@ WHY THIS EXISTS RATHER THAN `mc`. The chart's `backups.pgDump` CronJob ran `mini
 `mc cp --recursive`, `mc ls | sort -r | tail -n +N`, `mc rm --recursive`. Measured 2026-09-24 with
 the bearer DECODED, that image refuses ANONYMOUS pulls on every registry this estate can reach:
 Docker Hub issues a token whose `access` is `[]`, quay.io one with `actions: []`, both 401 on the
-manifest ([[XC-075]]). The dump it uploads is the lineage graph (AGE) and the authorization store
-(OpenFGA), so on a node that pulls fresh the estate's two most irreplaceable databases back up
+manifest ([[XC-075]]). The dump it uploads is the authorization store (OpenFGA) and the Dapr state
+store, so on a node that pulls fresh the estate's two most irreplaceable databases back up
 nowhere — and a CronJob that cannot start says so once, in an event nobody reads.
 
 Every verb it used is plain S3: `cp` is `put_object`, `ls` + `rm` are the retention walk that

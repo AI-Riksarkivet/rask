@@ -22,7 +22,7 @@ Package name equals directory name for all seven (`manifest.test.ts:53`). Base i
 | zone | base | dev port | nav label | what it is |
 |---|---|---|---|---|
 | `home` | `''` catch-all | 5273 | Home | The ESTATE LEVEL: `/` (an insights landing, scaffold-badged), `/projects` (+ `/projects/<id>`, the gallery/table list, create, and one project's overview) and `/settings` (estate config, admin-gated SERVER-side) — plus the **OIDC BFF** (`/auth/{login,callback,logout}`) |
-| `lakehouse` | `/lakehouse` | 5174 | Lakehouse | The big one (dock at `/lakehouse/workbench`) — areas `catalog`, `lineage`, `models`, `admin`, `workbench` (`governance` went to home's `/settings/` at #105); **storage is not an area**, it is `/lakehouse/catalog/storage`. The zone ROOT is an **Overview of the active project** (#109 — hierarchy + its warehouses, `ZoneNav.root`, the compute precedent), not the 307 into `/lakehouse/catalog` it used to be. 47 route files, **7 `+server.ts` routes** — 4 keep-bytes (Arrow query/insert, blob bytes + the #113 commit log, the `/api/explorer/**` storage-browser seam), 1 keep-flow (`capi/management/v1/me`), 2 catch-alls; 15 `.remote.ts` modules carry the rest; the estate's only `requestJSON` residual — see § Fetching data (b) |
+| `lakehouse` | `/lakehouse` | 5174 | Lakehouse | The big one (dock at `/lakehouse/workbench`) — areas `catalog`, `models`, `admin`, `workbench` (`governance` went to home's `/settings/` at #105); **storage is not an area**, it is `/lakehouse/catalog/storage`. The zone ROOT is an **Overview of the active project** (#109 — hierarchy + its warehouses, `ZoneNav.root`, the compute precedent), not the 307 into `/lakehouse/catalog` it used to be. 36 route files (measured 2026-10-16), **7 `+server.ts` routes** — 4 keep-bytes (Arrow query/insert, blob bytes + the #113 commit log, the `/api/explorer/**` storage-browser seam), 1 keep-flow (`capi/management/v1/me`), 2 catch-alls; 11 `.remote.ts` modules (measured 2026-10-16) carry the rest; the estate's only `requestJSON` residual — see § Fetching data (b) |
 | `explorer` | `/explorer` | 5173 | **Explorer** | Corpus search workbench (with a dock at `/explorer/workbench`): FTS/vector/hybrid, WebGPU atlas, Cypher KG, Svelte-Flow editor; **6 `+server.ts` routes** (was 13) — 4 keep-bytes + `api/search`/`api/atlas/chunks`, which keep their route (multipart / rowid-list POST) but answer **Arrow IPC**; every JSON value surface rides one of 5 `.remote.ts` modules (the transport ruling area 3) |
 | `annotator` | `/annotator` | 5177 | **Annotate** | PixiJS/WebGPU canvas over Arrow-backed rows, plus a `/browse` corpus surface; **4 `+server.ts` routes** (was 9) — the Arrow annotations transport, the Arrow annotation-IMPORT proxy (`api/tasks/[task_id]/import`, `requireSession`), `capi/management/v1/me`, the viewer catch-all; every JSON value surface rides one of 6 `.remote.ts` modules |
 | `compute` | `/compute` | 5175 | Compute | Ray/Serve observability + a dock at `/compute/workbench`. **Observability only — it runs nothing.** Its one *acting* surface, the `/compute/inference` playground (#131's move of `/models/playground`), was deleted 2026-08-07 along with its `api/infer` route and `COMPUTE_SERVE_URL`: it could reach exactly ONE Serve app and its UI was HTR end to end, so studio's flow canvas — `?app=&path=` + a typed payload, against the external Ray cluster — was already its general form. Inference now has one door, studio's. Deliberately NOT replaced by a cross-zone leaf: the top navbar owns cross-zone hops and `nav-truth.test.ts` pins the cross-zone sidebar set as EMPTY |
@@ -40,7 +40,7 @@ Only `@rask/ui` has a build (`svelte-package` → `dist/`); the rest are consume
 | `@rask/ui` | Design system + `@rask/ui/shell`. → **`rask-styling`** |
 | `@rask/api` | Gateway client (`ray`, `ingest`, `projects`, `me` — `ingest` targets `/api/ingest`, which has no gateway row and no backend since ADR 0154, so its calls 404) **plus** the OIDC/BFF plane (`bff.ts`, `oidc.ts`), the lineage client, and `@rask/api/dock-layout` + `dock-views` |
 | `@rask/dockview` | Svelte 5 binding over **dockview 7** — the docked workbenches. → **§ Workbenches** |
-| `@rask/flow` | Generic Svelte Flow binding: `GraphCanvas`, `StaticFlow`, `FlowAutoFit`, `depths`/`layout`. **Mechanism only — domain graphs (LineageGraph, FGA) stay in their zones** |
+| `@rask/flow` | Generic Svelte Flow binding: `GraphCanvas`, `StaticFlow`, `FlowAutoFit`, `depths`/`layout`. **Mechanism only — domain graphs (FGA) stay in their zones** |
 | `@rask/explorer-api` | Arrow-backed explorer/viewer client (media bytes, Arrow batches) |
 | `@rask/engine` | Framework-agnostic PixiJS/WebGPU annotation canvas (ra-anno lineage) |
 | `@rask/labeling` | The `LabelOp` model + annotator Arrow-IPC transport |
@@ -65,7 +65,7 @@ its own stores and remotes:
 | dock | panels | what they share |
 |---|---|---|
 | `/explorer/workbench` | results · atlas · player | ONE `Bench` search store via `createContext` — a hit picked in results is the hit the atlas highlights and the player loads |
-| `/lakehouse/workbench` | lineage graph · runs · events · tables · storage | ONE `LineageState`, polled once, so the DAG and the run board can never be a poll apart; Tables/Storage are the very `TableRegistry` / `ObjectBrowser` the catalog pages render |
+| `/lakehouse/workbench` | events · tables · storage | ONE `EventFeed` (`$lib/dock/bench.svelte.ts`), read once, behind the Events panel; Tables/Storage are the very `TableRegistry` / `ObjectBrowser` the catalog pages render |
 | `/compute/workbench` | jobs · cluster · actors · serve | the zone's own `getRayJobs`/`getRayCluster`/`getActors`/`getServe` remotes on the zone's own poll clock |
 
 **ZONE level is load-bearing.** The lakehouse's briefly sat at `/lakehouse/lineage/workbench`, which
@@ -88,19 +88,18 @@ The shape to copy:
 
 | | |
 |---|---|
-| the view lives in | `$lib/boards/<X>Board.svelte` (compute) or beside its domain (`$lib/lineage/RunsBoard.svelte`) |
+| the view lives in | `$lib/boards/<X>Board.svelte` (compute) or beside its domain |
 | the route is | `<svelte:head>` + `<XBoard />` — nine lines |
 | the panel is | `<XBoard />`, plus a box if it needs one |
 
-**When the panel's DATA differs, pass rows as a PROP — do not give the board its own fetch.** The
-lakehouse run board is the case: the route reads `listRuns` on the lineage cursor, the dock's panel
-reads the same rows out of the shared `LineageState` that also feeds the graph and the event feed. One
-poll for three panels is the property that earns an in-zone dock; a self-fetching board would have
-re-mirrored the view and broken it in one move. So the board owns PRESENTATION (sort, filter,
-pagination, drill-in) and the caller owns where the rows came from.
+**When the panel's DATA differs, pass rows as a PROP — do not give the board its own fetch.** When a
+route and a dock panel render one board from different reads (the route on its own query, the panel out
+of a store the dock shares), a self-fetching board would re-mirror the view and break it in one move.
+So the board owns PRESENTATION (sort, filter, pagination, drill-in) and the caller owns where the rows
+came from.
 
-A panel with no page counterpart is fine and is NOT a mirror — `EventsPanel` renders
-`LineageState.events`, which no route renders (`/admin/events` is the *governance* feed, a different
+A panel with no page counterpart is fine and is NOT a mirror — `EventsPanel` renders the dock's
+`EventFeed` (lineage's `GET /events`), which no route renders (`/admin/events` is the *governance* feed, a different
 plane). Do not invent a pairing to satisfy the rule.
 
 **Adding a dock to a zone? Four things fail QUIETLY if you skip them** (all four were skipped once,
@@ -191,13 +190,11 @@ Both halves are idiomatic SvelteKit — `+server.ts` is the framework's own tool
 **The media-plane BFF reads are AUTHORIZED now, not just proxied (2026-08-04).** `makeViewerProxy` — the `api/[...path]` catch-all that explorer and annotator both mount — carries `requireSession: true` (`packages/api/src/bff.ts:307-322`), so a bearer-less page-image or atlas read 401s at the BFF on an auth-enabled stack. The bearer path is sealed cookie → the zone's session handle → `makeBackendProxy` (`authorization: Bearer …`) → gateway → viewer, where `/api/page` checks `can_read_data` and `/api/pages` `can_get_metadata` on `table:<catalog id>`, and the S3 object routes behind `/api/explorer/**` check `can_browse_storage`. The lakehouse's `/api/explorer/[...rest]` forwards the caller's bearer but does **not** `requireSession`, so an empty `/lakehouse/catalog/storage` on a governed stack is an authz answer, not an outage.
 
 **(d) The bell renders a SUBJECT'S INBOX, and it does so in all seven zones (S3, 2026-08-10).** The
-surface is split in two and the badge moved with it: an **Inbox** tab (rows addressed to you, durable
-per subject) and an **Activity** tab (the `GET /runs` projection, unchanged), with the badge counting
-the **inbox alone**. Until S3 the panel rendered `/runs` only — dataset-governed, so the count was
-*everyone's* work, and the read state a zone persisted spoke for rows the inbox had never heard of:
-mark one read and it came back unread on the next reload, because there was no pointer to write to.
-Rendering inbox rows makes the two sets one set, and a dismissed row is simply absent rather than a
-set to reconstruct.
+surface is the inbox alone: rows addressed to you, durable per subject, and the badge counts them.
+A dataset-governed feed in the bell would count *everyone's* work, and a read state a zone persisted
+for it would speak for rows the inbox never heard of: mark one read and it comes back unread on the
+next reload, because there is no pointer to write to. Rendering inbox rows makes the two sets one set,
+and a dismissed row is simply absent rather than a set to reconstruct.
 
 Each zone owns a thin `$lib/live/inbox.remote.ts` (four remote functions: `readInboxState`,
 `readInboxFeed`, `markSeen`, `dismiss`) over the shared `@rask/api/inbox`; `@rask/ui` takes the rows
@@ -212,8 +209,8 @@ structurally (`InboxNotificationLike`) and never imports `@rask/api`. Four facts
   The zones hold the query object and call `.refresh()` — the estate's one polling idiom
   (`compute/src/routes/+page.svelte`), also flicker-free because the previous value stays readable.
 * **`inbox === undefined` is the un-wired case and is NOT the same as an empty inbox.** No session or
-  no service ⇒ the bell renders NO tabs and falls back to the run feed with per-tab memory, exactly as
-  before S3, which is what keeps `make dev-zone` working with no cluster behind it.
+  no service ⇒ the bell says "No notification inbox on this stack" rather than "nothing new", which is
+  what keeps `make dev-zone` honest with no cluster behind it.
 * **The badge's server `unread` wins over any local derivation** — the rows are one page, so deriving
   it would shrink the badge as a reader pages.
 
@@ -221,7 +218,7 @@ Gated by `@rask/zone-contract`'s `notification-surface.test.ts`, now a **loop ov
 rather than S1's named constant: per zone it asserts the transport exists over the shared client, that
 it addresses `RASK_GATEWAY_URL`, that the seam is bound, that the callbacks REACH the transport, and —
 the half no prop-name check can reach — that the layout passes `inbox`/`inboxUnread` at all, since a
-zone can bind every callback and still hand the bell nothing but `runs`.
+zone can bind every callback and still hand the bell no inbox.
 
 Estate-wide: `command()` 73 across 22 remote modules (mutations single-flight their reads: `void query().refresh()` in the handler), `form()` 0, `query.batch()` 0, `{#await}` 0. `query.live` is the LIVENESS spine, not just the bell: every zone's `feeds.remote.ts` (the bell) and lakehouse's `controlEvents`/`controlCursor`/`jetstreamCursor`. (The explorer's service-health is NOT one — it is a single deduped poll in `lib/service-health.svelte.ts`, whose own comment rejects a cursor because liveness has no event; see § *When a poll is the right answer* below, which is the general form of that exception.) Consume cursors through `$lib/live/tick.svelte.ts` (`liveRead` + `lineageTick`/`controlTick`) — it replaced thirteen hand-rolled `$effect`+`setInterval` pollers, and its rules (open on mount, cursor arrival is not a change) each exist because breaking them broke a test. Data mutations move the LINEAGE cursor; governance mutations (grants, warehouses, tenants — including raw `/management/v1/access/tuples` writes, which emit `grant_added`) move the CONTROL cursor.
 
@@ -275,7 +272,7 @@ Under `svelte-adapter-bun` a relative `/api/*` resolves against the **incoming e
 
 **`make dev-zone ZONE=lakehouse`** starts that zone plus its own seed-driven mock upstreams and
 nothing else. Measured 2026-08-07: zone serving in **7 s**, every route 200 (`/lakehouse/`,
-`catalog/tables`, `lineage`, `workbench`), styled (OKLCH tokens loaded, 13 sidebar links) — with
+`catalog/tables`, `workbench`), styled (OKLCH tokens loaded, 13 sidebar links) — with
 **no k3s, no uvicorn fleet, no container runtime**. That last part is the point: it is the only
 frontend loop that runs in a cloud sandbox (claude.ai/code, CI), and it is how CI already exercises
 5 of 7 zones on a stock `ubuntu-latest` runner.
@@ -308,10 +305,10 @@ Four things it deliberately does not give you — none is a bug:
 | | |
 |---|---|
 | **Populated data is per zone** | Mocks answer 404 until seeded (by design — a mock with baked-in fixtures cannot tell a live surface from a dead one), so a zone renders EMPTY unless it ships `e2e/dev-seed.ts`. **`lakehouse`, `annotator`, `explorer` and `models` have one**, all verified rendering real rows (explorer additionally needed `VIEWER_API` pointed at the mock — its descriptor boot gate rides the `[...path]` catch-all to a dead `:8101` nothing sets, masked in e2e by `page.route`). The launcher announces a zone with none rather than leaving blank ambiguous. **A seed cannot supply the ACTIVE PROJECT**, though: it is the host-wide `rask_active_project` cookie (#103) that opening `/projects/<slug>` in the HOME zone stamps, and a one-zone stack has no home zone — so the annotator's landing renders its honest "No project is active" card under `dev-zone` until you set the cookie by hand (`document.cookie = 'rask_active_project=default;path=/'`); its other surfaces are seeded as before. |
-| **SEED THE CURSOR OR NOTHING LOADS** | The trap, and it cost a debugging round. Most surfaces read on the **lineage cursor**, not on page load (`liveRead(lineageTick, () => refresh())`). A hydrated browser showed the first two requests are `GET /events?limit=1&summary=true` — contract `LineageProbeSchema` = `{events:[{seq:number}]}` — and `GET /runs`. Unseeded, the cursor never opens, `liveRead` never fires, and the zone requests **nothing** while showing "Loading…": five correct data seeds, empty page. The cursor env also defaults to a dead `:8001`, so a zone's stack must set `LINEAGE_API` to its own mock. **`curl` cannot diagnose this** — no hydration, no mount, no requests; only a real browser shows it. |
+| **SEED THE CURSOR OR NOTHING LOADS** | The trap, and it cost a debugging round. Most surfaces read on the **lineage cursor**, not on page load (`liveRead(lineageTick, () => refresh())`). The cursor is `@rask/api/runs-feed`'s `lineagePulse`, which probes `GET /events?limit=1&summary=true` — contract `LineageProbeSchema` = `{events:[{seq:number}]}` — and yields only `{cursor}`. Unseeded, the cursor never opens, `liveRead` never fires, and the zone requests **nothing** while showing "Loading…": five correct data seeds, empty page. The cursor env also defaults to a dead `:8001`, so a zone's stack must set `LINEAGE_API` to its own mock. **`curl` cannot diagnose this** — no hydration, no mount, no requests; only a real browser shows it. |
 | **`home` is not seedable** | Not a gap in the launcher — a zone decision. Its project gallery is identity-scoped, so under auth-off it answers *"No projects to show — sign-in is not configured on this stack"* **without reading**. Its mock served the seeds correctly; the page declined to ask. Needs a real session, not a fixture. |
 | **Auth is OFF — but mocks still see an identity** | `dev-zone` omits `OIDC_*`, so `locals.authEnabled` is false and the zone forwards **no bearer** — which the mocks 401 by design ("exactly like the real catalog"), so seeded reads would resolve to nothing. The launcher hands the *mocks* `MOCK_DEV_BEARER` out of band; **unset, every mock behaves exactly as under Playwright** (proven: full lakehouse suite, 182 passed, after the patch). For the real governed path — sealed cookie, login-first redirect — run the zone's Playwright suite. |
-| **A mock may not take the generic envelope** | `routes` uses `POST /__mock/seed` `{bearer, routes}`, which the catalog and observability mocks implement. The lakehouse's **lineage** mock is stateful with its own API (`POST /__mock/runs`) and 502s anything else, so a seed group can override `path`/`body`. Assuming one envelope for all of them earned that 502 on the first run. |
+| **A mock may not take the generic envelope** | `routes` uses `POST /__mock/seed` `{bearer, routes}`, which the catalog and observability mocks implement. The lakehouse's **lineage** mock is stateful with its own API (`POST /__mock/bump` advances its cursor) and 502s anything else, so a seed group can override `path`/`body`. Assuming one envelope for all of them earned that 502 on the first run. |
 | **Cross-zone links 404** | The shared navbar renders all seven entries with `data-sveltekit-reload`; one zone is listening. Use `make dev-frontends` + :3024 to cross a boundary. |
 | **No Dapr / FGA** | Cluster-only. Dapr *logic* is sandbox-friendly (`flows` degrades to an inline lane when `DAPR_GRPC_PORT` is unset); Dapr *wiring* — component `scopes:` per app-id, `actorStateStore`, JetStream delivery — fails silently and fail-closed, and only in-cluster. |
 

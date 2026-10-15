@@ -11,8 +11,7 @@
 	 * AREA and made it read as a lineage feature. A dock composes the whole zone, so it sits beside
 	 * the areas rather than inside one.
 	 *
-	 * The panels are this zone's own components. Graph/Runs/Events share ONE `LineageState`, polled
-	 * once through context, so the DAG, the run board and the event feed can never be a poll apart;
+	 * The panels are this zone's own components. Events reads the lineage event feed through context;
 	 * Tables and Storage are the very components `/catalog/tables` and `/catalog/storage` render, own
 	 * reads and all. Nothing here is a mirror — that is what an in-zone dock buys.
 	 *
@@ -20,7 +19,7 @@
 	 * `dock-layout-library` on this zone's user-state proxy) — the library is zone-agnostic.
 	 */
 	import { onMount, type Component } from 'svelte';
-	import { Activity, Database, HardDrive, List, Network } from '@lucide/svelte';
+	import { Database, HardDrive, List } from '@lucide/svelte';
 	import type { DockviewApi, SerializedDockview } from 'dockview';
 	import type { PanelRegistry } from '@rask/dockview';
 	import { DockViews, ViewSidebar } from '@rask/dockview/views';
@@ -30,8 +29,6 @@
 	import { createBench, setBench } from '$lib/dock/bench.svelte';
 	import { userStateFetcher } from '$lib/dock/user-state-fetch';
 	import EventsPanel from '$lib/dock/panels/EventsPanel.svelte';
-	import GraphPanel from '$lib/dock/panels/GraphPanel.svelte';
-	import RunsPanel from '$lib/dock/panels/RunsPanel.svelte';
 	import StoragePanel from '$lib/dock/panels/StoragePanel.svelte';
 	import TablesPanel from '$lib/dock/panels/TablesPanel.svelte';
 
@@ -40,18 +37,6 @@
 	onMount(() => void store.poll());
 
 	const panels: PanelRegistry = {
-		graph: {
-			component: GraphPanel,
-			label: 'Lineage graph',
-			icon: Network,
-			keywords: ['dag', 'lineage', 'provenance', 'medallion', 'openlineage'],
-		},
-		runs: {
-			component: RunsPanel,
-			label: 'Runs',
-			icon: Activity,
-			keywords: ['runs', 'executions', 'failures', 'state', 'lineage'],
-		},
 		events: {
 			component: EventsPanel,
 			label: 'Events',
@@ -103,28 +88,15 @@
 		api = dockApi;
 		dockApi.onDidLayoutChange(() => views.touch());
 		if (restored) return;
-		dockApi.addPanel({ id: 'graph', component: 'graph', title: 'Lineage graph' });
-		dockApi.addPanel({
-			id: 'runs',
-			component: 'runs',
-			title: 'Runs',
-			position: { referencePanel: 'graph', direction: 'right' },
-		});
+		dockApi.addPanel({ id: 'tables', component: 'tables', title: 'Tables' });
 		dockApi.addPanel({
 			id: 'events',
 			component: 'events',
 			title: 'Events',
-			position: { referencePanel: 'runs', direction: 'below' },
+			position: { referencePanel: 'tables', direction: 'right' },
 		});
-		dockApi.addPanel({
-			id: 'tables',
-			component: 'tables',
-			title: 'Tables',
-			position: { referencePanel: 'graph', direction: 'below' },
-		});
-		// Storage joins TABLES as a tab rather than taking a sixth region: five visible panes on a
-		// laptop leaves every one of them too small to read, and "what tables exist" / "what objects
-		// back them" are two answers to one question — which is exactly what a tab group is for.
+		// Storage joins TABLES as a tab rather than taking its own region: "what tables exist" / "what
+		// objects back them" are two answers to one question — which is exactly what a tab group is for.
 		dockApi.addPanel({
 			id: 'storage',
 			component: 'storage',

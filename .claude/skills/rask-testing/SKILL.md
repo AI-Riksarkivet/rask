@@ -93,7 +93,7 @@ consequences it does not spell out.
 | CI: `dagger call test` (`.dagger/test.go`)        | the `make test` marker filter, serially, with `--timeout=300 --timeout-method=thread`, helm installed. **No runner suite** |
 | CI: `dagger call auth-chain`, `dagger call governance-chain` | a real Dex, OpenFGA and catalog as Dagger services (plus lineage for `governance-chain`), asserting through `scripts/auth_chain.sh` and `tests/e2e-py/test_governance_e2e.py` respectively |
 | CI: `dagger call nats-auth` (= `make nats-auth`, ms-gates leg `nats-auth`) | `tests/e2e-py/test_nats_admits_each_client_only_to_its_own_subjects.py` (marker `nats_auth`): the NATS fixture's nats-server in operator mode with test-only nsc keys, the permission table read off the render's dev seed, every user's call set, foreign and credential-less publishes refused, and one real daprd 1.18.1 per component shape, judged by the broker's log ([[XC-078]]) |
-| CI: `e2e-stack` (= `make e2e-ci`), `dagger call test-lineage` | the `tests/e2e-py` files named in `scripts/e2e_stack.sh` and `.dagger/e2e.go`, against a stack the lane brings up |
+| CI: `e2e-stack` (= `make e2e-ci`) | the `tests/e2e-py` files named in `scripts/e2e_stack.sh`, against a stack the lane brings up |
 | `make fga-test` (part of `make check`)            | the OpenFGA model's own `.fga.yaml` suite                                                                         |
 | `make e2e-<suite>`, `make e2e-live`               | `tests/e2e-py` against a stack already deployed: one marker at the addresses you pass, or `-m e2e` against the k3s release |
 

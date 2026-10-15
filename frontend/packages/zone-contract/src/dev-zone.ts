@@ -245,7 +245,7 @@ async function waitForPort(port: number, label: string, tries = 60): Promise<voi
  *
  * `routes` is the GENERIC per-bearer mechanism — `POST /__mock/seed` with `{bearer, routes}` — which
  * the catalog and observability mocks implement. Not every mock does: the lakehouse's lineage mock is
- * STATEFUL with its own API (`POST /__mock/runs`) and answers 502 "not mocked" to anything else, so a
+ * STATEFUL with its own API (`POST /__mock/bump`) and answers 502 "not mocked" to anything else, so a
  * group may override `path` and `body` and post whatever that mock actually accepts. Assuming one
  * envelope for all of them earned a 502 on the first run — the mock's fallback working as designed.
  */

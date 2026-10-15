@@ -104,29 +104,6 @@ def test_lance_reclaims_a_stranded_file_only_after_the_floor_is_raised(tmp_path:
     assert not orphan.exists()
 
 
-def test_the_commit_is_a_config_change_lineage_already_knows_to_ignore(tmp_path: Path) -> None:
-    """`UpdateConfig` is in `lineage.core.reconcile.MAINTENANCE_OPERATIONS`, so the sweep neither reports
-    this version as a provenance hole nor back-fills it with a run that never existed. Asserted here
-    because the property belongs to the pair, and neither module's own tests can see the other."""
-    from lineage.core.reconcile import MAINTENANCE_OPERATIONS, read_storage_versions, read_version_operations
-
-    uri, orphan, _ = _stranded_dataset(tmp_path)
-    raise_listing_floors(
-        _settings(),
-        orphans=[OrphanFile(dataset=uri, path="_transactions/9-dead.txn", kind="transactions", reclaimable_by_lance=False, mtime_epoch=orphan.stat().st_mtime)],
-        storage_options={},
-    )
-
-    versions = read_storage_versions(uri, {}) or []
-    operations = read_version_operations(uri, {}, versions)
-    newest = max(versions)
-    assert operations[newest] == "UpdateConfig"
-    assert operations[newest] in MAINTENANCE_OPERATIONS
-
-
-# --- selection: which datasets earn a commit -------------------------------------------------- #
-
-
 def _orphan(dataset: str, reclaimable: bool | None, mtime: float = 2_000_000_000.0) -> OrphanFile:
     return OrphanFile(dataset=dataset, path="_transactions/x.txn", kind="transactions", reclaimable_by_lance=reclaimable, mtime_epoch=mtime)
 

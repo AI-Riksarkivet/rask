@@ -9,7 +9,7 @@ import {
 /**
  * The inbox plane's model — the half of S3 that is pure data.
  *
- * The component half (badge = inbox, the Inbox/Activity split) is asserted in
+ * The component half (badge = inbox) is asserted in
  * `notifications.test.ts` and, because the panel is PORTALLED and a portal renders nothing on the
  * server, ultimately in a browser. These are the rules a portal cannot hide.
  */

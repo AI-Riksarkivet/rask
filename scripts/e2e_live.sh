@@ -70,7 +70,6 @@ MAINT="$(svc "$RELEASE-maintenance")" || true
 NOTIFICATIONS="$(svc "$RELEASE-notifications")" || true
 # The notifications service mounts its routers under the fleet's API prefix, read from the release's own config.
 API_PREFIX="$(kubectl get cm "$RELEASE-config" -o jsonpath='{.data.RASK_API_PREFIX}' 2>/dev/null || true)"
-AGE="$(svc "$RELEASE-age")" || true
 [ -n "$CATALOG" ] || fail "no $RELEASE-catalog service — is the release deployed?"
 printf '   catalog=%s lineage=%s gateway=%s s3=%s\n' "$CATALOG" "$LINEAGE" "$GATEWAY" "$S3"
 
@@ -110,11 +109,6 @@ if [ -z "$S3_KEY" ]; then
   S3_KEY="$(kubectl get secret "$RELEASE-rustfs" -o jsonpath='{.data.accesskey}' 2>/dev/null | base64 -d || true)"
   S3_SECRET="$(kubectl get secret "$RELEASE-rustfs" -o jsonpath='{.data.secretkey}' 2>/dev/null | base64 -d || true)"
 fi
-# The lineage suites open the AGE graph DIRECTLY rather than through the service, because what they
-# assert is that the write reached the store — an assertion the service's own read cannot make. The
-# deployment's `LINEAGE_DATABASE_URL` carries no password (the pod takes it from the Dapr secret
-# store at lifespan), so the host-run form is rebuilt here from the same secret the cluster uses.
-PG_PASSWORD="$(kubectl get secret "$RELEASE-infra-credentials" -o jsonpath='{.data.postgres-password}' 2>/dev/null | base64 -d || true)"
 
 # AN ADDRESS THAT DID NOT RESOLVE IS EXPORTED AS NOTHING, never as the scheme alone. Every line below
 # used to be `export X="http://$Y"` unconditionally, so a service this script could not find became the
@@ -216,7 +210,7 @@ export LANCE_E2E_PROJECT="${LANCE_E2E_PROJECT:-acme}"
 export LANCE_E2E_DELIM='$'
 export LANCE_E2E_RELEASE="$RELEASE"
 export LANCE_E2E_OUTBOX_URI="s3://lance-catalog/_lineage_outbox"
-export LANCE_E2E_RECONCILE_BINDING=lineage-reconcile-cron
+export LANCE_E2E_RELAY_BINDING=lineage-relay-cron
 export LANCE_E2E_MAINTENANCE_BINDING=maintenance-cron
 export AWS_ACCESS_KEY_ID="$S3_KEY"
 export AWS_SECRET_ACCESS_KEY="$S3_SECRET"
@@ -278,11 +272,6 @@ if [ -n "$WAREHOUSE" ]; then
   printf '   warehouse: %s (project %s)\n' "$WAREHOUSE" "${LANCE_E2E_PROJECT:-acme}"
 else
   printf '   note: no warehouse found for project %s — the suites that need one use the root door and may be refused\n' "${LANCE_E2E_PROJECT:-acme}"
-fi
-if [ -n "$AGE" ] && [ -n "$PG_PASSWORD" ]; then
-  export LINEAGE_DATABASE_URL="postgresql://lance:$PG_PASSWORD@$AGE/lineage"
-else
-  printf '   note: no %s-age service or no postgres-password — the 10 direct-AGE legs will SKIP\n' "$RELEASE"
 fi
 
 # ---- a SECOND tenant, so the credential-isolation legs can run ----------------------------------

@@ -26,7 +26,6 @@ _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT / "services"))  # `uv run` doesn't apply the pytest pythonpath
 os.environ.setdefault("LANCE_S3_ACCESS_KEY_ID", "spec")
 os.environ.setdefault("LANCE_S3_SECRET_ACCESS_KEY", "spec")
-os.environ.setdefault("LINEAGE_DEMO_DATA_ENABLED", "true")  # spec = superset: demo routes always dumped
 
 _DOCS = _ROOT / "docs"
 

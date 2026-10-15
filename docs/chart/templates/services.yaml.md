@@ -92,8 +92,15 @@ to that announcement, so the loss is not only a provenance hole but a downstream
 never happens.
 
 The SAME prefix `LINEAGE_OUTBOX_URI` names below, because that is the only thing that drains
-it: lineage's reconcile cron re-ingests and re-publishes what it finds there. A private prefix
+it: lineage's relay cron records and re-publishes what it finds there. A private prefix
 would stage objects nothing ever reads, which looks like durability and is not.
+
+## `- { name: LANCE_PROVENANCE_NAMESPACE, value: {{ .Values.services.lineage.provenanceNamespace | quote }} }`
+
+The namespace the catalog keeps for provenance (ADR 0158): lineage's feed, edge list and outbox refusals are
+tables in it. The catalog creates it at boot, protects it, and never announces a write under it, because each of
+those rows records an announcement. Rendered from the same value as lineage's `LINEAGE_PROVENANCE_NAMESPACE`, so
+the two services cannot name different namespaces.
 
 ## `- { name: LANCE_CONTROL_EMIT_ENABLED, value: {{ hasKey .Values.catalog "controlEmit" | ternary .Values.cata...`
 
@@ -110,7 +117,7 @@ to a NATS blip (a grant, a `table_published`) reaches nobody — not the notific
 lane, not any replica's GET /management/v1/events buffer — with every pod green. Staged here, re-published by
 `catalog/api/control_relay.py` on the schedule in catalog-control-relay-cron.yaml.
 
-A PRIVATE PREFIX, never `_lineage_outbox`: lineage's reconcile cron parses everything in
+A PRIVATE PREFIX, never `_lineage_outbox`: lineage's relay cron parses everything in
 its prefix as an OpenLineage RunEvent and DELETES what it cannot, so a shared prefix
 destroys these events rather than relaying them (the catalog refuses to boot on equality).
 
@@ -209,15 +216,16 @@ here so the window is a decision rather than an inherited one.
 
 ## `apiVersion: dapr.io/v1alpha1`
 
-Dapr cron INPUT binding — the sidecar POSTs to /<bindingName> on `schedule` to run the periodic
-storage->graph reconciliation (B4), back-filling Lance writes whose lineage event was lost. Config lives
+Dapr cron INPUT binding — the sidecar POSTs to /<bindingName> on `schedule` to run lineage's relay tick:
+drain the lineage outbox, prune the feed, forward the feed to the configured graph backend. Config lives
 here, not in app code (no scheduler thread). Scoped to the lineage app; the route mounts only when
-LINEAGE_RECONCILE_BINDING_NAME matches this name. Gated on dapr.enabled too: without the Dapr control
+LINEAGE_RELAY_BINDING_NAME matches this name. Gated on dapr.enabled too: without the Dapr control
 plane the Component CRD doesn't exist and the release would fail to apply.
 
 ## `apiVersion: apps/v1`
 
-Lineage (consumer) — SUBSCRIBES (via its daprd sidecar) to the lineage topic and ingests into AGE.
+Lineage (consumer) — SUBSCRIBES (via its daprd sidecar) to the lineage topic and records each event in its
+feed and edge tables, Lance tables the catalog governs (ADR 0158). It keeps no database.
 
 ## `args:`
 
@@ -235,16 +243,28 @@ Gated on the sidecar for the reason the guard exists: with no sidecar nothing st
 header, so there is nothing to verify — and the Secret is not rendered, so the reference
 would dangle and the pod would never start.
 
-## `- { name: LINEAGE_DATABASE_URL, value: "postgresql://{{ .Values.age.user }}@{{ include "lance.ageConnectHos...`
+## `- { name: LINEAGE_CATALOG_URL, value: {{ printf "http://%s-catalog:%v" (include "lance.fullname" $root) $r...`
 
-The AGE password is NOT in the connection string in pod env; lineage fetches it from the
-secret store at boot and splices it into the URL. The URL carries user/host/db only.
+Lineage's store IS the catalog: every row of its feed, edge list and outbox refusals is written through the
+catalog's `merge_insert` door and read back through its `query` door, as lineage's own principal, so each write is
+authorized, judged and audited like any other writer's.
 
-## `- { name: LINEAGE_RUN_RETENTION_DAYS, value: {{ .Values.services.lineage.runRetentionDays | quote }} }`
+## `- { name: RASK_CATALOG_IDENTITY_TOKEN_FILE, value: /var/run/secrets/rask/identity/rask-catalog/token }`
 
-§4 reliability knobs, all three pruned or bounded by the reconcile cron: Run-node retention
-(0 = keep all), durable /events feed retention in days of ARRIVAL time (0 = unbounded), and
-the AGE pool's per-statement timeout (bounds runaway traversals).
+The projected `rask-catalog` ServiceAccount token (the `lance.identityTokens` mount below), which lineage presents
+to the catalog and re-reads on every call: the kubelet rotates it before it expires. The catalog grants this
+subject `writer` on the provenance namespace (`LANCE_PROVENANCE_WRITERS`), which reaches its tables and nothing else.
+
+## `- { name: LINEAGE_EVENTS_RETENTION_DAYS, value: {{ .Values.services.lineage.eventsRetentionDays | quote }} }`
+
+Durable /events feed retention in days of ARRIVAL time (0 = unbounded), pruned on the relay tick.
+
+## `{{- with .Values.services.lineage.forward }}`
+
+The forwarder (ADR 0158): the relay tick sends every recorded event, as standard OpenLineage over the HTTP transport, to
+`<url>/<endpoint>`; an empty URL forwards nothing. The API key is never a value: `LINEAGE_FORWARD_API_KEY_SECRET` names
+the secret in the Dapr secret store lineage reads it from on every tick, and `lance.daprAppSpec` denies it to every
+other app.
 
 ## `- { name: LINEAGE_DAPR_PUBSUB, value: {{ include "lance.subPubsub" (list $root .Values.services.lineage.dap...`
 
@@ -262,24 +282,13 @@ The parking subscription's OWN durable component (dapr-component.yaml, `-dlq` su
 never the main deliverPolicy=all component, whose replay would re-park the whole retained
 DLQ backlog.
 
-## `- { name: LINEAGE_FRESHNESS_BUDGET_HOURS, value: {{ .Values.services.lineage.freshnessBudgetHours | quote }} }`
-
-Freshness budget (data-contract gap #2): reconcile flags `stale` datasets whose newest
-version commit is older than this many hours. Unset/0 = the axis is off.
-
 ## `- { name: DAPR_API_TIMEOUT_SECONDS, value: {{ .Values.dapr.apiTimeoutSeconds | quote }} }`
 
 Bound the DaprClient gRPC deadline (the SDK env) — covers the boot-time secret-store fetch.
 
-## `- { name: LINEAGE_DEMO_DATA_ENABLED, value: {{ hasKey .Values.services.lineage "demoData" | ternary .Values...`
+## `- { name: LINEAGE_RELAY_BINDING_NAME, value: {{ .Values.services.lineage.relay.bindingName | quote }} }`
 
-Demo peek router — values-gated (unauthenticated metadata disclosure; prod ships it off).
-hasKey+ternary (the LANCE_AUDIT_ENABLED convention): a key missing under --reuse-values (a
-stored release predating demoData) must render the default, not "" (bool_parsing boot crash).
-
-## `- { name: LINEAGE_RECONCILE_BINDING_NAME, value: {{ .Values.services.lineage.reconcile.bindingName | quote ...`
-
-Mounts the cron reconcile route at this binding name (matches the bindings.cron component above).
+Mounts the relay tick's route at this binding name (matches the bindings.cron component above).
 
 ## `{{- $linScoped := .Values.minio.lineageAccessKey }}`
 
@@ -308,13 +317,6 @@ Scheme-derived (see the catalog twin above): https issuer => HTTPS guard stays e
 
 Operator-pinned FGA store id — the same auth.fgaStoreId every consumer + the bootstrap-admin
 Job use (see the catalog twin above). Unset = provision-by-name at boot.
-
-## `- { name: LINEAGE_READ_AUDIT_ENABLED, value: {{ hasKey .Values.services.lineage "readAudit" | ternary .Valu...`
-
-Read-side audit (services.lineage.readAudit): record every ALLOWED FGA-gated data read into
-lineage_reads — feeds GET /datasets/{name}/readers + the ReadersPanel. Rendered only under
-auth.enabled (a real subject exists), default ON like the catalog's write-side
-LANCE_AUDIT_ENABLED — and hasKey+ternary for the same --reuse-values reason.
 
 ## `- { name: LANCE_AUDIT_ENABLED, value: {{ hasKey .Values.auth "audit" | ternary .Values.auth.audit true | qu...`
 

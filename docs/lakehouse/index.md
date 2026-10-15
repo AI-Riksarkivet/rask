@@ -20,7 +20,7 @@ The load-bearing records, in reading order:
 - [Data Contract](../DATA-CONTRACT.md) — what it is, how it is enforced
 - [Decisions](../adr/README.md) — consolidated architecture decisions
 - [Tier Governance](../TIER-GOVERNANCE.md) — bronze → silver → gold, enforced in the catalog's write path
-- [Lineage](../LINEAGE.md) — OpenLineage → Apache AGE
+- [Lineage](../LINEAGE.md) — OpenLineage intake, the commit feed and the edge list, forwarded to a graph backend
 - [Authorization](../AUTHZ.md) — who can see and do what, per zone
 - [DuckDB Access](../DUCKDB.md) — querying governed tables from DuckDB
 - [Operators](../OPERATORS.md) — what the platform runs, and rask's own procedures

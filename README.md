@@ -134,7 +134,7 @@ make scan-image NAME=gateway
 ## CI
 
 `.github/workflows/ci.yml` calls the Dagger module's real functions — `lint`, `typecheck`, `openapi`,
-`test`, `test-pg`, `charts`, `frontend`, `test-lineage`, `scan-*` — plus the kind-backed live jobs
+`test`, `test-pg`, `charts`, `frontend`, `scan-*` — plus the kind-backed live jobs
 (`make e2e-ci`), the per-zone Playwright suites, and the zone-image build+smoke.
 Everything hermetic runs identically on your machine: `dagger call <fn>` == the CI step.
 

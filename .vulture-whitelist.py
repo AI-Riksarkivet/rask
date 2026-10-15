@@ -15,18 +15,12 @@ The categories held here, all verified by reading the call site:
   · pydantic MODEL FIELDS on response/claims schemas — "used" via serialization, not by name.
   · Test hooks and unittest.mock attributes (return_value / side_effect).
 
-LANDMINE — do NOT "clean up" what vulture flags without reading it first. `Image.MAX_IMAGE_PIXELS` in
-packages/service-kit/src/service_kit/lakehouse/media.py is reported as an "unused attribute" because it is an assignment to a
-Pillow global. It is the DECOMPRESSION-BOMB GUARD. Deleting it silently disarms a security control while
-every test stays green. That symbol is the reason this file is documented rather than auto-trusted.
-
 NOT whitelisted on purpose: services/common/sinks.py (SinkAdapter/LocalDirSink/S3Sink). No SERVICE imports
 it — its only consumers are its own unit test and scripts/media_pipeline_e2e.py. It is the un-wired "gold
 sink" seam from the data-zone architecture. It is left visible so it keeps showing up as an architectural
 gap to either wire or delete, rather than being quietly blessed as fine.
 """
 
-done  # unused variable (scripts/medallion_demo.py:99)
 model_config  # unused variable (services/catalog/core/config.py:23)
 model_config  # unused variable (services/common/oidc.py:69)
 exp  # unused variable (services/common/oidc.py:74)
@@ -47,7 +41,6 @@ pytestmark  # unused variable (tests/e2e-py/test_maintenance_e2e.py:33)
 pytestmark  # unused variable (tests/e2e/test_e2e.py:17)
 pytestmark  # unused variable (tests/e2e/test_gateway_e2e.py:23)
 pytestmark  # unused variable (tests/e2e/test_governance_e2e.py:40)
-pytestmark  # unused variable (tests/e2e/test_lineage_e2e.py:22)
 pytestmark  # unused variable (tests/e2e/test_multibase_e2e.py:32)
 pytestmark  # unused variable (tests/e2e/test_object_store_cas_e2e.py:42)
 pytestmark  # unused variable (tests/e2e/test_observability_e2e.py:41)

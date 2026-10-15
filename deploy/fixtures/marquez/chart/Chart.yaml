@@ -1,0 +1,8 @@
+apiVersion: v2
+name: marquez
+description: >-
+  NOT FOR PRODUCTION. The development OpenLineage graph backend for rask: the Marquez API over its own Postgres. A
+  platform runs its own graph backend; rask's lineage forwards to whatever `services.lineage.forward.url` names.
+type: application
+version: 0.1.0
+appVersion: "0.51.1"

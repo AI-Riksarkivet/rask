@@ -305,10 +305,10 @@ dapr.io/sidecar-seccomp-profile-type: RuntimeDefault
 {{- end -}}
 
 {{- define "lance.lineageSidecarOnlyRoutes" -}}
-{{- $bn := .Values.services.lineage.reconcile.bindingName -}}
+{{- $bn := .Values.services.lineage.relay.bindingName -}}
 
 {{- if and $bn (not (regexMatch "^[a-zA-Z0-9._-]+$" $bn)) -}}
-{{- fail (printf "services.lineage.reconcile.bindingName %q must match ^[A-Za-z0-9._-]+$ — it is interpolated into the gateway 403 blocklist env and used as a Dapr Component name" $bn) -}}
+{{- fail (printf "services.lineage.relay.bindingName %q must match ^[A-Za-z0-9._-]+$ — it is interpolated into the gateway 403 blocklist env and used as a Dapr Component name" $bn) -}}
 {{- end -}}
 
 lineage-events{{ with $bn }},{{ . }}{{ end }}
@@ -752,6 +752,11 @@ scoped_secret() {
 
         {{- range (include "lance.natsUsers" $cfgRoot | splitList " " | compact) }}
         {{- $denied = append $denied (printf "nats-user-%s" .) }}
+        {{- end }}
+        {{- with $cfgRoot.Values.services.lineage.forward.authSecret.name }}
+        {{- if ne $app $cfgRoot.Values.services.lineage.daprAppId }}
+        {{- $denied = append $denied . }}
+        {{- end }}
         {{- end }}
         {{- $denied = concat $denied (list "nats-root" "nats-route") }}
         {{- if $denied }}

@@ -1,11 +1,10 @@
 """Whatever the catalog emits, BOTH lineage doors must accept — the bus and the HTTP endpoint.
 
-[[LIN-004]] (2026-09-21) moved a catalog DDL change off the run shape: a create mints no `(:Run)` and
-no `(:Job)`, so `build_write_event` now returns an OpenLineage **DatasetEvent** for it. The bus door
-was taught the new shape — `services/consumer.py::_parse` discriminates and `handle_cloud_event`
-routes to `ingest_dataset_event`. The HTTP door was not: it still declares its body as `RunEvent`,
-which requires `eventType`, `run` and `job`, so a static event fails FastAPI's validation before any
-handler runs.
+[[LIN-004]] (2026-09-21) moved a catalog DDL change off the run shape: a create is no run that ran, so
+`build_write_event` returns an OpenLineage **DatasetEvent** for it. The bus door was taught the new shape
+first, and the HTTP door, declaring its body as `RunEvent` (which requires `eventType`, `run` and `job`),
+refused a static event in FastAPI's validation before any handler ran. Both doors now parse through
+`models.parse_event`, and the store records whichever shape arrives.
 
 MEASURED 2026-09-24 against the hermetic governance stack — the catalog on the HTTP transport, which
 is its default:
@@ -43,7 +42,7 @@ from lineage.api.v1.router import api_router
 from lineage.core.metrics import Door
 from lineage.models import DatasetEvent, RunEvent
 from lineage.services.consumer import handle_cloud_event
-from lineage.services.repository import LineageRepository
+from lineage.services.provenance import ProvenanceStore
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
@@ -52,17 +51,17 @@ _AUTHOR = "CgVhbGljZRIFbG9jYWw"
 
 
 class _Repo:
-    """Records which door the event reached. BOTH methods, because the defect is the routing."""
+    """Files what it records by the shape the door parsed it into, because the defect is the parse."""
 
     def __init__(self) -> None:
         self.runs: list[RunEvent] = []
         self.datasets: list[DatasetEvent] = []
 
-    async def ingest_event(self, event: RunEvent) -> None:
-        self.runs.append(event)
-
-    async def ingest_dataset_event(self, event: DatasetEvent) -> None:
-        self.datasets.append(event)
+    async def record(self, event: RunEvent | DatasetEvent) -> None:
+        if isinstance(event, DatasetEvent):
+            self.datasets.append(event)
+        else:
+            self.runs.append(event)
 
 
 def _emitted(operation: str) -> dict[str, Any]:
@@ -94,7 +93,7 @@ def unauthenticated_app(monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[FastA
     install_problem_handlers(app, logging.getLogger(__name__))
     app.include_router(api_router)
     repo = _Repo()
-    app.state.repository = repo
+    app.state.provenance = repo
     yield app, repo
     get_settings.cache_clear()
 
@@ -121,8 +120,8 @@ def test_the_bus_door_accepts_it(operation: str, door: str) -> None:
     repo = _Repo()
     import asyncio
 
-    # CAST, not a subclass: the fake records which door was taken, which is the whole assertion, and
-    # inheriting the real repository would drag its pool in for a test that touches no database.
-    status = asyncio.run(handle_cloud_event(cast(LineageRepository, repo), {"data": _emitted(operation)}, door=Door.SUBSCRIBER))
+    # CAST, not a subclass: the fake records which shape arrived, which is the whole assertion, and the real
+    # store would need a catalog for a test about the parse.
+    status = asyncio.run(handle_cloud_event(cast(ProvenanceStore, repo), {"data": _emitted(operation)}, door=Door.SUBSCRIBER))
     assert status == {"status": "SUCCESS"}, f"{operation} -> {status}"
-    assert len(getattr(repo, door)) == 1, f"{operation} reached neither door: runs={repo.runs} datasets={repo.datasets}"
+    assert len(getattr(repo, door)) == 1, f"{operation} was recorded as neither shape: runs={repo.runs} datasets={repo.datasets}"

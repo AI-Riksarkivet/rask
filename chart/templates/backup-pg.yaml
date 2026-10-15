@@ -1,5 +1,5 @@
 {{- if .Values.backups.pgDump.enabled }}
-# pg_dump the lineage + OpenFGA + Dapr-state databases (gzip) → the lakehouse S3 under _backups/pg/<date>/.
+# pg_dump the OpenFGA + Dapr-state databases (gzip) → the lakehouse S3 under _backups/pg/<date>/.
 # SELF-CONTAINED FALLBACK ONLY: when AGE is a CloudNativePG cluster (the rask path), disable this and use
 # CNPG's scheduled backups / PITR instead — they do this better. Reads creds from the infra-tier Secret.
 apiVersion: batch/v1
@@ -46,14 +46,12 @@ spec:
                 - |
                   set -e
                   rm -f /tmp/.dump-failed
-                  # THREE databases, not two. `stateDb` (daprstate) is the Dapr state store, and
-                  # dapr-statestore.yaml justifies putting it on this Postgres with "already backed up
-                  # (backup-pg.yaml)" — which was not true of this loop. It holds the notifications
-                  # plane's per-subject InboxActor read state and Dapr workflow/actor instance state.
-                  # The inbox CONTENTS are reconstructible (the cron reconciler replays lineage's durable
+                  # Both databases that hold state. `stateDb` (daprstate) is the Dapr state store: the
+                  # notifications plane's per-subject InboxActor read state and Dapr workflow/actor instance
+                  # state. The inbox CONTENTS are reconstructible (the cron reconciler replays lineage's durable
                   # GET /events), but WHICH messages a subject has already read exists nowhere else: losing
                   # it marks the whole estate unread for everyone, and in-flight workflows do not resume.
-                  for db in {{ .Values.age.lineageDb }} {{ .Values.age.openfgaDb }} {{ .Values.age.stateDb }}; do
+                  for db in {{ .Values.age.openfgaDb }} {{ .Values.age.stateDb }}; do
                     # NOT `pg_dump | gzip`. A pipeline reports only the LAST command's status, and this is
                     # `sh` — dash, where `set -o pipefail` does not exist. So a pg_dump that dies mid-stream
                     # still leaves a structurally valid gzip and the pipeline exits 0: `set -e` sees a clean

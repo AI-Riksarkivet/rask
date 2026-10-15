@@ -143,13 +143,6 @@ for (const user of ['alice@example.com', 'bob@example.com']) {
 		await page.goto(`${ORIGIN}/lakehouse/`, { waitUntil: 'domcontentloaded' });
 		await page.waitForTimeout(2500);
 
-		const feed = await page.evaluate(async () => {
-			const r = await fetch('/lakehouse/api/runs');
-			return { status: r.status, runs: r.ok ? ((await r.json()).runs ?? []) : [] };
-		});
-		const failed = feed.runs.filter((r) => r.state === 'FAIL' || r.state === 'ABORT');
-		console.log(`   /lakehouse/api/runs -> ${feed.status}, ${feed.runs.length} runs, ${failed.length} failed`);
-
 		const bell = page.getByRole('button', { name: /notification/i }).first();
 		check('the navbar carries the bell', (await bell.count()) > 0);
 		await bell.click();
@@ -161,20 +154,6 @@ for (const user of ['alice@example.com', 'bob@example.com']) {
 
 		const panelText = ((await panel.innerText()) ?? '').replace(/\s+/g, ' ');
 		check('the panel — not the page — says Notifications', panelText.includes('Notifications'));
-
-		if (failed.length > 0) {
-			const first = failed[0];
-			const err = (first.error_message ?? '').slice(0, 24);
-			check(
-				'a FAILED run is inside the panel, with its error, not just a red badge',
-				panelText.includes('Failed') && (err === '' || panelText.includes(err)),
-				err || '(no error_message on the first failure)',
-			);
-			// Failures first: the first status word in the panel must be Failed, since a failure sitting
-			// past the window is a failure nobody can see.
-			const firstState = (panelText.match(/Failed|Completed|Running|Started/) ?? [''])[0];
-			check('failures sort above completions', firstState === 'Failed', `first state word: ${firstState}`);
-		}
 
 		// Condition 10: measure every text row in the panel rather than eyeballing the crop.
 		const rows = panel.locator('p, span').filter({ hasText: /\S/ });

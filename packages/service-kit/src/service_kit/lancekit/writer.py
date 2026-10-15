@@ -190,7 +190,12 @@ class RestCatalogWriteTransport:
         """THIS caller's bearer, per request — never a default header on the shared client."""
         return _request_headers(self._token)
 
-    def merge_upsert(self, delta: pa.Table, on: str) -> None:
+    def merge_upsert(self, delta: pa.Table, on: str, *, matched_when: str | None = None) -> None:
+        """Insert the unmatched rows and update the matched ones, only where ``matched_when`` holds when it is given.
+
+        ``matched_when`` is the spec's ``when_matched_update_all_filt``, an SQL condition over ``source.<col>`` and
+        ``target.<col>``: ``source.seq > target.seq`` keeps a row's value from moving backward.
+        """
         # merge flags are direct params; `body` is the Arrow-IPC STREAM delta.
         with translate_catalog_errors():
             self._api.merge_insert_into_table(
@@ -199,6 +204,7 @@ class RestCatalogWriteTransport:
                 encode_arrow_stream(delta),
                 delimiter=self._delimiter,
                 when_matched_update_all=True,
+                when_matched_update_all_filt=matched_when,
                 when_not_matched_insert_all=True,
                 _request_timeout=self._timeout,
                 _headers=self.request_headers(),

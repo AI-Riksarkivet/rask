@@ -72,7 +72,6 @@ const task = (task_id: string, state: string) => ({
 export const ANNOTATOR_SEED: Record<string, unknown> = {
 	// LIVENESS FIRST — see the header.
 	'GET /events?limit=1&summary=true': CURSOR_PROBE,
-	'GET /runs': { runs: [] },
 
 	// `listProjects` calls `/projects?tenant=<t>`; the mock tries the with-query key first and then falls
 	// back to path-only, so this one entry covers every tenant a dev switches to.

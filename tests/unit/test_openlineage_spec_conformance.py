@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import pytest
 from jsonschema import Draft202012Validator, FormatChecker
@@ -30,7 +30,7 @@ from openlineage.client import facet_v2
 
 from catalog.core import lineage_emit as catalog_emit
 from catalog.core.run_context import RunContext
-from lineage.models import ColumnLineageEdge, Dataset, OutputStatistics, RunEvent
+from lineage.models import ColumnUpstream, Dataset, RunEvent
 from maintenance.core import lineage_emit as compaction_emit
 from service_kit import openlineage as ol
 from service_kit.lancekit import openlineage as lancekit_ol
@@ -163,10 +163,10 @@ def test_lancekit_annotation_event_conforms() -> None:
 
 
 def test_lancekit_column_lineage_uses_the_modern_transformations_array() -> None:
-    # ASSERTS the ingest can actually READ the mirror's column edges. The first cut put
-    # transformationType/transformationSubtype on the InputField — valid JSON (InputField allows
-    # additional properties) but a slot no consumer reads, so every edge arrived with an empty type
-    # and subtype. Drive the real parser, don't eyeball the dict.
+    # ASSERTS the slot a graph backend reads the kind from. The first cut put transformationType/
+    # transformationSubtype on the InputField — valid JSON (InputField allows additional properties) but a slot
+    # no consumer reads, so every forwarded edge arrived with an empty type and subtype. And lineage's own
+    # authorizer must find the column's source dataset in the same facet, or it authorizes nothing.
     result = lancekit_ol.WriteResult(
         version=1,
         row_count=1,
@@ -184,92 +184,13 @@ def test_lancekit_column_lineage_uses_the_modern_transformations_array() -> None
         event_time=_EVENT_TIME,
         result=result,
     )
-    edges = Dataset.model_validate(event["outputs"][0]).column_edges
-    assert edges == [
-        ColumnLineageEdge(
-            out_field="labels",
-            namespace="media",
-            name="unit-7",
-            field="raw_labels",
-            type="DIRECT",
-            subtype="TRANSFORMATION",
-            description="",
-            masking=False,
-        )
-    ]
-
-
-def test_reconcile_observed_drop_event_conforms(monkeypatch: pytest.MonkeyPatch) -> None:
-    # ASSERTS the DROP the reconcile records when it finds bytes cleanly gone ([[LH-144]]) is a real
-    # DatasetEvent, read off the feed row the repository actually writes rather than a mirror of it.
-    import asyncio
-
-    import lineage.services.repository as repo_mod
-
-    written: list[tuple[object, ...]] = []
-
-    class _Conn:
-        def transaction(self) -> _Conn:
-            return self
-
-        async def __aenter__(self) -> _Conn:
-            return self
-
-        async def __aexit__(self, *_a: object) -> bool:
-            return False
-
-        async def execute(self, statement: object, params: tuple[object, ...]) -> None:
-            if "INSERT INTO public.lineage_events" in str(statement):
-                written.append(params)
-
-    class _Pool:
-        def connection(self) -> _Conn:
-            return _Conn()
-
-    async def _took(*_args: object, **_kwargs: object) -> list[list[object]]:
-        return [[1]]
-
-    monkeypatch.setattr(repo_mod, "run_cypher", _took)
-    repository = repo_mod.LineageRepository(cast("Any", _Pool()), "g")
-
-    assert asyncio.run(repository.record_observed_drop("alpha$bronze$images", "s3://bucket/images", _EVENT_TIME))
-    [row] = written
-    _assert_conforms(json.loads(str(row[-1])))
-
-
-def test_ingest_reads_facets_from_the_spec_typed_slots() -> None:
-    # ASSERTS Postel on the read side. OutputStatisticsOutputDatasetFacet is an OutputDatasetFacet and
-    # DataQualityAssertionsDatasetFacet is an InputDatasetFacet, so the official client — and therefore
-    # every Spark/Airflow/dbt/Marquez producer, and our own lineage.seed — serialises them into
-    # outputFacets/inputFacets, NOT into facets. Reading only `facets` dropped them silently.
-    output = Dataset.model_validate(
-        {
-            "namespace": "silver",
-            "name": "features",
-            "facets": {},
-            "outputFacets": {
-                "outputStatistics": {
-                    "_producer": "https://example.com/p",
-                    "_schemaURL": facet_v2.output_statistics_output_dataset.OutputStatisticsOutputDatasetFacet._get_schema(),
-                    "rowCount": 64,
-                    "size": 4096,
-                }
-            },
-            "inputFacets": {
-                "dataQualityAssertions": {
-                    "_producer": "https://example.com/p",
-                    "_schemaURL": facet_v2.data_quality_assertions_dataset.DataQualityAssertionsDatasetFacet._get_schema(),
-                    "assertions": [{"assertion": "row_count", "success": False}],
-                }
-            },
-        }
-    )
-    assert output.statistics == OutputStatistics(row_count=64, size_bytes=4096)
-    assert output.quality_assertions == [{"assertion": "row_count", "success": False}]
+    [source] = event["outputs"][0]["facets"]["columnLineage"]["fields"]["labels"]["inputFields"]
+    assert [(t["type"], t["subtype"]) for t in source["transformations"]] == [("DIRECT", "TRANSFORMATION")]
+    assert Dataset.model_validate(event["outputs"][0]).column_upstreams == [ColumnUpstream(namespace="media", name="unit-7")]
 
 
 def test_typed_slots_survive_the_feed_round_trip() -> None:
-    # ASSERTS the durable /events blob (model_dump(by_alias=True)) keeps a producer's typed slots exactly
+    # ASSERTS the feed's stored payload (model_dump(by_alias=True)) keeps a producer's typed slots exactly
     # as sent — inputFacets/outputFacets are read off model_extra rather than declared as fields, so we
     # neither drop them nor stamp an empty outputFacets onto an input dataset (a key InputDataset lacks).
     wire = {

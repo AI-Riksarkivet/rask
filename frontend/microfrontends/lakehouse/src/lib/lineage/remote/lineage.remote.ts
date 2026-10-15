@@ -2,18 +2,12 @@ import { command, getRequestEvent, query } from '$app/server';
 import { env } from '$env/dynamic/private';
 import * as v from 'valibot';
 import type { ApiResult } from '@rask/api/client';
-import {
-	createLineageClient,
-	type DatasetGovernance,
-	type DlqBacklog,
-	type DlqReplayResponse,
-} from '@rask/api/lineage';
+import { createLineageClient, type DlqBacklog, type DlqReplayResponse } from '@rask/api/lineage';
 import { lineageAuthHeaders } from '@rask/api/runs-feed';
 import { readSecretFile } from '@rask/api/bff';
 
-// The lineage plane's WRITE surface plus the two reads that belong to it, in the zone's
-// remote-function dialect (the transport ruling, area 2) — same names, same `ApiResult` shapes as the
-// `$lib/api` client they replace, transport only.
+// The lineage plane's DLQ surface (its backlog read and its replay write), in the zone's
+// remote-function dialect (the transport ruling, area 2).
 //
 // It wraps the SHARED `createLineageClient` rather than re-typing its paths: the client only ever
 // needed a `getJSON`/`requestJSON` pair, so the pair below reaches the lineage service DIRECTLY from
@@ -23,12 +17,10 @@ import { readSecretFile } from '@rask/api/bff';
 // THE CREDENTIAL POSTURE IS THE POINT, and it is asymmetric on purpose (packages/api/src/bff.ts:190):
 // a READ may fall back to the service credential so a governed stack serves reads without a per-user
 // login; a WRITE never may — attaching the service token to a write would let an anonymous visitor
-// forge writes into the governed graph (the 2026-07-13 confused-deputy hole). The deleted routes made
-// that door twice (a GET-only proxy plus three session-only write routes); here it is one predicate.
+// forge writes into the governed graph (the 2026-07-13 confused-deputy hole).
 //
-// No single-flight `refresh()` on these commands, deliberately: every write ECHOES the whole updated
-// record (the governance quad) or a one-shot verdict (replay), and the panels render from that echo.
-// Refreshing the sibling read would be a second upstream call for a value the write just returned.
+// No single-flight `refresh()` on the replay command, deliberately: it ECHOES a one-shot verdict and
+// the panel renders from that echo.
 
 const LINEAGE_API = env.LINEAGE_API ?? 'http://localhost:8001';
 
@@ -112,47 +104,5 @@ export const replayDlq = command(
 			return { ok: false, status: 401, detail: 'sign in to replay a lineage event' };
 		}
 		return lineage().replayDlq(runId);
-	},
-);
-
-/** The dataset's governance record (#49): curated tags + description with their last-writer
- *  attribution. A swallowed failure is `null`, exactly as before — the panel says "unavailable"
- *  rather than showing an empty record as if the metadata were absent. */
-export const fetchGovernance = query(v.string(), async (name): Promise<DatasetGovernance | null> =>
-	lineage().fetchGovernance(name),
-);
-
-const TagWrite = v.object({ name: v.string(), tag: v.string() });
-
-/** Add one curated tag — session-only, writer-gated, echoing the whole updated record. */
-export const addDatasetTag = command(
-	TagWrite,
-	async ({ name, tag }): Promise<ApiResult<DatasetGovernance>> => {
-		if (signedOut()) {
-			return { ok: false, status: 401, detail: 'sign in to edit governance tags' };
-		}
-		return lineage().addDatasetTag(name, tag);
-	},
-);
-
-/** Remove one curated tag — same door, same echo. */
-export const removeDatasetTag = command(
-	TagWrite,
-	async ({ name, tag }): Promise<ApiResult<DatasetGovernance>> => {
-		if (signedOut()) {
-			return { ok: false, status: 401, detail: 'sign in to edit governance tags' };
-		}
-		return lineage().removeDatasetTag(name, tag);
-	},
-);
-
-/** Set the dataset description — the same session-only write, with its own refusal sentence. */
-export const setDatasetDescription = command(
-	v.object({ name: v.string(), description: v.string() }),
-	async ({ name, description }): Promise<ApiResult<DatasetGovernance>> => {
-		if (signedOut()) {
-			return { ok: false, status: 401, detail: 'sign in to edit the description' };
-		}
-		return lineage().setDatasetDescription(name, description);
 	},
 );

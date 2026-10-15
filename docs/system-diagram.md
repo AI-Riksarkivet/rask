@@ -25,19 +25,18 @@ and vice-versa. For the prose architecture see [`ARCHITECTURE.md`](./ARCHITECTUR
 ## The one idea
 
 Three planes, three governance axes, **one identity**. Every table is `table:<id>` — and that
-*same* string is the OpenFGA object (who may), the Lance dataset (what/when), and the lineage
-graph node (how/who). The diagram is built around that single identity threading through all three.
+*same* string is the OpenFGA object (who may), the Lance dataset (what/when), and the dataset a
+lineage feed row and edge name (how/who). The diagram is built around that single identity threading through all three.
 
 | Plane | Question | Component in the diagram |
 |---|---|---|
 | **Control** | who may, where is it | **Catalog** (FastAPI/pylance) + **OIDC** + **OpenFGA** |
 | **Data** | the bytes | **Object store** (MinIO / S3-compatible), reached by **Mode B** (server-mediated) or **STS vending** |
-| **Provenance** | how/who did it change | **Lineage svc** (OpenLineage) → **AGE graph** *(catalog create-events + job-emitted)* |
+| **Provenance** | how/who did it change | **Lineage svc** (OpenLineage) → **commit feed + edge list** (Lance tables in the catalog's provenance namespace) → a bring-your-own graph backend *(catalog commit-events + job-emitted)* |
 
 > ✅ **Provenance records the verified principal (audit `w8u4rc2tg` P0 #2/#3).** The catalog emits
-> OpenLineage on table **create** with `author` = the verified token sub — a
-> `(:User)-[:CREATED]->(:Dataset)` edge, so "who created the table" is an audit fact queryable at
-> `GET /datasets/{id}/creator`. A pipeline's own lineage binds the author server-side on ingest, so it
+> OpenLineage on table **create** with `author` = the verified token sub, recorded on the commit feed
+> row, so "who created the table" is an audit fact read from `GET /events?table=<id>`. A pipeline's own lineage binds the author server-side on ingest, so it
 > can't be forged. Emit covers the full write surface — create, insert, merge_insert, update, delete, and
 > maintenance's runs — with the Lance-version facet on every measured write. The catalog's emitter is off
 > unless `LANCE_LINEAGE_EMIT_ENABLED` is set (the chart sets it); ADR 0156 makes it mandatory on governed
@@ -87,8 +86,8 @@ The toggle is the *credential-delivery* shape — both modes run on the **same**
 | **Catalog** | orch (sky) | FastAPI over native `pylance` `DirectoryNamespace`; the control plane |
 | **OpenFGA** | vector (violet) | authz (Postgres) — `can_*` actions, concentric owner⊇writer⊇reader, parent cascade |
 | **Object store** | vector (violet) | the data plane — MinIO / S3-compatible; the mode toggle swaps the credential path (Mode B vs STS), not the backend |
-| **Lineage svc** | orch (sky) | FastAPI; ingests OpenLineage, serves upstream/downstream/producers/graph |
-| **AGE graph** | vector (violet) | Apache AGE (Postgres) — the provenance DAG, queried with openCypher |
+| **Lineage svc** | orch (sky) | FastAPI, no database; ingests OpenLineage, serves the commit feed (`GET /events`) and what derives from a table (`GET /tables/{name}/derived`), forwards every event to a graph backend |
+| **Provenance tables** | vector (violet) | `provenance$events` and `provenance$edges`: Lance tables in the catalog's provenance namespace, written through its `merge_insert` door as lineage's own principal |
 
 ---
 
@@ -100,7 +99,7 @@ The toggle is the *credential-delivery* shape — both modes run on the **same**
 3. **Catalog → OpenFGA** — `check can_create_table` on the **parent** namespace.
 4. **Catalog → Object store** — create the Lance dataset location + record the table (version 1).
 5. **Catalog → OpenFGA** — `grant_on_create`: seed `owner` grant + `parent` edge (inherits cascade).
-6. **Catalog → Lineage** — emit OpenLineage with `author` = the **verified** sub → a `(:User)-[:CREATED]->(:Dataset)` edge (the audit fact behind `GET /datasets/{id}/creator`). **Awaited inline, best-effort** — errors are swallowed so a lineage outage never fails the 201, and the shipped B4 reconcile back-fills anything lost.
+6. **Catalog → Lineage** — emit OpenLineage with `author` = the **verified** sub, recorded on the commit feed row (the audit fact behind "who created this table"). **After the commit, never failing it**: the event is staged to the outbox before it is published, so a lineage outage never fails the 201 and the relay tick drains what was not delivered.
 7. **Catalog → Client** — `201`; caller is the table's **owner** (⇒ writer ⇒ reader).
 
 ### 2. Read / query — `GET describe_table` (+ read)
@@ -123,22 +122,22 @@ catalog's publish door, which runs the project's gate and moves the `published` 
 4. **Job → Catalog** — `merge_insert` silver with an `Idempotency-Key` (authorizes `can_write_data`; retry-safe).
 5. **Job → Object store** — write the new silver dataset version (immutable; old versions stay for time-travel).
 6. **Job → Lineage** — emit an OpenLineage run event: inputs=[bronze], outputs=[silver]. Ingest **binds the verified author** on the authenticated path (implemented; the open HTTP `/api/v1/lineage` guards forgery via `enforce_author`).
-7. **Lineage → AGE** — `MERGE` Run/Job/Dataset + `WROTE`/`DERIVED_FROM` edges; dataset name = `table:<id>`.
+7. **Lineage → Catalog** — record the event as a `provenance$events` row and its table-level edges (bronze → silver) in `provenance$edges`, through the catalog's `merge_insert` door; a governed dataset is named by its bare catalog id.
 
-### 4. Lineage query — `GET /datasets/{id}/upstream`
-1. **Client → Lineage** — ask "where did gold come from?"
+### 4. Lineage query — `GET /tables/{name}/derived`
+1. **Client → Lineage** — ask "what was built from bronze?" (how an erasure finds every derived table).
 2. **Lineage → OIDC** — verify JWT (`RASK_OIDC_ENABLED`); no/invalid token → 401.
-3. **Lineage → OpenFGA** — `check can_get_metadata` (same right as describe-table); reuses the shared store, read-only.
-4. **Lineage → AGE** — openCypher `DERIVED_FROM*1..` traversal; the dataset name is an **agtype bind param**, never interpolated (injection-safe).
-5. **Lineage → Client** — `200` with the transitive upstream set.
+3. **Lineage → OpenFGA** — `check can_get_metadata` on the source (same right as describe-table); reuses the shared store, read-only.
+4. **Lineage → Catalog** — read the edge list through the catalog's `query` door and walk it, nearest first, to at most 20 hops.
+5. **Lineage → Client** — `200` with the derived tables the caller may see (`complete: false` when the walk stopped short). The full upstream/downstream graph is the bring-your-own backend's, which the forwarder feeds.
 
 > **The governance gaps the diagram tracked (audit `w8u4rc2tg`) — now resolved:**
 > 1. ✅ *Lineage query* reads are **authz-gated** (OIDC + `can_get_metadata`) with transitive-disclosure
->    filtering — was a full data-estate leak (P0 #1). Opt-in: `RASK_OIDC_ENABLED` + `RASK_FGA_ENABLED`.
-> 2. ✅ Lineage **ingest** requires a verified token and **binds the author** to it — provenance is no
->    longer forgeable (P0 #2); the catalog forwards the caller's bearer on emit.
+>    filtering (P0 #1). Opt-in: `RASK_OIDC_ENABLED` + `RASK_FGA_ENABLED`.
+> 2. ✅ Lineage **ingest** requires a verified token and **binds the author** to it, so provenance is not
+>    forgeable (P0 #2); the catalog forwards the caller's bearer on emit.
 > 3. ✅ The catalog **emits create-lineage** with the verified author — "who created the table" is an
->    audit fact at `GET /datasets/{id}/creator` (P0 #3). Insert/delete/merge-insert/update and
+>    audit fact on the commit feed (P0 #3). Insert/delete/merge-insert/update and
 >    maintenance's runs all emit too — the write surface is fully covered.
 >
 > Tracked in [`docs/adr/`](adr/README.md). Run the whole loop: `make governance-chain` (or
@@ -150,7 +149,7 @@ catalog's publish door, which runs the project's gate and moves the `published` 
 
 - **"Show me security end-to-end"** — run *Create table*; pause on steps 2→3→5 (verify → authorize → seed-ownership). The cascade is why one create grants exactly the right future access.
 - **"Two credential modes"** — open *Read / query*, step through once in **Mode B** (server-mediated), then flip to **STS vending** and step again. Same flow, same S3 storage, two credential paths.
-- **"Where does lineage come from?"** — run *Promote*; the last two steps (emit → MERGE) show the pipeline reporting its own run. Ingest **binds the verified author** (P0 #2), and the catalog announces every write the job commits.
+- **"Where does lineage come from?"** — run *Promote*; the last two steps (emit → record) show the pipeline reporting its own run. Ingest **binds the verified author** (P0 #2), and the catalog announces every write the job commits.
 - **"What's still open?"** — *Lineage query*, steps 2–3 are now the SHIPPED authz gate
   (`RASK_OIDC_ENABLED` + `RASK_FGA_ENABLED`, on in the chart); the remaining opens live in
   [`docs/adr/0007-7a-live-verification-residuals.md`](adr/0007-7a-live-verification-residuals.md) §7a (live-verification residuals) and

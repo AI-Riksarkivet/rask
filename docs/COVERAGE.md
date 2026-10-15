@@ -62,9 +62,9 @@ Rust `DirectoryNamespace` (backfill/transaction) or a real query engine (MV) —
 - **The lakehouse writes no tier data of its own.** Moving rows between bronze, silver and gold is the user's
   pipeline on their own compute, committing through the catalog's namespace doors; the catalog announces each
   committed write ([ADR 0155](adr/0155-the-medallion-is-tier-governance-in-the-catalog.md)).
-- **Version recovery works** — `restore_table` (v1→v3 verified) on the native backend; the catalog's `WROTE`
-  edge records the Lance version (`DatasetVersionDatasetFacet`); `/reconcile` anchors gold to the on-disk
-  `latest_write_version`.
+- **Version recovery works** — `restore_table` (v1→v3 verified) on the native backend; the catalog's
+  announcement records the Lance version each write produced (`DatasetVersionDatasetFacet`), in lineage's feed and
+  edge list.
 - **Retention nuance:** the compaction cron runs `cleanup_old_versions(older_than=7d)` over **every** dataset
   (gold included). It always keeps the **current** version (no data loss), but caps **time-travel depth** at
   7 days uniformly — there is no per-stage retention. If gold needs a longer recovery window than
@@ -87,6 +87,7 @@ left to rewind to. The replacement covered bad-WRITE recovery and was silently r
 recovery — the more dangerous kind of wrong entry, because everyone who read it stopped thinking about the
 problem. Deletion protection now closes the sharpest edge (#73: `protected` on tables/namespaces, refusing
 drop/deregister/rename), and the durable fix is the trash-namespace undrop on the maintenance sweep (#75).
-**Ahead of Lakekeeper:** the lineage moat (reconcile, column lineage, gold whole-history JSONB) +
-web-identity credential vending. One caveat: a *long-lived single shared* cluster would want runtime
+**Ahead of Lakekeeper:** catalog-governed provenance (every write announced, a durable commit feed and a
+table-level edge list as Lance tables, forwarded to any OpenLineage graph backend) + web-identity credential
+vending. One caveat: a *long-lived single shared* cluster would want runtime
 grant/role admin — N/A only while the model stays spin-up-per-workload.

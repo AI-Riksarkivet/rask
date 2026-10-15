@@ -22,6 +22,8 @@ import respx
 from fastapi import FastAPI
 from starlette.testclient import TestClient
 
+from lineage.models import DatasetEvent
+
 
 CATALOG, STAGE, UNLISTED, PERSON = "service-catalog", "service-bronze-to-silver", "service-trainer", "CgVhbGljZRIFbG9jYWw"
 SECRETS = "http://localhost:3500/v1.0/secrets/lance-secrets"
@@ -31,14 +33,11 @@ class _Feed:
     def __init__(self) -> None:
         self.recorded: list[str] = []
 
-    async def ingest_event(self, event: Any) -> None:
-        self.recorded.append(event.run_id)
+    async def record(self, event: Any) -> None:
+        self.recorded.append(event.dataset.name if isinstance(event, DatasetEvent) else event.run_id)
 
-    async def ingest_dataset_event(self, event: Any) -> None:
-        self.recorded.append(event.dataset.name)
-
-    async def run_output_names(self, _run_id: str) -> list[str]:
-        return []
+    async def run_author(self, _run_id: str) -> str | None:
+        return None
 
     async def recorded_event(self, _run_id: str, _event_type: str | None) -> dict[str, Any] | None:
         return None
@@ -98,7 +97,7 @@ def _door(monkeypatch: pytest.MonkeyPatch, *, grant: bool) -> tuple[TestClient, 
     install_problem_handlers(app, logging.getLogger(__name__))
     register_dapr(app)
     feed = _Feed()
-    app.state.repository = feed
+    app.state.provenance = feed
     app.state.fga = object()
     return TestClient(app), feed
 

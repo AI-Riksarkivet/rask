@@ -1,11 +1,13 @@
 [project]
 name = "lineage"
 version = "0.1.0"
-description = "Lineage service — OpenLineage event ingest over Dapr pub/sub into the Apache AGE property graph (datasets, runs, column lineage)."
+description = "Lineage service — the authenticated OpenLineage intake, the commit feed and the table-level edge list as Lance tables the catalog governs, and a forwarder to a bring-your-own graph backend."
 requires-python = ">=3.13"
 license = "Apache-2.0"
 dependencies = [
-    "service-kit[governed,lakehouse]",
+    # `lancekit` carries the spec's REST client the feed is read and written through (the catalog's own
+    # `query` and `merge_insert` doors, `lineage.services.provenance`).
+    "service-kit[governed,lakehouse,lancekit]",
     # The producer-signature seam ([[LH-064]]): `services/signature.py` verifies an event's Ed25519
     # signature with `lineage_kit.signing`, and the verifier has to share the producer's definition of
     # what was signed (canon-1, the facet's members) — a second implementation here would disagree the
@@ -15,26 +17,13 @@ dependencies = [
     "pydantic>=2.7",
     "pydantic-settings>=2.5",
     "uvicorn[standard]>=0.30",
-    "psycopg[binary]>=3.2",
-    "psycopg-pool>=3.2",
-    "pylance[otel]>=13.0.0",
     "lance-namespace>=0.11.0,<0.12",
     "dapr>=1.18.1",
     "dapr-ext-fastapi>=1.18.1",
     "opentelemetry-distro>=0.65b0",
     "opentelemetry-exporter-otlp>=1.44.0",
     "opentelemetry-instrumentation-fastapi>=0.65b0",
-    "opentelemetry-instrumentation-psycopg>=0.65b0",
     "opentelemetry-instrumentation-logging>=0.65b0",
-]
-
-# `lineage.seed` is the producer-side OpenLineage emitter for the mock medallion flow — compute-layer
-# instrumentation the service itself never imports (see its module docstring). Kept out of `dependencies`
-# so it never ships in the deployable image; run it with `uv run --group seed python -m lineage.seed`.
-[dependency-groups]
-seed = [
-    "openlineage-python",
-    "attrs",
 ]
 
 [build-system]

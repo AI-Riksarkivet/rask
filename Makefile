@@ -1,4 +1,4 @@
-.PHONY: fga-store-check fga-estate-migrate sbom zone-sbom registry-gc dagger-gc dev-gc help install build test test-slow lint lint-imports fmt clean storybook typecheck knip comment-gate check coverage fga-test ci dev-micro dev-frontends dev-frontends-k3s dev-zone home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-fixtures k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap dev-registry e2e frontend-images prod-render-check chart-docs chart-docs-check alert-rules-check alert-rules-drill notifications-lanes notifications-rig audit smoke-rustfs rustfs-lifecycle auth-chain governance-chain nats-auth medallion-demo go-fmt scan-config scan-secrets scan-image scan-zone-image seed-corpus e2e-isolation e2e-container-deletes e2e-fga-model
+.PHONY: fga-store-check fga-estate-migrate sbom zone-sbom registry-gc dagger-gc dev-gc help install build test test-slow lint lint-imports fmt clean storybook typecheck knip comment-gate check coverage fga-test ci dev-micro dev-frontends dev-frontends-k3s dev-zone home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-fixtures k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap dev-registry e2e frontend-images prod-render-check chart-docs chart-docs-check alert-rules-check alert-rules-drill notifications-lanes notifications-rig audit smoke-rustfs rustfs-lifecycle auth-chain governance-chain nats-auth go-fmt scan-config scan-secrets scan-image scan-zone-image seed-corpus e2e-isolation e2e-container-deletes e2e-fga-model
 
 help:
 	@echo "Targets:"
@@ -645,21 +645,6 @@ governance-chain: ## Governance e2e — authz + provenance authorship + lineage 
 nats-auth: ## NATS auth e2e — each bus client admitted only to its own subjects (operator-mode broker + daprd)
 	dagger call nats-auth
 
-# The live medallion walkthrough: real Lance datasets on RustFS, a real OpenLineage event per step,
-# and the DAG building in front of you. Ctrl-C stops it.
-#
-# It replaced `scripts/medallion_demo.sh`, which COULD NOT RUN: that script did
-# `compose up ... web`, and none of the five compose files it layered defines a `web` service, so
-# compose failed on an unknown service name. Nobody had run this successfully in a long time.
-#
-# Self-driving on purpose. The point is watching the DAG build rather than reading a finished one, and
-# Dagger services are per-invocation — a driver in a separate call would address a different stack —
-# so the service's own command starts uvicorn, waits for it, then runs the driver in the same
-# container. Pace it with `dagger call medallion-demo --step-delay=5 up --ports=8000:8000`.
-medallion-demo: ## Live medallion walkthrough — watch the DAG build at http://localhost:8000/ui/
-	@echo "UI: http://localhost:8000/ui/  (Ctrl-C to stop)"
-	dagger call medallion-demo up --ports=8000:8000
-
 # ---- local k3s ------------------------------------------------------------
 # A service that is in neither this list nor $(K3S_IMAGES) is never built by `make k3s-build` and never
 # side-loaded by `make k3s-import`, so a hand-built image lands outside CONTAINERD and k3s answers
@@ -797,7 +782,7 @@ DROP_CREDENTIAL_VALUES := --set dapr.appToken=null --set frontend.oidc.sessionSe
 # two of them, the operator first, and compute (the Ray dashboard and Serve companion) follows it, starting once rask's
 # app token and Dapr Configuration exist; observability is the store, dashboards and alerting rask's Collector
 # exports to. A GPU node with no device plugin yet adds nvidia-device-plugin.
-FIXTURES ?= external-secrets dapr nats cloudnative-pg dex minio openbao kuberay-operator ray-cluster compute observability
+FIXTURES ?= external-secrets dapr nats cloudnative-pg dex minio openbao kuberay-operator ray-cluster compute observability marquez
 
 k3s-fixtures: ## Install the development fixtures (FIXTURES) as their own releases, before the rask chart
 	$(if $(filter-out dex compute,$(FIXTURES)),KUBECONFIG=$(KUBECONFIG) ./scripts/fixtures.sh $(filter-out dex compute,$(FIXTURES)))

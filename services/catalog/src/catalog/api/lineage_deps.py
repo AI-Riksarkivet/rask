@@ -1,13 +1,13 @@
 """The shared read-back-and-emit trailer for catalog mutations that record versioned lineage.
 
 Every endpoint whose native op commits a table change ends the same way: read the produced version +
-per-version schema off the dataset, then publish a best-effort ``WROTE`` event. One helper (instead of a
+per-version schema off the dataset, then publish a best-effort write event. One helper (instead of a
 copy per endpoint module) so the two correctness properties live in exactly one place:
 
 * **the commit, never a re-read** — the version is the one the write itself reported (a handle's
   version after the commit, a response's ``version``, or the version its ``transaction_id`` committed),
   and the schema comes from ONE open pinned to it, so a concurrent writer can never lend its version or
-  its schema to this WROTE edge;
+  its schema to this event's output;
 * **best-effort throughout** — the mutation is already committed when this runs, so a read-back failure
   degrades the lineage enrichment (versionless / schemaless emit) but never fails the request.
 
@@ -42,7 +42,7 @@ async def emit_measured_write(
     branch: str | None,
     run: RunContext | None = None,
 ) -> None:
-    """Read back ``(version, schema)`` in one pinned open, then emit the best-effort WROTE event.
+    """Read back ``(version, schema)`` in one pinned open, then emit the best-effort write event.
 
     ``pin_version`` is the version the write COMMITTED. REQUIRED, with no default, so every door states
     which commit it made: a reopen cannot answer that, because under concurrent writes the latest snapshot

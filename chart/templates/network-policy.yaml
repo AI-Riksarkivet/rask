@@ -206,8 +206,8 @@ spec:
         - { protocol: TCP, port: 8200 }
 {{- if .Values.age.enabled }}
 ---
-# (3c) age-postgres:5432 — the lineage graph + the OpenFGA datastore + the Dapr state store
-# (dapr-statestore.yaml rides this same instance). Clients: lineage, openfga (subchart pods carry
+# (3c) age-postgres:5432 — the OpenFGA datastore + the Dapr state store
+# (dapr-statestore.yaml rides this same instance). Clients: openfga (subchart pods carry
 # app.kubernetes.io/name=openfga), the openfga-migrate job, the pg backup job, the catalog (per the
 # audit's client list), and (DAPRIFY 2026-07-27) the state-store-scoped apps — daprd's
 # state.postgresql component connects DIRECTLY to this postgres, so those pods' sidecars are real
@@ -228,7 +228,7 @@ spec:
               - key: app.kubernetes.io/component
                 operator: In
 
-                {{- $ageClients := list "lineage" "catalog" "openfga-migrate" "backup-pg" }}
+                {{- $ageClients := list "catalog" "openfga-migrate" "backup-pg" }}
                 {{- if and .Values.dapr.enabled .Values.stateStore.enabled }}
                 {{- $ageClients = concat $ageClients .Values.stateStore.scopes }}
                 {{- end }}

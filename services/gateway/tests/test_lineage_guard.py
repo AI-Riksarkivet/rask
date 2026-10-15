@@ -1,7 +1,7 @@
 """The lineage sidecar-only 403 guard (ADR 0108, the merge's P1: the nginx
 `lance.lineageSidecarOnlyRoutes` blocklist, ported to gateway middleware).
 
-Dapr-delivered lineage routes (pub/sub ingest + the cron reconcile binding) must
+Dapr-delivered lineage routes (pub/sub ingest + the relay cron binding) must
 never be reachable through the public edge — proxying them would ride the
 gateway's own sidecar and stamp the trusted app-api-token. The nginx block was a
 case-insensitive regex over the normalized URI; the middleware must cover the
@@ -45,7 +45,7 @@ def proxied(gw):
         "/api/lineage/lineage-events/",
         "/api/lineage/lineage-events/sub",
         "/api/lineage/LINEAGE-EVENTS",  # nginx block was case-insensitive (~*)
-        "/api/lineage/lineage-reconcile-cron",
+        "/api/lineage/lineage-relay-cron",
     ],
 )
 def test_sidecar_only_routes_403(gw, proxied, path: str) -> None:
@@ -58,7 +58,7 @@ def test_sidecar_only_routes_403(gw, proxied, path: str) -> None:
 
 def test_blocklist_env_overridable(monkeypatch: pytest.MonkeyPatch) -> None:
     """The chart renders the one-source list into RASK_LINEAGE_SIDECAR_ONLY_ROUTES
-    (e.g. a renamed reconcile binding); the middleware honours it.
+    (e.g. a renamed relay binding); the middleware honours it.
 
     The override is applied BEFORE the app boots, which is the only moment it can arrive in a
     deployment — the chart writes it into the pod's environment. It used to be re-parsed on every
@@ -80,8 +80,8 @@ def test_blocklist_env_overridable(monkeypatch: pytest.MonkeyPatch) -> None:
     with TestClient(gw.app) as client:
         gw.app.state.http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
         assert client.post("/api/lineage/custom-cron").status_code == 403
-        assert client.get("/api/lineage/lineage-reconcile-cron").status_code == 200  # no longer listed
-        assert str(captured[-1].url) == "http://127.0.0.1:8000/lineage-reconcile-cron"
+        assert client.get("/api/lineage/lineage-relay-cron").status_code == 200  # no longer listed
+        assert str(captured[-1].url) == "http://127.0.0.1:8000/lineage-relay-cron"
 
 
 def test_normalization_defeats_dot_segment_variants(gw) -> None:

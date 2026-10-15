@@ -11,9 +11,8 @@
  * fires only when the lineage cursor moves. A hydrated browser proved it — the very first requests are
  *
  *     GET /events?limit=1&summary=true      (the cursor probe, `lineagePulse`)
- *     GET /runs                             (the bell's feed, same stream)
  *
- * and with both 404 the cursor never opens, `liveRead` never fires, and the table sits on "Loading…"
+ * and with it 404 the cursor never opens, `liveRead` never fires, and the table sits on "Loading…"
  * having asked the upstream for nothing at all. Seed the cursor and the data follows. (Also why a `curl`
  * check is worthless here: no hydration, no mount, no `liveRead`, zero requests.)
  */
@@ -22,27 +21,6 @@
  *  `{ events: [{ seq: number }] }`. A number is all that is needed — the pulse only cares that the seq
  *  RESOLVED, and re-yields an unmoved cursor on a keepalive so the stream is never severed as idle. */
 export const CURSOR_PROBE = { events: [{ seq: 1 }] };
-
-/** The bell's run rows. Failures sort first in the notification surface, so one FAILED row makes that
- *  ordering visible rather than theoretical. */
-export const RUNS = {
-	runs: [
-		{
-			run_id: 'dev-train-1',
-			job: 'training.demo',
-			state: 'COMPLETE',
-			started_at: '2026-08-07T09:00:00Z',
-			updated_at: '2026-08-07T09:04:00Z',
-		},
-		{
-			run_id: 'dev-train-2',
-			job: 'training.fraud',
-			state: 'FAILED',
-			started_at: '2026-08-07T08:30:00Z',
-			updated_at: '2026-08-07T08:31:00Z',
-		},
-	],
-};
 
 /** The signed-in developer: estate admin, so privileged surfaces render rather than fail closed.
  *
@@ -88,9 +66,8 @@ const promRange = (points: [number, number][]) => ({
 });
 
 export const UPSTREAMS_SEED: Record<string, unknown> = {
-	// LIVENESS FIRST — nothing below is ever requested without these two. See the header.
+	// LIVENESS FIRST — nothing below is ever requested without it. See the header.
 	'GET /events?limit=1&summary=true': CURSOR_PROBE,
-	'GET /runs': RUNS,
 
 	'GET /management/v1/me': DEV_ME,
 	'GET /management/v1/model': { models: [DEMO, FRAUD] },

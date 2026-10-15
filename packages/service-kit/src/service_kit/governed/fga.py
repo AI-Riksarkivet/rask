@@ -1941,6 +1941,9 @@ TupleOrigin = Literal[
     # would inherit them. Its own value because the row means something no other origin does: nobody decided this
     # access was gone just now, a door found it already orphaned by an earlier drop.
     "stale_on_create",
+    # The grants the catalog writes on the namespace it keeps for provenance (ADR 0158): its parent edge and a `writer`
+    # per configured provenance writer. Its own value because no person granted them; the deployment configured them.
+    "provenance_namespace",
     "lifecycle_delete",
     "train",
     "annotator",

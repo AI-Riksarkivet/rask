@@ -5,8 +5,8 @@ the warehouse registry and its namespace bindings, deletion protection, maintena
 gates, transform declarations, the task registry, and the trash records that make a drop recoverable.
 Lose them and the Lance data survives while every statement about who may touch it does not.
 
-WHAT THE CHART OFFERS DOES NOT COVER THIS, measured 2026-09-14. `backups.pgDump` dumps the lineage and
-OpenFGA databases; `backups.volumeSnapshot` takes a CSI VolumeSnapshot of the MinIO PVCs. Both default
+WHAT THE CHART OFFERS DOES NOT COVER THIS, measured 2026-09-14. `backups.pgDump` dumps the OpenFGA and
+Dapr state databases; `backups.volumeSnapshot` takes a CSI VolumeSnapshot of the MinIO PVCs. Both default
 OFF, neither is enabled in the live release, and this cluster has no `volumesnapshotclass` resource
 type at all — the snapshot path could not run here even if it were switched on. So the control root's
 recoverability was untested because nothing was capable of testing it.

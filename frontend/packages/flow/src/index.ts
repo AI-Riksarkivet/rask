@@ -31,8 +31,8 @@
  * `@rask/dockview/styles.css` is. It lives here and not in `@rask/ui` for the same reason dockview's
  * does not: the design system carries no vendor-canvas bindings.
  *
- * What does NOT belong here: domain graphs. `LineageGraph` is a lineage panel (lakehouse's own lib), the FGA
- * builders are lakehouse access logic, the workflow EDITOR is media's. The binding stays domain-free.
+ * What does NOT belong here: domain graphs. The FGA builders are lakehouse access logic, the workflow EDITOR is
+ * media's. The binding stays domain-free.
  *
  * One domain graph is not in a zone either, and it is not an exception to that rule: `@rask/ui/hierarchy`
  * (project › warehouse › namespace › table) draws on `StaticFlow` from the DESIGN SYSTEM, because two zones

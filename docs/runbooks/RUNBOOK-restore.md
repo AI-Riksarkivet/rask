@@ -1,13 +1,11 @@
 # Backup & restore runbook
 
-How the estate is backed up, and the **order-sensitive** procedure to restore it. Closes the "no restore
-procedure anywhere" gap. The Postgres/AGE leg is authored from the backup artifacts + Apache AGE's
-requirements **and proven by a drill**: `scripts/age_restore_drill.sh` (run inside the age-postgres pod
-against a throwaway DB, wired into `e2e_stack.sh` behind `E2E_RESTORE_DRILL`) performs this runbook's exact
-pg_dump→drop→restore and verifies the graph came back with its labels + a real vertex — green on the
-pinned PG16 engine. The drill green does not transfer across a Postgres major (see the migration section
-below). The object-store `VolumeSnapshot` leg is **not** drilled — validate it on your cluster's CSI driver
-before trusting it in an incident.
+How the estate is backed up, and the **order-sensitive** procedure to restore it. The Postgres leg covers the
+`rask-age` server's two databases, OpenFGA's datastore and the Dapr state store; lineage keeps no database (its
+commit feed and edge list are Lance tables in the catalog's `provenance` namespace, so they come back with the
+object store). Neither the Postgres leg nor the object-store `VolumeSnapshot` leg is drilled: rehearse the
+pg_dump→drop→restore below on a throwaway database, and validate the snapshot leg on your cluster's CSI driver,
+before trusting either in an incident.
 
 > The in-cluster backups are the SELF-CONTAINED-prod path. If you externalize to CloudNativePG (Postgres)
 > and a managed S3 (object store), use THEIR PITR + snapshots instead — set
@@ -18,8 +16,8 @@ before trusting it in an incident.
 
 | Artifact | What | Where | Template |
 |---|---|---|---|
-| **pg_dump** (gzip) | the `lineage` DB (AGE graph + events/reads tables), the `openfga` DB (authz tuples) **and** the `daprstate` DB (Dapr state store: inbox read state + workflow/actor instances) | the object store, `_backups/pg/<UTC>/` | `backup-pg.yaml` (CronJob, `backups.pgDump`) |
-| **VolumeSnapshot** | the MinIO fixture's data PVCs = the **Lance lakehouse** (every tier + registry data) | cluster CSI VolumeSnapshot | `backup-snapshot.yaml` (`backups.volumeSnapshot`) |
+| **pg_dump** (gzip) | the `openfga` DB (authz tuples) **and** the `daprstate` DB (Dapr state store: inbox read state + workflow/actor instances) | the object store, `_backups/pg/<UTC>/` | `backup-pg.yaml` (CronJob, `backups.pgDump`) |
+| **VolumeSnapshot** | the MinIO fixture's data PVCs = the **Lance lakehouse** (every tier + registry data, and lineage's provenance tables) | cluster CSI VolumeSnapshot | `backup-snapshot.yaml` (`backups.volumeSnapshot`) |
 | **control-root records** | the governance objects: `_projects/`, `_warehouses/` (registry + namespace bindings), `_trash/`, `_protection/`, `_policies/`, `_gates/`, `_transforms/`, `_tasks/` | a timestamped prefix, `_backups/control/<UTC>/` by default | `scripts/control_root_backup.py` |
 
 > **The VolumeSnapshot row needs a cluster that can take one.** Measured 2026-09-14 on the k3s dev
@@ -35,48 +33,39 @@ PVC (an open gap — back up the unseal material out-of-band), and note the pg_d
 store, so a **total store loss loses both the Lance data AND the DB dumps** unless you also ship the dumps
 off-cluster (the "fate-sharing" gap).
 
-## Consistency: restore AGE + the object store as a pair
+## Consistency: restore the dumps + the object store as a pair
 
-The lineage graph (AGE) references Lance datasets that live in the object store; the registry (in the store) is
-described by the catalog. Restoring one far from the other leaves dangling provenance. **Restore the pg_dump and the
-object-store snapshot from the SAME backup window**, and expect the reconcile sweep to converge minor drift
-(storage↔graph) afterward.
+OpenFGA's tuples name the tables and namespaces the object store holds, and the notifications inbox (in
+`daprstate`) points at rows of lineage's commit feed, which lives in the object store. Restoring one far from the
+other leaves grants on objects that do not exist, or inboxes pointing past the feed. **Restore the pg_dump and the
+object-store snapshot from the SAME backup window.** An inbox cursor ahead of a restored feed does not stall: the
+notifications reconciler re-reads the feed from its oldest row when the feed answers a cursor beyond its head.
 
-## Restore — Postgres (AGE lineage graph + OpenFGA + Dapr state)
+## Restore — Postgres (OpenFGA + Dapr state)
 
-The critical AGE detail: a plain `pg_dump -d lineage` captures `ag_catalog`, the per-graph schema, and the
-label tables, **but the target must have the `age` extension available and loaded**, and the graph catalog
-must be consistent after load. Do NOT `psql < dump` into a database that already has a different `lineage`
-graph — drop/recreate the DB first.
+Every database on the `rask-age` server carries the `age` extension: the server preloads AGE into every backend,
+and AGE's hook needs `ag_catalog` to exist, so a database without it fails every `DROP` (`age-postgres.yaml`). The
+target must therefore have the extension available. Do NOT `psql < dump` into a database that already holds data —
+drop/recreate it first.
 
-1. **Fetch the dump** from S3: `mc cp rfs/<bucket>/_backups/pg/<UTC>/lineage.sql.gz .` (and `openfga.sql.gz`).
+1. **Fetch the dumps** from S3: `mc cp rfs/<bucket>/_backups/pg/<UTC>/openfga.sql.gz .` (and `daprstate.sql.gz`).
 2. **Recreate the target DB** clean (managed PG or the in-cluster `age-postgres`):
-   `DROP DATABASE IF EXISTS lineage; CREATE DATABASE lineage;`
+   `DROP DATABASE IF EXISTS openfga; CREATE DATABASE openfga;`
 3. **Ensure the extension is installable** in the target (the AGE image ships it):
-   `psql -d lineage -c "CREATE EXTENSION IF NOT EXISTS age;"`
-4. **Restore**: `gunzip -c lineage.sql.gz | psql -d lineage`. (The dump recreates `ag_catalog`, the graph
-   schema, and the label tables.)
-5. **Verify the graph is real, not just present**:
-   ```sql
-   LOAD 'age'; SET search_path = ag_catalog, "$user", public;
-   SELECT name FROM ag_graph;                    -- must list 'lineage'
-   SELECT * FROM cypher('lineage', $$ MATCH (d:Dataset) RETURN count(d) $$) AS (n agtype);
-   ```
-   A non-zero Dataset count + the graph name confirms the labels restored, not just the metadata rows.
-6. Repeat 1–4 for `openfga` (no AGE steps — it's plain relational).
-6b. **`daprstate` — restore it LAST, and only after deciding you want it.** Same plain-relational
-   procedure as `openfga` (no AGE steps), but it is the one dump whose restore is a judgement call
-   rather than a reflex, because Dapr owns this schema and the rows describe *in-flight* work:
+   `psql -d openfga -c "CREATE EXTENSION IF NOT EXISTS age;"`
+4. **Restore**: `gunzip -c openfga.sql.gz | psql -d openfga`.
+5. **`daprstate` — restore it LAST, and only after deciding you want it.** Same procedure as `openfga`, but it is
+   the one dump whose restore is a judgement call rather than a reflex, because Dapr owns this schema and the rows
+   describe *in-flight* work:
 
    - **What is lost without it:** every subject's inbox READ state. The inbox *contents* come back on
      their own — the notifications reconciler replays lineage's durable `GET /events` — but "which of
      these have I already seen" lives nowhere else, so skipping this dump marks the entire estate
      unread for everyone. Dapr workflow instances and actor state are lost with it too; in-flight
      workflows do not resume.
-   - **Why LAST:** the rows point at work items in the other two databases. Loading Dapr state that is
-     NEWER than the lineage/OpenFGA dumps beside it resurrects actors referencing events the restored
-     lineage DB does not have. Restore all three from the SAME `_backups/pg/<UTC>/` directory — they
-     are dumped in one CronJob run, so a single timestamp directory is internally consistent.
+   - **Why LAST, and from the same window:** the rows point at feed rows in the object store and at objects
+     OpenFGA's tuples govern. Restore both dumps from the SAME `_backups/pg/<UTC>/` directory — they are dumped in
+     one CronJob run, so a single timestamp directory is internally consistent.
    - **When to skip it:** if you are restoring far enough back that in-flight work is stale anyway,
      dropping `daprstate` and letting Dapr recreate its schema is legitimate and safe. Everyone starts
      with a full unread inbox, which is noisy but not wrong. Say so in the incident notes — an inbox
@@ -84,23 +73,17 @@ graph — drop/recreate the DB first.
    - **Check its size before assuming it is small.** Most of `daprstate` is Dapr workflow history, and
      that grows without bound unless `dapr.workflowStateRetention` is on — measured live 2026-08-10,
      before retention landed: 1367 instance rows for `dapr.internal.default.ingest.workflow` alone,
-     `count(expiredate) = 0`, oldest 7 days back. Retention now bounds it (7d completed / 30d failed),
+     `count(expiredate) = 0`, oldest 7 days back. Retention bounds it (7d completed / 30d failed),
      but a cluster restored from a dump taken with retention OFF carries the whole history.
-7. **App recovery is automatic**: on next boot lineage runs `ensure_graph()` (a no-op if step 4 restored the
-   graph) + `ensure_graph_constraints()`, and `/readyz` gates on the graph being queryable — so a
-   half-restored graph fails readiness loudly rather than serving silently.
-
-**If step 5 shows the graph metadata but zero labels** — the known plain-pg_dump-of-AGE hazard — restore is
-NOT trusted: switch the backup to an AGE-aware dump (per-graph `SELECT * FROM ag_catalog.agtype ...` export
-or CloudNativePG logical backup with the extension) and re-drill. **This is exactly why the drill is
-mandatory before relying on this path.**
+6. **App recovery is automatic**: OpenFGA and the Dapr sidecars reconnect on their own.
 
 ## Restore — the object store (the Lance lakehouse)
 
 1. Provision a new PVC from the VolumeSnapshot (`dataSource: {kind: VolumeSnapshot, name: <snap>}`).
 2. Point the MinIO fixture's StatefulSet at it (or restore into the existing PVC per your CSI driver's clone flow).
 3. Restart the store; then `catalog`/`lineage`/`maintenance` reconnect (their `/readyz` gates hold them out until the
-   object store answers).
+   object store answers). Lineage's commit feed and edge list come back with the store: they are Lance tables in
+   the catalog's `provenance` namespace, restored like any other table.
 
 ## Restore — the control root (projects, warehouses, bindings, trash)
 
@@ -143,15 +126,17 @@ Three things that exercise taught, each of which had already produced a wrong an
 
 ## After restore
 
-- Watch `/readyz` on catalog + lineage flip to 200 (pool AND graph healthy).
-- Drive one read (`/runs`, a dataset `/producers`) to confirm provenance resolves against the restored data.
-- Let the reconcile sweep run once to converge any storage↔graph drift from a slightly-off backup pair.
+- Watch `/readyz` on catalog + lineage flip to 200 (lineage's gates on its feed table answering through the catalog).
+- Drive one read (`GET /api/lineage/events`, and `GET /api/lineage/tables/<name>/derived` for a table you know has
+  derived tables) to confirm provenance resolves against the restored data.
+- A forwarder cursor in `provenance$cursors` restored behind the graph backend's state re-sends events the backend
+  already took: the forwarder promises at least once, never exactly once.
 - See [RUNBOOK-oncall.md](RUNBOOK-oncall.md) for the failure modes you may hit during recovery.
 
 ## Planned migration — bumping AGE across a Postgres major
 
 **The AGE image tag is not a routine bump.** `age.image` (chart/values.yaml) pins
-`apache/age:release_PG16_1.5.0` — the tag encodes **both** the Postgres major and the AGE build, because the
+`apache/age:release_PG16_1.6.0` — the tag encodes **both** the Postgres major and the AGE build, because the
 extension is compiled per major (the `release_PG16_*` line vs a `release_PG17_*` line). Moving to a
 PG17-based tag is a data migration, not an upgrade. (On `age.externalHost` — a managed Postgres — use the
 provider's major-upgrade path instead; this section is the in-cluster StatefulSet.)
@@ -159,8 +144,8 @@ provider's major-upgrade path instead; this section is the in-cluster StatefulSe
 **How the naive bump presents**: after `helm upgrade` with a PG17-based tag, the `<release>-age-0` pod goes
 `CrashLoopBackOff` with `FATAL: database files are incompatible with server` — the retained PVC
 (`data-<release>-age-0`, from the volumeClaimTemplate in `age-postgres.yaml`) still holds a PG16-format data
-directory, and a Postgres major changes the on-disk format. Downstream: lineage `/readyz` goes red (graph
-gate) and OpenFGA loses its datastore, so every governed API fails closed with 503 — see the
+directory, and a Postgres major changes the on-disk format. Downstream: OpenFGA loses its datastore and the Dapr
+state store goes with it, so every governed API fails closed with 503 — see the
 [CrashLoop section of RUNBOOK-oncall.md](RUNBOOK-oncall.md#crashloop-on-boot) for the triage shape.
 
 **Why there is no in-place path**: `pg_upgrade` needs the old *and* new majors' binaries side by side plus a
@@ -170,14 +155,14 @@ supported route is logical: dump on the old major → fresh data directory on th
 
 **Procedure** (rehearse it once on a throwaway install before touching a real estate):
 
-1. **Quiesce writers**: `kubectl scale deploy <release>-lineage <release>-openfga <release>-notifications --replicas=0`.
+1. **Quiesce writers**: `kubectl scale deploy <release>-openfga <release>-notifications --replicas=0`.
    Governed APIs 503 (authz fail-closed) for the window — expected and the point: the dump you take next is
    final. `notifications` is in that list because it is the writer of `daprstate` (its `InboxActor`s persist
    read state through the Dapr state store); leaving it up means dumping a database that is still being
-   written, and the restored inboxes disagree with the lineage dump taken beside them.
-2. **Take a fresh dump of all three DBs**: trigger the backup CronJob out of schedule —
+   written, and the restored inboxes disagree with the OpenFGA dump taken beside them.
+2. **Take a fresh dump of both DBs**: trigger the backup CronJob out of schedule —
    `kubectl create job --from=cronjob/<release>-pg-backup pg-migrate-dump` (`backup-pg.yaml`; it dumps
-   `lineage` + `openfga` + `daprstate` gzipped to `_backups/pg/<UTC>/` on the object store) — or run the equivalent manual
+   `openfga` + `daprstate` gzipped to `_backups/pg/<UTC>/` on the object store) — or run the equivalent manual
    `pg_dump` per database. Manually, do NOT write it as `pg_dump | gzip`: the pipeline reports only gzip's
    status, so a dump that dies mid-stream leaves a valid gzip and a zero exit — see `backup-pg.yaml` for the
    form that catches it. Then copy the dumps somewhere off the estate too; don't let the only copy
@@ -189,17 +174,15 @@ supported route is logical: dump on the old major → fresh data directory on th
    step-2 dumps are your only rollback — verify they exist and gunzip cleanly before proceeding.
 4. **Cut over**: `kubectl scale sts <release>-age --replicas=0`, delete the PVC `data-<release>-age-0`, then
    `helm upgrade` with the new `age.image`. The fresh PVC makes initdb run the `age-postgres.yaml` ConfigMap
-   scripts on the new major: extension, graph + label indexes, and the `openfga` + `daprstate` databases.
-5. **Restore all three dumps** per [Restore — Postgres](#restore--postgres-age-lineage-graph--openfga--dapr-state) above —
-   including its "drop/recreate the DB first" rule, which now applies unconditionally: initdb just
-   pre-created a fresh `lineage` graph in step 4.
-6. **Prove the round-trip on the new major before re-opening writes**: copy `scripts/age_restore_drill.sh`
-   into the new pod and run it (the same `kubectl cp` + `kubectl exec` shape as `e2e_stack.sh`'s
-   `E2E_RESTORE_DRILL` step). The restore-drill green was proven on the pinned PG16 engine only — it does not
-   transfer to a new major, and this is the moment the plain-pg_dump-of-AGE hazard would resurface.
-7. **Un-quiesce**: scale lineage + openfga back up, then run the [After restore](#after-restore) checks.
+   scripts on the new major: the extension and the `openfga` + `daprstate` databases.
+5. **Restore both dumps** per [Restore — Postgres](#restore--postgres-openfga--dapr-state) above —
+   including its "drop/recreate the DB first" rule, which applies unconditionally: initdb just
+   pre-created both databases empty in step 4.
+6. **Prove the restore on the new major before re-opening writes**: list the tuples of a store you know
+   (`fga tuple read`, or OpenFGA's `/stores/<id>/read`) and compare the count with the old major's.
+7. **Un-quiesce**: scale openfga + notifications back up, then run the [After restore](#after-restore) checks.
 
-**Rollback**: until step 6 is green *and* the estate has been driven on the new major, keep the old image
+**Rollback**: until step 6 matches *and* the estate has been driven on the new major, keep the old image
 tag, the step-3 snapshot, and the step-2 dumps. Reverting = `helm upgrade` back to the old tag + a PVC
 restored from the snapshot (or delete the PVC and restore the dumps under the old image — they were made by
 the old major's `pg_dump` and load clean there). Do not prune any of the rollback artifacts in the same

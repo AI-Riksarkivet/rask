@@ -1,15 +1,14 @@
 """Unit tests for the lineage service's auth gate (audit ``w8u4rc2tg``, P0 #1/#2).
 
-Infra-free, like ``test_lineage.py``: no database, no network. Drives the async gate with
-stdlib ``asyncio.run`` (the project convention — see ``test_fga_resilience.py``) and fakes
-the OpenFGA check + the OIDC verifier.
+Infra-free: no catalog, no network. Drives the async gate with stdlib ``asyncio.run`` (the project
+convention — see ``test_fga_resilience.py``) and fakes the OpenFGA check, the OIDC verifier and the store.
 
 Covers:
 * fail-closed config (a half-configured auth layer is a startup error),
 * authn (off → open; on → token required / verified / fail-closed when unwired),
 * the read authz gate (off → allow; unwired → 503; unauthenticated → 401; deny → 403; allow),
 * author-forgery prevention (the verified subject overrides any body-claimed author),
-* route wiring (the gate is actually attached to the endpoints).
+* the governed feed (`GET /events`): what a caller may see, and how its cursors move.
 """
 
 from __future__ import annotations
@@ -20,7 +19,6 @@ from typing import Any, cast
 
 import pytest
 from fastapi import Request
-from fastapi.routing import APIRoute
 from fastapi.security import HTTPAuthorizationCredentials
 from lance_namespace import PermissionDeniedError, ServiceUnavailableError, UnauthenticatedError
 from openfga_sdk import OpenFgaClient
@@ -29,27 +27,8 @@ from pydantic import ValidationError
 from lineage.api import fga_deps, security
 from lineage.core.config import LineageSettings
 from lineage.models import RunEvent
-from lineage.schemas import (
-    ColumnEdge,
-    ColumnGraph,
-    ColumnNeighbors,
-    ColumnNode,
-    ColumnRef,
-    DatasetRef,
-    DatasetSchema,
-    EstateGraph,
-    EventRecord,
-    GraphEdge,
-    GraphNode,
-    LineageGraph,
-    Neighbors,
-    RunInput,
-    RunInputs,
-    Runs,
-    RunStatus,
-    SchemaField,
-)
-from lineage.services.repository import LineageRepository
+from lineage.schemas import EventRecord
+from lineage.services.provenance import ProvenanceStore
 from service_kit.governed import fga
 from service_kit.governed.oidc import IDToken
 
@@ -172,58 +151,6 @@ def _event(claimed_author: str = "anon", outputs: list[str] | None = None, input
 
 
 # --------------------------------------------------------------------------- #
-# Route wiring — the gate is actually attached to the endpoints
-# --------------------------------------------------------------------------- #
-
-
-def _api_routes(app: Any) -> list[Any]:
-    """Flatten the app's routes, resolving starlette 1.3's lazy ``_IncludedRouter`` wrappers — the lineage
-    routes now live under ``include_router``, not directly on ``app.routes`` as when main.py was flat.
-
-    Wrappers are resolved via ``effective_route_contexts()``, NOT by walking ``original_router.routes``:
-    only the effective view carries include-time prefixes (the ingest router mounts under ``/api/v1`` at
-    the COMPOSITION layer — F-LIN-14 — so the raw walk would report the unprefixed ``/lineage``). The
-    contexts duck-type what these tests read: ``.path``, ``.methods``, ``.dependant``."""
-    out: list[Any] = []
-    stack = list(app.routes)
-    while stack:
-        route = stack.pop()
-        if isinstance(route, APIRoute):
-            out.append(route)
-        elif hasattr(route, "effective_route_contexts"):
-            out.extend(route.effective_route_contexts())
-        elif hasattr(route, "routes"):
-            stack.extend(route.routes)
-    return out
-
-
-def test_read_routes_wire_the_metadata_gate() -> None:
-    from lineage.main import app
-
-    gated = {
-        "/datasets/{name}/upstream",
-        "/datasets/{name}/downstream",
-        "/datasets/{name}/producers",
-        "/datasets/{name}/graph",
-        "/datasets/{name}/creator",
-        "/datasets/{name}/reconcile",
-        "/datasets/{name}/schema",
-        "/datasets/{name}/columns/{field}/upstream",
-        "/datasets/{name}/columns/{field}/downstream",
-        "/datasets/{name}/columns",
-        "/datasets/{name}/governance",
-    }
-    seen = set()
-    for route in _api_routes(app):
-        if route.path in gated:
-            calls = [d.call for d in route.dependant.dependencies]
-            assert fga_deps.require_metadata_access in calls, route.path
-            assert fga_deps.audit_read in calls, route.path  # #6: every gated read is also audited
-            seen.add(route.path)
-    assert seen == gated  # every per-dataset read is present and gated
-
-
-# --------------------------------------------------------------------------- #
 # DatasetFilter — transitive-disclosure filtering (audit w8u4rc2tg, security medium)
 # --------------------------------------------------------------------------- #
 
@@ -239,156 +166,74 @@ async def _batch_allow_a(_client: object, *, objects: list[str], **_kw: object) 
 # --------------------------------------------------------------------------- #
 
 
-class _FakeRepo:
-    """Minimal repository: captures the ingested event / returns two canned neighbors."""
+class _FakeStore:
+    """The store surface the feed door and the ingest door reach: a canned feed, and what was recorded."""
 
     def __init__(self) -> None:
-        self.ingested: RunEvent | None = None
+        self.recorded: RunEvent | None = None
         self.events: list[EventRecord] = []
         self.list_events_calls: list[dict[str, object]] = []
-        # The depth each rooted read was asked for, so a test can assert the route THREADS it rather
-        # than merely tolerating it. A double that silently swallows a new argument is how "the
-        # endpoint takes a depth" and "the endpoint uses the depth" drift apart — which is exactly
-        # what happened here: these two fakes kept the old two-argument signature after the real
-        # methods grew a depth, and the mismatch was invisible until the endpoint called them.
-        self.seen_depths: dict[str, object] = {}
-        self.runs: list[RunStatus] = []
-        self.runs_limit: int | None = None
-        self.inputs: list[RunInput] = []
-        self.write_version: int | None = None
-        self.uri: str | None = None
-        self.col_related: list[ColumnRef] = []
-        self.col_graph: ColumnGraph | None = None
-        self.lineage_graph: LineageGraph | None = None
         self.oldest: int | None = None
-        self.estate: EstateGraph | None = None
-        self.refusals: list[dict[str, str | None]] = []
 
-    async def record_refusal(self, *, outbox_key: str, run_id: str | None, author: str | None, reason: str, event_json: str) -> None:
-        """[[LH-182]] The drain now RECORDS a settled refusal before retiring the object, so a double
-        that cannot record one no longer stands in for the repository. Captured rather than ignored:
-        several of these tests assert what the refusal path did, and a silent no-op would let a drain
-        that recorded nothing pass as one that did."""
-        self.refusals.append({"outbox_key": outbox_key, "run_id": run_id, "author": author, "reason": reason, "event_json": event_json})
+    async def record(self, event: RunEvent) -> None:
+        self.recorded = event
 
-    async def ingest_event(self, event: RunEvent) -> None:
-        self.ingested = event
-
-    async def record_event(self, **_kwargs: object) -> None:
+    async def run_author(self, _run_id: str) -> str | None:
         return None
 
     async def list_events(self, limit: int = 500, *, after: int | None = None, since: int | None = None, summary: bool = False) -> list[EventRecord]:
         self.list_events_calls.append({"limit": limit, "after": after, "summary": summary})
         return self.events
 
-    async def oldest_event_seq(self) -> int | None:
-        return self.oldest
-
-    async def list_runs(self, *, limit: int | None = None) -> Runs:
-        self.runs_limit = limit
-        return Runs(runs=self.runs[:limit] if limit else self.runs)
-
-    async def run_inputs(self, run_id: str) -> RunInputs:
-        return RunInputs(run_id=run_id, inputs=self.inputs)
-
-    async def latest_write_version(self, name: str) -> int | None:
-        return self.write_version
-
-    async def source_uri(self, name: str) -> str | None:
-        return self.uri
-
-    async def dataset_schema(self, name: str, version: int | None = None) -> DatasetSchema:
-        return DatasetSchema(dataset=name, version=version or 2, fields=[SchemaField(name="id", type="int")])
-
-    async def estate_graph(self) -> EstateGraph:
-        assert self.estate is not None
-        return self.estate
-
-    async def column_upstream(self, dataset: str, field: str, depth: int | None = None) -> ColumnNeighbors:
-        self.seen_depths["column_upstream"] = depth
-        return ColumnNeighbors(dataset=dataset, field=field, related=self.col_related)
-
-    async def column_downstream(self, dataset: str, field: str, depth: int | None = None) -> ColumnNeighbors:
-        self.seen_depths["column_downstream"] = depth
-        return ColumnNeighbors(dataset=dataset, field=field, related=self.col_related)
-
-    async def dataset_column_graph(self, name: str, depth: int = 1) -> ColumnGraph:
-        self.seen_depths["columns"] = depth
-        return self.col_graph or ColumnGraph(root=name)
-
-    async def graph(self, name: str, depth: int | None = None) -> LineageGraph:
-        self.seen_depths["graph"] = depth
-        return self.lineage_graph or LineageGraph(root=name, nodes=[], edges=[])
-
-    async def upstream(self, name: str, depth: int | None = None) -> Neighbors:
-        self.seen_depths["upstream"] = depth
-        return Neighbors(dataset=name, related=[DatasetRef(name="a"), DatasetRef(name="b")])
-
-
-def test_run_inputs_surfaces_pinned_versions_and_is_governed(monkeypatch: pytest.MonkeyPatch) -> None:
-    """GET /runs/{id}/inputs exposes each input's PINNED version (#115 D1) and drops what the caller
-    can't see — the API surface for what was Cypher-only, and the "which feature versions made this
-    model" answer."""
-    from lineage.api.v1.endpoints.runs import get_run_inputs
-
-    monkeypatch.setattr(fga, "batch_check", _batch_allow_a)  # only "a" visible
-    settings = _settings(**_FULL_AUTH)
-    repo = _FakeRepo()
-    repo.inputs = [
-        RunInput(name="a", version="28"),  # visible + pinned → surfaced with its version
-        RunInput(name="b", version="3"),  # not visible → dropped (no cross-grant disclosure)
-    ]
-    flt = fga_deps.DatasetFilter(_request(fga=cast(OpenFgaClient, object())), settings, _token())
-    result = asyncio.run(get_run_inputs("train-run", cast(LineageRepository, repo), flt, settings))
-    assert result.run_id == "train-run"
-    assert [(i.name, i.version) for i in result.inputs] == [("a", "28")]  # b filtered; a keeps its pin
+    async def feed_bounds(self) -> tuple[int, int] | None:
+        return (self.oldest, max((event.seq for event in self.events), default=self.oldest)) if self.oldest is not None else None
 
 
 def test_get_events_filters_to_visible_datasets(monkeypatch: pytest.MonkeyPatch) -> None:
     # #22: the durable events feed is governed — drop events referencing a dataset the caller can't see.
-    from lineage.api.v1.endpoints.runs import get_events
+    from lineage.api.v1.endpoints.events import get_events
 
     monkeypatch.setattr(fga, "batch_check", _batch_allow_a)  # only "a" visible
     settings = _settings(**_FULL_AUTH)
-    repo = _FakeRepo()
+    repo = _FakeStore()
     repo.events = [
         EventRecord(seq=2, outputs=["a"], inputs=[], event={}),
         EventRecord(seq=1, outputs=["b"], inputs=[], event={}),  # "b" not visible → dropped
     ]
     flt = fga_deps.DatasetFilter(_request(fga=cast(OpenFgaClient, object())), settings, _token())
-    result = asyncio.run(get_events(cast(LineageRepository, repo), flt, settings))
+    result = asyncio.run(get_events(cast(ProvenanceStore, repo), flt, settings))
     assert [e.outputs for e in result.events] == [["a"]]  # the "b" event is filtered out
 
 
 def test_get_events_hides_dataset_less_events_when_governed(monkeypatch: pytest.MonkeyPatch) -> None:
     # #22 audit: a dataset-less event (empty inputs+outputs) must NOT pass the gate vacuously when FGA is
     # on — it would otherwise leak the run/author/full event JSON to a caller with zero grants.
-    from lineage.api.v1.endpoints.runs import get_events
+    from lineage.api.v1.endpoints.events import get_events
 
     monkeypatch.setattr(fga, "batch_check", _batch_allow_a)
     settings = _settings(**_FULL_AUTH)
-    repo = _FakeRepo()
+    repo = _FakeStore()
     repo.events = [EventRecord(seq=1, outputs=[], inputs=[], event={"run": {"runId": "secret"}})]
     flt = fga_deps.DatasetFilter(_request(fga=cast(OpenFgaClient, object())), settings, _token())
-    result = asyncio.run(get_events(cast(LineageRepository, repo), flt, settings))
+    result = asyncio.run(get_events(cast(ProvenanceStore, repo), flt, settings))
     assert result.events == []  # dataset-less event is hidden under governance
 
 
 def test_get_events_pagination_never_leaks_past_governance(monkeypatch: pytest.MonkeyPatch) -> None:
     # §2 perf (2026-07-11) guardrail pin: the governance filter runs BEFORE the slice on EVERY page —
     # a small `limit` must page through VISIBLE rows only; a hidden row never appears on any page.
-    from lineage.api.v1.endpoints.runs import get_events
+    from lineage.api.v1.endpoints.events import get_events
 
     monkeypatch.setattr(fga, "batch_check", _batch_allow_a)  # only "a" visible
     settings = _settings(**_FULL_AUTH)
-    repo = _FakeRepo()
+    repo = _FakeStore()
     repo.events = [
         EventRecord(seq=3, outputs=["a"], inputs=[], event={}),
         EventRecord(seq=2, outputs=["b"], inputs=[], event={}),  # hidden — must never surface
         EventRecord(seq=1, outputs=["a"], inputs=[], event={}),
     ]
     flt = fga_deps.DatasetFilter(_request(fga=cast(OpenFgaClient, object())), settings, _token())
-    result = asyncio.run(get_events(cast(LineageRepository, repo), flt, settings, limit=1))
+    result = asyncio.run(get_events(cast(ProvenanceStore, repo), flt, settings, limit=1))
     assert [e.seq for e in result.events] == [3]
     assert result.next_cursor == 3  # continue below the last VISIBLE row — not below the hidden one
     # auth ON keeps the wide fetch window so filtered-out rows don't starve the page
@@ -398,310 +243,45 @@ def test_get_events_pagination_never_leaks_past_governance(monkeypatch: pytest.M
 def test_get_events_cursor_and_fetch_width(monkeypatch: pytest.MonkeyPatch) -> None:
     # Auth OFF → governed() is pass-through, so the endpoint reads EXACTLY `limit` rows (the 2s
     # poll no longer pays a 2000-row window), and the keyset cursor advances / terminates correctly.
-    from lineage.api.v1.endpoints.runs import get_events
+    from lineage.api.v1.endpoints.events import get_events
 
     settings = _settings()  # auth off
-    repo = _FakeRepo()
+    repo = _FakeStore()
     flt = fga_deps.DatasetFilter(_request(), settings, None)
     repo.events = [
         EventRecord(seq=5, outputs=["a"], inputs=[], event={}),
         EventRecord(seq=4, outputs=["a"], inputs=[], event={}),
     ]
-    page = asyncio.run(get_events(cast(LineageRepository, repo), flt, settings, limit=2))
+    page = asyncio.run(get_events(cast(ProvenanceStore, repo), flt, settings, limit=2))
     assert repo.list_events_calls[-1] == {"limit": 2, "after": None, "summary": False}
     assert [e.seq for e in page.events] == [5, 4] and page.next_cursor == 4  # full page → continue
 
     repo.events = [EventRecord(seq=3, outputs=["a"], inputs=[], event={})]
-    page = asyncio.run(get_events(cast(LineageRepository, repo), flt, settings, after=4, limit=2))
+    page = asyncio.run(get_events(cast(ProvenanceStore, repo), flt, settings, after=4, limit=2))
     assert repo.list_events_calls[-1] == {"limit": 2, "after": 4, "summary": False}
     assert [e.seq for e in page.events] == [3] and page.next_cursor is None  # short page → exhausted
 
-    # summary rides through to the SQL projection layer untouched
-    asyncio.run(get_events(cast(LineageRepository, repo), flt, settings, summary=True))
+    # summary rides through to the store's read untouched
+    asyncio.run(get_events(cast(ProvenanceStore, repo), flt, settings, summary=True))
     assert repo.list_events_calls[-1]["summary"] is True
-
-
-@pytest.mark.parametrize("door", ["get_column_upstream", "get_column_downstream"])
-def test_get_column_neighbours_filter_to_visible_datasets(monkeypatch: pytest.MonkeyPatch, door: str) -> None:
-    # #24: column provenance and column impact are governed alike — a related column in a dataset the caller
-    # can't see is dropped (a column has no ACL of its own; it inherits its owning table's visibility).
-    from lineage.api.v1.endpoints import columns
-
-    monkeypatch.setattr(fga, "batch_check", _batch_allow_a)  # only "a" visible
-    settings = _settings(**_FULL_AUTH)
-    repo = _FakeRepo()
-    repo.col_related = [ColumnRef(dataset="a", field="x"), ColumnRef(dataset="b", field="y")]
-    flt = fga_deps.DatasetFilter(_request(fga=cast(OpenFgaClient, object())), settings, _token())
-    result = asyncio.run(getattr(columns, door)("a", "root", cast(LineageRepository, repo), flt, settings))
-    assert [(r.dataset, r.field) for r in result.related] == [("a", "x")]  # b's column is hidden
-
-
-def test_get_graph_drops_hidden_nodes_and_edges_both_directions(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # The dataset-level /graph transitive-disclosure guarantee (the contract the column tests cite as
-    # "same as /graph"): a node the caller can't see is dropped, and an edge needs BOTH endpoints visible
-    # — proven in both leak directions (source-hidden AND target-hidden). The requested root rides on the
-    # route gate's authorization, so the filter must keep it WITHOUT re-checking it (visible() is called
-    # with the other nodes only).
-    from lineage.api.v1.endpoints.datasets import get_graph
-
-    checked: list[str] = []
-
-    async def _allow_c(_client: object, *, objects: list[str], **_kw: object) -> dict[str, bool]:
-        checked.extend(objects)
-        return {o: o == "table:c" for o in objects}
-
-    monkeypatch.setattr(fga, "batch_check", _allow_c)
-    settings = _settings(**_FULL_AUTH)
-    repo = _FakeRepo()
-    repo.lineage_graph = LineageGraph(
-        root="a",
-        nodes=[GraphNode(id="a"), GraphNode(id="b"), GraphNode(id="c")],
-        edges=[
-            GraphEdge(source="a", target="c"),  # KEEP: both endpoints visible
-            GraphEdge(source="b", target="a"),  # source hidden
-            GraphEdge(source="a", target="b"),  # target hidden
-        ],
-    )
-    flt = fga_deps.DatasetFilter(_request(fga=cast(OpenFgaClient, object())), settings, _token())
-    result = asyncio.run(get_graph("a", cast(LineageRepository, repo), flt, 2))
-    assert {n.id for n in result.nodes} == {"a", "c"}  # b dropped; the root kept without an FGA check
-    # THE DEPTH MUST REACH THE REPOSITORY. Governance runs over whatever the walk returned, so a
-    # depth the route accepts and then drops would quietly serve a different neighbourhood than the
-    # caller asked for — and every assertion above would still pass, because the canned graph does
-    # not depend on it.
-    assert repo.seen_depths["graph"] == 2, f"get_graph was asked for depth 2 and passed {repo.seen_depths.get('graph')!r} to the repository"
-    assert "table:a" not in checked  # the root was NOT re-checked (the route gate already authorized it)
-    assert [(e.source, e.target) for e in result.edges] == [("a", "c")]  # both leak directions dropped
-
-
-def test_estate_graph_governed_like_datasets(monkeypatch: pytest.MonkeyPatch) -> None:
-    # The bulk /graph read carries the SAME transitive-disclosure guarantee as the per-dataset
-    # graph: a non-visible node drops, and an edge needs BOTH endpoints visible (proven in both
-    # leak directions). There is no route-gated root here — every node is checked.
-    from lineage.api.v1.endpoints.discovery import estate_graph
-
-    async def _allow_a_c(_client: object, *, objects: list[str], **_kw: object) -> dict[str, bool]:
-        return {o: o in ("table:a", "table:c") for o in objects}
-
-    monkeypatch.setattr(fga, "batch_check", _allow_a_c)
-    settings = _settings(**_FULL_AUTH)
-    repo = _FakeRepo()
-    repo.estate = EstateGraph(
-        nodes=[GraphNode(id="a"), GraphNode(id="b"), GraphNode(id="c")],
-        edges=[
-            GraphEdge(source="a", target="c"),  # KEEP: both endpoints visible
-            GraphEdge(source="b", target="a"),  # source hidden
-            GraphEdge(source="a", target="b"),  # target hidden
-        ],
-        total=3,
-    )
-    flt = fga_deps.DatasetFilter(_request(fga=cast(OpenFgaClient, object())), settings, _token())
-    result = asyncio.run(estate_graph(cast(LineageRepository, repo), flt, settings))
-    assert {n.id for n in result.nodes} == {"a", "c"}
-    assert [(e.source, e.target) for e in result.edges] == [("a", "c")]
-    assert result.total == 2  # the VISIBLE count — a hidden node is not even counted
-    assert result.capped is False
-
-
-def test_fold_writes_rolls_up_versions_and_failure() -> None:
-    # The estate read's per-node badge rollup: distinct versions sorted, failed sticky once any
-    # producing run FAILed/ABORTed (case-insensitive), datasets with no writes simply absent.
-    from lineage.services.repository import _fold_writes
-
-    rows = [
-        ["a", "2", "COMPLETE"],
-        ["a", "1", "fail"],
-        ["a", "2", "COMPLETE"],  # duplicate version collapses
-        ["b", None, "COMPLETE"],  # null version → no version recorded
-    ]
-    folded = _fold_writes(rows)
-    assert folded["a"] == (["1", "2"], True)
-    assert folded["b"] == ([], False)
-    assert "c" not in folded
-
-
-def test_estate_graph_caps_honestly_and_deterministically() -> None:
-    # Auth off: the cap truncates a name-sorted node list (stable across refreshes), drops edges
-    # that leave the window, and reports total/capped truthfully ("N of M", never "the estate").
-    from lineage.api.v1.endpoints.discovery import estate_graph
-
-    settings = _settings()
-    repo = _FakeRepo()
-    repo.estate = EstateGraph(
-        nodes=[GraphNode(id="c"), GraphNode(id="a"), GraphNode(id="b")],
-        edges=[GraphEdge(source="a", target="b"), GraphEdge(source="a", target="c")],
-        total=3,
-    )
-    flt = fga_deps.DatasetFilter(_request(), settings, None)
-    result = asyncio.run(estate_graph(cast(LineageRepository, repo), flt, settings, limit=2))
-    assert [n.id for n in result.nodes] == ["a", "b"]  # sorted, then capped
-    assert [(e.source, e.target) for e in result.edges] == [("a", "b")]  # a→c left the window
-    assert result.total == 3
-    assert result.capped is True
-
-
-def test_get_dataset_columns_drops_edges_touching_hidden_datasets(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # #24: the column-graph view drops nodes/edges touching a dataset the caller can't see. An edge needs
-    # BOTH endpoints visible — a 3-edge fixture proves selectivity in BOTH leak directions (source-hidden
-    # AND target-hidden), not just one — same transitive-disclosure guarantee as /graph, at column res.
-    from lineage.api.v1.endpoints.columns import get_dataset_columns
-
-    monkeypatch.setattr(fga, "batch_check", _batch_allow_a)  # only "a" visible
-    settings = _settings(**_FULL_AUTH)
-    repo = _FakeRepo()
-    repo.col_graph = ColumnGraph(
-        root="a",
-        columns=[
-            ColumnNode(dataset="a", field="x"),
-            ColumnNode(dataset="a", field="z"),
-            ColumnNode(dataset="b", field="y"),
-        ],
-        edges=[
-            ColumnEdge(source_dataset="a", source_field="x", target_dataset="a", target_field="z"),  # KEEP
-            ColumnEdge(source_dataset="b", source_field="y", target_dataset="a", target_field="x"),  # source hidden
-            ColumnEdge(source_dataset="a", source_field="x", target_dataset="b", target_field="y"),  # target hidden
-        ],
-    )
-    flt = fga_deps.DatasetFilter(_request(fga=cast(OpenFgaClient, object())), settings, _token())
-    result = asyncio.run(get_dataset_columns("a", cast(LineageRepository, repo), flt, 3))
-    assert [n.dataset for n in result.columns] == ["a", "a"]  # b's column dropped, a's two kept
-    # only the both-endpoints-visible edge survives; both leak directions are dropped.
-    assert [(e.source_field, e.target_field) for e in result.edges] == [("x", "z")]
-    # And the depth reached the repository — a walk the route widened but never asked for would
-    # govern the right rows of the wrong neighbourhood.
-    assert repo.seen_depths["columns"] == 3, f"get_dataset_columns was asked for depth 3 and passed {repo.seen_depths.get('columns')!r}"
-
-
-def test_get_reconcile_flags_storage_drift(monkeypatch: pytest.MonkeyPatch) -> None:
-    # #23: the endpoint wires graph version + on-disk version → drift status. Here the graph says v1 but
-    # storage is at v2 (a write that bypassed lineage) → storage_ahead, not in sync.
-    from lineage.api.v1.endpoints.reconcile import get_reconcile
-    from lineage.schemas import ReconcileState
-
-    settings = _settings()  # gating is route-level; the body just compares the two versions
-    repo = _FakeRepo()
-    repo.write_version = 1
-    repo.uri = "s3://lakehouse/silver/features"
-    monkeypatch.setattr("lineage.api.v1.endpoints.reconcile.read_storage_version", lambda _uri, _opts: 2)
-    # §9 P1 lifecycle: when storage IS readable, the endpoint also runs the blob-pointer probe and
-    # its findings ride the response — the axis the version comparison can't see.
-    monkeypatch.setattr("lineage.api.v1.endpoints.reconcile.read_dangling_blob_columns", lambda _uri, _opts: ["thumb"])
-    result = asyncio.run(get_reconcile("silver$features", cast(LineageRepository, repo), settings))
-    assert result.status is ReconcileState.STORAGE_AHEAD
-    assert result.in_sync is False
-    assert (result.graph_version, result.storage_version) == (1, 2)
-    assert result.dangling_blob_columns == ["thumb"]
-
-
-def test_get_reconcile_skips_storage_read_without_uri(monkeypatch: pytest.MonkeyPatch) -> None:
-    # No recorded source_uri → we can't read storage, so storage_version is None (graph claims a write
-    # with nothing readable behind it) without ever touching the object store.
-    from lineage.api.v1.endpoints.reconcile import get_reconcile
-    from lineage.schemas import ReconcileState
-
-    def _boom(_uri: str, _opts: dict[str, str]) -> int:
-        raise AssertionError("storage must not be read when no source_uri is recorded")
-
-    monkeypatch.setattr("lineage.api.v1.endpoints.reconcile.read_storage_version", _boom)
-    repo = _FakeRepo()
-    repo.write_version = 3
-    repo.uri = None
-    result = asyncio.run(get_reconcile("g$x", cast(LineageRepository, repo), _settings()))
-    assert result.status is ReconcileState.MISSING_ON_STORAGE
-    assert result.storage_version is None
-
-
-def test_get_runs_filters_to_visible_datasets(monkeypatch: pytest.MonkeyPatch) -> None:
-    # #22 audit: /runs is governed like /events — a run is shown only if its output datasets are visible.
-    from lineage.api.v1.endpoints.runs import get_runs
-
-    monkeypatch.setattr(fga, "batch_check", _batch_allow_a)
-    settings = _settings(**_FULL_AUTH)
-    repo = _FakeRepo()
-    repo.runs = [RunStatus(run_id="r-a", outputs=["a"]), RunStatus(run_id="r-b", outputs=["b"])]
-    flt = fga_deps.DatasetFilter(_request(fga=cast(OpenFgaClient, object())), settings, _token())
-    result = asyncio.run(get_runs(cast(LineageRepository, repo), flt, settings))
-    assert [r.run_id for r in result.runs] == ["r-a"]  # the run that wrote unseen "b" is dropped
-
-
-def test_the_runs_board_is_BOUNDED_at_the_query(monkeypatch: pytest.MonkeyPatch) -> None:
-    """§ Q3-10 / `F-LIN-04`. The board must ask the graph for a page, not for the estate.
-
-    MEASURED ON THE LIVE ESTATE 2026-09-07 and the code had already predicted it. `cypher.py` recorded
-    that `/runs` returns every row the FGA filter leaves, called that "currently fine — the graph's node
-    count is modest, and `/runs` measured 272 rows on the live estate 2026-08-23", and warned in the same
-    breath that this "is a property of the data, not of the code, and nothing bounds it if the estate
-    grows". Fifteen days later the same endpoint answered **5,122 runs / 2.65 MB**, on a board its own
-    docstring says is polled every two seconds, against a graph with no run retention
-    (`LINEAGE_RUN_RETENTION_DAYS=0`). The caveat was right and the date is what proves it.
-
-    A LIMIT THE HANDLER APPLIES IN PYTHON WOULD NOT FIX IT — the cost is the read. Asking for one run
-    cost 2.5 s and asking for a hundred cost 1.4 s, because the parameter was not a parameter: `/runs`
-    accepted `?limit=1` and returned all 5,122 rows, since FastAPI drops a query arg the signature does
-    not declare. So the bound has to reach the repository.
-    """
-    from lineage.api.v1.endpoints.runs import get_runs
-
-    monkeypatch.setattr(fga, "batch_check", _batch_allow_a)
-    settings = _settings(**_FULL_AUTH)
-    repo = _FakeRepo()
-    repo.runs = [RunStatus(run_id=f"r-{i}", outputs=["a"]) for i in range(50)]
-    flt = fga_deps.DatasetFilter(_request(fga=cast(OpenFgaClient, object())), settings, _token())
-
-    result = asyncio.run(get_runs(cast(LineageRepository, repo), flt, settings, limit=5))
-
-    assert repo.runs_limit is not None, "the endpoint read the whole board and sliced afterwards — the cost is the READ"
-    assert len(result.runs) == 5, f"asked for 5 runs and got {len(result.runs)}"
-
-
-def test_the_runs_bound_OVER_FETCHES_so_governance_cannot_starve_a_page(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The half that makes the bound safe, and it is the estate's own answer one endpoint down.
-
-    `/events` reads a WIDE window when FGA is on and slices to `limit` only after governing, because a
-    page cut to size before the visibility filter comes back short — or empty — while visible rows sit
-    just below it. `/runs` is governed the same way (a run is shown only if every dataset it wrote is
-    visible), so it needs the same headroom. With auth OFF the filter is pass-through and the headroom
-    is waste, so the fetch is exactly `limit`.
-    """
-    from lineage.api.v1.endpoints.runs import get_runs
-
-    monkeypatch.setattr(fga, "batch_check", _batch_allow_a)
-    repo = _FakeRepo()
-    repo.runs = [RunStatus(run_id=f"r-{i}", outputs=["a"]) for i in range(50)]
-    flt = fga_deps.DatasetFilter(_request(fga=cast(OpenFgaClient, object())), _settings(**_FULL_AUTH), _token())
-
-    asyncio.run(get_runs(cast(LineageRepository, repo), flt, _settings(**_FULL_AUTH), limit=5))
-    governed_fetch = repo.runs_limit
-    assert governed_fetch is not None and governed_fetch > 5, (
-        f"with FGA on the board fetched exactly {governed_fetch} rows — a page cut before the visibility "
-        "filter comes back short while visible runs sit below the window"
-    )
-
-    repo.runs_limit = None
-    asyncio.run(get_runs(cast(LineageRepository, repo), flt, _settings(), limit=5))
-    assert repo.runs_limit == 5, f"with auth off the filter is pass-through, so the over-fetch is pure waste — fetched {repo.runs_limit}"
 
 
 def test_ingest_handler_binds_verified_author() -> None:
     from lineage.api.v1.endpoints.ingest import ingest_event
 
-    repo = _FakeRepo()
+    repo = _FakeStore()
     event = _event(claimed_author="attacker")
-    asyncio.run(ingest_event(event.model_dump(by_alias=True), _request(), cast(LineageRepository, repo), _settings(), _token("real-user")))
-    assert repo.ingested is not None and repo.ingested.author == "real-user"  # body claim overridden
+    asyncio.run(ingest_event(event.model_dump(by_alias=True), _request(), cast(ProvenanceStore, repo), _settings(), _token("real-user")))
+    assert repo.recorded is not None and repo.recorded.author == "real-user"  # body claim overridden
 
 
 def test_ingest_handler_keeps_body_author_when_oidc_off() -> None:
     from lineage.api.v1.endpoints.ingest import ingest_event
 
-    repo = _FakeRepo()
+    repo = _FakeStore()
     event = _event(claimed_author="claimed")
-    asyncio.run(ingest_event(event.model_dump(by_alias=True), _request(), cast(LineageRepository, repo), _settings(), None))
-    assert repo.ingested is not None and repo.ingested.author == "claimed"
+    asyncio.run(ingest_event(event.model_dump(by_alias=True), _request(), cast(ProvenanceStore, repo), _settings(), None))
+    assert repo.recorded is not None and repo.recorded.author == "claimed"
 
 
 # --------------------------------------------------------------------------- #
@@ -718,7 +298,7 @@ def test_output_authz_unwired_client_fails_closed() -> None:
 def test_output_authz_output_less_still_requires_auth() -> None:
     # REGRESSION (bug hunt 2026-07-13): an event with NO outputs must STILL require a valid principal.
     # The pre-fix code short-circuited (`if not outputs: return`) BEFORE the auth checks, so an
-    # unauthenticated caller could ingest a forged inputs-only run into the governed audit graph.
+    # unauthenticated caller could record a forged inputs-only run in the governed feed.
     with pytest.raises(UnauthenticatedError):
         asyncio.run(fga_deps.enforce_output_authz(_event(inputs=["a$b"]), _request(fga=object()), _settings(**_FULL_AUTH), None))
 
@@ -738,52 +318,6 @@ def test_output_authz_denies_non_writable_output(monkeypatch: pytest.MonkeyPatch
                 _token(),
             )
         )
-
-
-# --------------------------------------------------------------------------- #
-# #6 — read-audit: log WHO read which dataset on a gated read. Off by default; needs a verified
-# subject; best-effort (an audit-write failure must never fail the read it is auditing).
-# --------------------------------------------------------------------------- #
-
-
-class _AuditRepo:
-    """Repository stub capturing record_read calls (and able to raise, to prove best-effort)."""
-
-    def __init__(self, *, fail: bool = False) -> None:
-        self.reads: list[tuple[str, str]] = []
-        self._fail = fail
-
-    async def record_read(self, *, reader: str, dataset: str) -> None:
-        if self._fail:
-            raise RuntimeError("audit store down")
-        self.reads.append((reader, dataset))
-
-
-def test_audit_read_disabled_does_not_record() -> None:
-    # Off by default → not even an authenticated read writes an audit row.
-    repo = _AuditRepo()
-    asyncio.run(fga_deps.audit_read("a$b", _settings(), _token(), cast(LineageRepository, repo)))
-    assert repo.reads == []
-
-
-def test_audit_read_records_reader_and_dataset_when_enabled() -> None:
-    # The audit row is keyed by the VERIFIED subject + the dataset name — who read what.
-    repo = _AuditRepo()
-    asyncio.run(
-        fga_deps.audit_read(
-            "silver$features",
-            _settings(read_audit_enabled=True),
-            _token("dee"),
-            cast(LineageRepository, repo),
-        )
-    )
-    assert repo.reads == [("dee", "silver$features")]
-
-
-def test_audit_read_best_effort_swallows_store_failure() -> None:
-    # An audit-write failure must NEVER fail the read it is auditing — the call returns, does not raise.
-    repo = _AuditRepo(fail=True)
-    asyncio.run(fga_deps.audit_read("a$b", _settings(read_audit_enabled=True), _token(), cast(LineageRepository, repo)))
 
 
 # --- A service principal on the HTTP ingest ----------------------------------------------------------
@@ -812,7 +346,7 @@ def test_service_principal_is_attributed_and_fga_bounded() -> None:
             "outputs": [{"namespace": "models", "name": "models$churn", "facets": {}}],
         }
     )
-    # (1) attributed — the run is no longer authored by "" (which is what the graph held before)
+    # (1) attributed — the run's author is the service's verified subject
     fga_deps.enforce_author(event, principal)
     trainer = "kubernetes~system:serviceaccount:default:rask-sa-ray"
     assert event.run.facets["author"] == {"name": trainer, "sub": trainer}
@@ -840,24 +374,12 @@ def test_service_principal_is_attributed_and_fga_bounded() -> None:
     assert checked["objects"] == ["table:models$churn"]
 
 
-def test_demo_datasets_requires_auth_when_fga_on(monkeypatch: pytest.MonkeyPatch) -> None:
-    # AUDIT: /demo/datasets read real medallion schemas/row-counts + gold's lineage JSONB from S3 with the
-    # SERVICE root creds and had NO auth gate — any in-cluster caller could exfiltrate them unauthenticated.
-    # It now authenticates + governs; with FGA on an unauthenticated request must 401 BEFORE any S3 read.
-    from lineage.api.v1.endpoints import demo
-
-    monkeypatch.setattr(demo, "_storage_options", lambda: {})  # isolate the gate from S3
-    unauthenticated = fga_deps.DatasetFilter(_request(fga=object()), _settings(**_FULL_AUTH), None)
-    with pytest.raises(UnauthenticatedError):
-        asyncio.run(demo.demo_datasets(_settings(**_FULL_AUTH), unauthenticated, demo.PeekCache()))
-
-
 def test_events_governs_on_columnlineage_source_datasets() -> None:
     # AUDIT: /events returned the full raw payload but governed only on top-level inputs/outputs. The
     # columnLineage facet names SOURCE datasets NOT in inputs, so a caller who can see the output would get
     # input datasets' column schemas. The ref-extractor now unions those in (event hidden unless the caller
     # can read every dataset the payload discloses).
-    from lineage.api.v1.endpoints.runs import _column_lineage_datasets
+    from lineage.api.v1.endpoints.events import _column_lineage_datasets
 
     event = {
         "outputs": [
@@ -877,7 +399,7 @@ def test_events_governs_on_columnlineage_source_datasets() -> None:
 def test_get_events_reports_the_feed_FLOOR_so_a_consumer_can_see_what_it_lost() -> None:
     """`oldest_seq` — the oldest row the feed still holds.
 
-    Lineage prunes its durable feed inline on every ingest, keeping the newest N rows by seq. That
+    Lineage prunes its feed on the relay tick, dropping the rows it received longest ago. That
     prune cannot consult any consumer's cursor: the notifications reconciler's mark lives in ITS Dapr
     state store, which lineage is not scoped to and must never be — reaching across would couple the
     producer of the feed to one of its readers.
@@ -889,14 +411,14 @@ def test_get_events_reports_the_feed_FLOOR_so_a_consumer_can_see_what_it_lost() 
     UNGOVERNED on purpose: a seq number discloses no dataset, and it is exactly the number a caller
     needs in order to know a page it CANNOT see is missing.
     """
-    from lineage.api.v1.endpoints.runs import get_events
+    from lineage.api.v1.endpoints.events import get_events
 
     settings = _settings()  # auth off
-    repo = _FakeRepo()
+    repo = _FakeStore()
     repo.oldest = 8999
     flt = fga_deps.DatasetFilter(_request(), settings, None)
     repo.events = [EventRecord(seq=9000, outputs=["a"], inputs=[], event={})]
 
-    page = asyncio.run(get_events(cast(LineageRepository, repo), flt, settings, limit=2))
+    page = asyncio.run(get_events(cast(ProvenanceStore, repo), flt, settings, limit=2))
 
     assert page.oldest_seq == 8999

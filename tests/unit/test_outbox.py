@@ -84,20 +84,19 @@ def test_a_failed_stage_still_attempts_the_publish(tmp_path: Any, monkeypatch: A
 
 class _Repo:
     def __init__(self) -> None:
-        # ONE list, because there is one call: `ingest_event` writes the graph AND the durable /events
-        # row in a single transaction. A recovered run that reached /runs + /producers while silently
-        # absent from the /events audit surface is no longer expressible at this seam.
+        # ONE list, because there is one call: `record` writes the edges AND the feed row, each keyed, so a
+        # retried call lands what is missing and nothing twice.
         self.ingested: list[str] = []
         self.refusals: list[dict[str, str | None]] = []
 
     async def record_refusal(self, *, outbox_key: str, run_id: str | None, author: str | None, reason: str, event_json: str) -> None:
         """[[LH-182]] The drain now RECORDS a settled refusal before retiring the object, so a double
-        that cannot record one no longer stands in for the repository. Captured rather than ignored:
+        that cannot record one no longer stands in for the store. Captured rather than ignored:
         several of these tests assert what the refusal path did, and a silent no-op would let a drain
         that recorded nothing pass as one that did."""
         self.refusals.append({"outbox_key": outbox_key, "run_id": run_id, "author": author, "reason": reason, "event_json": event_json})
 
-    async def ingest_event(self, event: Any) -> None:
+    async def record(self, event: Any) -> None:
         self.ingested.append(event.run.run_id)
 
 
@@ -198,18 +197,18 @@ def test_each_staged_event_drops_independently(tmp_path: Any) -> None:
 
 
 def test_the_drain_RE_PUBLISHES_so_every_subscriber_hears_a_recovered_event(tmp_path: Any, monkeypatch: Any) -> None:
-    """Ingesting alone repairs the GRAPH and leaves every subscriber unaware.
+    """Recording alone repairs the FEED and leaves every subscriber unaware.
 
     The catalog's write announcement is what the bus's subscribers act on (notifications among them), so
     a lost event does not merely under-report provenance -- nobody downstream hears of the write. The
-    relay recovering it into the graph fixes the record and leaves every subscriber uninformed.
+    relay recovering it into the feed fixes the record and leaves every subscriber uninformed.
     Re-publishing is what makes the outbox a recovery mechanism rather than an audit repair.
 
     Ordering is asserted, not assumed: the publish must happen BEFORE the staged object is dropped, so a
     publish that fails leaves the event for the next tick. The re-ingest then is a no-op (MERGE on run_id).
     """
     from catalog.core.lineage_emit import INSERT, build_write_event
-    from lineage.api import reconcile_cron
+    from lineage.api import relay_cron
     from lineage.services import staged
     from service_kit.openlineage import run_id_for
 
@@ -238,7 +237,7 @@ def test_the_drain_RE_PUBLISHES_so_every_subscriber_hears_a_recovered_event(tmp_
 
     monkeypatch.setattr(staged.dapr_publish, "publish_event", _fake_publish)
 
-    outcome = asyncio.run(reconcile_cron._drain_outbox(_authorized_request(), cast("Any", _Repo()), cast("Any", _Settings(uri)), {}, object()))
+    outcome = asyncio.run(relay_cron._drain_outbox(_authorized_request(), cast("Any", _Repo()), cast("Any", _Settings(uri)), {}, object()))
 
     assert outcome.drained == 1
     assert len(published) == 1, "a recovered event was ingested but never re-published -- the cascade stays halted"

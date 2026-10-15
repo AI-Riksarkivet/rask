@@ -5,6 +5,10 @@
         "age": {
             "type": "object",
             "properties": {
+                "bootstrapDb": {
+                    "description": "Name of the database the AGE server initialises and probes; no client reads it.",
+                    "type": "string"
+                },
                 "cnpgCluster": {
                     "type": "object",
                     "properties": {
@@ -19,19 +23,15 @@
                     }
                 },
                 "enabled": {
-                    "description": "Run the in-cluster apache/age Postgres StatefulSet that serves the lineage graph, OpenFGA and the Dapr state store databases.",
+                    "description": "Run the in-cluster apache/age Postgres StatefulSet that serves the OpenFGA and Dapr state store databases.",
                     "type": "boolean"
                 },
                 "externalHost": {
-                    "description": "Postgres host lineage, OpenFGA and the Dapr state store use instead of the in-cluster AGE; the render refuses it empty with age.enabled=false.",
+                    "description": "Postgres host OpenFGA and the Dapr state store use instead of the in-cluster AGE; the render refuses it empty with age.enabled=false.",
                     "type": "string"
                 },
                 "image": {
                     "description": "Postgres+AGE image for the StatefulSet and the pg_dump backup job (PG16; 1.6.0 is multi-arch amd64+arm64).",
-                    "type": "string"
-                },
-                "lineageDb": {
-                    "description": "Name of the AGE graph and database holding the OpenLineage graph.",
                     "type": "string"
                 },
                 "openfgaDb": {
@@ -171,7 +171,7 @@
                     "type": "object",
                     "properties": {
                         "enabled": {
-                            "description": "Schedule a CronJob that pg_dumps the lineage, OpenFGA and Dapr state databases (gzip) to `_backups/pg/\u003cdate\u003e/` in the lakehouse bucket. Off by default.",
+                            "description": "Schedule a CronJob that pg_dumps the OpenFGA and Dapr state databases (gzip) to `_backups/pg/\u003cdate\u003e/` in the lakehouse bucket. Off by default.",
                             "type": "boolean"
                         },
                         "keep": {
@@ -2071,25 +2071,39 @@
                 "lineage": {
                     "type": "object",
                     "properties": {
-                        "ageStatementTimeoutSeconds": {
-                            "description": "Server-side per-statement timeout in seconds on lineage's AGE pool; bounds a runaway Cypher traversal.",
-                            "type": "integer"
-                        },
                         "daprAppId": {
-                            "description": "Dapr app-id of lineage; also names its pubsub, DLQ and durable consumers and scopes its reconcile cron.",
+                            "description": "Dapr app-id of lineage; also names its pubsub, DLQ and durable consumers and scopes its relay cron.",
                             "type": "string"
                         },
-                        "demoData": {
-                            "description": "Mounts the unauthenticated /demo/* data-peek router. Demo only; off by default.",
-                            "type": "boolean"
-                        },
                         "eventsRetentionDays": {
-                            "description": "Days of arrival time the durable /events feed keeps, pruned on the reconcile tick; bounds how long a notifications outage it survives. 0 is unbounded.",
+                            "description": "Days of arrival time the durable /events feed keeps, pruned on the relay tick; bounds how long a notifications outage it survives. 0 is unbounded.",
                             "type": "integer"
                         },
-                        "freshnessBudgetHours": {
-                            "description": "Hours after which a dataset with no new version is flagged `stale` by reconcile and the dataset GET. 0 turns the check off.",
-                            "type": "integer"
+                        "forward": {
+                            "type": "object",
+                            "properties": {
+                                "authSecret": {
+                                    "type": "object",
+                                    "properties": {
+                                        "key": {
+                                            "description": "Field of that secret the API key is under.",
+                                            "type": "string"
+                                        },
+                                        "name": {
+                                            "description": "Secret in the Dapr secret store holding the backend's API key, sent as `Authorization: Bearer`. Empty sends none.",
+                                            "type": "string"
+                                        }
+                                    }
+                                },
+                                "endpoint": {
+                                    "description": "Path the events are POSTed to under `url` (the transport's `endpoint`).",
+                                    "type": "string"
+                                },
+                                "url": {
+                                    "description": "Base URL of the graph backend the relay forwards every recorded event to (the OpenLineage HTTP transport's `url`). Empty forwards nothing.",
+                                    "type": "string"
+                                }
+                            }
                         },
                         "module": {
                             "description": "uvicorn import path the lineage Deployment runs (templates/services.yaml).",
@@ -2099,7 +2113,7 @@
                             "type": "object",
                             "properties": {
                                 "enabled": {
-                                    "description": "Stages each lineage event to `s3://\u003cminio.bucket\u003e/_lineage_outbox` before publishing, drained by reconcile. Requires reconcile.enabled.",
+                                    "description": "Stages each lineage event to `s3://\u003cminio.bucket\u003e/_lineage_outbox` before publishing, drained by the relay. Requires relay.enabled.",
                                     "type": "boolean"
                                 }
                             }
@@ -2108,33 +2122,29 @@
                             "description": "Container and Service port of the lineage service.",
                             "type": "integer"
                         },
-                        "readAudit": {
-                            "description": "Records every allowed FGA-gated data read (feeds GET /datasets/{name}/readers). Rendered only when auth.enabled.",
-                            "type": "boolean"
+                        "provenanceNamespace": {
+                            "description": "Namespace the catalog keeps for lineage's feed and edge list (`LANCE_PROVENANCE_NAMESPACE`, `LINEAGE_PROVENANCE_NAMESPACE`).",
+                            "type": "string"
                         },
-                        "reconcile": {
+                        "relay": {
                             "type": "object",
                             "properties": {
                                 "bindingName": {
-                                    "description": "Name of the reconcile cron binding; the sidecar POSTs to /\u003cbindingName\u003e.",
+                                    "description": "Name of the relay cron binding; the sidecar POSTs to /\u003cbindingName\u003e.",
                                     "type": "string"
                                 },
                                 "enabled": {
-                                    "description": "Renders the storage-to-graph reconcile cron, which back-fills lost lineage events, drains the outbox and prunes. Needs dapr.enabled.",
+                                    "description": "Renders the relay cron, which drains the lineage outbox, prunes the feed and forwards it. Needs dapr.enabled.",
                                     "type": "boolean"
                                 },
                                 "schedule": {
-                                    "description": "Schedule of the reconcile sweep (Dapr cron syntax, e.g. `@every 300s` or a cron expression).",
+                                    "description": "Schedule of the relay tick (Dapr cron syntax, e.g. `@every 30s` or a cron expression).",
                                     "type": "string"
                                 }
                             }
                         },
                         "replicas": {
                             "description": "Replica count of lineage; replicas form a competing-consumer group, so it scales freely.",
-                            "type": "integer"
-                        },
-                        "runRetentionDays": {
-                            "description": "Days after which reconcile prunes graph :Run nodes and the Dataset nodes that leaves orphaned. 0 keeps everything.",
                             "type": "integer"
                         }
                     }

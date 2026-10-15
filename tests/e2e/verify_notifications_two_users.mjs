@@ -8,9 +8,7 @@
  * behaviour this plane replaced, where the badge counted everyone's work.
  *
  * WHY THIS FILE EXISTS AT ALL. The drive was performed once (recorded in `e315cb93`) and left no
- * harness: `scripts/verify_notifications.mjs` is the S1-era SINGLE-user script from the lance-ns
- * merge — it logs in as alice alone, asserts the bell renders from `/runs`, and writes screenshots to
- * a `lance-ns` path that no longer exists. So the plane's central claim was witnessed and then became
+ * harness that signs in two people, so the plane's central claim was witnessed and then became
  * unreproducible. A claim nobody can re-run is a claim that silently rots.
  *
  * STATUS: DRIVEN GREEN against local k3s on 2026-08-15 — all nine checks, exit 0. Nothing runs it

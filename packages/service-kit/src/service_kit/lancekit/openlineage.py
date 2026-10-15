@@ -104,7 +104,8 @@ def facet_fields(schema: pa.Schema) -> list[dict[str, str]]:
 
 #: Deterministic spec-valid UUID runId for a seed (e.g. ``"<stage>-<token>"``) — re-exported from
 #: ``service_kit.openlineage`` rather than recomputing the uuid5 namespace, so the id a pre-merge run mints
-#: is byte-identical to the merged one and a redelivery MERGEs onto a single ``(:Run)``.
+#: is byte-identical to the merged one and a redelivery lands on the same feed key, which the feed's insert-only
+#: merge keeps once.
 run_id_for = _run_id_for
 
 
