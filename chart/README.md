@@ -82,6 +82,8 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | catalog.multibase.baseCredentialRefs | object | `{}` | Map of data-base URI to a Dapr secret-store reference naming that base's credential. Every key must also be in `dataBases` or the render fails. Empty = estate options. |
 | catalog.multibase.dataBases | list | `[]` | Allowlist of bucket URIs one table's fragments may be spread across (`?data_base=` on create). Empty = multi-base off, single-location creates. |
 | catalog.multibase.devSeed | bool | `false` | Local fixture: create each referenced base's bucket, scoped MinIO user and dev-OpenBao secret. Refused on a real deployment, without MinIO or without the dev OpenBao. |
+| catalog.promotion.bindingName | string | `"catalog-promotion-expiry-cron"` | Name of the promotion-expiry Dapr cron Component; also the catalog's LANCE_PROMOTION_EXPIRY_BINDING_NAME and the route it serves. |
+| catalog.promotion.schedule | string | `"@every 60s"` | Dapr cron schedule on which promotion holds past their review deadline expire; lateness only costs time. |
 | catalog.trashGraceDays | int | `7` | Days a dropped table or namespace stays undroppable before the trash purge may reclaim it (LANCE_TRASH_GRACE_DAYS). 0 destroys immediately. |
 | catalog.warehouses.enabled | bool | `true` | Per-warehouse physical multi-tenancy: POST /management/v1/warehouses provisions a bucket per warehouse and binds top-level namespaces to it. Unbound namespaces use `minio.bucket`. |
 | config.AWS_REGION | string | `"us-east-1"` | AWS region written to the fleet ConfigMap for S3 clients; any value works against RustFS/MinIO. |

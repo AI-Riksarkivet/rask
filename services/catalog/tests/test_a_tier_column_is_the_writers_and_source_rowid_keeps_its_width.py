@@ -27,6 +27,7 @@ from lance_namespace import LanceNamespace, connect
 from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, NamespaceDep, SettingsDep, StorageOptionsDep, get_lineage_emitter
 from catalog.api.security import CurrentToken
 from catalog.api.v1.endpoints import publication as door
+from catalog.core.lineage_emit import NoopEmitter
 from catalog.services.dataplane import create_table
 from catalog.services.publication import published_version
 from service_kit.lakehouse.ns_errors import install_problem_handlers
@@ -54,7 +55,7 @@ def _app(namespace: Any, monkeypatch: pytest.MonkeyPatch, registry_root: str) ->
     application.dependency_overrides[CurrentToken.__metadata__[0].dependency] = lambda: SimpleNamespace(sub=_SUB)
     application.dependency_overrides[FgaClientDep.__metadata__[0].dependency] = lambda: object()
     application.dependency_overrides[ControlEmitterDep.__metadata__[0].dependency] = lambda: None
-    application.dependency_overrides[get_lineage_emitter] = lambda: SimpleNamespace(project_for=_project_for)
+    application.dependency_overrides[get_lineage_emitter] = _Tenant
 
     async def _noop_emit(*_a: Any, **_k: Any) -> None:
         return None
@@ -63,8 +64,12 @@ def _app(namespace: Any, monkeypatch: pytest.MonkeyPatch, registry_root: str) ->
     return application
 
 
-async def _project_for(_top_ns: str) -> str:
-    return "acme"
+class _Tenant(NoopEmitter):
+    """No lineage transport, and the tenant every table here belongs to."""
+
+    async def project_for(self, top_ns: str) -> str | None:
+        del top_ns
+        return "acme"
 
 
 @pytest.fixture

@@ -313,6 +313,10 @@ class CatalogMaintenanceSettings(BaseSettings):
     #: this value and the served path are one string, as for the control relay. Empty = no release route, so a
     #: deployment without the Component schedules releases that nothing performs: the chart renders both.
     erasure_release_binding_name: str = Field(default="", alias="LANCE_ERASURE_RELEASE_BINDING_NAME")
+    #: The cron binding that expires promotion holds past their review deadline (`catalog/api/promotion_expiry.py`,
+    #: ADR 0156 C1). One string with the Component's name and the served path, as for the erasure release. Empty =
+    #: no expiry route, so a hold waits until it is decided: the chart renders both.
+    promotion_expiry_binding_name: str = Field(default="", alias="LANCE_PROMOTION_EXPIRY_BINDING_NAME")
     #: The maintenance sweep's cleanup window (`maintenance.olderThanDays`), which an erasure report quotes as
     #: the last condition before the subject's bytes leave storage. Read here only to say it; the sweep owns it.
     erasure_cleanup_window_days: int = Field(default=7, ge=0, alias="LANCE_ERASURE_CLEANUP_WINDOW_DAYS")

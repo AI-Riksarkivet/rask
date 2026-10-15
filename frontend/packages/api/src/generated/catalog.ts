@@ -1079,6 +1079,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/management/v1/promotions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Promotions
+         * @description The open holds the caller may see, in table order: each table's held version, what `published` names, why
+         *     it is held and when the sweep expires it. A hold is listed to a caller holding `can_get_metadata` on its table.
+         */
+        get: operations["list_promotions_management_v1_promotions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/management/v1/stores": {
         parameters: {
             query?: never;
@@ -1752,6 +1773,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/management/v1/table/{id}/promotion/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Approve Promotion
+         * @description Approve the held `version`: `published` moves to it (the spec's `UpdateTableTag`) and its watchers are told.
+         *
+         *     Gated on `can_promote` by the router (`fga_deps`), and the tier judge decides it like every write. The approval
+         *     is recorded before the tag moves, so approving again completes one whose tag move failed and otherwise answers
+         *     as decided. 409 when the table holds no such version, it was decided otherwise, or `published` reached it.
+         */
+        post: operations["approve_promotion_management_v1_table__id__promotion_approve_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/table/{id}/promotion/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reject Promotion
+         * @description Reject the held `version`: main is restored to the published version (the spec's `RestoreTable`), as a new
+         *     commit, so the next writer builds on what readers read. `published` does not move.
+         *
+         *     Gated on `can_promote` by the router (`fga_deps`), and the tier judge decides it like every write. The rejection
+         *     is recorded before main is restored, and main is restored once: rejecting again completes a restore the first
+         *     call could not make, and otherwise answers as decided. With nothing published, or `published` moved to or past
+         *     the held version meanwhile, there is nothing to restore and the rejection only closes the hold. 409 when the
+         *     table holds no such version, it was decided otherwise, or `published` reached it.
+         */
+        post: operations["reject_promotion_management_v1_table__id__promotion_reject_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/management/v1/table/{id}/protection": {
         parameters: {
             query?: never;
@@ -1798,12 +1870,13 @@ export interface paths {
         put?: never;
         /**
          * Publish Table
-         * @description Gate `version` and, if it passes, advance `published` to it.
+         * @description Gate `version` and, if it passes, advance `published` to it; hold it when it breaches under review.
          *
          *     A refused gate is a 200 with `published=False`, not an error status: the request was well-formed
-         *     and the system did exactly what it should. Errors are reserved for the caller getting it wrong —
-         *     an unknown version (404), a backwards move (409), a malformed one (400) — all raised as
-         *     `lance_namespace` typed errors so the shared problem-body handler renders them.
+         *     and the system did exactly what it should. A held one is a 200 with `held=True` and the hold. Errors
+         *     are reserved for the caller getting it wrong — an unknown version (404), a backwards move (409), a
+         *     malformed one (400), a version older than the one held (409) — all raised as `lance_namespace` typed
+         *     errors so the shared problem-body handler renders them.
          */
         post: operations["publish_table_management_v1_table__id__publish_post"];
         delete?: never;
@@ -3499,10 +3572,9 @@ export interface paths {
          * Delete Table Tag
          * @description Delete a tag from the table — wraps lance_namespace DeleteTableTag.
          *
-         *     PROTECTION-GATED ([[LH-056]]). A tag is the pin ``published`` is made of, and the publication
-         *     door's rollback guard rests on it: publication refuses to move ``published`` BACKWARDS and has
-         *     nothing to say about republishing after the tag is gone. So a protected table refuses this on the
-         *     same record its drop consults, and ``force`` turns that lock only.
+         *     PROTECTION-GATED ([[LH-056]]). A tag pins the version it names against cleanup, so a protected table
+         *     refuses this on the same record its drop consults, and ``force`` turns that lock only. The catalog's own
+         *     tags, ``published`` among them, are refused here whatever the table's protection says.
          */
         post: operations["delete_table_tag_v1_table__id__tags_delete_post"];
         delete?: never;
@@ -4985,7 +5057,7 @@ export interface components {
              * Action
              * @enum {string}
              */
-            action: "grant_added" | "grant_revoked" | "project_created" | "project_deleted" | "warehouse_created" | "warehouse_activated" | "warehouse_deactivated" | "warehouse_bound" | "warehouse_unbound" | "warehouse_deleted" | "policy_set" | "policy_deleted" | "gate_set" | "gate_deleted" | "namespace_created" | "namespace_dropped" | "table_created" | "table_dropped" | "table_renamed" | "table_registered" | "table_deregistered" | "table_declared" | "table_protected" | "table_unprotected" | "namespace_protected" | "namespace_unprotected" | "table_undropped" | "namespace_undropped" | "table_purged" | "namespace_purged" | "table_published" | "table_branch_created" | "table_branch_deleted" | "table_tag_created" | "table_tag_updated" | "table_tag_deleted" | "task_assigned" | "task_unassigned" | "task_changes_requested" | "task_dropped" | "task_lease_expired" | "erasure_release_scheduled";
+            action: "grant_added" | "grant_revoked" | "project_created" | "project_deleted" | "warehouse_created" | "warehouse_activated" | "warehouse_deactivated" | "warehouse_bound" | "warehouse_unbound" | "warehouse_deleted" | "policy_set" | "policy_deleted" | "gate_set" | "gate_deleted" | "namespace_created" | "namespace_dropped" | "table_created" | "table_dropped" | "table_renamed" | "table_registered" | "table_deregistered" | "table_declared" | "table_protected" | "table_unprotected" | "namespace_protected" | "namespace_unprotected" | "table_undropped" | "namespace_undropped" | "table_purged" | "namespace_purged" | "table_published" | "promotion_held" | "promotion_rejected" | "promotion_expired" | "table_branch_created" | "table_branch_deleted" | "table_tag_created" | "table_tag_updated" | "table_tag_deleted" | "task_assigned" | "task_unassigned" | "task_changes_requested" | "task_dropped" | "task_lease_expired" | "erasure_release_scheduled";
             /** Actor */
             actor?: string | null;
             /** Event Id */
@@ -6786,6 +6858,11 @@ export interface components {
              * @default false
              */
             review_enabled?: boolean;
+            /**
+             * Review Hours
+             * @default 72
+             */
+            review_hours?: number;
         };
         /** GateSpecResponse */
         GateSpecResponse: {
@@ -6799,6 +6876,8 @@ export interface components {
             review_band: number;
             /** Review Enabled */
             review_enabled: boolean;
+            /** Review Hours */
+            review_hours: number;
         };
         /** GcPreview */
         GcPreview: {
@@ -7940,6 +8019,73 @@ export interface components {
             /** Tag */
             tag: string;
         };
+        /**
+         * PromotionDecision
+         * @description What a decision did: the closed hold, what readers of `published` now read, and main's restore.
+         */
+        PromotionDecision: {
+            hold: components["schemas"]["PromotionHold"];
+            /** Published Version */
+            published_version: number | null;
+            /** Restored Version */
+            restored_version?: number | null;
+        };
+        /**
+         * PromotionDecisionRequest
+         * @description The held version being decided. A decision lands only on the hold its decider reviewed.
+         */
+        PromotionDecisionRequest: {
+            /** Version */
+            version: number;
+        };
+        /**
+         * PromotionHold
+         * @description A version the project's quality gate holds for a `can_promote` holder, or the last decision on one.
+         */
+        PromotionHold: {
+            /** Decided At */
+            decided_at?: string | null;
+            /** Decided By */
+            decided_by?: string | null;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /**
+             * Opened At
+             * Format: date-time
+             */
+            opened_at: string;
+            /** Published Version */
+            published_version: number | null;
+            /** Reasons */
+            reasons: string[];
+            /** Requested By */
+            requested_by?: string | null;
+            /** Restored Version */
+            restored_version?: number | null;
+            /**
+             * State
+             * @default open
+             * @enum {string}
+             */
+            state?: "open" | "approved" | "rejected" | "expired" | "superseded";
+            /** Table */
+            table: string;
+            /** Version */
+            version: number;
+        };
+        /**
+         * PromotionsListResponse
+         * @description The open holds the caller may see, in table order.
+         */
+        PromotionsListResponse: {
+            /** Holds */
+            holds: components["schemas"]["PromotionHold"][];
+            /** Page Token */
+            page_token?: string | null;
+        };
         /** ProtectionResponse */
         ProtectionResponse: {
             /** Id */
@@ -8002,6 +8148,12 @@ export interface components {
              * @default request
              */
             gate_source?: string;
+            /**
+             * Held
+             * @default false
+             */
+            held?: boolean;
+            hold?: components["schemas"]["PromotionHold"] | null;
             /** Published */
             published: boolean;
             /** Reason */
@@ -11139,6 +11291,43 @@ export interface operations {
             };
         };
     };
+    list_promotions_management_v1_promotions_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                /** @description Continue after this table id (the previous page's `page_token`). */
+                page_token?: string | null;
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-caller-app-id"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PromotionsListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_stores_management_v1_stores_get: {
         parameters: {
             query?: {
@@ -11645,7 +11834,7 @@ export interface operations {
     vend_credentials_management_v1_table__id__credentials_post: {
         parameters: {
             query?: {
-                /** @description `read` (can_read_data), `write` (can_write_data: read the table, put data, transaction and deletion files and a staged manifest for CreateTableVersion to finalize) or `maintain` (can_maintain: get, put and delete the whole prefix). */
+                /** @description `read` (can_read_data), `write` (can_write_data: read the table, put data, transaction and deletion files and a staged manifest for CreateTableVersion to finalize) or `maintain` (can_vend_maintain, the maintenance identity's alone: get, put and delete the whole prefix). */
                 tier?: "read" | "write" | "maintain";
                 /** @description The branch this credential is for. Naming one NARROWS the grant: writes land under that branch's own `<table>/tree/<branch>/` (`data/` at the write tier; `_versions`, `_transactions`, `_deletions`, `_indices` and `data` at the maintain tier) and main drops to read-only. Omit for main. */
                 branch?: string;
@@ -12066,6 +12255,90 @@ export interface operations {
             };
         };
     };
+    approve_promotion_management_v1_table__id__promotion_approve_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                authorization?: string | null;
+                "dapr-caller-app-id"?: string | null;
+                "x-lance-originator"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PromotionDecisionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PromotionDecision"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reject_promotion_management_v1_table__id__promotion_reject_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                authorization?: string | null;
+                "dapr-caller-app-id"?: string | null;
+                "x-lance-originator"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PromotionDecisionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PromotionDecision"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_table_protection_management_v1_table__id__protection_get: {
         parameters: {
             query?: {
@@ -12149,6 +12422,7 @@ export interface operations {
                 delimiter?: string | null;
             };
             header?: {
+                authorization?: string | null;
                 "dapr-caller-app-id"?: string | null;
                 "x-lance-originator"?: string | null;
             };

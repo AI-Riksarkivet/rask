@@ -18,13 +18,11 @@ import httpx
 import pyarrow as pa
 import pytest
 from fastapi.testclient import TestClient
-from openfga_sdk.client.models import ClientCheckRequest, ClientWriteRequest
-from openfga_sdk.models import CheckResponse, ReadRequestTupleKey, ReadResponse
 
 from catalog.core.config import Settings, get_settings
 from catalog.services import warehouses
 from service_kit.governed.audit import AUDIT_LOGGER
-from service_kit.governed.oidc import IDToken
+from tests.integration.openfga_grants import Grants, act_as
 
 
 AUTH = {"Authorization": "Bearer t"}
@@ -32,39 +30,9 @@ ARROW = {**AUTH, "content-type": "application/vnd.apache.arrow.stream"}
 WAREHOUSE = "acme-bucket"
 PROJECT = "acme"
 
-type Triple = tuple[str, str, str]
-
-
-class _Grants:
-    """An OpenFGA store held in memory that allows exactly the checks in ``allowed``."""
-
-    def __init__(self) -> None:
-        self.allowed: set[Triple] = set()
-
-    async def check(self, body: ClientCheckRequest, options: dict[str, int | str | dict[str, int | str]] | None = None) -> CheckResponse:
-        del options
-        return CheckResponse(allowed=(body.user, body.relation, body.object) in self.allowed)
-
-    async def read(self, body: ReadRequestTupleKey, options: dict[str, int | str | dict[str, int | str]] | None = None) -> ReadResponse:
-        del body, options
-        return ReadResponse(tuples=[], continuation_token="")
-
-    async def write(self, body: ClientWriteRequest, options: dict[str, int | str | dict[str, int | str]] | None = None) -> None:
-        del body, options
-
-    async def close(self) -> None:
-        return None
-
-    def grant(self, user: str, *checks: tuple[str, str]) -> None:
-        self.allowed |= {(f"user:{user}", relation, obj) for relation, obj in checks}
-
-
-def _act_as(client: TestClient, sub: str) -> None:
-    client.app.state.oidc.verify.return_value = IDToken(iss="i", sub=sub, aud="lance", exp=1, iat=1)
-
 
 @pytest.fixture
-def grants(real_ns_client: TestClient, tmp_path: Path) -> Iterator[_Grants]:
+def grants(real_ns_client: TestClient, tmp_path: Path) -> Iterator[Grants]:
     """The real catalog as the chart deploys it, with warehouse ``WAREHOUSE`` of project ``PROJECT`` at its root.
 
     alice administers the project; bob may only create namespaces in its warehouse.
@@ -86,7 +54,7 @@ def grants(real_ns_client: TestClient, tmp_path: Path) -> Iterator[_Grants]:
     )
     real_ns_client.app.dependency_overrides[get_settings] = lambda: settings
     real_ns_client.app.state.oidc = MagicMock()
-    store = _Grants()
+    store = Grants()
     real_ns_client.app.state.fga = store
     warehouses.put_warehouse(root, {}, {"id": WAREHOUSE, "bucket": WAREHOUSE, "root_uri": root, "project": PROJECT, "status": "active", "created_at": "t"})
     for user in ("alice", "bob"):
@@ -112,10 +80,10 @@ def _refused(resp: httpx.Response, code: int) -> None:
     assert resp.json()["code"] == code, resp.json()
 
 
-def test_only_the_projects_admin_declares_or_drops_a_tier(real_ns_client: TestClient, grants: _Grants) -> None:
+def test_only_the_projects_admin_declares_or_drops_a_tier(real_ns_client: TestClient, grants: Grants) -> None:
     """On the warehouse door, the nested door and an Overwrite: bob is refused PermissionDenied (15), alice lands it."""
     client = real_ns_client
-    _act_as(client, "bob")
+    act_as(client, "bob")
     _refused(
         client.post(f"/management/v1/warehouses/{WAREHOUSE}/namespaces", json={"namespace": "sales", "properties": {"rask.tier": "silver"}}, headers=AUTH), 15
     )
@@ -123,23 +91,23 @@ def test_only_the_projects_admin_declares_or_drops_a_tier(real_ns_client: TestCl
     grants.grant("bob", ("can_create_namespace", "namespace:sales"))
     _refused(client.post("/v1/namespace/sales$lane/create", json={"properties": {"rask.tier": "silver"}}, headers=AUTH), 15)
 
-    _act_as(client, "alice")
+    act_as(client, "alice")
     assert _top_level(client, "ledger", {"rask.tier": "gold"}) == 200
     for user in ("alice", "bob"):
         grants.grant(user, ("can_get_metadata", "namespace:ledger"))
     assert _tier(client, "ledger") == "gold"
 
-    _act_as(client, "bob")
+    act_as(client, "bob")
     grants.grant("bob", ("can_create_namespace", "namespace:ledger"), ("can_delete", "namespace:ledger"))
     _refused(client.post("/v1/namespace/ledger/create", json={"mode": "Overwrite", "properties": {}}, headers=AUTH), 15)
     assert _tier(client, "ledger") == "gold", "a refused Overwrite dropped the tier"
 
 
-def test_a_declaration_names_a_tier_its_ancestors_agree_with(real_ns_client: TestClient, grants: _Grants) -> None:
+def test_a_declaration_names_a_tier_its_ancestors_agree_with(real_ns_client: TestClient, grants: Grants) -> None:
     """A value outside bronze/silver/gold, or a deeper namespace re-tiering its ancestor's, is InvalidInput (13);
     an ExistOk naming a tier the kept namespace does not have is NamespaceAlreadyExists (2)."""
     client = real_ns_client
-    _act_as(client, "alice")
+    act_as(client, "alice")
     _refused(
         client.post(f"/management/v1/warehouses/{WAREHOUSE}/namespaces", json={"namespace": "sales", "properties": {"rask.tier": "platinum"}}, headers=AUTH), 13
     )
@@ -167,11 +135,11 @@ def _rows() -> bytes:
 _RUN = {"x-rask-run-id": "run-7", "x-rask-inputs": json.dumps([{"table": ["src", "a"], "version": 1}])}
 
 
-def test_a_write_is_judged_under_the_tier_its_namespace_declares(real_ns_client: TestClient, grants: _Grants, caplog: pytest.LogCaptureFixture) -> None:
+def test_a_write_is_judged_under_the_tier_its_namespace_declares(real_ns_client: TestClient, grants: Grants, caplog: pytest.LogCaptureFixture) -> None:
     """Without the writer rung the write is PermissionDenied (15); with it the decision is audited under the
     declared tier, and a namespace whose NAME is a tier but which declares none is judged untiered."""
     client = real_ns_client
-    _act_as(client, "alice")
+    act_as(client, "alice")
     assert _top_level(client, "sales", {"rask.tier": "silver"}) == 200
     assert _top_level(client, "gold") == 200
     grants.grant(
@@ -183,10 +151,10 @@ def test_a_write_is_judged_under_the_tier_its_namespace_declares(real_ns_client:
     for ns in ("sales", "gold"):
         assert client.post(f"/v1/table/{ns}$t/create?mode=create", content=_rows(), headers={**ARROW, **_RUN}).status_code == 200
 
-    _act_as(client, "dave")
+    act_as(client, "dave")
     _refused(client.post("/v1/table/sales$t/insert", content=_rows(), headers={**ARROW, **_RUN}), 15)
 
-    _act_as(client, "alice")
+    act_as(client, "alice")
     caplog.set_level(logging.INFO, logger=AUDIT_LOGGER)
     for ns in ("sales", "gold"):
         assert client.post(f"/v1/table/{ns}$t/insert", content=_rows(), headers={**ARROW, **_RUN}).status_code == 200
@@ -198,12 +166,12 @@ def test_a_write_is_judged_under_the_tier_its_namespace_declares(real_ns_client:
     assert judged == [("table:sales$t", "silver"), ("table:gold$t", "untiered")]
 
 
-def test_a_recoverable_drop_and_its_undrop_keep_the_declared_tier(real_ns_client: TestClient, grants: _Grants) -> None:
+def test_a_recoverable_drop_and_its_undrop_keep_the_declared_tier(real_ns_client: TestClient, grants: Grants) -> None:
     """An owner who may drop and undrop is not an admin, so the round trip must bring the tier back with the namespace."""
     client = real_ns_client
-    _act_as(client, "alice")
+    act_as(client, "alice")
     assert _top_level(client, "ledger", {"rask.tier": "gold"}) == 200
-    _act_as(client, "bob")
+    act_as(client, "bob")
     grants.grant("bob", ("can_delete", "namespace:ledger"), ("can_get_metadata", "namespace:ledger"))
 
     assert client.post("/v1/namespace/ledger/drop", json={"behavior": "Cascade"}, headers=AUTH).status_code == 200

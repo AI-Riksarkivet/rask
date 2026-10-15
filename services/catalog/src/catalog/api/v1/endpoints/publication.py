@@ -1,8 +1,16 @@
-"""`POST /v1/table/{id}/publish` — the one door through which data becomes consumable.
+"""`POST /management/v1/table/{id}/publish` — the one door through which data becomes consumable.
 
 The publication contract, ruled by the owner 2026-08-04 (`c6c23407`) as D-R1/D-R2/D-R3. A commit makes a version READABLE; publishing makes it
 READY. The gate runs against the committed version and only a pass advances the `published` tag, so
 a consumer reading through the pointer never sees a batch that failed.
+
+**THE TAG IS THE GATE (ADR 0156 C1, [[LH-466]]).** Readers of a governed tier read `@published`. When the
+project's declared gate has review on, a version that breaches it is HELD: `published` stays, the hold is
+listed on `GET /management/v1/promotions`, and a `can_promote` holder answers it on
+`POST /management/v1/table/{id}/promotion/approve` (`published` moves to the held version, the spec's
+`UpdateTableTag`) or `.../promotion/reject` (main is restored to the published version, the spec's
+`RestoreTable`). Every move of `published` is announced as a `publish_table` lineage run, which the
+notifications plane delivers to the project's watchers.
 
 It is an endpoint, not a library call, because every writer must publish identically — the ingest
 plane, a Ray job, a backfill script, a person with credentials. A contract each writer implements
@@ -21,36 +29,49 @@ from __future__ import annotations
 
 import logging
 from functools import partial
-from typing import Annotated, Any, Protocol
+from typing import TYPE_CHECKING, Annotated, Any, Literal, Protocol
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Header, Query
 from fastapi.concurrency import run_in_threadpool
+from lance_namespace import InvalidTableStateError, RestoreTableRequest
 
+from catalog.api import lineage_deps
 from catalog.api.dependencies import (
+    ClockDep,
     ControlEmitterDep,
     FgaClientDep,
+    LineageEmitterDep,
     NamespaceDep,
     SettingsDep,
     StorageOptionsDep,
-    get_lineage_emitter,
 )
 from catalog.api.fga_deps import require_relation
+from catalog.api.pagination import paginate
 from catalog.api.security import CurrentToken, Principal
 from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier
-from catalog.core.lineage_emit import is_person_subject
+from catalog.core.lineage_emit import PUBLISH_TABLE, RESTORE_TABLE, LineageEmitter, emit_write_event, is_person_subject
 from catalog.core.namespace import open_dataset
-from catalog.schemas import PublishRequest, PublishResult
-from catalog.services import publication, warehouses
-from service_kit.control_emit import emit_control
+from catalog.schemas import PromotionDecision, PromotionDecisionRequest, PromotionHold, PromotionsListResponse, PublishRequest, PublishResult
+from catalog.services import dataplane, promotions, publication, warehouses
+from service_kit.control_emit import ControlEmitter, emit_control
 from service_kit.governed import fga
 from service_kit.governed.machine_identity import ServicePrincipal
+from service_kit.lakehouse.records import RecordChangedError
+
+
+if TYPE_CHECKING:
+    from datetime import datetime
+
+    from lance_namespace import LanceNamespace
 
 
 #: THE MANAGEMENT SURFACE ([[LH-021]]). These are rask's own operations, not Lance namespace ones —
 #: a spec client discovering them on `/v1/table` meets verbs the document never defines. They mount at
 #: `/management/v1` and inherit the same authn/authz and delimiter guard from `api/v1/router.py`.
-router = APIRouter(prefix="/management/v1/table", tags=["publication"])
+table_router = APIRouter(prefix="/management/v1/table", tags=["publication"])
+#: The holds awaiting a decision, across tables.
+promotions_router = APIRouter(prefix="/management/v1/promotions", tags=["publication"])
 
 
 class ProjectSource(Protocol):
@@ -58,10 +79,6 @@ class ProjectSource(Protocol):
     request-scoped binding cache; demanding the whole emitter would ask for six more it does not use."""
 
     async def project_for(self, top_ns: str) -> str | None: ...
-
-
-#: The lineage emitter, narrowed to the one method this route uses. Same instance, same cache.
-ProjectSourceDep = Annotated[ProjectSource, Depends(get_lineage_emitter)]
 
 
 #: NO LOCAL COPY OF "is this a person" LIVES HERE. `catalog.core.lineage_emit.is_person_subject` is the
@@ -246,7 +263,7 @@ async def resolve_effective_gate(
     return publication.effective_gate(spec, key_column=body.key_column, required_columns=body.required_columns)
 
 
-@router.post("/{id}/publish")
+@table_router.post("/{id}/publish")
 async def publish_table(
     id: str,
     body: PublishRequest,
@@ -254,16 +271,19 @@ async def publish_table(
     settings: SettingsDep,
     so: StorageOptionsDep,
     control: ControlEmitterDep,
-    lineage: ProjectSourceDep,
+    lineage: LineageEmitterDep,
     fga_client: FgaClientDep,
     token: CurrentToken,
+    clock: ClockDep,
+    authorization: Annotated[str | None, Header()] = None,
 ) -> PublishResult:
-    """Gate `version` and, if it passes, advance `published` to it.
+    """Gate `version` and, if it passes, advance `published` to it; hold it when it breaches under review.
 
     A refused gate is a 200 with `published=False`, not an error status: the request was well-formed
-    and the system did exactly what it should. Errors are reserved for the caller getting it wrong —
-    an unknown version (404), a backwards move (409), a malformed one (400) — all raised as
-    `lance_namespace` typed errors so the shared problem-body handler renders them.
+    and the system did exactly what it should. A held one is a 200 with `held=True` and the hold. Errors
+    are reserved for the caller getting it wrong — an unknown version (404), a backwards move (409), a
+    malformed one (400), a version older than the one held (409) — all raised as `lance_namespace` typed
+    errors so the shared problem-body handler renders them.
     """
     segments = parse_identifier(id, settings.delimiter)
     if body.accept_assertions:
@@ -289,18 +309,23 @@ async def publish_table(
     # the gate_only QUESTION and the publish ACT cannot end up under different policy.
     gate = await resolve_effective_gate(settings, so, lineage, segments, body)
     if body.gate_only:
-        # A QUESTION: the same assertions on the same version, tag untouched, no control event. It
-        # returns before the publish so nothing here can advance `published` by accident — a caller
-        # asking "would you accept this?" must never discover it published as a side effect.
+        # A QUESTION: the same assertions on the same version, tag untouched, no hold and no control
+        # event. It returns before the publish so nothing here can advance `published` or open a hold by
+        # accident — a caller asking "would you accept this?" must never discover it acted as a side effect.
         candidate = await run_in_threadpool(partial(open_dataset, ns, so, segments, version=body.version))
+        published_rows = await run_in_threadpool(_published_rows, ns, so, segments) if gate.review is not None else None
         verdict = await run_in_threadpool(
-            publication.gate,
-            candidate.uri,
-            key_column=gate.key_column,
-            version=body.version,
-            required_columns=tuple(gate.required_columns),
-            storage_options=so,
-            declared_by=gate.declared_by,
+            partial(
+                publication.gate,
+                candidate.uri,
+                key_column=gate.key_column,
+                version=body.version,
+                required_columns=tuple(gate.required_columns),
+                storage_options=so,
+                declared_by=gate.declared_by,
+                review=gate.review,
+                published_rows=published_rows,
+            )
         )
         return PublishResult(
             table=verdict.table,
@@ -310,50 +335,72 @@ async def publish_table(
             assertions=[a.model_dump() for a in verdict.assertions],
             reason=verdict.reason,
             gate_source=verdict.gate_source,
+            held=verdict.held,
         )
     result = await run_in_threadpool(
-        publication.publish,
-        ns,
-        so,
-        table_id=segments,
-        version=body.version,
-        key_column=gate.key_column,
-        required_columns=tuple(gate.required_columns),
-        accept_assertions=tuple(body.accept_assertions),
-        declared_by=gate.declared_by,
+        partial(
+            publication.publish,
+            ns,
+            so,
+            table_id=segments,
+            version=body.version,
+            key_column=gate.key_column,
+            required_columns=tuple(gate.required_columns),
+            accept_assertions=tuple(body.accept_assertions),
+            declared_by=gate.declared_by,
+            review=gate.review,
+        )
     )
-    # The NOTIFICATION, and only after the tag actually moved (D-R2). A refused gate announces
-    # nothing: there is no new readiness to wake anyone for, and an event on a rejection would train
-    # consumers to check whether a "published" notice actually published.
-    #
-    # `extra` carries the RANGE, which is the whole point of the signal (D-R3) — a consumer resolves
-    # {from, to} by the change-feed consumer rule (`catalog.services.changes`) and keeps no bookmark.
-    # A POLLING consumer that misses the event loses nothing, because the tag still answers "what is
-    # ready?"; a consumer that acts on the event alone does lose it, so the emitter STAGES through the
-    # control outbox and a failed publish leaves a recoverable object rather than nothing.
-    if result.advanced:
+    hold: PromotionHold | None = None
+    if result.held and gate.review is not None:
+        standing = await _hold(
+            settings=settings,
+            ns=ns,
+            so=so,
+            segments=segments,
+            result=result,
+            review=gate.review,
+            requested_by=token.sub if token is not None else None,
+            originator=publication_originator(body.originator, token),
+            cascade_id=body.cascade_id,
+            opened_at=clock(),
+        )
+        hold = _view(standing)
         await emit_control(
             control,
-            action="table_published",
+            action="promotion_held",
             object_type="table",
-            object_id=f"table:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}",
+            object_id=f"table:{standing.table}",
             actor=f"user:{token.sub}" if token is not None else None,
-            # I2: the caller names {project, dataset}, the CATALOG vends the URI and the tenant.
-            # Both were rebuilt downstream before this, and the tenant was rebuilt wrongly.
-            extra=await publication_extra(
-                lineage,
-                segments,
-                from_version=result.from_version,
-                to_version=result.to_version,
-                location=result.table,
-                accepted=result.accepted,
-                cascade_id=body.cascade_id,
-                # WHO this publication is FOR, as opposed to `actor`, which is who performed it. They
-                # differ on exactly the path that matters: a pipeline's publish is performed by its service
-                # principal and is for the person whose bronze write started the batch.
-                originator=publication_originator(body.originator, token),
-            ),
+            extra={
+                "version": standing.version,
+                "published_version": standing.published_version,
+                "reasons": standing.reasons,
+                "expires_at": standing.expires_at.isoformat(),
+            },
         )
+    # The NOTIFICATION, and only after the tag actually moved (D-R2). A refused or held gate announces
+    # no publication: there is no new readiness to wake anyone for, and an event on a rejection would
+    # train consumers to check whether a "published" notice actually published.
+    if result.advanced:
+        await _announce_publication(
+            lineage=lineage,
+            control=control,
+            settings=settings,
+            segments=segments,
+            token=token,
+            authorization=authorization,
+            from_version=result.from_version,
+            to_version=result.to_version,
+            location=result.table,
+            accepted=result.accepted,
+            cascade_id=body.cascade_id,
+            # WHO this publication is FOR, as opposed to `actor`, which is who performed it. They
+            # differ on exactly the path that matters: a pipeline's publish is performed by its service
+            # principal and is for the person whose bronze write started the batch.
+            originator=publication_originator(body.originator, token),
+        )
+        await _close_what_published_reached(settings=settings, ns=ns, so=so, segments=segments, published=result.to_version, at=clock())
 
     return PublishResult(
         table=result.table,
@@ -363,4 +410,297 @@ async def publish_table(
         assertions=[a.model_dump() for a in result.assertions],
         reason=result.reason,
         gate_source=result.gate_source,
+        held=hold is not None,
+        hold=hold,
     )
+
+
+def _published_rows(ns: LanceNamespace, so: dict[str, str], segments: list[str]) -> int | None:
+    """The row count readers of `published` read now, or `None` when nothing is published."""
+    return publication.rows_at(ns, so, segments, publication.published_version(ns, so, segments))
+
+
+def _view(hold: promotions.Hold) -> PromotionHold:
+    """The hold as the wire shows it: its storage location stays inside the catalog."""
+    return PromotionHold.model_validate(hold.model_dump(exclude={"location", "originator", "cascade_id", "restore_owed"}))
+
+
+async def _hold(
+    *,
+    settings: Settings,
+    ns: LanceNamespace,
+    so: dict[str, str],
+    segments: list[str],
+    result: publication.PublicationResult,
+    review: publication.ReviewPolicy,
+    requested_by: str | None,
+    originator: str,
+    cascade_id: str,
+    opened_at: datetime,
+) -> promotions.Hold:
+    """Record the held version as its table's open hold and pin it; the hold that stands is returned."""
+    held = promotions.Hold(
+        table=fga.canonical_object_id(segments, delimiter=settings.delimiter),
+        location=result.table,
+        version=result.to_version,
+        published_version=result.from_version,
+        reasons=result.hold_reasons,
+        requested_by=requested_by,
+        originator=originator,
+        cascade_id=cascade_id,
+        opened_at=opened_at,
+        expires_at=promotions.deadline(opened_at, review.hours),
+    )
+    standing = await run_in_threadpool(promotions.open_hold, settings.registry_root, settings.storage_options(), held)
+    await run_in_threadpool(promotions.sync_pin, ns, so, segments, standing)
+    return standing
+
+
+async def _repin(settings: Settings, ns: LanceNamespace, so: dict[str, str], segments: list[str]) -> None:
+    """Point the hold pin at the table's open hold as its record stands now, or remove it when none is open."""
+    current = await run_in_threadpool(
+        promotions.hold_of, settings.registry_root, settings.storage_options(), fga.canonical_object_id(segments, delimiter=settings.delimiter)
+    )
+    await run_in_threadpool(promotions.sync_pin, ns, so, segments, current)
+
+
+async def _close_what_published_reached(
+    *, settings: Settings, ns: LanceNamespace, so: dict[str, str], segments: list[str], published: int, at: datetime
+) -> None:
+    """Close the table's open hold when `published` moved to or past its version: readers already read it.
+
+    Best-effort, because `published` has already moved: a control root that cannot be read here leaves a hold
+    readers have passed, which the decision doors refuse as reached and the sweep expires, and must not turn a
+    committed publication into a failed request.
+    """
+    table = fga.canonical_object_id(segments, delimiter=settings.delimiter)
+    try:
+        closed = await run_in_threadpool(partial(promotions.supersede, settings.registry_root, settings.storage_options(), table, published=published, at=at))
+        if closed is not None:
+            await _repin(settings, ns, so, segments)
+    except (OSError, RecordChangedError):
+        log.warning("promotion_supersede_failed", extra={"table": table, "published": published}, exc_info=True)
+
+
+async def _announce_publication(
+    *,
+    lineage: LineageEmitter,
+    control: ControlEmitter,
+    settings: Settings,
+    segments: list[str],
+    token: Principal | None,
+    authorization: str | None,
+    from_version: int | None,
+    to_version: int,
+    location: str,
+    accepted: list[str] | None = None,
+    cascade_id: str = "",
+    originator: str = "",
+) -> None:
+    """Announce that `published` moved to `to_version`: a `publish_table` run on lineage, which reaches the
+    project's watchers, and `table_published` on the control lane, carrying the range (D-R3).
+
+    `extra` carries the RANGE, which is the whole point of the signal — a consumer resolves {from, to} by the
+    change-feed consumer rule (`catalog.services.changes`) and keeps no bookmark. A POLLING consumer that misses
+    the event loses nothing, because the tag still answers "what is ready?"; a consumer that acts on the event
+    alone does lose it, so the emitter STAGES through the control outbox and a failed publish leaves a
+    recoverable object rather than nothing.
+    """
+    await emit_write_event(
+        lineage,
+        segments,
+        delimiter=settings.delimiter,
+        author=token.sub if token is not None else None,
+        version=to_version,
+        operation=PUBLISH_TABLE,
+        authorization=authorization,
+        source_uri=location,
+    )
+    await emit_control(
+        control,
+        action="table_published",
+        object_type="table",
+        object_id=f"table:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}",
+        actor=f"user:{token.sub}" if token is not None else None,
+        # I2: the caller names {project, dataset}, the CATALOG vends the URI and the tenant.
+        # Both were rebuilt downstream before this, and the tenant was rebuilt wrongly.
+        extra=await publication_extra(
+            lineage,
+            segments,
+            from_version=from_version,
+            to_version=to_version,
+            location=location,
+            accepted=accepted,
+            cascade_id=cascade_id,
+            originator=originator,
+        ),
+    )
+
+
+async def _decision(
+    settings: Settings,
+    ns: LanceNamespace,
+    so: dict[str, str],
+    segments: list[str],
+    *,
+    version: int,
+    state: Literal["approved", "rejected"],
+    token: Principal | None,
+    at: datetime,
+) -> tuple[promotions.Hold, bool]:
+    """Record ``state`` on the table's open hold on ``version``: the hold as decided, and whether this call decided it.
+
+    A hold `published` already reached is closed as superseded and refused rather than decided, because its answer
+    would act on data readers have moved past: an approval would move the tag backwards, and a rejection would
+    restore main past newer published data. The same decision repeated after it took effect answers as decided.
+
+    Raises:
+        InvalidTableStateError: No such version is held on the dataset this id opens, or `published` reached it.
+    """
+    table = fga.canonical_object_id(segments, delimiter=settings.delimiter)
+    location = (await run_in_threadpool(open_dataset, ns, so, segments)).uri
+    previous = await run_in_threadpool(publication.published_version, ns, so, segments)
+    if previous is not None and previous >= version:
+        standing = await run_in_threadpool(promotions.hold_of, settings.registry_root, settings.storage_options(), table)
+        if standing is not None and (standing.version, standing.location, standing.state) == (version, location, state):
+            return standing, False
+        await _close_what_published_reached(settings=settings, ns=ns, so=so, segments=segments, published=previous, at=at)
+        raise InvalidTableStateError(f"`published` is at version {previous}, which already carries version {version}")
+    return await run_in_threadpool(
+        partial(
+            promotions.decide,
+            settings.registry_root,
+            settings.storage_options(),
+            table,
+            version=version,
+            location=location,
+            state=state,
+            by=token.sub if token is not None else None,
+            at=at,
+            restore_owed=state == "rejected" and previous is not None,
+        )
+    )
+
+
+@table_router.post("/{id}/promotion/approve")
+async def approve_promotion(
+    id: str,
+    body: PromotionDecisionRequest,
+    ns: NamespaceDep,
+    settings: SettingsDep,
+    so: StorageOptionsDep,
+    control: ControlEmitterDep,
+    lineage: LineageEmitterDep,
+    token: CurrentToken,
+    clock: ClockDep,
+    authorization: Annotated[str | None, Header()] = None,
+) -> PromotionDecision:
+    """Approve the held `version`: `published` moves to it (the spec's `UpdateTableTag`) and its watchers are told.
+
+    Gated on `can_promote` by the router (`fga_deps`), and the tier judge decides it like every write. The approval
+    is recorded before the tag moves, so approving again completes one whose tag move failed and otherwise answers
+    as decided. 409 when the table holds no such version, it was decided otherwise, or `published` reached it.
+    """
+    segments = parse_identifier(id, settings.delimiter)
+    decided, _ = await _decision(settings, ns, so, segments, version=body.version, state="approved", token=token, at=clock())
+    moved, previous = await run_in_threadpool(publication.advance, ns, so, segments, decided.version)
+    if moved:
+        await _announce_publication(
+            lineage=lineage,
+            control=control,
+            settings=settings,
+            segments=segments,
+            token=token,
+            authorization=authorization,
+            from_version=previous,
+            to_version=decided.version,
+            location=decided.location,
+            cascade_id=decided.cascade_id,
+            originator=decided.originator,
+        )
+    await _repin(settings, ns, so, segments)
+    return PromotionDecision(hold=_view(decided), published_version=decided.version if moved else previous)
+
+
+@table_router.post("/{id}/promotion/reject")
+async def reject_promotion(
+    id: str,
+    body: PromotionDecisionRequest,
+    ns: NamespaceDep,
+    settings: SettingsDep,
+    so: StorageOptionsDep,
+    control: ControlEmitterDep,
+    lineage: LineageEmitterDep,
+    token: CurrentToken,
+    clock: ClockDep,
+    authorization: Annotated[str | None, Header()] = None,
+) -> PromotionDecision:
+    """Reject the held `version`: main is restored to the published version (the spec's `RestoreTable`), as a new
+    commit, so the next writer builds on what readers read. `published` does not move.
+
+    Gated on `can_promote` by the router (`fga_deps`), and the tier judge decides it like every write. The rejection
+    is recorded before main is restored, and main is restored once: rejecting again completes a restore the first
+    call could not make, and otherwise answers as decided. With nothing published, or `published` moved to or past
+    the held version meanwhile, there is nothing to restore and the rejection only closes the hold. 409 when the
+    table holds no such version, it was decided otherwise, or `published` reached it.
+    """
+    segments = parse_identifier(id, settings.delimiter)
+    decided, claimed = await _decision(settings, ns, so, segments, version=body.version, state="rejected", token=token, at=clock())
+    if decided.restore_owed:
+        published = await run_in_threadpool(publication.published_version, ns, so, segments)
+        restored: int | None = None
+        if published is not None and published < decided.version:
+            _, restored = await run_in_threadpool(dataplane.restore, ns, so, RestoreTableRequest(id=segments, version=published))
+            await lineage_deps.emit_measured_write(
+                lineage,
+                segments,
+                ns=ns,
+                so=so,
+                settings=settings,
+                token=token,
+                operation=RESTORE_TABLE,
+                authorization=authorization,
+                pin_version=restored,
+                branch=None,
+            )
+        decided = await run_in_threadpool(
+            partial(promotions.record_restore, settings.registry_root, settings.storage_options(), decided.table, version=decided.version, restored=restored)
+        )
+    await _repin(settings, ns, so, segments)
+    published = await run_in_threadpool(publication.published_version, ns, so, segments)
+    if claimed:
+        await emit_control(
+            control,
+            action="promotion_rejected",
+            object_type="table",
+            object_id=f"table:{decided.table}",
+            actor=f"user:{token.sub}" if token is not None else None,
+            extra={"version": decided.version, "published_version": published, "restored_version": decided.restored_version},
+        )
+    return PromotionDecision(hold=_view(decided), published_version=published, restored_version=decided.restored_version)
+
+
+@promotions_router.get("")
+async def list_promotions(
+    settings: SettingsDep,
+    token: CurrentToken,
+    client: FgaClientDep,
+    limit: Annotated[int, Query(ge=1, le=1000)] = 100,
+    page_token: Annotated[str | None, Query(description="Continue after this table id (the previous page's `page_token`).")] = None,
+) -> PromotionsListResponse:
+    """The open holds the caller may see, in table order: each table's held version, what `published` names, why
+    it is held and when the sweep expires it. A hold is listed to a caller holding `can_get_metadata` on its table.
+    """
+    holds = await run_in_threadpool(promotions.open_holds, settings.registry_root, settings.storage_options())
+    if settings.fga_enabled and token is not None and client is not None:
+        visible = await fga.batch_check(client, user=token.sub, relation="can_get_metadata", objects=[f"table:{hold.table}" for hold in holds])
+        holds = [hold for hold in holds if visible.get(f"table:{hold.table}")]
+    by_table = {hold.table: hold for hold in holds}
+    page, next_token = paginate(sorted(by_table), page_token, limit)
+    return PromotionsListResponse(holds=[_view(by_table[table]) for table in page], page_token=next_token)
+
+
+# One exported router, like `gates`: `router.py` mounts `_module.router` for every endpoint module.
+router = APIRouter()
+router.include_router(table_router)
+router.include_router(promotions_router)

@@ -172,3 +172,5 @@ before they had a record here; each names its source document and the date of th
 | [0157](0157-stock-clients-commit-through-managed-versioning.md) | C3 | Stock clients commit through managed versioning; pylance 13 now; the controlplane is deleted (2026-10-12) |
 | [0158](0158-provenance-is-a-service-the-lineage-graph-is-bring-your-own.md) | LH-468 | Provenance is a rask service; the lineage graph is bring-your-own (2026-10-12) |
 | [0159](0159-four-owner-rulings-recorded-from-agent-memory.md) | LH-063 | Four owner rulings of 2026-09-25/26 that no ADR recorded: branch writes, the principal key, catalog drop events, an unplannable compaction (2026-10-12) |
+| [0160](0160-the-tier-judge-owns-the-write-rung-and-a-tier-is-declared-once.md) | LH-470 | The tier judge owns the write rung, and a tier is declared once (2026-10-13) |
+| [0161](0161-the-tag-gate-runs-at-publish.md) | LH-466 | The tag gate runs when a version is published, so a hold is the publish door's answer (2026-10-15) |

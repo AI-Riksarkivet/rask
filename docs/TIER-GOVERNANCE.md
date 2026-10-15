@@ -43,9 +43,15 @@ default path) for the work it does, and notifications target a person from those
   cannot be dropped, renamed or rewritten by a writer (`catalog/core/provenance_guard.py`). The rest of a tier row is
   the writer's: no tier carries a workload-shaped schema.
 - **The quality gate.** A project declares its gate on the catalog's gates door (which column identifies a row, which
-  columns a consumer depends on, how far a row count may move); the publish door
-  (`POST /management/v1/table/{id}/publish`, `catalog/services/publication.py`) runs it and, when it passes, moves the table's
-  `published` tag to that version.
+  columns a consumer depends on, how far a row count may move, and whether a breach waits for a person); the publish
+  door (`POST /management/v1/table/{id}/publish`, `catalog/services/publication.py`) runs it and, when it passes, moves
+  the table's `published` tag to that version. Readers of a governed tier read `@published`
+  ([ADR 0161](adr/0161-the-tag-gate-runs-at-publish.md)).
+- **The hold.** With review declared, a version that breaches the gate is held: `published` stays, the hold is listed on
+  `GET /management/v1/promotions`, and a holder of `can_promote` on the table approves it
+  (`POST /management/v1/table/{id}/promotion/approve`: `published` moves to it) or rejects it (`.../promotion/reject`:
+  main is restored to the published version). A hold nobody answers within the gate's `review_hours` expires. Every move
+  of `published` notifies the project's watchers.
 - **The model registry.** `models$<name>` are governed tables, promoted candidate → blessed on the catalog's
   `POST /management/v1/model/{name}/promote`, at the validator rung.
 

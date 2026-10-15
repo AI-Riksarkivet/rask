@@ -1483,12 +1483,9 @@ async def restore_table(
     # 11, the codes `_open_ref` mints for every other door. Unchecked, because a restore reads no row.
     if body.branch is not None:
         await run_in_threadpool(partial(open_dataset_unchecked, ns, so, segments, version=body.version, branch=body.branch))
-    await run_in_threadpool(partial(dataplane.refuse_a_restore_that_arms_cleanup, ns, so, segments, version=body.version, branch=body.branch))
-    response: RestoreTableResponse = await run_in_threadpool(native.call, ns, "restore_table", body)
-    # The response carries only a transaction_id, so the event names the version THAT transaction
-    # committed on the ref it restored, and the shared trailer reads its schema off one pinned open
-    # (best-effort: a lookup or readback failure never fails the already-committed restore).
-    committed = await run_in_threadpool(partial(dataplane.committed_version, ns, so, segments, response.transaction_id, branch=body.branch))
+    # The event names the version THAT restore committed on the ref it restored, and the shared trailer reads
+    # its schema off one pinned open (best-effort: a lookup or readback failure never fails the committed restore).
+    response, committed = await run_in_threadpool(dataplane.restore, ns, so, body)
     await lineage_deps.emit_measured_write(
         emitter,
         segments,

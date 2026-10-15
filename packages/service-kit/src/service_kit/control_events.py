@@ -89,6 +89,13 @@ ControlAction = Literal[
     # `extra` carries {from_version, to_version}: the RANGE (D-R3) a consumer resolves by the change-feed
     # consumer rule (`catalog.services.changes`), holding no bookmark of its own.
     "table_published",
+    # THE TAG GATE'S HOLD (ADR 0156 C1, [[LH-466]]): a publish the project's gate holds for a `can_promote`
+    # holder, a rejection that restores main to the published version, and a hold nobody answered before its
+    # deadline. An approval moves `published` and is announced as `table_published`. UNTARGETED: each changes a
+    # table's publication, not a person's standing, and the watchers hear the tag move through lineage.
+    "promotion_held",
+    "promotion_rejected",
+    "promotion_expired",
     # ANNOTATION WORK, and the first control actions a service other than the catalog/maintenance pair
     # publishes. They belong in this vocabulary rather than a stream of their own for the reason the
     # grant actions do: both NAME a person and hand them (or take from them) something they must act on,
@@ -232,6 +239,9 @@ def control_signer_role(action: ControlAction, object_id: str) -> ControlSignerR
             | "table_undropped"
             | "namespace_undropped"
             | "table_published"
+            | "promotion_held"
+            | "promotion_rejected"
+            | "promotion_expired"
             | "table_branch_created"
             | "table_branch_deleted"
             | "table_tag_created"

@@ -46,9 +46,10 @@ runs reach people through the OpenLineage events the pipeline's job emits, targe
 `author.sub` (Q1), or by `lance.originator` when the job authenticates as a service (Q2). The catalog's
 own COMPLETE for each commit the pipeline makes is authored as the verified caller.
 
-Decided and not yet built, so do not design against them as if they exist: moving a governed table's
-`published` tag notifies the project's watchers (ADR 0156 C1, LH-466 #586); lineage's `GET /events` gains a
-forward `since=` cursor and a documented commit-event shape (C7, LH-472 #598); and lineage shrinks to an
+Moving a table's `published` tag notifies the project's watchers (ADR 0156 C1, ADR 0161, [[LH-466]]): the catalog
+emits a `publish_table` run authored by the verified caller, its `lance.project` the tenant and its output the table,
+so it is delivered by WATCH like any catalog write. Decided and not yet built, so do not design against them as if
+they exist: lineage's `GET /events` gains a forward `since=` cursor and a documented commit-event shape (C7, LH-472 #598); and lineage shrinks to an
 authenticated OpenLineage intake, a Lance-stored commit feed and edge list, and a forwarder to a
 bring-your-own graph (ADR 0158, LH-468 #592). Today the feed and the graph are lineage's Postgres+AGE.
 

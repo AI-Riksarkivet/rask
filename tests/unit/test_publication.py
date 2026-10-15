@@ -239,8 +239,10 @@ async def test_a_PUBLICATION_announces_the_range_and_a_REJECTION_announces_nothi
     endpoint emitted on every rejection. A test that reimplements the code under test proves only
     that the copy is self-consistent.
     """
+    from catalog.api.dependencies import get_clock
     from catalog.api.v1.endpoints.publication import publish_table
     from catalog.core.config import Settings
+    from catalog.core.lineage_emit import NoopEmitter
     from catalog.schemas import PublishRequest
 
     announced: list[dict[str, object]] = []
@@ -249,7 +251,7 @@ async def test_a_PUBLICATION_announces_the_range_and_a_REJECTION_announces_nothi
         async def emit(self, event: object) -> None:
             announced.append({"action": getattr(event, "action", None), **dict(getattr(event, "extra", {}) or {})})
 
-    class _Tenant:
+    class _Tenant(NoopEmitter):
         """The project source. `acme-bronze` is a bound namespace here, so the event names its tenant —
         the medallion's publication head reads this field rather than splitting the id for it."""
 
@@ -262,10 +264,14 @@ async def test_a_PUBLICATION_announces_the_range_and_a_REJECTION_announces_nothi
     settings = Settings()
 
     good = _write(ns, [1, 2, 3])
-    await publish_table("pages", PublishRequest(version=good, key_column="id"), ns, settings, {}, _Emitter(), _Tenant(), None, None)
+    await publish_table(
+        "pages", PublishRequest(version=good, key_column="id"), ns, settings, {}, _Emitter(), _Tenant(), fga_client=None, token=None, clock=get_clock()
+    )
 
     bad = _write(ns, [4, None, 6])
-    await publish_table("pages", PublishRequest(version=bad, key_column="id"), ns, settings, {}, _Emitter(), _Tenant(), None, None)
+    await publish_table(
+        "pages", PublishRequest(version=bad, key_column="id"), ns, settings, {}, _Emitter(), _Tenant(), fga_client=None, token=None, clock=get_clock()
+    )
 
     assert [a["action"] for a in announced] == ["table_published"], "a rejection must announce nothing"
     assert (announced[0]["from_version"], announced[0]["to_version"]) == (None, good)

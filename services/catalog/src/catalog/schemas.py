@@ -996,6 +996,55 @@ class PublishResult(BaseModel):
     #: a caller whose ``key_column`` was superseded reads the same body either way and cannot tell
     #: which record governed its data.
     gate_source: str = "request"
+    #: The gate breached under the project's review: `to_version` waits for a `can_promote` holder on
+    #: `GET /management/v1/promotions`, and `published` stays at `from_version` (ADR 0156 C1).
+    held: bool = False
+    hold: PromotionHold | None = None
+
+
+class PromotionHold(BaseModel):
+    """A version the project's quality gate holds for a `can_promote` holder, or the last decision on one."""
+
+    #: The table's id, as the catalog names it (`acme-silver$orders`).
+    table: str
+    version: int
+    #: What `published` named when the version was held; `None` when nothing was published.
+    published_version: int | None
+    #: The failed assertions a validator may waive, then the band's reasons.
+    reasons: list[str]
+    requested_by: str | None = None
+    opened_at: datetime
+    #: When the sweep expires the hold if nobody has answered it.
+    expires_at: datetime
+    state: Literal["open", "approved", "rejected", "expired", "superseded"] = "open"
+    decided_by: str | None = None
+    decided_at: datetime | None = None
+    #: The version a rejection restored main as; `None` before or without a restore.
+    restored_version: int | None = None
+
+
+class PromotionsListResponse(BaseModel):
+    """The open holds the caller may see, in table order."""
+
+    holds: list[PromotionHold]
+    page_token: str | None = None
+
+
+class PromotionDecisionRequest(BaseModel):
+    """The held version being decided. A decision lands only on the hold its decider reviewed."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    version: int = Field(ge=1)
+
+
+class PromotionDecision(BaseModel):
+    """What a decision did: the closed hold, what readers of `published` now read, and main's restore."""
+
+    hold: PromotionHold
+    published_version: int | None
+    #: The version main was restored at by a rejection; `None` when nothing was published to restore.
+    restored_version: int | None = None
 
 
 # --------------------------------------------------------------------------- #
@@ -1064,6 +1113,7 @@ class GateSpecRequest(BaseModel):
     required_columns: list[str] = Field(default_factory=list)
     review_band: float = 0.25
     review_enabled: bool = False
+    review_hours: float = 72.0
 
 
 class GateSpecResponse(BaseModel):
@@ -1072,6 +1122,7 @@ class GateSpecResponse(BaseModel):
     required_columns: list[str] = Field(default_factory=list)
     review_band: float
     review_enabled: bool
+    review_hours: float
 
 
 # --------------------------------------------------------------------------- #

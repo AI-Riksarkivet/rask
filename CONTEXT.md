@@ -41,8 +41,8 @@ _Avoid_: layer, zone, stage
 
 **Tier judge**:
 The one decision every write door in the catalog asks before it writes: may this operation, on this table, by this
-caller, under this run, proceed. It answers allow, refuse or hold, and it owns the caller's write permission as well as
-the tier's rules, so no write door decides on its own.
+caller, under this run, proceed. It answers allow or refuse, and it owns the caller's write permission as well as the
+tier's rules, so no write door decides on its own.
 _Avoid_: tier guard, write gate
 
 **Tier governance**:
@@ -60,6 +60,11 @@ with its own token. The NATS topics it travels on are internal.
 _Avoid_: cascade head, bronze arrival
 
 **Promotion gate**:
-The check a project declares for a tier, run when a version is published by moving the table's `published` tag.
-ADR 0156 makes `@published` the version readers of a governed tier read, and LH-466 #586 builds that.
+The check a project declares for its tables, run when a version is published by moving the table's `published` tag,
+the version readers of a governed tier read. With review declared, a version that breaches it is held, not published.
 _Avoid_: promotion saga, review workflow
+
+**Hold**:
+A version the promotion gate kept from readers for a person to decide: approving it publishes it, rejecting it returns
+the table to its published version, and a hold nobody decides in time expires with nothing published.
+_Avoid_: pending promotion, review

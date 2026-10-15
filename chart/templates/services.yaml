@@ -138,6 +138,7 @@ spec:
             - { name: LANCE_ERASURE_CLEANUP_WINDOW_DAYS, value: {{ required "maintenance.olderThanDays is required" .Values.maintenance.olderThanDays | quote }} }
             {{- if .Values.dapr.enabled }}
             - { name: LANCE_ERASURE_RELEASE_BINDING_NAME, value: {{ .Values.catalog.erasure.bindingName | quote }} }
+            - { name: LANCE_PROMOTION_EXPIRY_BINDING_NAME, value: {{ .Values.catalog.promotion.bindingName | quote }} }
             {{- end }}
             {{- if .Values.dapr.enabled }}
 

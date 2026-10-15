@@ -57,7 +57,7 @@ def _control_actions() -> set[str]:
 #:
 #: The eight that ARE targeted are the ones where a PERSON's standing changed: the grant pair (someone
 #: gained or lost access), the task quintet (someone was handed work or had it taken away), and the
-#: promotion review (someone is being asked to decide). That is the line — a control event is targeted
+#: erasure release notice (someone loses pinned work at a deadline). That is the line — a control event is targeted
 #: when it changes what a specific person may do or must do, not when it changes an object.
 #:
 #: Enumerated rather than pattern-matched deliberately. A prefix rule (`table_*` is untargeted) would
@@ -86,6 +86,10 @@ _UNTARGETED_ACTIONS: frozenset[str] = frozenset(
         "namespace_unprotected",
         "policy_deleted",
         "policy_set",
+        # The tag gate's hold lifecycle changes a table's publication, not a person's standing.
+        "promotion_expired",
+        "promotion_held",
+        "promotion_rejected",
         "project_created",
         "project_deleted",
         "table_created",

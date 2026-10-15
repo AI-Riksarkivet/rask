@@ -10,8 +10,9 @@ A write that adds data to a silver or gold table names the run that produced it 
 into its commit, a stock client writes them into its staged manifest. A door whose pylance call cannot carry
 transaction properties (``update``, ``add_columns``), or that attaches bytes written elsewhere (``register``), is refused on those tiers, because the run it was given would
 not reach the commit. Every named input, on any tier, needs ``can_read_data``: naming a table one cannot read as an
-input would launder it into the derived table's lineage. The hold behind ``published`` lands with LH-466. A staged
-manifest's content is judged by ``catalog.services.managed_versions`` (LH-471), which hands its run here.
+input would launder it into the derived table's lineage. The judge answers allow or refuse before a write; a version
+that breaches the project's quality gate is held when it is published, by the publish door (``catalog.services.promotions``,
+ADR 0161). A staged manifest's content is judged by ``catalog.services.managed_versions`` (LH-471), which hands its run here.
 """
 
 from __future__ import annotations

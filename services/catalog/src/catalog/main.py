@@ -24,6 +24,7 @@ from catalog.api.dapr import register_control_dapr
 from catalog.api.erasure_release import mount_erasure_release
 from catalog.api.load_shed import WriteConcurrencyLimitMiddleware
 from catalog.api.maintenance_mode import maintenance_middleware
+from catalog.api.promotion_expiry import mount_promotion_expiry
 from catalog.api.v1.router import api_router
 from catalog.core import base_judge
 from catalog.core.config import Settings, get_settings
@@ -123,9 +124,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     # The relay's cron route (api/control_relay.py) is a SECOND sidecar-delivered door on this app and
     # carries the same guard, so its mount counts as "dapr enabled" here: a named binding with a blank
     # token would make `require_dapr_token` no-op and leave a replay-every-staged-event door open.
-    # The erasure release tick (api/erasure_release.py) is a third, guarded the same way.
+    # The erasure release tick (api/erasure_release.py) is a third, guarded the same way, and the promotion
+    # expiry tick (api/promotion_expiry.py) a fourth.
     assert_app_token_configured(
-        dapr_enabled=settings.control_emit_enabled or bool(settings.control_relay_binding_name) or bool(settings.erasure_release_binding_name)
+        dapr_enabled=settings.control_emit_enabled
+        or bool(settings.control_relay_binding_name)
+        or bool(settings.erasure_release_binding_name)
+        or bool(settings.promotion_expiry_binding_name)
     )
     # Q17-6 / §F2-2: the CODE default is anonymous and the chart flips it on, so a catalog started
     # any other way serves every route to anyone who can reach the port. Refused on the AMBIGUITY —
@@ -399,6 +404,9 @@ mount_control_relay(app, _settings.control_relay_binding_name)
 # ADR 0138: release an erasure's pinning tags and branches when the notice's grace period ends (POST /<binding
 # name> at the pod root). Mounted only when the chart names the binding, like the relay.
 mount_erasure_release(app, _settings.erasure_release_binding_name)
+# ADR 0156 C1: expire promotion holds nobody answered before their review deadline (POST /<binding name> at the
+# pod root). Mounted only when the chart names the binding, like the relay.
+mount_promotion_expiry(app, _settings.promotion_expiry_binding_name)
 # ADDED AFTER, therefore OUTSIDE the request-id layer — where they already were, and where they belong.
 # Reject oversized request bodies with 413 before they are buffered (Arrow-IPC OOM guard). See body_limit.py.
 app.add_middleware(BodySizeLimitMiddleware, max_bytes=_settings.max_body_bytes)

@@ -261,6 +261,11 @@ _OWNER_SUFFIX_RELATION: dict[str, dict[str, str]] = {
         # the escalation the ref-plane rungs exist to close. The quality gate is orthogonal: it
         # decides whether the DATA may be published, this decides whether the CALLER may.
         "publish": "can_update_tag",
+        # The tag gate's answer (ADR 0156 C1, [[LH-466]]): approving a held version moves `published` past the
+        # project's gate, and rejecting it restores main. Both are the VALIDATOR's act, a rung no writer or
+        # publisher holds, so a writer cannot approve its own held version (ADR 0160).
+        "promotion/approve": "can_promote",
+        "promotion/reject": "can_promote",
     },
     "namespace": {
         "drop": "can_delete",

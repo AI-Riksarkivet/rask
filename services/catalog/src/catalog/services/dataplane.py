@@ -75,6 +75,8 @@ from lance_namespace import (
     MergeInsertIntoTableRequest,
     MergeInsertIntoTableResponse,
     RegisterTableRequest,
+    RestoreTableRequest,
+    RestoreTableResponse,
     ServiceUnavailableError,
     TableAlreadyExistsError,
     TableBranchAlreadyExistsError,
@@ -1829,6 +1831,22 @@ def refuse_a_restore_that_arms_cleanup(ns: LanceNamespace, so: StorageOptions, t
             f"restore refused: version {version} carries commit-path auto-cleanup config {armed}, and restoring it would delete "
             "table versions inside the restore's own commit. Version reclamation belongs to the maintenance sweep; restore a version without these keys"
         )
+
+
+def restore(ns: LanceNamespace, so: StorageOptions, req: RestoreTableRequest) -> tuple[RestoreTableResponse, int | None]:
+    """Commit ``req``'s ref at ``req.version`` again as its newest version: the spec's answer, and the version made.
+
+    The spec's ``RestoreTable`` answers a transaction id and no version, so the version is read back from it, and
+    ``None`` means it could not be. Shared by the restore door and a promotion's rejection, which restores main to
+    the published version (ADR 0156 C1).
+
+    Raises:
+        InvalidInputError: The version to restore would arm commit-path cleanup.
+    """
+    table_id = list(req.id or [])
+    refuse_a_restore_that_arms_cleanup(ns, so, table_id, version=req.version, branch=req.branch)
+    response: RestoreTableResponse = native.call(ns, "restore_table", req)
+    return response, committed_version(ns, so, table_id, response.transaction_id, branch=req.branch)
 
 
 def refuse_a_branch_this_door_cannot_honour(branch: str | None, *, door: str, remedy: str | None = None) -> None:

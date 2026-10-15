@@ -11,6 +11,7 @@ from lance_namespace import (
     DeleteTableTagResponse,
     GetTableTagVersionRequest,
     GetTableTagVersionResponse,
+    InvalidInputError,
     LanceNamespace,
     ListTableTagsRequest,
     ListTableTagsResponse,
@@ -23,13 +24,26 @@ from catalog.api.dependencies import ControlEmitterDep, NamespaceDep, SettingsDe
 from catalog.api.rask_params import RaskFlag
 from catalog.api.security import CurrentToken
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
-from catalog.services import dataplane
+from catalog.services import dataplane, publication
 from service_kit.control_emit import emit_control
 from service_kit.governed import fga
 from service_kit.lakehouse import protection
 
 
 router = APIRouter(prefix="/v1/table", tags=["tag"])
+
+
+def _refuse_a_catalog_tag(tag: str) -> None:
+    """Refuse a tag the catalog moves itself (`publication.is_catalog_tag`), on every door that writes a tag.
+
+    Raises:
+        InvalidInputError: ``tag`` is `published`, `publishing` or under `rask.`.
+    """
+    if publication.is_catalog_tag(tag):
+        raise InvalidInputError(
+            f"tag {tag!r} is the catalog's own: `published` moves only through POST /management/v1/table/{{id}}/publish and a "
+            "can_promote holder's approval of a held version, and the other catalog tags pin versions for those doors"
+        )
 
 
 # DUAL-MOUNTED, and the reason is upstream disagreeing with itself. The spec says POST at every
@@ -75,6 +89,7 @@ async def create_table_tag(
     """
     segments = parse_identifier(id, settings.delimiter)
     body.id = reconcile_body_id(segments, body.id)
+    _refuse_a_catalog_tag(body.tag)
     response = dataplane.create_tag(ns, so, body)
     # AFTER the data-plane call — a change that did not happen is never announced.
     await emit_control(
@@ -115,6 +130,7 @@ async def update_table_tag(
     """
     segments = parse_identifier(id, settings.delimiter)
     body.id = reconcile_body_id(segments, body.id)
+    _refuse_a_catalog_tag(body.tag)
     response = dataplane.update_tag(ns, so, body)
     # AFTER the data-plane call — a change that did not happen is never announced.
     await emit_control(
@@ -141,13 +157,13 @@ async def delete_table_tag(
 ) -> DeleteTableTagResponse:
     """Delete a tag from the table — wraps lance_namespace DeleteTableTag.
 
-    PROTECTION-GATED ([[LH-056]]). A tag is the pin ``published`` is made of, and the publication
-    door's rollback guard rests on it: publication refuses to move ``published`` BACKWARDS and has
-    nothing to say about republishing after the tag is gone. So a protected table refuses this on the
-    same record its drop consults, and ``force`` turns that lock only.
+    PROTECTION-GATED ([[LH-056]]). A tag pins the version it names against cleanup, so a protected table
+    refuses this on the same record its drop consults, and ``force`` turns that lock only. The catalog's own
+    tags, ``published`` among them, are refused here whatever the table's protection says.
     """
     segments = parse_identifier(id, settings.delimiter)
     body.id = reconcile_body_id(segments, body.id)
+    _refuse_a_catalog_tag(body.tag)
     canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
     guard = await run_in_threadpool(protection.get_protection, settings.registry_root, settings.storage_options(), "table", canonical)
     fga_deps.require_not_protected(guard or {}, kind="table", obj_id=canonical, force=force)

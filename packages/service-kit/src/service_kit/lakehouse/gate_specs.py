@@ -59,6 +59,10 @@ class GateSpec(BaseModel):
     #: Whether a breach parks for a human at all. With this off a breach is only logged, which is
     #: the pre-review behaviour and still a legitimate choice for a tenant with nobody to ask.
     review_enabled: bool = False
+    #: How long a held promotion waits for a decision before the catalog's sweep expires it, leaving
+    #: `published` where it was. Hours, fractional allowed, and `gt=0` because a hold that expires as it
+    #: opens asks nobody.
+    review_hours: float = Field(default=72.0, gt=0)
 
     @property
     def gate_source(self) -> str:

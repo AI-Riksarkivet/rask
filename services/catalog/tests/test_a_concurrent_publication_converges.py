@@ -1,6 +1,6 @@
 """CONTRACT (LH-041): a publication that loses the tag-create race converges rather than failing.
 
-`_set_tag` read the tag and then branched create-vs-update. Two concurrent FIRST publications of one
+`set_tag` read the tag and then branched create-vs-update. Two concurrent FIRST publications of one
 dataset both read absent, both call create, and the loser got a 409 for a publish that should simply
 have moved the tag to the version it asked for.
 
@@ -17,7 +17,7 @@ from typing import Any, cast
 
 
 def test_a_concurrent_FIRST_publication_converges_instead_of_409ing(monkeypatch) -> None:
-    """CONTRACT (LH-041): `_set_tag` treats "the tag already exists" as convergence, not as failure.
+    """CONTRACT (LH-041): `set_tag` treats "the tag already exists" as convergence, not as failure.
 
     It read the tag and then branched create-vs-update, which is a TOCTOU: two concurrent FIRST
     publications of one dataset both read `None`, both call `create`, and the loser gets
@@ -51,6 +51,6 @@ def test_a_concurrent_FIRST_publication_converges_instead_of_409ing(monkeypatch)
     monkeypatch.setattr(publication.dataplane, "create_tag", _create)
     monkeypatch.setattr(publication.dataplane, "update_tag", _update)
 
-    publication._set_tag(cast("Any", None), {}, ["acme", "silver", "features"], "published", 7)
+    publication.set_tag(cast("Any", None), {}, ["acme", "silver", "features"], "published", 7)
 
     assert calls == ["create", "update"], f"the lost race was not converged: {calls}"

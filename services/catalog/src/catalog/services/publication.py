@@ -28,13 +28,20 @@ Deliberately shaped after `services/models.py::promote`, which has run this exac
 model registry since it was written — gate first, fail-closed, then create-or-update the tag. Models
 gate on metric thresholds and data gates on assertions, but the control flow is the same one, and
 having two spellings of it would be the drift this module exists to prevent.
+
+**THE TAG IS THE GATE, AND A BREACH IS HELD (ADR 0156 C1, [[LH-466]]).** Readers of a governed tier read the
+version tagged `published`, so a version reaches them only through this door. When the project's declared gate
+has review on, a version whose failed assertions a validator may waive, or whose row count moves past the band
+from the published version's, is HELD rather than refused: the tag stays where it is, and the door records a
+hold that a `can_promote` holder answers (`catalog.services.promotions`). A structural finding is refused
+whatever review says, because no approval makes broken data right.
 """
 
 from __future__ import annotations
 
 import contextlib
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from lance_namespace import (
     CreateTableTagRequest,
@@ -47,13 +54,13 @@ from lance_namespace import (
     TableVersionNotFoundError,
     UpdateTableTagRequest,
 )
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from catalog.core.config import shared_lance_session
 from catalog.core.namespace import open_dataset
 from catalog.services import dataplane
 from service_kit.lakehouse import gate_specs
-from service_kit.lakehouse.quality import NOT_NULL, STRUCTURAL_ASSERTIONS, Assertion, assert_quality, passed, tier_contract_violations
+from service_kit.lakehouse.quality import NOT_NULL, STRUCTURAL_ASSERTIONS, Assertion, assert_quality, tier_contract_violations
 
 
 if TYPE_CHECKING:
@@ -85,10 +92,96 @@ PUBLISHED_TAG = "published"
 #: GC of one version.
 PUBLISHING_TAG = "publishing"
 
+#: The prefix of the tags the platform pins versions with (`promotions.HOLD_TAG`), as `rask.*` is its metadata's.
+CATALOG_TAG_PREFIX = "rask."
+
+
+def is_catalog_tag(tag: str) -> bool:
+    """Whether ``tag`` is one the catalog moves itself and no client may create, move or delete.
+
+    `published` is what readers of a governed tier read (ADR 0156 C1), so only this door's gate and a
+    `can_promote` holder's approval move it; a tag door that moved it would publish past both. `publishing` and
+    the `rask.` tags pin versions for those doors.
+    """
+    return tag in (PUBLISHED_TAG, PUBLISHING_TAG) or tag.startswith(CATALOG_TAG_PREFIX)
+
 
 #: The two authorities that can name a gate's key column, as the result reports them.
 DECLARED_GATE = "declared"
 REQUESTED_GATE = "request"
+
+#: The band's two reasons to hold a version for a person. `FIRST_PUBLICATION`: nothing is published yet, or what
+#: is published is empty, so there is no row count to compare against and the band cannot judge. `ROW_COUNT_DELTA`:
+#: the row count moved further from the published version's than the band allows.
+FIRST_PUBLICATION = "first_publication"
+ROW_COUNT_DELTA = "row_count_delta"
+
+
+class ReviewPolicy(BaseModel):
+    """The review half of a project's declared gate, present only when the project turned review on."""
+
+    model_config = ConfigDict(frozen=True)
+
+    #: How far the row count may move from the published version's, as a ratio of it.
+    band: float
+    #: How long a held version waits for a decision before the sweep expires its hold.
+    hours: float
+
+
+def review_reasons(*, rows: int, published_rows: int | None, band: float) -> list[str]:
+    """Why a person should look at a version whose row count is ``rows`` — empty when the band passes it.
+
+    ``published_rows`` is ``None`` when nothing is published. A band of zero holds every change of row count
+    and passes an unchanged one.
+    """
+    if not published_rows:
+        return [FIRST_PUBLICATION]
+    if abs(rows - published_rows) > band * published_rows:
+        return [ROW_COUNT_DELTA]
+    return []
+
+
+class Verdict(BaseModel):
+    """What a version's findings decide: publish it, hold it for a `can_promote` holder, or refuse it."""
+
+    model_config = ConfigDict(frozen=True)
+
+    outcome: Literal["publish", "hold", "refuse"]
+    #: Failed assertions the request waived; a publish carrying any was an explicit acceptance.
+    accepted: list[str] = []
+    #: What decided a hold or a refusal: the failed assertions not waived, then the band's reasons.
+    reasons: list[str] = []
+
+    @property
+    def reason(self) -> str | None:
+        """The sentence the result carries, or ``None`` for a publish."""
+        match self.outcome:
+            case "refuse":
+                return f"quality gate failed: {', '.join(self.reasons)}"
+            case "hold":
+                return f"held for review: {', '.join(self.reasons)}"
+            case "publish":
+                return None
+
+
+def judge_findings(assertions: Sequence[Assertion], *, accept_assertions: Sequence[str] = (), band_reasons: Sequence[str] = (), review: bool) -> Verdict:
+    """Decide a version from its assertions and the band's reasons, under the project's review setting.
+
+    A structural failure refuses, whatever review says or the request accepts. With review off a failed assertion
+    the request did not accept refuses, and the band is not consulted. With review on, such a failure or a band
+    reason holds the version for a person.
+    """
+    failed = [a.assertion for a in assertions if not a.success]
+    # An acceptance names exactly what it accepts, so it is a statement about known findings rather than a
+    # blanket force that also waves through whatever appears later. Structural findings are never waived.
+    waived = set(accept_assertions) - STRUCTURAL_ASSERTIONS
+    unaccepted = [name for name in failed if name not in waived]
+    if any(name in STRUCTURAL_ASSERTIONS for name in unaccepted) or (unaccepted and not review):
+        return Verdict(outcome="refuse", reasons=unaccepted)
+    held = [*unaccepted, *band_reasons] if review else []
+    if held:
+        return Verdict(outcome="hold", reasons=held)
+    return Verdict(outcome="publish", accepted=sorted(set(failed)))
 
 
 def gate_source_for(declared_by: str) -> str:
@@ -126,6 +219,9 @@ class EffectiveGate(BaseModel):
     #: free-text label: `gate_source` derives from it, so the attribution cannot disagree with the
     #: record that actually governed.
     declared_by: str = ""
+    #: The declaration's review half when it turned review on, else `None`: only a project decides that a
+    #: breach waits for a person, so a request can neither turn review on nor off.
+    review: ReviewPolicy | None = None
 
     @property
     def gate_source(self) -> str:
@@ -166,24 +262,25 @@ def effective_gate(spec: GateSpec | None, *, key_column: str, required_columns: 
     # Declared first, then the request's own additions — an order, not a set, so the assertions come
     # back in a stable sequence a caller can diff between runs.
     union = list(spec.required_columns) + [column for column in required_columns if column not in spec.required_columns]
-    return EffectiveGate(key_column=spec.key_column, required_columns=union, declared_by=spec.project)
+    review = ReviewPolicy(band=spec.review_band, hours=spec.review_hours) if spec.review_enabled else None
+    return EffectiveGate(key_column=spec.key_column, required_columns=union, declared_by=spec.project, review=review)
 
 
-def _open_for_contract(uri: str, storage_options: dict[str, str], version: int) -> tuple[object, bool | None]:
-    """The schema of ``version`` at ``uri`` — the gate's half of the provenance check.
+def _open_for_contract(uri: str, storage_options: dict[str, str], version: int) -> tuple[Any, bool | None, int]:
+    """The schema, stable-row-id property and row count of ``version`` at ``uri`` — the gate's reads off the data.
 
-    `publish` already holds an opened dataset and passes its schema straight in; `gate` is handed a URI
-    and has to open one. Pinned to the same `version` the assertions ran against, never `latest`, for
-    the reason `assert_quality` records: another writer may have committed since, and answering about a
-    version this call is not gating is the failure the pin exists to prevent.
+    `publish` already holds an opened dataset and reads them off it; `gate` is handed a URI and has to
+    open one. Pinned to the same `version` the assertions ran against, never `latest`, for the reason
+    `assert_quality` records: another writer may have committed since, and answering about a version
+    this call is not gating is the failure the pin exists to prevent.
     """
     import lance
 
     dataset = lance.dataset(uri, storage_options=storage_options, version=version, session=shared_lance_session())
-    # BOTH READINGS FROM ONE OPEN. The schema answers the column half of the contract and
-    # `has_stable_row_ids` answers the half the columns cannot show; opening twice would let a
-    # concurrent commit put the two halves on different versions.
-    return dataset.schema, getattr(dataset, "has_stable_row_ids", None)
+    # EVERY READING FROM ONE OPEN. The schema answers the column half of the contract,
+    # `has_stable_row_ids` answers the half the columns cannot show, and the row count is the band's;
+    # opening twice would let a concurrent commit put them on different versions.
+    return dataset.schema, getattr(dataset, "has_stable_row_ids", None), int(dataset.count_rows())
 
 
 def refuse_a_tier_without_provenance(schema: Any, *, version: int, has_stable_row_ids: bool | None = None) -> None:
@@ -249,6 +346,11 @@ class PublicationResult(BaseModel):
     #: governed their data: a caller whose requested key column was superseded by the project's
     #: declaration reads an identical body otherwise.
     gate_source: str = REQUESTED_GATE
+    #: The gate breached under the project's review, so `to_version` waits for a `can_promote` holder and
+    #: `published` stays at `from_version`. Always false on a publish or a refusal.
+    held: bool = False
+    #: Why it is held: the failed assertions a validator may waive, then the band's reasons.
+    hold_reasons: list[str] = []
 
     @property
     def advanced(self) -> bool:
@@ -282,7 +384,7 @@ def published_version(ns: LanceNamespace, so: dict[str, str], table_id: Sequence
     return _tag_version(ns, so, table_id, PUBLISHED_TAG)
 
 
-def _set_tag(ns: LanceNamespace, so: dict[str, str], table_id: Sequence[str], tag: str, version: int) -> None:
+def set_tag(ns: LanceNamespace, so: dict[str, str], table_id: Sequence[str], tag: str, version: int) -> None:
     """Create the tag, or move it if it already exists.
 
     The spec splits create and update into two operations and refuses the wrong one, so which to call
@@ -310,6 +412,31 @@ def _set_tag(ns: LanceNamespace, so: dict[str, str], table_id: Sequence[str], ta
     dataplane.update_tag(ns, so, UpdateTableTagRequest(id=list(table_id), tag=tag, version=version))
 
 
+def advance(ns: LanceNamespace, so: dict[str, str], table_id: Sequence[str], version: int, *, tag: str = PUBLISHED_TAG) -> tuple[bool, int | None]:
+    """Move ``tag`` forward to ``version``: whether it moved, and the version it named before.
+
+    Read again right before the move, so a publication that landed after the caller's own read is never moved back
+    over. The read and the move are two operations, because a Lance tag has no conditional update, so two
+    publications inside that gap can still race.
+    """
+    current = _tag_version(ns, so, table_id, tag)
+    if current is not None and current >= version:
+        return False, current
+    set_tag(ns, so, table_id, tag, version)
+    return True, current
+
+
+def drop_tag(ns: LanceNamespace, so: dict[str, str], table_id: Sequence[str], tag: str) -> None:
+    """Delete the tag; one that is already gone is the outcome asked for, not an error."""
+    with contextlib.suppress(TableTagNotFoundError):
+        dataplane.delete_tag(ns, so, DeleteTableTagRequest(id=list(table_id), tag=tag))
+
+
+def rows_at(ns: LanceNamespace, so: dict[str, str], table_id: Sequence[str], version: int | None) -> int | None:
+    """The row count of ``version`` on main, or ``None`` for no version. Read off the manifest, not a scan."""
+    return None if version is None else int(open_dataset(ns, so, list(table_id), version=version).count_rows())
+
+
 def gate(
     uri: str,
     *,
@@ -318,6 +445,8 @@ def gate(
     required_columns: Sequence[str] = (),
     storage_options: dict[str, str] | None = None,
     declared_by: str = "",
+    review: ReviewPolicy | None = None,
+    published_rows: int | None = None,
 ) -> PublicationResult:
     """Run the publish gate's assertions and return the verdict WITHOUT touching the tag.
 
@@ -338,7 +467,8 @@ def gate(
 
     `declared_by` names the project whose declared record supplied `key_column`; empty means the
     request did. It only describes the values — this function never reads a declaration itself, so the
-    two doors cannot resolve one differently.
+    two doors cannot resolve one differently. `review` is that declaration's review half and
+    `published_rows` the published version's row count, so the answer says whether the act would HOLD.
     """
     assertions = assert_quality(
         uri,
@@ -354,9 +484,10 @@ def gate(
     # the reviewer has no way to see it coming. Opening the dataset a second time is the cost of
     # answering the same question — `assert_quality` above opened it for the assertions, and the
     # contract is a schema read, not a scan.
-    contract_schema, stable_ids = _open_for_contract(uri, storage_options or {}, version)
+    contract_schema, stable_ids, rows = _open_for_contract(uri, storage_options or {}, version)
     refuse_a_tier_without_provenance(contract_schema, version=version, has_stable_row_ids=stable_ids)
-    failed = [a.assertion for a in assertions if not a.success]
+    band = review_reasons(rows=rows, published_rows=published_rows, band=review.band) if review is not None else []
+    verdict = judge_findings(assertions, band_reasons=band, review=review is not None)
     return PublicationResult(
         table=uri,
         published=False,
@@ -364,7 +495,9 @@ def gate(
         to_version=version,
         assertions=list(assertions),
         gate_source=gate_source_for(declared_by),
-        reason=f"gate only: {', '.join(failed)}" if failed else None,
+        reason=f"gate only: {verdict.reason}" if verdict.reason else None,
+        held=verdict.outcome == "hold",
+        hold_reasons=verdict.reasons if verdict.outcome == "hold" else [],
     )
 
 
@@ -379,13 +512,15 @@ def publish(
     accept_assertions: Sequence[str] = (),
     tag: str = PUBLISHED_TAG,
     declared_by: str = "",
+    review: ReviewPolicy | None = None,
 ) -> PublicationResult:
     """Gate `version`, then advance `published` to it. Returns the range the notification should carry.
 
     Fail-closed in every direction: an out-of-range version raises before anything is read, and a
-    failed assertion returns `published=False` with the tag untouched, so the previously published
+    refused or held version returns `published=False` with the tag untouched, so the previously published
     version keeps serving. The assertions travel back either way — a blocked batch has to be
-    auditable, not merely rejected.
+    auditable, not merely rejected. `review` is the project's declared review (see `judge_findings`); a
+    HELD result is the caller's to record (`catalog.services.promotions`).
 
     The caller is already authorized; this decides only whether the DATA is good enough, which is the
     validator half of governance. FGA decides who MAY publish.
@@ -414,7 +549,7 @@ def publish(
 
     try:
         # Pin the candidate for the gate's duration — see PUBLISHING_TAG.
-        _set_tag(ns, storage_options, table_id, PUBLISHING_TAG, version)
+        set_tag(ns, storage_options, table_id, PUBLISHING_TAG, version)
 
         # Gate the version being published, not `latest`: they differ the moment another writer commits
         # while this gate runs, and publishing a version nobody checked is the whole failure this
@@ -437,34 +572,34 @@ def publish(
         # untraceable one, and no assertion in the list above can see a column that is absent.
         refuse_a_tier_without_provenance(candidate.schema, version=version, has_stable_row_ids=getattr(candidate, "has_stable_row_ids", None))
 
-        accepted: list[str] = []
-        if not passed(assertions):
-            failed = [a.assertion for a in assertions if not a.success]
-            # An override names EXACTLY what it accepts, so it is a statement about known findings
-            # rather than a blanket force that also waves through whatever appears later. Structural
-            # findings are excluded first and unconditionally: naming one cannot publish it.
-            waved = set(accept_assertions) - STRUCTURAL_ASSERTIONS
-            unaccepted = [name for name in failed if name not in waved]
-            if unaccepted:
-                return PublicationResult(
-                    table=candidate.uri,
-                    published=False,
-                    from_version=previous,
-                    to_version=version,
-                    assertions=assertions,
-                    gate_source=gate_source_for(declared_by),
-                    reason=f"quality gate failed: {', '.join(unaccepted)}",
-                )
-            accepted = sorted(set(failed))
+        # The band compares the row count readers would move to with the one they read now.
+        band = (
+            review_reasons(rows=int(candidate.count_rows()), published_rows=rows_at(ns, storage_options, table_id, previous), band=review.band)
+            if review is not None
+            else []
+        )
+        verdict = judge_findings(assertions, accept_assertions=accept_assertions, band_reasons=band, review=review is not None)
+        if verdict.outcome != "publish":
+            return PublicationResult(
+                table=candidate.uri,
+                published=False,
+                from_version=previous,
+                to_version=version,
+                assertions=assertions,
+                gate_source=gate_source_for(declared_by),
+                reason=verdict.reason,
+                held=verdict.outcome == "hold",
+                hold_reasons=verdict.reasons if verdict.outcome == "hold" else [],
+            )
 
-        _set_tag(ns, storage_options, table_id, tag, version)
+        set_tag(ns, storage_options, table_id, tag, version)
         return PublicationResult(
             table=candidate.uri,
             published=True,
             from_version=previous,
             to_version=version,
             assertions=assertions,
-            accepted=accepted,
+            accepted=verdict.accepted,
             gate_source=gate_source_for(declared_by),
         )
     finally:

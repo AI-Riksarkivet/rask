@@ -1,9 +1,10 @@
 """Quality-gate declaration endpoints — the governed door a project's gate is CONFIGURED through.
 
 The gate decides whether a write into a tier may publish: which column identifies a row, which columns
-a consumer depends on, and how far a row count may move before a promotion waits for a human. A gate is
-a record like every other governed artefact, so it can be enumerated, reviewed and gated on. The catalog's
-own promotion hold (ADR 0155, LH-466) is what reads it.
+a consumer depends on, how far a row count may move before a promotion waits for a human, and how long
+that wait may last. A gate is a record like every other governed artefact, so it can be enumerated,
+reviewed and gated on. The publish door reads it, and holds a breaching version for a `can_promote`
+holder when review is on (ADR 0156 C1, [[LH-466]]).
 
 Admin-gated on ``project:<id>#can_administer``, checked EXPLICITLY: ``/management/v1/project`` is not a
 router-guarded resource prefix, and ``project`` defines no reader-tier relation, so describe gates at
@@ -74,14 +75,21 @@ async def set_gate(
     except ValidationError as exc:
         raise _as_request_validation(exc) from None
     await run_in_threadpool(gate_specs.put_spec, settings.registry_root, settings.storage_options(), spec)
-    log.info("gate_spec_set", extra={"project": project, "review_band": spec.review_band, "review_enabled": spec.review_enabled})
+    log.info(
+        "gate_spec_set", extra={"project": project, "review_band": spec.review_band, "review_enabled": spec.review_enabled, "review_hours": spec.review_hours}
+    )
     await emit_control(
         control,
         action="gate_set",
         object_type="gate",
         object_id=project,
         actor=f"user:{token.sub}" if token else None,
-        extra={"review_band": str(spec.review_band), "review_enabled": str(spec.review_enabled), "key_column": spec.key_column},
+        extra={
+            "review_band": str(spec.review_band),
+            "review_enabled": str(spec.review_enabled),
+            "review_hours": str(spec.review_hours),
+            "key_column": spec.key_column,
+        },
     )
     return GateSpecResponse.model_validate(spec.model_dump())
 

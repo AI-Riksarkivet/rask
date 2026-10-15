@@ -130,6 +130,11 @@ REGISTER_TABLE = "register_table"
 #: ``version`` is the tag's TARGET (the promoted model version), not a fresh write — a distinct op so a
 #: blessing is never mistaken for a training run or a data write on the run board.
 PROMOTE_MODEL = "promote_model"
+#: The tag gate (ADR 0156 C1, [[LH-466]]): a table's ``published`` tag moved, so readers of its tier now read
+#: ``version``, the tag's target. Like a model promotion it mints no version, and it is a run of its own so the
+#: project's watchers are told that new data is live: the notifications plane targets them by this event's
+#: ``lance.project`` (`.claude/skills/rask-notifications`, WATCH).
+PUBLISH_TABLE = "publish_table"
 
 #: OpenLineage ``producer`` URI — identifies the software that emitted the event (spec-required,
 #: and what a Marquez-style consumer records as the event source).

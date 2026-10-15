@@ -273,6 +273,19 @@
                         }
                     }
                 },
+                "promotion": {
+                    "type": "object",
+                    "properties": {
+                        "bindingName": {
+                            "description": "Name of the promotion-expiry Dapr cron Component; also the catalog's LANCE_PROMOTION_EXPIRY_BINDING_NAME and the route it serves.",
+                            "type": "string"
+                        },
+                        "schedule": {
+                            "description": "Dapr cron schedule on which promotion holds past their review deadline expire; lateness only costs time.",
+                            "type": "string"
+                        }
+                    }
+                },
                 "trashGraceDays": {
                     "description": "Days a dropped table or namespace stays undroppable before the trash purge may reclaim it (LANCE_TRASH_GRACE_DAYS). 0 destroys immediately.",
                     "type": "integer"

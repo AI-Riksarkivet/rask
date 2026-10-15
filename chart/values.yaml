@@ -1062,6 +1062,16 @@ catalog:
     # How late a due release may run; late costs only time, so this is loose.
     # -- Dapr cron schedule on which due erasure pin releases run; lateness only costs time.
     schedule: "@every 300s"
+  # ADR 0156 C1 (LH-466): a publish the project's quality gate holds waits for a can_promote holder until the
+  # project's declared review_hours pass; this cron expires the holds nobody answered, and `published` stays.
+  promotion:
+    # ONE STRING, as for controlOutbox: the Component (catalog-promotion-expiry-cron.yaml), the app's
+    # LANCE_PROMOTION_EXPIRY_BINDING_NAME and the route at the catalog's pod root.
+    # -- Name of the promotion-expiry Dapr cron Component; also the catalog's LANCE_PROMOTION_EXPIRY_BINDING_NAME and the route it serves.
+    bindingName: catalog-promotion-expiry-cron
+    # A tick lists the open holds, an empty prefix in the healthy case, so it is cheap at this cadence.
+    # -- Dapr cron schedule on which promotion holds past their review deadline expire; lateness only costs time.
+    schedule: "@every 60s"
 
 # Dapr pub/sub: the publish-side component name + the lineage topic. Each SUBSCRIBER app additionally
 # gets its own derived component `<name>-<app-id>` carrying its queue group + deliver policy

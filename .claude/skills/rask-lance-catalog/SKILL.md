@@ -141,7 +141,8 @@ ADR 0160, LH-470). `catalog/core/tier_policy.py` holds it:
   next version by the backend's put-if-not-exists, because `LanceDataset.commit` of an `execute_uncommitted` merge
   rebases past a racing writer without its key check (measured on pylance 13.0.0: a duplicate key landed). A run on
   a branch write is refused 406. `update` and `add_columns` cannot carry transaction properties on pylance 13, so
-  silver and gold refuse them 406. The hold behind `published` lands with LH-466. Nothing anywhere reads a tier from
+  silver and gold refuse them 406. The judge answers allow or refuse; a version breaching the project's quality gate
+  is held when it is published, at the publish door (ADR 0161, below). Nothing anywhere reads a tier from
   a name.
 
 ## Storage — what state lives where (and why there is NO app database)
@@ -536,11 +537,18 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   silver and gold are written only through the namespace doors, so each tier is a `table:` object with a
   record and ownership tuples from its first row, and the catalog announces every committed write on
   lineage. Moving rows between tiers runs on the user's own compute and orchestrator; the lakehouse runs
-  no stage. The promotion gate today is `POST /management/v1/table/{id}/publish`: the project's quality
-  gate (`/management/v1/project/{id}/gate/*`) runs against the committed version and only a pass advances the
-  `published` tag. ADR 0156 C1 makes that tag THE gate: readers of a governed tier read `@published`,
-  approval moves it (`UpdateTableTag`), rejection restores main to it (`RestoreTable`), and moving it
-  notifies the project's watchers (LH-466, #586). A governed row needs no column (C9, [[LH-477]]): `source_rowid`
+  no stage. **The promotion gate is the `published` tag** (ADR 0156 C1, ADR 0161, [[LH-466]]): readers of a
+  governed tier read `@published`, and `POST /management/v1/table/{id}/publish` runs the project's quality gate
+  (`/management/v1/project/{id}/gate/*`) against the committed version; a pass advances the tag. With
+  `review_enabled` on that gate, a version whose non-structural assertions fail, or whose row count moves past
+  `review_band` from the published one (or that would be the table's first publication), is HELD
+  (`catalog.services.promotions`): `published` stays, one record per table under `_promotions/` on the control
+  root lists it on `GET /management/v1/promotions`, and the tag `rask.held` pins it against cleanup. A `can_promote`
+  holder answers on `POST /management/v1/table/{id}/promotion/approve` (`published` moves to it) or
+  `.../promotion/reject` (main is restored to the published version as a new commit); a hold unanswered after the
+  gate's `review_hours` expires on `catalog-promotion-expiry-cron`. Every move of `published` emits a `publish_table`
+  lineage run, which the notifications plane delivers to the project's watchers, and the spec's tag doors refuse
+  `published`, `publishing` and every `rask.` tag (400), so nothing else moves it. A governed row needs no column (C9, [[LH-477]]): `source_rowid`
   is an opt-in the publish door holds to uint64 stable row ids, and `stage` and `lineage` are the writer's.
 
   **`register_table` is the door for bytes written outside the catalog's own doors.** It turns written

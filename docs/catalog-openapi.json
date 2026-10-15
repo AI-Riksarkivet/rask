@@ -2705,6 +2705,9 @@
               "table_purged",
               "namespace_purged",
               "table_published",
+              "promotion_held",
+              "promotion_rejected",
+              "promotion_expired",
               "table_branch_created",
               "table_branch_deleted",
               "table_tag_created",
@@ -6780,6 +6783,11 @@
             "default": false,
             "title": "Review Enabled",
             "type": "boolean"
+          },
+          "review_hours": {
+            "default": 72.0,
+            "title": "Review Hours",
+            "type": "number"
           }
         },
         "title": "GateSpecRequest",
@@ -6809,13 +6817,18 @@
           "review_enabled": {
             "title": "Review Enabled",
             "type": "boolean"
+          },
+          "review_hours": {
+            "title": "Review Hours",
+            "type": "number"
           }
         },
         "required": [
           "project",
           "key_column",
           "review_band",
-          "review_enabled"
+          "review_enabled",
+          "review_hours"
         ],
         "title": "GateSpecResponse",
         "type": "object"
@@ -9344,6 +9357,194 @@
         "title": "PromoteResponse",
         "type": "object"
       },
+      "PromotionDecision": {
+        "description": "What a decision did: the closed hold, what readers of `published` now read, and main's restore.",
+        "properties": {
+          "hold": {
+            "$ref": "#/components/schemas/PromotionHold"
+          },
+          "published_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Published Version"
+          },
+          "restored_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Restored Version"
+          }
+        },
+        "required": [
+          "hold",
+          "published_version"
+        ],
+        "title": "PromotionDecision",
+        "type": "object"
+      },
+      "PromotionDecisionRequest": {
+        "additionalProperties": false,
+        "description": "The held version being decided. A decision lands only on the hold its decider reviewed.",
+        "properties": {
+          "version": {
+            "minimum": 1.0,
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version"
+        ],
+        "title": "PromotionDecisionRequest",
+        "type": "object"
+      },
+      "PromotionHold": {
+        "description": "A version the project's quality gate holds for a `can_promote` holder, or the last decision on one.",
+        "properties": {
+          "decided_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decided At"
+          },
+          "decided_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decided By"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "opened_at": {
+            "format": "date-time",
+            "title": "Opened At",
+            "type": "string"
+          },
+          "published_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Published Version"
+          },
+          "reasons": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Reasons",
+            "type": "array"
+          },
+          "requested_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requested By"
+          },
+          "restored_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Restored Version"
+          },
+          "state": {
+            "default": "open",
+            "enum": [
+              "open",
+              "approved",
+              "rejected",
+              "expired",
+              "superseded"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "table": {
+            "title": "Table",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "table",
+          "version",
+          "published_version",
+          "reasons",
+          "opened_at",
+          "expires_at"
+        ],
+        "title": "PromotionHold",
+        "type": "object"
+      },
+      "PromotionsListResponse": {
+        "description": "The open holds the caller may see, in table order.",
+        "properties": {
+          "holds": {
+            "items": {
+              "$ref": "#/components/schemas/PromotionHold"
+            },
+            "title": "Holds",
+            "type": "array"
+          },
+          "page_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Page Token"
+          }
+        },
+        "required": [
+          "holds"
+        ],
+        "title": "PromotionsListResponse",
+        "type": "object"
+      },
       "ProtectionResponse": {
         "properties": {
           "id": {
@@ -9452,6 +9653,21 @@
             "default": "request",
             "title": "Gate Source",
             "type": "string"
+          },
+          "held": {
+            "default": false,
+            "title": "Held",
+            "type": "boolean"
+          },
+          "hold": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PromotionHold"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "published": {
             "title": "Published",
@@ -16611,6 +16827,109 @@
         ]
       }
     },
+    "/management/v1/promotions": {
+      "get": {
+        "description": "The open holds the caller may see, in table order: each table's held version, what `published` names, why\nit is held and when the sweep expires it. A hold is listed to a caller holding `can_get_metadata` on its table.",
+        "operationId": "list_promotions_management_v1_promotions_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Continue after this table id (the previous page's `page_token`).",
+            "in": "query",
+            "name": "page_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Continue after this table id (the previous page's `page_token`).",
+              "title": "Page Token"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-caller-app-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Caller-App-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PromotionsListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Promotions",
+        "tags": [
+          "publication"
+        ]
+      }
+    },
     "/management/v1/stores": {
       "get": {
         "description": "The whole registry in one response \u2014 it is estate config, and the tier view needs all of it.\n\nESTATE-ADMIN GATED, on the same relation and object ``attach_store`` uses. Its docstring already\nstates the reason and it applies to the read at least as strongly: a store record names a host\nand a bucket the whole estate would then see, which is estate-wide disclosure \u2014 and reading the\nlist IS the disclosure, where attaching is only the cause of it. Ungated, any authenticated\nprincipal (any project member) enumerated every bucket the estate knows, including the\n``endpoint`` hosts of third-party buckets someone attached.\n\nThe router-level ``authorize`` cannot cover this: it authorizes ``{id}`` routes under\n``_RESOURCES`` and lets id-less collection routes through on authentication alone, which is right\nfor a listing the endpoint then FILTERS (``/management/v1/warehouses``, ``/management/v1/model``) and wrong for one it\ndoes not. This registry is estate-wide config with no per-item FGA object to filter on, so the\nhonest gate is the estate rung rather than a per-store one.",
@@ -17880,13 +18199,13 @@
             }
           },
           {
-            "description": "`read` (can_read_data), `write` (can_write_data: read the table, put data, transaction and deletion files and a staged manifest for CreateTableVersion to finalize) or `maintain` (can_maintain: get, put and delete the whole prefix).",
+            "description": "`read` (can_read_data), `write` (can_write_data: read the table, put data, transaction and deletion files and a staged manifest for CreateTableVersion to finalize) or `maintain` (can_vend_maintain, the maintenance identity's alone: get, put and delete the whole prefix).",
             "in": "query",
             "name": "tier",
             "required": false,
             "schema": {
               "default": "read",
-              "description": "`read` (can_read_data), `write` (can_write_data: read the table, put data, transaction and deletion files and a staged manifest for CreateTableVersion to finalize) or `maintain` (can_maintain: get, put and delete the whole prefix).",
+              "description": "`read` (can_read_data), `write` (can_write_data: read the table, put data, transaction and deletion files and a staged manifest for CreateTableVersion to finalize) or `maintain` (can_vend_maintain, the maintenance identity's alone: get, put and delete the whole prefix).",
               "enum": [
                 "read",
                 "write",
@@ -18994,6 +19313,254 @@
         ]
       }
     },
+    "/management/v1/table/{id}/promotion/approve": {
+      "post": {
+        "description": "Approve the held `version`: `published` moves to it (the spec's `UpdateTableTag`) and its watchers are told.\n\nGated on `can_promote` by the router (`fga_deps`), and the tier judge decides it like every write. The approval\nis recorded before the tag moves, so approving again completes one whose tag move failed and otherwise answers\nas decided. 409 when the table holds no such version, it was decided otherwise, or `published` reached it.",
+        "operationId": "approve_promotion_management_v1_table__id__promotion_approve_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "title": "Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-caller-app-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Caller-App-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-originator",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Originator"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PromotionDecisionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PromotionDecision"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Approve Promotion",
+        "tags": [
+          "publication"
+        ]
+      }
+    },
+    "/management/v1/table/{id}/promotion/reject": {
+      "post": {
+        "description": "Reject the held `version`: main is restored to the published version (the spec's `RestoreTable`), as a new\ncommit, so the next writer builds on what readers read. `published` does not move.\n\nGated on `can_promote` by the router (`fga_deps`), and the tier judge decides it like every write. The rejection\nis recorded before main is restored, and main is restored once: rejecting again completes a restore the first\ncall could not make, and otherwise answers as decided. With nothing published, or `published` moved to or past\nthe held version meanwhile, there is nothing to restore and the rejection only closes the hold. 409 when the\ntable holds no such version, it was decided otherwise, or `published` reached it.",
+        "operationId": "reject_promotion_management_v1_table__id__promotion_reject_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "title": "Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-caller-app-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Caller-App-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-originator",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Originator"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PromotionDecisionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PromotionDecision"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Reject Promotion",
+        "tags": [
+          "publication"
+        ]
+      }
+    },
     "/management/v1/table/{id}/protection": {
       "get": {
         "description": "Read the deletion-protection flag (#123). The SET door shipped a year of writes with NO read:\nan operator could not arm, disarm-check, or audit protection \u2014 they discovered it by eating a\n409. Owner-gated like the set door (the observer of a safety is whoever might trip it), and the\nrecord's `set_by` comes back so a refused drop can name who armed it.",
@@ -19168,7 +19735,7 @@
     },
     "/management/v1/table/{id}/publish": {
       "post": {
-        "description": "Gate `version` and, if it passes, advance `published` to it.\n\nA refused gate is a 200 with `published=False`, not an error status: the request was well-formed\nand the system did exactly what it should. Errors are reserved for the caller getting it wrong \u2014\nan unknown version (404), a backwards move (409), a malformed one (400) \u2014 all raised as\n`lance_namespace` typed errors so the shared problem-body handler renders them.",
+        "description": "Gate `version` and, if it passes, advance `published` to it; hold it when it breaches under review.\n\nA refused gate is a 200 with `published=False`, not an error status: the request was well-formed\nand the system did exactly what it should. A held one is a 200 with `held=True` and the hold. Errors\nare reserved for the caller getting it wrong \u2014 an unknown version (404), a backwards move (409), a\nmalformed one (400), a version older than the one held (409) \u2014 all raised as `lance_namespace` typed\nerrors so the shared problem-body handler renders them.",
         "operationId": "publish_table_management_v1_table__id__publish_post",
         "parameters": [
           {
@@ -19196,6 +19763,22 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
             }
           },
           {
@@ -26820,7 +27403,7 @@
     },
     "/v1/table/{id}/tags/delete": {
       "post": {
-        "description": "Delete a tag from the table \u2014 wraps lance_namespace DeleteTableTag.\n\nPROTECTION-GATED ([[LH-056]]). A tag is the pin ``published`` is made of, and the publication\ndoor's rollback guard rests on it: publication refuses to move ``published`` BACKWARDS and has\nnothing to say about republishing after the tag is gone. So a protected table refuses this on the\nsame record its drop consults, and ``force`` turns that lock only.",
+        "description": "Delete a tag from the table \u2014 wraps lance_namespace DeleteTableTag.\n\nPROTECTION-GATED ([[LH-056]]). A tag pins the version it names against cleanup, so a protected table\nrefuses this on the same record its drop consults, and ``force`` turns that lock only. The catalog's own\ntags, ``published`` among them, are refused here whatever the table's protection says.",
         "operationId": "delete_table_tag_v1_table__id__tags_delete_post",
         "parameters": [
           {
