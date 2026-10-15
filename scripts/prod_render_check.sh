@@ -212,15 +212,21 @@ grep -q "app.kubernetes.io/component: minio-mkbucket" "$OUT" || fail "the mkbuck
 grep -q -- "- minio-mkbucket" "$OUT" || fail "the minio ingress client list must admit the mkbucket hook component"
 
 # POD IDENTITY. Asserted on the RENDER: a template that stops naming its SA is invisible to any values
-# grep. Counted, not merely found: one dedicated ServiceAccount proves the SAs render, not that the
-# fleet uses them. Measured on this overlay 2026-10-12, with the prerequisites outside the release
-# (ADR 0153; NATS's two SAs are the bus's, [[XC-129]], and CloudNativePG's the operator's, [[XC-130]], the dev Dex's and MinIO's the fixtures', [[XC-131]], and OpenFGA's and the Postgres's the platform's, [[XC-132]]): 24 ServiceAccounts and 21
-# `automountServiceAccountToken: false`. The per-pod verdict (no first-party pod on `default`, no idle
-# token, no secret grant to their SAs) is
+# grep. Every workload's pod names a ServiceAccount, and every name it gives is one this render creates, so no
+# pod runs as the namespace's shared `default` and none names an account that does not exist. Measured on this
+# overlay 2026-10-15, with the prerequisites outside the release (ADR 0153): 21 workloads naming 12 of the 17
+# ServiceAccounts rendered; the other five belong to components the overlay leaves off. The per-pod verdict
+# (no idle token, no secret grant to their SAs) is
 # tests/unit/test_a_first_party_pod_cannot_read_a_secret_through_the_kube_api.py.
+workloads=$(grep -cE '^kind: (Deployment|StatefulSet|DaemonSet|Job|CronJob)$' "$OUT" || true)
+named=$(grep -E '^ +serviceAccountName: ' "$OUT" | awk '{print $2}' | tr -d '"' | sort)
+named_count=$(grep -c . <<<"$named" || true)
+[ "$named_count" -ge "$workloads" ] \
+  || fail "prod must give every workload a dedicated ServiceAccount (templates/security-sa.yaml): $workloads workloads, $named_count name one"
+rendered=$(awk '/^kind: ServiceAccount$/{sa=1;next} sa && /^  name: /{print $2; sa=0}' "$OUT" | tr -d '"' | sort -u)
+unrendered=$(comm -23 <(sort -u <<<"$named") <(echo "$rendered"))
+[ -z "$unrendered" ] || fail "workloads name ServiceAccounts this render does not create: $(tr '\n' ' ' <<<"$unrendered")"
 sa=$(grep -c "^kind: ServiceAccount" "$OUT" || true)
-[ "$sa" -ge 24 ] \
-  || fail "prod must give the fleet dedicated ServiceAccounts (templates/security-sa.yaml), rendered $sa (>=24 expected; 18 is the everything-runs-as-default baseline)"
 automount=$(grep -c "automountServiceAccountToken: false" "$OUT" || true)
 [ "$automount" -ge 15 ] \
   || fail "prod must stop mounting the SA token into app pods, rendered $automount refusals (>=15 expected; 1 is the baseline)"

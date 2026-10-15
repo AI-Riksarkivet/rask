@@ -245,14 +245,21 @@ RENDER_ARGS="` + renderArgs + `"
 render() { helm template chart $RENDER_ARGS "$@" | grep -v '^[[:space:]]*#'; }
 # RENDERED TO A FILE FIRST, so set -e sees a failed render: inside '$(render | grep -c X || true)' the
 # '|| true' swallows it and a render of nothing reads as a count of zero. The 'kind: Deployment' probe
-# proves the render produced a manifest before anything is concluded from it. Measured 2026-10-02 on
-# this render: 45 ServiceAccounts, 29 'automountServiceAccountToken: false', 32 pods on a '-sa-' SA; on
-# 2026-10-12, with every prerequisite and development stand-in out of the chart (ADR 0153): 25, 22 and 29.
+# proves the render produced a manifest before anything is concluded from it.
 render > /tmp/sa.yaml
 grep -q "kind: Deployment" /tmp/sa.yaml
-sa_objects=$(grep -c "^kind: ServiceAccount" /tmp/sa.yaml || true); [ "$sa_objects" -ge 25 ] || exit 1
-automount_off=$(grep -c "automountServiceAccountToken: false" /tmp/sa.yaml || true); [ "$automount_off" -ge 22 ] || exit 1
-wired=$(grep -c "serviceAccountName: .*-sa-" /tmp/sa.yaml || true); [ "$wired" -ge 25 ] || exit 1
+# The claim, not a count of it: every workload's pod names a ServiceAccount this render creates, so none runs as
+# the namespace's shared 'default'. Measured on this render 2026-10-15: 24 workloads, 24 names, 18 accounts.
+workloads=$(grep -cE '^kind: (Deployment|StatefulSet|DaemonSet|Job|CronJob)$' /tmp/sa.yaml || true)
+named=$(grep -E '^ +serviceAccountName: ' /tmp/sa.yaml | awk '{print $2}' | tr -d '"' | sort || true)
+[ "$(grep -c . <<<"$named" || true)" -ge "$workloads" ] || exit 1
+rendered=$(awk '/^kind: ServiceAccount$/{sa=1;next} sa && /^  name: /{print $2; sa=0}' /tmp/sa.yaml | tr -d '"' | sort -u)
+[ -z "$(comm -23 <(sort -u <<<"$named") <(echo "$rendered"))" ] || exit 1
+# And every first-party account (security-sa.yaml's '-sa-' names) is tokenless unless a binding gives it work in
+# the API (OpenBao under ESO, the issuer mirror): a token nothing uses is a credential for whoever reads the pod.
+tokened=$(awk '/^---/{if(n!="" && !off) print n; n=""; off=0; sa=0} /^kind: ServiceAccount$/{sa=1} sa && /^  name: /{n=$2} sa && /^automountServiceAccountToken: false/{off=1} END{if(n!="" && !off) print n}' /tmp/sa.yaml | tr -d '"' | grep -- '-sa-' | sort -u || true)
+bound=$(grep -A1 -E '^ +- kind: ServiceAccount$' /tmp/sa.yaml | awk '/name:/{print $2}' | tr -d '"' | sort -u || true)
+[ -z "$(comm -23 <(echo "$tokened") <(echo "$bound"))" ] || exit 1
 # 'if', not '!': set -e ignores a negated command, so '! grep -q' could never fail this gate.
 if grep -q "runAsUser: 999" /tmp/sa.yaml; then exit 1; fi
 render --set security.infraContexts.enabled=true > /tmp/sec.yaml
