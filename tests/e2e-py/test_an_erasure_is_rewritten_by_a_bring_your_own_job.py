@@ -164,8 +164,10 @@ def _authors_of(identity: Identity, *, since: int, table: str, versions: set[int
     while not versions <= set(authors):
         body = _ok(identity.http.get(f"{LINEAGE}/events", params={"since": cursor, "table": table, "limit": 500}, timeout=30))
         for row in body["events"]:
-            run = (row.get("event") or {}).get("run") or {}
-            facets = run.get("facets") or {}
+            # A write's facets ride its run; a definition change's, an index built or dropped among them, ride its
+            # dataset (`docs/COMMIT-EVENTS.md` § A dataset change).
+            event = row.get("event") or {}
+            facets = (event.get("run") or event.get("dataset") or {}).get("facets") or {}
             version = (facets.get("lance") or {}).get("version")
             if version is not None:
                 authors[int(version)] = str((facets.get("author") or {}).get("sub"))
