@@ -98,12 +98,16 @@ def test_grantable_relations_are_the_base_rungs_only() -> None:
     proven in ``test_fga_model_contract``, and the converse — a ``can_grant_*`` with no door — by
     ``test_a_grantable_rung_has_a_door``. This half pins the membership.
 
+    ``maintainer`` is the rung a bring-your-own compaction commits under (ADR 0162): ``version/create`` admits a
+    ``ReserveFragments`` and a ``Rewrite`` only from a maintainer, and a job's own identity is never an owner
+    (LH-433), so without this entry no job could ever compact.
+
     ``apply`` is absent from the answer below and present in the tuple, which is the mechanism
     working: ``_grantable_relations`` intersects with what the TYPE defines, and neither table nor
     namespace defines it. It is a rung of ``classification`` alone.
     """
     for t in ("table", "namespace"):
-        assert access._grantable_relations(t) == ("owner", "writer", "reader", "validator", "manage_grants", "pass_grants", "classifier")
+        assert access._grantable_relations(t) == ("owner", "writer", "reader", "validator", "maintainer", "manage_grants", "pass_grants", "classifier")
     assert access._grantable_relations("classification") == ("pass_grants", "apply")
 
 

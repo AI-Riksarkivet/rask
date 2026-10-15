@@ -392,7 +392,9 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   versions on its own door.
   **A compaction or an index commits here too** (ADR 0162). Lance's compaction protocol makes two commits,
   `ReserveFragments` (which may only advance `max_fragment_id`) then `Rewrite` (every row kept, by stable row id or
-  by count; `require_compactable`), and both need `can_maintain` beyond the writer rung. A `CreateIndex` (a build or
+  by count; `require_compactable`), and both need `can_maintain` beyond the writer rung: the `maintainer` rung, which an
+  owner holds and the grant doors hand a job's own identity like `writer` (`manage_grants`, or a maintainer holding
+  `pass_grants`); a service account is never an owner (LH-433). A `CreateIndex` (a build or
   an `optimize_indices`) needs the writer rung, changes no data, and each new segment lives under the table's own
   `_indices/<uuid>/` with its declared files present and the index opening. A compaction is refused 503 while the
   sweep's clone list is missing or older than `cloneListMaxAgeSeconds` (an hour), and 406 when the table is a

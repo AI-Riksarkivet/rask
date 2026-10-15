@@ -958,6 +958,7 @@ tests:
           can_grant_writer: true
           can_grant_reader: true
           can_grant_validator: true
+          can_grant_maintainer: true
           can_read_assignments: true
           # …and may not read, write or promote a single byte. This is the whole point.
           can_get_metadata: false
@@ -977,9 +978,10 @@ tests:
           # He is a writer, so he may pass writer — and reader, which writer already implies.
           can_grant_writer: true
           can_grant_reader: true
-          # He is NOT an owner or a validator, so he cannot mint either. No escalation via delegation.
+          # He is NOT an owner, a validator or a maintainer, so he cannot mint any of them. No escalation via delegation.
           can_grant_owner: false
           can_grant_validator: false
+          can_grant_maintainer: false
           # Nor can he create further delegates, or promote himself to grant-manager.
           can_grant_pass_grants: false
           can_grant_manage_grants: false

@@ -377,6 +377,10 @@ type warehouse
     define can_grant_writer: manage_grants or (writer and pass_grants)
     define can_grant_reader: manage_grants or (reader and pass_grants)
     define can_grant_validator: manage_grants or (validator and pass_grants)
+    # Maintaining is a bring-your-own compaction's rung (ADR 0162): `version/create` admits a `ReserveFragments`
+    # and a `Rewrite` only from a `maintainer`. A job's own identity is never an owner (LH-433), so it is granted
+    # this rung, with the same grant option as `writer`; the maintain-tier credential stays `maintenance`'s alone.
+    define can_grant_maintainer: manage_grants or (maintainer and pass_grants)
     # The same tier as its three neighbours, and at the SAME level as the rung it confers:
     # `classifier` cascades `... from parent`, so a tenant grant made here reaches every table
     # beneath it. Declaring the rung without its grant action is how it ended up ungated one
@@ -484,6 +488,7 @@ type namespace
     define can_grant_writer: manage_grants or (writer and pass_grants)
     define can_grant_reader: manage_grants or (reader and pass_grants)
     define can_grant_validator: manage_grants or (validator and pass_grants)
+    define can_grant_maintainer: manage_grants or (maintainer and pass_grants)
     # The same tier as its three neighbours, and at the SAME level as the rung it confers:
     # `classifier` cascades `... from parent`, so a tenant grant made here reaches every table
     # beneath it. Declaring the rung without its grant action is how it ended up ungated one
@@ -597,6 +602,7 @@ type table
     define can_grant_writer: manage_grants or (writer and pass_grants)
     define can_grant_reader: manage_grants or (reader and pass_grants)
     define can_grant_validator: manage_grants or (validator and pass_grants)
+    define can_grant_maintainer: manage_grants or (maintainer and pass_grants)
     # GRANTABLE THROUGH THE API, unlike `maintainer` and `publisher` — and the difference is WHO holds it.
     # Those two are service rungs the chart's bootstrap hook seeds; `classifier` is meant for a PERSON (a
     # data-protection officer labelling data they may not read), and a person's grant belongs on the grant

@@ -99,7 +99,7 @@ classification_router = APIRouter(prefix="/management/v1/classification", tags=[
 #: refused the rung 400 at the only door that could delegate it. `_grant_actions` (fga_deps) reads the
 #: model and this does not, so the two drifted in silence.
 #: `tests/unit/test_a_grantable_rung_has_a_door.py` compares them now.
-_GRANTABLE_BASE: tuple[str, ...] = ("owner", "writer", "reader", "validator", "manage_grants", "pass_grants", "classifier", "apply")
+_GRANTABLE_BASE: tuple[str, ...] = ("owner", "writer", "reader", "validator", "maintainer", "manage_grants", "pass_grants", "classifier", "apply")
 
 
 @lru_cache
