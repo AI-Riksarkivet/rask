@@ -2170,15 +2170,19 @@ export interface paths {
          *     3. Deletion protection (Decision 5) refuses 409 unless ``force=true``. ``force`` overrides the
          *        PROTECTION ONLY — step 2 has already run, identically, with or without it.
          *     4. Emptiness: a warehouse still holding namespaces refuses 409 **naming them**; a refusal that does not
-         *        say what blocks it just moves the search to the user. ``?cascade=true`` drops exactly those.
-         *     5. The cascade drops each bound namespace through the REAL native path, against the warehouse's OWN
-         *        bucket-rooted connection (so it drops in the right bucket), then revokes its tuples and removes its
-         *        binding — one namespace fully finished before the next, so a mid-cascade failure leaves a consistent
-         *        prefix and a retry converges (every primitive is idempotent). A namespace that still holds TABLES
-         *        refuses on its own rung: the request omits ``behavior``, so the native drop is Restrict and the level
-         *        below is emptied first. Do NOT reach for ``behavior="Cascade"`` here — measured against the directory
-         *        backend, it does not reject the value, it IGNORES it and drops Restrict-style anyway, so the field
-         *        would read as a working cascade while doing nothing.
+         *        say what blocks it just moves the search to the user. ``?cascade=true`` removes exactly those, with
+         *        everything in them. Before anything is removed, every bound namespace's subtree is enumerated and held to
+         *        its protection (:func:`_cascade_subtrees`): a protected namespace or table refuses 409 naming it unless
+         *        ``force=true``, and that refusal changes nothing.
+         *     5. The cascade removes each bound namespace's subtree against the warehouse's OWN bucket-rooted connection,
+         *        one namespace fully finished before the next: every table detached (:func:`_detach_table`; the
+         *        bytes stay unless step 7 purges them) and the namespaces dropped deepest first, each object's records
+         *        cleared as it goes, and only then their grants revoked (:func:`_revoke_subtree`), the binding last.
+         *        ``namespaces_dropped`` names every namespace removed, nested ones included. The `dir` backend drops a
+         *        namespace Restrict whatever ``behavior`` says (measured: ``behavior="Cascade"`` is ignored, not
+         *        refused), so emptying it first is what lets the drop land. A failure part-way leaves every object not
+         *        yet removed with every grant it had, and every step tolerates what an earlier attempt already removed,
+         *        so re-issuing the call finishes it.
          *     6. Tuples on ``warehouse:<id>``, then the registry record.
          *     7. **Bytes only on ``?purge_bucket=true``.** A catalog entry is recoverable, a customer's bucket is not,
          *        so the two never share a default; a record-less bucket is reported by the reconciler, not lost. And a
@@ -13022,7 +13026,9 @@ export interface operations {
                 delimiter?: string | null;
             };
             header?: {
+                authorization?: string | null;
                 "dapr-caller-app-id"?: string | null;
+                "x-lance-originator"?: string | null;
             };
             path: {
                 warehouse_id: string;

@@ -21126,7 +21126,7 @@
     },
     "/management/v1/warehouses/{warehouse_id}": {
       "delete": {
-        "description": "Delete a warehouse: its bindings, its tuples and its registry record \u2014 and its BUCKET only if asked.\n\nGated on ``project#can_administer`` (`open_hierarchy_lifecycle.md` Decision 3), NOT on a relation of the\nwarehouse itself: destroying a tenant's storage is a tenant-level act, so it clears the tenant's own\nadmin bar rather than a rung someone could hold on this one warehouse.\n\nOrder, and every step is load-bearing:\n\n1. The record must exist (404).\n2. **Authorize first.** The gate runs before the protection and emptiness checks, so an unauthorized\n   caller never learns whether the warehouse is protected or what it holds \u2014 a 409 listing another\n   tenant's namespace names is a disclosure a 403 must beat to.\n3. Deletion protection (Decision 5) refuses 409 unless ``force=true``. ``force`` overrides the\n   PROTECTION ONLY \u2014 step 2 has already run, identically, with or without it.\n4. Emptiness: a warehouse still holding namespaces refuses 409 **naming them**; a refusal that does not\n   say what blocks it just moves the search to the user. ``?cascade=true`` drops exactly those.\n5. The cascade drops each bound namespace through the REAL native path, against the warehouse's OWN\n   bucket-rooted connection (so it drops in the right bucket), then revokes its tuples and removes its\n   binding \u2014 one namespace fully finished before the next, so a mid-cascade failure leaves a consistent\n   prefix and a retry converges (every primitive is idempotent). A namespace that still holds TABLES\n   refuses on its own rung: the request omits ``behavior``, so the native drop is Restrict and the level\n   below is emptied first. Do NOT reach for ``behavior=\"Cascade\"`` here \u2014 measured against the directory\n   backend, it does not reject the value, it IGNORES it and drops Restrict-style anyway, so the field\n   would read as a working cascade while doing nothing.\n6. Tuples on ``warehouse:<id>``, then the registry record.\n7. **Bytes only on ``?purge_bucket=true``.** A catalog entry is recoverable, a customer's bucket is not,\n   so the two never share a default; a record-less bucket is reported by the reconciler, not lost. And a\n   purge that would take bytes this warehouse does not solely own \u2014 a bucket a same-project sibling\n   still claims, or reserved platform storage \u2014 refuses BEFORE the cascade\n   (:func:`_require_bucket_purgeable`).\n\nThe routing cache is evicted for every dropped namespace: ``_resolve_warehouse_root`` caches bindings\nPOSITIVELY and forever (they are immutable while they exist), so a binding deleted here but left in the\ncache would keep routing that namespace into a warehouse that no longer exists.",
+        "description": "Delete a warehouse: its bindings, its tuples and its registry record \u2014 and its BUCKET only if asked.\n\nGated on ``project#can_administer`` (`open_hierarchy_lifecycle.md` Decision 3), NOT on a relation of the\nwarehouse itself: destroying a tenant's storage is a tenant-level act, so it clears the tenant's own\nadmin bar rather than a rung someone could hold on this one warehouse.\n\nOrder, and every step is load-bearing:\n\n1. The record must exist (404).\n2. **Authorize first.** The gate runs before the protection and emptiness checks, so an unauthorized\n   caller never learns whether the warehouse is protected or what it holds \u2014 a 409 listing another\n   tenant's namespace names is a disclosure a 403 must beat to.\n3. Deletion protection (Decision 5) refuses 409 unless ``force=true``. ``force`` overrides the\n   PROTECTION ONLY \u2014 step 2 has already run, identically, with or without it.\n4. Emptiness: a warehouse still holding namespaces refuses 409 **naming them**; a refusal that does not\n   say what blocks it just moves the search to the user. ``?cascade=true`` removes exactly those, with\n   everything in them. Before anything is removed, every bound namespace's subtree is enumerated and held to\n   its protection (:func:`_cascade_subtrees`): a protected namespace or table refuses 409 naming it unless\n   ``force=true``, and that refusal changes nothing.\n5. The cascade removes each bound namespace's subtree against the warehouse's OWN bucket-rooted connection,\n   one namespace fully finished before the next: every table detached (:func:`_detach_table`; the\n   bytes stay unless step 7 purges them) and the namespaces dropped deepest first, each object's records\n   cleared as it goes, and only then their grants revoked (:func:`_revoke_subtree`), the binding last.\n   ``namespaces_dropped`` names every namespace removed, nested ones included. The `dir` backend drops a\n   namespace Restrict whatever ``behavior`` says (measured: ``behavior=\"Cascade\"`` is ignored, not\n   refused), so emptying it first is what lets the drop land. A failure part-way leaves every object not\n   yet removed with every grant it had, and every step tolerates what an earlier attempt already removed,\n   so re-issuing the call finishes it.\n6. Tuples on ``warehouse:<id>``, then the registry record.\n7. **Bytes only on ``?purge_bucket=true``.** A catalog entry is recoverable, a customer's bucket is not,\n   so the two never share a default; a record-less bucket is reported by the reconciler, not lost. And a\n   purge that would take bytes this warehouse does not solely own \u2014 a bucket a same-project sibling\n   still claims, or reserved platform storage \u2014 refuses BEFORE the cascade\n   (:func:`_require_bucket_purgeable`).\n\nThe routing cache is evicted for every dropped namespace: ``_resolve_warehouse_root`` caches bindings\nPOSITIVELY and forever (they are immutable while they exist), so a binding deleted here but left in the\ncache would keep routing that namespace into a warehouse that no longer exists.",
         "operationId": "delete_warehouse_management_v1_warehouses__warehouse_id__delete",
         "parameters": [
           {
@@ -21188,6 +21188,22 @@
           },
           {
             "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
             "name": "dapr-caller-app-id",
             "required": false,
             "schema": {
@@ -21200,6 +21216,22 @@
                 }
               ],
               "title": "Dapr-Caller-App-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-originator",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Originator"
             }
           }
         ],

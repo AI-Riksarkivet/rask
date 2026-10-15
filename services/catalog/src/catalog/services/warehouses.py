@@ -501,10 +501,10 @@ def evict_stale_bindings(cache: dict[str, dict[str, str]], *, action: str, objec
     four mutations, and each replica hears about all of them on the broadcast control-event
     subscription (no queueGroup: every replica, including the publisher, receives every event):
 
-    - ``warehouse_deleted``: the event's ``namespaces_dropped`` names the unbound namespaces, and a
-      warehouse-id SCAN backs it up — a partial delete (the door's Decision-3 path) can unbind more
-      than the event managed to record, and a stale entry here routes a tenant's table at a deleted
-      (possibly purged) bucket.
+    - ``warehouse_deleted``: the event's ``namespaces_dropped`` names every namespace the cascade dropped,
+      the unbound top-level ones among them (a nested id matches no cache key), and a warehouse-id SCAN
+      backs it up — a partial delete (the door's Decision-3 path) can unbind more than the event managed
+      to record, and a stale entry here routes a tenant's table at a deleted (possibly purged) bucket.
     - ``warehouse_bound``: a top-level namespace was just bound. The only way this replica holds a
       cached entry for it is a re-bind after a delete it never processed — evict so the next request
       reads the authoritative record.

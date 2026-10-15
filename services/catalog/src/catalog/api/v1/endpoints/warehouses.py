@@ -26,17 +26,19 @@ from __future__ import annotations
 
 import logging
 import uuid
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from datetime import UTC, datetime
 from functools import partial
-from typing import Any, Final
+from typing import Annotated, Final
 
-from fastapi import APIRouter, Request, Response
+from fastapi import APIRouter, Header, Request, Response
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import (
     ConcurrentModificationError,
     CreateNamespaceRequest,
     CreateNamespaceResponse,
+    DeregisterTableRequest,
+    DeregisterTableResponse,
     DropNamespaceRequest,
     InvalidInputError,
     LanceNamespace,
@@ -51,11 +53,13 @@ from lance_namespace import (
     UnsupportedOperationError,
 )
 from openfga_sdk import OpenFgaClient
+from pydantic import BaseModel, ConfigDict
 
 from catalog.api import fga_deps
 from catalog.api.dependencies import (
     ControlEmitterDep,
     FgaClientDep,
+    LineageEmitterDep,
     SettingsDep,
     VendorDep,
     namespace_for_root,
@@ -66,6 +70,7 @@ from catalog.core import tier_policy
 from catalog.core.config import Settings
 from catalog.core.formats import reject_unsupported_properties
 from catalog.core.identifiers import parse_identifier
+from catalog.core.lineage_emit import DEREGISTER_TABLE, LineageEmitter, emit_write_event
 from catalog.core.store_endpoint import names_the_estate_store, require_estate_store
 from catalog.core.vending import CredentialVendor
 from catalog.schemas import (
@@ -77,10 +82,11 @@ from catalog.schemas import (
     WarehouseNamespacesResponse,
     WarehouseResponse,
 )
-from catalog.services import native, warehouses
+from catalog.services import native, table_claims, warehouses
 from catalog.services.vend_probe import CAS_CHECK, CAS_RESERVE, SCOPE_CHECK, ProbeCheck, ProbeReport, summarize_probe
 from service_kit.control_emit import emit_control
 from service_kit.governed import fga
+from service_kit.lakehouse import base_registry, location_claims, maintenance_policies, protection
 from service_kit.lakehouse.naming import CONTROL_ID_RE
 from service_kit.lakehouse.ns_errors import PartiallyApplied
 from service_kit.lakehouse.records import RecordExistsError, RecordMissingError
@@ -799,40 +805,151 @@ def _tables_in_namespace(ns: LanceNamespace, top_ns: str) -> list[str]:
 # --------------------------------------------------------------------------- #
 
 
-async def _revoke_descendants_of(
-    ns_conn: Any,
-    client: OpenFgaClient | None,
-    settings: Settings,
-    token: Principal | None,
-    segments: list[str],
-) -> int:
-    """Revoke the tuples of every table and nested namespace under ``segments``. Returns the count.
+class _BoundSubtree(BaseModel):
+    """A namespace bound to the warehouse and what the catalog lists under it, enumerated before the cascade changes anything."""
 
-    CALLED BEFORE THE DROP, which is the whole of it: `drop_namespace` destroys its children inside one
-    native call, and afterwards they cannot be listed, so a revoke that ran after would have nothing to
-    enumerate. The namespace door already learned this — `_collect_descendants` exists there for exactly
-    this ordering — and the warehouse cascade took the same destructive action without it, leaving every
-    destroyed table's tuples behind. Those orphans then sit in the lineage reconcile's `governed_tables`
-    ("ids carrying at least one authorization tuple") with no dataset to match, which is how they
-    surface as a PROVENANCE gap rather than as the authorization residue they are.
+    model_config = ConfigDict(frozen=True)
 
-    The enumerator is REUSED rather than reimplemented: it caps depth and reports truncation, and a
-    second walker here would be a second place for an incomplete revoke to hide.
+    segments: list[str]
+    descendants: list[tuple[str, list[str]]]
 
-    Best-effort per object, like the revokes around it: a cascade that stopped on one failed revoke
-    would leave MORE orphans than one that continues and says so.
+    @property
+    def tables(self) -> list[list[str]]:
+        return [child for resource, child in self.descendants if resource == "table"]
+
+    @property
+    def namespaces(self) -> list[list[str]]:
+        """Every namespace in the subtree, deepest first and the bound one last, so each is empty when its own drop runs."""
+        nested = sorted((child for resource, child in self.descendants if resource == "namespace"), key=len, reverse=True)
+        return [*nested, self.segments]
+
+    @property
+    def objects(self) -> list[tuple[str, list[str]]]:
+        """Every object in the subtree as ``(resource, segments)``, each child before its parent."""
+        return [*(("table", child) for child in self.tables), *(("namespace", child) for child in self.namespaces)]
+
+
+async def _cascade_subtrees(ns: LanceNamespace, settings: Settings, bound: list[str], *, force: bool) -> list[_BoundSubtree]:
+    """Every bound namespace with its subtree, enumerated and held to its protection before anything is removed.
+
+    ALL OF THEM FIRST, so a refusal changes nothing: a protected table in the last namespace must not be found
+    after the first namespace is gone. The walker and the protection pre-flight are the namespace door's, so a
+    cascade through either door enumerates and refuses alike, and ``force`` turns the subtree's locks exactly as it
+    turns the warehouse's.
+
+    A bound namespace the backend does not have is drift, not an error: the binding outlived it (a half-finished
+    earlier delete), and its empty subtree lets the cascade remove the binding the catalog still owns. The `dir`
+    backend lists such a namespace as empty while the root holds a ``__manifest`` and refuses the listing
+    ``NamespaceNotFound`` while it holds none (measured on pylance 13.0.0), so both read as an empty subtree.
+    """
+    subtrees: list[_BoundSubtree] = []
+    for top_ns in bound:
+        segments = parse_identifier(top_ns, settings.delimiter)
+        try:
+            descendants = await run_in_threadpool(namespaces_api._collect_descendants, ns, segments)  # noqa: SLF001 — one walker, deliberately
+        except NamespaceNotFoundError:
+            descendants = []
+        subtrees.append(_BoundSubtree(segments=segments, descendants=descendants))
+    doomed = [obj for subtree in subtrees for obj in subtree.objects]
+    await namespaces_api._require_descendants_unprotected(settings, doomed, force=force)  # noqa: SLF001 — one protection pre-flight, deliberately
+    return subtrees
+
+
+async def _detach_table(ns: LanceNamespace, settings: Settings, segments: list[str], *, purge: bool) -> bool:
+    """Detach one table from the catalog, its bytes left in place; ``False`` when it was already gone.
+
+    DETACH, NOT DROP: this door takes bytes only on ``?purge_bucket=true``, and that holds for the tables in its
+    namespaces as much as for the bucket. A detached table's bytes stay where a later ``register_table`` can attach
+    them again; a purge takes them with the bucket, and then their base record goes with them ([[LH-279]]), or it
+    would sanction its bases for the next table registered at the location. The location's claim goes either way,
+    as at the deregister door ([[LH-204]]).
     """
     try:
-        descendants = await run_in_threadpool(namespaces_api._collect_descendants, ns_conn, segments)  # noqa: SLF001 — one walker, deliberately
-    except Exception as exc:  # noqa: BLE001 — an unenumerable subtree must not block the delete
-        log.warning("warehouse_cascade_descendants_unlistable", extra={"namespace": segments, "error": f"{type(exc).__name__}: {exc}"})
-        return 0
-    removed = 0
-    for resource, child in descendants:
-        removed += await _revoke_tuples(client, settings, token, f"{resource}:{fga.canonical_object_id(child, delimiter=settings.delimiter)}")
-    if removed:
-        log.info("warehouse_cascade_descendants_revoked", extra={"namespace": segments, "objects": len(descendants), "tuples": removed})
-    return removed
+        detached: DeregisterTableResponse = await run_in_threadpool(native.call, ns, "deregister_table", DeregisterTableRequest(id=segments))
+    except TableNotFoundError:
+        return False
+    if detached.location:
+        canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
+        await run_in_threadpool(location_claims.release, table_claims.claim_store(settings), detached.location, canonical)
+        if purge:
+            registry = base_registry.BaseRegistry(control_root=settings.registry_root, storage_options=settings.storage_options())
+            await run_in_threadpool(partial(base_registry.forget_base_record, registry, detached.location, table=canonical))
+    return True
+
+
+async def _announce_detached(emitter: LineageEmitter, settings: Settings, segments: list[str], *, token: Principal | None, authorization: str | None) -> None:
+    """Tell lineage the table stopped existing, as the deregister door does, or the reconcile reads it as live forever.
+
+    Before its grants are revoked, for the deregister door's reason: on the http transport the caller's bearer
+    authorizes the ingest against grants still standing. Best-effort, logged: a missing lineage row must not stop the
+    cascade before its revoke, which would trade it for grants on nothing.
+    """
+    try:
+        await emit_write_event(
+            emitter,
+            segments,
+            delimiter=settings.delimiter,
+            author=token.sub if token is not None else None,
+            version=None,
+            operation=DEREGISTER_TABLE,
+            authorization=authorization,
+        )
+    except Exception as exc:  # noqa: BLE001 — provenance must never fail the delete it records
+        log.warning("warehouse_cascade_lineage_emit_failed", extra={"table": segments, "error": str(exc)})
+
+
+async def _forget_records(settings: Settings, resource: str, segments: list[str], *, force: bool) -> None:
+    """Clear the control-root records keyed by a removed object's id, so an object reusing the id inherits none of them.
+
+    Cleared as each object goes, not after its namespace, because a re-issue lists only what is still there: the
+    records of an object an earlier attempt removed would otherwise stay. Protection only under ``force``: without it
+    the pre-flight proved the object carries no record. The maintenance policy always, as the namespace door clears
+    it for a subtree it destroys.
+    """
+    so = settings.storage_options()
+    canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
+    if force:
+        await run_in_threadpool(protection.clear_protection, settings.registry_root, so, resource, canonical)
+    await run_in_threadpool(maintenance_policies.delete_policy, settings.registry_root, so, resource, canonical)
+
+
+async def _revoke_subtree(client: OpenFgaClient | None, settings: Settings, subtree: _BoundSubtree, *, token: Principal | None) -> AsyncIterator[int]:
+    """Revoke every grant in a subtree the cascade removed, each child's before its parent's, yielding each object's count.
+
+    ONLY ONCE EVERY OBJECT IN IT IS GONE ([[LH-495]]). A grant revoked before its object is removed strands the
+    object: alive, and nobody left who may read, drop or recover it through a door.
+
+    THE CHILD EDGES FIND WHAT THE CATALOG NO LONGER LISTS. Every object created under a namespace leaves a ``child``
+    edge on it (``fga.hierarchy_edge_tuples``), and only that object's own revoke removes the edge, so the edges name
+    each grant still held under the namespace: a table a recoverable drop detached with the grants kept for its
+    undrop (#75), whose trash record goes with the warehouse, and anything an earlier attempt removed before a
+    failure stopped its revoke. Under a dropped namespace each of them names an object that is gone. The catalog's
+    own enumeration covers an object created before the edges existed.
+
+    Each edge is followed before the object holding it is revoked, so a failure part-way leaves every grant not yet
+    revoked still named by its parent's edge, where re-issuing the delete finds it. A count is yielded as each
+    object's revoke lands, so the caller's report includes every object revoked before a failure. The tuples an
+    object's own failed revoke already removed are in the audit trail (``fga.delete_tuples`` records each one) and
+    in no count.
+    """
+    if not (settings.fga_enabled and client is not None):
+        return
+    seen: set[str] = set()
+
+    async def revoke(obj: str) -> AsyncIterator[int]:
+        seen.add(obj)
+        if obj.startswith("namespace:"):
+            for held in await fga.read_object_tuples(client, obj):
+                if held.relation == "child" and held.user and held.user not in seen:
+                    async for removed in revoke(held.user):
+                        yield removed
+        yield await _revoke_tuples(client, settings, token, obj)
+
+    for resource, segments in subtree.objects:
+        obj = f"{resource}:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}"
+        if obj not in seen:
+            async for removed in revoke(obj):
+                yield removed
 
 
 async def _revoke_tuples(client: OpenFgaClient | None, settings: Settings, token: Principal | None, obj: str) -> int:
@@ -899,9 +1016,11 @@ async def delete_warehouse(
     token: CurrentToken,
     client: FgaClientDep,
     control: ControlEmitterDep,
+    emitter: LineageEmitterDep,
     cascade: bool = False,
     purge_bucket: bool = False,
     force: bool = False,
+    authorization: Annotated[str | None, Header()] = None,
 ) -> DeleteWarehouseResponse:
     """Delete a warehouse: its bindings, its tuples and its registry record — and its BUCKET only if asked.
 
@@ -918,15 +1037,19 @@ async def delete_warehouse(
     3. Deletion protection (Decision 5) refuses 409 unless ``force=true``. ``force`` overrides the
        PROTECTION ONLY — step 2 has already run, identically, with or without it.
     4. Emptiness: a warehouse still holding namespaces refuses 409 **naming them**; a refusal that does not
-       say what blocks it just moves the search to the user. ``?cascade=true`` drops exactly those.
-    5. The cascade drops each bound namespace through the REAL native path, against the warehouse's OWN
-       bucket-rooted connection (so it drops in the right bucket), then revokes its tuples and removes its
-       binding — one namespace fully finished before the next, so a mid-cascade failure leaves a consistent
-       prefix and a retry converges (every primitive is idempotent). A namespace that still holds TABLES
-       refuses on its own rung: the request omits ``behavior``, so the native drop is Restrict and the level
-       below is emptied first. Do NOT reach for ``behavior="Cascade"`` here — measured against the directory
-       backend, it does not reject the value, it IGNORES it and drops Restrict-style anyway, so the field
-       would read as a working cascade while doing nothing.
+       say what blocks it just moves the search to the user. ``?cascade=true`` removes exactly those, with
+       everything in them. Before anything is removed, every bound namespace's subtree is enumerated and held to
+       its protection (:func:`_cascade_subtrees`): a protected namespace or table refuses 409 naming it unless
+       ``force=true``, and that refusal changes nothing.
+    5. The cascade removes each bound namespace's subtree against the warehouse's OWN bucket-rooted connection,
+       one namespace fully finished before the next: every table detached (:func:`_detach_table`; the
+       bytes stay unless step 7 purges them) and the namespaces dropped deepest first, each object's records
+       cleared as it goes, and only then their grants revoked (:func:`_revoke_subtree`), the binding last.
+       ``namespaces_dropped`` names every namespace removed, nested ones included. The `dir` backend drops a
+       namespace Restrict whatever ``behavior`` says (measured: ``behavior="Cascade"`` is ignored, not
+       refused), so emptying it first is what lets the drop land. A failure part-way leaves every object not
+       yet removed with every grant it had, and every step tolerates what an earlier attempt already removed,
+       so re-issuing the call finishes it.
     6. Tuples on ``warehouse:<id>``, then the registry record.
     7. **Bytes only on ``?purge_bucket=true``.** A catalog entry is recoverable, a customer's bucket is not,
        so the two never share a default; a record-less bucket is reported by the reconciler, not lost. And a
@@ -982,38 +1105,44 @@ async def delete_warehouse(
     if bound or purge_bucket:
         require_estate_store(record.get("endpoint"), estate=settings.s3_endpoint, subject=f"warehouse {warehouse_id!r}")
 
-    root_uri = record["root_uri"]
-    dropped: list[str] = []
+    # The warehouse's OWN endpoint ([[LH-067]]): a cascade that opened the estate's store would find none of
+    # this warehouse's namespaces and report a clean delete having removed nothing.
+    ns_conn = await run_in_threadpool(namespace_for_root, request, settings, record["root_uri"], endpoint=record.get("endpoint") or None) if bound else None
+    subtrees = await _cascade_subtrees(ns_conn, settings, bound, force=force) if ns_conn is not None else []
+    # What landed, recorded as each step lands, so a failure part-way reports it rather than what was planned.
+    namespaces_dropped: list[str] = []
+    tables_removed: list[str] = []
     revoked = 0
     try:
-        if bound:
-            # The warehouse's OWN endpoint ([[LH-067]]): a cascade that opened the estate's store would
-            # find none of this warehouse's namespaces and report a clean delete having dropped nothing.
-            ns_conn = namespace_for_root(request, settings, root_uri, endpoint=record.get("endpoint") or None)
-            for top_ns in bound:
-                segments = parse_identifier(top_ns, settings.delimiter)
-                # BEFORE the drop: `drop_namespace` destroys the children in one native call, and a
-                # revoke that ran after would have nothing left to enumerate.
-                revoked += await _revoke_descendants_of(ns_conn, client, settings, token, segments)
-                try:
-                    await run_in_threadpool(native.call, ns_conn, "drop_namespace", DropNamespaceRequest(id=segments))
-                except NamespaceNotFoundError:
-                    # Drift, not an error: the binding outlived the namespace (a half-finished earlier delete,
-                    # or a reconciler case). Refusing here would make the binding undeletable by anyone;
-                    # continue so the record the catalog still owns is cleaned up.
-                    log.warning("warehouse_cascade_namespace_absent", extra={"warehouse": warehouse_id, "namespace": top_ns})
-                revoked += await _revoke_tuples(client, settings, token, f"namespace:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}")
+        if ns_conn is not None:
+            for subtree in subtrees:
+                for table in subtree.tables:
+                    if await _detach_table(ns_conn, settings, table, purge=purge_bucket):
+                        tables_removed.append(settings.delimiter.join(table))
+                        await _announce_detached(emitter, settings, table, token=token, authorization=authorization)
+                    await _forget_records(settings, "table", table, force=force)
+                for namespace in subtree.namespaces:
+                    try:
+                        await run_in_threadpool(native.call, ns_conn, "drop_namespace", DropNamespaceRequest(id=namespace))
+                    except NamespaceNotFoundError:
+                        # Drift, or an earlier attempt's work: the binding outlived what it pointed at, and refusing
+                        # here would leave a binding nobody can delete, so the catalog's own records still go.
+                        log.warning("warehouse_cascade_namespace_absent", extra={"warehouse": warehouse_id, "namespace": namespace})
+                    await _forget_records(settings, "namespace", namespace, force=force)
+                    namespaces_dropped.append(settings.delimiter.join(namespace))
+                async for removed in _revoke_subtree(client, settings, subtree, token=token):
+                    revoked += removed
+                top_ns = subtree.segments[0]
                 await run_in_threadpool(warehouses.unbind_namespace, settings.registry_root, so, top_ns)
                 request.app.state.warehouse_binding_cache.pop(top_ns, None)
-                dropped.append(top_ns)
 
         revoked += await _revoke_tuples(client, settings, token, f"warehouse:{warehouse_id}")
         await run_in_threadpool(warehouses.delete_warehouse_record, settings.registry_root, so, warehouse_id)
         purged = await run_in_threadpool(warehouses.purge_bucket, bucket, so) if purge_bucket else 0
     except Exception as exc:
         # Partial-failure honesty (Decision 3), the half a raised error would otherwise erase: once the first
-        # namespace drop lands, a later step CAN still fail (an OpenFGA outage on the revoke, a registry
-        # blip) — and the caller then gets a problem body that says nothing about the namespaces already
+        # table is detached, a later step CAN still fail (an OpenFGA outage on the revoke, a registry
+        # blip) — and the caller then gets a problem body that says nothing about what is already
         # gone. The error is deliberately NOT swallowed (fail-closed; every primitive is idempotent, so the
         # recovery path is to re-issue the same call), but what DID land is recorded here or it is lost.
         log.error(
@@ -1022,7 +1151,8 @@ async def delete_warehouse(
                 "warehouse": warehouse_id,
                 "project": project,
                 "bucket": bucket,
-                "namespaces_dropped": dropped,
+                "namespaces_dropped": namespaces_dropped,
+                "tables_removed": tables_removed,
                 "tuples_revoked": revoked,
                 "bucket_purged": False,
             },
@@ -1039,12 +1169,13 @@ async def delete_warehouse(
         # precisely what a 503 asks a client to do. The cause is chained, so the real failure is still
         # in the traceback and the log.
         raise PartiallyApplied(
-            f"warehouse {warehouse_id!r} was PARTIALLY deleted: {len(dropped)} namespace(s) dropped and "
-            f"{revoked} tuple(s) revoked before the failure. Every step is idempotent — re-issue this "
-            "call to finish it.",
+            f"warehouse {warehouse_id!r} was PARTIALLY deleted: {len(namespaces_dropped)} namespace(s) dropped, "
+            f"{len(tables_removed)} table(s) removed and {revoked} tuple(s) revoked before the failure. Every step is "
+            "idempotent — re-issue this call to finish it.",
             problem_extra={
                 "warehouse": warehouse_id,
-                "namespaces_dropped": dropped,
+                "namespaces_dropped": namespaces_dropped,
+                "tables_removed": tables_removed,
                 "tuples_revoked": revoked,
                 "bucket_purged": False,
                 "partial": True,
@@ -1057,7 +1188,8 @@ async def delete_warehouse(
             "warehouse": warehouse_id,
             "project": project,
             "bucket": bucket,
-            "namespaces_dropped": dropped,
+            "namespaces_dropped": namespaces_dropped,
+            "tables_removed": tables_removed,
             "tuples_revoked": revoked,
             "bucket_purged": purge_bucket,
             "objects_purged": purged,
@@ -1073,7 +1205,7 @@ async def delete_warehouse(
         extra={
             "project": project,
             "bucket": bucket,
-            "namespaces_dropped": dropped,
+            "namespaces_dropped": namespaces_dropped,
             "bucket_purged": purge_bucket,
             "objects_purged": purged,
         },
@@ -1081,7 +1213,7 @@ async def delete_warehouse(
     return DeleteWarehouseResponse(
         id=warehouse_id,
         bucket=bucket,
-        namespaces_dropped=dropped,
+        namespaces_dropped=namespaces_dropped,
         tuples_revoked=revoked,
         bucket_purged=purge_bucket,
         objects_purged=purged,

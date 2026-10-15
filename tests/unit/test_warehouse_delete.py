@@ -8,8 +8,9 @@ whether the purge primitive was called at all.
 
 The invariants under test are the ones a delete gets wrong silently: that the FGA gate is the PROJECT's
 admin rung and runs before anything that could disclose what the warehouse holds, that ``force`` turns the
-protection lock and NOT the authorization one, that a cascade leaves no binding (or cached route) behind,
-and that the bucket's bytes are never removed by default.
+protection lock and NOT the authorization one, that a cascade survives a binding whose namespace is already
+gone, and that the bucket's bytes are never removed by default. What a cascade removes and revokes, on real
+pylance, is `tests/integration/test_a_warehouse_cascade_revokes_a_grant_only_once_its_object_is_gone.py`.
 """
 
 from __future__ import annotations
@@ -22,12 +23,17 @@ from unittest.mock import MagicMock
 import pytest
 from lance_namespace import (
     InvalidInputError,
+    ListNamespacesRequest,
+    ListNamespacesResponse,
+    ListTablesRequest,
+    ListTablesResponse,
     NamespaceNotEmptyError,
     NamespaceNotFoundError,
     TableNotFoundError,
 )
 
 from catalog.core.config import Settings
+from catalog.core.lineage_emit import NoopEmitter
 from catalog.core.vending import ModeBVendor
 from catalog.services import warehouses
 from service_kit.control_emit import NoopControlEmitter
@@ -55,7 +61,7 @@ _TOKEN = IDToken(iss="i", sub="alice", aud="lance", exp=1, iat=1)
 
 
 class _FakeNamespace:
-    """The warehouse's bucket-rooted connection: records the drops ``native.call`` routes to it.
+    """The warehouse's bucket-rooted connection: empty namespaces, and the drops ``native.call`` routes to it.
 
     ``missing`` makes a namespace answer ``NamespaceNotFoundError`` — the drift case where a binding
     outlived the namespace it points at, which the cascade must survive rather than deadlock on.
@@ -65,13 +71,24 @@ class _FakeNamespace:
         self.dropped: list[list[str]] = []
         self._missing = missing
 
+    def _require(self, segments: list[str] | None) -> None:
+        if segments and segments[0] in self._missing:
+            raise NamespaceNotFoundError(f"namespace not found: {segments}")
+
+    def list_tables(self, request: ListTablesRequest) -> ListTablesResponse:
+        self._require(request.id)
+        return ListTablesResponse(tables=[])
+
+    def list_namespaces(self, request: ListNamespacesRequest) -> ListNamespacesResponse:
+        self._require(request.id)
+        return ListNamespacesResponse(namespaces=[])
+
     def drop_namespace(self, request: Any) -> None:
-        if request.id and request.id[0] in self._missing:
-            raise NamespaceNotFoundError(f"namespace not found: {request.id}")
+        self._require(request.id)
         self.dropped.append(list(request.id))
 
 
-def _request(root_uri: str = "s3://acme-bkt", ns: _FakeNamespace | None = None, *, cached: tuple[str, ...] = ()) -> Any:
+def _request(root_uri: str = "s3://acme-bkt", ns: _FakeNamespace | None = None) -> Any:
     """A stand-in request carrying the two pieces of app state the delete touches: the positive binding
     cache (which it must evict) and the per-root connection cache (pre-seeded, so no real backend is built).
 
@@ -81,7 +98,7 @@ def _request(root_uri: str = "s3://acme-bkt", ns: _FakeNamespace | None = None, 
     Seeding the old one-element key here did not fail loudly: it MISSED, and the miss built a real
     backend against an unreachable host."""
     state = SimpleNamespace(
-        warehouse_binding_cache={top_ns: {"warehouse_id": "acme-wh", "root_uri": root_uri} for top_ns in cached},
+        warehouse_binding_cache={},
         warehouse_namespaces={(root_uri, None): ns if ns is not None else _FakeNamespace()},
     )
     return SimpleNamespace(app=SimpleNamespace(state=state))
@@ -135,6 +152,7 @@ def _delete(
             token=token,
             client=client,
             control=NoopControlEmitter(),
+            emitter=NoopEmitter(),
             cascade=cascade,
             purge_bucket=purge_bucket,
             force=force,
@@ -193,23 +211,6 @@ def test_a_warehouse_that_still_holds_namespaces_refuses_and_names_every_one_of_
     assert "cascade=true" in message
     assert warehouses.get_warehouse(settings.registry_root, {}, "acme-wh") is not None
     assert warehouses.namespaces_bound_to(settings.registry_root, {}, "acme-wh") == ["bronze", "silver"]
-
-
-def test_cascade_drops_every_bound_namespace_and_leaves_no_binding_or_cached_route_behind(tmp_path: Any) -> None:
-    # A cascade that leaves a binding behind is a bug, and so is one that leaves the POSITIVE routing cache
-    # pointing at a warehouse that no longer exists — the resolver caches bindings forever.
-    settings = _settings(tmp_path)
-    _seed(settings, namespaces=("bronze", "silver"))
-    ns = _FakeNamespace()
-    request = _request(ns=ns, cached=("bronze", "silver"))
-
-    result = _delete(settings, request, cascade=True)
-
-    assert ns.dropped == [["bronze"], ["silver"]]  # the REAL native drop path, in the warehouse's own bucket
-    assert result.namespaces_dropped == ["bronze", "silver"]
-    assert warehouses.namespaces_bound_to(settings.registry_root, {}, "acme-wh") == []
-    assert warehouses.get_warehouse(settings.registry_root, {}, "acme-wh") is None
-    assert request.app.state.warehouse_binding_cache == {}
 
 
 def test_a_cascade_survives_a_binding_whose_namespace_is_already_gone(tmp_path: Any) -> None:
@@ -409,7 +410,7 @@ def test_force_true_without_authorization_is_still_refused(tmp_path: Any, monkey
 
 
 # --------------------------------------------------------------------------- #
-# the gate + the tuple revoke
+# the gate
 # --------------------------------------------------------------------------- #
 
 
@@ -425,18 +426,3 @@ def test_the_gate_is_the_projects_admin_rung_never_a_relation_on_the_warehouse(t
 
     assert store.checks == [("alice", "can_administer", "project:acme")]
     assert not any(obj.startswith("warehouse:") for _u, _r, obj in store.checks)
-
-
-def test_the_warehouses_own_tuples_are_revoked_and_so_are_every_cascaded_namespaces(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    # A deleted object's grants must not linger: a later object reusing the id would inherit them
-    # (stale-grant privilege bleed). The reported count is the one OpenFGA returned, summed over the
-    # warehouse and every namespace the cascade took with it.
-    settings = _settings(tmp_path, fga_enabled=True)
-    _seed(settings, namespaces=("bronze",))
-    store = _FakeStore(project_admins=("alice",))
-    store.install(monkeypatch)
-
-    result = _delete(settings, _request(), token=_TOKEN, client=MagicMock(), cascade=True)
-
-    assert store.revoked == ["namespace:bronze", "warehouse:acme-wh"]
-    assert result.tuples_revoked == 6  # 3 per object, as the fake store reports them

@@ -11,18 +11,13 @@ WHY AN EXTENSION MEMBER RATHER THAN `detail`: a 5xx detail is deliberately redac
 assembled by the endpoint from what it already knows about the caller's own objects, so it leaks
 nothing — RFC 9457 §3.2 extension members are exactly the seam for that.
 
-THE FAILURE IS FORCED MID-DELETE, after the first namespace drop and before the record delete, because
-a failure at either end proves nothing: fail first and there is no partial state to report, fail last
-and every step landed.
+These pin the carrier. The door's own report, from a failure forced mid-cascade on real pylance, is pinned by
+`test_a_warehouse_cascade_revokes_a_grant_only_once_its_object_is_gone.py`.
 """
 
 from __future__ import annotations
 
-from typing import Any
 from unittest.mock import MagicMock
-
-import pytest
-from fastapi.testclient import TestClient
 
 from service_kit.lakehouse.ns_errors import PartiallyApplied, problem_detail
 
@@ -34,26 +29,6 @@ def test_an_extension_member_cannot_redefine_a_reserved_field() -> None:
     assert body["status"] == status, "an extension member overwrote the status"
     assert body["detail"] != "leaked internals", "an extension member defeated the 5xx redaction"
     assert body["extra"] == "kept", "a non-reserved extension member was dropped"
-
-
-def test_a_delete_that_fails_midway_reports_the_namespaces_it_already_dropped(real_ns_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Driven through the real door: force the step AFTER the first drop to fail."""
-    from catalog.services import warehouses
-
-    def _boom(*_: object, **__: object) -> None:
-        raise RuntimeError("registry blip")
-
-    monkeypatch.setattr(warehouses, "delete_warehouse_record", _boom)
-
-    resp = real_ns_client.delete("/management/v1/warehouses/does-not-exist")
-
-    # The point is the SHAPE the caller receives, not this particular id: a problem body that names a
-    # partial outcome whenever one occurred, and an ordinary one when it did not.
-    assert resp.headers.get("content-type", "").startswith("application/problem+json")
-    body: dict[str, Any] = resp.json()
-    assert "status" in body and "detail" in body
-    if body.get("partial"):
-        assert "namespaces_dropped" in body, f"claimed partial without naming what landed: {body}"
 
 
 def test_the_carrier_is_the_declared_type_not_a_stapled_attribute() -> None:

@@ -181,6 +181,17 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
 - Deletes are bottom-up: a container refuses **409, naming its contents**; `cascade` is explicit;
   warehouse delete gates on the PROJECT's `can_administer`; bucket purge is a **separate opt-in**;
   project delete has **no cascade at all**.
+- **A warehouse cascade revokes a grant only once its object is gone** ([[LH-495]]). `?cascade=true` first
+  enumerates every bound namespace's subtree and holds it to its protection (`force` turns those locks as it
+  turns the warehouse's), so a refusal changes nothing. Then, one namespace at a time, it detaches every table
+  with `deregister_table` (the bytes stay unless `purge_bucket`, and only a purge forgets the base record),
+  drops the namespaces deepest first (the `dir` drop is Restrict whatever `behavior` says), clears their
+  protection and policy records, and only then revokes, children first. It finds them by the `child` edge each
+  object left on its parent as well as by the catalog's listing, so the grants a recoverable drop kept for its
+  undrop (#75), whose trash record goes with the warehouse, and any an earlier failed attempt left are revoked
+  too. A failure part-way answers 503 `PartiallyApplied` naming `namespaces_dropped`, `tables_removed` and
+  `tuples_revoked`, and re-issuing the call finishes it. Pinned by
+  `tests/integration/test_a_warehouse_cascade_revokes_a_grant_only_once_its_object_is_gone.py`.
 - **`force=true` overrides the `protected` flag and NOTHING else** — the FGA gate runs first and
   identically with or without it. Test both delete doors for force-without-authz.
 - **Recoverable drops are OPT-IN (#75).** With `LANCE_TRASH_GRACE_DAYS` > 0 (default 0/OFF, because a

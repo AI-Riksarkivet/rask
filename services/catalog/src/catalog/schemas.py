@@ -1081,9 +1081,11 @@ class DeleteWarehouseResponse(BaseModel):
     id: str
     #: The bucket the warehouse owned — named even when it was NOT purged, so the operator knows what survived.
     bucket: str
-    #: The namespaces a ``cascade`` actually dropped and unbound (empty on a non-cascade delete).
+    #: Every namespace a ``cascade`` actually dropped, nested ones included, in the order it dropped them (empty on a
+    #: non-cascade delete). Each bound one among them is unbound too.
     namespaces_dropped: list[str]
-    #: Tuples removed across the warehouse object AND every cascaded namespace. 0 when FGA is off.
+    #: Tuples removed across the warehouse object AND every namespace and table a cascade removed under it, those a
+    #: recoverable drop kept included. 0 when FGA is off.
     tuples_revoked: int
     bucket_purged: bool
     objects_purged: int

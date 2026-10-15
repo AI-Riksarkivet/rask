@@ -1,16 +1,19 @@
-"""An OpenFGA store held in memory, for integration tests whose claim is who may act.
+"""OpenFGA stores held in memory, which the real catalog app asks through the real `service_kit.governed.fga` functions.
 
-The real catalog app asks it through the real `service_kit.governed.fga` functions, and it answers each check
-from an explicit grant set, so a test names every grant it relies on and nothing else is allowed.
+``Grants`` is for a test whose claim is who may act: it answers each check from an explicit grant set, so a test
+names every grant it relies on and nothing else is allowed. ``TupleStore`` is for a test whose claim is which tuples a
+door leaves behind: it holds what the doors write and allows every check.
 """
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from openfga_sdk.client.models import ClientBatchCheckRequest, ClientBatchCheckResponse, ClientCheckRequest, ClientTuple, ClientWriteRequest
 from openfga_sdk.client.models.batch_check_single_response import ClientBatchCheckSingleResponse
-from openfga_sdk.models import CheckResponse, ReadRequestTupleKey, ReadResponse
+from openfga_sdk.client.models.list_users_request import ClientListUsersRequest
+from openfga_sdk.models import CheckResponse, ListUsersResponse, ReadRequestTupleKey, ReadResponse, Tuple, TupleKey
 
 from service_kit.governed.oidc import IDToken
 
@@ -58,6 +61,40 @@ class Grants:
     def grant(self, user: str, *checks: tuple[str, str]) -> None:
         """Allow ``user`` each ``(relation, object)`` in ``checks``."""
         self.allowed |= {(f"user:{user}", relation, obj) for relation, obj in checks}
+
+
+class TupleStore:
+    """An OpenFGA store held in memory that keeps every tuple the doors write and allows every check."""
+
+    def __init__(self) -> None:
+        self.tuples: set[Triple] = set()
+
+    async def check(self, body: ClientCheckRequest, options: Options = None) -> CheckResponse:
+        del body, options
+        return CheckResponse(allowed=True)
+
+    async def read(self, body: ReadRequestTupleKey, options: Options = None) -> ReadResponse:
+        del options
+        held = [Tuple(key=TupleKey(user=u, relation=r, object=o), timestamp=datetime.now(UTC)) for u, r, o in sorted(self.tuples) if o == body.object]
+        return ReadResponse(tuples=held, continuation_token="")
+
+    async def write(self, body: ClientWriteRequest, options: Options = None) -> None:
+        del options
+        self.tuples |= {(t.user, t.relation, t.object) for t in body.writes or []}
+        self.tuples -= {(t.user, t.relation, t.object) for t in body.deletes or []}
+
+    async def list_users(self, body: ClientListUsersRequest, options: Options = None) -> ListUsersResponse:
+        """The project door's display of its admins, which it degrades to nobody without; no claim reads it here."""
+        del body, options
+        return ListUsersResponse(users=[])
+
+    async def close(self) -> None:
+        return None
+
+    def naming(self, objects: list[str]) -> dict[str, set[Triple]]:
+        """The held tuples naming each of ``objects`` as their object or their user, for those any tuple names."""
+        named = {obj: {t for t in self.tuples if obj in (t[0], t[2])} for obj in objects}
+        return {obj: held for obj, held in named.items() if held}
 
 
 def act_as(client: TestClient, sub: str) -> None:
