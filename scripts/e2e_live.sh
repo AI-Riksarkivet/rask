@@ -67,6 +67,9 @@ FGA="$(svc "$RELEASE-openfga")"      || true
 # The telemetry store is the platform's; on a dev estate, the observability fixture's (deploy/fixtures/observability).
 GREPTIME="$(svc greptimedb observability)" || true
 MAINT="$(svc "$RELEASE-maintenance")" || true
+NOTIFICATIONS="$(svc "$RELEASE-notifications")" || true
+# The notifications service mounts its routers under the fleet's API prefix, read from the release's own config.
+API_PREFIX="$(kubectl get cm "$RELEASE-config" -o jsonpath='{.data.RASK_API_PREFIX}' 2>/dev/null || true)"
 AGE="$(svc "$RELEASE-age")" || true
 [ -n "$CATALOG" ] || fail "no $RELEASE-catalog service — is the release deployed?"
 printf '   catalog=%s lineage=%s gateway=%s s3=%s\n' "$CATALOG" "$LINEAGE" "$GATEWAY" "$S3"
@@ -134,6 +137,7 @@ url LANCE_E2E_DEX             "$DEX" /dex
 url LANCE_E2E_FGA             "$FGA"
 url LANCE_E2E_GREPTIME_URL    "$GREPTIME"
 url LANCE_E2E_MAINTENANCE_URL "$MAINT"
+url LANCE_E2E_NOTIFICATIONS_URL "$NOTIFICATIONS" "$API_PREFIX"
 [ -z "$_missing" ] || printf '   NOT DISCOVERED (their suites will skip):%s\n' "$_missing"
 export LANCE_E2E_TOKEN="$ALICE"
 export LANCE_E2E_ADMIN_TOKEN="$ALICE"

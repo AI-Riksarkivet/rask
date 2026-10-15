@@ -48,9 +48,12 @@ own COMPLETE for each commit the pipeline makes is authored as the verified call
 
 Moving a table's `published` tag notifies the project's watchers (ADR 0156 C1, ADR 0161, [[LH-466]]): the catalog
 emits a `publish_table` run authored by the verified caller, its `lance.project` the tenant and its output the table,
-so it is delivered by WATCH like any catalog write. Decided and not yet built, so do not design against them as if
-they exist: lineage's `GET /events` gains a forward `since=` cursor and a documented commit-event shape (C7, LH-472 #598); and lineage shrinks to an
-authenticated OpenLineage intake, a Lance-stored commit feed and edge list, and a forwarder to a
+so it is delivered by WATCH like any catalog write. Lineage records it only because its bus door authorizes a
+`publish_table` run on `can_update_tag` or `can_promote` rather than the writer rung (`lineage/api/fga_deps.py`): a
+validator's approval demanded `can_write_data`, was refused and dead-lettered, and still rang the watcher's bell, the
+class of trap 5. Lineage's `GET /events` follows forward from `since=` with the commit-event shape in
+`docs/COMMIT-EVENTS.md` (C7, [[LH-472]]). Decided and not yet built, so do not design against it as if it exists:
+lineage shrinks to an authenticated OpenLineage intake, a Lance-stored commit feed and edge list, and a forwarder to a
 bring-your-own graph (ADR 0158, LH-468 #592). Today the feed and the graph are lineage's Postgres+AGE.
 
 **Long-running jobs need the identity in TWO places, and they are not interchangeable.** Ray's own

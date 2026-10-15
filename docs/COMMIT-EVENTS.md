@@ -73,6 +73,15 @@ OpenLineage `RunEvent` whose `producer` is the catalog's emitter
 - `inputs`: the tables the write derived from, at their versions. A rename names the source table as its
   input, so a follower filtering on the old name sees the rename.
 
+### A publication
+
+The table's `published` tag moved: the version readers of a governed tier read changed, and no row was committed
+([ADR 0161](adr/0161-the-tag-gate-runs-at-publish.md)). `event_type` is `COMPLETE` and `event` is a `RunEvent` from the
+catalog's emitter whose `run.facets.lance.operation` is `publish_table` and whose `version` is the version now
+published, a version an earlier row already committed. `run.facets.author.sub` is who moved it: the publisher when the
+project's gate passed the version, or the validator who approved it when the gate held it. Trigger the next tier on
+this row when it should read only what readers of `@published` read.
+
 ### A dataset change
 
 A schema or lifecycle change that committed no rows (create, drop, ...). `event_type` is `COMPLETE`, `job`

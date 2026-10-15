@@ -85,3 +85,11 @@ default path) for the work it does, and notifications target a person from those
 `make medallion-demo` runs `scripts/medallion_demo.py`, a client that writes bronze, silver and gold as a pipeline
 would and emits an OpenLineage event per step, against a local stack with the lineage UI
 ([LINEAGE.md](LINEAGE.md)).
+
+`make e2e-byo-pipeline` proves the whole contract on a deployed estate
+(`tests/e2e-py/test_a_bring_your_own_pipeline_runs_end_to_end.py`): a stock pylance client seeds bronze through the
+namespace, follows `GET /events?since=` to the bronze commit, derives silver naming its run and that input in the spec
+Context, is held behind `published` by the project's gate, is approved by a validator while the project's watcher is
+told, and cannot forge the `published` tag with the write credential it was vended.
+`bash scripts/e2e_live.sh tests/e2e-py/test_a_bring_your_own_pipeline_runs_end_to_end.py` discovers every address from
+the release.

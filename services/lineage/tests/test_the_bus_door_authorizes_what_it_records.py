@@ -72,6 +72,20 @@ def test_a_DATA_write_demands_the_writer_rung() -> None:
     assert relations_for_operation("drop_table") == ("can_write_data",)
 
 
+@pytest.mark.parametrize(
+    ("operation", "rungs"),
+    [
+        pytest.param("publish_table", ("can_update_tag", "can_promote"), id="a-publication-never-on-the-writer-rung"),
+        pytest.param("restore_table", ("can_write_data", "can_promote"), id="a-restore-also-on-a-rejecting-validator"),
+    ],
+)
+def test_the_TAG_GATES_operations_are_recorded_on_the_rungs_of_the_doors_that_perform_them(operation: str, rungs: tuple[str, ...]) -> None:
+    """The publish door moves `published` at `can_update_tag` and a validator's approval at `can_promote`; neither
+    writes a row, so a plain writer may not record a publication. A restore commits a version: the spec's restore door
+    performs it for an owner, who writes, and a validator's rejection of a held version at `can_promote`."""
+    assert relations_for_operation(operation) == rungs
+
+
 def test_the_ROUTE_itself_refuses_an_unauthorized_delivery(monkeypatch: pytest.MonkeyPatch) -> None:
     """CONTRACT, and the only tier that can prove it: driven through the REGISTERED route with the
     production wiring, so it fails if `register_dapr` stops passing the authorizer.

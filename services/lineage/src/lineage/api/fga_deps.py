@@ -74,6 +74,18 @@ log = logging.getLogger(__name__)
 _WRITE_RELATIONS: Final = ("can_write_data",)
 _MAINTENANCE_RELATIONS: Final = ("can_write_data", "can_maintain")
 
+#: The tag gate's operations, recorded on the rungs of the catalog doors that perform them (ADR 0156 C1, ADR 0161).
+#: `publish_table` moves the `published` tag and writes no row: the publish door moves it at `can_update_tag` and a
+#: validator's approval at `can_promote`, and the writer rung, which can do neither, does not record one.
+#: `restore_table` commits a restored version: the spec's restore door at `can_restore` (an owner, who writes) and a
+#: validator's rejection of a held version at `can_promote`. Measured on the estate 2026-10-15 ([[LH-478]]): with the
+#: writer rung demanded for both, a validator's approval was refused `can_write_data required on outputs` and
+#: dead-lettered, so the commit feed a pipeline follows never showed the publication.
+_GATE_RELATIONS: Final[Mapping[str, tuple[str, ...]]] = {
+    "publish_table": ("can_update_tag", "can_promote"),
+    "restore_table": ("can_write_data", "can_promote"),
+}
+
 
 def relations_for_operation(operation: str | None) -> tuple[str, ...]:
     """Which rungs may record this operation — ANY of them suffices.
@@ -87,7 +99,11 @@ def relations_for_operation(operation: str | None) -> tuple[str, ...]:
     accepting only the maintainer rung would refuse the human who actually built the index. Adding the
     maintainer path is strictly additive; it takes nothing away from a writer. Same shape as the
     catalog's `_ALTERNATIVE_RUNGS`, and for the same reason.
+
+    The tag gate's publication and restore accept the rungs of the doors that perform them (`_GATE_RELATIONS`).
     """
+    if (gate := _GATE_RELATIONS.get(operation or "")) is not None:
+        return gate
     return _MAINTENANCE_RELATIONS if operation in MAINTENANCE_OPERATIONS else _WRITE_RELATIONS
 
 
