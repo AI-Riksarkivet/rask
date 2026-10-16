@@ -64,10 +64,18 @@ def _images(node: object) -> Iterator[str]:
             yield from _images(value)
 
 
+def _scaled_to_zero(doc: object) -> bool:
+    """A workload rendered with `replicas: 0` schedules no pod, so the node never pulls what it names."""
+    if not isinstance(doc, dict):
+        return False
+    spec = doc.get("spec")
+    return isinstance(spec, dict) and spec.get("replicas") == 0
+
+
 def side_loaded_in(docs: Iterable[object], tag: str) -> list[str]:
     """The sorted, unique `<component>:<tag>` references these parsed documents schedule."""
     suffix = f":{tag}"
-    return sorted({image for doc in docs for image in _images(doc) if image.endswith(suffix) and _BARE.match(image)})
+    return sorted({image for doc in docs if not _scaled_to_zero(doc) for image in _images(doc) if image.endswith(suffix) and _BARE.match(image)})
 
 
 def side_loaded(rendered: str, tag: str) -> list[str]:

@@ -60,6 +60,32 @@ cleanup() {
     kubectl logs "deploy/${RELEASE}-openbao" -c seed --tail=60 2>/dev/null || true
     echo "::endgroup::"
   fi
+  # WHERE THE STACK'S TIME WENT, on every run: the lane's budget is set by its slowest bring-up, and a pull, a restart
+  # and a dependency wait all read as one long `helm upgrade` unless each is printed. kubelet's `Pulled` event names the
+  # pull's own duration; a pod's restarts and its created-to-Ready span name the waits.
+  echo "::group::stack timeline (image pulls, restarts, created-to-Ready)"
+  kubectl get events -A --field-selector reason=Pulled -o jsonpath='{range .items[*]}{.metadata.namespace}/{.involvedObject.name}: {.message}{"\n"}{end}' 2>/dev/null \
+    | grep -v 'already present' || true
+  kubectl get pods -A -o json 2>/dev/null | python3 -c '
+import json, sys
+from datetime import datetime
+ts = lambda s: datetime.strptime(s, "%Y-%m-%dT%H:%M:%SZ")
+for p in json.load(sys.stdin)["items"]:
+    meta, status = p["metadata"], p.get("status", {})
+    created = meta["creationTimestamp"]
+    ready = next((c["lastTransitionTime"] for c in status.get("conditions", []) if c["type"] == "Ready" and c["status"] == "True"), None)
+    restarts = sum(c.get("restartCount", 0) for c in status.get("containerStatuses", []))
+    took = "%ds to Ready" % (ts(ready) - ts(created)).total_seconds() if ready else "not Ready now"
+    last = ["%s=%s/%s" % (c["name"], t.get("reason"), t.get("exitCode")) for c in status.get("containerStatuses", []) if (t := c.get("lastState", {}).get("terminated"))]
+    print("%s/%s: created %s, %s, restarts=%d %s" % (meta["namespace"], meta["name"], created, took, restarts, " ".join(last)))
+' || true
+  # What a restarted container said before it died: the reason a bring-up waited.
+  for p in $(kubectl get pods -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.status.containerStatuses[*].restartCount}{"\n"}{end}' 2>/dev/null \
+               | awk '{for (i = 2; i <= NF; i++) if ($i > 0) {print $1; break}}'); do
+    echo "--- previous run of $p"
+    kubectl logs "$p" --all-containers --previous --tail=5 2>/dev/null || true
+  done
+  echo "::endgroup::"
   if [ "${KEEP_STACK:-0}" != "1" ] && [ "${CI:-}" = "true" ]; then
     kind delete cluster --name "$CLUSTER" 2>/dev/null || true
   fi
@@ -70,28 +96,7 @@ trap cleanup EXIT
 step() { echo; echo "==> $*"; }
 
 # --------------------------------------------------------------------------------------------------
-step "1/8 cluster + chart deps"
-kind get clusters 2>/dev/null | grep -qx "$CLUSTER" || kind create cluster --config deploy/kind/kind-config.yaml --wait 180s
-# THE CLUSTER THIS SCRIPT MEANS ([[XC-057]]). Without it every helm and kubectl call below inherits
-# whatever the environment has, and `scripts/helm.sh` defaults that to the LIVE k3s estate — so this
-# script created a kind cluster and then upgraded the live release instead, measured 2026-09-23.
-# `kind export kubeconfig` writes the context; RASK_EXPECT_CONTEXT is what makes helm.sh refuse if
-# anything later repoints it.
-kind export kubeconfig --name "$CLUSTER"
-export RASK_EXPECT_CONTEXT="kind-$CLUSTER"
-# THE EXTERNAL SECRETS OPERATOR, DAPR AND THE NATS BUS, platform prerequisites the chart refuses to render without
-# ([[XC-004]], [[XC-128]], [[XC-129]]). This throwaway cluster stands in for the platform, so the lane installs them
-# from the same fixtures `make k3s-up` uses (deploy/fixtures/external-secrets, dapr, nats), each on its own release,
-# before rask. fixtures.sh waits for each, so Dapr's injector is Ready before any rask pod exists. The bus runs with
-# operator mode off (the fixture's default), so it takes the credentials rask's clients present without checking them.
-# Dex, the dev OIDC issuer the lane mints its tokens from, the dev object store and the dev secret store are fixtures too
-# ([[XC-131]]). The two stores start once rask is installed (the object store's root credential and the secret store's
-# seed scripts are rask's), so fixtures.sh does not wait for them.
-"$(dirname "$0")/fixtures.sh" external-secrets dapr nats dex openbao
-# The object store runs rask's first-party image, which step 2 builds and side-loads under the name rask's own hooks use;
-# its pod pulls it once it is loaded. A `--set` beats the estate's values-live-pins.yaml, a tag in a registry this
-# cluster cannot reach.
-"$(dirname "$0")/fixtures.sh" minio -- --set-string image.repository=minio --set-string "image.tag=$TAG"
+step "1/9 chart deps + the images the render schedules (built while the cluster comes up)"
 # EVERY https REPOSITORY `chart/Chart.yaml` DECLARES, derived rather than listed. `helm dependency
 # build` needs each one even when the component is disabled, and a hand-written list is a second copy
 # of the chart's own dependency set: measured 2026-09-24, it named five of the nine, so the lane died
@@ -107,25 +112,14 @@ $(grep -oE '^\s+repository:\s+https?://\S+' chart/Chart.yaml | awk '{print $2}' 
 EOF
 helm repo update >/dev/null && helm dependency build ./chart >/dev/null
 
-step "2/8 build + side-load the app image"
-bash scripts/dagger-image.sh --name rest-catalog --tag "$CATALOG_IMG" >/dev/null
-# EXPLICIT load + digest check: the same-":dev"-tag gotcha (a rebuilt tag does NOT update a running pod
-# under IfNotPresent) has bitten this repo repeatedly. Capture the freshly-built image id, load it, and
-# verify the kind node's containerd actually holds that digest — a silent no-op load would otherwise
-# serve a stale image and every "verified live" claim below would be against old code.
-CATALOG_DIGEST="$(docker image inspect --format '{{.Id}}' "$CATALOG_IMG")"
-kind load docker-image "$CATALOG_IMG" --name "$CLUSTER"
-if ! docker exec "${CLUSTER}-control-plane" crictl images -o json 2>/dev/null \
-  | grep -q "${CATALOG_DIGEST#sha256:}"; then
-  echo "!! kind node does not hold the freshly-built catalog digest ${CATALOG_DIGEST} after load — aborting" >&2
-  exit 1
-fi
-echo "   node holds catalog digest ${CATALOG_DIGEST}"
-
-ALREADY_BUILT="$CATALOG_IMG"
 # The governed stack's values, shared with scripts/install_from_empty.sh so the two lanes install one shape.
 # shellcheck source=scripts/stack_values.sh
 . "$(dirname "$0")/stack_values.sh"
+# THIS LANE'S OWN EXTRAS OFF: no suite it runs reaches flows or notifications, and on a 4-core runner their two builds
+# and two sidecar pods are what the lane's budget goes to. Measured 2026-10-16: with them, the fixture installs ran
+# beside four builds and Dapr's took 90 s instead of 13 s. Scaled to zero, the render schedules no pod for either, so
+# the side-loaded set below asks for neither image; install_from_empty keeps both, since it proves every workload starts.
+HELM_SET+=(--set services.flows.replicas=0 --set services.notifications.replicas=0)
 
 # EVERY SIDE-LOADED IMAGE THE CHART SCHEDULES, derived from the render rather than a list kept here.
 # `image.localImages=true` means a bare `<component>:dev` resolves on the NODE, so an image this
@@ -151,22 +145,84 @@ if [ -z "$SIDE_LOADED" ]; then
   echo "!! the render named no side-loaded <component>:$TAG image — image.localImages or image.tag has moved" >&2
   exit 1
 fi
+
+# BUILT AS TARBALLS, IN THE BACKGROUND. No build needs the cluster, so they run while kind and the fixtures come up, and
+# `--out` hands each one over as an OCI archive the node imports directly: no image passes through a docker daemon.
+IMAGE_DIR="$(mktemp -d)"
+IMAGE_CACHE="${E2E_IMAGE_CACHE:-$HOME/.cache/rask-e2e-images}"
+mkdir -p "$IMAGE_CACHE"
+build_image() {
+  local img="$1" stem="$2" dockerfile=".docker/$2.dockerfile" kept=""
+  # A dockerfile that copies nothing from the build context is a function of its own text and the pinned sources it
+  # names, so its archive is kept across runs under the hash of that text and of the script that writes the archive
+  # (`E2E_IMAGE_CACHE`, which CI restores). Every other image is built from this checkout, every run.
+  if ! grep -vE -- '--from=' "$dockerfile" | grep -qE '^[[:space:]]*(COPY|ADD)[[:space:]]'; then
+    kept="$IMAGE_CACHE/$stem-$(cat "$dockerfile" scripts/dagger-image.sh | sha256sum | cut -c1-16).tar"
+    echo "$kept" >>"$IMAGE_DIR/kept"
+    if [ -f "$kept" ]; then
+      cp "$kept" "$IMAGE_DIR/$stem.tar"
+      echo ">> $img: kept build of $dockerfile reused ($kept)"
+      return
+    fi
+  fi
+  bash scripts/dagger-image.sh --name "$stem" --tag "$img" --out "$IMAGE_DIR/$stem.tar"
+  [ -z "$kept" ] || cp "$IMAGE_DIR/$stem.tar" "$kept"
+}
+( while read -r img stem; do
+    [ -n "$img" ] || continue
+    build_image "$img" "$stem" || exit 1
+  done <<<"$SIDE_LOADED" ) >"$IMAGE_DIR/build.log" 2>&1 & BUILD_PID=$!
+PF_PIDS+=("$BUILD_PID")
+
+step "2/9 cluster + platform fixtures"
+kind get clusters 2>/dev/null | grep -qx "$CLUSTER" || kind create cluster --config deploy/kind/kind-config.yaml --wait 180s
+# THE CLUSTER THIS SCRIPT MEANS ([[XC-057]]). Without it every helm and kubectl call below inherits
+# whatever the environment has, and `scripts/helm.sh` defaults that to the LIVE k3s estate — so this
+# script created a kind cluster and then upgraded the live release instead, measured 2026-09-23.
+# `kind export kubeconfig` writes the context; RASK_EXPECT_CONTEXT is what makes helm.sh refuse if
+# anything later repoints it.
+kind export kubeconfig --name "$CLUSTER"
+export RASK_EXPECT_CONTEXT="kind-$CLUSTER"
+# THE EXTERNAL SECRETS OPERATOR, DAPR AND THE NATS BUS, platform prerequisites the chart refuses to render without
+# ([[XC-004]], [[XC-128]], [[XC-129]]). This throwaway cluster stands in for the platform, so the lane installs them
+# from the same fixtures `make k3s-up` uses (deploy/fixtures/external-secrets, dapr, nats), each on its own release,
+# before rask. fixtures.sh waits for each, so Dapr's injector is Ready before any rask pod exists. The bus runs with
+# operator mode off (the fixture's default), so it takes the credentials rask's clients present without checking them.
+# Dex, the dev OIDC issuer the lane mints its tokens from, the dev object store and the dev secret store are fixtures too
+# ([[XC-131]]). The two stores start once rask is installed (the object store's root credential and the secret store's
+# seed scripts are rask's), so fixtures.sh does not wait for them.
+"$(dirname "$0")/fixtures.sh" external-secrets dapr nats dex openbao
+
+step "3/9 side-load the images"
+wait "$BUILD_PID" || { cat "$IMAGE_DIR/build.log"; echo "!! an image build failed (log above)" >&2; exit 1; }
+grep '^>> ' "$IMAGE_DIR/build.log" || true
+# A kept build whose dockerfile has since changed is never asked for again; drop it so the kept set stays this run's.
+for f in "$IMAGE_CACHE"/*.tar; do
+  if [ -f "$f" ] && ! grep -qxF "$f" "$IMAGE_DIR/kept" 2>/dev/null; then rm -f "$f"; fi
+done
+# EXPLICIT import + digest record: the same-":dev"-tag gotcha (a rebuilt tag does NOT update a running pod under
+# IfNotPresent) has bitten this repo repeatedly. Each archive is named by `dagger-image.sh --tag`, so kind imports it
+# under the name the render asks for; its config and manifest digests are recorded here and every running container
+# is held to them after the rollout, so a silent no-op import cannot serve old code under the new tag.
+FRESH="$(mktemp)"
 while read -r img stem; do
   [ -n "$img" ] || continue
-  case " $ALREADY_BUILT " in *" $img "*) continue ;; esac
-  bash scripts/dagger-image.sh --name "$stem" --tag "$img" >/dev/null
-  digest="$(docker image inspect --format '{{.Id}}' "$img")"
-  kind load docker-image "$img" --name "$CLUSTER"
-  if ! docker exec "${CLUSTER}-control-plane" crictl images -o json 2>/dev/null | grep -q "${digest#sha256:}"; then
-    echo "!! kind node does not hold the freshly-built $img digest $digest after load — aborting" >&2
-    exit 1
-  fi
-  echo "   node holds $img digest $digest"
-done <<EOF
-$SIDE_LOADED
-EOF
+  digests="$(python3 -c '
+import json, sys, tarfile
+with tarfile.open(sys.argv[1]) as archive:
+    config = json.load(archive.extractfile("manifest.json"))[0]["Config"].rsplit("/", 1)[1]
+    manifest = json.load(archive.extractfile("index.json"))["manifests"][0]["digest"].split(":", 1)[1]
+print(config, manifest)' "$IMAGE_DIR/$stem.tar")"
+  kind load image-archive "$IMAGE_DIR/$stem.tar" --name "$CLUSTER" >/dev/null
+  echo "$img $digests" >>"$FRESH"
+  echo "   loaded $img (image id ${digests:0:12}…)"
+done <<<"$SIDE_LOADED"
+rm -rf "$IMAGE_DIR"
+# The object store runs rask's first-party image, imported above under the name rask's own hooks use. A `--set` beats
+# the estate's values-live-pins.yaml, a tag in a registry this cluster cannot reach.
+"$(dirname "$0")/fixtures.sh" minio -- --set-string image.repository=minio --set-string "image.tag=$TAG"
 
-step "3/8 deploy the governed stack (auth ON, #3-A/#3-B/#4 flags ON, heavy extras OFF)"
+step "4/9 deploy the governed stack (auth ON, #3-A/#3-B/#4 flags ON, heavy extras OFF)"
 # HISTORY: `--wait` used to DEADLOCK on a fresh cluster, which is why this job never once passed in CI.
 # helm's order is: apply manifests → (--wait) block until every resource is Ready → run post-install hooks.
 # The OpenFGA schema migration WAS a post-install hook, and the OpenFGA server cannot become Ready until its
@@ -179,8 +235,8 @@ step "3/8 deploy the governed stack (auth ON, #3-A/#3-B/#4 flags ON, heavy extra
 # sidecar-injector race below means the app pods that come up in the first wave are recreated anyway, so
 # waiting on them here would only buy a wait we then throw away. The explicit rollout waits are the ones that
 # matter. Do not re-read this as "the deadlock is still there".
-# SIDE-LOADED, SO THE CHART HAS TO BE TOLD. The images above are built by Dagger and pushed into the
-# kind node with `kind load docker-image` at `:dev`, which is exactly what `image.localImages` means:
+# SIDE-LOADED, SO THE CHART HAS TO BE TOLD. The images above are built by Dagger and imported into the
+# kind node's containerd at `:dev`, which is exactly what `image.localImages` means:
 # a bare `<component>:<tag>` reference that resolves on the NODE rather than at a registry. Without it
 # `rask.image` refuses the render outright — `image.repository must be set to a registry ... or set
 # image.localImages=true` — and the lane dies at `helm upgrade` having already built and loaded every
@@ -199,6 +255,19 @@ JOB_LOGS="$(mktemp)"
         kubectl logs "$p" --all-containers --tail=40 2>/dev/null; } > "$JOB_LOGS.$p" 2>&1 || true
     done
   done ) & PF_PIDS+=($!)
+# THE DEV STORE COMES UP AFTER THE SECRETS THAT READ IT. The dev OpenBao is seeded by scripts this release renders, so
+# every ExternalSecret and the SecretStore exist before the store can answer, and each first sync fails. ESO retries a
+# failure on a doubling backoff (1 s base, 7 min cap, `pkg/controllers/common.BuildRateLimiter`), an ExternalSecret
+# syncs only once its store reads Ready (`secretstore.assertStoreIsUsable`), and nothing wakes either when the store
+# becomes usable — ESO v2.10.0 does not watch the store from the ExternalSecret controller. So a Secret appeared at the
+# next doubling step after the store was ready: measured 2026-10-16, AGE waited 74 s on one run and 267 s on the next for
+# the same store. A platform's store exists before rask installs, so this is the dev bring-up's alone. Once the store's
+# own readiness says it is seeded, the lane wakes both controllers through ESO's update watch and its `force-sync`.
+( kubectl wait "deploy/$RELEASE-openbao" --for=condition=Available --timeout=600s >/dev/null 2>&1 || exit 0
+  kubectl annotate secretstore --all "rask.dev/store-seeded=$(date +%s)" --overwrite >/dev/null 2>&1
+  kubectl wait secretstore --all --for=condition=Ready --timeout=120s >/dev/null 2>&1
+  kubectl annotate externalsecret --all "external-secrets.io/force-sync=$(date +%s)" --overwrite >/dev/null 2>&1
+  echo "   dev store seeded at $(date -u +%T): its SecretStore revalidated and every ExternalSecret re-synced" ) & PF_PIDS+=($!)
 "$(dirname "$0")/helm.sh" upgrade --install "$RELEASE" ./chart --timeout 600s "${HELM_SET[@]}"
 
 # Recreate the app pods. Pod DELETE, not `rollout restart`: on a re-run against an existing cluster a rebuilt
@@ -216,30 +285,28 @@ kubectl rollout status deploy/"$RELEASE"-openfga --timeout=300s
 kubectl rollout status deploy/"$RELEASE"-catalog --timeout=300s
 kubectl rollout status deploy/"$RELEASE"-lineage --timeout=300s
 
-# The pod that actually came up must be running the image we just loaded — the definitive proof the whole
-# suite tests fresh code, not a stale same-tag image (the failure mode this guard exists for). NOTE: a
-# pod's `.status imageID` is the containerd MANIFEST digest, while `docker image inspect .Id` is the CONFIG
-# digest — different hashes for the SAME image. So we match the pod's digest against the FULL set crictl
-# associates with the tag (id + repoDigests); since `kind load` replaces the tag, any of them == fresh.
-NODE_SHAS="$(docker exec "${CLUSTER}-control-plane" crictl images -o json 2>/dev/null | python3 -c "
-import sys, json
-shas = []
-for img in json.load(sys.stdin).get('images', []):
-    if any('$CATALOG_IMG' in t for t in (img.get('repoTags') or [])):
-        if img.get('id'): shas.append(img['id'].split(':')[-1])
-        for rd in (img.get('repoDigests') or []): shas.append(rd.split(':')[-1])
-print(' '.join(shas))
-")"
-RUNNING_ID="$(kubectl get pods -l "app.kubernetes.io/instance=$RELEASE,app.kubernetes.io/component=catalog" \
-  -o jsonpath='{.items[0].status.containerStatuses[?(@.name=="catalog")].imageID}')"
-POD_SHA="${RUNNING_ID##*:}"
-case " $NODE_SHAS " in
-  *" $POD_SHA "*) echo "   running catalog pod serves the freshly-loaded image ($POD_SHA)" ;;
-  *) echo "!! running catalog pod imageID ($RUNNING_ID) is not a digest the node holds for $CATALOG_IMG ($NODE_SHAS) — stale, aborting" >&2
-     exit 1 ;;
-esac
+# Every running container of a side-loaded image must serve the archive this run built — the definitive proof the whole
+# suite tests fresh code, not a stale same-tag image (the failure mode this guard exists for). A container's `imageID`
+# names either digest depending on how containerd recorded the import, so both recorded above are accepted.
+kubectl get pods -o json >"$FRESH.pods"
+python3 -c '
+import json, sys
+fresh = {line.split()[0]: set(line.split()[1:]) for line in open(sys.argv[1]) if line.strip()}
+checked, stale = 0, []
+for pod in json.load(open(sys.argv[2]))["items"]:
+    for container in pod.get("status", {}).get("containerStatuses", []):
+        image = container["image"].removeprefix("docker.io/library/")
+        if image not in fresh or not container.get("imageID"):
+            continue
+        checked += 1
+        if container["imageID"].rsplit(":", 1)[-1] not in fresh[image]:
+            stale.append("%s/%s: %s is not the %s this run built" % (pod["metadata"]["name"], container["name"], container["imageID"], image))
+if stale or not checked:
+    sys.exit("!! " + ("; ".join(stale) or "no running container serves a side-loaded image"))
+print(f"   {checked} running containers serve the images this run built")
+' "$FRESH" "$FRESH.pods"
 
-step "4/8 port-forward the services the suites talk to"
+step "5/9 port-forward the services the suites talk to"
 kubectl port-forward "svc/$RELEASE-catalog" 2333:2333 >/tmp/pf-cat.log 2>&1 & PF_PIDS+=($!)
 kubectl port-forward "svc/$RELEASE-lineage" 18000:8000 >/tmp/pf-lin.log 2>&1 & PF_PIDS+=($!)
 # `minio`, not `rustfs`. The chart has rendered the object store as StatefulSet + Service
@@ -260,20 +327,30 @@ done
 echo "   catalog=$c lineage=$l dex=$d"
 [ "$c" = "200" ] && [ "$l" = "200" ] && [ "$d" = "200" ] || { echo "!! services never became ready"; exit 1; }
 
-step "5/8 provision the #3-B data buckets (the allowlist GOVERNS, it does not provision)"
-uv run python - <<PYEOF
+step "6/9 provision the #3-B data buckets (the allowlist GOVERNS, it does not provision)"
+# THE STORE'S OWN ROOT PAIR, from the Secret its StatefulSet reads. The store is seeded with a generated secret, so a
+# literal `minioadmin` signs every request with the wrong key: the store answers SignatureDoesNotMatch, the data
+# buckets are never made, and the suites that reach the store directly report it unreachable.
+S3_KEY="$(kubectl get secret "$RELEASE-infra-credentials" -o jsonpath='{.data.minio-access-key}' | base64 -d)"
+S3_SECRET="$(kubectl get secret "$RELEASE-infra-credentials" -o jsonpath='{.data.minio-secret-key}' | base64 -d)"
+[ -n "$S3_KEY" ] && [ -n "$S3_SECRET" ] || { echo "!! $RELEASE-infra-credentials holds no object-store pair"; exit 1; }
+S3_KEY="$S3_KEY" S3_SECRET="$S3_SECRET" uv run python - "${BASE_A#s3://}" "${BASE_B#s3://}" <<'PYEOF'
+import os, sys
 import boto3
-c = boto3.client("s3", endpoint_url="http://localhost:9900",
-                 aws_access_key_id="minioadmin", aws_secret_access_key="minioadmin",
-                 region_name="us-east-1")
-for b in ("mb-a", "mb-b"):
+from botocore.exceptions import ClientError
+c = boto3.client("s3", endpoint_url="http://localhost:9900", aws_access_key_id=os.environ["S3_KEY"],
+                 aws_secret_access_key=os.environ["S3_SECRET"], region_name="us-east-1")
+for b in sys.argv[1:]:
     try:
-        c.create_bucket(Bucket=b); print("   created", b)
-    except Exception as e:
-        print("   exists", b, type(e).__name__)
+        c.create_bucket(Bucket=b)
+        print("   created", b)
+    except ClientError as e:
+        if e.response["Error"]["Code"] not in ("BucketAlreadyOwnedByYou", "BucketAlreadyExists"):
+            raise
+        print("   exists", b)
 PYEOF
 
-step "6/8 mint Dex tokens + seed the project-admin grant"
+step "7/9 mint Dex tokens + build the tenant through the catalog's doors"
 mint() {
   curl -s -m10 http://localhost:5556/dex/token \
     -d grant_type=password -d client_id=lance-catalog -d client_secret=lance-catalog-secret \
@@ -286,10 +363,36 @@ BOB="$(mint bob@example.com)"
 
 # The FGA subject is the token's `sub` (a Dex opaque id), NOT the email — granting the email silently
 # authorizes nobody. Decode it.
-SUB="$(ALICE="$ALICE" uv run python -c "
+sub_of() {
+  TOK="$1" uv run python -c "
 import os,base64,json
-p = os.environ['ALICE'].split('.')[1]; p += '=' * (-len(p) % 4)
-print(json.loads(base64.urlsafe_b64decode(p))['sub'])")"
+p = os.environ['TOK'].split('.')[1]; p += '=' * (-len(p) % 4)
+print(json.loads(base64.urlsafe_b64decode(p))['sub'])"
+}
+SUB="$(sub_of "$ALICE")"
+BOB_SUB="$(sub_of "$BOB")"
+# The install named the estate admin from the Dex fixture before Dex existed (stack_values.sh); the token says who Dex
+# actually issues. A mismatch is an estate whose admin is nobody the suites can log in as.
+[ "$SUB" = "$ADMIN_SUB" ] || { echo "!! auth.bootstrapAdmin=$ADMIN_SUB but alice's token carries sub=$SUB"; exit 1; }
+
+# One call on a catalog door; success is any of the codes named, anything else prints the answer and fails.
+door() {
+  local token="$1" method="$2" path="$3" body="$4" out code; shift 4
+  out="$(mktemp)"
+  code="$(curl -s -o "$out" -w '%{http_code}' -m 60 -X "$method" "http://localhost:2333$path" \
+    -H "authorization: Bearer $token" -H 'content-type: application/json' -d "$body" || true)"
+  case " $* " in *" $code "*) rm -f "$out"; return 0 ;; esac
+  echo "!! $method $path answered ${code:-no response}: $(head -c 400 "$out")" >&2
+  rm -f "$out"
+  return 1
+}
+
+# THE TENANT, BUILT THE WAY A USER BUILDS ONE: project, then warehouse, then namespaces, each through its door, so every
+# grant the suites write with is the one the catalog writes, and no tuple is written by hand. Fixed ids rather than one
+# per run: a re-run against this cluster converges, and 409 is that convergence.
+PROJECT=acme
+WAREHOUSE=e2e-acme
+door "$ALICE" POST /management/v1/projects "{\"id\":\"$PROJECT\"}" 200 201 409 || exit 1
 # NEWEST store of that name — the same selector service_kit.governed.fga.provision uses (max created_at), so a boot-race
 # double-create (two catalog pods provisioning against a freshly-rolled OpenFGA) can never make the seeder
 # and the serving catalog disagree about which store the grants live in (CI flake 2026-07-15: the CLI
@@ -301,33 +404,39 @@ kubectl create token "$RELEASE-sa-jobs" --audience rask-openfga --duration 2h > 
 FGA_TOKEN="$(cat "$FGA_TOKEN_FILE")"
 SID="$(fga store list --api-url http://localhost:8081 --api-token "$FGA_TOKEN" \
   | uv run python -c "import sys,json;s=[x for x in json.load(sys.stdin)['stores'] if x['name']=='lance-catalog'];print(max(s,key=lambda x:x['created_at'])['id'])")"
-# project-admin => can_create_warehouse (the #3-A gate). bob gets NOTHING — he is the 403 leg.
-fga tuple write --api-url http://localhost:8081 --api-token "$FGA_TOKEN" --store-id "$SID" "user:$SUB" admin project:acme >/dev/null
-echo "   seeded user:${SUB:0:12}… admin project:acme (store ${SID:0:8}…)"
-
-# WAIT until the grant is READABLE before running the suites. OpenFGA on Postgres is eventually consistent:
-# `tuple write` returns BEFORE a subsequent `check` is guaranteed to see it, so the first warehouse-admin op
-# (test_warehouses) can 403 on a fresh stack — a race that makes the job "green once, flaky forever", the
-# exact trap this whole job exists to close. Poll the ACTUAL permission the test needs (can_create_warehouse
-# on project:acme) until it reads allowed.
+# The project's creator holds `admin` on it, written by the create. bob gets NOTHING on it — he is the 403 leg.
+# WAIT until that grant is READABLE before using it. OpenFGA on Postgres is eventually consistent: a write returns
+# BEFORE a subsequent `check` is guaranteed to see it, so the warehouse create below can 403 on a fresh stack — a race
+# that makes the job "green once, flaky forever". Poll the permission the next door checks.
 for i in $(seq 1 30); do
   allowed="$(fga query check --api-url http://localhost:8081 --api-token "$FGA_TOKEN" --store-id "$SID" \
-    "user:$SUB" can_create_warehouse project:acme 2>/dev/null \
+    "user:$SUB" can_create_warehouse "project:$PROJECT" 2>/dev/null \
     | uv run python -c "import sys,json;print(json.load(sys.stdin).get('allowed', False))" 2>/dev/null || echo False)"
-  [ "$allowed" = "True" ] && { echo "   grant is readable (can_create_warehouse=allowed)"; break; }
-  [ "$i" = "30" ] && { echo "!! FGA grant never became readable — the seed did not propagate"; exit 1; }
+  [ "$allowed" = "True" ] && { echo "   project:$PROJECT is alice's (can_create_warehouse=allowed, store ${SID:0:8}…)"; break; }
+  [ "$i" = "30" ] && { echo "!! alice's admin on project:$PROJECT never became readable"; exit 1; }
   sleep 1
 done
+door "$ALICE" POST /management/v1/warehouses "{\"id\":\"$WAREHOUSE\",\"project\":\"$PROJECT\"}" 200 201 409 || exit 1
+# The parent namespace the multibase suite and the chaos drill create under. A top-level namespace belongs to a
+# warehouse, and its creator owns it, so alice's child creates and table creates under it are authorized.
+door "$ALICE" POST "/management/v1/warehouses/$WAREHOUSE/namespaces" '{"namespace":"mbns","adopt_existing":true}' 200 201 409 || exit 1
+echo "   project $PROJECT > warehouse $WAREHOUSE > namespace mbns"
 
-# The parent namespace the multibase suite creates tables under — alice must OWN it or the create 403s
-# at the router before the allowlist check is ever reached.
-curl -s -o /dev/null -X POST "http://localhost:2333/v1/namespace/mbns/create" -H "authorization: Bearer $ALICE"
+# ---- a SECOND tenant, so the credential-isolation legs can run ----------------------------------
+# Five legs in `test_credential_isolation_e2e.py` assert that a credential vended for tenant A is REFUSED on tenant
+# B's data — the sharpest statement of storage isolation this estate makes. BOB ADMINISTERS B WHILE ALICE ADMINISTERS
+# acme, which is what makes this a cross-tenant test rather than one principal talking to two of its own projects.
+# Minting a project is the estate admin's, so alice creates it and grants bob through the project's members door.
+TENANT_B=e2etenantb
+door "$ALICE" POST /management/v1/projects "{\"id\":\"$TENANT_B\"}" 200 201 409 || exit 1
+door "$ALICE" PUT "/management/v1/projects/$TENANT_B/members" "{\"user\":\"$BOB_SUB\",\"relation\":\"admin\"}" 200 || exit 1
+echo "   tenant B: $TENANT_B (admin=bob)"
 
-step "7/8 the outbox suite's Dapr app token"
+step "8/9 the outbox suite's Dapr app token"
 DAPR_TOKEN="$(kubectl get secret "$RELEASE-dapr-app-token" -o jsonpath='{.data.token}' | base64 -d)"
 [ -n "$DAPR_TOKEN" ] || { echo "!! no dapr app token"; exit 1; }
 
-step "8/8 run the guarded e2e suites against the live stack"
+step "9/9 run the guarded e2e suites against the live stack"
 export LANCE_E2E_S3=http://localhost:9900
 # The CAS suite reads LANCE_E2E_S3_ENDPOINT (a DIFFERENT name). It was never exported, so all 3 CAS tests
 # skipped on every run — the suite named in the goal has, until now, never actually executed.
@@ -336,6 +445,8 @@ export LANCE_E2E_S3=http://localhost:9900
 # only those, and deletes them — `run_sweep` compacts and GCs everything it discovers, so pointing it at
 # `lance-catalog` would rewrite the estate this job just seeded.
 export LANCE_E2E_S3_ENDPOINT=http://localhost:9900
+export LANCE_E2E_S3_ACCESS_KEY="$S3_KEY"
+export LANCE_E2E_S3_SECRET_KEY="$S3_SECRET"
 export LANCE_E2E_CATALOG_URL=http://localhost:2333
 export LANCE_E2E_LINEAGE_URL=http://localhost:18000
 # WITH the /dex path prefix — that is what every suite defaults to, and what Dex actually serves the OIDC
@@ -347,44 +458,16 @@ export LANCE_E2E_FGA_TOKEN_FILE="$FGA_TOKEN_FILE"
 export LANCE_E2E_TOKEN="$ALICE"
 export LANCE_E2E_NONADMIN_TOKEN="$BOB"
 export LANCE_E2E_DAPR_TOKEN="$DAPR_TOKEN"
-export LANCE_E2E_PROJECT=acme
+export LANCE_E2E_PROJECT="$PROJECT"
+# The suites' top-level namespaces arrive through this warehouse (`topology.create_top_level`, `outbox_probe`).
+export LANCE_E2E_WAREHOUSE="$WAREHOUSE"
+export LANCE_E2E_PROJECT_B="$TENANT_B"
+export LANCE_E2E_TENANT_B_TOKEN="$BOB"
 export LANCE_E2E_DELIM='$'
 export LANCE_E2E_BASE_A="$BASE_A"
 export LANCE_E2E_BASE_B="$BASE_B"
 export LANCE_E2E_OUTBOX_URI="s3://lance-catalog/_lineage_outbox"
 export LANCE_E2E_RELAY_BINDING=lineage-relay-cron
-
-# ---- a SECOND tenant, so the credential-isolation legs can run ----------------------------------
-# Five legs in `test_credential_isolation_e2e.py` assert that a credential vended for tenant A is
-# REFUSED on tenant B's data — the sharpest statement of storage isolation this estate makes. This
-# harness minted both principals and seeded neither a second project nor the vars the legs gate on,
-# so all five SKIPPED here while `e2e_live.sh` ran them against the deployed estate. A skip reads
-# exactly like a pass, which is the failure the "NO SILENT SKIPS" gate below exists to catch.
-#
-# BOB ADMINISTERS B WHILE ALICE ADMINISTERS acme, which is what makes this a cross-tenant test rather
-# than one principal talking to two of its own projects. Bob holds nothing on `acme` here (see the
-# grant seeded above), so he stays the 403 leg the other suites need.
-#
-# A FIXED ID, not one per run: a project has no retention to clean it up, so a per-run tenant would
-# leave one behind on every drive. `POST /management/v1/projects` writes the record and the creator's admin tuple
-# together; a second create converges rather than failing, and 409 is accepted because which of the two
-# a door gives for "already there" is exactly the kind of thing that changes underneath a harness.
-TENANT_B="${LANCE_E2E_PROJECT_B:-e2etenantb}"
-B_CODE="$(curl -s -o /dev/null -w '%{http_code}' -m 20 -X POST http://localhost:2333/management/v1/projects \
-  -H "authorization: Bearer $ALICE" -H 'content-type: application/json' \
-  -d "{\"id\":\"$TENANT_B\"}" 2>/dev/null || true)"
-BOB_SUB="$(TOK="$BOB" uv run python -c "
-import base64, json, os
-b = os.environ['TOK'].split('.')[1]; b += '=' * (-len(b) % 4)
-print(json.loads(base64.urlsafe_b64decode(b))['sub'])" 2>/dev/null || true)"
-if { [ "$B_CODE" = "200" ] || [ "$B_CODE" = "201" ] || [ "$B_CODE" = "409" ]; } && [ -n "$BOB_SUB" ]; then
-  fga tuple write --api-url http://localhost:8081 --store-id "$SID" "user:$BOB_SUB" admin "project:$TENANT_B" >/dev/null 2>&1 || true
-  export LANCE_E2E_PROJECT_B="$TENANT_B"
-  export LANCE_E2E_TENANT_B_TOKEN="$BOB"
-  echo "   tenant B: $TENANT_B (admin=bob) — the credential-isolation legs will RUN"
-else
-  echo "   note: could not provision tenant B (HTTP ${B_CODE:-?}) — the 5 credential-isolation legs will SKIP"
-fi
 
 PYTHONPATH=services uv run pytest \
   tests/e2e-py/test_credential_isolation_e2e.py \

@@ -110,7 +110,42 @@ fi
 if [[ "$MODE" == "out" ]]; then
   mkdir -p "$(dirname "$OUT")"
   echo ">> dagger: ${ZONE:-${RUNNER:-$NAME}} -> $OUT"
-  exec dagger call "${fn[@]}" export --path="$OUT"
+  dagger call "${fn[@]}" export --path="$OUT"
+  # NAMED WHEN A TAG IS GIVEN. Dagger's export carries no image name, and containerd names an image it imports from an
+  # OCI layout by the `io.containerd.image.name` annotation on the index's manifest entry, a full reference; the layout's
+  # `manifest.json` is not read at all (containerd v1.7 `images/archive/importer.go`, `import.go::imageName`). So the
+  # annotation is written there, and `kind load image-archive` or a bare `ctr images import` lands the image under the
+  # name the render asks for.
+  if [[ -n "$TAG" ]]; then
+    python3 - "$OUT" "$TAG" <<'PYEOF'
+import io, json, os, sys, tarfile
+
+path, tag = sys.argv[1], sys.argv[2]
+first, _, rest = tag.partition("/")
+if not rest:
+    reference = f"docker.io/library/{tag}"
+elif "." in first or ":" in first or first == "localhost":
+    reference = tag
+else:
+    reference = f"docker.io/{tag}"
+named = path + ".named"
+with tarfile.open(path) as src, tarfile.open(named, "w") as dst:
+    for member in src.getmembers():
+        if member.name != "index.json":
+            dst.addfile(member, src.extractfile(member) if member.isfile() else None)
+            continue
+        index = json.load(src.extractfile(member))
+        for entry in index["manifests"]:
+            entry.setdefault("annotations", {}).update(
+                {"io.containerd.image.name": reference, "org.opencontainers.image.ref.name": reference.rsplit(":", 1)[1]}
+            )
+        body = json.dumps(index).encode()
+        member.size = len(body)
+        dst.addfile(member, io.BytesIO(body))
+os.replace(named, path)
+PYEOF
+  fi
+  exit 0
 fi
 
 tar="$(mktemp -d)/image.tar"

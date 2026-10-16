@@ -27,6 +27,8 @@ TOKEN = os.environ.get("LANCE_E2E_TOKEN", "")
 PROJECT = os.environ.get("LANCE_E2E_PROJECT", "acme")
 DELIM = os.environ.get("LANCE_E2E_DELIM", "$")
 S3 = os.environ.get("LANCE_E2E_S3", "http://localhost:9900")
+S3_ACCESS_KEY = os.environ.get("LANCE_E2E_S3_ACCESS_KEY", "minioadmin")
+S3_SECRET_KEY = os.environ.get("LANCE_E2E_S3_SECRET_KEY", "minioadmin")
 ARROW_STREAM = "application/vnd.apache.arrow.stream"
 #: The top-level namespace this suite binds into warehouse A — OWNED BY THIS FILE ALONE.
 #:
@@ -45,7 +47,7 @@ def _auth() -> dict[str, str]:
 
 
 def _fs() -> pafs.S3FileSystem:
-    return pafs.S3FileSystem(access_key="minioadmin", secret_key="minioadmin", endpoint_override=S3, scheme="http", region="")
+    return pafs.S3FileSystem(access_key=S3_ACCESS_KEY, secret_key=S3_SECRET_KEY, endpoint_override=S3, scheme="http", region="")
 
 
 def _list_bucket(bucket: str) -> list[str]:

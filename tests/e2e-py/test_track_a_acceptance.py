@@ -8,11 +8,11 @@ one accepted `branch`, answered 200, and wrote to main.
 
 WHAT IS ASSERTED
 
-1. THE TIER CONTRACT (`publication.refuse_a_tier_without_provenance`, owner ruling D1). Opt-in by
-   CLAIM: a table carrying ANY of `stage`/`lineage`/`source_rowid` is claiming to be a governed tier
-   and must carry all three, `source_rowid` at uint64, on a dataset created with stable row ids. Four
-   drives: the partial claim, the wrong width, the dataset whose row ids are not stable, and the
-   conforming tier that must still publish. A fifth proves a plain table is untouched.
+1. THE TIER CONTRACT (`publication.refuse_a_tier_without_provenance`, ADR 0156 C9). A governed row needs
+   no column; `source_rowid` is the one column the platform names, an opt-in held to uint64 on a dataset
+   created with stable row ids, and `stage`/`lineage` are the writer's own. Five drives: `source_rowid`
+   alone publishes, the wrong width is refused, a dataset whose row ids are not stable is refused at the
+   register door it arrives through, the full tier publishes, and a plain table is untouched.
 
 2. GATE/PUBLISH SYMMETRY. `gate_only=true` is the ASK and a bare publish is the ACT. Both doors are
    driven against ONE non-conforming table and must agree on status AND on the refusal text — a gate
@@ -160,7 +160,7 @@ class Estate:
 
 
 def _tier(rows: int = 2, *, source_rowid_type: pa.DataType | None = None) -> pa.Table:
-    """A conforming governed tier: the identity column plus the three provenance columns.
+    """A conforming governed tier: the identity column, the writer's `stage` and `lineage`, and `source_rowid`.
 
     `source_rowid` defaults to the width Lance's own stable row id uses; the wrong-width drive names
     int64 explicitly, because that is the whole content of the case it asserts.
@@ -265,20 +265,18 @@ def estate() -> Iterator[Estate]:
 # --- 1. the tier contract ----------------------------------------------------------------------
 
 
-def test_a_tier_claiming_provenance_it_does_not_carry_cannot_publish(estate: Estate) -> None:
-    """`source_rowid` alone is a CLAIM to be governed, and the door must refuse the claim it cannot honour.
+def test_a_source_rowid_without_stage_or_lineage_publishes(estate: Estate) -> None:
+    """`source_rowid` is an opt-in that stands on its own: the door holds its width and nothing beside it.
 
-    This is the shape that shipped: a table with a parent-row column and neither `stage` nor `lineage`.
-    The job-side check cannot see it — it counts parentless rows only when the column is in the schema,
-    so a table that drops the column reports zero and passes the check meant to catch it.
+    `stage` and `lineage` are the writer's columns (ADR 0156 C9), so a table carrying only the parent-row
+    column is a conforming tier, and refusing it would make the platform name a workload-shaped schema.
     """
-    estate.create("partial_claim", pa.table({"id": pa.array(["a"], pa.string()), "source_rowid": pa.array([0], pa.uint64())}))
+    estate.create("rowid_only", pa.table({"id": pa.array(["a"], pa.string()), "source_rowid": pa.array([0], pa.uint64())}))
 
-    response = estate.publish("partial_claim")
+    response = estate.publish("rowid_only")
 
-    assert response.status_code == 400, response.text
-    detail = response.json()["detail"]
-    assert "missing 'lineage'" in detail and "missing 'stage'" in detail, detail
+    assert response.status_code == 200, response.text
+    assert response.json()["published"] is True, response.text
 
 
 def test_a_tier_whose_source_rowid_is_the_wrong_width_cannot_publish(estate: Estate) -> None:
@@ -295,25 +293,22 @@ def test_a_tier_whose_source_rowid_is_the_wrong_width_cannot_publish(estate: Est
     assert "not uint64" in response.json()["detail"], response.text
 
 
-def test_a_tier_whose_dataset_has_no_stable_row_ids_cannot_publish(estate: Estate) -> None:
+def test_a_dataset_without_stable_row_ids_cannot_be_registered(estate: Estate) -> None:
     """The half the columns cannot show, and the only leg that needs a hand-written dataset.
 
     `enable_stable_row_ids` is CREATE-TIME ONLY, so a dataset made without it carries a perfectly
     well-typed `source_rowid` whose values do not survive compaction. The catalog's own create door always
-    sets the flag, which is exactly why this must be driven through `register` — the door that attaches
-    bytes somebody else wrote, and the one a hand-built tier actually arrives through.
+    sets the flag, so such a dataset arrives only through `register` — the door that attaches bytes somebody
+    else wrote — and that door refuses it before it is a table anyone could publish.
     """
     name = f"unstable_{uuid.uuid4().hex[:6]}"
     lance.write_dataset(_tier(), f"s3://{estate.warehouse}/{name}", storage_options=_storage_options(), enable_stable_row_ids=False)
     # A RELATIVE location: `register_table` refuses an absolute URI, because a registration that could name
     # any bucket would attach storage the namespace does not own.
     registered = requests.post(f"{CATALOG}/v1/table/{estate.table_id(name)}/register", json={"location": name}, headers=_auth(), timeout=120)
-    assert registered.status_code == 200, registered.text
 
-    response = estate.publish(name)
-
-    assert response.status_code == 400, response.text
-    assert "without stable row ids" in response.json()["detail"], response.text
+    assert registered.status_code == 400, registered.text
+    assert "without stable row ids" in registered.json()["detail"], registered.text
 
 
 def test_a_conforming_tier_publishes(estate: Estate) -> None:
@@ -331,10 +326,10 @@ def test_a_conforming_tier_publishes(estate: Estate) -> None:
 
 
 def test_a_plain_table_is_untouched_by_the_tier_contract(estate: Estate) -> None:
-    """A table claiming NOTHING is not a governed tier, and must publish exactly as it did before D1.
+    """A table without `source_rowid` is outside the tier contract and publishes on its gate alone.
 
-    The rule is opt-in by claim, and this is what makes it safe to enforce at a door every writer passes:
-    a registered external dataset or a user's own table carries none of the three columns and is left alone.
+    The rule is opt-in by column, and this is what makes it safe to enforce at a door every writer passes:
+    a registered external dataset or a user's own table that carries no `source_rowid` is left alone.
     """
     estate.create("plain", pa.table({"id": pa.array(["a", "b"], pa.string()), "text": pa.array(["one", "two"], pa.string())}))
 
@@ -356,14 +351,14 @@ def test_the_gate_refuses_exactly_what_the_publish_refuses(estate: Estate) -> No
     The refusal TEXT is compared too, not merely the status — two 400s for different reasons would still
     be a disagreement.
     """
-    estate.create("symmetry", pa.table({"id": pa.array(["a"], pa.string()), "stage": pa.array(["silver"], pa.string())}))
+    estate.create("symmetry", _tier(source_rowid_type=pa.int64()))
 
     ask = estate.publish("symmetry", gate_only=True)
     act = estate.publish("symmetry")
 
     assert ask.status_code == act.status_code == 400, (ask.text, act.text)
     assert ask.json()["detail"] == act.json()["detail"], (ask.text, act.text)
-    assert "missing 'lineage'" in ask.json()["detail"], ask.text
+    assert "not uint64" in ask.json()["detail"], ask.text
     # And the ASK stayed an ask: a refused gate must not have moved the pointer on its way to the 400.
     tag = requests.post(f"{CATALOG}/v1/table/{estate.table_id('symmetry')}/tags/list", json={}, headers=_auth(), timeout=60)
     assert tag.status_code == 200, tag.text

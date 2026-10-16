@@ -676,11 +676,20 @@ jobs:
       - name: Bootstrap the pinned toolchain into .localbin
         run: make bootstrap
 
-      # Free disk: the default runner image is ~85% full and a kind node + our image needs headroom.
-      - name: Reclaim runner disk
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc || true
-          df -h / | tail -1
+      # NO DISK RECLAIM. Deleting the runner's preinstalled toolchains took 1.5 min of this lane's budget, and the room it
+      # bought is not needed: measured 2026-10-16, the runner's root is 145G with 100G free after that delete, while the
+      # kind node and the four side-loaded images fit in a few GB. The headroom is printed so a smaller runner is visible.
+      - name: Runner disk headroom
+        run: df -h / | tail -1
+
+      # The images `scripts/e2e_stack.sh` keeps across runs: those whose dockerfile copies nothing from the checkout, each
+      # filed under the hash of its dockerfile and of the script that writes the archive, so a change to either rebuilds it.
+      - name: Restore the kept image builds
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/rask-e2e-images
+          key: e2e-images-${{ hashFiles('.docker/*.dockerfile', 'scripts/dagger-image.sh') }}
+          restore-keys: e2e-images-
 
       - name: Live e2e — governed kind stack + CAS/#2/#3-A/#3-B/#4 suites
         run: make e2e-ci

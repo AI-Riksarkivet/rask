@@ -68,6 +68,23 @@ def test_a_reference_the_chart_quotes_is_still_found() -> None:
     assert _SLI.side_loaded(render, "dev") == ["bare-stem:dev", "gateway:dev"]
 
 
+def test_a_workload_scaled_to_zero_asks_the_node_for_no_image() -> None:
+    """`replicas: 0` schedules no pod, so its image is never pulled and the stack need not build it.
+
+    A lane that turns a service off this way would otherwise spend a build on an image nothing runs. The
+    same image named by a workload that does run is still asked for.
+    """
+    render = (
+        "kind: Deployment\nspec:\n  replicas: 0\n  template:\n    spec:\n      containers:\n"
+        '        - image: "flows:dev"\n        - image: "lance-rest-catalog:dev"\n'
+        "---\nkind: Deployment\nspec:\n  replicas: 1\n  template:\n    spec:\n      containers:\n"
+        '        - image: "lance-rest-catalog:dev"\n'
+        "---\nkind: Job\nspec:\n  template:\n    spec:\n      containers:\n"
+        '        - image: "minio:dev"\n'
+    )
+    assert _SLI.side_loaded(render, "dev") == ["lance-rest-catalog:dev", "minio:dev"]
+
+
 def test_an_image_that_is_not_ours_is_left_alone() -> None:
     """Bare is not the test — the TAG is. `busybox` and `nats` carry no registry path either, and
     handing either to `dagger-image.sh --name` would fail on a dockerfile that does not exist."""
