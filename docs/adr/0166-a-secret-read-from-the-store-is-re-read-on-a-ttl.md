@@ -74,6 +74,10 @@ at each use.
 
 - A rotation is: issue a second key, check it against the bucket, write the pair to the store, wait ten minutes,
   revoke the first. No restart, and no window in which a pod signs with a revoked key (docs/OPERATORS.md § 8).
+- The catalog's pair signs its STS `AssumeRole`, which MinIO refuses from an access key (measured live 2026-10-16:
+  `AccessDenied`, every vend 503 until the store named a user's pair again, with no restart either way). On MinIO
+  the catalog therefore rotates to a second user under the same policy; AWS lets any key of the IAM user assume the
+  role.
 - The platform's store holds every service's key id beside its secret (docs/architecture/deployment.md); the dev
   seed writes them.
 - A secret store that stays down for longer than a held value's TTL makes the lakehouse answer 503 on every request
