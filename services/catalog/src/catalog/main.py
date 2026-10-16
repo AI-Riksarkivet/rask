@@ -12,6 +12,7 @@ import logging
 import os
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager, suppress
+from functools import partial
 
 import httpx
 from dapr.aio.clients import DaprClient
@@ -31,7 +32,7 @@ from catalog.core.config import Settings, get_settings
 from catalog.core.control_buffer import ControlEventBuffer
 from catalog.core.control_signing import control_sign
 from catalog.core.lineage_emit import make_emitter
-from catalog.core.namespace import build_namespace
+from catalog.core.namespace import NamespaceConnections
 from catalog.core.vending import EncryptionAtRest, make_vendor
 from catalog.services import provenance_namespace, warehouses
 from lineage_kit import SigningKey, parse_published_keys
@@ -39,9 +40,9 @@ from service_kit.body_limit import BodySizeLimitMiddleware
 from service_kit.control_emit import make_control_emitter
 from service_kit.governed.auth_lifespan import attach_auth
 from service_kit.governed.dapr_auth import assert_app_token_configured
-from service_kit.governed.secrets import apply_dapr_secrets
 from service_kit.governed.settings import assert_authentication_configured
 from service_kit.governed.signing_key import attach_signing, make_signing_holder, signing_ready_check
+from service_kit.governed.store_credential import make_store_credential
 from service_kit.governed.user_state import UserStateStore
 from service_kit.lakehouse.lance_metrics import instrument_lance_if_available
 from service_kit.lance_app import build_lance_service_app
@@ -69,7 +70,8 @@ async def _ensure_provenance_namespace(app: FastAPI) -> None:
     delay = _PROVENANCE_RETRY_FIRST_SECONDS
     while True:
         try:
-            await ensure_provenance_namespace(app.state.namespace, app.state.settings, getattr(app.state, "fga", None))
+            namespace = await run_in_threadpool(app.state.connections.connection, app.state.settings)
+            await ensure_provenance_namespace(namespace, app.state.settings, getattr(app.state, "fga", None))
             return
         except asyncio.CancelledError:
             raise
@@ -94,18 +96,13 @@ async def _backfill_cascade_grants(app: FastAPI) -> None:
         log.info("cascade_backfill_done", extra={"warehouses": seen, "tuples": written, "failures": len(failures)})
 
 
-def consume_dapr_secrets(settings: Settings) -> None:
-    """Resolve the S3 secret for this boot, whichever source is configured — and refuse to boot without one.
+def require_env_secret(settings: Settings) -> None:
+    """With the secret store off, refuse to boot without a plaintext secret.
 
-    The SPLICE itself is `service_kit.governed.secrets.apply_dapr_secrets`, the estate's one
-    implementation: this block used to inline its own copy of the fetch-and-splice, which is the fourth
-    copy docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit" DUP-09 names.
-
-    What stays HERE is the half that is genuinely the catalog's own posture: with the store OFF, an empty
-    plaintext key is a boot failure rather than a service that comes up and signs every S3 request wrong.
+    The catalog's own posture: an empty key is a boot failure rather than a service that comes up and
+    signs every S3 request wrong. With the store on, `StoreCredential.start` fails the boot closed instead.
     A named function, not an inline block, so the unit tier can drive the decision without a lifespan.
     """
-    apply_dapr_secrets(settings)
     if not settings.secrets_from_dapr and not settings.s3_secret_access_key.get_secret_value():
         raise RuntimeError("LANCE_S3_SECRET_ACCESS_KEY is required when secrets_from_dapr is off")
 
@@ -165,32 +162,25 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     )
     instrument_lance_if_available()  # Lance-native IO metrics onto the global MeterProvider
     bound_lance_scans(settings)
-    # Consume the sensitive S3 secret from the Dapr secret store (OpenBao) — the store is the SOLE source
-    # of truth, NOT a fallback. With secrets_from_dapr on, the chart does not put the secret in pod env,
-    # so reading the env would yield nothing: fetch from the store (retrying while it seeds) and FAIL
-    # CLOSED if it never arrives, rather than booting with an empty/plaintext key.
-    #
-    # `settings` IS the `@lru_cache`d singleton (bound above), and the splice inside `apply_dapr_secrets`
-    # assigns onto it IN PLACE. That is deliberate, and it is the only thing that makes the per-request
-    # `SettingsDep` read correct: every route resolves `get_settings()` again, and `storage_options()`
-    # rebuilds the S3 credentials from whatever that object holds. Splicing a local copy instead would
-    # leave the cache carrying an empty secret and every request signing with it — on a fleet that boots
-    # green and reports ready. Sound because it happens ONCE, here, before the app serves anything.
-    # `apply_dapr_secrets` carries the alternatives and what each costs;
-    # tests/unit/test_boot_secret_splice_is_in_place.py fails if the in-place read is broken.
-    #
-    # In a thread: the fetch is sync (blocking httpx + sleeps between retries, ~80s worst case). Nothing
-    # is served during the lifespan, but the loop must stay free for other startup tasks — and a blocking
-    # call in async context is never normalized.
-    await run_in_threadpool(consume_dapr_secrets, settings)
-    app.state.namespace = build_namespace(settings)  # fail fast if storage misconfigured
-    # The same root under the data plane's bounds, for the native operations that move rows (`DataNamespaceDep`).
-    app.state.data_namespace = build_namespace(settings, plane="data")
-    # #3-A warehouse routing caches (only used when warehouses_enabled): top-level-namespace → its physical
-    # root_uri (bindings are immutable, so cache-forever is safe) and root_uri → its namespace connection.
+    # The S3 key pair from the Dapr secret store (OpenBao) — the store is the SOLE source of truth, NOT a
+    # fallback. With secrets_from_dapr on, the chart renders neither half into pod env: the pair is read
+    # here, waiting out a store that is still seeding, and the boot FAILS CLOSED if it never arrives; then
+    # a background loop reads it again whenever half its TTL is used, so a pair rotated in the store is
+    # the one every request signs with within that TTL, with no restart ([[XC-082]], ADR 0166). Every
+    # `storage_options()` read peeks at what that loop holds, and nothing built here keeps a pair of its
+    # own: the connections are keyed on it, the vendor and the judge read it at each use, and the
+    # emitters take `storage_options` as a callable.
+    store_credential = make_store_credential(settings)
+    if store_credential is None:
+        require_env_secret(settings)
+    else:
+        await store_credential.start()
+    app.state.store_credential = store_credential
+    app.state.connections = NamespaceConnections()
+    app.state.connections.connection(settings)  # fail fast if storage misconfigured
+    # #3-A warehouse routing cache (only used when warehouses_enabled): top-level-namespace → its physical
+    # root_uri (bindings are immutable, so cache-forever is safe).
     app.state.warehouse_binding_cache = {}
-    app.state.warehouse_namespaces = {}
-    app.state.warehouse_data_namespaces = {}
     # `fatal=True` KEEPS THIS SERVICE'S POSTURE: neither construction was wrapped in a `try`, so a
     # failed build has always crashed the pod. The catalog is the estate's authorization SOURCE — it
     # writes the grants every other service reads — so a boot that cannot reach OpenFGA must be
@@ -218,12 +208,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         store_endpoint=settings.vended_store_endpoint,
         assume_role_arn=settings.s3_assume_role_arn,
         ttl_seconds=settings.vending_ttl_seconds,
-        # The credential the vendor DELEGATES FROM. Built AFTER `apply_dapr_secrets`, so this is the
-        # secret-store value rather than an env default — which is the whole reason it has to be passed
-        # explicitly: botocore's default chain reads the environment, and this estate deliberately never
-        # puts the S3 secret there.
-        access_key=settings.s3_access_key_id,
-        secret_key=settings.s3_secret_access_key.get_secret_value(),
+        # The credential the vendor DELEGATES FROM, read at each vend so a rotated pair signs the next
+        # AssumeRole. Passed explicitly because botocore's default chain reads the environment, and this
+        # estate deliberately never puts the S3 secret there.
+        credential=settings.s3_key_pair,
         encryption=EncryptionAtRest(
             algorithm=settings.s3_server_side_encryption,
             kms_key_id=settings.s3_sse_kms_key_id,
@@ -238,9 +226,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     )
     # [[LH-279]] WHAT EVERY TABLE READ JUDGES A DECLARED BASE AGAINST: the control root the create and
     # register doors write each table's base record to, and the configured external blob bases. Installed
-    # AFTER the secret splice so the record reads sign with the store's credential, and cleared at
-    # shutdown so nothing in this process outlives the app that configured it.
-    base_judge.install(base_judge.BaseJudge.from_settings(settings))
+    # as the settings it is built from, so each read signs its record reads with the pair in force, and
+    # cleared at shutdown so nothing in this process outlives the app that configured it.
+    base_judge.install(partial(base_judge.BaseJudge.from_settings, settings))
     # Lineage emission (opt-in, best-effort). Build the chosen transport: a Dapr pub/sub publisher (the
     # sidecar persists to NATS) or a direct-HTTP client. The Dapr client targets the local sidecar, so
     # it's cheap to construct and needs no broker reachability at boot.
@@ -292,7 +280,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         # The provenance namespace's own rows are never announced (`services.provenance_namespace`).
         unannounced=lambda namespace: provenance_namespace.is_provenance(namespace, settings),
         outbox_uri=settings.lineage_outbox_uri,
-        storage_options=settings.storage_options(),
+        storage_options=settings.storage_options,
         # The catalog's self-description for the standard `catalog` facet ([[LIN-002]]): the Lance
         # Namespace implementation it is reached through, and where the data it governs physically
         # lives. Both are read from the SAME settings the catalog serves from, so the facet cannot
@@ -328,7 +316,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         sign=control_sign(signing) if signing is not None else None,
         # Staged when configured, plain publish when not — opt-in, exactly like the lineage outbox.
         outbox_uri=settings.control_outbox_uri,
-        storage_options=settings.storage_options(),
+        storage_options=settings.storage_options,
     )
     # Per-subject user state on the Dapr state store (endpoints/user_state.py). Built unconditionally: it
     # is a client over the local sidecar, so construction is pure and does no I/O — a deployment without a
@@ -374,6 +362,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         provenance_task.cancel()
         if signing is not None:
             await signing.stop()
+        if store_credential is not None:
+            await store_credential.stop()
         fga_client = getattr(app.state, "fga", None)
         # Each close is isolated so one failing teardown can't strand the other resource.
         if fga_client is not None:
@@ -394,10 +384,11 @@ async def _namespace_ready(request: Request) -> Readiness:
     the probe. Best-effort: a backend that cannot answer ``namespace_id()`` is not a readiness fault
     (per-request resolution surfaces that as a domain error), so the pod stays Ready without the fact."""
     body = Readiness(status=ReadinessStatus.ready)
-    ns = getattr(request.app.state, "namespace", None)
-    if ns is not None:
+    connections = getattr(request.app.state, "connections", None)
+    if connections is not None:
         with suppress(LanceNamespaceError):
-            body.components["namespace"] = str(ns.namespace_id())
+            namespace = await run_in_threadpool(connections.connection, request.app.state.settings)
+            body.components["namespace"] = str(namespace.namespace_id())
     return body
 
 

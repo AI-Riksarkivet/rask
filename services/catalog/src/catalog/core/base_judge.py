@@ -12,7 +12,7 @@ should serve. A 403 would send an operator to FGA tuples that are not what is wr
 THE JUDGE IS DEPLOYMENT CONFIGURATION, installed once by the lifespan: the control root the records live
 on and ``LANCE_EXTERNAL_BLOB_BASES``, the same two values the create and register doors write the record
 against. A door that holds ``Settings`` builds its own through :meth:`BaseJudge.from_settings` — the same
-constructor — and the dataset seam in :mod:`catalog.core.namespace`, which takes no settings, reads the
+constructor — and the dataset seam in :mod:`catalog.core.namespace`, which takes no settings, builds the
 installed one. A dataset declaring only bases inside its own root is answered without either.
 
 The judge also carries each data base's credential reference ([[LH-273]]): the seam that judges a
@@ -151,29 +151,33 @@ class BaseJudge(BaseModel):
 
 
 class _Installed(BaseModel):
-    judge: BaseJudge | None = None
+    build: Callable[[], BaseJudge] | None = None
 
 
-#: The judge this process answers with. Written by the lifespan, cleared when it ends, so a later app
-#: in the same process — a test, a reload — never inherits the previous one's control root.
+#: How this process builds the judge it answers with. Written by the lifespan, cleared when it ends, so a
+#: later app in the same process — a test, a reload — never inherits the previous one's control root.
 _INSTALLED = _Installed()
 
 
-def install(judge: BaseJudge | None) -> None:
-    """Make ``judge`` the one :func:`installed_judge` returns; ``None`` uninstalls it."""
-    _INSTALLED.judge = judge
+def install(build: Callable[[], BaseJudge] | None) -> None:
+    """Make ``build`` what :func:`installed_judge` answers with; ``None`` uninstalls it.
+
+    A builder rather than a judge, because a judge holds the storage options its record reads sign with:
+    one built once at boot would keep signing with a pair the store has since replaced ([[XC-082]]).
+    """
+    _INSTALLED.build = build
 
 
 def installed_judge() -> BaseJudge:
-    """The judge the lifespan installed.
+    """The judge the lifespan installed, built now, with the key pair in force.
 
     Raises:
         ServiceUnavailableError: Nothing installed one, so no foreign base can be judged. Raised only when
             a dataset declares a base outside its own root; a caller never meets it otherwise.
     """
-    if _INSTALLED.judge is None:
+    if _INSTALLED.build is None:
         raise ServiceUnavailableError("the catalog's base judge is not installed, so a table declaring a foreign base cannot be read")
-    return _INSTALLED.judge
+    return _INSTALLED.build()
 
 
 def _foreign(location: str, refs: Sequence[BasePathRef]) -> list[BasePathRef]:

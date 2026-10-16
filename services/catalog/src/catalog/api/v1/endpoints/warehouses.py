@@ -62,6 +62,7 @@ from catalog.api.dependencies import (
     LineageEmitterDep,
     SettingsDep,
     VendorDep,
+    estate_namespace,
     namespace_for_root,
 )
 from catalog.api.security import CurrentToken, Principal
@@ -604,7 +605,7 @@ async def create_warehouse_namespace(
     # default-root namespace's tables become unreachable via the API (orphaned) — and the positive routing
     # cache makes it permanent. The write-once guard above only catches names bound to ANOTHER warehouse;
     # this is the other half of the same hazard. The operator must pick a fresh name or migrate first.
-    default_ns: LanceNamespace = request.app.state.namespace
+    default_ns = await estate_namespace(request, settings)
     if await run_in_threadpool(_namespace_exists_in_default, default_ns, segments):
         raise NamespaceAlreadyExistsError(
             f"namespace {ns_name!r} already exists in the default root; binding it to a warehouse would "
@@ -622,7 +623,7 @@ async def create_warehouse_namespace(
     # so the resolver that threads the record's endpoint does not run here — creating the namespace
     # at the estate's store instead would put it in a different object store from every table
     # later written to it.
-    ns_conn = namespace_for_root(request, settings, root_uri, endpoint=record.get("endpoint") or None)
+    ns_conn = await namespace_for_root(request, settings, root_uri, endpoint=record.get("endpoint") or None)
     req = CreateNamespaceRequest(id=segments, properties=body.properties)
     adopted = False
     try:
@@ -753,7 +754,7 @@ async def unbind_warehouse_namespace(
 
     # The record's endpoint, so the emptiness probe reads the store the warehouse names and a record
     # naming another store is refused at the builder ([[LH-205]]) rather than probed at the estate's.
-    ns = await run_in_threadpool(namespace_for_root, request, settings, str(binding["root_uri"]), endpoint=record.get("endpoint") or None)
+    ns = await namespace_for_root(request, settings, str(binding["root_uri"]), endpoint=record.get("endpoint") or None)
     tables = await run_in_threadpool(_tables_in_namespace, ns, top_ns)
     if tables:
         raise NamespaceNotEmptyError(
@@ -1032,7 +1033,7 @@ async def delete_warehouse(
 
     # The warehouse's OWN endpoint ([[LH-067]]): a cascade that opened the estate's store would find none of
     # this warehouse's namespaces and report a clean delete having removed nothing.
-    ns_conn = await run_in_threadpool(namespace_for_root, request, settings, record["root_uri"], endpoint=record.get("endpoint") or None) if bound else None
+    ns_conn = await namespace_for_root(request, settings, record["root_uri"], endpoint=record.get("endpoint") or None) if bound else None
     subtrees = await _cascade_subtrees(ns_conn, settings, bound, force=force) if ns_conn is not None else []
     # The warehouse's own trash, which the bindings select: it is ended before the cascade below removes them.
     trashed = await run_in_threadpool(partial(warehouses.trash_owned_by, settings.registry_root, so, warehouse_id, bucket=bucket, delimiter=settings.delimiter))

@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
+from lance_namespace import connect
 
 from catalog.api.dependencies import get_vendor
 from catalog.api.v1.endpoints import warehouses as wh_ep
@@ -502,10 +503,23 @@ def _wh_with_fake_backend(client: TestClient, tmp_path: Any, monkeypatch: pytest
 
     fake = _FakeNamespace(existing)
     monkeypatch.setattr(wh_svc, "provision_bucket", lambda bucket, so: None)
+
     # `endpoint` is keyword-only since [[LH-067]] — a warehouse may name its own object store, and every
     # caller now passes the record's value. The stub takes it and ignores it: what these tests exercise
     # is the create/compensate choreography, not which store the connection dialled.
-    monkeypatch.setattr(wh_ep, "namespace_for_root", lambda request, settings, root_uri, *, endpoint=None: fake)
+    async def warehouse_root(_request: object, _settings: object, _root_uri: str, *, endpoint: str | None = None) -> _FakeNamespace:
+        return fake
+
+    # The estate's own root, which the collision guard asks first: an empty local one, since these settings name an
+    # `s3://` root nothing serves here.
+    (tmp_path / "estate-root").mkdir()
+    estate = connect("dir", {"root": str(tmp_path / "estate-root")})
+
+    async def estate_root(_request: object, _settings: object) -> object:
+        return estate
+
+    monkeypatch.setattr(wh_ep, "namespace_for_root", warehouse_root)
+    monkeypatch.setattr(wh_ep, "estate_namespace", estate_root)
     s = _settings(tmp_path, fga=True)
     client.app.dependency_overrides[get_settings] = lambda: s
     proj_svc.put_project(f"file://{tmp_path}", {}, {"id": "acme", "created_at": "t", "created_by": "seed", "protected": "false"})

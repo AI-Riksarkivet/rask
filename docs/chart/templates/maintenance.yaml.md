@@ -187,8 +187,14 @@ The ACCESS KEY alone scopes the plane; the secret is derived in-cluster
 
 ## `- { name: MAINTENANCE_SECRETS_FROM_DAPR, value: "true" }`
 
-The S3 secret comes ONLY from the secret store at boot; never in pod env (the
-audit's fix — maintenance is a real S3 consumer that compacts/GCs the lakehouse). Fails closed.
+The S3 key pair comes ONLY from the secret store, read at boot and again while the service runs
+([[XC-082]], ADR 0166); never in pod env (the audit's fix — maintenance is a real S3 consumer that
+GCs the lakehouse). Fails closed.
+
+## `- { name: MAINTENANCE_DAPR_SECRET_S3_ID_FIELD, value: "maintenance-s3-access-key" }`
+
+The scoped identity's key id, read from the store with its secret: a rotation issues a new id, so the
+id cannot be configuration.
 
 ## `- { name: MAINTENANCE_DAPR_SECRET_S3_FIELD, value: "maintenance-s3-secret-key" }`
 

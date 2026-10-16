@@ -160,6 +160,19 @@ def _bounded_dapr_handshake(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _a_fresh_secret_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Give each test its own PROCESS-GLOBAL cache of secret-store reads (`service_kit.governed.secret_cache`).
+
+    It holds what a store double answered for up to ten minutes, so one test's answer would otherwise be the
+    next test's, and a test asserting what the store is asked would pass or fail by collection order. A test
+    that drives the TTL replaces it again with a cache on its own clock.
+    """
+    from service_kit.governed import secret_cache
+
+    monkeypatch.setattr(secret_cache, "STORE_READS", secret_cache.SecretCache())
+
+
+@pytest.fixture(autouse=True)
 def _no_dapr_proxy_factory_carryover() -> None:
     """Clear Dapr's PROCESS-GLOBAL actor-proxy factory before each test, so one test cannot decide
     another's outcome.

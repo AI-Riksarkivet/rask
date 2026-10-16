@@ -60,17 +60,16 @@ def test_a_warehouse_with_NO_endpoint_uses_the_estate_default(settings: Settings
 
 
 class _Req:
-    """The two pieces of `request` the resolver touches, without standing up an app.
+    """The one piece of `request` the resolver touches, without standing up an app.
 
-    Handed over with an explicit `cast` at each call rather than a `type: ignore`: these functions read
-    `request.app.state.warehouse_binding_cache` and `.warehouse_namespaces` and nothing else, so the
-    cast states what is actually required of the argument instead of silencing the checker.
+    Handed over with an explicit `cast` at each call rather than a `type: ignore`: the resolver reads
+    `request.app.state.warehouse_binding_cache` and nothing else, so the cast states what is actually
+    required of the argument instead of silencing the checker.
     """
 
     class _State:
         def __init__(self) -> None:
             self.warehouse_binding_cache: dict[str, dict[str, str]] = {}
-            self.warehouse_namespaces: dict[tuple[str, str | None], object] = {}
 
     def __init__(self) -> None:
         self.app = type("_App", (), {"state": _Req._State()})()

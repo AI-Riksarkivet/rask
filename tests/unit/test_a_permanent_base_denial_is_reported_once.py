@@ -10,11 +10,11 @@ them `base='s3://lance-catalog/models/' denied=True`** — the same base, the sa
 answer. `rask-maintenance` signs with a scoped key that cannot read the model-registry prefix, so the
 probe can never succeed.
 
-WHY ONCE PER PROCESS IS THE EXACT SHAPE rather than merely a quieter one. The S3 credential is
-resolved ONCE, at boot, from the Dapr secret store (`apply_dapr_secrets` runs in the lifespan). It
-cannot change while the process lives, so a denial for a given base is deterministic for the life of
-that process — reporting it again tells the reader nothing that was not in the first line. A rotated
-credential arrives by rollout, which is a new process and therefore a fresh report.
+WHY ONCE PER PROCESS IS THE EXACT SHAPE rather than merely a quieter one. A denial is the answer of
+the policy on the identity the service signs as, so it is deterministic for a given base: reporting it
+again tells the reader nothing that was not in the first line. A rotation replaces that identity's key
+and keeps its policy ([[XC-082]]); a changed policy arrives by rollout, which is a new process and
+therefore a fresh report.
 
 AND A TRANSIENT FAILURE MUST KEEP ITS TRACEBACK, which is the half that makes this safe: a store
 outage, a malformed URI or a bug in the probe is exactly the case where the stack matters. Only the

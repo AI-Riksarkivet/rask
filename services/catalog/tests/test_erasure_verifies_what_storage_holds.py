@@ -20,6 +20,7 @@ import logging
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from datetime import timedelta
+from functools import partial
 from pathlib import Path
 from typing import Any, Literal, cast
 
@@ -828,7 +829,7 @@ def test_no_object_under_the_table_root_holds_the_identifier_or_the_report_names
     root = tmp_path / "data"
     predicate = f"pii = '{_IDENTIFIER}'"
     settings = Settings(LANCE_S3_ACCESS_KEY_ID="k", LANCE_S3_SECRET_ACCESS_KEY="s", LANCE_CONTROL_ROOT=str(_control(root)))
-    base_judge.install(base_judge.BaseJudge.from_settings(settings))
+    base_judge.install(partial(base_judge.BaseJudge.from_settings, settings))
     try:
         namespace = build(root)
         with _door(namespace, settings) as client:

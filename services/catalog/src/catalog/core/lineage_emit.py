@@ -45,6 +45,7 @@ from lineage_kit import CanonError, SigningKey, attach_signature, author_of
 from service_kit.governed import fga
 from service_kit.governed.signing_key import SigningKeyHolder, SigningKeyUnavailableError
 from service_kit.lakehouse import outbox
+from service_kit.lakehouse.objectfs import StorageOptions
 from service_kit.lakehouse.schema import SchemaFields
 from service_kit.lakehouse.subjects import is_person_subject
 from service_kit.lakehouse.warehouse_registry import is_safe_project
@@ -741,7 +742,7 @@ class DaprEmitter(_BaseLineageEmitter):
         job_namespace: str,
         timeout_seconds: float,
         outbox_uri: str = "",
-        storage_options: dict[str, str] | None = None,
+        storage_options: Callable[[], StorageOptions] | None = None,
         signing: SigningKeyHolder[SigningKey] | None = None,
     ) -> None:
         self._client = client
@@ -750,7 +751,8 @@ class DaprEmitter(_BaseLineageEmitter):
         self._job_namespace = job_namespace
         self._timeout_seconds = timeout_seconds
         self._outbox_uri = outbox_uri
-        self._storage_options = storage_options or {}
+        #: Read at every stage, never held: the key pair in it rotates while the catalog runs ([[XC-082]]).
+        self._storage_options = storage_options
         #: THIS CATALOG'S OWN SIGNING KEY ([[LH-064]]). None is a catalog with no store to sign from, which emits
         #: unsigned as it always did. A holder without a key emits nothing at all, never an unsigned event.
         self._signing = signing
@@ -800,7 +802,7 @@ class DaprEmitter(_BaseLineageEmitter):
             await outbox.publish_lineage_with_outbox(
                 self._client,
                 outbox_uri=self._outbox_uri,
-                storage_options=self._storage_options,
+                storage_options=self._storage_options() if self._storage_options is not None else {},
                 # WHICHEVER SHAPE THIS IS. A static metadata change has no run id, and staging one
                 # under "" puts it beyond the relay — the exact loss the outbox exists to prevent.
                 run_id=event_identity(event),
@@ -830,7 +832,7 @@ def make_emitter(
     timeout_seconds: float = 5.0,
     project_resolver: ProjectResolver | None = None,
     outbox_uri: str = "",
-    storage_options: dict[str, str] | None = None,
+    storage_options: Callable[[], StorageOptions] | None = None,
     catalog_impl: str = "",
     warehouse_uri: str = "",
     signing: SigningKeyHolder[SigningKey] | None = None,

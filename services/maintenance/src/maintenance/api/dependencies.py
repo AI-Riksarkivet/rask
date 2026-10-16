@@ -51,11 +51,3 @@ def get_control_emitter(request: Request) -> ControlEmitter:
 
 
 ControlEmitterDep = Annotated[ControlEmitter, Depends(get_control_emitter)]
-
-
-def get_s3_client(request: Request) -> Any:  # noqa: ANN401 — boto3 client has no public stub
-    """The boto3 client the reconciler lists buckets with, or ``None`` when unwired (→ UNAVAILABLE)."""
-    return getattr(request.app.state, "s3_client", None)
-
-
-S3ClientDep = Annotated[Any, Depends(get_s3_client)]

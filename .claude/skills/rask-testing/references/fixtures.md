@@ -23,9 +23,10 @@ Every service builds `app` at module import. Pick the fixture by how settings re
 `tests/integration/conftest.py::real_ns_client`. The order is load-bearing:
 
 1. `monkeypatch.setenv` every variable the service needs to build and boot. For the catalog that
-   includes both S3 keys, even on the `dir` backend: `Settings` requires `LANCE_S3_ACCESS_KEY_ID` at
-   construction, and the lifespan's `consume_dapr_secrets` refuses to boot with an empty
-   `LANCE_S3_SECRET_ACCESS_KEY` while `secrets_from_dapr` is off.
+   includes both S3 keys, even on the `dir` backend: with `secrets_from_dapr` off, `Settings` requires
+   `LANCE_S3_ACCESS_KEY_ID` at construction and the lifespan's `require_env_secret` refuses to boot with
+   an empty `LANCE_S3_SECRET_ACCESS_KEY`. With it on, the pair is the store's: drive the sidecar's secret
+   API with respx (`services/catalog/tests/test_a_rotated_credential_is_served_after_its_ttl_without_a_restart.py`).
 2. `.cache_clear()` on that getter, or the previous test's values survive.
 3. Import the app **inside** the fixture.
 4. Set `app.dependency_overrides[...]` on the registered callables (`real_ns_client` overrides

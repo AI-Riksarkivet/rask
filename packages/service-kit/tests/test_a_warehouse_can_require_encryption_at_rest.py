@@ -76,8 +76,6 @@ def test_the_VENDED_credential_carries_it_to_a_direct_writer() -> None:
         region="eu-north-1",
         endpoint="http://s3:9000",
         assume_role=_assume,
-        access_key="a",
-        secret_key="b",
         encryption=EncryptionAtRest(algorithm="aws:kms", kms_key_id="arn:aws:kms:eu-north-1:1:key/abc"),
     )
     vended = vendor.vend(table_location="s3://bucket/ns/t.lance", tier="write")
@@ -99,8 +97,6 @@ def test_an_UNCONFIGURED_vendor_vends_exactly_what_it_did_before() -> None:
         region="eu-north-1",
         endpoint="http://s3:9000",
         assume_role=lambda **_k: {"Credentials": {"AccessKeyId": "AK", "SecretAccessKey": "SK", "SessionToken": "ST", "Expiration": None}},
-        access_key="a",
-        secret_key="b",
     )
     vended = vendor.vend(table_location="s3://bucket/ns/t.lance", tier="write")
     assert vended is not None, "the STS vendor vended nothing at all"

@@ -578,10 +578,10 @@ def gather_compaction_bases(ds: FragmentCarrier, probe: DatasetRootProbe) -> Com
             denied = _is_permission_denial(exc)
             if denied:
                 # REPORTED ONCE PER BASE, PER PROCESS, AND WITHOUT A STACK. A denial is configuration,
-                # not an incident: the S3 credential is resolved once at boot from the Dapr secret
-                # store, so it cannot change while this process lives and the answer for a given base
-                # is deterministic for its lifetime. A rotated credential arrives by rollout, which is
-                # a new process and therefore a fresh report.
+                # not an incident: it is the answer of the policy on the identity this service signs
+                # as, so it is deterministic for a given base. A rotation replaces that identity's key
+                # and keeps its policy ([[XC-082]]), so it changes no answer here; a changed policy is
+                # a deployment change, and a rollout is a new process and therefore a fresh report.
                 #
                 # Measured on the running sweep 2026-09-15: 134 rendered tracebacks in ONE pass, every
                 # one `base='s3://lance-catalog/models/' denied=True` — the same base, the same key,

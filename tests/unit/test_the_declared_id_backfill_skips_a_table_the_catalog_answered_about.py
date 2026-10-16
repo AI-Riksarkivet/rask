@@ -25,7 +25,6 @@ from maintenance.core import config as maintenance_config
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import credentials, discovery
 from maintenance.services.discovery import Discovery
-from service_kit.governed import secrets
 from service_kit.lakehouse import objectfs, warehouse_records
 
 
@@ -51,7 +50,6 @@ def _vended_at(location: str) -> httpx.Response:
 def _one_bucket_holding_both(monkeypatch: pytest.MonkeyPatch) -> None:
     settings = MaintenanceSettings.model_validate({"s3_bucket": "wh", "catalog_url": CATALOG})
     monkeypatch.setattr(maintenance_config, "MaintenanceSettings", lambda: settings)
-    monkeypatch.setattr(secrets, "apply_dapr_secrets", lambda _settings: None)
     monkeypatch.setattr(warehouse_records, "list_warehouse_records", lambda *_a, **_k: [])
     monkeypatch.setattr(warehouse_records, "maintainable_buckets", lambda _registry: [])
     monkeypatch.setattr(objectfs, "s3_filesystem", lambda _options: object())

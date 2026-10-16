@@ -971,7 +971,7 @@ async def undrop_namespace(
             warehouse_id,
             str(bound["root_uri"]),
         )
-        ns = namespace_for_root(request, settings, str(bound["root_uri"]), endpoint=warehouse.get("endpoint") or None)
+        ns = await namespace_for_root(request, settings, str(bound["root_uri"]), endpoint=warehouse.get("endpoint") or None)
     everything = await run_in_threadpool(trash.list_all, settings.registry_root, so)
     prefix = canonical + settings.delimiter
     subtree = [r for r in everything if str(r.get("id")) == canonical or str(r.get("id", "")).startswith(prefix)]

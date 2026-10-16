@@ -7,8 +7,9 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from lineage.core.config import LineageSettings
-from service_kit.governed.secrets import apply_dapr_secrets, fetch_dapr_secret
+from lineage.core.config import LineageSettings, storage_options
+from service_kit.governed.secrets import fetch_dapr_secret
+from service_kit.governed.store_credential import StoreCredential, make_store_credential
 
 
 def test_fetch_dapr_secret_fails_fast_on_4xx_but_retries_transient(
@@ -53,23 +54,26 @@ def test_lineage_reads_no_store_when_secrets_from_dapr_is_off(monkeypatch: pytes
     # model_validate (not LineageSettings(...)) so field-name keys validate cleanly past ty: the fields
     # carry LINEAGE_* aliases and populate_by_name accepts the names only at runtime.
     settings = LineageSettings.model_validate({"secrets_from_dapr": False})
-    apply_dapr_secrets(settings)
+    assert make_store_credential(settings) is None
+    storage_options(settings)
     assert not called  # off → never touches the store
 
 
-def test_lineage_takes_the_outbox_secret_from_the_store_alone(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_lineage_takes_the_outbox_pair_from_the_store_alone(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "service_kit.governed.secrets.fetch_dapr_secret",
-        lambda *_a, **_k: {"minio-secret-key": "from-store"},
+        lambda *_a, **_k: {"minio-access-key": "id-from-store", "minio-secret-key": "from-store"},
     )
-    settings = LineageSettings.model_validate({"secrets_from_dapr": True})
-    apply_dapr_secrets(settings)
-    assert settings.s3_secret_access_key.get_secret_value() == "from-store"  # SecretStr now
+    settings = LineageSettings.model_validate({"secrets_from_dapr": True, "s3_access_key_id": "id-from-env", "s3_secret_access_key": "from-env"})
+    StoreCredential(settings).read_at_boot()
+    options = storage_options(settings)
+    assert (options["aws_access_key_id"], options["aws_secret_access_key"]) == ("id-from-store", "from-store")
 
 
-def test_lineage_refuses_to_boot_without_the_outbox_secret(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Store empty AND no env fallback → must raise, never boot with an empty S3 key.
-    monkeypatch.setattr("service_kit.governed.secrets.fetch_dapr_secret", lambda *_a, **_k: {})
+@pytest.mark.parametrize("bundle", [{}, {"minio-secret-key": "only-the-secret"}], ids=["store-empty", "secret-without-its-key-id"])
+def test_lineage_refuses_to_boot_without_the_whole_outbox_pair(monkeypatch: pytest.MonkeyPatch, bundle: dict[str, str]) -> None:
+    # Store empty, or half a pair, AND no env fallback → must raise, never boot signing with half a credential.
+    monkeypatch.setattr("service_kit.governed.secrets.fetch_dapr_secret", lambda *_a, **_k: dict(bundle))
     settings = LineageSettings.model_validate({"secrets_from_dapr": True, "s3_secret_access_key": ""})
-    with pytest.raises(RuntimeError, match="failing closed"):
-        apply_dapr_secrets(settings)
+    with pytest.raises(RuntimeError, match="failing closed|half a credential"):
+        StoreCredential(settings).read_at_boot()

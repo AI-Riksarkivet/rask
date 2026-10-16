@@ -48,8 +48,6 @@ def test_a_vendor_with_no_allowlist_drops_the_same_base() -> None:
         role_arn="arn:aws:iam::000000000000:role/lance-vend",
         region="us-east-1",
         assume_role=_capturing_assume(sink),
-        access_key="unit",
-        secret_key="unit",
     )
 
     vendor.vend(table_location=TABLE, tier="read", bases=(TABLE_DIRECTORY,))

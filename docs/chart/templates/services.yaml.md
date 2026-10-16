@@ -60,6 +60,12 @@ not name — so the request was refused before the per-base credential was ever 
 and nothing said why (measured 2026-09-22). A render-time failure names the mistake; the
 runtime one is indistinguishable from a caller inventing a bucket.
 
+## `- { name: LANCE_DAPR_SECRET_S3_ID_FIELD, value: {{ include "lance.catalogKeyIdField" . | quote }} }`
+
+THE KEY ID IS THE STORE'S TOO ([[XC-082]], ADR 0166). Every S3-family store rotates by issuing a NEW key
+id, so an id held in pod env would pair a rotated secret with the old id. The catalog reads both fields
+from one fetch, at boot and again while it runs, and refuses a bundle carrying only one of them.
+
 ## `- { name: LANCE_DAPR_SECRET_S3_FIELD, value: {{ include "lance.catalogSecretField" . | quote }} }`
 
 NAMED HERE rather than left to the service's own default, which is what every sibling
@@ -71,8 +77,9 @@ otherwise healthy. A name the chart writes and the chart seeds cannot drift apar
 
 ## `- { name: LANCE_SECRETS_FROM_DAPR, value: "true" }`
 
-The S3 secret comes ONLY from the Dapr secret store at boot; it is never in pod env. The
-catalog fails closed if the store can't provide it. Needs the lance-secrets component
+The S3 key pair comes ONLY from the Dapr secret store, read at boot and again whenever half its TTL is
+used ([[XC-082]], ADR 0166); it is never in pod env. The catalog fails closed if the store can't provide
+it: at boot, and once a held pair goes unconfirmed for its TTL. Needs the lance-secrets component
 (scoped to catalog).
 
 ## `- { name: LANCE_VENDING_MODE, value: {{ .Values.vending.mode | quote }} }`
@@ -309,6 +316,12 @@ secret is DERIVED in-cluster (`lance.scopedSecretFn`), so naming the identity ne
 secret anywhere. Empty falls back to the tenant ROOT, which is what an
 install runs until one is named — a chart that silently repointed a live service at a
 credential nobody created would take it down on upgrade.
+
+## `- { name: LINEAGE_DAPR_SECRET_S3_ID_FIELD, value: "lineage-s3-access-key" }`
+
+The scoped identity's key id, read from the store with its secret ([[XC-082]], ADR 0166): a rotation
+issues a new id, so the id cannot be configuration. Unscoped, the default field is the root pair's
+`minio-access-key`.
 
 ## `- { name: LINEAGE_DAPR_SECRET_S3_FIELD, value: "lineage-s3-secret-key" }`
 

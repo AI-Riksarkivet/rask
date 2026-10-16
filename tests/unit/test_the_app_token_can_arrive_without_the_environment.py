@@ -19,34 +19,30 @@ is the one that would go green under a chain, so it is the one that matters here
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+import logging
 
 import pytest
+from fastapi import Depends, FastAPI
+from fastapi.testclient import TestClient
 from lance_namespace import PermissionDeniedError, ServiceUnavailableError
 
-from service_kit.governed import dapr_auth
-from service_kit.governed.dapr_auth import assert_app_token_configured, expected_app_token, require_dapr_token
+from service_kit.governed import secret_cache
+from service_kit.governed.dapr_auth import assert_app_token_configured, expected_app_tokens, require_dapr_token
+from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
 @pytest.fixture(autouse=True)
-def _a_cold_process(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    """The bundle is cached for the process lifetime, so each test starts from an unread store.
-
-    Without this the SECOND test in the file would assert against the FIRST one's bundle and pass no
-    matter what the resolver does — the hollow-test shape the estate has already paid for once.
-    """
+def _store_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every test here runs a store-mode door; the root conftest starts each one on an unread store."""
     monkeypatch.setenv("RASK_APP_TOKEN_FROM_STORE", "true")
     monkeypatch.delenv("RASK_ALLOW_UNAUTHENTICATED_DAPR", raising=False)
-    dapr_auth._secret_bundle.cache_clear()
-    yield
-    dapr_auth._secret_bundle.cache_clear()
 
 
 def _store(monkeypatch: pytest.MonkeyPatch, bundle: dict[str, str] | None) -> list[tuple[str, str]]:
     """Stand in for the sidecar's secret store; returns the calls it received.
 
     Patched at `service_kit.governed.secrets.fetch_dapr_secret` rather than on `dapr_auth`, because
-    that is where `_secret_bundle` imports it from at call time — patching the consuming module would
+    that is where the door's read imports it from at call time — patching the consuming module would
     leave the real fetch in place and every test here would fail against a store that is not there.
     """
     calls: list[tuple[str, str]] = []
@@ -110,15 +106,53 @@ def test_an_UNREADABLE_store_is_an_outage_not_a_refusal(monkeypatch: pytest.Monk
         require_dapr_token(dapr_api_token="anything", dapr_caller_app_id="")
 
 
-def test_the_store_is_read_ONCE_per_process(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Every guarded request resolves this, so an uncached read would put a sidecar hop on each one."""
+class _Clock:
+    def __init__(self) -> None:
+        self.now = 1_000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def _a_process(monkeypatch: pytest.MonkeyPatch, clock: _Clock) -> TestClient:
+    """A process with one sidecar-delivered route behind the door, and a secret cache that has read nothing."""
+    monkeypatch.setattr(secret_cache, "STORE_READS", secret_cache.SecretCache(clock=clock))
+    app = FastAPI()
+    install_problem_handlers(app, logging.getLogger(__name__))
+
+    @app.post("/delivered", dependencies=[Depends(require_dapr_token)])
+    def delivered() -> dict[str, str]:
+        return {"status": "SUCCESS"}
+
+    return TestClient(app, raise_server_exceptions=False)
+
+
+def test_the_app_token_rotates_across_a_restart_with_no_403(monkeypatch: pytest.MonkeyPatch) -> None:
+    """[[XC-082]] A rotation writes the new token as current and keeps the old one as previous, and no delivery is refused.
+
+    daprd reads its token from the ESO-synced Kubernetes Secret once, when its pod starts, so the running sidecar
+    presents the OLD token until a restart, and a sidecar that restarts before ESO syncs still starts with it. The
+    door therefore accepts the store's previous token beside its current one. It re-reads the store once the TTL
+    passes, which is what lets a token removed from the store stop being accepted with no restart.
+    """
     monkeypatch.delenv("APP_API_TOKEN", raising=False)
-    calls = _store(monkeypatch, {"dapr-app-token": "from-the-store"})
+    clock = _Clock()
+    bundle = {"dapr-app-token": "old"}
+    calls = _store(monkeypatch, bundle)
+    running = _a_process(monkeypatch, clock)
+    assert running.post("/delivered", headers={"dapr-api-token": "old"}).status_code == 200
 
-    for _ in range(5):
-        require_dapr_token(dapr_api_token="from-the-store", dapr_caller_app_id="")
+    bundle.update({"dapr-app-token": "new", "dapr-app-token-previous": "old"})
+    assert running.post("/delivered", headers={"dapr-api-token": "old"}).status_code == 200
+    assert len(calls) == 1, f"the store was read {len(calls)} times inside the TTL"
+    clock.now += secret_cache.SECRET_TTL_SECONDS
+    answers = {token: running.post("/delivered", headers={"dapr-api-token": token}).status_code for token in ("old", "new")}
+    restarted = _a_process(monkeypatch, clock)
+    answers |= {f"restarted:{token}": restarted.post("/delivered", headers={"dapr-api-token": token}).status_code for token in ("old", "new")}
+    forged = restarted.post("/delivered", headers={"dapr-api-token": "forged"})
 
-    assert calls == [("lance-secrets", "lance")], f"the store was read {len(calls)} times"
+    assert answers == {"old": 200, "new": 200, "restarted:old": 200, "restarted:new": 200}
+    assert (forged.status_code, forged.headers["content-type"]) == (403, "application/problem+json"), forged.text
 
 
 def test_the_boot_assertion_reads_the_store_too(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -132,7 +166,6 @@ def test_the_boot_assertion_reads_the_store_too(monkeypatch: pytest.MonkeyPatch)
 
     assert_app_token_configured(dapr_enabled=True)
 
-    dapr_auth._secret_bundle.cache_clear()
     _store(monkeypatch, {"catalog-s3-secret-key": "irrelevant"})
     with pytest.raises(RuntimeError, match="failing closed"):
         assert_app_token_configured(dapr_enabled=True)
@@ -152,18 +185,17 @@ def test_env_mode_is_untouched(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr("service_kit.governed.secrets.fetch_dapr_secret", _never)
 
-    assert expected_app_token() == "from-the-env"
+    assert expected_app_tokens() == ("from-the-env",)
     require_dapr_token(dapr_api_token="from-the-env", dapr_caller_app_id="")
 
 
 def test_a_LATE_seed_heals_without_a_restart(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The bundle is cached, and a cached successful MISS would outlive the thing that caused it.
+    """The tokens are cached, and a cached successful MISS would outlive the thing that caused it.
 
     The live ordering makes this reachable rather than theoretical: the chart's OpenBao seed Job and
     this pod roll in the same `helm upgrade`, so the app can read the bundle before the token is
-    written to it. An unreadable store already heals by itself, because `_secret_bundle` never caches
-    an exception — a store that ANSWERS without the field is the case that does not, and it would
-    refuse every delivery for the life of the process while the field sat there.
+    written to it. A store that ANSWERS without the field is therefore asked again on the next
+    request, exactly as an unreadable one is, rather than remembered as holding no token.
     """
     monkeypatch.delenv("APP_API_TOKEN", raising=False)
     bundle: dict[str, str] = {"catalog-s3-secret-key": "irrelevant"}

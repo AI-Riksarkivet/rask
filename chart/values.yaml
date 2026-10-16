@@ -1662,8 +1662,8 @@ minio:
   accessKey: minioadmin
   # THE MAINTENANCE PLANE'S OWN CREDENTIAL, scoped away from the tenant root above.
   #
-  # `MAINTENANCE_S3_ACCESS_KEY_ID` renders from `accessKey` — the store's ROOT account — and maintenance
-  # COMPACTS with it, which is a write. So the service that rewrites every dataset in every bucket also
+  # Unset, maintenance's key pair is the store's ROOT account (`minio-access-key`, `minio-secret-key`), and
+  # maintenance COMPACTS with it, which is a write. So the service that rewrites every dataset in every bucket also
   # reaches `_projects/`, `_protection/` and `_policies/`: the records that decide what maintenance
   # itself is permitted to do. A compromise there can turn off the shallow-clone guard that stops a
   # compaction destroying another dataset's source, or re-pace its own cadence.

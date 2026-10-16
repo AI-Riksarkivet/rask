@@ -162,14 +162,17 @@ data:
       frontend-session-secret=@"$G/frontend-session-secret" \
 
       {{- if $.Values.minio.maintenanceAccessKey }}
+      maintenance-s3-access-key={{ $.Values.minio.maintenanceAccessKey }} \
       maintenance-s3-secret-key=@"$HOME/seed/scoped-{{ $.Values.minio.maintenanceAccessKey }}" \
       {{- end }}
 
       {{- if $.Values.minio.catalogAccessKey }}
+      catalog-s3-access-key={{ $.Values.minio.catalogAccessKey }} \
       catalog-s3-secret-key=@"$HOME/seed/scoped-{{ $.Values.minio.catalogAccessKey }}" \
       {{- end }}
 
       {{- if $.Values.minio.lineageAccessKey }}
+      lineage-s3-access-key={{ $.Values.minio.lineageAccessKey }} \
       lineage-s3-secret-key=@"$HOME/seed/scoped-{{ $.Values.minio.lineageAccessKey }}" \
       {{- end }}
 

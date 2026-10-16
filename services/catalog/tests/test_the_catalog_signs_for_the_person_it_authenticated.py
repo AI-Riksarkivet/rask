@@ -113,7 +113,6 @@ def boot(tmp_path: Path, control_outbox: str, monkeypatch: pytest.MonkeyPatch, r
     env = {
         "LANCE_REST_IMPL": "dir",
         "LANCE_REST_ROOT": str(tmp_path / "warehouse"),
-        "LANCE_S3_ACCESS_KEY_ID": "test",
         "LANCE_SECRETS_FROM_DAPR": "true",
         "RASK_SIGNING_IDENTITY": CATALOG,
         "LANCE_LINEAGE_EMIT_ENABLED": "true",
@@ -138,7 +137,7 @@ def boot(tmp_path: Path, control_outbox: str, monkeypatch: pytest.MonkeyPatch, r
 
         def _boot(seed: httpx.Response, keys: httpx.Response, token: object) -> TestClient:
             stack.enter_context(respx.mock)
-            respx.get(f"{SECRETS}/lance").mock(return_value=httpx.Response(200, json={"minio-secret-key": "the-s3-secret"}))
+            respx.get(f"{SECRETS}/lance").mock(return_value=httpx.Response(200, json={"minio-access-key": "test", "minio-secret-key": "the-s3-secret"}))
             respx.get(f"{SECRETS}/signing-key-{CATALOG}").mock(return_value=seed)
             respx.get(f"{SECRETS}/signing-public-{CATALOG}").mock(return_value=keys)
             namespace = connect("dir", {"root": str(tmp_path / "warehouse")})

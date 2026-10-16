@@ -37,12 +37,16 @@ from tests.unit.chart_render import PREREQ_ARGS, RAY_ARGS
 REPO = Path(__file__).resolve().parents[2]
 CHART = REPO / "chart"
 
-#: `{env var naming the identity: the workload that presents it}` — one row per plane the chart
-#: provisions a scoped RustFS user for in `minio-scoped-users.yaml`.
+#: `{env var naming the store field the identity's key id is read from: the workload that presents it}` — one
+#: row per plane the chart provisions a scoped RustFS user for in `minio-scoped-users.yaml`. The pair is the
+#: store's (ADR 0166), so the identity a plane presents is the one behind the field it is told to read.
 PROVISIONED_PLANES = {
-    "MAINTENANCE_S3_ACCESS_KEY_ID": "maintenance",
-    "LINEAGE_S3_ACCESS_KEY_ID": "lineage",
+    "MAINTENANCE_DAPR_SECRET_S3_ID_FIELD": "maintenance",
+    "LINEAGE_DAPR_SECRET_S3_ID_FIELD": "lineage",
 }
+
+#: The store field holding the tenant ROOT account's key id, seeded from `minio.accessKey`.
+ROOT_ID_FIELD = "minio-access-key"
 
 
 def _render(*extra: str) -> str:
@@ -67,10 +71,6 @@ def _render(*extra: str) -> str:
     return subprocess.run(argv, capture_output=True, text=True, check=True).stdout
 
 
-def _root_key() -> str:
-    return str(yaml.safe_load((CHART / "values.yaml").read_text())["minio"]["accessKey"])
-
-
 def _rendered_identities(rendered: str) -> dict[str, set[str]]:
     """`{env var: every value any workload renders for it}`."""
     found: dict[str, set[str]] = {k: set() for k in PROVISIONED_PLANES}
@@ -86,13 +86,12 @@ def _rendered_identities(rendered: str) -> dict[str, set[str]]:
 
 def test_no_provisioned_plane_falls_back_to_the_storage_root() -> None:
     """The default install must not hand a service the tenant root key it has an identity for."""
-    root = _root_key()
     identities = _rendered_identities(_render())
     for var, plane in PROVISIONED_PLANES.items():
         rendered = identities[var]
         assert rendered, f"{var} renders nowhere — this pin is asserting nothing about {plane}"
-        assert root not in rendered, (
-            f"{plane} presents the tenant ROOT credential {root!r} on a default install, while "
+        assert ROOT_ID_FIELD not in rendered, (
+            f"{plane} reads the tenant ROOT credential's key id ({ROOT_ID_FIELD!r}) on a default install, while "
             f"`minio-scoped-users.yaml` provisions a least-privilege user for it in the same release. "
             "Root by default is not a deployment choice anyone made."
         )

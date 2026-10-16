@@ -9,6 +9,7 @@ the data-plane service for operations the native backend does not implement.
 from __future__ import annotations
 
 import logging
+import threading
 
 import lance
 from lance_namespace import (
@@ -26,6 +27,7 @@ from pydantic import BaseModel, Field
 from catalog.core.base_judge import installed_judge, require_sanctioned_bases
 from catalog.core.config import Settings, StorePlane, shared_lance_session
 from catalog.core.store_endpoint import require_estate_store
+from service_kit.governed.store_credential import S3KeyPair
 from service_kit.lakehouse import auto_cleanup
 from service_kit.lakehouse.features import BasePathRef, flags_from_open_error, manifest_base_path_refs, manifest_feature_flags, mixes_data_file_versions
 from service_kit.lancekit.absence import reads_as_absent
@@ -38,6 +40,54 @@ log = logging.getLogger(__name__)
 def build_namespace(settings: Settings, *, plane: StorePlane = "metadata") -> LanceNamespace:
     """The estate-rooted namespace connection, its object-store calls bounded for ``plane`` (`CatalogReadBounds`)."""
     return connect(settings.impl, settings.namespace_properties(plane=plane))
+
+
+class NamespaceConnections:
+    """The catalog's native namespace connections: one per (root, endpoint, plane), under the key pair in force.
+
+    A CONNECTION KEEPS THE PAIR IT WAS BUILT WITH ([[XC-082]]). Measured on pylance 13.0.0 over a moto
+    server enforcing key ids: once its key is revoked, a `dir` connection built with it answers every call
+    with the store's refusal, while a connection built with the new key works, as does an open through the
+    same `lance.Session` the old key opened with. So a connection is keyed on the pair it was built with,
+    and the first request after a rotation builds anew and drops what the old pair built.
+    """
+
+    def __init__(self) -> None:
+        self._built: dict[tuple[S3KeyPair, str, str | None, StorePlane], LanceNamespace] = {}
+        #: One build at a time: building connects to the store. A held connection is read without it, and the map is
+        #: replaced whole rather than changed in place, so a reader never sees it half-written.
+        self._building = threading.Lock()
+
+    def connection(self, settings: Settings, *, root: str | None = None, endpoint: str | None = None, plane: StorePlane = "metadata") -> LanceNamespace:
+        """The connection rooted at ``root`` (the estate's own root when ``None``), built on first use.
+
+        Blocking: building a connection reaches the store, so an async caller runs this in the threadpool.
+
+        Raises:
+            StoreCredentialUnavailableError: The store has not confirmed the catalog's pair within its TTL.
+            UnsupportedOperationError: ``endpoint`` names a store other than the estate's.
+            ServiceUnavailableError: A warehouse's store did not answer the connection.
+        """
+        pair = settings.s3_key_pair()
+        key = (pair, root or settings.root, endpoint, plane)
+        if (built := self._built.get(key)) is not None:
+            return built
+        with self._building:
+            if (built := self._built.get(key)) is not None:
+                return built
+            built = build_namespace(settings, plane=plane) if root is None else build_namespace_for_root(settings, root, endpoint=endpoint, plane=plane)
+            self._built = {**{held: conn for held, conn in self._built.items() if held[0] == pair}, key: built}
+            return built
+
+    def data_twin(self, settings: Settings, metadata: LanceNamespace) -> LanceNamespace | None:
+        """The data-plane connection to the root ``metadata`` reaches, or ``None`` when this did not build ``metadata``.
+
+        Blocking, as :meth:`connection` is.
+        """
+        for (_, root, endpoint, plane), conn in self._built.items():
+            if conn is metadata and plane == "metadata":
+                return self.connection(settings, root=None if root == settings.root else root, endpoint=endpoint, plane="data")
+        return None
 
 
 def build_namespace_for_root(settings: Settings, root_uri: str, *, endpoint: str | None = None, plane: StorePlane = "metadata") -> LanceNamespace:

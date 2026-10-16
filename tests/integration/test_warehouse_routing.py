@@ -157,7 +157,7 @@ def test_binding_collides_with_existing_default_namespace_409(
 
     from catalog.services import native
 
-    native.call(client.app.state.namespace, "create_namespace", CreateNamespaceRequest(id=["shared"]))
+    native.call(client.app.state.connections.connection(client.app.state.settings), "create_namespace", CreateNamespaceRequest(id=["shared"]))
 
     # Binding "shared" to the warehouse would route shared$* to the warehouse bucket and ORPHAN the
     # default-root tables — the collision guard must reject it with 409.

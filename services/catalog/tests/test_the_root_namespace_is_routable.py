@@ -33,16 +33,17 @@ def _settings(*, warehouses: bool) -> Any:
     return types.SimpleNamespace(delimiter="$", warehouses_enabled=warehouses, root="s3://root")
 
 
-#: Stands in for the lifespan-built connection `get_namespace` falls back to.
+#: Stands in for the estate-rooted connection `get_namespace` falls back to.
 DEFAULT_NS = object()
 
 
 def _request(object_id: str | None) -> Any:
     import types
 
+    connections = types.SimpleNamespace(connection=lambda *_a, **_kw: DEFAULT_NS)
     return types.SimpleNamespace(
         path_params={"id": object_id} if object_id is not None else {},
-        app=types.SimpleNamespace(state=types.SimpleNamespace(namespace=DEFAULT_NS)),
+        app=types.SimpleNamespace(state=types.SimpleNamespace(connections=connections)),
     )
 
 

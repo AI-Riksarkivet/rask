@@ -44,10 +44,11 @@ from fastapi import FastAPI
 from moto import settings as moto_settings
 from moto.iam.access_control import IAMRequestBase
 from moto.server import ThreadedMotoServer
-from pydantic import BaseModel
+from pydantic import BaseModel, SecretStr
 
 from catalog.api.dependencies import get_vendor
 from catalog.core.vending import StsVendor
+from service_kit.governed.store_credential import S3KeyPair
 from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 
 
@@ -135,7 +136,10 @@ def catalog_url(store: _Store, monkeypatch: pytest.MonkeyPatch) -> Iterator[str]
     from catalog.core.config import get_settings
     from catalog.main import app
 
-    vendor = StsVendor(role_arn=store.role_arn, region=_REGION, endpoint=store.url, access_key=store.estate_key, secret_key=store.estate_secret)
+    def estate() -> S3KeyPair:
+        return S3KeyPair(access_key_id=store.estate_key, secret_access_key=SecretStr(store.estate_secret))
+
+    vendor = StsVendor(role_arn=store.role_arn, region=_REGION, endpoint=store.url, credential=estate)
     app.dependency_overrides[get_vendor] = lambda: vendor
     yield from _serve(app)
     app.dependency_overrides.clear()

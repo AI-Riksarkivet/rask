@@ -30,6 +30,7 @@ from __future__ import annotations
 import json
 import logging
 import uuid
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any, Protocol, runtime_checkable
 
@@ -38,6 +39,7 @@ from dapr.aio.clients import DaprClient
 from lineage_kit import CanonError, SigningKey, attach_signature
 from service_kit.governed.signing_key import SigningKeyHolder, SigningKeyUnavailableError
 from service_kit.lakehouse import outbox
+from service_kit.lakehouse.objectfs import StorageOptions
 
 # The key the medallion's stage stamp WRITES. Imported rather than restated: a reader and a writer
 # that each spell a metadata key for themselves agree only by luck, and this one decides whether a
@@ -242,7 +244,7 @@ class DaprMaintenanceEmitter:
         job_namespace: str,
         timeout_seconds: float,
         outbox_uri: str = "",
-        storage_options: dict[str, str] | None = None,
+        storage_options: Callable[[], StorageOptions] | None = None,
         author: str = "",
         signing: SigningKeyHolder[SigningKey] | None = None,
     ) -> None:
@@ -262,7 +264,8 @@ class DaprMaintenanceEmitter:
         self._job_namespace = job_namespace
         self._timeout_seconds = timeout_seconds
         self._outbox_uri = outbox_uri
-        self._storage_options = storage_options or {}
+        #: Read at every stage, never held: the key pair in it rotates while the service runs ([[XC-082]]).
+        self._storage_options = storage_options
 
     async def emit_maintenance(self, *, table_id: str, namespace: str) -> None:
         # uuid4 ON PURPOSE: each tick that reclaims versions is a distinct successful run (§4 decided —
@@ -324,7 +327,7 @@ class DaprMaintenanceEmitter:
             await outbox.publish_lineage_with_outbox(
                 self._client,
                 outbox_uri=self._outbox_uri,
-                storage_options=self._storage_options,
+                storage_options=self._storage_options() if self._storage_options is not None else {},
                 run_id=str((event.get("run") or {}).get("runId") or ""),
                 event_json=json.dumps(event),
                 pubsub_name=self._pubsub,
@@ -342,7 +345,7 @@ def make_emitter(
     enabled: bool,
     dapr: DaprClient | None,
     outbox_uri: str = "",
-    storage_options: dict[str, str] | None = None,
+    storage_options: Callable[[], StorageOptions] | None = None,
     pubsub: str,
     topic: str,
     job_namespace: str,

@@ -40,7 +40,9 @@ def _request_stub() -> Any:
     """
     from types import SimpleNamespace
 
-    return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(warehouse_namespaces={})))
+    from catalog.core.namespace import NamespaceConnections
+
+    return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(connections=NamespaceConnections())))
 
 
 def _settings(tmp_path: Any, *, grace_days: int = 0) -> Settings:

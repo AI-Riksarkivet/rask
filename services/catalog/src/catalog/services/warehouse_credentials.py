@@ -6,17 +6,17 @@ travels in a record, and a scoped static key is not a fix. So the record names a
 material is fetched here, from the same Dapr secret store the catalog already resolves its own S3
 secret from.
 
-WHY NOT `apply_dapr_secrets`. That splices the ESTATE's one secret into `Settings` during the
-lifespan, and its docstring forbids reuse on this path in as many words: "never call this from a
-request handler or a background task". It mutates a shared `@lru_cache`d object that every later read
-resolves, which is sound exactly once, before the first request. A warehouse credential is per-RECORD
-and is discovered when a request names that warehouse, so it needs a holder of its own and must never
-be written back onto settings.
+WHY NOT THE CATALOG'S OWN CREDENTIAL HOLDER. `service_kit.governed.store_credential` keeps ONE pair,
+named in configuration, confirmed by a background loop from boot. A warehouse credential is per-RECORD
+and is discovered when a request names that warehouse, so it is read on demand, and must never be
+written onto settings.
 
-CACHED BY REFERENCE, because every table open under a warehouse names the same one and the store is a
-network hop. Keyed on `(store, ref, field)` so two warehouses naming different references cannot share
-an entry, and so a corrected reference is a different key rather than a stale hit. `cache_clear()` is
-the seam a rotation would use.
+HELD FOR THE STORE'S TTL, by reference ([[XC-082]]), because every table open under a warehouse names
+the same one and the store is a network hop: `service_kit.governed.secret_cache.STORE_READS` serves it
+for at most `SECRET_TTL_SECONDS` and then reads the store again, so a pair rotated in the store is the
+one signing within the TTL, with no restart. Keyed on `(store, ref, field)` so two warehouses naming
+different references cannot share an entry, and so a corrected reference is a different key rather than
+a stale hit. Concurrent opens that find it expired wait on one read.
 
 FAILS CLOSED, inherited rather than re-implemented: `fetch_required_secrets` raises when the bundle
 lacks the required field, and nothing here catches it. A fall-back to the estate's own key would be
@@ -27,9 +27,11 @@ which is the blast radius per-warehouse credentials exist to contain.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from functools import lru_cache
+from functools import partial
 from typing import Final
 
+from service_kit.governed import secret_cache
+from service_kit.governed.secret_cache import StoreRead
 from service_kit.governed.secrets import fetch_required_secrets
 
 
@@ -47,7 +49,6 @@ _REQUEST_RETRIES: Final = 2
 _REQUEST_BACKOFF: Final = 0.25
 
 
-@lru_cache(maxsize=256)
 def resolve(*, store: str, ref: str, field: str) -> Mapping[str, str] | None:
     """The secret material for the warehouse naming ``ref``, or ``None`` when it names none.
 
@@ -56,15 +57,24 @@ def resolve(*, store: str, ref: str, field: str) -> Mapping[str, str] | None:
     without a reference is in the estate's own store. Returning that secret from HERE would make an
     unset reference indistinguishable from one that resolved, which is how a misconfigured record
     starts writing somewhere nobody intended.
+
+    Raises:
+        RuntimeError: The store did not answer, or answered without both halves of the pair. Never cached.
     """
     if not ref:
         return None
-    bundle = fetch_required_secrets(store, ref, require=field, timeout=_REQUEST_TIMEOUT, retries=_REQUEST_RETRIES, backoff=_REQUEST_BACKOFF)
-    pair = {"aws_secret_access_key": bundle[field]}
+    read = StoreRead(store=store, secret=ref, fields=(field, _KEY_ID_FIELD))
+    pair = secret_cache.STORE_READS.get(read, partial(_read_pair, read))
+    return {"aws_secret_access_key": pair[field], _KEY_ID_FIELD: pair[_KEY_ID_FIELD]}
+
+
+def _read_pair(read: StoreRead) -> dict[str, str]:
+    """Both halves of the pair from one fetch, under the request path's bound."""
+    field, key_id_field = read.fields
+    bundle = fetch_required_secrets(read.store, read.secret, require=field, timeout=_REQUEST_TIMEOUT, retries=_REQUEST_RETRIES, backoff=_REQUEST_BACKOFF)
     # The key id rides the SAME bundle. Absent, the estate's own id stays in force and is paired with
     # a foreign secret — so its absence is refused rather than defaulted.
-    key_id = bundle.get(_KEY_ID_FIELD)
+    key_id = bundle.get(key_id_field)
     if not key_id:
-        raise RuntimeError(f"secret bundle {store!r}/{ref!r} carries {field!r} but no {_KEY_ID_FIELD!r}; half a credential signs nothing")
-    pair[_KEY_ID_FIELD] = key_id
-    return pair
+        raise RuntimeError(f"secret bundle {read.store!r}/{read.secret!r} carries {field!r} but no {key_id_field!r}; half a credential signs nothing")
+    return {field: bundle[field], key_id_field: key_id}

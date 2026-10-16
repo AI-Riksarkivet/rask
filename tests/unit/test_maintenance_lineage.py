@@ -420,7 +420,7 @@ def test_the_maintenance_emitter_STAGES_the_event_rather_than_publishing_it_bare
         job_namespace="compaction",
         timeout_seconds=5.0,
         outbox_uri="s3://staging/outbox",
-        storage_options={"region": "eu-north-1"},
+        storage_options=lambda: {"region": "eu-north-1"},
     )
     _asyncio.run(emitter._publish({"run": {"runId": "r-sweep"}}, "gold$catalog"))
 

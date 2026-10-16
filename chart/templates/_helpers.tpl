@@ -667,6 +667,10 @@ activeDeadlineSeconds: 1800
 {{- ternary "catalog-s3-secret-key" "minio-secret-key" (not (not .Values.minio.catalogAccessKey)) -}}
 {{- end -}}
 
+{{- define "lance.catalogKeyIdField" -}}
+{{- ternary "catalog-s3-access-key" "minio-access-key" (not (not .Values.minio.catalogAccessKey)) -}}
+{{- end -}}
+
 {{- define "lance.baseFixture" -}}
 {{- $out := dict -}}
 {{- if .Values.catalog.multibase.devSeed -}}

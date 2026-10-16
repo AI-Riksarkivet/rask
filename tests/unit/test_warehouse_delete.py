@@ -88,19 +88,22 @@ class _FakeNamespace:
         self.dropped.append(list(request.id))
 
 
+class _Connections:
+    """The catalog's connections, answering the fake for the warehouse's root, so no real backend is built."""
+
+    def __init__(self, root_uri: str, ns: _FakeNamespace) -> None:
+        self._root_uri = root_uri
+        self._ns = ns
+
+    def connection(self, _settings: Settings, *, root: str | None = None, endpoint: str | None = None, plane: str = "metadata") -> _FakeNamespace:
+        assert (root, endpoint) == (self._root_uri, None), f"the delete reached {root!r} at {endpoint!r}, not its warehouse's root"
+        return self._ns
+
+
 def _request(root_uri: str = "s3://acme-bkt", ns: _FakeNamespace | None = None) -> Any:
     """A stand-in request carrying the two pieces of app state the delete touches: the positive binding
-    cache (which it must evict) and the per-root connection cache (pre-seeded, so no real backend is built).
-
-    The connection cache is keyed on ``(root, endpoint)`` since [[LH-067]] — a root is immutable but a
-    warehouse's endpoint is caller-owned, so a root-only key would serve a connection built against the
-    old store for the life of the process. ``None`` is the estate-endpoint case, which is this fixture's.
-    Seeding the old one-element key here did not fail loudly: it MISSED, and the miss built a real
-    backend against an unreachable host."""
-    state = SimpleNamespace(
-        warehouse_binding_cache={},
-        warehouse_namespaces={(root_uri, None): ns if ns is not None else _FakeNamespace()},
-    )
+    cache (which it must evict) and the catalog's connections (answering a fake, so no real backend is built)."""
+    state = SimpleNamespace(warehouse_binding_cache={}, connections=_Connections(root_uri, ns if ns is not None else _FakeNamespace()))
     return SimpleNamespace(app=SimpleNamespace(state=state))
 
 

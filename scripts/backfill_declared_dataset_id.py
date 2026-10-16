@@ -55,13 +55,17 @@ def _plan() -> list[tuple[str, str, dict[str, str] | None]]:
     from maintenance.core.config import MaintenanceSettings
     from maintenance.services import credentials
     from maintenance.services.discovery import discover_datasets
-    from service_kit.governed.secrets import apply_dapr_secrets
+    from service_kit.governed.store_credential import make_store_credential
     from service_kit.lakehouse import warehouse_records
     from service_kit.lakehouse.objectfs import s3_filesystem
     from service_kit.lakehouse.table_locations import table_id_from_location
 
     settings = MaintenanceSettings()
-    apply_dapr_secrets(settings)
+    # Read from the store once, and held in `options` for the run: a one-shot walk, not a service that
+    # outlives a rotation.
+    credential = make_store_credential(settings)
+    if credential is not None:
+        credential.read_at_boot()
     options = settings.storage_options()
 
     buckets = list(settings.sweep_buckets)

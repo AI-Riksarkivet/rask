@@ -60,6 +60,7 @@ from service_kit.control_events import (
     ControlObjectType,
 )
 from service_kit.lakehouse import outbox
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 log = logging.getLogger(__name__)
@@ -113,7 +114,7 @@ class DaprControlEmitter:
         service: str,
         sign: ControlSign | None,
         outbox_uri: str = "",
-        storage_options: dict[str, str] | None = None,
+        storage_options: Callable[[], StorageOptions] | None = None,
     ) -> None:
         self._client = client
         self._pubsub = pubsub
@@ -126,7 +127,8 @@ class DaprControlEmitter:
         #: lane-specific relay that re-ingests what it finds, so sharing would feed each the other's
         #: events. Empty means unstaged: a failed publish is lost.
         self._outbox_uri = outbox_uri
-        self._storage_options = dict(storage_options or {})
+        #: Read at every stage, never held: the key pair in it rotates while the service runs ([[XC-082]]).
+        self._storage_options = storage_options
         # What this description SAYS is load-bearing: an operator reads it to decide whether a rising
         # count lost anything, and the answer depends on the consumer and on whether an outbox stages.
         self._emit_failed = metrics.get_meter(f"lance.{service}").create_counter(
@@ -172,7 +174,7 @@ class DaprControlEmitter:
             await outbox.publish_with_outbox(
                 self._client,
                 outbox_uri=self._outbox_uri,
-                storage_options=self._storage_options,
+                storage_options=self._storage_options() if self._storage_options is not None else {},
                 key=event.event_id,
                 event_json=event_json,
                 pubsub_name=self._pubsub,
@@ -208,7 +210,7 @@ def make_control_emitter(
     topic: str = CONTROL_TOPIC,
     timeout_seconds: float,
     outbox_uri: str = "",
-    storage_options: dict[str, str] | None = None,
+    storage_options: Callable[[], StorageOptions] | None = None,
 ) -> ControlEmitter:
     """The chosen control emitter: a Dapr publisher when enabled and a sidecar client is present, else
     the no-op (dev/off, like lineage). Built once in the service's lifespan onto

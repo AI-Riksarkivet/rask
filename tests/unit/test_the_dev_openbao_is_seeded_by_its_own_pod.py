@@ -439,14 +439,17 @@ def test_the_dev_store_is_seeded_by_its_own_pod_and_keeps_its_signing_keys(  # n
     )
     assert derived.returncode == 0, f"the Job's derive step failed: {derived.stderr[-500:]}"
     [mc_keys] = [m["mountPath"] for m in mc["volumeMounts"] if m["name"] == "keys"]
-    readers = {
-        (identity, field)
-        for _, _, c in chart_render.containers(docs)
-        for name, field in chart_render.env_of(c).items()
-        if name.endswith("_DAPR_SECRET_S3_FIELD") and (identity := chart_render.env_of(c).get(name.replace("_DAPR_SECRET_S3_FIELD", "_S3_ACCESS_KEY_ID")))
+    # (the store field holding a service's key id, the one holding its secret): the pair is the store's (ADR 0166).
+    pairs = {
+        (env[name.replace("_DAPR_SECRET_S3_FIELD", "_DAPR_SECRET_S3_ID_FIELD")], field)
+        for env in (chart_render.env_of(c) for _, _, c in chart_render.containers(docs))
+        for name, field in env.items()
+        if name.endswith("_DAPR_SECRET_S3_FIELD") and name.replace("_DAPR_SECRET_S3_FIELD", "_DAPR_SECRET_S3_ID_FIELD") in env
     }
-    assert readers, "no service reads a scoped storage field, so this pairing would pass vacuously"
-    for identity, field in sorted(readers):
+    assert pairs, "no service reads a scoped storage pair, so this pairing would pass vacuously"
+    for id_field, field in sorted(pairs):
+        identity = bundle.get(id_field, "")
+        assert identity, f"the store holds no {id_field}, the key id {field} signs under"
         minted = (keys_dir / identity).read_text()
         assert bundle.get(field) == minted, f"{field} in the store is not the secret the Job gives {identity}: every S3 call signs with a mismatched pair"
         assert minted != generated["minio-secret-key"], f"{identity} is published with the store's ROOT secret"

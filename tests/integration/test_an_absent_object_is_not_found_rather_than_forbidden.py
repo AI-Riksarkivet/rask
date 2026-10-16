@@ -93,11 +93,12 @@ def test_an_EXISTING_forbidden_table_is_still_403(real_ns_client: TestClient, mo
     _deny_child_allow_parent(monkeypatch, seen)
 
     # A backend that answers "it exists" for every probe — so only the authz verdict can decide.
-    real_ns_client.app.state.namespace = SimpleNamespace(
+    backend = SimpleNamespace(
         table_exists=lambda *_a, **_k: None,
         namespace_exists=lambda *_a, **_k: None,
         describe_table=lambda *_a, **_k: SimpleNamespace(location="s3://b/t"),
     )
+    real_ns_client.app.state.connections = SimpleNamespace(connection=lambda *_a, **_k: backend, data_twin=lambda *_a, **_k: None)
 
     resp = real_ns_client.post("/v1/table/db1$real/describe", json={}, headers={"Authorization": "Bearer t"})
 

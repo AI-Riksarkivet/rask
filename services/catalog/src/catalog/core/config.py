@@ -17,6 +17,7 @@ from pydantic import AliasChoices, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from service_kit.governed.settings import GovernedAuthSettings
+from service_kit.governed.store_credential import S3KeyPair, store_key_pair
 from service_kit.lakehouse.endpoint_scheme import allow_http_for
 from service_kit.lakehouse.naming import CATALOG_DELIMITER
 from service_kit.lakehouse.objectfs import StoreTimeouts
@@ -77,16 +78,15 @@ class CatalogStorageSettings(BaseSettings):
     every one of its fields, aliases and defaults.
     """
 
-    # Object store (MinIO / S3). Credentials are required — no default — so a
-    # missing secret fails loudly at startup instead of silently using a default.
     #: The scheme here is the ONLY source of `storage.allow_http` (see `namespace_properties`).
     #: It was a separate bool the chart pinned to "true" for every deployment, which let a TLS
     #: endpoint keep permission to fall back to plaintext — silent, because object_store consults
     #: the flag only when a request would otherwise be refused. One fact, so the two cannot disagree.
     s3_endpoint: str = Field(default="http://minio:9000", alias="LANCE_S3_ENDPOINT")
-    s3_access_key_id: str = Field(alias="LANCE_S3_ACCESS_KEY_ID")
-    # Optional default: with secrets_from_dapr on, the secret comes from the store (no plaintext env), and
-    # the lifespan fails closed if neither the store nor env provides it.
+    #: The key pair the catalog signs with when the secret store is OFF. With `secrets_from_dapr` on, the pair is the
+    #: store's (`dapr_secret_s3_id_field` and `dapr_secret_s3_field`, ADR 0166) and these two are not read; off, a
+    #: missing id is refused here and a missing secret by the lifespan.
+    s3_access_key_id: str = Field(default="", alias="LANCE_S3_ACCESS_KEY_ID")
     s3_secret_access_key: SecretStr = Field(default=SecretStr(""), alias="LANCE_S3_SECRET_ACCESS_KEY")
     s3_region: str = Field(default="us-east-1", alias="LANCE_S3_REGION")
     s3_virtual_hosted: bool = Field(default=False, alias="LANCE_S3_VIRTUAL_HOSTED")
@@ -239,10 +239,10 @@ class CatalogDaprSettings(BaseSettings):
     every one of its fields, aliases and defaults.
     """
 
-    # Secret consumption — when on, read the sensitive S3 secret from the Dapr secret store (OpenBao) at
-    # boot instead of trusting plaintext env (the audit's 'wired but never read' fix). The store is then
-    # the STRICT sole source: the chart omits the plaintext secret from pod env, and a store miss FAILS
-    # CLOSED at boot (no env fallback) — matching the module docstring's "no silent fallback".
+    # Secret consumption — when on, the S3 key pair is the Dapr secret store's (OpenBao), read at boot and
+    # again while the catalog runs (`service_kit.governed.store_credential`), never plaintext env. The store
+    # is then the STRICT sole source: the chart renders neither half into pod env, and a store miss FAILS
+    # CLOSED, at boot and once a held pair's TTL passes (no env fallback).
     secrets_from_dapr: bool = Field(default=False, alias="LANCE_SECRETS_FROM_DAPR")
     #: THE ONE STORE, NAMED ONCE (DUP-17). The estate runs a single Dapr secret-store component and
     #: seven env vars named it, each defaulting to the same literal and none of them set by the chart —
@@ -252,6 +252,9 @@ class CatalogDaprSettings(BaseSettings):
     dapr_secret_store: str = Field(default="lance-secrets", validation_alias=AliasChoices("LANCE_DAPR_SECRET_STORE", "RASK_SECRET_STORE"))
     dapr_secret_key: str = Field(default="lance", alias="LANCE_DAPR_SECRET_KEY")
     dapr_secret_s3_field: str = Field(default="minio-secret-key", alias="LANCE_DAPR_SECRET_S3_FIELD")
+    #: The field of the same secret holding the key id the secret signs under: a rotation issues a new id, so the id
+    #: is read from the store with its secret.
+    dapr_secret_s3_id_field: str = Field(default="minio-access-key", alias="LANCE_DAPR_SECRET_S3_ID_FIELD")
     # Dapr pub/sub transport (used when lineage_transport == "dapr"). The component name is what the
     # sidecar resolves to NATS JetStream; the topic is versioned (a breaking schema change → a new .vN).
     dapr_pubsub: str = Field(default="lineage-pubsub", alias="LANCE_DAPR_PUBSUB")
@@ -677,6 +680,23 @@ class Settings(
             )
         return self
 
+    @model_validator(mode="after")
+    def _validate_env_credential(self) -> Self:
+        """With the secret store off, the key id is the environment's, and an absent one is refused at boot."""
+        if not self.secrets_from_dapr and not self.s3_access_key_id:
+            raise ValueError("LANCE_S3_ACCESS_KEY_ID is required when the secret store is off (LANCE_SECRETS_FROM_DAPR)")
+        return self
+
+    def s3_key_pair(self) -> S3KeyPair:
+        """The key pair the catalog signs object-store requests with: the store's, or the environment's when the store is off.
+
+        Raises:
+            StoreCredentialUnavailableError: The store has not confirmed the pair within its TTL (503).
+        """
+        if self.secrets_from_dapr:
+            return store_key_pair(self)
+        return S3KeyPair(access_key_id=self.s3_access_key_id, secret_access_key=self.s3_secret_access_key)
+
     def namespace_properties(self, *, root: str | None = None, plane: StorePlane = "metadata") -> dict[str, str]:
         """Return properties for ``lance_namespace.connect(impl, properties)``, bounded for ``plane``.
 
@@ -692,12 +712,16 @@ class Settings(
 
         ``allow_http`` is derived from the endpoint's scheme, never set on its own, so a TLS endpoint
         cannot keep permission to fall back to plaintext.
+
+        The key pair is the one in force when this is called (:meth:`s3_key_pair`), so a caller holding the
+        result past a rotation holds a pair the store has replaced.
         """
+        pair = self.s3_key_pair()
         return {
             "root": root or self.root,
             f"{_STORAGE_PREFIX}endpoint": self.s3_endpoint,
-            f"{_STORAGE_PREFIX}access_key_id": self.s3_access_key_id,
-            f"{_STORAGE_PREFIX}secret_access_key": self.s3_secret_access_key.get_secret_value(),
+            f"{_STORAGE_PREFIX}access_key_id": pair.access_key_id,
+            f"{_STORAGE_PREFIX}secret_access_key": pair.secret_access_key.get_secret_value(),
             f"{_STORAGE_PREFIX}region": self.s3_region,
             f"{_STORAGE_PREFIX}allow_http": allow_http_for(self.s3_endpoint),
             f"{_STORAGE_PREFIX}virtual_hosted_style_request": str(self.s3_virtual_hosted).lower(),

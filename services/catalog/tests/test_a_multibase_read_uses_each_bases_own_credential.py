@@ -25,7 +25,7 @@ import respx
 from fastapi.testclient import TestClient
 
 from catalog.services import warehouse_credentials
-from service_kit.governed import secrets
+from service_kit.governed import secret_cache, secrets
 
 
 ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
@@ -112,7 +112,7 @@ def test_a_base_credential_the_secret_store_cannot_answer_fails_the_request_fast
     assert created.status_code == 200, created.text
     monkeypatch.setattr(warehouse_credentials, "fetch_required_secrets", secrets.fetch_required_secrets)
     monkeypatch.setenv("DAPR_HTTP_PORT", "3599")
-    warehouse_credentials.resolve.cache_clear()
+    secret_cache.STORE_READS.clear()
     url = door.format(table=table, base=second_base)
 
     with respx.mock(assert_all_called=True) as sidecar:

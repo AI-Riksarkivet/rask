@@ -1,9 +1,9 @@
 """A field a workload is TOLD to read must be one the secret store is told to WRITE, in every overlay.
 
-Each governed service is handed the NAME of its scoped S3 secret — `LANCE_DAPR_SECRET_S3_FIELD`,
-`LINEAGE_…`, `MAINTENANCE_…` — and fetches it from the Dapr secret store at boot. The
-record names the secret; it never carries one. That only works while the seed writes every name a
-Deployment reads, and the two are decided by SEPARATE template conditions.
+Each governed service is handed the NAMES of its scoped S3 key pair — `LANCE_DAPR_SECRET_S3_FIELD` and
+`LANCE_DAPR_SECRET_S3_ID_FIELD`, `LINEAGE_…`, `MAINTENANCE_…` — and fetches both halves from the Dapr
+secret store (ADR 0166). The record names the secret; it never carries one. That only works while the
+seed writes every name a Deployment reads, and the two are decided by SEPARATE template conditions.
 
 MEASURED 2026-09-24: they had drifted. `openbao.yaml` seeded `catalog-s3-secret-key` inside
 `{{- if $.Values.minio.medallionAccessKey }}` while the catalog Deployment selects its field on
@@ -26,11 +26,11 @@ import pytest
 from tests.unit.chart_render import OIDC_ARGS, render_text
 
 
-#: The env vars that hand a workload the NAME of a secret to fetch.
-_FIELD_ENV = re.compile(r"_DAPR_SECRET_S3_FIELD, value: \"([a-z0-9-]+)\"")
+#: The env vars that hand a workload the NAME of a field to fetch: the secret's and its key id's.
+_FIELD_ENV = re.compile(r"_DAPR_SECRET_S3_(?:ID_)?FIELD, value: \"([a-z0-9-]+)\"")
 
 #: Assignments in the store's seed command — `<field>=<value>`.
-_SEEDED = re.compile(r"\b([a-z0-9-]+-secret-key)=")
+_SEEDED = re.compile(r"\b([a-z0-9-]+-(?:secret|access)-key)=")
 
 #: Blanking one identity at a time is what makes the two conditions disagree.
 _IDENTITIES = ("catalogAccessKey", "lineageAccessKey", "maintenanceAccessKey")
@@ -50,6 +50,7 @@ def test_every_field_a_pod_is_told_to_read_is_seeded(label: str, overlay: tuple[
     told = set(_FIELD_ENV.findall(rendered))
     seeded = set(_SEEDED.findall(rendered))
     assert told, f"{label} renders no *_DAPR_SECRET_S3_FIELD — the gate lost its subject"
+    assert {field for field in told if field.endswith("-access-key")}, f"{label} renders no *_DAPR_SECRET_S3_ID_FIELD — the key id half lost its subject"
     assert seeded, f"{label} seeds no secret field — the gate lost its subject"
     missing = sorted(told - seeded)
     assert not missing, (

@@ -113,8 +113,9 @@ Don't redo any of it in a suite. At import, before collection builds any app, it
   the `respx_allows_unused_routes` fixture.
 
 Around every test, as autouse fixtures, it bounds the Dapr sidecar handshake to 1 s, clears Dapr's
-process-global actor-proxy factory, and writes the projected service-account token files the catalog's
-and lineage's doors read.
+process-global actor-proxy factory, gives the test a fresh cache of secret-store reads
+(`service_kit.governed.secret_cache.STORE_READS`; a test that drives the TTL replaces it with one on its
+own clock), and writes the projected service-account token files the catalog's and lineage's doors read.
 
 ## What stands in for what
 

@@ -59,8 +59,12 @@ def test_an_override_actually_changes_what_the_dependency_sees() -> None:
         seen["settings"] = s
         return s
 
+    class _Connections:
+        def connection(self, _settings: Settings, **_: object) -> object:
+            return object()
+
     app.dependency_overrides[deps.get_settings] = _settings
-    app.state.namespace = object()
+    app.state.connections = _Connections()
 
     response = TestClient(app).get("/probe/thing")
     assert response.status_code == 200, response.text

@@ -7,12 +7,10 @@ fix. So the record names a REFERENCE and the catalog resolves it at the Dapr sec
 already uses for its own S3 secret (`dapr_secret_store` / `dapr_secret_key` / `dapr_secret_s3_field`).
 
 RESOLVED ON THE REQUEST PATH, NOT AT BOOT, and that distinction is load-bearing rather than
-incidental. `apply_dapr_secrets` splices the ESTATE's one secret into settings once inside the
-lifespan, and its own docstring forbids reuse here: "never call this from a request handler or a
-background task", because it mutates a shared `@lru_cache`d object that every later read resolves. A
-warehouse's credential is per-RECORD and discovered when a request names that warehouse, so it needs a
-holder of its own — cached by reference so a hot path does not re-fetch, and never written back onto
-`Settings`.
+incidental. The catalog's own pair is one credential, named in configuration and kept confirmed from
+boot; a warehouse's credential is per-RECORD and discovered when a request names that warehouse, so it
+is read on demand, held by reference for the store's TTL so a hot path does not re-fetch, and never
+written onto `Settings`.
 
 FAILS CLOSED, on the same rule `fetch_required_secrets` already encodes: when a record names a
 reference the store cannot satisfy, the answer is a refusal, never a silent fall-back to the estate's
@@ -45,7 +43,6 @@ def test_the_reference_resolves_through_the_dapr_store_door(monkeypatch: pytest.
         return {require: "the-second-stores-secret", "aws_access_key_id": "second-store-key-id"}
 
     monkeypatch.setattr(warehouse_credentials, "fetch_required_secrets", _fetch)
-    warehouse_credentials.resolve.cache_clear()
 
     pair = warehouse_credentials.resolve(store="lance-secrets", ref="wh-eu", field="minio-secret-key")
 
@@ -66,7 +63,6 @@ def test_a_reference_the_store_cannot_satisfy_REFUSES_rather_than_falling_back(m
         raise RuntimeError(f"secret {require!r} unavailable — failing closed")
 
     monkeypatch.setattr(warehouse_credentials, "fetch_required_secrets", _fetch)
-    warehouse_credentials.resolve.cache_clear()
 
     with pytest.raises(RuntimeError, match="failing closed"):
         warehouse_credentials.resolve(store="lance-secrets", ref="missing", field="minio-secret-key")
@@ -102,7 +98,6 @@ def test_a_bundle_carrying_only_the_SECRET_is_refused(monkeypatch: pytest.Monkey
     monkeypatch.setattr(
         warehouse_credentials, "fetch_required_secrets", lambda _s, _k, *, require, timeout=5.0, retries=10, backoff=3.0: {require: "only-the-secret"}
     )
-    warehouse_credentials.resolve.cache_clear()
 
     with pytest.raises(RuntimeError, match="half a credential signs nothing"):
         warehouse_credentials.resolve(store="lance-secrets", ref="wh-eu", field="minio-secret-key")

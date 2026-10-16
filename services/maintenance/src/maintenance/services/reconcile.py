@@ -1423,11 +1423,8 @@ async def reconcile(
         # a different backend than the ambient one.
         from storage import s3_client
 
-        bucket_client = s3_client(
-            settings.s3_endpoint,
-            access_key=settings.s3_access_key_id,
-            secret_key=settings.s3_secret_access_key.get_secret_value(),
-        )
+        pair = settings.s3_key_pair()
+        bucket_client = s3_client(settings.s3_endpoint, access_key=pair.access_key_id, secret_key=pair.secret_access_key.get_secret_value())
 
     # `settings.platform_buckets`, not `sweep_buckets`: the swept set alone omits infrastructure the
     # estate creates for ITSELF and never governs — `rask-observability` (GreptimeDB's object store,

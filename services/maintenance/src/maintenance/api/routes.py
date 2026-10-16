@@ -26,7 +26,7 @@ from fastapi import APIRouter, Depends
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
-from maintenance.api.dependencies import ControlEmitterDep, FgaClientDep, LineageEmitterDep, S3ClientDep, SettingsDep
+from maintenance.api.dependencies import ControlEmitterDep, FgaClientDep, LineageEmitterDep, SettingsDep
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services.expiry import summarize_refusals
 from maintenance.services.floor import raise_listing_floors
@@ -96,7 +96,7 @@ async def ack_binding() -> dict[str, str]:
 _reconcile_lock = asyncio.Lock()
 
 
-async def on_reconcile_cron(settings: SettingsDep, client: FgaClientDep, bucket_client: S3ClientDep, control: ControlEmitterDep) -> dict[str, Any]:
+async def on_reconcile_cron(settings: SettingsDep, client: FgaClientDep, control: ControlEmitterDep) -> dict[str, Any]:
     """One cross-store drift REPORT, then — gated on it — the #79 expired-trash purge.
 
     Separate binding from the sweep because the cadences differ by an order of magnitude: the sweep
@@ -127,7 +127,6 @@ async def on_reconcile_cron(settings: SettingsDep, client: FgaClientDep, bucket_
             control_root=settings.resolved_control_root,
             fga_root_object=settings.fga_root_object,
             default_warehouse_object=settings.fga_default_warehouse_object,
-            bucket_client=bucket_client,
             into_sources=read_sources,
         )
         payload = report.model_dump(mode="json")

@@ -22,7 +22,6 @@ from typing import Any
 
 from dapr.aio.clients import DaprClient
 from fastapi import FastAPI
-from fastapi.concurrency import run_in_threadpool
 
 from lineage_kit import SigningKey, attach_control_signature, parse_published_keys
 from maintenance.api.arrival import register_arrival_route
@@ -35,12 +34,11 @@ from service_kit.governed.auth_lifespan import build_fga_client
 from service_kit.governed.dapr_auth import assert_app_token_configured
 from service_kit.governed.fga import OpenFgaCredentialRefusedError
 from service_kit.governed.fga import dispose as fga_dispose
-from service_kit.governed.secrets import apply_dapr_secrets
 from service_kit.governed.signing_key import SigningKeyHolder, attach_signing, make_signing_holder, signing_ready_check
+from service_kit.governed.store_credential import make_store_credential
 from service_kit.lakehouse.lance_metrics import instrument_lance_if_available
 from service_kit.lance_app import build_lance_service_app
 from service_kit.obs import configure_app_logging
-from storage import s3_client
 
 
 configure_app_logging()  # INFO audit/lifecycle logs reach OTLP (obs audit 2026-07-13)
@@ -83,21 +81,19 @@ async def _make_fga_client(settings: MaintenanceSettings) -> Any | None:  # noqa
         return None
 
 
-def _make_s3_client(settings: MaintenanceSettings) -> Any | None:  # noqa: ANN401 — boto3 client has no stub
-    """The bucket-listing client for ``orphan_buckets``, or ``None`` (→ that category is unavailable).
+def require_env_pair(settings: MaintenanceSettings) -> None:
+    """With the secret store off, refuse to boot without both halves of the environment's key pair.
 
-    Built from the sweep's own credentials via the canonical wrapper in ``packages/storage`` — never
-    boto3 directly, so one process cannot end up addressing two different endpoints.
+    The sweep is a real S3 consumer, so an empty secret would fail every pass with a cryptic
+    `SignatureDoesNotMatch` instead of a clear startup error. The key half is refused because any default for
+    it would be the store's root account, whose credential reaches every tenant's bytes and the
+    `_projects/`/`_protection/` records that govern maintenance itself. A credential is a pair; refusing only the
+    secret half leaves the dangerous half unguarded.
     """
-    try:
-        return s3_client(
-            settings.s3_endpoint,
-            access_key=settings.s3_access_key_id,
-            secret_key=settings.s3_secret_access_key.get_secret_value(),
-        )
-    except Exception:
-        log.warning("reconcile_s3_client_failed", exc_info=True)
-        return None
+    if not settings.s3_secret_access_key.get_secret_value():
+        raise RuntimeError("MAINTENANCE_S3_SECRET_ACCESS_KEY is required (set it, or enable MAINTENANCE_SECRETS_FROM_DAPR)")
+    if not settings.s3_access_key_id:
+        raise RuntimeError("MAINTENANCE_S3_ACCESS_KEY_ID is required (set it, or enable MAINTENANCE_SECRETS_FROM_DAPR): no key id defaults to the store's root")
 
 
 def _control_sign(holder: SigningKeyHolder[SigningKey]) -> ControlSign:
@@ -118,27 +114,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     # Fail closed if behind a Dapr sidecar but the app-token is unset — the cron route would otherwise be an
     # open forged-sweep path (symmetric with the lineage service). No-op in dev (dapr_enabled off).
     assert_app_token_configured(dapr_enabled=settings.dapr_enabled)
-    # Consume the S3 secret from the Dapr secret store (OpenBao) before the first cron sweep, so the
-    # sweep's S3 access uses a store-sourced key and the plaintext secret never ships in pod env. Fails
-    # closed if unavailable. The splice mutates the `@lru_cache`d settings IN PLACE — deliberately, so
-    # every later `get_settings()` read sees the key; `apply_dapr_secrets` carries why a copy would break
-    # this silently. In a thread: the fetch is sync (blocking httpx + retry sleeps) and must not stall
-    # the event loop.
-    await run_in_threadpool(apply_dapr_secrets, settings)
-    # Fail fast at boot if the S3 secret is still empty (neither the store nor plaintext env provided it) —
-    # the sweep is a real S3 consumer, so a silent empty key would otherwise fail every later pass
-    # with a cryptic S3 SignatureDoesNotMatch instead of a clear startup error (parity with the catalog's
-    # 'credentials required, no silent fallback'). The shared apply_dapr_secrets already fails closed when the store IS
-    # the source; this covers the plaintext-env path (secrets_from_dapr off) the comment used to over-claim.
-    if not settings.s3_secret_access_key.get_secret_value():
-        raise RuntimeError("MAINTENANCE_S3_SECRET_ACCESS_KEY is required (set it, or enable MAINTENANCE_SECRETS_FROM_DAPR)")
-    # THE KEY HALF, refused here for the same reason and in the same place. It used to default to the
-    # RustFS tenant root, so an unconfigured deployment did not fail — it ran the entire sweep with a
-    # credential reaching every tenant's bytes and the `_projects/`/`_protection/` records that govern
-    # maintenance itself. A credential is a pair; refusing only the secret half left the dangerous half
-    # unguarded.
-    if not settings.s3_access_key_id:
-        raise RuntimeError("MAINTENANCE_S3_ACCESS_KEY_ID is required — it no longer defaults to the RustFS tenant root")
+    # The S3 key pair from the Dapr secret store (OpenBao) before the first cron sweep, so the sweep signs with a
+    # store-held pair and the plaintext secret never ships in pod env: read now, failing the boot closed if the
+    # store never answers with both halves, then again while the service runs, so a pair rotated in the store is
+    # the one the sweep signs with within its TTL ([[XC-082]], ADR 0166). With the store off, the environment's
+    # pair is refused here when either half is missing.
+    store_credential = make_store_credential(settings)
+    if store_credential is None:
+        require_env_pair(settings)
+    else:
+        await store_credential.start()
+    app.state.store_credential = store_credential
     # ONE sidecar client for both emitters — lineage (data) and control (governance). Built when either is on; the
     # sidecar is local, so construction is cheap and needs no broker reachability at boot.
     dapr_client = DaprClient() if (settings.lineage_emit_enabled or settings.control_emit_enabled) else None
@@ -160,7 +146,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         job_namespace=settings.lineage_job_namespace,
         timeout_seconds=settings.publish_timeout_seconds,
         outbox_uri=settings.lineage_outbox_uri,
-        storage_options=settings.storage_options(),
+        storage_options=settings.storage_options,
         # The SAME identity this service presents at the catalog's service door, so the graph and the
         # catalog cannot disagree about who maintained a dataset. A signer must sign as it: the emitter refuses to
         # be built with a key for any other identity.
@@ -180,12 +166,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         # withheld and counted, never published unsigned.
         sign=_control_sign(signing) if signing is not None else None,
     )
-    # The reconciler's two read-only clients. Both are OPTIONAL by design: a missing one degrades its
-    # categories to UNAVAILABLE-with-a-reason, and the other five still report. Boot must NOT fail on
-    # them — the sweep is this service's primary job and does not need either.
+    # The reconciler's read-only FGA client. OPTIONAL by design: a missing one degrades its categories to
+    # UNAVAILABLE-with-a-reason, and the others still report. Boot must NOT fail on it — the sweep is this
+    # service's primary job and does not need it. Its bucket-listing client is built per tick, with the pair
+    # in force (`services.reconcile`).
     app.state.dapr_client = dapr_client
     app.state.fga_client = await _make_fga_client(settings)
-    app.state.s3_client = _make_s3_client(settings)
     # RESOLVED LAST, so the probes and the retry answers are served from the moment the app boots whether or not the
     # key resolved: a service that is waiting for its key takes no delivery (`retry_until_signed` on its routes),
     # reports itself not ready, and heals in place when the key is published.
@@ -199,6 +185,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         app.state.shutting_down = True
         if signing is not None:
             await signing.stop()
+        if store_credential is not None:
+            await store_credential.stop()
         # Same disposal as every sibling. Maintenance stores it as `app.state.fga_client` rather than
         # `fga`; the shared disposer covers both names so the difference stops mattering.
         await fga_dispose(app)

@@ -269,4 +269,31 @@ both (the bundled Dex and the dev OpenBao).
   4. Restart the consumers at once: a `secretKeyRef` env and the injector's app token are read at pod creation,
      so nothing rolls on its own. AGE: the sidecar Deployments, OpenFGA, the OTel Collector. The root: the
      sidecar Deployments, GreptimeDB and the Ray head (delete its pod; the RayCluster recreates it). The app
-     token and session key: the sidecar Deployments and the zones. The HF token: the Ray head.
+     token and session key: the sidecar Deployments and the zones (an app token rotated as below refuses no
+     delivery in between). The HF token: the Ray head.
+- **Rotating a service's S3 key pair, with no restart (ADR 0166).** The catalog, lineage and maintenance read their
+  pair from `secret/lance` and read it again every few minutes, and the catalog reads a data base's credential
+  reference again within ten minutes, so a rotation needs no restart:
+  1. Issue a second key for the identity, beside the one it holds: `mc admin accesskey create <alias> rask-catalog`
+     on MinIO, a second access key for the IAM user on AWS (each allows two).
+  2. Check the new pair against the bucket before writing it (`mc ls` under an alias holding it). Nothing probes it
+     after the write, and a wrong pair would be what every pod signs with.
+  3. Write both halves at once: `bao kv patch secret/lance catalog-s3-access-key=<id> catalog-s3-secret-key=<secret>`
+     (a data base's reference: patch its own secret's key id and secret fields). `kv patch`, never `kv put`, which
+     replaces every other field of the bundle.
+  4. Wait ten minutes. Each pod logs `store_credential_rotated`, naming the old and new key ids, when it switches.
+  5. Revoke the old key: `mc admin accesskey rm`, or, when the old credential is the user itself, reset the user's
+     own secret. No restart.
+
+  The dev seed writes `secret/lance` from its own list whenever it re-seeds (a change to the seed, or to a dev
+  credential), so a pair rotated by hand in the dev store is replaced by the seeded one then: put the seeded user's
+  secret back before that happens.
+- **Rotating the Dapr app token, with no refused delivery (ADR 0166).** A door accepts `dapr-app-token` and
+  `dapr-app-token-previous`, and daprd keeps the token its pod started with.
+  1. `bao kv patch secret/lance dapr-app-token-previous=<the current token> dapr-app-token=<the new token>`, then
+     wait ten minutes, so every door holds both before any sidecar can start with the new one: a daprd that
+     restarts on its own after the sync would otherwise present a token its door does not hold yet.
+  2. Force-sync the `<release>-dapr-app-token` ExternalSecret and wait for Ready.
+  3. `kubectl rollout restart` every sidecar Deployment, so each daprd starts with the new token.
+  4. Once every sidecar has restarted, clear the previous token (`bao kv patch secret/lance dapr-app-token-previous=`).
+     The doors stop accepting it within ten minutes; clearing it earlier refuses a sidecar still presenting it.

@@ -1,23 +1,19 @@
-"""Read sensitive secrets from the Dapr secret store at boot — so the store is actually CONSUMED.
+"""Read sensitive secrets from the Dapr secret store — the SOLE source, never the environment.
 
-The security audit flagged that the OpenBao/Dapr secret store was wired but never read: services still
-took their secrets from plaintext pod env, making the integration decorative — AND that the plaintext
-secret still shipped in env, so reading it from the store on top was redundant, not protective. The fix:
-when ``secrets_from_dapr`` is on, the chart omits the sensitive value from pod env entirely and the
-service fetches its secret bundle from the local sidecar's secret store
-(``GET /v1.0/secrets/<store>/<key>``) at startup as the SOLE source — retrying while the store seeds, and
-failing closed (not silently booting on an empty key) if it never arrives. So the store is genuinely the
-source of truth and the plaintext secret no longer lives in the environment.
+When ``secrets_from_dapr`` is on, the chart omits the sensitive value from pod env entirely and the
+service fetches its secret bundle from the local sidecar's secret store (``GET /v1.0/secrets/<store>/<key>``):
+at startup, retrying while the store seeds and failing closed (not silently booting on an empty key) if it
+never arrives, and again while it runs, through ``service_kit.governed.secret_cache`` (ADR 0166). So the
+store is the source of truth and the plaintext secret never lives in the environment.
 """
 
 from __future__ import annotations
 
 import logging
 import os
-from typing import Final, Protocol
+from typing import Final
 
 import httpx
-from pydantic import SecretStr
 from tenacity import (
     Retrying,
     before_sleep_log,
@@ -130,69 +126,4 @@ def fetch_required_secrets(store: str, key: str, *, require: str, timeout: float
     bundle = fetch_dapr_secret(store, key, timeout=timeout, retries=retries, backoff=backoff)
     if not bundle.get(require):
         raise RuntimeError(f"secret {require!r} unavailable from Dapr store {store!r}/{key!r} — failing closed (store is the sole source)")
-    return bundle
-
-
-class SupportsDaprSecrets(Protocol):
-    """The settings shape every store-consuming service already declares.
-
-    A PROTOCOL rather than a shared base class: the four settings objects are independent
-    ``BaseSettings`` subclasses with their own env prefixes and their own required fields, and giving
-    them a common ancestor would drag one service's validators into the others. What they genuinely
-    share is these five attributes, which is exactly what this names.
-    """
-
-    secrets_from_dapr: bool
-    dapr_secret_store: str
-    dapr_secret_key: str
-    dapr_secret_s3_field: str
-    s3_secret_access_key: SecretStr
-
-
-def apply_dapr_secrets(settings: SupportsDaprSecrets) -> dict[str, str]:
-    """Consume the S3 secret from the Dapr secret store and splice it into ``settings`` IN PLACE.
-
-    THE ONE IMPLEMENTATION for ``lineage.core.config``, ``maintenance.core.config`` and the catalog's
-    lifespan (docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit" DUP-09), because
-    per-service copies drift: only the
-    catalog's logged that the store had been consumed, and only the catalog's failed closed when the
-    flag was OFF and no plaintext key was configured either.
-
-    When ``secrets_from_dapr`` is on the store is the STRICT sole source: a store miss FAILS CLOSED
-    (``fetch_required_secrets`` raises), never falling back to a plaintext env value — the chart ships
-    none, and silently using one would contradict "OpenBao is the sole source". No-op (and no fetch)
-    when off.
-
-    Returns the whole bundle, so a service that needs a SECOND field from the same secret reads it off
-    THIS fetch instead of issuing another one. Empty dict when the flag is off.
-
-    SYNC by design (the fetch retries while the store seeds, ~80s worst case), so async lifespans call
-    it through ``run_in_threadpool``.
-
-    IN PLACE IS THE MECHANISM — do not "fix" it into a copy. Every caller hands this the object its
-    ``@lru_cache``d ``get_settings()`` returns, and that same object is what ``SettingsDep`` (and every
-    later non-request read) resolves; assigning onto it IS how a boot-time secret reaches the request
-    path. Returning a new object or ``model_copy(update=...)`` would leave the cache holding the
-    un-spliced one, so every S3 call signs with an empty key — and it fails INVISIBLY: the boot
-    succeeds, the pods go ready, and the estate reports itself healthy while the object store 403s.
-    Freezing the model fails DIFFERENTLY and, on its own, better: assignment onto a ``frozen=True``
-    model raises ``ValidationError`` (measured), so the splice would break loudly at boot instead of
-    signing with an empty key. What rules it out is the cost of the shape it forces, not the failure
-    mode — the accessor would have to be re-seated (its cache cleared AND a spliced instance forced
-    back in) at five call sites: more moving parts guarding a singleton that no request can reach. Holding the secret OUTSIDE ``Settings``, in a
-    credential object the storage seam reads, is the one genuinely better shape; it is a change across
-    four services and every ``storage_options()`` caller, not a local edit, and nobody has decided to
-    spend it.
-
-    Mutating shared state is sound here because of WHERE it runs: once, inside the lifespan, before the
-    app serves its first request, single-threaded — no reader exists yet, so there is no race and no
-    request can observe a half-spliced object. That is also the constraint: never call this from a
-    request handler or a background task. Pinned by
-    ``tests/unit/test_boot_secret_splice_is_in_place.py``.
-    """
-    if not settings.secrets_from_dapr:
-        return {}
-    bundle = fetch_required_secrets(settings.dapr_secret_store, settings.dapr_secret_key, require=settings.dapr_secret_s3_field)
-    settings.s3_secret_access_key = SecretStr(bundle[settings.dapr_secret_s3_field])
-    log.info("secret_from_dapr_store", extra={"store": settings.dapr_secret_store, "field": settings.dapr_secret_s3_field})
     return bundle

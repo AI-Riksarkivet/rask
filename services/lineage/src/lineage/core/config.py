@@ -16,6 +16,7 @@ from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from service_kit.governed.settings import GovernedAuthSettings
+from service_kit.governed.store_credential import S3KeyPair, store_key_pair
 from service_kit.lakehouse.objectfs import lance_storage_options
 
 
@@ -126,9 +127,10 @@ class LineageSettings(GovernedAuthSettings, BaseSettings):
 
     # --- The outbox the relay drains: object storage the producers stage to and this service deletes from.
     s3_endpoint: str | None = Field(default=None, alias="LINEAGE_S3_ENDPOINT")
+    #: The key pair the outbox is reached with when the secret store is OFF; with it on, the pair is the store's
+    #: (`dapr_secret_s3_id_field` and `dapr_secret_s3_field`, ADR 0166) and these two are not read. SecretStr so
+    #: the secret is redacted in repr/model_dump (parity with the catalog).
     s3_access_key_id: str | None = Field(default=None, alias="LINEAGE_S3_ACCESS_KEY_ID")
-    # SecretStr so the value is redacted in repr/model_dump (parity with the catalog) — read it with
-    # .get_secret_value() at the object-store call site.
     s3_secret_access_key: SecretStr = Field(default=SecretStr(""), alias="LINEAGE_S3_SECRET_ACCESS_KEY")
     s3_region: str = Field(default="us-east-1", alias="LINEAGE_S3_REGION")
 
@@ -143,10 +145,9 @@ class LineageSettings(GovernedAuthSettings, BaseSettings):
     # oldest-first means nothing starves behind a steady arrival rate. 0 = unbounded (not recommended).
     outbox_drain_limit: int = Field(default=500, alias="LINEAGE_OUTBOX_DRAIN_LIMIT")
 
-    # --- Secret consumption from the Dapr secret store (OpenBao) — the audit's 'wired but never read' /
-    # 'plaintext still ships' fix, symmetric with the catalog. When on, the outbox's S3 secret comes from
-    # the store at boot, NOT plaintext env: the chart omits it from pod env, and
-    # service_kit.governed.secrets.apply_dapr_secrets splices it in and fails closed.
+    # --- Secret consumption from the Dapr secret store (OpenBao), symmetric with the catalog. When on, the
+    # outbox's S3 key pair is the store's, NOT plaintext env: the chart renders neither half into pod env,
+    # and `service_kit.governed.store_credential` reads it at boot (failing closed) and again while lineage runs.
     secrets_from_dapr: bool = Field(default=False, alias="LINEAGE_SECRETS_FROM_DAPR")
     #: THE ONE STORE, NAMED ONCE (DUP-17). The estate runs a single Dapr secret-store component and
     #: seven env vars named it, each defaulting to the same literal and none of them set by the chart —
@@ -156,6 +157,8 @@ class LineageSettings(GovernedAuthSettings, BaseSettings):
     dapr_secret_store: str = Field(default="lance-secrets", validation_alias=AliasChoices("LINEAGE_DAPR_SECRET_STORE", "RASK_SECRET_STORE"))
     dapr_secret_key: str = Field(default="lance", alias="LINEAGE_DAPR_SECRET_KEY")
     dapr_secret_s3_field: str = Field(default="minio-secret-key", alias="LINEAGE_DAPR_SECRET_S3_FIELD")
+    #: The field of the same secret holding the key id the secret signs under, read with it.
+    dapr_secret_s3_id_field: str = Field(default="minio-access-key", alias="LINEAGE_DAPR_SECRET_S3_ID_FIELD")
 
     # --- Feed retention, in DAYS of arrival time (the estate's own `received_at`, never the
     # producer-supplied eventTime). 0 = unbounded. Pruned once per relay tick, never on the ingest path.
@@ -181,6 +184,16 @@ class LineageSettings(GovernedAuthSettings, BaseSettings):
     #: one nobody disables. Turn it on per-environment (the chart's dev values do).
     docs_enabled: bool = Field(default=False, alias="LINEAGE_DOCS")
 
+    def s3_key_pair(self) -> S3KeyPair:
+        """The key pair the outbox is reached with: the store's, or the environment's when the store is off.
+
+        Raises:
+            StoreCredentialUnavailableError: The store has not confirmed the pair within its TTL (503).
+        """
+        if self.secrets_from_dapr:
+            return store_key_pair(self)
+        return S3KeyPair(access_key_id=self.s3_access_key_id or "", secret_access_key=self.s3_secret_access_key)
+
 
 @lru_cache
 def get_settings() -> LineageSettings:
@@ -191,12 +204,9 @@ def get_settings() -> LineageSettings:
 def storage_options(settings: LineageSettings) -> dict[str, str]:
     """Object-store options for the outbox the relay drains.
 
-    The same S3-compatible config the producers stage with. Empty strings let the object-store client fall
-    back to its default credential chain (e.g. real AWS) when the ``LINEAGE_S3_*`` env vars are unset.
+    The same S3-compatible config the producers stage with, under the key pair in force. Empty strings let
+    the object-store client fall back to its default credential chain (e.g. real AWS) when the secret store
+    is off and the ``LINEAGE_S3_*`` env vars are unset.
     """
-    return lance_storage_options(
-        settings.s3_endpoint or "",
-        settings.s3_access_key_id or "",
-        settings.s3_secret_access_key.get_secret_value(),
-        settings.s3_region,
-    )
+    pair = settings.s3_key_pair()
+    return lance_storage_options(settings.s3_endpoint or "", pair.access_key_id, pair.secret_access_key.get_secret_value(), settings.s3_region)

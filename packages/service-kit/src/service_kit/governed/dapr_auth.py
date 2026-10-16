@@ -34,6 +34,9 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from starlette.responses import Response
 
+from service_kit.governed import secret_cache
+from service_kit.governed.secret_cache import StoreRead
+
 
 log = logging.getLogger(__name__)
 
@@ -87,7 +90,7 @@ class DaprDoorSettings(BaseSettings):
     #: A MODE, NOT A FALLBACK CHAIN. On, the store is the STRICT sole source and `APP_API_TOKEN` is not
     #: consulted at all — a chain would mean a store outage silently promoted a stale env value back to
     #: authoritative, which is the failure the rule exists to prevent. Off, env, exactly as before. That
-    #: is the same shape `apply_dapr_secrets` already uses for the S3 credential.
+    #: is the same shape the S3 key pair takes (`service_kit.governed.store_credential`).
     app_token_from_store: bool = Field(default=False, alias="RASK_APP_TOKEN_FROM_STORE")
 
     #: Which bundle holds it. The names match the per-service `*_DAPR_SECRET_STORE` / `*_DAPR_SECRET_KEY`
@@ -98,36 +101,62 @@ class DaprDoorSettings(BaseSettings):
     #: is spelled (`catalog-s3-secret-key`, `dapr-app-token`) — an underscore here would read
     #: as an env var, which is the one thing this value must never be.
     app_token_field: str = Field(default="dapr-app-token", alias="RASK_APP_TOKEN_FIELD")
+    #: The token a rotation replaced, accepted beside the current one ([[XC-082]], ADR 0166). daprd reads its
+    #: token from `<release>-dapr-app-token` once, when the pod starts, and ESO syncs that Secret from the store
+    #: on its own interval, so a sidecar keeps presenting the old token until its pod restarts, and a pod that
+    #: restarts before ESO synced still starts with it. Absent or empty outside a rotation.
+    app_token_previous_field: str = Field(default="dapr-app-token-previous", alias="RASK_APP_TOKEN_PREVIOUS_FIELD")
 
 
-def expected_app_token() -> str | None:
-    """The token every door on this app authenticates against — from the store, or from env.
+class _NoCurrentToken(LookupError):
+    """The store answered without the current token: the door is unconfigured, and the answer is never cached."""
 
-    ONE resolver for both consumers (`require_dapr_token`, `assert_app_token_configured`), because a
-    deployment that moves its token to the store must move every door with it: one door still reading
-    env while another reads the store is a pod where half the credentials are configured and nothing
-    says which half.
 
-    Cached through `_secret_bundle` (per process, per store+key), so the store is read once and the
-    per-request cost is a dict lookup. An unreadable store RAISES rather than answering `None` — the
-    absent-vs-unreadable split the estate enforces everywhere else: `None` here would mean "this
-    deployment has no token", and a caller would be refused for a reason that is not true.
+def _read_app_tokens(read: StoreRead) -> dict[str, str]:
+    """The current and previous tokens from one fetch: a single attempt, because a request is waiting on it.
+
+    Raises:
+        SecretStoreUnreadable: The store did not answer.
+        _NoCurrentToken: It answered without the current token, as it does before the seed lands.
+    """
+    from service_kit.governed.secrets import fetch_dapr_secret  # imported here, not at module scope: keeps this module import-light
+
+    current, previous = read.fields
+    bundle = fetch_dapr_secret(read.store, read.secret, retries=1)
+    if not bundle:
+        raise SecretStoreUnreadable(f"secret store {read.store!r} unreadable")
+    if not bundle.get(current):
+        raise _NoCurrentToken(current)
+    return {current: bundle[current], previous: bundle.get(previous, "")}
+
+
+def expected_app_tokens() -> tuple[str, ...]:
+    """The tokens every door on this app accepts, the current one first: from the store, or from env.
+
+    ONE resolver for every door, because a deployment that moves its token to the store must move every
+    door with it: one door still reading env while another reads the store is a pod where half the
+    credentials are configured and nothing says which half.
+
+    In store mode the tokens are the store's current and previous ones, read through
+    `service_kit.governed.secret_cache.STORE_READS`: held for its TTL, so a request costs a dict lookup and a
+    token the store replaced or removed stops being accepted once the TTL passes, with no restart. An empty
+    tuple means this deployment has no token, which the doors refuse. A store that answers without the
+    current token is such a deployment until the seed lands, and is asked again on the next request, since
+    a miss is never cached. An unreadable store RAISES rather than answering empty: the absent-vs-unreadable
+    split the estate enforces everywhere else.
+
+    Raises:
+        SecretStoreUnreadable: The store did not answer.
     """
     door = DaprDoorSettings()
     if not door.app_token_from_store:
-        return door.app_api_token
-    token = dict(_secret_bundle(door.secret_store, door.secret_key)).get(door.app_token_field) or None
-    if token is None:
-        # DROP THE CACHE, because a bundle that answered WITHOUT the field is the one failure this
-        # cache turns permanent. `_secret_bundle` never caches an exception, so an unreadable store
-        # heals by itself — but a store that answers a bundle the seed has not written yet caches a
-        # successful miss, and every later request reads it for the life of the process. That is the
-        # live ordering: the chart's seed Job and this pod roll in the same `helm upgrade`, so a pod
-        # that wins the race would refuse every delivery until somebody restarted it, long after the
-        # field was there. Uncached is the correct cost while the field is missing: the state is
-        # broken, the refetch is one sidecar hop, and it stops the moment the seed lands.
-        _secret_bundle.cache_clear()
-    return token
+        return (door.app_api_token,) if door.app_api_token else ()
+    read = StoreRead(store=door.secret_store, secret=door.secret_key, fields=(door.app_token_field, door.app_token_previous_field))
+    try:
+        tokens = secret_cache.STORE_READS.get(read, functools.partial(_read_app_tokens, read))
+    except _NoCurrentToken:
+        return ()
+    return tuple(token for field in read.fields if (token := tokens[field]))
 
 
 def missing_app_token_knob() -> str:
@@ -196,7 +225,7 @@ def require_dapr_token(
     # to the catch-all and answer 500 there. A `LanceNamespaceError` is mapped by both — the lance apps
     # directly, the fleet apps since `make_service_app` began installing the same translator.
     try:
-        expected = expected_app_token()
+        expected = expected_app_tokens()
     except SecretStoreUnreadable as outage:
         # 503, NOT 403. A store that will not answer is an outage, and answering 403 would tell the
         # sidecar its credential was rejected — so it would stop retrying a delivery that is going to
@@ -212,8 +241,11 @@ def require_dapr_token(
         refuse_unconfigured_door(caller=dapr_caller_app_id)
         return
     # compare_digest: the token is the only guard on these routes, so no timing side-channel; bytes
-    # (not str) so a non-ASCII header value is a clean 403, never a TypeError.
-    if not secrets.compare_digest((dapr_api_token or "").encode(), expected.encode()):
+    # (not str) so a non-ASCII header value is a clean 403, never a TypeError. Every accepted token is
+    # compared, a list rather than a short-circuit, so the time taken does not say which one matched.
+    presented = (dapr_api_token or "").encode()
+    matches = [secrets.compare_digest(presented, token.encode()) for token in expected]
+    if not any(matches):
         raise PermissionDeniedError("invalid or missing Dapr app-api-token")
 
 
@@ -230,7 +262,7 @@ def assert_app_token_configured(*, dapr_enabled: bool) -> None:
 
     In store mode it fetches with the BOOT retry budget rather than the request-path one: this runs in
     a lifespan, where a store still seeding is the expected condition and waiting is the correct
-    response. The request path cannot afford that and uses `_secret_bundle`'s single attempt."""
+    response. The request path cannot afford that and reads with a single attempt (`expected_app_tokens`)."""
     if not dapr_enabled:
         return
     door = DaprDoorSettings()
@@ -247,7 +279,7 @@ def assert_app_token_configured(*, dapr_enabled: bool) -> None:
         )
 
 
-# ── the secret bundle behind the app token ──────────────────────────────────────────
+# ── the store behind the app token ──────────────────────────────────────────────────
 
 
 class SecretStoreUnreadable(RuntimeError):
@@ -256,24 +288,6 @@ class SecretStoreUnreadable(RuntimeError):
     Callers map this to their 503 problem type. Conflating it with "no credential provisioned"
     would turn a secret-store outage into the same 401 as a misconfigured subject — the
     absent-vs-unreadable rule the estate already enforces in the state plane."""
-
-
-@functools.lru_cache(maxsize=4)
-def _secret_bundle(store: str, key: str) -> tuple[tuple[str, str], ...]:
-    """The secret bundle, fetched once per (store, key) and cached for the process lifetime.
-
-    retries=1, not the boot budget: this is reached from sync REQUEST dependencies (the AnyIO
-    threadpool), where 10 exponential-backoff attempts stalled a worker for minutes per cold call
-    (the viewer's per-store reads set the precedent). An unreadable store
-    RAISES — lru_cache never caches exceptions, so the next request retries — and a successful
-    bundle is cached until restart: rotating the app token means a rollout, the same
-    trade the viewer already made."""
-    from service_kit.governed.secrets import fetch_dapr_secret  # imported here, not at module scope: keeps this module import-light
-
-    bundle = fetch_dapr_secret(store, key, retries=1)
-    if not bundle:
-        raise SecretStoreUnreadable(f"secret store {store!r} unreadable")
-    return tuple(bundle.items())
 
 
 #: What `dapr.ext.fastapi.DaprActor` mounts at the ROOT of an app — outside `settings.api_prefix`, and
@@ -307,6 +321,7 @@ def guard_actor_routes(app: FastAPI) -> None:
     service that mounts no actors can call it harmlessly — but there is no reason to.
     """
     from fastapi.responses import JSONResponse  # imported here, not at module scope: keeps this module import-light
+    from starlette.concurrency import run_in_threadpool
     from starlette.middleware.base import BaseHTTPMiddleware
 
     from service_kit.lakehouse.ns_errors import problem_detail
@@ -314,7 +329,10 @@ def guard_actor_routes(app: FastAPI) -> None:
     async def _guard(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
         if request.url.path.startswith(ACTOR_PATH_PREFIXES):
             try:
-                require_dapr_token(
+                # IN THE THREADPOOL, as FastAPI runs the sync dependency elsewhere: a token whose TTL passed is
+                # read from the sidecar, and that read must not stall the event loop every other request shares.
+                await run_in_threadpool(
+                    require_dapr_token,
                     dapr_api_token=request.headers.get("dapr-api-token"),
                     dapr_caller_app_id=request.headers.get("dapr-caller-app-id"),
                 )

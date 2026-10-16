@@ -134,7 +134,8 @@ def test_the_estate_listing_lists_every_bound_seed_concurrently(tmp_path: Path, 
 
     monkeypatch.setattr(t_ep.native, "call", native_call)
     monkeypatch.setattr(t_ep, "_collect_tables", lambda *_a, **_kw: [])
-    request = cast("Any", SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(namespace=object()))))
+    connections = SimpleNamespace(connection=lambda *_a, **_kw: object())
+    request = cast("Any", SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(connections=connections))))
 
     asyncio.run(
         t_ep.list_all_tables(

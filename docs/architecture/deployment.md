@@ -42,8 +42,11 @@ unprovisioned field is a fail-closed outage at first use, not a fallback: minio-
 postgres-password, publisher-oidc-password, publisher-oidc-client-secret (the IdP client secret),
 dapr-state-connection-string, dapr-app-token (the app-API token: ESO writes it into the `dapr-app-token` Secret daprd
 stamps the header from, and the doors compare against this field), frontend-session-secret (the zones' cookie sealing
-key), ray-auth-token, and `<plane>-s3-secret-key` for each scoped identity named in values.yaml `minio`
-(sha256("<identity>-s3-<minio-secret-key>")[:40], `lance.scopedSecretFn`, which `minio-scoped-users` derives too).
+key), ray-auth-token, and for each scoped identity named in values.yaml `minio` its key pair:
+`<plane>-s3-access-key` (the key id) beside `<plane>-s3-secret-key` (sha256("<identity>-s3-<minio-secret-key>")[:40],
+`lance.scopedSecretFn`, which `minio-scoped-users` derives too). Both halves are read from the store and read again
+every few minutes (ADR 0166), so a rotation writes them together; during an app-token rotation the bundle also holds
+`dapr-app-token-previous` (docs/OPERATORS.md § 8).
 With `secrets.hfTokenInStore`, `hf-token` (field `token`). Beside the bundle, for every identity in
 `lance.signingIdentities`, two secrets: `signing-public-<identity>` (field `keys`) and then `signing-key-<identity>`
 (field `seed`), described in values.yaml `signing:`; the render refuses the platform's store until its operator

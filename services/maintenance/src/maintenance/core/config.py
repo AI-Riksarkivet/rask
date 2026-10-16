@@ -18,6 +18,7 @@ from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from service_kit.governed.settings import FgaSettings, SignatureDoorSettings
+from service_kit.governed.store_credential import S3KeyPair, store_key_pair
 from service_kit.lakehouse.naming import CATALOG_DELIMITER
 from service_kit.lakehouse.objectfs import lance_storage_options
 
@@ -132,17 +133,13 @@ class MaintenanceSettings(SignatureDoorSettings, FgaSettings, BaseSettings):
 
     # --- S3 access to the Lance lakehouse bucket ----------------------------------------------------
     s3_endpoint: str = Field(default="http://localhost:9000", alias="MAINTENANCE_S3_ENDPOINT")
-    # NO DEFAULT, and specifically not the tenant root it used to carry. The chart always sets this, so
-    # nothing shipped relied on the default — which is what made it dangerous: a deployment that
-    # configured a scoped SECRET and forgot the key would pair it with the root key id, and one that
-    # configured neither ran the whole sweep as RustFS tenant root, reaching every tenant's bytes and
-    # the records that govern maintenance itself. Empty so the boot check can refuse it, exactly as the
-    # secret half is already refused; a credential is a PAIR and half of one is not a lesser risk.
+    # The key pair the sweep signs with when the secret store is OFF; with it on, the pair is the store's
+    # (`dapr_secret_s3_id_field` and `dapr_secret_s3_field`, ADR 0166) and these two are not read. NO DEFAULT
+    # key id: any default would be the store's root account, and a deployment that configured neither half
+    # would run the whole sweep as the tenant root, reaching every tenant's bytes and the records that govern
+    # maintenance itself. Empty so the boot check can refuse either half; a credential is a PAIR and half of
+    # one is not a lesser risk. SecretStr so the secret is redacted in repr/model_dump (parity with the catalog).
     s3_access_key_id: str = Field(default="", alias="MAINTENANCE_S3_ACCESS_KEY_ID")
-    # Default "" so the chart can omit the plaintext env when the store is the source; apply_dapr_secrets
-    # fails closed if neither the store nor env provides it (the audit's secret-consumption fix — the
-    # maintenance pod is a real S3 consumer (it reclaims versions in the lakehouse), so it must NOT ship the key plain).
-    # SecretStr so it's redacted in repr/model_dump (parity with the catalog) — .get_secret_value() to read.
     s3_secret_access_key: SecretStr = Field(default=SecretStr(""), alias="MAINTENANCE_S3_SECRET_ACCESS_KEY")
     s3_bucket: str = Field(default="lance-catalog", alias="MAINTENANCE_S3_BUCKET")
     # #50 maintenance policies: where the catalog's policy registry lives (`<root>/_policies/`). Defaults
@@ -366,7 +363,8 @@ class MaintenanceSettings(SignatureDoorSettings, FgaSettings, BaseSettings):
     warehouses_enabled: bool = Field(default=False, alias="MAINTENANCE_WAREHOUSES_ENABLED")
 
     # --- Secret consumption from the Dapr secret store (OpenBao) — symmetric with catalog + lineage.
-    # When on, the S3 secret comes from the store at boot (NOT plaintext env); fails closed if absent.
+    # When on, the S3 key pair is the store's (NOT plaintext env), read at boot (failing closed if absent)
+    # and again while the service runs (`service_kit.governed.store_credential`).
     secrets_from_dapr: bool = Field(default=False, alias="MAINTENANCE_SECRETS_FROM_DAPR")
     #: THE ONE STORE, NAMED ONCE (DUP-17). The estate runs a single Dapr secret-store component and
     #: seven env vars named it, each defaulting to the same literal and none of them set by the chart —
@@ -394,6 +392,8 @@ class MaintenanceSettings(SignatureDoorSettings, FgaSettings, BaseSettings):
     #: re-read on every call because the kubelet rotates it at ~515 s of its 600 s life.
     catalog_identity_token_file: str = Field(default="/var/run/secrets/rask/identity/rask-catalog/token", alias="RASK_CATALOG_IDENTITY_TOKEN_FILE")
     dapr_secret_s3_field: str = Field(default="minio-secret-key", alias="MAINTENANCE_DAPR_SECRET_S3_FIELD")
+    #: The field of the same secret holding the key id the secret signs under, read with it.
+    dapr_secret_s3_id_field: str = Field(default="minio-access-key", alias="MAINTENANCE_DAPR_SECRET_S3_ID_FIELD")
 
     @property
     def resolved_policy_root(self) -> str:
@@ -417,16 +417,22 @@ class MaintenanceSettings(SignatureDoorSettings, FgaSettings, BaseSettings):
     #: pinned exactly two bare lineage publishers and this is the second.
     lineage_outbox_uri: str = Field(default="", alias="MAINTENANCE_LINEAGE_OUTBOX_URI")
 
+    def s3_key_pair(self) -> S3KeyPair:
+        """The key pair the sweep signs with: the store's, or the environment's when the store is off.
+
+        Raises:
+            StoreCredentialUnavailableError: The store has not confirmed the pair within its TTL (503).
+        """
+        if self.secrets_from_dapr:
+            return store_key_pair(self)
+        return S3KeyPair(access_key_id=self.s3_access_key_id, secret_access_key=self.s3_secret_access_key)
+
     def storage_options(self) -> dict[str, str]:
-        """The Lance ``storage_options`` for opening datasets on the (HTTP) S3 endpoint."""
+        """The Lance ``storage_options`` for opening datasets on the (HTTP) S3 endpoint, under the key pair in force."""
         # Via the shared builder — which also stamps path-style addressing; the hand-rolled copy here had
         # silently dropped it (audit 2026-07-15), leaving the sweep one object-store default away from 403s.
-        return lance_storage_options(
-            self.s3_endpoint,
-            self.s3_access_key_id,
-            self.s3_secret_access_key.get_secret_value(),
-            self.s3_region,
-        )
+        pair = self.s3_key_pair()
+        return lance_storage_options(self.s3_endpoint, pair.access_key_id, pair.secret_access_key.get_secret_value(), self.s3_region)
 
 
 def shared_lance_session() -> lance.Session:

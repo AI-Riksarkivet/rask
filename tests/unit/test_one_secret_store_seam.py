@@ -8,10 +8,8 @@ Two duplications share one surface here:
   repoints the store must find and set all seven or leave part of the estate reading a component that
   no longer exists. `RASK_SECRET_STORE` was already the estate-wide name two services read; this pins
   that ONE name repointing every consumer, with each per-service alias kept as an override.
-* **DUP-09** — the fetch-and-splice that consumes that store was written four times: three
-  `apply_dapr_secrets` copies (lineage, maintenance) plus an inline block in the catalog's
-  own lifespan. `service_kit.governed.secrets.apply_dapr_secrets` is the one implementation; nothing
-  else may assign the S3 secret from a store bundle.
+* **DUP-09** — the read that consumes that store for a service's S3 pair has one implementation,
+  `service_kit.governed.store_credential`, which the catalog, lineage and maintenance lifespans all start.
 """
 
 from __future__ import annotations

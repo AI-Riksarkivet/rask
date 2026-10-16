@@ -51,9 +51,11 @@ def _router(**over: Any) -> APIRouter:
 
 
 def test_the_route_hands_the_app_state_clients_to_the_reconciler(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The wiring itself: whatever the lifespan put on `app.state` is what the pass reads three stores
+    """The wiring itself: the FGA client the lifespan put on `app.state` is what the pass reads OpenFGA
     with. Asserted because the failure mode is silent — a route that quietly passes `None` produces a
-    report that is entirely 'unavailable' and still exits 200."""
+    report that is entirely 'unavailable' and still exits 200. The bucket-listing client is NOT handed
+    over: the pass builds it per tick with the key pair in force ([[XC-082]]), where one built at boot
+    would list with a key the store has since replaced."""
     seen: dict[str, Any] = {}
 
     async def fake_reconcile(settings: Any, client: Any = None, **kw: Any) -> Any:
@@ -67,13 +69,13 @@ def test_the_route_hands_the_app_state_clients_to_the_reconciler(monkeypatch: py
 
     monkeypatch.setattr(routes, "reconcile", fake_reconcile)
     settings = _settings(warehouses_enabled=True, fga_root_object="warehouse:custom")
-    out = asyncio.run(routes.on_reconcile_cron(settings, "FGA-SENTINEL", "S3-SENTINEL", NoopControlEmitter()))
+    out = asyncio.run(routes.on_reconcile_cron(settings, "FGA-SENTINEL", NoopControlEmitter()))
 
     # The #79 purge key rides along on every tick; the reconcile half is unchanged.
     assert out["total"] == 0
     assert out["trash_purge"]["enabled"] is False and out["trash_purge"]["ran"] is False
     assert seen["client"] == "FGA-SENTINEL"
-    assert seen["bucket_client"] == "S3-SENTINEL"
+    assert seen["bucket_client"] is None
     # These mirror CATALOG settings and are passed IN, never inferred: a divergent fga_root_object
     # reports the estate root as a ghost forever, and a divergent warehouses_enabled reports every
     # namespace as unbound.
@@ -93,7 +95,7 @@ def test_an_overlapping_tick_skips_rather_than_stacking(monkeypatch: pytest.Monk
     async def drive() -> dict[str, Any]:
         async with routes._reconcile_lock:
             monkeypatch.setattr(routes, "reconcile", never_called)
-            return await routes.on_reconcile_cron(_settings(), None, None, NoopControlEmitter())
+            return await routes.on_reconcile_cron(_settings(), None, NoopControlEmitter())
 
     out = asyncio.run(drive())
     assert out["status"] == "skipped"
@@ -214,7 +216,7 @@ def test_the_purge_consumes_THIS_ticks_report_inside_the_same_lock(monkeypatch: 
 
     monkeypatch.setattr(routes, "reconcile", fake_reconcile)
     monkeypatch.setattr(routes, "purge_expired_trash", fake_purge)
-    out = asyncio.run(routes.on_reconcile_cron(_settings(), "FGA-SENTINEL", None, NoopControlEmitter()))
+    out = asyncio.run(routes.on_reconcile_cron(_settings(), "FGA-SENTINEL", NoopControlEmitter()))
 
     assert seen["report"] is produced["report"], "the purge read a report this tick did not produce"
     assert seen["fga_client"] == "FGA-SENTINEL", "the purge got no FGA client — it could not revoke"

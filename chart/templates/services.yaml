@@ -85,8 +85,7 @@ spec:
             {{- end }}
             - { name: LANCE_MULTIBASE_BASE_CREDENTIAL_REFS, value: {{ $pairs | join "," | quote }} }
             - { name: LANCE_S3_ENDPOINT, value: "{{ include "lance.s3Endpoint" . }}" }
-            {{- $catalogScoped := .Values.minio.catalogAccessKey }}
-            - { name: LANCE_S3_ACCESS_KEY_ID, value: {{ ternary .Values.minio.catalogAccessKey .Values.minio.accessKey (not (not $catalogScoped)) | quote }} }
+            - { name: LANCE_DAPR_SECRET_S3_ID_FIELD, value: {{ include "lance.catalogKeyIdField" . | quote }} }
             - { name: LANCE_DAPR_SECRET_S3_FIELD, value: {{ include "lance.catalogSecretField" . | quote }} }
             - { name: LANCE_SECRETS_FROM_DAPR, value: "true" }
             {{- with include "lance.signingEnv" (list $root .Values.services.catalog.daprAppId) }}{{ . | nindent 12 }}{{- end }}
@@ -284,8 +283,8 @@ spec:
             - { name: LINEAGE_S3_ENDPOINT, value: "{{ include "lance.s3Endpoint" . }}" }
 
             {{- $linScoped := .Values.minio.lineageAccessKey }}
-            - { name: LINEAGE_S3_ACCESS_KEY_ID, value: {{ ternary .Values.minio.lineageAccessKey .Values.minio.accessKey (not (not $linScoped)) | quote }} }
             {{- if $linScoped }}
+            - { name: LINEAGE_DAPR_SECRET_S3_ID_FIELD, value: "lineage-s3-access-key" }
             - { name: LINEAGE_DAPR_SECRET_S3_FIELD, value: "lineage-s3-secret-key" }
             {{- end }}
             {{- if .Values.services.lineage.outbox.enabled }}

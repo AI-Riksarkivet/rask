@@ -36,6 +36,18 @@ class TwoStores(BaseModel):
     second_bucket: str
     estate: Key
     second: Key
+    #: May call IAM once enforcement is on, which the users' own keys may not: issues and revokes their keys.
+    admin: Key
+
+    def iam(self) -> Any:  # noqa: ANN401 — a boto3 IAM client
+        """An IAM client signed with the admin key."""
+        return boto3.client(
+            "iam",
+            endpoint_url=self.url,
+            aws_access_key_id=self.admin.aws_access_key_id,
+            aws_secret_access_key=self.admin.aws_secret_access_key,
+            region_name="us-east-1",
+        )
 
     @property
     def second_base(self) -> str:
@@ -59,6 +71,17 @@ def _user_on(iam: Any, user: str, bucket: str) -> Key:  # noqa: ANN401 — a bot
                 "Statement": [{"Effect": "Allow", "Action": ["s3:*"], "Resource": [f"arn:aws:s3:::{bucket}", f"arn:aws:s3:::{bucket}/*"]}],
             }
         ),
+    )
+    key = iam.create_access_key(UserName=user)["AccessKey"]
+    return Key(aws_access_key_id=key["AccessKeyId"], aws_secret_access_key=key["SecretAccessKey"])
+
+
+def _admin(iam: Any, user: str) -> Key:  # noqa: ANN401 — a boto3 IAM client
+    iam.create_user(UserName=user)
+    iam.put_user_policy(
+        UserName=user,
+        PolicyName="iam-admin",
+        PolicyDocument=json.dumps({"Version": "2012-10-17", "Statement": [{"Effect": "Allow", "Action": ["iam:*"], "Resource": ["*"]}]}),
     )
     key = iam.create_access_key(UserName=user)["AccessKey"]
     return Key(aws_access_key_id=key["AccessKeyId"], aws_secret_access_key=key["SecretAccessKey"])
@@ -94,6 +117,7 @@ def two_stores() -> Iterator[TwoStores]:
         second_bucket=second_bucket,
         estate=_user_on(iam, f"estate-{suffix}", estate_bucket),
         second=_user_on(iam, f"second-{suffix}", second_bucket),
+        admin=_admin(iam, f"admin-{suffix}"),
     )
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(IAMRequestBase, "check_signature", lambda _self: None)
@@ -148,7 +172,6 @@ def two_store_catalog(two_stores: TwoStores, monkeypatch: pytest.MonkeyPatch) ->
         return {require: two_stores.second.aws_secret_access_key, "aws_access_key_id": two_stores.second.aws_access_key_id}
 
     monkeypatch.setattr(warehouse_credentials, "fetch_required_secrets", _secret_store)
-    warehouse_credentials.resolve.cache_clear()
     from catalog.core.config import get_settings
 
     get_settings.cache_clear()
@@ -159,7 +182,6 @@ def two_store_catalog(two_stores: TwoStores, monkeypatch: pytest.MonkeyPatch) ->
         yield client
     app.dependency_overrides.clear()
     get_settings.cache_clear()
-    warehouse_credentials.resolve.cache_clear()
 
 
 class ErasureJob:

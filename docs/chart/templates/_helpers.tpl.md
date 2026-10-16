@@ -840,6 +840,10 @@ one bound that applies actually fires here.
 
 The bundle field the catalog reads its S3 secret from, and so the field a per-base credential carries.
 
+## `{{- define "lance.catalogKeyIdField" -}}`
+
+The bundle field the catalog reads its S3 key id from, beside the secret ([[XC-082]], ADR 0166).
+
 ## `{{- define "lance.baseFixture" -}}`
 
 [[LH-067]] The local data-base fixture (values.yaml `catalog.multibase.devSeed`): JSON
@@ -897,14 +901,14 @@ Kubernetes Secret injected as an environment variable, which the estate's rule r
 (owner, verbatim: *"Never secret through envs. Either from ESO, secret store dapr and STS for zero
 trust."*). A pod that already carries a Dapr sidecar and is in `lance.secretScopes` has the sanctioned
 path IN it — `GET /v1.0/secrets/lance-secrets/lance` — so what ships here is which source to read,
-which is configuration, while the value stays in OpenBao. `expected_app_token()` is the one accessor
+which is configuration, while the value stays in OpenBao. `expected_app_tokens()` is the one accessor
 all three doors go through (`require_dapr_token`, `service_principal`,
 `assert_app_token_configured`), so the switch moves every door on the pod together.
 
 THE FALLBACK IS NOT A FALLBACK CHAIN, and the distinction matters because the rule bans those too. It
 is a RENDER-TIME branch on a fact that is fixed at deploy: either there is a Vault to read and this
 app-id may read it, or there is not. The pod gets exactly one credential path and no runtime choice
-between them — `expected_app_token()` reads the store or reads env, never one then the other.
+between them — `expected_app_tokens()` reads the store or reads env, never one then the other.
 
 A pod OUTSIDE the scope list still gets the env row on purpose. Flipping it without adding its app-id
 to `lance.secretScopes` would make `assert_app_token_configured` fail its boot fetch and crash-loop

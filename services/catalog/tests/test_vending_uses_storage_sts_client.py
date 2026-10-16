@@ -12,8 +12,10 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from pydantic import SecretStr
 
 from catalog.core import vending
+from service_kit.governed.store_credential import S3KeyPair
 
 
 class _FakeSts:
@@ -60,8 +62,7 @@ def test_sts_vendor_builds_a_signed_client_through_the_storage_seam(seam: tuple[
         role_arn="arn:aws:iam::123456789012:role/vend",
         region="eu-north-1",
         endpoint="http://rustfs:9000",
-        access_key="ROOTKEY",
-        secret_key="ROOTSECRET",
+        credential=lambda: S3KeyPair(access_key_id="ROOTKEY", secret_access_key=SecretStr("ROOTSECRET")),
     )
     creds = vendor.vend(table_location="s3://b/db$t", tier="read")
 

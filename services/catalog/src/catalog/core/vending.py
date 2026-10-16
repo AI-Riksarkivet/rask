@@ -49,6 +49,7 @@ from pydantic import BaseModel, Field
 
 from catalog.core.base_judge import BaseJudge, require_sanctioned_bases
 from catalog.core.namespace import base_store_params_for, open_location
+from service_kit.governed.store_credential import S3KeyPair
 from service_kit.lakehouse.base_refs import location_within
 from service_kit.lakehouse.base_registry import BaseJudgement, BaseRole, BaseStanding
 from service_kit.lakehouse.branch_layout import BRANCH_CONTAINER, BRANCH_FILE_DIRS
@@ -742,8 +743,7 @@ class StsVendor:
         store_endpoint: str | None = None,
         ttl_seconds: int = 900,
         assume_role: Callable[..., dict[str, object]] | None = None,
-        access_key: str | None = None,
-        secret_key: str | None = None,
+        credential: Callable[[], S3KeyPair] | None = None,
         encryption: EncryptionAtRest | None = None,
         sanctioned_bases: Sequence[str] = (),
     ) -> None:
@@ -760,22 +760,27 @@ class StsVendor:
         #: STS endpoint need not be ([[LH-489]]). ``None`` is the STS endpoint's own address.
         self._store_endpoint = endpoint if store_endpoint is None else store_endpoint
         self._ttl = ttl_seconds
-        #: The credential this vendor DELEGATES FROM. Required, not optional in practice: AssumeRole is
-        #: a signed call and botocore's default chain finds nothing here, because the S3 secret reaches
-        #: `Settings` from the Dapr secret store and never the process env.
-        self._access_key = access_key
-        self._secret_key = secret_key
+        #: The credential this vendor DELEGATES FROM, read at every vend. Required, not optional in
+        #: practice: AssumeRole is a signed call and botocore's default chain finds nothing here, because
+        #: the S3 pair reaches the catalog from the Dapr secret store and never the process env.
+        self._credential = credential
         self._assume_role = assume_role or self._default_assume_role
-        self._client: Any = None  # boto3 STS client, built once (the vendor is a lifespan singleton)
+        #: The boto3 STS client and the pair it signs with. A client keeps its pair, so a rotated one builds
+        #: a new client ([[XC-082]]): the old one would sign every AssumeRole with a revoked key.
+        self._client: Any = None
+        self._client_pair: S3KeyPair | None = None
 
     def _default_assume_role(self, **kwargs: object) -> dict[str, object]:
-        if self._client is None:
+        pair = self._credential() if self._credential is not None else None
+        if self._client is None or pair != self._client_pair:
             from storage import sts_client  # lazy: only needed when STS vending is actually enabled
 
             # `storage` is where boto3 is declared and imported, so the timeouts and retry policy are
             # decided once; a client built here would inherit botocore's timeout-free defaults and an
             # unresponsive STS endpoint would hang the vend instead of failing it.
-            self._client = sts_client(region=self._region, endpoint=self._endpoint, access_key=self._access_key, secret_key=self._secret_key)
+            access_key, secret_key = (pair.access_key_id, pair.secret_access_key.get_secret_value()) if pair is not None else (None, None)
+            self._client = sts_client(region=self._region, endpoint=self._endpoint, access_key=access_key, secret_key=secret_key)
+            self._client_pair = pair
         return cast(dict[str, object], self._client.assume_role(**kwargs))
 
     def vend(
@@ -901,8 +906,7 @@ def make_vendor(
     store_endpoint: str | None = None,
     assume_role_arn: str | None = None,
     ttl_seconds: int = 900,
-    access_key: str | None = None,
-    secret_key: str | None = None,
+    credential: Callable[[], S3KeyPair] | None = None,
     encryption: EncryptionAtRest | None = None,
     sanctioned_bases: Sequence[str] = (),
 ) -> CredentialVendor:
@@ -922,8 +926,7 @@ def make_vendor(
             endpoint=sts_endpoint,
             store_endpoint=store_endpoint,
             ttl_seconds=ttl_seconds,
-            access_key=access_key,
-            secret_key=secret_key,
+            credential=credential,
             encryption=encryption,
             sanctioned_bases=sanctioned_bases,
         )

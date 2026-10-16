@@ -6,6 +6,7 @@ import logging
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime
+from functools import partial
 from typing import Annotated
 
 from fastapi import Depends, Header, Request
@@ -21,7 +22,7 @@ from catalog.core import run_context
 from catalog.core.config import Settings, StorePlane, get_settings
 from catalog.core.identifiers import parse_identifier
 from catalog.core.lineage_emit import LineageEmitter, NoopEmitter, OriginatorBoundEmitter, is_person_subject
-from catalog.core.namespace import build_namespace_for_root
+from catalog.core.namespace import NamespaceConnections
 from catalog.core.run_context import RunContext
 from catalog.core.vending import CredentialVendor, ModeBVendor
 from catalog.services import warehouses
@@ -164,7 +165,9 @@ def _fresh_cached_binding(cache: dict[str, dict[str, str]], top_ns: str, ttl_sec
     return entry
 
 
-def namespace_for_root(request: Request, settings: Settings, root_uri: str, *, endpoint: str | None = None, plane: StorePlane = "metadata") -> LanceNamespace:
+async def namespace_for_root(
+    request: Request, settings: Settings, root_uri: str, *, endpoint: str | None = None, plane: StorePlane = "metadata"
+) -> LanceNamespace:
     """The (cached) namespace connection rooted at ``root_uri`` — one per warehouse bucket.
 
     PUBLIC on purpose — the warehouse/namespace lifecycle endpoints resolve bucket-rooted connections
@@ -174,26 +177,31 @@ def namespace_for_root(request: Request, settings: Settings, root_uri: str, *, e
     KEYED ON ``(root, endpoint)``, not on the root alone ([[LH-067]]). A root is immutable but an
     endpoint is caller-owned and may be corrected, and a root-only key would serve the connection built
     against the OLD store for the life of the process — an open against the wrong endpoint, which reads
-    as a missing table rather than as stale configuration."""
-    conns: dict[tuple[str, str | None], LanceNamespace] = (
-        request.app.state.warehouse_namespaces if plane == "metadata" else request.app.state.warehouse_data_namespaces
-    )
-    conn = conns.get((root_uri, endpoint))
-    if conn is None:
-        conn = build_namespace_for_root(settings, root_uri, endpoint=endpoint, plane=plane)
-        conns[(root_uri, endpoint)] = conn
-    return conn
+    as a missing table rather than as stale configuration. And on the key pair in force, so a rotation
+    builds anew ([[XC-082]], :class:`catalog.core.namespace.NamespaceConnections`). In the threadpool,
+    because a build reaches the store."""
+    return await run_in_threadpool(partial(_connections(request).connection, settings, root=root_uri, endpoint=endpoint, plane=plane))
+
+
+async def estate_namespace(request: Request, settings: Settings) -> LanceNamespace:
+    """The connection rooted at the estate's own root, under the key pair in force. In the threadpool, as above."""
+    return await run_in_threadpool(_connections(request).connection, settings)
+
+
+def _connections(request: Request) -> NamespaceConnections:
+    """The connections the lifespan published on ``app.state``."""
+    connections: NamespaceConnections = request.app.state.connections
+    return connections
 
 
 async def get_namespace(request: Request, settings: SettingsDep) -> LanceNamespace:
     """The backend namespace for this request.
 
-    Default: the single connection built once in the lifespan. With ``warehouses_enabled`` (#3-A) and a
+    Default: the estate-rooted connection under the key pair in force. With ``warehouses_enabled`` (#3-A) and a
     request that targets a warehouse-BOUND top-level namespace, returns that warehouse's bucket-rooted
     connection instead — so create/describe/commit/list/drop all operate on the physically isolated bucket.
     An UNBOUND namespace (the common case) always falls through to the default root: existing single-bucket
     behaviour is untouched, and the binding lookup is skipped entirely when the feature is off."""
-    default_ns: LanceNamespace = request.app.state.namespace
     # SETTINGS BY INJECTION, not by calling the provider. FastAPI keys `app.dependency_overrides` on the
     # dependency CALLABLE, so a body call to `get_settings()` opts this dependency out of the override
     # map without saying so: an override that reaches every `SettingsDep` route silently missed this
@@ -202,8 +210,8 @@ async def get_namespace(request: Request, settings: SettingsDep) -> LanceNamespa
     # `SettingsDep` pays nothing for this.
     resolved = await _route_for(request, settings)
     if resolved is None or resolved[0] == settings.root:
-        return default_ns
-    return namespace_for_root(request, settings, resolved[0], endpoint=resolved[1])
+        return await estate_namespace(request, settings)
+    return await namespace_for_root(request, settings, resolved[0], endpoint=resolved[1])
 
 
 async def _route_for(request: Request, settings: Settings) -> tuple[str, str | None] | None:
@@ -251,13 +259,12 @@ async def namespace_for_top_ns(request: Request, settings: Settings, top_ns: str
     bound namespace's contents resolves it explicitly through this helper, one seed at a time, using
     the SAME binding lookup + per-warehouse connection cache the id routes use.
     """
-    default_ns: LanceNamespace = request.app.state.namespace
     if not settings.warehouses_enabled:
-        return default_ns
+        return await estate_namespace(request, settings)
     resolved = await _resolve_warehouse_root(request, settings, top_ns)
     if resolved is None or resolved[0] == settings.root:
-        return default_ns
-    return namespace_for_root(request, settings, resolved[0], endpoint=resolved[1])
+        return await estate_namespace(request, settings)
+    return await namespace_for_root(request, settings, resolved[0], endpoint=resolved[1])
 
 
 NamespaceDep = Annotated[LanceNamespace, Depends(get_namespace)]
@@ -270,15 +277,11 @@ async def get_data_namespace(request: Request, settings: SettingsDep, ns: Namesp
     `analyze_plan`): the metadata connection's whole-request bound would cut off a legitimate transfer
     (`CatalogReadBounds`). It is the data twin OF the connection :func:`get_namespace` resolved, found by
     identity, so it follows the same warehouse routing without a second binding read, and a connection
-    that is neither the default nor a cached warehouse one (a test's override) is handed back unchanged.
+    the catalog did not build (a test's override) is handed back unchanged.
     """
-    state = request.app.state
-    if ns is getattr(state, "namespace", None):
-        return state.data_namespace
-    for (root_uri, endpoint), conn in getattr(state, "warehouse_namespaces", {}).items():
-        if conn is ns:
-            return namespace_for_root(request, settings, root_uri, endpoint=endpoint, plane="data")
-    return ns
+    connections: NamespaceConnections | None = getattr(request.app.state, "connections", None)
+    twin = await run_in_threadpool(connections.data_twin, settings, ns) if connections is not None else None
+    return twin or ns
 
 
 DataNamespaceDep = Annotated[LanceNamespace, Depends(get_data_namespace)]

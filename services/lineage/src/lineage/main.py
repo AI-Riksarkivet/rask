@@ -13,7 +13,6 @@ from typing import Final
 
 import httpx
 from fastapi import FastAPI, Request
-from fastapi.concurrency import run_in_threadpool
 
 from lineage.api.dapr import register_dapr
 from lineage.api.v1.router import api_router
@@ -23,8 +22,8 @@ from service_kit.draining import arm_drain_on_sigterm
 from service_kit.governed.auth_lifespan import attach_auth
 from service_kit.governed.dapr_auth import assert_app_token_configured
 from service_kit.governed.fga import dispose as fga_dispose
-from service_kit.governed.secrets import apply_dapr_secrets
 from service_kit.governed.settings import assert_authentication_configured
+from service_kit.governed.store_credential import make_store_credential
 from service_kit.lance_app import build_lance_service_app
 from service_kit.obs import configure_app_logging
 from service_kit.schemas.health import Readiness, ReadinessStatus
@@ -78,10 +77,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         oidc_enabled=settings.oidc_enabled,
         insecure_allow_unauthenticated=settings.insecure_allow_unauthenticated,
     )
-    # The outbox's S3 secret from the Dapr secret store (OpenBao), never plaintext pod env. In a thread: the
-    # fetch is sync (blocking httpx + sleep between retries) and the loop must stay free. No-op when
-    # secrets_from_dapr is off.
-    await run_in_threadpool(apply_dapr_secrets, settings)
+    # The outbox's S3 key pair from the Dapr secret store (OpenBao), never plaintext pod env: read now, failing
+    # the boot closed if the store never answers, then again while lineage runs, so a pair rotated in the store
+    # is the one the relay signs with within its TTL ([[XC-082]], ADR 0166). None when secrets_from_dapr is off.
+    store_credential = make_store_credential(settings)
+    if store_credential is not None:
+        await store_credential.start()
+    app.state.store_credential = store_credential
     _disarm_drain: Callable[[], None] = _no_disarm
     try:
         store = ProvenanceStore.from_settings(settings)
@@ -127,6 +129,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         if forward_client is not None:
             with suppress(Exception):
                 await forward_client.aclose()
+        if store_credential is not None:
+            await store_credential.stop()
 
 
 async def _feed_ready(request: Request) -> Readiness:
