@@ -135,5 +135,7 @@ def test_the_originator_binding_still_overrides_only_an_absent_claim() -> None:
     inner = _RecordingEmitter()
     asyncio.run(_create(OriginatorBoundEmitter(inner, "carol"), **_optional()))
     assert inner.events[-1]["run"]["facets"]["lance"]["originator"] == "bob", "an explicit originator must win"
-    asyncio.run(_create(OriginatorBoundEmitter(inner, "carol"), **{**_optional(), "originator": None}))
+    absent = _optional()
+    absent["originator"] = None
+    asyncio.run(_create(OriginatorBoundEmitter(inner, "carol"), **absent))
     assert inner.events[-1]["run"]["facets"]["lance"]["originator"] == "carol", "the bound claim must fill an absent one"

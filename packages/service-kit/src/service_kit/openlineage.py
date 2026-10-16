@@ -151,8 +151,8 @@ def lifecycle_state(operation: str) -> str | None:
     Split out of :func:`lifecycle_facet` because the same question — did this change the table's
     DEFINITION rather than its rows — also decides whether the catalog emits a ``DatasetEvent``. Two
     lists would be two places for a new operation to be forgotten, and the one that keeps emitting a
-    run mints a phantom run nobody sees until they count. ``OVERWRITE`` is the one state that also wrote
-    rows, so the catalog keeps it a run (``catalog.core.lineage_emit._is_ddl``).
+    run mints a phantom run nobody sees until they count. ``OVERWRITE`` always wrote rows and a ``CREATE`` may
+    have, so the catalog keeps those writes runs (``catalog.core.lineage_emit.build_write_event``).
     """
     return _LIFECYCLE_BY_OPERATION.get(operation.lower())
 

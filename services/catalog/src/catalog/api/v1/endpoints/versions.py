@@ -262,6 +262,7 @@ async def create_table_version(
         pin_version=staged.version,
         branch=staged.branch,
         run=run,
+        commits_rows=staged.creates and adds_data,
     )
     return response
 

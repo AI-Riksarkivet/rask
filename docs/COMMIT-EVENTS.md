@@ -69,7 +69,9 @@ OpenLineage `RunEvent` whose `producer` is the catalog's emitter
 (`https://github.com/AI-Riksarkivet/rask/tree/main/services/catalog/src/catalog/core/lineage_emit.py`):
 
 - `outputs[0].name`: the table id, byte-for-byte the catalog's id and the OpenFGA object id.
-- `run.facets.lance`: `operation` (the catalog operation: `insert`, `merge_insert`, `update`, `delete`, ...),
+- `run.facets.lance`: `operation` (the catalog operation: `insert`, `merge_insert`, `update`, `delete`, ...;
+  `create_table` when the table's first version holds rows, whether the catalog's `create` door wrote them or a
+  client committed them through `version/create`),
   `version`, `ref` (the branch, absent for main), `branchIdentifier` (tells two incarnations of one branch
   name apart), `project`.
 - `outputs[0].facets.version.datasetVersion`: the same version as a string, when known.
@@ -88,7 +90,7 @@ this row when it should read only what readers of `@published` read.
 
 ### A dataset change
 
-A schema or lifecycle change that committed no rows (create, drop, ...). `event_type` is `COMPLETE`, `job`
+A schema or lifecycle change that committed no rows (a create with no rows, a drop, ...). `event_type` is `COMPLETE`, `job`
 is `null`, and `event` is an OpenLineage `DatasetEvent` with no `run`: the table is `dataset.name`, and the
 `lance` and `author` facets sit on `dataset.facets`.
 

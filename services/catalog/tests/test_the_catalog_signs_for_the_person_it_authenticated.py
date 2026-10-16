@@ -2,8 +2,8 @@
 
 [[LH-064]], [[XC-078]]. Every catalog event is authored by the signed-in PERSON, and the service holds no credential of
 theirs, so it signs as ITSELF and DECLARES the subject it acts for: an attestation ("the catalog authenticated this person
-and says so"), never a claim that the person signed. A create is a DatasetEvent and an insert a RunEvent, and both carry the
-author, so both are signed. The control events the same writes publish name the person as their actor (`user:<sub>`) and
+and says so"), never a claim that the person signed. A create that commits no rows is a DatasetEvent and an insert a RunEvent,
+and both carry the author, so both are signed. The control events the same writes publish name the person as their actor (`user:<sub>`) and
 are signed the same way. A write nobody authenticated has no author, and a signature on a lineage event with none could
 never verify, so that event goes out unsigned; its control events name no actor, which is the catalog acting for itself,
 so they are signed with no delegation.
@@ -73,9 +73,9 @@ class _Published:
         return self._keys
 
 
-def _rows() -> bytes:
+def _rows(count: int = 3) -> bytes:
     sink = pa.BufferOutputStream()
-    table = pa.table({"id": pa.array(range(3), pa.int64())})
+    table = pa.table({"id": pa.array(range(count), pa.int64())})
     with ipc.new_stream(sink, table.schema) as writer:
         writer.write_table(table)
     return bytes(sink.getvalue().to_pybytes())
@@ -154,7 +154,7 @@ def boot(tmp_path: Path, control_outbox: str, monkeypatch: pytest.MonkeyPatch, r
 
 def _write_a_table_and_a_row(client: TestClient) -> None:
     assert client.post("/v1/namespace/db/create", json={}).status_code == 200
-    assert client.post("/v1/table/db$t/create", content=_rows(), headers=ARROW_STREAM).status_code == 200
+    assert client.post("/v1/table/db$t/create", content=_rows(0), headers=ARROW_STREAM).status_code == 200
     assert client.post("/v1/table/db$t/insert", content=_rows(), headers=ARROW_STREAM).status_code == 200
 
 

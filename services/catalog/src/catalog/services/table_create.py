@@ -230,15 +230,16 @@ async def create_governed_table(
     if settings.lineage_emit_enabled:
         table = stamp_lineage_metadata(table, build_lineage_metadata(table_id=table_id, namespace=namespace, run_id=run_id))
     # Pre-existence, computed BEFORE the write (declared-only counts — it already holds an owner grant).
-    # An Overwrite always probes: whether it replaces a table decides its protection guard and its lineage
-    # record, and neither depends on FGA. An ExistOk probes only with FGA on, for its one FGA question:
+    # Overwrite and ExistOk always probe, because what each did decides its lineage record, which does not
+    # depend on FGA: an Overwrite of a table is not its create, and an ExistOk that kept one committed no rows
+    # ([[LH-492]]). The probe's FGA questions:
     #   · Overwrite of an EXISTING table replaces the tip's schema and rows, the spec's "dropped" — so it
     #     clears the owner-tier can_drop a real drop needs, not only the writer-tier can_create_table the
     #     router applied on the parent, and a protected table refuses it unless force=true.
     #   · ExistOk that KEPT an existing table wrote NOTHING — so seeding the caller `owner` would let ANY
     #     authenticated user (or namespace-writer) SEIZE ownership of an already-owned table via a no-op
     #     create (audit: CRITICAL). We must never grant owner on a table this request did not create.
-    probe = mode is CreateMode.OVERWRITE or (mode is CreateMode.EXIST_OK and settings.fga_enabled and client is not None)
+    probe = mode in (CreateMode.OVERWRITE, CreateMode.EXIST_OK)
     pre_existed = probe and await run_in_threadpool(table_exists, ns, segments)
     overwrote_existing = pre_existed and mode is CreateMode.OVERWRITE
     existok_kept_existing = pre_existed and mode is CreateMode.EXIST_OK
@@ -382,6 +383,8 @@ async def create_governed_table(
             schema_fields=schema_fields,
             inputs=inputs,
             run=run,
+            # The payload's rows landed at v1 only when this request wrote the table.
+            commits_rows=table.num_rows > 0 and not existok_kept_existing,
         )
     # Only a real creation emits — an ExistOk request that KEPT a pre-existing table wrote nothing and
     # created nothing (same guard that skips ownership seeding above), so a `table_created` here would be a

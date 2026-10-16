@@ -41,6 +41,7 @@ async def emit_measured_write(
     pin_version: int | None,
     branch: str | None,
     run: RunContext | None = None,
+    commits_rows: bool = False,
 ) -> None:
     """Read back ``(version, schema)`` in one pinned open, then emit the best-effort write event.
 
@@ -58,6 +59,9 @@ async def emit_measured_write(
     ``run`` is the run the writer named (:mod:`catalog.core.run_context`): its inputs become the event's
     version-pinned inputs, the derivation edge the catalog records for the write, and its id and job ride the
     event.
+
+    ``commits_rows`` says the commit added rows, which makes a table's first version a write rather than a
+    dataset change ([[LH-492]]).
     """
     # A request may spell main by name; the event records main as no ref at all, as Lance does.
     ref = dataplane.recorded_branch(branch)
@@ -85,4 +89,5 @@ async def emit_measured_write(
         branch_identifier=identifier,
         inputs=run_inputs(run),
         run=run,
+        commits_rows=commits_rows,
     )

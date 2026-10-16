@@ -229,8 +229,9 @@ def _is_ddl(operation: str) -> bool:
     forgotten — it would keep emitting a run, and the phantom it mints is invisible until someone
     counts the feed's runs.
 
-    ``OVERWRITE`` is not DDL here: an overwrite committed rows at a version, and only a run asserts edges
-    at the version a write made (``edges_of`` reads none off a ``DatasetEvent``).
+    ``OVERWRITE`` is not DDL here: an overwrite committed rows at a version, and only a run's output names
+    the version a write made (``docs/COMMIT-EVENTS.md``). A create that committed rows is the same case, but
+    the operation alone cannot say so: :func:`build_write_event` reads ``commits_rows`` for it.
     """
     state = lifecycle_state(operation)
     return state is not None and state != "OVERWRITE"
@@ -282,6 +283,7 @@ def build_write_event(
     originator: str | None = None,
     branch: str | None = None,
     branch_identifier: str | None = None,
+    commits_rows: bool = False,
     catalog_impl: str = "",
     warehouse_uri: str = "",
 ) -> dict[str, Any]:
@@ -302,6 +304,10 @@ def build_write_event(
 
     ``run`` is the run the writer named (:mod:`catalog.core.run_context`); its id and job ride the catalog's ``lance``
     facet, because ``run_id`` is this event's own id and the writer's need not be the UUID OpenLineage asks for.
+
+    ``commits_rows`` says the commit added rows ([[LH-492]]): a table's first version can, through the catalog's
+    ``create`` door or a stock client's ``version/create``. Such a create is announced as a run whose output names
+    the version and whose author is the caller, as an Overwrite is, because only a run's output carries a write.
     """
     lance_fields: dict[str, Any] = {"operation": operation}
     if run is not None:
@@ -400,8 +406,9 @@ def build_write_event(
     # inputs (`lineage.services.provenance.edges_of`). A rename passes its SOURCE precisely so the
     # destination is not an orphan with no history, so moving it would sever the chain this event
     # exists to preserve. There is no phantom in that case either: something really did derive one
-    # table from another.
-    if _is_ddl(operation) and not inputs:
+    # table from another. A definition change that committed rows keeps its run for the same reason an Overwrite
+    # does: those rows are a write at this version, and a follower acting on writes reads them off a run.
+    if _is_ddl(operation) and not inputs and not commits_rows:
         return _as_dataset_event(output=output, run_facets=run_facets, event_time=event_time)
     return {
         "eventType": "COMPLETE",
@@ -475,6 +482,8 @@ class EmitFields(TypedDict, total=False):
     #: The incarnation of ``branch`` the write committed to (pylance's ``branch_identifier``): a recreated
     #: branch restarts its version numbering, so the ref and version alone name two commits.
     branch_identifier: str | None
+    #: Whether the commit added rows, which makes a create a write (:func:`build_write_event`).
+    commits_rows: bool
 
 
 @runtime_checkable
@@ -678,6 +687,7 @@ class _BaseLineageEmitter:
             originator=fields.get("originator"),
             branch=fields.get("branch"),
             branch_identifier=fields.get("branch_identifier"),
+            commits_rows=fields.get("commits_rows", False),
             catalog_impl=self._catalog_impl,
             warehouse_uri=self._warehouse_uri,
         )
@@ -877,6 +887,7 @@ async def emit_write_event(
     source_uri: str | None = None,
     inputs: list[InputPin] | None = None,
     run: RunContext | None = None,
+    commits_rows: bool = False,
 ) -> None:
     """Publish a best-effort lineage event for a catalog mutation, awaited INLINE in the handler.
 
@@ -889,6 +900,7 @@ async def emit_write_event(
     (re)attach a location, e.g. ``register``/``declare``.
     ``inputs`` names the source dataset(s) this write is DERIVED FROM, each optionally version-pinned (a
     rename passes its source; a pipeline's write passes the inputs its run names); ``run`` names that run's id and job.
+    ``commits_rows`` says the commit added rows, which makes a create a write (:func:`build_write_event`).
     Ids come from ``fga`` so the lineage Dataset == the OpenFGA object.
     """
     refs = input_refs(inputs, delimiter=delimiter)
@@ -913,4 +925,5 @@ async def emit_write_event(
         project=project,
         branch=branch,
         branch_identifier=branch_identifier,
+        commits_rows=commits_rows,
     )
