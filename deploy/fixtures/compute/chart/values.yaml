@@ -1,5 +1,5 @@
 # The rask release this service sits beside. Every rask name below derives from it: the Deployment, Service and
-# ServiceAccount `<rask>-compute` / `<rask>-sa-compute` (the names rask's gateway and OpenFGA admit), and the objects rask
+# ServiceAccount `<rask>-compute` / `<rask>-sa-compute` (the names rask's OpenFGA admits), and the objects rask
 # owns that this pod reads by reference: `<rask>-dapr-app-token`, `<rask>-ray-auth-token`, `<rask>-dex`, `<rask>-openfga`
 # and `<rask>-otel-collector`.
 rask:
@@ -13,7 +13,21 @@ image:
 
 replicas: 1
 port: 8804
-# Mount prefix of the routers (RASK_API_PREFIX); rask's gateway forwards /api/ray and /api/serve unchanged.
+# The Gateway route publishing /api/ray and /api/serve on the Gateway rask's own routes attach to (rask's `route.*`): the
+# product chart renders no part of this service (ADR 0155), so it publishes itself.
+route:
+  enabled: true
+  # rask's `route.parentRefs`. Required while `enabled`.
+  parentRefs: []
+  # rask's `route.hostnames`.
+  hostnames: []
+
+# rask's `networkPolicy.enabled`: on, rask renders a default-deny that selects every pod in the namespace, so this
+# release admits the Gateway's traffic on `port` alone. Off, it renders no policy, because a policy selecting the pod
+# would itself isolate it (daprd's ports and the Collector's scrape included).
+networkPolicy:
+  enabled: false
+# Mount prefix of the routers (RASK_API_PREFIX); this release's route publishes `<apiPrefix>/ray` and `/api/serve` unchanged.
 apiPrefix: /api
 # Interactive API docs (RASK_DOCS).
 docs: false
@@ -32,7 +46,7 @@ prune:
   schedule: "@every 6h"
 
 dapr:
-  # A sidecar for the prune cron's delivery and the gateway's service invocation of app-id `compute`. Rendered only on a
+  # A sidecar for the prune cron's delivery. Rendered only on a
   # cluster that serves dapr.io/v1alpha1.
   enabled: true
   logLevel: info

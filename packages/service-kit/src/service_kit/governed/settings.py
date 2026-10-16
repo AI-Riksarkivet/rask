@@ -121,7 +121,7 @@ class FgaSettings:
         SCANS BOTH SOURCES pydantic-settings would read: the process environment AND the configured
         `env_file`. It checked only `os.environ` at first, justified by "every deployment path in this
         estate sets real env vars" — but settings classes DO set `env_file=".env"`
-        (`controlplane`, `gateway`, `flows`). A retired name in a dotenv therefore bound silently while the guard
+        (the shared `Settings`, `flows`, `notifications`, the media plane's). A retired name in a dotenv therefore bound silently while the guard
         stayed quiet, which is the one outcome a hard rename exists to prevent. Sources, not
         assembled values: by the time pydantic-settings hands over a dict, the NAME that supplied a
         value is gone.

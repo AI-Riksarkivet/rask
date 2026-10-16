@@ -9,7 +9,6 @@ module only constructs providers + instruments the app; it hardcodes no target.
 from __future__ import annotations
 
 import logging
-import os
 from collections.abc import Iterable, Mapping
 from contextlib import suppress
 from typing import TYPE_CHECKING, Any, Final
@@ -53,7 +52,7 @@ def server_request_hook(span: Span | None, scope: Mapping[str, Any]) -> None:
     `BaseHTTPMiddleware` layer fully buffers the response body and is refused on that plane
     (`service_kit.media.middleware`).
 
-    IT APPLIES ONLY WHERE `setup_otel` RUNS: the five `make_service_app` services and the gateway. A
+    IT APPLIES ONLY WHERE `setup_otel` RUNS: the three `make_service_app` services (compute, flows, notifications). A
     hook is a Python callable passed to `FastAPIInstrumentor.instrument_app`, and
     `opentelemetry-instrument` builds the instrumentor from an entry point with no way to carry one —
     so the eight apps the chart launches under it (the lance five and the media three) carry the id in
@@ -92,17 +91,12 @@ HTTP_DURATION_BUCKETS_MS: Final[tuple[float, ...]] = (
 )  # fmt: skip
 
 
-def setup_otel(app: FastAPI, service_name: str, settings: Settings | None = None) -> bool:
+def setup_otel(app: FastAPI, service_name: str, settings: Settings) -> bool:
     """Wire traces/metrics/logs OTLP export + FastAPI instrumentation.
-
-    `settings` is optional: services built on `make_service_app` pass their
-    `Settings`, but a bespoke entrypoint (e.g. the gateway, which uses plain
-    env + no `Settings`) can omit it and rely on `OTEL_EXPORTER_OTLP_ENDPOINT`
-    alone to opt in.
 
     Returns True if instrumentation was applied, False if skipped.
 
-    **An explicit `Settings` DECIDES — the endpoint env is only a fallback.** This used to be
+    **`Settings` DECIDES, and the endpoint env never does.** This used to be
     `(settings is not None and settings.otel_enabled) or bool(os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"))`,
     an `or` that made ambient env an override nothing could turn off: a caller passing
     `RASK_OTEL_ENABLED=false` still got a live exporter whenever the variable happened to be set in
@@ -118,13 +112,11 @@ def setup_otel(app: FastAPI, service_name: str, settings: Settings | None = None
     of an hour. `packages/service-kit/tests/test_otel.py::test_an_explicit_OFF_beats_an_ambient_endpoint`
     pins that an explicit OFF wins over that ambient endpoint.
 
-    The fallback is preserved for the case that motivated it: `services/gateway` calls this with no
-    `Settings` at all and opts in through the endpoint alone. Production is unaffected either way —
+    `make_service_app`, the one caller in the estate, passes its `Settings`. Production is unaffected —
     `chart/templates/_helpers.tpl` renders `RASK_OTEL_ENABLED: "true"` and `OTEL_EXPORTER_OTLP_ENDPOINT`
     from the SAME `observability.enabled` guard, so the two can never disagree there.
     """
-    enabled = settings.otel_enabled if settings is not None else bool(os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"))
-    if not enabled:
+    if not settings.otel_enabled:
         return False
 
     import atexit

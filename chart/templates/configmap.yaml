@@ -10,9 +10,6 @@ data:
   {{- end }}
   RASK_DOCS: {{ .Values.docs.enabled | quote }}
   RASK_DAPR_ENABLED: {{ .Values.dapr.enabled | quote }}
-  RASK_COMPUTE_URL: {{ printf "http://%s-compute:8804" (include "rask.fullname" .) | quote }}
-  RASK_FLOWS_URL: {{ printf "http://%s-flows:%v" (include "rask.fullname" .) .Values.services.flows.port | quote }}
-  RASK_NOTIFICATIONS_URL: {{ printf "http://%s-notifications:%v" (include "rask.fullname" .) .Values.services.notifications.port | quote }}
   {{- if .Values.dapr.enabled }}
   RASK_NOTIFICATIONS_PUBSUB: {{ include "lance.subPubsub" (list . "notifications") | quote }}
   RASK_NOTIFICATIONS_LINEAGE_TOPIC: {{ .Values.pubsub.topic | quote }}
@@ -23,12 +20,4 @@ data:
   {{- end }}
   RASK_NOTIFICATIONS_LINEAGE_URL: {{ printf "http://%s-lineage:%v" (include "lance.fullname" .) .Values.services.lineage.port | quote }}
   RASK_NOTIFICATIONS_BINDING_NAME: {{ .Values.services.notifications.reconcileBindingName | default "notifications-reconcile-cron" | quote }}
-  {{- end }}
-  RASK_CATALOG_API_URL: {{ printf "http://%s-catalog:%v" (include "lance.fullname" .) .Values.services.catalog.port | quote }}
-  RASK_LINEAGE_API_URL: {{ printf "http://%s-lineage:%v" (include "lance.fullname" .) .Values.services.lineage.port | quote }}
-  RASK_LINEAGE_SIDECAR_ONLY_ROUTES: {{ include "lance.lineageSidecarOnlyRoutes" . | quote }}
-  {{- if .Values.explorer.enabled }}
-  RASK_EXPLORER_VIEWER_URL: {{ printf "http://%s-viewer:%v" (include "lance.fullname" .) .Values.explorer.services.viewer.port | quote }}
-  RASK_EXPLORER_SEARCH_URL: {{ printf "http://%s-search:%v" (include "lance.fullname" .) .Values.explorer.services.search.port | quote }}
-  RASK_EXPLORER_ANNOTATOR_URL: {{ printf "http://%s-annotator:%v" (include "lance.fullname" .) .Values.explorer.services.annotator.port | quote }}
   {{- end }}

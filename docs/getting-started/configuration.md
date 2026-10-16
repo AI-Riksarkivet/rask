@@ -31,23 +31,38 @@ The catalog's own settings carry the `LANCE_` prefix (`services/catalog/src/cata
 | `LANCE_LINEAGE_OUTBOX_URI` | Stage each lineage event in the object store before publishing it. |
 | `LANCE_CONTROL_EMIT_ENABLED` | Broadcast the catalog's control-plane mutations on `catalog.control.v1`. |
 
-## Gateway
+## The edge
 
-The gateway (`:8888`) is the frontend's single proxy target (`services/gateway/src/gateway/config.py`). Its upstream
-service URLs are overridable via:
+There is no rask process at the edge: the platform's Gateway (Kubernetes Gateway API) serves the chart's HTTPRoutes
+(`chart/templates/route.yaml`, one rule per public prefix from `rask.apiRoutes` in `_helpers.tpl`), and each service
+authenticates every request itself. The route table:
 
-| Variable | Default | Upstream |
+| Public prefix | Service | Path at the service |
 |---|---|---|
-| `RASK_CATALOG_API_URL` | `http://127.0.0.1:2333` | catalog (`/api/catalog`) |
-| `RASK_LINEAGE_API_URL` | `http://127.0.0.1:8000` | lineage (`/api/lineage`) |
-| `RASK_EXPLORER_VIEWER_URL` | `http://127.0.0.1:8101` | media viewer (`/api/explorer`, incl. the objects browser) |
-| `RASK_EXPLORER_SEARCH_URL` | `http://127.0.0.1:8102` | media search (`/api/explorer/search`) |
-| `RASK_EXPLORER_ANNOTATOR_URL` | `http://127.0.0.1:8103` | annotator (`/api/explorer/annotations`) |
-| `RASK_FLOWS_URL` | `http://127.0.0.1:8840` | flows (`/api/flows`) |
-| `RASK_NOTIFICATIONS_URL` | `http://127.0.0.1:8850` | notifications (`/api/notifications`) |
-| `RASK_COMPUTE_URL` | `http://127.0.0.1:8804` | compute (`/api/ray`, `/api/serve`) |
+| `/api/explorer/search` | search | `/api/search…` |
+| `/api/explorer/annotations` | annotator | `/api/annotations…` |
+| `/api/explorer` | viewer (incl. the objects browser) | `/api…` |
+| `/api/catalog` | catalog | `/…` |
+| `/api/lineage` | lineage | `/…` |
+| `/api/flows` | flows | unchanged |
+| `/api/notifications` | notifications | unchanged |
+| `/api/ray`, `/api/serve` | compute (the compute fixture chart's own HTTPRoute) | unchanged |
 
-There is **no `/api` catch-all** — an unmatched `/api/*` 404s at the gateway.
+The rewrite is Gateway API `URLRewrite` `ReplacePrefixMatch`. An unmatched `/api/*` is the Gateway's own 404.
+
+| Value / variable | Meaning |
+|---|---|
+| `route.parentRefs` | The Gateway the routes attach to (required). In development, `traefik-gateway` in kube-system. |
+| `route.hostnames` | Hostnames the routes answer; empty matches every host the listener accepts. |
+| `route.edgeUrl` → `RASK_EDGE_URL` | The Gateway's in-cluster address, where the zones' server side sends `/api/*`. Required while the zones render. |
+| `route.edgeEgress` | NetworkPolicy egress rules admitting the zones to the Gateway's data plane pods; required under `networkPolicy.enabled`. |
+| `forwardedAllowIps` | The data plane's pod CIDR, trusted for `X-Forwarded-For` by every service the route publishes. |
+
+Locally there is no router: `make dev-micro` runs the fleet only. The zones' SSR reads `RASK_EDGE_URL` (default
+`http://localhost:8888`), and `make dev-frontends-k3s` puts the in-cluster Gateway there by port-forwarding k3s
+Traefik's Service to `:8888`; `make dev-zone ZONE=<z>` runs one zone against its own mocks instead. The zones' Vite
+dev `/api` proxies are per zone: `compute`/`studio`/`models` → `VIEWER_BACKEND` (`:8888`), `home`/`lakehouse` →
+`LANCE_BACKEND` (`:8001`).
 
 ## Storage
 

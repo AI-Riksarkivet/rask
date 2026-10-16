@@ -1,7 +1,7 @@
 # rask umbrella chart values — the MERGED estate (rask 0.2.0 + lance-ns 0.1.0, one release named `rask`).
 #
 # Two systems now install from this one file:
-#   * the rask fleet (gateway/flows/notifications),
+#   * the rask fleet (flows/notifications),
 #     KubeRay Serve, the MinIO StatefulSet, the SvelteKit microfrontend zones;
 #   * the lance-ns lakehouse (catalog + lineage + maintenance + media), governance
 #     (Dex OIDC + OpenFGA), the Dapr/NATS event fabric, OpenBao, and the OTel-first observability tier.
@@ -26,8 +26,8 @@ imagePullSecrets: []
 
 # singleTenant gates the LEGACY single-tenant default workloads (the default
 # domain services + /default frontends + default Postgres/NATS/migration).
-# Default false => front-door-only install (picker + gateway +
-# operators). Set true to restore the old single-tenant stack.
+# Default false => front-door-only install (the zones, the services the cluster route
+# publishes, operators). Set true to restore the old single-tenant stack.
 # NOTE: the OBJECT STORE is
 # deliberately NOT in this list: minio.enabled alone gates the operator Tenant
 # (docs/adr/0124-chart-unification-one-control-plane-each-one-object-store.md) because the lakehouse plane resolves `rask-minio:9000`
@@ -84,15 +84,12 @@ secrets:
 # OFF, and the reason it is one knob rather than a per-service choice is the defect it closes. Four
 # services already had a `docs_enabled` setting; all four defaulted it to True and NO manifest
 # anywhere set it, so the flag documented a decision nobody was making and the schemas shipped openly.
-# Three more (viewer, search, annotator) and the gateway had no flag at all.
-#
-# The gateway is the one that matters: `templates/ingress.yaml` publishes `/api` at the edge, and its
-# `{prefix}/openapi.json` answers anonymously by fanning out to every backend it fronts — a merged
-# route table plus an amplification lever, in one unauthenticated GET.
+# Three more (viewer, search, annotator) had no flag at all, and `templates/route.yaml` publishes each
+# of them at the edge, so an open schema is one unauthenticated GET away.
 #
 # Turn it on for a dev cluster (deploy/values-local.yaml does). Leave it off anywhere reachable.
 docs:
-  # -- Serves /docs, /redoc and /openapi.json on every app in the release, the gateway included. Off by default; turn on only for a dev cluster.
+  # -- Serves /docs, /redoc and /openapi.json on every app in the release. Off by default; turn on only for a dev cluster.
   enabled: false
 
 # Non-secret env shared by the fleet ConfigMap.
@@ -105,28 +102,26 @@ config:
   HCP_INSECURE: "true"
 
 # Per-service definitions. TWO planes share this map, by design of the merge:
-#   * the rask FLEET (gateway, flows, notifications) — rendered by templates/fleet.yaml, which ranges over this
-#     map but only emits the `gateway` entry unless singleTenant.enabled;
+#   * the rask FLEET (flows, notifications) — rendered by templates/fleet.yaml, which ranges over this
+#     map but only emits a `frontDoor` entry unless singleTenant.enabled;
 #   * the lance-ns LAKEHOUSE apps (catalog, lineage) — rendered by templates/services.yaml, which
 #     reads .Values.services.catalog / .Values.services.lineage by NAME.
 # RESOLVED (P4 collision guard, docs/adr/0124-chart-unification-one-control-plane-each-one-object-store.md): fleet.yaml excludes the lakehouse entries by name (its $lakehouse
 # list — catalog, lineage), unconditionally, so each service renders from exactly ONE template under
 # every singleTenant combination: the fleet entries from fleet.yaml, catalog+lineage from
 # services.yaml. A new lakehouse entry added to this map must also be added to that list.
-# The peers whose `x-forwarded-*` headers uvicorn may believe, for EVERY fleet pod (rendered by
-# rask.proxyHeaderArgs alongside --proxy-headers).
+# The peers whose `x-forwarded-*` headers uvicorn may believe, for every pod the cluster route reaches
+# (rendered by rask.proxyHeaderArgs alongside --proxy-headers).
 #
-# 127.0.0.1 is uvicorn's own default and what the six fleet dockerfiles hardcode in their CMD — the
-# value you would use if the proxy were a sidecar in the same pod. It is not: the gateway's proxy is
-# the INGRESS CONTROLLER, in another pod on another IP, so the match can never succeed and every
-# forwarded header is silently ignored. Set this to the ingress controller's pod CIDR (k3s default
-# 10.42.0.0/16) for the client IP and scheme to be real. Left at the default here so an existing
-# install changes nothing silently.
+# 127.0.0.1 is uvicorn's own default: the address of a proxy in the same pod, here the daprd sidecar.
+# The route's proxy is the Gateway's data plane, in another pod on another IP, so at the default every
+# forwarded header from it is ignored and the client IP is the Gateway's: an anonymous rate-limit key
+# (`service_kit.rate_limit.by_subject`) is then one bucket for every caller. Set this to the Gateway
+# data plane's pod CIDR (k3s default 10.42.0.0/16). The Gateway sets the chain itself and does not
+# pass a client's own `x-forwarded-for` through as trusted.
 #
 # '*' IS REFUSED at render time — it trusts every peer, so any client could forge its own source IP.
-# The gateway strips and re-stamps the forwarded chain either way (see _CLIENT_SPOOFABLE), so a
-# backend never sees a client's own claim; this key decides only whose claim the gateway believes.
-# -- Peers whose x-forwarded-* headers uvicorn trusts in every fleet pod (--forwarded-allow-ips). Set to the ingress controller's pod CIDR; `*` is refused.
+# -- Peers whose x-forwarded-* headers uvicorn trusts in every pod the route reaches (--forwarded-allow-ips). Set to the Gateway data plane's pod CIDR; `*` is refused.
 forwardedAllowIps: 127.0.0.1
 
 services:
@@ -138,7 +133,7 @@ services:
   # no store, no cluster — so it is part of the default install: the builder's client-side lane works
   # without it, but "engine offline" is what a user sees, and durable runs are unreachable.
   #
-  # `frontDoor: true` because the gateway carries /api/flows and a front-door-only install still serves
+  # `frontDoor: true` because the cluster route carries /api/flows and a front-door-only install still serves
   # the studio zone. Serve is reached from the ZONE (bytes ride its own +server.ts), never from here, so
   # this service needs no Serve URL of its own.
   flows:
@@ -148,7 +143,7 @@ services:
     port: 8840
     # -- Replica count of the flows Deployment; 0 scales it to zero.
     replicas: 1
-    # -- Renders flows outside singleTenant, because the gateway routes /api/flows to it.
+    # -- Renders flows outside singleTenant, because the cluster route publishes /api/flows on it.
     frontDoor: true
     # The run door spends GPU compute (model nodes invoke live Serve endpoints), so on a governed
     # stack it checks the estate writer tier — FlowsSettings extends GovernedAuthSettings (LANCE_*).
@@ -161,8 +156,8 @@ services:
   # estate's. Its own app-id because an inbox aggregates lineage runs and catalog governance and
   # belongs to neither producer.
   #
-  # `frontDoor: true` because the gateway carries /api/notifications unconditionally — an install
-  # without this Deployment answers ERR_DIRECT_INVOKE on the route the bell polls, in every zone.
+  # `frontDoor: true` because the bell polls /api/notifications in every zone, and the route publishes
+  # it only on an install that renders this Deployment.
   #
   # replicas: 1 is the fleet default, not an actor constraint: Dapr placement distributes actor ids
   # across hosts, and the bus subscription's `queueGroupName` makes replicas a competing-consumer
@@ -174,7 +169,7 @@ services:
     port: 8850
     # -- Replica count of the notifications Deployment; replicas form a competing-consumer group. 0 scales it to zero.
     replicas: 1
-    # -- Renders notifications outside singleTenant, because the gateway routes /api/notifications to it.
+    # -- Renders notifications outside singleTenant, because the cluster route publishes /api/notifications on it.
     frontDoor: true
     # The inbox door verifies the bearer and re-derives visibility per recipient — NotificationsSettings
     # extends GovernedAuthSettings, so the prefix is LANCE_ like flows'.
@@ -239,30 +234,6 @@ services:
     identityAudiences: [rask-lineage]
     # -- List of dependencies notifications waits for in an init container; only `minio` is honoured (when minio.enabled).
     waitFor: []
-  gateway:
-    # -- uvicorn import path the gateway Deployment runs.
-    module: "gateway:app"
-    # -- Container and Service port of the gateway (the /api reverse proxy the Ingress routes to).
-    port: 8888
-    # -- Replica count of the gateway Deployment; 0 scales it to zero.
-    replicas: 1
-    # -- Renders the gateway outside singleTenant; it is the /api entry point.
-    frontDoor: true
-    # The gateway proxies /api/* to backends, so probing a proxied path would couple its readiness
-    # to an upstream — it must stay Ready in a front-door-only install (no domain backends).
-    # THAT REASON IS INTACT AND THE EXCEPTION IS GONE. Both probes pointed at the gateway's own
-    # hand-rolled /healthz, which made it the one fleet app outside the estate's drain-aware pair and
-    # the one row every probe gate had to skip by name. It now mounts `service_kit.probes` with NO
-    # ready_check, so /readyz reports `starting`/`shutting_down` and asks no upstream: the recorded
-    # reason never required a private probe, only an unproxied one. /healthz remains as the gateway's
-    # public badge, exactly as /api/health remains the fleet's.
-    # -- Liveness probe path of the gateway (default `/livez`).
-    healthPath: /livez
-    # -- Readiness probe path of the gateway (default `/readyz`); it asks no upstream, so the gateway stays Ready without backends.
-    readyPath: /readyz
-    # -- List of dependencies the gateway waits for in an init container; only `minio` is honoured (when minio.enabled).
-    waitFor: []
-
   # ==== lance-ns lakehouse apps (templates/services.yaml; share the catalog image, different entrypoint) ====
   catalog:
     # -- uvicorn import path the catalog Deployment runs (templates/services.yaml).
@@ -342,8 +313,8 @@ services:
 # Image registry/tag shared by every fleet + migration container, PLUS the per-image lance-ns block so
 image:
   # A REGISTRY, e.g. ghcr.io/<org>/<repo> or localhost:5000. Required — see `rask.image` in
-  # _helpers.tpl for why an empty default was actively harmful: it rendered a BARE `gateway:dev`,
-  # which is `docker.io/library/gateway:dev`, and only ever worked because `make k3s-import` had
+  # _helpers.tpl for why an empty default was actively harmful: it rendered a BARE `notifications:dev`,
+  # which is `docker.io/library/notifications:dev`, and only ever worked because `make k3s-import` had
   # side-loaded the tag into the node. A GitOps reconciler has no such side channel.
   # -- Registry prefix for every first-party image (e.g. ghcr.io/<org>/<repo>). Required unless localImages is true.
   repository: ""
@@ -356,17 +327,17 @@ image:
   # PER-COMPONENT pins (#135) — the reason a `helm upgrade` stopped being destructive.
   #
   # One `tag` above cannot describe this fleet. A real estate runs a catalog tag across 11 services,
-  # a different tag on gateway/compute/controlplane, a third across the 7 zones, and a
+  # a different tag on flows/notifications, a third across the 7 zones, and a
   # DIGEST on one more. Rendering all of them from one value overwrites every image with a tag that is not on
   # the node — observed twice on 2026-08-06, once taking the whole fleet to ImagePullBackOff.
   #
-  # Keys are the COMPONENT name the template passes to `rask.image` (`gateway`, `notifications`,
+  # Keys are the COMPONENT name the template passes to `rask.image` (`flows`, `notifications`,
   # `lance-rest-catalog`, `web-lakehouse`, …) — the same string that appears in the rendered
   # reference. `digests` beats `tags`, exactly as the global `digest` beats the global `tag`.
   #
   #   tags:    { lance-rest-catalog: be-256ca0da, web-lakehouse: zone-14d8882d }
-  #   digests: { gateway: "sha256:834d2e23…" }
-  # -- Per-component tag map keyed by component name (gateway, lance-rest-catalog, web-<zone>, ...); beats the global tag.
+  #   digests: { notifications: "sha256:834d2e23…" }
+  # -- Per-component tag map keyed by component name (notifications, lance-rest-catalog, web-<zone>, ...); beats the global tag.
   tags: {} # @schema additionalProperties: {"type": "string"}
   # -- Per-component digest map keyed by component name; beats `tags` and the global tag.
   digests: {} # @schema additionalProperties: {"type": "string"}
@@ -720,12 +691,6 @@ frontend:
     publicOrigin: "" # browser-reachable origin, e.g. https://app.example.com (forms the redirect URI)
     # The session-cookie sealing key is not a value: it is the store's `frontend-session-secret`, written
     # by ESO into `<release>-frontend-session` beside the client secret.
-
-# === lance-ns nginx gateway: RETIRED (docs/adr/0117-nginx-is-retired-and-the-fastapi-gateway-is-the-in-cluster.md) ===
-# The rask fleet gateway at services.gateway (uvicorn `gateway:app` on :8888) is the ONE front door; it
-# carries the lance routes (/api/catalog, /api/lineage, /api/explorer/*) and the lineage
-# sidecar-only 403 guard as Python middleware. templates/gateway.yaml (nginx ConfigMap +
-# Deployment + Service) is deleted; the former top-level `gateway:` values block went with it.
 
 # === Governance (Dex OIDC + OpenFGA). Off → open dev mode; on → the full governed demo. ============
 auth:
@@ -1393,7 +1358,7 @@ maintenance:
 # and read the corpus from a node-local hostPath (NO data move — only the annotations table lives in the
 # catalog; MEDIA_READ/WRITE_BACKEND=catalog is the merge's env flip, "direct" restores standalone dev).
 explorer:
-  # -- Deploy the explorer trio (viewer, search, annotator services) and their gateway URLs.
+  # -- Deploy the explorer trio (viewer, search, annotator services) and their rows on the cluster route.
   enabled: false
   # Where the pods mount the corpus (read-only, all three services).
   # #142: set to a warehouse bucket (e.g. "s3://bind86-wh") to serve the media corpus from the
@@ -1793,61 +1758,28 @@ ray:
     enabled: false
 
 
-ingress:
-  # -- Renders the Ingress publishing `/` and `/api`. Only one release per cluster may hold a host-less Ingress.
+route:
+  # The edge is the platform's Gateway (Gateway API), not a rask process (ADR 0165): these HTTPRoutes name one backend per
+  # public prefix, and each service authenticates every request itself. Only Core matches and the URLRewrite filter are
+  # used, so any conformant implementation serves them (kgateway, Envoy Gateway, Istio, Cilium; on k3s, Traefik's
+  # Gateway provider, which `make k3s-install` switches on). What an implementation sizes for itself is the Gateway's
+  # policy, not a route's: allow response headers of 16 KB (a chart-heavy zone sends ~4 KB of modulepreload `Link`),
+  # request bodies of 64 MB (page images, Arrow imports), and an idle stream of an hour (a `query.live` generator yields
+  # only on change and SvelteKit's SSE transport sends no keepalive).
+  #
+  # A ROUTE WITH NO HOSTNAME IS A CLAIM ON EVERY HOST ITS GATEWAY'S LISTENER ACCEPTS. Two releases attached host-less to
+  # one listener are rival claims on `/` and `/api`, and the Gateway picks between them; a second install sets its own
+  # `hostnames` or `route.enabled=false`.
+  # -- Renders the HTTPRoutes publishing the zones on `/`, `/dex` and each `/api/*` prefix on the Gateway `parentRefs` names.
   enabled: true
-  # -- IngressClass name. Empty uses the cluster default (Traefik on k3s).
-  className: ""    # k3s default Traefik
-  # Empty host => catch-all: reachable on the node IP or a VS Code / ssh -L
-  # forwarded localhost with no Host header or /etc/hosts entry. Set a hostname
-  # (e.g. rask.local) for host-based routing in shared/prod environments.
-  #
-  # A HOST-LESS INGRESS IS A CLUSTER-WIDE CLAIM ON `/` AND `/api`, not a namespaced one. Install
-  # this chart a SECOND time anywhere in the cluster with `ingress.enabled` still true and the two
-  # releases become rival host-less claims on the same bare paths; the ingress controller picks
-  # between them arbitrarily and the loser's estate simply stops answering. Observed 2026-08-04: a
-  # lane deploy into its own namespace took `/`, `/projects` and `/settings` away from the real
-  # estate, which then answered the LANE gateway's `{"detail":"Not Found"}` while every pod in both
-  # namespaces was healthy. Nothing looks broken; the routing just moved.
-  #
-  # So: exactly ONE release per cluster may carry a host-less ingress. Any additional install —
-  # a slice, a lane, a preview — must either set a distinct `ingress.host` or, if it is reached
-  # in-cluster and needs no edge at all, `--set ingress.enabled=false`.
-  # -- Hostname the Ingress routes. Empty is a cluster-wide catch-all on `/` and `/api`.
-  host: ""
-  # Keyed defaults, so an operator's own annotations still merge (and can override these).
-  #
-  # SvelteKit emits one `Link: <…>; rel=modulepreload` entry per module of the entry graph, so a
-  # chart-heavy zone (models pulls layerchart) sends a ~4 KB response header. nginx's DEFAULT
-  # proxy buffer is 4 KB and it answers "upstream sent too big header" with a 502 — the models
-  # zone was unreachable through the edge while its pod served 200s (found live 2026-07-24).
-  # 16 KB fits the largest zone with headroom; harmless for the others.
-  #
-  # proxy-read-timeout is what keeps a live query alive. ingress-nginx defaults to 60s, and it counts
-  # from the last byte READ FROM the upstream, not from the last request — so a `query.live` generator
-  # that yields only when its data changes (the correct discipline) is severed by the edge after 60
-  # idle seconds. SvelteKit's SSE transport sends no keepalive of its own (kit 2.70.1
-  # runtime/server/remote.js has exactly one enqueue, the payload), so nothing refreshes that clock
-  # from the app side. The client then reconnects and re-runs the generator from scratch, which is
-  # strictly worse than polling. 3600s lets a stream idle for an hour; a genuinely dead upstream is
-  # still reaped, just on a timescale that matches a human session. proxy-send-timeout moves with it —
-  # the two are one setting in practice, and leaving the send side at 60s reaps the same connection
-  # from the other end.
-  # -- Annotations merged onto the Ingress; defaults raise nginx proxy buffers to 16k, read/send timeouts to 3600 s and the body cap to 64m.
-  annotations:
-    nginx.ingress.kubernetes.io/proxy-buffer-size: 16k
-    nginx.ingress.kubernetes.io/proxy-buffers-number: "4"
-    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
-    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
-    # proxy-body-size is load-bearing for the same reason proxy-read-timeout is: the DEFAULT is
-    # wrong for this estate. ingress-nginx caps a request body at 1m, and every image surface here
-    # is bigger than that — the inference playground's 2.2 MB page image was refused 413 at the
-    # INGRESS, before the zone server (whose own guard allows 25 MB) ever saw it, so the failure
-    # read as "inference is broken" rather than "the edge has a 1 MB cap". Also covers the
-    # annotator's Arrow import and the medallion's multi-image batch posts.
-    nginx.ingress.kubernetes.io/proxy-body-size: 64m
-  # -- List of Ingress TLS entries ({secretName, hosts}). Empty serves plain HTTP.
-  tls: []          # e.g. [{ secretName: rask-tls, hosts: ["rask.example.com"] }]
+  # -- Gateways the routes attach to, as Gateway API parentRefs ([{name, namespace, sectionName}]). Required while `enabled`.
+  parentRefs: []
+  # -- Hostnames the routes answer. Empty matches every host the Gateway's listener accepts.
+  hostnames: []
+  # -- In-cluster address of that Gateway (RASK_EDGE_URL): where the zones' server side sends `/api/*`, through the same routes a browser takes. Required while the zones render.
+  edgeUrl: ""
+  # -- NetworkPolicy egress rules ({to, ports}) admitting the zones to the Gateway's data plane pods, at the pod port a policy sees. Required under networkPolicy.enabled while the zones render.
+  edgeEgress: []
 
 # ==== cluster infra foundation (subchart dependencies, Chart.yaml) ==========
 # One `helm install` brings these up alongside the app. Turn off for a prod
@@ -2005,7 +1937,7 @@ nats:
 # Dapr objects and the sidecar annotations, and refuses to render with `enabled` on when the cluster does not serve
 # dapr.io/v1alpha1.
 dapr:
-  # One switch for "rask uses Dapr". Off runs plain pods with no Components; the gateway falls back to env-URL httpx.
+  # One switch for "rask uses Dapr". Off runs plain pods with no Components, and services call each other on their Service URLs.
   # -- Use Dapr: inject a daprd sidecar into every fleet and lakehouse pod and render rask's Components, Configurations and Resiliency. Needs a Dapr control plane (dapr.io/v1alpha1); the render refuses without it.
   enabled: true
   # -- Namespace the Dapr control plane runs in; the Collector scrapes it and, under NetworkPolicy, every pod may reach it.
@@ -2042,7 +1974,7 @@ dapr:
   # -- daprd sidecar log level, stamped as the `dapr.io/log-level` annotation (debug, info, warn, error).
   logLevel: "info"
   # Max request body size for Dapr service invocation. Dapr defaults to 4Mi,
-  # which rejects multi-image uploads proxied over the gateway's sidecar. Raise it
+  # which rejects multi-image uploads over service invocation. Raise it
   # to fit real batches.
   # -- Max request body for Dapr service invocation (`dapr.io/max-body-size`); Dapr's own default is 4Mi.
   maxBodySize: "32Mi"

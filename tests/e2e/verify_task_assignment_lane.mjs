@@ -11,8 +11,8 @@
  * because after a `grant_revoked` the subject can no longer see the object and a delivery-time check
  * would drop the one event they most need.
  *
- * REACHED DIRECTLY, not through the gateway. The annotator's task doors carry no gateway row (only
- * `/api/explorer/annotations` does), so this needs a port-forward:
+ * REACHED DIRECTLY, not through the cluster route. The annotator's task doors have no public prefix
+ * (only `/api/explorer/annotations` does), so this needs a port-forward:
  *
  *   kubectl port-forward svc/rask-annotator 18103:8103
  *   ORIGIN=http://localhost:8080 ANNOTATOR_URL=http://localhost:18103 node tests/e2e/verify_task_assignment_lane.mjs

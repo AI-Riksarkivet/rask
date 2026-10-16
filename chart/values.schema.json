@@ -457,7 +457,7 @@
             "type": "object",
             "properties": {
                 "enabled": {
-                    "description": "Serves /docs, /redoc and /openapi.json on every app in the release, the gateway included. Off by default; turn on only for a dev cluster.",
+                    "description": "Serves /docs, /redoc and /openapi.json on every app in the release. Off by default; turn on only for a dev cluster.",
                     "type": "boolean"
                 }
             }
@@ -528,7 +528,7 @@
                     "type": "string"
                 },
                 "enabled": {
-                    "description": "Deploy the explorer trio (viewer, search, annotator services) and their gateway URLs.",
+                    "description": "Deploy the explorer trio (viewer, search, annotator services) and their rows on the cluster route.",
                     "type": "boolean"
                 },
                 "readBackend": {
@@ -620,7 +620,7 @@
             }
         },
         "forwardedAllowIps": {
-            "description": "Peers whose x-forwarded-* headers uvicorn trusts in every fleet pod (--forwarded-allow-ips). Set to the ingress controller's pod CIDR; `*` is refused.",
+            "description": "Peers whose x-forwarded-* headers uvicorn trusts in every pod the route reaches (--forwarded-allow-ips). Set to the Gateway data plane's pod CIDR; `*` is refused.",
             "type": "string"
         },
         "frontend": {
@@ -810,7 +810,7 @@
                     "type": "string"
                 },
                 "tags": {
-                    "description": "Per-component tag map keyed by component name (gateway, lance-rest-catalog, web-\u003czone\u003e, ...); beats the global tag.",
+                    "description": "Per-component tag map keyed by component name (notifications, lance-rest-catalog, web-\u003czone\u003e, ...); beats the global tag.",
                     "type": "object",
                     "additionalProperties": {
                         "type": "string"
@@ -821,48 +821,6 @@
         "imagePullSecrets": {
             "description": "List of pull Secrets ({name: ...}) added to every first-party pod and hook Job. Empty pulls anonymously.",
             "type": "array"
-        },
-        "ingress": {
-            "type": "object",
-            "properties": {
-                "annotations": {
-                    "description": "Annotations merged onto the Ingress; defaults raise nginx proxy buffers to 16k, read/send timeouts to 3600 s and the body cap to 64m.",
-                    "type": "object",
-                    "properties": {
-                        "nginx.ingress.kubernetes.io/proxy-body-size": {
-                            "type": "string"
-                        },
-                        "nginx.ingress.kubernetes.io/proxy-buffer-size": {
-                            "type": "string"
-                        },
-                        "nginx.ingress.kubernetes.io/proxy-buffers-number": {
-                            "type": "string"
-                        },
-                        "nginx.ingress.kubernetes.io/proxy-read-timeout": {
-                            "type": "string"
-                        },
-                        "nginx.ingress.kubernetes.io/proxy-send-timeout": {
-                            "type": "string"
-                        }
-                    }
-                },
-                "className": {
-                    "description": "IngressClass name. Empty uses the cluster default (Traefik on k3s).",
-                    "type": "string"
-                },
-                "enabled": {
-                    "description": "Renders the Ingress publishing `/` and `/api`. Only one release per cluster may hold a host-less Ingress.",
-                    "type": "boolean"
-                },
-                "host": {
-                    "description": "Hostname the Ingress routes. Empty is a cluster-wide catch-all on `/` and `/api`.",
-                    "type": "string"
-                },
-                "tls": {
-                    "description": "List of Ingress TLS entries ({secretName, hosts}). Empty serves plain HTTP.",
-                    "type": "array"
-                }
-            }
         },
         "lifecycle": {
             "type": "object",
@@ -1893,6 +1851,31 @@
                 }
             }
         },
+        "route": {
+            "type": "object",
+            "properties": {
+                "edgeEgress": {
+                    "description": "NetworkPolicy egress rules ({to, ports}) admitting the zones to the Gateway's data plane pods, at the pod port a policy sees. Required under networkPolicy.enabled while the zones render.",
+                    "type": "array"
+                },
+                "edgeUrl": {
+                    "description": "In-cluster address of that Gateway (RASK_EDGE_URL): where the zones' server side sends `/api/*`, through the same routes a browser takes. Required while the zones render.",
+                    "type": "string"
+                },
+                "enabled": {
+                    "description": "Renders the HTTPRoutes publishing the zones on `/`, `/dex` and each `/api/*` prefix on the Gateway `parentRefs` names.",
+                    "type": "boolean"
+                },
+                "hostnames": {
+                    "description": "Hostnames the routes answer. Empty matches every host the Gateway's listener accepts.",
+                    "type": "array"
+                },
+                "parentRefs": {
+                    "description": "Gateways the routes attach to, as Gateway API parentRefs ([{name, namespace, sectionName}]). Required while `enabled`.",
+                    "type": "array"
+                }
+            }
+        },
         "runners": {
             "type": "object",
             "properties": {
@@ -2010,7 +1993,7 @@
                     "type": "object",
                     "properties": {
                         "frontDoor": {
-                            "description": "Renders flows outside singleTenant, because the gateway routes /api/flows to it.",
+                            "description": "Renders flows outside singleTenant, because the cluster route publishes /api/flows on it.",
                             "type": "boolean"
                         },
                         "governedAuth": {
@@ -2031,39 +2014,6 @@
                         },
                         "waitFor": {
                             "description": "List of dependencies flows waits for in an init container; only `minio` is honoured (when minio.enabled).",
-                            "type": "array"
-                        }
-                    }
-                },
-                "gateway": {
-                    "type": "object",
-                    "properties": {
-                        "frontDoor": {
-                            "description": "Renders the gateway outside singleTenant; it is the /api entry point.",
-                            "type": "boolean"
-                        },
-                        "healthPath": {
-                            "description": "Liveness probe path of the gateway (default `/livez`).",
-                            "type": "string"
-                        },
-                        "module": {
-                            "description": "uvicorn import path the gateway Deployment runs.",
-                            "type": "string"
-                        },
-                        "port": {
-                            "description": "Container and Service port of the gateway (the /api reverse proxy the Ingress routes to).",
-                            "type": "integer"
-                        },
-                        "readyPath": {
-                            "description": "Readiness probe path of the gateway (default `/readyz`); it asks no upstream, so the gateway stays Ready without backends.",
-                            "type": "string"
-                        },
-                        "replicas": {
-                            "description": "Replica count of the gateway Deployment; 0 scales it to zero.",
-                            "type": "integer"
-                        },
-                        "waitFor": {
-                            "description": "List of dependencies the gateway waits for in an init container; only `minio` is honoured (when minio.enabled).",
                             "type": "array"
                         }
                     }
@@ -2200,7 +2150,7 @@
                             "type": "boolean"
                         },
                         "frontDoor": {
-                            "description": "Renders notifications outside singleTenant, because the gateway routes /api/notifications to it.",
+                            "description": "Renders notifications outside singleTenant, because the cluster route publishes /api/notifications on it.",
                             "type": "boolean"
                         },
                         "governedAuth": {

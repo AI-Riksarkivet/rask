@@ -121,20 +121,6 @@ def test_the_store_is_read_ONCE_per_process(monkeypatch: pytest.MonkeyPatch) -> 
     assert calls == [("lance-secrets", "lance")], f"the store was read {len(calls)} times"
 
 
-def test_the_public_front_door_is_refused_before_the_store_is_read(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The caller check runs first, so a forged front-door invocation costs no secret-store hop.
-
-    It also means the front-door refusal survives a store outage — the one guard that must never
-    depend on anything that can be unavailable.
-    """
-    calls = _store(monkeypatch, None)
-
-    with pytest.raises(PermissionDeniedError, match="public front door"):
-        require_dapr_token(dapr_api_token="anything", dapr_caller_app_id="gateway")
-
-    assert calls == []
-
-
 def test_the_boot_assertion_reads_the_store_too(monkeypatch: pytest.MonkeyPatch) -> None:
     """A service that asserts at boot must assert against the source it will authenticate against.
 

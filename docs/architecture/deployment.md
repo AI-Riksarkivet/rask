@@ -94,7 +94,7 @@ credentials; `openbao.externalAddr`).
 Development runs stand-ins from `deploy/fixtures` (ADR 0153), and the chart renders none of them:
 
 - **Dex** (`deploy/fixtures/dex`, release `dex`, Service `rask-dex`): the OIDC issuer with the demo users and rask's
-  static client. `dex.enabled` says the estate uses it: the ingress serves it at `/dex`, the publisher's password is
+  static client. `dex.enabled` says the estate uses it: the cluster route serves it at `/dex`, the publisher's password is
   seeded into the dev store, and a real deployment's render refuses it.
 - **MinIO** (`deploy/fixtures/minio`, release `minio`, StatefulSet and Service `rask-minio`): the S3 store, on the
   claims `data-<n>-rask-minio-<i>`. `minio.enabled` says the estate uses it: rask's dev store issues its root
@@ -124,7 +124,7 @@ make k3s-down         # uninstall   |   make k3s-purge  # + delete PVCs
 ```
 
 `k3s-build` builds every image through `scripts/dagger-image.sh --out`, as an OCI tarball in `build/k3s-images/`:
-`gateway`, `compute`, `notifications` and `flows`, the seven zone images (`web-<zone>`), `lance-rest-catalog` (the
+`compute`, `notifications` and `flows`, the seven zone images (`web-<zone>`), `lance-rest-catalog` (the
 lakehouse image that serves catalog, lineage, maintenance and the media trio), `minio` and the `ray-cluster` image the
 development engine fixture runs. `k3s-import` loads each tarball into k3s containerd as `<image>:dev` with
 `sudo k3s ctr images import`; neither step runs docker. The release installs into `RELEASE_NAMESPACE` (default
@@ -141,8 +141,8 @@ locally and in CI.
 | Image | Dockerfile | Notes |
 |---|---|---|
 | `lance-rest-catalog` | `rest-catalog.dockerfile` | One image, several deployments: `catalog`, `lineage`, `maintenance`, `viewer`, `search` and `annotator`. |
-| `gateway`, `flows`, `notifications`, `compute` | `<name>.dockerfile` | One per service, `uv sync --frozen --package <name>` against the root `uv.lock`. `compute` ships in its own chart (`deploy/fixtures/compute`). |
-| `web-<zone>` (7 images) | `frontend.dockerfile` | One parametrized dockerfile, `--build-arg APP=<zone>`. SSR via `svelte-adapter-bun`; `home` is the catch-all (owns `/`), the six domain zones (lakehouse, explorer, annotator, compute, models, studio) each pin a bare base `/<zone>`, and the Ingress routes there with `pathType: Prefix` and no `rewrite-target`. Probes are TCP, because a zone's `/` 404s under its own base. tini as PID 1, non-root UID 10001. |
+| `flows`, `notifications`, `compute` | `<name>.dockerfile` | One per service, `uv sync --frozen --package <name>` against the root `uv.lock`. `compute` ships in its own chart (`deploy/fixtures/compute`). |
+| `web-<zone>` (7 images) | `frontend.dockerfile` | One parametrized dockerfile, `--build-arg APP=<zone>`. SSR via `svelte-adapter-bun`; `home` is the catch-all (owns `/`), the six domain zones (lakehouse, explorer, annotator, compute, models, studio) each pin a bare base `/<zone>`, and the cluster route (`<release>-web`) sends each base there as a `PathPrefix` match with no rewrite. Probes are TCP, because a zone's `/` 404s under its own base. tini as PID 1, non-root UID 10001. |
 | `ray-cluster`, `ray-<runner>` | `ray-cluster.dockerfile`, `ray-runner.dockerfile` | The development engine's head image and one image per sealed runner (`--runner <runner>`); neither is part of the product chart. |
 | `minio` | `minio.dockerfile` | The `mc` the chart's scoped-users hook drives, and the dev store's server, built from pinned upstream tags. |
 
@@ -166,8 +166,9 @@ lakehouse. It reads that engine's Ray dashboard REST API at `RAY_DASHBOARD_URL` 
 prune, and proxies `/api/serve/*`. It ships in its own chart, `deploy/fixtures/compute` (release `compute` in rask's
 namespace, installed by `make k3s-fixtures`), which reads the rask release's Dapr app token, `lance-tracing`
 Configuration, Dex, OpenFGA, OTel Collector and Ray auth token by reference; rask's OpenFGA admits its service account
-only when the product chart's `auth.externalFgaClients` names it. The gateway keeps its `/api/ray` and `/api/serve`
-rows, which reach it by its Dapr app-id `compute`. The address of the engine's dashboard is `ray.dashboardUrl`
+only when the product chart's `auth.externalFgaClients` names it. The fixture chart publishes `/api/ray` and `/api/serve`
+with its own HTTPRoute on the same Gateway (`deploy/fixtures/compute/chart/templates/route.yaml`), and a NetworkPolicy
+admitting its app port. The address of the engine's dashboard is `ray.dashboardUrl`
 (`rask.rayDashboardUrl`), shared by the annotator's Serve discovery and the zones' Serve origin.
 
 In development `make k3s-up` installs the `kuberay-operator`, `ray-cluster` and `compute` fixtures
@@ -181,12 +182,21 @@ with `--address ray://…:10001`.
 
 `make k3s-up` runs `helm upgrade --install rask ./chart --wait`. The chart deploys:
 
-- **gateway** — reverse proxy on `:8888` (path-routes `/api/*`, no catch-all).
 - **flows** and **notifications** — the studio flow-builder's server half and the per-subject inbox.
 - **the lakehouse** — catalog, lineage and maintenance, plus the media trio (viewer/search/annotator; the viewer
   carries the S3 object browser).
 - **frontend zones** — SvelteKit SSR apps on `:3000` each.
-- **Ingress** (Traefik) — `/api` → gateway:8888, `/` → the zone services.
+- **The cluster route** (`templates/route.yaml`) — two Gateway API HTTPRoutes on the platform's Gateway
+  (`route.parentRefs`): `<release>-api` sends each public `/api/*` prefix to its service, with a `URLRewrite`
+  `ReplacePrefixMatch` where the service mounts another path (the table is `rask.apiRoutes` in `_helpers.tpl`), and
+  `<release>-web` sends `/<zone>`, `/dex` and `/` to the zones and Dex. No rask process sits at the edge: an
+  unmatched `/api/*` is the Gateway's own 404, and every service authenticates each request itself. Only Core matches
+  and `URLRewrite` are used, so any conformant implementation serves them (kgateway, the intended production edge;
+  Envoy Gateway, Istio, Cilium); in development it is k3s's Traefik with its Gateway provider switched on by
+  `deploy/k3s/traefik-gateway.yaml`, which `scripts/k3s-install.sh` installs (GatewayClass `traefik`, Gateway
+  `traefik-gateway` in kube-system, listener `web` on the node's port 80). The zones' server side reaches `/api/*`
+  through the same Gateway at `route.edgeUrl` (`RASK_EDGE_URL`). The Gateway must allow ~16 KB response headers,
+  64 MB request bodies and hour-long idle streams; that is Gateway policy, not route (ADR 0165).
 - **Optional, in-chart for development and the platform's in production** ([[XC-132]]): `openfga.enabled` (the
   OpenFGA subchart) and `age.enabled` (the apache/age Postgres StatefulSet behind OpenFGA and the Dapr state store); see *Prerequisites in production*.
 - **Its own configuration of what it does not run**: the Dapr Components, Configurations and Resiliency, the NATS stream
@@ -203,11 +213,11 @@ Dex, MinIO, OpenBao, the telemetry chain, and the development engine (the KubeRa
 `frontend.oidc.enabled` moves in lockstep with `auth.enabled` (the chart refuses the half-governed pair,
 `templates/auth-consistency.yaml`) and needs a browser-reachable IdP: `frontend.oidc.publicIssuer` and
 `frontend.oidc.publicOrigin`, which forms the home zone's `…/auth/callback` redirect. The `home` zone owns
-`/auth/{login,callback,logout}` and sets one sealed session cookie at path `/`; because the Ingress routes every zone
+`/auth/{login,callback,logout}` and sets one sealed session cookie at path `/`; because the cluster route serves every zone
 under one origin, a login on one zone is a login on all of them, and every zone's BFF forwards the signed-in user's
 own bearer to the governed backends. The BFF is a confidential OIDC client; its client secret and the cookie's
 sealing key are the store's (`frontend-session-secret`), written by ESO into `<release>-frontend-session`, never a
-value. `scripts/verify_cross_zone_oidc.sh` drives a real headless Dex login through the Ingress origin and checks
+value. `scripts/verify_cross_zone_oidc.sh` drives a real headless Dex login through the edge origin and checks
 that the cookie carries across a zone boundary and that per-user authorization holds.
 
 `auth.bootstrapAdmin` names the first estate admin by Dex subject: a post-install/upgrade hook Job grants that subject
@@ -247,9 +257,8 @@ evaluator. The store must meet the audit store's contract in `chart/values.yaml`
 | **Alertmanager** | v0.28.0 | `observability-alertmanager:9093` | Groups and holds firing alerts (no receiver: pages nowhere) |
 
 **App instrumentation:** `service_kit.setup_otel` instruments the FastAPI fleet —
-the services built on `make_service_app` call it automatically, and the gateway
-(a bespoke proxy app, no `Settings`) calls it directly with `service_name="gateway"`
-so the front-door spans root every distributed trace. It wires both **traces** and **RED
+the services built on `make_service_app` call it automatically, so each service roots or
+continues the trace of every request the cluster route hands it. It wires both **traces** and **RED
 metrics**: the FastAPI/HTTPX instrumentation emits `http.server.*`/`http.client.*` request count,
 duration, and active-request metrics automatically. Every plane exports plain OTLP/HTTP to the
 Collector (`OTEL_EXPORTER_OTLP_ENDPOINT`, `RASK_OTEL_ENABLED` when `observability.enabled=true`) and names

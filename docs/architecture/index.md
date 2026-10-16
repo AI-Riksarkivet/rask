@@ -15,8 +15,9 @@ forwards it to a bring-your-own graph backend ([ADR 0158](../adr/0158-provenance
 **notifications** turns the events into a per-person inbox.
 **Maintenance** expires versions, purges trash, scans for orphans and reconciles stores. Moving data between tiers,
 ingest and training are the user's pipeline, on the user's own compute and orchestrator
-([ADR 0154](../adr/0154-the-lakehouse-runs-no-ingest-and-no-workflow-engine.md)). The HTTP backend sits behind a
-**gateway** on `:8888`; seven **SvelteKit 2 + Svelte 5 SSR** zones (svelte-adapter-bun) consume it: a catch-all
+([ADR 0154](../adr/0154-the-lakehouse-runs-no-ingest-and-no-workflow-engine.md)). The HTTP backend sits behind the
+**platform's Gateway** (Kubernetes Gateway API), whose HTTPRoutes the chart renders, one per public `/api/*` prefix
+([ADR 0165](../adr/0165-the-edge-is-the-platforms-gateway-api.md)); seven **SvelteKit 2 + Svelte 5 SSR** zones (svelte-adapter-bun) consume it: a catch-all
 `home` owning `/` plus `lakehouse`, `explorer`, `annotator`, `compute`, `models` and `studio`.
 
 ## Component map
@@ -24,7 +25,7 @@ ingest and training are the user's pipeline, on the user's own compute and orche
 ```mermaid
 flowchart TB
     browser["Browser"] --> zones["Zones · SvelteKit SSR (Bun)<br/><sub>frontend/microfrontends/*</sub>"]
-    zones -->|"/api/*"| gw["Gateway · :8888<br/><sub>services/gateway</sub>"]
+    zones -->|"/api/*"| gw["Platform Gateway · HTTPRoutes<br/><sub>chart/templates/route.yaml</sub>"]
     client["A user's pipeline<br/><sub>its own compute</sub>"] -->|"namespace doors"| cat
     gw --> cat["catalog<br/><sub>tier governance</sub>"]
     gw --> lin["lineage<br/><sub>GET /events · provenance tables</sub>"]
@@ -44,12 +45,13 @@ flowchart TB
   through the catalog's namespace doors, so tier governance cannot be bypassed. What it enforces today, and the
   ADR 0156 rules still to land, are in [Tier Governance](../TIER-GOVERNANCE.md).
 - **The estate is authenticated.** Every service verifies an OIDC token (Dex in development) and authorizes on OpenFGA;
-  the chart turns auth on by default and refuses a half-governed render. The frontend hits `/api/*` on the gateway
-  (SSR `load` uses the absolute gateway URL server-side).
+  the chart turns auth on by default and refuses a half-governed render. The frontend hits `/api/*` on the cluster
+  route, which sends each prefix straight to its service; no process at the edge holds a token, so every 401 and
+  403 comes from the service (SSR `load` uses the Gateway's in-cluster address, `RASK_EDGE_URL`, server-side).
 - **Compute is bring-your-own.** The lakehouse imports no `ray`, `ray_kit` or `compute` (the import contract
   `the-lakehouse-knows-no-engine`). The `compute` service (Ray dashboard introspection and the Serve proxy) is the
-  companion of a bring-your-own Ray engine and ships in its own chart; the gateway's `/api/ray` and `/api/serve` rows
-  reach it. A workload's model environment is a sealed `runners/<workload>` project.
+  companion of a bring-your-own Ray engine and ships in its own chart, which publishes `/api/ray` and `/api/serve` with its own
+  HTTPRoute. A workload's model environment is a sealed `runners/<workload>` project.
 - **State** is the Lance tables on S3 (MinIO in development), lineage's among them, plus Postgres for OpenFGA and the
   Dapr state store. The
   Helm chart in `chart/` deploys rask's own services; Dapr, NATS, the object store, the secret store and the

@@ -1,12 +1,12 @@
 """Converge a REPLAYED write onto the caller's key instead of executing it twice.
 
-WHY THIS EXISTS (§ Q17-32). `dapr-resiliency.yaml` replays a write door's failure up to three times,
-and `python-infrastructure`'s rule offers exactly two outs — *"Always pair retry with an idempotency
-key OR mark the operation non-retryable"*. The catalog has taken the second (its app-id sits on
-`writeRetry`, so a bare 500 is no longer replayed); this is the first, and the two are done together
-because each covers what the other misses. Narrowing the matcher stops the estate replaying the one
-status that carries no promise about whether the work happened; a key makes a replay that DOES happen
-— a 503, a proxy timeout, a client retry — converge rather than re-execute.
+WHY THIS EXISTS (§ Q17-32). A write door's failure is replayed by whoever sent it — a client's retry,
+a pipeline's re-run, a request the Gateway's data plane timed out. No Dapr policy replays it, because
+no service invokes the catalog through Dapr. And `python-infrastructure`'s rule
+offers exactly two outs: *"Always pair retry with an idempotency key OR mark the operation
+non-retryable"*. A replay the estate does not send is not one it can mark, so this is the first: a
+key makes a replay — a 503, a proxy timeout, a client retry — converge rather than
+re-execute.
 
 THE KEY IS OPTIONAL AT THE DOOR, AND THAT IS A SPEC CONSTRAINT, NOT A COMPROMISE. The Lance Namespace
 spec defines no `Idempotency-Key` and a stock Lance client must work with no rask SDK, so requiring it

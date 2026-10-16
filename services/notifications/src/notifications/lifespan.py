@@ -60,7 +60,7 @@ async def actor_plane_ready(request: Request) -> Readiness:
 
     `service_kit.probes` renders `degraded` as a 503, which would pull the pod from rotation. Refusing
     the inbox is `require_actor_plane`'s job; this probe's job is to report, not to act — and a service
-    whose health surface and gateway row still answer is a service an operator can diagnose.
+    whose health surface and route still answer is a service an operator can diagnose.
     """
     registered = bool(getattr(request.app.state, "actors_registered", False))
     return Readiness(status=ReadinessStatus.ready, components={"actors": "registered" if registered else "unregistered"})

@@ -114,7 +114,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | dex.port | int | `5556` | Port of the development Dex's Service. |
 | dex.publisher.password | string | `"password"` | Plain password of the publish saga's service account, seeded into OpenBao; must match the hash the development Dex holds (demo default `password`). |
 | dex.publisher.username | string | `"publisher@rask.internal"` | Login email of the publish saga's service account; the annotator mints a fresh token with it per publish. |
-| docs.enabled | bool | `false` | Serves /docs, /redoc and /openapi.json on every app in the release, the gateway included. Off by default; turn on only for a dev cluster. |
+| docs.enabled | bool | `false` | Serves /docs, /redoc and /openapi.json on every app in the release. Off by default; turn on only for a dev cluster. |
 | encoders.embedUrl | string | `""` | Base URL of the OpenAI-shaped embedding server search calls and viewer probes (MEDIA_EMBED_URL). Empty = vector search modes report unavailable. |
 | encoders.rerankUrl | string | `""` | Base URL of the OpenAI-shaped reranker server (MEDIA_RERANK_URL). Empty = the rerank leg reports unavailable. |
 | existingSecret | string | `""` | Name of a pre-made Secret used instead of the chart's `<release>-app` (object store access key ID and endpoint, never a credential). Empty renders `<release>-app`. |
@@ -128,7 +128,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | explorer.corpus.storageClass | string | `""` | StorageClass of the chart-created corpus PVC. Empty = the cluster's default StorageClass. |
 | explorer.corpusMountPath | string | `"/media-corpus"` | Path the corpus volume is mounted at, read-only, in all three explorer services. |
 | explorer.corpusS3Root | string | `""` | S3 root (e.g. a warehouse bucket) the viewer serves the media corpus from (MEDIA_S3_DB_ROOT). Empty = the mounted corpus volume. |
-| explorer.enabled | bool | `false` | Deploy the explorer trio (viewer, search, annotator services) and their gateway URLs. |
+| explorer.enabled | bool | `false` | Deploy the explorer trio (viewer, search, annotator services) and their rows on the cluster route. |
 | explorer.readBackend | string | `"catalog"` | Where the explorer services read annotations from (MEDIA_READ_BACKEND): `catalog` (governed) or `direct` (standalone dev). |
 | explorer.services.annotator | object | `{"daprAppId":"annotator","port":8103}` | Explorer annotator service: `port` and `daprAppId`; the app-id is scoped on the control pubsub when `explorer.controlEmit` is on. |
 | explorer.services.search | object | `{"daprAppId":"search","port":8102}` | Explorer search service: `port` (its HTTP port) and `daprAppId` (its Dapr app-id). |
@@ -142,7 +142,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | externalSecrets.role | string | `"lance-infra"` | Vault role the operator's ServiceAccount assumes; also names its read policy. |
 | externalSecrets.secretPath | string | `"lance"` | KV key holding the infra bundle (postgres-password, minio-secret-key), e.g. `lance` for secret/data/lance. |
 | externalSecrets.serviceAccount | string | `"external-secrets"` | Name of the External Secrets Operator ServiceAccount the Vault role is bound to, so no other pod can assume it. |
-| forwardedAllowIps | string | `"127.0.0.1"` | Peers whose x-forwarded-* headers uvicorn trusts in every fleet pod (--forwarded-allow-ips). Set to the ingress controller's pod CIDR; `*` is refused. |
+| forwardedAllowIps | string | `"127.0.0.1"` | Peers whose x-forwarded-* headers uvicorn trusts in every pod the route reaches (--forwarded-allow-ips). Set to the Gateway data plane's pod CIDR; `*` is refused. |
 | frontend.apps | list | `[{"catchAll":true,"name":"home"},{"name":"compute","path":"/compute"},{"name":"studio","path":"/studio"},{"name":"models","path":"/models"},{"name":"lakehouse","path":"/lakehouse"},{"name":"explorer","path":"/explorer"},{"name":"annotator","path":"/annotator"}]` | The zones to deploy: `name` (image `web-<name>`), `path` (/<name>) or `catchAll` for home at /, and an optional per-zone image `tag`. |
 | frontend.bodySizeLimit | string | `"32M"` | Request-body ceiling of each zone's Bun server (BODY_SIZE_LIMIT), kept above the BFF's 25 MB inference guard. |
 | frontend.enabled | bool | `true` | Deploy the SvelteKit zone servers, one Deployment and Service per entry in `frontend.apps`. |
@@ -167,13 +167,8 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | image.pullPolicy | string | `"IfNotPresent"` | imagePullPolicy for first-party containers. |
 | image.repository | string | `""` | Registry prefix for every first-party image (e.g. ghcr.io/<org>/<repo>). Required unless localImages is true. |
 | image.tag | string | `"dev"` | Default tag for every first-party image when no per-component tag or digest is set. |
-| image.tags | object | `{}` | Per-component tag map keyed by component name (gateway, lance-rest-catalog, web-<zone>, ...); beats the global tag. |
+| image.tags | object | `{}` | Per-component tag map keyed by component name (notifications, lance-rest-catalog, web-<zone>, ...); beats the global tag. |
 | imagePullSecrets | list | `[]` | List of pull Secrets ({name: ...}) added to every first-party pod and hook Job. Empty pulls anonymously. |
-| ingress.annotations | object | `{"nginx.ingress.kubernetes.io/proxy-body-size":"64m","nginx.ingress.kubernetes.io/proxy-buffer-size":"16k","nginx.ingress.kubernetes.io/proxy-buffers-number":"4","nginx.ingress.kubernetes.io/proxy-read-timeout":"3600","nginx.ingress.kubernetes.io/proxy-send-timeout":"3600"}` | Annotations merged onto the Ingress; defaults raise nginx proxy buffers to 16k, read/send timeouts to 3600 s and the body cap to 64m. |
-| ingress.className | string | `""` | IngressClass name. Empty uses the cluster default (Traefik on k3s). |
-| ingress.enabled | bool | `true` | Renders the Ingress publishing `/` and `/api`. Only one release per cluster may hold a host-less Ingress. |
-| ingress.host | string | `""` | Hostname the Ingress routes. Empty is a cluster-wide catch-all on `/` and `/api`. |
-| ingress.tls | list | `[]` | List of Ingress TLS entries ({secretName, hosts}). Empty serves plain HTTP. |
 | lifecycle.maintenanceTerminationGracePeriodSeconds | int | `120` | Grace period in seconds for maintenance pods, long enough that an in-flight sweep or Lance write is not SIGKILLed. |
 | lifecycle.preStopSeconds | int | `5` | Seconds every pod sleeps in preStop before SIGTERM, so endpoint removal propagates first. |
 | lifecycle.sidecarBlockShutdownSeconds | int | `20` | Seconds the Dapr sidecar keeps running after SIGTERM to flush acks; must lie between preStopSeconds and the grace period. |
@@ -283,6 +278,11 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | resources.lineage | object | `{"limits":{"cpu":"1","memory":"512Mi"},"requests":{"cpu":"250m","memory":"128Mi"}}` | CPU/memory requests and limits for lineage; requests sized so the HPA CPU target is meaningful. |
 | resources.otel-collector | object | `{"limits":{"cpu":"1","memory":"512Mi"},"requests":{"cpu":"300m","memory":"512Mi"}}` | CPU/memory requests and limits for the OTel Collector; memory limit matches its hardcoded 400 MiB memory_limiter. |
 | resources.viewer | object | `{"limits":{"cpu":"2","memory":"1536Mi"},"requests":{"cpu":"200m","memory":"768Mi"}}` | CPU/memory requests and limits for the explorer viewer (in-process KG engine and atlas cache). |
+| route.edgeEgress | list | `[]` | NetworkPolicy egress rules ({to, ports}) admitting the zones to the Gateway's data plane pods, at the pod port a policy sees. Required under networkPolicy.enabled while the zones render. |
+| route.edgeUrl | string | `""` | In-cluster address of that Gateway (RASK_EDGE_URL): where the zones' server side sends `/api/*`, through the same routes a browser takes. Required while the zones render. |
+| route.enabled | bool | `true` | Renders the HTTPRoutes publishing the zones on `/`, `/dex` and each `/api/*` prefix on the Gateway `parentRefs` names. |
+| route.hostnames | list | `[]` | Hostnames the routes answer. Empty matches every host the Gateway's listener accepts. |
+| route.parentRefs | list | `[]` | Gateways the routes attach to, as Gateway API parentRefs ([{name, namespace, sectionName}]). Required while `enabled`. |
 | runners.assist.image | object | `{"repository":"assist-runner","tag":"dev"}` | Assist runner image: `repository` and `tag`; the tag is required when runners are enabled. |
 | runners.assist.port | int | `8110` | HTTP port of the assist runner Service. |
 | runners.enabled | bool | `false` | Deploy the `assist` model runner and point the annotator's MEDIA_ASSIST_URL at it instead of its in-repo mock. |
@@ -297,19 +297,12 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | services.catalog.module | string | `"catalog.main:app"` | uvicorn import path the catalog Deployment runs (templates/services.yaml). |
 | services.catalog.port | int | `2333` | Container and Service port of the Lance catalog. |
 | services.catalog.replicas | int | `1` | Replica count of the catalog; above 1 requires catalog.controlEmit=true or the render fails. |
-| services.flows.frontDoor | bool | `true` | Renders flows outside singleTenant, because the gateway routes /api/flows to it. |
+| services.flows.frontDoor | bool | `true` | Renders flows outside singleTenant, because the cluster route publishes /api/flows on it. |
 | services.flows.governedAuth | bool | `true` | Gives flows the OIDC/FGA env and FGA token mount when auth.enabled; its run door checks the writer tier. |
 | services.flows.module | string | `"flows:app"` | uvicorn import path the flows (studio flow-builder server) Deployment runs. |
 | services.flows.port | int | `8840` | Container and Service port of the flows app. |
 | services.flows.replicas | int | `1` | Replica count of the flows Deployment; 0 scales it to zero. |
 | services.flows.waitFor | list | `[]` | List of dependencies flows waits for in an init container; only `minio` is honoured (when minio.enabled). |
-| services.gateway.frontDoor | bool | `true` | Renders the gateway outside singleTenant; it is the /api entry point. |
-| services.gateway.healthPath | string | `"/livez"` | Liveness probe path of the gateway (default `/livez`). |
-| services.gateway.module | string | `"gateway:app"` | uvicorn import path the gateway Deployment runs. |
-| services.gateway.port | int | `8888` | Container and Service port of the gateway (the /api reverse proxy the Ingress routes to). |
-| services.gateway.readyPath | string | `"/readyz"` | Readiness probe path of the gateway (default `/readyz`); it asks no upstream, so the gateway stays Ready without backends. |
-| services.gateway.replicas | int | `1` | Replica count of the gateway Deployment; 0 scales it to zero. |
-| services.gateway.waitFor | list | `[]` | List of dependencies the gateway waits for in an init container; only `minio` is honoured (when minio.enabled). |
 | services.lineage.daprAppId | string | `"lineage"` | Dapr app-id of lineage; also names its pubsub, DLQ and durable consumers and scopes its relay cron. |
 | services.lineage.eventsRetentionDays | int | `7` | Days of arrival time the durable /events feed keeps, pruned on the relay tick; bounds how long a notifications outage it survives. 0 is unbounded. |
 | services.lineage.forward.authSecret.key | string | `"api-key"` | Field of that secret the API key is under. |
@@ -332,7 +325,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | services.notifications.channels.slack.enabled | bool | `false` | Renders the Slack Dapr binding and adds `slack` to RASK_NOTIFICATIONS_CHANNELS. Off by default. |
 | services.notifications.channels.slack.secretName | string | `"notifications-slack"` | Secret-store key holding the Slack `webhookUrl` field. |
 | services.notifications.daprIngest | bool | `true` | Renders APP_API_TOKEN for notifications, which refuses to start with Dapr on and no token. |
-| services.notifications.frontDoor | bool | `true` | Renders notifications outside singleTenant, because the gateway routes /api/notifications to it. |
+| services.notifications.frontDoor | bool | `true` | Renders notifications outside singleTenant, because the cluster route publishes /api/notifications on it. |
 | services.notifications.governedAuth | bool | `true` | Gives notifications the OIDC/FGA env and FGA token mount when auth.enabled. |
 | services.notifications.identityAudiences | list | `["rask-lineage"]` | Audiences of the service-account tokens projected into the notifications pod, one per door it calls (rask-lineage). |
 | services.notifications.module | string | `"notifications:app"` | uvicorn import path the notifications (inbox) Deployment runs. |

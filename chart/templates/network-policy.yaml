@@ -168,7 +168,7 @@ spec:
 # apps — their daprd resolves the state store's connectionString through the lance-secrets
 # component at boot (dapr-component.yaml derives the secret-store scope from stateStore.scopes the
 # same way), so blocking them here wedges the sidecar on component init. The newly-sidecared fleet/
-# fleet pods load NO openbao-backed component and stay excluded: web/gateway/dex/minio/age
+# fleet pods load NO openbao-backed component and stay excluded: web/dex/minio/age
 # can NEVER reach it. External-secrets (off-namespace, when enabled) needs an entry in
 # networkPolicy.openbaoExtraFrom.
 apiVersion: networking.k8s.io/v1
@@ -297,10 +297,10 @@ spec:
       ports:
         - { protocol: TCP, port: {{ .Values.minio.port }} }
 ---
-# The front door: gateway + web + the P5 micro-frontend zones accept ingress from ANYWHERE
-# (NodePort/Ingress/port-forward) — they are the intended entry points and carry their own L7 guards (OIDC
-# on the apps behind). The zones are the north-south edge now (the Ingress path-routes /<zone> → web-<zone>),
-# so they MUST be admitted here or a policy-enforcing CNI (prod) drops all Ingress→zone traffic.
+# The front door: the micro-frontend zones accept ingress from ANYWHERE (the Gateway's data plane,
+# NodePort, port-forward) — they are the intended entry points and carry their own L7 guards (OIDC on the
+# apps behind). The cluster route sends /<zone> to web-<zone>, so they MUST be admitted here or a
+# policy-enforcing CNI (prod) drops all Gateway→zone traffic.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -312,7 +312,6 @@ spec:
       - key: app.kubernetes.io/component
         operator: In
         values:
-          - gateway
           {{- if .Values.frontend.enabled }}
           {{- range .Values.frontend.apps }}
           - web-{{ .name }}
@@ -322,6 +321,48 @@ spec:
   ingress:
     - {}
 ---
+# The services the cluster route publishes (`rask.apiRoutes`) accept the Gateway's traffic on their app
+# port and nothing else, from anywhere, as the zones do: the Gateway's data plane lives in the platform's
+# namespace, and every one of these services authenticates each request itself. The port is the bound:
+# daprd's ports on the same pod stay intra-namespace only.
+{{- range $row := include "rask.apiRoutes" . | fromJsonArray }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "lance.fullname" $ }}-edge-{{ $row.component }}
+  labels: {{- include "lance.labels" $ | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/component: {{ $row.component }} }
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        - { protocol: TCP, port: {{ $row.port }} }
+---
+{{- end }}
+{{- if .Values.frontend.enabled }}
+# The zones' server side reaches /api/* through the Gateway (RASK_EDGE_URL), which sits outside this
+# namespace. A policy sees the data plane's POD port, after the Service's translation, so the rule is the
+# platform's to state (`route.edgeEgress`) rather than derived from the URL.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "lance.fullname" . }}-allow-edge-egress
+  labels: {{- include "lance.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values:
+          {{- range .Values.frontend.apps }}
+          - web-{{ .name }}
+          {{- end }}
+  policyTypes: [Egress]
+  egress:
+    {{- toYaml (required "route.edgeEgress must state the NetworkPolicy egress rules ({to, ports}) that reach the Gateway's data plane pods: the zones' server side sends /api/* through it" .Values.route.edgeEgress) | nindent 4 }}
+---
+{{- end }}
 # (3e) nats:8222 — the NATS monitoring endpoint (varz/connz/jsz), surfaced in the ops view that now
 # lives at /lakehouse/admin. NATS is on the (3a) exclusion list, so the two nats rules here are its
 # ONLY ingress: this one admits the 8222 monitor port from the LAKEHOUSE zone pods alone; (3f) below
@@ -352,7 +393,7 @@ spec:
 ---
 # (3f) nats:4222 — the client port. Admitted from ANY intra-namespace pod, port-scoped, and honestly so:
 # the legitimate clients are the daprd SIDECARS, which live inside every dapr.io/enabled app pod
-# (gateway, catalog, lineage, compaction, maintenance, notifications) plus the nats-box hook Jobs
+# (catalog, lineage, maintenance, notifications, the media trio) plus the nats-box hook Jobs
 # (stream provision + DLQ tooling) — i.e. nearly every first-party pod in the namespace, and the set
 # follows the dapr.io/enabled ANNOTATION, which no label selector can see. Enumerating component labels
 # would restate that near-total list and silently strand the next sidecar carrier (a wedged bus, not a

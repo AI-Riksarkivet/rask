@@ -1,7 +1,7 @@
 """A retried write must converge on the caller's key instead of re-executing.
 
-THE DEFECT THIS CLOSES (§ Q17-32). `dapr-resiliency.yaml` replays a write door's failure up to three
-times, and the catalog's 91 write routes carry no idempotency key on any of them — so a 500 raised
+THE DEFECT THIS CLOSES (§ Q17-32). A retrying client replays a write door's failure, and the
+catalog's 91 write routes carried no idempotency key on any of them — so a 500 raised
 AFTER the Lance write in `create_governed_table` (the schema read-back, `emit_create`, `emit_control`)
 is replayed with nothing to converge it. With `mode=Create` the replays answer AlreadyExists, so a
 fully successful create surfaces as a 409 nobody can tell from a name collision; with `mode=Overwrite`
@@ -9,9 +9,9 @@ each replay RE-EXECUTES the destructive path — drop and rewrite the dataset, s
 ACL, four `table_created` events for one logical create.
 
 `python-infrastructure`'s rule offers exactly two outs — *"Always pair retry with an idempotency key
-OR mark the operation non-retryable"* — and the estate has taken the second for the catalog already
-(its app-id sits on `writeRetry`, so a bare 500 is no longer replayed). This is the first: the two
-cover what the other misses, which is why the rule says do both.
+OR mark the operation non-retryable"* — and no Dapr policy replays a catalog call (no rask service
+invokes the catalog through Dapr, and `dapr-resiliency.yaml` targets lineage alone). This is the first
+out, for every client whose own retry the estate cannot see.
 
 THE KEY IS OPTIONAL, AND THAT IS A SPEC CONSTRAINT RATHER THAN A COMPROMISE. The Lance Namespace spec
 defines no `Idempotency-Key`, and `rask-lance-catalog` records that a stock Lance client must work with

@@ -84,7 +84,7 @@ from types import MappingProxyType
 import httpx
 
 
-#: The catalog's own port (``rask-catalog``), not the gateway's — the seed drives the service directly so
+#: The catalog's own port (``rask-catalog``), not the edge's — the seed drives the service directly so
 #: a routing problem in front of it cannot be mistaken for a guard's refusal.
 CATALOG_URL = os.environ.get("SEED_CATALOG_URL", "http://127.0.0.1:2333")
 #: The catalog accepts ONLY IdP bearers when auth is on, and every door here is a governed write — so a

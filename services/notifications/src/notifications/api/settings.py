@@ -74,9 +74,9 @@ class IngressSettings(SignatureDoorSettings, BaseSettings):
     #: the operator rather than by code, so the default has to be the safe one.
     dlq_topic: str = Field(default="", alias="RASK_NOTIFICATIONS_DLQ_TOPIC")
 
-    #: The lineage service's own base URL — the reconciler's `GET /events/projection` origin. NOT the gateway:
-    #: the feed poll authenticates at lineage's SERVICE door, and the gateway is a public front door
-    #: whose invocations that door refuses by construction (`dapr_auth.is_public_caller`).
+    #: The lineage service's own base URL — the reconciler's `GET /events/projection` origin. An in-cluster
+    #: address, not the edge: the feed poll is service-to-service, and lineage authenticates the pod's
+    #: service-account token on whichever path it arrives (ADR 0156 C5).
     lineage_url: str = Field(default="http://127.0.0.1:8000", alias="RASK_NOTIFICATIONS_LINEAGE_URL")
 
     #: This pod's projected service-account token for lineage's door (audience `rask-lineage`). Lineage
@@ -133,24 +133,19 @@ class IngressSettings(SignatureDoorSettings, BaseSettings):
     def feed_base_url(self) -> str:
         """Where the reconciler reads lineage's feed: THROUGH THE SIDECAR when Dapr is on.
 
-        The direct URL was why the walk needed a hand-written retry — this module used to say so:
-        "This is the service's OWN egress: no sidecar policy covers it, so the retry has to." True of
-        a direct httpx call, and nothing recorded why it had to be direct.
-
-        Through service invocation, the estate's EXISTING `invokeRetry` policy covers it, and that
-        policy already encodes the rule `_is_transient` hand-rolled — `httpStatusCodes: 408,429,500-599`,
-        never a 4xx — for the reason its own comment gives, measured on the ingest door: "Retrying a 403
-        is also pointless on its own terms: the answer will not change." `lineage` is already one of
-        that policy's targets.
+        Through service invocation the sidecar retries the read: `<release>-invocation-resiliency`
+        targets `lineage` with `invokeRetry` (constant 2 s, three retries, `408,429,500-599`, never a
+        4xx, because a 403's answer will not change) and is scoped to `notifications`, the one
+        service-invocation caller. A pass that still fails leaves the cursor where it was, since it
+        advances only on a pass that completes, so the next cron tick re-walks it (`reconcile_cron`).
 
         The credential crosses the sidecar intact: the feed client sends this pod's projected
         `rask-lineage` token as `Authorization: Bearer`, and daprd forwards that header to lineage
         byte-identical through service invocation (measured, LH-220 probe e). Lineage authenticates
         the token itself; nothing the sidecar adds names the caller.
 
-        Falls back to the direct URL when Dapr is off, which is the gateway's own shape
-        (`gateway/__init__.py::_target_base`) and what keeps dev-micro and the unit tests on a plain
-        base URL.
+        Falls back to the direct URL when Dapr is off, which is what keeps dev-micro and the unit
+        tests on a plain base URL.
         """
         if not self.dapr_enabled:
             return self.lineage_url

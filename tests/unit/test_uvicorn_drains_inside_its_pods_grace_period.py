@@ -33,7 +33,6 @@ _FLAG = "--timeout-graceful-shutdown="
 _DRAIN_ARMED = frozenset(
     {
         "Deployment/rask-annotator",
-        "Deployment/rask-gateway",
         "Deployment/rask-lineage",
         "Deployment/rask-maintenance",
         "Deployment/rask-notifications",

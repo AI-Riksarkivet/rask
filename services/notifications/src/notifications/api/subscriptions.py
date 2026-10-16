@@ -16,9 +16,9 @@ even in a deployment with no broker behind it.
   `IngressSettings.dlq_topic`: a `deadLetterTopic` with no retry policy behind it parks on the FIRST
   failure, which is worse than having neither.
 
-The token dependency proves **"arrived via Dapr", never "trusted caller"** — the gateway itself
-invokes through Dapr, so a request can carry a valid `dapr-api-token` and still be an anonymous
-stranger. It is not an authorization decision, and none is needed here: this handler writes into
+The token dependency proves **"arrived via Dapr", never "trusted caller"** — the sidecar stamps the
+token on every request it delivers, service invocation from any app included, so a valid
+`dapr-api-token` names the transport, not the caller. It is not an authorization decision, and none is needed here: this handler writes into
 inboxes it derives itself, and every recipient's visibility is re-checked before a pointer is written.
 
 What the token cannot prove is who WROTE the event, since every pod the bus lets publish reaches this

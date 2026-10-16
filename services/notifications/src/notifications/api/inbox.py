@@ -1,9 +1,9 @@
 """The inbox door: read your feed, mark rows read, dismiss one.
 
 Mounted under `RASK_API_PREFIX` by `make_service_app`, so the deployed paths are
-`/api/notifications/inbox…` — exactly what the gateway's `/api/notifications` row forwards
+`/api/notifications/inbox…` — exactly what the cluster route's `/api/notifications` rule forwards
 unrewritten. Neither side spells that prefix: this router contributes only `/notifications` and the
-gateway interpolates the same env var into both halves of its row, so the two track each other
+chart's `rask.apiRoutes` interpolates the same `RASK_API_PREFIX` value into its rule, so the two track each other
 wherever it is set. What must never appear is a LITERAL on either side — a router prefix of
 `/api/notifications` here, or a hardcoded pair there, is correct exactly while `RASK_API_PREFIX`
 happens to be `/api` and 404s the moment it is not. That trap has been paid for once already.

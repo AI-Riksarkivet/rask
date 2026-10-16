@@ -3,7 +3,7 @@ Thin shell over ray-kit; no DB. The proxy_router mounts at the root (no /api/v1
 prefix) so /api/serve/* reaches the Ray Serve status API.
 
 The service is `compute` on every surface (R22, supersedes R20's `ray` choice):
-uv member, import package, k8s objects, dapr app-id, image and gateway upstream
+uv member, import package, k8s objects, dapr app-id, image and route backend
 all align — and `import compute` shadows nothing, which kills R20's recorded
 `ray-api`/`ray_api` PyPI-shadow exception. The PUBLIC URL namespace stays
 `/api/ray` + `/api/serve`: those paths name the Ray cluster the endpoints

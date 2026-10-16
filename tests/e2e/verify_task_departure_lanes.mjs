@@ -15,7 +15,7 @@
  *
  * Run:
  *   kubectl port-forward svc/rask-annotator 18113:8103
- *   kubectl port-forward svc/rask-gateway   18888:8888
+ *   kubectl port-forward -n kube-system svc/traefik 18888:80   (the dev Gateway: the cluster route)
  *   kubectl port-forward svc/rask-dex       15556:5556
  *   ANNOTATOR_URL=http://localhost:18113 GATEWAY_URL=http://localhost:18888 \
  *     TOKEN_URL=http://localhost:15556/dex/token node tests/e2e/verify_task_departure_lanes.mjs

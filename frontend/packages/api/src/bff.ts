@@ -3,7 +3,7 @@
 // backend services' shared auth). Imports @sveltejs/kit TYPES only, so it lives in server bundles.
 import type { Handle, RequestHandler } from '@sveltejs/kit';
 import { sequence } from '@sveltejs/kit/hooks';
-import { makeGatewayHandleFetch } from './gateway';
+import { edgeUrl, makeEdgeHandleFetch } from './edge';
 import { makeTelemetryHandle, startZoneTelemetry } from './telemetry';
 import { fetchMe } from './me';
 import { readSecretFile } from './secret-file';
@@ -254,7 +254,6 @@ export function makeBackendProxy(opts: {
 const DEFAULT_CATALOG_API = 'http://localhost:2333';
 const DEFAULT_LINEAGE_API = 'http://localhost:8001';
 const DEFAULT_VIEWER_API = 'http://localhost:8101';
-const DEFAULT_GATEWAY_URL = 'http://localhost:8001';
 
 /** The cookie that carries the ACTIVE PROJECT across zones (#103). Set by the home zone when a
  *  project is opened (`/projects/[project]`), read by EVERY zone's layout so the shared shell can
@@ -328,11 +327,11 @@ export function makeZoneLayoutLoad(env: Env) {
  *
  * `handle` hydrates the session per request from the sealed OIDC cookie and runs the login-first gate;
  * it is a no-op when OIDC is unconfigured (the zone runs auth-off — dev servers and hermetic e2e are
- * unchanged). `handleFetch` rewrites SSR `/api/*` to the in-cluster gateway and is only wired for the
- * zones that read the lineage plane during SSR (`gateway: true`); the media zones reach their services
- * through their own BFF routes instead, so they leave it undefined.
+ * unchanged). `handleFetch` rewrites SSR `/api/*` onto the cluster edge (`RASK_EDGE_URL`, see
+ * `./edge`) and is wired for the zones that issue relative `/api/*` during SSR (`edge: true`); the
+ * media zones reach their services through their own BFF routes instead, so they leave it undefined.
  */
-export function makeZoneHooks(env: Env, opts: { gateway?: boolean; zone?: string } = {}) {
+export function makeZoneHooks(env: Env, opts: { edge?: boolean; zone?: string } = {}) {
 	// TELEMETRY FIRST IN THE SEQUENCE, so the span covers session resolution too — an OIDC lookup that
 	// hangs is exactly the kind of slow request this exists to explain, and a span opened after it would
 	// measure everything except the part that was slow.
@@ -350,9 +349,7 @@ export function makeZoneHooks(env: Env, opts: { gateway?: boolean; zone?: string
 		handle: telemetryOn
 			? sequence(makeTelemetryHandle(opts.zone ?? env.OTEL_SERVICE_NAME ?? 'zone'), session)
 			: session,
-		handleFetch: opts.gateway
-			? makeGatewayHandleFetch(env.LANCE_GATEWAY_URL ?? DEFAULT_GATEWAY_URL)
-			: undefined,
+		handleFetch: opts.edge ? makeEdgeHandleFetch(edgeUrl(env)) : undefined,
 	};
 }
 

@@ -1,0 +1,64 @@
+{{- if .Values.route.enabled }}
+{{- $root := . -}}
+{{- if not .Values.route.parentRefs }}{{ fail "route.parentRefs must name the Gateway the routes attach to: the platform's in production, Traefik's `traefik-gateway` in kube-system on k3s" }}{{ end }}
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ include "rask.fullname" . }}-api
+  labels:
+    {{- include "rask.labels" . | nindent 4 }}
+spec:
+  parentRefs:
+    {{- toYaml .Values.route.parentRefs | nindent 4 }}
+  {{- with .Values.route.hostnames }}
+  hostnames:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    {{- range $row := include "rask.apiRoutes" . | fromJsonArray }}
+    - matches:
+        - path: { type: PathPrefix, value: {{ $row.prefix | quote }} }
+      {{- with $row.rewrite }}
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            path: { type: ReplacePrefixMatch, replacePrefixMatch: {{ . | quote }} }
+      {{- end }}
+      backendRefs:
+        - name: {{ $row.service }}
+          port: {{ $row.port }}
+    {{- end }}
+{{- if or .Values.frontend.enabled .Values.auth.enabled }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ include "rask.fullname" . }}-web
+  labels:
+    {{- include "rask.labels" . | nindent 4 }}
+spec:
+  parentRefs:
+    {{- toYaml .Values.route.parentRefs | nindent 4 }}
+  {{- with .Values.route.hostnames }}
+  hostnames:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    {{- if .Values.frontend.enabled }}
+    {{- range .Values.frontend.apps }}
+    - matches:
+        - path: { type: PathPrefix, value: {{ if .catchAll }}"/"{{ else }}{{ required (printf "frontend.apps entry %q needs a `path` (its svelte.config.js paths.base) unless it is the catchAll zone" .name) .path | quote }}{{ end }} }
+      backendRefs:
+        - name: {{ include "rask.fullname" $root }}-web-{{ .name }}
+          port: {{ $root.Values.frontend.service.port }}
+    {{- end }}
+    {{- end }}
+    {{- if .Values.auth.enabled }}
+    - matches:
+        - path: { type: PathPrefix, value: /dex }
+      backendRefs:
+        - name: {{ include "lance.dexHost" $root }}
+          port: 5556
+    {{- end }}
+{{- end }}
+{{- end }}

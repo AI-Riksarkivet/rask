@@ -1,5 +1,6 @@
 import { command, getRequestEvent, query } from '$app/server';
 import { env } from '$env/dynamic/private';
+import { edgeUrl } from '@rask/api';
 import {
 	dismissNotification,
 	INBOX_PAGE_LIMIT_MAX,
@@ -21,11 +22,12 @@ import * as v from 'valibot';
  * reachable from the browser, why the base is absolute) lives once in
  * `microfrontends/home/src/lib/live/inbox.remote.ts`; this is the same four functions for `explorer`.
  *
- * The base reads `RASK_GATEWAY_URL` and is ABSOLUTE on purpose: this zone runs no `/api` dev proxy
- * (`vite.config.ts`) — `${base}/api/*` is its OWN BFF route tree, which serves the three lance-media
- * doors and nothing else — so a relative `/api/notifications/*` 404s against this app itself.
+ * The base is the edge's `/api/notifications` route (`RASK_EDGE_URL`) and is ABSOLUTE on purpose:
+ * this zone wires no SSR edge rewrite and runs no `/api` dev proxy (`vite.config.ts`) —
+ * `${base}/api/*` is its OWN BFF route tree, which serves the three lance-media doors and nothing
+ * else — so a relative `/api/notifications/*` 404s against this app itself.
  */
-const NOTIFICATIONS_API = `${(env.RASK_GATEWAY_URL ?? 'http://localhost:8888').replace(/\/$/, '')}/api/notifications`;
+const NOTIFICATIONS_API = `${edgeUrl(env)}/api/notifications`;
 
 /** This request's inbox call: the event's fetch and the signed-in bearer, which only exist inside
  *  an app, plus the env-resolved base. */

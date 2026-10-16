@@ -27,16 +27,14 @@ class of run.
 new" would mean replaying the retained feed into people's inboxes on the day the service is deployed
 — the same failure `deliverPolicy: new` exists to prevent on the bus, arriving by the other door.
 
-**THE RETRY IS THE SIDECAR'S, NOT THIS MODULE'S.** It used to be tenacity's, on the argument that this
-is the service's own egress and "no sidecar policy covers it" — true only because the feed was read
-over a DIRECT httpx call, and nothing recorded why it had to be. Read through Dapr service invocation
-(`IngressSettings.feed_base_url`), the estate's existing `invokeRetry` policy covers it, and that
-policy already encodes the rule the hand-written `_is_transient` did: `408,429,500-599`, never a 4xx,
-for the reason its own comment gives — "Retrying a 403 is also pointless on its own terms: the answer
-will not change." `lineage` is already one of that policy's targets.
+**THE RETRY IS THE SIDECAR'S, NOT THIS MODULE'S.** The feed is read through Dapr service invocation
+(`IngressSettings.feed_base_url`), and the chart's `<release>-invocation-resiliency`, scoped to
+`notifications`, retries that hop with `invokeRetry`: `408,429,500-599`, never a 4xx, because a 403's
+answer will not change. A pass that still fails is re-walked by the next cron tick from the same mark,
+because the cursor advances only on a pass that completes.
 
-So this module now carries NO retry of its own, which is the same rule the subscription handler always
-had: one layer owns redelivery, and a second would multiply it.
+So this module carries NO retry of its own, which is the same rule the subscription handler has: one
+layer owns redelivery, and a second would multiply it.
 """
 
 import asyncio

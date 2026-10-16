@@ -7,10 +7,11 @@ graph (security audit, prod-blocker). When the pod is annotated ``dapr.io/app-to
 injects ``APP_API_TOKEN`` into the app **and** adds a ``dapr-api-token`` header to every request it
 delivers. This dependency rejects any delivery whose header doesn't match.
 
-Defense-in-depth (the token is one layer): the gateway **blocks** these routes from external traffic, and
-the route is only registered when Dapr is enabled. The ``pubsub.jetstream`` component's ``scopes`` decide
-which app-ids' sidecars load it, which is not who may publish: every scoped app can publish every topic on
-it, and a client that reaches the broker directly needs no sidecar. So the token authenticates the sidecar
+The token is sufficient against a public caller because no public path rides a sidecar: the cluster's
+Gateway routes each `/api/*` prefix to the app's own port (ADR 0165), so a request from outside the
+cluster never carries a sidecar's ``dapr-api-token``, and the route is only registered when Dapr is enabled.
+The ``pubsub.jetstream`` component's ``scopes`` decide which app-ids' sidecars load it, which is not who may
+publish: every scoped app can publish every topic on it, and a client that reaches the broker directly needs no sidecar. So the token authenticates the sidecar
 that delivered an event and nothing about who wrote it; a door that acts on what an event claims verifies
 the producer's signature (``lineage_kit.signing``).
 
@@ -34,19 +35,6 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from starlette.responses import Response
 
 
-#: Dapr app-ids whose invocations may NEVER take a service-token path — the PUBLIC front doors.
-#:
-#: A MEASURED bypass, not a hypothetical. ``dapr.io/app-token-secret`` makes daprd stamp
-#: ``dapr-api-token`` on every request it hands the app, and the gateway forwards ``/api/*`` through
-#: DAPR SERVICE INVOCATION. So an anonymous public request arrives at a backend already holding a
-#: valid service token. Measured against the ingest door: 403 straight to the pod, 403 via Service
-#: DNS, **202 through the gateway** — and a browser with no login started a real data-writing run.
-#:
-#: The token proves "arrived through Dapr", never "the caller is a trusted service". The gateway IS a
-#: trusted service; it is just invoking on behalf of someone who is not.
-_DEFAULT_PUBLIC_CALLERS = "gateway"
-
-
 log = logging.getLogger(__name__)
 
 
@@ -66,8 +54,8 @@ class DaprDoorSettings(BaseSettings):
     """
 
     # NO `populate_by_name`, deliberately. It would teach the env source a SECOND lookup name per
-    # field — the bare one — so `public_callers` would answer to `$PUBLIC_CALLERS` as well as the
-    # `RASK_PUBLIC_CALLERS` it declares, which is precisely what
+    # field — the bare one — so `app_token_field` would answer to `$APP_TOKEN_FIELD` as well as the
+    # `RASK_APP_TOKEN_FIELD` it declares, which is precisely what
     # `tests/unit/test_settings_env_namespace.py` exists to refuse. Nothing constructs this by field
     # name, so the convenience it buys is unused here.
     model_config = SettingsConfigDict(extra="ignore")
@@ -110,35 +98,6 @@ class DaprDoorSettings(BaseSettings):
     #: is spelled (`catalog-s3-secret-key`, `dapr-app-token`) — an underscore here would read
     #: as an env var, which is the one thing this value must never be.
     app_token_field: str = Field(default="dapr-app-token", alias="RASK_APP_TOKEN_FIELD")
-
-    #: The public front-door app-ids (comma-separated). ONE list for the whole estate — a per-service
-    #: setting would let one deployment forget an edge the others know about, and the set is a
-    #: property of the topology rather than of any single service.
-    public_callers: str = Field(default=_DEFAULT_PUBLIC_CALLERS, alias="RASK_PUBLIC_CALLERS")
-
-
-def public_callers() -> frozenset[str]:
-    """The configured public front-door app-ids, lower-cased — ONE list for the whole estate."""
-    return frozenset(caller.strip().lower() for caller in DaprDoorSettings().public_callers.split(",") if caller.strip())
-
-
-def is_public_caller(caller: str | None) -> bool:
-    """True when the invocation came through a front door that faces the public internet.
-
-    An ABSENT header is NOT public, and that is load-bearing rather than lenient: pub/sub delivery,
-    input-binding delivery and a direct Service-DNS call all arrive with no ``dapr-caller-app-id``,
-    and those are exactly the legitimate paths onto every route this module guards. Treating absence
-    as public would break the whole cascade while closing nothing.
-
-    Soundness depends on a client being unable to SET the header. daprd APPENDS its stamp rather than
-    replacing a client's, and FastAPI binds the FIRST occurrence, so a forged value wins — measured:
-    ``dapr-caller-app-id: medallion`` through the public gateway got a 202 out of a door that had
-    already been fixed. The gateway strips these from every inbound request (``_CLIENT_SPOOFABLE``);
-    that strip is what makes this check mean anything.
-    """
-    if not caller:
-        return False
-    return caller.strip().lower() in public_callers()
 
 
 def expected_app_token() -> str | None:
@@ -213,14 +172,12 @@ def refuse_unconfigured_door(*, caller: str | None = None) -> None:
 
 def require_dapr_token(
     dapr_api_token: Annotated[str | None, Header()] = None,
-    # The INVOKING Dapr app-id. Every route guarded by this dependency is delivered by the app's OWN
-    # sidecar — a pub/sub subscription or an input binding — so a SERVICE-INVOCATION caller is already
-    # anomalous, and a PUBLIC front door invoking one is the measured bypass.
+    # The INVOKING Dapr app-id, logged when an unconfigured door admits: every route guarded by this
+    # dependency is delivered by the app's OWN sidecar, so a service-invocation caller is anomalous.
     dapr_caller_app_id: Annotated[str | None, Header()] = None,
 ) -> None:
     """FastAPI dependency: reject a sidecar-delivered request whose ``dapr-api-token`` header doesn't
-    match the app's ``APP_API_TOKEN`` (set by Dapr from ``dapr.io/app-token-secret``), and reject ANY
-    invocation that arrived through a public front door.
+    match the app's ``APP_API_TOKEN`` (set by Dapr from ``dapr.io/app-token-secret``).
 
     An UNSET ``APP_API_TOKEN`` is a refusal, not a skip: the door cannot authenticate anybody, so it
     admits nobody. ``RASK_ALLOW_UNAUTHENTICATED_DAPR`` reopens it for a deployment that means to run
@@ -228,13 +185,6 @@ def require_dapr_token(
     startup error beats a per-request 403 — but only the six services that CALL it get that, which is
     why this door carries the check as well rather than relying on it.
 
-    The public-caller refusal is deliberately NOT conditional on the token. These routes are
-    sidecar-delivery-only by construction, so a front-door invocation of one is never legitimate in
-    any environment — including a deployment that has taken the unauthenticated hatch.
-
-    Threading the caller costs nothing at the call sites: this is consumed exclusively as
-    ``Depends(...)``, so FastAPI resolves the new header itself and every door it guards is fixed
-    without touching a single endpoint signature.
     """
     # A DOMAIN ERROR, not `HTTPException`, so the refusal wears the same RFC 9457 envelope as every
     # other error in these services. The bare form was mapped by NO app, so this one 403 arrived as
@@ -245,8 +195,6 @@ def require_dapr_token(
     # The four lance apps install `install_problem_handlers` ONLY, so a fleet `DomainError` would fall
     # to the catch-all and answer 500 there. A `LanceNamespaceError` is mapped by both — the lance apps
     # directly, the fleet apps since `make_service_app` began installing the same translator.
-    if is_public_caller(dapr_caller_app_id):
-        raise PermissionDeniedError(f"{dapr_caller_app_id!r} is a public front door: its Dapr app-token authenticates the proxy, not the caller")
     try:
         expected = expected_app_token()
     except SecretStoreUnreadable as outage:
@@ -348,9 +296,8 @@ def guard_actor_routes(app: FastAPI) -> None:
     author facets or a project listing — it was never meant to carry access control.
 
     `require_dapr_token` is the right door rather than a stand-in: these paths are BY CONSTRUCTION
-    sidecar-delivered — daprd calls them back presenting `dapr-api-token` — and the same dependency
-    refuses a public front door outright even where the token check has been waived. It proves
-    "arrived via Dapr", never "trusted caller".
+    sidecar-delivered — daprd calls them back presenting `dapr-api-token`. It proves "arrived via
+    Dapr", never "trusted caller".
 
     A middleware rather than a router dependency because the SDK adds these routes to the app itself:
     there is no `include_router` call to hang `dependencies=` on, and rewriting a mounted route's

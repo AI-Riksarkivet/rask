@@ -80,8 +80,9 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=10s \
   CMD python -c "import socket,sys; s=socket.socket(); s.settimeout(2); s.connect(('127.0.0.1',8840))" || exit 1
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
-# This service sits behind the FastAPI gateway (services/gateway); --forwarded-allow-ips
-# MUST be the gateway's CIDR at deploy time, never '*' (header-spoofing risk).
+# This service sits behind the platform Gateway's data plane (the cluster route); --forwarded-allow-ips
+# MUST be that data plane's pod CIDR at deploy time, never '*' (header-spoofing risk). The chart
+# overrides these args with `rask.proxyHeaderArgs` from `forwardedAllowIps`.
 # --workers intentionally unset: the run store is a process-local dict (v0), so a second worker
 # would serve GET /flows/runs/{id} from a process that never saw the run — a 404 half the time.
 CMD ["uvicorn", "flows:app", \

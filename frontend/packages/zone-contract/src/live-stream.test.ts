@@ -4,35 +4,24 @@ import { describe, expect, it } from 'vitest';
 import { REPO_ROOT } from './manifest';
 
 /**
- * A live query has to survive TWO idle timeouts, and the estate configures both in the same chart.
+ * A live query has to survive the zone server's idle timeout, which the chart configures.
  *
  * `query.live` is a server-side generator that yields only when its data changes — the correct
  * discipline, and the one that makes the connection look dead to every hop in front of it. SvelteKit's
  * SSE transport sends no keepalive of its own (kit 2.70.1 `runtime/server/remote.js` has exactly one
- * `controller.enqueue`, the payload), so nothing refreshes those clocks from the application side.
- *
- * Both hops were wrong, and only one was suspected. ingress-nginx defaults `proxy_read_timeout` to 60s,
- * and `svelte-adapter-bun` defaults Bun's `idleTimeout` to 10s — so on kind the streams were dying every
- * ~12s with "upstream prematurely closed connection" in the nginx log while the annotation everyone was
- * looking at said 3600. Raising one without the other buys nothing: the smaller wins.
- *
- * This gate is why the numbers cannot drift apart again. It reads the chart, not a comment.
+ * `controller.enqueue`, the payload), so nothing refreshes that clock from the application side.
+ * `svelte-adapter-bun` defaults Bun's `idleTimeout` to 10s, which severed every stream every ~12s. The
+ * edge's own idle limit is the platform Gateway's policy (chart/values.yaml `route:`, ADR 0165).
  */
 
-const NGINX_DEFAULT_READ_TIMEOUT_S = 60;
+/** The shortest idle limit a common proxy defaults to (ingress-nginx's `proxy_read_timeout`). */
+const PROXY_DEFAULT_READ_TIMEOUT_S = 60;
 const values = readFileSync(resolve(REPO_ROOT, 'chart/values.yaml'), 'utf8');
 const helpers = readFileSync(resolve(REPO_ROOT, 'chart/templates/_helpers.tpl'), 'utf8');
 
-const proxyReadTimeout = Number(
-	/nginx\.ingress\.kubernetes\.io\/proxy-read-timeout:\s*"?(\d+)"?/.exec(values)?.[1],
-);
 const idleTimeout = Number(/idleTimeoutSeconds:\s*(\d+)/.exec(values)?.[1]);
 
-describe('a live query survives both idle timeouts', () => {
-	it('the Ingress overrides nginx’s 60s proxy-read-timeout', () => {
-		expect(proxyReadTimeout).toBeGreaterThan(NGINX_DEFAULT_READ_TIMEOUT_S);
-	});
-
+describe('a live query survives the zone server’s idle timeout', () => {
 	/**
 	 * `0` means DISABLED, and disabled is the strongest setting rather than the weakest — which is the
 	 * opposite of what this gate first assumed. It asserted `> 60` on the raw number, so switching to 0
@@ -41,22 +30,14 @@ describe('a live query survives both idle timeouts', () => {
 	 *
 	 * The real hazard is a SMALL POSITIVE value: the adapter's own default is 10, which severed every live
 	 * subscription every ~12s and made `query.live` more expensive than the `setInterval` it replaced. So
-	 * the rule is: 0, or comfortably above nginx's default.
+	 * the rule is: 0, or comfortably above a proxy's common default.
 	 */
 	const disabled = idleTimeout === 0;
 
 	it('the zone server overrides the adapter’s 10s idle timeout', () => {
 		// The env name is the adapter's, not ours: `parseInt(env("IDLE_TIMEOUT", "10"), 10)`.
 		expect(helpers).toContain('name: IDLE_TIMEOUT');
-		expect(disabled || idleTimeout > NGINX_DEFAULT_READ_TIMEOUT_S).toBe(true);
-	});
-
-	it('the zone server’s timeout is not the binding constraint', () => {
-		// The proxy may hold longer than the origin only if the origin is not the one cutting first.
-		// Whichever is smaller is the real lifetime of every live subscription in the estate — unless the
-		// origin has no limit at all, in which case the proxy is the only clock.
-		const binding = disabled ? proxyReadTimeout : Math.min(proxyReadTimeout, idleTimeout);
-		expect(binding).toBeGreaterThan(NGINX_DEFAULT_READ_TIMEOUT_S);
+		expect(disabled || idleTimeout > PROXY_DEFAULT_READ_TIMEOUT_S).toBe(true);
 	});
 
 	it('the helper does not run IDLE_TIMEOUT through Helm’s `default`', () => {

@@ -779,7 +779,7 @@ async def proxy(
     # THE PREFIX IS THE CONTRACT, AND A DOT-SEGMENT LEAVES IT. This seam forwards `path` under
     # `dashboard_url`, and the HTTP client resolves `..` against the dashboard ORIGIN — so
     # `api/serve/../v0/logs/file/` is a request for `/api/v0/logs/file/`, i.e. any GET the dashboard
-    # serves. The public gateway collapses dot-segments before routing, but a caller on the service
+    # serves. A public edge may collapse dot-segments before routing, but a caller on the service
     # port is not behind it, and a PERCENT-ENCODED `%2e%2e` arrives at a `{path:path}` handler
     # already decoded (measured 2026-09-02 through the compute app: it was forwarded as written
     # above). Refused here, where the URL is built, so every consumer inherits it; an empty segment

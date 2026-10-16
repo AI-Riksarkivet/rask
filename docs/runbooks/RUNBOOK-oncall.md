@@ -11,7 +11,7 @@ these are found by watching the Perses dashboards (`make dashboards`) or a user 
 - **Services** (FastAPI): `catalog` (REST catalog, tier governance and the model registry), `lineage`
   (OpenLineage intake into the commit feed and edge list, Lance tables in the catalog's `provenance` namespace;
   the durable `GET /events` log; the relay tick that drains the outbox and forwards to the graph backend), `maintenance` (planner + worker),
-  `notifications`, `flows`, `gateway`, and the zones (`web-<zone>`). The lakehouse runs no stage and no pipeline: moving data
+  `notifications`, `flows`, and the zones (`web-<zone>`); public `/api/*` reaches them through the platform's Gateway on the chart's HTTPRoutes. The lakehouse runs no stage and no pipeline: moving data
   between tiers is the user's job on their own compute ([ADR 0155](../adr/0155-the-medallion-is-tier-governance-in-the-catalog.md)).
 - **Stores**: `age-postgres` (OpenFGA's datastore **AND** the Dapr state store — one pod, dual-purpose),
   the object store (MinIO in development: every Lance table, lineage's provenance tables included, and the registries), `openfga` (authz), `openbao` (secrets,

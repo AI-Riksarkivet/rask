@@ -2,7 +2,7 @@
 
 ``POST /flows/runs`` executes a graph whose model nodes invoke LIVE Ray Serve endpoints — it spends
 the estate's GPU compute on whatever the caller drew. It shipped ungated, which was the documented
-"localhost / trusted network" posture and stopped being defensible the moment the gateway carried
+"localhost / trusted network" posture and stopped being defensible the moment the edge carried
 ``/api/flows`` to a browser.
 
 **``/catalog`` and ``/validate`` are gated too, since 2026-08-26, and this docstring used to say the

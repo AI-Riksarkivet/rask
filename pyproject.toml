@@ -252,7 +252,6 @@ known-first-party = [
     "catalog",
     "compute",
     "flows",
-    "gateway",
     "lineage",
     "lineage_kit",
     "maintenance",
@@ -325,7 +324,7 @@ markers = [
     "chaos: pull-a-service resilience e2e — SCALES a deployment, so it is out of e2e-ci",
     "compaction: compaction/GC sweep e2e",
     "spec_conformance: the STOCK lance_namespace client driven against a live catalog (needs LANCE_E2E_CATALOG_URL)",
-    "gateway: Dapr service-invocation gateway e2e",
+    "edge: each public /api prefix reaches its service through the cluster Gateway and is refused there anonymously (needs RASK_E2E_EDGE_URL)",
     "media_catalog: annotator/catalog live-mode e2e",
     "nats_auth: operator-mode NATS admits each bus client only to its own subjects (run by `dagger call nats-auth`, which provides the broker, nsc and daprd)",
     "observability: observability (OTLP/Greptime) e2e",
@@ -344,11 +343,9 @@ branch = true
 # all 545 tracked `src/**/*.py` files and no other file, and a new member joins the denominator with no
 # edit here.
 source = ["services", "packages"]
-# `**/__init__.py` was here for empty package markers and deleted 409 statements of real
-# implementation across 69 files — including the ENTIRE gateway service, whose route table,
-# `_CLIENT_SPOOFABLE` header strip and proxy all live in `__init__.py`. Measured: the estate's front
-# door was absent from its own coverage report even when running its own tests; with this row narrowed
-# it reports 140 statements at 83%. An empty marker contributes 0 statements and costs nothing.
+# `**/__init__.py` is not omitted: several members keep real implementation in `__init__.py` (an app
+# factory, a route table), and omitting the marker files deleted 409 statements across 69 files from
+# the report. An empty marker contributes 0 statements and costs nothing.
 omit = ["**/tests/*"]
 
 [tool.coverage.report]

@@ -9424,9 +9424,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -9462,9 +9460,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -9500,9 +9496,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -9538,9 +9532,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -9576,9 +9568,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -9610,9 +9600,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -9657,9 +9645,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -9691,9 +9677,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -9729,9 +9713,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -9767,9 +9749,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -9807,9 +9787,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -9843,9 +9821,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -9886,9 +9862,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -9922,9 +9896,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -9959,9 +9931,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -9993,9 +9963,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -10030,9 +9998,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -10064,9 +10030,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 model: string;
             };
@@ -10102,7 +10066,6 @@ export interface operations {
             };
             header?: {
                 authorization?: string | null;
-                "dapr-caller-app-id"?: string | null;
                 "x-lance-originator"?: string | null;
             };
             path: {
@@ -10142,9 +10105,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -10182,9 +10143,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -10222,9 +10181,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -10258,9 +10215,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -10294,9 +10249,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -10330,9 +10283,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -10370,9 +10321,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -10406,9 +10355,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -10446,9 +10393,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -10482,9 +10427,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -10518,9 +10461,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -10558,9 +10499,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -10594,9 +10533,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -10634,9 +10571,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -10672,7 +10607,6 @@ export interface operations {
             };
             header?: {
                 authorization?: string | null;
-                "dapr-caller-app-id"?: string | null;
                 "x-lance-originator"?: string | null;
             };
             path: {
@@ -10708,9 +10642,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -10746,9 +10678,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -10782,9 +10712,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -10822,9 +10750,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -10858,9 +10784,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -10894,9 +10818,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -10934,9 +10856,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -10968,9 +10888,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -11006,9 +10924,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -11042,9 +10958,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -11078,9 +10992,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 project_id: string;
             };
@@ -11115,9 +11027,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 project_id: string;
             };
@@ -11151,9 +11061,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 project_id: string;
             };
@@ -11187,9 +11095,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 project_id: string;
             };
@@ -11227,9 +11133,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 project_id: string;
             };
@@ -11270,9 +11174,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -11304,9 +11206,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -11338,9 +11238,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -11376,9 +11274,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -11412,9 +11308,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -11452,9 +11346,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -11492,9 +11384,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -11528,9 +11418,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -11564,9 +11452,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -11600,9 +11486,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -11646,7 +11530,6 @@ export interface operations {
             header?: {
                 Range?: string | null;
                 "If-Range"?: string | null;
-                "dapr-caller-app-id"?: string | null;
             };
             path: {
                 id: string;
@@ -11681,9 +11564,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -11725,9 +11606,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -11763,9 +11642,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -11803,9 +11680,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
                 obligation_id: string;
@@ -11845,9 +11720,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -11885,9 +11758,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -11927,9 +11798,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -11967,9 +11836,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -12003,9 +11870,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -12039,9 +11904,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -12081,7 +11944,6 @@ export interface operations {
             };
             header?: {
                 authorization?: string | null;
-                "dapr-caller-app-id"?: string | null;
                 "x-lance-originator"?: string | null;
             };
             path: {
@@ -12123,7 +11985,6 @@ export interface operations {
             };
             header?: {
                 authorization?: string | null;
-                "dapr-caller-app-id"?: string | null;
                 "x-lance-originator"?: string | null;
             };
             path: {
@@ -12163,9 +12024,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -12199,9 +12058,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -12241,7 +12098,6 @@ export interface operations {
             };
             header?: {
                 authorization?: string | null;
-                "dapr-caller-app-id"?: string | null;
                 "x-lance-originator"?: string | null;
             };
             path: {
@@ -12281,9 +12137,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -12319,7 +12173,6 @@ export interface operations {
             };
             header?: {
                 authorization?: string | null;
-                "dapr-caller-app-id"?: string | null;
                 "x-lance-originator"?: string | null;
             };
             path: {
@@ -12355,9 +12208,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -12389,9 +12240,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -12427,9 +12276,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -12459,9 +12306,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -12493,9 +12338,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -12531,9 +12374,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -12563,9 +12404,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -12597,9 +12436,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -12635,9 +12472,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -12667,9 +12502,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -12701,9 +12534,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -12739,9 +12570,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -12771,9 +12600,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -12807,9 +12634,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -12843,9 +12668,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -12883,9 +12706,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -12917,9 +12738,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -12955,9 +12774,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -12989,9 +12806,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 warehouse_id: string;
             };
@@ -13030,7 +12845,6 @@ export interface operations {
             };
             header?: {
                 authorization?: string | null;
-                "dapr-caller-app-id"?: string | null;
                 "x-lance-originator"?: string | null;
             };
             path: {
@@ -13066,9 +12880,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 warehouse_id: string;
             };
@@ -13102,9 +12914,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 warehouse_id: string;
             };
@@ -13138,9 +12948,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 warehouse_id: string;
             };
@@ -13174,9 +12982,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 warehouse_id: string;
             };
@@ -13214,9 +13020,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 warehouse_id: string;
                 top_ns: string;
@@ -13251,9 +13055,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 warehouse_id: string;
             };
@@ -13307,9 +13109,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -13347,9 +13147,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -13387,9 +13185,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -13427,9 +13223,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -13469,7 +13263,6 @@ export interface operations {
             };
             header?: {
                 authorization?: string | null;
-                "dapr-caller-app-id"?: string | null;
                 "x-lance-originator"?: string | null;
             };
             path: {
@@ -13509,9 +13302,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -13549,9 +13340,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -13588,9 +13377,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -13627,9 +13414,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -13661,9 +13446,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -13699,9 +13482,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -13739,7 +13520,6 @@ export interface operations {
             };
             header?: {
                 authorization?: string | null;
-                "dapr-caller-app-id"?: string | null;
                 "x-lance-originator"?: string | null;
             };
             path: {
@@ -13781,7 +13561,6 @@ export interface operations {
             };
             header?: {
                 authorization?: string | null;
-                "dapr-caller-app-id"?: string | null;
                 "x-lance-originator"?: string | null;
             };
             path: {
@@ -13821,9 +13600,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -13861,9 +13638,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -13901,9 +13676,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -13941,9 +13714,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -13983,9 +13754,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -14019,9 +13788,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -14059,9 +13826,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -14104,7 +13869,6 @@ export interface operations {
             header?: {
                 authorization?: string | null;
                 "Idempotency-Key"?: string | null;
-                "dapr-caller-app-id"?: string | null;
                 "x-lance-originator"?: string | null;
             };
             path: {
@@ -14144,9 +13908,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -14184,9 +13946,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -14226,7 +13986,6 @@ export interface operations {
             };
             header?: {
                 authorization?: string | null;
-                "dapr-caller-app-id"?: string | null;
                 "x-lance-originator"?: string | null;
             };
             path: {
@@ -14268,7 +14027,6 @@ export interface operations {
             };
             header?: {
                 authorization?: string | null;
-                "dapr-caller-app-id"?: string | null;
                 "x-lance-originator"?: string | null;
             };
             path: {
@@ -14311,7 +14069,6 @@ export interface operations {
             header?: {
                 authorization?: string | null;
                 "Idempotency-Key"?: string | null;
-                "dapr-caller-app-id"?: string | null;
                 "x-lance-originator"?: string | null;
             };
             path: {
@@ -14359,9 +14116,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -14402,7 +14157,6 @@ export interface operations {
             header?: {
                 authorization?: string | null;
                 "Idempotency-Key"?: string | null;
-                "dapr-caller-app-id"?: string | null;
                 "x-lance-originator"?: string | null;
             };
             path: {
@@ -14440,7 +14194,6 @@ export interface operations {
             };
             header?: {
                 authorization?: string | null;
-                "dapr-caller-app-id"?: string | null;
                 "x-lance-originator"?: string | null;
             };
             path: {
@@ -14480,9 +14233,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -14518,9 +14269,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -14562,9 +14311,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -14606,7 +14353,6 @@ export interface operations {
             };
             header?: {
                 authorization?: string | null;
-                "dapr-caller-app-id"?: string | null;
                 "x-lance-originator"?: string | null;
             };
             path: {
@@ -14649,9 +14395,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
                 index_name: string;
@@ -14695,7 +14439,6 @@ export interface operations {
             };
             header?: {
                 authorization?: string | null;
-                "dapr-caller-app-id"?: string | null;
                 "x-lance-originator"?: string | null;
             };
             path: {
@@ -14747,7 +14490,6 @@ export interface operations {
             };
             header?: {
                 authorization?: string | null;
-                "dapr-caller-app-id"?: string | null;
                 "x-lance-originator"?: string | null;
             };
             path: {
@@ -14787,9 +14529,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -14830,7 +14570,6 @@ export interface operations {
             header?: {
                 authorization?: string | null;
                 "Idempotency-Key"?: string | null;
-                "dapr-caller-app-id"?: string | null;
                 "x-lance-originator"?: string | null;
             };
             path: {
@@ -14873,7 +14612,6 @@ export interface operations {
             header?: {
                 authorization?: string | null;
                 "Idempotency-Key"?: string | null;
-                "dapr-caller-app-id"?: string | null;
                 "x-lance-originator"?: string | null;
             };
             path: {
@@ -14916,7 +14654,6 @@ export interface operations {
             header?: {
                 authorization?: string | null;
                 "Idempotency-Key"?: string | null;
-                "dapr-caller-app-id"?: string | null;
                 "x-lance-originator"?: string | null;
             };
             path: {
@@ -14958,7 +14695,6 @@ export interface operations {
             };
             header?: {
                 authorization?: string | null;
-                "dapr-caller-app-id"?: string | null;
                 "x-lance-originator"?: string | null;
             };
             path: {
@@ -15002,9 +14738,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -15042,9 +14776,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -15082,9 +14814,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -15122,9 +14852,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -15158,9 +14886,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -15194,9 +14920,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -15234,9 +14958,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -15276,7 +14998,6 @@ export interface operations {
             };
             header?: {
                 authorization?: string | null;
-                "dapr-caller-app-id"?: string | null;
                 "x-lance-originator"?: string | null;
             };
             path: {
@@ -15318,7 +15039,6 @@ export interface operations {
             };
             header?: {
                 authorization?: string | null;
-                "dapr-caller-app-id"?: string | null;
                 "x-lance-originator"?: string | null;
             };
             path: {
@@ -15360,7 +15080,6 @@ export interface operations {
             };
             header?: {
                 authorization?: string | null;
-                "dapr-caller-app-id"?: string | null;
                 "x-lance-originator"?: string | null;
             };
             path: {
@@ -15400,9 +15119,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -15441,9 +15158,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -15486,9 +15201,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -15522,9 +15235,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -15562,9 +15273,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };

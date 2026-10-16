@@ -10,7 +10,7 @@ import { MOCK_OBS } from '../ports';
 // three states a validator actually meets are pinned here.
 //
 // SEEDED ON THE GATEWAY, not page.route: both the read and the decision are remote functions, so they
-// run on the zone SERVER where the browser cannot intercept them. RASK_GATEWAY_URL points at the
+// run on the zone SERVER where the browser cannot intercept them. RASK_EDGE_URL points at the
 // seed-driven mock (playwright.config.ts, auth-ON project) and the wire is asserted through its ledger.
 
 type Body = Record<string, unknown>;

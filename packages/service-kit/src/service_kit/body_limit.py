@@ -1,9 +1,8 @@
 """Request body-size limit — a pure-ASGI middleware that rejects oversized bodies with 413.
 
 MOVED HERE FROM `catalog/api/body_limit.py` (2026-08-26, owner ruling). It was written for the
-catalog and applied to the catalog alone, while five other apps built by `make_service_app` — the
-GATEWAY among them, which buffers every proxied body whole and is the one app published at the edge —
-got CORS + RequestID + Timing and no ceiling at all. `register_middleware` now installs it for every
+catalog and applied to the catalog alone, while the apps built by `make_service_app` got CORS +
+RequestID + Timing and no ceiling at all. `register_middleware` now installs it for every
 service, so one cannot be added without a cap and a new route cannot arrive uncapped.
 
 The shared default is a DoS CEILING, not a business rule: it exists to stop a multi-GB body reaching a
@@ -32,8 +31,8 @@ from service_kit.problem import problem_body
 #: `ErrorCode.INVALID_INPUT`, as the integer it already is on the wire (`ErrorCode` is an IntEnum).
 #:
 #: SPELLED AS A LITERAL because this middleware is registered for EVERY app `make_service_app` builds,
-#: including storeless ones like the gateway — importing the enum here is what made `import
-#: service_kit` require the `[governed]`/`[lakehouse]` extras and stopped the gateway image building.
+#: including storeless ones — importing the enum here would make `import service_kit` require the
+#: `[governed]`/`[lakehouse]` extras, and an image built without them fails `.docker/import-gate.py`.
 #: Deferring the import into the reject path would be worse, not better: it would turn a build-time
 #: failure into a request-time one, on the exact request that is already going wrong.
 #:

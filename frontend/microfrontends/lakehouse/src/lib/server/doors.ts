@@ -19,6 +19,7 @@ import { getRequestEvent } from '$app/server';
 import { env } from '$env/dynamic/private';
 import type * as v from 'valibot';
 import type { ApiResult } from '@rask/api/client';
+import { edgeUrl } from '@rask/api';
 import { parsed as sharedParsed, upstreamJSON } from '@rask/api/upstream';
 
 const CATALOG_API = env.CATALOG_API ?? 'http://localhost:2333';
@@ -26,14 +27,13 @@ const CATALOG_API = env.CATALOG_API ?? 'http://localhost:2333';
 /** The GATEWAY, absolute — never a relative `/api/…` from this zone.
  *
  * `vite.config.ts` proxies this zone's `/api` to `LANCE_BACKEND` (:8001, the LINEAGE service), so a
- * relative call from here reaches the wrong backend in dev and only works in prod because the chart
- * happens to aim both names at one Service. Server-side the hairpin rewrite exists too, but it keys
- * on `LANCE_GATEWAY_URL`. Naming `RASK_GATEWAY_URL` here is the one form that is right in both.
+ * relative call from here reaches the wrong backend in dev. Naming the edge (`RASK_EDGE_URL`) here
+ * is the one form that is right in dev and in cluster.
  *
  * Separate from `catalogJSON` because it is a different upstream with a different base — the
  * promotion doors are ROOT-mounted on the medallion producer and reached through the gateway's
  * `/api/promotions` row, not through the catalog. */
-const GATEWAY_API = env.RASK_GATEWAY_URL ?? 'http://localhost:8888';
+const GATEWAY_API = edgeUrl(env);
 
 /** One catalog call → `ApiResult<unknown>`; the signed-in session's bearer rides along. */
 export function catalogJSON(path: string, init?: RequestInit): Promise<ApiResult<unknown>> {

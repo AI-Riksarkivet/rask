@@ -138,8 +138,8 @@ Traced recursively over static imports, dynamic `import()` and `export … from`
 
 **Remote functions are per-app by construction.** SvelteKit hashes a remote function's endpoint id
 from its path *relative to the app*, so a package-shipped `.remote.ts` would be re-registered and
-re-served per zone — and would then execute under that zone's `handleFetch`, which for `lakehouse`
-defaults to `LANCE_GATEWAY_URL` (`:8001`) rather than the gateway. This is one of the two hard walls
+re-served per zone — and would then execute under the hosting zone's `handleFetch`, session and
+environment rather than those of the zone that owns the panel. This is one of the two hard walls
 that make build-time panel sharing lossy (the other is the context/store seam), and it is exactly
 the wall the web-components plan does not hit: a custom element ships with its OWN zone's build and
 keeps its zone's fetchers.

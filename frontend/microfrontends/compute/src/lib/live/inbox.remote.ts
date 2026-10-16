@@ -1,5 +1,6 @@
 import { command, getRequestEvent, query } from '$app/server';
 import { env } from '$env/dynamic/private';
+import { edgeUrl } from '@rask/api';
 import {
 	dismissNotification,
 	INBOX_PAGE_LIMIT_MAX,
@@ -25,11 +26,14 @@ import * as v from 'valibot';
  * authorship bound costs — lives once in `microfrontends/home/src/lib/live/inbox.remote.ts`.
  */
 
-/** ABSOLUTE, and reading `RASK_GATEWAY_URL` — the same variable this zone's `hooks.server.ts` uses
- *  for the Ray plane. A relative `/api/notifications` is not safe estate-wide: several zones proxy
- *  `/api` at `LANCE_GATEWAY_URL` (`:8001`, the lineage service), where it 404s. An absolute URL also
- *  passes the SSR gateway rewrite untouched, since that only rewrites this zone's own origin. */
-const NOTIFICATIONS_API = `${(env.RASK_GATEWAY_URL ?? 'http://localhost:8888').replace(/\/$/, '')}/api/notifications`;
+/**
+ * The edge's `/api/notifications` route, ABSOLUTE (`RASK_EDGE_URL`) — never a relative `/api/…`.
+ * The SSR rewrite that would carry a relative call to the edge is wired only in the zones that opt
+ * in (`makeZoneHooks(env, { edge: true })`), so a relative call is right in some zones and resolves
+ * against the zone's own origin in others; the absolute base is right wherever this file is copied,
+ * and passes that rewrite untouched, since it only rewrites requests to the zone's own origin.
+ */
+const NOTIFICATIONS_API = `${edgeUrl(env)}/api/notifications`;
 
 /** This request's inbox call: the event's fetch and the signed-in bearer, which only exist inside an
  *  app, plus the env-resolved base. */

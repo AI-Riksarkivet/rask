@@ -2,7 +2,8 @@
 # Minimal bootstrap for the local rask k3s stack: install k3s + helm and make
 # kubectl/helm usable without sudo. Idempotent; needs sudo.
 #
-# EVERYTHING ELSE comes up with `make k3s-up`: the development fixtures (deploy/fixtures,
+# It also switches on the development Gateway (k3s's Traefik, Gateway API provider). EVERYTHING ELSE comes up with
+# `make k3s-up`: the development fixtures (deploy/fixtures,
 # each its own release; the NVIDIA device plugin is one, for a GPU node), then the Helm
 # chart (chart/Chart.yaml dependencies + templates) with NATS, Dapr,
 # OpenFGA, Postgres, MinIO and the rask fleet. k3s and helm are the only bootstrap.
@@ -33,6 +34,10 @@ sudo k3s kubectl get nodes
 # Make kubectl/helm work without sudo for this user.
 export KUBECONFIG="$KUBECONFIG_PATH"
 sudo chmod 644 "$KUBECONFIG_PATH" || true
+
+# The development Gateway: k3s's Traefik with its Gateway API provider on (deploy/k3s/traefik-gateway.yaml). A file in
+# the server's manifests directory is applied by k3s at every start, so the setting outlives a k3s upgrade.
+sudo install -m 0644 "$(dirname "$0")/../deploy/k3s/traefik-gateway.yaml" /var/lib/rancher/k3s/server/manifests/traefik-gateway.yaml
 
 echo ">> [2/2] helm"
 if ! command -v helm >/dev/null 2>&1; then

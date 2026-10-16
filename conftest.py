@@ -10,11 +10,10 @@ exporter aimed at Dagger's collector, which rejects application metrics (`unknow
 pb`, in the engine's own log), and the SDK then retried with exponential backoff. Every app any test
 built paid for it.
 
-`service_kit.setup_otel` has since been fixed so an explicit `Settings` decides. But the fallback it
-keeps is legitimate and load-bearing — `services/gateway` calls `setup_otel(app, service_name=...)`
-with no `Settings` at all, at MODULE scope, and opts in through the endpoint alone. So merely
-importing the gateway inside a telemetry-injecting harness still starts an exporter. The service is
-right; the environment is what is wrong, and it is wrong for the whole session.
+`service_kit.setup_otel` decides from `Settings` alone, so no rask app opts in through the endpoint.
+The strip stays because the variable is still the HARNESS's, not the suite's: any library that
+configures an exporter from `OTEL_EXPORTER_OTLP_*` at import would aim it at Dagger's collector, and
+the environment is wrong for the whole session.
 
 Hence: strip the ambient OTLP variables ONCE, for the session, before anything imports. This is the
 same instinct as the config-isolation fixtures the per-directory conftests already use ("`create_app`
@@ -71,12 +70,12 @@ def _strip_harness_otlp() -> None:
 # The first version of this file did the strip in the session fixture below and nowhere else, which
 # does not work for the case it was written for. pytest's order is: load the rootdir conftest →
 # COLLECT (which IMPORTS every test module) → run the first test (which is when a session-scoped
-# autouse fixture finally executes). The damage this guards against is done at IMPORT: `services/gateway`
-# calls `setup_otel(app, service_name=...)` at MODULE scope with no `Settings`, so the exporter is
-# already wired by the time any fixture runs, and stripping the variable afterwards cannot un-wire it.
+# autouse fixture finally executes). The damage this guards against is done at IMPORT: a module that
+# wires an exporter at module scope has read the environment by the time any fixture runs, and
+# stripping the variable afterwards cannot un-wire it.
 #
-# Measured, not reasoned: with the strip in the fixture alone, a module importing the gateway under an
-# injected `OTEL_EXPORTER_OTLP_ENDPOINT` still saw the variable set at module scope. Moved here, it
+# Measured, not reasoned: with the strip in the fixture alone, a module collected under an injected
+# `OTEL_EXPORTER_OTLP_ENDPOINT` still saw the variable set at module scope. Moved here, it
 # sees `None`. A conftest at the rootdir is imported before collection begins, which is early enough.
 _strip_harness_otlp()
 

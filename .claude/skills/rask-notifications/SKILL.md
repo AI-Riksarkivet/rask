@@ -279,8 +279,9 @@ chart's bootstrap hook grants it as `event_reader` on `estate:rask`. Not the gov
 shows a service only the tables its grants reach, so every tenant warehouse's runs would be invisible to
 the lane and the tick would still log success. Each row carries only the targeting view (run id, state,
 time, the `author` and `lance` facets, output names), because addressing people needs nothing more. A
-deployment that forgets the grant gets a 403 on every tick, and no retry helps — the estate's
-`invokeRetry` never retries a 4xx, because a 403's answer will not change. Delivery needs
+deployment that forgets the grant gets a 403 on every tick, and no retry helps — the sidecar's
+`invokeRetry` (`<release>-invocation-resiliency`, scoped to `notifications`, targeting `lineage`) retries
+`408,429,500-599` and never a 4xx, because a 403's answer will not change. Delivery needs
 `can_be_notified` and render needs `can_get_metadata` on `table:<output name>` per recipient; an FGA
 outage is fail-closed (RETRY), never a delivery.
 

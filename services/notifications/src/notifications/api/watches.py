@@ -32,10 +32,10 @@ from service_kit.exceptions import ForbiddenError
 
 log = logging.getLogger(__name__)
 
-# `/notifications/watches`, NOT `/watches`. The gateway forwards `{prefix}/notifications` UNREWRITTEN
-# (services/gateway), so a router mounted one segment short is served by the app and unreachable through
-# the front door — a 404 that looks like a missing feature while the route exists and answers locally.
-# Found by driving the real service and reading its own openapi against the gateway's route table.
+# `/notifications/watches`, NOT `/watches`. The cluster route forwards `{prefix}/notifications` UNREWRITTEN
+# (`rask.apiRoutes`), so a router mounted one segment short is served by the app and unreachable through
+# the edge — a 404 that looks like a missing feature while the route exists and answers locally.
+# Found by driving the real service and reading its own openapi against the route table.
 router = APIRouter(prefix="/notifications/watches", tags=["watches"])
 
 #: The relation a watch requires, on `project:<id>`. Membership, not readership: the project is the

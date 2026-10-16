@@ -1,7 +1,7 @@
 // The mock NOTIFICATIONS service the watch-enrolment page reads through.
 //
 // `readWatches`/`watchProject`/`unwatchProject` are REMOTE functions: they run on the zone server and
-// call `${RASK_GATEWAY_URL}/api/notifications/...` from there, where `page.route` cannot reach. Same
+// call `${RASK_EDGE_URL}/api/notifications/...` from there, where `page.route` cannot reach. Same
 // reason mock-catalog and mock-observability exist, and the same reason a spec that tried to
 // `page.route('**/api/notifications/**')` saw no effect at all — the request never touches the browser.
 //

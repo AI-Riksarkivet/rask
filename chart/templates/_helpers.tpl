@@ -304,16 +304,6 @@ dapr.io/sidecar-seccomp-profile-type: RuntimeDefault
 {{- if or .Values.openbao.enabled .Values.openbao.externalAddr -}}true{{- end -}}
 {{- end -}}
 
-{{- define "lance.lineageSidecarOnlyRoutes" -}}
-{{- $bn := .Values.services.lineage.relay.bindingName -}}
-
-{{- if and $bn (not (regexMatch "^[a-zA-Z0-9._-]+$" $bn)) -}}
-{{- fail (printf "services.lineage.relay.bindingName %q must match ^[A-Za-z0-9._-]+$ — it is interpolated into the gateway 403 blocklist env and used as a Dapr Component name" $bn) -}}
-{{- end -}}
-
-lineage-events{{ with $bn }},{{ . }}{{ end }}
-{{- end -}}
-
 {{- define "lance.otelEnv" -}}
 {{- $root := index . 0 -}}
 {{- $svc := index . 1 -}}
@@ -867,4 +857,25 @@ keys_shaped() { case "$1" in *,) return 1 ;; *,*) pub_shaped "${1%%,*}" && pub_s
 {{- else -}}
 {{- include "rask.rayDashboardUrl" . -}}
 {{- end -}}
+{{- end -}}
+
+{{- define "rask.apiRoutes" -}}
+{{- $root := . -}}
+{{- $rows := list -}}
+{{- if .Values.explorer.enabled -}}
+{{- $media := .Values.explorer.services -}}
+{{- $rows = append $rows (dict "prefix" "/api/explorer/search" "component" "search" "service" (printf "%s-search" (include "lance.fullname" $root)) "port" $media.search.port "rewrite" "/api/search") -}}
+{{- $rows = append $rows (dict "prefix" "/api/explorer/annotations" "component" "annotator" "service" (printf "%s-annotator" (include "lance.fullname" $root)) "port" $media.annotator.port "rewrite" "/api/annotations") -}}
+{{- $rows = append $rows (dict "prefix" "/api/explorer" "component" "viewer" "service" (printf "%s-viewer" (include "lance.fullname" $root)) "port" $media.viewer.port "rewrite" "/api") -}}
+{{- end -}}
+{{- $rows = append $rows (dict "prefix" "/api/catalog" "component" "catalog" "service" (printf "%s-catalog" (include "lance.fullname" $root)) "port" .Values.services.catalog.port "rewrite" "/") -}}
+{{- $rows = append $rows (dict "prefix" "/api/lineage" "component" "lineage" "service" (printf "%s-lineage" (include "lance.fullname" $root)) "port" .Values.services.lineage.port "rewrite" "/") -}}
+{{- $prefix := .Values.config.RASK_API_PREFIX -}}
+{{- range $name := list "flows" "notifications" -}}
+{{- $svc := index $root.Values.services $name -}}
+{{- if or $svc.frontDoor $root.Values.singleTenant.enabled -}}
+{{- $rows = append $rows (dict "prefix" (printf "%s/%s" $prefix $name) "component" $name "service" (printf "%s-%s" (include "rask.fullname" $root) $name) "port" $svc.port "rewrite" "") -}}
+{{- end -}}
+{{- end -}}
+{{- toJson $rows -}}
 {{- end -}}

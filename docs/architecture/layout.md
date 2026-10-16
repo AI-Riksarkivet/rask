@@ -12,7 +12,7 @@ flowchart TD
     subgraph py["Python plane · repo root · uv workspace"]
         subgraph services["services/ · runnable code"]
             lake["lakehouse: catalog · lineage · maintenance · notifications"]
-            fleet["gateway · flows · compute"]
+            fleet["flows · compute"]
             media["media: viewer · search · annotator"]
         end
         subgraph packages["packages/ · reusable libraries (no entrypoints)"]
@@ -51,7 +51,7 @@ plane, and language purity is what lets both workspaces glob their members.
 | `packages/validate` | Python | Pre-upload image validation over bytes or paths. |
 | `packages/ray-cluster-env` | Python | A deps-only member (ships no code) naming the Ray images' platform environment. |
 | `frontend/packages/ui` | TS / Svelte | `@rask/ui`: Svelte 5 + Bits UI + Tailwind 4 component library with Storybook; `@rask/ui/shell` exports the shared `AppShell` every zone renders. |
-| `frontend/packages/api` | TS | `@rask/api`: the typed gateway client plus the OIDC/BFF plane and the lineage client. |
+| `frontend/packages/api` | TS | `@rask/api`: the typed `/api/*` client (relative paths; SSR rewrites them to `RASK_EDGE_URL`) plus the OIDC/BFF plane and the lineage client. |
 | `frontend/packages/explorer-api` | TS | `@rask/explorer-api`: the Arrow-backed explorer/viewer client. |
 | `frontend/packages/{dockview,flow,engine,labeling,config}` | TS | Workbench docks, the studio flow canvas, the annotation canvas, the `LabelOp` model and the shared `tsconfig`. |
 | `frontend/packages/zone-contract` | TS | `@rask/zone-contract`: the estate's shape gates as a vitest suite (cross-zone `data-sveltekit-reload`, the zone manifest, deploy paths, the toolchain guard) plus the `make dev-zone` scripts. |
@@ -62,11 +62,10 @@ plane, and language purity is what lets both workspaces glob their members.
 |---|---|---|
 | `services/{catalog,lineage,maintenance,notifications}` | FastAPI | The lakehouse: the governed Lance Namespace catalog with tier governance, OpenLineage intake, the durable `GET /events` feed and edge list (Lance tables the catalog governs) and the forwarder to a graph backend, maintenance (expiry, purge, orphan scan, reconcile), and the targeted inbox. |
 | `services/{viewer,search,annotator}` | FastAPI | The media plane (`:8101`–`:8103`, public `/api/explorer/*`). The viewer also serves the S3 object browser. |
-| `services/gateway` | FastAPI | Reverse proxy on `:8888` — path-routes `/api/*` to per-domain services (longest-prefix-first, no catch-all). |
 | `services/flows` | FastAPI | The studio flow-builder's server half (`/api/flows`). |
 | `services/compute` | FastAPI | Ray dashboard introspection + `/api/serve/*` proxy on `:8804`, the companion of a bring-your-own Ray engine; deployed by its own chart, `deploy/fixtures/compute`, not the product chart. |
 | `frontend/microfrontends/home` | SvelteKit 2 + Svelte 5 (SSR) | The catch-all zone (`:5273`) on `svelte-adapter-bun`; owns `/` and the OIDC BFF. |
-| `frontend/microfrontends/{lakehouse,explorer,annotator,compute,models,studio}` | SvelteKit 2 + Svelte 5 (SSR) | The six domain zones, each pinned to a bare base `/<zone>` and rendering the shared `@rask/ui/shell`; composed by Turborepo's microfrontends proxy on `:3024` in dev and the Ingress in-cluster. |
+| `frontend/microfrontends/{lakehouse,explorer,annotator,compute,models,studio}` | SvelteKit 2 + Svelte 5 (SSR) | The six domain zones, each pinned to a bare base `/<zone>` and rendering the shared `@rask/ui/shell`; composed by Turborepo's microfrontends proxy on `:3024` in dev and the cluster route in-cluster. |
 | `scripts/` | Python + shell | Every dev/ops tool in one place: `dev-micro.sh`, `k3s-install.sh`, the e2e stack drivers, … No production-state-changing CLIs — data enters and moves only through the catalog's namespace doors. |
 
 ## `runners/` — sealed model environments, deliberately NOT workspace members
@@ -87,7 +86,7 @@ Consequences that follow from the seal, all deliberate:
 
 ## Deployables — workspace members with a dockerfile
 
-There is **no `projects/` layer**. `gateway`, `compute`, `flows` and `notifications`
+There is **no `projects/` layer**. `compute`, `flows` and `notifications`
 each build their own `.docker/<name>.dockerfile` via `uv sync --frozen --package <name>`
 against the **root** `uv.lock`; one image, `.docker/rest-catalog.dockerfile`, serves `catalog`, `lineage`,
 `maintenance`, `viewer`, `search` and `annotator`. The seven zones build from `.docker/frontend.dockerfile`.

@@ -8,7 +8,7 @@
 //	dagger call audit                       osv-scanner over EVERY lockfile in the workspace
 //	dagger call scan-config                 trivy misconfig + secrets over .docker/ and chart/
 //	dagger call scan-secrets                trufflehog over the full GIT HISTORY
-//	dagger call scan-image --name=gateway   trivy over the image dagger call image just built
+//	dagger call scan-image --name=flows     trivy over the image dagger call image just built
 //	dagger call scan-zone-image --zone=home  … the same, for a micro-frontend
 //
 // ── Why two tools and not one ───────────────────────────────────────────────────────────────────
@@ -315,7 +315,7 @@ func (m *Rask) scanContainer(
 
 // ScanImage builds a deployable from .docker/<name>.dockerfile and scans that exact image.
 //
-// `name` is the dockerfile stem, identical to `dagger call image --name=…`: gateway, compute, runner,
+// `name` is the dockerfile stem, identical to `dagger call image --name=…`: notifications, compute, runner,
 // ray-cluster, …
 func (m *Rask) ScanImage(
 	ctx context.Context,
@@ -394,7 +394,7 @@ func (m *Rask) sbomContainer(img *dagger.Container, name string) *dagger.File {
 
 // Sbom builds a deployable from .docker/<name>.dockerfile and emits its CycloneDX SBOM.
 //
-//	dagger call sbom --name=gateway export --path=./sbom-gateway.cdx.json
+//	dagger call sbom --name=notifications export --path=./sbom-notifications.cdx.json
 func (m *Rask) Sbom(
 	// +defaultPath="/"
 	// +optional

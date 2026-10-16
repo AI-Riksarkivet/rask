@@ -17,7 +17,7 @@ that is actually about telemetry, and the annotation in `rask.daprAnnotations` i
 match. That direction is safe: the guard the old comment protected was against a DANGLING
 `dapr.io/config` reference, and a Configuration that always exists cannot dangle.
 
-NO EDGE-AUTH SECRET FOR THE TELEMETRY UIs: no gateway row or Ingress path routes them, so they are
+NO EDGE-AUTH SECRET FOR THE TELEMETRY UIs: no cluster route rule publishes them, so they are
 cluster-internal (port-forward) and the store, its dashboards and their auth are the platform's (ADR 0153).
 An edge that re-exposes them carries the auth itself, wired to that edge's own machinery.
 

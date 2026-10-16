@@ -133,25 +133,3 @@ def test_an_explicit_OFF_beats_an_ambient_endpoint(monkeypatch: object) -> None:
     monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector.invalid:4317")
 
     assert setup_otel(FastAPI(), "svc-test", _settings(RASK_OTEL_ENABLED=False)) is False
-
-
-def test_NO_settings_still_opts_in_through_the_endpoint(monkeypatch: object) -> None:
-    """The fallback the `or` existed for must survive: `services/gateway` calls `setup_otel` with no
-    `Settings` at all and opts in through the endpoint alone. Tightening the rule for callers that DO
-    pass settings must not take that away."""
-    import pytest
-
-    assert isinstance(monkeypatch, pytest.MonkeyPatch)
-    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317")
-
-    assert setup_otel(FastAPI(), "svc-test") is True
-
-
-def test_NO_settings_and_NO_endpoint_stays_off(monkeypatch: object) -> None:
-    """The other half of the fallback: absent both signals, nothing is wired."""
-    import pytest
-
-    assert isinstance(monkeypatch, pytest.MonkeyPatch)
-    monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
-
-    assert setup_otel(FastAPI(), "svc-test") is False

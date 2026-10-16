@@ -52,8 +52,8 @@ See [Deployment](../architecture/deployment.md) for the prerequisites, the image
 ## Run the frontend and the outer fleet locally
 
 ```bash
-make dev-micro         # gateway :8888 + compute :8804 + flows :8840 + notifications :8850 +
-                       #   the explorer trio from :8101 (scripts/dev-micro.sh)
+make dev-micro         # the fleet: compute :8804 + flows :8840 + notifications :8850 + the explorer trio
+                       #   from :8101 (scripts/dev-micro.sh); no edge — `make dev-frontends-k3s` brings one
 make dev-frontends     # all 7 SvelteKit SSR zones behind the Turborepo proxy on :3024
 ```
 

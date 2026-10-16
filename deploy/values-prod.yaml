@@ -31,11 +31,6 @@ services:
       enabled: true
     relay:
       enabled: true
-  # The ONE gateway (the fleet's uvicorn gateway:app on :8888 — the nginx gateway is retired,
-  # docs/adr/0117-nginx-is-retired-and-the-fastapi-gateway-is-the-in-cluster.md). fleet.yaml reads services.gateway; ha.yaml's PDB matches
-  # component=gateway either way.
-  gateway:
-    replicas: 2
   # --- Scaled 2026-08-27 (open_fastapi-audit: "No PodDisruptionBudget for any front-door fleet
   # service except the gateway, and values-prod leaves all of them single-replica"). Each of these
   # argues at its own definition site that it scales safely, and prod then left it at one — so a node
@@ -175,12 +170,17 @@ rustfs:
 maintenance:
   olderThanDays: 7
 
-# --- Ingress fronts the gateway in prod (kind used a port-forward). Wired in templates/ingress.yaml →
-# set your className / host / TLS. ------------------------------------------------------------------
-ingress:
+# The edge is the platform's Gateway (Gateway API; kgateway is the intended one): templates/route.yaml attaches the
+# zones' and every /api prefix's HTTPRoute to it. The deployer names the Gateway, its in-cluster address and the
+# NetworkPolicy egress that reaches its data plane pods; the render refuses any of them empty.
+route:
   enabled: true
-  className: nginx # match your cluster's Ingress controller (nginx / traefik / …) — this names the CLUSTER's controller class, not rask's gateway; kgateway is the intended future edge
-  host: "" # e.g. lance.example.com
+  hostnames: [] # e.g. [lance.example.com]
+#   parentRefs: [{name: edge, namespace: kgateway-system, sectionName: https}]
+#   edgeUrl: http://edge.kgateway-system.svc.cluster.local
+#   edgeEgress:
+#     - to: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kgateway-system}}}]
+#       ports: [{protocol: TCP, port: 8080}]
 
 # The telemetry store, its dashboards and its alerting are the platform's (ADR 0153). rask's Collector exports to
 # the OTLP endpoint named here, and the platform's evaluator loads deploy/alerting/rules.yml.

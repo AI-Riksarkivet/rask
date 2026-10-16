@@ -4,8 +4,8 @@ Before this module, `grep -rn 'PaginationParams|Page\\[|build_page|get_paginatio
 and `packages/` returned nothing: every paginated route had reinvented the wire shape. The measured
 result was eight parameter vocabularies (`limit`+`offset`, `limit`+`after`, `limit`+`cursor`,
 `page_size`+`continuation`, `page_token`+`limit`, `page`+`per_page`, `since`, bare `limit`) and seven
-ceilings across seven services, so a frontend generating a typed client from the gateway's aggregated
-OpenAPI saw four names for one concept.
+ceilings across seven services, so a frontend generating a typed client from the services' OpenAPI
+saw four names for one concept.
 
 SCOPED TO OFFSET ON PURPOSE. `pagination.md` says to pick the strategy per endpoint — offset for
 bounded admin tables, cursor for feeds, keyset at depth — and this estate genuinely uses all three:

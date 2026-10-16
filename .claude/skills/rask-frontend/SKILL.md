@@ -38,7 +38,7 @@ Only `@rask/ui` has a build (`svelte-package` → `dist/`); the rest are consume
 | package | what it is |
 |---|---|
 | `@rask/ui` | Design system + `@rask/ui/shell`. → **`rask-styling`** |
-| `@rask/api` | Gateway client (`ray`, `ingest`, `projects`, `me` — `ingest` targets `/api/ingest`, which has no gateway row and no backend since ADR 0154, so its calls 404) **plus** the OIDC/BFF plane (`bff.ts`, `oidc.ts`), the lineage client, and `@rask/api/dock-layout` + `dock-views` |
+| `@rask/api` | The `/api/*` client (`ray`, `ingest`, `projects`, `me` — `ingest` targets `/api/ingest`, which has no route row and no backend (ADR 0154), so its calls 404), `@rask/api/edge` (`edgeUrl`, `makeEdgeHandleFetch`) **plus** the OIDC/BFF plane (`bff.ts`, `oidc.ts`), the lineage client, and `@rask/api/dock-layout` + `dock-views` |
 | `@rask/dockview` | Svelte 5 binding over **dockview 7** — the docked workbenches. → **§ Workbenches** |
 | `@rask/flow` | Generic Svelte Flow binding: `GraphCanvas`, `StaticFlow`, `FlowAutoFit`, `depths`/`layout`. **Mechanism only — domain graphs (FGA) stay in their zones** |
 | `@rask/explorer-api` | Arrow-backed explorer/viewer client (media bytes, Arrow batches) |
@@ -187,7 +187,7 @@ Both halves are idiomatic SvelteKit — `+server.ts` is the framework's own tool
 
 **(c) Bell only — none left.** `train` held this row and no longer exists; `models` carries real remotes. The shape it described was: `lib/live/feeds.remote.ts`, the estate-wide `query.live` bell. **`studio` left this row when Flows landed**: it now carries the bell plus `lib/flows/remote/{serve,engine}.remote.ts` (Serve-app discovery over `/api/serve`, the flows engine's catalog) and ONE keep-bytes `+server.ts` (`api/infer`, raw image bytes → ALTO XML through `@rask/api/serve-proxy`), so it is a normal two-transport zone — and it grew the `hooks.server.ts` it had been the only zone without, because that BFF's 401 guard reads `locals` the hook populates.
 
-**The media-plane BFF reads are AUTHORIZED now, not just proxied (2026-08-04).** `makeViewerProxy` — the `api/[...path]` catch-all that explorer and annotator both mount — carries `requireSession: true` (`packages/api/src/bff.ts:307-322`), so a bearer-less page-image or atlas read 401s at the BFF on an auth-enabled stack. The bearer path is sealed cookie → the zone's session handle → `makeBackendProxy` (`authorization: Bearer …`) → gateway → viewer, where `/api/page` checks `can_read_data` and `/api/pages` `can_get_metadata` on `table:<catalog id>`, and the S3 object routes behind `/api/explorer/**` check `can_browse_storage`. The lakehouse's `/api/explorer/[...rest]` forwards the caller's bearer but does **not** `requireSession`, so an empty `/lakehouse/catalog/storage` on a governed stack is an authz answer, not an outage.
+**The media-plane BFF reads are AUTHORIZED now, not just proxied (2026-08-04).** `makeViewerProxy` — the `api/[...path]` catch-all that explorer and annotator both mount — carries `requireSession: true` (`packages/api/src/bff.ts:307-322`), so a bearer-less page-image or atlas read 401s at the BFF on an auth-enabled stack. The bearer path is sealed cookie → the zone's session handle → `makeBackendProxy` (`authorization: Bearer …`) → viewer (`VIEWER_API`, in-cluster), where `/api/page` checks `can_read_data` and `/api/pages` `can_get_metadata` on `table:<catalog id>`, and the S3 object routes behind `/api/explorer/**` check `can_browse_storage`. The lakehouse's `/api/explorer/[...rest]` forwards the caller's bearer but does **not** `requireSession`, so an empty `/lakehouse/catalog/storage` on a governed stack is an authz answer, not an outage.
 
 **(d) The bell renders a SUBJECT'S INBOX, and it does so in all seven zones (S3, 2026-08-10).** The
 surface is the inbox alone: rows addressed to you, durable per subject, and the badge counts them.
@@ -200,10 +200,10 @@ Each zone owns a thin `$lib/live/inbox.remote.ts` (four remote functions: `readI
 `readInboxFeed`, `markSeen`, `dismiss`) over the shared `@rask/api/inbox`; `@rask/ui` takes the rows
 structurally (`InboxNotificationLike`) and never imports `@rask/api`. Four facts a reader needs:
 
-* **The base is `RASK_GATEWAY_URL`, absolute, never a relative `/api/…`** — `home`/`lakehouse` proxy
-  `/api` to `LANCE_GATEWAY_URL` (:8001, LINEAGE) and `explorer`/`annotator` have no `/api` proxy at
-  all, so a relative call 404s in dev and survives in prod only because the chart happens to aim both
-  names at one Service.
+* **The base is `edgeUrl(env)` (`RASK_EDGE_URL`), absolute, never a relative `/api/…`.** The SSR
+  rewrite that carries a relative `/api/*` to the edge is wired only in the zones that opt in
+  (`makeZoneHooks(env, { edge: true })`); `explorer`/`annotator` do not, so a relative call there
+  resolves against the zone's own origin and 404s.
 * **Hold the query, don't re-call it.** A remote `query()` re-called returns the CACHED value, so
   `readInboxFeed()` after a write re-read exactly what was already there and the badge never moved.
   The zones hold the query object and call `.refresh()` — the estate's one polling idiom
@@ -216,7 +216,7 @@ structurally (`InboxNotificationLike`) and never imports `@rask/api`. Four facts
 
 Gated by `@rask/zone-contract`'s `notification-surface.test.ts`, now a **loop over `zoneDirs()`**
 rather than S1's named constant: per zone it asserts the transport exists over the shared client, that
-it addresses `RASK_GATEWAY_URL`, that the seam is bound, that the callbacks REACH the transport, and —
+it addresses the edge absolutely (`edgeUrl(env)`), that the seam is bound, that the callbacks REACH the transport, and —
 the half no prop-name check can reach — that the layout passes `inbox`/`inboxUnread` at all, since a
 zone can bind every callback and still hand the bell no inbox.
 
@@ -264,9 +264,9 @@ against a deployed zone.
 
 ### The SSR hairpin
 
-Under `svelte-adapter-bun` a relative `/api/*` resolves against the **incoming external origin**, so a server-side fetch leaves the cluster and comes back. `makeGatewayHandleFetch` (`packages/api/src/gateway.ts:33-44`) rewrites `origin + '/api/'` → `gatewayBase + path` during SSR.
+Under `svelte-adapter-bun` a relative `/api/*` resolves against the **incoming external origin**, so a server-side fetch leaves the cluster and comes back. `makeEdgeHandleFetch` (`packages/api/src/edge.ts`) rewrites `origin + '/api/'` → `edgeBase + path` during SSR.
 
-⚠️ The two wirings disagree on the env var. `compute/src/hooks.server.ts:11` reads **`RASK_GATEWAY_URL`**; `home`/`lakehouse` go through `makeZoneHooks(env, {gateway:true})`, which reads **`LANCE_GATEWAY_URL`** and defaults to `http://localhost:8001` (`bff.ts:241,267`) — the lineage port, not the gateway. Local dev sets only `RASK_GATEWAY_URL`. Treat a "works in `compute`, fails in `lakehouse`" SSR fetch as this.
+**One variable, one route table.** Every zone's server reaches `/api/*` through the cluster route at `RASK_EDGE_URL`: in-cluster the Gateway's in-cluster address (`route.edgeUrl`; on k3s `http://traefik.kube-system.svc.cluster.local`), in dev `http://localhost:8888` (the default, `DEFAULT_EDGE_URL`), where `make dev-frontends-k3s` port-forwards k3s Traefik's Gateway; `make dev-micro` starts no edge. The Vite dev `/api` proxies are separate and per zone (`compute`/`studio`/`models` → `VIEWER_BACKEND` :8888, `home`/`lakehouse` → `LANCE_BACKEND` :8001). The zones that issue relative `/api/*` during SSR (`home`, `lakehouse`, `compute`, `studio`, `models`) opt in with `makeZoneHooks(env, { edge: true })`; `explorer` and `annotator` reach their services through their own BFF routes. No zone restates which service owns a path: that is the route's (`rask-services-fleet`). The zones' egress to the Gateway's data plane is the NetworkPolicy `route.edgeEgress` states.
 
 ## Develop ONE zone, no cluster — `make dev-zone ZONE=<z>`
 
@@ -325,7 +325,7 @@ locally, so without it Playwright silently ADOPTS a foreign dev server and calls
 
 **One local loop for UI: `make dev-frontends`** — Vite HMR, sub-second, `/api` mocked or proxied.
 (For a single zone use `make dev-zone ZONE=<z>` above — `make dev-frontends` binds :3024 and all seven.)
-For anything only reproducible IN-CLUSTER (auth/OIDC, FGA, Dapr, the gateway's real routing) there is
+For anything only reproducible IN-CLUSTER (auth/OIDC, FGA, Dapr, the cluster route) there is
 no hot loop: build the zone image with `dagger call zone-image --zone=<zone> publish …` and roll it
 out. That costs minutes, not seconds, and it is the deliberate trade — the in-cluster hot-reload
 (Tilt) was removed 2026-08-04 because it was a second writer to the cluster and nobody was using it.
@@ -336,7 +336,7 @@ Turborepo 2.10.7 has a **built-in** microfrontends proxy. It reads `microfronten
 
 > A second, hand-rolled proxy sits at `packages/zone-contract/src/proxy.ts` (`PROXY_PORT ?? 5200`). Its `dev:proxy` turbo task is invoked by no root script and no Makefile target, and its claim that `bun run dev` starts it is false. `:3024` is the live dev origin; `:5200` survives only because `explorer`'s e2e defaults to it.
 
-**Prod.** One Ingress per release, rules specific-first: `/api` → `rask-gateway:8888`, `/<zone>` → `rask-web-<zone>:3000`, `/` → `rask-web-home:3000` last. `pathType: Prefix`, **no `rewrite-target`** — the pod receives `/compute/jobs` and `paths.base` consumes it. Images are tagged `web-<zone>:<tag>`.
+**Prod.** Two Gateway API HTTPRoutes per release on the platform's Gateway (`chart/templates/route.yaml`): `<release>-api` routes each public `/api/*` prefix to its service (`rask.apiRoutes`, see `rask-services-fleet`), and `<release>-web` routes `/<zone>` → `rask-web-<zone>:3000`, `/dex` → Dex, and `/` → `rask-web-home:3000`; the longest `PathPrefix` wins. The zone rules carry **no `URLRewrite`**: the pod receives `/compute/jobs` and `paths.base` consumes it. Images are tagged `web-<zone>:<tag>`.
 
 This works only because of `patches/svelte-adapter-bun@1.0.1.patch`: upstream roots sirv at `client/<base>`, but SvelteKit already emits base-prefixed assets *inside* `build/client/`, so `/compute/_app/x.js` resolved to `client/compute/compute/_app/x.js` → 404. Probes are TCP, not httpGet, because a zone's `/` 404s under its base.
 
@@ -418,9 +418,9 @@ so re-measure rather than trusting this sentence). Three reds closed together th
 a real finding rather than a flake:
 
 * `dev-zone.test.ts` × 2 — the annotator's Playwright config mocks `VIEWER_API` and home's mocks
-  `RASK_GATEWAY_URL`, while `src/dev-zone.ts` pointed neither zone at them, so `make dev-zone` read a
+  the edge base, while `src/dev-zone.ts` pointed neither zone at them, so `make dev-zone` read a
   connection refused where the suite read a mock. Home's was the worse half: the bell's remote
-  functions call `RASK_GATEWAY_URL` SERVER-side, so no dev browser could work around it and every
+  functions call the edge base (`RASK_EDGE_URL`) SERVER-side, so no dev browser could work around it and every
   zone's shell showed a bell failing on a dead socket instead of an empty inbox.
 * `generated-client-freshness.test.ts` — `docs/catalog-openapi.json` was 359 lines behind its routes
   and both generated clients behind their specs. `make openapi` then `bun --cwd=frontend run
@@ -481,6 +481,6 @@ Animation → **GSAP** via `{@attach}` (+ Lenis). Charts → **LayerChart**. Gra
 
 - `references/zone-map.md` — per-zone routes, endpoints, and libs; the nav/shell contract.
 - `rask-styling` — tokens, `@source`, component authoring.
-- `rask-services-fleet` — the `/api/*` gateway and the services these zones call.
+- `rask-services-fleet` — the cluster route for `/api/*` and the services these zones call.
 - `rask-architecture` — workspace planes and membership.
 - `docs/architecture/frontend-conventions.md` — the long-form canon. Its `@source` line (`:319`, `:347`) has four `../`; three is correct.

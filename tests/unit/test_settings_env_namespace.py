@@ -59,7 +59,6 @@ _SETTINGS: list[tuple[str, str, str]] = [
     # The FRONT DOOR, which had no settings class at all until FLEET-ENV-SCATTER: sixteen raw
     # `os.environ.get` reads, several of them per request. Neither `populate_by_name` nor
     # `env_prefix` — every field carries the deployed variable's full name as an explicit alias.
-    ("services/gateway", "gateway.config", "GatewaySettings"),
     # Subclasses of service_kit.media.config.Settings. None declares `populate_by_name`, and
     # GovernedAuthSettings is a plain mixin rather than a BaseSettings, so none inherited it.
     ("services/search", "search.core.config", "SearchSettings"),

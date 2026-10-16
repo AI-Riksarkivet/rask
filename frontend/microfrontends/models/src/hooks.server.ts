@@ -2,7 +2,7 @@ import { env } from '$env/dynamic/private';
 import { makeZoneHooks } from '@rask/api/bff';
 import { makeZoneServerErrorHandler } from '@rask/api/observability';
 
-// Per-request session hydration from the sealed OIDC cookie + the SSR `/api/*` → in-cluster gateway
+// Per-request session hydration from the sealed OIDC cookie + the SSR `/api/*` → cluster-edge
 // rewrite, both single-sourced in @rask/api/bff. No-op when OIDC is unconfigured (the zone runs
 // auth-off).
 //
@@ -13,7 +13,7 @@ import { makeZoneServerErrorHandler } from '@rask/api/observability';
 // the surface would render its "sign in" state to a user who is already signed in. That failure is
 // silent on an auth-off dev stack and only appears on a governed one, which is exactly the class of
 // bug the skill warns a moved auth-gated surface creates.
-export const { handle, handleFetch } = makeZoneHooks(env, { gateway: true });
+export const { handle, handleFetch } = makeZoneHooks(env, { edge: true });
 
 // Every unhandled SSR/endpoint error is stamped with THIS zone, so an alert names the zone that can
 // fix it instead of "the page" — the zones share one origin, and nothing else can tell them apart.

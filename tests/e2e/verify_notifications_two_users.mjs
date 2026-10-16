@@ -75,8 +75,8 @@ import { chromium } from '@playwright/test';
 //   kubectl port-forward -n kube-system svc/traefik 8080:80
 const ORIGIN = process.env.ORIGIN ?? 'http://localhost:8080';
 const SHOT = process.env.SHOT_DIR ?? '/tmp/rask-notifications-drive';
-// Lineage is addressed DIRECTLY (see emitRun) — the gateway fronts it, but the door this drive needs
-// is the ingest door and nothing here depends on the gateway's routing.
+// Lineage is addressed DIRECTLY (see emitRun) — the cluster route publishes it too, but the door this
+// drive needs is the ingest door and nothing here depends on the route.
 const LINEAGE_URL = process.env.LINEAGE_URL ?? 'http://localhost:8001';
 // THE RUN MUST BE EMITTED AS THE USER, NOT AS A SERVICE, AND THAT IS NOT A DETAIL OF THIS HARNESS.
 //
@@ -111,8 +111,8 @@ const LINEAGE_URL = process.env.LINEAGE_URL ?? 'http://localhost:8001';
 // Roles, never `can_*`: `can_write_data` and `can_be_notified` are derived relations and OpenFGA
 // refuses a direct assignment to them. Granting `writer`/`reader` is what makes the derived checks
 // answer true, and it is what the estate's own model prescribes.
-// `/api` on the SAME origin: the ingress routes it to rask-gateway:8888, which path-routes
-// `/api/notifications` onward. Not a separate host — the zone's own bell reaches the inbox this way,
+// `/api` on the SAME origin: the cluster route sends `/api/notifications` straight to the
+// notifications Service. Not a separate host — the zone's own bell reaches the inbox this way,
 // so driving the watch door here exercises the path a browser actually uses.
 const GATEWAY_URL = process.env.GATEWAY_URL ?? ORIGIN;
 const FGA_API_URL = process.env.FGA_API_URL ?? 'http://localhost:18099';
@@ -203,11 +203,8 @@ async function badge(page) {
  *
  * NOT from the browser, and that is a fact about the estate rather than a convenience. A page-side
  * `fetch('/api/lineage/...')` carries no bearer: the session lives in a sealed httpOnly cookie scoped
- * to the ZONE, and the gateway does not translate cookie to bearer. Worse, going through the gateway
- * at all forecloses the service door — `is_public_caller` refuses a service token presented by a
- * public front door (the measured bypass), so the request falls through to OIDC and 401s. Measured
- * both ways here: `/api/lineage/api/v1/lineage` through the gateway answers 401 "Missing bearer
- * token", while the same body against lineage directly authenticates.
+ * to the ZONE, and nothing at the edge translates cookie to bearer: the cluster route forwards the
+ * request as it arrived, so lineage sees no credential and answers 401.
  *
  * So the drive talks to lineage on LINEAGE_URL with the pair the door wants.
  */

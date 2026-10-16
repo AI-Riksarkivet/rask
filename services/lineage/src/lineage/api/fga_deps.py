@@ -1,7 +1,7 @@
 """In-service authz for the lineage read + ingest endpoints.
 
-The lineage service owns the commit feed and the edge list, so it must protect them itself (in-service, not
-via a gateway). It mirrors the catalog's authz guard (``services/catalog/api/fga_deps.py``) and **reuses
+The lineage service owns the commit feed and the edge list, so it must protect them itself (in-service: the
+cluster route in front of it checks nothing). It mirrors the catalog's authz guard (``services/catalog/api/fga_deps.py``) and **reuses
 the catalog's core** — :func:`service_kit.governed.fga.check` / ``batch_check`` — so the OpenFGA check has
 one source of truth. The thin FastAPI authz + filter dependencies are re-derived here
 because they bind to ``LineageSettings`` rather than the catalog's ``Settings``. (Shared

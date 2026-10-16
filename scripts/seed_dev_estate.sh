@@ -255,4 +255,4 @@ fi
 say "seeded"
 echo "corpus:    $CORPUS_HOST_PATH  (mount confirmed on rask-viewer)"
 echo "verified:  rask-search returns $HITS hits from '$DATASET_ID' (q=protokoll)"
-echo "next:      open the ingress and look at /explorer, /annotator, /lakehouse"
+echo "next:      open the edge (the cluster route) and look at /explorer, /annotator, /lakehouse"

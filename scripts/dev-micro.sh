@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Local microservice fleet — no extra dependencies (replaces honcho).
 #
-# Brings up the gateway + per-domain backends as background processes, prefixes
+# Brings up the per-domain backends as background processes, prefixes
 # each one's logs, and shuts the whole group down on Ctrl-C. Bring up the deps
 # first: `make ray-up`; S3/HCP comes from .env. Usually invoked via
 # `make dev-micro` (which runs `uv sync --all-packages` first). Ports are
@@ -20,34 +20,23 @@ set -euo pipefail
 export RAY_ENABLE_UV_RUN_RUNTIME_ENV=0   # documented Ray/uv gotcha
 
 # The frontend (@rask/api + remote functions) calls /api/*, so default the whole
-# fleet to RASK_API_PREFIX=/api. The gateway/services' OWN default is /api/v1; a
-# mismatch makes the gateway route /api/* rows wrong and you get 404s (e.g. the
-# compute zone's /api/ray/jobs). Override to /api/v1 if needed.
+# fleet to RASK_API_PREFIX=/api. The services' OWN default is /api/v1, and the
+# chart's routes publish /api/flows, /api/ray, … unchanged — a mismatch is a 404
+# at the service (e.g. the compute zone's /api/ray/jobs).
 export RASK_API_PREFIX="${RASK_API_PREFIX:-/api}"
 
 # PORT_OFFSET shifts every port so a second fleet can run on one host without
 # colliding (e.g. another user already holds the defaults): PORT_OFFSET=1000 →
-# gateway :9888, compute :9804, viewer :9101, … Then point the frontend at it:
-#   PORT_OFFSET=1000 make dev-micro
-#   VIEWER_BACKEND=http://localhost:9888 RASK_GATEWAY_URL=http://localhost:9888 make dev-frontends
+# compute :9804, viewer :9101, …
 OFFSET="${PORT_OFFSET:-0}"
-GATEWAY_PORT="${GATEWAY_PORT:-$((8888 + OFFSET))}"
 COMPUTE_PORT="${COMPUTE_PORT:-$((8804 + OFFSET))}"
 FLOWS_PORT="${FLOWS_PORT:-$((8840 + OFFSET))}"
 NOTIFICATIONS_PORT="${NOTIFICATIONS_PORT:-$((8850 + OFFSET))}"
 VIEWER_PORT="${VIEWER_PORT:-$((8101 + OFFSET))}"
 SEARCH_PORT="${SEARCH_PORT:-$((8102 + OFFSET))}"
 ANNOTATOR_PORT="${ANNOTATOR_PORT:-$((8103 + OFFSET))}"
-
-# Wire the gateway's upstreams to THIS fleet's per-service ports (else, when
-# offset, it would route to whatever holds the default ports). No-op at OFFSET=0.
-export RASK_FLOWS_URL="${RASK_FLOWS_URL:-http://127.0.0.1:${FLOWS_PORT}}"
-export RASK_NOTIFICATIONS_URL="${RASK_NOTIFICATIONS_URL:-http://127.0.0.1:${NOTIFICATIONS_PORT}}"
-export RASK_EXPLORER_VIEWER_URL="${RASK_EXPLORER_VIEWER_URL:-http://127.0.0.1:${VIEWER_PORT}}"
-export RASK_EXPLORER_SEARCH_URL="${RASK_EXPLORER_SEARCH_URL:-http://127.0.0.1:${SEARCH_PORT}}"
-export RASK_EXPLORER_ANNOTATOR_URL="${RASK_EXPLORER_ANNOTATOR_URL:-http://127.0.0.1:${ANNOTATOR_PORT}}"
 # The viewer reads its own VIEWER_PORT (media-plane settings), exported here so
-# its `run()` row and the gateway row above always agree under PORT_OFFSET.
+# its `run()` row binds the port this script names under PORT_OFFSET.
 export VIEWER_PORT
 
 # Kill the whole process group on exit so no uvicorn lingers.
@@ -59,7 +48,6 @@ run() {  # run <name> <port> <module> [extra env assignments...]
   ( "$@" uv run --no-sync uvicorn "$module" --host 127.0.0.1 --port "$port" 2>&1 | sed "s/^/[$name] /" ) &
 }
 
-run gateway      "$GATEWAY_PORT"      gateway:app
 run compute      "$COMPUTE_PORT"      compute:app
 # The studio flow-builder's backend: /api/flows/{catalog,validate,runs}. Needs nothing to boot — the
 # catalog is declared in-process and validation is pure — so it comes up green with no Ray, no Serve
@@ -91,8 +79,7 @@ run viewer       "$VIEWER_PORT"       viewer.main:app
 run search       "$SEARCH_PORT"       search.main:app
 run annotator    "$ANNOTATOR_PORT"    annotator.main:app
 
-echo "fleet up — gateway on http://127.0.0.1:${GATEWAY_PORT} (RASK_API_PREFIX=${RASK_API_PREFIX}; Ctrl-C to stop)"
-if [ "$OFFSET" != "0" ]; then
-  echo "  PORT_OFFSET=${OFFSET} → run the frontend with VIEWER_BACKEND=http://localhost:${GATEWAY_PORT} RASK_GATEWAY_URL=http://localhost:${GATEWAY_PORT}"
-fi
+echo "fleet up — compute :${COMPUTE_PORT} flows :${FLOWS_PORT} notifications :${NOTIFICATIONS_PORT} viewer :${VIEWER_PORT} search :${SEARCH_PORT} annotator :${ANNOTATOR_PORT} (RASK_API_PREFIX=${RASK_API_PREFIX}; Ctrl-C to stop)"
+echo "  no edge runs here: the zones' /api needs one on RASK_EDGE_URL — the in-cluster Gateway via"
+echo "  \`make dev-frontends-k3s\`, or \`make dev-zone ZONE=<z>\` for a zone against its mocks."
 wait

@@ -137,12 +137,3 @@ def test_a_malformed_parked_payload_is_still_parked(envelope: dict[str, Any], wi
     500 to the sidecar, which is a RETRY, onto the end of the line."""
     assert with_dead_lettering.post("/dlq-event", json=envelope).json() == {"status": "SUCCESS"}
     assert len(parked.adds) == 1
-
-
-def test_a_public_front_door_may_not_park_a_delivery(with_dead_lettering: TestClient, parked: _Counter) -> None:
-    """The park route carries the same door as the subscription it backs. It counts and alerts, so an
-    unguarded one is a way to make the estate's dead-letter alert fire from outside it."""
-    response = with_dead_lettering.post("/dlq-event", headers={"dapr-caller-app-id": "gateway"}, json={"id": "ce-9", "data": RUN_EVENT})
-
-    assert response.status_code == 403
-    assert parked.adds == []

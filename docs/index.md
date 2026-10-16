@@ -34,7 +34,7 @@ flowchart LR
    **notifications** tells the right person.
 3. **Maintenance** expires versions, purges trash, scans for orphans and reconciles stores.
 4. The **SvelteKit** zones read the catalog, lineage and the media services (viewer, search, annotator) through the
-   gateway on `:8888`.
+   cluster route: the platform's Gateway serves the chart's HTTPRoutes, one per public `/api/*` prefix.
 
 ## Where to go next
 

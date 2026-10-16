@@ -65,10 +65,10 @@ export default defineConfig({
 				// The audit trail's SQL upstream. Absent, `audit-core.ts` answers 501 ("needs the
 				// observability stack") — a real state the viewer renders, and not the one its spec means.
 				GREPTIME_API: `http://localhost:${MOCK_OBS_PORT}`,
-				// The watch page's remote functions call `${RASK_GATEWAY_URL}/api/notifications/*` from the
+				// The watch page's remote functions call `${RASK_EDGE_URL}/api/notifications/*` from the
 				// ZONE SERVER. Unset it points at :8888, which is unreachable here and answers `null` —
 				// rendered as "watching is unavailable", indistinguishable from the bug this suite pins.
-				RASK_GATEWAY_URL: `http://localhost:${MOCK_NOTIFICATIONS_PORT}`,
+				RASK_EDGE_URL: `http://localhost:${MOCK_NOTIFICATIONS_PORT}`,
 			},
 		},
 		{

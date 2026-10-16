@@ -12,7 +12,7 @@ a `BaseHTTPMiddleware` layer is refused outright (`service_kit.media.middleware`
 
 THE HOOK'S REACH IS THE `setup_otel` FAMILY, not the estate. It is a Python callable passed to
 `FastAPIInstrumentor.instrument_app`, so only an app that wires the SDK in process can install it —
-the five `make_service_app` services and the gateway. The eight the chart launches under
+the `make_service_app` services. The eight the chart launches under
 `opentelemetry-instrument` carry the id in their logs and on no span.
 
 PII STAYS OFF THE SPAN. The reference is explicit: "Don't put PII (email, raw user id, auth tokens) in
@@ -121,36 +121,3 @@ def test_the_hook_reads_no_PII_header(header: str) -> None:
     span = _Span()
     server_request_hook(cast("Span", span), {"type": "http", "headers": [(header.encode(), b"secret-value")]})
     assert "secret-value" not in str(span.attrs), f"the hook copied a {header} header onto the span"
-
-
-def test_the_gateway_mints_a_request_id_for_the_whole_trace() -> None:
-    """One value across every hop, minted at the front door.
-
-    The Fix asks for this specifically: "Mint the id at the gateway so one value spans the whole
-    trace." The gateway builds its own FastAPI and runs neither `register_middleware` nor the media
-    one, so it minted nothing — every downstream service invented its own id for the same request, and
-    the caller's echoed value matched none of them. An id that differs per hop correlates nothing,
-    which is the same failure as having none.
-
-    `X-Request-ID` is not hop-by-hop, so once the gateway sets it the proxy forwards it unchanged and
-    every downstream service echoes rather than re-mints it — one value across every hop's logs, and
-    across the spans of the apps that wire OTel in process (see the module docstring).
-    """
-    import importlib
-
-    from fastapi.testclient import TestClient
-
-    import gateway
-
-    gw = importlib.reload(gateway)
-    with TestClient(gw.app) as client:
-        response = client.get("/healthz")
-    assert response.headers.get("X-Request-ID"), (
-        "the gateway echoes no X-Request-ID, so each downstream service mints its own for the same request and the caller's id matches nothing"
-    )
-
-    with TestClient(gw.app) as client:
-        echoed = client.get("/healthz", headers={"X-Request-ID": "caller-supplied"})
-    assert echoed.headers.get("X-Request-ID") == "caller-supplied", (
-        "the gateway replaced a caller-supplied id — a client correlating its own logs across the boundary loses the join"
-    )

@@ -40,15 +40,13 @@ def _settings_cache_is_not_shared_between_tests() -> Iterator[None]:
 # service's OWN egress: no sidecar policy covers it, so the retry has to." True of a DIRECT httpx call
 # — and the reason it was direct is not recorded anywhere.
 #
-# Routed through Dapr service invocation instead, the estate's EXISTING `invokeRetry` policy covers it,
-# and that policy already encodes the same rule the hand-written `_is_transient` did:
-# `matching: httpStatusCodes: 408,429,500-599` — retry what a retry can fix, never a 4xx. Its comment
-# gives the same reasoning, measured on the ingest door: "Retrying a 403 is also pointless on its own
-# terms: the answer will not change." `lineage` is already a target of that policy
-# (chart/templates/dapr-resiliency.yaml builds $invoked from services.lineage.daprAppId).
+# Routed through Dapr service invocation instead, the `invokeRetry` policy covers it: the invocation
+# Resiliency in chart/templates/dapr-resiliency.yaml targets app `lineage` and is scoped to
+# `notifications`, the sidecar that makes the call (tests/unit/test_invariants.py::test_the_notifications_pod_asks_for_a_sidecar_and_is_allowed_to_receive_one).
+# It encodes the rule the hand-written `_is_transient` did: `408,429,500-599`, never a 4xx, because a
+# refusal does not change on a replay.
 #
-# The gateway established the shape (`_target_base`): sidecar when Dapr is on, direct URL otherwise, so
-# dev and the unit tests keep a plain base URL.
+# Sidecar when Dapr is on, direct URL otherwise, so dev and the unit tests keep a plain base URL.
 
 
 def test_the_feed_is_read_direct_when_dapr_is_off(monkeypatch) -> None:

@@ -92,8 +92,9 @@ every table built from a subject's source.
 else 401) and OpenFGA (`can_get_metadata` on `table:<id>`, else 403; feed rows naming a dataset the caller cannot see
 are dropped). Lineage reads the shared OpenFGA store and writes no tuple. Both layers are off in the code defaults and
 on in the chart (`RASK_OIDC_ENABLED`, `RASK_FGA_ENABLED`). The two Dapr-delivered routes verify the Dapr app token,
-the gateway 403-blocks them (`lance.lineageSidecarOnlyRoutes` in `_helpers.tpl`), and the service refuses to boot if
-either would mount without the token.
+which only the sidecar stamps: the cluster route publishes `/api/lineage` onto lineage's root, but a request through
+the Gateway reaches the app port directly and never carries that token, so the routes refuse it. The service refuses
+to boot if either would mount without the token.
 
 ## The relay tick
 

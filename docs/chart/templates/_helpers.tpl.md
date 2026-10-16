@@ -34,7 +34,7 @@ guarantee a rask selector can never adopt a lance pod inside the shared release.
 =====================================================================================================
 
 ---------------------------------------------------------------------------------------------------
-rask — the base chart's helpers (fleet: gateway, flows, notifications, frontends —
+rask — the base chart's helpers (fleet: flows, notifications, frontends, the cluster route —
 the orchestrator died at P7a; core-api/search-api/volumes-api died in the R6/R20 wave).
 ---------------------------------------------------------------------------------------------------
 
@@ -175,10 +175,9 @@ No metric interval either: the zone SDK builds a tracer provider and no metric r
 
 GATED ON `lance.otelEnabled`, NOT on `observability.enabled`. The narrow gate meant the chart's own
 documented prod posture — ship OTLP off-cluster, deploy no in-cluster stack — rendered ZERO OTEL_*
-on the entire request-serving fleet while the lakehouse plane kept exporting. `rask-gateway`'s
-container came back as literally `env: null`. Nothing announced it: `setup_otel` returns False,
-every pod stays Ready, and since the gateway is the estate's only edge, every trace the lakehouse
-did emit was rootless. The identical defect was found and fixed for RAY alone in August 2026; the
+on the entire request-serving fleet while the lakehouse plane kept exporting: a fleet container
+came back as literally `env: null`. Nothing announced it: `setup_otel` returns False, every pod
+stays Ready, and every trace that crossed the fleet lost the span that should have parented it. The identical defect was found and fixed for RAY alone in August 2026; the
 fleet was left behind and pinned by nothing.
 
 ## `- name: RASK_OTEL_ENABLED`
@@ -231,7 +230,7 @@ was renamed: no lance name collided with a rask name.
 VALUES THEY REQUIRE (the values.yaml merge must land these or the render breaks):
   age.externalHost · auth.enabled · catalog.controlEmit · dapr.{enabled,sidecarRestricted,
   sidecarResources.*,resiliency.enabled} · dex.clientId · frontend.{apps,image.tag,
-  idleTimeoutSeconds,oidc.*} · services.gateway.port · image.catalog.{repository,tag} · lifecycle.preStopSeconds ·
+  idleTimeoutSeconds,oidc.*} · route.edgeUrl · image.catalog.{repository,tag} · lifecycle.preStopSeconds ·
   medallion.buckets · nats.url ·
   observability.{enabled,environment} · openbao.{enabled,port,externalAddr} · pubsub.name ·
   resources.{default,<component>} · minio.{bucket,port,externalEndpoint} · security.readOnlyRootFilesystem ·
@@ -428,30 +427,6 @@ ANY Vault to read from — the in-cluster OpenBao OR an external Vault address. 
 store" from "render the in-cluster OpenBao server", so openbao.enabled=false + externalAddr consumes from
 the external Vault WITHOUT falling back to plaintext secrets in pod env (the closed leak).
 
-## `{{- define "lance.lineageSidecarOnlyRoutes" -}}`
-
-Sidecar-only lineage routes: Dapr-delivered (pub/sub ingest + the relay cron binding), auth'd by
-the app-api-token the sidecar stamps — they must NEVER be reachable through the public edge, which would
-otherwise proxy them via the gateway's own sidecar (stamping that same trusted token). ONE source for the
-gateway's 403 blocks — add any new Dapr-delivered lineage route here. Since the nginx gateway retired
-(docs/adr/0117-nginx-is-retired-and-the-fastapi-gateway-is-the-in-cluster.md) this renders a COMMA-separated list into the fleet ConfigMap's
-RASK_LINEAGE_SIDECAR_ONLY_ROUTES, consumed by the FastAPI gateway's `lineage_sidecar_guard` middleware
-(services/gateway). `lineage-events` matches the app's subscription route (lineage/api/dapr.py). The
-relay binding is blocked even when the relay is disabled (the route isn't mounted then — belt and
-suspenders). On the kgateway/Envoy migration these become "no HTTPRoute declared" (allow-list by
-construction) — the service-side token check is the load-bearing guard either way.
-
-## `{{- if and $bn (not (regexMatch "^[a-zA-Z0-9._-]+$" $bn)) -}}`
-
-The binding name is interpolated raw into the comma-separated 403 env AND used as a Dapr Component
-metadata.name — validate the charset at the render so a `,` (which would add an empty entry) or a
-space fails loudly here instead of silently weakening the guard. Same [a-z0-9-] shape a k8s name
-needs anyway.
-
-## `lineage-events{{ with $bn }},{{ . }}{{ end }}`
-
-`with` skips a blank binding name — a trailing `,` would add an empty entry to the blocklist.
-
 ## `{{- define "lance.otelEnv" -}}`
 
 OTel SDK env for an app (call: include "lance.otelEnv" (list $root "<service.name>")). The apps run
@@ -490,8 +465,8 @@ which is why the fleet carries it too.
 
 Must MATCH `rask.otelEnv`'s list byte for byte, so a change to one plane changes the other
 in the same commit. Covers every path fleet.yaml points a
-probe at, not just the operational pair — including `/api/health` and the gateway's `/healthz`,
-which remain served as badges even though no probe asks for them any more.
+probe at, not just the operational pair — including `/api/health`, which remains served as a badge
+even though no probe asks for it. `/healthz` matches no route any service mounts.
 
 ## `{{- define "lance.lineageEmitEnv" -}}`
 
@@ -587,9 +562,10 @@ six images documenting a posture production never had. Owner decision 2026-08-27
 carries it.
 
 `127.0.0.1` — uvicorn's own default, and what those CMDs hardcode — is the value you would use
-if the proxy were a sidecar in the same pod. It is the Ingress controller, in another pod on
+if the proxy were a sidecar in the same pod. It is the Gateway's data plane, in another pod on
 another IP, so the match can never succeed and every forwarded header is silently ignored. Set
-`forwardedAllowIps` to the ingress controller's pod CIDR to make the client IP real. The default
+`forwardedAllowIps` to the data plane's pod CIDR to make the client IP real (`deploy/values-local.yaml`
+names k3s's pod CIDR, 10.42.0.0/16, where Traefik runs). The default
 stays 127.0.0.1 so this changes nothing silently on an existing install.
 
 `*` IS REFUSED HERE, not in a comment. It trusts every peer, so any client's `x-forwarded-for`
@@ -671,13 +647,13 @@ See security.tmpSizeLimit.
 ## `{{- define "rask.image" -}}`
 
 A FULLY-RESOLVED image reference for a first-party component. Call:
-  include "rask.image" (list $root "gateway")
+  include "rask.image" (list $root "notifications")
 
 GITOPS IS THE FIRST-CLASS CONSUMER of this chart, and that decides the two rules below.
 
-1. `image.repository` is REQUIRED. It used to default to "", which rendered a BARE `gateway:dev` —
-   and a bare name is not a local image, it is `docker.io/library/gateway:dev`. That only ever
-   appeared to work because `make k3s-import` had side-loaded the tag into the node's containerd,
+1. `image.repository` is REQUIRED. An empty one renders a BARE `notifications:dev` — and a
+   bare name is not a local image, it is `docker.io/library/notifications:dev`. That only
+   appears to work because `make k3s-import` had side-loaded the tag into the node's containerd,
    so the kubelet never had to pull. A reconciler has no such side channel: every pod
    ImagePullBackOffs, and the error blames Docker Hub rather than the missing setting. Measured
    here 2026-08-04, on `controlplane:dev` and `compute:dev`, after a `helm upgrade` reset every
@@ -1047,8 +1023,8 @@ dapr_error_code_total — a closed set of daprd error codes, so bounded by const
 THE POINT OF THIS BLOCK. At the upstream default (still `true` in 1.18.1) the sidecar stamps the
 RAW remainder of a service-invocation URL onto the `path` label. Measured live on this cluster:
 dapr_http_server_request_count{app_id="gateway",path="/v1.0/invoke/compute/method/api/ray/jobs"}
-The gateway proxies /api/catalog/... and /api/lineage/..., so that is one series per table,
-namespace and project id, forever, in a store nothing authorizes reads against.
+An invoked catalog or lineage path carries its table, namespace and project ids, so that is one
+series per id, forever, in a store nothing authorizes reads against.
 
 NOT A SUBJECT LEAK, and do not describe it as one. daprd 1.18.1 ALREADY templates actor ids
 (`/v1.0/actors/InboxActor/{id}/method`) and drops state keys (`/v1.0/state/lance-statestore`) at
@@ -1071,7 +1047,7 @@ conflicting patterns. A catch-all does not conflict with THIS list, but panics t
 adds `/` or a bare `/{x...}` to it. One Configuration serves every app-id, so that is the whole
 fleet crash-looping on a one-line edit three lines above, with no recover() on the path and no
 validation anywhere before runtime. It also buys nothing: it only renames the "" bucket. Invoke
-paths therefore label as "", and the gateway->upstream hop is read from the UPSTREAM's own
+paths therefore label as "", and an invoke hop is read from the UPSTREAM's own
 http_server_duration_milliseconds_* instead — a deliberate erasure, not an oversight.
 
 ## `logging:`
@@ -1212,3 +1188,21 @@ when set, else empty.
 
 Ray Serve's HTTP ingress on the same plane: `frontend.serveUrl` when Serve lives elsewhere; a RayService's
 load-balanced serve Service; else the dashboard itself, whose external host serves the apps too.
+
+## `{{- define "rask.apiRoutes" -}}`
+
+THE ONE ROUTE TABLE: the public `/api/*` prefixes the cluster route publishes, as a JSON list of
+`{prefix, component, service, port, rewrite}`. `route.yaml` renders one HTTPRoute rule per row
+(`rewrite` becomes a `URLRewrite` `ReplacePrefixMatch`; empty forwards the path unchanged), and
+`network-policy.yaml` renders one `<release>-edge-<component>` policy per row admitting that port, so a
+published prefix and an admitted port come from one list and cannot drift.
+
+The rows mirror the gates of the templates that render each backend: the media trio only under
+`explorer.enabled` (explorer.yaml), catalog and lineage always (services.yaml), flows and notifications
+only when front-door or single-tenant (fleet.yaml's own condition), so the route never names a Service
+that did not render. The more specific `/api/explorer/*` rows precede `/api/explorer` for the reader;
+Gateway API matches the longest prefix regardless of order.
+
+A new public prefix is a row here plus a row in
+`tests/unit/test_the_cluster_route_names_one_backend_per_api_prefix.py`. Compute's `/api/ray` and
+`/api/serve` are not rows: the compute fixture chart publishes them with its own HTTPRoute.

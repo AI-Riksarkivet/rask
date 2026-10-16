@@ -1,0 +1,25 @@
+# k3s's bundled Traefik as the development Gateway (Gateway API), the stand-in for the platform's (ADR 0165; kgateway is
+# the intended production edge). k3s ships the Gateway API CRDs and runs Traefik with only its Ingress and CRD
+# providers; this switches on the Gateway provider, which renders GatewayClass `traefik` and Gateway `traefik-gateway`
+# in kube-system, and lets that Gateway's `web` listener (entrypoint :8000, the node's port 80) admit routes from every
+# namespace. rask's routes attach to it (deploy/values-local.yaml `route.parentRefs`). Values keys are the Traefik
+# chart's own (traefik 40.1.0 `values.yaml`: `providers.kubernetesGateway`, `gateway.listeners.web.namespacePolicy`).
+# `scripts/k3s-install.sh` installs this file into k3s's auto-deploy directory, so k3s's helm controller re-rolls
+# Traefik with it.
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: traefik
+  namespace: kube-system
+spec:
+  valuesContent: |-
+    providers:
+      kubernetesGateway:
+        enabled: true
+    gateway:
+      listeners:
+        web:
+          port: 8000
+          protocol: HTTP
+          namespacePolicy:
+            from: All

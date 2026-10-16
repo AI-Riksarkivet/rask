@@ -19,7 +19,7 @@
 	// NotificationCenter has always exposed these two sets as bindable with `onseen`/`ondismiss`
 	// documented as "the persistence seam"; this is the zone giving that seam its backend
 	// (`services/notifications`, one inbox actor per subject, reached through this zone's own
-	// RASK_GATEWAY_URL).
+	// RASK_EDGE_URL).
 	let seen = $state<string[]>([]);
 	let dismissed = $state<string[]>([]);
 

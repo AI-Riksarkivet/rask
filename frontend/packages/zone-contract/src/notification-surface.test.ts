@@ -105,15 +105,15 @@ describe("the bell's persistence seam is wired in every zone", () => {
 			expect(source).toMatch(/export const dismiss = command\(/);
 		});
 
-		it(`${zone} addresses the gateway ABSOLUTELY, not through its own /api`, () => {
-			// Not a style rule. `home` and `lakehouse` proxy `/api` to LANCE_GATEWAY_URL (:8001, the
-			// LINEAGE service), so a relative `/api/notifications/*` 404s in dev and survives in prod
-			// only because the chart happens to aim both names at one Service. That is a coincidence,
-			// not a contract, and it breaks the day either name moves.
+		it(`${zone} addresses the edge ABSOLUTELY, not through its own /api`, () => {
+			// Not a style rule. The SSR rewrite that carries a relative `/api/*` to the edge is wired
+			// only in the zones that opt in (`makeZoneHooks(env, { edge: true })`); explorer and
+			// annotator do not, so a relative `/api/notifications/*` from them resolves against their
+			// own origin and 404s. `edgeUrl(env)` is the one form that is right in every zone.
 			const source = readFileSync(inbox, 'utf8');
 			expect(
-				source.includes('RASK_GATEWAY_URL'),
-				`${zone}'s inbox transport does not read RASK_GATEWAY_URL, so it is addressing the wrong upstream`,
+				source.includes('edgeUrl(env)'),
+				`${zone}'s inbox transport does not address the edge through edgeUrl(env), so it is addressing the wrong upstream`,
 			).toBe(true);
 		});
 

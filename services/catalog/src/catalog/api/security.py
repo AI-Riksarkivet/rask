@@ -21,13 +21,12 @@ from __future__ import annotations
 from typing import Annotated
 
 import jwt
-from fastapi import Depends, Header, Request
+from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from lance_namespace import PermissionDeniedError, ServiceUnavailableError, UnauthenticatedError
+from lance_namespace import ServiceUnavailableError, UnauthenticatedError
 
 from catalog.api.dependencies import SettingsDep
 from service_kit.governed.audit import FAILURE, SUCCESS, audit
-from service_kit.governed.dapr_auth import is_public_caller
 from service_kit.governed.deps import ANONYMOUS_SUBJECT
 from service_kit.governed.machine_identity import ServiceAccountVerifier, ServicePrincipal
 from service_kit.governed.oidc import IDToken, OIDCVerifier, ProviderUnavailableError
@@ -53,19 +52,13 @@ def _claims_issuer(bearer: str, issuer: str | None) -> bool:
     return isinstance(claimed, str) and claimed.rstrip("/") == issuer.rstrip("/")
 
 
-def _service_principal(verifier: ServiceAccountVerifier | None, bearer: str, caller_app_id: str | None) -> ServicePrincipal:
+def _service_principal(verifier: ServiceAccountVerifier | None, bearer: str) -> ServicePrincipal:
     """The service a cluster-issued bearer proves, or the refusal that names why it proves none."""
     if verifier is None:
         # The settings name a service-account issuer and this bearer claims it, but no verifier was
         # built: a 503 keeps a broken boot visible instead of handing the token to the IdP.
         audit("authn", FAILURE, reason="verifier_unavailable")
         raise ServiceUnavailableError("Authentication is enabled but unavailable")
-    if is_public_caller(caller_app_id):
-        # The public front door forwards a stranger's request through Dapr; a service principal is
-        # never something it may present on their behalf. The gateway strips the header a client
-        # could forge, which is what makes this check mean anything.
-        audit("authn", FAILURE, reason="public_caller")
-        raise PermissionDeniedError(f"{caller_app_id!r} is a public front door: a service token is not accepted through it")
     try:
         principal = verifier.verify(bearer)
     except ProviderUnavailableError as exc:
@@ -82,9 +75,6 @@ def authenticate(
     request: Request,
     settings: SettingsDep,
     credentials: _CredentialsDep,
-    # The INVOKING Dapr app-id — what separates a service from the PUBLIC front door invoking on a
-    # stranger's behalf. See `service_kit.governed.dapr_auth.is_public_caller`.
-    dapr_caller_app_id: Annotated[str | None, Header()] = None,
 ) -> Principal | None:
     """Authenticate the request: a projected service-account token (a service) or an OIDC bearer (a person).
 
@@ -99,7 +89,7 @@ def authenticate(
     bearer = credentials.credentials if credentials is not None else None
     sa_verifier: ServiceAccountVerifier | None = getattr(request.app.state, "sa_oidc", None)
     if bearer and (sa_verifier.issued(bearer) if sa_verifier is not None else _claims_issuer(bearer, settings.sa_issuer)):
-        return _service_principal(sa_verifier, bearer, dapr_caller_app_id)
+        return _service_principal(sa_verifier, bearer)
 
     verifier: OIDCVerifier | None = getattr(request.app.state, "oidc", None)
     if verifier is None:

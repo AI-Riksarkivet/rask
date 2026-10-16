@@ -54,7 +54,8 @@ svc() {
 step "1/4 discovering the deployed release"
 CATALOG="$(svc "$RELEASE-catalog")"  || true
 LINEAGE="$(svc "$RELEASE-lineage")"  || true
-GATEWAY="$(svc "$RELEASE-gateway")"  || true
+# The edge is the cluster's Gateway: on k3s, Traefik's Service, which serves the release's HTTPRoutes.
+EDGE="$(svc traefik kube-system)"   || true
 # THE OBJECT STORE ANSWERS TO WHICHEVER BACKEND THE RELEASE INSTALLED, and the name is not a
 # formality: `rustfs.enabled` renders a RustFS Tenant at `<release>-rustfs-io` while the MinIO path
 # renders `<release>-minio`. Discovering only one of them is how this script exported the literal
@@ -71,7 +72,7 @@ NOTIFICATIONS="$(svc "$RELEASE-notifications")" || true
 # The notifications service mounts its routers under the fleet's API prefix, read from the release's own config.
 API_PREFIX="$(kubectl get cm "$RELEASE-config" -o jsonpath='{.data.RASK_API_PREFIX}' 2>/dev/null || true)"
 [ -n "$CATALOG" ] || fail "no $RELEASE-catalog service — is the release deployed?"
-printf '   catalog=%s lineage=%s gateway=%s s3=%s\n' "$CATALOG" "$LINEAGE" "$GATEWAY" "$S3"
+printf '   catalog=%s lineage=%s edge=%s s3=%s\n' "$CATALOG" "$LINEAGE" "$EDGE" "$S3"
 
 step "2/4 minting a real bearer through Dex"
 # The estate is governed, so an unauthenticated suite proves nothing. The password grant is the same
@@ -124,7 +125,7 @@ url() {  # url VARNAME HOST[/path] — export VARNAME=http://HOST... only if HOS
 }
 url LANCE_E2E_CATALOG_URL     "$CATALOG"
 url LANCE_E2E_LINEAGE_URL     "$LINEAGE"
-url LANCE_E2E_GATEWAY_URL     "$GATEWAY"
+url RASK_E2E_EDGE_URL         "$EDGE"
 url LANCE_E2E_S3              "$S3"
 url LANCE_E2E_S3_ENDPOINT     "$S3"
 url LANCE_E2E_DEX             "$DEX" /dex

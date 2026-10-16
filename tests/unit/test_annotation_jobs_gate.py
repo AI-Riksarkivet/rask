@@ -9,12 +9,11 @@ WHY `require_dapr_token` AND NOT THE NEIGHBOURS' FGA PAIR. `JobRequest` names a 
 scope and an OPTIONAL dataset — there is no project id to check a per-project relation against, and
 `scope.level="corpus"` is estate-wide by construction. Inventing a door for an object the request
 never identifies would be a worse answer than naming the boundary the seam actually sits behind, and
-it genuinely sits behind one: the gateway proxies only `/api/explorer/annotations` →
-`/api/annotations`, so `/api/jobs` has NO public row and is reachable in-cluster only.
+it genuinely sits behind one: the cluster route publishes only `/api/explorer/annotations` →
+`/api/annotations` on the annotator, so `/api/jobs` has NO public row and is reachable in-cluster only.
 
-What `require_dapr_token` proves is "arrived via Dapr", never "trusted caller" — the gateway itself
-invokes through Dapr. That is exactly the claim being made here, so the tests below assert the
-service-only boundary, NOT a user-authorization one.
+What `require_dapr_token` proves is "arrived via Dapr", never "trusted caller". That is exactly the
+claim being made here, so the tests below assert the service-only boundary, NOT a user-authorization one.
 """
 
 from __future__ import annotations
@@ -86,11 +85,7 @@ def test_an_UNCONFIGURED_door_refuses_every_caller(monkeypatch: pytest.MonkeyPat
 
 
 def test_the_DELIBERATE_dev_default_still_reaches_the_handler(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The local loop keeps working without a token — once someone says so out loud.
-
-    The public-caller refusal above still holds even here, which is why the opt-in opens a door for a
-    sidecar delivery and never for a front-door proxy.
-    """
+    """The local loop keeps working without a token — once someone says so out loud."""
     monkeypatch.delenv("APP_API_TOKEN", raising=False)
     monkeypatch.setenv("RASK_ALLOW_UNAUTHENTICATED_DAPR", "true")
 
@@ -99,10 +94,11 @@ def test_the_DELIBERATE_dev_default_still_reaches_the_handler(monkeypatch: pytes
     assert response.status_code != 403
 
 
-def test_the_gate_precedes_the_BODY_so_a_refusal_costs_no_validation() -> None:
+def test_the_gate_precedes_the_BODY_so_a_refusal_costs_no_validation(monkeypatch: pytest.MonkeyPatch) -> None:
     """A router-level dependency runs before body validation: garbage from an unauthenticated caller
     must be refused as unauthorized (403), never reported as malformed (422). Leaking which payloads
     parse is a small oracle, and it is free to close."""
-    response = _client().post("/api/jobs/apply", json={"nonsense": True}, headers={"dapr-caller-app-id": "gateway"})
+    monkeypatch.setenv("APP_API_TOKEN", "expected")
+    response = _client().post("/api/jobs/apply", json={"nonsense": True}, headers={"dapr-api-token": "forged"})
 
     assert response.status_code == 403

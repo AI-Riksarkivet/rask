@@ -169,13 +169,11 @@ async def test_an_unreadable_identity_token_fails_the_poll_and_sends_nothing(lin
 @pytest.mark.asyncio
 @respx.mock
 async def test_a_transient_failure_is_NOT_retried_in_this_module() -> None:
-    """The inverse of what this test used to assert, and the change is deliberate.
+    """Redelivery is the sidecar's, not this module's.
 
-    It read: "Tenacity lives HERE and nowhere else: no sidecar policy covers a call this service makes
-    itself." That was true only because the feed was read over a DIRECT httpx call. Read through Dapr
-    service invocation (`IngressSettings.feed_base_url`), the estate's existing `invokeRetry` policy
-    covers it — and that policy already encodes the same rule the hand-written `_is_transient` did:
-    `408,429,500-599`, never a 4xx.
+    The feed is read through Dapr service invocation (`IngressSettings.feed_base_url`), and the
+    invocation Resiliency scoped to this app's sidecar retries it on `408,429,500-599`, never a 4xx
+    (tests/unit/test_invariants.py::test_the_notifications_pod_asks_for_a_sidecar_and_is_allowed_to_receive_one).
 
     So a 503 must now propagate on the FIRST attempt. One layer owns redelivery; a second multiplies it.
     """

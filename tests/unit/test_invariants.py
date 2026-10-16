@@ -307,23 +307,23 @@ def test_a_per_component_pin_beats_the_global_tag_and_a_digest_beats_the_pin() -
     """#135 — the chart must be able to describe a fleet that is NOT one tag.
 
     One `image.tag` could not: a live estate ran a catalog tag across 11 services, a different tag on
-    gateway/compute/controlplane, a third across the 7 zones, and an ingest DIGEST. Rendering all of
+    flows/notifications, a third across the 7 zones, and an ingest DIGEST. Rendering all of
     that from one value is what made `helm upgrade` destructive — every image rewritten to a tag the
     node did not hold, whole fleet ImagePullBackOff, recovered by hand. Observed twice on 2026-08-06.
 
     Precedence is asserted end to end, because a pin that is merely ACCEPTED and then overridden is
     worse than no pin: it reads as safety while the deploy still rewrites the image.
     """
-    pinned = _helm_template(*_REAL_REGISTRY, "image.tags.gateway=PINNED")
-    assert 'image: "reg.example/gateway:PINNED"' in pinned, "a per-component tag did not reach the render"
-    assert 'image: "reg.example/notifications:dev"' in pinned, "the pin leaked onto a component that did not ask for it"
+    pinned = _helm_template(*_REAL_REGISTRY, "image.tags.notifications=PINNED")
+    assert 'image: "reg.example/notifications:PINNED"' in pinned, "a per-component tag did not reach the render"
+    assert 'image: "reg.example/flows:dev"' in pinned, "the pin leaked onto a component that did not ask for it"
 
     # A digest is a CONTENT pin — a reconciler's, typically — so no tag may undo it.
-    both = _helm_template(*_REAL_REGISTRY, "image.tags.gateway=IGNORED", "image.digests.gateway=sha256:abc")
-    assert 'image: "reg.example/gateway@sha256:abc"' in both, "a per-component tag overrode a digest"
+    both = _helm_template(*_REAL_REGISTRY, "image.tags.notifications=IGNORED", "image.digests.notifications=sha256:abc")
+    assert 'image: "reg.example/notifications@sha256:abc"' in both, "a per-component tag overrode a digest"
 
 
-@pytest.mark.parametrize("key", ["image.tags.lance-rest-catalog", "image.digests.gateway"])
+@pytest.mark.parametrize("key", ["image.tags.lance-rest-catalog", "image.digests.notifications"])
 def test_an_image_reference_that_helm_parsed_as_a_number_is_refused_at_render(key: str) -> None:
     """A short sha can be all digits, and `--set` parses `93951597` as an int64.
 
@@ -463,12 +463,15 @@ def test_the_notifications_pod_asks_for_a_sidecar_and_is_allowed_to_receive_one(
     every pod that asks — and says nothing at all about a pod that never asks. That is the vacuous case
     this closes: the whole notification plane is actor state plus one bus subscription, so a
     Deployment rendered with no `dapr.io/*` annotations would come up healthy, serve its health surface
-    and its gateway row, and fail every inbox route forever — on a pod whose probes stay green,
+    and its route, and fail every inbox route forever — on a pod whose probes stay green,
     because actor registration is process-local and cannot notice that no sidecar was injected.
 
     The app-id is asserted because it is not decoration: `lance-statestore`'s `scopes`, the
-    `lineage-pubsub-notifications` component's subscriber list and the resiliency CRD all key on that
-    exact string, and a mismatch disables actor hosting with no error anywhere.
+    `lineage-pubsub-notifications` component's subscriber list and the resiliency CRDs all key on that
+    exact string, and a mismatch disables actor hosting with no error anywhere. The reconciler reads
+    lineage's feed through this sidecar and carries no retry of its own, so the invocation Resiliency
+    targeting `lineage` must be scoped to this app-id: a Resiliency applies only in the sidecars its
+    `scopes` name.
     """
     rendered = _helm_template()
 
@@ -492,15 +495,21 @@ def test_the_notifications_pod_asks_for_a_sidecar_and_is_allowed_to_receive_one(
         "fail-closed webhook skips it and it comes up un-injected, with every inbox route failing"
     )
 
+    feed_retry = [
+        doc
+        for doc in yaml.load_all(rendered, Loader=FAST_LOADER)
+        if isinstance(doc, dict) and doc.get("kind") == "Resiliency" and "lineage" in (((doc.get("spec") or {}).get("targets") or {}).get("apps") or {})
+    ]
+    assert [doc["scopes"] for doc in feed_retry] == [["notifications"]], "no Resiliency the notifications sidecar loads retries its lineage feed read"
+
 
 # --------------------------------------------------------------------------------------------------
 # 12. The notification plane's WIRING — the four facts that live in the chart and nowhere else
 #
 # The service's own suites prove what each route answers; none of them can see whether anything ever
 # reaches those routes. Each guard below covers one address that is written down in exactly one place,
-# read somewhere else, and whose omission produces a HEALTHY pod: a gateway proxying to itself, a
-# subscription on a component that does not exist, an actor host with no state store, and a kubelet
-# probing a path the app does not serve. Three of the four have already shipped once in this estate on
+# read somewhere else, and whose omission produces a HEALTHY pod: a subscription on a component that does not exist, an actor
+# host with no state store, and a kubelet probing a path the app does not serve. Two of the three have already shipped once in this estate on
 # a neighbouring service.
 # --------------------------------------------------------------------------------------------------
 
@@ -528,11 +537,11 @@ def _rendered_docs(*set_values: str) -> list[dict]:
 
 
 def _fleet_config(docs: list[dict]) -> dict[str, str]:
-    """The fleet ConfigMap — the one carrying `RASK_API_PREFIX` and the gateway's upstream addresses."""
+    """The fleet ConfigMap — the one carrying `RASK_API_PREFIX` and the notifications plane's addresses."""
     for doc in docs:
         if doc.get("kind") == "ConfigMap" and "RASK_API_PREFIX" in (doc.get("data") or {}):
             return doc["data"]
-    raise AssertionError("no fleet ConfigMap rendered — every gateway upstream would fall back to a localhost default")
+    raise AssertionError("no fleet ConfigMap rendered — every fleet address would fall back to a localhost default")
 
 
 def _notifications_container(docs: list[dict]) -> dict:
@@ -542,31 +551,10 @@ def _notifications_container(docs: list[dict]) -> dict:
     raise AssertionError("no notifications Deployment rendered")
 
 
-def test_the_gateway_learns_where_the_inbox_lives_rather_than_proxying_to_itself() -> None:
-    """`RASK_NOTIFICATIONS_URL` is the only thing standing between the row and a self-proxy.
-
-    The gateway's row defaults to `http://127.0.0.1:8850` — inside the gateway POD that address is the
-    gateway, where no inbox route exists, so every call answers a 404 indistinguishable from an
-    unrouted path while the service is up and healthy one Service name away. This is not a
-    hypothetical: a gateway upstream URL has shipped missing from the configmap once, and a comment
-    saying so is not a gate.
-
-    The port is compared against the container's OWN port rather than a literal: the failure this
-    catches second is the address being right and the port stale.
-    """
-    docs = _rendered_docs()
-    url = _fleet_config(docs).get("RASK_NOTIFICATIONS_URL")
-    port = _notifications_container(docs)["ports"][0]["containerPort"]
-
-    assert url, "the chart renders no RASK_NOTIFICATIONS_URL — the gateway's /api/notifications row proxies to the gateway itself"
-    assert "127.0.0.1" not in url and "localhost" not in url, f"the gateway is pointed at itself: {url}"
-    assert url.endswith(f":{port}"), f"the gateway addresses {url} while the pod listens on {port}"
-
-
 def test_the_inbox_subscribes_on_a_component_the_chart_actually_renders() -> None:
     """A subscription names its pubsub component by string, and a name that resolves to nothing is a
-    STARTUP error the pod survives: daprd logs it, the app serves its health surface and its gateway
-    row, and not one lineage event is ever delivered.
+    STARTUP error the pod survives: daprd logs it, the app serves its health surface and its route,
+    and not one lineage event is ever delivered.
 
     Both ends are asserted because they fail in different deployments. The chart's value is what the
     pod reads; the app's DEFAULT is what a dev run without the ConfigMap reads, and the two drifting

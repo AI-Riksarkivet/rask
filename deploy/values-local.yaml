@@ -86,9 +86,8 @@ ray:
 # Interactive API docs (/docs, /redoc, /openapi.json) across the release.
 #
 # ON here and OFF in the chart default, which is the split the audit asked for: a local k3s cluster is
-# where these are actually useful, and it is not reachable from anywhere. Everything published at an
-# Ingress keeps the closed default — most of all the gateway, whose aggregated `{prefix}/openapi.json`
-# answers anonymously and fans out to every backend it fronts.
+# where these are actually useful, and it is not reachable from anywhere. Everything the
+# Gateway route publishes keeps the closed default, because an open schema there is one anonymous GET away.
 docs:
   enabled: true
 
@@ -175,3 +174,12 @@ services:
       # The development graph backend, the marquez fixture (deploy/fixtures/marquez): lineage forwards every event it
       # records there, as it would to a platform's own (ADR 0158).
       url: http://rask-marquez:5000
+
+# The edge on k3s is Traefik's Gateway provider (`make k3s-install` switches it on; deploy/k3s/traefik-gateway.yaml):
+# its `traefik-gateway` in kube-system, listener `web`, the same entrypoint the node's port 80 serves. The zones' server
+# side reaches it at Traefik's Service, and uvicorn trusts the forwarded chain from the pod CIDR it runs in. k3s runs no
+# NetworkPolicy here (`networkPolicy.enabled` is off), so no `route.edgeEgress`.
+route:
+  parentRefs: [{name: traefik-gateway, namespace: kube-system, sectionName: web}]
+  edgeUrl: http://traefik.kube-system.svc.cluster.local
+forwardedAllowIps: 10.42.0.0/16

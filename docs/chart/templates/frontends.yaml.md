@@ -9,9 +9,9 @@ SvelteKit SSR micro-frontend zones. One Deployment + Service per .Values.fronten
 entry, all built from the ONE parametrized .docker/frontend.dockerfile (image
 "<zone>:<tag>", `make k3s-build`). The catch-all (catchAll: true) serves "/"; every
 domain zone is pinned to its base path /<zone> in its svelte.config.js and is
-TCP-probed — a zone's "/" is a 404 under its base path, so no httpGet. The Ingress
-path-routes /<zone> -> this Service (ingress.yaml); the gateway sits BEHIND these Bun
-servers and owns /api only — it never serves the SPA shell.
+TCP-probed — a zone's "/" is a 404 under its base path, so no httpGet. The cluster
+route sends /<zone> -> this Service (route.yaml, `<release>-web`) and each /api/* prefix
+straight to its service (`<release>-api`); no backend serves the SPA shell.
 
 NAMING — the live collision class of the lance-ns merge: every frontend object is
 `<fullname>-web-<zone>`, NOT the bare zone name. The merged estate has an `annotator`
@@ -27,20 +27,19 @@ ha.yaml (zone PDBs) and network-policy.yaml (the front-door rule) already select
 `app.kubernetes.io/component: web-<zone>` — the three must stay in step.
 
 Every zone shares ONE env block (the "auth/secret similar in every MFE" seam):
-the backend URLs the zones' BFF proxies target, the gateway URL the SSR /api rewrite
-uses, and — auth on — the service-cred read fallback + the OIDC config, so a login on
+the backend URLs the zones' BFF proxies target, the edge URL the SSR /api fetches
+use, and — auth on — the service-cred read fallback + the OIDC config, so a login on
 any zone is a login on every zone (one origin, one sealed cookie). The media/annotator
 zones additionally get the media plane's upstreams, scoped per zone.
 
-## `{{- $gwPort := $root.Values.services.gateway.port -}}`
+## `{{- $edge := required "route.edgeUrl must name the Gateway's in-cluster address: the zones' server sid...`
 
-The zones' gateway is the RASK FLEET gateway (services.gateway, uvicorn `gateway:app`
-on :8888) — the process that path-routes /api/* to the fleet and the lance planes,
-and the target the zones' relative /api/* fetches resolve to through
-the Ingress. lance-ns's own nginx gateway (top-level `gateway:`, :8080,
-templates/gateway.yaml) is RETIRED and deleted (docs/adr/0117-nginx-is-retired-and-the-fastapi-gateway-is-the-in-cluster.md),
-so `<fullname>-gateway` names exactly one object — the fleet gateway. kgateway is
-the intended future edge (not implemented on this branch).
+The zones' server side reaches /api/* through the SAME cluster route a browser takes: `route.edgeUrl`
+is the platform Gateway's in-cluster address (on k3s, `http://traefik.kube-system.svc.cluster.local`),
+rendered as `RASK_EDGE_URL`. One route table, the cluster's, so a zone holds no per-service map of
+prefixes to Services that could drift from `rask.apiRoutes`. Required while the zones render: an SSR
+fetch with no edge falls back to the zone's localhost dev default, which inside a pod is the pod.
+Egress to it is `route.edgeEgress` (network-policy.yaml).
 
 ## `{{- $expected := list (printf "LINEAGE:%s" $root.Values.services.lineage.daprAppId) -}}`
 
@@ -90,8 +89,8 @@ guard is what speaks: it names the limit and the reason, whereas the adapter's
 ## `{{- include "rask.zoneOtelEnv" (list $root (printf "web-%s" .name)) | nindent 12 }}`
 
 TELEMETRY. The zones are the FIRST hop of every browser request — a page is served by
-this Bun server before anything reaches the gateway — and they exported nothing, so a
-slow page with a healthy gateway had no span anywhere to explain it. Worse than a gap:
+this Bun server before anything reaches a backend — and they exported nothing, so a
+slow page with healthy backends had no span anywhere to explain it. Worse than a gap:
 the RED dashboard's unfiltered `sum by (service_name)` rendered their absence as "these
 services do not exist" rather than "these services are unmonitored".
 
@@ -114,13 +113,13 @@ Verified 2026-08-06: an external dashboard host also serves the Serve apps
 genuinely lives somewhere else; a render naming no Ray leaves the env unset.
 
 Ray Serve's HTTP INGRESS — a different endpoint from the dashboard the compute service
-reads for `/api/serve` discovery, and nothing routes to it: inference is the one call the
-gateway cannot carry (its `/api/serve` row is GET-only by design, because Ray's dashboard
-exposes a deploy API). So the ONE zone that offers inference reaches it directly, and
+reads for `/api/serve` discovery, and nothing routes to it: inference is the one call
+`/api/serve` cannot carry (the compute service's proxy there is GET/HEAD-only by design,
+because Ray's dashboard exposes a deploy API). So the ONE zone that offers inference reaches it directly, and
 defaults to `http://localhost:8000` in code — which inside a pod is the pod. Studio takes
 the ORIGIN, because it appends `?app=` per request.
 
-## `- name: RASK_GATEWAY_URL`
+## `- name: RASK_EDGE_URL`
 
 NO `COMPUTE_SERVE_URL`, and its absence removed a whole class of trap with it.
 
@@ -135,10 +134,9 @@ upgrade with `The order in patch list … doesn't match $setElementOrder` AFTER 
 applying, taking ~20 deployments to ImagePullBackOff on 2026-08-06.
 `test_no_env_var_is_rendered_TWICE_on_any_workload` (parametrized over `ray.enabled`,
 because that toggle is what produced the overlap) still guards the class.
-SSR load/remote functions reach the gateway server-side via an absolute base
-URL; client code uses the relative /api/* Ingress route. Both names are live:
-the api package's gateway client reads RASK_GATEWAY_URL, the BFF reads
-LANCE_GATEWAY_URL — one Service, two readers, so both must be injected.
+SSR load/remote functions reach /api/* server-side via this absolute base URL (the
+Gateway's in-cluster address); client code uses the relative /api/* path on the same
+cluster route. ONE name, read by every zone's server-side API client and BFF alike.
 
 ## `- name: CATALOG_API`
 
@@ -185,8 +183,8 @@ can beat it. 0 (disabled) is the default; the wedged-client objection is
 answered by the app-level 20s keepalive, whose write fails on a vanished peer.
 `hasKey`, never `| default`: Helm treats 0 as empty, so `| default 255`
 rendered 255 for an explicit 0 and the change looked applied while nothing
-moved. Pair with ingress.annotations' proxy-read-timeout — both hops must
-hold, and the SMALLER one always wins.
+moved. Pair with the platform Gateway's idle-stream allowance (route.yaml) —
+both hops must hold, and the SMALLER one always wins.
 
 ## `- name: LINEAGE_SERVICE_TOKEN_FILE`
 
@@ -222,7 +220,7 @@ so the in-cluster head is the opt-in case and this block pointed the one inferen
 surface at the wrong cluster — a CPU htrflow — whenever ray.enabled was set.
 Inference now has exactly one door, studio's, which takes `$serveOrigin` above and is
 therefore derived from the same ONE signal as discovery. The reasoning for why
-inference bypasses the gateway at all (its `/api/serve` row is GET/HEAD-only on
+inference bypasses `/api/serve` at all (the compute proxy is GET/HEAD-only on
 purpose, because Ray's dashboard can PUT a deployment) lives with STUDIO_SERVE_URL.
 
 ## `- name: VIEWER_API`

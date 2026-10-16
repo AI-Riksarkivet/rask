@@ -64,17 +64,6 @@ def test_an_unauthenticated_caller_cannot_read_an_inbox_by_actor_id(client: Test
     assert ALICE not in response.text, "the refusal echoed the actor id back"
 
 
-def test_a_public_front_door_is_refused_even_with_no_token_configured(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The half that still holds in dev. `APP_API_TOKEN` unset makes the token check a no-op, so the
-    public-caller refusal is the only guard there is — and a front door's Dapr token authenticates the
-    PROXY, not the person behind it."""
-    monkeypatch.delenv("APP_API_TOKEN", raising=False)
-
-    response = client.put(f"/actors/InboxActor/{ALICE}/method/Page", json={}, headers={"dapr-caller-app-id": "gateway"})
-
-    assert response.status_code == 403
-
-
 def test_the_sidecar_itself_still_gets_through(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     """The guard must not break the thing it protects: daprd calls these routes back, presenting
     `dapr-api-token`. A gate that also refuses the sidecar would take the whole actor plane down."""

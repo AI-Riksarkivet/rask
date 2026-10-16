@@ -79,8 +79,9 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=10s \
   CMD python -c "import socket,sys; s=socket.socket(); s.settimeout(2); s.connect(('127.0.0.1',8850))" || exit 1
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
-# This service sits behind the FastAPI gateway (services/gateway); --forwarded-allow-ips
-# MUST be the gateway's CIDR at deploy time, never '*' (header-spoofing risk).
+# This service sits behind the platform Gateway's data plane (the cluster route); --forwarded-allow-ips
+# MUST be that data plane's pod CIDR at deploy time, never '*' (header-spoofing risk). The chart
+# overrides these args with `rask.proxyHeaderArgs` from `forwardedAllowIps`.
 # --workers intentionally unset, and here that is a CORRECTNESS bound rather than a sizing default:
 # Dapr places an actor id on a HOST, and a host is one daprd plus the one app it calls on the app-port.
 # Several uvicorn workers behind that port are several ActorRuntimes sharing one address, so two calls

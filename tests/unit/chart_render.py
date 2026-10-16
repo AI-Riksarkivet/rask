@@ -35,13 +35,17 @@ REPO = pathlib.Path(__file__).resolve().parents[2]
 NATS_URL = "nats://bus.example.com:4222"
 
 #: The prerequisites a render names: the APIs the chart checks through `.Capabilities`, the External Secrets Operator
-#: ([[XC-004]]) and Dapr ([[XC-128]]), and the NATS bus's address ([[XC-129]]). A cluster-less render names the
+#: ([[XC-004]]) and Dapr ([[XC-128]]), the NATS bus's address ([[XC-129]]), and the platform's Gateway the routes attach
+#: to, its in-cluster address and the egress that reaches it (ADR 0165). A cluster-less render names the
 #: cluster it targets. Without them every render refuses.
 PREREQ_ARGS: tuple[str, ...] = (
     "--api-versions", "external-secrets.io/v1/ExternalSecret",
     "--api-versions", "generators.external-secrets.io/v1alpha1/Password",
     "--api-versions", "dapr.io/v1alpha1",
     "--set-string", f"nats.url={NATS_URL}",
+    "--set-json", 'route.parentRefs=[{"name":"edge","namespace":"edge-system"}]',
+    "--set-string", "route.edgeUrl=http://edge.edge-system.svc.cluster.local",
+    "--set-json", 'route.edgeEgress=[{"to":[{"namespaceSelector":{"matchLabels":{"kubernetes.io/metadata.name":"edge-system"}}}],"ports":[{"protocol":"TCP","port":8080}]}]',
 )  # fmt: skip
 
 #: The Ray an estate names ([[CP-041]]): with the cascade's Ray lane on (the default) and no in-cluster

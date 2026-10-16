@@ -168,8 +168,9 @@ def register_dapr(app: FastAPI) -> None:
 
     ``DaprApp(app)`` is always constructed (it adds GET ``/dapr/subscribe``). The subscription itself is
     registered ONLY when Dapr ingest is enabled, so an HTTP-only deployment carries no always-live ingest
-    route. Combined with the token guard above, the pubsub component's publisher scopes, and the gateway
-    blocking this route, a forged external event cannot reach the feed. When ``dapr_dlq_topic`` is set
+    route. Combined with the token guard above (a request through the cluster route reaches the app port
+    and never carries a sidecar's token) and the pubsub component's publisher scopes, a forged external
+    event cannot reach the feed. When ``dapr_dlq_topic`` is set
     (chart: ``dapr.resiliency.enabled``), the subscription declares a Dapr ``deadLetterTopic`` and the
     parking route is registered — exhausted deliveries become visible instead of vanishing.
 

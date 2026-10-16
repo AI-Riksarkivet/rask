@@ -128,7 +128,7 @@ func (m *Rask) Test(
 ) (string, error) {
 	return m.base(src).
 		// base() only syncs the root project; the suites IMPORT the workspace members
-		// (compute, gateway, storage, …), so install every member like `make dev-micro` does.
+		// (compute, notifications, storage, …), so install every member like `make dev-micro` does.
 		WithExec([]string{"uv", "sync", "--all-packages"}).
 		// ── helm, so the chart-render invariants actually RUN (audit m5, fixed 2026-08-03) ──────────
 		// THIRTEEN tests in tests/unit/test_invariants.py render the chart through _helm_template()

@@ -274,7 +274,7 @@ jobs:
   # because the language dependencies inside the image are the same ones the lockfiles pinned. What it
   # DOES add is the layer no lockfile describes: Debian CVEs in the trixie/bun base images.
   #
-  # A SUBSET, said plainly: the three deployables (gateway, compute, runner) plus one representative
+  # A SUBSET, said plainly: the three deployables (notifications, compute, runner) plus one representative
   # zone. The other six dockerfiles and six zones are NOT scanned by this job. Widening it is a matter
   # of adding matrix rows and paying the build minutes.
   supply-chain-images:
@@ -285,7 +285,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        image: [gateway, compute, runner]
+        image: [notifications, compute, runner]
     steps:
       - uses: actions/checkout@v4
       - name: Install Dagger CLI (pinned to the module's engineVersion)

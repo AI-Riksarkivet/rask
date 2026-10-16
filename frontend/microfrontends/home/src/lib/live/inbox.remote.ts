@@ -1,5 +1,6 @@
 import { command, getRequestEvent, query } from '$app/server';
 import { env } from '$env/dynamic/private';
+import { edgeUrl } from '@rask/api';
 import {
 	dismissNotification,
 	INBOX_PAGE_LIMIT_MAX,
@@ -40,20 +41,15 @@ import * as v from 'valibot';
  *  - The watch/prefs settings surface lands here in S4, so the plane has one owner zone from S1
  *    rather than moving between slices.
  *
- * THE PROXY SPLIT, and why nothing here is relative. This zone's `/api` dev proxy targets
- * `LANCE_BACKEND` (`vite.config.ts`) and its SSR rewrite targets `LANCE_GATEWAY_URL`, both
- * defaulting to `http://localhost:8001` — the LINEAGE service, not the gateway
- * (`@rask/api/bff.ts` `DEFAULT_GATEWAY_URL`). So a relative `/api/notifications/*` from this zone
- * 404s against lineage in dev, and survives in prod only because the chart happens to point both
- * names at the same gateway Service (`chart/templates/frontends.yaml`) — a coincidence, not a
- * contract, and a dev/prod split is what it would be the day either name moved. The base is
- * therefore explicit and reads `RASK_GATEWAY_URL`: the variable `compute`, `studio` and the
- * lakehouse's `/api/explorer` door already read, injected into every zone pod by the same chart
- * block. One env, no chart change, and the S1 gateway row is the whole address. The absolute URL
- * also passes the SSR rewrite untouched — it only rewrites requests to this zone's OWN origin
- * (`@rask/api/gateway.ts`), which is what keeps `LANCE_GATEWAY_URL` out of this path entirely.
+ * WHY THE BASE IS ABSOLUTE. Every zone's server reaches `/api/*` through the cluster edge at
+ * `RASK_EDGE_URL` (`@rask/api/edge.ts`), whose `/api/notifications` route is the whole address. The
+ * SSR rewrite that would carry a relative `/api/…` there is wired only in the zones that opt in
+ * (`makeZoneHooks(env, { edge: true })`); explorer and annotator do not, and a relative call from
+ * them resolves against their own origin. Naming the edge keeps this module and its six siblings
+ * right on their own, and an absolute URL passes the rewrite untouched — it only rewrites requests
+ * to the zone's OWN origin.
  */
-const NOTIFICATIONS_API = `${(env.RASK_GATEWAY_URL ?? 'http://localhost:8888').replace(/\/$/, '')}/api/notifications`;
+const NOTIFICATIONS_API = `${edgeUrl(env)}/api/notifications`;
 
 /** This request's inbox call: the event's fetch and the signed-in bearer, which only exist inside
  *  an app, plus the env-resolved base. */

@@ -18,6 +18,7 @@ import { getRequestEvent } from '$app/server';
 import { env } from '$env/dynamic/private';
 import type * as v from 'valibot';
 import type { ApiResult } from '@rask/api/client';
+import { edgeUrl } from '@rask/api';
 import { parsed as sharedParsed, upstreamJSON } from '@rask/api/upstream';
 
 const CATALOG_API = env.CATALOG_API ?? 'http://localhost:2333';
@@ -28,7 +29,7 @@ const CATALOG_API = env.CATALOG_API ?? 'http://localhost:2333';
  * resolved against the incoming external origin under svelte-adapter-bun, and only the zones that
  * proxy `/api` would reach anything at all. Naming the gateway is the one form that is right in dev
  * and in cluster. */
-const GATEWAY_API = (env.RASK_GATEWAY_URL ?? 'http://localhost:8888').replace(/\/$/, '');
+const GATEWAY_API = edgeUrl(env);
 
 /** One catalog call → `ApiResult<unknown>`; the signed-in session's bearer rides along. */
 export function catalogJSON(path: string, init?: RequestInit): Promise<ApiResult<unknown>> {

@@ -24,14 +24,13 @@ from __future__ import annotations
 from typing import Annotated, Protocol
 
 import jwt
-from fastapi import Depends, Header, Request
+from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from lance_namespace import PermissionDeniedError, ServiceUnavailableError, UnauthenticatedError
+from lance_namespace import ServiceUnavailableError, UnauthenticatedError
 
 from lineage.api.dependencies import SettingsDep
 from lineage.core.config import LineageSettings
 from service_kit.governed.audit import FAILURE, SUCCESS, audit
-from service_kit.governed.dapr_auth import is_public_caller
 from service_kit.governed.machine_identity import ServiceAccountVerifier, ServicePrincipal
 from service_kit.governed.oidc import IDToken, OIDCVerifier, ProviderUnavailableError
 
@@ -70,15 +69,8 @@ def _service_account_issued(token: str, settings: LineageSettings, verifier: Ser
     return isinstance(claimed, str) and claimed.rstrip("/") == settings.sa_issuer.rstrip("/")
 
 
-def _service_account(token: str, verifier: ServiceAccountVerifier | None, dapr_caller_app_id: str | None) -> ServicePrincipal:
+def _service_account(token: str, verifier: ServiceAccountVerifier | None) -> ServicePrincipal:
     """The service a projected token proves, rendered in the door's problem vocabulary."""
-    if is_public_caller(dapr_caller_app_id):
-        # A service principal is never something the public front door may present on a stranger's behalf: the
-        # gateway forwards through Dapr service invocation, and a request it carries is a person's or nobody's.
-        audit("authn", FAILURE, reason="public_caller")
-        raise PermissionDeniedError(
-            f"{dapr_caller_app_id!r} is a public front door: a service account authenticates a service, not a caller — sign in and retry"
-        )
     if verifier is None:
         audit("authn", FAILURE, reason="verifier_unavailable")
         raise ServiceUnavailableError("Authentication is enabled but unavailable")
@@ -98,9 +90,6 @@ def authenticate(
     request: Request,
     settings: SettingsDep,
     credentials: _CredentialsDep,
-    # The INVOKING Dapr app-id — what separates a service from the public front door invoking on a
-    # stranger's behalf. See `service_kit.governed.dapr_auth.is_public_caller`.
-    dapr_caller_app_id: Annotated[str | None, Header()] = None,
 ) -> Principal | None:
     """Authenticate the caller: a person's IdP bearer, or a service's projected service-account token.
 
@@ -111,7 +100,7 @@ def authenticate(
     bearer = credentials.credentials if credentials is not None and credentials.credentials else None
     sa_verifier: ServiceAccountVerifier | None = getattr(request.app.state, "sa_oidc", None)
     if bearer is not None and _service_account_issued(bearer, settings, sa_verifier):
-        return _service_account(bearer, sa_verifier, dapr_caller_app_id)
+        return _service_account(bearer, sa_verifier)
     verifier: OIDCVerifier | None = getattr(request.app.state, "oidc", None)
     if verifier is None:
         # Enabled but no verifier wired (startup/discovery skew): fail closed, never open.

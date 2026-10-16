@@ -129,10 +129,10 @@ def _install_ns_problem_handlers(app: FastAPI) -> None:
     THE IMPORT IS DEFERRED, and that is a packaging constraint rather than a performance one.
     `lance_namespace` lives behind service-kit's `[governed]` / `[lakehouse]` extras and MUST stay
     there: this library is shared by every service including the storeless ones, so a Lance dependency
-    in its base is a Lance dependency in the gateway. Importing it at module scope made
-    `import service_kit` itself require the extra, which is how the gateway image stopped building at
-    all — `ModuleNotFoundError: No module named 'lance_namespace'`, caught by `.docker/import-gate.py`
-    while every test stayed green (the workspace venv resolves the extra through a sibling member).
+    in its base is a Lance dependency in every one of them. Importing it at module scope makes
+    `import service_kit` itself require the extra, and an image built without it fails at import —
+    `ModuleNotFoundError: No module named 'lance_namespace'`, caught by `.docker/import-gate.py`
+    while every test stays green (the workspace venv resolves the extra through a sibling member).
 
     SKIPPING IS SOUND, NOT A SILENT DEGRADATION, and this is the load-bearing argument. These handlers
     translate `lance_namespace` EXCEPTION TYPES. If the package is not importable then those classes do
@@ -172,12 +172,11 @@ def make_service_app(
     Serve proxy) is mounted at the root. The lifespan defaults to the minimal
     `default_lifespan` unless `lifespan=` is passed.
 
-    `settings` IS INJECTABLE, and omitting it keeps the old behaviour exactly. Four of the five
-    callers build their app at MODULE level, so without this parameter `build_settings()` —
-    `load_dotenv()` plus a whole `Settings` validation off the process environment — ran as an
-    unavoidable side effect of `import compute` / `import flows` / `import notifications` /
-    `import gateway`. Nothing could state the configuration it wanted: a caller could only mutate
-    the environment and hope it got there before the import did. Passing an object closes that,
+    `settings` IS INJECTABLE, and omitting it builds one from the environment. Every caller (compute,
+    flows, notifications) builds its app at MODULE level, so without this parameter `build_settings()` —
+    `load_dotenv()` plus a whole `Settings` validation off the process environment — would run as an
+    unavoidable side effect of `import compute` / `import flows` / `import notifications`. Nothing could state
+    the configuration it wanted: a caller could only mutate the environment and hope it got there before the import did. Passing an object closes that,
     and it is the same object the router prefix, the docs URLs, the middleware, `app.state.settings`
     and the lifespan factory all see — one instance, not a re-read per consumer.
     """

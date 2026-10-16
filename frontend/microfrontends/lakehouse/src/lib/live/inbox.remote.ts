@@ -1,5 +1,6 @@
 import { command, getRequestEvent, query } from '$app/server';
 import { env } from '$env/dynamic/private';
+import { edgeUrl } from '@rask/api';
 import {
 	dismissNotification,
 	INBOX_PAGE_LIMIT_MAX,
@@ -27,12 +28,13 @@ import * as v from 'valibot';
  */
 
 /**
- * ABSOLUTE, and read off `RASK_GATEWAY_URL` rather than written relative. This zone's `/api` dev
- * proxy and its SSR rewrite both target `LANCE_GATEWAY_URL` (`:8001`, the LINEAGE service), so a
- * relative `/api/notifications/*` from here 404s against lineage in dev. An absolute gateway URL also
- * passes the SSR rewrite untouched — it only rewrites calls to this zone's own origin.
+ * The edge's `/api/notifications` route, ABSOLUTE (`RASK_EDGE_URL`) — never a relative `/api/…`.
+ * The SSR rewrite that would carry a relative call to the edge is wired only in the zones that opt
+ * in (`makeZoneHooks(env, { edge: true })`), so a relative call is right in some zones and resolves
+ * against the zone's own origin in others; the absolute base is right wherever this file is copied,
+ * and passes that rewrite untouched, since it only rewrites requests to the zone's own origin.
  */
-const NOTIFICATIONS_API = `${(env.RASK_GATEWAY_URL ?? 'http://localhost:8888').replace(/\/$/, '')}/api/notifications`;
+const NOTIFICATIONS_API = `${edgeUrl(env)}/api/notifications`;
 
 /** This request's inbox call: the event's fetch and the signed-in bearer, plus the env-resolved base. */
 function inboxRequest() {

@@ -13,8 +13,8 @@ halves look right in isolation.
 **`require_dapr_token` is load-bearing here, not ceremony.** An unauthenticated trigger would let any
 client that can reach the port drive an unbounded number of catch-up walks against lineage — and,
 because the feed is governed by THIS service's identity, drive them with credentials the caller does
-not hold. The dependency also refuses invocations that arrived through a public front door, which is
-the measured gateway-bypass class.
+not hold. A request through the cluster route reaches the app port directly and never carries a
+sidecar's token, so the dependency refuses it.
 
 **Failures answer, they do not crash.** A tick that cannot read its cursor, cannot reach lineage, or
 outruns its budget raises a domain error that `make_service_app`'s handlers render as problem+json.

@@ -36,6 +36,8 @@ scopes:
 {{- range $subscribers }}
   - {{ .appId }}
 {{- end }}
+{{- $notifications := .Values.services.notifications }}
+{{- if or $notifications.frontDoor .Values.singleTenant.enabled }}
 ---
 apiVersion: dapr.io/v1alpha1
 kind: Resiliency
@@ -53,35 +55,12 @@ spec:
         maxRetries: 3
         matching:
           httpStatusCodes: 408,429,500-599
-      writeRetry:
-        policy: constant
-        duration: 2s
-        maxRetries: 3
-        matching:
-          httpStatusCodes: 408,429,502,503,504
   targets:
     apps:
-
-{{- $invoked := list .Values.services.catalog.daprAppId .Values.services.lineage.daprAppId }}
-{{- $lakehouse := list "catalog" "lineage" }}
-
-{{- range $name, $svc := .Values.services }}
-{{- if and (not (has $name $lakehouse)) (ne $name "gateway") (or $svc.frontDoor $.Values.singleTenant.enabled) }}
-{{- $invoked = append $invoked $name }}
-{{- end }}
-{{- end }}
-{{- if .Values.explorer.enabled }}
-{{- range $name, $svc := .Values.explorer.services }}
-{{- $invoked = append $invoked $svc.daprAppId }}
-{{- end }}
-{{- end }}
-
-{{- $writeDoors := list .Values.services.catalog.daprAppId }}
-{{- range $invoked }}
-      {{ . }}:
+      {{ .Values.services.lineage.daprAppId }}:
         timeout: invokeTimeout
-        retry: {{ if has . $writeDoors }}writeRetry{{ else }}invokeRetry{{ end }}
-{{- end }}
+        retry: invokeRetry
 scopes:
-  - gateway
+  - notifications
+{{- end }}
 {{- end }}

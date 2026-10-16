@@ -10,6 +10,11 @@ broker backOff — see values.yaml dapr.resiliency): the SIDECAR owns pub/sub de
 delivery that exhausts this schedule is published to the subscription's dead-letter topic (visible,
 ERROR-logged parking) instead of silently ceasing to redeliver after the broker's maxDeliver.
 
+This object governs pub/sub delivery alone. Service invocation has its own object below
+(`<release>-invocation-resiliency`), because Dapr applies invocation resiliency on the CALLING sidecar
+and that object is scoped to the one caller there is. Public traffic reaches each service through the
+cluster route (route.yaml), which involves no sidecar, so no policy can or needs to see it.
+
 THE POLICY IS `constant` BECAUSE IT IS THE ONLY ONE THAT CAN HOLD A WINDOW. dapr/kit's NewBackOff
 reads `Duration` under PolicyConstant alone (`b = backoff.NewConstantBackOff(c.Duration)`); under
 PolicyExponential it is ignored outright and the schedule comes from InitialInterval / Multiplier /
@@ -71,86 +76,20 @@ expression, so a rename of `pubsub.controlName` cannot leave the policy pointing
 that is gone. Gated by tests/unit/test_invariants.py's durable-component sweep, which is what
 caught this one before it shipped.
 
-## `apiVersion: dapr.io/v1alpha1`
+## `{{- if or $notifications.frontDoor .Values.singleTenant.enabled }}` — `<release>-invocation-resiliency`
 
-Service-invocation resiliency (the DAPRIFY mesh, 2026-07-27): with dapr.enabled every /api/* request
-leaves the gateway through its own daprd (RASK_DAPR_ENABLED → localhost:3500/v1.0/invoke/<app-id>/method),
-and Dapr applies invocation resiliency on the CALLING sidecar — so this policy is scoped to the gateway
-and targets every app-id the gateway routes to (services/gateway _routes()). Deliberately modest, no
-invented aggression: 3 constant-backoff retries (connect-level blips), an end-to-end timeout of 300s
-matching the gateway's own httpx client (httpx.Timeout(30.0, read=300.0) in services/gateway — a shorter
-Dapr timeout would cut long reads the gateway itself still waits for), and a circuit breaker that sheds
-a persistently dead upstream for 30s (the gateway's connect timeout) after 5 consecutive failures
-instead of stacking doomed retries onto it.
+The service-invocation policy, rendered only when notifications renders, because notifications is the
+only service-invocation caller in the estate: its reconciler reads lineage's durable feed through
+`/v1.0/invoke/lineage/method` (`IngressSettings.feed_base_url`). Dapr applies an invocation policy on
+the CALLING sidecar, so `scopes: [notifications]` is what makes it apply at all; a policy scoped to any
+other app-id governs nothing on this hop. Pinned by
+`tests/unit/test_invariants.py::test_the_notifications_pod_asks_for_a_sidecar_and_is_allowed_to_receive_one`.
 
-## `matching:`
+`invokeRetry` is `constant` 2 s, three retries, matching `408,429,500-599`: never a 4xx, because a 403's
+answer will not change, and a missing `event_reader` grant is a 403 on every tick that no retry can fix.
+`invokeTimeout` is 300 s. The only target is app `lineage`. No policy targets the catalog: no service
+invokes it through Dapr, so its write doors are replayed only by their own callers (see
+`service_kit.lakehouse.idempotency`).
 
-RETRY ONLY WHAT A RETRY CAN FIX. Without this, every 4xx is retried three times, so one
-rejected request becomes FOUR failures against `consecutiveFailures >= 5` — two denied
-logins open the breaker and the next 30 s of traffic to that app gets 500 for EVERY caller.
-Measured on the ingest door: a handful of anonymous 403s took the whole app-id offline,
-which turns an authorization check into a self-inflicted denial of service.
-Retrying a 403 is also pointless on its own terms: the answer will not change.
-
-## `writeRetry:`
-
-THE WRITE DOORS GET A NARROWER MATCHER, and the difference is exactly 500.
-The catalog's writes are announced on the bus and a pipeline acts on the announcement, so a replayed
-write is a second announcement ("pair retry with an idempotency key OR mark the operation non-retryable" —
-do both, because each covers what the other misses).
-502/503/504 mean the request never reached a working app, and these doors answer 503 with an
-explicit `Retry-After: 5` — a retry is what they ASK for. A bare 500 means the app WAS reached
-and something failed inside it, possibly after the door had already published its trigger.
-Replaying that three times at 2s is how one operator click became four unrelated runs.
-THE CATALOG IS ON THIS LIST TOO, since 2026-09-09, and the sentence that kept it off was the
-defect. It read "retrying a read after a 500 is harmless" — true, and the catalog is not a
-read plane: 77 POST plus 14 DELETE/PUT/PATCH routes across `api/v1/endpoints/`, none
-carrying an idempotency key. A 500 raised anywhere AFTER the Lance write in
-`create_governed_table` — the schema read-back, `emit_create`, `emit_control` — was replayed
-three times at 2s with nothing to converge them: with `mode=Create` the replays answer
-AlreadyExists, so a create that fully succeeded surfaces as a 409 indistinguishable from a
-name collision; with `mode=Overwrite` each replay RE-EXECUTES the destructive path, dropping
-and rewriting the dataset and re-seeding the ACL. The same amplifier sat on rename, drop,
-register and the warehouse/project mints.
-The rule this applies is the estate's own, quoted in
-`tests/unit/test_write_doors_require_idempotency.py`: "pair retry with an idempotency key OR
-mark the operation non-retryable". The catalog has no key, so it takes the other branch —
-and the key is § Q17-32's second half, which this does not replace.
-What it costs is a 500-retry on catalog READS. That is a resilience nicety a caller can
-repeat for itself; a replayed destructive write cannot be undone by anyone.
-
-## `targets:`
-
-NO CIRCUIT BREAKER ON INVOCATION TARGETS, deliberately.
-There was one — `consecutiveFailures >= 5`, 30 s open — and Dapr's circuit breaker, unlike its
-retry policy, has NO status matching: it counts every non-2xx, including the 4xx an authorization
-check returns as its normal, correct answer.
-Measured on the ingest door, after the retry `matching` above already removed the 4x
-amplification: `403 403 403 403 403 500 500 500 500 500`. Five refused requests took the whole
-app-id offline for every caller for 30 s. That is a denial of service ANY unauthenticated client
-can trigger on demand, against every app behind the gateway, by sending five requests it already
-knows will be refused. A protective control an attacker can aim is not a protective control.
-What is lost is fail-fast against a genuinely dead upstream. That is bounded by `invokeTimeout`
-and by the retry policy, and a slower failure on a real outage is a far smaller cost than a
-trivially remote-triggerable one on a healthy fleet.
-
-## `{{- $invoked := list .Values.services.catalog.daprAppId .Values.services.lineage.daprAppId }}`
-
-Target only app-ids whose pods can actually render — mirror the templates' own gates
-(fleet.yaml ranges .Values.services minus the lakehouse entries, gateway always + the rest
-under singleTenant; services.yaml renders catalog/lineage unconditionally;
-explorer.yaml carries its own toggle). Derived, not restated, so a new fleet
-entry is picked up here automatically.
-
-## `{{- range $name, $svc := .Values.services }}`
-
-Mirrors fleet.yaml's gate EXACTLY — `frontDoor` or singleTenant — because this list claims to be
-DERIVED from it. A restated gate (`if singleTenant.enabled` alone) drifts the moment a service
-becomes front-door: the chart renders a pod the gateway invokes while this CR does not target it,
-leaving that call with no timeout, no retry and no circuit breaker while the identical call to
-catalog has all three (measured on compute, before it moved to its own fixture chart). gateway is excluded because it is the CALLER, not a target.
-
-## `{{- $writeDoors := list .Values.services.catalog.daprAppId }}`
-
-The write doors take `writeRetry` (no 500); everything else keeps `invokeRetry`. Derived from
-the app-id rather than listed twice, so a rename cannot leave a head on the wide policy.
+A pass that exhausts the retries leaves the reconciler's cursor where it was (it advances only on a pass
+that completes), so the next cron tick re-walks it.

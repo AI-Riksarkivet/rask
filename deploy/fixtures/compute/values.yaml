@@ -1,2 +1,7 @@
 # The local estate's settings, the ones deploy/values-local.yaml gives rask: API docs on (rask's `docs.enabled`).
 docs: true
+# The Gateway deploy/values-local.yaml attaches rask's routes to: Traefik's on k3s.
+route:
+  parentRefs: [{name: traefik-gateway, namespace: kube-system, sectionName: web}]
+# The Gateway's data plane runs in the k3s pod CIDR, as rask's `forwardedAllowIps` in deploy/values-local.yaml.
+forwardedAllowIps: 10.42.0.0/16

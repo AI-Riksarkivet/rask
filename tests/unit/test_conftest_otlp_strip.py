@@ -2,9 +2,9 @@
 
 THE BUG THIS PINS, and it is an ordering bug rather than a logic one. `dagger call test` hung twice
 (abandoned at 22 and 56 minutes) with the worker asleep in `hrtimer_nanosleep`: Dagger injects
-`OTEL_EXPORTER_OTLP_ENDPOINT` for its own telemetry, `services/gateway` calls `setup_otel(...)` at
-MODULE scope and opts in through that endpoint alone, and the resulting exporter retried against a
-collector that rejects application metrics, with exponential backoff, for every app any test built.
+`OTEL_EXPORTER_OTLP_ENDPOINT` for its own telemetry, an app wired at MODULE scope opted in through that
+endpoint alone, and the resulting exporter retried against a collector that rejects application
+metrics, with exponential backoff, for every app any test built.
 
 The root conftest was written to close it and did not, because of the order pytest actually runs in:
 

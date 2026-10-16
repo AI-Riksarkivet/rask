@@ -9,7 +9,7 @@ What happens when a service goes down, can we get corrupted state, and how do we
 > demonstrated once", not "continuously chaos-tested".
 >
 > **What IS a repeatable regression suite:** the `make e2e-*` targets run the live suites under
-> `tests/e2e-py/` (observability, gateway, maintenance/compaction, CAS, governance boundary cases) against a
+> `tests/e2e-py/` (observability, the cluster route, maintenance/compaction, CAS, governance boundary cases) against a
 > deployed stack, and `make e2e-chaos` encodes the first chaos row below (scale lineage to 0, write, assert
 > the replay). The other chaos rows are **not encoded as automated tests** — they mutate shared infra, so
 > they stay out of the default lanes.

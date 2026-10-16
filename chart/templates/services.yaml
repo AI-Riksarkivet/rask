@@ -51,6 +51,7 @@ spec:
             - "--host=0.0.0.0"
             - "--port={{ .Values.services.catalog.port }}"
             {{- include "rask.shutdownArg" . | nindent 12 }}
+            {{- include "rask.proxyHeaderArgs" . | nindent 12 }}
           ports: [{ name: http, containerPort: {{ .Values.services.catalog.port }} }]
           env:
             {{- include "lance.allocatorEnv" (list $root) | nindent 12 }}
@@ -185,6 +186,8 @@ spec:
   selector: { app.kubernetes.io/component: catalog, app.kubernetes.io/instance: {{ .Release.Name }} }
 ---
 {{- if and .Values.dapr.enabled .Values.services.lineage.relay.enabled }}
+{{- $bn := .Values.services.lineage.relay.bindingName }}
+{{- if not (regexMatch "^[a-zA-Z0-9._-]+$" $bn) }}{{ fail (printf "services.lineage.relay.bindingName %q must match ^[A-Za-z0-9._-]+$: it names a Dapr Component and the route daprd delivers to" $bn) }}{{ end }}
 apiVersion: dapr.io/v1alpha1
 kind: Component
 metadata:
@@ -245,6 +248,7 @@ spec:
             - "--host=0.0.0.0"
             - "--port={{ .Values.services.lineage.port }}"
             {{- include "rask.shutdownArg" . | nindent 12 }}
+            {{- include "rask.proxyHeaderArgs" . | nindent 12 }}
           ports: [{ name: http, containerPort: {{ .Values.services.lineage.port }} }]
           env:
             {{- include "lance.allocatorEnv" (list $root) | nindent 12 }}

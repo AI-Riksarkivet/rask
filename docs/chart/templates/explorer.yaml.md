@@ -20,7 +20,7 @@ corpus — the same class of silent-wrong as the hostPath wedge this replaced, o
 ## `{{- include "rask.daprAnnotations" (list $root $svc.daprAppId $svc.port) | nindent 8 }}`
 
 Shared annotation surface (app-id = $svc.daprAppId — viewer/search/annotator, the exact
-ids the gateway's route rows invoke); the helper owns the full set so it never drifts.
+ids the sidecar registers them under); the helper owns the full set so it never drifts.
 
 ## `{{- $enc := $root.Values.encoders | default dict }}`
 
@@ -56,3 +56,10 @@ The source itself lives in `lance.corpusVolume` (_helpers.tpl) and is INCLUDED, 
 transcribed: the readers here and the seed writer must resolve to the same volume, and
 when they did not, the seed wrote a corpus to a hostPath while these three read an
 emptyDir — green probes on both sides, an empty product, for three days.
+
+## `{{- include "rask.proxyHeaderArgs" $root | nindent 12 }}`
+
+The media trio sit behind the Gateway's data plane (the cluster route's `/api/explorer*` rows), so they
+trust its `X-Forwarded-For` from `forwardedAllowIps` alone, exactly as catalog, lineage and the fleet do:
+without it every anonymous request carries the data plane's address and the rate limiter keys the whole
+public estate as one client.

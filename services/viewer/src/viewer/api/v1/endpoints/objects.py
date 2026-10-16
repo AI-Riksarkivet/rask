@@ -5,8 +5,8 @@ Ported from the retired rask ``volumes-api`` in the R6/R20 media wave
 and a STREAMED byte download over any bucket in the catalog's storage registry
 (it was two fixed buckets once — that premise died with `LANCE_STORES`, and it
 is why the download streams rather than buffers). Public paths ride the
-existing ``/api/explorer`` gateway row (``/api/explorer/objects`` → ``/api/objects``
-here), so the gateway grows zero new rows.
+existing ``/api/explorer`` rule of the cluster route (``/api/explorer/objects`` → ``/api/objects``
+here), so the route grows zero new rules.
 
 Uses ``storage.s3_client`` (never raw boto3); endpoint/creds resolve from env
 (``RASK_S3_ENDPOINT_URL`` / ``AWS_*``). Routes are ``async def`` for the awaited

@@ -470,22 +470,6 @@
               "title": "Limit",
               "type": "integer"
             }
-          },
-          {
-            "in": "header",
-            "name": "dapr-caller-app-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Caller-App-Id"
-            }
           }
         ],
         "responses": {
@@ -534,22 +518,6 @@
               "title": "Run Id",
               "type": "string"
             }
-          },
-          {
-            "in": "header",
-            "name": "dapr-caller-app-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Caller-App-Id"
-            }
           }
         ],
         "responses": {
@@ -589,24 +557,6 @@
       "post": {
         "description": "Ingest one OpenLineage event \u2014 a ``RunEvent``, or a ``DatasetEvent`` for a change no job performed.\n\nPARSED HERE RATHER THAN BY THE SIGNATURE, so this door and the bus door share ONE discriminator\n(`models.parse_event`). Declaring the body as `RunEvent` is what made a static event 422 before\nany handler ran: [[LIN-004]] moved catalog DDL onto `DatasetEvent` and taught only the bus. The\ncatalog's HTTP emitter is best-effort, so every create it sent lost its provenance in silence \u2014\nmeasured 2026-09-24, three creates, `{\"events\":[]}` in the durable feed, and a governance\nassertion reading `expected lineage creator=..., got None`.\n\nA body that is neither shape raises `RequestValidationError`, which `install_problem_handlers`\nrenders exactly as FastAPI's own 422 \u2014 the wire answer for a malformed payload is unchanged.\n\nThis is the OpenLineage HTTP-transport default path, so any OpenLineage producer\n(our emitter, Airflow, Spark, dbt, \u2026) configured with ``OPENLINEAGE_URL`` pointed\nhere ingests with no glue \u2014 the lightweight-Marquez contract.\n\nWhen OIDC is enabled the ``CurrentToken`` dependency requires a verified bearer token\n(401 otherwise), :func:`~lineage.api.fga_deps.enforce_author` binds the run author to that\ntoken's subject (no self-asserted identity), and :func:`~lineage.api.fga_deps.enforce_output_authz`\nrequires ``can_write_data`` on every output dataset (a producer can't record provenance for a table\nit can't write). Both are no-ops when auth is off.",
         "operationId": "ingest_event_api_v1_lineage_post",
-        "parameters": [
-          {
-            "in": "header",
-            "name": "dapr-caller-app-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Caller-App-Id"
-            }
-          }
-        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -969,22 +919,6 @@
               "title": "Summary",
               "type": "boolean"
             }
-          },
-          {
-            "in": "header",
-            "name": "dapr-caller-app-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Caller-App-Id"
-            }
           }
         ],
         "responses": {
@@ -1069,22 +1003,6 @@
               "minimum": 1,
               "title": "Limit",
               "type": "integer"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-caller-app-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Caller-App-Id"
             }
           }
         ],
@@ -1187,22 +1105,6 @@
               "minimum": 1,
               "title": "Depth",
               "type": "integer"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-caller-app-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Caller-App-Id"
             }
           }
         ],

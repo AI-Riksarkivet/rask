@@ -393,9 +393,6 @@ def test_events_governs_on_columnlineage_source_datasets() -> None:
     assert _column_lineage_datasets({}) == set()  # summary=True → no payload → no extra refs, nothing hidden
 
 
-# ── the public front door must not be able to mint a service principal ────────
-
-
 def test_get_events_reports_the_feed_FLOOR_so_a_consumer_can_see_what_it_lost() -> None:
     """`oldest_seq` — the oldest row the feed still holds.
 

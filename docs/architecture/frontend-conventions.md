@@ -71,11 +71,12 @@ Styling is **Tailwind 4 + OKLCH `@theme` tokens** from `@rask/ui/styles/tokens.c
 **THE canonical pattern.** Every read is a **server-only remote `query()`** in
 `src/lib/remote/<domain>.remote.ts` whose body calls a **`@rask/api`** function,
 passing **`getRequestEvent().fetch`**. The `@rask/api` functions fetch **relative
-`/api/*`**; a per-app server hook (`src/hooks.server.ts` →
-`makeGatewayHandleFetch(env.RASK_GATEWAY_URL)`) rewrites those to the **in-cluster
-gateway** during SSR, so a server read goes straight to the gateway instead of
-hairpinning out through the external ingress (a relative URL on the server would
-otherwise resolve against the incoming request origin). The request-scoped fetch
+`/api/*`**; a per-app server hook (`src/hooks.server.ts` → `makeZoneHooks(env, { edge: true })`,
+which wraps `makeEdgeHandleFetch(env.RASK_EDGE_URL)`) rewrites those to the **edge's
+in-cluster address** during SSR — the platform Gateway that serves the chart's HTTPRoutes —
+so a server read takes the same cluster route a browser does without hairpinning out through
+the external origin (a relative URL on the server would otherwise resolve against the incoming
+request origin). The request-scoped fetch
 inherits cookies and inlines the response into the SSR payload (no hydration
 refetch, no `onMount` waterfall). Reuse `@rask/api`'s schemas + parse — **zero
 duplicated fetch/validation per app**, and the rewrite is single-sourced in
@@ -101,7 +102,7 @@ export const getRayJobs = query(async (): Promise<RayJobsPayload> => {
 When the endpoint isn't in `@rask/api` yet (e.g. the lakehouse storage
 browser's media-viewer objects routes), the
 query still fetches **relative `/api/*` via `getRequestEvent().fetch`** — the
-same `hooks.server.ts` rewrite carries it to the gateway, so there is **no
+same `hooks.server.ts` rewrite carries it to the edge, so there is **no
 absolute-URL special case**. The only difference is that the response is parsed
 against a **local valibot schema** instead of an imported `@rask/api` one
 (parse-don't-validate at the boundary), and the real upstream status is surfaced
@@ -164,10 +165,10 @@ async function runSync() {
 **Why the hook (the SSR-origin problem).** `getRequestEvent().fetch` of a relative
 `/api/*` resolves against the browser origin on the client, but a server has no
 origin — raw during SSR inside a k3s pod the relative URL fails ("Unable to
-connect") or hairpins out through the external ingress. That is what the
-`makeGatewayHandleFetch` hook above solves: SvelteKit calls `handleFetch` only for
-server-side `event.fetch`, so it rewrites SSR `/api/*` to the in-cluster gateway
-and leaves client requests untouched. **All four data apps** (`overview`,
+connect") or hairpins out through the external origin. That is what the
+`makeEdgeHandleFetch` hook above solves: SvelteKit calls `handleFetch` only for
+server-side `event.fetch`, so it rewrites SSR `/api/*` to the edge's in-cluster
+address (`RASK_EDGE_URL`) and leaves client requests untouched. **All four data apps** (`overview`,
 `discover`, `compute`, `storage`) carry the **identical**
 hook in `src/hooks.server.ts` — no per-app variation. The catch-all `home` has
 **no** `@rask/api` data layer (so no hook).
@@ -470,7 +471,7 @@ drifting and breaking routing.
 ```
 
 ```ts
-// vite.config.ts — port matches microfrontends.json, strict, /api → gateway
+// vite.config.ts — port matches microfrontends.json, strict, /api → an edge on :8888
 server: {
 	port: 5179,
 	strictPort: true,

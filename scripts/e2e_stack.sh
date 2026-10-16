@@ -136,7 +136,7 @@ ALREADY_BUILT="$CATALOG_IMG"
 # is the render's and a new service joins it by existing. `$HELM_SET` is the SAME array the upgrade
 # below uses, so the set built and the set deployed cannot disagree.
 # EXTRACTED BY PARSING THE RENDER, not by matching its text: every chart call site passes
-# `rask.image` through `quote`, so a reference arrives here as `image: "gateway:dev"` and a filter
+# `rask.image` through `quote`, so a reference arrives here as `image: "notifications:dev"` and a filter
 # anchored on the unquoted scalar matches none of them. `scripts/side_loaded_images.py` is that
 # parse, shared with the gate that pins it, and it emits the dockerfile stem beside each image so
 # this loop needs to know neither rule. `--tag` comes from $CATALOG_IMG so one variable decides the
@@ -204,7 +204,7 @@ JOB_LOGS="$(mktemp)"
 # Recreate the app pods. Pod DELETE, not `rollout restart`: on a re-run against an existing cluster a rebuilt
 # same-tag image only lands on a freshly-scheduled pod, and delete forces that reschedule to pull the just-loaded
 # digest from the node cache (IfNotPresent) — the kind same-tag staleness fix (memory: kind-same-tag-image-gotcha).
-for d in catalog lineage gateway; do
+for d in catalog lineage; do
   kubectl delete pods -l "app.kubernetes.io/instance=$RELEASE,app.kubernetes.io/component=$d" \
     --ignore-not-found >/dev/null 2>&1 || true
 done

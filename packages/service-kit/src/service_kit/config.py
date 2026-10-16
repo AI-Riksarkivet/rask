@@ -3,7 +3,7 @@
 Read once at startup via `Settings()`; pass through DI as `SettingsDep`. Never
 re-read env vars in routes or services.
 
-Only the fields the surviving fleet (gateway + ray) reads live here — the
+Only the fields the `make_service_app` services (compute, flows, notifications) read live here — the
 viewer-I/O, Lance search and SPA fields died with core-api/search-api/volumes-api
 in the R6/R20 media wave (docs/adr/0112-the-media-plane-absorbs-rask-s-discovery-and-viewing-r5-r6.md). S3 endpoint and
 credential resolution belongs to `storage` (env-driven: RASK_S3_* / AWS_* /
@@ -42,9 +42,7 @@ class Settings(BaseSettings):
     #: is one nobody turns off.
     #:
     #: What this closes is a route table, parameter names and request/response schemas — not data, and
-    #: every documented route stays individually auth-gated. It matters most on the gateway, whose
-    #: aggregated `{prefix}/openapi.json` is published at the Ingress and answers an anonymous caller
-    #: by fanning out to every backend it fronts.
+    #: every documented route stays individually auth-gated.
     docs_enabled: bool = Field(default=False, alias="RASK_DOCS")
 
     #: Whether this app emits the `lance.audit` compliance stream. ON by default, because the trail
@@ -66,8 +64,7 @@ class Settings(BaseSettings):
     #: The request-body ceiling every app built by `make_service_app` enforces (`body_limit.py`).
     #:
     #: A DoS BOUND, not a business rule. It exists so a multi-GB body cannot reach a buffer — five
-    #: apps had no ceiling at all until 2026-08-26, the gateway included, and the gateway buffers
-    #: every proxied body whole. Generous on purpose: a route that wants a real limit states its own,
+    #: apps had no ceiling at all until 2026-08-26. Generous on purpose: a route that wants a real limit states its own,
     #: and the catalog sets 256 MiB explicitly for Arrow-IPC writes (it builds its own app, so it is
     #: not double-capped).
     max_body_bytes: int = Field(default=64 * 1024 * 1024, alias="RASK_MAX_BODY_BYTES")
@@ -77,8 +74,8 @@ class Settings(BaseSettings):
     # that env var is present, even if this flag is false.
     otel_enabled: bool = Field(default=False, alias="RASK_OTEL_ENABLED")
 
-    # Dapr service invocation. When false, build_dapr_client returns None and the
-    # gateway falls back to direct httpx upstreams. DAPR_HTTP_PORT is set by the
+    # Whether a Dapr sidecar runs beside the app; compute reads it to fail closed on an
+    # unset app token (`assert_app_token_configured`). DAPR_HTTP_PORT is set by the
     # Dapr sidecar injector in-cluster.
     dapr_enabled: bool = Field(default=False, alias="RASK_DAPR_ENABLED")
     dapr_http_port: str = Field(default="3500", alias="DAPR_HTTP_PORT")

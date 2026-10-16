@@ -29,7 +29,7 @@ export const MOCK_CATALOG_PORT = 5287;
  *  zone's block, which is the only free direction — 5289–5299 belong to lakehouse, explorer and
  *  annotator. */
 export const MOCK_OBS_PORT = 5286;
-/** The mock NOTIFICATIONS service standing in for `${RASK_GATEWAY_URL}/api/notifications/*`, which the
+/** The mock NOTIFICATIONS service standing in for `${RASK_EDGE_URL}/api/notifications/*`, which the
  *  watch page reads through REMOTE functions — server-side, where `page.route` cannot reach. 5285 is
  *  the next port below, the only free direction (5289–5299 belong to lakehouse, explorer and annotator). */
 export const MOCK_NOTIFICATIONS_PORT = 5285;

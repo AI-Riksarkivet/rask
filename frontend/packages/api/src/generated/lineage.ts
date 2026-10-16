@@ -468,9 +468,7 @@ export interface operations {
             query?: {
                 limit?: number;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -499,9 +497,7 @@ export interface operations {
     replay_dlq_admin_dlq__run_id__replay_post: {
         parameters: {
             query?: never;
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 run_id: string;
             };
@@ -532,9 +528,7 @@ export interface operations {
     ingest_event_api_v1_lineage_post: {
         parameters: {
             query?: never;
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -700,9 +694,7 @@ export interface operations {
                 limit?: number;
                 summary?: boolean;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -735,9 +727,7 @@ export interface operations {
                 since?: number | null;
                 limit?: number;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -808,9 +798,7 @@ export interface operations {
             query?: {
                 depth?: number;
             };
-            header?: {
-                "dapr-caller-app-id"?: string | null;
-            };
+            header?: never;
             path: {
                 name: string;
             };

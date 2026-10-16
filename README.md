@@ -40,16 +40,19 @@ Two language-pure planes: Python at the repo root, all JS/TS under `frontend/`.
     (OpenLineage → AGE, and the durable `GET /events` log), `maintenance` (version expiry, trash purge, the orphan
     scan, cross-store reconcile, and the list of tables due for a bring-your-own compaction or index optimize; ADR 0162)
   - **media**: `viewer`, `search`, `annotator`
-  - **fleet**: `gateway` (reverse proxy `:8888`), `flows` (the studio flow-builder's server half),
-    `notifications` (the per-subject inbox), and `compute` (Ray introspection + Serve proxy), the companion of a
-    bring-your-own Ray engine, which ships in its own chart (`deploy/fixtures/compute`) and has no gateway row
+  - **fleet**: `flows` (the studio flow-builder's server half), `notifications` (the per-subject inbox), and
+    `compute` (Ray introspection + Serve proxy), the companion of a bring-your-own Ray engine, which ships in its
+    own chart (`deploy/fixtures/compute`) with its own HTTPRoute
+  - **the edge** is the platform's Gateway (Kubernetes Gateway API), not a rask process: the chart's HTTPRoutes
+    (`chart/templates/route.yaml`) send each public `/api/*` prefix to its service, and every service authenticates
+    each request itself (ADR 0165)
 - `runners/` — **sealed model environments, not workspace members** (each owns its `pyproject.toml`
   and `uv.lock`, so torch/model pins never enter the fleet's resolution): `htr`, `asr`, `diarize`,
   `voiceprint`, `topics`, `kg`, `assist`, `insid3`, `dummy`
 - `frontend/` — the JS/TS plane; its own Bun + Turborepo workspace root:
   - `microfrontends/` — **seven SvelteKit 2 + Svelte 5 zones**: `home` (catch-all, owns `/`,
     `/projects`, `/settings` and the OIDC BFF) + `lakehouse`, `explorer`, `annotator`, `compute`,
-    `models`, `studio` — composed by the Turborepo `:3024` proxy in dev, by the Ingress in-cluster
+    `models`, `studio` — composed by the Turborepo `:3024` proxy in dev, by the cluster route in-cluster
   - `packages/` — `@rask/ui` (Svelte 5 + Bits UI + Tailwind 4 design system, Storybook), `@rask/api`,
     `@rask/explorer-api`, `@rask/dockview`, `@rask/flow`, `@rask/engine`, `@rask/labeling`,
     `@rask/config`, `@rask/zone-contract` (the estate's shape gates, a vitest suite)
@@ -85,7 +88,8 @@ make check       # fmt + lint + typecheck + knip
 ```bash
 make dev-zone ZONE=lakehouse   # ONE zone + its own mock upstreams — no cluster, no containers
 make dev-frontends             # all seven zones behind the :3024 proxy
-make dev-micro                 # gateway :8888 + compute, flows, notifications and the explorer trio
+make dev-micro                 # the fleet: compute, flows, notifications and the explorer trio (no edge)
+make dev-frontends-k3s         # all zones with /api → the in-cluster Gateway, port-forwarded to :8888
 ```
 
 **`make dev-zone` is the leanest loop and the only one that needs nothing else** — it starts a zone
@@ -128,7 +132,7 @@ locally and another in CI.
 make audit          # osv-scanner over every lockfile + .dagger/go.mod
 make scan-config    # trivy misconfig + secret detection over dockerfiles + chart
 make scan-secrets   # trufflehog over git history (gates on VERIFIED credentials only)
-make scan-image NAME=gateway
+make scan-image NAME=notifications
 ```
 
 ## CI

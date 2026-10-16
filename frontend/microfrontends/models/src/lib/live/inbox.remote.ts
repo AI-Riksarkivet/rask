@@ -1,5 +1,6 @@
 import { command, getRequestEvent, query } from '$app/server';
 import { env } from '$env/dynamic/private';
+import { edgeUrl } from '@rask/api';
 import {
 	dismissNotification,
 	INBOX_PAGE_LIMIT_MAX,
@@ -20,11 +21,10 @@ import * as v from 'valibot';
  * `ondismiss` seam. Server-side only: the bearer lives in the sealed httpOnly session cookie, and
  * the service derives the actor from the token's `sub` with no header fallback.
  *
- * The base is ABSOLUTE and reads `RASK_GATEWAY_URL` — never a relative `/api/*`. See
- * `microfrontends/home/src/lib/live/inbox.remote.ts` for the full reasoning (the proxy split: some
- * zones' `/api` targets `LANCE_GATEWAY_URL` on :8001, the lineage service, so a relative call 404s).
+ * The base is ABSOLUTE (`RASK_EDGE_URL`, the edge's `/api/notifications` route) — never a relative
+ * `/api/*`. See `microfrontends/home/src/lib/live/inbox.remote.ts` for the full reasoning.
  */
-const NOTIFICATIONS_API = `${(env.RASK_GATEWAY_URL ?? 'http://localhost:8888').replace(/\/$/, '')}/api/notifications`;
+const NOTIFICATIONS_API = `${edgeUrl(env)}/api/notifications`;
 
 /** This request's inbox call: the event's fetch and the signed-in bearer, which only exist inside
  *  an app, plus the env-resolved base. */

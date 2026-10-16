@@ -38,9 +38,7 @@ from fastapi.testclient import TestClient
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
-#: The apps composed through `make_service_app`. The gateway is absent from THIS list only because it
-#: is not composed by the factory — it builds its own FastAPI. It serves the same pair and is probed
-#: at it; see the gateway block at the end of this file.
+#: The apps composed through `make_service_app`.
 FACTORY_APPS = ["compute", "flows", "notifications"]
 
 
@@ -81,8 +79,8 @@ def test_the_chart_probes_READINESS_at_readyz_not_the_static_badge() -> None:
         if doc.get("kind") != "Deployment" or "rask-" not in doc["metadata"]["name"]:
             continue
         name = doc["metadata"]["name"]
-        if name.endswith(("-gateway", "-web-annotator", "-web-compute", "-web-explorer", "-web-home", "-web-lakehouse", "-web-models", "-web-studio")):
-            continue  # the gateway has a recorded exception; the web zones are not fleet apps
+        if name.endswith(("-web-annotator", "-web-compute", "-web-explorer", "-web-home", "-web-lakehouse", "-web-models", "-web-studio")):
+            continue  # the web zones are not fleet apps
         for container in doc["spec"]["template"]["spec"].get("containers") or []:
             probe = (container.get("readinessProbe") or {}).get("httpGet") or {}
             path = probe.get("path")
@@ -92,37 +90,6 @@ def test_the_chart_probes_READINESS_at_readyz_not_the_static_badge() -> None:
     assert not wrong, (
         f"these readiness probes point somewhere other than /readyz: {wrong} — `/api/health` is a "
         f"static badge, so it answers 200 while the pod drains and the kubelet keeps sending traffic"
-    )
-
-
-def test_the_gateway_probe_REPORTS_the_drain() -> None:
-    """The gateway keeps `/healthz` for both probes, and that exception is recorded and correct —
-    probing a proxied path would couple its readiness to an upstream. But a constant cannot say
-    "draining", and the gateway is the INGRESS: a rolling update that keeps it in rotation through
-    SIGTERM drops in-flight requests at the one hop every request passes through.
-
-    open_fastapi-audit names this explicitly: "even it should set `app.state.shutting_down` so its
-    `/healthz` can report the drain".
-    """
-    import gateway
-
-    # THROUGH THE LIFESPAN, which is what makes this order-independent. `gateway.app` is a module
-    # singleton and the lifespan's `finally` sets `shutting_down = True`, so any earlier test that ran
-    # a TestClient context leaves the flag set — this test then read 503 for its 200 precondition and
-    # failed on a state it never established. Entering the lifespan sets it False the way a real boot
-    # does, rather than patching the flag to paper over the leak.
-    with TestClient(gateway.app) as client:
-        assert client.get("/healthz").status_code == 200
-
-        gateway.app.state.shutting_down = True
-        try:
-            response = client.get("/healthz")
-        finally:
-            gateway.app.state.shutting_down = False
-
-    assert response.status_code == 503, (
-        "the gateway answers /healthz 200 while draining, so the kubelet keeps routing to it through "
-        "SIGTERM — at the one hop every request in the estate passes through"
     )
 
 
@@ -151,19 +118,3 @@ def test_the_gateway_probe_REPORTS_the_drain() -> None:
 # `shutting_down` and touches nothing else. The gateway gets the estate's readiness contract without
 # acquiring a dependency. `/healthz` stays as its public badge, the way `/api/health` stayed as the
 # fleet's.
-
-
-def test_the_gateway_readyz_REPORTS_the_drain() -> None:
-    """A readiness probe that cannot say "draining" is the inversion this whole finding is about."""
-    import gateway
-
-    with TestClient(gateway.app) as client:
-        assert client.get("/readyz").status_code == 200, "the app never became Ready, so the drain proves nothing"
-        gateway.app.state.shutting_down = True
-        try:
-            draining = client.get("/readyz")
-        finally:
-            gateway.app.state.shutting_down = False
-
-    assert draining.status_code == 503, "the gateway stays Ready through SIGTERM at the estate's only ingress"
-    assert draining.json()["status"] == "shutting_down"

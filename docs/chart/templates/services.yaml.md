@@ -15,6 +15,11 @@ command/args are split so the module, bind address, port and graceful-shutdown f
 one per line, the same whether the command is bare `uvicorn` or wrapped in
 `opentelemetry-instrument`.
 
+`rask.proxyHeaderArgs` adds `--proxy-headers --forwarded-allow-ips=<forwardedAllowIps>`: the
+cluster route sends public traffic here through the Gateway's data plane, so without trusting its
+`X-Forwarded-For` every anonymous request carries the data plane's address and the rate limiter keys
+the whole public estate as one client.
+
 ## `- { name: LANCE_MAX_CONCURRENT_WRITES, value: {{ hasKey .Values.catalog "maxConcurrentWrites" | ternary .Va...`
 
 Load-shed cap on concurrent in-flight Arrow-IPC writes (each buffers up to maxBodyBytes).
@@ -201,12 +206,14 @@ AFFINITY RATHER THAN A SHARED BUFFER: the events are hints and the audit trail i
 record, so the console can always re-read authoritative state. Paying for a shared buffer to fix a
 polling artefact is the wrong trade.
 
-`ClientIP` works here because every caller is a POD with a stable address — the console's poll
-runs server-side in the home zone and reaches this Service directly (`CATALOG_API`), never through
-the gateway. Maintenance runs its own pods and keeps spreading.
-This is NOT a pattern to copy onto the gateway Service, which sits behind the Ingress: there every
-request arrives from the ingress controller's single address, and pinning it would send the whole
-estate to one replica.
+`ClientIP` works here because every caller it governs is a POD with a stable address reaching the
+Service through kube-proxy — the console's poll runs server-side in the home zone and reaches this
+Service directly (`CATALOG_API`), not through the cluster route. Maintenance runs its own pods and
+keeps spreading.
+Public traffic through the Gateway is not pinned by this: a Gateway API data plane balances across the
+Service's endpoints itself rather than through its ClusterIP, so the data plane's single source
+address never meets kube-proxy's affinity. An implementation that forwarded to the ClusterIP instead
+would send every edge request to one replica.
 
 ## `timeoutSeconds: 10800`
 
@@ -233,6 +240,11 @@ command/args are split so the module, bind address, port and graceful-shutdown f
 (`rask.shutdownArg`, sized from the pod's termination grace) render as uvicorn arguments,
 one per line, the same whether the command is bare `uvicorn` or wrapped in
 `opentelemetry-instrument`.
+
+`rask.proxyHeaderArgs` adds `--proxy-headers --forwarded-allow-ips=<forwardedAllowIps>`: the
+cluster route sends public traffic here through the Gateway's data plane, so without trusting its
+`X-Forwarded-For` every anonymous request carries the data plane's address and the rate limiter keys
+the whole public estate as one client.
 
 ## `{{- include "lance.appTokenEnv" (list $root $root.Values.services.lineage.daprAppId) | nindent 12 }}`
 

@@ -16,7 +16,6 @@ members = [
     "catalog",
     "compute",
     "flows",
-    "gateway",
     "lineage",
     "lineage-kit",
     "maintenance",
@@ -1008,29 +1007,6 @@ wheels = [
 [package.optional-dependencies]
 http = [
     { name = "aiohttp" },
-]
-
-[[package]]
-name = "gateway"
-version = "0.1.0"
-source = { editable = "services/gateway" }
-dependencies = [
-    { name = "fastapi" },
-    { name = "httpx" },
-    { name = "pydantic" },
-    { name = "pydantic-settings" },
-    { name = "service-kit" },
-    { name = "uvicorn" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "fastapi", specifier = ">=0.115" },
-    { name = "httpx", specifier = ">=0.27" },
-    { name = "pydantic", specifier = ">=2.7" },
-    { name = "pydantic-settings", specifier = ">=2.5" },
-    { name = "service-kit", editable = "packages/service-kit" },
-    { name = "uvicorn", specifier = ">=0.30" },
 ]
 
 [[package]]

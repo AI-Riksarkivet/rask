@@ -4,18 +4,15 @@ The subscriptions are POST routes on the same FastAPI app that serves the public
 check any client that can reach the port can forge an event — and this plane's forged event is not
 a graph row, it is a notification in a named person's inbox, attributed to them as the author.
 
-Three refusals, and they answer different questions:
+Two refusals, and they answer different questions:
 
 * **the app token** proves the request arrived through THIS app's sidecar. Unset is the documented dev
   default, and `assert_app_token_configured` turns it into a startup failure the moment Dapr ingest is
-  actually on, so the no-op can only apply where nothing is deployed.
-* **the caller app-id** refuses a PUBLIC front door outright, token or no token. That one is a
-  measured bypass rather than a hypothesis: daprd stamps a valid `dapr-api-token` on every request it
-  delivers, and the gateway forwards `/api/*` through Dapr service invocation — so an anonymous
-  browser request arrives at a backend already holding a valid service token. It was measured against
-  the ingest door as 403 direct, 403 via service DNS, **202 through the gateway**.
-* **the signature** ([[XC-078]]) proves who WROTE the event, which neither check above can: both
-  authenticate the sidecar that delivered it, and every pod the bus lets publish reaches that sidecar.
+  actually on, so the no-op can only apply where nothing is deployed. A request from outside the
+  cluster never holds it: the Gateway routes `/api/notifications` to the app's port, not through a
+  sidecar (ADR 0165).
+* **the signature** ([[XC-078]]) proves who WROTE the event, which the check above cannot: it
+  authenticates the sidecar that delivered it, and every pod the bus lets publish reaches that sidecar.
   Under `RASK_SIGNATURE_DOORS=enforce` a run event reaches an inbox only when a signer the estate lists
   signed it, and a control event only when the role its action names signed it; the annotator's task
   actions and the grants on its own projects need no signature (owner rulings R3 and R5). A refusal is
@@ -355,36 +352,6 @@ def test_a_delivery_without_the_sidecars_token_puts_nothing_in_an_inbox(headers:
     manifest still says it is authenticated."""
     assert token_door.post("/lineage-events", headers=headers, json=_cloud_event(RUN_EVENT)).status_code == 403
     assert plane.boxes == {}
-
-
-def test_a_public_front_door_may_not_deliver_an_event_even_with_a_valid_token(token_door: TestClient, plane: _Plane) -> None:
-    """The token authenticates the PROXY, never the caller behind it. The gateway is a trusted service
-    invoking on behalf of someone who is not, so its invocations of a sidecar-delivery route are
-    refused unconditionally — this is not a token question and must not be answered like one."""
-    response = token_door.post(
-        "/lineage-events",
-        headers={"dapr-api-token": TOKEN, "dapr-caller-app-id": "gateway"},
-        json=_cloud_event(RUN_EVENT),
-    )
-
-    assert response.status_code == 403
-    assert "public front door" in response.json()["detail"]
-    assert plane.boxes == {}
-
-
-def test_the_public_front_door_is_refused_in_dev_too_where_it_is_the_only_guard(open_door: TestClient, plane: _Plane) -> None:
-    """With no token configured the caller check is the whole door. Making it conditional on the token
-    would leave the least-configured deployment the most permissive one."""
-    assert open_door.post("/lineage-events", headers={"dapr-caller-app-id": "gateway"}, json=_cloud_event(RUN_EVENT)).status_code == 403
-    assert plane.boxes == {}
-
-
-def test_an_absent_caller_header_is_not_a_public_caller(open_door: TestClient, plane: _Plane) -> None:
-    """Load-bearing rather than lenient: pub/sub delivery, binding delivery and a direct Service-DNS
-    call all arrive with no `dapr-caller-app-id`, and those are exactly the legitimate paths onto this
-    route. Treating absence as public would refuse every real delivery while closing nothing."""
-    assert open_door.post("/lineage-events", json=_cloud_event(RUN_EVENT)).json() == {"status": "SUCCESS"}
-    assert len(plane.boxes["alice"]) == 1
 
 
 def test_enabling_dapr_ingest_without_a_token_refuses_to_start(monkeypatch: pytest.MonkeyPatch) -> None:

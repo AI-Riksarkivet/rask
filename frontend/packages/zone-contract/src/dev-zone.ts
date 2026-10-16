@@ -114,12 +114,12 @@ export const ZONE_STACKS: Record<string, ZoneStack> = {
 		env: (port) => ({
 			CATALOG_API: url(port('MOCK_CATALOG_PORT')),
 			GREPTIME_API: url(port('MOCK_OBS_PORT')),
-			// The BELL. Its remote functions call `${RASK_GATEWAY_URL}/api/notifications/*` from the
+			// The BELL. Its remote functions call `${RASK_EDGE_URL}/api/notifications/*` from the
 			// SERVER, so this is not something a dev browser can be made to work around — unset, the
 			// default points somewhere nothing is listening and every zone's shell shows a bell that
 			// fails on connection refused instead of an empty inbox. The e2e suite has mocked it all
 			// along; only the dev loop was left reading a dead socket.
-			RASK_GATEWAY_URL: url(port('MOCK_NOTIFICATIONS_PORT')),
+			RASK_EDGE_URL: url(port('MOCK_NOTIFICATIONS_PORT')),
 			// The client-side vite proxy target. Left at its default it points at :8001 (the lineage
 			// service), which `make dev-micro` does not start — so every browser-side /api/* call fails
 			// on a connection refused rather than an honest 404. Pointed at the mock it is at least a
@@ -142,7 +142,7 @@ export const ZONE_STACKS: Record<string, ZoneStack> = {
 			// The GATEWAY, for the promotions surface. Same mock as GREPTIME/NATS — the paths never
 			// collide. Required rather than optional: `gatewayJSON` defaults to localhost:8888, a real
 			// port on a dev host, so an unset var lets `make dev-zone` read a LIVE gateway.
-			RASK_GATEWAY_URL: url(port('MOCK_OBS_PORT')),
+			RASK_EDGE_URL: url(port('MOCK_OBS_PORT')),
 			LANCE_BACKEND: url(port('MOCK_CATALOG_PORT')),
 		}),
 	},

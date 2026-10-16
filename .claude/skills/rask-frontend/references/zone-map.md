@@ -17,9 +17,9 @@ The composition manifest is `microfrontends/home/microfrontends.json`, owned by 
 | `/auth/logout` | GET + POST, deletes the cookie at `path:'/'` |
 | `/capi/management/v1/projects` | GET-only bearer-forwarding pass-through to catalog via `makeCatalogProxy(env)` |
 
-Four zones carry both `hooks.server.ts` and `hooks.client.ts` — home, lakehouse, explorer, annotator — and all four hydrate the sealed session through `makeZoneHooks`. Home and lakehouse pass `{gateway: true}` (the SSR `/api/*` rewrite); explorer and annotator take the session handle ALONE, because they reach the media services through their own BFF. `compute` is the fifth OIDC zone but wires it by hand (`makeSessionHandle` + its own `makeGatewayHandleFetch(RASK_GATEWAY_URL)`), for the env-var reason in SKILL § The SSR hairpin. `train` and `studio` have no hooks at all.
+Four zones carry both `hooks.server.ts` and `hooks.client.ts` — home, lakehouse, explorer, annotator — and all four hydrate the sealed session through `makeZoneHooks`. Home and lakehouse pass `{edge: true}` (the SSR `/api/*` rewrite onto `RASK_EDGE_URL`); explorer and annotator take the session handle ALONE, because they reach the media services through their own BFF. `compute`, `studio` and `models` go through `makeZoneHooks(env, { edge: true })` too (SKILL § The SSR hairpin).
 
-Data: `+layout.server.ts` awaits `fetchMe({catalogUrl: CATALOG_API})` — `env.CATALOG_API ?? 'http://localhost:2333'`, **direct to catalog, not through the gateway**. `+page.server.ts` fetches its own `/capi/management/v1/projects` only for estate admins; otherwise the gallery derives from `me.projects`.
+Data: `+layout.server.ts` awaits `fetchMe({catalogUrl: CATALOG_API})` — `env.CATALOG_API ?? 'http://localhost:2333'`, **direct to catalog, not through the cluster route**. `+page.server.ts` fetches its own `/capi/management/v1/projects` only for estate admins; otherwise the gallery derives from `me.projects`.
 
 `lib/nav.ts` declares **one** leaf, so `AppShell` renders no sidebar (`hasNav = leaves.length > 1`) — deliberate. `lib/remote/home.remote.ts`'s `getProjects` is **dead code**; `knip.json:13` ignores `src/**/*.remote.ts`, so the gate cannot see it.
 
@@ -37,13 +37,13 @@ Five areas that used to be separate apps, merged under one router: `catalog`, `m
 
 **`models`** is an area here, not a zone; **storage is not even an area** — it is `catalog/storage`. **`governance`** (access, audit) split out of `admin` (events, streams, dlq, tenants) so the breadcrumb stops contradicting the rail, but both sit behind the same estate-admin door (`PRIVILEGED_AREAS` in `+layout.svelte:32`). The model registry (list/describe/**promote**) rides `lib/models/remote/models.remote.ts` — the `capi/v1/model/[model]/promote` route is gone.
 
-7 `+server.ts` routes — 4 keep-bytes (`capi/v1/table/[id]/query` + `/insert` Arrow, `capi/v1/table/[id]/[...rest]` for blob bytes and the #113 commit log, and `api/explorer/[...rest]`, the R18 storage-browser seam that rides to the GATEWAY with its path unchanged), 1 keep-flow (`capi/management/v1/me`), 2 catch-alls (`api/[...path]` → lineage, `capi/[...path]` → catalog). The `/api/audit` shim is **gone**; its logic survives in `lib/server/audit-core.ts`, consumed only by `admin/remote/audit.remote.ts`.
+7 `+server.ts` routes — 4 keep-bytes (`capi/v1/table/[id]/query` + `/insert` Arrow, `capi/v1/table/[id]/[...rest]` for blob bytes and the #113 commit log, and `api/explorer/[...rest]`, the R18 storage-browser seam that rides to the cluster EDGE (`RASK_EDGE_URL`) with its path unchanged, where the `/api/explorer` route rewrites it onto the viewer), 1 keep-flow (`capi/management/v1/me`), 2 catch-alls (`api/[...path]` → lineage, `capi/[...path]` → catalog). The `/api/audit` shim is **gone**; its logic survives in `lib/server/audit-core.ts`, consumed only by `admin/remote/audit.remote.ts`.
 
 11 `.remote.ts` modules (measured 2026-10-16) — and the estate's only `requestJSON` residual; the four sites and the convergence rule are in SKILL § Fetching data (b).
 
 ## `explorer` — base `/explorer`, port 5173, labelled **Explorer**
 
-Multimodal corpus search: FTS / vector / hybrid / voice search, a WebGPU embedding atlas, a Cypher knowledge-graph explorer, and a Svelte-Flow dataflow editor — plus a dock at `/explorer/workbench` (results + atlas + player over one shared search store, this zone own components). Reaches `:8101`/`:8102`/`:8103` (plus the catalog and lineage) through its own BFF rather than the gateway.
+Multimodal corpus search: FTS / vector / hybrid / voice search, a WebGPU embedding atlas, a Cypher knowledge-graph explorer, and a Svelte-Flow dataflow editor — plus a dock at `/explorer/workbench` (results + atlas + player over one shared search store, this zone own components). Reaches `:8101`/`:8102`/`:8103` (plus the catalog and lineage) through its own BFF rather than the cluster route.
 
 **6 `+server.ts` routes** after the transport ruling area 3, down from 13 — 4 keep-bytes (`api/atlas/points` Arrow + its zone cache, `api/voice/similar` multipart-in, the `api/[...path]` viewer catch-all, `diagram` SSR'd SVG/HTML), plus the 2 **promote-arrow** routes that keep their `+server.ts` because their REQUEST shape pins them there: `api/search` (the POST carries a File) and `api/atlas/chunks` (a read spelled as a POST). Both now answer **Arrow IPC** built by `$lib/server/rows-arrow.ts` — a corpus row is a loose object, so the encoder derives the schema per response and names the JSON-carried columns in the schema metadata; `@rask/explorer-api`'s `rowsFromArrow` decodes them and OMITS null cells (`RowSchema`'s optional fields admit `undefined`, never `null`).
 
@@ -63,7 +63,7 @@ It renders `AppShell` with **`canvas={true}`** — drops sidebar and breadcrumb,
 
 ## `compute` — base `/compute`, port 5175
 
-**13 pages + a dock** (measured 2026-08-07 — `find src/routes -name '+page.svelte'`): `/` (overview), `/jobs`, `/jobs/[id]`, `/actors`, `/cluster`, `/serve`, `/gpu`, `/logviewer`, `/api-docs` (iframes `/api/docs`), `/etl` (the ingest form, which reads its source kinds from `GET /api/ingest/sources` — a route with no gateway row and no backend, since the lakehouse runs no ingest service (ADR 0154), so the form 404s), `/ingest/[run_id]` (one ingest run's detail), `/query` (scaffold — no query backend yet), and `/workbench`. The views themselves live in `$lib/boards/*` per the panel-is-the-page rule, so the routes stay thin and the dock's panels render the page's component.
+**13 pages + a dock** (measured 2026-08-07 — `find src/routes -name '+page.svelte'`): `/` (overview), `/jobs`, `/jobs/[id]`, `/actors`, `/cluster`, `/serve`, `/gpu`, `/logviewer`, `/api-docs` (iframes `/api/docs`), `/etl` (the ingest form, which reads its source kinds from `GET /api/ingest/sources` — a route with no route row and no backend, since the lakehouse runs no ingest service (ADR 0154), so the form 404s), `/ingest/[run_id]` (one ingest run's detail), `/query` (scaffold — no query backend yet), and `/workbench`. The views themselves live in `$lib/boards/*` per the panel-is-the-page rule, so the routes stay thin and the dock's panels render the page's component.
 
 Two routes this list used to name are gone, and both are worth knowing: **`/new`** became `/etl` (a stale nav row pointing at `/new` also named an unimported icon, so evaluating `nav.ts` threw and took EVERY compute page down with a 500 — not just the dead link), and **`/inference`** was deleted 2026-08-07 with its `api/infer` route and `COMPUTE_SERVE_URL` — a single-app, HTR-only duplicate of studio's flow canvas. **The zone now has NO `+server.ts` and no acting surface at all**: it observes Ray, it does not drive it.
 
@@ -75,12 +75,12 @@ Endpoints (`packages/api/src/ray.ts`): `/api/ray/{health,jobs,cluster,actors,tas
 
 The lakehouse runs no stage, no training and no engine, so three frontend callers name routes no service
 serves: the `models` zone's `train.remote.ts` (`POST /api/train`) and the `lakehouse` zone's
-`promotions.remote.ts` (`/api/promotions`) have no gateway row and 404 `no upstream`; the `compute` zone's
-`/transforms` page reaches the catalog through `/api/catalog`, and the catalog serves no transforms door, so
-it 404s there. The compute service ships in its own fixture chart beside the Ray engine, and the gateway has no
-`/api/ray` or `/api/serve` row, so the `compute` zone's `packages/api/src/ray.ts` calls above and `studio`'s
-Serve-app discovery over `/api/serve` also 404 `no upstream` through the gateway. The frontend is outside LH-464; these are listed so a 404 there is not read as a routing
-fault.
+`promotions.remote.ts` (`/api/promotions`) have no route row, so the cluster route sends them to the `/`
+rule and `web-home` answers 404; the `compute` zone's `/transforms` page reaches the catalog through
+`/api/catalog`, and the catalog serves no transforms door, so it 404s there. `/api/ray` and `/api/serve` are
+routed only where the compute fixture chart is installed (its own HTTPRoute); without it the `compute` zone's
+`packages/api/src/ray.ts` calls and `studio`'s Serve-app discovery 404 the same way. The frontend is outside
+LH-464; these are listed so a 404 there is not read as a routing fault.
 
 ## `studio` — base `/studio`, port 5176
 

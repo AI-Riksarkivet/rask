@@ -11,7 +11,7 @@ observability store are prerequisites (ADR 0153), installed in development from 
 The FastAPI services and the event plumbing hold no durable state; they can be killed, scaled, or
 re-imaged at any time with no data loss.
 
-- `catalog`, `lineage`, `maintenance`, `notifications`, `flows`, `gateway`, the zones (`web-<zone>`), the media trio
+- `catalog`, `lineage`, `maintenance`, `notifications`, `flows`, the zones (`web-<zone>`), the media trio
 - the Dapr control plane and Dex (prerequisites)
 
 These read their config from env / OpenBao and their data from the durable tier below. Rolling them is a
@@ -109,5 +109,5 @@ So: a long-lived lakehouse with provenance, and a version-expiry lifecycle that 
 
 ## Prod profile
 `deploy/values-prod.yaml` is a starting overlay — it flips the safe-by-default-off prod switches (sealed
-OpenBao, governance on, Dapr dashboard off, ingress) and turns the in-cluster OpenFGA and Postgres off in favour of
+OpenBao, governance on, Dapr dashboard off, the cluster route on the platform's Gateway) and turns the in-cluster OpenFGA and Postgres off in favour of
 the platform's (`openfga.enabled: false`, `age.enabled: false`). Apply with `helm upgrade … -f chart/values.yaml -f deploy/values-prod.yaml`.

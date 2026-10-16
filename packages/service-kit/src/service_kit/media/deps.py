@@ -30,5 +30,5 @@ DatasetParam = Annotated[str | None, Query(description="Dataset id (default DB w
 # docstring's own promise — "at merge, lance-ns's auth swaps this for the VERIFIED token subject" —
 # is the change that removed them: the annotator's write routes now take `CurrentSubject`
 # (annotator/api/security.py), which is `anon` with OIDC off and the verified `sub` with it on,
-# with deliberately no header fallback. The gateway additionally strips `x-user` at the public edge
-# (`_CLIENT_SPOOFABLE`), so the header means nothing anywhere.
+# with deliberately no header fallback. No service reads `x-user`, so the header means nothing
+# anywhere.

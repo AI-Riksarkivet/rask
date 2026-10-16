@@ -6,12 +6,12 @@
 # system" was true of the CI gates and false of every artefact. The dockerfile is unchanged and remains
 # the single source of truth; only the driver moved.
 #
-#   scripts/dagger-image.sh --name gateway      --tag gateway:dev
+#   scripts/dagger-image.sh --name notifications --tag notifications:dev
 #   scripts/dagger-image.sh --name rest-catalog --tag lance-rest-catalog:dev
 #   scripts/dagger-image.sh --zone lakehouse    --tag web-lakehouse:dev
 #   scripts/dagger-image.sh --runner htr        --tag ray-htr:dev
 #   scripts/dagger-image.sh --name cnpg-age-ext --tag cnpg-age:dev --arg AGE_REF=v1.5.0
-#   scripts/dagger-image.sh --name gateway      --out build/k3s-images/gateway.tar   (no docker: what k3s-build does)
+#   scripts/dagger-image.sh --name notifications --out build/k3s-images/notifications.tar   (no docker: what k3s-build does)
 #
 # DELIVERY: --load (default) exports an OCI tarball and `docker load`s it, which reproduces exactly what
 # `docker buildx build --load` used to do, so the compose stacks and the kind lane keep working unchanged.

@@ -9,7 +9,7 @@ beside the script falls behind the day a service is added (measured 2026-09-24 o
 overlay scheduled seven rask images and the script built one).
 
 PARSE THE DOCUMENTS, NEVER MATCH THE TEXT. Chart call sites pass `rask.image` through `quote`, so a
-reference renders as `image: "gateway:dev"` — a filter anchored on an unquoted scalar matches nothing
+reference renders as `image: "notifications:dev"` — a filter anchored on an unquoted scalar matches nothing
 at all. Measured the same day against the `e2e-stack` overlay: fifteen `:dev` references in the render,
 zero matches, and because a stack that finds no image aborts rather than deploying, BOTH live lanes
 died there before they reached a single assertion. Parsing costs milliseconds and cannot be wrong about

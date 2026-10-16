@@ -19,4 +19,6 @@ HELM_SET=(
   --set observability.enabled=false
   --set maintenance.enabled=false
   --set frontend.enabled=false
+  # The lanes drive each service directly, not through an edge, and a lane cluster runs no Gateway.
+  --set route.enabled=false
 )

@@ -38,8 +38,8 @@ logger = logging.getLogger(__name__)
 # construction. Inventing a door for an object the request never identifies is a worse answer than
 # naming the boundary this seam actually sits behind.
 #
-# And it genuinely sits behind one: the gateway proxies only `/api/explorer/annotations` →
-# `/api/annotations` (`gateway/__init__.py::_routes()`), so `/api/jobs` has NO public row and is
+# And it genuinely sits behind one: the cluster route publishes only `/api/explorer/annotations` →
+# `/api/annotations` (`rask.apiRoutes`, chart/templates/_helpers.tpl), so `/api/jobs` has NO public rule and is
 # reachable in-cluster only. `require_dapr_token` proves "arrived via Dapr", never "trusted caller"
 # (`dapr_auth.py:33-45`) — which is exactly the claim being made: a service-to-service seam until a
 # runner exists that can carry a user's identity, at which point this becomes an FGA check against the

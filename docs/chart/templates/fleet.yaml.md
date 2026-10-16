@@ -17,9 +17,10 @@ fleet entry needs nothing.
 
 `frontDoor: true` = part of the DEFAULT install, regardless of singleTenant. A gate that names one
 service literally leaves every other front-door service unrendered unless someone sets the LEGACY
-single-tenant flag, and the gateway routes to its front-door app-ids UNCONDITIONALLY — so a default
-install answers ERR_DIRECT_INVOKE on a route the gateway publishes (measured 2026-08 on compute's
-/api/ray, which the compute fixture chart now serves outside this chart, ADR 0155).
+single-tenant flag, and the cluster route publishes a prefix for every front-door service
+(`rask.apiRoutes` keys on the same `frontDoor` / `singleTenant` condition) — so a default install would
+publish a prefix whose backend never rendered (measured 2026-08 on compute's /api/ray, which the
+compute fixture chart now serves outside this chart, ADR 0155).
 
 ## `terminationGracePeriodSeconds: {{ $root.Values.lifecycle.terminationGracePeriodSeconds }}`
 
@@ -30,19 +31,17 @@ run a Dapr sidecar whose flush the default does not budget for.
 
 ## `{{- include "lance.spreadConstraints" $name | nindent 6 }}`
 
-THE ONE TEMPLATE THAT NEVER CALLED THIS, which mattered most here: the gateway is the
-only fleet service the prod overlay has ever run at replicas: 2, and it is the ingress
-every request in the estate passes through. Both pods on one node and the node's failure
-takes the estate down with a PodDisruptionBudget that permitted nothing — the exact
-failure the helper's own docstring records. Harmless at one replica.
+Every fleet Deployment spreads its replicas across nodes, as the lance-plane ones do. Without
+it, a service scaled to two can land both pods on one node, and that node's failure takes the
+service down with a PodDisruptionBudget that permitted nothing — the exact failure the helper's
+own docstring records. Harmless at one replica.
 
 ## `{{- include "lance.securityContext" $root | nindent 10 }}`
 
 THE HARDENING values.yaml ALREADY CLAIMED THESE PODS HAD. Its comment says pod hardening
 is "applied to every app container via the lance.securityContext helper" — and this file
-did not call it, so the six fleet Deployments (gateway included, the pod the Ingress
-routes /api to) rendered with no securityContext at all while every lance-plane and web
-Deployment had one.
+did not call it, so the fleet Deployments rendered with no securityContext at all while
+every lance-plane and web Deployment had one.
 
 The images already end `USER app`, so the missing `drop: ["ALL"]` was nominal — a
 container that never runs as uid 0 holds no effective capabilities either way. What was
@@ -63,7 +62,7 @@ HCP_ENDPOINT, HF_TOKEN — and the AWS pair is the store's ROOT credential.
 
 MEASURED INSIDE THE RUNNING PODS: `rask-ingest` listed 106 buckets with it (the whole
 estate) while `rask-maintenance`, on its scoped identity, was denied the same call. So
-the widest storage credential in the estate was mounted into the gateway, the
+the widest storage credential in the estate was mounted into the
 notifications inbox, the compute shell and the flows backend — none of which
 constructs an S3 client at all: zero imports of lance, pyarrow, boto3, storage or any
 service_kit.lakehouse storage module, no HF code, and no HF/boto dependency. Nothing
@@ -113,9 +112,9 @@ ExternalSecret (external-secrets.yaml) and it also gates this reference.
 ## `{{- include "lance.governedOidcEnv" $root | nindent 12 }}`
 
 The USER door, for services that declare `governedAuth` — NOT every frontDoor
-service. `frontDoor` means "the gateway routes to it", which is a different
-question: the GATEWAY reads no auth settings at all, so keying on it emits
-variables that service never reads. A governed service's settings carry their own prefix, so
+service. `frontDoor` means "the cluster route publishes it", which is a different
+question: a service can be published and still not be governed by the user door, so
+keying on it emits variables that service never reads. A governed service's settings carry their own prefix, so
 the prefix this env uses is verified per service, not assumed: emitting the wrong prefix produces variables the
 service never reads, which looks wired and does nothing.
 

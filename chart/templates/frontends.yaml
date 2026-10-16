@@ -3,7 +3,7 @@
 {{- $root := . -}}
 {{- $fe := .Values.frontend -}}
 
-{{- $gwPort := $root.Values.services.gateway.port -}}
+{{- $edge := required "route.edgeUrl must name the Gateway's in-cluster address: the zones' server side sends /api/* through it" $root.Values.route.edgeUrl -}}
 
 {{- $expected := list (printf "LINEAGE:%s" $root.Values.services.lineage.daprAppId) -}}
 {{- if $root.Values.dapr.resiliency.enabled -}}
@@ -70,10 +70,8 @@ spec:
             - name: STUDIO_SERVE_URL
               value: {{ . | quote }}
             {{- end }}
-            - name: RASK_GATEWAY_URL
-              value: {{ printf "http://%s-gateway:%v" (include "rask.fullname" $root) $gwPort | quote }}
-            - name: LANCE_GATEWAY_URL
-              value: {{ printf "http://%s-gateway:%v" (include "rask.fullname" $root) $gwPort | quote }}
+            - name: RASK_EDGE_URL
+              value: {{ $edge | quote }}
             - name: CATALOG_API
               value: {{ printf "http://%s-catalog:%v" (include "rask.fullname" $root) $root.Values.services.catalog.port | quote }}
             - name: LINEAGE_API

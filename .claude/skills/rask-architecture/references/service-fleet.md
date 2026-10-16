@@ -1,25 +1,23 @@
 # The service fleet: ports, entrypoints, and which package each composes
 
-The fleet (`make dev-micro`, driven by `scripts/dev-micro.sh`) is SEVEN processes:
-gateway `:8888` + compute `:8804` + flows `:8840` + notifications `:8850` + the explorer trio —
-viewer `:8101`, search `:8102`, annotator `:8103`. (`PORT_OFFSET=<n>` shifts all seven
-so a second fleet can share a host.) The gateway routes compute's `/api/ray` and `/api/serve` rows to
-`RASK_COMPUTE_URL`, and in-cluster compute ships in its own fixture chart (`deploy/fixtures/compute`),
-not the product chart.
+The fleet (`make dev-micro`, driven by `scripts/dev-micro.sh`) is SIX processes: compute `:8804` + flows
+`:8840` + notifications `:8850` + the explorer trio — viewer `:8101`, search `:8102`, annotator `:8103`.
+(`PORT_OFFSET=<n>` shifts all six so a second fleet can share a host.) It starts no router: the public
+route table is the chart's HTTPRoutes, served by a Gateway (`rask-services-fleet`). In-cluster compute
+ships in its own fixture chart (`deploy/fixtures/compute`), not the product chart, and publishes
+`/api/ray` and `/api/serve` with its own HTTPRoute.
 
-The frontend's Vite proxy targets `:8888` (the gateway) for `compute`/`studio`/`models`
-**only**; `home`/`lakehouse` proxy `/api` to `LANCE_BACKEND` (`:8001`, which this fleet
-does NOT start) and `explorer`/`annotator` have no `/api` proxy at all — they reach
-`:8101`/`:8102`/`:8103` through their own BFF. See `rask-frontend`.
+The zones' Vite `/api` proxies are per zone: `compute`/`studio`/`models` → `VIEWER_BACKEND` (`:8888`),
+`home`/`lakehouse` → `LANCE_BACKEND` (`:8001`, which this fleet does NOT start), and `explorer`/`annotator`
+have no `/api` proxy — they reach `:8101`/`:8102`/`:8103` through their own BFF. Their SSR reads one
+`RASK_EDGE_URL` (default `http://localhost:8888`). An edge on :8888 comes from `make dev-frontends-k3s`
+(k3s Traefik's Gateway, port-forwarded). See `rask-frontend`.
 
-## Ten HTTP entrypoints are thin shells over one of three factories
+## Nine HTTP entrypoints are thin shells over one of three factories
 
 `compute`, `flows` and `notifications` import routers (+ maybe a
 lifespan) from a domain package and call `service_kit.make_service_app` — no business logic in
-the entrypoint. Count by CALL SITE, not by import: `gateway` names the factory in three comments
-and calls it nowhere. `gateway` builds `FastAPI(...)` itself (it is a proxy, not a router host),
-though it does call `service_kit.setup_otel` directly, so it is on the shared telemetry path
-even while it is off the shared app-factory path.
+the entrypoint. Count by CALL SITE, not by import.
 
 THE OTHER SIX COME OUT OF A FACTORY TOO, because copied boots drift: each repeated the same five-step
 boot in copied comments (docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit"
@@ -31,9 +29,8 @@ the layout. See rask-architecture's "Three factories are sanctioned".
 
 | Service | Port | Composes package(s) | Lifespan | DB? | Notes |
 |---|---|---|---|---|---|
-| `gateway` | 8888 | none (httpx proxy) | own asynccontextmanager | no | path-routes `/api/*` longest-prefix-first, **no catch-all**; upstreams env-overridable (`RASK_COMPUTE_URL`, `RASK_FLOWS_URL`, `RASK_NOTIFICATIONS_URL`, `RASK_CATALOG_API_URL`, `RASK_LINEAGE_API_URL`, `RASK_EXPLORER_{VIEWER,SEARCH,ANNOTATOR}_URL`). There is **no** `RASK_MEDIA_*_URL` — the media→explorer rename took those names with it. |
-| `compute` | 8804 | `ray-kit` | `compute.lifespan.make_lifespan` | no | Ray dashboard introspection; `proxy_router` mounts at root so `/api/serve/*` reaches Serve status API. The gateway's `/api/ray` and `/api/serve` rows reach it; deployed by its own fixture chart |
-| `viewer` (explorer plane) | 8101 | `service-kit[lancekit]` + `storage` | own (lazy registry) | no | `/api/explorer/*` incl. the S3 objects browser ported from volumes-api |
+| `compute` | 8804 | `ray-kit` | `compute.lifespan.make_lifespan` | no | Ray dashboard introspection; `proxy_router` mounts at root so `/api/serve/*` reaches Serve status API. Its fixture chart's own HTTPRoute publishes `/api/ray` and `/api/serve`; deployed by that fixture chart |
+| `viewer` (explorer plane) | 8101 | `service-kit[lancekit]` + `storage` | own (lazy registry) | no | public `/api/explorer/*`, rewritten to `/api/*` by the route, incl. the S3 objects browser |
 
 ## The lakehouse runs no ingest, no stage and no engine
 

@@ -2,9 +2,9 @@
 
 Mounted under `settings.api_prefix` by `make_service_app`, so the deployed paths are
 `/api/flows/...` (the chart sets `RASK_API_PREFIX=/api`, and `scripts/dev-micro.sh` matches it) —
-which is exactly what the gateway's `/api/flows` row forwards unrewritten. A router prefix of
+which is exactly what the cluster route's `/api/flows` rule forwards unrewritten. A router prefix of
 `/flows` with an api_prefix of `/api/v1` would serve `/api/v1/flows/...` and every call through the
-gateway would 404; that trap has already been paid for once in this estate (the ingest row's `/v1`).
+route would 404; that trap has already been paid for once in this estate (the ingest row's `/v1`).
 
 Both `/runs` routes are gated on the estate `writer` tier (`flows.security`), and a run id is
 DERIVED from the caller's `Idempotency-Key` rather than minted per attempt — the run id is also the

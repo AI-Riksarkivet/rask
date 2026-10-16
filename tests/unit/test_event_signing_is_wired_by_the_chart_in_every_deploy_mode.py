@@ -208,13 +208,13 @@ def _loaded_configurations(docs: tuple[dict, ...]) -> dict[str, tuple[str, dict]
 
 def test_a_configuration_is_renamed_when_and_only_when_its_spec_changes_so_a_pod_cannot_load_a_stale_one() -> None:
     before = _loaded_configurations(chart_render.render(*DEFAULT_ARGS))
-    probe = ("--set", "nats.auth.users.probe.publish={probe.v1}", "--set", "nats.auth.users.probe.subscribe={_INBOX.>}")
+    probe = ("--set", "services.lineage.forward.authSecret.name=probe-forward-auth")
     after = _loaded_configurations(chart_render.render(*DEFAULT_ARGS, *probe))
 
-    assert before.keys() == after.keys() and len(before) > 5, f"the pods that name a Configuration are {sorted(before)}"
+    assert before.keys() == after.keys() and len(before) >= 5, f"the pods that name a Configuration are {sorted(before)}"
     edited = {pod for pod in before if before[pod][1] != after[pod][1]}
     renamed = {pod for pod in before if before[pod][0] != after[pod][0]}
-    # A bus user's credential is denied in every per-app Configuration; the gateway loads the shared `lance-tracing` one, which lists none.
+    # The forwarder's credential is denied in every per-app Configuration but lineage's, which reads it.
     assert edited and edited != before.keys(), (
         f"the overlay must edit some Configurations and leave others, or one direction below measures nothing: {sorted(edited)}"
     )

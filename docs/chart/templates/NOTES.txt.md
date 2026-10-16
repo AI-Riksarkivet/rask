@@ -21,3 +21,12 @@ The #4 durability chain is stage (outbox) -> publish -> drain (the relay tick). 
 now, so this only fires when an operator deliberately broke the chain — and then it says exactly
 WHICH half is missing and what is lost, instead of the old generic line that every default install
 printed and everyone learned to scroll past (live-proof 2026-07-28, defect 7).
+
+## `{{- if .Values.route.enabled }}`
+
+The banner names the address a person opens: the first of `route.hostnames` when the routes carry one,
+else the Gateway's own address, since host-less routes answer any Host its listener accepts. The API
+line names a catalog path, a prefix the cluster route publishes in every install, so one request
+exercises the Gateway, the route and the catalog together. The Gateway the routes
+attach to is named from `route.parentRefs`, because the address is the platform's to hand out, not the
+chart's.

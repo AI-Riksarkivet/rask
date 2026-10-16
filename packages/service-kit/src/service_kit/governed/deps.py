@@ -179,8 +179,8 @@ def make_auth_deps(settings_dep: Any) -> AuthDeps:
 
         **IT IS ALSO PUBLISHED ON `request.state`, and that is not incidental.** `rate_limit.by_subject`
         reads `request.state.subject` and falls back to the client IP; nothing in the estate ever wrote
-        it, so the subject branch was dead and every request fell to the IP branch. Behind the gateway
-        the observed IP is the gateway pod, so one bucket served every caller — worse than no limiter,
+        it, so the subject branch was dead and every request fell to the IP branch. Behind a proxy the
+        observed IP is the proxy's pod, so one bucket served every caller — worse than no limiter,
         because a single caller could exhaust everyone's quota.
 
         Published HERE rather than in the limiter because the limiter is a slowapi key function running

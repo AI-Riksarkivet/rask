@@ -14,7 +14,7 @@ claim below was verified against the render or the code (2026-08-28), not inheri
 
 | Block | Used | Where (verified) |
 | --- | --- | --- |
-| Service invocation | ✅ | gateway `_target_base` → `/v1.0/invoke/{app_id}/method` (direct-httpx fallback when Dapr off); `invoke/lineage`, `invoke/compute` |
+| Service invocation | ✅ | notifications' reconciler → `/v1.0/invoke/lineage/method` (`feed_base_url`; direct URL when Dapr is off). `<release>-invocation-resiliency` (rendered with notifications) gives it `invokeRetry` (constant 2 s ×3, `408,429,500-599`) and `invokeTimeout` 300 s, targeting app `lineage`, `scopes: [notifications]`. No policy targets the catalog: no service invokes it through Dapr. Public traffic never rides invocation: the cluster route reaches each app port directly |
 | State | ✅ | `state.postgresql` ×1 (the actor state store; scopes are load-bearing — see traps) |
 | Pub/sub | ✅ | `pubsub.jetstream`, one Component per app-id that publishes or subscribes, each scoped to ONE app-id and naming that app's NATS user from the store (`jwt`/`seedKey` secretKeyRef to `nats-user-<app>`, `auth.secretStore: lance-secrets`; the permission table is `nats.auth.users` in values.yaml, [[XC-078]]); `DaprApp.subscribe` incl. a DLQ route; `queueGroupName` makes replicas competing consumers |
 | Bindings | ✅ | `bindings.cron` ×7 in the product chart: `maintenance-cron` (the sweep), `maintenance-reconcile-cron`, `lineage-relay-cron` (drains the outbox, prunes the feed, forwards to the graph backend), `notifications-reconcile-cron`, `catalog-control-relay-cron`, `catalog-erasure-release-cron` (ADR 0138, releasing an erasure's pinning tags and branches when due), `catalog-promotion-expiry-cron` (ADR 0161, expiring promotion holds past their review deadline); the compute fixture chart (`deploy/fixtures/compute`, ADR 0155) renders a seventh, `compute-prune-jobs-cron` — read the cluster for what runs, not the templates. Plus `bindings.smtp`, `bindings.http` — all delivered to `POST /<component-name>` at the pod ROOT |
@@ -40,8 +40,8 @@ claim below was verified against the render or the code (2026-08-28), not inheri
    correct its semantics, that wrapper IS the DIY and the block bought you a dependency.
 
 **DIY is justified when ANY of these hold (and the justification is written at the site):**
-- **No sidecar on that hop.** The two standing examples: the PUBLIC edge (Ingress → gateway:8888 is
-  app-port direct, so no Dapr middleware/ratelimit can ever see a client request — rate limiting and
+- **No sidecar on that hop.** The two standing examples: the PUBLIC edge (the platform's Gateway →
+  each service's app port is direct, so no Dapr middleware/ratelimit can ever see a client request — rate limiting and
   body caps therefore live in `service_kit.middleware` / slowapi, by owner ruling 2026-08-26), and
   **Ray pods** (no daprd; a job cannot call `/v1.0/secrets/*`).
 - **Per-request semantics the block cannot express.** notifications' reconcile guard must SKIP an
@@ -60,10 +60,9 @@ actor placement/turn semantics.
 ## Recorded refusals (do not re-litigate without new facts)
 
 - **HTTP middleware pipeline** (2026-08-28, three independent reasons): public traffic never traverses
-  daprd; `middleware.http.ratelimit` is per-sidecar and keyed on remote IP, which on the only hop it
-  could see is the gateway pod for every request; one `dapr.io/config` per sidecar + HotReload-off
-  makes a pipeline fleet-global and rollout-gated. The gateway→backend invoke hop is real but is the
-  wrong place for authn (it would validate the gateway's outbound call, not the client's inbound one).
+  daprd (the cluster route reaches the app port); `middleware.http.ratelimit` is per-sidecar and keyed
+  on remote IP, which on a service-invocation hop is the calling pod, never the client; one
+  `dapr.io/config` per sidecar + HotReload-off makes a pipeline fleet-global and rollout-gated.
 - **Configuration API** (2026-08-28): the fleet's config is ONE ConfigMap via `envFrom`, validated by
   pydantic-settings at boot, and the render-driven invariant tests depend on seeing it; change
   cadence is deliberately rollout-shaped. It solves a problem this estate chose not to have.
@@ -163,10 +162,11 @@ sidecar.
 - An actor state store the app-id is not SCOPED to ⇒ sidecar logs "Workflow engine started" and
   actor hosting silently disables — healthy pod, permanently empty feature. Probe `/v1.0/metadata`
   for the ACTOR capability, not the log line.
-- daprd APPENDS its caller-identity headers; FastAPI binds the FIRST duplicate ⇒ the gateway must
-  strip client-supplied `dapr-*` headers at the edge (`_CLIENT_SPOOFABLE`) or every door's caller
-  check reads the client's own claim. ADR 0156 retires the Python gateway for cluster routing straight
-  to each service (XC-150, #602); when it goes, that strip has to move into every service's own door.
+- daprd APPENDS its caller-identity headers and FastAPI binds the FIRST duplicate, so a client-supplied
+  `dapr-caller-app-id` is a claim, never an identity. No door authorizes on it: a Dapr-delivered route
+  authenticates on `dapr-api-token` alone (`require_dapr_token`), which a request through the cluster
+  route never carries because it reaches the app port without a sidecar, and a caller's identity is its
+  verified bearer (ADR 0156 C5).
 - A cron/input binding is delivered to `POST /<component-name>` at the pod ROOT — never under
   `RASK_API_PREFIX`. Component name, env var and served path are one string, pinned by invariants.
 - **`bindings.cron` FIRES ON EVERY REPLICA.** The component is stateless and uncoordinated — Diagrid,

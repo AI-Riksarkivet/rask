@@ -399,8 +399,8 @@ async def media_clip(
     # everything the pod can reach, with a 120 s ffmpeg timeout per attempt.
     #
     # The path changed with it, because the old one resolved nowhere: this service serves media
-    # bytes at `/api/media/{doc_id}` and has no `/api/explorer/{doc_id}` route, while the gateway
-    # row ("/api/explorer", "/api", *viewer) rewrites the external form to `/api/{doc_id}`, which it
+    # bytes at `/api/media/{doc_id}` and has no `/api/explorer/{doc_id}` route, while the cluster
+    # route's `/api/explorer` → `/api` rule rewrites the external form to `/api/{doc_id}`, which it
     # has no route for either. The header-derived host was buying nothing but the SSRF.
     source = f"{settings.clip_source_origin.rstrip('/')}/api/media/{doc_id}"
     if dataset:
@@ -409,8 +409,8 @@ async def media_clip(
     # AUTHZ, after shape. `can_read_data`, not `can_get_metadata`: a clip IS the media, so this is
     # the rung `pages.py` uses for image bytes rather than the one `datasets.py` uses for a listing.
     # The whole module carried no auth constructs at all until 2026-08-26, while its two siblings
-    # gated the same corpus objects — and the viewer is published at the edge through the gateway's
-    # `/api/explorer` row.
+    # gated the same corpus objects — and the viewer is published at the edge through the cluster
+    # route's `/api/explorer` rule.
     obj = corpus_object(settings, handle.id, binding.table)
     if not await checker(user=subject, relation=READ_DATA, obj=obj):
         audit("viewer.clip.read", FAILURE, subject=subject, resource=handle.id, relation=READ_DATA)

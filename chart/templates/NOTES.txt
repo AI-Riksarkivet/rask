@@ -52,26 +52,18 @@ Micro-frontend zones (SvelteKit SSR; the catch-all owns "/"):
 {{- end }}
 {{- end }}
 
-{{- if .Values.ingress.enabled }}
-{{- if .Values.ingress.host }}
+{{- if .Values.route.enabled }}
+{{- with .Values.route.hostnames }}
 
-UI:  http://{{ .Values.ingress.host }}/      API: http://{{ .Values.ingress.host }}/api/health
-Add "127.0.0.1 {{ .Values.ingress.host }}" to /etc/hosts if it is not resolvable.
+UI:  http://{{ first . }}/      API: http://{{ first . }}/api/catalog/livez
 {{- else }}
 
-UI:  http://<node-ip>/      API: http://<node-ip>/api/health   (catch-all ingress, any Host)
-Over VS Code Remote-SSH / ssh -L: forward port 80, then open the forwarded http://localhost:<port>/.
+UI:  http://<gateway-address>/      API: http://<gateway-address>/api/catalog/livez   (host-less routes, any Host)
 {{- end }}
-kind has no host ports — port-forward the ingress controller instead:
-  kubectl -n ingress-nginx port-forward svc/ingress-nginx-controller 8090:80
+The routes attach to {{ range .Values.route.parentRefs }}{{ .namespace | default $root.Release.Namespace }}/{{ .name }} {{ end }}— the platform's Gateway serves them.
 {{- else }}
 
-Ingress disabled — port-forward the gateway:
-{{- with (index .Values.services "gateway") }}
-  kubectl port-forward svc/{{ include "rask.fullname" $root }}-gateway {{ .port }}
-{{- else }}
-  kubectl port-forward svc/{{ include "rask.fullname" $root }}-gateway 8888
-{{- end }}
+Routes disabled — nothing publishes the zones or /api; port-forward a zone or a service directly.
 {{- end }}
 
 {{- if .Values.observability.enabled }}

@@ -42,14 +42,14 @@ The sibling fixture `::client` has the same order over a `MagicMock(spec=LanceNa
 only claims about routing, identifier parsing and error mapping.
 
 **Settings read once at import** (`make_service_app`'s `build_settings()` in compute,
-flows and notifications; `build_gateway_settings()` in the gateway):
+flows and notifications):
 
 - Set the env the whole directory needs around the first import, in its `conftest.py`, then hand it
   back. Copy `services/compute/tests/conftest.py`. Env left set leaks into every other testpath,
   because pytest collects all of them before it runs any test, and nothing checks for the leak: the
   suite stays green while a later module builds its app from the wrong values.
 - A test that needs another value sets it with `monkeypatch.setenv` and calls
-  `importlib.reload(<package>)` (`services/gateway/tests/test_notifications_proxy_shapes.py`).
+  `importlib.reload(<module>)` (`services/compute/tests/test_retention_is_configured_not_imported.py`).
 - Code in `service_kit` itself builds a synthetic app with `make_service_app(..., settings=...)`
   (`packages/service-kit/tests/test_settings_are_injectable.py`).
 - compute and notifications also keep `lru_cache`d service getters

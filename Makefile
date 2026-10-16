@@ -4,9 +4,9 @@ help:
 	@echo "Targets:"
 	@echo "  install build test lint fmt clean storybook"
 	@echo "  typecheck knip check ci   frontend-check frontend-build"
-	@echo "  dev-micro                              — backend fleet (gateway :8888 + per-domain services)"
+	@echo "  dev-micro                              — backend fleet (per-domain services; no edge)"
 	@echo "  dev-frontends                          — all 6 zones behind the :3024 proxy (browse http://localhost:3024)"
-	@echo "  dev-frontends-k3s                      — same, but /api → the IN-CLUSTER gateway (port-forwarded)"
+	@echo "  dev-frontends-k3s                      — same, but /api → the IN-CLUSTER edge (Traefik, port-forwarded)"
 	@echo "  home frontend-<zone>                   — run one zone each (e.g. frontend-explorer)"
 	@echo "  dev-gc                                 — reclaim the dev registry + the Dagger cache"
 	@echo "  ray-up ray-down ray-status   ray-up-htr (2-GPU pool, GPUs 0,1)"
@@ -260,8 +260,8 @@ knip:
 # The denominator is every src file of every workspace member, whichever tests ran: `[tool.coverage.run]
 # source` names the two workspace directories and `[tool.coverage.report] include_namespace_packages`
 # makes discovery walk their src-layout members (without it, a single package's test run discovered 3
-# files against 427), and `omit` keeps every `__init__.py`, which is where the whole gateway service
-# lives.
+# files against 427), and `omit` keeps every `__init__.py`, where several members keep real
+# implementation (an app factory, a route table).
 #
 # NO `fail_under` HERE ON PURPOSE. Picking the number is an owner's decision, and a threshold invented
 # by whoever fixed the plumbing is how a gate ends up ratcheted to whatever happened to be true that
@@ -365,14 +365,14 @@ scan-secrets:
 	dagger call scan-secrets
 
 scan-image:
-	@test -n "$(NAME)" || { echo "  !! usage: make scan-image NAME=gateway"; exit 1; }
+	@test -n "$(NAME)" || { echo "  !! usage: make scan-image NAME=notifications"; exit 1; }
 	dagger call scan-image --name=$(NAME)
 
 # THE INVENTORY, not a gate. `scan-image` answers "is this image clean today"; this answers "what is
 # IN it", which is the question a new CVE asks and the one nothing here could answer. Emitted from the
 # same tarball the scanner reads, so the SBOM describes the exact bytes that were scanned.
-sbom: ## CycloneDX SBOM for one image (NAME=gateway) — writes ./sbom-<name>.cdx.json
-	@test -n "$(NAME)" || { echo "  !! usage: make sbom NAME=gateway"; exit 1; }
+sbom: ## CycloneDX SBOM for one image (NAME=notifications) — writes ./sbom-<name>.cdx.json
+	@test -n "$(NAME)" || { echo "  !! usage: make sbom NAME=notifications"; exit 1; }
 	dagger call sbom --name=$(NAME) export --path=./sbom-$(NAME).cdx.json
 	@echo "  -> ./sbom-$(NAME).cdx.json"
 
@@ -416,8 +416,9 @@ dev-micro:
 
 # ---- frontends (SvelteKit microfrontends) ----------------------------------
 # Six independent SvelteKit SSR zones (svelte-adapter-bun) + the shared ui
-# library's watcher, orchestrated by Turborepo. Each zone's Vite dev server proxies
-# /api/* → VIEWER_BACKEND (the gateway, :8888). The zones come up on
+# library's watcher, orchestrated by Turborepo. Each zone's server reaches /api/* at
+# RASK_EDGE_URL and its Vite dev server proxies /api/* to VIEWER_BACKEND (both :8888,
+# an edge — `make dev-frontends-k3s` forwards the cluster's). The zones come up on
 # their own ports AND Turborepo auto-starts its built-in microfrontends proxy (from
 # frontend/microfrontends/home/microfrontends.json — no extra package) on :3024:
 #   single origin → http://localhost:3024   (browse THIS for cross-zone nav)
@@ -441,18 +442,17 @@ dev-frontends:        # build the ui + api libs once, then all zones + :3024 pro
 	bunx turbo --cwd=frontend run dev --filter='./microfrontends/*'
 
 dev-frontends-k3s:    # frontend HMR (Path A) against the IN-CLUSTER backend
-	# Port-forwards the in-cluster gateway to :8888, then runs all 6 zones with Vite
-	# HMR pointed at it (VIEWER_BACKEND client proxy + RASK_GATEWAY_URL SSR both
-	# default to :8888). One Ctrl-C tears down both (trap kills the port-forward).
-	# Needs the cluster up (`make k3s-up`). Browse http://localhost:3024.
-	@echo "==> port-forward rask-gateway → http://localhost:8888 (Ctrl-C stops both)"
-	@$(KUBECTL) port-forward svc/rask-gateway 8888:8888 >/dev/null 2>&1 & \
+	# Port-forwards the in-cluster edge (k3s Traefik's Gateway, which serves the chart's
+	# HTTPRoutes) to :8888, then runs all zones with Vite HMR pointed at it (VIEWER_BACKEND
+	# client proxy + RASK_EDGE_URL SSR, both :8888). One Ctrl-C tears down both (trap kills
+	# the port-forward). Needs the cluster up (`make k3s-up`). Browse http://localhost:3024.
+	@echo "==> port-forward kube-system/traefik → http://localhost:8888 (Ctrl-C stops both)"
+	@$(KUBECTL) -n kube-system port-forward svc/traefik 8888:80 >/dev/null 2>&1 & \
 	  PF=$$!; trap 'kill $$PF 2>/dev/null' EXIT INT TERM; \
 	  until curl -sf http://localhost:8888/api/ray/health >/dev/null 2>&1; do sleep 1; done; \
-	  echo "==> gateway reachable; starting frontends (Vite HMR)"; \
-	  VIEWER_BACKEND=http://localhost:8888 RASK_GATEWAY_URL=http://localhost:8888 \
-	    bunx turbo --cwd=frontend run build --filter='./packages/ui' --filter='./packages/api' && \
-	  VIEWER_BACKEND=http://localhost:8888 RASK_GATEWAY_URL=http://localhost:8888 \
+	  echo "==> edge reachable; starting frontends (Vite HMR)"; \
+	  bunx turbo --cwd=frontend run build --filter='./packages/ui' --filter='./packages/api' && \
+	  VIEWER_BACKEND=http://localhost:8888 RASK_EDGE_URL=http://localhost:8888 \
 	    bunx turbo --cwd=frontend run dev --filter='./microfrontends/*'
 
 home:      # catch-all zone only, :5273 (serves /)
@@ -655,7 +655,7 @@ nats-auth: ## NATS auth e2e — each bus client admitted only to its own subject
 # (`flows` is STILL absent and has been since it landed: `.docker/flows.dockerfile` and a `rask-flows`
 # Deployment both exist, so an in-cluster flows is unverifiable today for the identical reason. Named
 # rather than fixed here — it is another plane's diff.)
-COMPOSE_IMAGES = gateway compute notifications flows
+COMPOSE_IMAGES = compute notifications flows
 # SvelteKit SSR microfrontend zone images — one web-<zone> image per $(ZONES) entry,
 # all built from the one parametrized .docker/frontend.dockerfile via --build-arg
 # APP=<name>. (R22: the web- prefix keeps the zone image namespace disjoint from the
@@ -804,7 +804,7 @@ k3s-crds: ## Apply the vendored CRDs no release owns (see chart/.helmignore), be
 # (7c2171f0) until 2026-08-23, and the whole target failed with `/bin/sh: @#: not found` plus a
 # `helm get values requires 1 argument` from the orphaned `-o yaml`. A comment that breaks the recipe
 # it documents is worse than no comment; keep prose out of the continuation.
-k3s-up: k3s-crds k3s-fixtures k3s-deps k3s-stem-check ## Apply CRDs, install fixtures, vendor deps, then install/upgrade the release and wait for the gateway
+k3s-up: k3s-crds k3s-fixtures k3s-deps k3s-stem-check ## Apply CRDs, install fixtures, vendor deps, then install/upgrade the release and wait for the catalog
 	@case '$(DEV_VENDED_ENDPOINT)' in http://:*|*:) echo "DEV_VENDED_ENDPOINT '$(DEV_VENDED_ENDPOINT)' names no node address or port: is kubectl pointed at the cluster?" >&2; exit 1;; esac
 	@set -a; [ -f .env ] && . ./.env; set +a; \
 	if [ -z "$$HF_TOKEN" ] && [ -r "$${HF_HOME:-$$HOME/.cache/huggingface}/token" ]; then \
@@ -848,9 +848,9 @@ k3s-up: k3s-crds k3s-fixtures k3s-deps k3s-stem-check ## Apply CRDs, install fix
 	  $(DROP_CREDENTIAL_VALUES) \
 	  $$HFARGS \
 	  $${AWS_ACCESS_KEY_ID:+--set-string minio.accessKey=$$AWS_ACCESS_KEY_ID}
-	$(KUBECTL) rollout status deploy/rask-gateway --timeout=300s
-	@echo "UI → http://<node-ip>/   (catch-all ingress; over VS Code/ssh -L forward port 80 → http://localhost:<port>/)"
-	@echo "API → http://<node-ip>/api/ray/health"
+	$(KUBECTL) rollout status deploy/rask-catalog --timeout=300s
+	@echo "UI → http://<node-ip>/   (host-less routes on Traefik's Gateway; over VS Code/ssh -L forward port 80 → http://localhost:<port>/)"
+	@echo "API → http://<node-ip>/api/catalog/livez"
 
 seed-corpus: ## Seed the demo corpus into the volume the media plane actually READS
 	./scripts/seed-corpus.sh
@@ -1012,7 +1012,7 @@ kind-preload: bootstrap ## Pull the chart's third-party images into the host cac
 # unblock. Keeping --wait off was the workaround; keeping it ON is now the regression test.
 kind-deploy: k3s-deps ## helm upgrade --install release `rask` into the kind cluster
 	$(HELM) upgrade --install rask ./chart --kube-context kind-$(KIND_CLUSTER) --wait --wait-for-jobs --timeout 900s
-	$(LOCALBIN)/kubectl --context kind-$(KIND_CLUSTER) rollout status deploy/rask-gateway --timeout=300s
+	$(LOCALBIN)/kubectl --context kind-$(KIND_CLUSTER) rollout status deploy/rask-catalog --timeout=300s
 
 kind-down: ## Delete the rask kind cluster
 	$(KIND) delete cluster --name $(KIND_CLUSTER)
@@ -1074,9 +1074,9 @@ e2e-container-deletes: ## Warehouse/project delete, cascade and the gate-before-
 #
 # All of them need a live deployed stack (that is what `e2e` means here); they are runnable proofs,
 # not a CI lane. `make e2e-ci` remains the governed-kind-stack entry point, and wiring the
-# security-shaped ones (gateway, cas) into CI is the follow-up — it needs an edit to
+# security-shaped ones (edge, cas) into CI is the follow-up — it needs an edit to
 # `.github/workflows/ci.yml`, which a concurrent session is holding.
-E2E_SUITES = byo-branch byo-erasure byo-pipeline cas chaos compaction gateway media-catalog observability spec-conformance track-a user-state
+E2E_SUITES = byo-branch byo-erasure byo-pipeline cas chaos compaction edge media-catalog observability spec-conformance track-a user-state
 .PHONY: $(addprefix e2e-,$(E2E_SUITES))   # declared HERE, not up with the other .PHONY: make
                                           # expands a rule's prerequisites AS IT READS the line,
                                           # so referencing E2E_SUITES before this assignment
@@ -1137,13 +1137,11 @@ e2e-spec-conformance-incluster: ## The same suite as an in-cluster Job — prove
 check-fast: ## The pre-push suite in parallel — 1m17s against 9m57s serial
 	uv run pytest tests/unit tests/integration -q -n 16 --dist loadfile
 
-# REQUIRES its target, rather than skipping into a green. Every test in this suite is guarded on
-# LANCE_E2E_GATEWAY_URL, so without it the target collected 3 tests, skipped all 3 and exited 0 — a
-# routing proof that reported success having proved nothing, which is exactly what its docstring
-# invited a reader to trust. A live drive with no live target is a failed invocation, not a pass.
-e2e-gateway:        ## Dapr service-invocation gateway routing proof (needs LANCE_E2E_GATEWAY_URL)
-	@test -n "$(LANCE_E2E_GATEWAY_URL)" || { echo "set LANCE_E2E_GATEWAY_URL, e.g. make e2e-gateway LANCE_E2E_GATEWAY_URL=http://localhost:8888"; exit 1; }
-	LANCE_E2E_GATEWAY_URL=$(LANCE_E2E_GATEWAY_URL) uv run pytest tests/e2e-py -m gateway -v
+# REQUIRES its target, rather than skipping into a green: every test in this suite skips without
+# RASK_E2E_EDGE_URL, and a live drive with no live target is a failed invocation, not a pass.
+e2e-edge:           ## Each /api prefix reaches its service through the cluster Gateway and is refused there anonymously (needs RASK_E2E_EDGE_URL)
+	@test -n "$(RASK_E2E_EDGE_URL)" || { echo "set RASK_E2E_EDGE_URL, e.g. make e2e-edge RASK_E2E_EDGE_URL=http://10.16.51.55"; exit 1; }
+	RASK_E2E_EDGE_URL=$(RASK_E2E_EDGE_URL) uv run pytest tests/e2e-py -m edge -v
 e2e-media-catalog:  ## Annotator/catalog live-mode proof (needs MEDIA_CATALOG_URL)
 	@test -n "$(MEDIA_CATALOG_URL)" || { echo "  !! e2e-media-catalog needs MEDIA_CATALOG_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
 	MEDIA_CATALOG_URL=$(MEDIA_CATALOG_URL) uv run pytest tests/e2e-py -m media_catalog -v

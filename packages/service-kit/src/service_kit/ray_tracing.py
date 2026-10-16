@@ -13,7 +13,7 @@ Ray has TWO independent tracing switches, configured in different places, and ne
 
   * Ray SERVE — ``RAY_SERVE_TRACING_EXPORTER_IMPORT_PATH=service_kit.ray_tracing:serve_span_processors``.
     Produces proxy → router → replica spans and HONOURS AN INBOUND ``traceparent``, which makes it the
-    segment that joins a gateway-originated trace to the model call. It is the higher-value of the two
+    segment that joins a caller's trace to the model call. It is the higher-value of the two
     and Ray's own monitoring docs never mention it exists.
 
 THE CONTRACTS DIFFER AND MUST NOT BE COPY-PASTED. The core hook takes no arguments and returns

@@ -44,3 +44,20 @@ from the URL (`lance.urlPort`: explicit, else 443 for https, 80 for http). `prod
 
 The zones read the store's SQL and PromQL API at `observability.query.url` (the audit viewer, admin pages and
 experiment curves); the same derivation opens its port for the zone pods only.
+
+## `name: {{ include "lance.fullname" $ }}-edge-{{ $row.component }}`
+
+One policy per service the cluster route publishes, ranged from the same `rask.apiRoutes` list
+`route.yaml` renders its rules from, so a public prefix and an admitted port cannot drift. The Gateway's
+data plane lives in the platform's namespace, so the source is unrestricted, as for the zones; the bound is
+the PORT: only the app port is admitted, and daprd's ports on the same pod stay intra-namespace. That is
+safe because every one of these services authenticates each request itself, and a request through the
+Gateway reaches the app port directly, never carrying a sidecar's app token.
+
+## `name: {{ include "lance.fullname" . }}-allow-edge-egress`
+
+The zones' server side sends `/api/*` through the Gateway (`RASK_EDGE_URL` = `route.edgeUrl`), which sits
+outside this namespace. A NetworkPolicy sees the data plane's POD port, after the Service's translation
+(Traefik on k3s listens on :8000 behind the node's :80), so the rule cannot be derived from the URL: the
+platform states it as `route.edgeEgress`, and the render fails without it under `networkPolicy.enabled`
+while the zones render.

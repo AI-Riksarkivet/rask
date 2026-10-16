@@ -30,7 +30,8 @@ PROD_VALUES="${PROD_VALUES:-deploy/values-prod.yaml}"
 # nats.auth.provisioned the same for the NATS users (templates/nats-provisioned.yaml). nats.url is the platform's NATS
 # bus, a prerequisite values-prod leaves for the deployer to name.
 # observability.export.endpoint is the platform's OTLP backend, which values-prod leaves for the deployer to name, and
-# auth.fgaApiUrl and age.externalHost the platform's OpenFGA and Postgres ([[XC-132]]).
+# auth.fgaApiUrl and age.externalHost the platform's OpenFGA and Postgres ([[XC-132]]), and route.* the platform's Gateway,
+# its in-cluster address and the egress that reaches it (ADR 0165).
 COMMON=(--api-versions external-secrets.io/v1/ExternalSecret --api-versions dapr.io/v1alpha1
         --set frontend.oidc.publicIssuer=https://auth.example.com/dex
         --set frontend.oidc.publicOrigin=https://lance.example.com
@@ -41,14 +42,17 @@ COMMON=(--api-versions external-secrets.io/v1/ExternalSecret --api-versions dapr
         --set-string nats.url=nats://nats.example.com:4222
         --set-string observability.export.endpoint=http://otlp.example.com:4318/v1/otlp
         --set-string auth.fgaApiUrl=https://fga.example.com
-        --set-string age.externalHost=pg.example.com)
+        --set-string age.externalHost=pg.example.com
+        --set-json 'route.parentRefs=[{"name":"edge","namespace":"edge-system"}]'
+        --set-string route.edgeUrl=http://edge.edge-system.svc.cluster.local
+        --set-json 'route.edgeEgress=[{"to":[{"namespaceSelector":{"matchLabels":{"kubernetes.io/metadata.name":"edge-system"}}}],"ports":[{"protocol":"TCP","port":8080}]}]')
 OUT="$(mktemp)"
 trap 'rm -f "$OUT"' EXIT
 
 helm template rask "$CHART" -f "$PROD_VALUES" \
   --set image.catalog.tag=v0 --set frontend.image.tag=v0 \
   --set backups.volumeSnapshot.snapshotClassName=csi-snapclass \
-  --set ingress.host=lance.example.com "${COMMON[@]}" > "$OUT"
+  --set route.hostnames[0]=lance.example.com "${COMMON[@]}" > "$OUT"
 
 fail() { echo "!! prod-render-check: $*" >&2; exit 1; }
 
@@ -107,7 +111,7 @@ pdb_names=$(awk '/^kind: PodDisruptionBudget$/{f=1} f&&/^  name: /{print $2; f=0
 # Input-vs-output, not circular: the expected set comes from values.yaml, the actual from the render.
 zones=$(awk '/^  apps:/{f=1;next} f&&/^  [a-zA-Z]/{exit} f&&match($0,/name: [a-z0-9-]+/){print substr($0,RSTART+6,RLENGTH-6)}' "$CHART/values.yaml")
 [ -n "$zones" ] || fail "could not derive frontend.apps from $CHART/values.yaml — the PDB zone assertion would be vacuous"
-for p in catalog lineage gateway $(sed 's/^/web-/' <<<"$zones"); do
+for p in catalog lineage $(sed 's/^/web-/' <<<"$zones"); do
   grep -qx "rask-$p" <<<"$pdb_names" \
     || fail "prod is missing the rask-$p PodDisruptionBudget (got: $(tr '\n' ' ' <<<"$pdb_names"))"
 done
@@ -137,14 +141,13 @@ grep -q "name: rask-vmagent$" "$OUT" && fail "vmagent must NOT be shipped (the O
 
 # 8b. THE EDGE'S FORMERLY-UNAUTHENTICATED DOORS STAY SHUT IN PROD.
 #
-# The nginx gateway exposed unauthenticated locations, among them /perses/ + /greptime/ (basic-auth'd via
-# observability.edgeAuth). The gateway fold (docs/adr/0117-nginx-is-retired-and-the-fastapi-gateway-is-the-in-cluster.md) retired nginx:
-# the FastAPI gateway proxies /api/* only, and the telemetry suite is cluster-internal (port-forward only — no Ingress path routes it). Assert the doors stay CLOSED under the new topology,
-# on the rendered OUTPUT: an Ingress path or a resurfaced nginx block reopens a door invisibly.
+# The telemetry suite (/perses/, /greptime/) is cluster-internal (port-forward only): no rule of the cluster route
+# publishes it, and the routes publish /api/* prefixes, the zones and /dex alone (ADR 0165). Assert the doors stay
+# CLOSED on the rendered OUTPUT: a route path or an nginx location block reopens a door invisibly.
 grep -qE "location /(produce|perses|greptime)" "$OUT" \
   && fail "an nginx location block resurfaced — the nginx gateway is retired (docs/adr/0117-nginx-is-retired-and-the-fastapi-gateway-is-the-in-cluster.md)"
-grep -qE "path: /(perses|greptime)" "$OUT" \
-  && fail "prod must NOT route /perses//greptime at the public edge (cluster-internal since the gateway fold)"
+grep -qE 'value: "?/(perses|greptime)' "$OUT" \
+  && fail "prod must NOT route /perses or /greptime at the public edge: the telemetry suite is cluster-internal"
 
 # 9. Catalog memory coherence (P1): the load-shed write cap must be sized to the catalog memory tier —
 # cap × maxBodyBytes of buffered Arrow-IPC bodies + 512Mi baseline headroom (process + pyarrow decode)
@@ -177,7 +180,7 @@ peak=$((cap * body + headroom))
 EXT_S3=https://s3.ext.example.com
 atomic=$(helm template rask "$CHART" -f "$PROD_VALUES" \
   --set image.catalog.tag=v0 --set frontend.image.tag=v0 \
-  --set backups.volumeSnapshot.snapshotClassName=csi-snapclass --set ingress.host=lance.example.com \
+  --set backups.volumeSnapshot.snapshotClassName=csi-snapclass --set route.hostnames[0]=lance.example.com \
   --set minio.enabled=false --set minio.externalEndpoint="$EXT_S3" "${COMMON[@]}")
 grep -q "rask-minio:9000" <<<"$atomic" && fail "externalizing the object store still leaks in-cluster store DNS"
 grep -q "$EXT_S3" <<<"$atomic" || fail "the externalized object store endpoint reaches nothing in the render"
@@ -228,8 +231,8 @@ unrendered=$(comm -23 <(sort -u <<<"$named") <(echo "$rendered"))
 [ -z "$unrendered" ] || fail "workloads name ServiceAccounts this render does not create: $(tr '\n' ' ' <<<"$unrendered")"
 sa=$(grep -c "^kind: ServiceAccount" "$OUT" || true)
 automount=$(grep -c "automountServiceAccountToken: false" "$OUT" || true)
-[ "$automount" -ge 15 ] \
-  || fail "prod must stop mounting the SA token into app pods, rendered $automount refusals (>=15 expected; 1 is the baseline)"
+[ "$automount" -ge 14 ] \
+  || fail "prod must stop mounting the SA token into app pods, rendered $automount refusals (>=14 expected; 1 is the baseline)"
 grep -q 'dapr.io/sidecar-seccomp-profile-type: RuntimeDefault' "$OUT" \
   || fail "prod must restrict the daprd sidecar (dapr.sidecarRestricted) — a pod is only as restricted as its loosest container"
 

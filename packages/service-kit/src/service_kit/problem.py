@@ -6,14 +6,14 @@ library builds gets — imported ``problem_body`` from it. So ``import service_k
 required a package that lives behind the ``[governed]`` / ``[lakehouse]`` extras, and the estate's own
 rule is that those stay optional because this library is shared by storeless services too.
 
-The consequence was not theoretical: ``services/gateway`` declares ``service-kit`` bare, and its image
-stopped building at all —
+The consequence is not theoretical: an image whose member declares ``service-kit`` bare resolves no
+``lance_namespace`` and fails ``.docker/import-gate.py`` —
 
     import gate FAILED — 1/1 modules could not be IMPORTED:
-      gateway: ModuleNotFoundError: No module named 'lance_namespace'
+      <member>: ModuleNotFoundError: No module named 'lance_namespace'
 
-Five other bare consumers resolved it TRANSITIVELY, by luck, through some other dependency; the
-gateway did not, and they were one dependency bump from the same failure.
+A bare consumer that resolves it TRANSITIVELY, through some other dependency, does so by luck and is
+one dependency bump from the same failure.
 
 Nothing here is Lance-specific. The envelope is RFC 9457 plus the two spec-0.9 keys, and the code is
 an integer on the wire either way — ``ErrorCode`` is an ``IntEnum``, so a caller that HAS the extra

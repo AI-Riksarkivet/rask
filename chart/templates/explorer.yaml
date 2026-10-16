@@ -91,6 +91,7 @@ spec:
             - "--host=0.0.0.0"
             - "--port={{ $svc.port }}"
             {{- include "rask.shutdownArg" $root | nindent 12 }}
+            {{- include "rask.proxyHeaderArgs" $root | nindent 12 }}
           ports: [{ name: http, containerPort: {{ $svc.port }} }]
           env:
             {{- if include "lance.otelEnabled" $root }}
