@@ -43,6 +43,7 @@ from lineage.schemas import EventRecord
 from notifications.api.reconciler import LineageCursor, LineageCursorStore, LineageFeedClient, reconcile
 from notifications.api.visibility import Visibility
 from notifications.proxies import TypedActorProxy
+from service_kit.governed.decider import OpenFgaDecider
 from service_kit.governed.machine_identity import ServicePrincipal
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 
@@ -162,7 +163,7 @@ def lineage(monkeypatch: pytest.MonkeyPatch) -> Iterator[FastAPI]:
     install_problem_handlers(app, logging.getLogger(__name__))
     app.include_router(api_router)
     app.dependency_overrides[authenticate] = lambda: RECONCILER
-    app.state.fga = cast(OpenFgaClient, _OpenFga())
+    app.state.decider = OpenFgaDecider(cast(OpenFgaClient, _OpenFga()))
     app.state.provenance = _Feed(
         [
             EventRecord(seq=2, outputs=["acme-gold$catalog"], inputs=["acme-silver$pages"], event=TENANT_RUN),
@@ -190,7 +191,7 @@ async def test_the_walk_reaches_a_tenant_warehouse_run_and_is_sent_only_what_tar
         result = await reconcile(
             client=feed,
             store=cast(LineageCursorStore, _Cursor()),
-            visibility=Visibility(client=None, enabled=False),
+            visibility=Visibility(decider=None, enabled=False),
             open_inbox=lambda subject: cast(TypedActorProxy, _Inbox(boxes, subject)),
             max_pages=4,
             budget_seconds=10.0,

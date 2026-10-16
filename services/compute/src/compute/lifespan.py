@@ -17,6 +17,7 @@ from ray_kit.auth import auth_headers
 from service_kit.config import Settings
 from service_kit.governed.auth_lifespan import attach_auth
 from service_kit.governed.dapr_auth import assert_app_token_configured
+from service_kit.governed.fga import dispose as fga_dispose
 
 
 log = logging.getLogger(__name__)
@@ -43,7 +44,7 @@ def make_lifespan(settings: Settings) -> Callable[[FastAPI], AbstractAsyncContex
         # any pod in the namespace while reading as sidecar-only. A pod that refuses to start names
         # the missing variable; a pod that starts open names nothing.
         assert_app_token_configured(dapr_enabled=get_compute_settings().dapr_enabled)
-        # THE DOOR'S OWN DEPENDENCIES. `compute.security` reads `app.state.oidc` / `app.state.fga`;
+        # THE DOOR'S OWN DEPENDENCIES. `compute.security` reads `app.state.oidc` / `app.state.decider`;
         # without this the settings are bound, the routes declare the dependency, and every request
         # answers 503 "Authentication is enabled but unavailable" — which is fail-CLOSED and correct,
         # and also means the service does nothing. Measured on the live estate: that is exactly what
@@ -54,6 +55,7 @@ def make_lifespan(settings: Settings) -> Callable[[FastAPI], AbstractAsyncContex
             yield
         finally:
             await app.state.http.aclose()
+            await fga_dispose(app)
             log.info("shutdown_complete")
 
     return lifespan

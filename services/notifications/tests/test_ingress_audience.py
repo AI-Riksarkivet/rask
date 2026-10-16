@@ -24,6 +24,7 @@ from notifications.api.fanout import audience_for, fan_out
 from notifications.api.lineage_events import LineageRunEvent, Notifiable, notifiable
 from notifications.api.visibility import METADATA_RELATION, NOTIFY_RELATION, Visibility
 from notifications.proxies import TypedActorProxy
+from service_kit.governed.decider import OpenFgaDecider
 
 
 if TYPE_CHECKING:
@@ -31,7 +32,7 @@ if TYPE_CHECKING:
 
 
 WIRED = cast("OpenFgaClient", object())
-OPEN = Visibility(client=None, enabled=False)
+OPEN = Visibility(decider=None, enabled=False)
 
 
 def _event(*, author: str = "alice", outputs: list[str] | None = None, project: str | None = None) -> dict[str, Any]:
@@ -114,7 +115,7 @@ def recipient_counter(monkeypatch: pytest.MonkeyPatch) -> _Counter:
 def _governed(monkeypatch: pytest.MonkeyPatch, allowed: dict[str, set[str]]) -> tuple[Visibility, _Recorder]:
     recorder = _Recorder(allowed)
     monkeypatch.setattr(visibility_module.fga, "batch_check", recorder)
-    return Visibility(client=WIRED, enabled=True), recorder
+    return Visibility(decider=OpenFgaDecider(WIRED), enabled=True), recorder
 
 
 # --- v1's audience -------------------------------------------------------------------------------
@@ -212,7 +213,7 @@ async def test_an_authorization_outage_is_never_answered_permissively_for_any_re
     """Swept over an audience rather than one subject: the refusal is raised per recipient, so a
     fan-out is where a "well, carry on for the rest" would be written."""
     plane = _Plane()
-    unwired = Visibility(client=None, enabled=True)
+    unwired = Visibility(decider=None, enabled=True)
 
     result = await fan_out(_notice(), audience=["alice", "bob", "carol"], visibility=unwired, open_inbox=plane.open)
 

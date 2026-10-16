@@ -213,7 +213,9 @@ def _told(event: dict[str, Any], *, watchers: list[str]) -> dict[str, list[tuple
     async def _watching(project: str) -> list[str]:
         return watchers if project == PROJECT else []
 
-    status = asyncio.run(ingest_run_event(event, lane=Lane.BUS, visibility=Visibility(client=None, enabled=False), watchers=_watching, open_inbox=inboxes.open))
+    status = asyncio.run(
+        ingest_run_event(event, lane=Lane.BUS, visibility=Visibility(decider=None, enabled=False), watchers=_watching, open_inbox=inboxes.open)
+    )
     assert status == {"status": "SUCCESS"}, status
     return {subject: [(row["reason"], row["object_id"]) for row in rows] for subject, rows in inboxes.rows.items()}
 

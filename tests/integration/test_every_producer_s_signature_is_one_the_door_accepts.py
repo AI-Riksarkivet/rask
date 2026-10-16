@@ -34,6 +34,7 @@ from lineage.api import fga_deps
 from lineage.core.config import LineageSettings, Signing
 from lineage.models import UnverifiedEventError, parse_event
 from service_kit.governed import fga
+from service_kit.governed.decider import OpenFgaDecider
 
 
 PERSON = "CiQwOGE4Njg0Yi1kYjg4LTRiNzMtOTBhOS0zY2QxNjYxZjU0NjY"
@@ -92,7 +93,7 @@ def _settings(signers: set[str], delegators: set[str], *, fga_enabled: bool = Fa
 
 async def _drive(event: dict[str, Any], settings: LineageSettings) -> None:
     """Through the REAL door, as the bus drives it: the parsed model plus the bytes that arrived."""
-    request = cast("Any", SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(fga=object()))))
+    request = cast("Any", SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(decider=OpenFgaDecider(cast("Any", object()))))))
     parsed = parse_event(json.loads(json.dumps(event)))
     await fga_deps.enforce_bus_authz(parsed, request, settings, event)
 

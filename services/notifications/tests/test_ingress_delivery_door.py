@@ -170,7 +170,7 @@ def _build(plane: _Plane, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClien
     app = FastAPI()
     install_problem_handlers(app, logging.getLogger(__name__))
     app.state.notifications_settings = get_notifications_settings()
-    app.state.fga = None
+    app.state.decider = None
     subscriptions_module.register_subscriptions(app)
     # Before any request: the real `inbox_for` builds a Dapr `ActorProxy`, whose constructor blocks on
     # a sidecar health check for a full minute when there is no daprd to answer it.

@@ -66,7 +66,7 @@ def _app(monkeypatch: pytest.MonkeyPatch) -> FastAPI:
     app = FastAPI()
     install_problem_handlers(app, logging.getLogger(__name__))
     app.state.notifications_settings = get_notifications_settings()
-    app.state.fga = None
+    app.state.decider = None
     subscriptions_module.register_subscriptions(app)
     return app
 

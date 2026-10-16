@@ -1,12 +1,11 @@
 """In-service authz for the lineage read + ingest endpoints.
 
 The lineage service owns the commit feed and the edge list, so it must protect them itself (in-service: the
-cluster route in front of it checks nothing). It mirrors the catalog's authz guard (``services/catalog/api/fga_deps.py``) and **reuses
-the catalog's core** — :func:`service_kit.governed.fga.check` / ``batch_check`` — so the OpenFGA check has
-one source of truth. The thin FastAPI authz + filter dependencies are re-derived here
-because they bind to ``LineageSettings`` rather than the catalog's ``Settings``. (Shared
-*library* code; the service makes no runtime call to the catalog — it talks only to the IdP
-and the shared OpenFGA store, read-only.)
+cluster route in front of it checks nothing). It mirrors the catalog's authz guard (``services/catalog/api/fga_deps.py``)
+and asks every question through ``app.state.decider`` (:mod:`service_kit.governed.decider`): deployed, that is the
+catalog's decision door, and lineage holds no credential to the OpenFGA store at all ([[LH-442]]). The thin FastAPI
+authz + filter dependencies are re-derived here because they bind to ``LineageSettings`` rather than the catalog's
+``Settings``.
 
 Three holes this closes (audit ``w8u4rc2tg``):
 
@@ -35,7 +34,6 @@ from lance_namespace import (
     ServiceUnavailableError,
     UnauthenticatedError,
 )
-from openfga_sdk import OpenFgaClient
 
 from lineage.api.dependencies import SettingsDep
 from lineage.api.security import CurrentToken, Principal
@@ -43,7 +41,7 @@ from lineage.core.config import LineageSettings
 from lineage.models import MAINTENANCE_OPERATIONS, DatasetEvent, ForeignRunError, RunEvent, UnauthoredRunError, UngovernedOutputError, author_sub_from_payload
 from lineage.services.signature import verify_arrived_event
 from lineage_kit.signing import VerifiedSignature
-from service_kit.governed import fga
+from service_kit.governed.decider import AccessDecider
 from service_kit.openlineage import lifecycle_state
 
 
@@ -103,23 +101,23 @@ def relations_for_operation(operation: str | None) -> tuple[str, ...]:
     return _MAINTENANCE_RELATIONS if operation in MAINTENANCE_OPERATIONS else _WRITE_RELATIONS
 
 
-async def _denied_objects(client: OpenFgaClient, *, user: str, relations: tuple[str, ...], names: list[str], object_type: str) -> list[str]:
+async def _denied_objects(decider: AccessDecider, *, user: str, relations: tuple[str, ...], names: list[str], object_type: str) -> list[str]:
     """The names the subject may NOT record against — denied under EVERY acceptable relation.
 
     Batched per relation rather than per object, and short-circuited: the common case is one relation
     and one round trip. A name still denied after the last relation is genuinely refused, and so is one
-    whose ``<type>:<name>`` is no object id, which ``fga.batch_check`` answers False unasked.
+    whose ``<type>:<name>`` is no object id, which the decider answers False unasked.
     """
     remaining = list(names)
     for relation in relations:
         if not remaining:
             break
-        allowed = await fga.batch_check(client, user=user, relation=relation, objects=[f"{object_type}:{n}" for n in remaining])
+        allowed = await decider.batch_check(user=user, relation=relation, objects=[f"{object_type}:{n}" for n in remaining])
         remaining = [n for n in remaining if not allowed.get(f"{object_type}:{n}")]
     return sorted(remaining)
 
 
-async def _none_are_governed(client: OpenFgaClient, *, names: list[str], object_type: str) -> bool:
+async def _none_are_governed(decider: AccessDecider, *, names: list[str], object_type: str) -> bool:
     """True only when EVERY denied name carries zero tuples — i.e. there is nothing to grant on.
 
     Decides which ack a refusal earns ([[LH-166]]): a grant needs an object, so a denial naming only
@@ -133,11 +131,8 @@ async def _none_are_governed(client: OpenFgaClient, *, names: list[str], object_
     refusal repairable.
     """
     try:
-        for name in names:
-            # A name that is no object id holds no tuple, and reading it would fail the request.
-            obj = f"{object_type}:{name}"
-            if fga.is_object_id(obj) and await fga.read_object_tuples(client, obj):
-                return False
+        if any((await decider.governed([f"{object_type}:{name}" for name in names])).values()):
+            return False
     except Exception as exc:  # noqa: BLE001 — unreadable is not evidence of absence
         log.warning("ingest_governance_probe_unreadable", extra={"outputs": names, "error": str(exc)})
         return False
@@ -147,16 +142,16 @@ async def _none_are_governed(client: OpenFgaClient, *, names: list[str], object_
 async def _require_relation(relation: str, name: str, request: Request, settings: LineageSettings, token: Principal | None) -> None:
     """The one fail-closed authz ladder every per-``{name}`` gate shares (audit 2026-07-16: it had
     grown four near-copies). No-op when FGA is off; unwired client → 503; unauthenticated → 401;
-    deny → 403; an OpenFGA outage inside ``fga.check`` → 503, never allow."""
+    deny → 403; an unanswerable decision → 503, never allow."""
     if not settings.fga_enabled:
         return
-    client = getattr(request.app.state, "fga", None)
-    if client is None:
+    decider = getattr(request.app.state, "decider", None)
+    if decider is None:
         raise ServiceUnavailableError("authorization service is not available")
     if token is None:
         raise UnauthenticatedError("authentication required")
     obj = f"{settings.fga_object_type}:{name}"
-    if not await fga.check(client, user=token.sub, relation=relation, obj=obj):
+    if not await decider.check(user=token.sub, relation=relation, obj=obj):
         log.info("access_denied", extra={"sub": token.sub, "relation": relation, "object": obj})
         raise PermissionDeniedError(f"{relation} required on {obj}")
 
@@ -182,13 +177,13 @@ async def require_event_feed_reader(request: Request, settings: LineageSettings,
     """
     if not settings.fga_enabled:
         return
-    client = getattr(request.app.state, "fga", None)
-    if client is None:
+    decider = getattr(request.app.state, "decider", None)
+    if decider is None:
         raise ServiceUnavailableError("authorization service is not available")
     if token is None:
         raise UnauthenticatedError("authentication required")
     obj = settings.fga_root_object
-    if not await fga.check(client, user=token.sub, relation=_EVENT_FEED_RELATION, obj=obj):
+    if not await decider.check(user=token.sub, relation=_EVENT_FEED_RELATION, obj=obj):
         log.info("access_denied", extra={"sub": token.sub, "relation": _EVENT_FEED_RELATION, "object": obj})
         raise PermissionDeniedError(f"{_EVENT_FEED_RELATION} required on {obj}")
 
@@ -414,8 +409,8 @@ async def enforce_output_authz(
         return
     # Fail-closed FIRST — BEFORE any empty-set short-circuit: an authenticated but unauthorized caller must
     # not be able to record a run merely by declaring no outputs. (bug hunt 2026-07-13)
-    client = getattr(request.app.state, "fga", None)
-    if client is None:
+    decider = getattr(request.app.state, "decider", None)
+    if decider is None:
         raise ServiceUnavailableError("authorization service is not available")
     if token is None:
         raise UnauthenticatedError("authentication required")
@@ -438,11 +433,11 @@ async def enforce_output_authz(
             raise ForeignRunError(f"run {event.run_id} was founded by another subject; only its author may extend it")
     outputs = [d.name for d in event.outputs if d.name]
     if outputs:
-        denied = await _denied_objects(client, user=token.sub, relations=relations, names=outputs, object_type=object_type)
+        denied = await _denied_objects(decider, user=token.sub, relations=relations, names=outputs, object_type=object_type)
         if denied:
             log.info("ingest_denied", extra={"sub": token.sub, "relation": "|".join(relations), "outputs": denied})
             reason = f"{' or '.join(relations)} required on outputs: {', '.join(denied)}"
-            if await _none_are_governed(client, names=denied, object_type=object_type):
+            if await _none_are_governed(decider, names=denied, object_type=object_type):
                 raise UngovernedOutputError(reason)
             raise PermissionDeniedError(reason)
     # Inputs: you may only RECORD reading a dataset you can SEE — else an authenticated reader (e.g. the
@@ -464,7 +459,7 @@ async def enforce_output_authz(
     inputs = sorted({d.name for d in event.inputs if d.name and not is_external_source(d.namespace, d.name)} | column_upstreams)
     if inputs:
         objs = [f"{object_type}:{n}" for n in inputs]
-        seen = await fga.batch_check(client, user=token.sub, relation="can_get_metadata", objects=objs)
+        seen = await decider.batch_check(user=token.sub, relation="can_get_metadata", objects=objs)
         hidden = sorted(n for n in inputs if not seen.get(f"{object_type}:{n}"))
         if hidden:
             log.info(
@@ -494,8 +489,8 @@ class DatasetFilter:
         """Return the subset of ``names`` the caller may read (``can_get_metadata``)."""
         if not self._settings.fga_enabled or not names:
             return set(names)
-        client = getattr(self._request.app.state, "fga", None)
-        if client is None:
+        decider = getattr(self._request.app.state, "decider", None)
+        if decider is None:
             raise ServiceUnavailableError("authorization service is not available")
         if self._token is None:
             raise UnauthenticatedError("authentication required")
@@ -503,10 +498,9 @@ class DatasetFilter:
         # Dedupe before the round trip: callers legitimately pass per-item dataset names, and a
         # duplicate-laden batch payload is pure wasted checks. A
         # name whose `<type>:<name>` is no object id (an external `s3://` source, say) is answered False
-        # by `fga.batch_check` without being sent; other external names are sent and answered not granted.
+        # by the decider without being sent; other external names are sent and answered not granted.
         unique = list(dict.fromkeys(names))
-        allowed = await fga.batch_check(
-            client,
+        allowed = await decider.batch_check(
             user=self._token.sub,
             relation="can_get_metadata",
             objects=[f"{object_type}:{n}" for n in unique],

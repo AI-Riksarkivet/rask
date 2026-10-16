@@ -31,6 +31,7 @@ from notifications.api.lineage_events import Notifiable
 from notifications.api.metrics import Lane, Outcome
 from notifications.api.visibility import Visibility
 from notifications.proxies import TypedActorProxy
+from service_kit.governed.decider import OpenFgaDecider
 
 
 if TYPE_CHECKING:
@@ -147,12 +148,12 @@ def recipient_counter(monkeypatch: pytest.MonkeyPatch) -> _Counter:
 def _view(kind: str, monkeypatch: pytest.MonkeyPatch) -> Visibility:
     """One of the four authorization configurations, wired at the `batch_check` seam."""
     if kind == FGA_OFF:
-        return Visibility(client=None, enabled=False)
+        return Visibility(decider=None, enabled=False)
     if kind == FGA_UNWIRED:
-        return Visibility(client=None, enabled=True)
+        return Visibility(decider=None, enabled=True)
     allowed = {"table:silver$pages"} if kind == FGA_ALL else set()
     monkeypatch.setattr(visibility_module.fga, "batch_check", _Checks(allowed))
-    return Visibility(client=WIRED, enabled=True)
+    return Visibility(decider=OpenFgaDecider(WIRED), enabled=True)
 
 
 #: `(payload, fga, broken_subjects, pre_deliveries, status, outcome)` — one row per path the ingress
@@ -206,7 +207,7 @@ async def test_the_lane_is_recorded_because_the_two_ingresses_fail_differently(l
     """The bus and the feed carry DIFFERENT producers — the ingest service and Ray TRAIN reach the
     feed and never the topic — so a lane-blind counter cannot show that one of the two stopped."""
     plane = _Plane()
-    await ingest_run_event(_event(), lane=lane, visibility=Visibility(client=None, enabled=False), open_inbox=plane.open)
+    await ingest_run_event(_event(), lane=lane, visibility=Visibility(decider=None, enabled=False), open_inbox=plane.open)
     assert ingress_counter.adds[0][1]["lance.notifications.lane"] == lane.value
 
 
@@ -231,7 +232,7 @@ async def test_no_payload_shape_makes_the_handler_raise(payload: object) -> None
     that was written for something else — a facet bag that is null, an output list that is a string —
     and the contract is that a STATUS comes back regardless."""
     plane = _Plane()
-    answer = await ingest_run_event(payload, lane=Lane.BUS, visibility=Visibility(client=None, enabled=False), open_inbox=plane.open)
+    answer = await ingest_run_event(payload, lane=Lane.BUS, visibility=Visibility(decider=None, enabled=False), open_inbox=plane.open)
     assert answer in (DAPR_SUCCESS, DAPR_RETRY, DAPR_DROP)
 
 
@@ -287,7 +288,7 @@ async def test_a_partly_failed_fan_out_is_counted_as_retried_rather_than_deliver
     plane = _Plane(broken={"bob"})
     monkeypatch.setattr(ingest_module, "audience_for", _audience("alice", "bob"))
 
-    answer = await ingest_run_event(_event(), lane=Lane.BUS, visibility=Visibility(client=None, enabled=False), open_inbox=plane.open)
+    answer = await ingest_run_event(_event(), lane=Lane.BUS, visibility=Visibility(decider=None, enabled=False), open_inbox=plane.open)
 
     assert answer is DAPR_RETRY
     assert ingress_counter.outcomes == [Outcome.RETRIED.value]
@@ -304,7 +305,7 @@ async def test_an_event_one_recipient_may_not_see_is_still_a_delivered_event(
     plane = _Plane()
     monkeypatch.setattr(ingest_module, "audience_for", _audience("alice", "bob"))
     monkeypatch.setattr(visibility_module.fga, "batch_check", _Checks({"table:silver$pages"}, subjects={"alice"}))
-    seen_by_alice_only = Visibility(client=WIRED, enabled=True)
+    seen_by_alice_only = Visibility(decider=OpenFgaDecider(WIRED), enabled=True)
 
     answer = await ingest_run_event(_event(), lane=Lane.BUS, visibility=seen_by_alice_only, open_inbox=plane.open)
 
@@ -323,7 +324,7 @@ async def test_an_empty_audience_is_acked_rather_than_retried_forever(
     plane = _Plane()
     monkeypatch.setattr(ingest_module, "audience_for", _audience())
 
-    answer = await ingest_run_event(_event(), lane=Lane.BUS, visibility=Visibility(client=None, enabled=False), open_inbox=plane.open)
+    answer = await ingest_run_event(_event(), lane=Lane.BUS, visibility=Visibility(decider=None, enabled=False), open_inbox=plane.open)
 
     assert answer is DAPR_SUCCESS
     assert ingress_counter.outcomes == [Outcome.HIDDEN.value]

@@ -314,6 +314,68 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/management/v1/decisions/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Decide Check
+         * @description Whether ``user`` holds ``relation`` on each object, in one round trip.
+         *
+         *     An object that is no object id is answered False unasked, as `fga.batch_check` answers it: no tuple can name it.
+         */
+        post: operations["decide_check_management_v1_decisions_check_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/decisions/governed": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Decide Governed
+         * @description Whether any tuple names each ``table:`` object: a refusal on an object nothing governs can never be granted away.
+         */
+        post: operations["decide_governed_management_v1_decisions_governed_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/decisions/list-users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Decide List Users
+         * @description The people in a membership userset (``role:<id>#assignee``, ``team:<id>#member``, ``project:<id>#member``).
+         */
+        post: operations["decide_list_users_management_v1_decisions_list_users_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/management/v1/erasures": {
         parameters: {
             query?: never;
@@ -3354,7 +3416,9 @@ export interface paths {
          *
          *     The caller must hold ``can_drop`` on the source (owner tier, gated by the router ``authorize``) AND
          *     ``can_create_table`` on the DESTINATION parent — else a source owner could plant their table into a
-         *     namespace/tenant they lack create rights on. FGA tuples migrate from the old id to the new; a
+         *     namespace/tenant they lack create rights on. What the table holds under its name moves from the old id to the
+         *     new ([[LH-215]]): every grant (``fga_deps.move_ownership``), its protection and maintenance policy and its data
+         *     directories' claims (``_carry_what_the_name_holds``). A
          *     versionless REGISTER marker records the attachment at the new id, with the source as its input, so the
          *     destination's provenance continues from the source's. Source missing → 404
          *     ``TableNotFound``; destination name taken → 409 ``TableAlreadyExists``; the location held by a
@@ -5674,6 +5738,64 @@ export interface components {
             mode: string;
             /** Read Version */
             read_version?: number | null;
+        };
+        /**
+         * DecisionCheck
+         * @description May ``user`` (a bare subject, as a token's ``sub``) hold ``relation`` on each of ``objects``.
+         */
+        DecisionCheck: {
+            /** Objects */
+            objects: string[];
+            /** Relation */
+            relation: string;
+            /** User */
+            user: string;
+        };
+        /**
+         * DecisionCheckResult
+         * @description One verdict per object asked about.
+         */
+        DecisionCheckResult: {
+            /** Allowed */
+            allowed: {
+                [key: string]: boolean;
+            };
+        };
+        /**
+         * DecisionGoverned
+         * @description Whether any tuple names each of ``objects`` (ADR 0050: "is this governed at all" is OpenFGA's to answer).
+         */
+        DecisionGoverned: {
+            /** Objects */
+            objects: string[];
+        };
+        /**
+         * DecisionGovernedResult
+         * @description One answer per object asked about.
+         */
+        DecisionGovernedResult: {
+            /** Governed */
+            governed: {
+                [key: string]: boolean;
+            };
+        };
+        /**
+         * DecisionListUsers
+         * @description Which ``user`` subjects hold ``relation`` on ``object``, effective access included.
+         */
+        DecisionListUsers: {
+            /** Object */
+            object: string;
+            /** Relation */
+            relation: string;
+        };
+        /**
+         * DecisionListUsersResult
+         * @description Bare subject ids, sorted, as `fga.list_users` returns them.
+         */
+        DecisionListUsersResult: {
+            /** Users */
+            users: string[];
         };
         /**
          * DeclareTableRequest
@@ -9840,6 +9962,114 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AccessGrantResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    decide_check_management_v1_decisions_check_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DecisionCheck"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DecisionCheckResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    decide_governed_management_v1_decisions_governed_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DecisionGoverned"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DecisionGovernedResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    decide_list_users_management_v1_decisions_list_users_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DecisionListUsers"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DecisionListUsersResult"];
                 };
             };
             /** @description Validation Error */

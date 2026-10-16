@@ -156,7 +156,7 @@ metadata:
 spec:
   podSelector:
     matchExpressions:
-      - { key: app.kubernetes.io/component, operator: NotIn, values: [openbao, age, minio, nats] }
+      - { key: app.kubernetes.io/component, operator: NotIn, values: [openbao, age, minio, nats, authorization-controller] }
   policyTypes: [Ingress]
   ingress:
     - from:
@@ -204,6 +204,42 @@ spec:
         {{- end }}
       ports:
         - { protocol: TCP, port: 8200 }
+{{- if .Values.openfga.enabled }}
+---
+# (3b') openfga:8080/8081 — the authorization store, which authorizes none of its callers ([[LH-442]]): any token it
+# admits may write any tuple. Only the tuple writers reach its API (the catalog, maintenance, the annotator and the
+# jobs that publish the model and seed the estate's grants, `lance.fgaWriters`); every other service asks the catalog's
+# decision door. The Collector reaches the metrics port alone.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "lance.fullname" . }}-openfga
+  labels: {{- include "lance.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/name: openfga, app.kubernetes.io/component: authorization-controller }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/component
+                operator: In
+                values:
+                  {{- range (concat (include "lance.fgaWriters" . | splitList " ") (list "bootstrap-admin" "openfga-model")) }}
+                  - {{ . }}
+                  {{- end }}
+      ports:
+        - { protocol: TCP, port: 8080 }
+        - { protocol: TCP, port: 8081 }
+    {{- if .Values.observability.enabled }}
+    - from:
+        - podSelector:
+            matchLabels: { app.kubernetes.io/component: otel-collector }
+      ports:
+        - { protocol: TCP, port: 2112 }
+    {{- end }}
+{{- end }}
 {{- if .Values.age.enabled }}
 ---
 # (3c) age-postgres:5432 — the OpenFGA datastore + the Dapr state store

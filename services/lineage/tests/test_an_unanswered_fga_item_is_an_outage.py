@@ -35,6 +35,7 @@ from starlette.testclient import TestClient
 from lineage.api import fga_deps
 from lineage.core.config import LineageSettings
 from lineage.models import RunEvent
+from service_kit.governed.decider import OpenFgaDecider
 from service_kit.governed.oidc import IDToken
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 
@@ -112,7 +113,7 @@ def _bus_door(monkeypatch: pytest.MonkeyPatch, fga_client: _OpenFga) -> tuple[Te
     get_settings.cache_clear()
     repo = _Repo()
     app.state.provenance = repo
-    app.state.fga = fga_client
+    app.state.decider = OpenFgaDecider(cast("OpenFgaClient", fga_client))
     return TestClient(app), repo
 
 

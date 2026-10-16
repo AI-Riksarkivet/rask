@@ -756,14 +756,16 @@ auth:
   # the stream even with auth on.
   # -- Emit the structured authn/authz/credential-vending audit stream (LANCE_AUDIT_ENABLED and siblings); takes effect only with auth on. false silences it.
   audit: true
-  # -- The platform's OpenFGA HTTP API (e.g. `https://fga.internal:8080`), which every FGA client, the openfga-model hook and the bootstrap-admin Job dial when `openfga.enabled` is false; the render refuses it empty then. It must admit rask's projected `rask-openfga` tokens: OIDC against the cluster's ServiceAccount issuer, the subjects `lance.openfgaSubjects` lists.
+  # -- The platform's OpenFGA HTTP API (e.g. `https://fga.internal:8080`), which the tuple writers (the catalog, maintenance, the annotator), the openfga-model hook and the bootstrap-admin Job dial when `openfga.enabled` is false; the render refuses it empty then. It must admit rask's projected `rask-openfga` tokens from exactly the subjects `lance.openfgaSubjects` lists: OIDC against the cluster's ServiceAccount issuer.
   fgaApiUrl: ""
-  # OpenFGA admits only the ServiceAccounts `lance.openfgaSubjects` lists, and it lists this release's own clients. A
-  # first-party service installed as its own release (the compute fixture, deploy/fixtures/compute) presents a projected
-  # `rask-openfga` token from an account this chart does not render, so its name is listed here, `<namespace>:<name>`.
-  # OpenFGA reads the list at start, so a change needs an OpenFGA restart.
-  # -- ServiceAccounts outside this release that OpenFGA admits, each `<namespace>:<name>` (e.g. `default:rask-sa-compute` for the compute fixture). Read only with auth on.
-  externalFgaClients: []
+  # OpenFGA authorizes none of its callers, so only the services that write tuples hold a `rask-openfga` token
+  # ([[LH-442]]); every other governed service asks the catalog's decision door (`/management/v1/decisions`) as its own
+  # ServiceAccount, holding `decider` on the estate root (`lance.fgaDecisionRoles`, seeded by bootstrap-admin). A
+  # first-party service installed as its own release (the compute fixture, deploy/fixtures/compute) asks the same door
+  # from an account this chart does not render, so its name is listed here, `<namespace>:<name>`, and granted `decider`.
+  # OpenFGA reads its own subject list (the writers) only at start, so a change to it needs an OpenFGA restart.
+  # -- ServiceAccounts outside this release that may ask the catalog's decision door, each `<namespace>:<name>` (e.g. `default:rask-sa-compute` for the compute fixture); bootstrap-admin grants each `decider`. Read only with auth on.
+  externalDeciders: []
   # Pin the OpenFGA store id. When set, EVERY FGA consumer (the services, the openfga-model hook and the
   # bootstrap-admin Job) uses that store; empty (default) = the newest store named `lance-catalog`. A
   # MODEL pin makes every service check against that one model whatever its image carries; no deployment

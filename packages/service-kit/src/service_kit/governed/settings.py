@@ -74,6 +74,14 @@ class FgaSettings:
     #: every OpenFGA request and read on each one, because the kubelet rotates it ([[XC-077]]). Unset sends
     #: no credential, which only an OpenFGA without authn admits; the chart sets it wherever auth is on.
     fga_token_file: str | None = Field(default=None, alias="RASK_FGA_TOKEN_FILE")
+    #: The catalog whose decision door answers this service's authorization questions ([[LH-442]],
+    #: `service_kit.governed.decider`). Set, the service builds no OpenFGA client and holds no credential to the
+    #: store; unset, it is one of the store's clients at `fga_api_url`. The chart sets it on every governed
+    #: service that writes no tuple.
+    fga_decider_url: str | None = Field(default=None, alias="RASK_FGA_DECIDER_URL")
+    #: This pod's projected ServiceAccount token for the catalog's `rask-catalog` audience, the bearer of every
+    #: decision request, read on each one.
+    fga_decider_token_file: str | None = Field(default=None, alias="RASK_FGA_DECIDER_TOKEN_FILE")
     #: The estate's root FGA object — the one a platform-wide PRIVILEGE is checked against, as
     #: opposed to a per-tenant one. Shared here rather than redeclared per service because it is a
     #: coordinate every governed service must agree on: the catalog gates `GET /management/v1/events` on it,

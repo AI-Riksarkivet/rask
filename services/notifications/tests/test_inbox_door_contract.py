@@ -122,7 +122,7 @@ def _app(plane: _Plane, monkeypatch: pytest.MonkeyPatch, *, resolve_subject: boo
     app.include_router(inbox_module.router)
     app.state.notifications_settings = get_notifications_settings()
     app.state.actors_registered = True
-    app.state.fga = None
+    app.state.decider = None
     if resolve_subject:
         # The verified subject, injected through the door's OWN dependency. Overriding it (rather than
         # patching the route) is what keeps `CurrentSubject` in the request path — a route that stopped
@@ -321,7 +321,7 @@ def test_authorization_enabled_but_unwired_refuses_a_page_it_cannot_filter(clien
     objects the reader may no longer see.
     """
     plane.inbox(CALLER).rows = [_pointer("alice-001@FAIL", minutes_ago=1)]
-    client.app.state.fga = None
+    client.app.state.decider = None
     client.app.state.notifications_settings = get_notifications_settings().model_copy(update={"fga_enabled": True})
 
     response = client.get("/notifications/inbox")
@@ -335,7 +335,7 @@ def test_an_empty_inbox_is_not_turned_into_an_outage_by_the_same_setting(client:
     """The other side of that edge, asserted so the refusal above is not read as "503 whenever FGA is
     unwired". A reader with nothing to filter gets their empty inbox, because 503ing it would turn
     "you have no notifications" into an error for every idle user during an OpenFGA blip."""
-    client.app.state.fga = None
+    client.app.state.decider = None
     client.app.state.notifications_settings = get_notifications_settings().model_copy(update={"fga_enabled": True})
 
     response = client.get("/notifications/inbox")

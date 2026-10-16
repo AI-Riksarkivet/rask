@@ -106,8 +106,8 @@ second case. Kueue's upstream docs only ever install it as its own release in `k
   JetStream bus `rask-nats` in rask's namespace that `nats.url` names ([[XC-129]]), the CloudNativePG operator in
   cnpg-system that the AGE-on-CNPG `Cluster` needs, its CRDs still applied by `make k3s-crds` first ([[XC-130]]), the dev OIDC issuer `rask-dex`, object store `rask-minio` and secret store `rask-openbao` ([[XC-131]]; both stores' fixtures are `WAIT=false`: the object store's root credential and the secret store's seed scripts are rask's), the dev Ray engine
   ([[XC-125]]) and its companion `compute` service (a local chart, release `compute` in rask's namespace, `WAIT=false`:
-  it reads rask's Dapr token, Dex, OpenFGA and Collector by reference, and rask's OpenFGA admits its account only through
-  `auth.externalFgaClients`), the telemetry chain the Collector exports to ([[XC-127]]), and the OpenLineage graph backend
+  it reads rask's Dapr token, Dex, catalog and Collector by reference, and asks the catalog's decision door, which
+  answers its account only through `auth.externalDeciders`), the telemetry chain the Collector exports to ([[XC-127]]), and the OpenLineage graph backend
   `rask-marquez` lineage's forwarder sends to (ADR 0158); a GPU node with no device plugin yet adds `nvidia-device-plugin`). A fixture's `SET_FILES` passes an
   artefact from outside its chart with `--set-file` (the alert rules), and a local fixture chart with upstream
   `dependencies:` is vendored from its own `Chart.lock` (`scripts/fixtures.sh --vendor`, run by `make k3s-deps`, so a

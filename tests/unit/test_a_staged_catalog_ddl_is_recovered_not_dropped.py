@@ -36,6 +36,7 @@ from lineage.core.config import LineageSettings, Signing
 from lineage.models import DatasetEvent, UnverifiedEventError
 from lineage_kit.signing import signature_of
 from service_kit.governed import fga
+from service_kit.governed.decider import OpenFgaDecider
 from service_kit.governed.oidc import IDToken
 from service_kit.lakehouse import outbox, outbox_metrics
 from service_kit.openlineage import event_identity, run_id_for
@@ -164,7 +165,7 @@ def _arm_gate(monkeypatch: pytest.MonkeyPatch, *, writer: str | None) -> None:
 
 
 def _request() -> Any:  # noqa: ANN401 — the drain and the routes read only app.state
-    return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(fga=object())))
+    return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(decider=OpenFgaDecider(cast("Any", object())))))
 
 
 def _rewrite_staged(settings: LineageSettings, key: str, doc: dict[str, Any]) -> None:
@@ -463,7 +464,7 @@ def test_a_create_the_feed_already_holds_is_a_replay_and_not_a_loss(tmp_path: Pa
             return held.model_dump(by_alias=True) if (run_id, event_type) == (held.feed_id, held.feed_event_type) else None
 
     repo = _FeedHoldsIt()
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(fga=object(), provenance=repo)))
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(decider=OpenFgaDecider(cast("Any", object())), provenance=repo)))
 
     outcome = asyncio.run(relay_cron._drain_outbox(cast("Any", request), cast("Any", repo), settings, {}, _Publisher()))
 

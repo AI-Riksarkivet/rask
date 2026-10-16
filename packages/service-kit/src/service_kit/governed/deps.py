@@ -56,8 +56,8 @@ from lance_namespace import UnauthenticatedError
 from openfga_sdk import OpenFgaClient
 
 from service_kit.exceptions import ServiceUnavailableError
-from service_kit.governed import fga
 from service_kit.governed.audit import FAILURE, SUCCESS, audit
+from service_kit.governed.decider import AccessDecider
 from service_kit.governed.oidc import IDToken, OIDCVerifier, ProviderUnavailableError
 
 
@@ -90,6 +90,7 @@ type _Authenticate = Callable[..., IDToken | None]
 type _NamesSubject = Callable[..., str]
 type _ResolvesChecker = Callable[..., FgaChecker]
 type _ResolvesClient = Callable[..., OpenFgaClient | None]
+type _ResolvesDecider = Callable[..., AccessDecider | None]
 
 
 class AuthDeps:
@@ -100,6 +101,7 @@ class AuthDeps:
         authenticate: _Authenticate,
         current_subject: _NamesSubject,
         get_checker: _ResolvesChecker,
+        get_decider: _ResolvesDecider,
         get_fga_client: _ResolvesClient,
         #: NOT `| None`. The name means the SUBJECT may be anonymous — the dependency itself always
         #: exists, and `build_auth_deps` below is the only construction site and always passes it.
@@ -112,14 +114,11 @@ class AuthDeps:
         self.current_subject = current_subject
         self.optional_subject = optional_subject
         self.get_checker = get_checker
-        #: The RAW client, for the filtering paths `FgaChecker` deliberately cannot express.
-        #:
-        #: The checker Protocol is one relation on one object, by design — an endpoint should not be
-        #: able to write tuples or enumerate objects through it. That narrowness is right for a route
-        #: guard and wrong for a filtered LIST, where `authz.md` says to prefer `batch_check`: "same
-        #: network round-trip cost as one call". Without this accessor the only way to batch was to
-        #: reach into `request.app.state` by hand, which is how the viewer ended up making one check
-        #: per corpus on the first call every zone makes.
+        #: The decider, for the filtered LIST the one-relation checker cannot express: `authz.md` says to prefer a
+        #: batch there, one round trip for every object a page shows.
+        self.get_decider = get_decider
+        #: The RAW client, for a service that writes tuples (the annotator). A check-only service has none
+        #: ([[LH-442]]): its `app.state.fga` is unset and this answers 503 with FGA on.
         self.get_fga_client = get_fga_client
 
 
@@ -232,15 +231,22 @@ def make_auth_deps(settings_dep: Any) -> AuthDeps:
 
             return _open
 
-        client = getattr(request.app.state, "fga", None)
-        if client is None:
-            audit("authz", FAILURE, reason="client_unavailable")
-            raise ServiceUnavailableError("Authorization is enabled but unavailable")
+        decider = _require_decider(request)
 
         async def _check(*, user: str, relation: str, obj: str) -> bool:
-            return await fga.check(client, user=user, relation=relation, obj=obj)
+            return await decider.check(user=user, relation=relation, obj=obj)
 
         return _check
+
+    def get_decider(request: Request, settings: settings_dep) -> AccessDecider | None:
+        """The decider, with the SAME fail-closed posture as the checker, for a filtered list that asks many objects at once.
+
+        FGA off → `None`, matching `get_checker`'s permissive branch: a caller batching against a disabled store has
+        nothing to ask. FGA on but unwired → 503, never a permissive fallback.
+        """
+        if not settings.fga_enabled:
+            return None
+        return _require_decider(request)
 
     def get_fga_client(request: Request, settings: settings_dep) -> OpenFgaClient | None:
         """The raw client, with the SAME fail-closed posture as the checker.
@@ -262,8 +268,18 @@ def make_auth_deps(settings_dep: Any) -> AuthDeps:
         current_subject=current_subject,
         optional_subject=optional_subject,
         get_checker=get_checker,
+        get_decider=get_decider,
         get_fga_client=get_fga_client,
     )
+
+
+def _require_decider(request: Request) -> AccessDecider:
+    """`app.state.decider`, or the 503 an enabled-but-unwired authorization layer answers."""
+    decider = getattr(request.app.state, "decider", None)
+    if decider is None:
+        audit("authz", FAILURE, reason="client_unavailable")
+        raise ServiceUnavailableError("Authorization is enabled but unavailable")
+    return decider
 
 
 def raw_bearer(credentials: _CredentialsDep) -> str | None:
@@ -282,6 +298,7 @@ RawBearerToken = Annotated[str | None, Depends(raw_bearer)]
 
 __all__ = [
     "ANONYMOUS_SUBJECT",
+    "AccessDecider",
     "AuthDeps",
     "FgaChecker",
     "RawBearerToken",

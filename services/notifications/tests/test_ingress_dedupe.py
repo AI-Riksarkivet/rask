@@ -33,7 +33,7 @@ from notifications.proxies import TypedActorProxy
 
 
 LINEAGE = "http://lineage.invalid"
-OPEN = Visibility(client=None, enabled=False)
+OPEN = Visibility(decider=None, enabled=False)
 
 RUN_EVENT: dict[str, Any] = {
     "eventType": "FAIL",
@@ -86,7 +86,7 @@ def bus(monkeypatch: pytest.MonkeyPatch, plane: _Plane) -> Iterator[TestClient]:
     get_ingress_settings.cache_clear()
     app = FastAPI()
     app.state.notifications_settings = get_notifications_settings()
-    app.state.fga = None
+    app.state.decider = None
     subscriptions_module.register_subscriptions(app)
     monkeypatch.setattr(subscriptions_module, "inbox_for", plane.open)
     with TestClient(app) as client:

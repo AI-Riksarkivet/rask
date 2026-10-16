@@ -548,25 +548,64 @@ securityContext:
 {{- end -}}
 
 {{- define "lance.governedFgaEnv" -}}
-{{- $root := . }}
+{{- $root := index . 0 }}{{- $name := index . 1 }}
 - { name: RASK_FGA_ENABLED, value: "true" }
+{{- if include "lance.isFgaWriter" (list $root $name) }}
 - { name: RASK_FGA_API_URL, value: {{ include "lance.openfgaUrl" $root | quote }} }
-{{- include "lance.fgaToken" (list "env") }}
+{{- include "lance.governedFgaPins" $root }}
+{{- end }}
+{{- include "lance.fgaCredential" (list $root "env" $name) }}
 {{- end -}}
 
 {{- define "lance.openfgaAudience" -}}rask-openfga{{- end -}}
+
+{{- define "lance.fgaWriters" -}}
+catalog maintenance annotator
+{{- end -}}
+
+{{- define "lance.isFgaWriter" -}}
+{{- if has (index . 1) (include "lance.fgaWriters" (index . 0) | splitList " ") }}true{{ end -}}
+{{- end -}}
 
 {{- define "lance.openfgaSubjects" -}}
 {{- $v := .Values -}}{{- $p := printf "system:serviceaccount:%s:" .Release.Namespace -}}{{- $sa := printf "%s%s-sa-" $p (include "lance.fullname" .) -}}
 {{- $out := list -}}
 {{- if $v.auth.enabled -}}
-{{- range list "catalog" "lineage" "jobs" "hooks" }}{{ $out = append $out (printf "%s%s" $sa .) }}{{ end -}}
+{{- range list "catalog" "jobs" "hooks" }}{{ $out = append $out (printf "%s%s" $sa .) }}{{ end -}}
 {{- if $v.maintenance.enabled }}{{ $out = append $out (printf "%smaintenance" $sa) }}{{ end -}}
-{{- if $v.explorer.enabled }}{{ range $n, $_ := $v.explorer.services }}{{ $out = append $out (printf "%s%s" $sa $n) }}{{ end }}{{ end -}}
-{{- range $n, $s := $v.services }}{{ if and (not (has $n (list "catalog" "lineage"))) (or $s.frontDoor $v.singleTenant.enabled) $s.governedAuth }}{{ $out = append $out (printf "%s%s" $sa $n) }}{{ end }}{{ end -}}
-{{- range ($v.auth.externalFgaClients | default list) }}{{- if not (regexMatch "^[a-z0-9-]+:[a-z0-9.-]+$" .) }}{{- fail (printf "auth.externalFgaClients entry %q is not <namespace>:<serviceaccount>" .) }}{{- end }}{{ $out = append $out (printf "system:serviceaccount:%s" .) }}{{ end -}}
+{{- if and $v.explorer.enabled (hasKey $v.explorer.services "annotator") }}{{ $out = append $out (printf "%sannotator" $sa) }}{{ end -}}
 {{- end -}}
 {{- $out | uniq | sortAlpha | join "," -}}
+{{- end -}}
+
+{{- define "lance.fgaDecisionRoles" -}}
+{{- $v := .Values -}}{{- $root := . -}}
+{{- $routes := dict "lineage" (list "governance_prober") "notifications" (list "member_expander") -}}
+{{- $names := list "lineage" -}}
+{{- if $v.explorer.enabled }}{{ range $n, $_ := $v.explorer.services }}{{ $names = append $names $n }}{{ end }}{{ end -}}
+{{- range $n, $s := $v.services }}{{ if and (not (has $n (list "catalog" "lineage"))) (or $s.frontDoor $v.singleTenant.enabled) $s.governedAuth }}{{ $names = append $names $n }}{{ end }}{{ end -}}
+{{- $out := dict -}}
+{{- if $v.auth.enabled -}}
+{{- range ($names | uniq) }}{{ if not (include "lance.isFgaWriter" (list $root .)) }}{{ $_ := set $out (include "lance.saSubject" (list $root .)) (prepend (get $routes . | default list) "decider") }}{{ end }}{{ end -}}
+{{- range ($v.auth.externalDeciders | default list) }}{{- if not (regexMatch "^[a-z0-9-]+:[a-z0-9.-]+$" .) }}{{- fail (printf "auth.externalDeciders entry %q is not <namespace>:<serviceaccount>" .) }}{{- end }}{{ $_ := set $out (printf "kubernetes~system:serviceaccount:%s" .) (list "decider") }}{{ end -}}
+{{- end -}}
+{{- toJson $out -}}
+{{- end -}}
+
+{{- define "lance.catalogUrl" -}}
+{{- printf "http://%s-catalog:%v" (include "lance.fullname" .) .Values.services.catalog.port -}}
+{{- end -}}
+
+{{- define "lance.fgaCredential" -}}
+{{- $root := index . 0 -}}{{- $part := index . 1 -}}{{- $name := index . 2 -}}
+{{- if include "lance.isFgaWriter" (list $root $name) }}
+{{- include "lance.fgaToken" (list $part) }}
+{{- else if eq $part "env" }}
+- { name: RASK_FGA_DECIDER_URL, value: {{ include "lance.catalogUrl" $root | quote }} }
+- { name: RASK_FGA_DECIDER_TOKEN_FILE, value: /var/run/secrets/rask/identity/rask-catalog/token }
+{{- else if not (and (gt (len .) 3) (index . 3)) }}
+{{- include "lance.identityTokens" (list $part "rask-catalog") }}
+{{- end }}
 {{- end -}}
 
 {{- define "lance.fgaToken" -}}

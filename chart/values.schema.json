@@ -88,12 +88,12 @@
                     "description": "Govern the estate: authn on every door plus OpenFGA authz. On by default (fails closed); a bare install then needs frontend OIDC configured or it refuses to render.",
                     "type": "boolean"
                 },
-                "externalFgaClients": {
-                    "description": "ServiceAccounts outside this release that OpenFGA admits, each `\u003cnamespace\u003e:\u003cname\u003e` (e.g. `default:rask-sa-compute` for the compute fixture). Read only with auth on.",
+                "externalDeciders": {
+                    "description": "ServiceAccounts outside this release that may ask the catalog's decision door, each `\u003cnamespace\u003e:\u003cname\u003e` (e.g. `default:rask-sa-compute` for the compute fixture); bootstrap-admin grants each `decider`. Read only with auth on.",
                     "type": "array"
                 },
                 "fgaApiUrl": {
-                    "description": "The platform's OpenFGA HTTP API (e.g. `https://fga.internal:8080`), which every FGA client, the openfga-model hook and the bootstrap-admin Job dial when `openfga.enabled` is false; the render refuses it empty then. It must admit rask's projected `rask-openfga` tokens: OIDC against the cluster's ServiceAccount issuer, the subjects `lance.openfgaSubjects` lists.",
+                    "description": "The platform's OpenFGA HTTP API (e.g. `https://fga.internal:8080`), which the tuple writers (the catalog, maintenance, the annotator), the openfga-model hook and the bootstrap-admin Job dial when `openfga.enabled` is false; the render refuses it empty then. It must admit rask's projected `rask-openfga` tokens from exactly the subjects `lance.openfgaSubjects` lists: OIDC against the cluster's ServiceAccount issuer.",
                     "type": "string"
                 },
                 "fgaModelId": {

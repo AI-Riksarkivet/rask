@@ -4368,6 +4368,131 @@
         "title": "CredentialResponse",
         "type": "object"
       },
+      "DecisionCheck": {
+        "additionalProperties": false,
+        "description": "May ``user`` (a bare subject, as a token's ``sub``) hold ``relation`` on each of ``objects``.",
+        "properties": {
+          "objects": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 1000,
+            "minItems": 1,
+            "title": "Objects",
+            "type": "array"
+          },
+          "relation": {
+            "minLength": 1,
+            "title": "Relation",
+            "type": "string"
+          },
+          "user": {
+            "minLength": 1,
+            "title": "User",
+            "type": "string"
+          }
+        },
+        "required": [
+          "user",
+          "relation",
+          "objects"
+        ],
+        "title": "DecisionCheck",
+        "type": "object"
+      },
+      "DecisionCheckResult": {
+        "description": "One verdict per object asked about.",
+        "properties": {
+          "allowed": {
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "title": "Allowed",
+            "type": "object"
+          }
+        },
+        "required": [
+          "allowed"
+        ],
+        "title": "DecisionCheckResult",
+        "type": "object"
+      },
+      "DecisionGoverned": {
+        "additionalProperties": false,
+        "description": "Whether any tuple names each of ``objects`` (ADR 0050: \"is this governed at all\" is OpenFGA's to answer).",
+        "properties": {
+          "objects": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 1000,
+            "minItems": 1,
+            "title": "Objects",
+            "type": "array"
+          }
+        },
+        "required": [
+          "objects"
+        ],
+        "title": "DecisionGoverned",
+        "type": "object"
+      },
+      "DecisionGovernedResult": {
+        "description": "One answer per object asked about.",
+        "properties": {
+          "governed": {
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "title": "Governed",
+            "type": "object"
+          }
+        },
+        "required": [
+          "governed"
+        ],
+        "title": "DecisionGovernedResult",
+        "type": "object"
+      },
+      "DecisionListUsers": {
+        "additionalProperties": false,
+        "description": "Which ``user`` subjects hold ``relation`` on ``object``, effective access included.",
+        "properties": {
+          "object": {
+            "minLength": 1,
+            "title": "Object",
+            "type": "string"
+          },
+          "relation": {
+            "minLength": 1,
+            "title": "Relation",
+            "type": "string"
+          }
+        },
+        "required": [
+          "relation",
+          "object"
+        ],
+        "title": "DecisionListUsers",
+        "type": "object"
+      },
+      "DecisionListUsersResult": {
+        "description": "Bare subject ids, sorted, as `fga.list_users` returns them.",
+        "properties": {
+          "users": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Users",
+            "type": "array"
+          }
+        },
+        "required": [
+          "users"
+        ],
+        "title": "DecisionListUsersResult",
+        "type": "object"
+      },
       "DeclareTableRequest": {
         "description": "Request for declaring a table. ",
         "properties": {
@@ -13536,6 +13661,207 @@
         "summary": "Revoke Classification Access",
         "tags": [
           "access"
+        ]
+      }
+    },
+    "/management/v1/decisions/check": {
+      "post": {
+        "description": "Whether ``user`` holds ``relation`` on each object, in one round trip.\n\nAn object that is no object id is answered False unasked, as `fga.batch_check` answers it: no tuple can name it.",
+        "operationId": "decide_check_management_v1_decisions_check_post",
+        "parameters": [
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DecisionCheck"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DecisionCheckResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Decide Check",
+        "tags": [
+          "decisions"
+        ]
+      }
+    },
+    "/management/v1/decisions/governed": {
+      "post": {
+        "description": "Whether any tuple names each ``table:`` object: a refusal on an object nothing governs can never be granted away.",
+        "operationId": "decide_governed_management_v1_decisions_governed_post",
+        "parameters": [
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DecisionGoverned"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DecisionGovernedResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Decide Governed",
+        "tags": [
+          "decisions"
+        ]
+      }
+    },
+    "/management/v1/decisions/list-users": {
+      "post": {
+        "description": "The people in a membership userset (``role:<id>#assignee``, ``team:<id>#member``, ``project:<id>#member``).",
+        "operationId": "decide_list_users_management_v1_decisions_list_users_post",
+        "parameters": [
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DecisionListUsers"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DecisionListUsersResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Decide List Users",
+        "tags": [
+          "decisions"
         ]
       }
     },
@@ -24200,7 +24526,7 @@
     },
     "/v1/table/{id}/rename": {
       "post": {
-        "description": "Rename the table at ``id`` by moving its POINTER, then migrate its FGA ownership and emit lineage.\n\nLance has no format-level rename (table rename is a namespace-layer remap, not a data-plane commit) and\nthe ``dir`` backend's ``rename_table`` is a hard 501, which is also off-spec \u2014 the Namespace REST spec\nmakes rename a first-class Metadata op. It is served here as what the spec describes: the destination id\nis registered at the SOURCE's existing location and the source id is deregistered. **No data byte is\nread, written or deleted**, so the cost is O(1) rather than the dataset's size \u2014 see\n``dataplane.rename_table`` for the lance-ns V2 naming rule that makes this correct and for the one\nshape (a V1 root-namespace table) it refuses.\n\nThe caller must hold ``can_drop`` on the source (owner tier, gated by the router ``authorize``) AND\n``can_create_table`` on the DESTINATION parent \u2014 else a source owner could plant their table into a\nnamespace/tenant they lack create rights on. FGA tuples migrate from the old id to the new; a\nversionless REGISTER marker records the attachment at the new id, with the source as its input, so the\ndestination's provenance continues from the source's. Source missing \u2192 404\n``TableNotFound``; destination name taken \u2192 409 ``TableAlreadyExists``; the location held by a\nconcurrent rename or registration \u2192 409 ``ConcurrentModification`` (code 14, [[LH-204]]).",
+        "description": "Rename the table at ``id`` by moving its POINTER, then migrate its FGA ownership and emit lineage.\n\nLance has no format-level rename (table rename is a namespace-layer remap, not a data-plane commit) and\nthe ``dir`` backend's ``rename_table`` is a hard 501, which is also off-spec \u2014 the Namespace REST spec\nmakes rename a first-class Metadata op. It is served here as what the spec describes: the destination id\nis registered at the SOURCE's existing location and the source id is deregistered. **No data byte is\nread, written or deleted**, so the cost is O(1) rather than the dataset's size \u2014 see\n``dataplane.rename_table`` for the lance-ns V2 naming rule that makes this correct and for the one\nshape (a V1 root-namespace table) it refuses.\n\nThe caller must hold ``can_drop`` on the source (owner tier, gated by the router ``authorize``) AND\n``can_create_table`` on the DESTINATION parent \u2014 else a source owner could plant their table into a\nnamespace/tenant they lack create rights on. What the table holds under its name moves from the old id to the\nnew ([[LH-215]]): every grant (``fga_deps.move_ownership``), its protection and maintenance policy and its data\ndirectories' claims (``_carry_what_the_name_holds``). A\nversionless REGISTER marker records the attachment at the new id, with the source as its input, so the\ndestination's provenance continues from the source's. Source missing \u2192 404\n``TableNotFound``; destination name taken \u2192 409 ``TableAlreadyExists``; the location held by a\nconcurrent rename or registration \u2192 409 ``ConcurrentModification`` (code 14, [[LH-204]]).",
         "operationId": "rename_table_v1_table__id__rename_post",
         "parameters": [
           {

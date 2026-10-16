@@ -13,15 +13,12 @@ then answers an uncredentialed call 401 is the live probe's (`scratch/probe_open
 
 from __future__ import annotations
 
+import json
 from pathlib import PurePosixPath
 
 import pytest
 
 from tests.unit.chart_render import DEFAULT_ARGS, containers, env_of, render
-
-
-#: The default render, and one with every optional FGA client on: the explorer trio.
-_RENDERS = pytest.mark.parametrize("overlay", [pytest.param((), id="default"), pytest.param(("--set", "explorer.enabled=true"), id="every-client")])
 
 
 def _openfga(docs: tuple[dict, ...]) -> dict[str, str]:
@@ -45,9 +42,28 @@ def test_openfga_runs_oidc_against_the_mirrored_cluster_issuer_with_no_playgroun
     assert server.get("OPENFGA_HTTP_CORS_ALLOWED_ORIGINS", "*") != "*"
 
 
-@_RENDERS
-def test_every_fga_client_presents_a_projected_token_openfga_admits(overlay: tuple[str, ...]) -> None:
-    docs = render(*DEFAULT_ARGS, *overlay)
+#: The accounts that write tuples ([[LH-442]]): the catalog, maintenance, and with the explorer on the annotator, plus the
+#: jobs that publish the model and seed the estate's grants. Every other governed service decides through the catalog.
+_WRITERS = {"default": {"catalog", "maintenance", "jobs", "hooks"}, "every-client": {"catalog", "maintenance", "annotator", "jobs", "hooks"}}
+
+
+def _projected(pod: dict, container: dict, path: str) -> set[tuple[str | None, str]]:
+    """The (audience, file) of the projected ServiceAccount token mounted where ``path`` lives."""
+    token = PurePosixPath(path)
+    mount = next((m for m in container.get("volumeMounts") or [] if PurePosixPath(m["mountPath"]) == token.parent), None)
+    volume = next((v for v in pod.get("volumes") or [] if mount and v["name"] == mount["name"]), {})
+    return {
+        (s["serviceAccountToken"].get("audience"), s["serviceAccountToken"]["path"])
+        for s in volume.get("projected", {}).get("sources", [])
+        if "serviceAccountToken" in s
+    }
+
+
+@pytest.mark.parametrize("overlay", [pytest.param((), id="default"), pytest.param(("--set", "explorer.enabled=true"), id="every-client")])
+def test_only_a_tuple_writer_holds_an_openfga_token_and_every_other_governed_service_decides_through_the_catalog(
+    request: pytest.FixtureRequest, overlay: tuple[str, ...]
+) -> None:
+    docs = render(*DEFAULT_ARGS, "--set", "networkPolicy.enabled=true", *overlay)
     audience = _openfga(docs)["OPENFGA_AUTHN_OIDC_AUDIENCE"]
     pods = {f"{d['kind']}/{d['metadata']['name']}": d["spec"]["template"]["spec"] for d in docs if d.get("kind") in {"Deployment", "Job"}}
     subjects_ref = next(
@@ -59,23 +75,40 @@ def test_every_fga_client_presents_a_projected_token_openfga_admits(overlay: tup
     )
     config_map = next(d for d in docs if d.get("kind") == "ConfigMap" and d["metadata"]["name"] == subjects_ref["name"])
     admitted = set(config_map["data"][subjects_ref["key"]].split(","))
+    writers = {f"system:serviceaccount:default:rask-sa-{w}" for w in _WRITERS[request.node.callspec.id]}
+    seeded = json.loads(next(env_of(c)["FGA_DECISION_ROLES"] for w, _n, c in containers(docs) if w == "Job/rask-bootstrap-admin"))
+    reaching = next(d for d in docs if d.get("kind") == "NetworkPolicy" and d["metadata"]["name"] == "rask-openfga")["spec"]["ingress"][0]["from"]
+    reachers = {v for peer in reaching for e in peer["podSelector"]["matchExpressions"] for v in e["values"]}
 
-    clients, missing, accounts = [], [], set()
+    openfga_clients, deciders, wrong = set(), {}, []
     for workload, name, container in containers(docs):
-        env = env_of(container)
-        if not ({"RASK_FGA_API_URL", "FGA_API_URL"} & env.keys()):
-            continue
-        clients.append(f"{workload}/{name}")
-        accounts.add(f"system:serviceaccount:default:{pods[workload]['serviceAccountName']}")
-        token = PurePosixPath(env.get("RASK_FGA_TOKEN_FILE", "/unset"))
-        mount = next((m for m in container.get("volumeMounts") or [] if PurePosixPath(m["mountPath"]) == token.parent), None)
-        volume = next((v for v in pods[workload].get("volumes") or [] if mount and v["name"] == mount["name"]), {})
-        sources = [s["serviceAccountToken"] for s in volume.get("projected", {}).get("sources", []) if "serviceAccountToken" in s]
-        if {(s.get("audience"), s["path"]) for s in sources} != {(audience, token.name)}:
-            missing.append(f"{workload}/{name}")
+        env, pod = env_of(container), pods.get(workload, {})
+        account = f"system:serviceaccount:default:{pod.get('serviceAccountName')}"
+        if {"RASK_FGA_API_URL", "FGA_API_URL"} & env.keys():
+            openfga_clients.add(account)
+            if _projected(pod, container, env.get("RASK_FGA_TOKEN_FILE", "/unset")) != {(audience, "token")}:
+                wrong.append(f"{workload}/{name}: no projected {audience!r} token at RASK_FGA_TOKEN_FILE")
+        elif env.get("RASK_FGA_ENABLED") == "true":
+            deciders[f"kubernetes~{account}"] = f"{workload}/{name}"
+            if env.get("RASK_FGA_DECIDER_URL") != "http://rask-catalog:2333":
+                wrong.append(f"{workload}/{name}: decides through {env.get('RASK_FGA_DECIDER_URL')!r}, not the catalog")
+            if _projected(pod, container, env.get("RASK_FGA_DECIDER_TOKEN_FILE", "/unset")) != {("rask-catalog", "token")}:
+                wrong.append(f"{workload}/{name}: no projected 'rask-catalog' token at RASK_FGA_DECIDER_TOKEN_FILE")
+        if (
+            any(
+                s.get("audience") == audience
+                for v in pod.get("volumes") or []
+                for s in (v.get("projected") or {}).get("sources", [])
+                for s in [s.get("serviceAccountToken") or {}]
+            )
+            and account not in writers
+        ):
+            wrong.append(f"{workload}/{name}: projects a {audience!r} token, and {account} writes no tuple")
 
-    assert len(clients) >= 7, f"the render names fewer OpenFGA clients than the estate runs: {clients}"
-    assert missing == [], f"these FGA clients present no projected {audience!r} token at RASK_FGA_TOKEN_FILE: {missing}"
-    assert admitted == accounts, (
-        f"OpenFGA's subject list differs from the FGA clients' accounts: refused {sorted(accounts - admitted)}, admitted non-clients {sorted(admitted - accounts)}"
+    assert wrong == [], wrong
+    assert admitted == openfga_clients == writers, (
+        f"OpenFGA admits {sorted(admitted)}; its clients are {sorted(openfga_clients)}; the writers are {sorted(writers)}"
     )
+    assert len(deciders) >= 3 and set(deciders) == set(seeded), f"deciders {sorted(deciders)} vs the roles bootstrap seeds {sorted(seeded)}"
+    assert all("decider" in roles for roles in seeded.values()), seeded
+    assert reachers == {"catalog", "maintenance", "annotator", "bootstrap-admin", "openfga-model"}, f"OpenFGA's API is reachable from {sorted(reachers)}"

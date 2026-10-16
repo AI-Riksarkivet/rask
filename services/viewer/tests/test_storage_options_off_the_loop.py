@@ -56,7 +56,7 @@ async def test_list_datasets_resolves_the_secret_off_the_event_loop(monkeypatch:
     )
     state = AppState(settings=settings)
 
-    result = await datasets_ep.list_datasets(state=cast("Any", state), client=None, subject="anon", settings=cast("Any", settings))
+    result = await datasets_ep.list_datasets(state=cast("Any", state), decider=None, subject="anon", settings=cast("Any", settings))
 
     assert fetch_threads, "the secret was never fetched — the registry build did not read storage_options()"
     assert all(t != loop_thread for t in fetch_threads), f"the blocking Dapr secret fetch ran on the event-loop thread ({loop_thread}): {fetch_threads}"

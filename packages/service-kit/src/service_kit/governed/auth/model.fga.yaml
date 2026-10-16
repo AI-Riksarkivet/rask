@@ -1566,7 +1566,70 @@ tests:
       - user: user:notifications
         relation: event_reader
         object: estate:rask
+      # The tuples the chart's bootstrap hook writes for the check-only services ([[LH-442]]): every one is a
+      # `decider`, notifications alone a `member_expander`, lineage alone a `governance_prober`.
+      - user: user:lineage
+        relation: decider
+        object: estate:rask
+      - user: user:lineage
+        relation: governance_prober
+        object: estate:rask
+      - user: user:notifications
+        relation: decider
+        object: estate:rask
+      - user: user:notifications
+        relation: member_expander
+        object: estate:rask
+      - user: user:viewer
+        relation: decider
+        object: estate:rask
     check:
+      # EACH CHECK-ONLY SERVICE OPENS THE DECISION ROUTES IT IS GRANTED AND NOTHING ELSE ON THE ROOT ([[LH-442]]).
+      # Each flips if a role is folded into another, or into a rung that edits the graph (`can_observe_events`)
+      # or reads data (`reader`).
+      - user: user:lineage
+        object: estate:rask
+        assertions:
+          can_decide_access: true
+          can_probe_governance: true
+          can_expand_members: false
+          can_observe_events: false
+          can_read_event_feed: false
+          reader: false
+      - user: user:viewer
+        object: estate:rask
+        assertions:
+          can_decide_access: true
+          can_expand_members: false
+          can_probe_governance: false
+      # Notifications holds `event_reader` too (above); neither of its decision roles reaches the feed's rung or back.
+      - user: user:notifications
+        object: estate:rask
+        assertions:
+          can_decide_access: true
+          can_expand_members: true
+          can_probe_governance: false
+          can_observe_events: false
+      # Nobody holds one by tier: the estate admin and an operator each flip these if a permission is widened to
+      # `owner`, `admin` or `operator`, and a subject holding no tuple at all is refused all three.
+      - user: user:root_admin
+        object: estate:rask
+        assertions:
+          can_decide_access: false
+          can_expand_members: false
+          can_probe_governance: false
+      - user: user:provisioner
+        object: estate:rask
+        assertions:
+          can_decide_access: false
+          can_expand_members: false
+          can_probe_governance: false
+      - user: user:unknown
+        object: estate:rask
+        assertions:
+          can_decide_access: false
+          can_expand_members: false
+          can_probe_governance: false
       # The machine identity: it may create projects, and it reaches that through `operator` rather
       # than by being a principal type of its own.
       - user: user:provisioner

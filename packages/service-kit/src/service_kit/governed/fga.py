@@ -1211,7 +1211,7 @@ class ObjectListing(NamedTuple):
 
 
 async def dispose(app: object) -> None:
-    """Close the OpenFGA client this app opened, if it opened one.
+    """Close the OpenFGA client and the decider this app opened, if it opened them.
 
     THE FACTORY'S PACKAGE OWNS THE DISPOSAL, which is the whole point rather than a convenience. Five
     lifespans call `make_client` and exactly one of them closed the result — the other four each would
@@ -1227,11 +1227,12 @@ async def dispose(app: object) -> None:
     silent too: FGA-off stacks never build one, and a lifespan that failed before it got that far must
     still be able to unwind.
     """
-    client = getattr(getattr(app, "state", None), "fga", None) or getattr(getattr(app, "state", None), "fga_client", None)
-    if client is None:
-        return
-    with suppress(Exception):
-        await client.close()
+    state = getattr(app, "state", None)
+    # The decider too: a catalog decider holds an HTTP pool of its own, and a store decider's close is a no-op.
+    for held in (getattr(state, "decider", None), getattr(state, "fga", None) or getattr(state, "fga_client", None)):
+        if held is not None:
+            with suppress(Exception):
+                await held.close()
 
 
 async def list_objects(

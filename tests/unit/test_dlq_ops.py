@@ -14,7 +14,7 @@ import logging
 from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from lance_namespace import (
@@ -29,6 +29,7 @@ from lineage.api.v1.endpoints import dlq
 from lineage.core.config import LineageSettings, storage_options
 from service_kit.governed import fga
 from service_kit.governed.audit import AUDIT_LOGGER, configure_audit
+from service_kit.governed.decider import OpenFgaDecider
 from service_kit.governed.oidc import IDToken
 from service_kit.lakehouse import outbox
 
@@ -130,7 +131,7 @@ def test_list_empty_when_no_outbox_configured() -> None:
 def test_list_fails_closed_without_a_token_when_fga_on(tmp_path: Path) -> None:
     s = _settings(tmp_path, **_FULL_AUTH)
     with pytest.raises(UnauthenticatedError):
-        asyncio.run(dlq.list_dlq(s, None, _filter(_request(fga=object()), s, None), limit=100))
+        asyncio.run(dlq.list_dlq(s, None, _filter(_request(decider=OpenFgaDecider(cast("Any", object()))), s, None), limit=100))
 
 
 def test_list_filters_events_to_visible_datasets(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -143,7 +144,7 @@ def test_list_filters_events_to_visible_datasets(tmp_path: Path, monkeypatch: py
 
     monkeypatch.setattr(fga, "batch_check", only_mine)
     token = _token()
-    flt = _filter(_request(fga=object()), s, token)
+    flt = _filter(_request(decider=OpenFgaDecider(cast("Any", object()))), s, token)
     out = asyncio.run(dlq.list_dlq(s, token, flt, limit=100))
     assert out.depth == 2  # raw health signal unfiltered
     assert [e.run_id for e in out.events] == ["r1"]  # but only the visible dataset's event
@@ -155,8 +156,8 @@ def test_list_filters_events_to_visible_datasets(tmp_path: Path, monkeypatch: py
 
 
 def _replay(s: LineageSettings, run_id: str, repo: Any, token: Any = None) -> Any:
-    flt = _filter(_request(fga=object()), s, token)
-    return dlq.replay_dlq(run_id, _request(fga=object()), repo, s, token, flt, None)
+    flt = _filter(_request(decider=OpenFgaDecider(cast("Any", object()))), s, token)
+    return dlq.replay_dlq(run_id, _request(decider=OpenFgaDecider(cast("Any", object()))), repo, s, token, flt, None)
 
 
 def test_replay_reingests_and_drops(tmp_path: Path) -> None:

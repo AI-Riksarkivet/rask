@@ -31,6 +31,7 @@ from notifications.feed import paginate, unread_count
 from notifications.models import InboxPointer, InboxQuery, NotificationReason
 from notifications.proxies import TypedActorProxy
 from service_kit.exceptions import register_handlers
+from service_kit.governed.decider import OpenFgaDecider
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
@@ -105,7 +106,7 @@ def test_the_harness_renders_a_row_openfga_answered(door: tuple[TestClient, _Inb
     """Without this, the 503 below could be a door that never reached OpenFGA."""
     client, inbox = door
     double = _OpenFga(unanswered=set())
-    client.app.state.fga = _client(double)
+    client.app.state.decider = OpenFgaDecider(_client(double))
     inbox.rows = [_pointer(1, "silver$pages")]
 
     response = client.get("/notifications/inbox")
@@ -117,7 +118,7 @@ def test_the_harness_renders_a_row_openfga_answered(door: tuple[TestClient, _Inb
 
 def test_a_row_openfga_could_not_answer_is_a_503_not_a_hidden_row(door: tuple[TestClient, _Inbox]) -> None:
     client, inbox = door
-    client.app.state.fga = _client(_OpenFga(unanswered={"table:gold$reports"}))
+    client.app.state.decider = OpenFgaDecider(_client(_OpenFga(unanswered={"table:gold$reports"})))
     inbox.rows = [_pointer(1, "silver$pages"), _pointer(2, "gold$reports")]
 
     response = client.get("/notifications/inbox")
@@ -154,7 +155,7 @@ def _run_event(output: str = "silver$pages") -> dict[str, Any]:
 @pytest.mark.asyncio
 async def test_the_harness_delivers_a_run_openfga_answered() -> None:
     plane = _Plane()
-    visibility = Visibility(client=_client(_OpenFga(unanswered=set())), enabled=True)
+    visibility = Visibility(decider=OpenFgaDecider(_client(_OpenFga(unanswered=set()))), enabled=True)
 
     status = await ingest_run_event(_run_event(), lane=Lane.BUS, visibility=visibility, open_inbox=plane.open)
 
@@ -165,7 +166,7 @@ async def test_the_harness_delivers_a_run_openfga_answered() -> None:
 @pytest.mark.asyncio
 async def test_a_delivery_openfga_could_not_answer_is_retried_not_acked_as_hidden() -> None:
     plane = _Plane()
-    visibility = Visibility(client=_client(_OpenFga(unanswered={"table:silver$pages"})), enabled=True)
+    visibility = Visibility(decider=OpenFgaDecider(_client(_OpenFga(unanswered={"table:silver$pages"}))), enabled=True)
 
     status = await ingest_run_event(_run_event(), lane=Lane.BUS, visibility=visibility, open_inbox=plane.open)
 
@@ -180,7 +181,7 @@ async def test_a_run_whose_output_is_named_like_a_uri_is_hidden_not_retried_fore
     the delivery is acked."""
     plane = _Plane()
     double = _OpenFga(unanswered=set())
-    visibility = Visibility(client=_client(double), enabled=True)
+    visibility = Visibility(decider=OpenFgaDecider(_client(double)), enabled=True)
 
     status = await ingest_run_event(_run_event("s3://images/run1"), lane=Lane.BUS, visibility=visibility, open_inbox=plane.open)
 
@@ -192,7 +193,7 @@ async def test_a_run_whose_output_is_named_like_a_uri_is_hidden_not_retried_fore
 def test_a_row_stamped_with_a_model_type_is_asked_about_that_object(door: tuple[TestClient, _Inbox]) -> None:
     client, inbox = door
     double = _OpenFga(unanswered=set())
-    client.app.state.fga = _client(double)
+    client.app.state.decider = OpenFgaDecider(_client(double))
     inbox.rows = [_pointer(1, "warehouse:acme")]
 
     response = client.get("/notifications/inbox")

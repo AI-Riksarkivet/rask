@@ -81,7 +81,7 @@ def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     app.include_router(inbox_module.router)
     app.state.notifications_settings = get_notifications_settings()
     app.state.actors_registered = True
-    app.state.fga = None
+    app.state.decider = None
     monkeypatch.setattr(inbox_module, "inbox_for", lambda _subject: cast(TypedActorProxy, _LeakingInbox()))
     with TestClient(app, raise_server_exceptions=False) as test_client:
         yield test_client

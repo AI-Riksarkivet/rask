@@ -148,7 +148,7 @@ spec:
             {{- end }}
             {{- if .Values.auth.enabled }}
             {{- include "lance.governedOidcEnv" . | nindent 12 }}
-            {{- include "lance.governedFgaEnv" . | nindent 12 }}
+            {{- include "lance.governedFgaEnv" (list . "catalog") | nindent 12 }}
             {{- include "lance.saVerifier" (list $root "env" "catalog") | nindent 12 }}
 
             {{- $maintainers := list }}
@@ -157,7 +157,6 @@ spec:
             {{- end }}
             - { name: LANCE_FGA_MAINTAINERS, value: {{ toJson (compact $maintainers) | quote }} }
             - { name: LANCE_PROVENANCE_WRITERS, value: {{ toJson (list (include "lance.saSubject" (list $root "lineage"))) | quote }} }
-            {{- with include "lance.governedFgaPins" . }}{{- . | nindent 12 }}{{- end }}
             - { name: LANCE_AUDIT_ENABLED, value: {{ hasKey .Values.auth "audit" | ternary .Values.auth.audit true | quote }} }
             - { name: LANCE_FGA_LOCK_ROOT_CREATE, value: {{ hasKey .Values.auth "lockRootCreate" | ternary .Values.auth.lockRootCreate (include "rask.isRealDeployment" . | eq "true") | quote }} }
             {{- end }}
@@ -301,15 +300,7 @@ spec:
             - { name: RASK_OIDC_DISCOVERY_URL, value: "http://{{ include "lance.dexHost" . }}:{{ .Values.dex.port }}/dex" }
             - { name: RASK_OIDC_AUDIENCE, value: {{ .Values.dex.clientId | quote }} }
             - { name: RASK_OIDC_ALLOW_INSECURE, value: {{ ternary "false" "true" (hasPrefix "https://" .Values.dex.issuer) | quote }} }
-            - { name: RASK_FGA_ENABLED, value: "true" }
-            - { name: RASK_FGA_API_URL, value: {{ include "lance.openfgaUrl" . | quote }} }
-            {{- include "lance.fgaToken" (list "env") | nindent 12 }}
-            {{- with .Values.auth.fgaStoreId }}
-            - { name: RASK_FGA_STORE_ID, value: {{ . | quote }} }
-            {{- end }}
-            {{- with .Values.auth.fgaModelId }}
-            - { name: RASK_FGA_MODEL_ID, value: {{ . | quote }} }
-            {{- end }}
+            {{- include "lance.governedFgaEnv" (list . "lineage") | nindent 12 }}
             - { name: LANCE_AUDIT_ENABLED, value: {{ hasKey .Values.auth "audit" | ternary .Values.auth.audit true | quote }} }
             {{- include "lance.saVerifier" (list $root "env" "lineage") | nindent 12 }}
 
@@ -326,12 +317,10 @@ spec:
             {{- include "lance.tmpMount" . | nindent 12 }}
             {{- include "lance.identityTokens" (list "mounts" "rask-catalog") | nindent 12 }}
             {{- include "lance.saVerifier" (list $root "mounts" "lineage") | nindent 12 }}
-            {{- if .Values.auth.enabled }}{{ include "lance.fgaToken" (list "mounts") | nindent 12 }}{{ end }}
       volumes:
         {{- include "lance.tmpVolume" . | nindent 8 }}
         {{- include "lance.identityTokens" (list "volumes" "rask-catalog") | nindent 8 }}
         {{- include "lance.saVerifier" (list $root "volumes" "lineage") | nindent 8 }}
-        {{- if .Values.auth.enabled }}{{ include "lance.fgaToken" (list "volumes") | nindent 8 }}{{ end }}
 ---
 apiVersion: v1
 kind: Service

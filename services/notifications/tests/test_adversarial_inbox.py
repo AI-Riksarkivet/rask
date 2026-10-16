@@ -174,7 +174,7 @@ def _door(inbox: _Inbox, monkeypatch: pytest.MonkeyPatch, *, subject: str = SUBJ
     app.include_router(inbox_module.router)
     app.state.notifications_settings = get_notifications_settings()
     app.state.actors_registered = True
-    app.state.fga = None
+    app.state.decider = None
     app.dependency_overrides[security_module._deps.current_subject] = lambda: subject
     monkeypatch.setattr(inbox_module, "inbox_for", lambda _subject: cast(TypedActorProxy, inbox))
     return app
@@ -211,7 +211,7 @@ def test_a_verified_token_with_an_unusable_subject_crashes_the_door_instead_of_r
     app.include_router(inbox_module.router)
     app.state.notifications_settings = get_notifications_settings()
     app.state.actors_registered = True
-    app.state.fga = None
+    app.state.decider = None
     app.dependency_overrides[security_module._deps.current_subject] = lambda: subject
 
     with TestClient(app, raise_server_exceptions=False) as door:
@@ -308,7 +308,7 @@ def test_the_refusal_body_carries_a_fixed_reason_while_the_envelope_goes_to_the_
     app.include_router(inbox_module.router)
     app.state.notifications_settings = get_notifications_settings()
     app.state.actors_registered = True
-    app.state.fga = None
+    app.state.decider = None
     app.dependency_overrides[security_module._deps.current_subject] = lambda: SUBJECT
     monkeypatch.setattr(inbox_module, "inbox_for", lambda _subject: cast(TypedActorProxy, _Proxy()))
 
@@ -348,7 +348,7 @@ async def test_the_drop_log_names_the_field_that_failed_and_never_what_it_held(c
     }
 
     with caplog.at_level(logging.ERROR, logger="notifications.api.ingest"):
-        status = await ingest_run_event(hostile, lane=Lane.BUS, visibility=Visibility(client=None, enabled=False), open_inbox=lambda _subject: cast(Any, None))
+        status = await ingest_run_event(hostile, lane=Lane.BUS, visibility=Visibility(decider=None, enabled=False), open_inbox=lambda _subject: cast(Any, None))
 
     logged = " ".join(f"{record.getMessage()} {getattr(record, 'faults', '')}" for record in caplog.records)
     assert status == DAPR_DROP

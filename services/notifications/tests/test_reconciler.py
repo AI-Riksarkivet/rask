@@ -33,7 +33,7 @@ from service_kit.governed.machine_identity import IdentityTokenUnavailableError
 
 
 LINEAGE = "http://lineage.invalid"
-OPEN = Visibility(client=None, enabled=False)
+OPEN = Visibility(decider=None, enabled=False)
 
 pytestmark = pytest.mark.usefixtures("lineage_identity_token")
 

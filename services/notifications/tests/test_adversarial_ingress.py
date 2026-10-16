@@ -32,7 +32,7 @@ from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
 LINEAGE = "http://lineage.invalid"
-OPEN = Visibility(client=None, enabled=False)
+OPEN = Visibility(decider=None, enabled=False)
 pytestmark = pytest.mark.usefixtures("lineage_identity_token")
 
 

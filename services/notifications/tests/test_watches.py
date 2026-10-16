@@ -125,7 +125,7 @@ def _app(plane: _Plane, *, allow: bool) -> FastAPI:
     app = FastAPI()
     app.include_router(watches_module.router)
     app.state.notifications_settings = get_notifications_settings()
-    app.state.fga = None
+    app.state.decider = None
     app.state.actors_registered = True
 
     async def checker(*, user: str, relation: str, obj: str) -> bool:

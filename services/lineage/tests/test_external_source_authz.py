@@ -28,6 +28,8 @@ test written only for the first.
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 import pytest
 from lance_namespace import PermissionDeniedError
 
@@ -35,6 +37,8 @@ from lineage.api.fga_deps import enforce_output_authz, is_external_source
 from lineage.core.config import LineageSettings
 from lineage.models import Dataset, Job, Run, RunEvent
 from lineage.schemas import EventRecord
+from service_kit.governed import fga
+from service_kit.governed.decider import OpenFgaDecider
 
 
 GOVERNED = "bind86-bronze$pages"
@@ -102,17 +106,15 @@ def settings() -> LineageSettings:
 
 @pytest.fixture
 def request_with(monkeypatch):
-    """Wire a fake FGA into both the request and the module's `fga` helper."""
+    """Wire a fake FGA into the request's decider, through the `fga` helper it reads."""
 
     def _make(allowed: set[str]) -> tuple[object, _FakeFGA]:
         fake = _FakeFGA(allowed)
 
-        from lineage.api import fga_deps
-
-        monkeypatch.setattr(fga_deps.fga, "batch_check", fake.batch_check)
+        monkeypatch.setattr(fga, "batch_check", fake.batch_check)
 
         class _App:
-            state = type("S", (), {"fga": object()})()
+            state = type("S", (), {"decider": OpenFgaDecider(cast("Any", object()))})()
 
         return type("R", (), {"app": _App()})(), fake
 

@@ -41,11 +41,10 @@ from notifications.api.settings import get_ingress_settings
 from notifications.api.signature_door import screen_control_event, screen_lineage_event
 from notifications.config import get_notifications_settings
 from notifications.proxies import channel_push, inbox_for, watchers_of
-from service_kit.governed import fga
 
 
 if TYPE_CHECKING:  # no runtime cost, and it breaks no import cycle
-    from openfga_sdk import OpenFgaClient
+    from service_kit.governed.decider import AccessDecider
 from service_kit.draining import retry_when_draining
 from service_kit.governed.dapr_auth import require_dapr_token
 
@@ -93,7 +92,7 @@ def register_subscriptions(app: FastAPI) -> None:
             return withheld
         return await ingest_run_event(data, lane=Lane.BUS, visibility=visibility, open_inbox=inbox_for, watchers=watchers_of, push=channel_push())
 
-    def _make_expander(client: "OpenFgaClient | None") -> UsersetExpander | None:
+    def _make_expander(decider: "AccessDecider | None") -> UsersetExpander | None:
         """Resolve `role:reviewers#assignee` to the people holding that relation, via the SAME
         `list_users` primitive the access review uses.
 
@@ -106,14 +105,14 @@ def register_subscriptions(app: FastAPI) -> None:
         # lives on the service settings and `IngressSettings` has never carried one. Reading it off the
         # wrong object raised AttributeError on the FIRST control event with a userset — invisible to
         # the unit tests, which inject an expander directly and never build one.
-        if client is None or not get_notifications_settings().fga_enabled:
+        if decider is None or not get_notifications_settings().fga_enabled:
             return None
 
         async def expand(userset: str) -> tuple[str, ...]:
             obj, _, relation = userset.partition("#")
             if not obj or not relation:
                 return ()
-            return tuple(await fga.list_users(client, relation=relation, obj=obj))
+            return tuple(await decider.list_users(relation=relation, obj=obj))
 
         return expand
 
@@ -149,7 +148,7 @@ def register_subscriptions(app: FastAPI) -> None:
         return await ingest_control_event(
             data,
             open_inbox=inbox_for,
-            expand=_make_expander(getattr(request.app.state, "fga", None)),
+            expand=_make_expander(getattr(request.app.state, "decider", None)),
         )
 
     # The doors' refusal series, at 0 from the moment the doors exist. `notifications/__init__.py` calls this function

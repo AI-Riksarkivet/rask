@@ -55,6 +55,8 @@ if TYPE_CHECKING:
     from fastapi import FastAPI
     from openfga_sdk import OpenFgaClient
 
+    from service_kit.governed.decider import AccessDecider
+
 
 log = logging.getLogger(__name__)
 
@@ -84,7 +86,16 @@ class _FgaSettings(Protocol):
     def fga_token_file(self) -> str | None: ...
 
 
-class _GovernedSettings(_FgaSettings, Protocol):
+class _DeciderSettings(_FgaSettings, Protocol):
+    """Where a service that writes no tuple asks its authorization questions ([[LH-442]])."""
+
+    @property
+    def fga_decider_url(self) -> str | None: ...
+    @property
+    def fga_decider_token_file(self) -> str | None: ...
+
+
+class _GovernedSettings(_DeciderSettings, Protocol):
     """The subset of `GovernedAuthSettings` this needs. A Protocol, so a settings class satisfies it
     structurally without importing a base — which is what lets medallion, whose class mixes the two
     halves directly rather than the composed `GovernedAuthSettings`, pass without a cast."""
@@ -201,7 +212,10 @@ async def attach_auth(
     provision: bool = False,
     fatal: bool = False,
 ) -> None:
-    """Put `app.state.oidc`, `app.state.sa_oidc` and `app.state.fga` in place when configured, and None otherwise.
+    """Put `app.state.oidc`, `app.state.sa_oidc`, `app.state.fga` and `app.state.decider` in place when configured, and None otherwise.
+
+    `app.state.decider` answers every gate's authorization question: the catalog's decision door for a service
+    configured with `fga_decider_url`, which then has no `app.state.fga`, or the store through `app.state.fga`.
 
     Call from a lifespan, before yielding. `service` names the caller in the log lines, which is the
     only thing that differed between the copies this replaces. See the module docstring for what
@@ -215,6 +229,7 @@ async def attach_auth(
     app.state.oidc = None
     app.state.sa_oidc = None
     app.state.fga = None
+    app.state.decider = None
     if settings.oidc_enabled and settings.oidc_issuer and settings.oidc_audience:
         try:
             from service_kit.governed import oidc
@@ -277,6 +292,35 @@ async def attach_auth(
                 raise
             log.exception("%s: service-account verifier failed to build — service callers will 503", service)
 
+    app.state.decider = build_catalog_decider(settings, service=service)
+    if app.state.decider is not None:
+        return
     client = await build_fga_client(settings, service=service, provision=provision, fatal=fatal)
     if client is not None:
+        from service_kit.governed.decider import OpenFgaDecider
+
         app.state.fga = client
+        app.state.decider = OpenFgaDecider(client)
+
+
+def build_catalog_decider(settings: _DeciderSettings, *, service: str) -> AccessDecider | None:
+    """The catalog's decision door for a service that writes no tuple, or `None` for one of the store's clients ([[LH-442]]).
+
+    A service given `fga_decider_url` builds no OpenFGA client at all, so it holds no credential that could write a
+    tuple. Nothing is fetched here: the first gated request asks, and a refusal there is a 503 that names the cause in
+    this pod's log (`decision_refused`).
+    """
+    if not (settings.fga_enabled and settings.fga_decider_url):
+        return None
+    from service_kit.governed.decider import CatalogDecider
+    from service_kit.governed.machine_identity import read_identity_token
+
+    token_file = settings.fga_decider_token_file
+    if not token_file:
+        raise ValueError(f"{service}: RASK_FGA_DECIDER_URL is set but RASK_FGA_DECIDER_TOKEN_FILE is not; the catalog would refuse every decision")
+
+    def token() -> str:
+        return read_identity_token(token_file)
+
+    log.info("%s: authorization decided by the catalog (%s)", service, settings.fga_decider_url)
+    return CatalogDecider(settings.fga_decider_url, token=token, timeout_seconds=settings.fga_timeout_seconds)

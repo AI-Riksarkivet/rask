@@ -165,8 +165,9 @@ The **`compute` service** (`:8804`, over `ray-kit`) is the companion of a bring-
 lakehouse. It reads that engine's Ray dashboard REST API at `RAY_DASHBOARD_URL` for the jobs board and job-history
 prune, and proxies `/api/serve/*`. It ships in its own chart, `deploy/fixtures/compute` (release `compute` in rask's
 namespace, installed by `make k3s-fixtures`), which reads the rask release's Dapr app token, `lance-tracing`
-Configuration, Dex, OpenFGA, OTel Collector and Ray auth token by reference; rask's OpenFGA admits its service account
-only when the product chart's `auth.externalFgaClients` names it. The fixture chart publishes `/api/ray` and `/api/serve`
+Configuration, Dex, catalog, OTel Collector and Ray auth token by reference; it holds no OpenFGA credential and asks the
+catalog's decision door, which answers its service account only when the product chart's `auth.externalDeciders` names
+it ([[LH-442]]). The fixture chart publishes `/api/ray` and `/api/serve`
 with its own HTTPRoute on the same Gateway (`deploy/fixtures/compute/chart/templates/route.yaml`), and a NetworkPolicy
 admitting its app port. The address of the engine's dashboard is `ray.dashboardUrl`
 (`rask.rayDashboardUrl`), shared by the annotator's Serve discovery and the zones' Serve origin.

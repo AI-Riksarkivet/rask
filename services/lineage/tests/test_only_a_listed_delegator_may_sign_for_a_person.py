@@ -14,15 +14,17 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any
+from typing import Any, cast
 
 import httpx
 import pytest
 import respx
 from fastapi import FastAPI
+from openfga_sdk import OpenFgaClient
 from starlette.testclient import TestClient
 
 from lineage.models import DatasetEvent
+from service_kit.governed.decider import OpenFgaDecider
 
 
 CATALOG, STAGE, UNLISTED, PERSON = "service-catalog", "service-bronze-to-silver", "service-trainer", "CgVhbGljZRIFbG9jYWw"
@@ -98,7 +100,7 @@ def _door(monkeypatch: pytest.MonkeyPatch, *, grant: bool) -> tuple[TestClient, 
     register_dapr(app)
     feed = _Feed()
     app.state.provenance = feed
-    app.state.fga = object()
+    app.state.decider = OpenFgaDecider(cast("OpenFgaClient", object()))
     return TestClient(app), feed
 
 

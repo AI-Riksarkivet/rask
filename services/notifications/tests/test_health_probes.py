@@ -57,7 +57,7 @@ def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     app.include_router(root)
     app.include_router(inbox_module.router, prefix="/api")
     app.state.notifications_settings = get_notifications_settings()
-    app.state.fga = None
+    app.state.decider = None
     app.dependency_overrides[security_module._deps.current_subject] = lambda: "alice"
     # Both seams to the actor plane explode: whatever a probe touches, it must not be this.
     monkeypatch.setattr(inbox_module, "inbox_for", lambda _subject: cast(TypedActorProxy, _ExplodingInbox()))

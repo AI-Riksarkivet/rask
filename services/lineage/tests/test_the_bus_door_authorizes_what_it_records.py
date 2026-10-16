@@ -21,10 +21,12 @@ from typing import Any, cast
 
 import pytest
 from lance_namespace import PermissionDeniedError
+from openfga_sdk import OpenFgaClient
 
 from lineage.api.fga_deps import relations_for_operation
 from lineage.core.config import Signing
 from lineage.models import RunEvent
+from service_kit.governed.decider import OpenFgaDecider
 
 
 def _event(**run_facets: Any) -> RunEvent:
@@ -128,7 +130,7 @@ def test_the_ROUTE_itself_refuses_an_unauthorized_delivery(monkeypatch: pytest.M
 
     repo = _RepoWithOutputs()
     app.state.provenance = repo
-    app.state.fga = object()
+    app.state.decider = OpenFgaDecider(cast("OpenFgaClient", object()))
 
     payload = {"data": _event(author={"name": "mallory", "sub": "mallory"}).model_dump(by_alias=True)}
     response = TestClient(app).post("/lineage-events", json=payload, headers={"dapr-api-token": "s3cret"})
@@ -151,7 +153,7 @@ class _Settings:
 
 def _request(provenance: object) -> Any:
     class _App:
-        state = type("S", (), {"fga": object(), "provenance": provenance})()
+        state = type("S", (), {"decider": OpenFgaDecider(cast("OpenFgaClient", object())), "provenance": provenance})()
 
     return type("R", (), {"app": _App()})()
 

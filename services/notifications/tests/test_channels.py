@@ -250,7 +250,7 @@ async def _run_fanout(*, delivered: bool = True, raises: bool = False, visible: 
     await fan_out(
         notice,
         audience=["alice"],
-        visibility=_View(client=None, enabled=False),
+        visibility=_View(decider=None, enabled=False),
         open_inbox=cast(InboxOpener, lambda _s: _InboxStub(delivered, raises=raises)),
         push=pushes,
     )
@@ -298,7 +298,7 @@ class TestFanoutHook:
         result = await fan_out(
             notice,
             audience=["alice"],
-            visibility=Visibility(client=None, enabled=False),
+            visibility=Visibility(decider=None, enabled=False),
             open_inbox=cast(InboxOpener, lambda _s: _InboxStub(True)),
             push=_Pushes(fails=True),
         )

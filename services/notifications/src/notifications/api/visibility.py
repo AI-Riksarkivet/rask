@@ -39,7 +39,7 @@ from service_kit.governed import fga
 
 
 if TYPE_CHECKING:
-    from openfga_sdk import OpenFgaClient
+    from service_kit.governed.decider import AccessDecider
 
 
 log = logging.getLogger(__name__)
@@ -102,8 +102,8 @@ class Visibility:
     without a per-recipient object.
     """
 
-    def __init__(self, *, client: "OpenFgaClient | None", enabled: bool) -> None:
-        self._client = client
+    def __init__(self, *, decider: "AccessDecider | None", enabled: bool) -> None:
+        self._decider = decider
         self._enabled = enabled
 
     async def _filter(self, subject: str, names: Collection[str], relation: str) -> set[str]:
@@ -116,14 +116,13 @@ class Visibility:
         """
         if not self._enabled or not names:
             return set(names)
-        if self._client is None:
+        if self._decider is None:
             # The middle case of the three-outcome rule, and the one that must never be permissive:
             # FGA on with no client is a BROKEN authorization layer, and answering it open turns that
             # into an open one, silently.
             raise ServiceUnavailableError("authorization is enabled but unavailable")
         objects = {name: _as_object(name) for name in names}
-        allowed = await fga.batch_check(
-            self._client,
+        allowed = await self._decider.batch_check(
             user=subject,
             relation=relation,
             objects=list(objects.values()),
@@ -155,9 +154,9 @@ class Visibility:
         """
         if not self._enabled or not project_id:
             return True
-        if self._client is None:
+        if self._decider is None:
             raise ServiceUnavailableError("authorization is enabled but unavailable")
-        return await fga.check(self._client, user=subject, relation=WATCH_RELATION, obj=f"project:{project_id}")
+        return await self._decider.check(user=subject, relation=WATCH_RELATION, obj=f"project:{project_id}")
 
     async def sees_all(self, subject: str, names: Collection[str]) -> bool:
         """DELIVERY: whether `subject` may be notified about EVERY name — the subset test, and the

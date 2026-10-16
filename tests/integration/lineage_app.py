@@ -28,6 +28,7 @@ from fastapi import Body, FastAPI, Header, Response
 from fastapi.testclient import TestClient
 from openfga_sdk import OpenFgaClient
 
+from service_kit.governed.decider import OpenFgaDecider
 from service_kit.governed.fga import user_object
 from service_kit.governed.machine_identity import ServicePrincipal
 from service_kit.lakehouse.ns_errors import install_problem_handlers
@@ -187,7 +188,7 @@ def governed_lineage(catalog_url: str, monkeypatch: pytest.MonkeyPatch, granted:
     app.dependency_overrides[authenticate] = caller
     grants = Grants()
     grants.allowed = {(user_object(subject), relation, obj) for subject, relation, obj in granted}
-    app.state.fga = cast(OpenFgaClient, grants)
+    app.state.decider = OpenFgaDecider(cast(OpenFgaClient, grants))
     app.state.provenance = store
     try:
         with TestClient(app) as client:

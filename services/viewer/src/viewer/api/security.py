@@ -20,9 +20,8 @@ from __future__ import annotations
 from typing import Annotated
 
 from fastapi import Depends
-from openfga_sdk.client import OpenFgaClient
 
-from service_kit.governed.deps import FgaChecker, make_auth_deps
+from service_kit.governed.deps import AccessDecider, FgaChecker, make_auth_deps
 from viewer.core.config import ViewerSettings, get_viewer_settings
 
 
@@ -33,9 +32,9 @@ _deps = make_auth_deps(SettingsDep)
 CurrentSubject = Annotated[str, Depends(_deps.current_subject)]
 CheckerDep = Annotated[FgaChecker, Depends(_deps.get_checker)]
 
-#: The RAW client, for the FILTERING path. `CheckerDep` is one relation on one object by design and
-#: cannot express a batch; see `AuthDeps.get_fga_client`.
-FgaClientDep = Annotated[OpenFgaClient | None, Depends(_deps.get_fga_client)]
+#: The decider, for the FILTERING path. `CheckerDep` is one relation on one object by design and
+#: cannot express a batch; see `AuthDeps.get_decider`.
+DeciderDep = Annotated[AccessDecider | None, Depends(_deps.get_decider)]
 
 #: The relation a READ of a corpus's metadata requires. `can_get_metadata` and not `can_read_data`:
 #: listing a corpus and reading its descriptor is metadata, and the model already separates the two —

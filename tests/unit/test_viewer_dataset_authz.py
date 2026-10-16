@@ -13,13 +13,15 @@ A parallel `dataset` type would be a second thing to keep in step with the real 
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from service_kit.exceptions import register_handlers
+from service_kit.governed import fga
+from service_kit.governed.decider import OpenFgaDecider
 from service_kit.lancekit.descriptor import DatasetDescriptor
 from service_kit.media.authz import corpus_object
 from viewer.api.v1.endpoints import datasets as ds
@@ -91,7 +93,7 @@ def _fake_batch_check(monkeypatch: pytest.MonkeyPatch) -> None:
                 _authz.seen.append({"user": user, "relation": relation, "obj": obj})
         return {obj: (_authz.allow if isinstance(_authz.allow, bool) else obj in _authz.allow) for obj in objects}
 
-    monkeypatch.setattr(ds.fga, "batch_check", _batch)
+    monkeypatch.setattr(fga, "batch_check", _batch)
 
 
 def _app(registry: _Registry, *, allow: Any, seen: list[dict[str, Any]] | None = None, fga_enabled: bool = False) -> FastAPI:
@@ -126,11 +128,11 @@ def _app(registry: _Registry, *, allow: Any, seen: list[dict[str, Any]] | None =
         }
     )
     app.dependency_overrides[get_viewer_settings] = lambda: settings
-    # The listing takes the RAW client now — `FgaChecker` is one relation on one object by design and
-    # cannot express a batch. A sentinel suffices: `fga.batch_check` itself is faked by the autouse
-    # fixture below, so nothing ever calls into the SDK.
-    client_dep = ds.FgaClientDep.__metadata__[0].dependency
-    app.dependency_overrides[client_dep] = lambda: object()
+    # The listing takes the decider — `FgaChecker` is one relation on one object by design and cannot
+    # express a batch. A store decider over a sentinel client suffices: `fga.batch_check` itself is faked by
+    # the autouse fixture above, so nothing ever calls into the SDK.
+    decider_dep = ds.DeciderDep.__metadata__[0].dependency
+    app.dependency_overrides[decider_dep] = lambda: OpenFgaDecider(cast("Any", object()))
     # The checker is still injected for the DESCRIPTOR route, which asks about one object and rightly
     # still uses it.
     checker_dep = ds.CheckerDep.__metadata__[0].dependency

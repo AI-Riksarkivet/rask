@@ -11,6 +11,7 @@ import pytest
 
 from notifications.api import visibility as visibility_module
 from notifications.api.visibility import FGA_OBJECT_TYPE, METADATA_RELATION, Visibility
+from service_kit.governed.decider import OpenFgaDecider
 
 
 if TYPE_CHECKING:
@@ -45,7 +46,7 @@ def recorder(monkeypatch: pytest.MonkeyPatch) -> _Recorder:
 async def test_one_round_trip_over_the_whole_candidate_set(recorder: _Recorder) -> None:
     """`batch_check`, never N `check`s — the shape the governed lineage read already uses."""
     recorder.allowed = {f"{FGA_OBJECT_TYPE}:silver$pages"}
-    view = Visibility(client=WIRED, enabled=True)
+    view = Visibility(decider=OpenFgaDecider(WIRED), enabled=True)
 
     assert await view.visible("alice", ["silver$pages", "gold$lines"]) == {"silver$pages"}
 

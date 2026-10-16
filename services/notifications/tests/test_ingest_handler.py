@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     from openfga_sdk import OpenFgaClient
 
 
-OPEN = Visibility(client=None, enabled=False)
+OPEN = Visibility(decider=None, enabled=False)
 #: A wired client. Only its identity matters — `_Checks` below is what answers.
 WIRED = cast("OpenFgaClient", object())
 

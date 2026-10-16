@@ -38,14 +38,14 @@ CheckerDep = Annotated[FgaChecker, Depends(_deps.get_checker)]
 
 
 def get_visibility(request: Request, settings: NotificationsSettingsDep) -> Visibility:
-    """The per-request view onto OpenFGA, built from the client the lifespan put on `app.state`.
+    """The per-request view onto authorization, built from the decider the lifespan put on `app.state`.
 
     Deliberately NOT `make_auth_deps().get_checker`: that resolves a single-object `check`, and every
     authorization question this door asks is "which of these may I see" over a page of rows — one
     `batch_check` round-trip, never N checks. The three-outcome rule is unchanged and lives in
     `Visibility` itself.
     """
-    return Visibility(client=getattr(request.app.state, "fga", None), enabled=settings.fga_enabled)
+    return Visibility(decider=getattr(request.app.state, "decider", None), enabled=settings.fga_enabled)
 
 
 VisibilityDep = Annotated[Visibility, Depends(get_visibility)]

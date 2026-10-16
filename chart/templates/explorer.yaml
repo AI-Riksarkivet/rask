@@ -156,7 +156,7 @@ spec:
             # The annotation TASK plane is FGA-gated too (can_claim/can_review/can_publish on
             # annotation_project:<id>, §6). Mirrors the catalog's block in services.yaml.
             {{- include "lance.governedOidcEnv" $root | nindent 12 }}
-            {{- include "lance.governedFgaEnv" $root | nindent 12 }}
+            {{- include "lance.governedFgaEnv" (list $root $name) | nindent 12 }}
             {{- if eq $name "annotator" }}
             # ANNOTATOR ONLY, and it stays that way: the publish saga's identity coordinates. This is
             # a service credential for writing back annotations, which no other explorer service does.
@@ -173,7 +173,6 @@ spec:
             # as the publisher password.
             - { name: MEDIA_PUBLISH_USERNAME, value: {{ $root.Values.dex.publisher.username | quote }} }
             {{- end }}
-            {{- with include "lance.governedFgaPins" $root }}{{- . | nindent 12 }}{{- end }}
             {{- end }}
             {{- if eq $name "viewer" }}
             # The S3 object browser (ported from the retired volumes-api, R6/R20). NO CREDENTIAL ENV:
@@ -249,10 +248,10 @@ spec:
           volumeMounts:
             {{- include "lance.tmpMount" $root | nindent 12 }}
             - { name: corpus, mountPath: {{ $root.Values.explorer.corpusMountPath | quote }}, readOnly: true }
-            {{- if $root.Values.auth.enabled }}{{ include "lance.fgaToken" (list "mounts") | nindent 12 }}{{ end }}
+            {{- if $root.Values.auth.enabled }}{{ include "lance.fgaCredential" (list $root "mounts" $name) | nindent 12 }}{{ end }}
       volumes:
         {{- include "lance.tmpVolume" $root | nindent 8 }}
-        {{- if $root.Values.auth.enabled }}{{ include "lance.fgaToken" (list "volumes") | nindent 8 }}{{ end }}
+        {{- if $root.Values.auth.enabled }}{{ include "lance.fgaCredential" (list $root "volumes" $name) | nindent 8 }}{{ end }}
 
         {{- include "lance.corpusVolume" $root | nindent 8 }}
 ---

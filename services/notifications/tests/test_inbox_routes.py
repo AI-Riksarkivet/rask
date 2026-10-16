@@ -17,6 +17,7 @@ from typing import Any, cast
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from openfga_sdk import OpenFgaClient
 
 from notifications.api import inbox as inbox_module
 from notifications.api import visibility as visibility_module
@@ -25,6 +26,7 @@ from notifications.feed import paginate, unread_count
 from notifications.models import InboxDismiss, InboxMark, InboxPointer, InboxQuery, NotificationReason
 from notifications.proxies import TypedActorProxy
 from service_kit.exceptions import register_handlers
+from service_kit.governed.decider import OpenFgaDecider
 
 
 NOW = datetime(2026, 8, 9, 12, 0, tzinfo=UTC)
@@ -82,7 +84,7 @@ def client(monkeypatch: pytest.MonkeyPatch, inbox: _Inbox) -> Iterator[TestClien
     app.state.notifications_settings = get_notifications_settings()
     app.state.actors_registered = True
     # Auth off, so the subject is `anon` and the visibility filter is pass-through — the dev shape.
-    app.state.fga = None
+    app.state.decider = None
     monkeypatch.setattr(inbox_module, "inbox_for", lambda _subject: cast(TypedActorProxy, inbox))
     with TestClient(app) as test_client:
         yield test_client
@@ -159,7 +161,7 @@ def test_a_row_whose_object_the_reader_may_no_longer_see_degrades_out_of_the_pag
         return {obj: obj == "table:silver$pages" for obj in objects}
 
     monkeypatch.setattr(visibility_module.fga, "batch_check", _only_silver)
-    client.app.state.fga = object()
+    client.app.state.decider = OpenFgaDecider(cast("OpenFgaClient", object()))
     client.app.state.notifications_settings = get_notifications_settings().model_copy(update={"fga_enabled": True})
     inbox.rows = [_pointer(1), _pointer(2, obj="gold$revoked")]
 
@@ -176,7 +178,7 @@ def test_a_page_emptied_by_the_filter_still_hands_back_a_cursor(client: TestClie
         return dict.fromkeys(objects, False)
 
     monkeypatch.setattr(visibility_module.fga, "batch_check", _nothing)
-    client.app.state.fga = object()
+    client.app.state.decider = OpenFgaDecider(cast("OpenFgaClient", object()))
     client.app.state.notifications_settings = get_notifications_settings().model_copy(update={"fga_enabled": True})
     inbox.rows = [_pointer(n) for n in range(1, 5)]
 
@@ -261,7 +263,7 @@ def test_a_control_row_survives_the_render_filter_that_hides_lineage_rows(
         return dict.fromkeys(objects, False)
 
     monkeypatch.setattr(visibility_module.fga, "batch_check", _nothing)
-    client.app.state.fga = object()
+    client.app.state.decider = OpenFgaDecider(cast("OpenFgaClient", object()))
     client.app.state.notifications_settings = get_notifications_settings().model_copy(update={"fga_enabled": True})
     control = InboxPointer(
         notification_id="evt-9@TASK_ASSIGNED",

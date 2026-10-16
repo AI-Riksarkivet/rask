@@ -109,7 +109,7 @@ def _app(*, feed: _FakeFeed | None, cursor: _FakeCursor | None, actors: bool = T
     install_problem_handlers(app, logging.getLogger(__name__))
     app.include_router(reconcile_cron.router)
     app.state.notifications_settings = get_notifications_settings()
-    app.state.fga = None
+    app.state.decider = None
     app.state.actors_registered = actors
     if feed is not None:
         app.state.lineage_feed = cast(LineageFeedClient, feed)

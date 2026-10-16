@@ -30,6 +30,7 @@ from lineage.models import RunEvent
 from lineage.schemas import EventRecord
 from lineage.services.provenance import ProvenanceStore
 from service_kit.governed import fga
+from service_kit.governed.decider import OpenFgaDecider
 from service_kit.governed.oidc import IDToken
 
 
@@ -46,7 +47,7 @@ def _token(sub: str = "alice") -> IDToken:
 
 
 def _request(**state: object) -> Request:
-    """A fake request exposing only ``request.app.state`` (the gate reads ``oidc``/``fga``)."""
+    """A fake request exposing only ``request.app.state`` (the gate reads ``oidc``/``decider``)."""
     return cast(Request, SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(**state))))
 
 
@@ -114,7 +115,7 @@ def test_gate_unwired_client_fails_closed() -> None:
 
 def test_gate_unauthenticated_raises() -> None:
     with pytest.raises(UnauthenticatedError):
-        asyncio.run(fga_deps.require_metadata_access("a$b", _request(fga=object()), _settings(**_FULL_AUTH), None))
+        asyncio.run(fga_deps.require_metadata_access("a$b", _request(decider=OpenFgaDecider(cast("Any", object()))), _settings(**_FULL_AUTH), None))
 
 
 def test_gate_denies_without_permission(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -127,7 +128,7 @@ def test_gate_denies_without_permission(monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.setattr(fga, "check", _deny)
     client = cast(OpenFgaClient, object())
     with pytest.raises(PermissionDeniedError):
-        asyncio.run(fga_deps.require_metadata_access("a$b", _request(fga=client), _settings(**_FULL_AUTH), _token()))
+        asyncio.run(fga_deps.require_metadata_access("a$b", _request(decider=OpenFgaDecider(client)), _settings(**_FULL_AUTH), _token()))
     # The denial must be on the right user/object/relation, not just "some" denial.
     assert captured == {"user": "alice", "relation": "can_get_metadata", "obj": "table:a$b"}
 
@@ -200,7 +201,7 @@ def test_get_events_filters_to_visible_datasets(monkeypatch: pytest.MonkeyPatch)
         EventRecord(seq=2, outputs=["a"], inputs=[], event={}),
         EventRecord(seq=1, outputs=["b"], inputs=[], event={}),  # "b" not visible → dropped
     ]
-    flt = fga_deps.DatasetFilter(_request(fga=cast(OpenFgaClient, object())), settings, _token())
+    flt = fga_deps.DatasetFilter(_request(decider=OpenFgaDecider(cast(OpenFgaClient, object()))), settings, _token())
     result = asyncio.run(get_events(cast(ProvenanceStore, repo), flt, settings))
     assert [e.outputs for e in result.events] == [["a"]]  # the "b" event is filtered out
 
@@ -214,7 +215,7 @@ def test_get_events_hides_dataset_less_events_when_governed(monkeypatch: pytest.
     settings = _settings(**_FULL_AUTH)
     repo = _FakeStore()
     repo.events = [EventRecord(seq=1, outputs=[], inputs=[], event={"run": {"runId": "secret"}})]
-    flt = fga_deps.DatasetFilter(_request(fga=cast(OpenFgaClient, object())), settings, _token())
+    flt = fga_deps.DatasetFilter(_request(decider=OpenFgaDecider(cast(OpenFgaClient, object()))), settings, _token())
     result = asyncio.run(get_events(cast(ProvenanceStore, repo), flt, settings))
     assert result.events == []  # dataset-less event is hidden under governance
 
@@ -232,7 +233,7 @@ def test_get_events_pagination_never_leaks_past_governance(monkeypatch: pytest.M
         EventRecord(seq=2, outputs=["b"], inputs=[], event={}),  # hidden — must never surface
         EventRecord(seq=1, outputs=["a"], inputs=[], event={}),
     ]
-    flt = fga_deps.DatasetFilter(_request(fga=cast(OpenFgaClient, object())), settings, _token())
+    flt = fga_deps.DatasetFilter(_request(decider=OpenFgaDecider(cast(OpenFgaClient, object()))), settings, _token())
     result = asyncio.run(get_events(cast(ProvenanceStore, repo), flt, settings, limit=1))
     assert [e.seq for e in result.events] == [3]
     assert result.next_cursor == 3  # continue below the last VISIBLE row — not below the hidden one
@@ -300,7 +301,9 @@ def test_output_authz_output_less_still_requires_auth() -> None:
     # The pre-fix code short-circuited (`if not outputs: return`) BEFORE the auth checks, so an
     # unauthenticated caller could record a forged inputs-only run in the governed feed.
     with pytest.raises(UnauthenticatedError):
-        asyncio.run(fga_deps.enforce_output_authz(_event(inputs=["a$b"]), _request(fga=object()), _settings(**_FULL_AUTH), None))
+        asyncio.run(
+            fga_deps.enforce_output_authz(_event(inputs=["a$b"]), _request(decider=OpenFgaDecider(cast("Any", object()))), _settings(**_FULL_AUTH), None)
+        )
 
 
 def test_output_authz_denies_non_writable_output(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -313,7 +316,7 @@ def test_output_authz_denies_non_writable_output(monkeypatch: pytest.MonkeyPatch
         asyncio.run(
             fga_deps.enforce_output_authz(
                 _event(outputs=["a$b", "c$d"]),
-                _request(fga=cast(OpenFgaClient, object())),
+                _request(decider=OpenFgaDecider(cast(OpenFgaClient, object()))),
                 _settings(**_FULL_AUTH),
                 _token(),
             )
@@ -364,7 +367,7 @@ def test_service_principal_is_attributed_and_fga_bounded() -> None:
             asyncio.run(
                 fga_deps.enforce_output_authz(
                     event,
-                    _request(fga=cast(OpenFgaClient, object())),
+                    _request(decider=OpenFgaDecider(cast(OpenFgaClient, object()))),
                     _settings(**_FULL_AUTH),
                     principal,
                 )

@@ -24,6 +24,7 @@ import pytest
 
 from notifications.api import visibility as visibility_module
 from notifications.api.visibility import Visibility
+from service_kit.governed.decider import OpenFgaDecider
 
 
 WIRED = cast("Any", object())
@@ -44,7 +45,7 @@ class _Recorder:
 def _view(monkeypatch: pytest.MonkeyPatch, allowed: set[str]) -> tuple[Visibility, _Recorder]:
     recorder = _Recorder(allowed)
     monkeypatch.setattr(visibility_module.fga, "batch_check", recorder)
-    return Visibility(client=WIRED, enabled=True), recorder
+    return Visibility(decider=OpenFgaDecider(WIRED), enabled=True), recorder
 
 
 @pytest.mark.asyncio

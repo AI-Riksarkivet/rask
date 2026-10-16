@@ -27,6 +27,7 @@ from typing import Any, cast
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from openfga_sdk import OpenFgaClient
 
 from notifications.api import inbox as inbox_module
 from notifications.api.security import get_visibility
@@ -35,6 +36,7 @@ from notifications.config import get_notifications_settings
 from notifications.models import NotificationReason
 from notifications.proxies import TypedActorProxy
 from service_kit.exceptions import register_handlers
+from service_kit.governed.decider import OpenFgaDecider
 
 
 NOW = datetime(2026, 8, 25, 12, 0, tzinfo=UTC)
@@ -98,13 +100,13 @@ def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     app.include_router(inbox_module.router)
     app.state.notifications_settings = get_notifications_settings()
     app.state.actors_registered = True
-    app.state.fga = _DenyingFGA()
+    app.state.decider = OpenFgaDecider(cast("OpenFgaClient", _DenyingFGA()))
     # Authorization ON, injected rather than switched on through settings: `RASK_FGA_ENABLED`
     # legitimately refuses to be set without `RASK_OIDC_ENABLED` ("authz needs a verified subject"),
     # and dragging a bearer through this fixture would test the auth door, not the render gate.
     # Without `enabled=True` `Visibility._filter` short-circuits permissive and the two "must stay
     # governed" cases below would pass while asserting nothing.
-    app.dependency_overrides[get_visibility] = lambda: Visibility(client=cast("Any", _DenyingFGA()), enabled=True)
+    app.dependency_overrides[get_visibility] = lambda: Visibility(decider=OpenFgaDecider(cast("Any", _DenyingFGA())), enabled=True)
     monkeypatch.setattr(inbox_module, "inbox_for", lambda _subject: cast(TypedActorProxy, _Inbox()))
     with TestClient(app, raise_server_exceptions=False) as test_client:
         yield test_client

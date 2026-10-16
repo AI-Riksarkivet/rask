@@ -33,7 +33,7 @@ from notifications.proxies import TypedActorProxy
 
 
 LINEAGE = "http://lineage.invalid"
-OPEN = Visibility(client=None, enabled=False)
+OPEN = Visibility(decider=None, enabled=False)
 
 RUN_EVENT: dict[str, Any] = {
     "eventType": "FAIL",

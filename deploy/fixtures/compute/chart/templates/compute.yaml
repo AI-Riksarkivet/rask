@@ -106,7 +106,7 @@ spec:
           volumeMounts:
             - { name: tmp, mountPath: /tmp }
             {{- if .Values.auth.enabled }}
-            - { name: identity-rask-openfga, mountPath: /var/run/secrets/rask/identity/rask-openfga, readOnly: true }
+            - { name: identity-rask-catalog, mountPath: /var/run/secrets/rask/identity/rask-catalog, readOnly: true }
             {{- end }}
           ports:
             - name: http
@@ -146,11 +146,8 @@ spec:
             - { name: RASK_OIDC_AUDIENCE, value: {{ .Values.auth.oidc.audience | quote }} }
             - { name: RASK_OIDC_ALLOW_INSECURE, value: {{ ternary "false" "true" (hasPrefix "https://" $issuer) | quote }} }
             - { name: RASK_FGA_ENABLED, value: "true" }
-            - { name: RASK_FGA_API_URL, value: {{ .Values.auth.fga.apiUrl | default (printf "http://%s-openfga:8080" $r) | quote }} }
-            - { name: RASK_FGA_TOKEN_FILE, value: /var/run/secrets/rask/identity/rask-openfga/token }
-            {{- with .Values.auth.fga.storeId }}
-            - { name: RASK_FGA_STORE_ID, value: {{ . | quote }} }
-            {{- end }}
+            - { name: RASK_FGA_DECIDER_URL, value: {{ .Values.auth.fga.deciderUrl | default (printf "http://%s-catalog:2333" $r) | quote }} }
+            - { name: RASK_FGA_DECIDER_TOKEN_FILE, value: /var/run/secrets/rask/identity/rask-catalog/token }
             {{- else }}
             - { name: RASK_INSECURE_ALLOW_UNAUTHENTICATED, value: "true" }
             {{- end }}
@@ -174,10 +171,10 @@ spec:
       volumes:
         - { name: tmp, emptyDir: { sizeLimit: "2Gi" } }
         {{- if .Values.auth.enabled }}
-        - name: identity-rask-openfga
+        - name: identity-rask-catalog
           projected:
             sources:
-              - serviceAccountToken: { path: token, audience: rask-openfga, expirationSeconds: 600 }
+              - serviceAccountToken: { path: token, audience: rask-catalog, expirationSeconds: 600 }
         {{- end }}
 {{- if $dapr }}
 ---

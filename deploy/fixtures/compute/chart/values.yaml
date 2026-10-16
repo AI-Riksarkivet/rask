@@ -1,7 +1,7 @@
 # The rask release this service sits beside. Every rask name below derives from it: the Deployment, Service and
-# ServiceAccount `<rask>-compute` / `<rask>-sa-compute` (the names rask's OpenFGA admits), and the objects rask
-# owns that this pod reads by reference: `<rask>-dapr-app-token`, `<rask>-ray-auth-token`, `<rask>-dex`, `<rask>-openfga`
-# and `<rask>-otel-collector`.
+# ServiceAccount `<rask>-compute` / `<rask>-sa-compute` (the account rask's catalog answers decisions for), and the
+# objects rask owns that this pod reads by reference: `<rask>-dapr-app-token`, `<rask>-ray-auth-token`, `<rask>-dex`,
+# `<rask>-catalog` and `<rask>-otel-collector`.
 rask:
   release: rask
 
@@ -89,11 +89,10 @@ auth:
     # rask's `dex.clientId`.
     audience: lance-catalog
   fga:
-    # rask's OpenFGA; empty derives `http://<rask>-openfga:8080`. OpenFGA admits this pod's projected `rask-openfga`
-    # token only when rask's `auth.externalFgaClients` names its account.
-    apiUrl: ""
-    # rask's `auth.fgaStoreId`, when pinned.
-    storeId: ""
+    # rask's catalog, whose decision door answers this pod's authorization questions; empty derives
+    # `http://<rask>-catalog:2333`. The door answers this pod's projected `rask-catalog` token only when rask's
+    # `auth.externalDeciders` names its account. compute holds no OpenFGA credential ([[LH-442]]).
+    deciderUrl: ""
 
 # The Ray Job SDK this service imports pulls the whole Ray client library into the process; on a 512Mi limit it was
 # OOMKilled while answering (measured 2026-07-29).

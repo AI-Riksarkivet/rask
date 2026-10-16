@@ -37,13 +37,14 @@ spec:
             - { name: FGA_API_URL, value: {{ include "lance.openfgaUrl" . | quote }} }
             {{- include "lance.fgaToken" (list "env") | nindent 12 }}
             - { name: FGA_ROOT_OBJECT, value: "warehouse:lance_catalog" }
+            - { name: FGA_DECISION_ROLES, value: {{ include "lance.fgaDecisionRoles" . | quote }} }
             {{- with .Values.auth.fgaStoreId }}
             - { name: RASK_FGA_STORE_ID, value: {{ . | quote }} }
             {{- end }}
           command: ["python", "-c"]
           args:
             - |
-              import os, sys, time
+              import json, os, sys, time
               import httpx
               from service_kit.governed.auth.write_model import STORE_NAME, fga_headers, history, model_document
               from service_kit.governed.fga import grantee_object, newest_store, user_object
@@ -162,10 +163,15 @@ spec:
               #
               # `admin` reaches every estate rung (`owner`/`writer`/`reader` and the can_* verbs), so the
               # first human needs exactly one tuple. The SERVICE rung is estate-scoped because what it guards
-              # is a platform surface rather than anyone's data: `event_reader`, the whole run feed.
+              # is a platform surface rather than anyone's data: `event_reader`, the whole run feed, and the decision
+              # roles ([[LH-442]]): every service that writes no tuple asks the catalog's decision door instead of
+              # holding an OpenFGA token, and each holds only the roles that open the routes it calls
+              # (`lance.fgaDecisionRoles`: `decider` for check, `member_expander`, `governance_prober`).
+              decision_roles = json.loads(os.environ["FGA_DECISION_ROLES"])
               estate_grants = (
                   ([(user, "admin")] if subject else [])
                   + [(user_object(r), "event_reader") for r in event_readers]
+                  + [(user_object(d), role) for d, roles in sorted(decision_roles.items()) for role in roles]
               )
 
               for target, pairs in ((obj, grants), (estate_obj, estate_grants)):

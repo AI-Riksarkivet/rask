@@ -73,9 +73,9 @@ maintenance:
   tombstoneSweep: true
   tombstoneSweepDryRun: true
 
-# The compute fixture (deploy/fixtures/compute) is its own release; OpenFGA admits its account by name.
+# The compute fixture (deploy/fixtures/compute) is its own release; the catalog's decision door answers its account by name.
 auth:
-  externalFgaClients: ["default:rask-sa-compute"]
+  externalDeciders: ["default:rask-sa-compute"]
 
 # THE ENGINE ([[CP-041]]): the ray-cluster fixture's RayCluster `rask-ray` gives KubeRay's own `rask-ray-head-svc`,
 # the one address compute prunes on.

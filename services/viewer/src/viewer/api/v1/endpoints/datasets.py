@@ -14,14 +14,13 @@ from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
 from service_kit.exceptions import ForbiddenError
-from service_kit.governed import fga
 from service_kit.governed.audit import FAILURE, audit
 from service_kit.lancekit.descriptor import DatasetDescriptor
 from service_kit.lancekit.registry import DatasetRegistry, UnknownDatasetError
 from service_kit.media.authz import corpus_object
 from service_kit.media.deps import StateDep
 from service_kit.media.state import AppState, dataset_handle, ensure_registry
-from viewer.api.security import READ_METADATA, CheckerDep, CurrentSubject, FgaClientDep, SettingsDep
+from viewer.api.security import READ_METADATA, CheckerDep, CurrentSubject, DeciderDep, SettingsDep
 
 
 logger = logging.getLogger(__name__)
@@ -58,7 +57,7 @@ def _registry(state: AppState) -> DatasetRegistry:
 
 
 @router.get("/datasets")
-async def list_datasets(state: StateDep, client: FgaClientDep, subject: CurrentSubject, settings: SettingsDep) -> DatasetsResponse:
+async def list_datasets(state: StateDep, decider: DeciderDep, subject: CurrentSubject, settings: SettingsDep) -> DatasetsResponse:
     """The corpora this CALLER may see.
 
     It used to be every corpus on disk, to anyone. A corpus list is itself sensitive — it names data
@@ -120,18 +119,18 @@ async def list_datasets(state: StateDep, client: FgaClientDep, subject: CurrentS
     # itself twice: `lineage/api/fga_deps.py` and `notifications/api/visibility.py`.
     #
     # THE TABLE-LESS RULE IS UNCHANGED and still keyed on `settings.fga_enabled`, not on whether a
-    # client happens to be present. A corpus that declares no search names no FGA object, so it is
+    # decider happens to be present. A corpus that declares no search names no FGA object, so it is
     # decided BEFORE the batch rather than given a guessed identifier: denied when authz is on, listed
     # when it is off, exactly as before.
     if not settings.fga_enabled:
         return DatasetsResponse(datasets=[s for s, _t in pairs])
 
     tabled = [(summary, table) for summary, table in pairs if table is not None]
-    if not tabled or client is None:
+    if not tabled or decider is None:
         return DatasetsResponse(datasets=[])
 
     objects = [corpus_object(settings, summary.id, table) for summary, table in tabled]
-    verdicts = await fga.batch_check(client, user=subject, relation=READ_METADATA, objects=objects)
+    verdicts = await decider.batch_check(user=subject, relation=READ_METADATA, objects=objects)
     return DatasetsResponse(datasets=[summary for (summary, _t), obj in zip(tabled, objects, strict=True) if verdicts.get(obj, False)])
 
 
