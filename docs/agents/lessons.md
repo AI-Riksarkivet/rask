@@ -76,3 +76,5 @@ in `CLAUDE.md`. Add a line when a trap costs a session, and delete one when the 
 - **A Dagger lane uploads the whole host tree.** `+defaultPath="/"` sends ~15 GB here and looks hung for 30+ min; run lanes with --src a clean `git ls-files` copy.
 - **Build the local loop before the CI round.** 2026-10-12: seven blind 30-40 min CI rounds; a local Dagger k3s found the cause in minutes; reproduce first.
 - **The node runs out of inotify before memory.** 2026-10-14: root held 127 of 128 instances (one per container, the containerd shim OOM watch); the Dagger engine dnsmasq exited 5 and builds died on DNS; `make k3s-install` sets 8192.
+- **An access key cannot sign MinIO's AssumeRole.** the catalog vends through STS, so on MinIO its rotated credential is a second user under the same policy; rotated to a key, every vend answered 503 (XC-082, 2026-10-16).
+- **A new required store field restarts the first pods.** a pod that boots before the dev seed writes the field fails closed until the seed lands (4 restarts, about 2 min, rev 32); the old pods serve meanwhile, so read the previous log before calling it a fault.
