@@ -93,9 +93,8 @@ if [ "$KIND" = "emptyDir" ]; then
 fi
 
 # ---- the script travels as a ConfigMap; scripts/seed_demo_corpus.py stays the ONE copy ------------
-# Not baked into the catalog image on purpose: this is a dev FIXTURE, and the sanctioned ingestion
-# path for real data is the medallion producer's POST /ingest-iiif. A production image should not
-# carry a demo seeder.
+# Not baked into the catalog image on purpose: this is a dev FIXTURE, and real data enters only
+# through the catalog's namespace doors (ADR 0154). A production image should not carry a demo seeder.
 k delete job "$JOB" --ignore-not-found >/dev/null
 k create configmap "$CM" --from-file="seed_demo_corpus.py=$SEED_SCRIPT" \
 	--dry-run=client -o yaml | k apply -f - >/dev/null
