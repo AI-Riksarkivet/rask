@@ -4,12 +4,12 @@
 name: rask-dex
 image: ghcr.io/dexidp/dex:v2.42.0
 port: 5556
-# The issuer Dex serves, rask's default `dex.issuer`; `make k3s-fixtures` passes DEV_ISSUER, as it does to rask.
+# The issuer Dex serves, rask's `auth.oidc.issuer`; `make k3s-fixtures` passes DEV_ISSUER, as it does to rask.
 issuer: http://rask-dex:5556/dex
 # The origin of rask's zones, whose OIDC callback is `<publicOrigin>/auth/callback`; empty registers none, as rask's
 # default `frontend.oidc.publicOrigin` is. `make k3s-fixtures` passes DEV_ORIGIN.
 publicOrigin: ""
-# The static client; rask's `dex.clientId` is the audience its services check and `dex.clientSecret` the secret it seeds.
+# The static client; rask's `auth.oidc.clientId` is the audience its services check and `dex.clientSecret` the secret it seeds.
 clientId: lance-catalog
 clientSecret: lance-catalog-secret
 # Two demo identities with one password, so the governed demo shows an allow and a deny: alice creates a table and is

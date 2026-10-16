@@ -71,7 +71,7 @@ OBSERVABILITY_ARGS: tuple[str, ...] = tuple(arg for value in OBSERVABILITY_SETS 
 #: The fail-closed OIDC guards' dummy inputs plus the ESO APIs, naming no Ray: the base of a gate of the
 #: Ray guard itself.
 UNNAMED_RAY_ARGS: tuple[str, ...] = (
-    "--set-string", "frontend.oidc.publicIssuer=https://auth.example.com/dex",
+    "--set-string", "auth.oidc.issuer=https://auth.example.com/dex",
     "--set-string", "frontend.oidc.publicOrigin=https://lance.example.com",
     *PREREQ_ARGS,
 )  # fmt: skip

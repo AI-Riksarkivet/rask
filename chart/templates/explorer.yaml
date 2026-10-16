@@ -167,11 +167,13 @@ spec:
             # GONE (2026-08-26): `open_reader`/`open_writer` fell back to it whenever a request had no
             # bearer, which re-issued an ANONYMOUS caller under the estate's own identity. The saga
             # below was the cited justification and never used it — it mints its own token here.
+            {{- if $root.Values.dex.enabled }}
             - { name: MEDIA_PUBLISH_TOKEN_URL, value: "http://{{ include "lance.dexHost" $root }}:{{ $root.Values.dex.port }}/dex/token" }
-            - { name: MEDIA_PUBLISH_CLIENT_ID, value: {{ $root.Values.dex.clientId | quote }} }
+            - { name: MEDIA_PUBLISH_CLIENT_ID, value: {{ $root.Values.auth.oidc.clientId | quote }} }
             # The client secret is the store's publisher-oidc-client-secret, read from the SAME bundle
             # as the publisher password.
             - { name: MEDIA_PUBLISH_USERNAME, value: {{ $root.Values.dex.publisher.username | quote }} }
+            {{- end }}
             {{- end }}
             {{- end }}
             {{- if eq $name "viewer" }}

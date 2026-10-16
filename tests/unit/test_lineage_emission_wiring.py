@@ -69,7 +69,7 @@ def _render(*set_values: str) -> str:
     # Since auth defaults ON (2026-08-06) every render needs identity values; the chart refuses OIDC
     # without a session secret ON PURPOSE, and that refusal has its own test in test_invariants.py.
     argv += [*PREREQ_ARGS, *RAY_ARGS]
-    argv += ["--set-string", "frontend.oidc.publicIssuer=http://localhost:8080/dex"]
+    argv += ["--set-string", "auth.oidc.issuer=http://localhost:8080/dex"]
     argv += ["--set-string", "frontend.oidc.publicOrigin=http://localhost:8080"]
     # Side-loaded images: see `rask.image` in _helpers.tpl — the chart refuses a bare
     # `<component>:<tag>` unless this is set, because that is docker.io and not a local image.

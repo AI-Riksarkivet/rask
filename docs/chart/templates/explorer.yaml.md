@@ -63,3 +63,11 @@ The media trio sit behind the Gateway's data plane (the cluster route's `/api/ex
 trust its `X-Forwarded-For` from `forwardedAllowIps` alone, exactly as catalog, lineage and the fleet do:
 without it every anonymous request carries the data plane's address and the rate limiter keys the whole
 public estate as one client.
+
+## `{{- if $root.Values.dex.enabled }}`
+
+The publish saga's identity is a password-grant user of the development Dex (Dex has no
+client-credentials grant), so its token URL, client and user render only with `dex.enabled`. Without
+Dex (every real deployment) the saga mints no token and publishes with no bearer, which a governed
+catalog refuses: it fails closed rather than posting the publisher's password and the client secret
+over http to whatever answers `rask-dex` ([[XC-148]]).

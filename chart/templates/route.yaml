@@ -53,12 +53,12 @@ spec:
           port: {{ $root.Values.frontend.service.port }}
     {{- end }}
     {{- end }}
-    {{- if .Values.auth.enabled }}
+    {{- if and .Values.auth.enabled .Values.dex.enabled }}
     - matches:
         - path: { type: PathPrefix, value: /dex }
       backendRefs:
         - name: {{ include "lance.dexHost" $root }}
-          port: 5556
+          port: {{ .Values.dex.port }}
     {{- end }}
 {{- end }}
 {{- end }}

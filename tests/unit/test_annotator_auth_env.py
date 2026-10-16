@@ -29,7 +29,7 @@ def _render(**sets: str) -> list[dict]:
     # Since auth defaults ON (2026-08-06) every render needs identity values; the chart refuses OIDC
     # without a session secret ON PURPOSE, and that refusal has its own test in test_invariants.py.
     cmd += [*PREREQ_ARGS, *RAY_ARGS]
-    cmd += ["--set-string", "frontend.oidc.publicIssuer=http://localhost:8080/dex"]
+    cmd += ["--set-string", "auth.oidc.issuer=http://localhost:8080/dex"]
     cmd += ["--set-string", "frontend.oidc.publicOrigin=http://localhost:8080"]
     # The chart REQUIRES an image registry unless the images are side-loaded into the node
     # (`rask.image` in _helpers.tpl): a bare `<component>:<tag>` is `docker.io/library/...`
@@ -59,4 +59,4 @@ def test_auth_enabled_wires_fga_and_oidc_onto_the_annotator() -> None:
     env = _annotator_env(_render(explorer__enabled="true", auth__enabled="true", auth__allowHeadless="true"))
     assert env.get("RASK_FGA_ENABLED") == "true"
     assert env.get("RASK_OIDC_ENABLED") == "true"
-    assert env.get("RASK_OIDC_AUDIENCE"), "the audience must come from dex.clientId"
+    assert env.get("RASK_OIDC_AUDIENCE"), "the audience must come from auth.oidc.clientId"

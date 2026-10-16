@@ -34,7 +34,7 @@ _BASE = [
     *PREREQ_ARGS,
     *RAY_ARGS,
     "--set-string",
-    "frontend.oidc.publicIssuer=http://dex.local:5556",
+    "auth.oidc.issuer=http://dex.local:5556",
     "--set-string",
     "frontend.oidc.publicOrigin=http://rask.local",
     "--set-string",

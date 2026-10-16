@@ -20,8 +20,8 @@ The catalog then 401s every read the browser attempts. Nothing in the install sa
 halves was forgotten, and the symptom (an empty, scolding UI) looks like a data problem rather than
 a configuration one.
 
-The chart already guards the OPPOSITE direction — frontend.oidc.enabled without a
-publicIssuer or publicOrigin fails (frontends.yaml, _helpers.tpl). This is the missing half.
+The chart already guards the OPPOSITE direction — frontend.oidc.enabled without an
+`auth.oidc.issuer` or `frontend.oidc.publicOrigin` fails (frontends.yaml, _helpers.tpl). This is the missing half.
 
 Two combinations are deliberately NOT errors:
   * frontend.enabled=false — there is no UI to sign into, so a governed API-only stack is coherent.

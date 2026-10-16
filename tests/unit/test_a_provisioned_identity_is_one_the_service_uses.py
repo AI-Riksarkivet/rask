@@ -59,7 +59,7 @@ def _render(*extra: str) -> str:
         *PREREQ_ARGS,
         *RAY_ARGS,
         "--set-string",
-        "frontend.oidc.publicIssuer=http://localhost:8080/dex",
+        "auth.oidc.issuer=http://localhost:8080/dex",
         "--set-string",
         "frontend.oidc.publicOrigin=http://localhost:8080",
         *extra,

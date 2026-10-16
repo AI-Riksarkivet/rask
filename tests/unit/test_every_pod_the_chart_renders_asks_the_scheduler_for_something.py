@@ -41,7 +41,7 @@ REPO = pathlib.Path(__file__).resolve().parents[2]
 _OIDC_ARGS = [
     *PREREQ_ARGS,
     *RAY_ARGS,
-    "--set-string", "frontend.oidc.publicIssuer=https://auth.example.com/dex",
+    "--set-string", "auth.oidc.issuer=https://auth.example.com/dex",
     "--set-string", "frontend.oidc.publicOrigin=https://lance.example.com",
 ]  # fmt: skip
 

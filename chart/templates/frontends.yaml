@@ -105,12 +105,11 @@ spec:
               value: /var/run/secrets/rask/identity/rask-lineage/token
             {{- if $fe.oidc.enabled }}
 
-            {{- if not $fe.oidc.publicIssuer }}{{ fail "frontend.oidc.enabled requires frontend.oidc.publicIssuer (a browser-reachable IdP)" }}{{- end }}
             {{- if not $fe.oidc.publicOrigin }}{{ fail "frontend.oidc.enabled requires frontend.oidc.publicOrigin (the browser-reachable origin)" }}{{- end }}
             - name: OIDC_ISSUER
-              value: {{ $fe.oidc.publicIssuer | quote }}
+              value: {{ include "lance.oidcIssuer" $root | quote }}
             - name: OIDC_CLIENT_ID
-              value: {{ $root.Values.dex.clientId | quote }}
+              value: {{ $root.Values.auth.oidc.clientId | quote }}
             - name: OIDC_CLIENT_SECRET
               valueFrom:
                 secretKeyRef:
@@ -123,8 +122,10 @@ spec:
                 secretKeyRef:
                   name: {{ $root.Release.Name }}-frontend-session
                   key: secret
+            {{- if $root.Values.dex.enabled }}
             - name: OIDC_INTERNAL_ISSUER
-              value: {{ printf "http://%s:5556/dex" (include "lance.dexHost" $root) | quote }}
+              value: {{ printf "http://%s:%v/dex" (include "lance.dexHost" $root) $root.Values.dex.port | quote }}
+            {{- end }}
             {{- end }}
             {{- end }}
 

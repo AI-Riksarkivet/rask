@@ -138,7 +138,7 @@ spec:
             - { name: OTEL_RESOURCE_ATTRIBUTES, value: "service.namespace=rask,deployment.environment.name={{ .Values.otel.environment }},service.version={{ .Chart.AppVersion }}" }
             {{- end }}
             {{- if .Values.auth.enabled }}
-            {{- $issuer := required "auth.oidc.issuer is rask's dex.issuer; compute accepts a token only when its iss equals it" .Values.auth.oidc.issuer }}
+            {{- $issuer := required "auth.oidc.issuer is rask's auth.oidc.issuer; compute accepts a token only when its iss equals it" .Values.auth.oidc.issuer }}
             - { name: RASK_AUDIT_ENABLED, value: {{ .Values.auth.audit | quote }} }
             - { name: RASK_OIDC_ENABLED, value: "true" }
             - { name: RASK_OIDC_ISSUER, value: {{ $issuer | quote }} }

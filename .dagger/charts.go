@@ -203,7 +203,7 @@ const renderArgs = "--set image.repository=ghcr.io/example/rask " +
 	"--set-string route.edgeUrl=http://edge.edge-system.svc.cluster.local " +
 	"--api-versions external-secrets.io/v1/ExternalSecret " +
 	"--api-versions dapr.io/v1alpha1 " +
-	"--set-string frontend.oidc.publicIssuer=http://localhost:8080/dex " +
+	"--set-string auth.oidc.issuer=https://auth.example.com/dex " +
 	"--set-string frontend.oidc.publicOrigin=http://localhost:8080 " +
 	"--set openbao.devMode=false " +
 	"--set signing.provisioned=true " +

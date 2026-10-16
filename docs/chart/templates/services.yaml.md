@@ -317,13 +317,10 @@ defaults to `minio-secret-key` — the tenant ROOT's secret — so a SCOPED acce
 on that default is signed with a mismatched pair and every operation fails
 `SignatureDoesNotMatch`. The Ray and maintenance pairs each paid for this.
 
-## `- { name: RASK_OIDC_DISCOVERY_URL, value: "http://{{ include "lance.dexHost" . }}:{{ .Values.dex.port }}/de...`
+## `{{- include "lance.governedOidcEnv" . | nindent 12 }}`
 
-Split-horizon: the issuer is the PUBLIC URL tokens carry; discovery/JWKS are fetched in-cluster.
-
-## `- { name: RASK_OIDC_ALLOW_INSECURE, value: {{ ternary "false" "true" (hasPrefix "https://" .Values.dex.issu...`
-
-Scheme-derived (see the catalog twin above): https issuer => HTTPS guard stays enforced.
+Lineage's OIDC coordinates come from the same helper as every other governed door, so its trust anchor
+cannot drift from theirs: `lance.governedOidcEnv` in _helpers.tpl.
 
 ## `- { name: RASK_FGA_STORE_ID, value: {{ . | quote }} }`
 

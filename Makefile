@@ -839,9 +839,8 @@ k3s-up: k3s-crds k3s-fixtures k3s-deps k3s-stem-check ## Apply CRDs, install fix
 	  $$IMGARGS \
 	  -f deploy/values-local.yaml \
 	  --set explorer.enabled=$(EXPLORER) \
-	  --set-string frontend.oidc.publicIssuer=$(DEV_ISSUER) \
+	  --set-string auth.oidc.issuer=$(DEV_ISSUER) \
 	  --set-string frontend.oidc.publicOrigin=$(DEV_ORIGIN) \
-	  --set-string dex.issuer=$(DEV_ISSUER) \
 	  --set-string vending.endpoint=$(DEV_VENDED_ENDPOINT) \
 	  --set explorer.corpus.mode=$(CORPUS) \
 	  --set explorer.corpus.accessMode=$(CORPUS_ACCESS_MODE) \
@@ -900,7 +899,7 @@ k3s-converge: ## Roll a WHOLE image stem to one tag and upgrade (the resolution 
 	@# clean, which is the worst direction for this failure to go. So the recipe keeps the upgrade's
 	@# status in rc and exits with it after the cleanup.
 	@test -n "$(TAG)" || { echo "!! TAG is required, e.g. make k3s-converge TAG=main-$$(git rev-parse --short=8 HEAD)"; exit 2; }
-	@set -a; [ -f .env ] && . ./.env; set +a; 	STEM="$${STEM:-lance-rest-catalog}"; 	LIVE=$$(mktemp); 	$(HELM) get values rask -o yaml >"$$LIVE" 2>/dev/null || { echo "!! no live release to read image settings from"; exit 1; }; 	grep -q 'repository:' "$$LIVE" || { echo "!! the live release carries no image.repository; run make k3s-up first"; exit 1; }; 	echo ">> converging stem $$STEM -> $(TAG)"; 	$(HELM) upgrade --install rask ./chart --wait --wait-for-jobs --timeout 20m --take-ownership 	  -f "$$LIVE" 	  -f deploy/values-local.yaml 	  --set image.tags.$$STEM=$(TAG) 	  --set explorer.enabled=$(EXPLORER) 	  --set-string frontend.oidc.publicIssuer=$(DEV_ISSUER) 	  --set-string frontend.oidc.publicOrigin=$(DEV_ORIGIN) 	  --set-string dex.issuer=$(DEV_ISSUER) 	  --set explorer.corpus.mode=$(CORPUS) 	  --set explorer.corpus.accessMode=$(CORPUS_ACCESS_MODE) 	  $(DROP_CREDENTIAL_VALUES); 	rc=$$?; 	rm -f "$$LIVE"; 	[ $$rc -eq 0 ] || { echo "!! helm upgrade FAILED (exit $$rc) — the release was NOT converged, and the cluster may now disagree with it"; exit $$rc; }
+	@set -a; [ -f .env ] && . ./.env; set +a; 	STEM="$${STEM:-lance-rest-catalog}"; 	LIVE=$$(mktemp); 	$(HELM) get values rask -o yaml >"$$LIVE" 2>/dev/null || { echo "!! no live release to read image settings from"; exit 1; }; 	grep -q 'repository:' "$$LIVE" || { echo "!! the live release carries no image.repository; run make k3s-up first"; exit 1; }; 	echo ">> converging stem $$STEM -> $(TAG)"; 	$(HELM) upgrade --install rask ./chart --wait --wait-for-jobs --timeout 20m --take-ownership 	  -f "$$LIVE" 	  -f deploy/values-local.yaml 	  --set image.tags.$$STEM=$(TAG) 	  --set explorer.enabled=$(EXPLORER) 	  --set-string auth.oidc.issuer=$(DEV_ISSUER) 	  --set-string frontend.oidc.publicOrigin=$(DEV_ORIGIN) 	  --set explorer.corpus.mode=$(CORPUS) 	  --set explorer.corpus.accessMode=$(CORPUS_ACCESS_MODE) 	  $(DROP_CREDENTIAL_VALUES); 	rc=$$?; 	rm -f "$$LIVE"; 	[ $$rc -eq 0 ] || { echo "!! helm upgrade FAILED (exit $$rc) — the release was NOT converged, and the cluster may now disagree with it"; exit $$rc; }
 	@# SINGLE QUOTES around the suggested command, never backticks: a backtick inside an echo is
 	@# COMMAND SUBSTITUTION, so `>> ... `make k3s-up` ...` RAN a full k3s-up as a side effect of
 	@# printing advice. Observed 2026-09-22 in this target's own output — "every stem converged —

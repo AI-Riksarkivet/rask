@@ -550,13 +550,23 @@ securityContext:
 {{- end }}
 {{- end -}}
 
+{{- define "lance.oidcIssuer" -}}
+{{- $issuer := required "auth.oidc.issuer must name the IdP every governed door trusts and the zones sign in at: the development Dex's issuer with dex.enabled, the platform's IdP otherwise" .Values.auth.oidc.issuer -}}
+{{- if and (not .Values.dex.enabled) (not (hasPrefix "https://" $issuer)) -}}
+{{- fail (printf "auth.oidc.issuer=%s is not https. Without the development Dex (dex.enabled=false) the issuer is the platform's IdP, and every governed door fetches the keys it checks each token against from it: over http, whoever answers that address on the path chooses them. Name the IdP's https issuer." $issuer) -}}
+{{- end -}}
+{{- $issuer -}}
+{{- end -}}
+
 {{- define "lance.governedOidcEnv" -}}
 {{- $root := . }}
 - { name: RASK_OIDC_ENABLED, value: "true" }
-- { name: RASK_OIDC_ISSUER, value: {{ $root.Values.dex.issuer | quote }} }
+- { name: RASK_OIDC_ISSUER, value: {{ include "lance.oidcIssuer" $root | quote }} }
+{{- if $root.Values.dex.enabled }}
 - { name: RASK_OIDC_DISCOVERY_URL, value: "http://{{ include "lance.dexHost" $root }}:{{ $root.Values.dex.port }}/dex" }
-- { name: RASK_OIDC_AUDIENCE, value: {{ $root.Values.dex.clientId | quote }} }
-- { name: RASK_OIDC_ALLOW_INSECURE, value: {{ ternary "false" "true" (hasPrefix "https://" $root.Values.dex.issuer) | quote }} }
+{{- end }}
+- { name: RASK_OIDC_AUDIENCE, value: {{ $root.Values.auth.oidc.clientId | quote }} }
+- { name: RASK_OIDC_ALLOW_INSECURE, value: {{ ternary "true" "false" $root.Values.dex.enabled | quote }} }
 {{- end -}}
 
 {{- define "lance.governedFgaEnv" -}}

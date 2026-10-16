@@ -45,7 +45,7 @@ _PROD_ARGS = [
     "--set", "ingress.host=lance.example.com",
     *PREREQ_ARGS,
     *RAY_ARGS,
-    "--set", "frontend.oidc.publicIssuer=https://auth.example.com/dex",
+    "--set", "auth.oidc.issuer=https://auth.example.com/dex",
     "--set", "frontend.oidc.publicOrigin=https://lance.example.com",
     "--set", "image.repository=ghcr.io/example/rask",
 ]  # fmt: skip

@@ -30,7 +30,7 @@ def _helm(*set_values: str, check: bool = True) -> subprocess.CompletedProcess[s
     argv = [helm, "template", "rask", str(CHART)]
     # Since auth defaults ON (2026-08-06) every render needs identity values, and ESO is a prerequisite.
     argv += [*PREREQ_ARGS, *RAY_ARGS]
-    argv += ["--set-string", "frontend.oidc.publicIssuer=http://localhost:8080/dex"]
+    argv += ["--set-string", "auth.oidc.issuer=http://localhost:8080/dex"]
     argv += ["--set-string", "frontend.oidc.publicOrigin=http://localhost:8080"]
     # The chart REQUIRES an image registry unless the images are side-loaded into the node
     # (`rask.image` in _helpers.tpl): a bare `<component>:<tag>` is `docker.io/library/...`

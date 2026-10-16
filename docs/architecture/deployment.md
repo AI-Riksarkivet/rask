@@ -89,7 +89,7 @@ backups belong to the platform, so production runs no `pg_dump` CronJob.
 ## Development stand-ins
 
 A real deployment brings its own identity provider, object store and secret store, and the chart takes them by
-reference (`frontend.oidc.publicIssuer`, `dex.issuer`, `dex.clientId`; `minio.externalEndpoint` and the scoped
+reference (`auth.oidc.issuer`, https, and `auth.oidc.clientId`; `minio.externalEndpoint` and the scoped
 credentials; `openbao.externalAddr`).
 Development runs stand-ins from `deploy/fixtures` (ADR 0153), and the chart renders none of them:
 
@@ -212,8 +212,8 @@ Dex, MinIO, OpenBao, the telemetry chain, and the development engine (the KubeRa
 ### Per-user login across the zones
 
 `frontend.oidc.enabled` moves in lockstep with `auth.enabled` (the chart refuses the half-governed pair,
-`templates/auth-consistency.yaml`) and needs a browser-reachable IdP: `frontend.oidc.publicIssuer` and
-`frontend.oidc.publicOrigin`, which forms the home zone's `…/auth/callback` redirect. The `home` zone owns
+`templates/auth-consistency.yaml`) and needs a browser-reachable IdP: `auth.oidc.issuer`, the one issuer the governed
+doors also trust, and `frontend.oidc.publicOrigin`, which forms the home zone's `…/auth/callback` redirect. The `home` zone owns
 `/auth/{login,callback,logout}` and sets one sealed session cookie at path `/`; because the cluster route serves every zone
 under one origin, a login on one zone is a login on all of them, and every zone's BFF forwards the signed-in user's
 own bearer to the governed backends. The BFF is a confidential OIDC client; its client secret and the cookie's

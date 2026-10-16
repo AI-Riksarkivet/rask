@@ -195,20 +195,24 @@ read-only UI works without a per-user browser login.
 The zone's projected `rask-lineage` identity ([[LH-220]]): the BFF re-reads the file per
 request, so the kubelet's rotation reaches a running pod with no restart.
 
-## `{{- if not $fe.oidc.publicIssuer }}{{ fail "frontend.oidc.enabled requires frontend.oidc.publicIssuer (a br...`
+## `{{- if not $fe.oidc.publicOrigin }}{{ fail "frontend.oidc.enabled requires frontend.oidc.publicOrigin (the b...`
 
-Per-user OIDC login (opt-in; needs a browser-reachable IdP). Every zone reads
+Per-user OIDC login (opt-in; needs a browser-reachable IdP, `auth.oidc.issuer`, the one the governed
+doors trust: `lance.oidcIssuer` in _helpers.tpl). Every zone reads
 the sealed session cookie (ISSUER+CLIENT_ID+REDIRECT_URI make authEnabled
 true; SESSION_SECRET decodes it); the home zone also presents the confidential
 client secret at the token exchange. Both ride `<release>-frontend-session`, which
 the external-secrets operator writes from the store (templates/external-secrets.yaml).
 
-## `- name: OIDC_INTERNAL_ISSUER`
+## `{{- if $root.Values.dex.enabled }}`
 
-Split-horizon OIDC: the zones' SERVER-side fetches (discovery doc, token POST)
-go to the in-cluster Dex Service — the public issuer may only resolve for
-browsers. The BROWSER-facing authorize URL and the `iss` expectation keep the
-public OIDC_ISSUER; the BFF rewrites the discovered endpoints onto this base.
+Split-horizon OIDC, for the development Dex only: the zones' SERVER-side fetches
+(discovery doc, token POST) go to the in-cluster Dex Service — the public issuer
+may only resolve for browsers. The BROWSER-facing authorize URL and the `iss`
+expectation keep the public OIDC_ISSUER; the BFF rewrites the discovered
+endpoints onto this base. Without Dex (every real deployment) it renders nothing,
+so the token exchange, which carries the client secret, goes to the IdP's own
+https address and never to whatever answers `rask-dex` ([[XC-148]]).
 
 ## `{{- if and $root.Values.explorer.enabled (or (eq .name "explorer") (eq .name "annotator")) }}`
 

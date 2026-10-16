@@ -41,7 +41,7 @@ def _render(*extra: str) -> list[dict]:
         pytest.skip("helm not on PATH")
     cmd = ["helm", "template", "rask", str(REPO / "chart")]
     cmd += [*PREREQ_ARGS, *RAY_ARGS]
-    cmd += ["--set-string", "frontend.oidc.publicIssuer=http://localhost:8080/dex"]
+    cmd += ["--set-string", "auth.oidc.issuer=http://localhost:8080/dex"]
     cmd += ["--set-string", "frontend.oidc.publicOrigin=http://localhost:8080"]
     cmd += ["--set", "image.localImages=true", *extra]
     done = subprocess.run(cmd, capture_output=True, text=True, check=False)

@@ -16,7 +16,7 @@ export RASK_EXPECT_CONTEXT
 # Prereq (see docs/architecture/deployment.md "Per-user login across the zones"): the 5 zone images built + kind-loaded, ingress-nginx
 # installed, and `helm upgrade … --set auth.enabled=true
 # --set ingress.enabled=true --set frontend.oidc.enabled=true
-# --set frontend.oidc.publicIssuer=http://lance-ns-dex:5556/dex
+# --set auth.oidc.issuer=http://lance-ns-dex:5556/dex
 # --set frontend.oidc.publicOrigin=http://localhost:8090` applied,
 # then `kubectl rollout restart deploy/lance-ns-dex`. This script seeds alice's
 # admin grant + drives the browser (read-only forwards); run it OUTSIDE auto mode (or `!`-prefix).

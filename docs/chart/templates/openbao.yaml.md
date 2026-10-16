@@ -32,7 +32,7 @@ otel-collector-export (fields username, password), the credential the audit stor
 SEVERAL CONSUMERS, ONE KEY (2026-08-09). `publisher-oidc-client-secret` serves the annotator's publish
 client (`explorer.yaml`), the zones' OIDC client (the frontend-session ExternalSecret in
 `external-secrets.yaml`) AND, with `minio.oidc.enabled`, the object store's STS AssumeRoleWithWebIdentity config —
-there is one Dex client (`dex.clientId`), so there is one secret. The object store reaches it by a
+there is one Dex client (`auth.oidc.clientId`), so there is one secret. The object store reaches it by a
 different ROUTE, not a different key: it has no daprd sidecar, so it cannot read the Dapr secret store,
 and it consumes the value as a `secretKeyRef` into the infra-credentials Secret (external-secrets syncs
 that key FROM this one). Do NOT seed a second `dex-client-secret` field to tidy the naming: a rotation

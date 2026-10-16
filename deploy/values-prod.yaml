@@ -56,8 +56,8 @@ frontend:
   # overlay could not render at all until this landed, which nothing noticed because the render
   # check itself was unreachable (its `make prod-render-check` target did not exist).
   # Its two secrets (the session sealing key and the client secret) come from the store, field
-  # `frontend-session-secret` and `publisher-oidc-client-secret` of `<kvMount>/<secretPath>`; publicIssuer
-  # and publicOrigin are configuration, supplied at deploy, and frontends.yaml fails closed on each.
+  # `frontend-session-secret` and `publisher-oidc-client-secret` of `<kvMount>/<secretPath>`; auth.oidc.issuer
+  # and publicOrigin are configuration, supplied at deploy, and the render fails closed on each.
   oidc:
     enabled: true
 podDisruptionBudget:
@@ -94,7 +94,7 @@ networkPolicy:
   #     ports: [{protocol: TCP, port: 6443}]
   # Every other platform endpoint this overlay names outside the namespace is reached through extraEgress, a rule per
   # endpoint naming its addresses: the NATS bus (nats.url, 4222), the Postgres (age.externalHost, 5432), the Ray
-  # dashboard (ray.dashboardUrl), the platform's IdP (frontend.oidc.publicIssuer) and an off-cluster S3. No other
+  # dashboard (ray.dashboardUrl), the platform's IdP (auth.oidc.issuer) and an off-cluster S3. No other
   # egress leaves the namespace, so an endpoint missing here is unreachable.
   # extraEgress:
   #   - to: [{ipBlock: {cidr: 10.0.1.20/32}}]
@@ -147,7 +147,9 @@ ray:
     enabled: true
 
 # --- The bundled Dex is the dev IdP (its users and client secret are published in this chart, XC-025); a real
-# deployment refuses it (templates/prod-credentials.yaml) and signs in through the platform's IdP.
+# deployment refuses it (templates/prod-credentials.yaml) and signs in through the platform's IdP, which the deployer
+# names as `auth.oidc.issuer` (https; the render refuses an http one) with its client as `auth.oidc.clientId`: every
+# governed door trusts that issuer and nothing else.
 dex:
   enabled: false
 

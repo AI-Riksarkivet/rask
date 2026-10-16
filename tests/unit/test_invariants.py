@@ -53,11 +53,11 @@ def _helm_template(*set_values: str) -> str:
     # `<component>:<tag>` unless this is set, because that is docker.io and not a local image.
     argv += ["--set", "image.localImages=true"]
     # The identity values every render needs since auth defaults ON (2026-08-06), and the ESO APIs the
-    # chart requires ([[XC-004]]). The chart refuses OIDC without a public issuer ON PURPOSE — that refusal
+    # chart requires ([[XC-004]]). The chart refuses OIDC without an issuer ON PURPOSE — that refusal
     # is what stops a forgotten values file installing an ungoverned estate. Supplying dev values HERE keeps
     # every other render test testing its own subject rather than re-testing the guard.
     argv += [*PREREQ_ARGS, *RAY_ARGS]
-    argv += ["--set-string", "frontend.oidc.publicIssuer=http://localhost:8080/dex"]
+    argv += ["--set", "auth.oidc.issuer=http://localhost:8080/dex"]
     argv += ["--set-string", "frontend.oidc.publicOrigin=http://localhost:8080"]
     for value in set_values:
         argv += ["--set", value]
@@ -298,6 +298,7 @@ _REAL_REGISTRY = (
     "image.repository=reg.example",
     "openbao.devMode=false",
     "dex.enabled=false",
+    "auth.oidc.issuer=https://auth.example.com/dex",
     "signing.provisioned=true",
     "nats.auth.provisioned=true",
 )

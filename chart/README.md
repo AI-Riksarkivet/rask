@@ -47,13 +47,15 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | auth.allowHeadless | bool | `false` | Permit `auth.enabled` without a frontend sign-in flow, for a deliberately API-only estate; otherwise templates/auth-consistency.yaml refuses that combination. |
 | auth.audit | bool | `true` | Emit the structured authn/authz/credential-vending audit stream (LANCE_AUDIT_ENABLED and siblings); takes effect only with auth on. false silences it. |
 | auth.bootstrapAdmin | string | `""` | Dex subject (id_token `sub`) the bootstrap-admin hook grants `owner` on the default warehouse and `admin` on estate:rask. Empty = human grants are made out of band. |
-| auth.enabled | bool | `true` | Govern the estate: authn on every door plus OpenFGA authz. On by default (fails closed); a bare install then needs frontend OIDC configured or it refuses to render. |
+| auth.enabled | bool | `true` | Govern the estate: authn on every door plus OpenFGA authz. On by default (fails closed); a bare install then needs `auth.oidc.issuer` and frontend OIDC configured or it refuses to render. |
 | auth.externalDeciders | list | `[]` | ServiceAccounts outside this release that may ask the catalog's decision door, each `<namespace>:<name>` (e.g. `default:rask-sa-compute` for the compute fixture); bootstrap-admin grants each `decider`. Read only with auth on. |
 | auth.fgaApiUrl | string | `""` | The platform's OpenFGA HTTP API (e.g. `https://fga.internal:8080`), which the tuple writers (the catalog, maintenance, the annotator), the openfga-model hook and the bootstrap-admin Job dial when `openfga.enabled` is false; the render refuses it empty then. It must admit rask's projected `rask-openfga` tokens from exactly the subjects `lance.openfgaSubjects` lists: OIDC against the cluster's ServiceAccount issuer. |
 | auth.fgaEgress | list | `[]` | NetworkPolicy egress rules ({to, ports}) admitting the pods that dial `fgaApiUrl` (the tuple writers, the openfga-model hook, the bootstrap-admin Job) to it, at the port a policy sees. Required under networkPolicy.enabled while `openfga.enabled` is false. |
 | auth.fgaModelId | string | `""` | Pin the OpenFGA authorization model id every service checks against, whatever its image carries. Empty = the store's latest model. |
 | auth.fgaStoreId | string | `""` | Pin the OpenFGA store id used by every service, the openfga-model hook and the bootstrap-admin Job. Empty = the newest store named `lance-catalog`. |
 | auth.issuerMirror.enabled | bool | `true` | Render the issuer mirror (templates/openfga-authn.yaml) that republishes the SA issuer's discovery and JWKS unauthenticated for OpenFGA; off only for a publicly served issuer. |
+| auth.oidc.clientId | string | `"lance-catalog"` | The OIDC client id: the audience every governed door checks (`RASK_OIDC_AUDIENCE`), the client the zones sign in as, and the development Dex's static client. |
+| auth.oidc.issuer | string | `""` | The OIDC issuer every governed door trusts (`RASK_OIDC_ISSUER`; a token is accepted only when its `iss` equals it) and the zones sign in at (`OIDC_ISSUER`). Required when `auth.enabled` or `frontend.oidc.enabled`; https unless `dex.enabled`. |
 | auth.serviceAccountIssuer | string | `"https://kubernetes.default.svc.cluster.local"` | The Kubernetes ServiceAccount token issuer every door verifies service tokens against (RASK_SA_ISSUER); must equal OpenFGA's issuer alias or the render fails. |
 | autoscaling.enabled | bool | `false` | Renders CPU-based HPAs for catalog and lineage. Needs metrics-server; off by default. |
 | autoscaling.maxReplicas | int | `5` | HPA maximum replicas for catalog and lineage. |
@@ -108,10 +110,8 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | dapr.workflowRetention.enabled | bool | `true` | Render a Dapr workflow `stateRetentionPolicy`, the only thing that purges workflow history; false means history grows unbounded. |
 | dapr.workflowRetention.failed | string | `"720h"` | How long a failed workflow's history is kept for post-mortems, as a positive h or m duration of at least 1h; default 720h. |
 | dapr.workflowRetention.terminated | string | `"720h"` | How long a terminated workflow's history is kept, as a positive h or m duration of at least 1h; default 720h (30 days). |
-| dex.clientId | string | `"lance-catalog"` | The development Dex's static client id; also the audience services check (`RASK_OIDC_AUDIENCE`) and the client MinIO's OIDC provider uses. |
 | dex.clientSecret | string | `"lance-catalog-secret"` | The development Dex's static client secret (demo value); seeded into OpenBao as `publisher-oidc-client-secret`. |
 | dex.enabled | bool | `true` | This estate uses the development Dex (deploy/fixtures/dex, Service `<release>-dex`): the ingress serves it at /dex, its publisher password is seeded into the dev store, and a real deployment refuses it. The chart renders no Dex. |
-| dex.issuer | string | `"http://rask-dex:5556/dex"` | OIDC issuer URL Dex serves and services trust (`RASK_OIDC_ISSUER`); a non-https issuer sets `RASK_OIDC_ALLOW_INSECURE=true`. |
 | dex.port | int | `5556` | Port of the development Dex's Service. |
 | dex.publisher.password | string | `"password"` | Plain password of the publish saga's service account, seeded into OpenBao; must match the hash the development Dex holds (demo default `password`). |
 | dex.publisher.username | string | `"publisher@rask.internal"` | Login email of the publish saga's service account; the annotator mints a fresh token with it per publish. |
@@ -151,7 +151,6 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | frontend.image.pullPolicy | string | `"IfNotPresent"` | Image pull policy for the zone containers; empty falls back to `image.pullPolicy`. |
 | frontend.image.tag | string | `"7ea481c"` | Default image tag for every zone (an immutable commit tag); a zone overrides it with `tag` on its `apps` entry. |
 | frontend.oidc.enabled | bool | `true` | Per-user OIDC login shared across all zones; must move together with `auth.enabled` (templates/auth-consistency.yaml). |
-| frontend.oidc.publicIssuer | string | `""` | Browser-reachable IdP issuer URL, e.g. https://auth.example.com/dex; required when `oidc.enabled`. |
 | frontend.oidc.publicOrigin | string | `""` | Browser-reachable app origin, e.g. https://app.example.com; forms the /auth/callback redirect URI. Required when `oidc.enabled`. |
 | frontend.podSecurityContext.runAsNonRoot | bool | `true` | Pod-level securityContext for zone pods: refuse to start a container running as root. |
 | frontend.replicas | int | `1` | Replicas per zone Deployment; above 1 the chart also renders a PodDisruptionBudget per zone. |

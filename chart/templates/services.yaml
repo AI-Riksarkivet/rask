@@ -295,11 +295,7 @@ spec:
             {{- include "lance.governedAuthAck" . | nindent 12 }}
             {{- end }}
             {{- if .Values.auth.enabled }}
-            - { name: RASK_OIDC_ENABLED, value: "true" }
-            - { name: RASK_OIDC_ISSUER, value: {{ .Values.dex.issuer | quote }} }
-            - { name: RASK_OIDC_DISCOVERY_URL, value: "http://{{ include "lance.dexHost" . }}:{{ .Values.dex.port }}/dex" }
-            - { name: RASK_OIDC_AUDIENCE, value: {{ .Values.dex.clientId | quote }} }
-            - { name: RASK_OIDC_ALLOW_INSECURE, value: {{ ternary "false" "true" (hasPrefix "https://" .Values.dex.issuer) | quote }} }
+            {{- include "lance.governedOidcEnv" . | nindent 12 }}
             {{- include "lance.governedFgaEnv" (list . "lineage") | nindent 12 }}
             - { name: LANCE_AUDIT_ENABLED, value: {{ hasKey .Values.auth "audit" | ternary .Values.auth.audit true | quote }} }
             {{- include "lance.saVerifier" (list $root "env" "lineage") | nindent 12 }}

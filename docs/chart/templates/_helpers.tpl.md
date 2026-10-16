@@ -229,7 +229,7 @@ was renamed: no lance name collided with a rask name.
 
 VALUES THEY REQUIRE (the values.yaml merge must land these or the render breaks):
   age.externalHost · auth.enabled · catalog.controlEmit · dapr.{enabled,sidecarRestricted,
-  sidecarResources.*,resiliency.enabled} · dex.clientId · frontend.{apps,image.tag,
+  sidecarResources.*,resiliency.enabled} · auth.oidc.{issuer,clientId} · dex.{enabled,port} · frontend.{apps,image.tag,
   idleTimeoutSeconds,oidc.*} · route.edgeUrl · image.catalog.{repository,tag} · lifecycle.preStopSeconds ·
   medallion.buckets · nats.url ·
   observability.{enabled,environment} · openbao.{enabled,port,externalAddr} · pubsub.name ·
@@ -749,14 +749,27 @@ Call: include "lance.saVerifier" (list $root "env"|"volumes"|"mounts" <door>).
 The API-audience token and cluster CA a reader of the SA issuer's discovery and keys fetches with, at
 /var/run/secrets/rask/sa-fetch. Call: include "lance.saFetch" "volumes"|"mounts".
 
-## `- { name: RASK_OIDC_DISCOVERY_URL, value: "http://{{ include "lance.dexHost" $root }}:{{ $root.Values.dex.p...`
+## `{{- define "lance.oidcIssuer" -}}`
 
-Split-horizon: the issuer is the PUBLIC URL tokens carry; discovery/JWKS are fetched in-cluster.
+The estate's one trust anchor, `auth.oidc.issuer`: every governed door's RASK_OIDC_ISSUER and every
+zone's OIDC_ISSUER render from it, so the browser and the doors cannot be configured with two issuers
+([[XC-148]]). Without the development Dex it is the platform's IdP, and the doors fetch the keys they
+check each token against from it, so an http issuer is refused at render: over http, whoever answers
+that address on the path chooses the keys.
 
-## `- { name: RASK_OIDC_ALLOW_INSECURE, value: {{ ternary "false" "true" (hasPrefix "https://" $root.Values.dex...`
+## `{{- if $root.Values.dex.enabled }}`
 
-Scheme-derived like the vault skipVerify: the http escape hatch opens ONLY for a plain-http
-issuer (the in-cluster dev Dex); an https issuer (a real IdP) keeps the HTTPS guard enforced.
+Split-horizon, for the development Dex only: the issuer is the URL the browser sees and tokens carry;
+discovery and JWKS are fetched in-cluster at `http://<release>-dex`. Without Dex (every real
+deployment, prod-credentials.yaml) the doors fetch from the issuer itself.
+
+## `- { name: RASK_OIDC_ALLOW_INSECURE, value: {{ ternary "true" "false" $root.Values.dex.enabled | quote }} }`
+
+The http escape hatch opens exactly when the development Dex is the IdP, because its in-cluster
+discovery URL is http whatever the issuer's own scheme. Keyed to the issuer's scheme instead, a
+production render that left the issuer at a dev default trusted `rask-dex` over http on every door
+([[XC-148]]). Stated as `"false"` otherwise rather than left to the setting's default, so the render
+itself shows the HTTPS guard on.
 
 ## `{{- define "lance.governedFgaEnv" -}}`
 

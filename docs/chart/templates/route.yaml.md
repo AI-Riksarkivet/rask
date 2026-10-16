@@ -78,7 +78,9 @@ frontend tier carries a `web-` prefix).
 Dex under the same origin as the zones, so the whole OIDC round-trip (authorize, login form, token,
 JWKS) rides one public origin: no second hostname, no extra tunnel. Dex already serves under `/dex` (its
 issuer path). Split-horizon: pods fetch via the internal Service URL (OIDC_INTERNAL_ISSUER), browsers via
-this route.
+this route. Only with `dex.enabled`: without the development Dex nothing legitimate answers `rask-dex`,
+and a route to it would hand the app's own origin, under `/dex`, to whatever workload takes that name
+([[XC-148]]).
 
 ## `{{- with .Values.route.hostnames }}`
 

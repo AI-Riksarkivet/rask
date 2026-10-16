@@ -39,6 +39,7 @@ LOCK = "LANCE_FGA_LOCK_ROOT_CREATE"
 _REAL = (
     "openbao.devMode=false",
     "dex.enabled=false",
+    "auth.oidc.issuer=https://auth.example.com/dex",
     "signing.provisioned=true",
     "nats.auth.provisioned=true",
 )

@@ -34,7 +34,7 @@ PROD_VALUES="${PROD_VALUES:-deploy/values-prod.yaml}"
 # its in-cluster address and the egress that reaches it (ADR 0165), and the egress that reaches the API server, the
 # telemetry backend and the platform's OpenFGA, which no URL can derive ([[XC-143]]).
 COMMON=(--api-versions external-secrets.io/v1/ExternalSecret --api-versions dapr.io/v1alpha1
-        --set frontend.oidc.publicIssuer=https://auth.example.com/dex
+        --set auth.oidc.issuer=https://auth.example.com/dex
         --set frontend.oidc.publicOrigin=https://lance.example.com
         --set image.repository=ghcr.io/example/rask
         --set signing.provisioned=true

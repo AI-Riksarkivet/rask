@@ -33,7 +33,7 @@ def _render(*sets: str) -> subprocess.CompletedProcess[str]:
     # Since auth defaults ON (2026-08-06) every render needs identity values; the chart refuses OIDC
     # without a session secret ON PURPOSE, and that refusal has its own test in test_invariants.py.
     argv += [*PREREQ_ARGS, *RAY_ARGS]
-    argv += ["--set-string", "frontend.oidc.publicIssuer=http://localhost:8080/dex"]
+    argv += ["--set-string", "auth.oidc.issuer=http://localhost:8080/dex"]
     argv += ["--set-string", "frontend.oidc.publicOrigin=http://localhost:8080"]
     for value in sets:
         argv += ["--set", value]

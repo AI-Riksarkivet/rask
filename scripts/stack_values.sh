@@ -16,6 +16,8 @@ HELM_SET=(
   # The bus the nats fixture runs ([[XC-129]]).
   --set-string nats.url=nats://rask-nats:4222
   --set auth.enabled=true
+  # The dex fixture's issuer at its default, the in-cluster one: the lanes reach it as `rask-dex`, as every door does.
+  --set-string auth.oidc.issuer=http://rask-dex:5556/dex
   --set-string "auth.bootstrapAdmin=$ADMIN_SUB"
   --set catalog.warehouses.enabled=true
   --set-json "catalog.multibase.dataBases=[\"$BASE_A\",\"$BASE_B\"]"

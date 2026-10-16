@@ -45,7 +45,7 @@ def _render(*set_values: str) -> list[dict]:
         pytest.skip("helm not available")
     argv = [helm, "template", "rask", str(CHART), "--set", "image.localImages=true"]
     argv += [*PREREQ_ARGS, *RAY_ARGS]
-    argv += ["--set-string", "frontend.oidc.publicIssuer=http://localhost:8080/dex"]
+    argv += ["--set-string", "auth.oidc.issuer=http://localhost:8080/dex"]
     argv += ["--set-string", "frontend.oidc.publicOrigin=http://localhost:8080"]
     for value in set_values:
         argv += ["--set", value]

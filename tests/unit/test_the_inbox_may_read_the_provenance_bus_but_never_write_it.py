@@ -50,7 +50,7 @@ def _component() -> dict[str, str]:
         helm, "template", "rask", str(REPO / "chart"),
         *PREREQ_ARGS,
         *RAY_ARGS,
-        "--set-string", "frontend.oidc.publicIssuer=http://auth/dex",
+        "--set-string", "auth.oidc.issuer=http://auth/dex",
         "--set-string", "frontend.oidc.publicOrigin=http://auth",
         "--set", "image.localImages=true",
     ]  # fmt: skip
@@ -107,7 +107,7 @@ def test_no_sibling_component_carries_these_keys() -> None:
         helm, "template", "rask", str(REPO / "chart"),
         *PREREQ_ARGS,
         *RAY_ARGS,
-        "--set-string", "frontend.oidc.publicIssuer=http://auth/dex",
+        "--set-string", "auth.oidc.issuer=http://auth/dex",
         "--set-string", "frontend.oidc.publicOrigin=http://auth",
         "--set", "image.localImages=true",
     ]  # fmt: skip
