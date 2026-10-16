@@ -148,7 +148,6 @@ spec:
 scopes:
   - {{ .Values.services.lineage.daprAppId }}
 {{- end }}
-{{- if include "lance.secretsViaDapr" . }}
 ---
 apiVersion: dapr.io/v1alpha1
 kind: Component
@@ -160,7 +159,7 @@ spec:
   version: v1
   metadata:
     - { name: vaultAddr, value: "{{ include "lance.vaultAddr" . }}" }
-    {{- if and .Values.openbao.enabled .Values.openbao.devMode }}
+    {{- if .Values.openbao.enabled }}
     - { name: vaultToken, value: {{ .Values.openbao.devToken | quote }} }
     {{- else }}
     - name: vaultToken
@@ -176,6 +175,5 @@ spec:
 scopes:
 {{- range ($secretScopes | uniq) }}
   - {{ . }}
-{{- end }}
 {{- end }}
 {{- end }}

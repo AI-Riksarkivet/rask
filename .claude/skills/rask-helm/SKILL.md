@@ -159,8 +159,8 @@ write, config silently stops arriving while images keep moving — which is how 
 for a day with neither half of its credential pair. A signer's pair comes from the release:
 `RASK_SIGNING_IDENTITY` (its service-account subject) is rendered on its Deployment, and the `signing-key-<key name>`
 secret (the ServiceAccount's name, `lance.signingKeys`) is
-seeded into the chart's dev OpenBao (a store the chart does not mint into is provisioned by the
-operator and attested by `signing.provisioned`).
+seeded into the dev OpenBao by the seed the chart renders (the platform's store, which the chart does not mint into, is
+provisioned by its operator and attested by `signing.provisioned`).
 
 - Before believing a chart commit landed: `helm history rask` — if the top revision predates the
   commit, it did not.
@@ -175,8 +175,8 @@ operator and attested by `signing.provisioned`).
   `seccompProfile.type: RuntimeDefault`. Uneven application of these is backlog row XC-061.
 - **`serviceAccount.automount: false`** unless the pod genuinely calls the Kubernetes API. Here it is
   not a switch: every first-party pod runs as its own SA from `templates/security-sa.yaml`, tokenless
-  on the SA object; a first-party pod mounts a token only where a binding gives its SA work: OpenBao
-  under ESO, and the pods whose templates carry their own RBAC (§8).
+  on the SA object; a first-party pod mounts a token only where a binding gives its SA work: the pods
+  whose templates carry their own RBAC (§8).
 - **`values.schema.json`** — validates the MERGED values at install and upgrade, so a mistyped key fails
   before any pod starts. rask's is generated from `values.yaml`'s types and `# --` comments by helm-values-schema-json
   (`make chart-docs`, beside the README; `make chart-docs-check` fails on a stale one). It caught a live `--set-string`
@@ -202,7 +202,7 @@ for zero trust."*
 |---|---|
 | `env: valueFrom: secretKeyRef` marked ✅ "secrets from secretKeyRef" | **Not approved.** Whether an ESO-written Secret delivered this way satisfies the rule is backlog XC-002, awaiting a ruling. Default: a working secret never enters process env. |
 | `helm-secrets` / SOPS: encrypted secrets in a values file | **No.** A chart value never carries a secret, encrypted or not. A record NAMES a secret. |
-| `templates/secret.yaml` rendering a Secret from `.Values` | **No.** Credentials come from OpenBao via the Dapr secret store or ESO. |
+| `templates/secret.yaml` rendering a Secret from `.Values` | **No.** Credentials come from the secret store (the platform's Vault or OpenBao; the dev OpenBao fixture) via the Dapr secret store or ESO. |
 | a literal `value:` in a Job's env for a derived credential | **No** — readable by anyone with `get jobs`; `minio-scoped-users.yaml` derives each one into a memory file in-cluster ([[XC-004]]). |
 | Docker-based chart tooling | **Dagger.** `dagger call charts` runs the chart gate. |
 
@@ -222,9 +222,8 @@ catalog, lineage, maintenance, the medallion, OpenBao and Dex ran as `default` w
 - **Every first-party pod names its own SA**, and the NATS fixture's server and nats-box run as their own
   (`serviceAccount` values in deploy/fixtures/nats). A shared SA is allowed only where the sharers are one identity (`sa-web`
   for the zones, `sa-maintenance` for the maintenance service); one-shot Jobs share `sa-jobs`.
-- **A binding names its subject through the helper the pod uses** (`lance.openbaoServiceAccount` for
-  the auth-delegator), never through a free value with a `default` fallback: an unset value then puts
-  the grant on the shared identity. Likewise a pod names its SA with the prefix `security-sa.yaml`
+- **A binding names its subject through the helper the pod uses**, never through a free value with a
+  `default` fallback: an unset value then puts the grant on the shared identity. Likewise a pod names its SA with the prefix `security-sa.yaml`
   renders it with, `lance.fullname` (the release name). `rask.fullname` is pinned to `rask` by
   `fullnameOverride`, so under any other release name the two diverge and the pod is refused at
   admission (measured 2026-10-02: 14 pods on a render as release `foo`).
@@ -260,7 +259,7 @@ catalog, lineage, maintenance, the medallion, OpenBao and Dex ran as `default` w
   afresh: the old public keys go with the old store, and an enforcing lineage refuses what was signed
   before the loss. Signers re-resolve their key within 5 minutes and heal in place, so restart the signers
   and lineage after a non-surge replacement rather than waiting (docs/OPERATORS.md § 6). values.yaml
-  `signing:` holds the tiers, the rotation and the store-loss cases, and a sealed or external store is
+  `signing:` holds the tiers, the rotation and the store-loss cases, and the platform's store is
   refused at render until `signing.provisioned` attests that an operator created them.
 - **The dev OpenBao also mints the NATS trust root** ([[XC-078]]): the seed carries `nats-root` and `nats-route` over a
   surge and re-issues every `nats-user-<user>` of the issued table (`lance.natsTable`: values.yaml `nats.auth.users` plus
@@ -279,6 +278,11 @@ catalog, lineage, maintenance, the medallion, OpenBao and Dex ran as `default` w
   has applied it. Read a pod's Configuration from its `dapr.io/config`, never by a name built from the app-id.
   The gates: `tests/unit/test_only_the_owner_may_read_its_signing_key.py` (who may read which secret) and
   `tests/unit/test_event_signing_is_wired_by_the_chart_in_every_deploy_mode.py` (the name follows the spec).
+- **The chart renders no secret store; production names the platform's** ([[XC-149]]): `openbao.enabled` means the
+  estate uses the dev OpenBao fixture (a real deployment refuses it), and off it the render requires `openbao.externalAddr`
+  (https only: every sidecar presents the store's token to it) and, under `networkPolicy.enabled`, `openbao.egress`, a rule
+  admitting exactly the pods `lance.secretScopes` names. Setting both is refused. The dev store's seed stays rask's (owner,
+  2026-10-16): only rask's values know what to seed.
 - **OpenFGA and its Postgres are optional, and production names the platform's** ([[XC-132]]): `openfga.enabled` and
   `age.enabled` off, `auth.fgaApiUrl` and `age.externalHost` set (the render refuses either empty). Every FGA client
   dials `lance.openfgaUrl` and every Postgres client `lance.ageConnectHost` (on the AGE-on-CNPG path, `lance-pg-rw`);

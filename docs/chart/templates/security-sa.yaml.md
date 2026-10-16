@@ -6,8 +6,8 @@ every release revision, under a 1 MiB ceiling. Each section is headed by the tem
 ## `{{- $components := list "catalog" "lineage" "web" "maintenance" "jobs" "viewer" "search" "annotator" "assist" "issuer-mirror" "hooks" }}`
 
 ONE ServiceAccount PER FIRST-PARTY SERVICE, each with automountServiceAccountToken: false on the
-SA object, so a pod holds a Kubernetes API token only where its own spec asks for one (OpenBao
-under ESO). The Dapr injector's projected Sentry token is a separate volume and is unaffected.
+SA object, so a pod holds a Kubernetes API token only where its own spec asks for one. The Dapr
+injector's projected Sentry token is a separate volume and is unaffected.
 These SAs carry no grant except issuer discovery below; a pod that calls the API keeps its own
 RBAC-bound SA in its template. The fleet's SAs come from the same map fleet.yaml ranges, so a new
 fleet service cannot name an SA this file did not render, and a pod names its SA with this file's

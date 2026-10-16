@@ -78,8 +78,8 @@ openfga:
 age:
   enabled: false
 
-# Network isolation: default-deny + DNS egress + the EXCLUSIVE OpenBao-ingress lock (only secret-consuming
-# app pods may reach openbao:8200). The chart ships the full, correct impl (templates/network-policy.yaml);
+# Network isolation: default-deny + DNS egress + the EXCLUSIVE secret-store egress (only the pods whose sidecar
+# reads the store reach its addresses, `openbao.egress`). The chart ships the full, correct impl (templates/network-policy.yaml);
 # it was simply never enabled on the documented prod overlay — the security audit's headline gap. REQUIRES a
 # policy-enforcing CNI (Calico/Cilium): kind's default kindnet SILENTLY ignores NetworkPolicy, so this can't
 # be proven on the demo — verify with the negative-isolation probe (docs/KIND-RUNBOOK.md) on the real
@@ -131,12 +131,17 @@ backups:
     enabled: true
     snapshotClassName: "" # set your cluster's CSI VolumeSnapshotClass
 
-# --- Secrets: the SEALED, file-backed OpenBao (no fixed root token; an operator must init + unseal).
-# devMode=false is the prod signal. No credential is a chart value: the operator provisions every field
-# `<kvMount>/<secretPath>` must hold (docs/chart/templates/openbao.yaml.md lists them) and the External Secrets
-# Operator, a prerequisite installed on its own, delivers them (templates/external-secrets.yaml). -----
+# --- Secrets: the platform's Vault or OpenBao ([[XC-149]]); the chart renders no secret store. The deployer names
+# it as `openbao.externalAddr` (https; the render refuses http) with `openbao.egress`, the NetworkPolicy rule reaching
+# its addresses for the pods whose sidecar reads it, and the render refuses either empty. No credential is a chart
+# value: the platform's operator provisions every field docs/architecture/deployment.md lists under Prerequisites,
+# and the External Secrets Operator, a prerequisite installed on its own, delivers them (templates/external-secrets.yaml). -----
 openbao:
-  devMode: false
+  enabled: false
+  # externalAddr: https://vault.internal:8200
+  # egress:
+  #   - to: [{ipBlock: {cidr: 10.0.2.30/32}}]
+  #     ports: [{protocol: TCP, port: 8200}]
 
 # --- Ray token auth ON (gate 7 / R3): Ray clients present the store's `ray-auth-token`, which ESO
 # writes into `<release>-ray-auth-token`. Enforcing it is the engine's (KubeRay's spec.authOptions.secretName
@@ -222,10 +227,7 @@ observability:
 # rustfs (rustfs-operator / any managed S3):         # managed S3 for the lakehouse
 #   enabled: false
 #   externalEndpoint: https://s3.us-east-1.amazonaws.com
-# openbao (the platform's store):                   # ESO (a prerequisite) syncs every Secret a pod without a
-#   enabled: false                                   # sidecar mounts FROM it; the platform provisions the ESO
-#   externalAddr: https://vault.internal:8200        # role and every field the chart's header lists
-# externalSecrets:
+# externalSecrets:                                   # the platform's ESO role on its store (see `openbao` above)
 #   role: lance
 # nats (the platform's JetStream, REQUIRED):        # a prerequisite rask never installs (ADR 0153); bus down =
 #   url: nats://nats.internal:4222                   # no lineage ingest, no cascade. The stream Job provisions

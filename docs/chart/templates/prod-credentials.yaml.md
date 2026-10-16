@@ -19,7 +19,7 @@ store field that replaced it. `make k3s-converge` strips them from the release i
 
 2. A REAL DEPLOYMENT carries no published dev secret. The condition comes from `rask.isRealDeployment`,
 so this template and the root-create lock (services.yaml, F2-11) cannot answer "is this real?"
-differently. The signal is `openbao.devMode=false`, or `image.repository` with `image.localImages=false`:
+differently. The signal is `openbao.enabled=false` (the platform's store), or `image.repository` with `image.localImages=false`:
 "the images come from a registry someone else can reach" is a FACT about the deploy rather than a flag to
 remember (`localhost:`, `127.0.0.1:` and `172.17.0.1:` registries are the in-cluster dev loop).
 
@@ -27,4 +27,4 @@ THE TWO EXEMPTIONS ARE FENCED HERE (owner, 2026-10-06): the bundled dev Dex (its
 secret and publisher password are chart configuration, XC-025) and the dev OpenBao's root token (XC-079)
 are the only credentials a render still carries, and only a dev render. A real deployment refuses the dev
 OpenBao (which is also what stops the chart generating credentials for one: `lance.mintsDevCredentials`
-needs devMode) and refuses the bundled Dex; it points at the platform's store and IdP.
+needs `openbao.enabled`) and refuses the bundled Dex; it points at the platform's store and IdP.

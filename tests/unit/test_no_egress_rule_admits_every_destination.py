@@ -46,7 +46,7 @@ _FIRST_PARTY_SOURCE = "rask/templates/"
 #: Every list of egress rules the render takes from values, by the overlay that renders the policy reading it.
 _STATED_RULES: dict[str, tuple[str, ...]] = {
     "default": ("networkPolicy.apiServerEgress", "networkPolicy.extraEgress", "route.edgeEgress", "observability.export.egress", "observability.query.egress"),
-    "prod": ("auth.fgaEgress",),
+    "prod": ("auth.fgaEgress", "openbao.egress"),
 }
 
 
@@ -80,17 +80,6 @@ def _holds_an_api_credential(template: dict, accounts: dict[str, dict]) -> bool:
         for volume in spec.get("volumes") or []
         for source in (volume.get("projected") or {}).get("sources") or []
     )
-
-
-def _selects(selector: dict, labels: dict[str, str]) -> bool:
-    if any(labels.get(key) != value for key, value in (selector.get("matchLabels") or {}).items()):
-        return False
-    for expression in selector.get("matchExpressions") or []:
-        key, operator, values = expression["key"], expression["operator"], expression.get("values") or []
-        held = {"In": key in labels and labels[key] in values, "NotIn": labels.get(key) not in values, "Exists": key in labels}
-        if not held.get(operator, key not in labels):
-            return False
-    return True
 
 
 def _admits_everything(peer: dict) -> bool:
@@ -143,7 +132,7 @@ def test_only_a_pod_that_calls_the_api_server_may_reach_it(overlay: str) -> None
         if template is None:
             continue
         workload = f"{doc['kind']}/{doc['metadata']['name']}"
-        if any(_selects(selector, template["metadata"].get("labels") or {}) for selector in selectors):
+        if any(chart_render.selects(selector, template["metadata"].get("labels") or {}) for selector in selectors):
             admitted.add(workload)
         if source.startswith(_FIRST_PARTY_SOURCE) and _holds_an_api_credential(template, accounts):
             callers.add(workload)

@@ -12,7 +12,7 @@ be armed by an operator who already knew to arm it. Removing the key is what let
 an estate that never mentioned it.
 
 SAME SHAPE F2-9 ALREADY FIXED, one layer over. `prod-credentials.yaml` answers "is this a real
-deployment?" on signals the deploy already depends on — `openbao.devMode`, and images pulled from a
+deployment?" on signals the deploy already depends on — the platform's secret store, and images pulled from a
 registry off this node — rather than a flag someone must remember. That answer now lives in ONE
 helper with two consumers, so the credential guard and the root-create lock cannot disagree about what
 "real" means.
@@ -32,12 +32,15 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 from test_invariants import _rendered_docs  # noqa: E402
 
+from tests.unit.chart_render import SECRET_STORE_URL
+
 
 LOCK = "LANCE_FGA_LOCK_ROOT_CREATE"
 
-#: A real deployment: the platform's sealed store, whose operator attests the keys it provisioned.
+#: A real deployment: the platform's store, whose operator attests the keys it provisioned.
 _REAL = (
-    "openbao.devMode=false",
+    "openbao.enabled=false",
+    f"openbao.externalAddr={SECRET_STORE_URL}",
     "dex.enabled=false",
     "auth.oidc.issuer=https://auth.example.com/dex",
     "signing.provisioned=true",

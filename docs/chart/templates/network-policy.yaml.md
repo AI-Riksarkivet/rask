@@ -3,19 +3,24 @@
 Rationale for `chart/templates/network-policy.yaml`. It lives here because Helm stores the chart's templates in
 every release revision, under a 1 MiB ceiling. Each section is headed by the template line it explains.
 
-## `{{- $openbaoClients := list "catalog" "lineage" "maintenance" }}`
+## `{{- range (append (splitList "," (include "lance.secretScopes" .)) "openbao" | uniq) }}`
 
-stateStore.scopes is APPENDED + uniq'd (app-id == component label for these
-pods — media.yaml keys them identically), so this list and the secret-store
-component's scope (dapr-component.yaml) cannot drift.
+The dev store's readers are the secret-store component's scope itself, `lance.secretScopes` (app-id ==
+component label for these pods), so this list and the scope of `lance-secrets` (dapr-component.yaml) cannot
+drift, and the store's own pods, because the seed reads the signing pairs and the bus root from the outgoing
+pod through the Service (openbao-seed.yaml).
 
-## `{{- if .Values.openbao.devMode }}`
+## `{{- if not .Values.openbao.enabled }}`
 
-the dev seed reads the signing pairs from the outgoing OpenBao pod (openbao.yaml)
+THE PLATFORM'S STORE, REACHED ONLY BY ITS READERS ([[XC-149]]). It lives outside the namespace, so the lock
+is egress: the pods whose sidecar reads it, the same `lance.secretScopes` as the dev store's ingress lock,
+reach the addresses the platform states in `openbao.egress`, and no other pod does. Like the API server, the
+store is reached at addresses no URL derives, and the render refuses the rule empty under
+`networkPolicy.enabled`.
 
 ## `{{- $ageClients := list "catalog" "openfga-migrate" "backup-pg" }}`
 
-stateStore.scopes appended + uniq'd, same derivation as the openbao rule above.
+stateStore.scopes appended + uniq'd: the state-store-scoped apps' daprd dial this Postgres directly.
 
 ## `{{- if and .Values.observability.enabled .Values.stateStore.enabled }}`
 
@@ -31,7 +36,7 @@ allow-entry for a pod it never deploys.
 
 The pods that call the Kubernetes API, each under the condition its template renders: the token verifiers (catalog
 and lineage under `auth.enabled`, reading the service-account issuer's discovery and key set), the issuer mirror,
-OpenBao (its Kubernetes auth backend reviews ESO's logins), the Collector (`k8sattributes` reads pod metadata), the
+the dev store's pod (the openbao fixture's; its Kubernetes auth backend reviews ESO's logins), the Collector (`k8sattributes` reads pod metadata), the
 volume-snapshot CronJob (`kubectl`) and the Dapr dashboard. Every one holds a token the API server accepts, and no
 other first-party pod does; `test_no_egress_rule_admits_every_destination.py` compares the two sets on the
 render. The API server is the cluster's: no label selects it and no URL names its endpoints, because the CNI judges
@@ -42,7 +47,7 @@ ports, in the cluster and outside it, so the rule is scoped twice: to these pods
 ## `egress: {{- include "lance.egressRules" (list "networkPolicy.apiServerEgress" .Values.networkPolicy.apiServerEgress "the Kubernetes API server's endpoints, at the port a policy sees after the kubernetes Service's translation") | nindent 4 }}`
 
 Every egress rule a deployer states (`networkPolicy.apiServerEgress`, `networkPolicy.extraEgress`, `route.edgeEgress`,
-`observability.export.egress`, `observability.query.egress`, `auth.fgaEgress`) passes through this helper, which refuses an empty list
+`observability.export.egress`, `observability.query.egress`, `auth.fgaEgress`, `openbao.egress`) passes through this helper, which refuses an empty list
 where one is required, a rule with no `to` peers, and a peer `ipBlock` whose CIDR is `/0`: each is a rule that admits
 every destination on its ports.
 

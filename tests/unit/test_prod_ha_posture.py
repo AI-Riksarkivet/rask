@@ -12,55 +12,19 @@ dev profile is single-replica everywhere by design.
 from __future__ import annotations
 
 import pathlib
-import shutil
-import subprocess
 import sys
-
-import pytest
-import yaml
 
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
-from chart_yaml import FAST_LOADER
 from test_invariants import _first_party_deployments  # noqa: E402
 
-from tests.unit.chart_render import PREREQ_ARGS, RAY_ARGS
+from tests.unit.chart_render import PROD_ARGS, render
 
 
-REPO = pathlib.Path(__file__).resolve().parents[2]
-
-#: The dummy values `scripts/prod_render_check.sh` uses. They satisfy the chart's fail-closed prod
-#: guards (appToken / age password / rustfs key / registry), which is also how this render proves those
-#: guards do not block a legitimate prod install.
-_PROD_ARGS = [
-    "--set", "image.catalog.tag=v0",
-    "--set", "frontend.image.tag=v0",
-    "--set", "signing.provisioned=true",
-    "--set", "nats.auth.provisioned=true",
-    "--set-string", "observability.export.endpoint=http://otlp.example.com:4318/v1/otlp",
-    "--set-string", "auth.fgaApiUrl=https://fga.example.com",
-    "--set-string", "age.externalHost=pg.example.com",
-    "--set", "backups.volumeSnapshot.snapshotClassName=csi-snapclass",
-    "--set", "ingress.host=lance.example.com",
-    *PREREQ_ARGS,
-    *RAY_ARGS,
-    "--set", "auth.oidc.issuer=https://auth.example.com/dex",
-    "--set", "frontend.oidc.publicOrigin=https://lance.example.com",
-    "--set", "image.repository=ghcr.io/example/rask",
-]  # fmt: skip
-
-
-def _prod_docs() -> list[dict]:
-    helm = shutil.which("helm") or str(REPO / ".localbin/helm")
-    if not pathlib.Path(helm).exists():
-        pytest.skip("helm not available")
-    argv = [helm, "template", "rask", str(REPO / "chart"), "-f", str(REPO / "deploy/values-prod.yaml"), *_PROD_ARGS]
-    out = subprocess.run(argv, capture_output=True, text=True, check=True).stdout  # noqa: S603
-    return [doc for doc in yaml.load_all(out, Loader=FAST_LOADER) if isinstance(doc, dict)]
-
-
-_DOCS = _prod_docs()
+#: The production overlay with the dummy inputs its fail-closed guards require, which is also how this render proves
+#: those guards do not block a legitimate prod install.
+_DOCS = list(render(*PROD_ARGS))
 _OURS = _first_party_deployments(_DOCS)
 
 

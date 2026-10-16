@@ -239,15 +239,8 @@ def _pod(args: tuple[str, ...], workload: str) -> _Pod:
 
 
 def _offending(args: tuple[str, ...]) -> list[str]:
-    """Every grant of `secrets` or `tokenreviews` that reaches an SA a first-party pod runs as.
-
-    The one sanctioned grant: `system:auth-delegator` on the SA OpenBao alone runs as, which its
-    Kubernetes auth backend reviews ESO's login token with.
-    """
-    pods = _pods(*args)
-    ours = {pod.service_account for pod in pods if pod.first_party} | {"default"}
-    openbao = [pod.service_account for pod in pods if pod.workload == "Deployment/rask-openbao"]
-    reviewer = openbao[0] if openbao and sum(pod.service_account == openbao[0] for pod in pods) == 1 else None
+    """Every grant of `secrets` or `tokenreviews` that reaches an SA a first-party pod runs as."""
+    ours = {pod.service_account for pod in _pods(*args) if pod.first_party} | {"default"}
     found: list[str] = []
     for binding in _bindings(*args):
         if not binding.grants:
@@ -256,8 +249,7 @@ def _offending(args: tuple[str, ...]) -> list[str]:
             if _EVERY_SERVICE_ACCOUNT.match(group):
                 found.append(f"{binding.name} grants {sorted(binding.grants)} to group {group}")
         for account in binding.service_accounts:
-            sanctioned = binding.role == ("ClusterRole", "system:auth-delegator") and account == reviewer
-            if account in ours and not sanctioned:
+            if account in ours:
                 found.append(f"{binding.name} grants {sorted(binding.grants)} to SA {account}")
     return found
 
@@ -266,18 +258,17 @@ def _offending(args: tuple[str, ...]) -> list[str]:
 def test_no_first_party_service_account_can_read_a_secret_or_review_a_token(overlay: str) -> None:
     """No grant of `secrets` or `tokenreviews` reaches `default`, an every-SA group, or an SA a first-party pod runs as.
 
-    The one sanctioned grant is `system:auth-delegator` on the SA OpenBao alone runs as: ESO, a prerequisite
-    ([[XC-004]]), logs in through OpenBao's Kubernetes auth backend, and OpenBao reviews that login with its
-    OWN mounted token, so the grant and the mount must name one SA.
+    The secret store is the platform's or the dev fixture's ([[XC-149]]), so no first-party pod reviews a token: ESO, a
+    prerequisite ([[XC-004]]), logs in through the store's Kubernetes auth backend, and the dev store reviews that login
+    with its OWN mounted token, so the fixture binds `system:auth-delegator` to the SA its pod runs as.
     """
     args = _OVERLAYS[overlay]
     pods, bindings = _pods(*args), _bindings(*args)
-    store = [pod for pod in pods if pod.workload == "Deployment/rask-openbao"]
     delegated = [b.service_accounts for b in bindings if b.role == ("ClusterRole", "system:auth-delegator")]
 
     # The walk sees the chart's pods and the subcharts', and the classifier reads rendered roles; without these every
     # assertion below passes by parsing nothing.
-    assert sum(pod.first_party for pod in pods) >= 20, f"{overlay}: only {sum(p.first_party for p in pods)} first-party pod templates"
+    assert sum(pod.first_party for pod in pods) >= 15, f"{overlay}: only {sum(p.first_party for p in pods)} first-party pod templates"
     # OpenFGA is the chart's one subchart and production names the platform's ([[XC-132]]), so the overlays that run it
     # prove the split.
     if overlay != "prod":
@@ -287,12 +278,6 @@ def test_no_first_party_service_account_can_read_a_secret_or_review_a_token(over
     assert any(b.role not in _BUILTIN_GRANTS for b in bindings), f"{overlay}: no binding to a rendered role was classified"
 
     assert _offending(args) == [], f"{overlay}: {_offending(args)}"
-    if store:
-        [openbao] = store
-        assert any("tokenreviews" in b.grants for b in bindings), f"{overlay}: no binding classified as reviewing tokens; OpenBao's auth-delegator does"
-        assert delegated == [(openbao.service_account,)], f"{overlay}: auth-delegator bound to {delegated}, OpenBao runs as {openbao.service_account}"
-        assert openbao.token_mounted, f"{overlay}: OpenBao mounts no token, so it cannot review ESO's login"
-        return
     # The dev store is the openbao fixture's ([[XC-131]]): rask binds no reviewer, and the fixture binds the SA its own pod
     # runs as, with that pod's token mounted.
     assert delegated == [], f"{overlay}: rask runs no OpenBao and still binds the auth-delegator to {delegated}"

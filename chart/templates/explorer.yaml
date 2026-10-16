@@ -118,7 +118,7 @@ spec:
             - { name: ANNOTATOR_CONTROL_EMIT_ENABLED, value: "true" }
             - { name: ANNOTATOR_CONTROL_PUBSUB, value: {{ printf "%s-%s" ($root.Values.pubsub.controlName | default "catalog-control-pubsub") $svc.daprAppId | quote }} }
             {{- end }}
-            {{- if and (eq $name "annotator") (include "lance.secretsViaDapr" $root) }}
+            {{- if eq $name "annotator" }}
             # THE APP-API TOKEN, FROM THE STORE — never from env, which is the estate's rule and the
             # reason this row exists at all. The annotator guards `/api/jobs/apply` and the whole
             # `DaprActor` callback surface with `require_dapr_token`, and daprd stamps the header
@@ -197,7 +197,7 @@ spec:
             {{- if and (eq $name "viewer") $root.Values.minio.viewerAccessKey }}
             # THE FALLBACK IDENTITY, and it must not be the tenant root. A store in `RASK_STORES` that
             # names a `secret` resolves its own scoped pair from the Dapr store (`viewer-s3`, seeded by
-            # `openbao.yaml`) and never reads this; a store that names NONE deliberately falls back to
+            # `openbao-seed.yaml`) and never reads this; a store that names NONE deliberately falls back to
             # process env, which is an operator's choice the registry documents. What that fallback
             # must not be is `rustfsadmin`.
             #

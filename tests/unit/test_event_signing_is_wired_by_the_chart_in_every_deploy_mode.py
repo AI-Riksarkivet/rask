@@ -2,7 +2,7 @@
 
 [[LH-064]], [[XC-078]] (values.yaml `signing:`). Four things the chart decides, each of which fails silently if it is wrong:
 
-- A store nothing seeds (`openbao.devMode=false`, or `openbao.externalAddr`) mints no key, so every signer would stay not Ready
+- The platform's store (`openbao.enabled=false`, `openbao.externalAddr`), which nothing here seeds, mints no key, so every signer would stay not Ready
   and lineage could verify nothing. The render refuses it, naming every secret and the script that creates them, until the
   operator attests with `signing.provisioned`. Nor does it mint a NATS user ([[XC-078]], values.yaml `nats.auth`): each
   `nats-user-<user>` waits for `nats.auth.provisioned`.
@@ -33,11 +33,9 @@ from tests.unit import chart_render
 from tests.unit.chart_render import DEFAULT_ARGS
 
 
-#: A real deployment carries no published dev credential: the bundled dev Dex is off, so the refusal under test is this one.
-_REAL = ("--set", "dex.enabled=false")
-
-_SEALED = ("--set", "openbao.devMode=false", *_REAL)
-_EXTERNAL = ("--set", "openbao.enabled=false", "--set", "openbao.externalAddr=https://vault.example:8200")
+#: The platform's store makes a real deployment, which carries no published dev credential: the bundled dev Dex is off, so the
+#: refusal under test is this one.
+_PLATFORM_STORE = ("--set", "openbao.enabled=false", "--set-string", f"openbao.externalAddr={chart_render.SECRET_STORE_URL}", "--set", "dex.enabled=false")
 
 
 def _signers(docs: tuple[dict, ...]) -> list[str]:
@@ -101,20 +99,13 @@ def _identities_running(docs: tuple[dict, ...], app: str) -> list[str]:
     )
 
 
-@pytest.mark.parametrize(
-    "mode",
-    [
-        pytest.param(_SEALED, id="a-sealed-store"),
-        pytest.param(_EXTERNAL, id="an-external-store"),
-    ],
-)
-def test_a_store_nothing_seeds_is_refused_until_the_operator_attests_its_signing_keys_and_bus_users(mode: tuple[str, ...]) -> None:
+def test_a_store_nothing_seeds_is_refused_until_the_operator_attests_its_signing_keys_and_bus_users() -> None:
     default = chart_render.render(*DEFAULT_ARGS)
     identities, users = _signers(default), chart_render.nats_users(default)
     assert identities and users, "the default render has no signer or no bus user, so the refusals below would name nothing"
 
     with pytest.raises(subprocess.CalledProcessError) as refused:
-        chart_render.render(*DEFAULT_ARGS, *mode)
+        chart_render.render(*DEFAULT_ARGS, *_PLATFORM_STORE)
     message = refused.value.stderr
     # The names each signer reads its pair under (`signing_key_secret`), so the chart and the signer agree on them.
     missing = [name for identity in identities for name in (signing_public_secret(identity), signing_key_secret(identity)) if name not in message]
@@ -122,13 +113,13 @@ def test_a_store_nothing_seeds_is_refused_until_the_operator_attests_its_signing
 
     # The users a store nothing seeds must already hold; the bus's own config is the bus's, not rask's to attest.
     with pytest.raises(subprocess.CalledProcessError) as refused:
-        chart_render.render(*DEFAULT_ARGS, *mode, "--set", "signing.provisioned=true")
+        chart_render.render(*DEFAULT_ARGS, *_PLATFORM_STORE, "--set", "signing.provisioned=true")
     message = refused.value.stderr
     names = {f"nats-user-{user}" for user in users}
     assert not [name for name in names if name not in message], f"the refusal does not name {sorted(n for n in names if n not in message)}"
     assert "nats-route" not in message and "nats-server" not in message, "the refusal asks the operator to attest the bus's own config"
 
-    docs = chart_render.render(*DEFAULT_ARGS, *mode, "--set", "signing.provisioned=true", "--set", "nats.auth.provisioned=true")
+    docs = chart_render.render(*DEFAULT_ARGS, *_PLATFORM_STORE, "--set", "signing.provisioned=true", "--set", "nats.auth.provisioned=true")
     assert _signers(docs) == identities, "an attested store must still render every signer's identity"
     assert not [name for _, name, _ in chart_render.containers(docs) if name == "mint"], "only the dev store has a mint step to run"
     assert not chart_render.nats_users(docs), "the dev seed issues users for a bus or a store it does not provision"

@@ -1,6 +1,5 @@
-{{- if and .Values.openbao.enabled .Values.openbao.devMode }}
+{{- if .Values.openbao.enabled }}
 {{- $signers := include "lance.signingKeys" (list .) | splitList " " | compact }}
-{{- $mint := and (not .Values.openbao.externalAddr) $signers }}
 {{- $nats := include "lance.natsMints" . }}
 {{- $natsUsers := include "lance.natsUsers" . | splitList " " | compact }}
 {{- $natsTable := include "lance.natsTable" . | fromJson }}
@@ -15,7 +14,7 @@ data:
     set -f
     umask 077
     {{- include "lance.signingShapes" . | nindent 4 }}
-    for id in {{ if $mint }}{{ join " " $signers }}{{ end }}; do
+    for id in {{ join " " $signers }}; do
       out=$(nk -gen user -pubout 2>/dev/null) || { echo "mint: nk failed for $id"; continue; }
       s=; p=
       for w in $out; do
@@ -45,7 +44,7 @@ data:
       echo "cannot read secret/$1 behind the Service, refusing to write over it: $got" >&2
       exit 1
     }
-    {{- if or $mint $nats }}
+    {{- if or $signers $nats }}
 
     {{- include "lance.signingShapes" . | nindent 4 }}
     put_pair() {
@@ -187,7 +186,7 @@ data:
     {{- if $nats }}
     nats_bundle
     {{- end }}
-    {{- if $mint }}
+    {{- if $signers }}
     {{- range $signers }}
     put_pair {{ . }}
     {{- end }}

@@ -223,7 +223,7 @@ outnumbered `GET /api/health` three to one.
 lance-ns — grafted verbatim from lance-ns main@083b49a chart/templates/_helpers.tpl.
 
 Every one of these is referenced by a grafted lance template (services.yaml, maintenance.yaml,
-explorer.yaml, fleet.yaml, minio-buckets.yaml, openbao.yaml, openbao-seed.yaml, age-postgres.yaml,
+explorer.yaml, fleet.yaml, minio-buckets.yaml, openbao-seed.yaml, age-postgres.yaml,
 otel-collector.yaml, network-policy.yaml, ha.yaml, runners.yaml, …). None of them
 was renamed: no lance name collided with a rask name.
 
@@ -280,7 +280,7 @@ once — the argument `prod-credentials.yaml` makes for itself and which now has
 
 BOTH SIGNALS ARE FACTS THE DEPLOY ALREADY DEPENDS ON, never a flag someone must remember to arm. A
 guard reachable only by remembering an opt-in protects the installs that did not need protecting.
-`openbao.devMode=false` is the explicit prod signal; failing that, images pulled from a registry off
+`openbao.enabled=false` (the platform's secret store) is the explicit prod signal; failing that, images pulled from a registry off
 this node means the deployment is not the local loop — `make k3s-up` renders `localImages=true` for
 side-loaded images, and the three dev-registry addresses are unroutable from anywhere but the node.
 
@@ -329,10 +329,13 @@ telemetry goes after it is `observability.export`, the Collector's business alon
 Whether the apps carry the OTel SDK wiring (instrument + otelEnv + the lance-tracing Dapr config): exactly when
 `observability.enabled` deploys the Collector they export to. Non-empty string = on (helm `if` truthiness).
 
-## `{{- define "lance.openbaoServiceAccount" -}}`
+## `{{- define "lance.platformStoreAddr" -}}`
 
-The SA OpenBao runs as. ONE name for the pod and for its auth-delegator binding, so the grant
-can only land on the identity that holds the token it reviews with.
+THE PLATFORM'S STORE IS NAMED, AND OVER TLS ([[XC-149]]). The chart renders no secret store, so with
+`openbao.enabled` off the address is required: a render that names no store would leave every
+`secretKeyRef` resolving against Kubernetes Secrets the chart never declares (dapr-statestore.yaml).
+An http address is refused because every sidecar presents the store's token to it, in the clear
+otherwise; the dev store alone is http, inside the namespace.
 
 ## `{{- define "lance.vaultAddrFQDN" -}}`
 
@@ -374,15 +377,11 @@ A PUBLISH-ONLY pub/sub Component (list $root $name $appId): one app's connection
 
 ## `{{- define "lance.mintsDevCredentials" -}}`
 
-Whether the chart generates the dev OpenBao's credentials (external-secrets.yaml): only for a dev store this chart runs.
+Whether the chart generates the dev OpenBao's credentials (external-secrets.yaml): only for the dev store (`openbao.enabled`), which the openbao fixture runs and this chart seeds.
 
 ## `{{- define "lance.natsMints" -}}`
 
-Whether the chart's dev OpenBao issues the NATS credentials: a dev store this chart runs is the issuer of the dev bus (deploy/fixtures/nats).
-
-## `{{- define "lance.natsCredsFiles" -}}`
-
-Whether a pod with no sidecar gets its NATS credential as a file ESO writes from the store.
+Whether the dev OpenBao issues the NATS credentials: the dev store this chart seeds is the issuer of the dev bus (deploy/fixtures/nats).
 
 ## `{{- define "lance.natsFiles" -}}`
 
@@ -419,13 +418,6 @@ BLOCKED by the OTel Collector — a single Deployment whose filelog receiver inh
 PSA exemption in the API-server admission config. So: this hardens what the chart owns; full-namespace
 enforce stays parked-by-design (docs/KIND-RUNBOOK §6.4). Live-provable in isolation: flip this + the
 injector value, re-roll, and the daprd container carries drop:[ALL] + RuntimeDefault.
-
-## `{{- define "lance.secretsViaDapr" -}}`
-
-Do the app services consume secrets via Dapr (the secret store), vs plaintext env? True when there is
-ANY Vault to read from — the in-cluster OpenBao OR an external Vault address. This decouples "use the secret
-store" from "render the in-cluster OpenBao server", so openbao.enabled=false + externalAddr consumes from
-the external Vault WITHOUT falling back to plaintext secrets in pod env (the closed leak).
 
 ## `{{- define "lance.otelEnv" -}}`
 

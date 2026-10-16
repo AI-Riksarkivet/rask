@@ -300,7 +300,7 @@ spec:
             - { name: LANCE_AUDIT_ENABLED, value: {{ hasKey .Values.auth "audit" | ternary .Values.auth.audit true | quote }} }
             {{- include "lance.saVerifier" (list $root "env" "lineage") | nindent 12 }}
 
-            {{- if and (.Values.signing).enforce (include "lance.secretsViaDapr" .) }}
+            {{- if (.Values.signing).enforce }}
             {{- $signers := include "lance.signingIdentities" . | splitList " " | compact }}
             {{- if not $signers }}{{ fail "signing.enforce=true but no identity signs: lineage would verify nothing" }}{{- end }}
             - { name: LINEAGE_SIGNERS, value: {{ $signers | toJson | quote }} }

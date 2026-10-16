@@ -12,32 +12,23 @@ so `dapr.enabled=false` renders no Component a cluster without Dapr could not ac
 
 ## `secretKeyRef:`
 
-WITH NO DAPR SECRET STORE THIS RESOLVES AGAINST KUBERNETES SECRETS, and the chart declares
-no `lance` Secret — so an install with `openbao.enabled=false` and no external address must
-supply one itself. Nothing warns: daprd exits `Fatal error from runtime: failed to load
-components: Secret "lance" not found`, which kills the SIDECAR, so every app in the release
-fails its health check for a reason naming neither this component nor the flag behind it.
-Measured 2026-09-24 on `e2e-ray`, which set `openbao.enabled=false` and supplied nothing:
-medallion-producer and bronze-to-silver both died that way seven minutes into a deploy, and
-the visible symptom was `TimeoutError: Dapr health check timed out`. The stack scripts now
-keep the store on, and `tests/unit/test_a_dapr_component_names_a_secret_something_can_
-resolve.py` holds every overlay they deploy to that rule.
+WITH NO DAPR SECRET STORE THIS WOULD RESOLVE AGAINST KUBERNETES SECRETS, and the chart declares
+no `lance` Secret: daprd exits `Fatal error from runtime: failed to load components: Secret "lance"
+not found`, which kills the SIDECAR, so every app in the release fails its health check for a
+reason naming neither this component nor the flag behind it. Measured 2026-09-24 on `e2e-ray`,
+an overlay that named no store: medallion-producer and bronze-to-silver both died that way seven
+minutes into a deploy, and the visible symptom was `TimeoutError: Dapr health check timed out`.
+So every render names a store, the dev OpenBao (`openbao.enabled`) or the platform's
+(`openbao.externalAddr`, which `lance.platformStoreAddr` requires otherwise), and
+`tests/unit/test_a_dapr_component_names_a_secret_something_can_resolve.py` holds every overlay the
+stack scripts deploy to that rule.
 
-## `{{- if include "lance.secretsViaDapr" . }}`
+## `auth:`
 
-THE WHOLE BLOCK IS CONDITIONAL, not just its one child. `lance-secrets` is gated on
-lance.secretsViaDapr (openbao.enabled or an external addr), so naming it unconditionally
-pointed the state store at a component that need not exist — daprd then logs 'references a
-secret store that isn't loaded', the state store silently does not load, and actor hosting
-goes with it. Without a secret store Dapr falls back to Kubernetes Secrets, which is the
-honest behaviour for an install that has no OpenBao.
-
-Emitting the `auth:` key with its only child behind the guard renders YAML null, which the
-Component CRD refuses outright:
-  Component.dapr.io "lance-statestore" is invalid:
-  auth: Invalid value: "null": auth in body must be of type object: "null"
-Measured 2026-09-24 on `e2e-ray`, whose overlay sets `openbao.enabled=false` — so the apply
-failed on the state store that hosts every actor, and the stack never came up.
+UNCONDITIONAL, like the `lance-secrets` component it names: every render names a store, so the state
+store never names a component the render does not hold. Naming one that is absent makes daprd log
+'references a secret store that isn't loaded', the state store silently does not load, and actor
+hosting goes with it.
 
 ## `{{- $scopes := .Values.stateStore.scopes | default list }}`
 

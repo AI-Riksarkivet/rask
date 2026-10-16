@@ -5,12 +5,12 @@ every release revision, under a 1 MiB ceiling. Each section is headed by the tem
 
 ## `{{- $signers := include "lance.signingIdentities" . | splitList " " | compact }}`
 
-THE DEVELOPMENT STORE'S SEED, and only its seed. With `openbao.devMode` the server is the
+THE DEVELOPMENT STORE'S SEED, and only its seed. With `openbao.enabled` the server is the
 `deploy/fixtures/openbao` release (`server -dev`: in memory, auto-unsealed, fixed root token, DEMO ONLY), and
 rask renders the two scripts it runs as one ConfigMap, `<release>-openbao-seed`, which the fixture names as
 `seedScripts`. The fixture pod runs `mint.sh` as an init container and `seed.sh` beside the server. What
-the seed writes is rask's to decide, because it is the list of rask's own secrets (`openbao.yaml` names the
-fields a production store must hold); how the dev server runs is the fixture's.
+the seed writes is rask's to decide, because it is the list of rask's own secrets (docs/architecture/deployment.md
+lists the fields the platform's store must hold); how the dev server runs is the fixture's ([[XC-149]]).
 
 The fixture mounts the scripts and both credential Secrets at 0444, not 0400 + an fsGroup: the seed (uid
 65532) reads them, and an fsGroup would also make the pod's SA token 0640 root:<fsGroup>, which the server

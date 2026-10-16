@@ -9,10 +9,11 @@ release, before rask's (`make k3s-up`).
 
 ## Prerequisites: the External Secrets Operator and a secret store
 
-The chart takes **no credential as a value** ([[XC-004]]). Every secret lives in a store (the chart's dev
-OpenBao, or the platform's OpenBao/Vault via `openbao.externalAddr`) and reaches a pod from it: through the
-Dapr secret store for a pod with a sidecar, and through an ExternalSecret for one without. So the
-**External Secrets Operator is a prerequisite**, platform-run like the store, and rask never installs it.
+The chart takes **no credential as a value** ([[XC-004]]). Every secret lives in a store (the platform's
+Vault or OpenBao in production, the dev OpenBao fixture in development; the next section) and reaches a pod
+from it: through the Dapr secret store for a pod with a sidecar, and through an ExternalSecret for one
+without. So the **External Secrets Operator is a prerequisite**, platform-run like the store, and rask never
+installs it.
 Install it on its own release first, at the version `deploy/fixtures/external-secrets/fixture.env` names (the one
 rask is tested against; that fixture is also the development install `make k3s-up` runs).
 
@@ -20,6 +21,44 @@ Without it, `helm upgrade` and `make k3s-up` fail at render time with a message 
 cluster-less `helm template` states the API it targets: `--api-versions external-secrets.io/v1/ExternalSecret`
 (plus `--api-versions generators.external-secrets.io/v1alpha1/Password` for the dev OpenBao, whose
 credentials ESO's Password generator creates in-cluster). A credential passed as a value is refused.
+
+## Prerequisite in production: the secret store
+
+The chart renders no secret store ([[XC-149]], ADR 0153). `deploy/values-prod.yaml` sets `openbao.enabled: false`,
+and the deployer names the platform's Vault or OpenBao as `openbao.externalAddr`, over https: every sidecar sends the
+store's token to it, so the render refuses an http address. Its certificate must chain to a CA the sidecars and ESO
+trust by default; the chart names no CA bundle. Under the production NetworkPolicy, `openbao.egress` states the
+store's addresses, and the rule admits only the pods whose sidecar reads it (the apps `lance.secretScopes` lists).
+The render refuses either one empty.
+
+Two readers name it. The Dapr secret store `lance-secrets` (`secretstores.hashicorp.vault`, KV v2 under `secret`)
+presents the token in the `<release>-openbao-token` Secret, which nothing in the chart creates; replacing that one
+shared static token is [[XC-079]]. ESO's SecretStore `<release>-vault` logs in through the store's Kubernetes auth
+backend at `externalSecrets.kubernetesAuthPath`, as the role `externalSecrets.role` bound to ESO's ServiceAccount,
+whose policy reads the paths the chart's ExternalSecrets name.
+
+THE FIELDS `secret/lance` MUST HOLD. Nothing seeds the platform's store and no credential is a chart value, so an
+unprovisioned field is a fail-closed outage at first use, not a fallback: minio-access-key, minio-secret-key,
+postgres-password, publisher-oidc-password, publisher-oidc-client-secret (the IdP client secret),
+dapr-state-connection-string, dapr-app-token (the app-API token: ESO writes it into the `dapr-app-token` Secret daprd
+stamps the header from, and the doors compare against this field), frontend-session-secret (the zones' cookie sealing
+key), ray-auth-token, and `<plane>-s3-secret-key` for each scoped identity named in values.yaml `minio`
+(sha256("<identity>-s3-<minio-secret-key>")[:40], `lance.scopedSecretFn`, which `minio-scoped-users` derives too).
+With `secrets.hfTokenInStore`, `hf-token` (field `token`). Beside the bundle, for every identity in
+`lance.signingIdentities`, two secrets: `signing-public-<identity>` (field `keys`) and then `signing-key-<identity>`
+(field `seed`), described in values.yaml `signing:`; the render refuses the platform's store until its operator
+created them and `signing.provisioned` says so. Likewise `nats-user-<user>` per values.yaml `nats.auth` user, and
+`nats-route` (and `nats-server`, in operator mode), attested by `nats.auth.provisioned`. With the in-chart Collector,
+`otel-collector-export` (fields username, password), the credential the audit store admits. The dev seed
+(`chart/templates/openbao-seed.yaml`) writes the same list into the dev store; keep the two in step.
+
+SEVERAL CONSUMERS, ONE KEY (2026-08-09). `publisher-oidc-client-secret` serves the annotator's publish client
+(`explorer.yaml`), the zones' OIDC client (the frontend-session ExternalSecret in `external-secrets.yaml`) AND, with
+`minio.oidc.enabled`, the object store's STS AssumeRoleWithWebIdentity config: there is one IdP client
+(`auth.oidc.clientId`), so there is one secret. The object store reaches it by a different ROUTE, not a different key:
+it has no daprd sidecar, so it cannot read the Dapr secret store, and it consumes the value as a `secretKeyRef` into
+the infra-credentials Secret (ESO syncs that key FROM this one). Do NOT seed a second `dex-client-secret` field to tidy
+the naming: a rotation that updates one copy and not the other breaks STS-assume on a path nothing tests.
 
 ## Prerequisite: the Dapr control plane
 
@@ -83,7 +122,7 @@ and `deploy/values-prod.yaml` turns both off (`openfga.enabled: false`, `age.ena
   `dapr-state-connection-string` (`postgres://<age.user>:<password>@<age.externalHost>:<age.port>/<age.stateDb>`),
   which the platform writes beside it. No chart value carries either.
 
-The render refuses either one when it is empty and its part is off. Under the production NetworkPolicy (default-deny egress), each endpoint needs a `networkPolicy.extraEgress` entry, as an external NATS does; the OTLP backend and its query API take theirs in `observability.export.egress` and `observability.query.egress`, the API server its endpoints in `networkPolicy.apiServerEgress`, and an external OpenFGA its addresses in `auth.fgaEgress`, each admitting only the pods that dial it. Every such rule names its `to` peers: the render refuses one that admits every destination. OpenFGA's own datastore, availability and
+The render refuses either one when it is empty and its part is off. Under the production NetworkPolicy (default-deny egress), each endpoint needs a `networkPolicy.extraEgress` entry, as an external NATS does; the OTLP backend and its query API take theirs in `observability.export.egress` and `observability.query.egress`, the API server its endpoints in `networkPolicy.apiServerEgress`, an external OpenFGA its addresses in `auth.fgaEgress`, and the platform's secret store its addresses in `openbao.egress`, each admitting only the pods that dial it. Every such rule names its `to` peers: the render refuses one that admits every destination. OpenFGA's own datastore, availability and
 backups belong to the platform, so production runs no `pg_dump` CronJob.
 
 ## Development stand-ins
@@ -101,10 +140,10 @@ Development runs stand-ins from `deploy/fixtures` (ADR 0153), and the chart rend
   credential (`rask-infra-credentials`, through ESO), and rask's hooks provision its buckets and scoped users. Its
   server starts once rask is installed, so the fixture install does not wait for it.
 - **OpenBao in dev mode** (`deploy/fixtures/openbao`, release `openbao`, Deployment and Service `rask-openbao`): the
-  in-memory secret store. `openbao.enabled` with `devMode` says the estate uses it, and what goes into it stays rask's:
-  the chart renders the seed scripts into `<release>-openbao-seed` (the dev credentials, every signing identity's
-  Ed25519 pair, the bus trust root and users, ESO's policy), and the fixture's pod runs them beside the server. Without
-  `devMode` the chart renders the sealed, file-backed server itself.
+  in-memory secret store. `openbao.enabled` says the estate uses it, and a real deployment's render refuses it. What
+  goes into it stays rask's: the chart renders the seed scripts into `<release>-openbao-seed` (the dev credentials,
+  every signing identity's Ed25519 pair, the bus trust root and users, ESO's policy), and the fixture's pod runs them
+  beside the server.
 - **Marquez** (`deploy/fixtures/marquez`, release `marquez`, Service `rask-marquez:5000`): the graph backend, with its
   own Postgres. The lineage graph is bring-your-own (ADR 0158), and `deploy/values-local.yaml` points lineage's
   forwarder (`services.lineage.forward.url`) at it, as a platform would point it at its own Marquez, DataHub or

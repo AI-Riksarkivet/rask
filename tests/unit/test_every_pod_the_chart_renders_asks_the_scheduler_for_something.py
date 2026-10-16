@@ -33,7 +33,7 @@ import pytest
 import yaml
 from chart_yaml import FAST_LOADER
 
-from tests.unit.chart_render import PREREQ_ARGS, RAY_ARGS
+from tests.unit.chart_render import PREREQ_ARGS, PROD_ARGS, RAY_ARGS
 
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
@@ -43,20 +43,6 @@ _OIDC_ARGS = [
     *RAY_ARGS,
     "--set-string", "auth.oidc.issuer=https://auth.example.com/dex",
     "--set-string", "frontend.oidc.publicOrigin=https://lance.example.com",
-]  # fmt: skip
-
-#: The fail-closed prod guards' dummy inputs, same set `scripts/prod_render_check.sh` uses.
-_PROD_ARGS = [
-    "--set", "image.catalog.tag=v0",
-    "--set", "frontend.image.tag=v0",
-    "--set", "signing.provisioned=true",
-    "--set", "nats.auth.provisioned=true",
-    "--set-string", "observability.export.endpoint=http://otlp.example.com:4318/v1/otlp",
-    "--set-string", "auth.fgaApiUrl=https://fga.example.com",
-    "--set-string", "age.externalHost=pg.example.com",
-    "--set", "backups.volumeSnapshot.snapshotClassName=csi-snapclass",
-    "--set", "ingress.host=lance.example.com",
-    "--set", "image.repository=ghcr.io/example/rask",
 ]  # fmt: skip
 
 _DEFAULT_ARGS = ["--set", "image.localImages=true", "--set", "minio.enabled=true"]
@@ -109,7 +95,7 @@ def _unbounded(docs: list[dict]) -> list[str]:
 
 _OVERLAYS = {
     "default": _DEFAULT_ARGS,
-    "prod": ["-f", str(REPO / "deploy/values-prod.yaml"), *_PROD_ARGS],
+    "prod": [*PROD_ARGS],
 }
 
 

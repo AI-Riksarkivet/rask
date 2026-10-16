@@ -38,6 +38,11 @@ NATS_URL = "nats://bus.example.com:4222"
 #: other peer a render holds can be mistaken for it.
 API_SERVER_CIDR = "192.0.2.10/32"
 
+#: The platform's secret store a production render names ([[XC-149]]), and its address as the platform states it to the
+#: NetworkPolicy: a documentation range no other peer shares.
+SECRET_STORE_URL = "https://vault.example.com:8200"
+SECRET_STORE_CIDR = "198.51.100.20/32"
+
 #: The prerequisites a render names: the APIs the chart checks through `.Capabilities`, the External Secrets Operator
 #: ([[XC-004]]) and Dapr ([[XC-128]]), the NATS bus's address ([[XC-129]]), and the platform's Gateway the routes attach
 #: to, its in-cluster address and the egress that reaches it (ADR 0165). Under `networkPolicy.enabled` the egress to
@@ -94,6 +99,8 @@ PROD_ARGS: tuple[str, ...] = (
     "--set-string", "observability.export.endpoint=http://otlp.example.com:4318/v1/otlp",
     "--set-string", "auth.fgaApiUrl=https://fga.example.com",
     "--set-string", "age.externalHost=pg.example.com",
+    "--set-string", f"openbao.externalAddr={SECRET_STORE_URL}",
+    "--set-json", f'openbao.egress=[{{"to":[{{"ipBlock":{{"cidr":"{SECRET_STORE_CIDR}"}}}}],"ports":[{{"protocol":"TCP","port":8200}}]}}]',
     "--set", "backups.volumeSnapshot.snapshotClassName=csi-snapclass",
     "--set", "ingress.host=lance.example.com",
     "--set", "image.repository=ghcr.io/example/rask",
@@ -180,6 +187,18 @@ def env_of(container: dict) -> dict[str, str]:
     """The container's `name: value` env pairs. `valueFrom` entries are omitted deliberately — a gate
     reading a rendered literal cannot see what a secret reference resolves to at run time."""
     return {e["name"]: e["value"] for e in container.get("env") or [] if "value" in e}
+
+
+def selects(selector: dict, labels: dict[str, str]) -> bool:
+    """Whether a label selector (`matchLabels`, `matchExpressions`) matches a pod's labels, as the API server reads it."""
+    if any(labels.get(key) != value for key, value in (selector.get("matchLabels") or {}).items()):
+        return False
+    for expression in selector.get("matchExpressions") or []:
+        key, operator, values = expression["key"], expression["operator"], expression.get("values") or []
+        held = {"In": key in labels and labels[key] in values, "NotIn": labels.get(key) not in values, "Exists": key in labels}
+        if not held.get(operator, key not in labels):
+            return False
+    return True
 
 
 #: One NATS user as the dev OpenBao's seed issues it: `nats_user <name> '<publish,...>' '<subscribe,...>'`.

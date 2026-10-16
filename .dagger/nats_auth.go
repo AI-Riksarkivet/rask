@@ -7,8 +7,8 @@ import (
 	"dagger/rask/internal/dagger"
 )
 
-// natsBoxImage is the nats-box the estate deploys: the NATS fixture's operator box, and `signing.mintImage`, whose
-// nsc the dev mint runs. The lane mints its test keys with this image's nsc, so they come from the same tool.
+// natsBoxImage is the nats-box the estate deploys: the NATS fixture's operator box, and the openbao fixture's `mintImage`,
+// whose nsc the dev mint runs. The lane mints its test keys with this image's nsc, so they come from the same tool.
 const natsBoxImage = "natsio/nats-box:0.19.7"
 
 // natsStreamJobImage is the image chart/templates/nats-stream-job.yaml runs the stream Job in. The lane runs that

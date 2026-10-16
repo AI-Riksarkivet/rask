@@ -336,6 +336,6 @@ ran on its field default (§ Q17-27). hasKey+ternary for the reason recorded at 
 catalog's copy: `| default` makes an explicit false un-settable, and a bare reference
 renders "" on a `--reuse-values` upgrade, which is a bool_parsing crash at boot.
 
-## `{{- if and (.Values.signing).enforce (include "lance.secretsViaDapr" .) }}`
+## `{{- if (.Values.signing).enforce }}`
 
 ENFORCEMENT (values.yaml `signing:`): both sets or neither, and never an empty signer list.

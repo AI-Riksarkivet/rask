@@ -49,8 +49,8 @@ spec:
     # store "wired but never read", with services taking secrets from plaintext pod env, which made the
     # integration decorative. Putting a password-bearing DSN into a k8s Secret would reintroduce exactly
     # that. The DSN is stored assembled because a Dapr metadata `secretKeyRef` substitutes the WHOLE
-    # value — there is no way to splice in just the password — so the seed writes it whole to
-    # secret/lance (openbao.yaml), beside postgres-password.
+    # value — there is no way to splice in just the password — so the store holds it whole at
+    # secret/lance (the dev seed, openbao-seed.yaml, writes it), beside postgres-password.
     - name: connectionString
       secretKeyRef:
         name: lance # the secret at secret/data/lance; vaultKVUsePrefix=false drops Dapr's "dapr/" prefix
@@ -61,12 +61,9 @@ spec:
     # (a cache, say) from colliding in the same database if one is ever pointed here.
     - { name: tableName, value: {{ .Values.stateStore.tableName | quote }} }
     - { name: metadataTableName, value: {{ .Values.stateStore.metadataTableName | quote }} }
-
-{{- if include "lance.secretsViaDapr" . }}
 auth:
   # Which component resolves the secretKeyRef above. Without this Dapr looks in Kubernetes Secrets.
   secretStore: {{ .Values.stateStore.secretStore }}
-{{- end }}
 
 {{- $scopes := .Values.stateStore.scopes | default list }}
 

@@ -289,7 +289,7 @@
                             "type": "array"
                         },
                         "devSeed": {
-                            "description": "Local fixture: create each referenced base's bucket, scoped MinIO user and dev-OpenBao secret. Refused on a real deployment, without MinIO or without the dev OpenBao.",
+                            "description": "Local fixture: create each referenced base's bucket, scoped MinIO user and dev-store secret. Refused on a real deployment, without MinIO or without the development store.",
                             "type": "boolean"
                         }
                     }
@@ -1135,7 +1135,7 @@
                             }
                         },
                         "provisioned": {
-                            "description": "Attests the platform store holds every `nats-user-\u003cuser\u003e`; required when the store is not the chart's dev OpenBao.",
+                            "description": "Attests the platform's store holds every `nats-user-\u003cuser\u003e`; required when the store is the platform's (`openbao.enabled` false).",
                             "type": "boolean"
                         },
                         "users": {
@@ -1282,7 +1282,7 @@
                     "type": "array"
                 },
                 "openbaoExtraFrom": {
-                    "description": "List of extra NetworkPolicy `from` peers allowed to reach OpenBao (e.g. the external-secrets namespace).",
+                    "description": "List of extra NetworkPolicy `from` peers allowed to reach the development store (`openbao.enabled`; e.g. the external-secrets namespace).",
                     "type": "array"
                 }
             }
@@ -1373,33 +1373,25 @@
         "openbao": {
             "type": "object",
             "properties": {
-                "devMode": {
-                    "description": "The development store: in-memory, auto-unsealed with a fixed root token (demo only), run by the openbao fixture. False renders a sealed file-backed server an operator must init and unseal.",
-                    "type": "boolean"
-                },
                 "devToken": {
-                    "description": "Root token of the development store (the openbao fixture's `devToken`), which the Dapr secret store presents when `devMode` is true.",
+                    "description": "Root token of the development store (the openbao fixture's `devToken`), which the Dapr secret store presents.",
                     "type": "string"
                 },
+                "egress": {
+                    "description": "NetworkPolicy egress rules ({to, ports}) admitting the store's readers to the platform's store. Required under networkPolicy.enabled when `enabled` is false.",
+                    "type": "array"
+                },
                 "enabled": {
-                    "description": "An in-cluster OpenBao at `\u003crelease\u003e-openbao`: with `devMode` the development store (deploy/fixtures/openbao), whose seed runs the scripts this chart renders (`\u003crelease\u003e-openbao-seed`); without it the sealed server this chart renders.",
+                    "description": "This estate uses the development store (deploy/fixtures/openbao, Service `\u003crelease\u003e-openbao`): in memory, auto-unsealed, a fixed root token, seeded by the scripts this chart renders (`\u003crelease\u003e-openbao-seed`). A real deployment refuses it. False reads the platform's store at `externalAddr`.",
                     "type": "boolean"
                 },
                 "externalAddr": {
-                    "description": "Address of an external Vault/OpenBao the secret stores point at instead of the in-cluster server; pair with `openbao.enabled=false`.",
-                    "type": "string"
-                },
-                "image": {
-                    "description": "OpenBao container image; also used by the MinIO scoped-users hook.",
+                    "description": "The platform's Vault or OpenBao (https), which the Dapr secret store and ESO's SecretStore read when `enabled` is false; required then, and refused beside `enabled`.",
                     "type": "string"
                 },
                 "port": {
-                    "description": "Port of the OpenBao Service.",
+                    "description": "Port of the development store's Service.",
                     "type": "integer"
-                },
-                "storage": {
-                    "description": "PVC size of the file backend when `devMode` is false.",
-                    "type": "string"
                 }
             }
         },
@@ -1955,20 +1947,8 @@
                             }
                         },
                         "enabled": {
-                            "description": "Applies pinned runAsUser/fsGroup securityContexts to the infra pods (AGE, OpenBao). Off by default.",
+                            "description": "Applies pinned runAsUser/fsGroup securityContexts to the infra pods (the AGE Postgres). Off by default.",
                             "type": "boolean"
-                        },
-                        "openbao": {
-                            "description": "uid/fsGroup for the OpenBao pod (image uid 100).",
-                            "type": "object",
-                            "properties": {
-                                "fsGroup": {
-                                    "type": "integer"
-                                },
-                                "runAsUser": {
-                                    "type": "integer"
-                                }
-                            }
                         }
                     }
                 },
@@ -2220,12 +2200,8 @@
                     "description": "Lineage refuses unsigned or non-verifying events when the secret store and auth are also on. False renders no signer sets and lineage verifies nothing.",
                     "type": "boolean"
                 },
-                "mintImage": {
-                    "description": "Image of the dev OpenBao's `mint` init container that generates each identity's NKEY pair.",
-                    "type": "string"
-                },
                 "provisioned": {
-                    "description": "Attest that signing keys exist for every identity in a non-dev store; the render fails until it is true there.",
+                    "description": "Attest that signing keys exist for every identity in the platform's store; the render fails until it is true there.",
                     "type": "boolean"
                 }
             }

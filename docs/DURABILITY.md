@@ -23,7 +23,7 @@ no-op for data.
 | **Object store (S3)** | the **lakehouse** (Lance datasets), lineage's provenance tables (the commit feed and edge list, in the catalog's `provenance` namespace), the lineage outbox, trash and the registries | the MinIO fixture's PVCs in development; the platform's S3 in production | the permanent data asset — lives for months/years |
 | **Apache AGE / Postgres** | OpenFGA's authz store + the Dapr state store (notifications' inbox read state) | PVC (`volumeClaimTemplates`) | grows with history; permanent |
 | **NATS JetStream** | the catalog→lineage event buffer | PVC (`fileStore`) | transient (replay window); survives restart so no event is lost across a roll |
-| **OpenBao** | secrets | PVC (prod path, `openbao.devMode=false`) | permanent; in prod usually **external** (see tier 3) |
+| **Secret store** | secrets | none in the chart ([[XC-149]]): the platform's Vault or OpenBao in production (tier 3); the dev OpenBao fixture is in memory and its seed writes it again | permanent, the platform's |
 
 #### Object-store commit safety (conditional writes / CAS) — VALIDATED ✅
 
@@ -54,7 +54,7 @@ the apps at the external endpoint:
 |---------|----------------------|-----|
 | **S3 lakehouse** | the permanent system of record; you want a managed, replicated, lifecycle-policied object store (AWS S3 / a MinIO cluster) | `minio.enabled=false` + `minio.externalEndpoint=…` → catalog/lineage/maintenance + vending connect there |
 | **Postgres (AGE)** | a managed DB (RDS/Cloud SQL/CNPG) for backups, HA, PITR | `age.enabled=false` + `age.externalHost=…` (+ matching user/password/dbs) → the OpenFGA datastore Secret and the Dapr state store point there (also override the openfga subchart's `datastore.uri`) |
-| **OpenBao / secrets — app tier** | a hardened external Vault / cloud KMS | `openbao.enabled=false` + `openbao.externalAddr=…` → the apps consume from the external Vault via their Dapr sidecar (`secretsViaDapr` keys off `externalAddr`, so there is **no** plaintext-env fallback) and the in-cluster OpenBao is not rendered |
+| **OpenBao / secrets — app tier** | a hardened external Vault / cloud KMS | `openbao.enabled=false` + `openbao.externalAddr=…` → the apps consume from the external Vault via their Dapr sidecar (`secretsViaDapr` keys off `externalAddr`, so there is **no** plaintext-env fallback); the chart renders no store in any mode, and `openbao.egress` admits only the store's readers to it |
 | **infra-tier Secret** | the `infra-credentials` + `observability-s3` Secrets (AGE and object-store root creds; GreptimeDB's S3 **secret** key) should come from Vault, not chart values | `externalSecrets.enabled=true` → the external-secrets.io operator syncs `<release>-infra-credentials` **and** `<release>-observability-s3` from Vault (both static Secrets are skipped); the openfga DSN is assembled from the fetched password. The non-sensitive S3 access-key *id* is still templated (it ships in app env regardless) |
 | **Observability** (OTel Collector → the platform's store) | you don't want observability to die with the cluster it observes — run the store on a separate platform/cluster | rask ships only the **OTel Collector** (`observability.enabled`), its telemetry seam: apps export OTLP to it, it tails infra logs (`filelog`, retires Vector) and scrapes the Dapr sidecars (`prometheus`+k8s SD), and exports all three signals to **`observability.export.endpoint`**, the platform's backend (ADR 0153; development: the `observability` fixture's GreptimeDB). The store, dashboards and alerting are the platform's; the alert rules are `deploy/alerting/rules.yml`. `filelog` checkpoints its read offsets (`file_storage` extension) so a Collector container restart resumes without a log gap — Vector `data_dir` parity |
 
@@ -91,8 +91,8 @@ So: a long-lived lakehouse with provenance, and a version-expiry lifecycle that 
   in-cluster pg-backup CronJob (`backup-pg.yaml`) dumps `openfga` + `daprstate` gzipped to
   `_backups/pg/<UTC>/` on the object store and prunes all but the newest `backups.pgDump.keep` dumps (default 7;
   0 disables).
-- **OpenBao** — the file-backend PVC snapshot, or (prod) the external Vault's own backup; secrets are also
-  re-derivable from the source of truth the operator populates from.
+- **The secret store** — the platform's own backup; secrets are also re-derivable from the source of truth the
+  operator populates from. The dev OpenBao fixture holds nothing its seed cannot write again.
 - **NATS** — transient; no backup needed (lineage's insert-only merges mean a replayed event lands no second
   row).
 
@@ -101,13 +101,11 @@ So: a long-lived lakehouse with provenance, and a version-expiry lifecycle that 
 - **Backup fate-sharing**: the pg_dump lands on the same object store, so a total store loss loses both the Lance data
   *and* the DB dumps. Ship the dumps off-cluster (a second object store / off-site), or externalize
   Postgres to CloudNativePG and use its PITR.
-- **OpenBao PVC**: no automated backup path is shipped — snapshot it yourself and back up the unseal
-  material out-of-band.
 - **RPO/RTO are undocumented**, and nothing verifies the lakehouse `VolumeSnapshot` actually succeeds (the
   empty `snapshotClassName` is a per-cluster value) — confirm both on your cluster before trusting the
   snapshot leg.
 
 ## Prod profile
-`deploy/values-prod.yaml` is a starting overlay — it flips the safe-by-default-off prod switches (sealed
-OpenBao, governance on, Dapr dashboard off, the cluster route on the platform's Gateway) and turns the in-cluster OpenFGA and Postgres off in favour of
+`deploy/values-prod.yaml` is a starting overlay — it flips the safe-by-default-off prod switches (the
+platform's secret store, governance on, Dapr dashboard off, the cluster route on the platform's Gateway) and turns the in-cluster OpenFGA and Postgres off in favour of
 the platform's (`openfga.enabled: false`, `age.enabled: false`). Apply with `helm upgrade … -f chart/values.yaml -f deploy/values-prod.yaml`.

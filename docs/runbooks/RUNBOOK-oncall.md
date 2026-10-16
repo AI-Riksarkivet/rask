@@ -14,8 +14,8 @@ these are found by watching the Perses dashboards (`make dashboards`) or a user 
   `notifications`, `flows`, and the zones (`web-<zone>`); public `/api/*` reaches them through the platform's Gateway on the chart's HTTPRoutes. The lakehouse runs no stage and no pipeline: moving data
   between tiers is the user's job on their own compute ([ADR 0155](../adr/0155-the-medallion-is-tier-governance-in-the-catalog.md)).
 - **Stores**: `age-postgres` (OpenFGA's datastore **AND** the Dapr state store — one pod, dual-purpose),
-  the object store (MinIO in development: every Lance table, lineage's provenance tables included, and the registries), `openfga` (authz), `openbao` (secrets,
-  prod = sealed file backend), `greptimedb` (metrics), `dex` (OIDC).
+  the object store (MinIO in development: every Lance table, lineage's provenance tables included, and the registries), `openfga` (authz), the secret store (the openbao
+  fixture in development; the platform's Vault or OpenBao in production), `greptimedb` (metrics), `dex` (OIDC).
 - **Signals**: Perses panels (`make dashboards`), `kubectl logs`, and the domain metrics —
   `lineage_events_processed_total{lance_lineage_outcome}` (incl. `DEAD_LETTERED`),
   `outbox_depth` / `outbox_oldest_age_seconds`.
@@ -27,7 +27,7 @@ these are found by watching the Perses dashboards (`make dashboards`) or a user 
 | Symptom | Jump to |
 |---|---|
 | Everything returns 503 / auth failures across the board | [OpenFGA down](#openfga-down--503-everywhere) |
-| App pods stuck `0/1` "waiting for application startup" after a restart/drain | [OpenBao sealed](#openbao-sealed-on-restart--boot-deadlock) |
+| App pods stuck `0/1` "waiting for application startup" after a restart/drain | [The secret store sealed](#the-secret-store-sealed--boot-deadlock) |
 | A pod `CrashLoopBackOff` shortly after boot | [Slow boot / startupProbe](#crashloop-on-boot) |
 | lineage `/readyz` = 503 `{"catalog":"unavailable"}`, pod `NotReady` | [Lineage not ready](#lineage-not-ready--catalog-unreachable) |
 | `dapr_dead_letter_parked` ERROR logs | [DLQ parking](#dlq-parking--a-delivery-gave-up) |
@@ -54,21 +54,21 @@ up — OpenFGA stores tuples in the `rask-age` Postgres, beside the Dapr state s
 **Act.** Wait for reschedule / scale it back up; if the datastore is the real cause, see
 [AGE down](#age-postgres-down--fga--dapr-state). Never "fix" a fail-closed 503 by disabling auth in prod.
 
-## OpenBao sealed-on-restart → boot deadlock
+## The secret store sealed → boot deadlock
 
 **Symptom.** After a node drain / pod restart, app pods hang `0/1` at "waiting for application startup"; the
 startupProbe eventually restarts them, looping.
 
-**Cause.** Prod OpenBao (`devMode=false`) is a **sealed** file backend. Apps consume secrets fail-closed via
-Dapr **at startup** (the ~80s secret fetch), so while OpenBao is sealed every app pod blocks on boot — the
-documented two-sided deadlock. There is no auto-unseal yet (ESO / bank-vaults is the destination —
-ASSESSMENT gap #5).
+**Cause.** The platform's store (`openbao.externalAddr`) is sealed or unreachable. Apps consume secrets fail-closed
+via Dapr **at startup** (the ~80s secret fetch), so while the store is sealed every app pod blocks on boot — the
+documented two-sided deadlock. Unsealing it, and auto-unseal, are the platform's ([[XC-149]]); the dev OpenBao
+fixture is in memory and never sealed.
 
-**Diagnose.** `kubectl exec <openbao-pod> -- bao status` → `Sealed: true`.
+**Diagnose.** The store's status from the platform (`bao status` or `vault status` against `openbao.externalAddr`)
+→ `Sealed: true`.
 
-**Act.** `bao operator unseal` with the unseal key(s), then the app pods complete boot on their next
-startupProbe cycle (no manual app restart needed — the 300s budget covers it). **Prevention:** adopt an
-auto-unseal operator before calling the secret tier prod-ready.
+**Act.** The platform unseals its store, then the app pods complete boot on their next startupProbe cycle (no
+manual app restart needed — the 300s budget covers it).
 
 ## CrashLoop on boot
 
@@ -76,7 +76,7 @@ auto-unseal operator before calling the secret tier prod-ready.
 
 **Cause.** The FastAPI lifespan (Dapr secret fetch ~80s worst case + FGA provision; on lineage, creating its
 provenance tables through the catalog, retried until the catalog answers) runs **before** uvicorn serves. The
-`startupProbe` gives 300s for this; if boot exceeds it, a dependency is genuinely stuck — usually OpenBao sealed
+`startupProbe` gives 300s for this; if boot exceeds it, a dependency is genuinely stuck — usually the secret store sealed
 (above), OpenFGA unreachable, or, for lineage, the catalog (`lineage_provenance_tables_not_ready` WARN lines).
 
 **Diagnose.** `kubectl logs <pod> --previous` for where the lifespan stalls; check OpenBao, OpenFGA and the catalog.

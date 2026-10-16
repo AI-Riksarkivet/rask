@@ -39,7 +39,8 @@ spec:
           secret: { secretName: {{ include "lance.fullname" . }}-infra-credentials, items: [{ key: minio-secret-key, path: minio-secret-key }], defaultMode: 0400 }
       initContainers:
         - name: derive
-          image: {{ .Values.openbao.image }}
+          image: {{ include "rask.image" (list . "minio") | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
           {{- include "lance.rootlessSecurityContext" 65532 | nindent 10 }}
           volumeMounts:
             - { name: keys, mountPath: /keys }

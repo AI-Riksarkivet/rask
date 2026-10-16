@@ -126,7 +126,7 @@ dapr.io/config: "lance-tracing"
 {{- define "rask.isRealDeployment" -}}
 {{- $repo := (.Values.image.repository | default "") -}}
 {{- $sideloaded := or .Values.image.localImages (hasPrefix "localhost:" $repo) (hasPrefix "127.0.0.1:" $repo) (hasPrefix "172.17.0.1:" $repo) -}}
-{{- if or (not .Values.openbao.devMode) (not $sideloaded) -}}true{{- end -}}
+{{- if or (not .Values.openbao.enabled) (not $sideloaded) -}}true{{- end -}}
 {{- end -}}
 
 {{- define "lance.labels" -}}
@@ -192,16 +192,24 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- if .Values.observability.enabled -}}true{{- end -}}
 {{- end -}}
 
-{{- define "lance.openbaoServiceAccount" -}}
-{{ include "lance.fullname" . }}-sa-openbao
-{{- end -}}
-
 {{- define "lance.vaultAddr" -}}
-{{- if .Values.openbao.externalAddr -}}{{ .Values.openbao.externalAddr }}{{- else -}}http://{{ include "lance.openbaoHost" . }}:{{ .Values.openbao.port }}{{- end -}}
+{{- if .Values.openbao.enabled -}}http://{{ include "lance.openbaoHost" . }}:{{ .Values.openbao.port }}
+{{- else -}}{{ include "lance.platformStoreAddr" . }}
+{{- end -}}
 {{- end -}}
 
 {{- define "lance.vaultAddrFQDN" -}}
-{{- if .Values.openbao.externalAddr -}}{{ .Values.openbao.externalAddr }}{{- else -}}http://{{ include "lance.openbaoHost" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.openbao.port }}{{- end -}}
+{{- if .Values.openbao.enabled -}}http://{{ include "lance.openbaoHost" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.openbao.port }}
+{{- else -}}{{ include "lance.platformStoreAddr" . }}
+{{- end -}}
+{{- end -}}
+
+{{- define "lance.platformStoreAddr" -}}
+{{- $addr := required "openbao.enabled is false, so the secret store is the platform's: set openbao.externalAddr to its Vault or OpenBao (https; docs/architecture/deployment.md, Prerequisites)" .Values.openbao.externalAddr -}}
+{{- if not (hasPrefix "https://" $addr) -}}
+{{- fail (printf "openbao.externalAddr is %q: every sidecar sends the store's token to it, so the platform's secret store is reached over https only" $addr) -}}
+{{- end -}}
+{{- $addr -}}
 {{- end -}}
 
 {{- define "lance.natsUrl" -}}
@@ -241,17 +249,13 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 
 {{- define "lance.natsCreds" -}}
 {{- $root := index . 0 -}}{{- $app := index . 1 -}}
-{{- if include "lance.secretsViaDapr" $root -}}
 {{- if not (has $app (include "lance.natsUsers" $root | splitList " ")) }}{{- fail (printf "a pub/sub component of %s names nats-user-%s, which nats.auth.users does not declare" $app $app) }}{{- end -}}
 - { name: jwt, secretKeyRef: { name: nats-user-{{ $app }}, key: jwt } }
 - { name: seedKey, secretKeyRef: { name: nats-user-{{ $app }}, key: seed } }
 {{- end -}}
-{{- end -}}
 
-{{- define "lance.natsAuth" -}}
-{{- if include "lance.secretsViaDapr" . }}
+{{- define "lance.natsAuth" }}
 auth: { secretStore: lance-secrets }
-{{- end }}
 {{- end -}}
 
 {{- define "lance.publishPubsub" -}}
@@ -275,25 +279,18 @@ scopes:
 {{- end -}}
 
 {{- define "lance.mintsDevCredentials" -}}
-{{- if and .Values.openbao.enabled .Values.openbao.devMode (not .Values.openbao.externalAddr) -}}true{{- end -}}
+{{- if .Values.openbao.enabled -}}true{{- end -}}
 {{- end -}}
 
 {{- define "lance.natsMints" -}}
 {{- include "lance.mintsDevCredentials" . -}}
 {{- end -}}
 
-{{- define "lance.natsCredsFiles" -}}
-{{- if include "lance.secretsViaDapr" . -}}true{{- end -}}
-{{- end -}}
-
 {{- define "lance.natsFiles" -}}
-{{- $files := dict -}}
-{{- if include "lance.natsCredsFiles" . -}}
-{{- $_ := set $files "nats-admin-creds" (list "nats-user-admin") -}}
+{{- $files := dict "nats-admin-creds" (list "nats-user-admin") -}}
 {{- if include "lance.natsMints" . }}
 {{- $_ := set $files "nats-box-creds" (list "nats-user-monitor") }}
 {{- $_ := set $files "nats-auth" (list "nats-server" "nats-route") }}
-{{- end -}}
 {{- end -}}
 {{- toJson $files -}}
 {{- end -}}
@@ -310,10 +307,6 @@ dapr.io/disable-builtin-k8s-secret-store: "true"
 
 dapr.io/sidecar-seccomp-profile-type: RuntimeDefault
 {{- end }}
-{{- end -}}
-
-{{- define "lance.secretsViaDapr" -}}
-{{- if or .Values.openbao.enabled .Values.openbao.externalAddr -}}true{{- end -}}
 {{- end -}}
 
 {{- define "lance.otelEnv" -}}
@@ -678,7 +671,7 @@ activeDeadlineSeconds: 1800
 {{- $out := dict -}}
 {{- if .Values.catalog.multibase.devSeed -}}
 {{- if or (include "rask.isRealDeployment" .) (not .Values.minio.enabled) (not .Values.openbao.enabled) -}}
-{{- fail "catalog.multibase.devSeed is a local fixture: it needs minio.enabled, the bundled dev-mode openbao and side-loaded images" -}}
+{{- fail "catalog.multibase.devSeed is a local fixture: it needs minio.enabled, the development store (openbao.enabled) and side-loaded images" -}}
 {{- end -}}
 {{- range $base, $ref := .Values.catalog.multibase.baseCredentialRefs | default dict -}}
 {{- if not (and (hasPrefix "s3://" $base) (regexMatch "^[a-z0-9][a-z0-9-]*$" $ref)) -}}
@@ -720,7 +713,7 @@ scoped_secret() {
 
 {{- define "lance.appTokenEnv" -}}
 {{- $root := index . 0 -}}{{- $appId := index . 1 -}}
-{{- if and (include "lance.secretsViaDapr" $root) (has $appId (splitList "," (include "lance.secretScopes" $root))) -}}
+{{- if has $appId (splitList "," (include "lance.secretScopes" $root)) -}}
 - { name: RASK_APP_TOKEN_FROM_STORE, value: "true" }
 {{- else -}}
 - name: APP_API_TOKEN
@@ -854,9 +847,7 @@ scoped_secret() {
 {{- end -}}
 
 {{- define "lance.signingEnv" -}}
-{{- if include "lance.secretsViaDapr" (index . 0) }}
 {{- range (include "lance.signingIdentitiesForApp" . | splitList " " | compact) }}- { name: RASK_SIGNING_IDENTITY, value: {{ . | quote }} }{{- end }}
-{{- end }}
 {{- end -}}
 
 {{- define "lance.controlSignerRoles" -}}
@@ -868,7 +859,7 @@ scoped_secret() {
 {{- define "lance.doorEnv" -}}
 {{- $r := index . 0 -}}{{- $mode := ($r.Values.signing).doors -}}
 {{- if not (has $mode (list "off" "observe" "enforce")) }}{{- fail (printf "signing.doors is %v, not the string off, observe or enforce" $mode) }}{{- end }}
-{{- if and $r.Values.auth.enabled (include "lance.secretsViaDapr" $r) }}
+{{- if $r.Values.auth.enabled }}
 {{- $signers := include "lance.signingIdentities" $r | splitList " " | compact }}
 {{- if and (ne $mode "off") (not $signers) }}{{- fail (printf "signing.doors=%s but no identity signs: the doors would verify nothing" $mode) }}{{- end }}
 {{- if gt (len .) 2 }}{{- $roles := include "lance.controlSignerRoles" $r | fromJson }}{{- $signers = list }}{{- range (index . 2) }}{{- $signers = concat $signers (get $roles .) }}{{- end }}{{- $signers = $signers | uniq | sortAlpha }}{{- end }}

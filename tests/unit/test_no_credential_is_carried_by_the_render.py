@@ -14,7 +14,7 @@ import subprocess
 
 import pytest
 
-from tests.unit.chart_render import DEFAULT_ARGS, OIDC_ARGS, REPO, render_chart_text, render_text
+from tests.unit.chart_render import DEFAULT_ARGS, OIDC_ARGS, REPO, SECRET_STORE_URL, render_chart_text, render_text
 
 
 #: The two cluster-less renders an operator makes: the chart's dev defaults and the local estate's overlay,
@@ -45,7 +45,10 @@ def test_a_credential_passed_as_a_value_is_refused_naming_it() -> None:
 
 def test_a_real_deployment_refuses_the_bundled_dev_idp() -> None:
     """The bundled Dex is one of the two exemptions (owner, 2026-10-06), fenced to dev renders: a real one refuses it."""
-    real = ("--set", "image.repository=ghcr.io/example/rask", "--set", "openbao.devMode=false", "--set", "signing.provisioned=true")
+    real = (
+        "--set", "image.repository=ghcr.io/example/rask", "--set", "openbao.enabled=false",
+        "--set-string", f"openbao.externalAddr={SECRET_STORE_URL}", "--set", "signing.provisioned=true",
+    )  # fmt: skip
     with pytest.raises(subprocess.CalledProcessError) as refused:
         render_text(*real, "--set", "nats.auth.provisioned=true")
 

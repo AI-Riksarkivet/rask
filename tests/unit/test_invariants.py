@@ -291,12 +291,13 @@ def test_every_dapr_annotated_pod_carries_the_injector_webhook_label() -> None:
 
 
 #: A render whose images come from a registry off this node — which `prod-credentials.yaml` reads as a
-#: real deployment, so it points at the platform's sealed store rather than the dev OpenBao. That keeps
+#: real deployment, so it points at the platform's store rather than the dev OpenBao. That keeps
 #: a test about IMAGE PINNING testing its own subject.
 _REAL_REGISTRY = (
     "image.localImages=false",
     "image.repository=reg.example",
-    "openbao.devMode=false",
+    "openbao.enabled=false",
+    f"openbao.externalAddr={chart_render.SECRET_STORE_URL}",
     "dex.enabled=false",
     "auth.oidc.issuer=https://auth.example.com/dex",
     "signing.provisioned=true",
@@ -662,8 +663,8 @@ def test_every_bus_client_dials_the_bus_the_estate_names_and_the_render_runs_non
 @pytest.mark.parametrize("stand_in", ["dex", "minio", "openbao"])
 def test_the_render_runs_no_development_stand_in(stand_in: str) -> None:
     """[[XC-131]]: the development stand-ins are fixtures (ADR 0153), so a render with every gate that names one on
-    (`dex.enabled`, `minio.enabled`, `openbao.enabled` with `devMode`) runs no pod of it and serves none; rask reaches each
-    by its endpoint."""
+    (`dex.enabled`, `minio.enabled`, `openbao.enabled`) runs no pod of it and serves none; rask reaches each by its
+    endpoint."""
     docs = chart_render.render(*chart_render.DEFAULT_ARGS, "--set", "auth.enabled=true")
     found = [
         f"{doc['kind']}/{doc['metadata']['name']}"
@@ -674,33 +675,55 @@ def test_the_render_runs_no_development_stand_in(stand_in: str) -> None:
     assert not found, f"the render runs the development {stand_in}, which is a fixture: {found}"
 
 
-def test_a_render_with_external_openfga_and_postgres_runs_neither_and_dials_the_platforms() -> None:
-    """[[XC-132]]: OpenFGA and the Postgres behind OpenFGA and the Dapr state store are optional; production turns them off
-    and names the platform's instances (ADR 0153). Such a render runs no OpenFGA or Postgres workload or identity, every
-    FGA client and every Postgres client dials the named endpoint, and no credential rides along in an env value: the FGA
-    token is a projected file and the Postgres password the store's `postgres-password`, both by reference."""
-    fga, pg = "https://fga.platform.example", "pg.platform.example"
+def test_a_production_render_runs_no_store_the_platform_serves_and_dials_the_platforms() -> None:
+    """[[XC-132]], [[XC-149]]: OpenFGA, the Postgres behind OpenFGA and the Dapr state store, and the secret store are the
+    platform's in production, which names each (ADR 0153). The production render runs no workload or identity of any of
+    them and holds no object of the secret store. Every FGA client, Postgres client and secret reader dials the named
+    endpoint, the pods whose sidecar reads the store are the pods admitted to it and no others, and no credential rides
+    along in an env value: the FGA token is a projected file and the Postgres password the store's `postgres-password`,
+    both by reference."""
+    fga, pg, store = "https://fga.platform.example", "pg.platform.example", "https://vault.platform.example:8200"
     docs = chart_render.render(
-        *chart_render.DEFAULT_ARGS, *chart_render.OBSERVABILITY_ARGS,
-        "--set", "auth.enabled=true", "--set", "openfga.enabled=false", "--set", "age.enabled=false",
-        "--set-string", f"auth.fgaApiUrl={fga}", "--set-string", f"age.externalHost={pg}",
+        *chart_render.PROD_ARGS,
+        "--set-string", f"auth.fgaApiUrl={fga}", "--set-string", f"age.externalHost={pg}", "--set-string", f"openbao.externalAddr={store}",
     )  # fmt: skip
 
     found = sorted(
         f"{workload}/{name} ({container['image']})"
         for workload, name, container in chart_render.containers(docs)
-        if container["image"].split("/")[-1].split(":")[0] in {"openfga", "age", "postgres"}
+        if container["image"].split("/")[-1].split(":")[0] in {"openfga", "age", "postgres", "openbao"}
     )
-    found += sorted(f"{doc['kind']}/{doc['metadata']['name']}" for doc in docs if doc["metadata"]["name"] in {"rask-age", "rask-openfga", "rask-sa-age"})
-    assert not found, f"the render runs part of an OpenFGA or Postgres the platform serves: {found}"
+    found += sorted(
+        f"{doc['kind']}/{doc['metadata']['name']}"
+        for doc in docs
+        if doc["metadata"]["name"] in {"rask-age", "rask-openfga", "rask-sa-age"} or "openbao" in doc["metadata"]["name"]
+    )
+    assert not found, f"the render runs part of a store the platform serves: {found}"
 
     text = json.dumps(docs)
-    assert not re.findall(r"rask-(?:age|openfga)(?::\d| \d|\.[a-z0-9-]+\.svc)|(?:@|//|host=|-h )rask-(?:age|openfga)\b|'rask-(?:age|openfga)'", text), (
-        "a client still dials the in-chart instance"
-    )
+    in_chart = r"rask-(?:age|openfga|openbao)(?::\d| \d|\.[a-z0-9-]+\.svc)|(?:@|//|host=|-h )rask-(?:age|openfga|openbao)\b|'rask-(?:age|openfga|openbao)'"
+    assert not re.findall(in_chart, text), "a client still dials the in-chart instance"
     fga_urls = {env[k] for _, _, c in chart_render.containers(docs) for k in ("RASK_FGA_API_URL", "FGA_API_URL") if k in (env := chart_render.env_of(c))}
     assert fga_urls == {fga}, fga_urls
     assert f"host={pg} " in text, "the Collector's state-store scrape does not dial the platform's Postgres"
+
+    [secrets] = [doc for doc in docs if doc.get("kind") == "Component" and doc["spec"]["type"].startswith("secretstores.")]
+    named = {row["value"] for row in secrets["spec"]["metadata"] if row["name"] == "vaultAddr"}
+    named |= {doc["spec"]["provider"]["vault"]["server"] for doc in docs if doc.get("kind") == "SecretStore"}
+    assert named == {store}, f"the Dapr secret store and ESO's SecretStore read {named}, not the store the deployment names"
+    peer = {"ipBlock": {"cidr": chart_render.SECRET_STORE_CIDR}}
+    admitting = [
+        doc["spec"]["podSelector"]
+        for doc in docs
+        if doc.get("kind") == "NetworkPolicy" and any(peer in (rule.get("to") or []) for rule in doc["spec"].get("egress") or [])
+    ]
+    pods = {f"{doc['kind']}/{doc['metadata']['name']}": doc["spec"]["template"] for doc in docs if doc.get("kind") in {"Deployment", "StatefulSet"}}
+    readers = {name for name, pod in pods.items() if (pod["metadata"].get("annotations") or {}).get("dapr.io/app-id") in secrets["scopes"]}
+    admitted = {name for name, pod in pods.items() if any(chart_render.selects(selector, pod["metadata"]["labels"]) for selector in admitting)}
+    assert "Deployment/rask-catalog" in readers, f"the readers read as {sorted(readers)}"
+    assert admitted == readers, (
+        f"admitted to the store and not reading it: {sorted(admitted - readers)}; reading it and not admitted: {sorted(readers - admitted)}"
+    )
 
     leaked = sorted(
         f"{workload}/{name}: {key}"
@@ -970,7 +993,7 @@ def test_the_chart_TURNS_DOCS_OFF_by_default_and_ON_when_asked() -> None:
 #:
 #: Two different reasons, kept apart on purpose:
 #:
-#:  * SUBCHARTS — dapr, nats, openfga, dex, openbao, rustfs. Not ours to template,
+#:  * SUBCHARTS — dapr, nats, openfga, dex, rustfs. Not ours to template,
 #:    so not ours to harden.
 #:  * INFRA PODS WE DO TEMPLATE — the OTel collector. Its securityContext is gated behind
 #:    `security.infraContexts.enabled`, which values.yaml defaults OFF and stages explicitly:
@@ -979,7 +1002,7 @@ def test_the_chart_TURNS_DOCS_OFF_by_default_and_ON_when_asked() -> None:
 #:    silently pre-empt it. It is listed HERE, visibly, rather than being missing from a
 #:    hand-written first-party tuple where nobody could tell the difference.
 _UNCOVERED_DEPLOYMENTS = (
-    "dapr", "nats", "openfga", "dex", "openbao", "minio",
+    "dapr", "nats", "openfga", "dex", "minio",
     "otel-collector",
 )  # fmt: skip
 

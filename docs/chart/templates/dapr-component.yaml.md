@@ -175,17 +175,17 @@ resiliency-mode values the nats-stream-job's durable-drift reconcile expects (EX
 this component only renders when resiliency is on, which is also the only time LINEAGE_DLQ_TOPIC
 exists.
 
-Dapr secret store fronting OpenBao / an external Vault (Vault-API compatible). Apps read secrets via
-their sidecar (GET /v1.0/secrets/lance-secrets/<name>) instead of plaintext env — the secret-handling
-fix. Renders for the in-cluster OpenBao OR an external Vault (openbao.externalAddr), so externalizing
-the store does not force the apps back to plaintext.
+Dapr secret store fronting the dev OpenBao or the platform's Vault or OpenBao (Vault-API compatible). Apps
+read secrets via their sidecar (GET /v1.0/secrets/lance-secrets/<name>) instead of plaintext env — the
+secret-handling fix. The chart renders no store ([[XC-149]]): it names the dev fixture's (`openbao.enabled`)
+or the platform's (`openbao.externalAddr`), and the apps read either one through this component.
 
 ## `- name: vaultToken`
 
-Prod path: NOT the dev root token (it can't authenticate against an operator-initialized OpenBao).
-The operator supplies a real, scoped token via this Kubernetes secret; Dapr resolves it through its
-default k8s secret store. Create it out-of-band: kubectl create secret generic <release>-openbao-token
---from-literal=token=<bao-token>.
+The platform's store: NOT the dev root token, which only the dev store accepts. The operator supplies a
+real, scoped token via this Kubernetes secret; Dapr resolves it through its default k8s secret store.
+Create it out-of-band: kubectl create secret generic <release>-openbao-token --from-literal=token=<bao-token>.
+One static token for every sidecar is [[XC-079]].
 
 ## `- { name: vaultKVUsePrefix, value: "false" }`
 
@@ -194,8 +194,8 @@ secret/data/<key>. Drop the prefix so the path is the natural secret/data/<key> 
 
 ## `- { name: skipVerify, value: {{ ternary "false" "true" (hasPrefix "https://" (include "lance.vaultAddr" .))...`
 
-TLS verification tracks the Vault address scheme: an https Vault (the openbao.externalAddr prod
-path) is verified; skipVerify only for the plain-http in-cluster dev OpenBao (no TLS to verify).
+TLS verification tracks the Vault address scheme: the platform's store is https (`lance.platformStoreAddr`
+refuses anything else) and verified; skipVerify only for the plain-http dev OpenBao (no TLS to verify).
 An unconditional "true" would leave the component fronting EVERY app secret unverified in prod.
 
 ## `{{- $secretScopes := splitList "," (include "lance.secretScopes" .) }}`

@@ -26,13 +26,14 @@ PROD_VALUES="${PROD_VALUES:-deploy/values-prod.yaml}"
 # step 6 of .dagger/charts.go's chain and step 2 had been failing on the SAME guard since the same
 # commit: the gate never reached the script that would have reported it. values-prod.yaml deliberately
 # does NOT pin a registry (the deployer supplies theirs), so the check must. signing.provisioned is the operator's attestation that the event-signing
-# keys exist in the sealed store (templates/signing-provisioned.yaml refuses a non-dev store without it), and
+# keys exist in the platform's store (templates/signing-provisioned.yaml refuses it without that), and
 # nats.auth.provisioned the same for the NATS users (templates/nats-provisioned.yaml). nats.url is the platform's NATS
 # bus, a prerequisite values-prod leaves for the deployer to name.
 # observability.export.endpoint is the platform's OTLP backend, which values-prod leaves for the deployer to name, and
-# auth.fgaApiUrl and age.externalHost the platform's OpenFGA and Postgres ([[XC-132]]), and route.* the platform's Gateway,
-# its in-cluster address and the egress that reaches it (ADR 0165), and the egress that reaches the API server, the
-# telemetry backend and the platform's OpenFGA, which no URL can derive ([[XC-143]]).
+# auth.fgaApiUrl and age.externalHost the platform's OpenFGA and Postgres ([[XC-132]]), openbao.externalAddr its secret
+# store ([[XC-149]]), and route.* the platform's Gateway, its in-cluster address and the egress that reaches it (ADR 0165),
+# and the egress that reaches the API server, the telemetry backend, the platform's OpenFGA and its secret store, which
+# no URL can derive ([[XC-143]]).
 COMMON=(--api-versions external-secrets.io/v1/ExternalSecret --api-versions dapr.io/v1alpha1
         --set auth.oidc.issuer=https://auth.example.com/dex
         --set frontend.oidc.publicOrigin=https://lance.example.com
@@ -44,6 +45,8 @@ COMMON=(--api-versions external-secrets.io/v1/ExternalSecret --api-versions dapr
         --set-string observability.export.endpoint=http://otlp.example.com:4318/v1/otlp
         --set-string auth.fgaApiUrl=https://fga.example.com
         --set-string age.externalHost=pg.example.com
+        --set-string openbao.externalAddr=https://vault.example.com:8200
+        --set-json 'openbao.egress=[{"to":[{"ipBlock":{"cidr":"198.51.100.20/32"}}],"ports":[{"protocol":"TCP","port":8200}]}]'
         --set-json 'route.parentRefs=[{"name":"edge","namespace":"edge-system"}]'
         --set-string route.edgeUrl=http://edge.edge-system.svc.cluster.local
         --set-json 'route.edgeEgress=[{"to":[{"namespaceSelector":{"matchLabels":{"kubernetes.io/metadata.name":"edge-system"}}}],"ports":[{"protocol":"TCP","port":8080}]}]'
@@ -60,11 +63,11 @@ helm template rask "$CHART" -f "$PROD_VALUES" \
 
 fail() { echo "!! prod-render-check: $*" >&2; exit 1; }
 
-# 1. Network isolation ON (the audit's headline gap): default-deny + DNS + the exclusive openbao lock.
+# 1. Network isolation ON (the audit's headline gap): default-deny + DNS + the secret store's exclusive egress.
 np=$(grep -c "kind: NetworkPolicy" "$OUT" || true)
 [ "$np" -ge 9 ] || fail "prod must render the network-isolation layer (>=9 NetworkPolicies), got $np"
 grep -q "default-deny" "$OUT" || fail "prod NetworkPolicy set missing default-deny"
-grep -q -- "-openbao" "$OUT" || fail "prod NetworkPolicy set missing the openbao ingress lock"
+grep -q "name: rask-allow-secret-store-egress" "$OUT" || fail "prod NetworkPolicy set missing the egress that admits only the secret store's readers"
 # NATS isolation (goal cond 8): the general intra-namespace ingress allow must EXCLUDE the nats pods —
 # without the exclusion the explicit nats rules are decorative (NetworkPolicies are additive). Then the
 # two explicit rules must render: 4222 (clients, port-scoped from any in-namespace pod — the daprd
@@ -86,6 +89,9 @@ grep -A20 "name: rask-nats-monitor" "$OUT" | grep -q "port: 8222" \
 grep -qE "name: rask-(openfga|age)$" "$OUT" && fail "prod must not run an OpenFGA or a Postgres (the platform's)"
 grep -qE "rask-openfga:8080|host=rask-age |@rask-age:" "$OUT" && fail "a prod client dials the in-chart OpenFGA or Postgres"
 grep -q '"https://fga.example.com"' "$OUT" || fail "prod's FGA clients must dial auth.fgaApiUrl"
+# The secret store is the platform's too ([[XC-149]]): prod renders no OpenBao, and its readers read openbao.externalAddr.
+grep -qE "^  name: rask-(sa-)?openbao" "$OUT" && fail "prod must not render a secret store (the platform's)"
+grep -q 'https://vault.example.com:8200' "$OUT" || fail "prod's secret readers must read openbao.externalAddr"
 
 # 3. The Dapr control plane is the platform's (ADR 0153): prod renders none of it, only rask's own Dapr objects.
 grep -qE "name: dapr-(sentry|operator|placement-server|scheduler-server|sidecar-injector)$" "$OUT" \
@@ -236,8 +242,8 @@ unrendered=$(comm -23 <(sort -u <<<"$named") <(echo "$rendered"))
 [ -z "$unrendered" ] || fail "workloads name ServiceAccounts this render does not create: $(tr '\n' ' ' <<<"$unrendered")"
 sa=$(grep -c "^kind: ServiceAccount" "$OUT" || true)
 automount=$(grep -c "automountServiceAccountToken: false" "$OUT" || true)
-[ "$automount" -ge 14 ] \
-  || fail "prod must stop mounting the SA token into app pods, rendered $automount refusals (>=14 expected; 1 is the baseline)"
+[ "$automount" -ge 13 ] \
+  || fail "prod must stop mounting the SA token into app pods, rendered $automount refusals (>=13 expected; 1 is the baseline)"
 grep -q 'dapr.io/sidecar-seccomp-profile-type: RuntimeDefault' "$OUT" \
   || fail "prod must restrict the daprd sidecar (dapr.sidecarRestricted) — a pod is only as restricted as its loosest container"
 
@@ -249,4 +255,4 @@ grep -q 'dapr.io/sidecar-seccomp-profile-type: RuntimeDefault' "$OUT" \
 grep -q "deployment.environment.name=prod" "$OUT" \
   || fail "prod telemetry must carry deployment.environment.name=prod (observability.environment) — it renders $(grep -oE 'deployment\.environment\.name=[^,\"]*' "$OUT" | sort -u | head -1)"
 
-echo "✓ prod-render-check: NetworkPolicy=$np, OpenFGA+Postgres external, Dapr control plane external, PDBs=$pdb (backends+zones named), spread=$spread, tiers=$tiers, export named, no-bespoke-scraper, write-cap=$cap fits $cat_mem, minio-externalize atomic, ESO path renders, hook pods labeled, ServiceAccounts=$sa, token-automount-refusals=$automount"
+echo "✓ prod-render-check: NetworkPolicy=$np, OpenFGA+Postgres+secret store external, Dapr control plane external, PDBs=$pdb (backends+zones named), spread=$spread, tiers=$tiers, export named, no-bespoke-scraper, write-cap=$cap fits $cat_mem, minio-externalize atomic, ESO path renders, hook pods labeled, ServiceAccounts=$sa, token-automount-refusals=$automount"

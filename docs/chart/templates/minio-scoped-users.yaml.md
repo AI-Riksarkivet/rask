@@ -101,8 +101,9 @@ unless the pod names an fsGroup; with one it is root:<fsGroup> and group-readabl
 
 EVERY SECRET IS A FILE ([[XC-004]]): the root as a mounted key of the ESO-written infra-credentials, and each
 scoped secret derived from it in memory by `lance.scopedSecretFn` — the function the dev OpenBao's seed runs, so
-the user `mc` creates and the field a service reads agree. In the openbao image, whose busybox sha256sum was
-measured (2026-10-05). No key is in the pod spec, an env or the render.
+the user `mc` creates and the field a service reads agree. In the store's own image, the one `mc` runs, so the
+hook pulls nothing the estate does not build: its busybox sha256sum, run as 65532, gave coreutils' 40 characters
+(measured 2026-10-16 on `minio:e755c55b`). No key is in the pod spec, an env or the render.
 
 ## `image: {{ include "rask.image" (list . "minio") | quote }}`
 

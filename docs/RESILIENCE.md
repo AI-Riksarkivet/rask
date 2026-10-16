@@ -121,8 +121,8 @@ semantics, so it must not undercut the slowest handler. Either way the window co
    - **NATS / JetStream** — one node, `streamReplicas=1`; the Dapr pub/sub backbone. Down → no event flows at
      all (catalog emits swallow, notifications and maintenance hear nothing).
    - **The object store** (the MinIO fixture in development) — the S3 data plane. Down → no Lance read/write.
-   - **OpenBao / OpenFGA / Dex** — one pod each; down → (respectively) app-tier secrets fail-closed at boot,
-     authz checks fail, OIDC login fails.
+   - **The secret store / OpenFGA / Dex** — one pod each in development (the store and Dex are fixtures; production
+     names the platform's); down → (respectively) app-tier secrets fail-closed at boot, authz checks fail, OIDC login fails.
    *Fix (prod):* multi-replica + `streamReplicas=3` for NATS, a real Postgres HA (Patroni/CNPG), a replicated
    object store. Tracked as infra work; **the app tier is already `replicas`-ready** (stateless, PDBs shipped).
 

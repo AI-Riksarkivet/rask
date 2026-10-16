@@ -5,18 +5,18 @@
 #   (1) default-deny Ingress+Egress for every pod in the namespace;
 #   (2) the kube-dns egress allow ships IN THIS SAME FILE (default-deny egress without it bricks
 #       name resolution — the audit's named footgun);
-#   (3) targeted ingress allows for the guarded stores (openbao ← secret-consuming app pods only;
-#       age-postgres:5432 ← its real clients; minio:9000 ← the data plane; nats ← 4222 intra-namespace
+#   (3) targeted allows for the guarded stores (the secret store ← the pods whose sidecar reads it,
+#       as ingress on the dev store and egress to the platform's; age-postgres:5432 ← its real clients; minio:9000 ← the data plane; nats ← 4222 intra-namespace
 #       + 8222 admin-only, other ports closed) — every OTHER pod gets plain intra-namespace ingress,
 #       EXCLUDING the guarded stores so the targeted lists stay exclusive (NetworkPolicies are
 #       additive: the general allow must NOT cover the stores);
 #   (4) values-prod flips `networkPolicy.enabled` — the LIVE verification runbook is todo_fable
-#       §7a (all pods Ready, e2e suites green, and a negative probe: curl openbao:8200 from the
-#       web pod must time out).
+#       §7a (all pods Ready, e2e suites green, and a negative probe: a request to the secret store
+#       from the web pod must time out).
 # Egress posture (tier 1): intra-namespace open + DNS + the Dapr control plane; the INGRESS rules do
 # the guarding — a connection needs BOTH the source's egress and the destination's ingress to allow.
-# Every egress rule names its peers: the API server, the Gateway and the telemetry backend are the
-# platform's to state, and externalized backends (S3/NATS off-cluster) need
+# Every egress rule names its peers: the API server, the Gateway, the telemetry backend and the
+# secret store are the platform's to state, and externalized backends (S3/NATS off-cluster) need
 # `networkPolicy.extraEgress` entries. NOTE: requires a policy-enforcing CNI (Calico/Cilium);
 # kind's default CNI ignores NetworkPolicy entirely. kubectl port-forward traffic enters via the
 # kubelet (not the CNI data path) and keeps working under default-deny on mainstream CNIs.
@@ -110,6 +110,26 @@ spec:
   policyTypes: [Egress]
   egress: {{- include "lance.egressRules" (list "auth.fgaEgress" .Values.auth.fgaEgress "the platform's OpenFGA at auth.fgaApiUrl") | nindent 4 }}
 {{- end }}
+{{- if not .Values.openbao.enabled }}
+---
+# The platform's secret store (openbao.externalAddr): only the pods whose sidecar reads it, to the peers the platform states.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "lance.fullname" . }}-allow-secret-store-egress
+  labels: {{- include "lance.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values:
+          {{- range (splitList "," (include "lance.secretScopes" .)) }}
+          - {{ . }}
+          {{- end }}
+  policyTypes: [Egress]
+  egress: {{- include "lance.egressRules" (list "openbao.egress" .Values.openbao.egress "the platform's secret store at openbao.externalAddr") | nindent 4 }}
+{{- end }}
 {{- if .Values.dapr.enabled }}
 ---
 apiVersion: networking.k8s.io/v1
@@ -189,16 +209,13 @@ spec:
   ingress:
     - from:
         - podSelector: {}
+{{- if .Values.openbao.enabled }}
 ---
-# (3b) openbao:8200 — THE crown jewel (the audit's headline: "reachable by any pod"). Only the
-# secret-consuming app pods' daprd sidecars may connect: catalog, lineage, maintenance (planner and worker),
-# and (DAPRIFY 2026-07-27) the state-store-scoped
-# apps — their daprd resolves the state store's connectionString through the lance-secrets
-# component at boot (dapr-component.yaml derives the secret-store scope from stateStore.scopes the
-# same way), so blocking them here wedges the sidecar on component init. The newly-sidecared fleet/
-# fleet pods load NO openbao-backed component and stay excluded: web/dex/minio/age
-# can NEVER reach it. External-secrets (off-namespace, when enabled) needs an entry in
-# networkPolicy.openbaoExtraFrom.
+# (3b) openbao:8200, the development store (the openbao fixture's pod): only the pods whose sidecar reads it, the apps
+# the lance-secrets component is scoped to (`lance.secretScopes`, which takes in the state-store-scoped apps: their
+# daprd resolves the state store's connectionString through it at boot, so blocking them wedges the sidecar on component
+# init), and the store's own pods, whose seed reads the outgoing pod through the Service. External-secrets
+# (off-namespace) needs an entry in networkPolicy.openbaoExtraFrom.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -214,17 +231,8 @@ spec:
             matchExpressions:
               - key: app.kubernetes.io/component
                 operator: In
-
-                {{- $openbaoClients := list "catalog" "lineage" "maintenance" }}
-                {{- if and .Values.dapr.enabled .Values.stateStore.enabled }}
-                {{- $openbaoClients = concat $openbaoClients .Values.stateStore.scopes }}
-                {{- end }}
-
-                {{- if .Values.openbao.devMode }}
-                {{- $openbaoClients = append $openbaoClients "openbao" }}
-                {{- end }}
                 values:
-                  {{- range ($openbaoClients | uniq) }}
+                  {{- range (append (splitList "," (include "lance.secretScopes" .)) "openbao" | uniq) }}
                   - {{ . }}
                   {{- end }}
         {{- with .Values.networkPolicy.openbaoExtraFrom }}
@@ -232,6 +240,7 @@ spec:
         {{- end }}
       ports:
         - { protocol: TCP, port: 8200 }
+{{- end }}
 {{- if .Values.openfga.enabled }}
 ---
 # (3b') openfga:8080/8081 — the authorization store, which authorizes none of its callers ([[LH-442]]): any token it

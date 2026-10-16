@@ -105,25 +105,11 @@ never binds `:8000`, and daprd sits "waiting for application to listen" — a tw
 reads like a crash but is a **missing secret**. Root-caused by running `apply_dapr_secrets` inside the
 stuck pod under a watchdog; fixed by re-running the seed (the chart's own hook) + recreating the pod.
 
-**The plan (two levels, do the cheap one regardless):**
-
-1. **Interim — a values flip, NOT an operator (cheap, do soon):** set `openbao.devMode=false` so
-   OpenBao runs `server -config` against its **already-provisioned PVC**. Secrets then survive pod
-   restarts, and the seed Job becomes first-boot-only. Cost: OpenBao then needs a real
-   `operator init` + unseal step (no fixed root token) — which is the exact chore the operator
-   removes, so this is the bridge, not the destination. Tracked in `docs/adr/`.
-2. **Prod — a secrets operator (the destination):** adopt **External Secrets Operator** (cloud-agnostic,
-   syncs from any backend into k8s Secrets / Dapr), the **Vault/OpenBao operator**, or **bank-vaults**
-   for **auto-unseal** (no manual init/unseal) + **declarative secret sync** (retire `openbao-seed`
-   entirely) + rotation/PKI. Same "operators later" wave as rows 1–4. **First verify whether rask
-   already operates one** (it operates the other four — §2); if so, merge = flip values, not install.
-   If not, ESO is the lowest-coupling adopt because it is backend- and cloud-agnostic like our Dapr
-   secretstore seam already is.
-
-**Why it was invisible until now:** the seed hook makes the happy path (a clean `helm upgrade`) always
-re-seed, so dev-mode's in-memory loss only bites on an *out-of-band* restart. That is rare in a quiet
-demo and routine in prod (node drains, OOM, rollouts) — which is precisely why it belongs on the
-operator wave and not in the "never build" bucket.
+**Where it stands.** The seed runs beside the dev server and seeds an in-place restart again (§ 6,
+`chart/templates/openbao-seed.yaml`), so a bare pod restart needs no release. The dev store stays in memory: it is
+the openbao fixture, not for production. The chart renders no secret store ([[XC-149]]): production names the
+platform's Vault or OpenBao, whose operator owns unsealing, durability and rotation, and the External Secrets
+Operator is a prerequisite (docs/architecture/deployment.md, Prerequisite in production: the secret store).
 
 ## 6 · Event signing keys: provisioning, rotation and loss (LH-064)
 
@@ -135,19 +121,19 @@ while the kid of its own seed is in its list, so the list is always written befo
 reads lists only. The residual stays named: a pod that holds OpenBao's root token or reaches :8200 reads the store
 without a sidecar until XC-079.
 
-**The dev OpenBao (`openbao.devMode=true`) needs nothing from you.** Its `mint` init container generates a candidate
+**The dev OpenBao (`openbao.enabled`) needs nothing from you.** Its `mint` init container generates a candidate
 pair per identity on a memory volume the server never mounts, and its `seed` container chooses one pair per identity
 (the kept copy, else the store behind the Service, else the candidate), keeps it, and writes the list first. A
 rollout therefore carries every pair over; an in-place restart of either container writes the same pair again.
 
-**A sealed or external store mints nothing.** The render refuses it until the secrets exist and
+**The platform's store mints nothing.** The render refuses it until the secrets exist and
 `--set signing.provisioned=true` attests it. Each identity needs `signing-public-<key>` (field `keys`: its public
 NKEYs, comma-separated, current first) written before `signing-key-<key>` (field `seed`: its NKEY user seed);
 `nk -gen user -pubout` prints a pair. Tooling for this is the production runbook, which waits for a production
 estate (owner, no-prod parking 2026-09-21). Until the keys exist no signer is Ready and none emits: a sidecar
 delivery to one is answered RETRY, not dropped.
 
-**Retiring `service-token-<identity>` on a sealed or external store.** No door reads `secret/service-token-<identity>`
+**Retiring `service-token-<identity>` on the platform's store.** No door reads `secret/service-token-<identity>`
 (a service is the ServiceAccount its projected token names), and no deploy removes one from a store the chart never wrote
 to. Delete any that exist, one per identity (`bao kv metadata delete secret/service-token-<identity>`), and narrow the
 `lance-infra` ESO policy to its one path, `secret/data/lance`.
@@ -171,7 +157,7 @@ after `bao kv metadata delete`, `bao kv get -field=seed secret/signing-key-<key>
 soft `bao kv delete` it prints `No data found at ...`, which the seed refuses as an unreadable store, so the
 replacement pod never becomes Ready and the rollout wedges (the outgoing pod keeps serving, `maxUnavailable: 0`).
 
-Rotation on a sealed or external store belongs to the parked production runbook. The signer re-resolves its key within
+Rotation on the platform's store belongs to the parked production runbook. The signer re-resolves its key within
 5 minutes and heals in place, and the retired key leaves the list at the next rotation.
 
 **Loss.** A dev OpenBao replacement with no outgoing pod to carry from (a deleted pod, a drained node) mints every
@@ -202,7 +188,7 @@ by ExternalSecrets.
 
 **Production (owner ruling R1): the platform runs NATS and its store; rask owns no trust root.** Name the bus in
 `nats.url`, create `nats-user-<user>` for every user the chart's table issues, signed by the bus's operator; then
-`--set nats.auth.provisioned=true`. Until then a non-dev render (openbao.devMode=false or openbao.externalAddr) fails and
+`--set nats.auth.provisioned=true`. Until then a render naming the platform's store (openbao.enabled=false) fails and
 names every secret it needs. The server's own config and route credential are the platform's.
 
 **The dev OpenBao mints the fixture bus's trust root.** It writes `nats-server` and `nats-route`, which the fixture's
@@ -264,7 +250,7 @@ both (the bundled Dex and the dev OpenBao).
   and `<release>-dev-credentials` does not, the render refuses (`lookup`, so only against a cluster): generating
   beside live data would lock every consumer out of it. Create the Secret from the credentials the estate holds
   first; a Secret that exists without an owner is operator-held and the chart generates nothing beside it.
-- **Real deployment.** The platform's store holds every field `templates/openbao.yaml`'s header lists, provisioned
+- **Real deployment.** The platform's store holds every field docs/architecture/deployment.md lists, provisioned
   by its operator; the chart generates nothing.
 - **Never delete the OpenBao pod to make it re-seed.** A replacement with no outgoing pod re-mints every signing
   pair (§ 6) and the NATS root (§ 7, an empty JetStream). The seed's loop is the re-seed path; a rollout restart

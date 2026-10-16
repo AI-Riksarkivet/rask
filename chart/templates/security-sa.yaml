@@ -3,9 +3,6 @@
 {{- if .Values.age.enabled }}
 {{- $components = append $components "age" }}
 {{- end }}
-{{- if and .Values.openbao.enabled (not .Values.openbao.devMode) }}
-{{- $components = append $components "openbao" }}
-{{- end }}
 {{- range $name, $_ := .Values.services }}
 {{- if not (has $name $components) }}
 {{- $components = append $components $name }}

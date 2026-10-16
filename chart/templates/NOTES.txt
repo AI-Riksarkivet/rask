@@ -26,10 +26,10 @@ Services (ClusterIP):
 {{- if or .Values.openfga.enabled .Values.auth.fgaApiUrl }}
   - openfga:   {{ include "lance.openfgaUrl" . }} (authorization model{{ if not .Values.openfga.enabled }}; the platform's OpenFGA{{ end }})
 {{- end }}
-{{- with .Values.openbao }}
-{{- if .enabled }}
-  - openbao:   {{ include "lance.openbaoHost" $root }}:{{ .port }} (app-tier secret store, read via Dapr)
-{{- end }}
+{{- if .Values.openbao.enabled }}
+  - openbao:   {{ include "lance.openbaoHost" . }}:{{ .Values.openbao.port }} (the openbao fixture's development secret store, read via Dapr and ESO)
+{{- else }}
+  - secrets:   {{ include "lance.platformStoreAddr" . }} (the platform's secret store, read via Dapr and ESO)
 {{- end }}
 {{- with .Values.dex }}
 {{- if .enabled }}

@@ -99,7 +99,7 @@ def _first_party_workloads() -> list[tuple[str, str, dict]]:
 #: a new unhardened container reds this gate — and every line removed is a container hardened for good.
 #:
 #: WHY IT IS NOT SIMPLY FIXED IN ONE GO. Most of these run THIRD-PARTY IMAGES the chart templates itself
-#: (postgres, minio, openbao, dex, the mc/nats/kubectl CLIs), where `readOnlyRootFilesystem` is the key
+#: (postgres, minio, dex, the mc/nats/kubectl CLIs), where `readOnlyRootFilesystem` is the key
 #: that breaks things: each writes somewhere under its own root unless given a mount. Applying the
 #: baseline blind would trade a hardening gap for a crash loop, so each comes off this list with its pod
 #: observed running, which is a per-workload piece of work rather than one edit.
@@ -113,7 +113,6 @@ _UNHARDENED_TODAY: dict[str, dict[str, tuple[str, ...]]] = {
     # that breaks each: every one writes under its own root unless given a mount, so each comes off
     # with its pod observed running rather than by adding a line here.
     "StatefulSet/age/postgres": {"containers": BASELINE},
-    "Deployment/openbao/openbao": {"containers": BASELINE},
     "Deployment/dex/dex": {"containers": BASELINE},
     # PARTIAL, and the numbers are why the ratchet names keys rather than containers.
     "StatefulSet/minio/minio": {"containers": ("runAsNonRoot", "seccompProfile")},

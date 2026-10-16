@@ -528,8 +528,8 @@ security:
   tmpSizeLimit: 2Gi
   # POD IDENTITY is not a value. Every first-party workload runs as its own ServiceAccount
   # (templates/security-sa.yaml), tokenless on the SA object. A first-party pod holds a Kubernetes API
-  # token only when its SA carries a grant it uses: OpenBao under ESO, and the RBAC-bound
-  # Collector, Dapr dashboard and snapshot pods. `default` is the identity every unnamed pod in the
+  # token only when its SA carries a grant it uses: the RBAC-bound Collector, Dapr dashboard and
+  # snapshot pods. `default` is the identity every unnamed pod in the
   # namespace shares, and a Dapr control plane grants it `secrets: get` unless its `dapr_rbac.secretReader`
   # is off (deploy/fixtures/dapr/values.yaml). Pinned by
   # tests/unit/test_a_first_party_pod_cannot_read_a_secret_through_the_kube_api.py.
@@ -539,19 +539,18 @@ security:
   # after these boot green — the label itself is a kubectl step, the namespace isn't chart-owned).
   # Per-image uid/fsGroup (data/secret holders need the RIGHT ids for their PVCs, not helper reuse):
   infraContexts:
-    # -- Applies pinned runAsUser/fsGroup securityContexts to the infra pods (AGE, OpenBao). Off by default.
+    # -- Applies pinned runAsUser/fsGroup securityContexts to the infra pods (the AGE Postgres). Off by default.
     enabled: false
     # -- uid/fsGroup for the AGE Postgres pod (postgres image uid/gid 999).
     age: { runAsUser: 999, fsGroup: 999 } # postgres official image uid/gid
-    # -- uid/fsGroup for the OpenBao pod (image uid 100).
-    openbao: { runAsUser: 100, fsGroup: 1000 } # hashicorp vault-family image uid
 
 # === Network isolation (opt-in; requires a policy-enforcing CNI e.g. Calico/Cilium) ===============
 # k3s's default kindnet/flannel does NOT enforce NetworkPolicy, so this is a no-op there — it is prod
 # hardening. When enabled: namespace default-deny Ingress+Egress, kube-dns egress allow (same change —
 # the audit's footgun), intra-namespace allows, api-server egress, and EXCLUSIVE client lists for the
-# guarded stores (openbao ← secret-consuming app pods ONLY; age-postgres ← its real clients;
-# minio ← the data plane). Default OFF; flip in values-prod on a policy-enforcing CNI.
+# guarded stores (the secret store ← the pods whose sidecar reads it ONLY, as the dev store's ingress or
+# as egress to the platform's; age-postgres ← its real clients; minio ← the data plane). Default OFF;
+# flip in values-prod on a policy-enforcing CNI.
 # ⚠ Under default-deny, EVERY Job/CronJob pod template needs explicit component labels or the policy
 # blocks it silently (kindnet hides the failure) — see the templates' job specs.
 networkPolicy:
@@ -562,20 +561,20 @@ networkPolicy:
   # network-policy.yaml (3e)/(3f).
   # -- Renders default-deny NetworkPolicies with explicit allows and exclusive client lists for the guarded stores. Needs a policy-enforcing CNI.
   enabled: false
-  # Extra `from` peers for the openbao policy — e.g. the external-secrets operator's namespace:
+  # Extra `from` peers for the development store's policy — e.g. the external-secrets operator's namespace:
   # [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: external-secrets}}}]
-  # -- List of extra NetworkPolicy `from` peers allowed to reach OpenBao (e.g. the external-secrets namespace).
+  # -- List of extra NetworkPolicy `from` peers allowed to reach the development store (`openbao.enabled`; e.g. the external-secrets namespace).
   openbaoExtraFrom: []
   # Extra `from` peers for the minio policy — a client outside the release's component labels:
   # -- List of extra NetworkPolicy `from` peers allowed to reach the object store.
   minioExtraFrom: []
   # Extra egress rules (verbatim NetworkPolicy egress entries) for externalized backends —
   # off-cluster S3, a NATS outside this namespace (nats.url), the platform's Postgres (age.externalHost), the Ray
-  # dashboard (ray.dashboardUrl), the platform's IdP. The API server, the telemetry backend, the Gateway and an
-  # external OpenFGA take rules of their own, scoped to the pods that dial them.
+  # dashboard (ray.dashboardUrl), the platform's IdP. The API server, the telemetry backend, the Gateway, an
+  # external OpenFGA and the platform's secret store take rules of their own, scoped to the pods that dial them.
   # -- List of extra egress rules, verbatim NetworkPolicy entries, for external backends (off-cluster S3, managed NATS, Postgres, Ray, the IdP). Each rule names its `to` peers; the render refuses one that admits every destination.
   extraEgress: []
-  # The pods that call the Kubernetes API (the token verifiers, OpenBao's login reviews, the Collector's pod metadata,
+  # The pods that call the Kubernetes API (the token verifiers, the dev store's login reviews, the Collector's pod metadata,
   # the snapshot CronJob, the Dapr dashboard) reach it through these rules and no other pod does. The API server is
   # Service-less from a policy's view: the CNI judges the endpoint after the `kubernetes` Service's translation, so
   # state the endpoints `kubectl get endpointslice -n default -l kubernetes.io/service-name=kubernetes` lists, at
@@ -935,7 +934,7 @@ catalog:
     # -- Map of data-base URI to a Dapr secret-store reference naming that base's credential. Every key must also be in `dataBases` or the render fails. Empty = estate options.
     baseCredentialRefs: {}
     # LOCAL FIXTURE for the references above, off by default and refused at render on a real deployment
-    # (`rask.isRealDeployment`), with MinIO off, or without the bundled dev-mode OpenBao. In production
+    # (`rask.isRealDeployment`), with MinIO off, or without the development store (`openbao.enabled`). In production
     # the store, its users and the secret each reference names are platform-run: an operator creates
     # them and the chart only names them. On, for every reference:
     #   * `minio-scoped-users` creates the bucket if missing, a policy `rask-base-<ref>` that reaches
@@ -950,7 +949,7 @@ catalog:
     # key, a re-run is idempotent, and the seed's own re-seed loop restores the entry after an in-place
     # OpenBao restart or a replaced pod. It is a fixture identity, not a tenant's: it proves the per-base
     # credential path end to end.
-    # -- Local fixture: create each referenced base's bucket, scoped MinIO user and dev-OpenBao secret. Refused on a real deployment, without MinIO or without the dev OpenBao.
+    # -- Local fixture: create each referenced base's bucket, scoped MinIO user and dev-store secret. Refused on a real deployment, without MinIO or without the development store.
     devSeed: false
   # Control-plane change-events: every governance/metadata mutation (grants/warehouses/policies/tables)
   # publishes a CatalogControlEvent onto a DEDICATED broadcast Dapr topic (catalog.control.v1, no
@@ -1860,7 +1859,7 @@ nats:
   # half of each is its own component: maintenance and the annotator announce on `<pubsub.controlName>-<app>`, and
   # maintenance publishes its lineage on `lineage-pubsub-maintenance` even with the write-event lane off.
   #
-  # THE DEV MINT (openbao.yaml; owner ruling R1: the NATS fixture and the bundled OpenBao are dev stand-ins, and their
+  # THE DEV MINT (openbao-seed.yaml; owner ruling R1: the NATS fixture and the dev OpenBao are dev stand-ins, and their
   # durability across a stand-in's loss is not a goal). The dev store is the fixture bus's issuer, and grants ESO read on
   # `nats-server`, `nats-route` and `nats-user-monitor`, which the fixture's ExternalSecrets write into its config. The `mint` init container copies nsc and nk out of nats-box; the seed carries the trust root
   # (`nats-root`: the operator and account keys nsc keeps, never a user's) and the route credential (`nats-route`: user,
@@ -1875,8 +1874,8 @@ nats:
   # the global account today. An account limit counts every replica (measured: an R3 stream reserving 400MB is refused under a
   # 1G limit), so a 1Gi limit would hold a third of what the disks do.
   #
-  # PRODUCTION (R1): the platform runs NATS and its store; rask names the credentials and owns no trust root. A store this chart
-  # does not seed (openbao.devMode=false or openbao.externalAddr) fails the render until `provisioned` attests that every
+  # PRODUCTION (R1): the platform runs NATS and its store; rask names the credentials and owns no trust root. The platform's
+  # store (openbao.enabled=false), which this chart does not seed, fails the render until `provisioned` attests that every
   # `nats-user-<user>` exists, issued by the bus's operator with this table's permissions.
   #
   # THE SERVER'S MODE is the bus's setting, not rask's: off, a server takes anyone and ignores a presented credential, so every
@@ -1889,7 +1888,7 @@ nats:
   # one it already holds: it signs every control event; ackPolicy none does not stop daprd 1.18.1 acking, measured);
   # 8222 monitoring is unauthenticated by design; and anything holding OpenBao's dev root token reads the store (XC-079).
   auth:
-    # -- Attests the platform store holds every `nats-user-<user>`; required when the store is not the chart's dev OpenBao.
+    # -- Attests the platform's store holds every `nats-user-<user>`; required when the store is the platform's (`openbao.enabled` false).
     provisioned: false
     # -- Extra user grants keyed by a values flag path, merged into `nats.auth.users` only while that flag is true (lance.natsTable).
     flagged:
@@ -2355,28 +2354,24 @@ dex:
     # -- Plain password of the publish saga's service account, seeded into OpenBao; must match the hash the development Dex holds (demo default `password`).
     password: password
 
-# === OpenBao — the secret store the Dapr secret stores and ESO read ================================
+# === The secret store the Dapr secret store and ESO read: the platform's, or the dev OpenBao fixture =====
+# The chart renders no secret store ([[XC-149]], ADR 0153). Production names the platform's Vault or OpenBao; development
+# uses deploy/fixtures/openbao, an in-memory OpenBao with a fixed root token that this chart seeds.
 openbao:
-  # -- An in-cluster OpenBao at `<release>-openbao`: with `devMode` the development store (deploy/fixtures/openbao), whose seed runs the scripts this chart renders (`<release>-openbao-seed`); without it the sealed server this chart renders.
+  # -- This estate uses the development store (deploy/fixtures/openbao, Service `<release>-openbao`): in memory, auto-unsealed, a fixed root token, seeded by the scripts this chart renders (`<release>-openbao-seed`). A real deployment refuses it. False reads the platform's store at `externalAddr`.
   enabled: true
-  # -- OpenBao container image; also used by the MinIO scoped-users hook.
-  image: openbao/openbao:2.2.0
-  # -- Port of the OpenBao Service.
+  # -- Port of the development store's Service.
   port: 8200
-  # devMode=true → in-memory, auto-unsealed, fixed root token (demo ONLY — anyone in-cluster can read
-  # everything with `root`). Set devMode=false for the prod path: a sealed, file-backed server on a PVC
-  # that an operator must `bao operator init` + unseal, with real auth — no fixed root token, no auto-seed.
-  # -- The development store: in-memory, auto-unsealed with a fixed root token (demo only), run by the openbao fixture. False renders a sealed file-backed server an operator must init and unseal.
-  devMode: true
-  # -- Root token of the development store (the openbao fixture's `devToken`), which the Dapr secret store presents when `devMode` is true.
-  devToken: root # dev-mode root token (devMode=true only)
-  # -- PVC size of the file backend when `devMode` is false.
-  storage: 1Gi # PVC size for the prod (devMode=false) file backend
-  # Externalize: when set, the Dapr secret store points at THIS Vault/OpenBao address instead of the
-  # in-cluster server — pair with openbao.enabled=false to use an external Vault. The apps still consume
-  # via Dapr (no plaintext fallback) because secretsViaDapr keys off this too.
-  # -- Address of an external Vault/OpenBao the secret stores point at instead of the in-cluster server; pair with `openbao.enabled=false`.
+  # -- Root token of the development store (the openbao fixture's `devToken`), which the Dapr secret store presents.
+  devToken: root
+  # The platform's store is reached over TLS only: every sidecar sends the store's token to it, so the render refuses an
+  # http address. Its certificate must chain to a CA the sidecars and ESO trust by default; the chart names no CA bundle.
+  # -- The platform's Vault or OpenBao (https), which the Dapr secret store and ESO's SecretStore read when `enabled` is false; required then, and refused beside `enabled`.
   externalAddr: "" # e.g. https://vault.internal:8200
+  # Only the pods whose sidecar reads the store (every app the Dapr secret store is scoped to, `lance.secretScopes`) reach
+  # it, at the addresses the platform states: no URL derives the peers a CNI judges.
+  # -- NetworkPolicy egress rules ({to, ports}) admitting the store's readers to the platform's store. Required under networkPolicy.enabled when `enabled` is false.
+  egress: []
 
 # === Event signing keys ([[LH-064]]) ======================================================================
 # Every identity in `lance.signingIdentities` (the catalog and maintenance) signs the lineage it emits with its own Ed25519 key, so lineage holds public keys only and cannot
@@ -2388,7 +2383,7 @@ openbao:
 # The field names stay disjoint from the fields a runtime-named reader requires (access_key, secret_key, token,
 # aws_access_key_id), so a warehouse record that names signing-key-<key> returns nothing.
 #
-# THE DEV OPENBAO MINTS AND CARRIES THEM (templates/openbao.yaml). A `mint` init container runs
+# THE DEV OPENBAO MINTS AND CARRIES THEM (templates/openbao-seed.yaml, run by the openbao fixture's pod). A `mint` init container runs
 # `nk -gen user -pubout` once per identity and leaves each candidate pair on a memory emptyDir that the openbao
 # container does not mount; it prints names only and always exits 0, so a failed mint costs that one signer its key
 # (the signer stays not Ready) and never the baseline seed or the `openbao-seeded` readiness key. The `seed`
@@ -2467,16 +2462,12 @@ signing:
   # door. observe is the mode to soak a change to who signs before enforcing it.
   # -- Mode of the bus doors' signature check: "off", "observe" (count would-refuse) or "enforce" (ack and refuse). Always quoted.
   doors: "enforce"
-  # NON-DEV STORES (openbao.devMode=false, or openbao.externalAddr) MINT NOTHING, so every signer would stay not
+  # THE PLATFORM'S STORE (openbao.enabled=false) MINTS NOTHING, so every signer would stay not
   # Ready. The render fails until the operator attests here that signing-public-<key> and then
   # signing-key-<key> exist for every identity the failure names. Tooling for that, and rotation on such a
   # store, is the production runbook, which waits for a production estate (owner, no-prod parking 2026-09-21).
-  # -- Attest that signing keys exist for every identity in a non-dev store; the render fails until it is true there.
+  # -- Attest that signing keys exist for every identity in the platform's store; the render fails until it is true there.
   provisioned: false
-  # The `mint` init container's image, the one place it is pinned. `nk` is measured working as uid 65532 with a
-  # read-only root.
-  # -- Image of the dev OpenBao's `mint` init container that generates each identity's NKEY pair.
-  mintImage: natsio/nats-box:0.19.7
 
 # === external-secrets.io — the PREREQUISITE every pod without a sidecar takes its credentials through.
 # The External Secrets Operator is platform-run and rask never installs it (owner, 2026-10-05): install it
@@ -2485,7 +2476,7 @@ signing:
 # with `--api-versions external-secrets.io/v1/ExternalSecret` (and
 # `generators.external-secrets.io/v1alpha1/Password` for the dev OpenBao's generated credentials).
 # templates/external-secrets.yaml creates a SecretStore (→ the store) and one ExternalSecret per Secret a
-# pod without a sidecar mounts. With the chart's dev OpenBao its seed also provisions the auth half: the
+# pod without a sidecar mounts. With the dev OpenBao (`openbao.enabled`) the seed this chart renders also provisions the auth half: the
 # kubernetes auth backend, a policy granting READ on exactly the paths those ExternalSecrets name, and the
 # role below bound to the operator's ServiceAccount (measured 2026-09-08: without it every ExternalSecret
 # sat in SecretSyncedError). A platform store is provisioned by its operator.

@@ -182,16 +182,17 @@ func (m *Rask) Charts(
 // to Docker Hub and ImagePullBackOff), not about which registry.
 //
 // NO CREDENTIAL IS AN ARGUMENT ([[XC-004]]): the chart takes none as a value and refuses one, so a
-// real-registry render points at the platform's store (`openbao.devMode=false`) and the External Secrets
-// Operator, a prerequisite the render checks through `.Capabilities`, is named with `--api-versions`.
+// real-registry render points at the platform's store (`openbao.enabled=false`, `openbao.externalAddr`, [[XC-149]]) and
+// the External Secrets Operator, a prerequisite the render checks through `.Capabilities`, is named with `--api-versions`.
 // The bundled dev Dex is refused on a real deployment (its credentials are published, XC-025), so this
 // real-registry shape turns it off as values-prod.yaml does. `signing.provisioned` is the operator's attestation
-// that the event-signing keys exist, without which `templates/signing-provisioned.yaml` refuses a sealed store;
+// that the event-signing keys exist, without which `templates/signing-provisioned.yaml` refuses the platform's store;
 // `nats.auth.provisioned` attests every bus client's NATS user the same way (`templates/nats-provisioned.yaml`).
 // `ray.dashboardUrl` names the estate's Ray, the one address every Ray consumer renders ([[CP-041]]). `nats.url` names the
 // platform's NATS bus the same way: a prerequisite rask never installs ([[XC-129]]), and `route.*` the platform's Gateway
-// the routes attach to and its in-cluster address (ADR 0165). `networkPolicy.apiServerEgress` and `route.edgeEgress` state the
-// peers the isolation layer admits the API server and the Gateway at, which no URL can derive ([[XC-143]]).
+// the routes attach to and its in-cluster address (ADR 0165). `networkPolicy.apiServerEgress`, `route.edgeEgress` and
+// `openbao.egress` state the peers the isolation layer admits the API server, the Gateway and the platform's secret store
+// at, which no URL can derive ([[XC-143]]).
 const renderArgs = "--set image.repository=ghcr.io/example/rask " +
 	"--set-string ray.dashboardUrl=http://ray.example.com:8265 " +
 	"--set-string nats.url=nats://nats.example.com:4222 " +
@@ -205,13 +206,16 @@ const renderArgs = "--set image.repository=ghcr.io/example/rask " +
 	"--api-versions dapr.io/v1alpha1 " +
 	"--set-string auth.oidc.issuer=https://auth.example.com/dex " +
 	"--set-string frontend.oidc.publicOrigin=http://localhost:8080 " +
-	"--set openbao.devMode=false " +
+	"--set openbao.enabled=false " +
+	"--set-string openbao.externalAddr=https://vault.example.com:8200 " +
+	"--set openbao.egress[0].to[0].ipBlock.cidr=198.51.100.20/32 " +
+	"--set openbao.egress[0].ports[0].port=8200 " +
 	"--set signing.provisioned=true " +
 	"--set nats.auth.provisioned=true " +
 	"--set dex.enabled=false"
 
 // networkPolicyGate: the NetworkPolicy layer is off by default and, when flipped on, renders the full
-// isolation set (default-deny, DNS allow, the exclusive openbao lock). Copied verbatim from ci.yml.
+// isolation set (default-deny, DNS allow, the egress that admits only the secret store's readers).
 const networkPolicyGate = `set -euo pipefail
 RENDER_ARGS="` + renderArgs + `"
 # Render CONFIGURATION, not prose. Every assertion in these gates is about what the chart produces for
@@ -237,7 +241,7 @@ count=$(grep -c "kind: NetworkPolicy" /tmp/np.yaml); [ "$count" -ge 9 ] || exit 
 grep -q "default-deny" /tmp/np.yaml
 grep -q "allow-dns" /tmp/np.yaml
 grep -q "k8s-app: kube-dns" /tmp/np.yaml
-grep -q -- "-openbao" /tmp/np.yaml
+grep -q -- "-allow-secret-store-egress" /tmp/np.yaml
 grep -q "NotIn" /tmp/np.yaml`
 
 // securityGate: the DEFAULT render wires a dedicated tokenless SA into every first-party pod; the infra

@@ -19,7 +19,7 @@ claim below was verified against the render or the code (2026-08-28), not inheri
 | Pub/sub | ✅ | `pubsub.jetstream`, one Component per app-id that publishes or subscribes, each scoped to ONE app-id and naming that app's NATS user from the store (`jwt`/`seedKey` secretKeyRef to `nats-user-<app>`, `auth.secretStore: lance-secrets`; the permission table is `nats.auth.users` in values.yaml, [[XC-078]]); `DaprApp.subscribe` incl. a DLQ route; `queueGroupName` makes replicas competing consumers |
 | Bindings | ✅ | `bindings.cron` ×7 in the product chart: `maintenance-cron` (the sweep), `maintenance-reconcile-cron`, `lineage-relay-cron` (drains the outbox, prunes the feed, forwards to the graph backend), `notifications-reconcile-cron`, `catalog-control-relay-cron`, `catalog-erasure-release-cron` (ADR 0138, releasing an erasure's pinning tags and branches when due), `catalog-promotion-expiry-cron` (ADR 0161, expiring promotion holds past their review deadline); the compute fixture chart (`deploy/fixtures/compute`, ADR 0155) renders a seventh, `compute-prune-jobs-cron` — read the cluster for what runs, not the templates. Plus `bindings.smtp`, `bindings.http` — all delivered to `POST /<component-name>` at the pod ROOT |
 | Actors | ✅ | `DaprActor` ×17, `ActorProxy` ×28 (notifications inbox, project tasks) |
-| Secrets | ✅ | `secretstores.hashicorp.vault` → OpenBao. THE estate rule: sole source, fail-closed, never env fallback |
+| Secrets | ✅ | `secretstores.hashicorp.vault` → the platform's Vault or OpenBao (the dev OpenBao fixture in development; the chart renders none, [[XC-149]]). THE estate rule: sole source, fail-closed, never env fallback |
 | Workflow | ✅ | `DaprWorkflowClient`, `WorkflowRuntime` in `services/flows` only. The lakehouse runs no workflow: the import contract `the-lakehouse-is-not-built-on-a-workflow-engine` forbids it (ADR 0154). The promotion gate is a tag, not a saga: readers read `@published`, approval moves the tag, rejection restores main, a cron sweep expires stale holds (ADR 0156 C1, ADR 0161, [[LH-466]]) |
 | Configuration | ❌ | Ruled out — see refusals |
 | Middleware | ❌ | Ruled out — see refusals |
@@ -52,7 +52,7 @@ claim below was verified against the render or the code (2026-08-28), not inheri
 - **The block is Alpha and the need is load-bearing.** Alpha components (lock, most middleware) may
   churn; a correctness-critical seam should not pivot on one without a recorded owner decision.
 
-**Never DIY these, ever:** secret distribution (OpenBao via the Dapr secret store is the sole source —
+**Never DIY these, ever:** secret distribution (the store via the Dapr secret store is the sole source —
 no env fallback, no "graceful degradation"; scope the Component to every consuming app-id), pub/sub
 delivery/retry (JetStream + `dapr-resiliency.yaml`, never a hand retry loop around a publish), and
 actor placement/turn semantics.
