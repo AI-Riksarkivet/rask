@@ -859,7 +859,9 @@ def finalize(ns: LanceNamespace, staged: StagedVersion, request: CreateTableVers
     """Finalize the judged bytes through the backend's put-if-not-exists; a lost race is the backend's 409.
 
     The backend is handed the catalog's own copy, which it moves into the version slot (measured on pylance 13.0.0), so
-    the version that lands is the one judged whatever the writer puts over its staged key meanwhile.
+    the version that lands is the one judged whatever the writer puts over its staged key meanwhile. The copy carries the
+    writer's transaction byte for byte, and a client whose answer was lost relies on that: Lance reads the version back
+    and keeps the commit as its own only when the transaction there is the one it staged ([[LH-491]]).
     """
     path = f"{dataplane.object_store_path(staged.location.rstrip('/'))}/_versions/d{staged.finalize_id}.manifest"
     judged = request.model_copy(update={"manifest_path": path})

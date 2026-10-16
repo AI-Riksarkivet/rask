@@ -413,7 +413,11 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   overlay, a deletion file or row ids below the table's `next_row_id`; each added file well formed, present at its
   declared size and agreeing with its footer, at the table's file version ([[LH-211]], `client_fragments`); blob
   sidecars against the table's recorded external bases; the primary key across new rows and carried rows; a
-  rewrite's `require_compactable`. The finalize is announced with `emit_measured_write`. **A branch commit is served
+  rewrite's `require_compactable`. The finalize is announced with `emit_measured_write`. A lost answer is Lance's own
+  to recover ([[LH-491]], `verify_commit_outcome` in Lance's `rust/lance/src/io/commit.rs` at v13.0.0): it reads the
+  version back and keeps the commit only when the inline transaction there is the one it staged, so the finalize must
+  land the writer's transaction byte for byte
+  (`test_a_commit_whose_answer_is_lost_lands_once_and_the_client_gets_its_version_back`). **A branch commit is served
   the same way** ([[LH-490]], ADR 0164): pylance stages it under `tree/<branch>/` and names `branch`; the judge opens
   it at the branch's own location (`managed_versions.CommitRef`) against the branch version it follows, judges its
   bases against the table's root, and finalizes with `branch`. A branch is created through `CreateTableBranch`

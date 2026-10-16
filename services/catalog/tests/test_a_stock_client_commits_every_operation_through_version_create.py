@@ -686,6 +686,36 @@ def test_what_lands_is_what_was_judged_whatever_the_writer_puts_over_its_staged_
     assert _rows(landed) == [(1, "a"), (2, "b"), (3, "c"), (4, "d")]
 
 
+def test_a_commit_whose_answer_is_lost_lands_once_and_the_client_gets_its_version_back(served: Served, monkeypatch: pytest.MonkeyPatch) -> None:
+    """[[LH-491]]: after a failed commit attempt Lance reads the target version back and keeps the commit as its own
+    when the transaction there, the manifest's inline one, equals the one it staged (``verify_commit_outcome`` in
+    ``rust/lance/src/io/commit.rs`` at v13.0.0; ``lance_docs/file_format.md`` § Commit Algorithm covers only the rebase
+    and retry). That holds only while the catalog finalizes the writer's transaction unchanged: measured on pylance 13.0.0
+    with a finalize that changed its uuid, Lance read the landed version as another writer's, rebased and re-staged the
+    same fragment as the next version, and reported the commit's outcome unknown."""
+    from catalog.services import managed_versions
+
+    finalize = managed_versions.finalize
+    answered: list[int] = []
+
+    def answer_lost_after_the_finalize(*args: Any) -> Any:
+        landed = finalize(*args)
+        assert landed.version is not None
+        answered.append(landed.version.version)
+        if len(answered) == 1:
+            raise lance_namespace.ServiceUnavailableError("the answer to a finalized commit was lost on its way back")
+        return landed
+
+    stock = _created(served)
+    monkeypatch.setattr(managed_versions, "finalize", answer_lost_after_the_finalize)
+
+    written = lance.write_dataset(_keyed([4], ["d"]), namespace_client=stock, table_id=_TABLE, mode="append")
+
+    table = _opened(stock)
+    assert (written.version, answered, [entry["version"] for entry in table.versions()]) == (2, [2], [1, 2])
+    assert _rows(table) == [(1, "a"), (2, "b"), (3, "c"), (4, "d")]
+
+
 #: The provenance a pipeline names on a governed write (ADR 0156 C2): its run, its job, and each input at a version.
 _RUN = {"x-rask-run-id": "run-7", "x-rask-job": "nightly", "x-rask-inputs": json.dumps([{"table": ["db", "src"], "version": 1}])}
 
