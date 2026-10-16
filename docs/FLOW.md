@@ -24,7 +24,8 @@ Data enters only through the catalog's Lance Namespace doors (`CreateTable`, `In
 `MergeInsertIntoTable`, `DeclareTable` + vended credentials, `RegisterTable`; `lance_docs/ns_catalog/spec.yaml`). The
 writer is a client: the deployer's ingest job on its own compute (a sealed runner, CP-061, not yet built), or a user's
 pipeline moving data between tiers, as the live lane `tests/e2e-py/test_a_bring_your_own_pipeline_runs_end_to_end.py`
-does with stock pylance. Each door authorizes the caller on OpenFGA before it commits.
+does with stock clients: pylance seeds bronze and the lance-namespace client derives silver. Each door authorizes the
+caller on OpenFGA before it commits.
 
 → [`TIER-GOVERNANCE.md`](TIER-GOVERNANCE.md) · code: `services/catalog`
 

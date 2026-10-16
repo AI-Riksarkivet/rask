@@ -19,6 +19,7 @@ Data enters bronze the same way ([ADR 0154](adr/0154-the-lakehouse-runs-no-inges
 the bring-your-own ingest runner (CP-061) exists, a client seeds bronze through those doors itself, as the live lane
 `tests/e2e-py/test_a_bring_your_own_pipeline_runs_end_to_end.py` does with stock pylance on the credential the catalog
 vends. A create that commits no rows is a definition change; a commit that adds rows, a create included, is the arrival.
+A register adopts a dataset some other writer committed, so it is announced as a definition change naming no version.
 
 **Every tier is governed from its first row.** Because the only way in is the catalog, a table is a `table:` object
 in OpenFGA before anyone reads it; the maintenance policy, the protection record and every grant key off that object.

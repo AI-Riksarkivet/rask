@@ -194,13 +194,10 @@ def seed(root: Path | str) -> str:
     # speech_id/chunk_id are INTEGERS: the viewer builds its frame filter as
     # `speech_id = 0 AND chunk_id = 19` with unquoted numeric literals, so string columns
     # fail with "Received literal Int64(0) and could not convert to literal of type Utf8".
-    # `lance.blob_field` rather than a hand-rolled struct + `ARROW:extension:name` metadata. This was
-    # the ONLY site in the repo spelling blob-v2 by hand; every other writer uses the helpers
-    # (`medallion/services/ingest.py`). The two are not
+    # `lance.blob_field` rather than a hand-rolled struct + `ARROW:extension:name` metadata. The two are not
     # equivalent: the helper yields a real Arrow EXTENSION type (`extension<lance.blob.v2<BlobType>>`),
     # while the hand-rolled struct only carries the name as field metadata — which any process that
-    # has imported lance will fail to reconstruct across an Arrow-IPC boundary. It reads the same
-    # today and is a landmine for every door this fixture is about to be put through.
+    # has imported lance will fail to reconstruct across an Arrow-IPC boundary.
     image_field = lance.blob_field("image")
     schema = pa.schema(
         [
