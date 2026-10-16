@@ -22,8 +22,8 @@ project policy wins over the sweep's global defaults.
 
 Trust boundary: like the warehouse registry, records are trusted as written — the write path is the
 catalog's owner-gated API, and a principal with direct write access to the control bucket is already
-inside the storage trust boundary. Known limitation: dropping or renaming a table does not clean up
-its policy record; the orphan matches nothing (the path is gone) but lingers until deleted.
+inside the storage trust boundary. A record is keyed by its object's name, so a rename carries it and a
+drop or deregister ends it, through :mod:`service_kit.lakehouse.object_records`.
 
 Fields: ``retention_days`` / ``retain_versions`` (old-version cleanup overrides — Lance itself exempts
 tag-pinned versions from cleanup, so ``blessed`` and friends survive any policy), ``compact_enabled``
@@ -36,7 +36,7 @@ threadpool it.
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Final
 
 from service_kit.lakehouse.naming import CATALOG_DELIMITER
 from service_kit.lakehouse.objectfs import StorageOptions
@@ -45,7 +45,8 @@ from service_kit.lakehouse.record_store import delete_record, get_record, list_r
 
 log = logging.getLogger(__name__)
 
-_POLICIES_PREFIX = "_policies"
+#: Where the records live on the control root, one per object under ``record_key(PREFIX, kind, canonical_id)``.
+PREFIX: Final = "_policies"
 
 #: The event stem for this registry's store warnings (`<stem>_malformed`, `<stem>_unreadable`).
 _EVENT = "maintenance_policy"
@@ -53,7 +54,7 @@ _EVENT = "maintenance_policy"
 
 def put_policy(control_root: str, storage_options: StorageOptions, record: dict[str, Any]) -> None:
     """Persist one policy record (overwrite — set is idempotent)."""
-    put_record(control_root, storage_options, record_key(_POLICIES_PREFIX, record["kind"], record["id"]), record)
+    put_record(control_root, storage_options, record_key(PREFIX, record["kind"], record["id"]), record)
 
 
 def get_policy(control_root: str, storage_options: StorageOptions, kind: str, canonical_id: str) -> dict[str, Any] | None:
@@ -63,39 +64,12 @@ def get_policy(control_root: str, storage_options: StorageOptions, kind: str, ca
     ``json.loads(...)`` unguarded, so a non-object document reached :func:`resolve_policy` as whatever
     JSON was on disk. It now reads as absent, and the sweep falls back to its global defaults.
     """
-    return get_record(control_root, storage_options, record_key(_POLICIES_PREFIX, kind, canonical_id), event=_EVENT)
+    return get_record(control_root, storage_options, record_key(PREFIX, kind, canonical_id), event=_EVENT)
 
 
 def delete_policy(control_root: str, storage_options: StorageOptions, kind: str, canonical_id: str) -> bool:
     """Remove one policy record; ``False`` when it did not exist (delete is idempotent)."""
-    return delete_record(control_root, storage_options, record_key(_POLICIES_PREFIX, kind, canonical_id))
-
-
-def migrate_policy(control_root: str, storage_options: StorageOptions, kind: str, old_id: str, new_id: str) -> bool:
-    """Move one policy record to a new canonical id; ``False`` when there was nothing to move.
-
-    For RENAME, where deleting would be wrong in both directions. The record key is a hash of
-    ``kind:canonical_id`` (see :func:`service_kit.lakehouse.record_store.record_key`), so a renamed
-    object's policy no longer resolves under its
-    new id while the old key lingers forever matching nothing — the operator's retention window,
-    fragment sizing and cleanup toggles silently revert to defaults on an operation that is supposed to
-    move a table, not reconfigure it.
-
-    Migration rather than deletion is what the sibling records already do: ``rename_table`` migrates the
-    FGA tuples from the old id to the new, on the principle that a rename relocates an object and keeps
-    everything attached to it. The policy is attached to the object, not to the name.
-
-    Writes the destination BEFORE removing the source, so a failure mid-way leaves a duplicate (both ids
-    resolve, the new one correctly) rather than a table with no policy at all — the same
-    seed-then-revoke ordering, and for the same reason: of the two imperfect failure states, the
-    recoverable one is the one that keeps configuration alive.
-    """
-    record = get_policy(control_root, storage_options, kind, old_id)
-    if record is None:
-        return False
-    put_policy(control_root, storage_options, {**record, "id": new_id})
-    delete_policy(control_root, storage_options, kind, old_id)
-    return True
+    return delete_record(control_root, storage_options, record_key(PREFIX, kind, canonical_id))
 
 
 def list_policies(control_root: str, storage_options: StorageOptions) -> list[dict[str, Any]]:
@@ -106,7 +80,7 @@ def list_policies(control_root: str, storage_options: StorageOptions) -> list[di
     silently dropped every policy would maintain opted-out datasets and ignore protective retention.
     """
     out: list[dict[str, Any]] = []
-    for record in list_records(control_root, storage_options, _POLICIES_PREFIX, event=_EVENT):
+    for record in list_records(control_root, storage_options, PREFIX, event=_EVENT):
         if _record_is_well_formed(record):
             out.append(record)
         else:
@@ -202,7 +176,7 @@ def _state_key(record: dict[str, Any], uri: str) -> str:
     # `<id>:<uri>` is what the stamp is FOR, so it takes the canonical-id slot and the digest is
     # byte-identical to the hand-rolled sha256 this used to carry (pinned in the drain suite, because
     # changing it orphans every stamp already written and re-maintains every dataset once).
-    return record_key(f"{_POLICIES_PREFIX}/state", str(record["kind"]), f"{record['id']}:{uri}")
+    return record_key(f"{PREFIX}/state", str(record["kind"]), f"{record['id']}:{uri}")
 
 
 def read_state(control_root: str, storage_options: StorageOptions, record: dict[str, Any], uri: str) -> str | None:
@@ -236,11 +210,11 @@ def read_planned_version(control_root: str, storage_options: StorageOptions, uri
     Treating an unreadable stamp as "recently planned" would silence maintenance for that dataset until
     someone noticed, which is the failure mode the cadence stamp's own docstring warns about.
     """
-    record = get_record(control_root, storage_options, record_key(f"{_POLICIES_PREFIX}/state", _EVENT_STATE_KIND, uri), event="maintenance_event_state")
+    record = get_record(control_root, storage_options, record_key(f"{PREFIX}/state", _EVENT_STATE_KIND, uri), event="maintenance_event_state")
     value = record.get("last_planned_version") if record else None
     return value if isinstance(value, int) else None
 
 
 def write_planned_version(control_root: str, storage_options: StorageOptions, uri: str, version: int) -> None:
     """Stamp the version this lane planned at (overwrite — only the latest matters)."""
-    put_record(control_root, storage_options, record_key(f"{_POLICIES_PREFIX}/state", _EVENT_STATE_KIND, uri), {"last_planned_version": version})
+    put_record(control_root, storage_options, record_key(f"{PREFIX}/state", _EVENT_STATE_KIND, uri), {"last_planned_version": version})

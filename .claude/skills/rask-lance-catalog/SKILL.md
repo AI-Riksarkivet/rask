@@ -244,6 +244,11 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   `_META_READ_ACTIONS`/`_DATA_READ_ACTIONS`/`_MAINTENANCE_ACTIONS`) —
   `services/catalog/tests/test_an_undeclared_door_is_refused.py` walks every mounted route and fails
   on one that has none. The record dies with the object: drop/deregister clear it so a reused id can't inherit it.
+  A rename carries it ([[LH-215]]): a table's id is its name, so the rename moves every record in
+  `service_kit.lakehouse.object_records.OBJECT_RECORD_PREFIXES` (protection, maintenance policy) to the new name,
+  hands its data directories' claims over, and writes every grant held on the old name onto the new one in the
+  seed batch before revoking the old (`fga_deps.move_ownership`). Every door that ends an object (drop, deregister,
+  a cascade, the trash purge) ends that same list through `object_records.end_object_records`.
   A destructive CASCADE destroys its children INSIDE one native call, so they never re-enter this
   door — `drop_namespace` therefore enumerates `_collect_descendants` whenever `behavior=cascade`
   (no longer gated on `fga_enabled`) and protection-checks EVERY enumerated id before anything

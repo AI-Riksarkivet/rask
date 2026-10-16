@@ -79,7 +79,7 @@ from catalog.services import dataplane, native, table_bases, table_claims, wareh
 from service_kit.control_emit import emit_control
 from service_kit.governed import fga
 from service_kit.governed.audit import SUCCESS, audit
-from service_kit.lakehouse import base_registry, location_claims, maintenance_policies, protection, trash
+from service_kit.lakehouse import base_registry, location_claims, object_records, protection, trash
 from service_kit.lakehouse.ns_errors import PartiallyApplied
 
 
@@ -706,19 +706,14 @@ async def drop_table(
             await run_in_threadpool(location_claims.release, table_claims.claim_store(settings), response.location, canonical)
     else:
         response = DropTableResponse()
-    # The record's job ends with the object: clear it so a LATER table reusing this id does not
-    # inherit a protection nobody set on it (the same reuse rule as the FGA revoke below).
-    if guard:  # only when one existed — a clear on nothing is a guaranteed-wasted S3 DELETE per drop
-        await run_in_threadpool(protection.clear_protection, settings.registry_root, settings.storage_options(), "table", canonical)
-    # The MAINTENANCE POLICY is the same kind of record and needs the same reuse rule — it had none, so
-    # `delete_policy` was reachable only from the explicit policy-delete endpoints and a destroyed table
-    # left its policy behind forever. That record is not inert: the sweep discovers datasets by walking
-    # storage for a `_versions/` marker, not by reading the registry, so a re-created table at the same
-    # id is swept under a retention window and fragment sizing nobody set on it.
-    # NOT on the recoverable path, exactly as the namespace door keeps its warehouse binding and the
-    # drop keeps its grants: undrop restores the table, and it must come back configured as it was.
+    # What the table held under its name dies with it, so a LATER table at this id inherits none of it ([[LH-215]]): the
+    # sweep finds a dataset by walking storage, not the registry, so a policy left here governs whatever is created at
+    # the id next. A recoverable drop keeps its maintenance policy for the undrop, as it keeps its grants, and the trash
+    # purge ends both. Its protection goes now, because the drop it guarded has happened.
     if not trashed:
-        await run_in_threadpool(maintenance_policies.delete_policy, settings.registry_root, settings.storage_options(), "table", canonical)
+        await run_in_threadpool(object_records.end_object_records, settings.registry_root, settings.storage_options(), "table", canonical)
+    elif guard:
+        await run_in_threadpool(protection.clear_protection, settings.registry_root, settings.storage_options(), "table", canonical)
     # Record the drop as best-effort lineage — provenance of the deletion (the dataset node persists in the
     # graph, named a `drop_table` run). Inline-awaited (NOT BackgroundTasks) → reaches the durable
     # Dapr/JetStream transport before the response; best-effort, so it never fails the drop. Emitted BEFORE
@@ -787,8 +782,8 @@ async def deregister_table(
     # The detached bytes are nobody's now, so the id's claim on them goes ([[LH-204]]).
     if response.location:
         await run_in_threadpool(location_claims.release, table_claims.claim_store(settings), response.location, canonical)
-    if guard:  # only when one existed — a clear on nothing is a guaranteed-wasted S3 DELETE per drop
-        await run_in_threadpool(protection.clear_protection, settings.registry_root, settings.storage_options(), "table", canonical)
+    # The table leaves governance, so what it held under its name goes, or a table registered at this id inherits it.
+    await run_in_threadpool(object_records.end_object_records, settings.registry_root, settings.storage_options(), "table", canonical)
     # Record the detach as best-effort lineage — asymmetric with drop (which deletes data), deregister
     # only detaches, so without this marker the feed reads it as a still-live, never-touched table.
     # Versionless (no data was written), inline-awaited so it reaches the durable transport before the
@@ -1277,6 +1272,29 @@ async def set_table_protection(
     return ProtectionResponse(id=canonical, protected=body.protected)
 
 
+async def _carry_what_the_name_holds(settings: Settings, location: str, *, source: list[str], destination: list[str]) -> None:
+    """Move what a renamed table holds on the control root under its old name to its new one ([[LH-215]]).
+
+    Its protection and maintenance policy (`object_records`), and its claims on its data directories ([[LH-252]]):
+    left with the old name, a directory's holder no longer resolves and the next registration declaring it is admitted
+    once the claim's lease has run. Logged, never raised: the native rename has committed, and a failure here must not
+    strand the caller after it. Each carry is attempted whatever the other did, and what failed to move stays under the
+    old name, where an operator reading the log finds it.
+    """
+    old = fga.canonical_object_id(source, delimiter=settings.delimiter)
+    new = fga.canonical_object_id(destination, delimiter=settings.delimiter)
+    so = settings.storage_options()
+    try:
+        await run_in_threadpool(partial(object_records.move_object_records, settings.registry_root, so, "table", old_id=old, new_id=new))
+    except Exception as exc:  # noqa: BLE001 — the rename has committed; what did not move is logged, not raised
+        log.error("rename_records_not_carried", extra={"source": old, "destination": new, "error": str(exc)[:300]})
+    registry = base_registry.BaseRegistry(control_root=settings.registry_root, storage_options=so)
+    try:
+        await run_in_threadpool(partial(base_registry.hand_over_data_directories, registry, location, previous=old, table=new, segments=destination))
+    except Exception as exc:  # noqa: BLE001 — as above: logged, so the directories left with the old name are found
+        log.error("rename_data_directories_not_handed_over", extra={"source": old, "destination": new, "error": str(exc)[:300]})
+
+
 @router.post("/{id}/rename", response_model_exclude_none=True)
 async def rename_table(
     id: str,
@@ -1304,7 +1322,9 @@ async def rename_table(
 
     The caller must hold ``can_drop`` on the source (owner tier, gated by the router ``authorize``) AND
     ``can_create_table`` on the DESTINATION parent — else a source owner could plant their table into a
-    namespace/tenant they lack create rights on. FGA tuples migrate from the old id to the new; a
+    namespace/tenant they lack create rights on. What the table holds under its name moves from the old id to the
+    new ([[LH-215]]): every grant (``fga_deps.move_ownership``), its protection and maintenance policy and its data
+    directories' claims (``_carry_what_the_name_holds``). A
     versionless REGISTER marker records the attachment at the new id, with the source as its input, so the
     destination's provenance continues from the source's. Source missing → 404
     ``TableNotFound``; destination name taken → 409 ``TableAlreadyExists``; the location held by a
@@ -1318,10 +1338,10 @@ async def rename_table(
     segments = parse_identifier(id, settings.delimiter)
     body.id = reconcile_body_id(segments, body.id)  # a contradictory body id is a 400, like every {id} route
     # #73: a rename RETIRES the source id, so the source's protection gates it exactly like drop even
-    # though no byte moves. The bytes surviving is not the point — a protected table's protection record,
-    # its policies and every grant are keyed on the id, and a rename takes the table out from under all
-    # three. `force` rides the query string as on the sibling doors. Checked FIRST — before the
-    # parent/create gates — so a protected source refuses identically regardless of destination.
+    # though no byte moves: every reader and pipeline addressing the table by its id loses it. `force` rides
+    # the query string as on the sibling doors, and the protection travels with the table to its new name.
+    # Checked FIRST — before the parent/create gates — so a protected source refuses identically regardless
+    # of destination.
     canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
     guard = await run_in_threadpool(protection.get_protection, settings.registry_root, settings.storage_options(), "table", canonical)
     fga_deps.require_not_protected(guard or {}, kind="table", obj_id=canonical, force=force)
@@ -1343,6 +1363,8 @@ async def rename_table(
     # parent BEFORE the (destructive, relocating) rename — else a source-table owner could plant their table
     # into a namespace/tenant they have no create rights on. (authorize already gated can_drop on the source.)
     await fga_deps.require_create_on_parent(client, settings, token, resource="table", segments=new_segments)
+    # The grants follow the table, so each is judged as a grant on the destination before anything moves.
+    await fga_deps.require_grants_may_follow(client, settings, resource="table", source=segments, destination=new_segments)
     new_segments, location = await run_in_threadpool(
         partial(
             dataplane.rename_table,
@@ -1356,6 +1378,7 @@ async def rename_table(
             root=settings.root,
         )
     )
+    await _carry_what_the_name_holds(settings, location, source=segments, destination=new_segments)
     # Emit the SOURCE's terminal marker BEFORE revoking its tuples. The default ``http`` lineage transport
     # runs ``enforce_output_authz`` (``can_write_data`` on the source); revoking first deletes the
     # parent→writer edge, so even an admin would 403 and this best-effort emit would be silently swallowed —
@@ -1375,49 +1398,9 @@ async def rename_table(
         operation=DEREGISTER_TABLE,
         authorization=authorization,
     )
-    # SEED THE DESTINATION FIRST, then revoke the source. The order is the fix, and it is a deliberate
-    # choice between two imperfect failure states (owner ruling 2026-08-15, diff2 F3).
-    #
-    # It was revoke-then-seed. The native rename has already committed by this point, so if the seed
-    # then failed the table existed at the NEW id holding no tuples at all, while the OLD id's grants
-    # had just been deleted — no owner anywhere, and `can_drop: owner` (with `owner from parent`
-    # unable to help, since seed writes owner and parent as ONE batch) means literally nobody in the
-    # estate could act on it. Permanently stranded, repairable only by hand-written tuples.
-    #
-    # Seeding first inverts which half is lost: a failed REVOKE leaves a stale grant on the source id,
-    # which no longer names a table. That is a real but narrow risk — it only matters if that exact id
-    # is later reused, and a create at a reused id revokes what it finds there before seeding
-    # (`seed_ownership(created=True)`, [[LH-480]]). Weighed against an object nobody can touch, the estate
-    # prefers the recoverable state: the table always has a live owner who can finish the cleanup.
-    #
-    # The revoke is best-effort for the same reason the compensations are: it is an OpenFGA call, and
-    # if OpenFGA is what is down, failing the whole rename here would strand the caller after a native
-    # mutation that already succeeded. The stale grant is logged, not raised.
-    await fga_deps.seed_ownership(client, settings, token, resource="table", segments=new_segments, created=True)
-    try:
-        await fga_deps.revoke_ownership(client, settings, resource="table", segments=segments, token=token)
-    except Exception as revoke_exc:
-        log.warning(
-            "rename_source_revoke_failed",
-            extra={"source": fga.canonical_object_id(segments, delimiter=settings.delimiter), "error": str(revoke_exc)},
-        )
-    # The MAINTENANCE POLICY migrates with the tuples, for the same reason they do: a rename relocates an
-    # object and keeps what is attached to it. Nothing moved it before, so the record stayed keyed to the
-    # OLD canonical id — `_key` hashes `kind:canonical_id` — and therefore matched nothing while the
-    # renamed table silently reverted to default retention, fragment sizing and cleanup toggles. A rename
-    # is supposed to move a table, not reconfigure it. Best-effort and logged, never raised: the native
-    # rename has already committed by here, so a failed policy move must not strand the caller.
-    try:
-        await run_in_threadpool(
-            maintenance_policies.migrate_policy,
-            settings.registry_root,
-            so,
-            "table",
-            canonical,
-            fga.canonical_object_id(new_segments, delimiter=settings.delimiter),
-        )
-    except Exception as policy_exc:
-        log.warning("rename_policy_migrate_failed", extra={"source": canonical, "error": str(policy_exc)})
+    # The grants follow the table ([[LH-215]]): every grant held on the old name is written on the new one in the
+    # batch that seeds it, and only then is the old name revoked (`fga_deps.move_ownership`).
+    await fga_deps.move_ownership(client, settings, token, resource="table", source=segments, destination=new_segments)
     # …then the DESTINATION's (re)attachment at its new location — AFTER its ownership is seeded, so the
     # emit's own ``can_write_data`` check passes on the http transport. Versionless: the relocate preserved
     # the on-disk version along with the whole version history, and the marker names none of it.

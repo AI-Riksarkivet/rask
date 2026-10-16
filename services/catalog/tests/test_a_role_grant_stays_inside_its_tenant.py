@@ -23,7 +23,7 @@ import pytest
 from lance_namespace import InvalidInputError
 from openfga_sdk import OpenFgaClient
 
-from catalog.api.v1.endpoints import access
+from catalog.api import fga_deps
 from catalog.core.config import Settings
 
 
@@ -44,9 +44,9 @@ async def _refuse(monkeypatch: pytest.MonkeyPatch, *, role_tuples: list[_Tuple],
     async def _read(_client: Any, _obj: str) -> list[_Tuple]:
         return role_tuples
 
-    monkeypatch.setattr(access.fga, "read_object_tuples", _read)
-    monkeypatch.setattr(access.warehouses, "project_for_namespace", lambda *_a, **_k: namespace_project)
-    await access._refuse_a_cross_tenant_role_grant(  # noqa: SLF001 — the guard is the unit
+    monkeypatch.setattr(fga_deps.fga, "read_object_tuples", _read)
+    monkeypatch.setattr(fga_deps.warehouses, "project_for_namespace", lambda *_a, **_k: namespace_project)
+    await fga_deps.refuse_a_cross_tenant_role_grant(
         cast(OpenFgaClient, object()), grantee, fga_type="namespace", segments=["beta_bronze"], settings=cast(Settings, _Settings())
     )
 

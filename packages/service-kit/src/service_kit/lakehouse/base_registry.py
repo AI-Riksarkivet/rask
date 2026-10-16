@@ -362,6 +362,31 @@ def claim_data_directories(
     return taken
 
 
+def hand_over_data_directories(registry: BaseRegistry, location: str, *, previous: str, table: str, segments: list[str]) -> list[str]:
+    """Hand ``previous``'s claims on the data directories of the table rooted at ``location`` to ``table``, its new name ([[LH-215]]).
+
+    A claim's holder is the table's name, and a holder no longer named is judged gone once the claim's lease has run,
+    so a rename that left them with the old name would admit the next registration declaring the directory. Each
+    claim is handed over as the location's own is, through :func:`location_claims.take` with ``previous``; a claim
+    another table holds is not taken from it.
+
+    Returns:
+        The directories handed over.
+
+    Raises:
+        location_claims.LocationHeldError: Another table holds one of the directories.
+    """
+    record = read_base_record(registry, location)
+    claims = location_claims.ClaimStore(control_root=registry.control_root, storage_options=registry.storage_options)
+    handed: list[str] = []
+    for entry in record.entries if record is not None else []:
+        if entry.role is not BaseRole.DATA:
+            continue
+        location_claims.take(claims, entry.path, table, segments, previous=previous, is_gone=lambda _claim: False)
+        handed.append(entry.path)
+    return handed
+
+
 def release_data_directories(registry: BaseRegistry, directories: Sequence[str], table: str) -> None:
     """Release ``table``'s claims on ``directories`` — the undo of :func:`claim_data_directories`."""
     claims = location_claims.ClaimStore(control_root=registry.control_root, storage_options=registry.storage_options)

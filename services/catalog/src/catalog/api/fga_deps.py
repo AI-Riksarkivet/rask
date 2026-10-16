@@ -55,11 +55,11 @@ from catalog.api.security import CurrentToken, Principal
 from catalog.core import run_context, tier_policy
 from catalog.core.config import Settings
 from catalog.core.identifiers import MAX_NAMESPACE_DEPTH, parse_identifier
-from catalog.services import native
+from catalog.services import native, warehouses
 from service_kit.governed import fga
 from service_kit.governed.audit import ALLOW, DENY, FAILURE, audit
 from service_kit.governed.machine_identity import ServicePrincipal
-from service_kit.lakehouse import maintenance_policies, protection, trash
+from service_kit.lakehouse import object_records, protection, trash
 from service_kit.lakehouse.subjects import is_person_subject
 
 
@@ -1470,6 +1470,8 @@ async def seed_ownership(
     created: bool,
     parent_object: str | None = None,
     may_grant_owner: bool = True,
+    carried: Sequence[fga.ClientTuple] = (),
+    origin: fga.TupleOrigin = "create",
 ) -> None:
     """Grant the creator ``owner`` + the ``parent`` edge on a just-created object.
 
@@ -1498,6 +1500,8 @@ async def seed_ownership(
     catalog root its segments would imply. That door open-coded its own ``grant_on_create`` for
     exactly this reason, which also left it outside every compensation this module grew — so the
     override exists to pull it back in rather than to make the parent generally configurable.
+
+    ``carried`` rides the same batch (:func:`move_ownership`), audited under ``origin``.
     """
     if not (settings.fga_enabled and token is not None and client is not None):
         return
@@ -1526,10 +1530,105 @@ async def seed_ownership(
         resource=resource,
         obj_id=fga.canonical_object_id(segments, delimiter=settings.delimiter),
         actor=token.sub,
-        origin="create",
+        origin=origin,
         parent_object=parent_object
         or fga.parent_object(resource, segments, delimiter=settings.delimiter, warehouse_object=settings.fga_default_warehouse_object),
+        carried=carried,
     )
+
+
+#: Object types whose tenant resolves through the binding registry (namespace -> warehouse -> project).
+#: A `project:` object IS its own tenant and a `warehouse:` one carries a direct tuple, so neither needs
+#: the registry; they are left out rather than guessed at.
+_TENANT_RESOLVES_BY_NAMESPACE = frozenset({"namespace", "table", "materialized_view"})
+
+
+async def refuse_a_cross_tenant_role_grant(client: OpenFgaClient, grantee: str, *, fga_type: str, segments: list[str], settings: Settings) -> None:
+    """Refuse granting a role from one tenant a rung on another tenant's object.
+
+    A role name is estate-global unless the model says otherwise, so `role:analyst#assignee` minted in
+    one project could be granted on any other project's namespace and every layer below would honour
+    it: the tuple is well-formed, the rung is real, and the grantor holds the owner rung on the object
+    they are granting. Nothing downstream can tell the role came from somewhere else.
+
+    FAIL-OPEN FOR AN UNSCOPED ROLE, DELIBERATELY. A role carrying no `project` edge is estate-wide and
+    keeps exactly the reach it has today, so this refuses something that was previously possible only
+    where the model now carries the fact to refuse it on. The alternative — refusing every role whose
+    tenant is unknown — would break every existing grant on the day the edge landed, which is how a
+    security control gets reverted rather than adopted.
+
+    Also fail-open when the OBJECT's tenant cannot be established: an unbound namespace has no tenant
+    to disagree with, and inventing a refusal from a failed registry read would turn a registry blip
+    into a governance outage on a path that already has an owner check in front of it.
+
+    InvalidInput (13 -> 400), matching the bad-rung refusal above and lance-ns's own vocabulary: the
+    grantor may well hold every rung this needs, so it is a malformed request rather than a denial.
+    """
+    if not grantee.startswith("role:") or fga_type not in _TENANT_RESOLVES_BY_NAMESPACE or not segments:
+        return
+    role_object = grantee.split("#", 1)[0]
+    owned_by = {
+        tup.user.removeprefix("project:")
+        for tup in await fga.read_object_tuples(client, role_object)
+        if tup.relation == "project" and tup.user.startswith("project:")
+    }
+    if not owned_by:
+        return
+    target = await run_in_threadpool(warehouses.project_for_namespace, settings.registry_root, settings.storage_options(), segments[0])
+    if target is None or target in owned_by:
+        return
+    raise InvalidInputError(f"{grantee!r} belongs to project {min(owned_by)!r} and cannot be granted on {segments[0]!r}, which belongs to project {target!r}")
+
+
+async def require_grants_may_follow(client: OpenFgaClient | None, settings: Settings, *, resource: str, source: list[str], destination: list[str]) -> None:
+    """Refuse a rename whose carried grants the grant door would refuse on ``destination`` ([[LH-215]]).
+
+    :func:`move_ownership` writes every grant held on ``source`` onto ``destination``, which is a grant on the
+    destination, so each is held to the grant door's own rule (:func:`refuse_a_cross_tenant_role_grant`): a role one
+    tenant owns is not granted a rung on another tenant's object by renaming the object across. Asked BEFORE the native
+    rename, so a refusal leaves the table where it was. A destination under the same top-level namespace has the
+    source's tenant, and nothing is read.
+    """
+    if not (settings.fga_enabled and client is not None) or source[:1] == destination[:1]:
+        return
+    for held in await fga.read_object_tuples(client, f"{resource}:{fga.canonical_object_id(source, delimiter=settings.delimiter)}"):
+        if held.user and held.relation != "parent":
+            await refuse_a_cross_tenant_role_grant(client, held.user, fga_type=resource, segments=destination, settings=settings)
+
+
+async def move_ownership(
+    client: OpenFgaClient | None,
+    settings: Settings,
+    token: Principal | None,
+    *,
+    resource: str,
+    source: list[str],
+    destination: list[str],
+) -> None:
+    """Carry the grants a renamed object held under ``source`` to ``destination``, then revoke ``source`` ([[LH-215]]).
+
+    A lance-ns id is the object's name and Lance keeps no table UUID, so every grant is keyed by the name and a rename
+    must move them: revoking the old name's grants without carrying them drops every reader, writer and owner someone
+    granted, silently. Each grant held directly on ``source`` is written on ``destination`` in the SAME batch as the
+    renamer's owner grant and the new parent edge (:func:`seed_ownership`), so the destination is seeded with all of
+    them or none. The old ``parent`` edge is not carried: the new one names where the object lives now. What the object
+    inherits changes with its parent, as it would for an object created there.
+
+    The source is revoked AFTER the seed, and best-effort: the native rename has committed by now, so a failed revoke
+    is logged rather than raised, leaving a grant on a name that holds no object (owner ruling 2026-08-15, diff2 F3).
+    A create at that name revokes it before seeding ([[LH-480]]).
+    """
+    if not (settings.fga_enabled and token is not None and client is not None):
+        return
+    old = f"{resource}:{fga.canonical_object_id(source, delimiter=settings.delimiter)}"
+    new = f"{resource}:{fga.canonical_object_id(destination, delimiter=settings.delimiter)}"
+    held = await fga.read_object_tuples(client, old)
+    carried = [fga.ClientTuple(user=t.user, relation=t.relation, object=new, condition=t.condition) for t in held if t.relation != "parent"]
+    await seed_ownership(client, settings, token, resource=resource, segments=destination, created=True, carried=carried, origin="rename")
+    try:
+        await fga.revoke_object_tuples(client, old, actor=token.sub, origin="rename")  # noqa: TID251
+    except Exception as revoke_exc:  # noqa: BLE001 — the rename has committed; a stale grant on a dead name is logged
+        log.warning("rename_source_revoke_failed", extra={"source": old, "error": str(revoke_exc)})
 
 
 async def revoke_ownership(
@@ -1626,8 +1725,7 @@ async def end_removed_subtree(
                     async for count in end(held.user):
                         yield count
         kind, _, canonical = obj.partition(":")
-        await run_in_threadpool(protection.clear_protection, settings.registry_root, so, kind, canonical)
-        await run_in_threadpool(maintenance_policies.delete_policy, settings.registry_root, so, kind, canonical)
+        await run_in_threadpool(object_records.end_object_records, settings.registry_root, so, kind, canonical)
         yield await revoke_removed_object(client, settings, obj, token=token)
 
     children_first = sorted(removed, key=lambda item: (item[0] == "namespace", -len(item[1])))

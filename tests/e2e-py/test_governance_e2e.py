@@ -10,7 +10,9 @@ Asserts the dataops/governance story end to end:
   2. alice creates namespace + bronze table → 200 (app seeds owner);
   3. an outsider (no grant) describe → 403; alice (owner) describe → 200 (authz cascade);
   4. the catalog recorded alice as the **verified** author of bronze's create on lineage's ``/events`` feed;
-  5. a promote run (bronze → silver, as a user's pipeline emits) makes silver derived from bronze.
+  5. a promote run (bronze → silver, as a user's pipeline emits) makes silver derived from bronze;
+  6. a forced rename carries a direct grant and the protection record to the new name, and leaves no
+     tuple naming the old one ([[LH-215]]), read off the OpenFGA store itself.
 
 (The lineage service runs with its own auth OFF in this overlay; the gate is unit-tested +
 has its own e2e. This test focuses on catalog authz + provenance authorship + tier lineage.)
@@ -31,6 +33,8 @@ import requests
 from topology import OUTSIDER, assert_parent_exists, create_top_level
 
 from lineage.models import author_sub_from_payload
+from service_kit.governed.auth.write_model import STORE_NAME, fga_headers
+from service_kit.governed.fga import newest_store
 from service_kit.openlineage import RUN_EVENT_SCHEMA_URL, custom_facet, run_id_for
 
 
@@ -46,6 +50,10 @@ DEX = os.environ.get("LANCE_E2E_DEX", "http://localhost:5556/dex")
 # LANCE_E2E_DEX_SECRET="" for a public-client Dex.
 DEX_SECRET = os.environ.get("LANCE_E2E_DEX_SECRET", "lance-catalog-secret")
 ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
+#: The OpenFGA the catalog asks, read directly where a claim is about the tuples the store holds.
+FGA = os.environ.get("LANCE_E2E_FGA", "").rstrip("/")
+FGA_STORE = os.environ.get("LANCE_E2E_FGA_STORE_ID", "")
+FGA_TOKEN_FILE = os.environ.get("LANCE_E2E_FGA_TOKEN_FILE") or None
 
 pytestmark = pytest.mark.e2e
 
@@ -190,3 +198,47 @@ def test_governance_flow(stack: tuple[str, str]) -> None:
 
     down = _poll(_bronze_derived, [silver])
     assert isinstance(down, list) and silver in down, f"expected {silver} derived from {bronze}, got {down}"
+
+
+def _tuples_on(obj: str) -> list[dict[str, Any]]:
+    """Every tuple the catalog's OpenFGA store holds whose object is ``obj``: what the reconciler counts as a ghost."""
+    assert FGA, "set LANCE_E2E_FGA: this claim is about the tuples the store holds"
+    headers = fga_headers(FGA_TOKEN_FILE)
+    named = newest_store(requests.get(f"{FGA}/stores", headers=headers, timeout=10).json().get("stores") or [], STORE_NAME)
+    store = FGA_STORE or (str(named["id"]) if named else "")
+    assert store, f"the OpenFGA at {FGA} holds no store named {STORE_NAME!r}"
+    read = requests.post(f"{FGA}/stores/{store}/read", headers=headers, json={"tuple_key": {"object": obj}}, timeout=10)
+    assert read.status_code == 200, read.text
+    return read.json().get("tuples") or []
+
+
+def test_a_forced_rename_carries_a_direct_grant_and_protection_and_leaves_no_tuple_on_the_old_name(stack: tuple[str, str]) -> None:
+    server, _ = stack
+    alice, outsider = _token("alice@example.com"), _token(OUTSIDER)
+    ah, bh = {"Authorization": f"Bearer {alice}"}, {"Authorization": f"Bearer {outsider}"}
+    ns = f"mv{os.getpid()}"
+    source, dest = f"{ns}$src", f"{ns}$dst"
+    assert_parent_exists(create_top_level(server, ns, ah), ns)
+    try:
+        rows = pa.table({"id": pa.array([1, 2, 3], pa.int64())})
+        assert requests.post(f"{server}/v1/table/{source}/create", headers={**ah, **ARROW}, data=_ipc(rows), timeout=30).status_code == 200
+        granted = requests.post(
+            f"{server}/management/v1/table/{source}/access/grant", headers=ah, json={"user": _sub(outsider), "relation": "reader"}, timeout=10
+        )
+        assert granted.status_code == 200, granted.text
+        assert requests.post(f"{server}/v1/table/{source}/describe", headers=bh, timeout=10).status_code == 200, "precondition: the direct grant reads"
+        assert requests.post(f"{server}/management/v1/table/{source}/protection", headers=ah, json={"protected": True}, timeout=10).status_code == 200
+
+        renamed = requests.post(f"{server}/v1/table/{source}/rename", headers=ah, params={"force": "true"}, json={"new_table_name": "dst"}, timeout=30)
+
+        assert renamed.status_code == 200, renamed.text
+        assert requests.post(f"{server}/v1/table/{dest}/describe", headers=bh, timeout=10).status_code == 200, (
+            "the direct reader grant did not follow the table"
+        )
+        assert requests.get(f"{server}/management/v1/table/{dest}/protection", headers=ah, timeout=10).json()["protected"] is True
+        assert requests.get(f"{server}/management/v1/table/{source}/protection", headers=ah, timeout=10).json()["protected"] is False
+        assert _tuples_on(f"table:{source}") == [], "a tuple names the old id, which the reconciler reports as a ghost table"
+    finally:
+        # The leg runs against live estates too; what it made goes, protection and all, so its namespace can be unbound.
+        for table in (source, dest):
+            requests.post(f"{server}/v1/table/{table}/drop", headers=ah, params={"force": "true", "purge": "true"}, json={}, timeout=30)

@@ -20,6 +20,7 @@ from maintenance.core.config import MaintenanceSettings
 from maintenance.services.expiry import ExpiryPolicy, ExpiryTarget, expire_versions
 from maintenance.services.plan import cadence_skip
 from service_kit.lakehouse import maintenance_policies as mp
+from service_kit.lakehouse import object_records
 
 
 def _policy(kind: str = "table", id_: str = "db$t", path: str = "bkt/u1_db$t", **fields: Any) -> dict[str, Any]:
@@ -281,61 +282,24 @@ def test_a_partial_policy_update_preserves_fields_it_did_not_mention(tmp_path: A
 # ------------------------------------------------- the record's lifecycle vs its object's
 
 
-def test_a_policy_MIGRATES_with_a_rename(tmp_path: Path) -> None:
-    """A rename relocates an object and keeps what is attached to it — the tuples already do this.
+def test_a_moved_record_is_written_under_the_new_name_before_the_old_one_goes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """New name first, old name second, so a failure part-way leaves the configuration alive ([[LH-215]]).
 
-    `_key` hashes `kind:canonical_id`, so a renamed table's policy stops resolving under its new id the
-    instant the name changes. Before `migrate_policy` nothing moved it, and the renamed table silently
-    reverted to default retention, fragment sizing and cleanup toggles while the old record lingered
-    forever matching nothing. A rename is supposed to move a table, not reconfigure it.
-    """
-    root = str(tmp_path)
-    mp.put_policy(root, {}, {"kind": "table", "id": "bronze$pages", "retention_days": 30})
-
-    assert mp.migrate_policy(root, {}, "table", "bronze$pages", "bronze$scans") is True
-
-    assert mp.get_policy(root, {}, "table", "bronze$pages") is None, "the old id must stop resolving"
-    moved = mp.get_policy(root, {}, "table", "bronze$scans")
-    assert moved is not None, "the renamed table must still carry its policy"
-    assert moved["retention_days"] == 30, "the operator's configuration must survive the move intact"
-    assert moved["id"] == "bronze$scans", "the record must be re-keyed to the new id, not merely copied"
-
-
-def test_migrating_a_policy_that_does_not_exist_is_a_no_op(tmp_path: Path) -> None:
-    """Most renames move a table that never had a policy; that must not mint an empty one."""
-    root = str(tmp_path)
-    assert mp.migrate_policy(root, {}, "table", "bronze$absent", "bronze$new") is False
-    assert mp.get_policy(root, {}, "table", "bronze$new") is None
-
-
-def test_a_migrated_policy_does_not_leave_the_destination_unconfigured_on_a_partial_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Destination first, source second — so the recoverable half is the one that keeps config alive.
-
-    Same ordering, and the same reasoning, as rename's seed-then-revoke: of the two imperfect failure
-    states, a duplicate record (both ids resolve, the new one correctly) beats a table with no policy at
-    all. Asserted by observing that the destination is readable before the source is gone.
+    Of the two imperfect failure states, a record under both names (the new one correct) beats a renamed table
+    with no policy at all. Asserted by observing that the new name resolves at the moment the old one is deleted.
     """
     root = str(tmp_path)
     mp.put_policy(root, {}, {"kind": "table", "id": "a$t", "retention_days": 7})
     seen: list[str | None] = []
+    original = object_records.delete_record
 
-    original = mp.delete_policy
-
-    def _spy(control_root: str, storage_options: dict[str, str], kind: str, canonical_id: str) -> bool:
-        # At the moment the source is removed, the destination must ALREADY be readable.
+    def _spy(control_root: str, storage_options: dict[str, str], key: str) -> bool:
         record = mp.get_policy(control_root, storage_options, "table", "b$t")
         seen.append(None if record is None else record["id"])
-        return original(control_root, storage_options, kind, canonical_id)
+        return original(control_root, storage_options, key)
 
-    # `monkeypatch.setattr`, not `mp.delete_policy = _spy`. The direct assignment was an
-    # `invalid-assignment` to ty even once `_spy`'s signature matched `delete_policy`'s exactly — ty
-    # rejects rebinding a module-level function attribute, not the types. It had been silenced with
-    # `# type: ignore[assignment]`, which is MYPY's syntax and which ty does not honour, so the
-    # suppression did nothing and the error stayed. Because the ty pre-commit hook runs full-project
-    # with `pass_filenames=false`, that one diagnostic blocked EVERY commit in the repo, for every
-    # concurrent session. `setattr` is a normal call, type-checks cleanly, and undoes itself — so the
-    # try/finally goes too.
-    monkeypatch.setattr(mp, "delete_policy", _spy)
-    mp.migrate_policy(root, {}, "table", "a$t", "b$t")
+    monkeypatch.setattr(object_records, "delete_record", _spy)
 
-    assert seen == ["b$t"], "the destination must be written BEFORE the source is deleted"
+    assert object_records.move_object_records(root, {}, "table", old_id="a$t", new_id="b$t") == [mp.PREFIX]
+    assert seen == ["b$t"], "the new name must be written BEFORE the old one is deleted"
+    assert mp.get_policy(root, {}, "table", "a$t") is None

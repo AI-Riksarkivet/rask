@@ -418,6 +418,9 @@ func (m *Rask) GovernanceChain(
 		// default failed both outsider legs at the TOKEN GRANT (`access_denied: Invalid username or
 		// password`), so the lane reported an authorization result it had never reached.
 		WithEnvVariable("LANCE_E2E_OUTSIDER", "bob@example.com").
+		// The rename leg reads the store itself: a tuple left on a retired name is what the reconciler reports as a
+		// ghost table, and no catalog door lists a store's raw tuples to a tenant.
+		WithEnvVariable("LANCE_E2E_FGA", "http://openfga:8080").
 		// Wait for BOTH, not just the ports: uvicorn accepts before either lifespan is built, and the
 		// lineage service additionally has to create its tables through the catalog. A racing first
 		// request reads as a wrong answer rather than as an unready service.

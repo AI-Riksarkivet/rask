@@ -86,7 +86,7 @@ from catalog.services import native, table_claims, warehouses
 from catalog.services.vend_probe import CAS_CHECK, CAS_RESERVE, SCOPE_CHECK, ProbeCheck, ProbeReport, summarize_probe
 from service_kit.control_emit import emit_control
 from service_kit.governed import fga
-from service_kit.lakehouse import base_registry, location_claims, maintenance_policies, trash
+from service_kit.lakehouse import base_registry, location_claims, object_records, trash
 from service_kit.lakehouse.naming import CONTROL_ID_RE
 from service_kit.lakehouse.ns_errors import PartiallyApplied
 from service_kit.lakehouse.records import RecordExistsError, RecordMissingError
@@ -884,7 +884,7 @@ async def _forget_trashed(settings: Settings, kind: str, canonical: str, *, loca
     failure before it is cleared leaves it for the re-issue to end.
     """
     so = settings.storage_options()
-    await run_in_threadpool(maintenance_policies.delete_policy, settings.registry_root, so, kind, canonical)
+    await run_in_threadpool(object_records.end_object_records, settings.registry_root, so, kind, canonical)
     if location:
         await run_in_threadpool(location_claims.release, table_claims.claim_store(settings), location, canonical)
         registry = base_registry.BaseRegistry(control_root=settings.registry_root, storage_options=so)

@@ -78,7 +78,7 @@ from maintenance.services.reconcile import MANIFEST_DIR, NON_GATING_CATEGORIES, 
 from service_kit.control_emit import ControlEmitter, NoopControlEmitter, emit_control
 from service_kit.control_events import ControlAction, ControlObjectType
 from service_kit.governed import fga
-from service_kit.lakehouse import location_claims, trash, warehouse_records
+from service_kit.lakehouse import location_claims, object_records, trash, warehouse_records
 from service_kit.lakehouse.base_refs import BaseRefs, location_within
 from service_kit.lakehouse.base_registry import BaseRegistry, UnreadableBaseRecordError, forget_base_record
 from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base
@@ -795,6 +795,8 @@ async def _purge_one(
     deleted_bytes, deleted_files = reclaimed
 
     try:
+        # What the drop kept for an undrop ends with the bytes ([[LH-215]]), before the trash record that names it.
+        await run_in_threadpool(object_records.end_object_records, control_root, storage_options, kind, obj_id)
         await run_in_threadpool(trash.clear, control_root, storage_options, obj_id, kind=kind)
     except Exception as exc:  # noqa: BLE001 — the bytes ARE gone; say so rather than claiming a clean purge
         reason = f"the bytes were deleted and the grants revoked, but the trash record could not be cleared ({type(exc).__name__}: {exc}) — the next tick retries idempotently"

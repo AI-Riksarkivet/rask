@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from datetime import timedelta
 from typing import Any
 
 import boto3
@@ -29,6 +30,7 @@ import pytest
 from fastapi.testclient import TestClient
 from moto.iam.access_control import IAMPolicy, PermissionResult
 
+from service_kit.lakehouse import location_claims
 from service_kit.lakehouse.features import manifest_base_path_refs
 
 
@@ -91,14 +93,21 @@ def _capture_policy(client: TestClient) -> dict[str, Any]:
     return sent
 
 
-@pytest.mark.parametrize("second_table", ["created", "registered-over-its-directory"])
+@pytest.mark.parametrize("second_table", ["created", "registered-over-its-directory", "registered-over-a-renamed-tables-directory"])
 def test_a_table_on_a_data_base_reaches_none_of_another_tables_fragments(
     two_store_catalog: TestClient,
     two_stores: Any,
     plain_base: str,
     second_table: str,  # noqa: ANN401
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     owner, owner_location = _create(two_store_catalog, plain_base, _ids(1, 2))
+    if second_table == "registered-over-a-renamed-tables-directory":
+        # A directory's holder is its table's NAME ([[LH-215]]), and a holder no longer named is taken over once its
+        # lease has run: the rename must hand the directory to the new name. The lease is spent at once here.
+        renamed = two_store_catalog.post(f"/v1/table/{owner}/rename", json={"new_table_name": f"{owner.partition('$')[2]}r"})
+        assert renamed.status_code == 200, renamed.text
+        monkeypatch.setattr(location_claims, "LEASE", timedelta(0))
     owner_keys = _fragment_keys(two_stores, _directory(two_stores, owner_location))
     sent = _capture_policy(two_store_catalog)
 

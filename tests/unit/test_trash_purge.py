@@ -47,7 +47,7 @@ from maintenance.services import purge as mod
 from maintenance.services.reconcile import CATEGORIES, CategorySkipped, CategoryUnavailable, IncompleteScan, ReconcileReport
 from service_kit.control_events import CatalogControlEvent
 from service_kit.governed import fga as fga_module
-from service_kit.lakehouse import trash
+from service_kit.lakehouse import maintenance_policies, trash
 from service_kit.lakehouse.base_refs import BaseRefs, normalise
 
 
@@ -275,10 +275,12 @@ def test_an_expired_table_record_deletes_its_recorded_path_and_clears_the_record
     """The point of the whole feature: expired bytes go away, and the record goes with them.
 
     The record is cleared LAST so any failure above leaves it for the next tick — asserting it is gone is
-    therefore also asserting the whole sequence completed.
+    therefore also asserting the whole sequence completed. The policy the recoverable drop kept for an undrop goes
+    too ([[LH-215]]), or the next table created at the id is maintained under it.
     """
     estate = _Estate(tmp_path)
     canonical, location = estate.drop_recoverably("team", "orders")
+    maintenance_policies.put_policy(estate.control_root, {}, {"kind": "table", "id": canonical, "retention_days": 1})
     path = Path(location.removeprefix("file://"))
     assert path.is_dir(), "the fixture must really have bytes, or 'deleted' proves nothing"
 
@@ -292,6 +294,7 @@ def test_an_expired_table_record_deletes_its_recorded_path_and_clears_the_record
     assert out.purged[0].files_deleted > 0
     assert not path.exists(), "the recorded path survived the purge"
     assert estate.record(canonical) is None, "the trash record survived its own purge"
+    assert maintenance_policies.get_policy(estate.control_root, {}, "table", canonical) is None, "the policy outlived the table it governed"
 
 
 def test_an_unexpired_record_survives(tmp_path: Path) -> None:

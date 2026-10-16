@@ -35,7 +35,7 @@ from openfga_sdk.client.models import ClientWriteRequest
 from catalog.core.config import get_settings
 from catalog.core.lineage_emit import HttpLineageEmitter
 from catalog.services import warehouses
-from service_kit.lakehouse import base_registry, maintenance_policies, trash
+from service_kit.lakehouse import base_registry, maintenance_policies, object_records, trash
 from service_kit.lakehouse.objectfs import StorageOptions
 from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from storage import S3Client
@@ -79,17 +79,17 @@ class _Tenant:
         self.monkeypatch = monkeypatch
 
     def break_policy_store_once(self) -> None:
-        """Fail the next maintenance-policy delete, as a control root that does not answer once."""
-        real = maintenance_policies.delete_policy
+        """Fail the next end of an object's control-root records, as a control root that does not answer once."""
+        real = object_records.end_object_records
         failed: list[str] = []
 
-        def delete_policy(control_root: str, storage_options: StorageOptions, kind: str, canonical_id: str) -> bool:
+        def end_object_records(control_root: str, storage_options: StorageOptions, kind: str, canonical_id: str) -> list[str]:
             if not failed:
                 failed.append(canonical_id)
                 raise OSError("the control root did not answer")
             return real(control_root, storage_options, kind, canonical_id)
 
-        self.monkeypatch.setattr(maintenance_policies, "delete_policy", delete_policy)
+        self.monkeypatch.setattr(object_records, "end_object_records", end_object_records)
 
     def bind(self, namespace: str) -> None:
         answer = self.client.post(f"/management/v1/warehouses/{self.warehouse}/namespaces", json={"namespace": namespace})

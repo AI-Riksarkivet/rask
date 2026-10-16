@@ -34,7 +34,7 @@ import json
 import logging
 import re
 import unicodedata
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable, Sequence
 from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
@@ -1944,6 +1944,10 @@ TupleOrigin = Literal[
     # The grants the catalog writes on the namespace it keeps for provenance (ADR 0158): its parent edge and a `writer`
     # per configured provenance writer. Its own value because no person granted them; the deployment configured them.
     "provenance_namespace",
+    # The grants a rename carries from the retired name to the new one ([[LH-215]]), and its revoke of the retired name.
+    # Its own value because the renamer did not grant what it carries: the grant's author is on the earlier row naming
+    # the old object, and the rename's control event (`table_renamed`, `from` and `to`) joins the two.
+    "rename",
     "lifecycle_delete",
     "train",
     "annotator",
@@ -2030,6 +2034,7 @@ async def grant_on_create(
     grant_owner: bool = True,
     parent_object: str | None = None,
     parent_relation: str = "parent",
+    carried: Sequence[ClientTuple] = (),
     retry_attempts: int = DEFAULT_RETRY_ATTEMPTS,
     retry_backoff_seconds: float = DEFAULT_RETRY_BACKOFF_SECONDS,
     retry_max_backoff_seconds: float = DEFAULT_RETRY_MAX_BACKOFF_SECONDS,
@@ -2052,6 +2057,9 @@ async def grant_on_create(
     ``obj_id`` must be the canonical, delimited id (see ``canonical_object_id``)
     so this grant and the later authorization ``check`` agree byte-for-byte.
 
+    ``carried`` are grants on ``obj`` the object held under another name, written in the SAME batch as the
+    owner grant and the edges, so an object a rename moved is seeded with all of them or with none ([[LH-215]]).
+
     Idempotent (safe to call again on retry of a create): writing existing tuples
     is swallowed. On OpenFGA outage it fails closed with ``ServiceUnavailableError``.
     """
@@ -2064,10 +2072,6 @@ async def grant_on_create(
     # why this is a flag on the SAME batch rather than a second call: dropping the owner tuple and
     # dropping the edge look identical at the call site and are opposite in effect.
     tuples = [ClientTuple(user=user_object(user_sub), relation="owner", object=obj)] if grant_owner else []
-    if not tuples and not parent_object:
-        # Nothing to write: no owner grant asked for and no parent to link. A root-level object created
-        # by a machine has no governance to seed, and an empty batch is a wasted round trip.
-        return
     if parent_object:
         # The edge's RELATION NAME is a property of the model, not a constant. Every governed type
         # spells it `parent`, but `annotation_project` spells it `tenant` — writing `parent` there
@@ -2077,15 +2081,30 @@ async def grant_on_create(
         # `hierarchy_edge_tuples` owns that pairing for every writer — see its docstring for what
         # happens to an object that gets only the forward half.
         tuples.extend(hierarchy_edge_tuples(child_object=obj, parent_object=parent_object, parent_relation=parent_relation))
+    batch = _distinct_tuples([*tuples, *carried])
+    if not batch:
+        # Nothing to write: no owner grant asked for and no parent to link. A root-level object created
+        # by a machine has no governance to seed, and an empty batch is a wasted round trip.
+        return
     await write_tuples(
         client,
-        tuples,
+        batch,
         actor=actor,
         origin=origin,
         retry_attempts=retry_attempts,
         retry_backoff_seconds=retry_backoff_seconds,
         retry_max_backoff_seconds=retry_max_backoff_seconds,
     )
+
+
+def _distinct_tuples(tuples: Iterable[ClientTuple]) -> list[ClientTuple]:
+    """``tuples`` with each ``(user, relation, object)`` once, first kept, so a carried grant equal to the owner grant
+    cannot fail the batch: measured on OpenFGA v1.18.3, a write naming one tuple twice answers 400
+    ``cannot_allow_duplicate_tuples_in_one_request`` even with ``on_duplicate: ignore``."""
+    seen: dict[tuple[str | None, str | None, str | None], ClientTuple] = {}
+    for t in tuples:
+        seen.setdefault((t.user, t.relation, t.object), t)
+    return list(seen.values())
 
 
 def _delete_reported_absent(exc: ApiException) -> bool:

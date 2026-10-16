@@ -569,9 +569,15 @@ def test_rename_table_seeds_destination_then_revokes_source(client: TestClient, 
         order.append(f"revoke:{obj}")
         return [_revoked_tuple(obj=obj)]
 
-    async def _grant(_c: object, **kw: object) -> None:
-        order.append(f"grant:{kw['obj_id']}")
+    async def _read(_c: object, obj: str, **_k: object) -> list[fga_module.ClientTuple]:
+        order.append(f"read:{obj}")
+        return [fga_module.ClientTuple(user="user:bob", relation="reader", object=obj)]
 
+    async def _grant(_c: object, **kw: object) -> None:
+        carried = cast("list[fga_module.ClientTuple]", kw["carried"])
+        order.append(f"grant:{kw['obj_id']}:{','.join(f'{t.user}#{t.relation}@{t.object}' for t in carried)}")
+
+    monkeypatch.setattr(fga_module, "read_object_tuples", _read)
     monkeypatch.setattr(fga_module, "revoke_object_tuples", _revoke)
     monkeypatch.setattr(fga_module, "grant_on_create", _grant)
 
@@ -581,8 +587,9 @@ def test_rename_table_seeds_destination_then_revokes_source(client: TestClient, 
         headers={"Authorization": "Bearer t"},
     )
     assert resp.status_code == 200
-    # The destination is a fresh id, so whatever an earlier incarnation left there goes first ([[LH-480]]).
-    assert order == ["revoke:table:db1$u2", "grant:db1$u2", "revoke:table:db1$users"]
+    # The destination is a fresh id, so whatever an earlier incarnation left there goes first ([[LH-480]]); the source's
+    # grants ride the seed batch ([[LH-215]]).
+    assert order == ["read:table:db1$users", "revoke:table:db1$u2", "grant:db1$u2:user:bob#reader@table:db1$u2", "revoke:table:db1$users"]
 
 
 def test_overwrite_by_owner_keeps_every_grant_and_grants_the_overwriter_no_ownership(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:

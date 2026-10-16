@@ -25,13 +25,14 @@ module is the protection vocabulary over it, and no longer a fourth copy of the 
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Final
 
 from service_kit.lakehouse.objectfs import StorageOptions
 from service_kit.lakehouse.record_store import delete_record, get_record, put_record, record_key
 
 
-_PROTECTION_PREFIX = "_protection"
+#: Where the records live on the control root, one per object under ``record_key(PREFIX, kind, canonical_id)``.
+PREFIX: Final = "_protection"
 
 #: The event stem for this registry's store warnings (`<stem>_malformed`, `<stem>_unreadable`).
 _EVENT = "protection_record"
@@ -39,7 +40,7 @@ _EVENT = "protection_record"
 
 def set_protection(control_root: str, storage_options: StorageOptions, record: dict[str, Any]) -> None:
     """Persist one protection record (overwrite — setting is idempotent)."""
-    put_record(control_root, storage_options, record_key(_PROTECTION_PREFIX, str(record["kind"]), str(record["id"])), record)
+    put_record(control_root, storage_options, record_key(PREFIX, str(record["kind"]), str(record["id"])), record)
 
 
 def get_protection(control_root: str, storage_options: StorageOptions, kind: str, canonical_id: str) -> dict[str, Any] | None:
@@ -47,9 +48,9 @@ def get_protection(control_root: str, storage_options: StorageOptions, kind: str
     correct fail-open direction for this flag: protection is an opt-in the owner set, not a default
     the store's availability grants. (A store OUTAGE surfaces as an exception from pyarrow, not as
     None — the caller lets that propagate rather than treating it as unprotected.)"""
-    return get_record(control_root, storage_options, record_key(_PROTECTION_PREFIX, kind, canonical_id), event=_EVENT)
+    return get_record(control_root, storage_options, record_key(PREFIX, kind, canonical_id), event=_EVENT)
 
 
 def clear_protection(control_root: str, storage_options: StorageOptions, kind: str, canonical_id: str) -> bool:
     """Remove one protection record; ``True`` if one existed."""
-    return delete_record(control_root, storage_options, record_key(_PROTECTION_PREFIX, kind, canonical_id))
+    return delete_record(control_root, storage_options, record_key(PREFIX, kind, canonical_id))
