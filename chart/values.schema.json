@@ -96,6 +96,10 @@
                     "description": "The platform's OpenFGA HTTP API (e.g. `https://fga.internal:8080`), which the tuple writers (the catalog, maintenance, the annotator), the openfga-model hook and the bootstrap-admin Job dial when `openfga.enabled` is false; the render refuses it empty then. It must admit rask's projected `rask-openfga` tokens from exactly the subjects `lance.openfgaSubjects` lists: OIDC against the cluster's ServiceAccount issuer.",
                     "type": "string"
                 },
+                "fgaEgress": {
+                    "description": "NetworkPolicy egress rules ({to, ports}) admitting the pods that dial `fgaApiUrl` (the tuple writers, the openfga-model hook, the bootstrap-admin Job) to it, at the port a policy sees. Required under networkPolicy.enabled while `openfga.enabled` is false.",
+                    "type": "array"
+                },
                 "fgaModelId": {
                     "description": "Pin the OpenFGA authorization model id every service checks against, whatever its image carries. Empty = the store's latest model.",
                     "type": "string"
@@ -1260,12 +1264,16 @@
         "networkPolicy": {
             "type": "object",
             "properties": {
+                "apiServerEgress": {
+                    "description": "NetworkPolicy egress rules ({to, ports}) admitting the pods that call the Kubernetes API to its endpoints. Required under networkPolicy.enabled while any such pod renders.",
+                    "type": "array"
+                },
                 "enabled": {
                     "description": "Renders default-deny NetworkPolicies with explicit allows and exclusive client lists for the guarded stores. Needs a policy-enforcing CNI.",
                     "type": "boolean"
                 },
                 "extraEgress": {
-                    "description": "List of extra egress rules, verbatim NetworkPolicy entries, for external backends (off-cluster S3, managed NATS, external OTLP).",
+                    "description": "List of extra egress rules, verbatim NetworkPolicy entries, for external backends (off-cluster S3, managed NATS, Postgres, Ray, the IdP). Each rule names its `to` peers; the render refuses one that admits every destination.",
                     "type": "array"
                 },
                 "minioExtraFrom": {
@@ -1300,6 +1308,10 @@
                                     "type": "string"
                                 }
                             }
+                        },
+                        "egress": {
+                            "description": "NetworkPolicy egress rules ({to, ports}) admitting the Collector to the backend at `endpoint`, at the port a policy sees. Required under networkPolicy.enabled.",
+                            "type": "array"
                         },
                         "endpoint": {
                             "description": "OTLP/HTTP base URL the Collector exports traces, metrics and logs to (`/v1/traces` etc. are appended); the platform's backend. Required while `enabled`: empty fails the render.",
@@ -1340,6 +1352,10 @@
                         "auditTable": {
                             "description": "Table the audit viewer reads `lance.audit` records from; the same table `export.auditHeaders` routes them to.",
                             "type": "string"
+                        },
+                        "egress": {
+                            "description": "NetworkPolicy egress rules ({to, ports}) admitting the zones to the store at `url`, at the port a policy sees. Required under networkPolicy.enabled while `url` is set.",
+                            "type": "array"
                         },
                         "url": {
                             "description": "Base URL of the store's SQL and PromQL API the zones read (GREPTIME_API); empty leaves those panels without data.",

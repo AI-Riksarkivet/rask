@@ -31,7 +31,8 @@ PROD_VALUES="${PROD_VALUES:-deploy/values-prod.yaml}"
 # bus, a prerequisite values-prod leaves for the deployer to name.
 # observability.export.endpoint is the platform's OTLP backend, which values-prod leaves for the deployer to name, and
 # auth.fgaApiUrl and age.externalHost the platform's OpenFGA and Postgres ([[XC-132]]), and route.* the platform's Gateway,
-# its in-cluster address and the egress that reaches it (ADR 0165).
+# its in-cluster address and the egress that reaches it (ADR 0165), and the egress that reaches the API server, the
+# telemetry backend and the platform's OpenFGA, which no URL can derive ([[XC-143]]).
 COMMON=(--api-versions external-secrets.io/v1/ExternalSecret --api-versions dapr.io/v1alpha1
         --set frontend.oidc.publicIssuer=https://auth.example.com/dex
         --set frontend.oidc.publicOrigin=https://lance.example.com
@@ -45,7 +46,10 @@ COMMON=(--api-versions external-secrets.io/v1/ExternalSecret --api-versions dapr
         --set-string age.externalHost=pg.example.com
         --set-json 'route.parentRefs=[{"name":"edge","namespace":"edge-system"}]'
         --set-string route.edgeUrl=http://edge.edge-system.svc.cluster.local
-        --set-json 'route.edgeEgress=[{"to":[{"namespaceSelector":{"matchLabels":{"kubernetes.io/metadata.name":"edge-system"}}}],"ports":[{"protocol":"TCP","port":8080}]}]')
+        --set-json 'route.edgeEgress=[{"to":[{"namespaceSelector":{"matchLabels":{"kubernetes.io/metadata.name":"edge-system"}}}],"ports":[{"protocol":"TCP","port":8080}]}]'
+        --set-json 'networkPolicy.apiServerEgress=[{"to":[{"ipBlock":{"cidr":"192.0.2.10/32"}}],"ports":[{"protocol":"TCP","port":6443}]}]'
+        --set-json 'observability.export.egress=[{"to":[{"ipBlock":{"cidr":"203.0.113.10/32"}}],"ports":[{"protocol":"TCP","port":4318}]}]'
+        --set-json 'auth.fgaEgress=[{"to":[{"ipBlock":{"cidr":"198.51.100.10/32"}}],"ports":[{"protocol":"TCP","port":443}]}]')
 OUT="$(mktemp)"
 trap 'rm -f "$OUT"' EXIT
 
@@ -66,7 +70,7 @@ grep -q -- "-openbao" "$OUT" || fail "prod NetworkPolicy set missing the openbao
 # two explicit rules must render: 4222 (clients, port-scoped from any in-namespace pod — the daprd
 # sidecars live in nearly every app pod) and 8222 (monitor) from the web-lakehouse zone pods. The windowed
 # greps pin the from-selector + port to THEIR rule, not a stray match elsewhere.
-grep -qF "values: [openbao, age, minio, nats]" "$OUT" \
+grep -qF "values: [openbao, age, minio, nats, authorization-controller]" "$OUT" \
   || fail "the general intra-namespace ingress allow must exclude the nats pods (with openbao/age/minio)"
 grep -q "name: rask-nats-clients" "$OUT" || fail "prod NetworkPolicy set missing the nats-clients (4222) rule"
 grep -A20 "name: rask-nats-clients" "$OUT" | grep -q "port: 4222" \
@@ -130,9 +134,10 @@ tiers=$(grep -c "memory: 1Gi" "$OUT" || true)
 # 7. The Collector exports to the endpoint the deployer names, and rask ships no store or alert engine of its own
 # (ADR 0153): the alert rules are deploy/alerting/rules.yml, for the platform's evaluator.
 grep -q 'endpoint: "http://otlp.example.com:4318/v1/otlp"' "$OUT" || fail "prod's Collector must export to observability.export.endpoint"
-# Default-deny egress would drop an off-namespace export silently: the Collector's egress must open the endpoint's port.
-grep -A12 "name: rask-allow-telemetry-export-egress$" "$OUT" | grep -q "port: 4318 }" \
-  || fail "prod's NetworkPolicy must let the Collector reach the export endpoint's port (4318)"
+# Default-deny egress would drop an off-namespace export silently: the Collector's egress must admit the backend the
+# deployer states (observability.export.egress).
+grep -A20 "name: rask-allow-telemetry-export-egress$" "$OUT" | grep -q "cidr: 203.0.113.10/32" \
+  || fail "prod's NetworkPolicy must let the Collector reach the export backend observability.export.egress names"
 grep -qE "name: rask-(vmalert|alertmanager|greptimedb-standalone|perses)$" "$OUT" \
   && fail "prod must not render an observability store, dashboard or alert engine (they are the platform's)"
 

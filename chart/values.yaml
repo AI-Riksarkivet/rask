@@ -570,9 +570,20 @@ networkPolicy:
   # -- List of extra NetworkPolicy `from` peers allowed to reach the object store.
   minioExtraFrom: []
   # Extra egress rules (verbatim NetworkPolicy egress entries) for externalized backends —
-  # off-cluster S3, a NATS outside this namespace (nats.url), an external OTLP endpoint.
-  # -- List of extra egress rules, verbatim NetworkPolicy entries, for external backends (off-cluster S3, managed NATS, external OTLP).
+  # off-cluster S3, a NATS outside this namespace (nats.url), the platform's Postgres (age.externalHost), the Ray
+  # dashboard (ray.dashboardUrl), the platform's IdP. The API server, the telemetry backend, the Gateway and an
+  # external OpenFGA take rules of their own, scoped to the pods that dial them.
+  # -- List of extra egress rules, verbatim NetworkPolicy entries, for external backends (off-cluster S3, managed NATS, Postgres, Ray, the IdP). Each rule names its `to` peers; the render refuses one that admits every destination.
   extraEgress: []
+  # The pods that call the Kubernetes API (the token verifiers, OpenBao's login reviews, the Collector's pod metadata,
+  # the snapshot CronJob, the Dapr dashboard) reach it through these rules and no other pod does. The API server is
+  # Service-less from a policy's view: the CNI judges the endpoint after the `kubernetes` Service's translation, so
+  # state the endpoints `kubectl get endpointslice -n default -l kubernetes.io/service-name=kubernetes` lists, at
+  # their port (6443 on k3s and kubeadm, 443 on most managed clusters), e.g.
+  # [{to: [{ipBlock: {cidr: 10.0.0.10/32}}], ports: [{protocol: TCP, port: 6443}]}]. A CNI that classifies the API
+  # server as an entity of its own (Cilium) matches it only under its own policy kind or its CIDR-match-nodes mode.
+  # -- NetworkPolicy egress rules ({to, ports}) admitting the pods that call the Kubernetes API to its endpoints. Required under networkPolicy.enabled while any such pod renders.
+  apiServerEgress: []
 
 
 # === Micro-frontend zones: the SvelteKit SSR zones deployed from the ONE parametrized
@@ -758,6 +769,8 @@ auth:
   audit: true
   # -- The platform's OpenFGA HTTP API (e.g. `https://fga.internal:8080`), which the tuple writers (the catalog, maintenance, the annotator), the openfga-model hook and the bootstrap-admin Job dial when `openfga.enabled` is false; the render refuses it empty then. It must admit rask's projected `rask-openfga` tokens from exactly the subjects `lance.openfgaSubjects` lists: OIDC against the cluster's ServiceAccount issuer.
   fgaApiUrl: ""
+  # -- NetworkPolicy egress rules ({to, ports}) admitting the pods that dial `fgaApiUrl` (the tuple writers, the openfga-model hook, the bootstrap-admin Job) to it, at the port a policy sees. Required under networkPolicy.enabled while `openfga.enabled` is false.
+  fgaEgress: []
   # OpenFGA authorizes none of its callers, so only the services that write tuples hold a `rask-openfga` token
   # ([[LH-442]]); every other governed service asks the catalog's decision door (`/management/v1/decisions`) as its own
   # ServiceAccount, holding `decider` on the estate root (`lance.fgaDecisionRoles`, seeded by bootstrap-admin). A
@@ -2549,6 +2562,8 @@ observability:
     # -- Headers added to the export of `lance.audit` records, which leave on their own exporter.
     auditHeaders:
       x-greptime-log-table-name: lance_audit
+    # -- NetworkPolicy egress rules ({to, ports}) admitting the Collector to the backend at `endpoint`, at the port a policy sees. Required under networkPolicy.enabled.
+    egress: []
   # The zones' audit viewer (home), the admin observability pages (lakehouse) and the experiment curves (models)
   # read the store directly, as GREPTIME_API: SQL at `<url>/v1/sql`, PromQL at `<url>/v1/prometheus`.
   query:
@@ -2556,5 +2571,7 @@ observability:
     url: ""
     # -- Table the audit viewer reads `lance.audit` records from; the same table `export.auditHeaders` routes them to.
     auditTable: lance_audit
+    # -- NetworkPolicy egress rules ({to, ports}) admitting the zones to the store at `url`, at the port a policy sees. Required under networkPolicy.enabled while `url` is set.
+    egress: []
   # -- Dapr tracing sampling rate in the Dapr Configuration, as a string from 0 to 1; "1" traces every request.
   samplingRate: "1" # Dapr trace sampling — full, so the catalog→lineage context always propagates

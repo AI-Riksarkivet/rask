@@ -50,6 +50,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | auth.enabled | bool | `true` | Govern the estate: authn on every door plus OpenFGA authz. On by default (fails closed); a bare install then needs frontend OIDC configured or it refuses to render. |
 | auth.externalDeciders | list | `[]` | ServiceAccounts outside this release that may ask the catalog's decision door, each `<namespace>:<name>` (e.g. `default:rask-sa-compute` for the compute fixture); bootstrap-admin grants each `decider`. Read only with auth on. |
 | auth.fgaApiUrl | string | `""` | The platform's OpenFGA HTTP API (e.g. `https://fga.internal:8080`), which the tuple writers (the catalog, maintenance, the annotator), the openfga-model hook and the bootstrap-admin Job dial when `openfga.enabled` is false; the render refuses it empty then. It must admit rask's projected `rask-openfga` tokens from exactly the subjects `lance.openfgaSubjects` lists: OIDC against the cluster's ServiceAccount issuer. |
+| auth.fgaEgress | list | `[]` | NetworkPolicy egress rules ({to, ports}) admitting the pods that dial `fgaApiUrl` (the tuple writers, the openfga-model hook, the bootstrap-admin Job) to it, at the port a policy sees. Required under networkPolicy.enabled while `openfga.enabled` is false. |
 | auth.fgaModelId | string | `""` | Pin the OpenFGA authorization model id every service checks against, whatever its image carries. Empty = the store's latest model. |
 | auth.fgaStoreId | string | `""` | Pin the OpenFGA store id used by every service, the openfga-model hook and the bootstrap-admin Job. Empty = the newest store named `lance-catalog`. |
 | auth.issuerMirror.enabled | bool | `true` | Render the issuer mirror (templates/openfga-authn.yaml) that republishes the SA issuer's discovery and JWKS unauthenticated for OpenFGA; off only for a publicly served issuer. |
@@ -229,18 +230,21 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | nats.monitorUrl | string | `""` | HTTP monitoring endpoint of the bus (varz/jsz) the lakehouse zone's ops view reads (e.g. http://rask-nats-headless:8222). Empty hides the panel. |
 | nats.streamReplicas | int | `3` | Raft replica count for every stream the stream Job provisions; must not exceed the bus's node count. |
 | nats.url | string | `""` | NATS JetStream address every pub/sub component and the stream Job connect to (e.g. nats://nats.internal:4222). Required: empty fails the render. |
+| networkPolicy.apiServerEgress | list | `[]` | NetworkPolicy egress rules ({to, ports}) admitting the pods that call the Kubernetes API to its endpoints. Required under networkPolicy.enabled while any such pod renders. |
 | networkPolicy.enabled | bool | `false` | Renders default-deny NetworkPolicies with explicit allows and exclusive client lists for the guarded stores. Needs a policy-enforcing CNI. |
-| networkPolicy.extraEgress | list | `[]` | List of extra egress rules, verbatim NetworkPolicy entries, for external backends (off-cluster S3, managed NATS, external OTLP). |
+| networkPolicy.extraEgress | list | `[]` | List of extra egress rules, verbatim NetworkPolicy entries, for external backends (off-cluster S3, managed NATS, Postgres, Ray, the IdP). Each rule names its `to` peers; the render refuses one that admits every destination. |
 | networkPolicy.minioExtraFrom | list | `[]` | List of extra NetworkPolicy `from` peers allowed to reach the object store. |
 | networkPolicy.openbaoExtraFrom | list | `[]` | List of extra NetworkPolicy `from` peers allowed to reach OpenBao (e.g. the external-secrets namespace). |
 | observability.enabled | bool | `false` | Deploy rask's OTel Collector and turn on OTLP export from the fleet, Dapr and OpenFGA to it; needs `export.endpoint`. |
 | observability.environment | string | `"rask"` | Value of the `deployment.environment.name` OTel resource attribute; empty falls back to the release namespace. |
 | observability.export.auditHeaders | object | `{"x-greptime-log-table-name":"lance_audit"}` | Headers added to the export of `lance.audit` records, which leave on their own exporter. |
+| observability.export.egress | list | `[]` | NetworkPolicy egress rules ({to, ports}) admitting the Collector to the backend at `endpoint`, at the port a policy sees. Required under networkPolicy.enabled. |
 | observability.export.endpoint | string | `""` | OTLP/HTTP base URL the Collector exports traces, metrics and logs to (`/v1/traces` etc. are appended); the platform's backend. Required while `enabled`: empty fails the render. |
 | observability.export.headers | object | `{"x-greptime-db-name":"public"}` | Headers sent on every export. |
 | observability.export.traceHeaders | object | `{"x-greptime-pipeline-name":"greptime_trace_v1"}` | Headers added to the trace export. |
 | observability.otelCollector.image | string | `"otel/opentelemetry-collector-contrib:0.157.0"` | Container image for the OTel Collector (contrib distribution). |
 | observability.query.auditTable | string | `"lance_audit"` | Table the audit viewer reads `lance.audit` records from; the same table `export.auditHeaders` routes them to. |
+| observability.query.egress | list | `[]` | NetworkPolicy egress rules ({to, ports}) admitting the zones to the store at `url`, at the port a policy sees. Required under networkPolicy.enabled while `url` is set. |
 | observability.query.url | string | `""` | Base URL of the store's SQL and PromQL API the zones read (GREPTIME_API); empty leaves those panels without data. |
 | observability.samplingRate | string | `"1"` | Dapr tracing sampling rate in the Dapr Configuration, as a string from 0 to 1; "1" traces every request. |
 | openbao.devMode | bool | `true` | The development store: in-memory, auto-unsealed with a fixed root token (demo only), run by the openbao fixture. False renders a sealed file-backed server an operator must init and unseal. |

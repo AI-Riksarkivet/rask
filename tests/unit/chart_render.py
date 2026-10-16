@@ -34,10 +34,15 @@ REPO = pathlib.Path(__file__).resolve().parents[2]
 #: this address.
 NATS_URL = "nats://bus.example.com:4222"
 
+#: The API server's address as a platform states it to the NetworkPolicy ([[XC-143]]): a documentation range, so no
+#: other peer a render holds can be mistaken for it.
+API_SERVER_CIDR = "192.0.2.10/32"
+
 #: The prerequisites a render names: the APIs the chart checks through `.Capabilities`, the External Secrets Operator
 #: ([[XC-004]]) and Dapr ([[XC-128]]), the NATS bus's address ([[XC-129]]), and the platform's Gateway the routes attach
-#: to, its in-cluster address and the egress that reaches it (ADR 0165). A cluster-less render names the
-#: cluster it targets. Without them every render refuses.
+#: to, its in-cluster address and the egress that reaches it (ADR 0165). Under `networkPolicy.enabled` the egress to
+#: the API server, the telemetry backend and an external OpenFGA is the platform's to state too ([[XC-143]]). A cluster-less render names
+#: the cluster it targets. Without them every render refuses.
 PREREQ_ARGS: tuple[str, ...] = (
     "--api-versions", "external-secrets.io/v1/ExternalSecret",
     "--api-versions", "generators.external-secrets.io/v1alpha1/Password",
@@ -46,6 +51,10 @@ PREREQ_ARGS: tuple[str, ...] = (
     "--set-json", 'route.parentRefs=[{"name":"edge","namespace":"edge-system"}]',
     "--set-string", "route.edgeUrl=http://edge.edge-system.svc.cluster.local",
     "--set-json", 'route.edgeEgress=[{"to":[{"namespaceSelector":{"matchLabels":{"kubernetes.io/metadata.name":"edge-system"}}}],"ports":[{"protocol":"TCP","port":8080}]}]',
+    "--set-json", f'networkPolicy.apiServerEgress=[{{"to":[{{"ipBlock":{{"cidr":"{API_SERVER_CIDR}"}}}}],"ports":[{{"protocol":"TCP","port":6443}}]}}]',
+    "--set-json", 'observability.export.egress=[{"to":[{"ipBlock":{"cidr":"203.0.113.10/32"}}],"ports":[{"protocol":"TCP","port":4318}]}]',
+    "--set-json", 'observability.query.egress=[{"to":[{"namespaceSelector":{"matchLabels":{"kubernetes.io/metadata.name":"observability"}}}],"ports":[{"protocol":"TCP","port":4000}]}]',
+    "--set-json", 'auth.fgaEgress=[{"to":[{"ipBlock":{"cidr":"198.51.100.10/32"}}],"ports":[{"protocol":"TCP","port":443}]}]',
 )  # fmt: skip
 
 #: The Ray an estate names ([[CP-041]]): with the cascade's Ray lane on (the default) and no in-cluster
@@ -73,6 +82,22 @@ OIDC_ARGS: tuple[str, ...] = (*UNNAMED_RAY_ARGS, *RAY_ARGS)
 
 #: The local-development overlay: side-loaded images, MinIO on.
 DEFAULT_ARGS: tuple[str, ...] = ("--set", "image.localImages=true", "--set", "minio.enabled=true")
+
+#: The production overlay with the inputs its fail-closed guards refuse to render without, the set
+#: `scripts/prod_render_check.sh` supplies.
+PROD_ARGS: tuple[str, ...] = (
+    "-f", str(REPO / "deploy/values-prod.yaml"),
+    "--set", "image.catalog.tag=v0",
+    "--set", "frontend.image.tag=v0",
+    "--set", "signing.provisioned=true",
+    "--set", "nats.auth.provisioned=true",
+    "--set-string", "observability.export.endpoint=http://otlp.example.com:4318/v1/otlp",
+    "--set-string", "auth.fgaApiUrl=https://fga.example.com",
+    "--set-string", "age.externalHost=pg.example.com",
+    "--set", "backups.volumeSnapshot.snapshotClassName=csi-snapclass",
+    "--set", "ingress.host=lance.example.com",
+    "--set", "image.repository=ghcr.io/example/rask",
+)  # fmt: skip
 
 
 def render_chart_text(chart: pathlib.Path, *extra: str, base: tuple[str, ...] = OIDC_ARGS) -> str:

@@ -190,12 +190,16 @@ func (m *Rask) Charts(
 // `nats.auth.provisioned` attests every bus client's NATS user the same way (`templates/nats-provisioned.yaml`).
 // `ray.dashboardUrl` names the estate's Ray, the one address every Ray consumer renders ([[CP-041]]). `nats.url` names the
 // platform's NATS bus the same way: a prerequisite rask never installs ([[XC-129]]), and `route.*` the platform's Gateway
-// the routes attach to and its in-cluster address (ADR 0165).
+// the routes attach to and its in-cluster address (ADR 0165). `networkPolicy.apiServerEgress` and `route.edgeEgress` state the
+// peers the isolation layer admits the API server and the Gateway at, which no URL can derive ([[XC-143]]).
 const renderArgs = "--set image.repository=ghcr.io/example/rask " +
 	"--set-string ray.dashboardUrl=http://ray.example.com:8265 " +
 	"--set-string nats.url=nats://nats.example.com:4222 " +
 	"--set route.parentRefs[0].name=edge --set route.parentRefs[0].namespace=edge-system " +
+	"--set route.edgeEgress[0].to[0].ipBlock.cidr=192.0.2.20/32 " +
 	"--set route.edgeEgress[0].ports[0].port=8080 " +
+	"--set networkPolicy.apiServerEgress[0].to[0].ipBlock.cidr=192.0.2.10/32 " +
+	"--set networkPolicy.apiServerEgress[0].ports[0].port=6443 " +
 	"--set-string route.edgeUrl=http://edge.edge-system.svc.cluster.local " +
 	"--api-versions external-secrets.io/v1/ExternalSecret " +
 	"--api-versions dapr.io/v1alpha1 " +

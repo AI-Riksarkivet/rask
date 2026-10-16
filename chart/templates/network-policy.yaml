@@ -13,9 +13,10 @@
 #   (4) values-prod flips `networkPolicy.enabled` — the LIVE verification runbook is todo_fable
 #       §7a (all pods Ready, e2e suites green, and a negative probe: curl openbao:8200 from the
 #       web pod must time out).
-# Egress posture (tier 1): intra-namespace open + DNS + api-server (Dapr control plane needs it);
-# the INGRESS rules do the guarding — a connection needs BOTH the source's egress and the
-# destination's ingress to allow. Externalized backends (S3/NATS/OTLP off-cluster) need
+# Egress posture (tier 1): intra-namespace open + DNS + the Dapr control plane; the INGRESS rules do
+# the guarding — a connection needs BOTH the source's egress and the destination's ingress to allow.
+# Every egress rule names its peers: the API server, the Gateway and the telemetry backend are the
+# platform's to state, and externalized backends (S3/NATS off-cluster) need
 # `networkPolicy.extraEgress` entries. NOTE: requires a policy-enforcing CNI (Calico/Cilium);
 # kind's default CNI ignores NetworkPolicy entirely. kubectl port-forward traffic enters via the
 # kubelet (not the CNI data path) and keeps working under default-deny on mainstream CNIs.
@@ -63,21 +64,52 @@ spec:
     - to:
         - podSelector: {}
 ---
-# API-server egress (namespace-wide): the Dapr control plane (operator/injector/sentry/placement)
-# watches CRDs and leases; external-secrets (when enabled) reconciles via webhooks. Ports only —
-# the api-server's IP is cluster-specific.
+# API-server egress: only the pods that call the Kubernetes API, to the peers the platform states.
+{{- $apiClients := list }}
+{{- if .Values.auth.enabled }}{{ $apiClients = concat $apiClients (list "catalog" "lineage") }}{{ end }}
+{{- if .Values.openfga.enabled }}{{ $apiClients = append $apiClients "issuer-mirror" }}{{ end }}
+{{- if .Values.openbao.enabled }}{{ $apiClients = append $apiClients "openbao" }}{{ end }}
+{{- if .Values.observability.enabled }}{{ $apiClients = append $apiClients "otel-collector" }}{{ end }}
+{{- if .Values.backups.volumeSnapshot.enabled }}{{ $apiClients = append $apiClients "minio-backup" }}{{ end }}
+{{- if and .Values.dapr.enabled .Values.dapr.dashboard.enabled }}{{ $apiClients = append $apiClients "dapr-dashboard" }}{{ end }}
+{{- if $apiClients }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: {{ include "lance.fullname" . }}-allow-apiserver-egress
   labels: {{- include "lance.labels" . | nindent 4 }}
 spec:
-  podSelector: {}
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values:
+          {{- range $apiClients }}
+          - {{ . }}
+          {{- end }}
   policyTypes: [Egress]
-  egress:
-    - ports:
-        - { protocol: TCP, port: 443 }
-        - { protocol: TCP, port: 6443 }
+  egress: {{- include "lance.egressRules" (list "networkPolicy.apiServerEgress" .Values.networkPolicy.apiServerEgress "the Kubernetes API server's endpoints, at the port a policy sees after the kubernetes Service's translation") | nindent 4 }}
+{{- end }}
+{{- if not .Values.openfga.enabled }}
+---
+# The platform's OpenFGA (auth.fgaApiUrl): only the pods that dial it, to the peers the platform states.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "lance.fullname" . }}-allow-openfga-egress
+  labels: {{- include "lance.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values:
+          {{- range (concat (include "lance.fgaWriters" . | splitList " ") (list "bootstrap-admin" "openfga-model")) }}
+          - {{ . }}
+          {{- end }}
+  policyTypes: [Egress]
+  egress: {{- include "lance.egressRules" (list "auth.fgaEgress" .Values.auth.fgaEgress "the platform's OpenFGA at auth.fgaApiUrl") | nindent 4 }}
+{{- end }}
 {{- if .Values.dapr.enabled }}
 ---
 apiVersion: networking.k8s.io/v1
@@ -105,9 +137,7 @@ spec:
   podSelector:
     matchLabels: { app.kubernetes.io/component: otel-collector }
   policyTypes: [Egress]
-  egress:
-    - ports:
-        - { protocol: TCP, port: {{ include "lance.urlPort" $o.export.endpoint }} }
+  egress: {{- include "lance.egressRules" (list "observability.export.egress" $o.export.egress "the telemetry backend at observability.export.endpoint") | nindent 4 }}
 {{- end }}
 {{- with ($o.query).url }}
 {{- if $.Values.frontend.enabled }}
@@ -127,9 +157,7 @@ spec:
           - web-{{ .name }}
           {{- end }}
   policyTypes: [Egress]
-  egress:
-    - ports:
-        - { protocol: TCP, port: {{ include "lance.urlPort" . }} }
+  egress: {{- include "lance.egressRules" (list "observability.query.egress" $o.query.egress "the telemetry store's query API at observability.query.url") | nindent 4 }}
 {{- end }}
 {{- end }}
 {{- with .Values.networkPolicy.extraEgress }}
@@ -143,7 +171,7 @@ metadata:
 spec:
   podSelector: {}
   policyTypes: [Egress]
-  egress: {{- toYaml . | nindent 4 }}
+  egress: {{- include "lance.egressRules" (list "networkPolicy.extraEgress" . "the external backend the rule is for") | nindent 4 }}
 {{- end }}
 ---
 # (3a) General intra-namespace INGRESS — every pod EXCEPT the guarded stores (additive-allow
@@ -396,7 +424,7 @@ spec:
           {{- end }}
   policyTypes: [Egress]
   egress:
-    {{- toYaml (required "route.edgeEgress must state the NetworkPolicy egress rules ({to, ports}) that reach the Gateway's data plane pods: the zones' server side sends /api/* through it" .Values.route.edgeEgress) | nindent 4 }}
+    {{- include "lance.egressRules" (list "route.edgeEgress" .Values.route.edgeEgress "the Gateway's data plane pods: the zones' server side sends /api/* through it") | nindent 4 }}
 ---
 {{- end }}
 # (3e) nats:8222 — the NATS monitoring endpoint (varz/connz/jsz), surfaced in the ops view that now

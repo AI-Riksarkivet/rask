@@ -170,10 +170,22 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 
 {{- define "lance.otlpEndpoint" -}}http://{{ include "lance.fullname" . }}-otel-collector:4318{{- end -}}
 
-{{- define "lance.urlPort" -}}
-{{- $u := urlParse . -}}
-{{- $hp := splitList ":" $u.host -}}
-{{- if gt (len $hp) 1 -}}{{ last $hp }}{{- else if eq $u.scheme "https" -}}443{{- else -}}80{{- end -}}
+{{- define "lance.egressRules" -}}
+{{- $value := index . 0 -}}{{- $rules := index . 1 -}}{{- $reaches := index . 2 -}}
+{{- if not $rules }}
+{{- fail (printf "%s must state the NetworkPolicy egress rules ({to, ports}) that reach %s" $value $reaches) }}
+{{- end }}
+{{- range $rules }}
+{{- if not (.to | default list) }}
+{{- fail (printf "%s: the rule %s names no `to` peers, so it admits every destination on its ports; name the peers that are %s" $value (toJson .) $reaches) }}
+{{- end }}
+{{- range .to }}
+{{- if hasSuffix "/0" (toString ((.ipBlock | default dict).cidr | default "")) }}
+{{- fail (printf "%s: the peer %s admits every destination; name the addresses of %s" $value (toJson .) $reaches) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- toYaml $rules }}
 {{- end -}}
 
 {{- define "lance.otelEnabled" -}}

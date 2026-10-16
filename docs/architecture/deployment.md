@@ -83,7 +83,7 @@ and `deploy/values-prod.yaml` turns both off (`openfga.enabled: false`, `age.ena
   `dapr-state-connection-string` (`postgres://<age.user>:<password>@<age.externalHost>:<age.port>/<age.stateDb>`),
   which the platform writes beside it. No chart value carries either.
 
-The render refuses either one when it is empty and its part is off. Under the production NetworkPolicy (default-deny egress), each endpoint needs a `networkPolicy.extraEgress` entry, as an external NATS or OTLP backend does. OpenFGA's own datastore, availability and
+The render refuses either one when it is empty and its part is off. Under the production NetworkPolicy (default-deny egress), each endpoint needs a `networkPolicy.extraEgress` entry, as an external NATS does; the OTLP backend and its query API take theirs in `observability.export.egress` and `observability.query.egress`, the API server its endpoints in `networkPolicy.apiServerEgress`, and an external OpenFGA its addresses in `auth.fgaEgress`, each admitting only the pods that dial it. Every such rule names its `to` peers: the render refuses one that admits every destination. OpenFGA's own datastore, availability and
 backups belong to the platform, so production runs no `pg_dump` CronJob.
 
 ## Development stand-ins

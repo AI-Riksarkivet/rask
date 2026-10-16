@@ -27,6 +27,32 @@ the retention alert it guards goes blind. Gated on the conditions that render
 the Collector and its receiver, so an estate without them carries no
 allow-entry for a pod it never deploys.
 
+## `{{- $apiClients := list }}`
+
+The pods that call the Kubernetes API, each under the condition its template renders: the token verifiers (catalog
+and lineage under `auth.enabled`, reading the service-account issuer's discovery and key set), the issuer mirror,
+OpenBao (its Kubernetes auth backend reviews ESO's logins), the Collector (`k8sattributes` reads pod metadata), the
+volume-snapshot CronJob (`kubectl`) and the Dapr dashboard. Every one holds a token the API server accepts, and no
+other first-party pod does; `test_no_egress_rule_admits_every_destination.py` compares the two sets on the
+render. The API server is the cluster's: no label selects it and no URL names its endpoints, because the CNI judges
+the endpoint after the `kubernetes` Service's translation (host IPs at 6443 on k3s and kubeadm), so the platform
+states it as `networkPolicy.apiServerEgress`. An egress rule with no `to` peers matches every destination on its
+ports, in the cluster and outside it, so the rule is scoped twice: to these pods, and to those peers.
+
+## `egress: {{- include "lance.egressRules" (list "networkPolicy.apiServerEgress" .Values.networkPolicy.apiServerEgress "the Kubernetes API server's endpoints, at the port a policy sees after the kubernetes Service's translation") | nindent 4 }}`
+
+Every egress rule a deployer states (`networkPolicy.apiServerEgress`, `networkPolicy.extraEgress`, `route.edgeEgress`,
+`observability.export.egress`, `observability.query.egress`, `auth.fgaEgress`) passes through this helper, which refuses an empty list
+where one is required, a rule with no `to` peers, and a peer `ipBlock` whose CIDR is `/0`: each is a rule that admits
+every destination on its ports.
+
+## `name: {{ include "lance.fullname" . }}-allow-openfga-egress`
+
+With `openfga.enabled` off, OpenFGA is the platform's (`auth.fgaApiUrl`, usually HTTPS outside the namespace) and the
+estate's authorization fails closed through it. The pods that dial it are the tuple writers (`lance.fgaWriters`), the
+model hook and the bootstrap-admin Job, the same list its in-namespace ingress admits, and only they reach the peers the
+platform states as `auth.fgaEgress`.
+
 ## `name: {{ include "lance.fullname" . }}-allow-dapr-control-plane-egress`
 
 Every sidecar dials the Dapr control plane (Sentry for its certificate, placement, the scheduler, the operator's
@@ -37,13 +63,15 @@ the platform's to choose.
 ## `name: {{ include "lance.fullname" . }}-allow-telemetry-export-egress`
 
 The Collector exports to `observability.export.endpoint`, the platform's backend, usually outside the namespace;
-default-deny egress would drop that silently while the Collector's queue retries into nothing. The port is derived
-from the URL (`lance.urlPort`: explicit, else 443 for https, 80 for http). `prod-render-check` asserts it on :4318.
+default-deny egress would drop that silently while the Collector's queue retries into nothing. A URL names a host, and
+a NetworkPolicy matches addresses, so the platform states the backend's peers and port as `observability.export.egress`.
+`prod-render-check` asserts the stated peer reaches the rule.
 
 ## `name: {{ include "lance.fullname" $ }}-allow-telemetry-query-egress`
 
 The zones read the store's SQL and PromQL API at `observability.query.url` (the audit viewer, admin pages and
-experiment curves); the same derivation opens its port for the zone pods only.
+experiment curves); `observability.query.egress` states its peers and port, for the zone pods only. The zones are the
+pods that face the internet, so a port-only rule here would give the most exposed pods a path to any host.
 
 ## `name: {{ include "lance.fullname" $ }}-edge-{{ $row.component }}`
 

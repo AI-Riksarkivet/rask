@@ -32,29 +32,14 @@ import pytest
 import yaml
 from pydantic import BaseModel, ConfigDict
 
-from tests.unit.chart_render import DEFAULT_ARGS, REPO, render_fixture, render_text
+from tests.unit.chart_render import DEFAULT_ARGS, PROD_ARGS, REPO, render_fixture, render_text
 from tests.unit.chart_yaml import FAST_LOADER
 
-
-#: The fail-closed prod guards' dummy inputs, the set `scripts/prod_render_check.sh` supplies.
-_PROD_ARGS: tuple[str, ...] = (
-    "-f", str(REPO / "deploy/values-prod.yaml"),
-    "--set", "image.catalog.tag=v0",
-    "--set", "frontend.image.tag=v0",
-    "--set", "signing.provisioned=true",
-    "--set", "nats.auth.provisioned=true",
-    "--set-string", "observability.export.endpoint=http://otlp.example.com:4318/v1/otlp",
-    "--set-string", "auth.fgaApiUrl=https://fga.example.com",
-    "--set-string", "age.externalHost=pg.example.com",
-    "--set", "backups.volumeSnapshot.snapshotClassName=csi-snapclass",
-    "--set", "ingress.host=lance.example.com",
-    "--set", "image.repository=ghcr.io/example/rask",
-)  # fmt: skip
 
 _OVERLAYS: dict[str, tuple[str, ...]] = {
     "default": DEFAULT_ARGS,
     "deployed": ("--set", "image.localImages=true", "-f", str(REPO / "deploy/values-local.yaml")),
-    "prod": _PROD_ARGS,
+    "prod": PROD_ARGS,
 }
 
 _FIRST_PARTY_SOURCE = "rask/templates/"

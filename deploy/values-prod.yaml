@@ -65,8 +65,9 @@ podDisruptionBudget:
   minAvailable: 1
 
 # OpenFGA and the Postgres behind AGE and OpenFGA are the platform's ([[XC-132]], ADR 0153): production runs neither
-# and names them. The deployer sets `auth.fgaApiUrl` (the platform's OpenFGA HTTP API) and `age.externalHost`, and the
-# render refuses either empty. No credential is a value: an FGA client presents its projected `rask-openfga`
+# and names them. The deployer sets `auth.fgaApiUrl` (the platform's OpenFGA HTTP API) with `auth.fgaEgress` (the
+# NetworkPolicy rule reaching its addresses, for the pods that dial it) and `age.externalHost`, and the render refuses
+# any of them empty. No credential is a value: an FGA client presents its projected `rask-openfga`
 # ServiceAccount token, which the platform's OpenFGA admits by OIDC against the cluster's ServiceAccount issuer for the
 # subjects `lance.openfgaSubjects` lists, and the Postgres password is the store's `postgres-password`, which ESO
 # delivers. The platform's Postgres carries the `openfga` and `daprstate` databases; lineage keeps no database
@@ -85,6 +86,19 @@ age:
 # cluster as a prod acceptance step. (prod-readiness P1)
 networkPolicy:
   enabled: true
+  # The pods that call the Kubernetes API reach its endpoints and nothing else on that port; the render refuses an
+  # empty list or a rule without `to` peers. The endpoints are the cluster's (`kubectl get endpointslice -n default
+  # -l kubernetes.io/service-name=kubernetes`):
+  # apiServerEgress:
+  #   - to: [{ipBlock: {cidr: 10.0.0.10/32}}]
+  #     ports: [{protocol: TCP, port: 6443}]
+  # Every other platform endpoint this overlay names outside the namespace is reached through extraEgress, a rule per
+  # endpoint naming its addresses: the NATS bus (nats.url, 4222), the Postgres (age.externalHost, 5432), the Ray
+  # dashboard (ray.dashboardUrl), the platform's IdP (frontend.oidc.publicIssuer) and an off-cluster S3. No other
+  # egress leaves the namespace, so an endpoint missing here is unreachable.
+  # extraEgress:
+  #   - to: [{ipBlock: {cidr: 10.0.1.20/32}}]
+  #     ports: [{protocol: TCP, port: 5432}]
 
 # Load-shed cap sized to the catalog memory tier below (P1): the code default (16) admits 16 × 256MiB
 # buffered Arrow-IPC bodies = 4Gi of buffers against the 1Gi limit — a write burst OOM-kills the pod even
@@ -193,7 +207,8 @@ observability:
   # `deployment.environment.name=rask`. An alert that fires on "the estate" cannot say which one.
   environment: prod
   # `export.endpoint` (the platform's OTLP backend; the render refuses it empty) and `query.url` (its
-  # SQL/PromQL API for the zones) are the deployer's to name. The store must meet the audit store's
+  # SQL/PromQL API for the zones) are the deployer's to name, each with the NetworkPolicy egress that reaches it
+  # (`export.egress`, `query.egress`: {to, ports} rules naming the backend's addresses). The store must meet the audit store's
   # contract (values.yaml `observability`): refuse unauthenticated writes and deletes, admit
   # `otel-collector-export`.
 

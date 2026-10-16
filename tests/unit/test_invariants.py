@@ -578,16 +578,6 @@ def test_the_inbox_subscribes_on_a_component_the_chart_actually_renders() -> Non
     assert "notifications" in (component.get("scopes") or []), f"{configured} is not scoped to notifications — its sidecar refuses to load it"
 
 
-#: The operator inputs a prod render needs besides the Ray, as `scripts/prod_render_check.sh` passes them.
-_PROD_INPUTS = (
-    "-f", str(REPO / "deploy/values-prod.yaml"),
-    "--set", "image.catalog.tag=v0", "--set", "frontend.image.tag=v0", "--set", "image.repository=ghcr.io/example/rask",
-    "--set", "signing.provisioned=true", "--set", "nats.auth.provisioned=true",
-    "--set-string", "observability.export.endpoint=http://otlp.example.com:4318/v1/otlp",
-    "--set-string", "auth.fgaApiUrl=https://fga.example.com",
-    "--set-string", "age.externalHost=pg.example.com",
-    "--set", "backups.volumeSnapshot.snapshotClassName=csi-snapclass", "--set", "ingress.host=lance.example.com",
-)  # fmt: skip
 _LOCAL_INPUTS = ("--set", "image.localImages=true", "-f", str(REPO / "deploy/values-local.yaml"))
 _EXTERNAL_RAY = "https://ray.example.com:8265"
 
@@ -596,8 +586,8 @@ _EXTERNAL_RAY = "https://ray.example.com:8265"
     ("overlay", "address"),
     [
         pytest.param(("--set", "image.localImages=true"), None, id="default-names-no-ray"),
-        pytest.param(_PROD_INPUTS, None, id="prod-names-no-ray"),
-        pytest.param((*_PROD_INPUTS, "--set-string", f"ray.dashboardUrl={_EXTERNAL_RAY}"), _EXTERNAL_RAY, id="prod-external-ray"),
+        pytest.param(chart_render.PROD_ARGS, None, id="prod-names-no-ray"),
+        pytest.param((*chart_render.PROD_ARGS, "--set-string", f"ray.dashboardUrl={_EXTERNAL_RAY}"), _EXTERNAL_RAY, id="prod-external-ray"),
         pytest.param(_LOCAL_INPUTS, "http://rask-ray-head-svc:8265", id="local-fixture-head"),
     ],
 )
