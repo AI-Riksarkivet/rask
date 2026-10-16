@@ -236,8 +236,12 @@ def test_a_forced_rename_carries_a_direct_grant_and_protection_and_leaves_no_tup
             "the direct reader grant did not follow the table"
         )
         assert requests.get(f"{server}/management/v1/table/{dest}/protection", headers=ah, timeout=10).json()["protected"] is True
-        assert requests.get(f"{server}/management/v1/table/{source}/protection", headers=ah, timeout=10).json()["protected"] is False
         assert _tuples_on(f"table:{source}") == [], "a tuple names the old id, which the reconciler reports as a ghost table"
+        # The old id names no table now, so no door answers for it; a table created there must hold nothing the old one did.
+        assert requests.post(f"{server}/v1/table/{source}/create", headers={**ah, **ARROW}, data=_ipc(rows), timeout=30).status_code == 200
+        assert requests.get(f"{server}/management/v1/table/{source}/protection", headers=ah, timeout=10).json()["protected"] is False, (
+            "a table created at the old id was born protected"
+        )
     finally:
         # The leg runs against live estates too; what it made goes, protection and all, so its namespace can be unbound.
         for table in (source, dest):
