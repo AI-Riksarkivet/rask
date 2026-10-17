@@ -337,7 +337,7 @@ async def enforce_bus_authz(event: RunEvent | DatasetEvent, request: Request, se
         # A stamp that names no principal is no author: nothing could be authorized as it ([[LH-063]]).
         if not is_principal(subject):
             raise UnauthoredRunError(f"a bus-delivered run's author {subject[:128]!r} is not a principal (<idp-id>~<subject>)")
-        await enforce_output_authz(event, request, settings, _StampedAuthor(subject), relations=relations_for_operation(event.operation))
+        await enforce_output_authz(event, request, settings, _StampedAuthor(subject), relations=relations_for_operation(event.operation), verified=verified)
     except PermissionDeniedError:
         if not await _is_replay(event, payload, request):
             raise
@@ -368,6 +368,25 @@ def _is_a_delegators_drop(event: RunEvent | DatasetEvent, verified: VerifiedSign
     )
 
 
+def _is_a_delegators_register(event: RunEvent | DatasetEvent, verified: VerifiedSignature | None, settings: LineageSettings) -> bool:
+    """A table's register the catalog signed: its inputs are admitted on that signature, never on the author's grants
+    (owner ruling 2026-10-17, [[LH-501]]).
+
+    THE SOURCE'S GRANTS ARE GONE BY DESIGN, as a drop's are. A rename announces the destination's register with the
+    source as its input, so the edge list keeps destination←source, and between its two markers the catalog moves every
+    grant on the source to the destination (`fga_deps.move_ownership`): a delivery asks FGA about a name that holds no
+    tuple, and the rename's provenance could never be recorded. The catalog authorized `can_drop` on the source, create
+    on the destination's parent and every grant that follows before it mutated anything; its verified signature is that
+    attestation, as for a drop (`_is_a_delegators_drop`). The catalog's register names an input only for a rename's
+    source: its register and undrop doors name none.
+
+    The inputs only: the outputs keep their check, since the destination holds the grants the source had. Only a
+    signature this call verified as one of the chart's delegators; an unsigned register, or one any other identity
+    signed, keeps the full check.
+    """
+    return verified is not None and verified.identity in settings.signing.delegators and event.operation == "register_table"
+
+
 async def _is_replay(event: RunEvent | DatasetEvent, payload: dict[str, object], request: Request) -> bool:
     """Is this the SAME event the feed already holds — a redelivery rather than a new assertion?
 
@@ -396,7 +415,13 @@ async def _is_replay(event: RunEvent | DatasetEvent, payload: dict[str, object],
 
 
 async def enforce_output_authz(
-    event: RunEvent | DatasetEvent, request: Request, settings: LineageSettings, token: Caller | None, *, relations: tuple[str, ...] = _WRITE_RELATIONS
+    event: RunEvent | DatasetEvent,
+    request: Request,
+    settings: LineageSettings,
+    token: Caller | None,
+    *,
+    relations: tuple[str, ...] = _WRITE_RELATIONS,
+    verified: VerifiedSignature | None = None,
 ) -> None:
     """Output-scoped ingest authz: require the producer may WRITE every output dataset it claims.
 
@@ -407,7 +432,8 @@ async def enforce_output_authz(
     GOVERNED inputs are also authorized (``can_get_metadata``): you may only record READING a dataset you
     can see, so an authenticated reader can't forge READ-edge provenance for datasets outside its reach.
     External sources are exempt and :func:`is_external_source` says why — they are unauthorizable by
-    construction, and requiring a tuple for one refused every honest producer of a raw ingest.
+    construction, and requiring a tuple for one refused every honest producer of a raw ingest. So are the
+    inputs of a register whose ``verified`` signature is a delegator's (:func:`_is_a_delegators_register`).
     """
     if not settings.fga_enabled:
         return
@@ -461,7 +487,7 @@ async def enforce_output_authz(
     # has no `table:` object, and (since `lineage_name`) cannot be recorded as a governed table either.
     column_upstreams = {up.name for out in event.outputs for up in out.column_upstreams if not is_external_source(up.namespace, up.name)}
     inputs = sorted({d.name for d in event.inputs if d.name and not is_external_source(d.namespace, d.name)} | column_upstreams)
-    if inputs:
+    if inputs and not _is_a_delegators_register(event, verified, settings):
         objs = [f"{object_type}:{n}" for n in inputs]
         seen = await decider.batch_check(user=token.subject, relation="can_get_metadata", objects=objs)
         hidden = sorted(n for n in inputs if not seen.get(f"{object_type}:{n}"))
