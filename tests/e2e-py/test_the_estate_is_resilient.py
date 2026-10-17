@@ -92,6 +92,11 @@ BUS_OUTAGE_SECONDS = chaos.RECONNECT_WINDOW_SECONDS + 30.0
 #: which committed nothing (measured on pylance 13.0.0 with the catalog killed under concurrent appends).
 COMMIT_RESULT_UNKNOWN = "the commit may or may not have been applied"
 NO_DOOR = "Failed to execute request"
+#: What a stock client says of a commit Lance gave up on after rebasing it over its concurrent writers' commits, which
+#: committed nothing (`lance_docs/file_format.md` § Commit Algorithm). The kill drill's writers resume together once the
+#: catalog is back, and on the e2e-stack lane's runner one exhausted its retries (run 39063208675: "Too many concurrent
+#: writers. Attempted 5 times, but failed on retry_timeout of 30.000 seconds.").
+CONTENDED = "Too many concurrent writers"
 #: How many kills the kill drill may spend before one meets a commit in flight: a kill can land between two commits.
 KILLS = 3
 ARROW = "application/vnd.apache.arrow.stream"
@@ -284,12 +289,14 @@ def _problem_code(answer: requests.Response) -> int | None:
 
 
 def _outage_failure(error: Exception) -> Literal["lost", "refused"] | None:
-    """How a stock commit failed because its door was gone or could not answer: its answer lost, or no door took it; or
-    ``None``, a failure no outage explains. The client folds both into its errors' text, so the text is what is read."""
+    """How a stock commit failed because its door was gone or could not answer: its answer lost, or no door took it, or
+    Lance gave up on the burst of writers the outage left waiting; or ``None``, a failure no outage explains. The client
+    folds all three into its errors' text, so the text is what is read. A refusal committed nothing, and Lance's history
+    is the check of that: a refused write that landed is a version no commit was acknowledged for."""
     text = str(error)
     if COMMIT_RESULT_UNKNOWN in text:
         return "lost"
-    if isinstance(error, ln.ServiceUnavailableError) or NO_DOOR in text:
+    if isinstance(error, ln.ServiceUnavailableError) or NO_DOOR in text or CONTENDED in text:
         return "refused"
     return None
 
