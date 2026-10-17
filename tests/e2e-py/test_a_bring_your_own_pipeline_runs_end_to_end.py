@@ -12,6 +12,7 @@ holds, and who is told of each, are criterion 4's (`test_events_are_correct.py`)
 
 A second leg holds the write tier's vended credential and tries to forge the `published` tag in the store itself.
 
+The scenario's own claims are part of Phase 1's acceptance (`phase1`, XC-090), beside the criteria that read its drive.
 Run with `bash scripts/e2e_live.sh tests/e2e-py/test_a_bring_your_own_pipeline_runs_end_to_end.py`, which discovers
 every address from the release, or `make e2e-byo-pipeline` with the addresses set.
 """
@@ -31,7 +32,7 @@ from botocore.exceptions import ClientError
 from byo_scenario import ScenarioRun, Tenant
 
 
-pytestmark = [pytest.mark.e2e, pytest.mark.byo_pipeline, pytest.mark.skipif(not scenario.LIVE, reason=scenario.REQUIRES)]
+pytestmark = [pytest.mark.e2e, pytest.mark.byo_pipeline, pytest.mark.phase1, pytest.mark.skipif(not scenario.LIVE, reason=scenario.REQUIRES)]
 
 
 def test_a_pipeline_seeds_bronze_derives_silver_and_its_breach_waits_for_a_validator(byo_tenant: Tenant, byo_run: ScenarioRun) -> None:

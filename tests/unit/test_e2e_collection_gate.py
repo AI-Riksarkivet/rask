@@ -63,8 +63,8 @@ def _suite_files_on_disk() -> set[str]:
     return {f"{E2E_DIR}/{p.name}" for p in (REPO_ROOT / E2E_DIR).glob("test_*.py")}
 
 
-def _collected(*args: str) -> set[str]:
-    """The node ids `pytest --collect-only` selects from the live suites under ``args``."""
+def _collected(*args: str) -> list[str]:
+    """The node ids `pytest --collect-only` selects from the live suites under ``args``, in the order the run would take."""
     proc = subprocess.run(
         [sys.executable, "-m", "pytest", "--collect-only", "-q", "--no-cov", "-p", "no:cacheprovider", E2E_DIR, *args],
         cwd=REPO_ROOT,
@@ -73,12 +73,12 @@ def _collected(*args: str) -> set[str]:
         timeout=300,
     )
     assert proc.returncode == 0, f"collecting {E2E_DIR} {' '.join(args)} failed (exit {proc.returncode}):\n{proc.stdout}\n{proc.stderr}"
-    return {line for line in proc.stdout.splitlines() if line.startswith(f"{E2E_DIR}/")}
+    return [line for line in proc.stdout.splitlines() if line.startswith(f"{E2E_DIR}/")]
 
 
 def test_e2e_py_collection_finds_all_live_suites():
-    # `--chaos`, because a module whose every test is a chaos drill selects nothing without it.
-    suite_files = {node.split("::", 1)[0] for node in _collected("--chaos")}
+    # `--chaos` and `--soak`, because a module of chaos drills, and the soak, select nothing without them.
+    suite_files = {node.split("::", 1)[0] for node in _collected("--chaos", "--soak", "kept-drive.json")}
     on_disk = _suite_files_on_disk()
     assert on_disk, f"no test_*.py files found in {E2E_DIR} — the scan root moved and this gate is vacuous"
     missing = sorted(on_disk - set(suite_files))
@@ -89,12 +89,25 @@ def test_e2e_py_collection_finds_all_live_suites():
     )
 
 
-def test_a_plain_live_drive_selects_no_chaos_drill():
+def test_a_plain_live_drive_selects_no_chaos_drill_and_no_soak():
     """A chaos drill takes down the release it runs against, so it runs only where the run asks for it with `--chaos`:
-    the e2e-stack lane's throwaway cluster, or an explicit drive of the deployed release (XC-095). A plain drive,
-    `scripts/e2e_live.sh` with no flag or `-m phase1`, selects none."""
-    drills = _collected("-m", "chaos", "--chaos")
-    plain = _collected() | _collected("-m", "phase1")
+    the e2e-stack lane's throwaway cluster, or an explicit drive of the deployed release (XC-095). The soak reads a drive
+    an earlier run kept, so it runs only where the run names that drive with `--soak` (XC-090). A plain drive,
+    `scripts/e2e_live.sh` with no flag or `-m phase1`, selects neither."""
+    drills = set(_collected("-m", "chaos", "--chaos"))
+    soak = set(_collected("-m", "soak", "--soak", "kept-drive.json"))
+    plain = set(_collected()) | set(_collected("-m", "phase1"))
+
+    assert drills and soak, "no chaos drill or no soak test is selected even when the run asks for them, so this gate checks nothing"
+    assert drills.isdisjoint(plain) and soak.isdisjoint(plain)
+
+
+def test_a_drive_that_asks_for_the_drills_runs_them_after_every_other_test():
+    """A drill takes a dependency of the release down and brings it back, so a test read after one reads an estate just
+    through an outage: a run that asks for the drills, the whole live set or Phase 1's acceptance, runs them last."""
+    drills = set(_collected("-m", "chaos", "--chaos"))
+    every = _collected("--chaos")
+    acceptance = _collected("-m", "phase1", "--chaos")
 
     assert drills, "no chaos drill is selected even when the run asks for them, so this gate checks nothing"
-    assert drills.isdisjoint(plain)
+    assert (set(every[-len(drills) :]), set(acceptance[-len(drills) :])) == (drills, drills)

@@ -49,7 +49,7 @@ import byo_scenario as scenario
 import pytest
 from bus import BusMessage
 from byo_scenario import Identity, ScenarioRun, Tenant
-from correctness import settled_outbox_depth
+from correctness import feed_of, settled_outbox_depth, told
 from jsonschema import Draft202012Validator, FormatChecker
 from pydantic import BaseModel, ValidationError
 from referencing import Registry, Resource
@@ -163,11 +163,9 @@ def _grant_messages(captured: Captured, person: Identity) -> dict[str, BusMessag
 @pytest.fixture(scope="module")
 def captured(byo_tenant: Tenant, byo_run: ScenarioRun) -> Captured:
     tables = {byo_run.bronze_table, byo_run.silver_table}
-    # One row read through two table filters is one feed row: each silver write names bronze as its input.
-    rows = {int(row["seq"]): row for table in sorted(tables) for row in scenario.read_forward(byo_tenant.pipeline, since=byo_run.start, table=table)}
     lineage = [message for message in bus.messages_since("LINEAGE", byo_tenant.created_at) if _tables_of(message.event) & tables]
     control = [message for message in bus.messages_since("CATALOG_CONTROL", byo_tenant.created_at) if byo_tenant.project in str(message.event.get("object_id"))]
-    return Captured(feed=[rows[seq] for seq in sorted(rows)], lineage=lineage, control=control)
+    return Captured(feed=feed_of(byo_tenant.pipeline, byo_run), lineage=lineage, control=control)
 
 
 @pytest.fixture(scope="module")
@@ -301,22 +299,15 @@ def test_each_person_the_scenario_names_is_told_exactly_their_part(captured: Cap
         ),
         "validator": sorted([grant(tenant.validator, f"namespace:{tenant.silver}")]),
     }
-    people = {"admin": tenant.admin, "pipeline": tenant.pipeline, "validator": tenant.validator}
-    scope = {byo_run.bronze_table, byo_run.silver_table, f"namespace:{tenant.bronze}", f"namespace:{tenant.silver}", f"project:{tenant.project}"}
 
     deadline = time.monotonic() + scenario.SETTLE_SECONDS
     while True:
-        told = {
-            name: sorted(
-                (row["notification_id"], row["reason"], row["object_id"]) for row in person.inbox(since=tenant.created_at) if row["object_id"] in scope
-            )
-            for name, person in people.items()
-        }
-        if all(set(expected[name]) <= set(told[name]) for name in people) or time.monotonic() > deadline:
+        heard = told(tenant, byo_run)
+        if all(set(expected[part]) <= set(heard[part]) for part in tenant.people) or time.monotonic() > deadline:
             break
         time.sleep(3)
 
-    assert told == expected
+    assert heard == expected
 
 
 def test_each_event_is_recorded_once_and_a_redelivery_of_its_bytes_adds_nothing(captured: Captured, byo_run: ScenarioRun, redelivery: Redelivery) -> None:

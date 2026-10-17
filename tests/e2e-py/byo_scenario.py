@@ -19,7 +19,7 @@ tag gate. `drive` is that job, run from outside the cluster:
 Three Dex users from the deployed configmap play the parts. The estate admin creates a scratch tenant (a project,
 a warehouse with its own bucket, a bronze and a silver namespace), declares its gate and watches it. The pipeline
 identity holds only `writer` on the two namespaces, so it owns what it creates. The validator holds `validator` on
-silver. The tenant is deleted at the end of the session.
+silver. The tenant is deleted at the end of the session, unless the session keeps the drive for the soak (`kept_drive`).
 
 ONE DRIVE, MANY READERS. `tests/e2e-py/conftest.py` serves the tenant and one drive's `ScenarioRun` as session
 fixtures, so each module that asserts on the scenario reads the same run: the scenario's own claims
@@ -147,11 +147,12 @@ def arrow_ipc(table: pa.Table) -> bytes:
 class Tenant:
     """The scratch tenant one session drives, and what it must take down again."""
 
-    def __init__(self) -> None:
+    def __init__(self, project: str | None = None) -> None:
+        """A tenant of its own, or the one named ``project`` that an earlier session made, signed in again."""
         self.admin = Identity.person(ADMIN_USER)
         self.pipeline = Identity.person(PIPELINE_USER)
         self.validator = Identity.person(VALIDATOR_USER)
-        self.project = f"byo-{uuid.uuid4().hex[:8]}"
+        self.project = project or f"byo-{uuid.uuid4().hex[:8]}"
         self.bronze = f"{self.project}-bronze"
         self.silver = f"{self.project}-silver"
         self.tables: list[str] = []
@@ -159,6 +160,13 @@ class Tenant:
         #: The wall clock just before the tenant's first door, which `create` sets: the tenant's grants are told from
         #: here, before any write, so a reader of the inboxes or the bus reads from here.
         self.created_at = datetime.now(UTC)
+        #: Whether the session keeps the tenant past its end, for the soak to read (`kept_drive.keep`).
+        self.kept = False
+
+    @property
+    def people(self) -> dict[str, Identity]:
+        """The three people the scenario names, by the part each plays."""
+        return {"admin": self.admin, "pipeline": self.pipeline, "validator": self.validator}
 
     def create(self) -> None:
         admin = self.admin

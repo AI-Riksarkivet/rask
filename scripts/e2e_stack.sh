@@ -6,9 +6,9 @@
 # MANUAL terminal run while `ci.yml` ran `pytest -m "not e2e"`. Nothing guarded them, so a regression
 # tomorrow would be silent. This script makes the live proof an artifact that runs on every push.
 #
-# It brings up the GOVERNED stack (Dex OIDC + OpenFGA + Dapr + RustFS + AGE) on kind with the feature
-# flags the suites need, seeds the exact grants/buckets they assume, then runs the five e2e suites the
-# goal names: CAS, client-direct (#2), warehouses (#3-A), multibase (#3-B), outbox (#4).
+# It brings up the GOVERNED stack (Dex OIDC + OpenFGA + Dapr + NATS + MinIO + OpenBao) on kind with the feature
+# flags the suites need, seeds the exact grants/buckets they assume, then runs the lane's own suites, Phase 1's
+# acceptance (`-m phase1`, XC-090) and its soak, each in a session of its own.
 #
 # Heavy optional components (observability: the OTel Collector, web, maintenance) are DISABLED — they
 # are not under test here and a GitHub runner is 2 cores / 7 GB. `make e2e-obs` covers observability.
@@ -524,12 +524,14 @@ SA_AUDIENCE="$(kubectl get deploy "$RELEASE-catalog" -o jsonpath='{.spec.templat
 kubectl create token "$RELEASE-sa-lineage" --audience "$SA_AUDIENCE" --duration 2h > "$SERVICE_TOKEN_FILE" || { echo "!! could not mint a $SA_AUDIENCE token for $RELEASE-sa-lineage"; exit 1; }
 export LANCE_E2E_SERVICE_TOKEN_FILE="$SERVICE_TOKEN_FILE"
 
-# CRITERION 5'S DRILLS RUN LAST, because each takes a dependency of this release down (XC-095): by the time they run,
-# every other suite has read what it needed. Each restores what it took down in a `finally`, and the shared tenant is
-# torn down at session end through the doors they leave serving. `E2E_CHAOS=0` leaves them out while iterating.
-CHAOS=(tests/e2e-py/test_the_estate_is_resilient.py --chaos)
-[ "${E2E_CHAOS:-1}" = "1" ] || CHAOS=()
-PYTHONPATH=services uv run pytest \
+# NO SILENT SKIPS. Every suite skips when the address or token it needs is missing, which is right on a laptop with
+# nothing running and a lie here: the stack is up, so a skip means a misnamed variable and a suite that never ran.
+# `--require-live` fails each session below on any skip, naming what skipped.
+PYTEST=(env PYTHONPATH=services uv run pytest -v -rs -p no:cacheprovider --require-live)
+failed=()
+
+# The lane's own suites, a session of their own.
+"${PYTEST[@]}" \
   tests/e2e-py/test_credential_isolation_e2e.py \
   tests/e2e-py/test_object_store_cas_e2e.py \
   tests/e2e-py/test_warehouses_e2e.py \
@@ -537,25 +539,29 @@ PYTHONPATH=services uv run pytest \
   tests/e2e-py/test_outbox_crash_e2e.py \
   tests/e2e-py/test_maintenance_s3_e2e.py \
   tests/e2e-py/test_track_a_acceptance.py \
-  tests/e2e-py/test_a_bring_your_own_pipeline_runs_end_to_end.py \
-  tests/e2e-py/test_provenance_is_correct.py \
-  tests/e2e-py/test_events_are_correct.py \
-  tests/e2e-py/test_the_catalog_is_correct.py \
-  "${CHAOS[@]}" \
-  -v -rs -p no:cacheprovider | tee /tmp/e2e-stack.log
+  || failed+=("the lane's suites")
 
-# NO SILENT SKIPS. Every suite above is skip-guarded on "is the stack reachable?" — which is the right
-# behaviour on a laptop with nothing running, and a LIE here: the stack IS up, so a skip means an env var is
-# misnamed and the suite silently did not run. That is not hypothetical. It is how the CAS suite (3 tests,
-# wrong var name) and the client-direct suite (2 tests, Dex URL missing its /dex prefix) went COMPLETELY
-# UNEXECUTED for the entire life of this job while it reported "6 passed" and a green check.
-# A green tick over a suite that never ran is worse than a red one.
-if grep -qE "[1-9][0-9]* skipped" /tmp/e2e-stack.log; then
-  echo
-  echo "!! FAIL: e2e suites SKIPPED against a LIVE stack — that is a misconfiguration, not 'not applicable':"
-  grep -E "^SKIPPED|skipped" /tmp/e2e-stack.log || true
-  exit 1
+# PHASE 1'S ACCEPTANCE (XC-090), BY ITS MARKER, so a module joins the lane by carrying `phase1`: one drive of the
+# bring-your-own scenario, its own claims, and every criterion read off it. Criterion 5's drills each take a dependency
+# of this release down (XC-095), so the session runs them after every other test it selected (`conftest.py`), and each
+# restores what it took down in a `finally`. `E2E_CHAOS=0` leaves them out while iterating. The session keeps its drive
+# for the soak.
+CHAOS=(--chaos)
+[ "${E2E_CHAOS:-1}" = "1" ] || CHAOS=()
+KEPT="$(mktemp -d)/kept-drive.json"
+if "${PYTEST[@]}" tests/e2e-py -m phase1 "${CHAOS[@]}" --keep-drive "$KEPT"; then
+  # THE SOAK, AT ONCE. The deployed estate reads its kept drive again a day later (`make e2e-soak`); here the same
+  # reading runs straight after the acceptance, so keeping and resuming a drive is exercised on every push. It removes
+  # the kept tenant once it passes.
+  LANCE_E2E_SOAK_SECONDS=0 "${PYTEST[@]}" tests/e2e-py -m soak --soak "$KEPT" || failed+=("the soak")
+else
+  failed+=("Phase 1's acceptance")
 fi
 
+if [ "${#failed[@]}" -gt 0 ]; then
+  echo
+  echo "!! FAIL: $(IFS=,; echo "${failed[*]}")"
+  exit 1
+fi
 echo
-echo "✓ e2e stack suite green — the live proof is now an artifact, not an anecdote"
+echo "✓ e2e stack suite green, Phase 1's acceptance and its soak with it"

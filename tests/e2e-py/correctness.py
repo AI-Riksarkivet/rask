@@ -1,10 +1,14 @@
-"""What a Phase 1 criterion reads to call the estate correct once a drive has ended (XC-091, XC-094, XC-095).
+"""What a Phase 1 criterion reads to call the estate correct once a drive has ended (XC-090, XC-091, XC-094, XC-095).
 
 PROVENANCE. Lance holds the ground truth: each ref's version history, and the `rask.*` transaction properties each
 commit carries (`read_transaction(v)`; `lance_docs/PROVENANCE.md` § Transaction properties, `catalog.core.run_context`).
 Lineage records the table-level edge list from each commit's announcement: one row for each input a run names, from the
-version it read to the version and ref it wrote (ADR 0158). `history_of` reads the first, `recorded_edges` the second,
-and `edges_named` says what the second must hold, given the first.
+version it read to the version and ref it wrote (ADR 0158). `history_of` reads the first and `as_named` says what it must
+hold, given the commits a writer was told landed; `recorded_edges` reads the second and `edges_named` says what it must
+hold, given the first.
+
+WHAT A DRIVE CAUSED. `feed_of` reads every row lineage's feed holds about the scenario's two tables and `announced` the
+commit each names; `told` reads what each person the scenario names was told of the drive.
 
 A branch is its own version history (`lance_docs/file_format.md` § Branch and Tag Specification): its manifests and
 transactions live under `tree/<branch>/`, and its history starts after the parent version `_refs/branches/<branch>.json`
@@ -40,10 +44,11 @@ import bus
 import byo_scenario as scenario
 import lance
 import requests
-from byo_scenario import Identity
+from byo_scenario import Commit, Identity, ScenarioRun, Tenant
 from pydantic import BaseModel, ConfigDict
 
 from service_kit.lakehouse import outbox
+from service_kit.openlineage import event_identity
 
 
 #: The namespace the catalog keeps lineage's tables in (`services.lineage.provenanceNamespace`).
@@ -59,6 +64,8 @@ STORE_SECRET = os.environ.get("LANCE_E2E_S3_SECRET_KEY", "")
 #: Each version of a set of tables, as ``(table, branch, version)`` with ``None`` for main, and the `rask.*`
 #: properties its commit carries.
 type History = dict[tuple[str, str | None, int], dict[str, Any]]
+#: What a person was told of a drive, as ``(notification id, reason, object)``.
+type Told = tuple[str, str, str]
 
 
 class Edge(BaseModel):
@@ -76,12 +83,33 @@ class Edge(BaseModel):
     author: str | None
 
 
+class Announcement(BaseModel):
+    """One row of lineage's feed about a drive's tables: where it sits, the event it records, and the commit it names."""
+
+    model_config = ConfigDict(frozen=True)
+
+    seq: int
+    event_id: str
+    event_type: str
+    table: str
+    operation: str
+    #: The version and ref the row names; a definition change names no version, and main is no ref.
+    version: int | None
+    ref: str | None
+
+
 def rask_properties(properties: Mapping[str, str]) -> dict[str, Any]:
     """The `rask.*` entries of a commit's transaction properties, `rask.inputs` decoded."""
     rask: dict[str, Any] = {key: value for key, value in properties.items() if key.startswith("rask.")}
     if "rask.inputs" in rask:
         rask["rask.inputs"] = json.loads(rask["rask.inputs"])
     return rask
+
+
+def as_named(commits: Iterable[Commit], *, author: str) -> History:
+    """What Lance holds for ``commits`` once ``author`` has committed them: each at its table, ref and version, carrying
+    the `rask.*` properties its run names."""
+    return {(commit.table, commit.branch, commit.version): rask_properties(commit.run.transaction_properties(author=author)) for commit in commits}
 
 
 def _refs(main: lance.LanceDataset) -> list[tuple[str | None, lance.LanceDataset, int]]:
@@ -144,6 +172,40 @@ def recorded_edges(owner: Identity, tables: Iterable[str], *, expected: Iterable
         if wanted <= Counter(recorded) or time.monotonic() > deadline:
             return recorded
         time.sleep(2)
+
+
+def feed_of(reader: Identity, run: ScenarioRun) -> list[dict[str, Any]]:
+    """Every row lineage's feed holds about the drive's two tables from where the pipeline began following, oldest first.
+    A silver write names bronze as its input, so a row read through both table filters is one row."""
+    rows = {int(row["seq"]): row for table in (run.bronze_table, run.silver_table) for row in scenario.read_forward(reader, since=run.start, table=table)}
+    return [rows[seq] for seq in sorted(rows)]
+
+
+def announced(reader: Identity, run: ScenarioRun) -> list[Announcement]:
+    """The drive's feed rows (`feed_of`), each as the event it records and the commit it names."""
+    return [
+        Announcement(
+            seq=int(row["seq"]),
+            event_id=event_identity(row["event"]),
+            event_type=str(row["event_type"]),
+            table=str(row["outputs"][0]),
+            operation=str(facet.get("operation")),
+            version=facet.get("version"),
+            ref=facet.get("ref"),
+        )
+        for row in feed_of(reader, run)
+        for facet in (scenario.lance_facet(row),)
+    ]
+
+
+def told(tenant: Tenant, run: ScenarioRun) -> dict[str, list[Told]]:
+    """What each person the scenario names was told of the drive, by the part they play: their inbox rows since the tenant
+    was made about its project, its two namespaces or its two tables, sorted."""
+    about = {run.bronze_table, run.silver_table, f"namespace:{tenant.bronze}", f"namespace:{tenant.silver}", f"project:{tenant.project}"}
+    return {
+        part: sorted((row["notification_id"], row["reason"], row["object_id"]) for row in person.inbox(since=tenant.created_at) if row["object_id"] in about)
+        for part, person in tenant.people.items()
+    }
 
 
 def _settled(depth: Callable[[], int], within: float) -> int:

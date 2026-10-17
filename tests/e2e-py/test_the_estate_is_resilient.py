@@ -72,7 +72,7 @@ import pytest
 import requests
 from byo_scenario import CATALOG, Commit, NamedRun, Tenant
 from chaos import Workload
-from correctness import edges_named, history_of, rask_properties, recorded_edges, settled_control_outbox_depth, settled_outbox_depth
+from correctness import as_named, edges_named, history_of, rask_properties, recorded_edges, settled_control_outbox_depth, settled_outbox_depth
 from pydantic import BaseModel
 
 
@@ -257,11 +257,7 @@ class Drills:
         names = ["$".join(table) for table in tables]
         author = self.pipeline.principal
         history = history_of(self.pipeline, names)
-        acknowledged = {
-            (commit.table, commit.branch, commit.version): rask_properties(commit.run.transaction_properties(author=author))
-            for commit in self.commits
-            if commit.table in names
-        }
+        acknowledged = as_named((commit for commit in self.commits if commit.table in names), author=author)
         lost = {run.run_id: rask_properties(run.transaction_properties(author=author)) for run in self.unanswered}
         landed = {key: properties for key, properties in history.items() if key not in acknowledged and properties.get("rask.run_id") in lost}
         runs = Counter(properties.get("rask.run_id") for properties in history.values())

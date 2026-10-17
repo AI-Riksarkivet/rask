@@ -18,6 +18,10 @@
 #
 # Usage:  bash scripts/e2e_live.sh [-m MARKER | FILE...]
 #         RELEASE=rask KUBECONFIG=/etc/rancher/k3s/k3s.yaml bash scripts/e2e_live.sh -m cas
+#
+# Phase 1's acceptance with criterion 5's drills, its drive kept, then the soak a day later (XC-090):
+#         bash scripts/e2e_live.sh -m phase1 --require-live --chaos --keep-drive PATH
+#         bash scripts/e2e_live.sh -m soak --require-live --soak PATH
 set -euo pipefail
 
 RELEASE="${RELEASE:-rask}"

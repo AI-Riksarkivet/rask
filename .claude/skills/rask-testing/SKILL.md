@@ -68,16 +68,25 @@ consequences it does not spell out.
   than the run (criterion 2's principal × door matrix, `test_the_catalog_is_correct.py`) makes its own objects in
   the shared tenant's warehouse, under names that do not carry the project id, so the other criteria read only what
   the scenario made. The bus is read through `tests/e2e-py/bus.py`, by sequence, with no consumer of its own.
-  What every criterion reads to call the estate correct (each ref's history, the edge list, the DLQ and both
-  outboxes) is `tests/e2e-py/correctness.py`, so a new criterion holds the estate to the same readings.
-  `make e2e-phase1` and the e2e-stack lane run them.
+  What every criterion reads to call the estate correct (each ref's history, the edge list, the feed's rows and the
+  inboxes' about the drive, the DLQ and both outboxes) is `tests/e2e-py/correctness.py`, so a new criterion holds the
+  estate to the same readings. The acceptance is the marker, not a file list: `make e2e-phase1` and the e2e-stack
+  lane run `-m phase1`, so a module joins both by carrying it; the scenario's own module
+  (`test_a_bring_your_own_pipeline_runs_end_to_end.py`) carries it beside `byo_pipeline`.
+- **The soak reads a kept drive a day later.** A run passed `--keep-drive PATH` keeps the scenario's tenant when every
+  test it ran passed, and records the drive at PATH (`tests/e2e-py/kept_drive.py`); a run passed `--soak PATH`
+  resumes it, runs `test_the_estate_stays_correct_while_it_runs.py` (marker `soak`, deselected without `--soak`)
+  once `LANCE_E2E_SOAK_SECONDS` (a day) have passed, and removes the tenant when it passes. The e2e-stack lane soaks
+  at once (`LANCE_E2E_SOAK_SECONDS=0`) so keeping and resuming run on every push; the deployed estate soaks the day
+  through `bash scripts/e2e_live.sh -m soak --require-live --soak PATH` or `make e2e-soak`.
 - **A chaos drill runs only when the run asks for it.** A test marked `chaos` takes a dependency of the release
   down, so `tests/e2e-py/conftest.py` deselects it unless the run passes `--chaos`: a plain live drive, `-m phase1`
-  included, runs none (`tests/unit/test_e2e_collection_gate.py`). Criterion 5's drills
-  (`test_the_estate_is_resilient.py`, XC-095) carry both `phase1` and `chaos`; the e2e-stack lane runs them last
-  with `--chaos`, and the deployed release only through an explicit `bash scripts/e2e_live.sh -m phase1
-  --require-live --chaos` or `make e2e-chaos`. A drill acts through `tests/e2e-py/chaos.py`, which takes each
-  dependency down without destroying what it holds, and restores it in a `finally`.
+  included, runs none, and a run that asks for them runs them after every other test it selected
+  (`tests/unit/test_e2e_collection_gate.py`). Criterion 5's drills (`test_the_estate_is_resilient.py`, XC-095)
+  carry both `phase1` and `chaos`; the e2e-stack lane runs them with `--chaos`, and the deployed release only through
+  an explicit `bash scripts/e2e_live.sh -m phase1 --require-live --chaos` or `make e2e-chaos`. A drill acts through
+  `tests/e2e-py/chaos.py`, which takes each dependency down without destroying what it holds, and restores it in a
+  `finally`.
 - **A runner suite runs only from the Makefile.** No root testpath reaches `runners/`. `make test`
   and `make test-slow` loop over every `runners/*/tests`, running `uv run --frozen pytest` from inside
   that runner's directory, so a new `runners/<name>/tests` runs in both with no edit; `--frozen` needs
@@ -110,7 +119,7 @@ consequences it does not spell out.
 | CI: `dagger call test` (`.dagger/test.go`)        | the `make test` marker filter, serially, with `--timeout=300 --timeout-method=thread`, helm installed. **No runner suite** |
 | CI: `dagger call auth-chain`, `dagger call governance-chain` | a real Dex, OpenFGA and catalog as Dagger services (plus lineage for `governance-chain`), asserting through `scripts/auth_chain.sh` and `tests/e2e-py/test_governance_e2e.py` respectively |
 | CI: `dagger call nats-auth` (= `make nats-auth`, ms-gates leg `nats-auth`) | `tests/e2e-py/test_nats_admits_each_client_only_to_its_own_subjects.py` (marker `nats_auth`): the NATS fixture's nats-server in operator mode with test-only nsc keys, the permission table read off the render's dev seed, every user's call set, foreign and credential-less publishes refused, and one real daprd 1.18.1 per component shape, judged by the broker's log ([[XC-078]]) |
-| CI: `e2e-stack` (= `make e2e-ci`) | the `tests/e2e-py` files named in `scripts/e2e_stack.sh`, against a stack the lane brings up |
+| CI: `e2e-stack` (= `make e2e-ci`) | against a stack the lane brings up, three sessions under `--require-live`: the `tests/e2e-py` files named in `scripts/e2e_stack.sh`, then Phase 1's acceptance (`-m phase1 --chaos --keep-drive`), then its soak at once (`-m soak`) |
 | `make fga-test` (part of `make check`)            | the OpenFGA model's own `.fga.yaml` suite                                                                         |
 | `make e2e-<suite>`, `make e2e-live`               | `tests/e2e-py` against a stack already deployed: one marker at the addresses you pass, or `-m e2e` against the k3s release |
 

@@ -14,7 +14,7 @@ to the version and ref it wrote. This module holds Lance to what the pipeline di
    and by its author, and no other edge names either table.
 
 How each ref's history and the edge list are read, branches included, is `correctness`'s, which criterion 5's drills
-read the same way.
+and the soak read the same way.
 
 WHAT IS NOT CLAIMED, and why. That each commit is announced once, by its author, is criterion 4's
 (`test_events_are_correct.py`). Lineage's one door over the edge list, `/tables/{t}/derived`, answers a
@@ -32,7 +32,7 @@ import bus
 import byo_scenario as scenario
 import pytest
 from byo_scenario import ScenarioRun, Tenant
-from correctness import Edge, History, edges_named, history_of, rask_properties, recorded_edges
+from correctness import Edge, History, as_named, edges_named, history_of, recorded_edges
 
 
 pytestmark = [
@@ -60,11 +60,7 @@ def test_each_version_is_a_pipeline_commit_carrying_the_run_it_named_and_who_com
     `staging`, carry the run as the pipeline staged it, which `version/create` admits only under the caller's own
     principal; silver's create and insert carry the run the catalog stamped from the spec Context, beside the person
     who called its door."""
-    author = byo_tenant.pipeline.principal
-
-    assert history == {
-        (commit.table, commit.branch, commit.version): rask_properties(commit.run.transaction_properties(author=author)) for commit in byo_run.commits
-    }
+    assert history == as_named(byo_run.commits, author=byo_tenant.pipeline.principal)
 
 
 def test_the_edge_list_holds_one_edge_for_each_input_a_version_names_and_no_other(history: History, edges: list[Edge]) -> None:
