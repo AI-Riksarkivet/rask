@@ -12,11 +12,16 @@ publicOrigin: ""
 # The static client; rask's `auth.oidc.clientId` is the audience its services check and `dex.clientSecret` the secret it seeds.
 clientId: lance-catalog
 clientSecret: lance-catalog-secret
-# Two demo identities with one password, so the governed demo shows an allow and a deny: alice creates a table and is
-# granted it, bob is refused reading it. The hash is bcrypt of "password".
+# Demo identities with one password. The hash is bcrypt of "password". alice and bob make the governed demo's allow and
+# deny: alice creates a table and is granted it, bob is refused reading it. carol, dave and erin are the writer, the
+# reader and the outsider of criterion 2's principal matrix (tests/e2e-py/test_the_catalog_is_correct.py), so each rung
+# there is held by a different person.
 users:
   - { email: alice@example.com, username: alice, userID: 08a8684b-db88-4b73-90a9-3cd1661f5466 }
   - { email: bob@example.com, username: bob, userID: 1b6e2f5a-7c4d-4e9b-9f1a-2d3c4b5a6e7f }
+  - { email: carol@example.com, username: carol, userID: 718ae9f8-ab91-403e-a07c-cd1caf667cce }
+  - { email: dave@example.com, username: dave, userID: a7d3182d-0d75-4ce6-930f-dcb5c0d9f8ad }
+  - { email: erin@example.com, username: erin, userID: bbca9aad-6c7c-4bcd-a88e-f74abbae1185 }
 passwordHash: "$2b$10$TsVVN0.5g.XntmJAGNuXF.gyhwQZgmgjmkevKxTa48M7k06J./53G"
 # The publish saga's service account: Dex has no client-credentials grant, so the annotator mints a token per publish
 # with this password-grant user. rask seeds its plain password (`dex.publisher.password`) into its store.

@@ -64,8 +64,11 @@ consequences it does not spell out.
 - **Phase 1's acceptance reads one drive.** A `phase1` module (one per criterion, XC-090) asserts on the
   bring-your-own scenario `tests/e2e-py/byo_scenario.py` drives once per session (`conftest.py`'s `byo_tenant`
   and `byo_run`), so a session running several modules reads one tenant and one run; add what a new criterion
-  needs to `ScenarioRun` rather than driving again. The bus is read through `tests/e2e-py/bus.py`, by sequence,
-  with no consumer of its own. `make e2e-phase1` and the e2e-stack lane run them.
+  needs to `ScenarioRun` rather than driving again. A criterion whose claim is about the catalog's doors rather
+  than the run (criterion 2's principal × door matrix, `test_the_catalog_is_correct.py`) makes its own objects in
+  the shared tenant's warehouse, under names that do not carry the project id, so the other criteria read only what
+  the scenario made. The bus is read through `tests/e2e-py/bus.py`, by sequence, with no consumer of its own.
+  `make e2e-phase1` and the e2e-stack lane run them.
 - **A runner suite runs only from the Makefile.** No root testpath reaches `runners/`. `make test`
   and `make test-slow` loop over every `runners/*/tests`, running `uv run --frozen pytest` from inside
   that runner's directory, so a new `runners/<name>/tests` runs in both with no edit; `--frozen` needs
@@ -134,7 +137,7 @@ own clock), and writes the projected service-account token files the catalog's a
 | NATS JetStream                | a real broker through Dagger (`references/fixtures.md` § NATS); the `nats-auth` lane brings its own         |
 | Ray job client                | a structural fake `cast` to `JobSubmissionClient`: `packages/ray-kit/tests/test_dashboard_bounds.py`        |
 | OpenFGA, authz not the claim  | `RASK_FGA_ENABLED` / `RASK_OIDC_ENABLED` left at their default, off; with FGA off the checker allows everything. Where a route needs a named subject or a decision, override that service's `current_subject` / `get_checker` |
-| OpenFGA, authz is the claim   | the model's `.fga.yaml` suite (`make fga-test`), or a real Dex and OpenFGA via `dagger call auth-chain` / `governance-chain`. The offline suite has no OpenFGA server |
+| OpenFGA, authz is the claim   | the model's `.fga.yaml` suite (`make fga-test`), or a real Dex and OpenFGA via `dagger call auth-chain` / `governance-chain`, or on a deployed estate criterion 2's principal × door matrix (`tests/e2e-py/test_the_catalog_is_correct.py`). The offline suite has no OpenFGA server |
 | The chart                     | `tests/unit/chart_render.py`: `references/fixtures.md` § The chart                                          |
 
 ## Skips and prose

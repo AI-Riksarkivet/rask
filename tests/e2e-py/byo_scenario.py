@@ -46,8 +46,6 @@ import pyarrow.ipc as ipc
 import requests
 from principals import DEX_SCOPE, principal_of
 from pydantic import BaseModel, Field
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
 
 
 CATALOG = os.environ.get("LANCE_E2E_CATALOG_URL", "").rstrip("/")
@@ -65,11 +63,13 @@ SETTLE_SECONDS = float(os.environ.get("LANCE_E2E_SETTLE_SECONDS", "120"))
 ARROW = "application/vnd.apache.arrow.stream"
 #: The branch the pipeline cuts from silver and commits on.
 STAGING = "staging"
-#: A GET retried on a fresh connection when the server closed the pooled one before answering, which RFC 9112 § 9.3.1
-#: lets a client do for an idempotent request. Through `kubectl port-forward` a server's close of an idle keep-alive
-#: connection reaches the client only as its next request fails: measured on the e2e-stack lane 2026-10-17,
-#: `RemoteDisconnected` on `GET /api/notifications/inbox`. A status code is an answer and is never retried.
-IDEMPOTENT_RETRY = Retry(total=3, connect=3, read=3, status=0, backoff_factor=0.2, allowed_methods=frozenset({"GET"}))
+#: Every request a suite's client sends closes its connection, so no pooled connection is kept to go stale. Through
+#: `kubectl port-forward` a server's close of an idle keep-alive connection reaches the client only as its next request
+#: fails, measured on the e2e-stack lane: `RemoteDisconnected` on a GET (run 39015745966), and hyper's `IncompleteMessage`
+#: on pylance's own POSTs and describes once a stock client sat idle past the catalog's five-second keep-alive (runs
+#: 39029359505, 39029400893, 39029401980, 2026-10-17). A POST must not be retried (RFC 9112 § 9.3.1), so the connection
+#: is not reused at all.
+CLOSE_EACH_REQUEST = "close"
 
 #: Whether a deployed estate is named, and what to set when it is not.
 LIVE = bool(CATALOG and LINEAGE and NOTIFICATIONS and DEX)
@@ -77,9 +77,18 @@ REQUIRES = "set LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_NOTIFICA
 
 
 class Identity:
-    """One Dex user: its bearer, and the principal the estate's grants name ([[LH-063]])."""
+    """One caller of the estate's doors: its bearer, and the principal the estate's grants name ([[LH-063]])."""
 
-    def __init__(self, email: str) -> None:
+    def __init__(self, bearer: str) -> None:
+        self.bearer = bearer
+        self.principal = principal_of(CATALOG, bearer)
+        self.http = requests.Session()
+        self.http.headers["authorization"] = f"Bearer {bearer}"
+        self.http.headers["connection"] = CLOSE_EACH_REQUEST
+
+    @classmethod
+    def person(cls, email: str) -> Identity:
+        """A Dex user, signed in with the password grant."""
         answer = requests.post(
             f"{DEX}/token",
             data={
@@ -93,16 +102,14 @@ class Identity:
             timeout=20,
         )
         answer.raise_for_status()
-        self.bearer = str(answer.json()["id_token"])
-        self.principal = principal_of(CATALOG, self.bearer)
-        self.http = requests.Session()
-        self.http.mount("http://", HTTPAdapter(max_retries=IDEMPOTENT_RETRY))
-        self.http.headers["authorization"] = f"Bearer {self.bearer}"
+        return cls(str(answer.json()["id_token"]))
 
     def namespace(self, **context: str) -> lance_namespace.LanceNamespace:
         """The stock client an outside pipeline gets, sending ``context`` as spec Context headers on every call."""
         headers = {f"headers.{name}": value for name, value in context.items()}
-        return lance_namespace.connect("rest", {"uri": CATALOG, "headers.Authorization": f"Bearer {self.bearer}", **headers})
+        return lance_namespace.connect(
+            "rest", {"uri": CATALOG, "headers.Authorization": f"Bearer {self.bearer}", "headers.Connection": CLOSE_EACH_REQUEST, **headers}
+        )
 
     def inbox(self, *, since: datetime) -> list[dict[str, Any]]:
         """This person's inbox rows about things that happened at or after ``since``, newest first.
@@ -141,9 +148,9 @@ class Tenant:
     """The scratch tenant one session drives, and what it must take down again."""
 
     def __init__(self) -> None:
-        self.admin = Identity(ADMIN_USER)
-        self.pipeline = Identity(PIPELINE_USER)
-        self.validator = Identity(VALIDATOR_USER)
+        self.admin = Identity.person(ADMIN_USER)
+        self.pipeline = Identity.person(PIPELINE_USER)
+        self.validator = Identity.person(VALIDATOR_USER)
         self.project = f"byo-{uuid.uuid4().hex[:8]}"
         self.bronze = f"{self.project}-bronze"
         self.silver = f"{self.project}-silver"

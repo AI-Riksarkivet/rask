@@ -1578,6 +1578,22 @@ wheels = [
 ]
 
 [[package]]
+name = "lance-ray"
+version = "0.5.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "lance-namespace" },
+    { name = "packaging" },
+    { name = "pyarrow" },
+    { name = "pylance" },
+    { name = "ray", extra = ["data"] },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/48/5c/7eaeace1eff30543873bc191e4bf0d1a8ffc5b604168b7ad3e652c3d8e7e/lance_ray-0.5.0.tar.gz", hash = "sha256:9e90530e4fa6560fc69c9179373f1f92d837650d0f9bb2b72aa98456059a0121", size = 89875, upload-time = "2026-07-24T23:30:24.171Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/95/ba/32d66fbd8bc90372f4185c3d0fe90a9d4cba3b22cde5edb79d1c22b0fa6b/lance_ray-0.5.0-py3-none-any.whl", hash = "sha256:fe7ba364063defd209bbaba0f8abef54b6ddaae2665ab887b281d571cc122575", size = 58921, upload-time = "2026-07-24T23:30:23.229Z" },
+]
+
+[[package]]
 name = "lancedb"
 version = "0.40.0"
 source = { registry = "https://pypi.org/simple" }
@@ -3210,6 +3226,7 @@ dev = [
     { name = "datasets" },
     { name = "duckdb" },
     { name = "jsonschema" },
+    { name = "lance-ray" },
     { name = "lancedb" },
     { name = "moto", extra = ["s3", "server"] },
     { name = "nats-py" },
@@ -3234,6 +3251,7 @@ dev = [
     { name = "datasets", specifier = ">=4.8.4" },
     { name = "duckdb", specifier = ">=1.4" },
     { name = "jsonschema", specifier = ">=4.26" },
+    { name = "lance-ray", specifier = ">=0.5.0" },
     { name = "lancedb", specifier = ">=0.40.0" },
     { name = "moto", extras = ["s3", "server"], specifier = ">=5.0" },
     { name = "nats-py", specifier = ">=2.15" },

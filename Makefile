@@ -1075,7 +1075,7 @@ e2e-container-deletes: ## Warehouse/project delete, cascade and the gate-before-
 # not a CI lane. `make e2e-ci` remains the governed-kind-stack entry point, and wiring the
 # security-shaped ones (edge, cas) into CI is the follow-up — it needs an edit to
 # `.github/workflows/ci.yml`, which a concurrent session is holding.
-E2E_SUITES = byo-branch byo-erasure byo-pipeline cas chaos compaction edge media-catalog observability phase1 spec-conformance track-a user-state
+E2E_SUITES = byo-branch byo-erasure byo-pipeline cas chaos compaction edge media-catalog observability phase1 track-a user-state
 .PHONY: $(addprefix e2e-,$(E2E_SUITES))   # declared HERE, not up with the other .PHONY: make
                                           # expands a rule's prerequisites AS IT READS the line,
                                           # so referencing E2E_SUITES before this assignment
@@ -1109,19 +1109,6 @@ e2e-compaction:     ## Maintenance sweep / compaction / GC proofs (needs LANCE_E
 	@test -n "$(LANCE_E2E_MAINTENANCE_URL)" || { echo "  !! e2e-compaction needs LANCE_E2E_MAINTENANCE_URL, LANCE_E2E_GREPTIME_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
 	@test -n "$(LANCE_E2E_GREPTIME_URL)" || { echo "  !! e2e-compaction needs LANCE_E2E_MAINTENANCE_URL, LANCE_E2E_GREPTIME_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
 	LANCE_E2E_MAINTENANCE_URL=$(LANCE_E2E_MAINTENANCE_URL) LANCE_E2E_GREPTIME_URL=$(LANCE_E2E_GREPTIME_URL) uv run pytest tests/e2e-py -m compaction -v
-e2e-spec-conformance:     ## The STOCK lance_namespace client against a live catalog (needs LANCE_E2E_CATALOG_URL)
-	@test -n "$(LANCE_E2E_CATALOG_URL)" || { echo "  !! e2e-spec-conformance needs LANCE_E2E_CATALOG_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	LANCE_E2E_CATALOG_URL=$(LANCE_E2E_CATALOG_URL) LANCE_E2E_DEX=$(LANCE_E2E_DEX) uv run pytest tests/e2e-py -m spec_conformance -v
-
-# THE SAME SUITE, run from INSIDE the cluster, and the difference is not redundancy. The catalog vends
-# its own in-cluster address, so a host-side client gets a correct 900s credential for a host it cannot
-# resolve — measured 2026-09-19, the k3s service network is routable from this host and `rask-minio`
-# does not resolve on it. The lancedb and lance-ray cases therefore SKIP above, and a skip reads as
-# green. This target proves the byte READ, which only a process inside the cluster can; the one above
-# still proves resolution and credential issuance from a developer's own machine.
-e2e-spec-conformance-incluster: ## The same suite as an in-cluster Job — proves the READ, not just the vend
-	bash scripts/conformance-incluster.sh
-
 # THE ITERATION LOOP, and the measurement that made it a target. `tests/unit` + `tests/integration` is
 # what every change runs before it is pushed, and it took 9m57s serially on a 64-core machine. Measured
 # 2026-09-19 at `-n 16 --dist loadfile`: **1m17s, 4,947 passed, zero failures** — 7.7x, because the
@@ -1149,13 +1136,14 @@ e2e-observability:  ## OTLP → GreptimeDB observability proof (needs LANCE_E2E_
 	@test -n "$(LANCE_E2E_LINEAGE_URL)" || { echo "  !! e2e-observability needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_GREPTIME_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
 	@test -n "$(LANCE_E2E_GREPTIME_URL)" || { echo "  !! e2e-observability needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_GREPTIME_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
 	LANCE_E2E_CATALOG_URL=$(LANCE_E2E_CATALOG_URL) LANCE_E2E_LINEAGE_URL=$(LANCE_E2E_LINEAGE_URL) LANCE_E2E_GREPTIME_URL=$(LANCE_E2E_GREPTIME_URL) uv run pytest tests/e2e-py -m observability -v
-e2e-phase1:         ## Phase 1's acceptance (XC-090): each criterion module read off one drive of the bring-your-own scenario; criterion 1, provenance, is XC-091, and criterion 4, events, is XC-094 (needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_NOTIFICATIONS_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL; `bash scripts/e2e_live.sh -m phase1 --require-live` discovers them)
-	@test -n "$(LANCE_E2E_CATALOG_URL)" || { echo "  !! e2e-phase1 needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_NOTIFICATIONS_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	@test -n "$(LANCE_E2E_LINEAGE_URL)" || { echo "  !! e2e-phase1 needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_NOTIFICATIONS_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	@test -n "$(LANCE_E2E_NOTIFICATIONS_URL)" || { echo "  !! e2e-phase1 needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_NOTIFICATIONS_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	@test -n "$(LANCE_E2E_DEX)" || { echo "  !! e2e-phase1 needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_NOTIFICATIONS_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	@test -n "$(LANCE_E2E_NATS_URL)" || { echo "  !! e2e-phase1 needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_NOTIFICATIONS_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	LANCE_E2E_CATALOG_URL=$(LANCE_E2E_CATALOG_URL) LANCE_E2E_LINEAGE_URL=$(LANCE_E2E_LINEAGE_URL) LANCE_E2E_NOTIFICATIONS_URL=$(LANCE_E2E_NOTIFICATIONS_URL) LANCE_E2E_DEX=$(LANCE_E2E_DEX) LANCE_E2E_NATS_URL=$(LANCE_E2E_NATS_URL) uv run pytest tests/e2e-py -m phase1 -v --require-live
+e2e-phase1:         ## Phase 1's acceptance (XC-090): each criterion module read off one drive of the bring-your-own scenario; criterion 1, provenance, is XC-091, criterion 2, the catalog, is XC-092, and criterion 4, events, is XC-094 (needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_NOTIFICATIONS_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL, LANCE_E2E_SERVICE_TOKEN_FILE; `bash scripts/e2e_live.sh -m phase1 --require-live` discovers them)
+	@test -n "$(LANCE_E2E_CATALOG_URL)" || { echo "  !! e2e-phase1 needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_NOTIFICATIONS_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL, LANCE_E2E_SERVICE_TOKEN_FILE — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	@test -n "$(LANCE_E2E_LINEAGE_URL)" || { echo "  !! e2e-phase1 needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_NOTIFICATIONS_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL, LANCE_E2E_SERVICE_TOKEN_FILE — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	@test -n "$(LANCE_E2E_NOTIFICATIONS_URL)" || { echo "  !! e2e-phase1 needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_NOTIFICATIONS_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL, LANCE_E2E_SERVICE_TOKEN_FILE — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	@test -n "$(LANCE_E2E_DEX)" || { echo "  !! e2e-phase1 needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_NOTIFICATIONS_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL, LANCE_E2E_SERVICE_TOKEN_FILE — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	@test -n "$(LANCE_E2E_NATS_URL)" || { echo "  !! e2e-phase1 needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_NOTIFICATIONS_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL, LANCE_E2E_SERVICE_TOKEN_FILE — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	@test -n "$(LANCE_E2E_SERVICE_TOKEN_FILE)" || { echo "  !! e2e-phase1 needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_NOTIFICATIONS_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL, LANCE_E2E_SERVICE_TOKEN_FILE — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	LANCE_E2E_CATALOG_URL=$(LANCE_E2E_CATALOG_URL) LANCE_E2E_LINEAGE_URL=$(LANCE_E2E_LINEAGE_URL) LANCE_E2E_NOTIFICATIONS_URL=$(LANCE_E2E_NOTIFICATIONS_URL) LANCE_E2E_DEX=$(LANCE_E2E_DEX) LANCE_E2E_NATS_URL=$(LANCE_E2E_NATS_URL) LANCE_E2E_SERVICE_TOKEN_FILE=$(LANCE_E2E_SERVICE_TOKEN_FILE) uv run pytest tests/e2e-py -m phase1 -v --require-live
 e2e-track-a:        ## Track A acceptance: tier contract + gate/publish symmetry + branch isolation (needs LANCE_E2E_CATALOG_URL, LANCE_E2E_TOKEN, LANCE_E2E_S3_ENDPOINT)
 	@test -n "$(LANCE_E2E_CATALOG_URL)" || { echo "  !! e2e-track-a needs LANCE_E2E_CATALOG_URL, LANCE_E2E_TOKEN, LANCE_E2E_S3_ENDPOINT — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
 	@test -n "$(LANCE_E2E_TOKEN)" || { echo "  !! e2e-track-a needs LANCE_E2E_CATALOG_URL, LANCE_E2E_TOKEN, LANCE_E2E_S3_ENDPOINT — a live drive with no live target is a failed invocation, not a pass"; exit 1; }

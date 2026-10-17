@@ -494,6 +494,11 @@ export LANCE_E2E_RELAY_BINDING=lineage-relay-cron
 export LANCE_E2E_NOTIFICATIONS_URL="http://localhost:8850$(kubectl get cm "$RELEASE-config" -o jsonpath='{.data.RASK_API_PREFIX}')"
 export LANCE_E2E_NATS_URL=nats://localhost:4222
 export LANCE_E2E_RELEASE="$RELEASE"
+# Criterion 2's service identity: the lineage service's account, for the audience the catalog's own door checks.
+SERVICE_TOKEN_FILE="$(mktemp)"
+SA_AUDIENCE="$(kubectl get deploy "$RELEASE-catalog" -o jsonpath='{.spec.template.spec.containers[?(@.name=="catalog")].env[?(@.name=="RASK_SA_AUDIENCE")].value}')"
+kubectl create token "$RELEASE-sa-lineage" --audience "$SA_AUDIENCE" --duration 2h > "$SERVICE_TOKEN_FILE" || { echo "!! could not mint a $SA_AUDIENCE token for $RELEASE-sa-lineage"; exit 1; }
+export LANCE_E2E_SERVICE_TOKEN_FILE="$SERVICE_TOKEN_FILE"
 
 PYTHONPATH=services uv run pytest \
   tests/e2e-py/test_credential_isolation_e2e.py \
@@ -506,6 +511,7 @@ PYTHONPATH=services uv run pytest \
   tests/e2e-py/test_a_bring_your_own_pipeline_runs_end_to_end.py \
   tests/e2e-py/test_provenance_is_correct.py \
   tests/e2e-py/test_events_are_correct.py \
+  tests/e2e-py/test_the_catalog_is_correct.py \
   -v -rs -p no:cacheprovider | tee /tmp/e2e-stack.log
 
 # NO SILENT SKIPS. Every suite above is skip-guarded on "is the stack reachable?" — which is the right

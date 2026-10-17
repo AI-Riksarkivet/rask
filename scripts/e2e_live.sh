@@ -210,6 +210,17 @@ except LookupError as exc:
     [ -n "${LANCE_E2E_NONADMIN_TOKEN:-}" ] || printf '   note: every candidate holds can_administer on %s — the non-admin legs SKIP rather than fail falsely\n' "${LANCE_E2E_PROJECT:-acme}"
   fi
 fi
+# THE SERVICE IDENTITY criterion 2's matrix calls as (tests/e2e-py/test_the_catalog_is_correct.py): the lineage service's
+# account, for the audience the catalog's own door checks, read off the deployed catalog container. An account
+# authenticates whatever namespace it runs in, and what it may do is the tuples that name it.
+SA_AUDIENCE="$(kubectl get deploy "$RELEASE-catalog" -o jsonpath='{.spec.template.spec.containers[?(@.name=="catalog")].env[?(@.name=="RASK_SA_AUDIENCE")].value}' 2>/dev/null || true)"
+if [ -n "$SA_AUDIENCE" ]; then
+  SERVICE_TOKEN_FILE="$(mktemp)"
+  trap 'rm -f "${FGA_TOKEN_FILE:-}" "$SERVICE_TOKEN_FILE"' EXIT
+  kubectl create token "$RELEASE-sa-lineage" --audience "$SA_AUDIENCE" --duration 2h > "$SERVICE_TOKEN_FILE" \
+    || fail "could not mint a $SA_AUDIENCE token for $RELEASE-sa-lineage"
+  export LANCE_E2E_SERVICE_TOKEN_FILE="$SERVICE_TOKEN_FILE"
+fi
 export LANCE_E2E_DAPR_TOKEN="$DAPR_TOKEN"
 export LANCE_E2E_OIDC_CLIENT_ID="$DEX_CLIENT"
 export LANCE_E2E_OIDC_CLIENT_SECRET="$DEX_SECRET"

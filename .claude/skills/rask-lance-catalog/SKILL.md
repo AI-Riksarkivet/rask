@@ -15,14 +15,19 @@ Two contracts stack here, and confusing them is how bugs happen:
 
 ## The spec surface (verified 2026-08-04 against lance.org)
 
-- **Operations: 54/54 ROUTED, 48 backend-backed.** `tests/integration/test_spec_conformance.py`
-  asserts that every op in the vendored `lance_docs/ns_catalog/spec.yaml` has a served route. Nothing
-  counts the vendored ops or compares them with upstream, so a shrunken or stale spec weakens that
-  check silently (`lance_docs/PROVENANCE.md`). The other **6 answer a spec-correct 406**: four because
-  the native `dir` backend stubs them —
-  `backfill_column`, `alter_transaction` and BOTH materialized-view ops — and the two multi-table commits,
-  `batch_create_table_versions` and `batch_commit_tables`, because the catalog judges one table version at a time
-  (`versions.py::_batches_are_not_judged`, `docs/COVERAGE.md`). `CreateTableVersion` is served under
+- **Operations: 54/54 ROUTED, each driven by a stock client on the deployed estate** (criterion 2's `phase1`
+  module, `tests/e2e-py/test_the_catalog_is_correct.py`, XC-092). `tests/integration/test_spec_conformance.py`
+  asserts that every op in the vendored `lance_docs/ns_catalog/spec.yaml` has a served route; the module takes
+  its rows from the same file. Measured live 2026-10-17 (helm rev 34), past each door's gate **six answer the
+  spec's 406 (code 0)**: the two index builds (the lakehouse builds nothing, ADR 0162), the two multi-table
+  commits, `batch_create_table_versions` and `batch_commit_tables`, because the catalog judges one table version
+  at a time (`versions.py::_batches_are_not_judged`), and `backfill_column` and `create_materialized_view`, which
+  the native `dir` backend stubs. `alter_transaction` joins them when LH-221 (#143) lands; until then both
+  transaction doors refuse every caller. `refresh_materialized_view` refuses every caller 403: it needs
+  `can_refresh` on a view, and no view exists to hold it. **pylance's `RestNamespace` implements 51 of the 54**:
+  `update_field_metadata` (served here), `batch_create_table_versions` and `batch_commit_tables` fall to the
+  `LanceNamespace` base class, which answers code 0 itself and sends nothing, so a client reaches them through
+  the spec's generated `lance_namespace_urllib3_client`. `CreateTableVersion` is served under
   `managed_versioning=true` (ADR 0157, LH-471): see "Stock clients commit through `version/create`" below.
   Spelling matters when grepping: the spec op and
   the served route are SINGULAR — `POST /v1/table/{id}/backfill_column` (`spec.yaml:1570`,
