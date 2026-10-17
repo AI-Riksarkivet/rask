@@ -234,10 +234,20 @@ def _mutate(monkeypatch: pytest.MonkeyPatch, body: AccessTuple, *, write: bool, 
     return written, response
 
 
-def test_delete_audits_its_own_event(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
-    body = AccessTuple(user="team:acme#member", relation="writer", object="namespace:bronze")
-    written, _ = _mutate(monkeypatch, body, write=False)
-    assert written[0].user == "team:acme#member"  # userset passes verbatim
+@pytest.mark.parametrize(
+    ("user", "deleted"),
+    [
+        pytest.param("team:acme#member", "team:acme#member", id="a-userset-passes-verbatim"),
+        pytest.param("user:dex~alice@corp", "user:dex~alice%40corp", id="a-principal-is-the-user-it-is"),
+        pytest.param("user:CiQ1c2VyLTESBWxvY2Fs", "user:CiQ1c2VyLTESBWxvY2Fs", id="a-stored-id-naming-no-principal-is-revoked-as-stored"),
+    ],
+)
+def test_a_delete_removes_the_tuple_as_the_store_holds_it(
+    gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch, user: str, deleted: str
+) -> None:
+    """A revoke reaches the tuple it names, including a grant to an id no principal forms ([[LH-063]])."""
+    written, _ = _mutate(monkeypatch, AccessTuple(user=user, relation="writer", object="namespace:bronze"), write=False)
+    assert [tup.user for tup in written] == [deleted]
     assert rec.calls == []  # same as the write path: the library owns the success row
 
 

@@ -53,6 +53,7 @@ from catalog.schemas import (
 from service_kit.control_emit import ControlEmitter, emit_control
 from service_kit.governed import fga
 from service_kit.governed.audit import FAILURE, SUCCESS, audit
+from service_kit.governed.principal import is_principal
 
 
 log = logging.getLogger(__name__)
@@ -151,6 +152,21 @@ def _qualified_subject(user: str) -> str:
     (``team:acme#member``, ``role:admin#assignee``) passes through verbatim — the same resolution as the
     per-object access/check + access/grant surfaces (double-prefixing would falsely deny every check)."""
     return fga.grantee_object(user)
+
+
+def _tuple_user(user: str, *, evaluated: bool) -> str:
+    """The user a caller-named tuple names: a principal, as :func:`_qualified_subject` resolves it, with one exception.
+
+    A delete names a stored ``user:<id>`` that is no principal exactly as the store holds it (a raw IdP subject the
+    store already held, [[LH-063]]). A delete only removes access, and refusing it would leave such a grant irrevocable
+    through the body the Inspector sends back, as :func:`_validated_write_tuple` keeps a clock-pinned grant revocable.
+    A write, a bare value and a stored id that is a principal are resolved as before, so a revoke never misses the
+    encoded tuple it names.
+    """
+    kind, typed, stored = user.partition(":")
+    if not evaluated and typed and kind == "user" and not is_principal(fga.subject_of(stored)):
+        return user
+    return _qualified_subject(user)
 
 
 def _require_fga_client(client: FgaClientDep) -> OpenFgaClient:
@@ -303,7 +319,7 @@ def _validated_write_tuple(body: AccessTuple, *, evaluated: bool) -> fga.ClientT
             raise InvalidInputError(f"condition {body.condition.name!r} has no parameter {', '.join(sorted(unknown))}")
         condition = fga.RelationshipCondition(name=body.condition.name, context=dict(body.condition.context or {}))
 
-    tup = fga.ClientTuple(user=_qualified_subject(body.user), relation=body.relation, object=obj, condition=condition)
+    tup = fga.ClientTuple(user=_tuple_user(body.user, evaluated=evaluated), relation=body.relation, object=obj, condition=condition)
     if evaluated:
         fga.reject_stored_clock([tup])
     return tup
