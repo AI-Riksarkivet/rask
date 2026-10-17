@@ -89,4 +89,8 @@ in `CLAUDE.md`. Add a line when a trap costs a session, and delete one when the 
 - **`bao status` exits 2 for a sealed store,** with the same JSON it prints for an unsealed one, so a caller reads `sealed` from the JSON and accepts both codes (XC-095, 2026-10-17).
 - **A Dapr sidecar's bus connection does not survive a long outage.** past nats.go's 60 reconnect attempts the sidecar's pub/sub is dead until it restarts, while its pod stays Ready; `service_kit.bus_watchdog` restarts it (`rask-dapr` § Traps, XC-095, 2026-10-17).
 - **A live drill dies with the session that started it.** A drill run from an agent session's background shell is killed when the session ends, and a killed drill skips its `finally`: XC-095's issuer drill left Dex's Service selector cut on the live estate until it was restored by hand. Run a live drill detached (`setsid nohup … &`) so it reaches its `finally` whatever happens to the session (XC-095, 2026-10-17).
+- **pytest takes a conftest option's value for a path.** It parses the command line before it loads the conftest that
+  defines an option, so `-m phase1 --keep-drive PATH` with no test path took PATH for the run's own and never loaded
+  `tests/e2e-py/conftest.py` ("unrecognized arguments"); a flag with no value is unaffected. `scripts/e2e_live.sh`
+  roots a pathless run at `tests/e2e-py` (XC-090, 2026-10-17).
 - **A CI gate no local gate mirrors goes red unnoticed.** Rows land straight on `main`, so `dagger call charts` (ms-charts) failed on every push from LH-063 to XC-092: its render args lacked the `auth.oidc.connectors` LH-063's guard began to require. A change that adds a render guard runs `dagger call charts` locally before it lands (XC-095, 2026-10-17).

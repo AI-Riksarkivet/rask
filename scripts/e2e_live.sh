@@ -386,8 +386,13 @@ done
 step "4/4 running the suites against the live estate"
 # `-m e2e` and NOT a file list: the marker is what the suites declare about themselves, so a new suite
 # is picked up without editing this script. Args override for a narrower run.
-if [ "$#" -gt 0 ]; then
-  PYTHONPATH=services uv run pytest "$@" -v
-else
-  PYTHONPATH=services uv run pytest tests/e2e-py -m e2e -v
-fi
+#
+# A RUN THAT NAMES NO PATH IS ROOTED AT tests/e2e-py. pytest reads its arguments before it loads the conftest that
+# defines `--keep-drive PATH` and `--soak PATH`, so with no path it takes that PATH for the run's own path and never
+# loads the conftest: measured on pytest 9.1.1, `-m phase1 --keep-drive PATH` stopped at "unrecognized arguments".
+ROOT=(tests/e2e-py)
+for arg in "$@"; do
+  case "$arg" in tests/* | */tests/*) ROOT=() ;; esac
+done
+[ "$#" -gt 0 ] || set -- -m e2e
+PYTHONPATH=services uv run pytest "${ROOT[@]}" "$@" -v
