@@ -84,6 +84,19 @@ def messages_since(stream: str, since: datetime) -> list[BusMessage]:
     return asyncio.run(_messages_since(stream, since))
 
 
+async def _last_seq(stream: str) -> int:
+    client = await _connect()
+    try:
+        return (await client.jetstream().stream_info(stream)).state.last_seq
+    finally:
+        await client.close()
+
+
+def last_seq(stream: str) -> int:
+    """The sequence of the newest message ``stream`` holds; 0 while it holds none."""
+    return asyncio.run(_last_seq(stream))
+
+
 async def _publish(subject: str, envelope: dict[str, Any], msg_id: str | None) -> int:
     client = await _connect()
     try:

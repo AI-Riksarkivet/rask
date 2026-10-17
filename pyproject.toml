@@ -328,7 +328,7 @@ markers = [
     "media_catalog: annotator/catalog live-mode e2e",
     "nats_auth: operator-mode NATS admits each bus client only to its own subjects (run by `dagger call nats-auth`, which provides the broker, nsc and daprd)",
     "observability: observability (OTLP/Greptime) e2e",
-    "phase1: Phase 1's acceptance (XC-090): one module per criterion, each read off one drive of the bring-your-own scenario (`byo_scenario`); criterion 4, events, is XC-094",
+    "phase1: Phase 1's acceptance (XC-090): one module per criterion, each read off one drive of the bring-your-own scenario (`byo_scenario`); criterion 1, provenance, is XC-091, and criterion 4, events, is XC-094",
     "track_a: Track A acceptance e2e (tier contract, gate/publish symmetry, branch isolation) against a live catalog",
     "user_state: user-state live e2e",
 ]

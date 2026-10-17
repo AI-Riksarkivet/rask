@@ -4,14 +4,17 @@ The lakehouse runs no pipeline. A user's job, on its own compute, writes every t
 Namespace doors with a stock client, follows the commit feed to learn what to do next, and publishes through the
 tag gate. `drive` is that job, run from outside the cluster:
 
-1. it seeds bronze with stock pylance through the namespace, on the credential the catalog vends;
+1. it seeds bronze with stock pylance through the namespace, on the credential the catalog vends, each commit staging
+   the run that made it as `rask.*` transaction properties;
 2. it follows lineage's `GET /events?since=` forward to the bronze write and the version it committed;
 3. it derives silver through the catalog's create and insert doors, naming its run and the bronze input at that
    version in the spec Context (`x-rask-run-id`, `x-rask-job`, `x-rask-inputs`);
 4. it publishes: the project's gate holds a breaching version behind `published`, readers of `@published` keep the
    previous version, a validator approves while the admin watches the project, and the admin stops watching once
    told;
-5. it follows the feed over silver and reads its writes and both publications in commit order.
+5. it follows the feed over silver and reads its writes and both publications in commit order;
+6. it writes a branch, as every table writer may (D3): it cuts `staging` from silver and commits a stock append on it
+   through `version/create`, naming the run and the bronze input as transaction properties.
 
 Three Dex users from the deployed configmap play the parts. The estate admin creates a scratch tenant (a project,
 a warehouse with its own bucket, a bronze and a silver namespace), declares its gate and watches it. The pipeline
@@ -21,7 +24,8 @@ silver. The tenant is deleted at the end of the session.
 ONE DRIVE, MANY READERS. `tests/e2e-py/conftest.py` serves the tenant and one drive's `ScenarioRun` as session
 fixtures, so each module that asserts on the scenario reads the same run: the scenario's own claims
 (`test_a_bring_your_own_pipeline_runs_end_to_end.py`) and every `phase1` criterion module. The run records what the
-pipeline saw while it ran, so a reader asserts it afterwards without driving again.
+pipeline did and saw while it ran, each commit with the version its write answered and the run it named, so a reader
+asserts it afterwards without driving again.
 """
 
 from __future__ import annotations
@@ -41,7 +45,7 @@ import pyarrow as pa
 import pyarrow.ipc as ipc
 import requests
 from principals import DEX_SCOPE, principal_of
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
@@ -59,6 +63,8 @@ VALIDATOR_USER = os.environ.get("LANCE_E2E_VALIDATOR_USER", "bob@example.com")
 #: How long a committed write may take to reach lineage's feed and an inbox.
 SETTLE_SECONDS = float(os.environ.get("LANCE_E2E_SETTLE_SECONDS", "120"))
 ARROW = "application/vnd.apache.arrow.stream"
+#: The branch the pipeline cuts from silver and commits on.
+STAGING = "staging"
 #: A GET retried on a fresh connection when the server closed the pooled one before answering, which RFC 9112 § 9.3.1
 #: lets a client do for an idempotent request. Through `kubectl port-forward` a server's close of an idle keep-alive
 #: connection reaches the client only as its next request fails: measured on the e2e-stack lane 2026-10-17,
@@ -250,6 +256,36 @@ def published_rows(identity: Identity, table_id: list[str]) -> int:
     return lance.dataset(namespace_client=identity.namespace(), table_id=table_id, version="published").count_rows()
 
 
+class NamedRun(BaseModel):
+    """The run a write names, as the pipeline names it: its id, its job, and each input as a table id and the version
+    it was read at. Bronze's source is outside the catalog, so its runs name no input."""
+
+    run_id: str
+    job: str
+    inputs: list[dict[str, Any]] = Field(default_factory=list)
+
+    def context(self) -> dict[str, str]:
+        """The spec Context headers that name this run on a catalog door."""
+        return {"x-rask-run-id": self.run_id, "x-rask-job": self.job, "x-rask-inputs": json.dumps(self.inputs)}
+
+    def transaction_properties(self, *, author: str) -> dict[str, str]:
+        """The `rask.*` transaction properties a stock client stages for this run when ``author`` commits it
+        (`catalog.core.run_context`): `rask.inputs` only when the run names an input."""
+        stamped = {"rask.run_id": self.run_id, "rask.job": self.job, "rask.author": author}
+        return stamped | ({"rask.inputs": json.dumps(self.inputs)} if self.inputs else {})
+
+
+class Commit(BaseModel):
+    """One commit the pipeline made: the table, the ref it landed on, the version its write answered there, and the
+    run it named."""
+
+    table: str
+    #: The branch the commit landed on; ``None`` is main.
+    branch: str | None = None
+    version: int
+    run: NamedRun
+
+
 class ScenarioRun(BaseModel):
     """What one drive did and what the pipeline saw while it ran, in the order it happened."""
 
@@ -257,6 +293,8 @@ class ScenarioRun(BaseModel):
     start: int
     bronze_table: str
     silver_table: str
+    #: Every commit the pipeline made, in order: bronze's stock seed, silver's create and insert, and its append on `staging`.
+    commits: list[Commit]
     #: The publish door's answers: the first version, then the breaching one the gate holds.
     first_publish: dict[str, Any]
     held_publish: dict[str, Any]
@@ -279,29 +317,50 @@ def drive(tenant: Tenant) -> ScenarioRun:
     started_at = datetime.now(UTC)
     start = feed_start(pipeline)
 
-    # 1. Seed bronze with stock pylance through the namespace: a first load, then an increment.
+    # 1. Seed bronze with stock pylance through the namespace, each commit naming its run: a first load, then an increment.
     stock = pipeline.namespace()
-    lance.write_dataset(rows_of(range(4)), namespace_client=stock, table_id=bronze_id, mode="create", data_storage_version="2.2", enable_stable_row_ids=True)
+    seed_run = NamedRun(run_id="byo-seed-1", job="byo-bronze")
+    seeded = lance.write_dataset(
+        rows_of(range(4)),
+        namespace_client=stock,
+        table_id=bronze_id,
+        mode="create",
+        data_storage_version="2.2",
+        enable_stable_row_ids=True,
+        transaction_properties=seed_run.transaction_properties(author=pipeline.principal),
+    )
     tenant.tables.append(bronze_table)
-    lance.write_dataset(rows_of(range(4, 8)), namespace_client=stock, table_id=bronze_id, mode="append")
+    increment_run = seed_run.model_copy(update={"run_id": "byo-seed-2"})
+    increment = lance.write_dataset(
+        rows_of(range(4, 8)),
+        namespace_client=stock,
+        table_id=bronze_id,
+        mode="append",
+        transaction_properties=increment_run.transaction_properties(author=pipeline.principal),
+    )
+    commits = [Commit(table=bronze_table, version=seeded.version, run=seed_run), Commit(table=bronze_table, version=increment.version, run=increment_run)]
 
     # 2. Follow the feed to the bronze write: its committed version is the input silver derives from.
     bronze_rows, _ = follow(pipeline, since=start, table=bronze_table, until=lambda rows: ("insert", 2) in writes(rows))
     bronze_version = max(version for operation, version in writes(bronze_rows) if operation == "insert")
 
     # 3. Derive silver through the catalog's doors, naming the run and the input in the spec Context.
-    def silver_run(run_id: str) -> lance_namespace.LanceNamespace:
-        inputs = json.dumps([{"table": bronze_id, "version": bronze_version}])
-        return pipeline.namespace(**{"x-rask-run-id": run_id, "x-rask-job": "byo-silver", "x-rask-inputs": inputs})
-
+    first_run = NamedRun(run_id="byo-run-1", job="byo-silver", inputs=[{"table": bronze_id, "version": bronze_version}])
     silver_start = feed_start(pipeline)
-    silver_run("byo-run-1").create_table(lance_namespace.CreateTableRequest(id=silver_id, mode="create"), arrow_ipc(rows_of(range(8))))
+    created = pipeline.namespace(**first_run.context()).create_table(
+        lance_namespace.CreateTableRequest(id=silver_id, mode="create"), arrow_ipc(rows_of(range(8)))
+    )
     tenant.tables.append(silver_table)
     first = ok(pipeline.http.post(f"{CATALOG}/management/v1/table/{silver_table}/publish", json={"version": 1, "key_column": "id"}, timeout=120))
 
     # 4. The project turns review on; the next batch triples silver, past the 0.25 band, and is held behind `published`.
     tenant.declare_gate(review=True)
-    silver_run("byo-run-2").insert_into_table(lance_namespace.InsertIntoTableRequest(id=silver_id, mode="append"), arrow_ipc(rows_of(range(8, 24))))
+    second_run = first_run.model_copy(update={"run_id": "byo-run-2"})
+    inserted = pipeline.namespace(**second_run.context()).insert_into_table(
+        lance_namespace.InsertIntoTableRequest(id=silver_id, mode="append"), arrow_ipc(rows_of(range(8, 24)))
+    )
+    assert created.version is not None and inserted.version is not None, f"silver's create answered version {created.version}, its insert {inserted.version}"
+    commits += [Commit(table=silver_table, version=created.version, run=first_run), Commit(table=silver_table, version=inserted.version, run=second_run)]
     held = ok(pipeline.http.post(f"{CATALOG}/management/v1/table/{silver_table}/publish", json={"version": 2, "key_column": "id"}, timeout=120))
     published_while_held = published_rows(admin, silver_id)
     stock_while_held = lance.dataset(namespace_client=stock, table_id=silver_id).count_rows()
@@ -324,10 +383,23 @@ def drive(tenant: Tenant) -> ScenarioRun:
         time.sleep(3)
     tenant.unwatch()
 
+    # 6. The pipeline cuts `staging` from silver through the spec's CreateTableBranch, then commits a stock append on it
+    #    through version/create, naming its run and the bronze input as transaction properties.
+    pipeline.namespace().create_table_branch(lance_namespace.CreateTableBranchRequest(id=silver_id, name=STAGING))
+    branch_run = first_run.model_copy(update={"run_id": "byo-run-3"})
+    on_branch = lance.write_dataset(
+        rows_of(range(24, 28)),
+        lance.dataset(namespace_client=stock, table_id=silver_id).checkout_version((STAGING, None)),
+        mode="append",
+        transaction_properties=branch_run.transaction_properties(author=pipeline.principal),
+    )
+    commits.append(Commit(table=silver_table, branch=STAGING, version=on_branch.version, run=branch_run))
+
     return ScenarioRun(
         start=start,
         bronze_table=bronze_table,
         silver_table=silver_table,
+        commits=commits,
         first_publish=first,
         held_publish=held,
         published_rows_while_held=published_while_held,

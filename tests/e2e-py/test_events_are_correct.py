@@ -328,7 +328,7 @@ def test_each_event_is_recorded_once_and_a_redelivery_of_its_bytes_adds_nothing(
     assert [key for key, count in keys.items() if count > 1] == []
     assert commits == {
         byo_run.bronze_table: [("declare_table", None), ("create_table", 1), ("insert", 2)],
-        byo_run.silver_table: [("create_table", 1), ("publish_table", 1), ("insert", 2), ("publish_table", 2)],
+        byo_run.silver_table: [("create_table", 1), ("publish_table", 1), ("insert", 2), ("publish_table", 2), ("insert", 3)],
     }
     assert (redelivery.landed, redelivery.in_inbox) == ([], [redelivery.notification])
 

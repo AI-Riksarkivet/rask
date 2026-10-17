@@ -220,6 +220,10 @@ export LANCE_E2E_RELEASE="$RELEASE"
 # The namespace the release runs in: its ServiceAccounts are the services' signing identities.
 LANCE_E2E_RELEASE_NAMESPACE="$(kubectl config view --minify -o jsonpath='{..namespace}' 2>/dev/null || true)"
 export LANCE_E2E_RELEASE_NAMESPACE="${LANCE_E2E_RELEASE_NAMESPACE:-default}"
+# The namespace lineage keeps its feed and edge list in (`services.lineage.provenanceNamespace`), read off the deployed
+# lineage container: criterion 1's module reads the edge list there.
+PROVENANCE_NS="$(kubectl get deploy "$RELEASE-lineage" -o jsonpath='{.spec.template.spec.containers[*].env[?(@.name=="LINEAGE_PROVENANCE_NAMESPACE")].value}' 2>/dev/null || true)"
+[ -z "$PROVENANCE_NS" ] || export LANCE_E2E_PROVENANCE_NAMESPACE="$PROVENANCE_NS"
 export LANCE_E2E_OUTBOX_URI="s3://lance-catalog/_lineage_outbox"
 export LANCE_E2E_RELAY_BINDING=lineage-relay-cron
 export LANCE_E2E_MAINTENANCE_BINDING=maintenance-cron

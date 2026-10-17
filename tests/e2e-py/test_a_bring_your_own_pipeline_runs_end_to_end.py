@@ -5,9 +5,10 @@ Namespace doors with a stock client, follows the commit feed to learn what to do
 tag gate. That job is `byo_scenario.drive`, run once per session on a scratch tenant (`conftest.py`'s `byo_run`), so
 this module and every `phase1` criterion module read one run of it. This module holds the scenario's own claims: the
 project's gate holds a breaching version behind `published`, where readers of `@published` keep the previous version,
-until a validator approves; the pipeline's insert carries the run and the bronze input it named in the spec Context;
-and a follower reads silver's rows in seq order up to a cursor that answers itself. Which commits the feed holds, and
-who is told of each, are criterion 4's claims (`test_events_are_correct.py`).
+until a validator approves; the insert's feed row names the bronze input and the job the pipeline named in the spec
+Context; and a follower reads silver's rows in seq order up to a cursor that answers itself. What each commit carries
+and the edges lineage records for it are criterion 1's claims (`test_provenance_is_correct.py`); which commits the feed
+holds, and who is told of each, are criterion 4's (`test_events_are_correct.py`).
 
 A second leg holds the write tier's vended credential and tries to forge the `published` tag in the store itself.
 
@@ -45,9 +46,7 @@ def test_a_pipeline_seeds_bronze_derives_silver_and_its_breach_waits_for_a_valid
     assert (approved["published_version"], approved["hold"]["decided_by"]) == (2, byo_tenant.validator.principal), approved
     assert run.published_rows_after_approval == 24
     assert [int(row["seq"]) for row in run.silver_rows] == sorted(int(row["seq"]) for row in run.silver_rows)
-    assert (insert["inputs"], scenario.lance_facet(insert)["runId"], scenario.lance_facet(insert)["job"]) == ([run.bronze_table], "byo-run-2", "byo-silver"), (
-        insert
-    )
+    assert (insert["inputs"], scenario.lance_facet(insert)["job"]) == ([run.bronze_table], "byo-silver"), insert
     assert (run.caught_up["events"], run.caught_up["next_cursor"]) == ([], run.cursor), run.caught_up
 
 

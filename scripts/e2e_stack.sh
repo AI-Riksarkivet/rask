@@ -504,6 +504,7 @@ PYTHONPATH=services uv run pytest \
   tests/e2e-py/test_maintenance_s3_e2e.py \
   tests/e2e-py/test_track_a_acceptance.py \
   tests/e2e-py/test_a_bring_your_own_pipeline_runs_end_to_end.py \
+  tests/e2e-py/test_provenance_is_correct.py \
   tests/e2e-py/test_events_are_correct.py \
   -v -rs -p no:cacheprovider | tee /tmp/e2e-stack.log
 
