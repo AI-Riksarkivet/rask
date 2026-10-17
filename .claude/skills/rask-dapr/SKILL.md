@@ -183,6 +183,19 @@ sidecar.
 - `ActorProxy` dispatches @actormethod WIRE names, not Python names; mocks cannot catch a mismatch.
 - Missing `dapr.io/app-token-secret` on a bus-subscribing app ⇒ `assert_app_token_configured`
   crash-loops the pod. Missing row in `dapr-resiliency.yaml` ⇒ no sidecar retry AND no dead-letter.
+- **A bus outage longer than about two minutes closes every `pubsub.jetstream` connection for good, and the pods
+  stay Ready.** Dapr 1.18.1's component (components-contrib v1.18.0, `jetstream.go:60-77`) connects with nats.go's
+  defaults, 60 reconnect attempts 2 s apart, and no metadata field changes them. After the last attempt the client
+  closes: every subscription is dropped and every publish answers `nats: connection closed`. daprd's liveness is a TCP
+  check and its readiness reads no component, so nothing restarts it, and with HotReload off it re-creates no component
+  on its own. Measured on the kind lane 2026-10-17: after a 150 s outage, lineage's and notifications' durables
+  acknowledged nothing for sixteen minutes. Each service with a jetstream component runs `service_kit.bus_watchdog`. It
+  probes each component on `probe.<app-id>`, a subject no stream captures (one row per app in `nats.auth.users`), and
+  asks the sidecar to shut down (`POST /v1.0/shutdown`, answered only on the pod's loopback) once the bus greets a
+  connection again. It never does so sooner: a sidecar started while the bus refuses connections fails its component
+  and exits. A new service with a jetstream component needs three things or it wedges on the first long outage: it
+  starts the watchdog in its lifespan, it gets `lance.busEnv`, and it gets its probe row. Upstream:
+  components-contrib#4563, fix #4564. Delete the watchdog once a Dapr release ships the fix.
 - **A Resiliency retry whose `policy` and `duration` disagree is silently ineffective, and nothing
   rejects it.** dapr/kit's `NewBackOff` reads `Duration` ONLY under `PolicyConstant`; under
   `PolicyExponential` it is ignored and the schedule comes from `InitialInterval`/`Multiplier`/

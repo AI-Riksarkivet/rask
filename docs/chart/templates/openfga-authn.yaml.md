@@ -12,3 +12,8 @@ and `auth.issuerMirror`.
 
 No FGA client renders (auth off): an empty list would admit every subject, so name one no ServiceAccount
 can have (a namespace cannot be `-`).
+
+## `args:`
+
+No `command:`, so the image's tini, its ENTRYPOINT, stays the container's PID 1 and runs uvicorn's command line from
+`args` ([[LH-313]]; `services.yaml.md` § `args:`).

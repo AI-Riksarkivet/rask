@@ -19,11 +19,12 @@ from __future__ import annotations
 
 import re
 import subprocess
+from collections.abc import Callable
 
 import pytest
 import yaml
 
-from tests.unit.chart_render import DEFAULT_ARGS, REPO, containers, render, render_text
+from tests.unit.chart_render import DEFAULT_ARGS, OBSERVABILITY_SETS, REPO, containers, render, render_fixture, render_text
 
 
 _FLAG = "--timeout-graceful-shutdown="
@@ -51,6 +52,10 @@ def _overlay(lifecycle: dict[str, int | str]) -> tuple[str, ...]:
     return (*DEFAULT_ARGS, "--set", "explorer.enabled=true", *(arg for key, value in lifecycle.items() for arg in ("--set", f"lifecycle.{key}={value}")))
 
 
+def _runs_uvicorn(container: dict) -> bool:
+    return any("uvicorn" in str(part) for part in [*(container.get("command") or []), *(container.get("args") or [])])
+
+
 def _bounded(docs: tuple[dict, ...]) -> dict[tuple[str, str], tuple[int, int, list[str]]]:
     """`(workload, container) -> (pod grace, preStop sleep, --timeout-graceful-shutdown args)` for every uvicorn."""
     grace = {
@@ -60,7 +65,7 @@ def _bounded(docs: tuple[dict, ...]) -> dict[tuple[str, str], tuple[int, int, li
     }
     found: dict[tuple[str, str], tuple[int, int, list[str]]] = {}
     for workload, name, container in containers(docs):
-        if not any("uvicorn" in part for part in container.get("command") or []):
+        if not _runs_uvicorn(container):
             continue
         pre_stop = " ".join(container.get("lifecycle", {}).get("preStop", {}).get("exec", {}).get("command", []))
         sleep = re.search(r"sleep (\d+)", pre_stop)
@@ -107,3 +112,35 @@ def test_a_lifecycle_that_leaves_no_drain_refuses_to_RENDER(lifecycle: dict[str,
     with pytest.raises(subprocess.CalledProcessError) as refused:
         render_text(*_overlay(lifecycle))
     assert refusal in refused.value.stderr, refused.value.stderr
+
+
+#: The init each image a chart runs uvicorn from declares as its ENTRYPOINT (`.docker/rest-catalog.dockerfile`,
+#: `notifications.dockerfile`, `flows.dockerfile`, `compute.dockerfile`).
+#: What a uvicorn container's command line begins with: uvicorn itself, or the tracer that execs it.
+_LAUNCHERS = {"uvicorn", "opentelemetry-instrument"}
+
+
+@pytest.mark.parametrize(
+    "docs",
+    [
+        pytest.param(lambda: render(*_overlay({})), id="observability-off"),
+        pytest.param(lambda: render(*_overlay({}), *(arg for item in OBSERVABILITY_SETS for arg in ("--set", item))), id="observability-on"),
+        pytest.param(lambda: render_fixture("compute", "--set", "auth.oidc.issuer=https://auth.example.com/dex"), id="the-compute-fixture"),
+    ],
+)
+def test_every_uvicorn_runs_under_its_images_init_never_as_its_containers_pid_1(docs: Callable[[], tuple[dict, ...]]) -> None:
+    """[[LH-313]] Each image's ENTRYPOINT is its tini, and a container's `command` replaces the ENTRYPOINT, so a container
+    that sets one makes uvicorn its PID 1. The kernel then drops a signal uvicorn handles no differently from one it does
+    not: as PID 1 it lost its closing re-raise of SIGTERM, holding a threaded request 25.1 s past a 3 s bound where off
+    PID 1 it ended at 3.9 s (measured 2026-09-28, uvicorn 0.51.0), and a SIGKILL sent from inside its own PID namespace
+    never reaches it, so nothing in the pod can kill it. So no container that runs uvicorn sets `command`: it passes
+    uvicorn's command line as `args`, which the image's ENTRYPOINT runs. The image's half is proven on the kind lane,
+    where XC-095's catalog drill kills the one uvicorn that is not PID 1."""
+    found = {
+        f"{workload}/{name}": (container.get("command"), (container.get("args") or [None])[0])
+        for workload, name, container in containers(docs())
+        if _runs_uvicorn(container)
+    }
+
+    assert found, "no container runs uvicorn, so this gate checks nothing"
+    assert {where: shape for where, shape in found.items() if shape[0] is not None or shape[1] not in _LAUNCHERS} == {}

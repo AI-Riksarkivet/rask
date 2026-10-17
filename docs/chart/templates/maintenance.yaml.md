@@ -248,3 +248,8 @@ reads and the bootstrap-admin Job grants into, so the store this reports on can 
 diverge from the store the catalog checks against. A maintenance job that provisioned its
 own store would read an EMPTY one and report every real tenant as a ghost; unset, the four
 authz categories report unavailable-with-a-reason, which is the honest answer.
+
+## `args:`
+
+No `command:`, so the image's tini, its ENTRYPOINT, stays the container's PID 1 and runs uvicorn's command line from
+`args` ([[LH-313]]; `services.yaml.md` § `args:`).

@@ -49,6 +49,7 @@ import byo_scenario as scenario
 import pytest
 from bus import BusMessage
 from byo_scenario import Identity, ScenarioRun, Tenant
+from correctness import settled_outbox_depth
 from jsonschema import Draft202012Validator, FormatChecker
 from pydantic import BaseModel, ValidationError
 from referencing import Registry, Resource
@@ -342,18 +343,10 @@ def test_nothing_the_scenario_caused_parked_and_the_outbox_drained(byo_tenant: T
     """The window opens at the tenant's creation and holds the drive, the redelivery and the forgeries, which this
     test depends on. The outbox depth is the estate's: the set the relay drains, each a committed write not yet
     confirmed delivered."""
-
-    def outbox_depth() -> int:
-        return int(scenario.ok(byo_tenant.admin.http.get(f"{scenario.LINEAGE}/admin/dlq", params={"limit": 1}, timeout=30))["depth"])
-
     parked = [
         (message.seq, message.subject, sorted(_tables_of(message.event)) or message.event.get("object_id"))
         for message in bus.messages_since("DLQ", byo_tenant.created_at)
     ]
-    deadline = time.monotonic() + scenario.SETTLE_SECONDS
-    depth = outbox_depth()
-    while depth and time.monotonic() < deadline:
-        time.sleep(3)
-        depth = outbox_depth()
+    depth = settled_outbox_depth(byo_tenant.admin)
 
     assert (parked, depth) == ([], 0)

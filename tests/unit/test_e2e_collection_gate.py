@@ -63,16 +63,22 @@ def _suite_files_on_disk() -> set[str]:
     return {f"{E2E_DIR}/{p.name}" for p in (REPO_ROOT / E2E_DIR).glob("test_*.py")}
 
 
-def test_e2e_py_collection_finds_all_live_suites():
+def _collected(*args: str) -> set[str]:
+    """The node ids `pytest --collect-only` selects from the live suites under ``args``."""
     proc = subprocess.run(
-        [sys.executable, "-m", "pytest", "--collect-only", "-q", "--no-cov", "-p", "no:cacheprovider", E2E_DIR],
+        [sys.executable, "-m", "pytest", "--collect-only", "-q", "--no-cov", "-p", "no:cacheprovider", E2E_DIR, *args],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
         timeout=300,
     )
-    assert proc.returncode == 0, f"collecting {E2E_DIR} failed (exit {proc.returncode}):\n{proc.stdout}\n{proc.stderr}"
-    suite_files = {line.split("::", 1)[0] for line in proc.stdout.splitlines() if line.startswith(f"{E2E_DIR}/")}
+    assert proc.returncode == 0, f"collecting {E2E_DIR} {' '.join(args)} failed (exit {proc.returncode}):\n{proc.stdout}\n{proc.stderr}"
+    return {line for line in proc.stdout.splitlines() if line.startswith(f"{E2E_DIR}/")}
+
+
+def test_e2e_py_collection_finds_all_live_suites():
+    # `--chaos`, because a module whose every test is a chaos drill selects nothing without it.
+    suite_files = {node.split("::", 1)[0] for node in _collected("--chaos")}
     on_disk = _suite_files_on_disk()
     assert on_disk, f"no test_*.py files found in {E2E_DIR} — the scan root moved and this gate is vacuous"
     missing = sorted(on_disk - set(suite_files))
@@ -81,3 +87,14 @@ def test_e2e_py_collection_finds_all_live_suites():
         "A suite that stops collecting is invisible — every run stays green while its assertions no "
         "longer exist. Fix the collection error, or delete the file if the suite is genuinely gone."
     )
+
+
+def test_a_plain_live_drive_selects_no_chaos_drill():
+    """A chaos drill takes down the release it runs against, so it runs only where the run asks for it with `--chaos`:
+    the e2e-stack lane's throwaway cluster, or an explicit drive of the deployed release (XC-095). A plain drive,
+    `scripts/e2e_live.sh` with no flag or `-m phase1`, selects none."""
+    drills = _collected("-m", "chaos", "--chaos")
+    plain = _collected() | _collected("-m", "phase1")
+
+    assert drills, "no chaos drill is selected even when the run asks for them, so this gate checks nothing"
+    assert drills.isdisjoint(plain)

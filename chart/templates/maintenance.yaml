@@ -64,12 +64,11 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           {{- include "lance.securityContext" . | nindent 10 }}
           {{- include "lance.preStop" . | nindent 10 }}
-          {{- if include "lance.otelEnabled" $root }}
-          command: ["opentelemetry-instrument", "uvicorn"]
-          {{- else }}
-          command: ["uvicorn"]
-          {{- end }}
           args:
+            {{- if include "lance.otelEnabled" $root }}
+            - "opentelemetry-instrument"
+            {{- end }}
+            - "uvicorn"
             - "maintenance.service:app"
             - "--host=0.0.0.0"
             - "--port={{ $port }}"
@@ -88,6 +87,7 @@ spec:
             {{- if .Values.dapr.enabled }}
 
 {{- include "lance.appTokenEnv" (list $root $root.Values.maintenance.daprAppId) | nindent 12 }}
+            {{- include "lance.busEnv" $root | nindent 12 }}
             {{- end }}
             {{- if $root.Values.maintenance.vendWriteCredentials }}
             - { name: MAINTENANCE_CATALOG_URL, value: {{ printf "http://%s-catalog:%v" (include "lance.fullname" $root) $root.Values.services.catalog.port | quote }} }

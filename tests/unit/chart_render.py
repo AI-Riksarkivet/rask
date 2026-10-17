@@ -184,6 +184,15 @@ def containers(docs: tuple[dict, ...]) -> list[tuple[str, str, dict]]:
     return found
 
 
+def uvicorn_target(container: dict) -> str | None:
+    """The `module:attribute` a container's uvicorn serves, read off its whole command line (`args` carry it, behind
+    `uvicorn` or the tracer that execs it), or None for a container that runs no uvicorn."""
+    argv = [str(part) for part in [*(container.get("command") or []), *(container.get("args") or [])]]
+    if "uvicorn" not in argv:
+        return None
+    return next((part for part in argv if ":" in part and not part.startswith("-")), None)
+
+
 def env_of(container: dict) -> dict[str, str]:
     """The container's `name: value` env pairs. `valueFrom` entries are omitted deliberately — a gate
     reading a rendered literal cannot see what a secret reference resolves to at run time."""

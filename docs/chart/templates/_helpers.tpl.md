@@ -347,6 +347,14 @@ SecretStore login failed with `lookup rask-openbao ... server misbehaving` — a
 reads as an OpenBao outage rather than as a name that cannot resolve from where it is used.
 Measured against the live cluster 2026-08-31.
 
+## `{{- define "lance.busEnv" -}}`
+
+The bus a pod's sidecar connects to, named to the pods whose sidecar holds a `pubsub.jetstream` component (catalog,
+lineage, maintenance, notifications). Each service watches its own sidecar with it and restarts the sidecar once one of
+its connections has closed for good and the bus greets a new connection again (`service_kit.bus_watchdog`, [[XC-095]]):
+Dapr 1.18.1's component never reconnects past nats.go's default 60 attempts (components-contrib#4563). An address, not
+a credential: the sidecar's own connection carries the app's bus user.
+
 ## `{{- define "lance.subPubsub" -}}`
 
 The per-SUBSCRIBER pubsub component name (call: include "lance.subPubsub" (list $root <appId>)).

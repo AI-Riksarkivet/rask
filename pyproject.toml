@@ -324,7 +324,7 @@ markers = [
     "byo_erasure: an erasure drill on the live estate: the obligation recorded, a bring-your-own job's rewrites through version/create, the catalog's verification (LH-493)",
     "byo_pipeline: a bring-your-own pipeline end to end on the live estate: stock writes, provenance, the tag gate, the commit feed (LH-478)",
     "cas: object-store conditional-write (CAS) e2e",
-    "chaos: pull-a-service resilience e2e — SCALES a deployment, so it is out of e2e-ci",
+    "chaos: criterion 5's dependency-outage drills (XC-095): each takes one dependency of the release down, so they are deselected unless the run passes --chaos",
     "compaction: compaction/GC sweep e2e",
     "edge: each public /api prefix reaches its service through the cluster Gateway and is refused there anonymously (needs RASK_E2E_EDGE_URL)",
     "media_catalog: annotator/catalog live-mode e2e",

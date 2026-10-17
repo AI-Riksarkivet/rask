@@ -70,7 +70,8 @@ RIG = "rask-test-rig"
 #: lineage: catalog/core/lineage_emit.py, lineage/services/staged.py (recovered signed bytes), maintenance/core/
 #: lineage_emit.py. control: catalog's control_emit and control_relay.py, plus the flagged announcers below. maintenance
 #: work: catalog/endpoints/maintenance.py and maintenance/services/work_queue.py; index: catalog only. dlq.<app>: the
-#: `deadLetterTopic` of that app's subscriptions.
+#: `deadLetterTopic` of that app's subscriptions. probe.<app>: service_kit/bus_watchdog.py, which each service runs over its
+#: own sidecar's connections.
 def _values() -> Path:
     return Path(os.environ.get(VALUES_ENV) or REPO / "chart" / "values.yaml")
 
@@ -93,7 +94,11 @@ PUBLISHERS: dict[str, frozenset[str]] = {
     "dlq.lineage.events": frozenset({"lineage"}),
     "dlq.notifications": frozenset({"notifications"}),
     "dlq.maintenance.arrival": frozenset({"maintenance"}),
+    **{f"probe.{app}": frozenset({app}) for app in ("catalog", "lineage", "maintenance", "notifications")},
 }
+#: The subjects no stream captures, so an owner's publish is acknowledged by nobody and only the broker's log says
+#: whether it was refused.
+UNSTORED = frozenset(subject for subject in PUBLISHERS if subject.startswith("probe."))
 
 #: What each sidecar subscribes, as (durableName, topic); None is the catalog's ephemeral broadcast consumer.
 #: catalog/api/dapr.py; lineage/api/dapr.py;
@@ -220,6 +225,9 @@ async def _publish_matrix(url: str, mint_: Mint, table: dict[str, Permissions], 
     findings: list[str] = []
     for user, client in clients.items():
         for subject in (s for s in universe if user in PUBLISHERS.get(s, ())):
+            if subject in UNSTORED:
+                await client.nc.publish(subject, json.dumps({"probe": user}).encode())
+                continue
             try:
                 await client.js.publish(subject, json.dumps({"probe": user}).encode(), timeout=3)
             except Exception as exc:  # noqa: BLE001 — any failure to land is the finding

@@ -216,6 +216,10 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- required "NATS JetStream is a prerequisite: set nats.url to the bus every pub/sub component and the stream Job connect to (docs/architecture/deployment.md, Prerequisites); rask never installs it" .Values.nats.url -}}
 {{- end -}}
 
+{{- define "lance.busEnv" -}}
+- { name: RASK_BUS_URL, value: {{ include "lance.natsUrl" . | quote }} }
+{{- end -}}
+
 {{- define "lance.subPubsub" -}}
 {{- $root := index . 0 -}}
 {{- $root.Values.pubsub.name }}-{{ index . 1 -}}

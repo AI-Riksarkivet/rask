@@ -325,19 +325,42 @@ print(f"   {checked} running containers serve the images this run built")
 ' "$FRESH" "$FRESH.pods"
 
 step "5/9 port-forward the services the suites talk to"
-kubectl port-forward "svc/$RELEASE-catalog" 2333:2333 >/tmp/pf-cat.log 2>&1 & PF_PIDS+=($!)
-kubectl port-forward "svc/$RELEASE-lineage" 18000:8000 >/tmp/pf-lin.log 2>&1 & PF_PIDS+=($!)
+# A FORWARD FOLLOWS ITS SERVICE'S READY POD. `kubectl port-forward` binds to one pod for its life, and when that pod goes
+# the forward can stay up and drop every connection it accepts (measured on this lane: `RemoteDisconnected` on every call
+# through lineage's forward once a drill had scaled lineage down and back). Criterion 5's drills restart the pods behind
+# six of these, so each forward names the pod it binds, and is restarted once that pod is no longer a ready endpoint of
+# its Service. The loop kills its forward when the lane's cleanup stops it.
+ready_pods() {
+  kubectl get endpointslices -l "kubernetes.io/service-name=$1" -o json 2>/dev/null | python3 -c '
+import json, sys
+slices = json.load(sys.stdin).get("items") or []
+print(" ".join(e["targetRef"]["name"] for s in slices for e in s.get("endpoints") or [] if (e.get("conditions") or {}).get("ready") and e.get("targetRef")))'
+}
+forward() {
+  local service="$1" ports="$2" log="$3"
+  ( trap 'kill "$child" 2>/dev/null; exit 0' TERM
+    child=""
+    while :; do
+      pod="$(ready_pods "$service" | awk '{print $1}')"
+      if [ -z "$pod" ]; then sleep 1; continue; fi
+      kubectl port-forward "pod/$pod" "$ports" >>"$log" 2>&1 & child=$!
+      while kill -0 "$child" 2>/dev/null && ready_pods "$service" | tr ' ' '\n' | grep -qx "$pod"; do sleep 2; done
+      kill "$child" 2>/dev/null || true
+      wait "$child" 2>/dev/null || true
+    done ) & PF_PIDS+=($!)
+}
+forward "$RELEASE-catalog" 2333:2333 /tmp/pf-cat.log
+forward "$RELEASE-lineage" 18000:8000 /tmp/pf-lin.log
 # `minio`, not `rustfs`. The chart has rendered the object store as StatefulSet + Service
 # `rask-minio` since 2026-09-11; nothing renders `-rustfs` any more, so this port-forward addressed an
-# object that does not exist and the chaos drill below scaled a Deployment that does not exist.
-# Verified against the running estate rather than the templates: `svc/rask-minio` and
+# object that does not exist. Verified against the running estate rather than the templates: `svc/rask-minio` and
 # `statefulset.apps/rask-minio`.
-kubectl port-forward "svc/$RELEASE-minio"  9900:9000 >/tmp/pf-rfs.log 2>&1 & PF_PIDS+=($!)
-kubectl port-forward "svc/$RELEASE-dex"     5556:5556 >/tmp/pf-dex.log 2>&1 & PF_PIDS+=($!)
-kubectl port-forward "svc/$RELEASE-openfga" 8081:8080 >/tmp/pf-fga.log 2>&1 & PF_PIDS+=($!)
-kubectl port-forward "svc/$RELEASE-notifications" 8850:8850 >/tmp/pf-not.log 2>&1 & PF_PIDS+=($!)
+forward "$RELEASE-minio" 9900:9000 /tmp/pf-rfs.log
+forward "$RELEASE-dex" 5556:5556 /tmp/pf-dex.log
+forward "$RELEASE-openfga" 8081:8080 /tmp/pf-fga.log
+forward "$RELEASE-notifications" 8850:8850 /tmp/pf-not.log
 # The bus `nats.url` names (stack_values.sh): criterion 4's module reads its streams and publishes on it.
-kubectl port-forward svc/rask-nats 4222:4222 >/tmp/pf-nats.log 2>&1 & PF_PIDS+=($!)
+forward rask-nats 4222:4222 /tmp/pf-nats.log
 for i in $(seq 1 40); do
   c=$(curl -s -o /dev/null -w '%{http_code}' -m2 http://localhost:2333/livez 2>/dev/null || true)
   l=$(curl -s -o /dev/null -w '%{http_code}' -m2 http://localhost:18000/livez 2>/dev/null || true)
@@ -438,7 +461,7 @@ for i in $(seq 1 30); do
   sleep 1
 done
 door "$ALICE" POST /management/v1/warehouses "{\"id\":\"$WAREHOUSE\",\"project\":\"$PROJECT\"}" 200 201 409 || exit 1
-# The parent namespace the multibase suite and the chaos drill create under. A top-level namespace belongs to a
+# The parent namespace the multibase suite creates under. A top-level namespace belongs to a
 # warehouse, and its creator owns it, so alice's child creates and table creates under it are authorized.
 door "$ALICE" POST "/management/v1/warehouses/$WAREHOUSE/namespaces" '{"namespace":"mbns","adopt_existing":true}' 200 201 409 || exit 1
 echo "   project $PROJECT > warehouse $WAREHOUSE > namespace mbns"
@@ -488,6 +511,7 @@ export LANCE_E2E_DELIM='$'
 export LANCE_E2E_BASE_A="$BASE_A"
 export LANCE_E2E_BASE_B="$BASE_B"
 export LANCE_E2E_OUTBOX_URI="s3://lance-catalog/_lineage_outbox"
+export LANCE_E2E_CONTROL_OUTBOX_URI="s3://lance-catalog/_control_outbox"
 export LANCE_E2E_RELAY_BINDING=lineage-relay-cron
 # The bring-your-own scenario and criterion 4's module: the notifications service under the release's API prefix, the
 # bus, and the release whose ServiceAccounts sign.
@@ -500,6 +524,11 @@ SA_AUDIENCE="$(kubectl get deploy "$RELEASE-catalog" -o jsonpath='{.spec.templat
 kubectl create token "$RELEASE-sa-lineage" --audience "$SA_AUDIENCE" --duration 2h > "$SERVICE_TOKEN_FILE" || { echo "!! could not mint a $SA_AUDIENCE token for $RELEASE-sa-lineage"; exit 1; }
 export LANCE_E2E_SERVICE_TOKEN_FILE="$SERVICE_TOKEN_FILE"
 
+# CRITERION 5'S DRILLS RUN LAST, because each takes a dependency of this release down (XC-095): by the time they run,
+# every other suite has read what it needed. Each restores what it took down in a `finally`, and the shared tenant is
+# torn down at session end through the doors they leave serving. `E2E_CHAOS=0` leaves them out while iterating.
+CHAOS=(tests/e2e-py/test_the_estate_is_resilient.py --chaos)
+[ "${E2E_CHAOS:-1}" = "1" ] || CHAOS=()
 PYTHONPATH=services uv run pytest \
   tests/e2e-py/test_credential_isolation_e2e.py \
   tests/e2e-py/test_object_store_cas_e2e.py \
@@ -512,6 +541,7 @@ PYTHONPATH=services uv run pytest \
   tests/e2e-py/test_provenance_is_correct.py \
   tests/e2e-py/test_events_are_correct.py \
   tests/e2e-py/test_the_catalog_is_correct.py \
+  "${CHAOS[@]}" \
   -v -rs -p no:cacheprovider | tee /tmp/e2e-stack.log
 
 # NO SILENT SKIPS. Every suite above is skip-guarded on "is the stack reachable?" — which is the right
@@ -525,57 +555,6 @@ if grep -qE "[1-9][0-9]* skipped" /tmp/e2e-stack.log; then
   echo "!! FAIL: e2e suites SKIPPED against a LIVE stack — that is a misconfiguration, not 'not applicable':"
   grep -E "^SKIPPED|skipped" /tmp/e2e-stack.log || true
   exit 1
-fi
-
-# --- P5 chaos drill: prove a core-dependency OUTAGE fails CLOSED (never fail-open) and RECOVERS. The stack
-# is auth-on, so this is the LIVE counterpart to the mocked OpenFGA-down unit test + the first test of the
-# RustFS/S3 outage at all. Runs LAST (the suites already passed; the cluster is torn down after) and each
-# probe RESTORES the dependency + verifies recovery, so it leaves the stack healthy. Fail-CLOSED assertions
-# are STRICT (a 200 while a dep is down is a security/data hole → hard fail); recovery polls are GENEROUS (a
-# slow reschedule must not false-red). Probes are CHILD namespace CREATEs under the alice-owned `mbns`
-# parent (created above), NOT root creates: a child create runs the can_create_child FGA check on the parent
-# THEN a genuine S3 write, so FGA-down → 503 AT THE CHECK before storage (a root create with lockRootCreate
-# off would skip the FGA check entirely and only 500 later on the ownership-seed write — that would pass this
-# drill even if the authz check itself fail-opened). RustFS-down → 5xx on the write. Both deterministic, no
-# cache can mask them, no 409 on retry. E2E_CHAOS=0 disables it (iteration escape hatch).
-if [ "${E2E_CHAOS:-1}" = "1" ]; then
-  step "chaos: dependency-outage fail-closed drill (P5)"
-  CAT=http://localhost:2333
-  # mbns is alice's own namespace (created earlier), so can_create_child is authorized on the happy path;
-  # the $-delimited id makes chaos-$1 a CHILD of mbns (not a root namespace).
-  gov_create() { curl -s -o /dev/null -w '%{http_code}' -m15 -H "authorization: Bearer $ALICE" \
-    -X POST "$CAT/v1/namespace/mbns\$chaos-$1/create"; }
-  # A KIND, not an assumed Deployment. The object store is a StatefulSet (`rask-minio`) and OpenFGA is
-  # a Deployment, so a helper that hard-codes `deploy/` silently no-ops on half its callers — and a
-  # no-op restore leaves the estate scaled to zero for every test after it.
-  restore_dep() { kubectl scale "${2:-deploy}/$1" --replicas=1 >/dev/null 2>&1 || true
-                  kubectl rollout status "${2:-deploy}/$1" --timeout=180s >/dev/null 2>&1 || true; }
-
-  b=$(gov_create base); [ "$b" = "200" ] || { echo "!! chaos baseline create expected 200, got $b"; exit 1; }
-  echo "   baseline governed create = 200 ✓"
-
-  # 1. OpenFGA (authz chokepoint) down → the FGA check fails CLOSED (never fail-open 200).
-  echo "   -- OpenFGA outage --"
-  kubectl scale "deploy/$RELEASE-openfga" --replicas=0 >/dev/null
-  n=0; down=""; for _ in $(seq 1 40); do n=$((n+1)); down=$(gov_create "f$n"); [ "$down" != "200" ] && break; sleep 2; done
-  if [ "$down" = "200" ]; then restore_dep "$RELEASE-openfga"; echo "!! OpenFGA down but create STILL 200 — FAIL-OPEN (security hole)"; exit 1; fi
-  echo "   OpenFGA down → governed create $down (fail-closed) ✓"
-  restore_dep "$RELEASE-openfga"
-  up=""; for _ in $(seq 1 40); do up=$(gov_create "fr$RANDOM"); [ "$up" = "200" ] && break; sleep 3; done
-  [ "$up" = "200" ] || { echo "!! create did not recover after OpenFGA restored (got $up)"; exit 1; }
-  echo "   OpenFGA restored → governed create 200 (recovered) ✓"
-
-  # 2. RustFS (data plane) down → the S3 write fails CLOSED (a write with no object store would be data loss).
-  echo "   -- RustFS outage --"
-  kubectl scale "statefulset/$RELEASE-minio" --replicas=0 >/dev/null
-  n=0; down=""; for _ in $(seq 1 40); do n=$((n+1)); down=$(gov_create "s$n"); [ "$down" != "200" ] && break; sleep 2; done
-  if [ "$down" = "200" ]; then restore_dep "$RELEASE-minio" statefulset; echo "!! the object store is down but create STILL 200 — a write with no object store is data loss"; exit 1; fi
-  echo "   RustFS down → governed create $down (fail-closed) ✓"
-  restore_dep "$RELEASE-minio" statefulset
-  up=""; for _ in $(seq 1 50); do up=$(gov_create "sr$RANDOM"); [ "$up" = "200" ] && break; sleep 3; done
-  [ "$up" = "200" ] || { echo "!! create did not recover after RustFS restored (got $up)"; exit 1; }
-  echo "   RustFS restored → governed create 200 (recovered) ✓"
-  echo "   ✓ chaos drill: both dependency outages fail closed + recover"
 fi
 
 echo

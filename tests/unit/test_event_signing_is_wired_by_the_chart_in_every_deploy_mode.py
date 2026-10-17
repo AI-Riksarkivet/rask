@@ -74,7 +74,7 @@ _ALL_HOSTS = _CONTROL_HOSTS | {"Deployment/rask-maintenance"}
 
 
 def _app(container: dict) -> str:
-    return (container.get("args") or [""])[0]
+    return chart_render.uvicorn_target(container) or ""
 
 
 def _door_hosts(docs: tuple[dict, ...]) -> dict[str, str]:

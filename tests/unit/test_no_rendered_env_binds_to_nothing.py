@@ -15,10 +15,11 @@ pydantic-settings drops an unknown variable in silence, so the pod starts, the v
 and `kubectl describe` shows a setting that is not one.
 
 THE PREFIXES AND FIELDS ARE DISCOVERED, NOT LISTED. A hand-written list is the same failure one layer
-up: the next service is the one nobody adds. The packages are the ones the render runs (each Python
-container's uvicorn target names its package), their settings classes are the `BaseSettings` subclasses
-their config modules define once imported, and each class's `env_prefix` and `model_fields` are read off
-the class itself, so a new service is covered by existing here rather than by an edit.
+up: the next service is the one nobody adds. The apps are the ones the render runs (each Python
+container's uvicorn target names its module), their settings classes are every `BaseSettings` subclass
+that exists once those modules are imported, the shared packages' included wherever a class lives, and
+each class's `env_prefix` and `model_fields` are read off the class itself, so a new service is covered
+by existing here rather than by an edit.
 
 CHECKED AGAINST THE UNION OF EVERY CLASS, deliberately. `LANCE_` is the prefix of
 the catalog, flows and notifications alike; asking whether one particular class binds a name would
@@ -42,6 +43,7 @@ from pydantic_settings import BaseSettings
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
+from chart_render import containers, uvicorn_target  # noqa: E402
 from test_invariants import _rendered_docs  # noqa: E402
 
 
@@ -49,31 +51,33 @@ from test_invariants import _rendered_docs  # noqa: E402
 _JS_PLANE = "web-"
 
 
-def _python_packages() -> set[str]:
-    """The top-level package of every uvicorn target the render runs (`catalog.main:app` -> `catalog`)."""
-    packages: set[str] = set()
-    for doc in _rendered_docs():
-        if doc.get("kind") not in {"Deployment", "StatefulSet"}:
-            continue
-        for container in doc["spec"]["template"]["spec"].get("containers", []):
-            for arg in container.get("args") or []:
-                if ":" in arg and not arg.startswith("-"):
-                    packages.add(arg.split(":", 1)[0].split(".", 1)[0])
-    return packages
+def _app_modules() -> dict[str, bool]:
+    """The module of every uvicorn target the render runs (`catalog.main:app` -> `catalog.main`), and whether it builds
+    its app when imported: a target uvicorn calls with `--factory` builds nothing until called."""
+    found: dict[str, bool] = {}
+    for _, _, container in containers(tuple(_rendered_docs())):
+        if target := uvicorn_target(container):
+            found[target.split(":", 1)[0]] = "--factory" not in [*(container.get("command") or []), *(container.get("args") or [])]
+    return found
 
 
 def _settings_classes() -> list[type[BaseSettings]]:
-    """Every `BaseSettings` subclass that a config module of a rendered package defines."""
-    found: list[type[BaseSettings]] = []
-    for package_name in sorted(_python_packages()):
+    """Every `BaseSettings` subclass loaded once each module of a rendered app's package is imported: the settings the
+    running apps can read, a shared library's included through the modules that import it. A module that builds its app
+    at import is not imported, and a module that will not import fails the gate rather than hiding the classes it
+    defines."""
+    apps = _app_modules()
+    for package_name in sorted({module.split(".", 1)[0] for module in apps}):
         package = importlib.import_module(package_name)
         for info in pkgutil.walk_packages(getattr(package, "__path__", []), prefix=f"{package_name}."):
-            if "config" not in info.name.rsplit(".", 1)[-1]:
-                continue
-            module = importlib.import_module(info.name)
-            found.extend(
-                value for value in vars(module).values() if isinstance(value, type) and issubclass(value, BaseSettings) and value.__module__ == module.__name__
-            )
+            if not apps.get(info.name, False):
+                importlib.import_module(info.name)
+    found: list[type[BaseSettings]] = []
+    pending: list[type[BaseSettings]] = list(BaseSettings.__subclasses__())
+    while pending:
+        settings_cls = pending.pop()
+        found.append(settings_cls)
+        pending.extend(settings_cls.__subclasses__())
     return found
 
 

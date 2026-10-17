@@ -2,17 +2,14 @@
 
 What happens when a service goes down, can we get corrupted state, and how do we recover.
 
-> **Honesty note on "chaos-tested".** The chaos table below was a **point-in-time** verification — each row
-> was run once by pulling a live service on the kind cluster and observing recovery. It is **not** a standing
-> regression suite, and the subscriptions now run on durable cursors (see the delivery-semantics callout below
-> the table), so the lineage replay row stands for the `all` policy only. Treat this as "recovery was
-> demonstrated once", not "continuously chaos-tested".
->
-> **What IS a repeatable regression suite:** the `make e2e-*` targets run the live suites under
-> `tests/e2e-py/` (observability, the cluster route, maintenance/compaction, CAS, governance boundary cases) against a
-> deployed stack, and `make e2e-chaos` encodes the first chaos row below (scale lineage to 0, write, assert
-> the replay). The other chaos rows are **not encoded as automated tests** — they mutate shared infra, so
-> they stay out of the default lanes.
+> **The standing chaos suite.** Criterion 5's drills (`tests/e2e-py/test_the_estate_is_resilient.py`, [[XC-095]]) take
+> one dependency down at a time (the object store, OpenFGA, lineage, the bus, the issuer, the secret store) or kill the
+> catalog mid-commit, drive the doors a pipeline uses while it is gone, restore it, and hold the estate to criteria 1
+> and 4: every version a commit the pipeline made, one edge for each input it names, nothing parked on the DLQ, both
+> outboxes drained. The e2e-stack kind lane runs them on every push, last, with `--chaos`; the deployed release runs
+> them only when invoked explicitly (`bash scripts/e2e_live.sh -m phase1 --require-live --chaos`), and a plain live
+> drive selects none. Their measured record is the next section; the table after it is the earlier point-in-time
+> record, each row run once by hand.
 
 ## The core guarantee: at-least-once + idempotent → no corruption, no loss (within bounds)
 
@@ -25,6 +22,39 @@ Two properties make it safe:
    (`provenance$edges`) with an insert-only merge on each table's unenforced primary key, through the catalog's
    `merge_insert` door (`lineage/services/provenance.py`). So redelivery / replay of the same event lands no
    second row — never a duplicate, never corruption. The worst failure mode is *under-reporting* (a lost event), never a corrupt or doubled one.
+
+## Criterion 5's drills, as measured
+
+Each drill ends with the readings criteria 1 and 4 hold the scenario to. Every version is a commit the pipeline made,
+carrying the run it named. The edge list holds one edge per input those versions name, and at most one for a commit whose
+answer was lost (LH-497). Nothing parks on the DLQ, and both of the catalog's outboxes drain. The durations are each drill's
+whole run, outage and recovery included, on the e2e-stack kind lane (run 39049821010).
+
+| Dependency | Taken down | What the doors answer while it is gone | Kind lane, 2026-10-17 |
+| --- | --- | --- | --- |
+| Object store (`rask-minio`) | scaled to zero | A write through the catalog's insert door is refused 503 code 17, or gets no answer within the bound the catalog's own store timeouts set (2 × 6 listings × (retries + 1) × max(connect, request): 60 s at the defaults). It never lands while the store is gone. | 28 s |
+| OpenFGA | scaled to zero | A governed write answers 503 code 17 at its authorization check: never an allow, and never a deny that would read as a missing grant. | 20 s |
+| Lineage | scaled to zero | Commits go on landing; its durable consumer resumes where it stopped and records each announcement once. | 39 s |
+| The bus (`rask-nats`, three nodes) | scaled 3 → 0 for 150 s | Commits and grants land, their announcements staged in the outboxes, and the lineage relay records the staged writes without the bus. The outage closes every sidecar's connection for good (below), and each service restarts its own sidecar once the bus greets a connection again. | 320 s, 150 s of it the outage |
+| Dex | its Service cut from its pod | A door holding the issuer's key set (300 s) accepts an existing token. A door that must fetch the key set answers 503 code 17, never 401, and accepts the token again once Dex is back, with no restart. | 69 s |
+| The secret store (`rask-openbao`) | sealed in place | Within one re-read of its key (300 s) the catalog drops its signing key, then refuses every write it would announce with 503 code 17 before committing it. The store's contents survive the seal, so nothing is minted again. | 290 s, most of it the re-read |
+| The catalog | its uvicorn SIGKILLed, four writers committing through `version/create` | Every acknowledged commit lands once, a commit whose answer the kill lost lands at most once, and no run lands twice: Lance's put-if-not-exists of each `_versions/` manifest keeps one history. | 168 s |
+
+**A bus outage longer than about two minutes stops every sidecar's pub/sub until the sidecar restarts.** Dapr 1.18.1's
+`pubsub.jetstream` component connects with none of nats.go's reconnect options, so each NATS client gives up after its
+default 60 attempts 2 s apart and closes for good. Its subscriptions are gone, every publish answers
+`nats: connection closed`, and the pod stays Ready, because daprd's liveness is a TCP check and its readiness reads no
+component. Measured on the kind lane before the fix: with NATS held down 150 s, lineage's and notifications' durables
+acknowledged nothing for the sixteen minutes that followed and both outboxes kept their backlog. The feed and the edge
+list stayed correct, because the lineage relay records the outbox without the bus.
+
+The fix is upstream (components-contrib#4563; #4564, `MaxReconnects(-1)`, unmerged). Until a Dapr release ships it, the
+catalog, lineage, maintenance and notifications each run `service_kit.bus_watchdog` over their own sidecar. The
+annotator's control publisher runs none, because the explorer is outside Phase 1. The watchdog probes every
+`pubsub.jetstream` component every 30 s on `probe.<app-id>`, a subject no stream captures. When a probe answers that the
+connection is closed, the watchdog waits until the bus greets a new connection, then asks the sidecar to shut down, and
+the kubelet restarts it. A shorter outage needs none of this: a client still reconnecting buffers its publishes and
+sends them once the bus is back.
 
 ## Chaos experiments (all recovered with zero loss)
 
@@ -118,11 +148,15 @@ semantics, so it must not undercut the slowest handler. Either way the window co
      state is unreadable. Lineage keeps no database: its tables live in the object store behind the catalog.
    - **The catalog** — lineage's feed and edge list are read and written through its doors. Down → lineage
      ingest answers `RETRY` (buffered) and lineage's `/readyz` reports the catalog unavailable.
-   - **NATS / JetStream** — one node, `streamReplicas=1`; the Dapr pub/sub backbone. Down → no event flows at
-     all (catalog emits swallow, notifications and maintenance hear nothing).
+   - **NATS / JetStream** — three nodes, `streamReplicas=3`, each on its own volume; the Dapr pub/sub backbone. All
+     down → no event flows: the catalog's writes still land and stage their announcements in its outboxes, which the
+     relays deliver once the bus is back.
    - **The object store** (the MinIO fixture in development) — the S3 data plane. Down → no Lance read/write.
    - **The secret store / OpenFGA / Dex** — one pod each in development (the store and Dex are fixtures; production
-     names the platform's); down → (respectively) app-tier secrets fail-closed at boot, authz checks fail, OIDC login fails.
+     names the platform's). The store sealed: a signer drops its key within one re-read (300 s) and the catalog refuses
+     every write it would announce, and every other secret a pod holds expires 300 to 600 s after the store last
+     confirmed it (ADR 0166). OpenFGA down: every governed door answers 503 code 17. Dex down: a door that still holds
+     its key set accepts the tokens it verifies for up to 300 s, and one that must fetch the key set answers 503 code 17.
    *Fix (prod):* multi-replica + `streamReplicas=3` for NATS, a real Postgres HA (Patroni/CNPG), a replicated
    object store. Tracked as infra work; **the app tier is already `replicas`-ready** (stateless, PDBs shipped).
 

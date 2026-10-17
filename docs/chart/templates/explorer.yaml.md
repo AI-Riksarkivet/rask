@@ -71,3 +71,8 @@ client-credentials grant), so its token URL, client and user render only with `d
 Dex (every real deployment) the saga mints no token and publishes with no bearer, which a governed
 catalog refuses: it fails closed rather than posting the publisher's password and the client secret
 over http to whatever answers `rask-dex` ([[XC-148]]).
+
+## `args:`
+
+No `command:`, so the image's tini, its ENTRYPOINT, stays the container's PID 1 and runs uvicorn's command line from
+`args` ([[LH-313]]; `services.yaml.md` § `args:`).

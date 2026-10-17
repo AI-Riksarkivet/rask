@@ -29,7 +29,7 @@ _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 #: Every mount that serves the catalog's doors. The management mount carries the most destructive ones
 #: (erasure, policy set, grants, the registries), so a window that gated only `/v1` let each of them run
 #: through it (LH-446).
-_GATED_MOUNTS: tuple[str, ...] = ("/v1/", "/management/v1/")
+GATED_MOUNTS: tuple[str, ...] = ("/v1/", "/management/v1/")
 
 #: The spec's READ actions, as trailing path segments.
 #:
@@ -87,7 +87,7 @@ def is_mutating(method: str, path: str = "") -> bool:
     return action not in _READ_ACTIONS
 
 
-def _is_read_vend(path: str, request: Request) -> bool:
+def is_read_vend(path: str, request: Request) -> bool:
     """True for a read-tier credential vend, the one door whose read/write answer is in its query."""
     return path.rstrip("/").rsplit("/", 1)[-1] == _VEND_ACTION and request.query_params.get("tier", "read") == "read"
 
@@ -120,6 +120,6 @@ async def maintenance_middleware(
     settings = getattr(request.app.state, "settings", None)
     read_only = bool(getattr(settings, "maintenance_read_only", False))
     path = request.url.path
-    if read_only and path.startswith(_GATED_MOUNTS) and is_mutating(request.method, path) and not _is_read_vend(path, request):
+    if read_only and path.startswith(GATED_MOUNTS) and is_mutating(request.method, path) and not is_read_vend(path, request):
         return maintenance_response()
     return await call_next(request)

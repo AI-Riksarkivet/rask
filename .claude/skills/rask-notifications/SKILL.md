@@ -178,8 +178,10 @@ escapes.
 declares the `user:` actor it authenticated; maintenance signs as itself), or `None` when it holds no signing
 identity, which the doors accept only for an action `control_signer_role` exempts (the task actions, R3; an
 annotation project's grants, R5). A signer whose key is unresolved publishes and stages nothing: the event is withheld
-and counted under `reason="unsigned"`, outbox or not, and the signer reports itself not ready, so a control event
-emitted then (a `table_published` included) is lost, not delayed. No relay signs: the catalog's control relay
+and counted under `reason="unsigned"`, outbox or not, and the signer reports itself not ready. The catalog therefore
+refuses every write it would announce while its key is unresolved, 503 code 17 before the commit
+(`catalog/api/signing_gate.py`, [[XC-095]]), so none of its announcements is lost to a missing key; a producer with no such
+gate loses what it emits while its key is unresolved. No relay signs: the catalog's control relay
 republishes a staged event verbatim only when it verifies as signed by the catalog's own identity and retires anything
 else as poison, so a staged forgery never becomes a catalog-signed event.
 

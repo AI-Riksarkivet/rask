@@ -10,10 +10,15 @@ pubsub.jetstream component. The daprd sidecar (injected by the annotations) carr
 
 ## `args:`
 
-command/args are split so the module, bind address, port and graceful-shutdown flag
-(`rask.shutdownArg`, sized from the pod's termination grace) render as uvicorn arguments,
-one per line, the same whether the command is bare `uvicorn` or wrapped in
-`opentelemetry-instrument`.
+No `command:`. Each image's ENTRYPOINT is its tini (`.docker/*.dockerfile`), and a container's `command` replaces the
+ENTRYPOINT, so a container that set one made uvicorn its PID 1 ([[LH-313]]). The kernel drops a PID 1's closing re-raise
+of SIGTERM, so a threaded request held a PID 1 uvicorn 25.1 s past a 3 s graceful-shutdown bound (measured 2026-09-28,
+uvicorn 0.51.0), and it drops a SIGKILL sent from inside the PID 1's own namespace, so nothing in the pod could kill it.
+The chart therefore passes uvicorn's whole command line as `args`, which the image's ENTRYPOINT runs, so the init
+survives whatever renders the pod: `opentelemetry-instrument` first when tracing is on, then `uvicorn`, the module, bind
+address, port and graceful-shutdown flag (`rask.shutdownArg`, sized from the pod's termination grace), one per line.
+Pinned by `tests/unit/test_uvicorn_drains_inside_its_pods_grace_period.py`; XC-095's catalog drill proves the PID 1 on
+the kind lane.
 
 `rask.proxyHeaderArgs` adds `--proxy-headers --forwarded-allow-ips=<forwardedAllowIps>`: the
 cluster route sends public traffic here through the Gateway's data plane, so without trusting its
@@ -243,10 +248,15 @@ feed and edge tables, Lance tables the catalog governs (ADR 0158). It keeps no d
 
 ## `args:`
 
-command/args are split so the module, bind address, port and graceful-shutdown flag
-(`rask.shutdownArg`, sized from the pod's termination grace) render as uvicorn arguments,
-one per line, the same whether the command is bare `uvicorn` or wrapped in
-`opentelemetry-instrument`.
+No `command:`. Each image's ENTRYPOINT is its tini (`.docker/*.dockerfile`), and a container's `command` replaces the
+ENTRYPOINT, so a container that set one made uvicorn its PID 1 ([[LH-313]]). The kernel drops a PID 1's closing re-raise
+of SIGTERM, so a threaded request held a PID 1 uvicorn 25.1 s past a 3 s graceful-shutdown bound (measured 2026-09-28,
+uvicorn 0.51.0), and it drops a SIGKILL sent from inside the PID 1's own namespace, so nothing in the pod could kill it.
+The chart therefore passes uvicorn's whole command line as `args`, which the image's ENTRYPOINT runs, so the init
+survives whatever renders the pod: `opentelemetry-instrument` first when tracing is on, then `uvicorn`, the module, bind
+address, port and graceful-shutdown flag (`rask.shutdownArg`, sized from the pod's termination grace), one per line.
+Pinned by `tests/unit/test_uvicorn_drains_inside_its_pods_grace_period.py`; XC-095's catalog drill proves the PID 1 on
+the kind lane.
 
 `rask.proxyHeaderArgs` adds `--proxy-headers --forwarded-allow-ips=<forwardedAllowIps>`: the
 cluster route sends public traffic here through the Gateway's data plane, so without trusting its

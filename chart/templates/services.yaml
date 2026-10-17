@@ -41,12 +41,11 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           {{- include "lance.securityContext" . | nindent 10 }}
           {{- include "lance.preStop" . | nindent 10 }}
-          {{- if include "lance.otelEnabled" $root }}
-          command: ["opentelemetry-instrument", "uvicorn"]
-          {{- else }}
-          command: ["uvicorn"]
-          {{- end }}
           args:
+            {{- if include "lance.otelEnabled" $root }}
+            - "opentelemetry-instrument"
+            {{- end }}
+            - "uvicorn"
             - {{ .Values.services.catalog.module | quote }}
             - "--host=0.0.0.0"
             - "--port={{ .Values.services.catalog.port }}"
@@ -133,6 +132,7 @@ spec:
             {{- if .Values.dapr.enabled }}
             - { name: LANCE_ERASURE_RELEASE_BINDING_NAME, value: {{ .Values.catalog.erasure.bindingName | quote }} }
             - { name: LANCE_PROMOTION_EXPIRY_BINDING_NAME, value: {{ .Values.catalog.promotion.bindingName | quote }} }
+            {{- include "lance.busEnv" $root | nindent 12 }}
             {{- end }}
             {{- if .Values.dapr.enabled }}
 
@@ -236,12 +236,11 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           {{- include "lance.securityContext" . | nindent 10 }}
           {{- include "lance.preStop" . | nindent 10 }}
-          {{- if include "lance.otelEnabled" $root }}
-          command: ["opentelemetry-instrument", "uvicorn"]
-          {{- else }}
-          command: ["uvicorn"]
-          {{- end }}
           args:
+            {{- if include "lance.otelEnabled" $root }}
+            - "opentelemetry-instrument"
+            {{- end }}
+            - "uvicorn"
             - {{ .Values.services.lineage.module | quote }}
             - "--host=0.0.0.0"
             - "--port={{ .Values.services.lineage.port }}"
@@ -256,6 +255,7 @@ spec:
             {{- if .Values.dapr.enabled }}
 
 {{- include "lance.appTokenEnv" (list $root $root.Values.services.lineage.daprAppId) | nindent 12 }}
+            {{- include "lance.busEnv" $root | nindent 12 }}
             {{- end }}
             - { name: LINEAGE_CATALOG_URL, value: {{ printf "http://%s-catalog:%v" (include "lance.fullname" $root) $root.Values.services.catalog.port | quote }} }
             - { name: RASK_CATALOG_IDENTITY_TOKEN_FILE, value: /var/run/secrets/rask/identity/rask-catalog/token }

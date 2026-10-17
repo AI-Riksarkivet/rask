@@ -293,7 +293,8 @@ def attach_signing(app: FastAPI, holder: SigningStatus | None) -> None:
     setattr(app.state, SIGNING_STATE, holder)
 
 
-def _signing_of(app: FastAPI) -> SigningStatus | None:
+def signing_of(app: FastAPI) -> SigningStatus | None:
+    """The holder `attach_signing` published on ``app``, or None for a service that does not sign."""
     holder: SigningStatus | None = getattr(app.state, SIGNING_STATE, None)
     return holder
 
@@ -310,7 +311,7 @@ async def retry_until_signed(request: Request) -> dict[str, str] | None:
     `async def` although it awaits nothing: a sync dependency is queued behind the threadpool, and a pod whose
     threads are all busy with long work would then answer the gate late, which is the moment it matters.
     """
-    holder = _signing_of(request.app)
+    holder = signing_of(request.app)
     return RETRY if holder is not None and not holder.ready else None
 
 
@@ -323,7 +324,7 @@ def signing_ready_check(inner: ReadyCheck | None = None) -> ReadyCheck:
 
     async def check(request: Request) -> Readiness:
         body = await inner(request) if inner is not None else Readiness(status=ReadinessStatus.ready)
-        holder = _signing_of(request.app)
+        holder = signing_of(request.app)
         if holder is None or holder.ready:
             return body
         return body.model_copy(update={"status": ReadinessStatus.degraded, "components": {**body.components, "signing": holder.reason}})

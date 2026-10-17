@@ -479,12 +479,14 @@ resources:
 # `teardownSeconds` before the kubelet's SIGKILL: 40 - 5 - 10 = 25s for the 40s pods,
 # 120 - 5 - 10 = 105s for maintenance. Work in a THREAD (Starlette's run_in_threadpool, which runs
 # maintenance's sweep) is not interrupted by the bound: it ends by returning, or by that
-# SIGKILL at the pod's grace. uvicorn is the container's PID 1 (the command replaces the image's
-# tini), where the kernel drops its closing re-raise of SIGTERM, so the process waits for the thread
-# (measured 2026-09-28, uvicorn 0.51.0, 3s bound: a 25s threaded request kept a PID 1 up 25.1s after
-# SIGTERM, and ended with the process at 3.9s when uvicorn was not PID 1).
+# SIGKILL at the pod's grace. No container the chart renders sets `command`, so each image's tini,
+# its ENTRYPOINT, runs uvicorn's command line from `args` and uvicorn is never PID 1 ([[LH-313]]):
+# the kernel drops a PID 1's closing re-raise of SIGTERM, so the process waited for the thread
+# (measured 2026-09-28, uvicorn 0.51.0, 3s bound: a 25s threaded request kept a PID 1 up 25.1s
+# after SIGTERM, and the process ended at 3.9s when uvicorn was not PID 1), and a SIGKILL sent from
+# inside the pod never reaches a PID 1.
 # `teardownSeconds` is a budget, not a measurement of any lifespan. `rask.shutdownArg` renders the
-# bound into every uvicorn whose command the chart sets (the assist runner keeps its image's CMD) and
+# bound into every uvicorn whose command line the chart sets (the assist runner keeps its image's CMD) and
 # refuses to render a bound that is not positive or a negative teardownSeconds, whose bound would end
 # after the SIGKILL. Pinned by tests/unit/test_uvicorn_drains_inside_its_pods_grace_period.py.
 lifecycle:
@@ -1854,6 +1856,8 @@ nats:
   #     redelivers to the DLQ; a server upgrade that flips the flag changes these rows. A consumer the server names (the
   #     catalog's ephemeral broadcast) acknowledges on $JS.ACK.S.>;
   #   - a sidecar parks a dead letter through the component the delivery came on, so a subscriber publishes its own dlq.<app>;
+  #   - each service probes its own sidecar's connections on probe.<app-id> (service_kit.bus_watchdog), which no stream
+  #     captures, so a probe stores nothing; the annotator runs no watchdog and holds no probe subject;
   #   - only admin (the stream Job's own command set, measured) creates a stream or deletes
   #     a consumer, no app holds $JS.API.>, and monitor reads stream and consumer state but no message and publishes nothing.
   # catalog.control.v1 is published by the catalog, by maintenance under maintenance.controlEmit, and by the annotator under
@@ -1928,6 +1932,7 @@ nats:
           - $JS.API.CONSUMER.CREATE.CATALOG_CONTROL # the ephemeral broadcast every replica holds
           - $JS.API.CONSUMER.INFO.CATALOG_CONTROL.*
           - $JS.ACK.CATALOG_CONTROL.>
+          - probe.catalog # its sidecar's own connections, probed (service_kit.bus_watchdog); no stream captures it
         subscribe: [_INBOX.>]
       lineage:
         publish:
@@ -1940,11 +1945,13 @@ nats:
           - $JS.API.CONSUMER.INFO.DLQ.lineage-dlq-durable
           - $JS.API.CONSUMER.CREATE.DLQ.lineage-dlq-durable.>
           - $JS.ACK.DLQ.lineage-dlq-durable.>
+          - probe.lineage
         subscribe: [_INBOX.>]
       maintenance:
         publish:
           - lineage.events.v1
           - $JS.API.STREAM.NAMES
+          - probe.maintenance
         subscribe: [_INBOX.>]
       monitor:
         publish: [$JS.API.INFO, $JS.API.STREAM.LIST, $JS.API.STREAM.NAMES, $JS.API.STREAM.INFO.*, $JS.API.CONSUMER.LIST.*, $JS.API.CONSUMER.NAMES.*, $JS.API.CONSUMER.INFO.*.*, $SYS.REQ.USER.INFO]
@@ -1962,6 +1969,7 @@ nats:
           - $JS.API.CONSUMER.INFO.DLQ.notifications-durable
           - $JS.API.CONSUMER.CREATE.DLQ.notifications-durable.>
           - $JS.ACK.DLQ.notifications-durable.>
+          - probe.notifications
         subscribe: [_INBOX.>]
 
 # === Dapr — rask's Components, Configurations, Resiliency and sidecars ===========================

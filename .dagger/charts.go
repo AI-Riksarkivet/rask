@@ -185,8 +185,10 @@ func (m *Rask) Charts(
 // real-registry render points at the platform's store (`openbao.enabled=false`, `openbao.externalAddr`, [[XC-149]]) and
 // the External Secrets Operator, a prerequisite the render checks through `.Capabilities`, is named with `--api-versions`.
 // The bundled dev Dex is refused on a real deployment (its credentials are published, XC-025), so this
-// real-registry shape turns it off as values-prod.yaml does. `signing.provisioned` is the operator's attestation
-// that the event-signing keys exist, without which `templates/signing-provisioned.yaml` refuses the platform's store;
+// real-registry shape turns it off as values-prod.yaml does, and names the idp id of the platform IdP's connector
+// (`auth.oidc.connectors`), which a person's principal key carries and the render refuses to go without ([[LH-063]]).
+// `signing.provisioned` is the operator's attestation that the event-signing keys exist, without which
+// `templates/signing-provisioned.yaml` refuses the platform's store;
 // `nats.auth.provisioned` attests every bus client's NATS user the same way (`templates/nats-provisioned.yaml`).
 // `ray.dashboardUrl` names the estate's Ray, the one address every Ray consumer renders ([[CP-041]]). `nats.url` names the
 // platform's NATS bus the same way: a prerequisite rask never installs ([[XC-129]]), and `route.*` the platform's Gateway
@@ -205,6 +207,7 @@ const renderArgs = "--set image.repository=ghcr.io/example/rask " +
 	"--api-versions external-secrets.io/v1/ExternalSecret " +
 	"--api-versions dapr.io/v1alpha1 " +
 	"--set-string auth.oidc.issuer=https://auth.example.com/dex " +
+	"--set-string auth.oidc.connectors.ldap=corp " +
 	"--set-string frontend.oidc.publicOrigin=http://localhost:8080 " +
 	"--set openbao.enabled=false " +
 	"--set-string openbao.externalAddr=https://vault.example.com:8200 " +

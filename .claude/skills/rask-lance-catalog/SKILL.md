@@ -115,7 +115,10 @@ operations** (ADR 0156, LH-476): every rask-only route is served under `/managem
 `/management/v1/projects`, and a rask route on `/v1` answers 404. The two GET twins of `count_rows` and
 `tags/list` stay on `/v1` because they are spec operations the stock pylance REST client sends as GET.
 `tests/integration/test_spec_conformance.py` walks the served route table for both directions, and the
-read-only maintenance gate (`catalog/api/maintenance_mode.py`) refuses writes on both mounts.
+read-only maintenance gate (`catalog/api/maintenance_mode.py`) refuses writes on both mounts. The same classification
+refuses every write the catalog would announce while it holds no signing key (`catalog/api/signing_gate.py`, [[XC-095]]):
+503 code 17 before the commit, since an announcement signed after the commit could not be made; only a data write under
+the provenance namespace, which the catalog never announces, is served then.
 
 **A table's tier is the `rask.tier` property of the nearest enclosing namespace that declares one** (ADR 0156 C8,
 ADR 0160, LH-470). `catalog/core/tier_policy.py` holds it:

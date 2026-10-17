@@ -161,3 +161,8 @@ now live in ONE helper.
 ## `{{- toYaml (index $root.Values.resources $name | default $root.Values.resources.fleet) | nindent 12 }}`
 
 A service may name its OWN tier (resources.<name>); otherwise the shared fleet one.
+
+## `args:`
+
+No `command:`, so the image's tini, its ENTRYPOINT, stays the container's PID 1 and runs uvicorn's command line from
+`args` ([[LH-313]]; `services.yaml.md` § `args:`).

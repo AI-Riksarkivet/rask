@@ -13,15 +13,18 @@ store, the lifespan that builds the holder, the emitters it is handed, and the d
 emitter alone passes with a lifespan that never gives it a key. The sidecar's secret API is answered by respx and its
 publish is a recording stand-in, so what the verifier sees is exactly what the catalog put on the bus.
 
-A SIGNER WITHOUT ITS KEY ANNOUNCES NOTHING AND FAILS NOTHING. The emit runs after the Lance write committed, so a
-signature that cannot be made is a withheld announcement, never a failed request; the pod reports not ready meanwhile. A
-control event is withheld the same way and is not staged either: the control relay delivers only staged bytes this
-catalog signed (`test_the_control_lane_has_a_relay.py`), so an unsigned one could never leave the outbox.
+A SIGNER WITHOUT ITS KEY TAKES NO WRITE IT WOULD ANNOUNCE. A write's announcement is signed after its Lance commit, so a
+catalog that cannot sign refuses the write first, ServiceUnavailable, and commits nothing it could not announce
+([[XC-095]], owner 2026-10-17); the pod reports not ready meanwhile. The one write it still takes is one it never
+announces: a data write under the provenance namespace, whose rows are lineage's record of the announcements
+(`catalog.services.provenance_namespace`). An unsigned control event would never leave the outbox either: the control
+relay delivers only staged bytes this catalog signed (`test_the_control_lane_has_a_relay.py`).
 """
 
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import ExitStack
 from pathlib import Path
@@ -33,7 +36,15 @@ import pyarrow.ipc as ipc
 import pytest
 import respx
 from fastapi.testclient import TestClient
-from lance_namespace import connect
+from lance_namespace import (
+    CreateNamespaceRequest,
+    CreateTableRequest,
+    DescribeTableRequest,
+    NamespaceExistsRequest,
+    NamespaceNotFoundError,
+    TableNotFoundError,
+    connect,
+)
 
 from lineage_kit import SIGNATURE_FACET, RefusalReason, SignatureError, verify_control_signature, verify_signature
 from service_kit.control_events import CONTROL_TOPIC
@@ -53,6 +64,8 @@ PERSON = "dex~08a8684b-db88-4b73-90a9-3cd1661f5466"
 SECRETS = "http://localhost:3500/v1.0/secrets/lance-secrets"
 ARROW_STREAM = {"content-type": "application/vnd.apache.arrow.stream"}
 LINEAGE_TOPIC = "lineage.events.v1"
+#: The namespace the catalog keeps lineage's tables in, as the chart names it (`services.lineage.provenanceNamespace`).
+PROVENANCE = "provenance"
 
 
 def _person(key: str) -> PersonPrincipal:
@@ -132,6 +145,7 @@ def boot(tmp_path: Path, control_outbox: str, monkeypatch: pytest.MonkeyPatch, r
         "LANCE_LINEAGE_TRANSPORT": "dapr",
         "LANCE_CONTROL_EMIT_ENABLED": "true",
         "LANCE_CONTROL_OUTBOX_URI": control_outbox,
+        "LANCE_PROVENANCE_NAMESPACE": PROVENANCE,
         "APP_API_TOKEN": "the-estate-app-token",
         "DAPR_HTTP_PORT": "3500",
     }
@@ -214,18 +228,55 @@ def test_a_write_nobody_authenticated_is_announced_unsigned_and_its_control_even
     }
 
 
+def _made_natively(root: Path, table: list[str]) -> None:
+    """``table`` made on the `dir` root directly, as nothing that announces would make it. Its namespace is made the same
+    way, except the provenance namespace, which the catalog makes itself at boot (`catalog.services.provenance_namespace`)
+    and which is waited for rather than raced: the `dir` backend answers a concurrent create 409 code 14."""
+    namespace = connect("dir", {"root": str(root)})
+    if table[:-1] == [PROVENANCE]:
+        deadline = time.monotonic() + 30
+        while True:
+            try:
+                namespace.namespace_exists(NamespaceExistsRequest(id=table[:-1]))
+                break
+            except NamespaceNotFoundError:
+                assert time.monotonic() < deadline, "the catalog never made its provenance namespace"
+                time.sleep(0.1)
+    else:
+        namespace.create_namespace(CreateNamespaceRequest(id=table[:-1]))
+    namespace.create_table(CreateTableRequest(id=table), _rows())
+
+
+def _version(root: Path, table: list[str]) -> int | None:
+    """The version ``table`` is at on the `dir` root, or None when it does not exist."""
+    try:
+        return connect("dir", {"root": str(root)}).describe_table(DescribeTableRequest(id=table, load_detailed_metadata=True)).version
+    except TableNotFoundError:
+        return None
+
+
 @pytest.mark.parametrize(
-    "token",
+    ("door", "table", "answer", "version"),
     [
-        pytest.param(_person(PERSON), id="a-write-by-a-person"),
+        pytest.param("/v1/namespace/fresh/create", ["fresh", "t"], (503, 17), None, id="a-namespace-it-would-announce"),
+        pytest.param("/v1/table/db$t/insert", ["db", "t"], (503, 17), 1, id="an-insert-it-would-announce"),
+        pytest.param(f"/v1/table/{PROVENANCE}$feed/insert", [PROVENANCE, "feed"], (200, None), 2, id="an-insert-it-never-announces"),
     ],
 )
-def test_a_catalog_without_its_key_commits_the_write_announces_nothing_stages_nothing_and_is_not_ready(boot: Boot, control_outbox: str, token: object) -> None:
-    client = boot(httpx.Response(500), httpx.Response(404), token)
+def test_a_catalog_without_its_key_takes_only_the_writes_it_never_announces(
+    boot: Boot, control_outbox: str, tmp_path: Path, door: str, table: list[str], answer: tuple[int, int | None], version: int | None
+) -> None:
+    """A write it would announce is refused before it commits, so the table stays at its version and a namespace is never
+    made; lineage's own write under the provenance namespace, which it never announces, is served."""
+    client = boot(httpx.Response(500), httpx.Response(404), _person(PERSON))
+    if version is not None:
+        _made_natively(tmp_path / "warehouse", table)
 
-    _write_a_table_and_a_row(client)
+    written = client.post(door, content=_rows(), headers=ARROW_STREAM) if door.endswith("/insert") else client.post(door, json={})
     readiness = client.get("/readyz")
 
+    assert (written.status_code, written.json().get("code") if written.status_code != 200 else None) == answer, written.text
+    assert _version(tmp_path / "warehouse", table) == version
     assert _Sidecar.published == [], f"a catalog without its key announced {len(_Sidecar.published)} events"
     staged = [json.loads(body)["action"] for _key, body in outbox.list_events(control_outbox, {})]
     assert staged == [], f"a catalog without its key staged {staged} unsigned, and a staged object proves nothing about who wrote it"

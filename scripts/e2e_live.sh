@@ -236,6 +236,9 @@ export LANCE_E2E_RELEASE_NAMESPACE="${LANCE_E2E_RELEASE_NAMESPACE:-default}"
 PROVENANCE_NS="$(kubectl get deploy "$RELEASE-lineage" -o jsonpath='{.spec.template.spec.containers[*].env[?(@.name=="LINEAGE_PROVENANCE_NAMESPACE")].value}' 2>/dev/null || true)"
 [ -z "$PROVENANCE_NS" ] || export LANCE_E2E_PROVENANCE_NAMESPACE="$PROVENANCE_NS"
 export LANCE_E2E_OUTBOX_URI="s3://lance-catalog/_lineage_outbox"
+# The control lane's outbox, read off the deployed catalog container: criterion 5's drills hold it drained.
+CONTROL_OUTBOX="$(kubectl get deploy "$RELEASE-catalog" -o jsonpath='{.spec.template.spec.containers[?(@.name=="catalog")].env[?(@.name=="LANCE_CONTROL_OUTBOX_URI")].value}' 2>/dev/null || true)"
+[ -z "$CONTROL_OUTBOX" ] || export LANCE_E2E_CONTROL_OUTBOX_URI="$CONTROL_OUTBOX"
 export LANCE_E2E_RELAY_BINDING=lineage-relay-cron
 export LANCE_E2E_MAINTENANCE_BINDING=maintenance-cron
 export AWS_ACCESS_KEY_ID="$S3_KEY"

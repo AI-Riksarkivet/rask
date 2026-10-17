@@ -173,6 +173,11 @@ provisioned by its operator and attested by `signing.provisioned`).
 - **Security context**, per container and pod: `runAsNonRoot: true`, `runAsUser` explicit,
   `allowPrivilegeEscalation: false`, `readOnlyRootFilesystem: true`, `capabilities.drop: [ALL]`,
   `seccompProfile.type: RuntimeDefault`. Uneven application of these is backlog row XC-061.
+- **A container passes `args`, never `command`.** A container's `command` replaces its image's ENTRYPOINT, and each
+  image's ENTRYPOINT is its tini, so the charts pass uvicorn's command line only as `args` ([[LH-313]]): as PID 1, uvicorn
+  loses its closing SIGTERM re-raise and no SIGKILL sent from inside the pod reaches it, which criterion 5's catalog
+  drill needs (`tests/unit/test_uvicorn_drains_inside_its_pods_grace_period.py`). Keeping the image's init this way holds
+  whatever renders the pod, the chart now and an operator later.
 - **`serviceAccount.automount: false`** unless the pod genuinely calls the Kubernetes API. Here it is
   not a switch: every first-party pod runs as its own SA from `templates/security-sa.yaml`, tokenless
   on the SA object; a first-party pod mounts a token only where a binding gives its SA work: the pods

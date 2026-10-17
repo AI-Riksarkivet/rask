@@ -24,6 +24,7 @@ from notifications.api.settings import get_ingress_settings
 from notifications.config import get_notifications_settings
 from notifications.inbox_actor import InboxActor
 from notifications.watch_actor import WatchIndexActor
+from service_kit.bus_watchdog import start_bus_watchdog
 from service_kit.config import Settings
 from service_kit.draining import arm_drain_on_sigterm
 from service_kit.governed.actor_state_store import probe_actor_state_store
@@ -141,6 +142,9 @@ def make_lifespan(settings: Settings) -> Callable[[FastAPI], AbstractAsyncContex
                 app.state.actors_registered = False
                 log.exception("notifications: actor registration failed — the inbox will 503")
 
+        # Restarts this pod's sidecar once one of its bus connections has closed for good, as daprd's do after a long bus
+        # outage (`service_kit.bus_watchdog`); None where the chart names this pod no bus.
+        bus_watchdog = await start_bus_watchdog()
         app.state.startup_complete = True
         app.state.shutting_down = False
         try:
@@ -154,6 +158,8 @@ def make_lifespan(settings: Settings) -> Callable[[FastAPI], AbstractAsyncContex
         finally:
             _disarm_drain()
             app.state.shutting_down = True
+            if bus_watchdog is not None:
+                await bus_watchdog.stop()
             # Reverse construction order: the httpx pool was built AFTER the FGA client, so it closes
             # first. Suppressed for the same reason as the FGA close below — a shutdown path that
             # raises hides whatever came after it.

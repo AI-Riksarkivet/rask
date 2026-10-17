@@ -18,6 +18,7 @@ from lineage.api.dapr import register_dapr
 from lineage.api.v1.router import api_router
 from lineage.core.config import get_settings
 from lineage.services.provenance import ProvenanceStore
+from service_kit.bus_watchdog import start_bus_watchdog
 from service_kit.draining import arm_drain_on_sigterm
 from service_kit.governed.auth_lifespan import attach_auth
 from service_kit.governed.dapr_auth import assert_app_token_configured
@@ -84,6 +85,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     if store_credential is not None:
         await store_credential.start()
     app.state.store_credential = store_credential
+    # Restarts this pod's sidecar once one of its bus connections has closed for good, as daprd's do after a long bus
+    # outage (`service_kit.bus_watchdog`); None where the chart names this pod no bus.
+    bus_watchdog = await start_bus_watchdog()
     _disarm_drain: Callable[[], None] = _no_disarm
     try:
         store = ProvenanceStore.from_settings(settings)
@@ -119,6 +123,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     finally:
         _disarm_drain()
         app.state.shutting_down = True
+        if bus_watchdog is not None:
+            await bus_watchdog.stop()
         # Isolate each close so a failure in one still runs the others (parity with the other services).
         await fga_dispose(app)
         dapr_client = getattr(app.state, "dapr", None)

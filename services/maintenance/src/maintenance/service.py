@@ -28,6 +28,7 @@ from maintenance.api.arrival import register_arrival_route
 from maintenance.api.routes import build_router
 from maintenance.core.config import MaintenanceSettings, get_settings
 from maintenance.core.lineage_emit import make_emitter
+from service_kit.bus_watchdog import start_bus_watchdog
 from service_kit.control_emit import ControlSign, make_control_emitter
 from service_kit.draining import arm_drain_on_sigterm
 from service_kit.governed.auth_lifespan import build_fga_client
@@ -177,12 +178,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     # reports itself not ready, and heals in place when the key is published.
     if signing is not None:
         await signing.start()
+    # Restarts this pod's sidecar once one of its bus connections has closed for good, as daprd's do after a long bus
+    # outage (`service_kit.bus_watchdog`); None where the chart names this pod no bus.
+    bus_watchdog = await start_bus_watchdog()
     app.state.startup_complete = True
     try:
         yield
     finally:
         _disarm_drain()
         app.state.shutting_down = True
+        if bus_watchdog is not None:
+            await bus_watchdog.stop()
         if signing is not None:
             await signing.stop()
         if store_credential is not None:

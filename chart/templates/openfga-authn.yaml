@@ -51,8 +51,13 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           {{- include "lance.securityContext" . | nindent 10 }}
           {{- include "lance.preStop" . | nindent 10 }}
-          command: ["uvicorn", "--factory", "service_kit.governed.issuer_mirror:create_app", "--host=0.0.0.0", "--port=8080"]
-          args: {{- include "rask.shutdownArg" . | nindent 12 }}
+          args:
+            - "uvicorn"
+            - "--factory"
+            - "service_kit.governed.issuer_mirror:create_app"
+            - "--host=0.0.0.0"
+            - "--port=8080"
+            {{- include "rask.shutdownArg" . | nindent 12 }}
           env:
             - { name: RASK_ISSUER_MIRROR_ISSUER, value: {{ .Values.auth.serviceAccountIssuer | quote }} }
             - { name: RASK_ISSUER_MIRROR_PUBLIC_URL, value: "http://{{ $name }}:8080" }

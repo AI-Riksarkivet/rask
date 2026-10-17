@@ -630,7 +630,9 @@ jobs:
   e2e-stack:
     runs-on: ubuntu-latest
     needs: ms-test
-    timeout-minutes: 45
+    # 70: the bring-up and the suites measured about 10 minutes (run 39032366683), and criterion 5's seven drills each
+    # wait out an outage, a restore and a settle window, the secret store's alone up to the signer's 300 s re-read.
+    timeout-minutes: 70
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - uses: actions/checkout@v4

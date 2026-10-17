@@ -37,15 +37,38 @@ if TYPE_CHECKING:
 _HERE = Path(__file__).parent
 
 
-def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Mark everything here `e2e`, and deselect every `chaos` drill unless the run asks for them with `--chaos`.
+
+    A drill takes down a dependency of the release it runs against, so a drive of the deployed release runs one only when
+    its caller says so (XC-095). Deselected rather than skipped: a skip would fail `--require-live` on a drive that was
+    never meant to run them.
+    """
     for item in items:
         if _HERE in item.path.parents:
             item.add_marker(pytest.mark.e2e)
+    if config.getoption("--chaos"):
+        return
+    drills = [item for item in items if item.get_closest_marker("chaos")]
+    if drills:
+        config.hook.pytest_deselected(items=drills)
+        items[:] = [item for item in items if not item.get_closest_marker("chaos")]
 
 
 # `--require-live` lives in its own module so it can be exercised without this file's live-estate
-# cleanup fixture; re-exported here because pytest collects hooks from the conftest it loads.
-from require_live import pytest_addoption, pytest_sessionfinish  # noqa: E402 — after the sys.path insert above
+# cleanup fixture; its hooks are called from here because pytest collects hooks from the conftest it loads.
+from require_live import pytest_addoption as _require_live_option  # noqa: E402 — after the sys.path insert above
+from require_live import pytest_sessionfinish  # noqa: E402
+
+
+def pytest_addoption(parser: pytest.Parser) -> None:
+    _require_live_option(parser)
+    parser.addoption(
+        "--chaos",
+        action="store_true",
+        default=False,
+        help="run the chaos drills, which take down the dependencies of the release they run against",
+    )
 
 
 __all__ = ["pytest_addoption", "pytest_sessionfinish"]

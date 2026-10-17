@@ -68,7 +68,16 @@ consequences it does not spell out.
   than the run (criterion 2's principal × door matrix, `test_the_catalog_is_correct.py`) makes its own objects in
   the shared tenant's warehouse, under names that do not carry the project id, so the other criteria read only what
   the scenario made. The bus is read through `tests/e2e-py/bus.py`, by sequence, with no consumer of its own.
+  What every criterion reads to call the estate correct (each ref's history, the edge list, the DLQ and both
+  outboxes) is `tests/e2e-py/correctness.py`, so a new criterion holds the estate to the same readings.
   `make e2e-phase1` and the e2e-stack lane run them.
+- **A chaos drill runs only when the run asks for it.** A test marked `chaos` takes a dependency of the release
+  down, so `tests/e2e-py/conftest.py` deselects it unless the run passes `--chaos`: a plain live drive, `-m phase1`
+  included, runs none (`tests/unit/test_e2e_collection_gate.py`). Criterion 5's drills
+  (`test_the_estate_is_resilient.py`, XC-095) carry both `phase1` and `chaos`; the e2e-stack lane runs them last
+  with `--chaos`, and the deployed release only through an explicit `bash scripts/e2e_live.sh -m phase1
+  --require-live --chaos` or `make e2e-chaos`. A drill acts through `tests/e2e-py/chaos.py`, which takes each
+  dependency down without destroying what it holds, and restores it in a `finally`.
 - **A runner suite runs only from the Makefile.** No root testpath reaches `runners/`. `make test`
   and `make test-slow` loop over every `runners/*/tests`, running `uv run --frozen pytest` from inside
   that runner's directory, so a new `runners/<name>/tests` runs in both with no edit; `--frozen` needs

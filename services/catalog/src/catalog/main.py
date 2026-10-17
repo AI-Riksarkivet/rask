@@ -26,6 +26,7 @@ from catalog.api.erasure_release import mount_erasure_release
 from catalog.api.load_shed import WriteConcurrencyLimitMiddleware
 from catalog.api.maintenance_mode import maintenance_middleware
 from catalog.api.promotion_expiry import mount_promotion_expiry
+from catalog.api.signing_gate import signing_gate_middleware
 from catalog.api.v1.router import api_router
 from catalog.core import base_judge
 from catalog.core.config import Settings, get_settings
@@ -37,6 +38,7 @@ from catalog.core.vending import EncryptionAtRest, make_vendor
 from catalog.services import provenance_namespace, warehouses
 from lineage_kit import SigningKey, parse_published_keys
 from service_kit.body_limit import BodySizeLimitMiddleware
+from service_kit.bus_watchdog import start_bus_watchdog
 from service_kit.control_emit import make_control_emitter
 from service_kit.governed.auth_lifespan import attach_auth
 from service_kit.governed.dapr_auth import assert_app_token_configured
@@ -353,6 +355,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     # The namespace lineage keeps its tables in, in the background for the backfill's reasons: lineage retries
     # its tables until the namespace exists, so a slow OpenFGA or store must not delay this catalog's readiness.
     provenance_task = asyncio.create_task(_ensure_provenance_namespace(app))
+    # Restarts this pod's sidecar once one of its bus connections has closed for good, as daprd's do after a long bus
+    # outage (`service_kit.bus_watchdog`); None where the chart names this pod no bus.
+    bus_watchdog = await start_bus_watchdog()
     try:
         yield
     finally:
@@ -360,6 +365,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         base_judge.install(None)
         backfill_task.cancel()
         provenance_task.cancel()
+        if bus_watchdog is not None:
+            await bus_watchdog.stop()
         if signing is not None:
             await signing.stop()
         if store_credential is not None:
@@ -397,7 +404,8 @@ _settings = get_settings()
 # gate, the handler pair in the order that makes it work, one request id, and the probes — see
 # `service_kit.lance_app` for what each of those five is for and what a copy of it got wrong.
 #
-# `maintenance_middleware` (the read-only gate, a no-op unless LANCE_MAINTENANCE_READ_ONLY=true) goes
+# `maintenance_middleware` (the read-only gate, a no-op unless LANCE_MAINTENANCE_READ_ONLY=true) and
+# `signing_gate_middleware` (the writes a catalog without its signing key refuses) go
 # in as `inner_middleware` and NOT after this call, because middleware added later is OUTER: outside
 # the request-id layer its 503 never passes back through `RequestIDMiddleware` and goes out with no
 # `X-Request-ID`, so an operator cannot correlate the refusal with anything. That ordering is the
@@ -411,7 +419,7 @@ app = build_lance_service_app(
     log=log,
     routers=[api_router],
     ready_check=signing_ready_check(_namespace_ready),
-    inner_middleware=[maintenance_middleware],
+    inner_middleware=[maintenance_middleware, signing_gate_middleware],
 )
 # Wire the broadcast control-plane-event subscription that fills each replica's ring buffer. DaprApp always
 # adds GET /dapr/subscribe; the subscription registers only when control_emit_enabled (see api/dapr.py).
