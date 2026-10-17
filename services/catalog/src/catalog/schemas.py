@@ -899,7 +899,7 @@ class SetProtectionRequest(BaseModel):
 class ProtectionResponse(BaseModel):
     id: str
     protected: bool
-    # Who armed it (`user:<sub>`), from the record — None on an unprotected object and on the SET
+    # Who armed it (`user:<principal>`), from the record — None on an unprotected object and on the SET
     # response (the caller knows who they are). A refused drop can then NAME the armer (#123).
     set_by: str | None = None
 

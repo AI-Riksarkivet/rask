@@ -15,7 +15,7 @@ from notifications.models import NotificationReason
 from service_kit.control_events import CatalogControlEvent
 
 
-def _event(*, action: str = "grant_added", subject: str | None = "user:alice", object_id: str = "table:acme$gold") -> CatalogControlEvent:
+def _event(*, action: str = "grant_added", subject: str | None = "user:dex~alice", object_id: str = "table:acme$gold") -> CatalogControlEvent:
     extra: dict[str, Any] = {"relation": "reader"}
     if subject is not None:
         extra["subject"] = subject
@@ -27,7 +27,7 @@ def _event(*, action: str = "grant_added", subject: str | None = "user:alice", o
         action=cast(Any, action),
         object_type=cast(Any, "table"),
         object_id=object_id,
-        actor="user:admin",
+        actor="user:dex~admin",
         extra=extra,
     )
 
@@ -54,9 +54,19 @@ class _Plane:
 
 
 class TestNamedSubject:
+    @pytest.mark.parametrize(
+        ("stamped", "inbox"),
+        [
+            pytest.param("user:dex~alice", ("dex~alice",), id="a-person-is-the-principal-their-user-names"),
+            pytest.param("user:corp~a%40b", ("corp~a@b",), id="an-encoded-character-addresses-the-inbox-its-token-reaches"),
+            pytest.param("user:kubernetes~system%3Aserviceaccount%3Adefault%3Arask-sa-catalog", (), id="a-machine-is-no-inbox"),
+        ],
+    )
     @pytest.mark.asyncio
-    async def test_a_grant_names_its_grantee(self) -> None:
-        assert await named_subjects(_event(action="grant_added")) == ("alice",)
+    async def test_a_grant_names_its_grantee(self, stamped: str, inbox: tuple[str, ...]) -> None:
+        """A grant stamps the OpenFGA user it names (`fga.user_object`), and an inbox is addressed by the principal key a
+        person's own token proves ([[LH-063]]): the stamped id is decoded, and only a person is told."""
+        assert await named_subjects(_event(action="grant_added", subject=stamped)) == inbox
 
     @pytest.mark.parametrize("action", ["warehouse_bound"])
     @pytest.mark.asyncio
@@ -109,7 +119,7 @@ class TestIngest:
 
         assert await ingest_control_event(_event().model_dump(mode="json"), open_inbox=plane.open) == {"status": "SUCCESS"}
 
-        assert list(plane.boxes) == ["alice"]
+        assert list(plane.boxes) == ["dex~alice"]
 
     @pytest.mark.asyncio
     async def test_a_revoke_is_delivered_even_though_the_subject_can_no_longer_see_the_object(self) -> None:
@@ -119,7 +129,7 @@ class TestIngest:
 
         await ingest_control_event(_event(action="grant_revoked").model_dump(mode="json"), open_inbox=plane.open)
 
-        assert plane.boxes["alice"][0]["reason"] == "grant_revoked"
+        assert plane.boxes["dex~alice"][0]["reason"] == "grant_revoked"
 
     @pytest.mark.asyncio
     async def test_an_event_naming_nobody_is_acked_rather_than_dropped(self) -> None:
@@ -141,7 +151,7 @@ class TestIngest:
     async def test_an_unreachable_inbox_retries(self) -> None:
         """Unlike the watcher lookup, redelivery genuinely helps: the actor is momentarily
         unreachable, and the delivery is idempotent on the notification id."""
-        plane = _Plane(broken={"alice"})
+        plane = _Plane(broken={"dex~alice"})
 
         assert await ingest_control_event(_event().model_dump(mode="json"), open_inbox=plane.open) == {"status": "RETRY"}
 
@@ -155,7 +165,7 @@ class TestTaskAssignment:
     nothing at all, so an assignee learned about their work by looking for it.
     """
 
-    def _assignment(self, *, action: str = "task_assigned", subject: str | None = "user:bob") -> CatalogControlEvent:
+    def _assignment(self, *, action: str = "task_assigned", subject: str | None = "user:dex~bob") -> CatalogControlEvent:
         extra: dict[str, Any] = {"project": "acme"}
         if subject is not None:
             extra["subject"] = subject
@@ -165,7 +175,7 @@ class TestTaskAssignment:
             action=cast(Any, action),
             object_type=cast(Any, "annotation_task"),
             object_id="task:t-77",
-            actor="user:alice",
+            actor="user:dex~alice",
             extra=extra,
         )
 
@@ -178,8 +188,8 @@ class TestTaskAssignment:
         plane = _Plane()
         result = await ingest_control_event(self._assignment().model_dump(mode="json"), open_inbox=plane.open)
         assert result == {"status": "SUCCESS"}
-        assert list(plane.boxes) == ["bob"], "the manager must not be told about their own assignment"
-        assert plane.boxes["bob"][0]["reason"] == NotificationReason.TASK_ASSIGNED
+        assert list(plane.boxes) == ["dex~bob"], "the manager must not be told about their own assignment"
+        assert plane.boxes["dex~bob"][0]["reason"] == NotificationReason.TASK_ASSIGNED
 
 
 class TestUsersetGrants:
@@ -205,7 +215,7 @@ class TestUsersetGrants:
             action=cast(Any, "grant_added"),
             object_type=cast(Any, "table"),
             object_id="table:acme$gold",
-            actor="user:admin",
+            actor="user:dex~admin",
             extra={"relation": "reader", "subject": subject},
         )
 
@@ -215,12 +225,12 @@ class TestUsersetGrants:
 
         async def expand(userset: str) -> tuple[str, ...]:
             assert userset == "role:reviewers#assignee"
-            return ("bob", "carol")
+            return ("dex~bob", "dex~carol")
 
         result = await ingest_control_event(self._event("role:reviewers#assignee").model_dump(mode="json"), open_inbox=plane.open, expand=expand)
 
         assert result == {"status": "SUCCESS"}
-        assert sorted(plane.boxes) == ["bob", "carol"]
+        assert sorted(plane.boxes) == ["dex~bob", "dex~carol"]
         assert "role:reviewers#assignee" not in plane.boxes, "the group itself must never get an inbox"
 
     @pytest.mark.asyncio
@@ -233,9 +243,9 @@ class TestUsersetGrants:
             calls.append(userset)
             return ()
 
-        await ingest_control_event(self._event("user:alice").model_dump(mode="json"), open_inbox=plane.open, expand=expand)
+        await ingest_control_event(self._event("user:dex~alice").model_dump(mode="json"), open_inbox=plane.open, expand=expand)
 
-        assert list(plane.boxes) == ["alice"]
+        assert list(plane.boxes) == ["dex~alice"]
         assert calls == [], "a plain principal must not be expanded"
 
     @pytest.mark.asyncio

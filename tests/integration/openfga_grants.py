@@ -18,7 +18,10 @@ from openfga_sdk.models import CheckResponse, ListUsersResponse, ReadRequestTupl
 from openfga_sdk.models.error_code import ErrorCode
 from openfga_sdk.models.validation_error_message_response import ValidationErrorMessageResponse
 
+from service_kit.governed.fga import user_object
 from service_kit.governed.oidc import IDToken
+from service_kit.governed.person_identity import PersonPrincipal
+from service_kit.governed.principal import Principal, is_principal
 
 
 if TYPE_CHECKING:
@@ -62,8 +65,8 @@ class Grants:
         return None
 
     def grant(self, user: str, *checks: tuple[str, str]) -> None:
-        """Allow ``user`` each ``(relation, object)`` in ``checks``."""
-        self.allowed |= {(f"user:{user}", relation, obj) for relation, obj in checks}
+        """Allow ``user`` (a person's name or a principal key, as :func:`principal_key` reads it) each ``(relation, object)`` in ``checks``."""
+        self.allowed |= {(user_object(principal_key(user)), relation, obj) for relation, obj in checks}
 
 
 class TupleStore:
@@ -114,6 +117,20 @@ def _absent_delete() -> ApiException:
     return exc
 
 
-def act_as(client: TestClient, sub: str) -> None:
-    """Make every later request on ``client`` authenticate as ``sub`` (the app's OIDC verifier is a mock)."""
-    client.app.state.oidc.verify.return_value = IDToken(iss="i", sub=sub, aud="lance", exp=1, iat=1)
+def principal_key(who: str) -> str:
+    """The principal ``who`` names: a principal key as written, and a bare name the person ``dex~<name>``.
+
+    `dex` is the idp id the dev Dex's password connector maps to, so ``"alice"`` is the person that connector reports as
+    `alice`.
+    """
+    return who if is_principal(who) else Principal(idp_id="dex", subject=who).key
+
+
+def act_as(client: TestClient, who: str) -> None:
+    """Make every later request on ``client`` authenticate as the person ``who`` names (see :func:`principal_key`).
+
+    The app's verifier is a mock; it answers the `PersonPrincipal` a verified Dex token for that person would prove.
+    """
+    principal = Principal.parse(principal_key(who))
+    claims = IDToken(iss="i", sub=principal.subject, aud="lance", exp=1, iat=1)
+    client.app.state.oidc.verify.return_value = PersonPrincipal(principal=principal, claims=claims)

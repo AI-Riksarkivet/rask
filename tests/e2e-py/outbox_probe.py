@@ -22,12 +22,11 @@ written for.
 
 from __future__ import annotations
 
-import base64
-import json
 import os
 
 import pyarrow as pa
 import requests
+from principals import DEX_SCOPE, principal_of
 
 
 CATALOG = os.environ.get("LANCE_E2E_CATALOG_URL", "").rstrip("/")
@@ -59,7 +58,7 @@ def bearer() -> str:
         "grant_type": "password",
         "client_id": os.environ.get("LANCE_E2E_OIDC_CLIENT_ID", "lance-catalog"),
         "client_secret": os.environ.get("LANCE_E2E_OIDC_CLIENT_SECRET", "lance-catalog-secret"),
-        "scope": "openid email",
+        "scope": DEX_SCOPE,
         "username": os.environ.get("LANCE_E2E_OIDC_USERNAME", "alice@example.com"),
         "password": os.environ.get("LANCE_E2E_OIDC_PASSWORD", "password"),
     }
@@ -72,17 +71,13 @@ def bearer() -> str:
 
 
 def subject_of(token: str) -> str:
-    """The `sub` claim, which is the FGA subject verbatim — `deps.py` uses the raw IdP sub.
+    """The principal the catalog keys this bearer on ([[LH-063]]), asked of the catalog itself.
 
-    Read from the TOKEN rather than configured, because the author the probe stamps and the owner the
+    Read for the TOKEN rather than configured, because the author the probe stamps and the owner the
     catalog recorded have to be the same string or the gate refuses an event whose output the author
     does hold.
     """
-    payload = token.split(".")[1] if token.count(".") == 2 else ""
-    if not payload:
-        return ""
-    padded = payload + "=" * (-len(payload) % 4)
-    return str(json.loads(base64.urlsafe_b64decode(padded)).get("sub", ""))
+    return principal_of(CATALOG, token) if token else ""
 
 
 def owned_output_table(namespace: str, table: str) -> str:

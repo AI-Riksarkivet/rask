@@ -39,6 +39,8 @@ from catalog.services import warehouses
 from service_kit.control_emit import NoopControlEmitter
 from service_kit.governed import fga as fga_module
 from service_kit.governed.oidc import IDToken
+from service_kit.governed.person_identity import PersonPrincipal
+from service_kit.governed.principal import Principal
 
 
 def _root(tmp_path: Any) -> str:
@@ -53,11 +55,16 @@ def _settings(tmp_path: Any, *, fga_enabled: bool = False) -> Settings:
         "s3_secret_access_key": "x",
     }
     if fga_enabled:
-        data |= {"fga_enabled": True, "oidc_enabled": True, "oidc_issuer": "https://idp", "oidc_audience": "lance"}
+        data |= {"fga_enabled": True, "oidc_enabled": True, "oidc_issuer": "https://idp", "oidc_audience": "lance", "oidc_connectors": {"local": "dex"}}
     return Settings.model_validate(data)
 
 
-_TOKEN = IDToken(iss="i", sub="alice", aud="lance", exp=1, iat=1)
+def _caller(key: str) -> PersonPrincipal:
+    principal = Principal.parse(key)
+    return PersonPrincipal(principal=principal, claims=IDToken(iss="i", sub=principal.subject, aud="lance", exp=1, iat=1))
+
+
+_TOKEN = _caller("dex~alice")
 
 
 class _FakeNamespace:
@@ -139,7 +146,7 @@ def _delete(
     request: Any,
     *,
     warehouse_id: str = "acme-wh",
-    token: IDToken | None = None,
+    token: PersonPrincipal | None = None,
     client: Any = None,
     cascade: bool = False,
     purge_bucket: bool = False,
@@ -401,7 +408,7 @@ def test_force_true_without_authorization_is_still_refused(tmp_path: Any, monkey
         _delete(
             settings,
             _request(),
-            token=IDToken(iss="i", sub="mallory", aud="lance", exp=1, iat=1),
+            token=_caller("dex~mallory"),
             client=MagicMock(),
             force=True,
             purge_bucket=True,
@@ -422,10 +429,10 @@ def test_the_gate_is_the_projects_admin_rung_never_a_relation_on_the_warehouse(t
     # not a rung someone could hold on this one warehouse (a warehouse owner must not be able to delete it).
     settings = _settings(tmp_path, fga_enabled=True)
     _seed(settings)
-    store = _FakeStore(project_admins=("alice",))
+    store = _FakeStore(project_admins=("dex~alice",))
     store.install(monkeypatch)
 
     _delete(settings, _request(), token=_TOKEN, client=MagicMock())
 
-    assert store.checks == [("alice", "can_administer", "project:acme")]
+    assert store.checks == [("dex~alice", "can_administer", "project:acme")]
     assert not any(obj.startswith("warehouse:") for _u, _r, obj in store.checks)

@@ -41,6 +41,7 @@ def door(sa_issuer: Any, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient
         "RASK_OIDC_ENABLED": "true",
         "RASK_OIDC_ISSUER": "https://idp.invalid",
         "RASK_OIDC_AUDIENCE": "lance-catalog",
+        "RASK_OIDC_CONNECTORS": '{"local": "dex"}',
         "RASK_SA_ISSUER": issuer.issuer,
         "RASK_SA_AUDIENCE": "rask-lineage",
         "RASK_SA_FETCH_TOKEN_FILE": str(issuer.fetch_token_file),
@@ -62,7 +63,7 @@ def door(sa_issuer: Any, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient
 
     @app.get("/who")
     def who(caller: security.CurrentToken) -> dict[str, str | None]:
-        return {"sub": caller.sub if caller is not None else None}
+        return {"sub": caller.subject if caller is not None else None}
 
     with TestClient(app, raise_server_exceptions=False) as client:
         yield client

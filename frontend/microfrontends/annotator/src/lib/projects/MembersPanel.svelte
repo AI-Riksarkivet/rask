@@ -129,7 +129,7 @@
 		>
 			<Input
 				bind:value={who}
-				placeholder="annotator (OIDC subject or username)"
+				placeholder="annotator (principal: idp~user id)"
 				aria-label="Person to grant"
 				class="h-8 w-56"
 			/>

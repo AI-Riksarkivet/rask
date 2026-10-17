@@ -16,10 +16,13 @@ from typing import Any, cast
 from catalog.api.v1.endpoints import events as ep
 from catalog.core.control_buffer import ControlEventBuffer
 from service_kit.control_events import CatalogControlEvent
+from service_kit.governed.oidc import IDToken
+from service_kit.governed.person_identity import PersonPrincipal
+from service_kit.governed.principal import Principal
 
 
 def _evt(object_id: str = "table:db1$t") -> CatalogControlEvent:
-    return CatalogControlEvent(action="grant_added", object_type="grant", object_id=object_id, actor="user:alice")
+    return CatalogControlEvent(action="grant_added", object_type="grant", object_id=object_id, actor="user:dex~alice")
 
 
 def _settings(*, fga_enabled: bool = False) -> Any:
@@ -64,13 +67,18 @@ def test_delivered_events_write_one_audit(monkeypatch: Any) -> None:
     buf = ControlEventBuffer(8)
     buf.append(_evt("a"))  # cursor 1
     buf.append(_evt("b"))  # cursor 2
-    res = _call(_request(buf), _settings(), since=1, token=SimpleNamespace(sub="root_admin"))
+    res = _call(
+        _request(buf),
+        _settings(),
+        since=1,
+        token=PersonPrincipal(principal=Principal(idp_id="dex", subject="root_admin"), claims=IDToken(iss="i", sub="root_admin", aud="lance", exp=1, iat=1)),
+    )
     assert [e.object_id for e in res.events] == ["b"] and res.cursor == 2
     assert len(rec.calls) == 1
     action, fields = rec.calls[0]
     assert action == "event_stream_opened"
     assert fields["resource"] == "warehouse:lance_catalog"  # #12: audited against the root object
-    assert fields["subject"] == "root_admin" and fields["delivered"] == 1 and fields["reset"] is False
+    assert fields["subject"] == "dex~root_admin" and fields["delivered"] == 1 and fields["reset"] is False
 
 
 def test_reset_writes_audit(monkeypatch: Any) -> None:

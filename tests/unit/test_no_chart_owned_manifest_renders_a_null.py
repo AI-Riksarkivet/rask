@@ -47,7 +47,8 @@ _OWN_SOURCE = re.compile(r"^# Source: rask/templates/(\S+)", re.MULTILINE)
 _STACK_SCRIPTS = ("stack_values.sh",)
 
 #: A shell variable inside a `--set` value. Substituted rather than skipped: dropping the flag would
-#: quietly shrink the overlay, and the gate is about SHAPE, so any syntactically valid value serves.
+#: quietly shrink the overlay, and the gate is about SHAPE, so any syntactically valid value serves. The value is
+#: principal-shaped (`<idp-id>~<subject>`) because `auth.bootstrapAdmin` takes one and the render refuses a bare name.
 _SHELL_VAR = re.compile(r"\$\{?\w+\}?")
 
 
@@ -60,7 +61,7 @@ def _overlay_from(script: pathlib.Path) -> tuple[str, ...]:
     pattern = r"""--(set|set-string|set-json)\s+("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\S+)"""
     for flag, raw in re.findall(pattern, script.read_text(encoding="utf-8")):
         value = raw[1:-1] if raw[:1] in "\"'" else raw
-        args += [f"--{flag}", _SHELL_VAR.sub("gate-placeholder", value.replace('\\"', '"').replace("\\'", "'"))]
+        args += [f"--{flag}", _SHELL_VAR.sub("gate~placeholder", value.replace('\\"', '"').replace("\\'", "'"))]
     return tuple(args)
 
 

@@ -80,15 +80,14 @@
 		`Revoking here needs can_revoke_grant on this ${kind} — grant-manager only, deliberately stricter than granting so a delegate cannot strip the owner who delegated to them.`,
 	);
 
-	// A tuple is written for the id EXACTLY as typed while a live store keys on the OIDC `sub`, so a
-	// display name grants to nobody AND still answers 200. ADVISORY, never blocking: literal ids are
-	// legitimate (a service account holds rungs on this estate) and usersets are literal by design.
+	// A grant names a principal, `<idp-id>~<user id>` (LH-063), or a typed object or userset; the catalog refuses
+	// a bare name, which no token could ever prove. ADVISORY, so the reason shows before the request, never
+	// blocking: the catalog's refusal is the rule.
 	const known = $derived(new Set(knownSubjects));
 	const looksUnresolvable = $derived.by(() => {
 		const u = subject.trim();
-		if (!u || u.includes(':') || u.includes('#')) return false;
-		if (known.has(u) || known.has(`user:${u}`)) return false;
-		return /^[a-z][a-z0-9._-]{0,30}$/i.test(u);
+		if (!u || u.includes('~') || u.includes(':') || u.includes('#')) return false;
+		return !(known.has(u) || known.has(`user:${u}`));
 	});
 
 	async function run(granting: boolean): Promise<void> {
@@ -128,7 +127,7 @@
 <div data-slot="grant-form" class="form">
 	<input
 		class="mono"
-		placeholder="OIDC sub, or role:…#assignee / team:…#member"
+		placeholder="principal (idp~user id), or role:…#assignee / team:…#member"
 		aria-label="Subject to grant to"
 		bind:value={subject}
 	/>
@@ -165,10 +164,12 @@
 		<p class="advice">
 			<TriangleAlert size={12} />
 			<span>
-				Granted exactly as typed. A signed-in user's subject is their OIDC <code>sub</code> — a long
-				opaque id like <code class="mono">CiQwOGE4Njg0Yi…</code>, not a display name — so
-				<code class="mono">{subject.trim()}</code> will match nobody unless that is literally the subject
-				id (a service account or a userset).
+				Not a principal. A signed-in person is <code class="mono"
+					>&lt;idp-id&gt;~&lt;user id&gt;</code
+				>
+				— the identity provider that vouched for them and the id it reports, like
+				<code class="mono">dex~08a8684b…</code>, not a display name — so the catalog refuses
+				<code class="mono">{subject.trim()}</code>.
 			</span>
 		</p>
 	{/if}

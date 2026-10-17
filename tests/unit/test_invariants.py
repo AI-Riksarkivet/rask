@@ -84,7 +84,7 @@ def test_no_SCOPED_storage_identity_is_published_with_the_ROOT_secret() -> None:
     field from a file, and a scoped field must name the file `scoped_secret` derived for its identity,
     never the root's (`$G/minio-secret-key`). Generic over every scoped field the seed writes.
     """
-    rendered = _helm_template("auth.bootstrapAdmin=user:gate-probe")
+    rendered = _helm_template("auth.bootstrapAdmin=dex~gate-probe")
 
     fields = re.findall(r"([a-z-]*(?<!minio-)secret-key)=@\"([^\"]+)\"", rendered)
     assert fields, "the seed writes no scoped secret field, so this gate would pass vacuously"
@@ -300,6 +300,7 @@ _REAL_REGISTRY = (
     f"openbao.externalAddr={chart_render.SECRET_STORE_URL}",
     "dex.enabled=false",
     "auth.oidc.issuer=https://auth.example.com/dex",
+    "auth.oidc.connectors.ldap=corp",
     "signing.provisioned=true",
     "nats.auth.provisioned=true",
 )

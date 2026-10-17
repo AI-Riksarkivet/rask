@@ -30,15 +30,14 @@ export type GalleryData = {
 	/** A session exists but the catalog could not confirm WHO — not the same as signed out. */
 	identityUnavailable: boolean;
 	estateAdmin: boolean;
-	/** The signed-in caller in FGA subject form (`user:<sub>`), prefilled into the initial-admin
+	/** The signed-in caller's principal key (`<idp-id>~<user id>`), prefilled into the initial-admin
 	 *  field of the create dialog. Empty when there is no resolvable identity. */
 	meSubject: string;
 	projects: GalleryProject[];
 };
 
-/** The caller's identity in FGA subject form; an already-typed sub (`user:alice`) passes through. */
-const subjectOf = (me: Me | null): string =>
-	me === null ? '' : me.sub.includes(':') ? me.sub : `user:${me.sub}`;
+/** The caller's principal key, which a grant names as written: the catalog encodes it once into its OpenFGA user. */
+const subjectOf = (me: Me | null): string => (me === null ? '' : me.sub);
 
 /** The signed-in landing = the caller's project gallery. Memberships come straight from `me`
  *  (the frozen /management/v1/me contract, resolved in the layout); an estate admin instead sees ALL tenants

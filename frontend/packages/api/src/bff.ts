@@ -70,7 +70,9 @@ export function makeOidcConfig(env: Env): OidcConfig | null {
 		clientId,
 		clientSecret: env.OIDC_CLIENT_SECRET || null,
 		redirectUri,
-		scopes: env.OIDC_SCOPES || 'openid profile email',
+		// `federated:id` puts the Dex connector and the upstream user id in the token, the two halves of the principal
+		// every governed door keys a person on; a token without them is refused there (LH-063).
+		scopes: env.OIDC_SCOPES || 'openid profile email federated:id',
 		// SESSION_SECRET seals the cookie (AES-256-GCM); unset in dev → unsealed base64 (documented).
 		sessionKey: env.SESSION_SECRET ? deriveSessionKey(env.SESSION_SECRET) : null,
 		// Split-horizon: server-side fetches (discovery, token POST) go here when set — the in-cluster Dex

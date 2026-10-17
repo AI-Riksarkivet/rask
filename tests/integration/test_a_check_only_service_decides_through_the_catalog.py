@@ -45,13 +45,13 @@ class _Store(Grants):
 
     async def read(self, body: ReadRequestTupleKey, options: Options = None) -> ReadResponse:
         del options
-        held = [Tuple(key=TupleKey(user="user:alice", relation="owner", object=_GOVERNED), timestamp=time.time())] if body.object == _GOVERNED else []
+        held = [Tuple(key=TupleKey(user="user:dex~alice", relation="owner", object=_GOVERNED), timestamp=time.time())] if body.object == _GOVERNED else []
         return ReadResponse(tuples=held, continuation_token="")
 
     async def list_users(self, body: ClientListUsersRequest, options: Options = None) -> ListUsersResponse:
         del options
         asked = body.object
-        members = ["bob", "carol"] if asked is not None and (asked.type, asked.id, body.relation) == ("role", "reviewers", "assignee") else []
+        members = ["dex~bob", "dex~carol"] if asked is not None and (asked.type, asked.id, body.relation) == ("role", "reviewers", "assignee") else []
         return ListUsersResponse(users=[User(object=FgaObject(type="user", id=m)) for m in members])
 
 
@@ -67,6 +67,7 @@ def catalog(sa_issuer: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
         "RASK_OIDC_ENABLED": "true",
         "RASK_OIDC_ISSUER": "https://idp.invalid",
         "RASK_OIDC_AUDIENCE": "lance-catalog",
+        "RASK_OIDC_CONNECTORS": '{"local": "dex"}',
         "RASK_SA_ISSUER": sa_issuer.issuer,
         "RASK_SA_AUDIENCE": "rask-catalog",
         "RASK_SA_FETCH_TOKEN_FILE": str(sa_issuer.fetch_token_file),
@@ -86,11 +87,13 @@ def catalog(sa_issuer: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
         (_account("rask-sa-viewer"), "can_decide_access", _ROOT),
         (_account("rask-sa-notifications"), "can_expand_members", _ROOT),
         (_account("rask-sa-flows"), "can_decide_access", _ROOT),
-        ("user:alice", "writer", _ROOT),
-        ("user:alice", "can_get_metadata", "table:a"),
+        ("user:dex~alice", "writer", _ROOT),
+        ("user:dex~alice", "can_get_metadata", "table:a"),
     }
     # Authorization on for the requests, after a lifespan that built the verifiers and no OpenFGA client.
-    governed = Settings.model_validate({**env, "RASK_FGA_ENABLED": True, "RASK_FGA_API_URL": "http://openfga.invalid:8080"})
+    governed = Settings.model_validate(
+        {**env, "RASK_OIDC_CONNECTORS": {"local": "dex"}, "RASK_FGA_ENABLED": True, "RASK_FGA_API_URL": "http://openfga.invalid:8080"}
+    )
     app.dependency_overrides[get_settings] = lambda: governed
     server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=0, log_level="warning", lifespan="on"))
     thread = threading.Thread(target=server.run, daemon=True)
@@ -114,7 +117,7 @@ _CASES = [
     pytest.param("rask-sa-lineage", ("governed", [_GOVERNED, _STRAY]), {_GOVERNED: True, _STRAY: False}, id="a-governance-prober-probes"),
     pytest.param("rask-sa-viewer", ("check", "can_get_metadata", ["table:a"]), {"table:a": True}, id="the-viewer-checks"),
     pytest.param("rask-sa-viewer", ("governed", [_GOVERNED]), None, id="the-viewer-may-not-probe"),
-    pytest.param("rask-sa-notifications", ("list-users", "assignee", "role:reviewers"), ["bob", "carol"], id="a-member-expander-expands"),
+    pytest.param("rask-sa-notifications", ("list-users", "assignee", "role:reviewers"), ["dex~bob", "dex~carol"], id="a-member-expander-expands"),
     pytest.param("rask-sa-lineage", ("list-users", "assignee", "role:reviewers"), None, id="lineage-may-not-expand-members"),
     pytest.param("rask-sa-notifications", ("list-users", "can_get_metadata", "table:a"), None, id="only-a-membership-userset-expands"),
     pytest.param("rask-sa-flows", ("check", "writer", [_ROOT]), {_ROOT: True}, id="flows-asks-the-estate-tier-it-runs-a-flow-on"),
@@ -136,7 +139,7 @@ async def test_a_check_only_service_is_answered_only_what_its_decision_role_open
 
     async def ask() -> dict[str, bool] | list[str]:
         if route == "check":
-            return await decider.batch_check(user="alice", relation=args[0], objects=args[1])
+            return await decider.batch_check(user="dex~alice", relation=args[0], objects=args[1])
         if route == "governed":
             return await decider.governed(args[0])
         return await decider.list_users(relation=args[0], obj=args[1])

@@ -19,7 +19,7 @@ Run nodes anyway, so this pointer was never durable, while the ``(:User)-[:CREAT
 it: the lineage service's FGA-gated ``/creator`` endpoint takes a DATASET name and reads that CREATED
 edge, which the static-metadata ingest writes exactly as the run-shaped create did. We deliberately do
 **not** stamp the creator's
-OIDC ``sub`` into the file: it is identity/PII and the Lance file lives on object storage *outside* the
+principal key into the file: it is identity/PII and the Lance file lives on object storage *outside* the
 OpenFGA boundary, so embedding it would leak the principal to anyone with raw bucket access. (#22 audit)
 """
 

@@ -246,7 +246,7 @@ async def emit_control(
     Call at a mutation endpoint AFTER the backend/FGA change and its audit succeed, so a change that did
     not happen is never announced. Endpoints obtain ``emitter`` via their ``ControlEmitterDep``; the off
     state is a ``NoopControlEmitter``, so the call is always safe and needs no ``getattr`` guard.
-    ``actor`` must be the verified OIDC subject (e.g. ``user:alice``), never a request-body value.
+    ``actor`` must be the verified caller, ``user:`` and its principal key (e.g. ``user:dex~alice``), never a request-body value.
 
     ``extra["subject"]`` is load-bearing for the notifications plane: for an action in that plane's
     ``NAMED_ACTIONS`` it names the PERSON the event is about, and being named IS the targeting. It must

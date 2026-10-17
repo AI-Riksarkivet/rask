@@ -145,7 +145,7 @@ async def list_due_maintenance(
     their files through it."""
     records = await run_in_threadpool(maintenance_due.list_due, settings.registry_root, settings.storage_options())
     if settings.fga_enabled and token is not None and client is not None:
-        allowed = await fga.batch_check(client, user=token.sub, relation="can_maintain", objects=[f"table:{record.table}" for record in records])
+        allowed = await fga.batch_check(client, user=token.subject, relation="can_maintain", objects=[f"table:{record.table}" for record in records])
         records = [record for record in records if allowed.get(f"table:{record.table}")]
     by_table = {record.table: record for record in records}
     page, next_token = paginate(sorted(by_table), page_token, limit)

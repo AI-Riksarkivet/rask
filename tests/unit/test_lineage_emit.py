@@ -588,7 +588,7 @@ async def test_a_SERVICE_run_can_name_the_person_it_runs_FOR() -> None:
 
     Some catalog writes are made BY a service ON BEHALF OF a person: the annotator's publish saga is
     the live case, driven from an actor reminder under a dedicated `publisher@rask.internal` service
-    account. `enforce_author` correctly overwrites `author` with that service's verified sub, so the
+    account. `enforce_author` correctly overwrites `author` with that service's verified principal, so the
     human CANNOT be the author and must not try to be — `lance.originator` is the field for exactly
     this, and the catalog had no way to carry it.
 
@@ -600,11 +600,11 @@ async def test_a_SERVICE_run_can_name_the_person_it_runs_FOR() -> None:
     emitter = HttpLineageEmitter(cast(httpx.AsyncClient, client), "http://lineage", job_namespace="lance-catalog")
 
     await emitter.emit_create(
-        table_id="acme-silver$annotations", namespace="acme-silver", author="service-publisher", version=1, originator="CiQwOGE4Njg0Yi1kYjg4"
+        table_id="acme-silver$annotations", namespace="acme-silver", author="service-publisher", version=1, originator="dex~08a8684b-db88"
     )
 
     lance = _facets(client.posted)["lance"]
-    assert lance["originator"] == "CiQwOGE4Njg0Yi1kYjg4"
+    assert lance["originator"] == "dex~08a8684b-db88"
     assert _facets(client.posted)["author"]["sub"] == "service-publisher", "the service remains the author; originator is additive"
 
 

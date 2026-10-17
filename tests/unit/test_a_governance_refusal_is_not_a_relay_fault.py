@@ -100,7 +100,14 @@ def _drive(uri: str) -> Any:  # noqa: ANN401 — DrainOutcome
 
 def _governed_settings(outbox_uri: str) -> LineageSettings:
     """The real settings, FGA on — the whole point: the other executing tests leave it off."""
-    auth = {"oidc_enabled": True, "oidc_issuer": "https://dex.example", "oidc_audience": "lance", "fga_store_id": "s", "fga_model_id": "m"}
+    auth = {
+        "oidc_enabled": True,
+        "oidc_issuer": "https://dex.example",
+        "oidc_audience": "lance",
+        "oidc_connectors": {"local": "dex"},
+        "fga_store_id": "s",
+        "fga_model_id": "m",
+    }
     return LineageSettings.model_validate({"outbox_uri": outbox_uri, "fga_enabled": True, **auth})
 
 

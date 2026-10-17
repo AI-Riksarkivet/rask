@@ -24,6 +24,8 @@ from catalog.services import projects as proj_svc
 from catalog.services import warehouses
 from service_kit.governed import fga as fga_module
 from service_kit.governed.oidc import IDToken
+from service_kit.governed.person_identity import PersonPrincipal
+from service_kit.governed.principal import Principal
 
 
 def _root(tmp_path: Any) -> str:
@@ -83,6 +85,7 @@ def _fga_settings(control_root: str | None = None) -> Settings:
         "oidc_enabled": True,
         "oidc_issuer": "https://idp",
         "oidc_audience": "lance",
+        "oidc_connectors": {"local": "dex"},
         "s3_access_key_id": "x",
         "s3_secret_access_key": "x",
     }
@@ -91,7 +94,12 @@ def _fga_settings(control_root: str | None = None) -> Settings:
     return Settings.model_validate(data)
 
 
-_TOKEN = IDToken(iss="i", sub="alice", aud="lance", exp=1, iat=1)
+def _caller(key: str) -> PersonPrincipal:
+    principal = Principal.parse(key)
+    return PersonPrincipal(principal=principal, claims=IDToken(iss="i", sub=principal.subject, aud="lance", exp=1, iat=1))
+
+
+_TOKEN = _caller("dex~alice")
 
 
 def test_gate_fails_closed_on_outage(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -122,7 +130,7 @@ def test_the_ownership_seeds_write_only_relations_the_model_defines(monkeypatch:
     # (owner + the project edge, from warehouse-create) and seed_project_admin (the tenant's admin,
     # minted by POST /management/v1/projects since the bootstrap exception died).
     asyncio.run(fga_deps.seed_warehouse(MagicMock(), _fga_settings(), _TOKEN, warehouse_id="wh-a", project="acme"))
-    granted = asyncio.run(fga_deps.seed_project_admin(MagicMock(), _fga_settings(), _TOKEN, project="acme", admin="alice"))
+    granted = asyncio.run(fga_deps.seed_project_admin(MagicMock(), _fga_settings(), _TOKEN, project="acme", admin="dex~alice"))
     assert granted is True  # reported, so create_project only audits a grant that really happened
     assert captured, "the seeds wrote no tuples"
     model = {t["type"]: set(t.get("relations") or {}) for t in fga_module.load_model()["type_definitions"]}
@@ -160,7 +168,7 @@ def test_seed_warehouse_never_grants_project_admin(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(fga_module, "write_tuples", rec_write)
     asyncio.run(fga_deps.seed_warehouse(MagicMock(), _fga_settings(), _TOKEN, warehouse_id="wh-a", project="acme"))
     assert {(t.user, t.relation, t.object) for t in captured} == {
-        (f"user:{_TOKEN.sub}", "owner", "warehouse:wh-a"),
+        (f"user:{_TOKEN.subject}", "owner", "warehouse:wh-a"),
         ("project:acme", "project", "warehouse:wh-a"),
     }
 
@@ -193,7 +201,7 @@ class _FakeStore:
 
     async def check(self, _client: object, *, user: str, relation: str, obj: str, **_kw: object) -> bool:
         self.checks.append((user, relation, obj))
-        # The real `fga.check` sends a bare sub as the user it is (`user_object`, qualify=True) and a full
+        # The real `fga.check` sends a principal key as the user it is (`user_object`, qualify=True) and a full
         # subject verbatim (qualify=False); mirror that so a checked subject and a seeded tuple are the same string.
         subject = user if _kw.get("qualify") is False else fga_module.user_object(user)
         if relation == "can_observe_events":
@@ -225,6 +233,7 @@ def _governed_settings(tmp_path: Any) -> Settings:
             "oidc_enabled": True,
             "oidc_issuer": "https://idp",
             "oidc_audience": "lance",
+            "oidc_connectors": {"local": "dex"},
             "s3_access_key_id": "x",
             "s3_secret_access_key": "x",
         }
@@ -238,7 +247,7 @@ def _create_as(settings: Settings, sub: str, body: Any) -> Any:
     return asyncio.run(
         wh_ep.create_warehouse(
             settings=settings,
-            token=IDToken(iss="i", sub=sub, aud="lance", exp=1, iat=1),
+            token=_caller(sub),
             client=MagicMock(),
             control=NoopControlEmitter(),
             vendor=ModeBVendor(),  # the default `get_vendor` falls back to: no direct credentials, so the probe skips
@@ -254,7 +263,7 @@ def _create_project_as(settings: Settings, sub: str, project_id: str) -> Any:
     return asyncio.run(
         proj_ep.create_project(
             settings=settings,
-            token=IDToken(iss="i", sub=sub, aud="lance", exp=1, iat=1),
+            token=_caller(sub),
             client=MagicMock(),
             control=NoopControlEmitter(),
             body=proj_ep.CreateProjectRequest(id=project_id),
@@ -268,21 +277,21 @@ def test_gate_has_one_door_only_and_never_probes_the_estate_rung(
     """The bootstrap exception is GONE (Decision 1): a project admin passes, and the estate root is
     never even probed — tenants are minted at POST /management/v1/projects, not through a warehouse side door."""
     store = _FakeStore()
-    store.tuples.add(("user:alice", "admin", "project:acme"))
+    store.tuples.add(("user:dex~alice", "admin", "project:acme"))
     monkeypatch.setattr(fga_module, "check", store.check)
     asyncio.run(fga_deps.require_can_create_warehouse(MagicMock(), _fga_settings(), _TOKEN, project="acme"))
-    assert store.checks == [("alice", "can_create_warehouse", "project:acme")]
+    assert store.checks == [("dex~alice", "can_create_warehouse", "project:acme")]
 
 
 def test_gate_denies_an_ordinary_user_with_no_estate_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
     """Fail-closed, and the denial is FINAL: no second door exists to fall through to. An estate admin
     who is not this project's admin is denied here too — their path is POST /management/v1/projects, which seeds
     them as admin, after which this gate passes on the project's own rung."""
-    store = _FakeStore(estate_admins=("alice",))  # estate rung held — and still irrelevant here
+    store = _FakeStore(estate_admins=("dex~alice",))  # estate rung held — and still irrelevant here
     monkeypatch.setattr(fga_module, "check", store.check)
     with pytest.raises(PermissionDeniedError):
         asyncio.run(fga_deps.require_can_create_warehouse(MagicMock(), _fga_settings(), _TOKEN, project="acme"))
-    assert store.checks == [("alice", "can_create_warehouse", "project:acme")]
+    assert store.checks == [("dex~alice", "can_create_warehouse", "project:acme")]
 
 
 def test_require_project_exists_refuses_an_unknown_tenant(tmp_path: Path) -> None:
@@ -304,26 +313,26 @@ def test_estate_admin_creates_a_project_and_the_project_then_governs_itself(tmp_
     # warehouse after that passes on the project's OWN rung. The warehouse door never probes the estate.
     from catalog.schemas import CreateWarehouseRequest
 
-    store = _FakeStore(estate_admins=("alice",))
+    store = _FakeStore(estate_admins=("dex~alice",))
     store.install(monkeypatch)
     monkeypatch.setattr(warehouses, "provision_bucket", lambda bucket, so: None)
     settings = _governed_settings(tmp_path)
 
-    minted = _create_project_as(settings, "alice", "acme")
-    assert store.checks == [("alice", "can_observe_events", _ROOT_OBJECT)]
-    assert ("user:alice", "admin", "project:acme") in store.tuples
-    assert minted.admins == ["user:alice"]  # existence and permission born together, and the response shows it
+    minted = _create_project_as(settings, "dex~alice", "acme")
+    assert store.checks == [("dex~alice", "can_observe_events", _ROOT_OBJECT)]
+    assert ("user:dex~alice", "admin", "project:acme") in store.tuples
+    assert minted.admins == ["user:dex~alice"]  # existence and permission born together, and the response shows it
 
     store.checks.clear()
-    first = _create_as(settings, "alice", CreateWarehouseRequest(id="acme-wh", project="acme"))
+    first = _create_as(settings, "dex~alice", CreateWarehouseRequest(id="acme-wh", project="acme"))
     assert first.id == "acme-wh"
-    assert ("user:alice", "owner", "warehouse:acme-wh") in store.tuples
-    assert store.checks == [("alice", "can_create_warehouse", "project:acme")]
+    assert ("user:dex~alice", "owner", "warehouse:acme-wh") in store.tuples
+    assert store.checks == [("dex~alice", "can_create_warehouse", "project:acme")]
 
     store.checks.clear()
-    gold = _create_as(settings, "alice", CreateWarehouseRequest(id="acme-gold", project="acme", serving="gold"))
+    gold = _create_as(settings, "dex~alice", CreateWarehouseRequest(id="acme-gold", project="acme", serving="gold"))
     assert gold.serving == "gold"
-    assert store.checks == [("alice", "can_create_warehouse", "project:acme")]
+    assert store.checks == [("dex~alice", "can_create_warehouse", "project:acme")]
 
 
 def test_a_machine_that_mints_a_project_names_its_person_admin_and_holds_nothing(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -350,9 +359,9 @@ def test_a_machine_that_mints_a_project_names_its_person_admin_and_holds_nothing
             create(unnamed)
         assert proj_svc.list_projects(settings.registry_root, {}) == [], f"a refused create ({unnamed!r}) wrote the tenant anyway"
 
-    minted = create("alice")
+    minted = create("dex~alice")
 
-    assert minted.admins == ["user:alice"]
+    assert minted.admins == ["user:dex~alice"]
     assert not any(t[0] == "user:kubernetes~system%3Aserviceaccount%3Aops%3Aprovisioner" and t[2] == "project:acme" for t in store.tuples), (
         "the machine holds a tuple on the tenant it minted"
     )
@@ -364,16 +373,16 @@ def test_an_ordinary_user_cannot_mint_a_tenant_through_any_door(tmp_path: Any, m
     # bucket, no registry record, no tuple either way.
     from catalog.schemas import CreateWarehouseRequest
 
-    store = _FakeStore(estate_admins=("alice",))
+    store = _FakeStore(estate_admins=("dex~alice",))
     store.install(monkeypatch)
     provisioned: list[str] = []
     monkeypatch.setattr(warehouses, "provision_bucket", lambda bucket, so: provisioned.append(bucket))
     settings = _governed_settings(tmp_path)
 
     with pytest.raises(PermissionDeniedError):
-        _create_project_as(settings, "mallory", "evil")
+        _create_project_as(settings, "dex~mallory", "evil")
     with pytest.raises(TableNotFoundError):
-        _create_as(settings, "mallory", CreateWarehouseRequest(id="evil-wh", project="evil"))
+        _create_as(settings, "dex~mallory", CreateWarehouseRequest(id="evil-wh", project="evil"))
     assert provisioned == []
     assert proj_svc.list_projects(settings.registry_root, {}) == []
     assert warehouses.list_warehouses(settings.registry_root, {}) == []
@@ -386,16 +395,16 @@ def test_a_second_warehouse_in_a_live_tenant_still_needs_that_tenants_admin(tmp_
     # tuple is minted behind the refusal.
     from catalog.schemas import CreateWarehouseRequest
 
-    store = _FakeStore(estate_admins=("alice", "carol"))
+    store = _FakeStore(estate_admins=("dex~alice", "dex~carol"))
     store.install(monkeypatch)
     monkeypatch.setattr(warehouses, "provision_bucket", lambda bucket, so: None)
     settings = _governed_settings(tmp_path)
-    _create_project_as(settings, "alice", "acme")
-    _create_as(settings, "alice", CreateWarehouseRequest(id="acme-wh", project="acme"))
+    _create_project_as(settings, "dex~alice", "acme")
+    _create_as(settings, "dex~alice", CreateWarehouseRequest(id="acme-wh", project="acme"))
 
     with pytest.raises(PermissionDeniedError):
-        _create_as(settings, "carol", CreateWarehouseRequest(id="acme-two", project="acme"))
-    assert ("user:carol", "admin", "project:acme") not in store.tuples
+        _create_as(settings, "dex~carol", CreateWarehouseRequest(id="acme-two", project="acme"))
+    assert ("user:dex~carol", "admin", "project:acme") not in store.tuples
     assert warehouses.get_warehouse(settings.registry_root, {}, "acme-two") is None
 
 
@@ -640,10 +649,10 @@ def test_a_warehouse_created_PROTECTED_actually_refuses_its_delete(tmp_path: Any
     from catalog.schemas import CreateWarehouseRequest
 
     settings = _governed_settings(tmp_path)
-    _FakeStore(estate_admins=("alice",)).install(monkeypatch)
+    _FakeStore(estate_admins=("dex~alice",)).install(monkeypatch)
     monkeypatch.setattr(warehouses, "provision_bucket", lambda bucket, so: None)
-    _create_project_as(settings, "alice", "acme")
-    created = _create_as(settings, "alice", CreateWarehouseRequest(id="safe-wh", project="acme", protected=True))
+    _create_project_as(settings, "dex~alice", "acme")
+    created = _create_as(settings, "dex~alice", CreateWarehouseRequest(id="safe-wh", project="acme", protected=True))
     assert created.protected is True, "the create dropped the flag — observability half"
 
     from catalog.api import fga_deps
@@ -663,10 +672,10 @@ def test_an_UNPROTECTED_create_stays_byte_identical_on_the_wire(tmp_path: Any, m
     from catalog.schemas import CreateWarehouseRequest
 
     settings = _governed_settings(tmp_path)
-    _FakeStore(estate_admins=("alice",)).install(monkeypatch)
+    _FakeStore(estate_admins=("dex~alice",)).install(monkeypatch)
     monkeypatch.setattr(warehouses, "provision_bucket", lambda bucket, so: None)
-    _create_project_as(settings, "alice", "acme")
-    created = _create_as(settings, "alice", CreateWarehouseRequest(id="plain-wh", project="acme"))
+    _create_project_as(settings, "dex~alice", "acme")
+    created = _create_as(settings, "dex~alice", CreateWarehouseRequest(id="plain-wh", project="acme"))
     assert created.protected is None
 
     from catalog.services import warehouses as wh_svc

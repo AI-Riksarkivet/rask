@@ -35,7 +35,16 @@ from tests.unit.chart_render import DEFAULT_ARGS
 
 #: The platform's store makes a real deployment, which carries no published dev credential: the bundled dev Dex is off, so the
 #: refusal under test is this one.
-_PLATFORM_STORE = ("--set", "openbao.enabled=false", "--set-string", f"openbao.externalAddr={chart_render.SECRET_STORE_URL}", "--set", "dex.enabled=false")
+_PLATFORM_STORE = (
+    "--set",
+    "openbao.enabled=false",
+    "--set-string",
+    f"openbao.externalAddr={chart_render.SECRET_STORE_URL}",
+    "--set",
+    "dex.enabled=false",
+    "--set",
+    "auth.oidc.connectors.ldap=corp",
+)
 
 
 def _signers(docs: tuple[dict, ...]) -> list[str]:

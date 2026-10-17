@@ -43,7 +43,7 @@ sleep 4
 # bearers, so a seed without a token can create nothing on an auth-enabled stack.
 TOKEN="$(curl -s --max-time 15 -X POST "http://localhost:$DEX_PORT/dex/token" \
   -d grant_type=password -d "username=$DEX_USER" -d "password=$DEX_PASS" \
-  -d scope='openid profile email' -u lance-catalog:lance-catalog-secret \
+  -d scope='openid profile email federated:id' -u lance-catalog:lance-catalog-secret \
   | python3 -c 'import sys,json; print(json.load(sys.stdin).get("id_token",""))')"
 if [ -z "$TOKEN" ]; then echo "could not mint a dex token for $DEX_USER" >&2; exit 1; fi
 

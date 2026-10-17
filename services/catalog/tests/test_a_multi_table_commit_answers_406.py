@@ -26,6 +26,9 @@ from catalog.api import fga_deps, lineage_deps
 from catalog.api.dependencies import FgaClientDep, LineageEmitterDep, NamespaceDep, SettingsDep, StorageOptionsDep
 from catalog.api.security import CurrentToken
 from catalog.api.v1.endpoints import versions as version_door
+from service_kit.governed.oidc import IDToken
+from service_kit.governed.person_identity import PersonPrincipal
+from service_kit.governed.principal import Principal
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
@@ -40,7 +43,9 @@ def _app(ns: object, monkeypatch: pytest.MonkeyPatch) -> tuple[FastAPI, list[lis
     application.dependency_overrides[SettingsDep.__metadata__[0].dependency] = lambda: settings
     application.dependency_overrides[NamespaceDep.__metadata__[0].dependency] = lambda: ns
     application.dependency_overrides[StorageOptionsDep.__metadata__[0].dependency] = lambda: {}
-    application.dependency_overrides[CurrentToken.__metadata__[0].dependency] = lambda: SimpleNamespace(sub="alice")
+    application.dependency_overrides[CurrentToken.__metadata__[0].dependency] = lambda: PersonPrincipal(
+        principal=Principal(idp_id="dex", subject="alice"), claims=IDToken(iss="i", sub="alice", aud="lance", exp=1, iat=1)
+    )
     application.dependency_overrides[LineageEmitterDep.__metadata__[0].dependency] = lambda: None
     application.dependency_overrides[FgaClientDep.__metadata__[0].dependency] = lambda: None
     seeded: list[list[str]] = []

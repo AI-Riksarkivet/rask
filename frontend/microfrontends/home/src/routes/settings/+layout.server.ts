@@ -45,7 +45,7 @@ export const load: LayoutServerLoad = async ({ parent }) => {
 			'Estate settings are estate-admin only — your identity lacks can_observe_events on the FGA root.',
 		);
 	}
-	// The signed-in caller in FGA subject form (`user:<sub>`) — an already-typed sub passes through.
+	// The signed-in caller's principal key (`<idp-id>~<user id>`), the form a grant names as written.
 	// The settings index prints it; keeping it here means the index needs no load of its own.
-	return { meSubject: me.sub.includes(':') ? me.sub : `user:${me.sub}` };
+	return { meSubject: me.sub };
 };

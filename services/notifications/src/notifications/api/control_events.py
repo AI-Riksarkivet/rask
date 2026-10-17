@@ -22,12 +22,13 @@ the gate reads.)
 
 import logging
 from collections.abc import Awaitable, Callable
-from typing import Final
 
 from notifications.api.fanout import InboxOpener
 from notifications.api.metrics import Lane, Outcome, record_ingress
 from notifications.models import NotificationDelivery, NotificationReason
 from service_kit.control_events import CatalogControlEvent
+from service_kit.governed import fga
+from service_kit.lakehouse.subjects import is_person_subject
 
 
 log = logging.getLogger(__name__)
@@ -51,19 +52,6 @@ NAMED_ACTIONS: frozenset[str] = frozenset(
         "erasure_release_scheduled",
     }
 )
-
-#: The FGA wildcard principal, which is a grant to EVERYONE and therefore names no one.
-#:
-#: `POST .../managed-access` writes exactly this (`_MANAGED_ACCESS_SUBJECT`,
-#: `catalog/api/v1/endpoints/access.py:455`) and emits a normal `grant_added`/`grant_revoked` carrying
-#: it as `extra.subject`. It survived the emptiness check — `"user:*"` strips to a truthy `"*"` — so
-#: every managed-access toggle delivered a pointer into an inbox actor literally named `*`.
-#:
-#: Filtered HERE, at the one place that turns a principal into an inbox address, rather than at the
-#: catalog: this lane consumes an envelope it does not own, and the rule ("an address must identify a
-#: person") belongs with the code that does the addressing. A producer stamping any other non-personal
-#: principal is then quiet by the same rule instead of needing its own patch.
-_WILDCARD: Final = "*"
 
 #: How a USERSET (`role:reviewers#assignee`, `team:eng#member`) resolves to the people in it.
 #:
@@ -101,6 +89,10 @@ async def named_subjects(event: CatalogControlEvent, expand: UsersetExpander | N
     Read from `extra.subject` — the catalog stamps it on the grant actions and nothing else. Tolerant
     of an absent or oddly-typed value because `extra` is an open bag on an envelope this service does
     not own: a producer that stops stamping it makes this lane quiet, never wrong.
+
+    An address must identify a person (`is_person_subject`), and that rule is applied HERE, at the one place that
+    turns a principal into an inbox address, rather than at each producer: managed access stamps the wildcard
+    `user:*` on an ordinary `grant_added`, and a grant may name a service account, and neither is a person's inbox.
     """
     if event.action not in NAMED_ACTIONS:
         return ()
@@ -108,18 +100,20 @@ async def named_subjects(event: CatalogControlEvent, expand: UsersetExpander | N
     if not isinstance(raw, str):
         return ()
     if _is_userset(raw.strip()):
-        return () if expand is None else tuple(dict.fromkeys(s for s in await expand(raw.strip()) if s and s != _WILDCARD))
-    # The catalog writes FGA-style principals (`user:alice`); an inbox is addressed by the bare token
-    # sub. Stripping the type prefix is the one translation between the two vocabularies, and it is
-    # done HERE rather than in the actor so the actor never learns about FGA at all.
+        return () if expand is None else tuple(dict.fromkeys(s for s in await expand(raw.strip()) if is_person_subject(s)))
+    # Every producer stamps the OpenFGA user the grant named (`fga.user_object`, `user:` and the principal key
+    # percent-encoded), and an inbox is addressed by the principal key itself, so the id is decoded here
+    # (`fga.subject_of`): the one translation between the two vocabularies, done HERE rather than in the actor so
+    # the actor never learns about FGA at all. A key carrying an encoded character would otherwise address an inbox
+    # nobody's token reaches ([[LH-063]]).
     #
-    # Emptiness is checked AFTER normalizing, not before: a bare `"user:"` is truthy and strips to
-    # nothing, so the pre-check let it through and handed `inbox_actor_id` an empty subject — which
-    # raises, turning a malformed producer field into a RETRY loop on an event that can never succeed.
-    subject = raw.removeprefix("user:").strip()
-    if not subject or subject == _WILDCARD:
-        return ()
-    return (subject,)
+    # The person rule is applied AFTER decoding, not before: a bare `"user:"` is truthy and decodes to nothing,
+    # and a wildcard or a service account's principal addresses no person, so each is quiet here rather than an
+    # inbox actor nobody opens, or an empty subject that `inbox_actor_id` raises on, turning a malformed producer
+    # field into a RETRY loop on an event that can never succeed.
+    stripped = raw.strip()
+    subject = fga.subject_of(stripped.removeprefix("user:")) if stripped.startswith("user:") else stripped
+    return (subject,) if is_person_subject(subject) else ()
 
 
 def as_delivery(event: CatalogControlEvent) -> NotificationDelivery:

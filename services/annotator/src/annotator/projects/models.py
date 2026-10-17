@@ -24,6 +24,19 @@ from uuid import uuid4
 from pydantic import BaseModel, Field
 
 from annotator.projects.ontology import LabelOntology
+from service_kit.governed.principal import Principal
+
+
+def notified_user(party: str) -> str:
+    """The `extra.subject` a task event stamps for the party it tells: the OpenFGA user a principal is ([[LH-063]]).
+
+    A party that is not a principal (the auth-off `anon`) is stamped as written, `user:` and itself, and the
+    notifications plane, which delivers only to a person, tells nobody.
+    """
+    try:
+        return Principal.parse(party).fga_user
+    except ValueError:
+        return f"user:{party}"
 
 
 def new_id() -> str:

@@ -66,7 +66,7 @@ async def poll_control_events(
         audit(
             "event_stream_opened",
             SUCCESS,
-            subject=token.sub if token is not None else None,
+            subject=token.subject if token is not None else None,
             resource=settings.fga_root_object,
             delivered=len(events),
             reset=reset,

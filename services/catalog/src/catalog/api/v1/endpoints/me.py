@@ -34,10 +34,11 @@ from lance_namespace import ServiceUnavailableError, UnauthenticatedError
 from openfga_sdk import OpenFgaClient
 
 from catalog.api.dependencies import FgaClientDep, SettingsDep
-from catalog.api.security import CurrentToken, Principal
+from catalog.api.security import Caller, CurrentToken
 from catalog.core.config import Settings
 from catalog.schemas import MeProject, MeResponse
 from service_kit.governed import fga
+from service_kit.governed.person_identity import PersonPrincipal
 
 
 log = logging.getLogger(__name__)
@@ -51,9 +52,14 @@ router = APIRouter(prefix="/management/v1/me", tags=["me"])
 _LOOKUP_BUDGET_SECONDS = 2.0
 
 
-def _claim(token: Principal, name: str) -> str | None:
-    """A non-empty string claim off the verified token (``extra='allow'`` keeps them), else ``None``."""
-    value = getattr(token, name, None)
+def _claim(token: Caller, name: str) -> str | None:
+    """A non-empty string display claim off a person's verified token (``extra='allow'`` keeps them), else ``None``.
+
+    A service account's token carries no display claim, so it describes itself by its principal alone.
+    """
+    if not isinstance(token, PersonPrincipal):
+        return None
+    value = getattr(token.claims, name, None)
     return value if isinstance(value, str) and value else None
 
 
@@ -109,16 +115,16 @@ async def get_me(settings: SettingsDep, token: CurrentToken, client: FgaClientDe
         # Dev parity (FGA off): every require_* gate is a no-op, so the caller effectively holds full
         # standing — say so honestly rather than painting a locked-down shell over an open catalog. (The
         # enabled-but-unwired client case never reaches here: the router-wide authorize 503s it first.)
-        return MeResponse(sub=token.sub, name=name, email=email, estate_admin=True, projects=[])
+        return MeResponse(sub=token.subject, name=name, email=email, estate_admin=True, projects=[])
     # One shared deadline across the three sequential lookups — admin BEFORE member, so the stronger
     # role wins the dedupe below and a budget expiry costs the weaker list first.
     deadline = asyncio.get_running_loop().time() + _LOOKUP_BUDGET_SECONDS
-    estate_admin = await _estate_admin(client, settings, token.sub, deadline)
-    admin_ids = await _project_ids(client, token.sub, "can_administer", deadline)
-    member_ids = await _project_ids(client, token.sub, "member", deadline)
+    estate_admin = await _estate_admin(client, settings, token.subject, deadline)
+    admin_ids = await _project_ids(client, token.subject, "can_administer", deadline)
+    member_ids = await _project_ids(client, token.subject, "member", deadline)
     # The model folds admins into members (`member: ... or admin`), so every admin project also shows up
     # in the member list — keep the admin row, drop the duplicate.
     projects = [MeProject(project=p, role="admin") for p in admin_ids]
     admin_set = set(admin_ids)
     projects += [MeProject(project=p, role="member") for p in member_ids if p not in admin_set]
-    return MeResponse(sub=token.sub, name=name, email=email, estate_admin=estate_admin, projects=projects)
+    return MeResponse(sub=token.subject, name=name, email=email, estate_admin=estate_admin, projects=projects)

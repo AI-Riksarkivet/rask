@@ -354,26 +354,26 @@ step "7/9 mint Dex tokens + build the tenant through the catalog's doors"
 mint() {
   curl -s -m10 http://localhost:5556/dex/token \
     -d grant_type=password -d client_id=lance-catalog -d client_secret=lance-catalog-secret \
-    -d scope="openid email" -d username="$1" -d password=password \
+    -d scope="openid email federated:id" -d username="$1" -d password=password \
   | uv run python -c "import sys,json;print(json.load(sys.stdin).get('id_token',''))"
 }
 ALICE="$(mint alice@example.com)"
 BOB="$(mint bob@example.com)"
 [ -n "$ALICE" ] && [ -n "$BOB" ] || { echo "!! Dex issued no token"; exit 1; }
 
-# The FGA subject is the token's `sub` (a Dex opaque id), NOT the email — granting the email silently
-# authorizes nobody. Decode it.
-sub_of() {
-  TOK="$1" uv run python -c "
-import os,base64,json
-p = os.environ['TOK'].split('.')[1]; p += '=' * (-len(p) % 4)
-print(json.loads(base64.urlsafe_b64decode(p))['sub'])"
+# The FGA subject is the principal the token proves (`<idp-id>~<user id>`, LH-063), NOT the email — granting the
+# email authorizes nobody. The catalog names it: `/management/v1/me` answers the principal its connector map derives.
+principal_of() {
+  curl -s -m 30 http://localhost:2333/management/v1/me -H "authorization: Bearer $1" \
+  | uv run python -c "import sys,json;print(json.load(sys.stdin).get('sub',''))"
 }
-SUB="$(sub_of "$ALICE")"
-BOB_SUB="$(sub_of "$BOB")"
-# The install named the estate admin from the Dex fixture before Dex existed (stack_values.sh); the token says who Dex
-# actually issues. A mismatch is an estate whose admin is nobody the suites can log in as.
-[ "$SUB" = "$ADMIN_SUB" ] || { echo "!! auth.bootstrapAdmin=$ADMIN_SUB but alice's token carries sub=$SUB"; exit 1; }
+PRINCIPAL="$(principal_of "$ALICE")"
+BOB_PRINCIPAL="$(principal_of "$BOB")"
+# The install named the estate admin from the Dex fixture before Dex existed (stack_values.sh); the catalog says who
+# Dex's token proves. A mismatch is an estate whose admin is nobody the suites can log in as.
+[ "$PRINCIPAL" = "$ADMIN_PRINCIPAL" ] || { echo "!! auth.bootstrapAdmin=$ADMIN_PRINCIPAL but alice's token proves $PRINCIPAL"; exit 1; }
+# The OpenFGA user a principal is, through the one seam every tuple writer uses.
+ALICE_USER="$(uv run python -c "import sys; from service_kit.governed.fga import user_object; print(user_object(sys.argv[1]))" "$PRINCIPAL")"
 
 # One call on a catalog door; success is any of the codes named, anything else prints the answer and fails.
 door() {
@@ -410,7 +410,7 @@ SID="$(fga store list --api-url http://localhost:8081 --api-token "$FGA_TOKEN" \
 # that makes the job "green once, flaky forever". Poll the permission the next door checks.
 for i in $(seq 1 30); do
   allowed="$(fga query check --api-url http://localhost:8081 --api-token "$FGA_TOKEN" --store-id "$SID" \
-    "user:$SUB" can_create_warehouse "project:$PROJECT" 2>/dev/null \
+    "$ALICE_USER" can_create_warehouse "project:$PROJECT" 2>/dev/null \
     | uv run python -c "import sys,json;print(json.load(sys.stdin).get('allowed', False))" 2>/dev/null || echo False)"
   [ "$allowed" = "True" ] && { echo "   project:$PROJECT is alice's (can_create_warehouse=allowed, store ${SID:0:8}…)"; break; }
   [ "$i" = "30" ] && { echo "!! alice's admin on project:$PROJECT never became readable"; exit 1; }
@@ -429,7 +429,7 @@ echo "   project $PROJECT > warehouse $WAREHOUSE > namespace mbns"
 # Minting a project is the estate admin's, so alice creates it and grants bob through the project's members door.
 TENANT_B=e2etenantb
 door "$ALICE" POST /management/v1/projects "{\"id\":\"$TENANT_B\"}" 200 201 409 || exit 1
-door "$ALICE" PUT "/management/v1/projects/$TENANT_B/members" "{\"user\":\"$BOB_SUB\",\"relation\":\"admin\"}" 200 || exit 1
+door "$ALICE" PUT "/management/v1/projects/$TENANT_B/members" "{\"user\":\"$BOB_PRINCIPAL\",\"relation\":\"admin\"}" 200 || exit 1
 echo "   tenant B: $TENANT_B (admin=bob)"
 
 step "8/9 the outbox suite's Dapr app token"

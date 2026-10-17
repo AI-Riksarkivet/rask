@@ -34,7 +34,7 @@ from openfga_sdk import OpenFgaClient
 
 from catalog.api import fga_deps
 from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, SettingsDep
-from catalog.api.security import CurrentToken, Principal
+from catalog.api.security import Caller, CurrentToken
 from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier
 from catalog.schemas import (
@@ -123,12 +123,12 @@ def _can_relations(fga_type: str) -> tuple[str, ...]:
     return ()
 
 
-async def _access_list(client: OpenFgaClient | None, settings: Settings, token: Principal | None, fga_type: str, id: str) -> AccessListResponse:
+async def _access_list(client: OpenFgaClient | None, settings: Settings, token: Caller | None, fga_type: str, id: str) -> AccessListResponse:
     client = fga_deps.require_fga(settings, client, feature="access review")
     segments = parse_identifier(id, settings.delimiter)
     obj = f"{fga_type}:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}"
     relations = _can_relations(fga_type)
-    subject = token.sub if token else "anonymous"
+    subject = token.subject if token else "anonymous"
     try:
         # TaskGroup, not gather: one failed relation cancels the siblings, so a degraded OpenFGA is
         # never hammered by up-to-nine orphaned retry loops after the request has already 503'd.
@@ -173,7 +173,7 @@ async def list_namespace_access(id: str, client: FgaClientDep, settings: Setting
 async def _access_check(
     client: OpenFgaClient | None,
     settings: Settings,
-    token: Principal | None,
+    token: Caller | None,
     fga_type: str,
     id: str,
     body: AccessCheckRequest,
@@ -190,7 +190,7 @@ async def _access_check(
         raise InvalidInputError(f"{body.relation!r} is not a can_* relation on {fga_type}")
     segments = parse_identifier(id, settings.delimiter)
     obj = f"{fga_type}:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}"
-    subject = token.sub if token else "anonymous"
+    subject = token.subject if token else "anonymous"
     # Resolve to a FULL subject (`fga.grantee_object`): a subject is the user it is; a qualified userset
     # (``role:…#member`` / ``team:…#member``) is passed through as-is. Then check with qualify=False so
     # fga.check sends it verbatim — otherwise its default ``user:`` prefix would double to ``user:user:…``
@@ -219,7 +219,7 @@ async def check_namespace_access(id: str, client: FgaClientDep, settings: Settin
     return await _access_check(client, settings, token, "namespace", id, body)
 
 
-async def _my_permissions(client: OpenFgaClient | None, settings: Settings, token: Principal | None, fga_type: str, id: str) -> MyPermissionsResponse:
+async def _my_permissions(client: OpenFgaClient | None, settings: Settings, token: Caller | None, fga_type: str, id: str) -> MyPermissionsResponse:
     """Answer every ``can_*`` on this object for the CALLER — the self-view.
 
     Reader-gated (``can_get_metadata``), NOT owner-gated like its two siblings, and the distinction is
@@ -239,7 +239,7 @@ async def _my_permissions(client: OpenFgaClient | None, settings: Settings, toke
     client = fga_deps.require_fga(settings, client, feature="permission self-view")
     # `fga_enabled` implies `oidc_enabled` (the pair is refused at boot) and OIDC 401s a bearer-less
     # request before any handler runs, so a token is guaranteed once the gate above has passed. Stated
-    # rather than assumed: `CurrentToken` is `Principal | None`, and the alternative is `token.sub`
+    # rather than assumed: `CurrentToken` is `Caller | None`, and the alternative is `token.subject`
     # raising AttributeError on a branch that only configuration makes unreachable. The siblings can
     # fall back to "anonymous" because they use the subject for an AUDIT row; here it IS the subject
     # of every Check, and "anonymous" would silently answer the wrong question.
@@ -248,7 +248,7 @@ async def _my_permissions(client: OpenFgaClient | None, settings: Settings, toke
     segments = parse_identifier(id, settings.delimiter)
     obj = f"{fga_type}:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}"
     # The caller's subject is the user it is (`fga.user_object`), a service account's included.
-    subject = fga.user_object(token.sub)
+    subject = fga.user_object(token.subject)
     relations = _can_relations(fga_type)
     # TaskGroup, not gather — same reason as the review path: one failure cancels its siblings rather
     # than leaving orphaned retry loops hammering a degraded OpenFGA after the request has 503'd.
@@ -324,7 +324,7 @@ async def _access_mutate(
     client: OpenFgaClient | None,
     control: ControlEmitter,
     settings: Settings,
-    token: Principal | None,
+    token: Caller | None,
     fga_type: str,
     id: str,
     body: AccessGrantRequest,
@@ -356,7 +356,7 @@ async def _access_mutate(
         raise InvalidInputError(f"{body.relation!r} is not a grantable rung on {fga_type} (one of {', '.join(grantable)})")
     segments = parse_identifier(id, settings.delimiter)
     obj = f"{fga_type}:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}"
-    actor = token.sub if token else "anonymous"
+    actor = token.subject if token else "anonymous"
     # Resolve the grantee to a FULL subject (qualify=False semantics, mirroring access/check): a subject is the
     # user it is; a qualified userset (``role:…#assignee`` / ``team:…#member``) is passed through verbatim.
     grantee = fga.grantee_object(body.user)
@@ -381,7 +381,7 @@ async def _access_mutate(
         action="grant_added" if grant else "grant_revoked",
         object_type="grant",
         object_id=obj,
-        actor=f"user:{token.sub}" if token else None,
+        actor=f"user:{token.subject}" if token else None,
         extra={"relation": body.relation, "subject": grantee},
     )
     return AccessGrantResponse(object=obj, user=grantee, relation=body.relation, granted=grant)
@@ -460,7 +460,7 @@ def _graph_node(node_id: str) -> GraphNode:
     return GraphNode(id=node_id, type=fga_type or "unknown", label=rest or node_id)
 
 
-async def _access_graph(client: OpenFgaClient | None, settings: Settings, token: Principal | None, fga_type: str, id: str) -> AccessGraphResponse:
+async def _access_graph(client: OpenFgaClient | None, settings: Settings, token: Caller | None, fga_type: str, id: str) -> AccessGraphResponse:
     """The #81 authorization-graph primitive — one hop of the relationship graph around an object: the
     object, every subject directly granted a rung on it, and its ``parent``/``project`` container edge.
 
@@ -472,7 +472,7 @@ async def _access_graph(client: OpenFgaClient | None, settings: Settings, token:
     client = fga_deps.require_fga(settings, client, feature="access graph")
     segments = parse_identifier(id, settings.delimiter)
     obj = f"{fga_type}:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}"
-    subject = token.sub if token else "anonymous"
+    subject = token.subject if token else "anonymous"
     try:
         tuples = await fga.read_object_tuples(client, obj)
     except ServiceUnavailableError:
@@ -551,7 +551,7 @@ async def get_warehouse_managed_access(id: str, client: FgaClientDep, settings: 
 
 
 async def _set_managed_access(
-    client: OpenFgaClient | None, control: ControlEmitter, settings: Settings, token: Principal | None, fga_type: str, id: str, enabled: bool
+    client: OpenFgaClient | None, control: ControlEmitter, settings: Settings, token: Caller | None, fga_type: str, id: str, enabled: bool
 ) -> ManagedAccessResponse:
     """Set or clear the flag, idempotently.
 
@@ -562,7 +562,7 @@ async def _set_managed_access(
     client = fga_deps.require_fga(settings, client, feature="managed access")
     segments = parse_identifier(id, settings.delimiter)
     obj = f"{fga_type}:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}"
-    actor = token.sub if token else "system:catalog"
+    actor = token.subject if token else "system:catalog"
     tup = fga.ClientTuple(user=_MANAGED_ACCESS_SUBJECT, relation="managed_access", object=obj)
 
     already = any(t.object == obj and t.relation == "managed_access" for t in await fga.read_object_tuples(client, obj))
@@ -579,7 +579,7 @@ async def _set_managed_access(
         action="grant_added" if enabled else "grant_revoked",
         object_type="grant",
         object_id=obj,
-        actor=f"user:{token.sub}" if token else None,
+        actor=f"user:{token.subject}" if token else None,
         extra={"relation": "managed_access", "subject": _MANAGED_ACCESS_SUBJECT},
     )
     return ManagedAccessResponse(object=obj, managed_access=enabled)

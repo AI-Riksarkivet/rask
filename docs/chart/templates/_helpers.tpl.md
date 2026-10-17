@@ -763,6 +763,29 @@ production render that left the issuer at a dev default trusted `rask-dex` over 
 ([[XC-148]]). Stated as `"false"` otherwise rather than left to the setting's default, so the render
 itself shows the HTTPS guard on.
 
+## `- { name: RASK_OIDC_CONNECTORS, value: {{ include "lance.oidcConnectors" $root | quote }} }`
+
+The idp id each Dex connector's users are principals of ([[LH-063]], ADR 0159 D5), as JSON, on every governed door. A
+door keys a person on `<idp-id>~<user id>` from the token's `federated_claims` and refuses a token whose connector this
+map does not name, so every door must carry the same map: one include, here.
+
+## `{{- define "lance.oidcConnectors" -}}`
+
+`auth.oidc.connectors`, plus the development Dex's one connector, its password database `local`, as `dex` when
+`dex.enabled` and the map names no `local` of its own. Refused at render when empty, since a door would then sign
+nobody in; for an empty connector id; and for an idp id that is not a string, is outside lower-case letters, digits and
+`-`, or is `kubernetes`, which is the service-account issuer's: a person named `kubernetes~…` would read as a machine at
+every door. The service refuses the same map at boot (`GovernedAuthSettings`, a `dict[str, str]`, which takes no number
+for an idp id); the render refusal names the value before any pod starts. The compute fixture's copy of the map is
+refused by the same rules (`deploy/fixtures/compute/chart/templates/compute.yaml`).
+
+## `{{- define "lance.bootstrapAdmin" -}}`
+
+`auth.bootstrapAdmin`, which the bootstrap-admin hook grants the estate's two standing authorities, must be a person's
+principal, `<idp-id>~<user id>`. A bare name is refused at render because no token could ever prove it, a `user:` id
+because the hook encodes the principal itself (`fga.user_object`), and a `kubernetes~` principal because a machine
+administers no tenant (LH-433).
+
 ## `{{- define "lance.governedFgaEnv" -}}`
 
 The FGA client coordinates. Separate from OIDC — see above.

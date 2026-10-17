@@ -46,6 +46,8 @@ from pydantic import BaseModel
 from catalog.core import manifest_bytes
 from service_kit.governed import fga as fga_module
 from service_kit.governed.oidc import IDToken
+from service_kit.governed.person_identity import PersonPrincipal
+from service_kit.governed.principal import Principal
 from service_kit.lakehouse import base_refs, maintenance_due
 
 
@@ -147,7 +149,9 @@ def _serve(served: Served, env: dict[str, str], monkeypatch: pytest.MonkeyPatch)
             raise RuntimeError("uvicorn did not start")
         time.sleep(0.05)
     verifier = MagicMock()
-    verifier.verify.return_value = IDToken(iss="i", sub="alice", aud="lance", exp=1, iat=1)
+    verifier.verify.return_value = PersonPrincipal(
+        principal=Principal(idp_id="dex", subject="alice"), claims=IDToken(iss="i", sub="alice", aud="lance", exp=1, iat=1)
+    )
     app.state.oidc = verifier
     fga_client = MagicMock()
     fga_client.close = AsyncMock()
@@ -784,7 +788,11 @@ def test_a_catalog_write_door_commits_the_run_its_context_names(
     landed = _opened(served.stock())
     assert landed.version == 2
     properties = _committed_properties(landed, 2)
-    assert {key: value for key, value in properties.items() if key != "rask.inputs"} == {"rask.run_id": "run-7", "rask.job": "nightly", "rask.author": "alice"}
+    assert {key: value for key, value in properties.items() if key != "rask.inputs"} == {
+        "rask.run_id": "run-7",
+        "rask.job": "nightly",
+        "rask.author": "dex~alice",
+    }
     assert json.loads(properties["rask.inputs"]) == [{"table": ["db", "src"], "version": 1}]
     (announced,) = recorder.writes
     assert (announced["version"], announced["inputs"], announced["run"].run_id, announced["run"].job) == (
@@ -796,7 +804,7 @@ def test_a_catalog_write_door_commits_the_run_its_context_names(
 
 
 _SILVER = ["lab", "t"]
-_PROVENANCE = {"rask.run_id": "run-7", "rask.author": "alice", "rask.inputs": json.dumps([{"table": ["db", "src"], "version": 1}])}
+_PROVENANCE = {"rask.run_id": "run-7", "rask.author": "dex~alice", "rask.inputs": json.dumps([{"table": ["db", "src"], "version": 1}])}
 
 
 def _stock_append_naming_no_run(served: Served) -> tuple[int, int, str]:
@@ -885,7 +893,7 @@ def test_a_silver_commit_lands_only_when_it_names_its_run_and_inputs(
 
 
 def _stock_append_naming(served: Served, inputs: str) -> tuple[int, str]:
-    provenance = {"rask.run_id": "run-7", "rask.author": "alice", "rask.inputs": inputs}
+    provenance = {"rask.run_id": "run-7", "rask.author": "dex~alice", "rask.inputs": inputs}
     with pytest.raises(OSError):
         lance.write_dataset(_keyed([4], ["d"]), namespace_client=served.stock(), table_id=_TABLE, mode="append", transaction_properties=provenance)
     _, code, detail = _answer_to_the_staged_commit(served, "db$t", 2)

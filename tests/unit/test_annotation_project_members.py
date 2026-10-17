@@ -24,7 +24,7 @@ from service_kit.exceptions import ConflictError
 
 PROJECT = "proj-7"
 OBJ = f"annotation_project:{PROJECT}"
-MANAGER = "alice"
+MANAGER = "dex~alice"
 
 
 class _RecordingControl:
@@ -83,12 +83,12 @@ def test_a_grant_names_the_person_who_received_it(monkeypatch: pytest.MonkeyPatc
     _Store().install(monkeypatch)
     control = _RecordingControl()
 
-    _grant("annotator", "bob", control)
+    _grant("annotator", "dex~bob", control)
 
     assert len(control.events) == 1
     event = control.events[0]
     assert event.action == "grant_added"
-    assert event.extra["subject"] == "user:bob", "the audience is the grantee, never the manager who granted"
+    assert event.extra["subject"] == "user:dex~bob", "the audience is the grantee, never the manager who granted"
     assert event.actor == f"user:{MANAGER}"
     assert event.object_id == OBJ
 
@@ -96,21 +96,21 @@ def test_a_grant_names_the_person_who_received_it(monkeypatch: pytest.MonkeyPatc
 def test_a_revoke_names_the_person_who_lost_access(monkeypatch: pytest.MonkeyPatch) -> None:
     """The sharper half: after this bob cannot see the project, so no visibility-gated feed could ever
     have told him. Being NAMED is the targeting."""
-    _Store([_tuple("user:bob", "annotator"), _tuple("user:alice", "owner")]).install(monkeypatch)
+    _Store([_tuple("user:dex~bob", "annotator"), _tuple("user:dex~alice", "owner")]).install(monkeypatch)
     control = _RecordingControl()
 
-    _revoke("annotator", "bob", control)
+    _revoke("annotator", "dex~bob", control)
 
-    assert [(e.action, e.extra["subject"]) for e in control.events] == [("grant_revoked", "user:bob")]
+    assert [(e.action, e.extra["subject"]) for e in control.events] == [("grant_revoked", "user:dex~bob")]
 
 
 def test_a_repeated_grant_announces_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
     """Re-granting what someone already holds is a no-op on the store and must be one on the bus:
     a row in their inbox for a change that did not happen is how a bell stops being read."""
-    _Store([_tuple("user:bob", "annotator")]).install(monkeypatch)
+    _Store([_tuple("user:dex~bob", "annotator")]).install(monkeypatch)
     control = _RecordingControl()
 
-    _grant("annotator", "bob", control)
+    _grant("annotator", "dex~bob", control)
 
     assert control.events == []
 
@@ -118,10 +118,10 @@ def test_a_repeated_grant_announces_nothing(monkeypatch: pytest.MonkeyPatch) -> 
 def test_the_last_administrative_grant_is_refused_and_announces_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
     """A refusal is not a change. The door already guards the last owner/manager; this pins that the
     announcement follows the MUTATION rather than the request — nothing committed, nothing said."""
-    _Store([_tuple("user:alice", "owner")]).install(monkeypatch)
+    _Store([_tuple("user:dex~alice", "owner")]).install(monkeypatch)
     control = _RecordingControl()
 
     with pytest.raises(ConflictError):
-        _revoke("owner", "alice", control)
+        _revoke("owner", "dex~alice", control)
 
     assert control.events == []

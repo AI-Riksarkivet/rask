@@ -26,6 +26,7 @@ import os
 
 import pytest
 import requests
+from principals import DEX_SCOPE
 
 
 CATALOG = os.environ.get("LANCE_E2E_CATALOG_URL", "").rstrip("/")
@@ -56,7 +57,7 @@ def _token(user: str) -> str:
             "client_secret": DEX_SECRET,
             "username": user,
             "password": "password",
-            "scope": "openid",
+            "scope": DEX_SCOPE,
         },
         timeout=15,
     )

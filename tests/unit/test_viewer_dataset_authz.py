@@ -125,6 +125,7 @@ def _app(registry: _Registry, *, allow: Any, seen: list[dict[str, Any]] | None =
             "RASK_OIDC_ENABLED": fga_enabled,
             "RASK_OIDC_ISSUER": "https://issuer.test",
             "RASK_OIDC_AUDIENCE": "rask",
+            "RASK_OIDC_CONNECTORS": {"local": "dex"},
         }
     )
     app.dependency_overrides[get_viewer_settings] = lambda: settings
@@ -144,7 +145,7 @@ def _app(registry: _Registry, *, allow: Any, seen: list[dict[str, Any]] | None =
 
     app.dependency_overrides[checker_dep] = lambda: _one
     subject_dep = ds.CurrentSubject.__metadata__[0].dependency
-    app.dependency_overrides[subject_dep] = lambda: "gina"
+    app.dependency_overrides[subject_dep] = lambda: "dex~gina"
 
     # NOT `class _State: registry = registry` — a class body does not close over the enclosing
     # function's locals, so the right-hand `registry` resolves to the module-level FIXTURE and every
@@ -207,7 +208,7 @@ def test_the_check_uses_the_VERIFIED_subject(registry: _Registry) -> None:
 
     client.get("/api/datasets")
 
-    assert {c["user"] for c in seen} == {"gina"}
+    assert {c["user"] for c in seen} == {"dex~gina"}
 
 
 def test_the_descriptor_is_gated_too(registry: _Registry) -> None:

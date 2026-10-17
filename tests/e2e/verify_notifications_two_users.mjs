@@ -128,7 +128,7 @@ function fgaAuth() {
  *  so it needs its own grant. Its ServiceAccount's subject (`lance.saSubject`), written as the OpenFGA user
  *  it is (`service_kit.governed.fga.user_object`: `%` as `%25`, `:` as `%3A`). */
 const SERVICE_SUBJECT = process.env.NOTIFICATIONS_SUBJECT ?? 'kubernetes~system:serviceaccount:default:rask-sa-notifications';
-const SERVICE_USER = `user:${SERVICE_SUBJECT.replaceAll('%', '%25').replaceAll(':', '%3A')}`;
+const SERVICE_USER = fgaUser(SERVICE_SUBJECT);
 /** The project used to prove WATCH targeting — created as tuples only; no catalog row is needed. */
 const WATCH_PROJECT = process.env.WATCH_PROJECT ?? 'drive-watch-project';
 const TOKEN_URL = process.env.TOKEN_URL ?? `${ORIGIN}/dex/token`;
@@ -217,7 +217,7 @@ async function mintToken(email) {
 		grant_type: 'password',
 		username: email,
 		password: PASSWORD,
-		scope: 'openid profile email',
+		scope: 'openid profile email federated:id',
 	});
 	const res = await fetch(TOKEN_URL, {
 		method: 'POST',
@@ -234,18 +234,20 @@ async function mintToken(email) {
 	return token;
 }
 
-/** The `sub` inside a Dex token — the ONLY correct spelling of a person here.
- *
- *  Dex's subject is an opaque `CiQwOGE4…` string, not "alice". It is simultaneously the FGA principal
- *  (`user:<sub>`), the InboxActor's id, and what `enforce_author` stamps on the run — so all three
- *  must come from one place, and that place is the token. An earlier version of this drive passed the
- *  literal string 'alice' and addressed an inbox nobody owns. */
+/** The principal a Dex token proves (LH-063): the idp id the chart gives the development Dex's connector `local`
+ *  (`dex`, `lance.oidcConnectors`) and the user id Dex reports in `federated_claims`, which it does only when the
+ *  client asks for `federated:id`. It is simultaneously the FGA principal, the InboxActor id and what
+ *  `enforce_author` stamps, so all three come from here. */
 function subjectOf(token) {
-	const part = token.split('.')[1];
-	const json = Buffer.from(part.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
-	const sub = JSON.parse(json).sub;
-	if (!sub) throw new Error('token carries no sub');
-	return sub;
+	const json = Buffer.from(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
+	const federated = JSON.parse(json).federated_claims;
+	if (!federated?.user_id) throw new Error('token carries no federated_claims (ask Dex for federated:id)');
+	return `dex~${federated.user_id}`;
+}
+
+/** The OpenFGA user a principal is: `user:` and the key percent-encoded as `fga.user_object` encodes it. */
+function fgaUser(principal) {
+	return `user:${encodeURIComponent(principal).replace(/[!'()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`)}`;
 }
 
 /** Resolve the estate's store by NAME, newest-wins — the same tie-break `fga.provision` uses.
@@ -337,10 +339,10 @@ const bobSub = subjectOf(bobToken);
 //   · alice `member` of the watch project — the watch door is `project#member`-gated.
 const storeId = await fgaStoreId();
 await seedGrants(storeId, [
-	{ user: `user:${aliceSub}`, relation: 'writer', object: `table:${OUTPUT}` },
-	{ user: `user:${bobSub}`, relation: 'writer', object: `table:${OUTPUT}` },
+	{ user: fgaUser(aliceSub), relation: 'writer', object: `table:${OUTPUT}` },
+	{ user: fgaUser(bobSub), relation: 'writer', object: `table:${OUTPUT}` },
 	{ user: SERVICE_USER, relation: 'reader', object: `table:${OUTPUT}` },
-	{ user: `user:${aliceSub}`, relation: 'member', object: `project:${WATCH_PROJECT}` },
+	{ user: fgaUser(aliceSub), relation: 'member', object: `project:${WATCH_PROJECT}` },
 ]);
 console.log(`   seeded 4 grants in store ${storeId}`);
 

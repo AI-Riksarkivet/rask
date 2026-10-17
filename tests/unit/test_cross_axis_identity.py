@@ -27,6 +27,9 @@ import pytest
 from catalog.core.identifiers import parse_identifier
 from service_kit.control_emit import NoopControlEmitter
 from service_kit.governed import fga
+from service_kit.governed.oidc import IDToken
+from service_kit.governed.person_identity import PersonPrincipal
+from service_kit.governed.principal import Principal
 from service_kit.lancekit.arrow_ipc import encode_arrow_stream
 
 
@@ -128,7 +131,7 @@ def test_create_handler_keeps_all_three_axes_identical_under_non_default_delimit
             id="alpha.bronze.images",
             ns=cast(Any, object()),
             settings=_settings("."),
-            token=cast(Any, SimpleNamespace(sub="alice")),
+            token=PersonPrincipal(principal=Principal(idp_id="dex", subject="alice"), claims=IDToken(iss="i", sub="alice", aud="lance", exp=1, iat=1)),
             client=cast(Any, object()),
             emitter=cast(Any, emitter),
             control=cast(Any, NoopControlEmitter()),
@@ -146,7 +149,7 @@ def test_create_handler_keeps_all_three_axes_identical_under_non_default_delimit
     assert emitter.create is not None
     assert emitter.create["table_id"] == canonical
     assert emitter.create["namespace"] == "alpha.bronze"
-    assert emitter.create["author"] == "alice"
+    assert emitter.create["author"] == "dex~alice"
     # Data axis: the id stamped into the Lance file's schema metadata (#21).
     assert stamped["table_id"] == canonical
     assert stamped["namespace"] == "alpha.bronze"

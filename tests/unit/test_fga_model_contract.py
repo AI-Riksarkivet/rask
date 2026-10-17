@@ -33,6 +33,8 @@ from catalog.api import fga_deps
 from catalog.core.config import Settings
 from service_kit.governed import fga as fga_module
 from service_kit.governed.oidc import IDToken
+from service_kit.governed.person_identity import PersonPrincipal
+from service_kit.governed.principal import Principal
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -66,6 +68,7 @@ def _settings(*, lock_root: bool) -> Settings:
             "oidc_enabled": True,
             "oidc_issuer": "https://idp.example",
             "oidc_audience": "lance",
+            "oidc_connectors": {"local": "dex"},
             "fga_enabled": True,
             "fga_api_url": "http://openfga:8080",
             "fga_lock_root_create": lock_root,
@@ -162,7 +165,7 @@ def _catalog_pairs(monkeypatch: pytest.MonkeyPatch) -> set[tuple[str, str]]:
 
     for segments in (["db1", "txn1"], ["txn1"]):  # namespaced (parent-scoped) + opaque (object-scoped)
         for suffix in ("describe", "alter"):
-            asyncio.run(fga_deps._authorize_transaction(_CLIENT, settings, segments, suffix, user="alice"))
+            asyncio.run(fga_deps._authorize_transaction(_CLIENT, settings, segments, suffix, user="dex~alice"))
 
     body = {
         "entries": [{"id": ["db1", "users"]}],
@@ -172,20 +175,16 @@ def _catalog_pairs(monkeypatch: pytest.MonkeyPatch) -> set[tuple[str, str]]:
             {"commit_table": {"id": ["db1", "b"]}},  # generic writer tier
         ],
     }
-    asyncio.run(fga_deps._authorize_batch(cast("Request", _FakeRequest(body)), _CLIENT, settings, user="alice"))
+    asyncio.run(fga_deps._authorize_batch(cast("Request", _FakeRequest(body)), _CLIENT, settings, user="dex~alice"))
 
     # 4. The endpoint-level gates that check outside `authorize` (Overwrite / rename-into-namespace).
-    token = cast("IDToken", _Token())
+    token = PersonPrincipal(principal=Principal(idp_id="dex", subject="alice"), claims=IDToken(iss="i", sub="alice", aud="lance", exp=1, iat=1))
     asyncio.run(fga_deps.require_can_drop_table(_CLIENT, settings, token, segments=["db1", "t"]))
     for resource in ("table", "namespace", "materialized_view"):
         asyncio.run(fga_deps.require_create_on_parent(_CLIENT, settings, token, resource=resource, segments=["db1", "child"]))
 
     pairs.update(checked)
     return pairs
-
-
-class _Token:
-    sub = "alice"
 
 
 # --------------------------------------------------------------------------- #
@@ -221,7 +220,7 @@ def test_transaction_alter_checks_a_real_namespace_writer_relation(
         return True
 
     monkeypatch.setattr(fga_deps.fga, "check", rec_check)
-    asyncio.run(fga_deps._authorize_transaction(_CLIENT, _settings(lock_root=False), ["db1", "txn1"], "alter", user="alice"))
+    asyncio.run(fga_deps._authorize_transaction(_CLIENT, _settings(lock_root=False), ["db1", "txn1"], "alter", user="dex~alice"))
 
     obj, relation = checked[-1]
     assert obj == "namespace:db1"  # parent-scoped, not a per-txn object nothing seeds

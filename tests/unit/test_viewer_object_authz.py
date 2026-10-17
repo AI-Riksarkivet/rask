@@ -91,11 +91,12 @@ def _app(*, allow: Any, seen: list[dict[str, Any]] | None = None) -> FastAPI:
             "RASK_OIDC_ENABLED": True,
             "RASK_OIDC_ISSUER": "https://issuer.test",
             "RASK_OIDC_AUDIENCE": "rask",
+            "RASK_OIDC_CONNECTORS": {"local": "dex"},
         }
     )
     app.dependency_overrides[get_viewer_settings] = lambda: settings
     app.dependency_overrides[ob.CheckerDep.__metadata__[0].dependency] = lambda: checker
-    app.dependency_overrides[ob.CurrentSubject.__metadata__[0].dependency] = lambda: "gina"
+    app.dependency_overrides[ob.CurrentSubject.__metadata__[0].dependency] = lambda: "dex~gina"
     app.dependency_overrides[ob.SettingsDep.__metadata__[0].dependency] = lambda: settings
     return app
 
@@ -145,4 +146,4 @@ def test_the_check_is_made_against_the_ESTATE_ROOT_not_the_store() -> None:
 
     assert [s["obj"] for s in seen] == [ROOT, ROOT, ROOT]
     assert {s["relation"] for s in seen} == {BROWSE_STORAGE}
-    assert {s["user"] for s in seen} == {"gina"}
+    assert {s["user"] for s in seen} == {"dex~gina"}

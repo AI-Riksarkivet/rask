@@ -80,16 +80,16 @@ def test_grant_on_create_writes_the_parent_edge_and_its_inverse_in_one_batch() -
     asyncio.run(
         fga.grant_on_create(
             _client(fake),
-            user_sub="alice",
+            user_sub="dex~alice",
             resource="table",
             obj_id="ns1$t",
-            actor="alice",
+            actor="dex~alice",
             origin="create",
             parent_object="namespace:ns1",
         )
     )
     assert _keys(fake.written) == {
-        ("user:alice", "owner", "table:ns1$t"),
+        ("user:dex~alice", "owner", "table:ns1$t"),
         ("namespace:ns1", "parent", "table:ns1$t"),
         ("table:ns1$t", "child", "namespace:ns1"),
     }
@@ -98,8 +98,8 @@ def test_grant_on_create_writes_the_parent_edge_and_its_inverse_in_one_batch() -
 def test_grant_on_create_writes_no_edges_for_a_root_object() -> None:
     """No parent → no edges either way; the creator's own grant is the whole write."""
     fake = _WriteClient()
-    asyncio.run(fga.grant_on_create(_client(fake), user_sub="alice", resource="table", obj_id="rootless", actor="alice", origin="create"))
-    assert _keys(fake.written) == {("user:alice", "owner", "table:rootless")}
+    asyncio.run(fga.grant_on_create(_client(fake), user_sub="dex~alice", resource="table", obj_id="rootless", actor="dex~alice", origin="create"))
+    assert _keys(fake.written) == {("user:dex~alice", "owner", "table:rootless")}
 
 
 def test_grant_on_create_skips_the_inverse_when_the_parent_type_declares_no_child() -> None:
@@ -111,17 +111,17 @@ def test_grant_on_create_skips_the_inverse_when_the_parent_type_declares_no_chil
     asyncio.run(
         fga.grant_on_create(
             _client(fake),
-            user_sub="alice",
+            user_sub="dex~alice",
             resource="annotation_project",
             obj_id="labels",
-            actor="alice",
+            actor="dex~alice",
             origin="create",
             parent_object="project:acme",
             parent_relation="tenant",
         )
     )
     assert _keys(fake.written) == {
-        ("user:alice", "owner", "annotation_project:labels"),
+        ("user:dex~alice", "owner", "annotation_project:labels"),
         ("project:acme", "tenant", "annotation_project:labels"),
     }
 
@@ -138,11 +138,11 @@ def test_revoke_removes_the_inverse_child_edge_a_read_by_object_cannot_see() -> 
 
     The parent is recovered from the ``parent`` tuple the read DOES return: that one is
     ``<parent> parent <obj>``, so its USER is the parent object."""
-    fake = _ReadDeleteClient([_tuple("user:alice", "owner", "table:ns1$t"), _tuple("namespace:ns1", "parent", "table:ns1$t")])
+    fake = _ReadDeleteClient([_tuple("user:dex~alice", "owner", "table:ns1$t"), _tuple("namespace:ns1", "parent", "table:ns1$t")])
     removed = asyncio.run(fga.revoke_object_tuples(_client(fake), "table:ns1$t", actor="test", origin="create"))
     assert len(removed) == 3  # the two read back, plus the inverse edge they imply
     assert _keys(fake.deleted) == {
-        ("user:alice", "owner", "table:ns1$t"),
+        ("user:dex~alice", "owner", "table:ns1$t"),
         ("namespace:ns1", "parent", "table:ns1$t"),
         ("table:ns1$t", "child", "namespace:ns1"),
     }

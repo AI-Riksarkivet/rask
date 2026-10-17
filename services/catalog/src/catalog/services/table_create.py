@@ -60,7 +60,7 @@ from openfga_sdk import OpenFgaClient
 from pydantic import BaseModel
 
 from catalog.api import fga_deps
-from catalog.api.security import Principal
+from catalog.api.security import Caller
 from catalog.core import provenance_guard, run_context
 from catalog.core.base_judge import GovernedStorage
 from catalog.core.config import Settings
@@ -171,7 +171,7 @@ async def create_governed_table(
     id: str,
     ns: LanceNamespace,
     settings: Settings,
-    token: Principal | None,
+    token: Caller | None,
     client: OpenFgaClient | None,
     emitter: LineageEmitter,
     control: ControlEmitter,
@@ -221,7 +221,7 @@ async def create_governed_table(
     segments = parse_identifier(id, settings.delimiter)
     table_id = fga.canonical_object_id(segments, delimiter=settings.delimiter)
     namespace = fga.parent_namespace_id(segments, delimiter=settings.delimiter) or ""
-    created_by = token.sub if token is not None else None
+    created_by = token.subject if token is not None else None
     run_id = str(uuid.uuid4())
     # #21: stamp the lineage coordinates into the Lance file's schema metadata so the data is
     # self-describing (reconcilable to the graph without the catalog). A metadata swap on the decoded
@@ -397,7 +397,7 @@ async def create_governed_table(
             action="table_created",
             object_type="table",
             object_id=f"table:{table_id}",
-            actor=f"user:{token.sub}" if token is not None else None,
+            actor=f"user:{token.subject}" if token is not None else None,
             extra={
                 "namespace": namespace,
                 "version": response.version or 1,

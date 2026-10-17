@@ -38,7 +38,7 @@ from openfga_sdk import OpenFgaClient
 
 from catalog.api import fga_deps, lineage_deps
 from catalog.api.dependencies import DataNamespaceDep, FgaClientDep, LineageEmitterDep, NamespaceDep, SettingsDep, StorageOptionsDep
-from catalog.api.security import CurrentToken, Principal
+from catalog.api.security import Caller, CurrentToken
 from catalog.core import provenance_guard
 from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
@@ -70,7 +70,7 @@ GOVERNANCE_FIELD_PREFIX: Final = "rask."
 async def _require_classifier_for_governance_keys(
     client: OpenFgaClient | None,
     settings: Settings,
-    token: Principal | None,
+    token: Caller | None,
     *,
     segments: list[str],
     updates: list[dict[str, Any]],

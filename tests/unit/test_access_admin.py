@@ -36,6 +36,9 @@ from catalog.schemas import (
 )
 from service_kit.control_emit import NoopControlEmitter
 from service_kit.governed import fga
+from service_kit.governed.oidc import IDToken
+from service_kit.governed.person_identity import PersonPrincipal
+from service_kit.governed.principal import Principal
 
 
 def _settings(*, fga_enabled: bool = True) -> Any:
@@ -56,8 +59,9 @@ def _request(client: Any = None) -> Any:
     return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(fga=client)))
 
 
-def _token(sub: str) -> Any:
-    return SimpleNamespace(sub=sub)
+def _token(name: str) -> PersonPrincipal:
+    """The person `name` as the door's verifier hands them over: the principal `dex~<name>`."""
+    return PersonPrincipal(principal=Principal(idp_id="dex", subject=name), claims=IDToken(iss="i", sub=name, aud="lance", exp=1, iat=1))
 
 
 class _AuditRecorder:
@@ -95,7 +99,7 @@ def _read(monkeypatch: pytest.MonkeyPatch, **kwargs: Any) -> tuple[dict[str, Any
     async def _fake_read_tuples(_client: Any, **read_kwargs: Any) -> tuple[list[Any], str | None]:
         seen.update(read_kwargs)
         return (
-            [fga.ClientTuple(user="user:alice", relation="reader", object="table:db1$t")],
+            [fga.ClientTuple(user="user:dex~alice", relation="reader", object="table:db1$t")],
             "tok-next",
         )
 
@@ -162,7 +166,7 @@ def test_every_access_route_is_covered_by_that_gate() -> None:
 def test_object_type_only_scans_the_whole_type(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
     seen, response = _read(monkeypatch, object_type="table")
     assert seen["obj"] == "table:" and seen["user"] is None
-    assert [t.user for t in response.tuples] == ["user:alice"]
+    assert [t.user for t in response.tuples] == ["user:dex~alice"]
     assert response.continuation == "tok-next"
 
 
@@ -172,8 +176,8 @@ def test_full_object_filter_passes_verbatim(gate_seen: dict[str, Any], rec: _Aud
 
 
 def test_user_plus_object_type_qualifies_the_bare_subject(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
-    seen, _ = _read(monkeypatch, user="alice", object_type="namespace")
-    assert seen["user"] == "user:alice" and seen["obj"] == "namespace:"
+    seen, _ = _read(monkeypatch, user="dex~alice", object_type="namespace")
+    assert seen["user"] == "user:dex~alice" and seen["obj"] == "namespace:"
 
 
 def test_qualified_userset_filter_passes_verbatim(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -184,7 +188,7 @@ def test_qualified_userset_filter_passes_verbatim(gate_seen: dict[str, Any], rec
 
 def test_user_only_filter_is_a_400_explaining_why(gate_seen: dict[str, Any], rec: _AuditRecorder) -> None:
     with pytest.raises(InvalidInputError, match="object type"):
-        asyncio.run(ep.read_access_tuples(client=_fga_client(), token=None, user="alice"))
+        asyncio.run(ep.read_access_tuples(client=_fga_client(), token=None, user="dex~alice"))
 
 
 def test_no_filter_reads_the_whole_store(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -230,19 +234,6 @@ def _mutate(monkeypatch: pytest.MonkeyPatch, body: AccessTuple, *, write: bool, 
     return written, response
 
 
-def test_write_qualifies_bare_user_and_audits_success(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
-    body = AccessTuple(user="alice", relation="reader", object="table:db1$t")
-    written, response = _mutate(monkeypatch, body, write=True)
-    assert len(written) == 1
-    stored = (written[0].user, written[0].relation, written[0].object)
-    assert stored == ("user:alice", "reader", "table:db1$t")
-    assert response.user == "user:alice"  # echoes the tuple as stored, not the bare input
-    # The SUCCESS row is now emitted by `fga.write_tuples` itself, so EVERY write site gets one — see
-    # test_fga_expand.py for the library-level proof. This handler must therefore emit none of its own,
-    # or this one surface would produce two rows per write while the other six produced none.
-    assert rec.calls == []
-
-
 def test_delete_audits_its_own_event(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
     body = AccessTuple(user="team:acme#member", relation="writer", object="namespace:bronze")
     written, _ = _mutate(monkeypatch, body, write=False)
@@ -251,7 +242,7 @@ def test_delete_audits_its_own_event(gate_seen: dict[str, Any], rec: _AuditRecor
 
 
 def test_write_outage_audits_failure_and_raises(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
-    body = AccessTuple(user="alice", relation="reader", object="table:db1$t")
+    body = AccessTuple(user="dex~alice", relation="reader", object="table:db1$t")
     with pytest.raises(ServiceUnavailableError):
         _mutate(monkeypatch, body, write=True, fail=True)
     assert rec.calls[0][:2] == ("access_tuple_write", "failure")
@@ -291,17 +282,21 @@ def _mutate_recording_emission(
 
 
 def test_write_emits_grant_added(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
-    emitter = _mutate_recording_emission(monkeypatch, AccessTuple(user="alice", relation="reader", object="table:db1$t"), write=True)
+    emitter = _mutate_recording_emission(monkeypatch, AccessTuple(user="dex~alice", relation="reader", object="table:db1$t"), write=True)
     [event] = emitter.events
     assert (event.action, event.object_type, event.object_id) == ("grant_added", "grant", "table:db1$t")
-    assert event.actor == "user:root_admin"
-    assert event.extra == {"relation": "reader", "subject": "user:alice"}
+    assert event.actor == "user:dex~root_admin"
+    assert event.extra == {"relation": "reader", "subject": "user:dex~alice"}
+    # The SUCCESS row is emitted by `fga.write_tuples` itself, so EVERY write site gets one — see
+    # test_fga_expand.py for the library-level proof. This handler must therefore emit none of its own,
+    # or this one surface would produce two rows per write while the other six produced none.
+    assert rec.calls == []
 
 
 def test_write_rejects_a_derived_can_relation(gate_seen: dict[str, Any], rec: _AuditRecorder) -> None:
     # can_read_data is DEFINED on table but not directly assignable — OpenFGA would 400 it with the same
     # error class the idempotent-duplicate handling swallows, so it must never leave this process.
-    body = AccessTuple(user="alice", relation="can_read_data", object="table:db1$t")
+    body = AccessTuple(user="dex~alice", relation="can_read_data", object="table:db1$t")
     with pytest.raises(InvalidInputError, match="can_read_data"):
         asyncio.run(ep.write_access_tuple(client=_fga_client(), control=NoopControlEmitter(), token=None, body=body))
 
@@ -314,7 +309,7 @@ def test_write_rejects_unknown_type_and_bare_object(gate_seen: dict[str, Any], r
                     client=_fga_client(),
                     control=NoopControlEmitter(),
                     token=None,
-                    body=AccessTuple(user="alice", relation="reader", object=bad),
+                    body=AccessTuple(user="dex~alice", relation="reader", object=bad),
                 )
             )
 
@@ -341,7 +336,7 @@ def test_check_probes_any_defined_relation_with_qualified_subject(gate_seen: dic
         ep.check_access(
             client=_fga_client(),
             token=_token("root_admin"),
-            body=AccessCheckBody(user="alice", relation="writer", object="namespace:bronze"),
+            body=AccessCheckBody(user="dex~alice", relation="writer", object="namespace:bronze"),
         )
     )
     # qualify=False + pre-resolved subject: fga.check must see the full subject verbatim (the 2026-07-20
@@ -350,15 +345,15 @@ def test_check_probes_any_defined_relation_with_qualified_subject(gate_seen: dic
     # would be a different request — OpenFGA treats an empty context as "evaluate with no operands",
     # which errors any CEL expression on the path instead of leaving it unevaluated.
     assert seen == {
-        "user": "user:alice",
+        "user": "user:dex~alice",
         "relation": "writer",
         "obj": "namespace:bronze",
         "qualify": False,
         "context": None,
     }
     assert response.allowed is True
-    assert (response.checked.user, response.checked.relation) == ("user:alice", "writer")
-    assert rec.calls == [("access_simulate", "success", {"subject": "root_admin", "resource": "namespace:bronze"})]
+    assert (response.checked.user, response.checked.relation) == ("user:dex~alice", "writer")
+    assert rec.calls == [("access_simulate", "success", {"subject": "dex~root_admin", "resource": "namespace:bronze"})]
 
 
 def test_check_rejects_a_phantom_relation(gate_seen: dict[str, Any], rec: _AuditRecorder) -> None:
@@ -369,7 +364,7 @@ def test_check_rejects_a_phantom_relation(gate_seen: dict[str, Any], rec: _Audit
             ep.check_access(
                 client=_fga_client(),
                 token=None,
-                body=AccessCheckBody(user="alice", relation="can_fly", object="table:db1$t"),
+                body=AccessCheckBody(user="dex~alice", relation="can_fly", object="table:db1$t"),
             )
         )
 
@@ -398,7 +393,7 @@ def test_list_objects_clears_the_estate_gate_and_qualifies_a_bare_subject(
         ep.list_access_objects(
             client=_fga_client(),
             token=_token("root_admin"),
-            body=AccessListObjectsRequest(user="alice", relation="can_read_data", type="table"),
+            body=AccessListObjectsRequest(user="dex~alice", relation="can_read_data", type="table"),
         )
     )
     # The GATE assertion moved out of this test: it is a router dependency now, so a direct handler
@@ -407,9 +402,9 @@ def test_list_objects_clears_the_estate_gate_and_qualifies_a_bare_subject(
     # `test_every_access_route_is_covered_by_that_gate` asserts every route carries it — including this one.
     # What remains here is what this test is actually named for.
     # qualify=False with a pre-resolved subject — the same double-prefix guard `check` carries.
-    assert seen == {"user": "user:alice", "relation": "can_read_data", "object_type": "table", "qualify": False}
+    assert seen == {"user": "user:dex~alice", "relation": "can_read_data", "object_type": "table", "qualify": False}
     assert response.objects == ["table:db1$t", "table:db1$u"]
-    assert (response.user, response.type) == ("user:alice", "table")
+    assert (response.user, response.type) == ("user:dex~alice", "table")
     assert rec.calls[0][:2] == ("access_list_objects", "success")
     assert rec.calls[0][2]["delivered"] == 2
 
@@ -420,7 +415,7 @@ def test_list_objects_rejects_an_unknown_type_and_a_phantom_relation(gate_seen: 
             ep.list_access_objects(
                 client=_fga_client(),
                 token=None,
-                body=AccessListObjectsRequest(user="alice", relation="reader", type="dragon"),
+                body=AccessListObjectsRequest(user="dex~alice", relation="reader", type="dragon"),
             )
         )
     with pytest.raises(InvalidInputError, match="can_fly"):
@@ -428,7 +423,7 @@ def test_list_objects_rejects_an_unknown_type_and_a_phantom_relation(gate_seen: 
             ep.list_access_objects(
                 client=_fga_client(),
                 token=None,
-                body=AccessListObjectsRequest(user="alice", relation="can_fly", type="table"),
+                body=AccessListObjectsRequest(user="dex~alice", relation="can_fly", type="table"),
             )
         )
 
@@ -443,7 +438,7 @@ def test_list_objects_outage_audits_failure_and_raises(gate_seen: dict[str, Any]
             ep.list_access_objects(
                 client=_fga_client(),
                 token=_token("root_admin"),
-                body=AccessListObjectsRequest(user="alice", relation="can_read_data", type="table"),
+                body=AccessListObjectsRequest(user="dex~alice", relation="can_read_data", type="table"),
             )
         )
     assert rec.calls[0][:2] == ("access_list_objects", "failure")
@@ -515,7 +510,7 @@ def test_expand_returns_the_tree_and_records_the_depth(gate_seen: dict[str, Any]
 
     async def _fake(_client: Any, **kwargs: Any) -> dict[str, Any]:
         seen.update(kwargs)
-        return {"name": "table:db1$t#reader", "leaf": {"users": ["user:alice"], "computed": None, "tuple_to_userset": None}}
+        return {"name": "table:db1$t#reader", "leaf": {"users": ["user:dex~alice"], "computed": None, "tuple_to_userset": None}}
 
     monkeypatch.setattr(ep.fga, "expand_tree", _fake)
     response = asyncio.run(
@@ -527,7 +522,7 @@ def test_expand_returns_the_tree_and_records_the_depth(gate_seen: dict[str, Any]
     )
     assert (seen["relation"], seen["obj"], seen["max_depth"]) == ("reader", "table:db1$t", 3)
     assert response.tree is not None and response.tree.leaf is not None
-    assert response.tree.leaf.users == ["user:alice"]
+    assert response.tree.leaf.users == ["user:dex~alice"]
     assert response.depth == 3
     assert rec.calls[0][:2] == ("access_expand", "success")
 
@@ -595,17 +590,17 @@ def test_simulate_returns_the_delta_not_just_the_verdict(gate_seen: dict[str, An
             client=_fga_client(),
             token=_token("root_admin"),
             body=AccessSimulateRequest(
-                user="alice",
+                user="dex~alice",
                 relation="can_read_data",
                 object="table:db1$t",
-                hypothetical=[AccessTuple(user="alice", relation="reader", object="table:db1$t")],
+                hypothetical=[AccessTuple(user="dex~alice", relation="reader", object="table:db1$t")],
             ),
         )
     )
     assert (response.baseline, response.allowed) == (False, True)
-    assert response.checked.user == "user:alice"  # resolved, echoed — never the bare input
+    assert response.checked.user == "user:dex~alice"  # resolved, echoed — never the bare input
     # The hypothetical is qualified the same way a real write would qualify it.
-    assert response.hypothetical[0].user == "user:alice"
+    assert response.hypothetical[0].user == "user:dex~alice"
     # Baseline runs WITHOUT contextual tuples; the second call carries them.
     assert seen[0].get("contextual_tuples") is None
     assert seen[1]["contextual_tuples"] is not None
@@ -623,10 +618,10 @@ def test_simulate_reports_a_no_op_grant_honestly(gate_seen: dict[str, Any], rec:
             client=_fga_client(),
             token=None,
             body=AccessSimulateRequest(
-                user="alice",
+                user="dex~alice",
                 relation="can_read_data",
                 object="table:db1$t",
-                hypothetical=[AccessTuple(user="bob", relation="reader", object="table:db1$t")],
+                hypothetical=[AccessTuple(user="dex~bob", relation="reader", object="table:db1$t")],
             ),
         )
     )
@@ -646,10 +641,10 @@ def test_simulate_rejects_a_hypothesis_it_would_refuse_to_write(gate_seen: dict[
                 client=_fga_client(),
                 token=None,
                 body=AccessSimulateRequest(
-                    user="alice",
+                    user="dex~alice",
                     relation="reader",
                     object="table:db1$t",
-                    hypothetical=[AccessTuple(user="alice", relation="can_read_data", object="table:db1$t")],
+                    hypothetical=[AccessTuple(user="dex~alice", relation="can_read_data", object="table:db1$t")],
                 ),
             )
         )
@@ -665,7 +660,7 @@ def test_simulate_outage_audits_failure_and_raises(gate_seen: dict[str, Any], re
             ep.simulate_access(
                 client=_fga_client(),
                 token=_token("root_admin"),
-                body=AccessSimulateRequest(user="alice", relation="reader", object="table:db1$t"),
+                body=AccessSimulateRequest(user="dex~alice", relation="reader", object="table:db1$t"),
             )
         )
     assert rec.calls[0][:2] == ("access_simulate_hypothetical", "failure")
@@ -696,7 +691,7 @@ def test_a_conditional_grant_reaches_openfga_with_its_condition(gate_seen: dict[
     written = _write_conditional(
         monkeypatch,
         AccessTuple(
-            user="alice",
+            user="dex~alice",
             relation="writer",
             object="namespace:bronze",
             condition=TupleCondition(name="non_expired_grant", context={"grant_time": "2026-07-29T09:00:00Z", "grant_duration": "4h"}),
@@ -718,7 +713,7 @@ def test_a_condition_the_rung_does_not_accept_is_a_clean_400(gate_seen: dict[str
                 control=NoopControlEmitter(),
                 token=None,
                 body=AccessTuple(
-                    user="alice",
+                    user="dex~alice",
                     relation="owner",
                     object="namespace:bronze",
                     condition=TupleCondition(name="non_expired_grant", context={"grant_time": "x", "grant_duration": "1h"}),
@@ -734,7 +729,7 @@ def test_an_unknown_condition_is_a_clean_400(gate_seen: dict[str, Any], rec: _Au
                 client=_fga_client(),
                 control=NoopControlEmitter(),
                 token=None,
-                body=AccessTuple(user="alice", relation="writer", object="namespace:bronze", condition=TupleCondition(name="never_expires")),
+                body=AccessTuple(user="dex~alice", relation="writer", object="namespace:bronze", condition=TupleCondition(name="never_expires")),
             )
         )
 
@@ -749,7 +744,7 @@ def test_a_condition_missing_a_parameter_is_a_clean_400(gate_seen: dict[str, Any
                 control=NoopControlEmitter(),
                 token=None,
                 body=AccessTuple(
-                    user="alice",
+                    user="dex~alice",
                     relation="writer",
                     object="namespace:bronze",
                     condition=TupleCondition(name="non_expired_grant", context={"grant_time": "2026-07-29T09:00:00Z"}),
@@ -761,7 +756,7 @@ def test_a_condition_missing_a_parameter_is_a_clean_400(gate_seen: dict[str, Any
 def _clock_pinned_grant() -> AccessTuple:
     """A time-boxed grant whose caller also supplied the CHECK's clock, pinned inside the window."""
     return AccessTuple(
-        user="alice",
+        user="dex~alice",
         relation="writer",
         object="namespace:bronze",
         condition=TupleCondition(
@@ -796,7 +791,7 @@ def test_a_simulated_hypothesis_cannot_carry_a_clock_either(gate_seen: dict[str,
         return True
 
     monkeypatch.setattr(ep.fga, "check", _fake_check)
-    body = AccessSimulateRequest(user="alice", relation="writer", object="namespace:bronze", hypothetical=[_clock_pinned_grant()])
+    body = AccessSimulateRequest(user="dex~alice", relation="writer", object="namespace:bronze", hypothetical=[_clock_pinned_grant()])
     with pytest.raises(InvalidInputError, match="cannot carry current_time on the tuple"):
         asyncio.run(ep.simulate_access(client=_fga_client(), token=None, body=body))
     assert checks == []
@@ -808,5 +803,5 @@ def test_a_grant_carrying_a_clock_can_still_be_revoked(gate_seen: dict[str, Any]
     stay revocable with the very body the Inspector sends back, or the one grant that never expires is
     also the one grant this door cannot remove."""
     written, response = _mutate(monkeypatch, _clock_pinned_grant(), write=False)
-    assert [(t.user, t.relation, t.object) for t in written] == [("user:alice", "writer", "namespace:bronze")]
+    assert [(t.user, t.relation, t.object) for t in written] == [("user:dex~alice", "writer", "namespace:bronze")]
     assert response.object == "namespace:bronze"

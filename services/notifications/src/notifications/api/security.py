@@ -1,6 +1,7 @@
 """Who is asking, and what they may see — the inbox door's authn/authz wiring.
 
-**The subject is the token's `sub` and nothing else.** There is deliberately no header fallback in
+**The subject is the principal the verified token proves and nothing else** (`<idp-id>~<user id>`, [[LH-063]]).
+There is deliberately no header fallback in
 `service_kit.governed.deps`, and this door adds none: an inbox is addressed by
 `encode_subject(subject)`, so a fallback would not merely weaken authentication — it would let a
 caller name somebody else's actor. Nothing in this service accepts a subject as a parameter.

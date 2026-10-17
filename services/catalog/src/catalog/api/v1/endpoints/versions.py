@@ -98,7 +98,7 @@ async def table_history(
     have one — identity is this estate's concern, not the format's. The actor per version already lives in
     the lineage store, on the ``author`` run facet
     (``GET /datasets/{name}/producers`` → ``dataset_version`` + ``author`` + ``operation``), which is written
-    from the verified OIDC subject on every governed write. A who/when/what view joins the two on the version
+    from the verified caller's principal key on every governed write. A who/when/what view joins the two on the version
     number. Two sources, each authoritative for its own half — a third that merged them would just be a copy
     of one of them, free to drift.
 
@@ -223,7 +223,7 @@ async def create_table_version(
         judge = BaseJudge.from_settings(settings)
         record = await run_in_threadpool(judge.read_record, described.location)
         run = run_context.from_properties(staged.properties)
-        run_context.require_caller_authored(staged.properties, run, caller=token.sub if token is not None else None)
+        run_context.require_caller_authored(staged.properties, run, caller=token.subject if token is not None else None)
         adds_data = await run_in_threadpool(
             partial(
                 managed_versions.judge,
@@ -244,7 +244,7 @@ async def create_table_version(
     audit(
         "commit_version",
         SUCCESS,
-        subject=token.sub if token is not None else None,
+        subject=token.subject if token is not None else None,
         resource=f"table:{canonical}",
         version=staged.version,
         operation=staged.operation,

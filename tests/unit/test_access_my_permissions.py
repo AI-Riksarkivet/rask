@@ -7,9 +7,9 @@ Three properties, and each exists because its opposite was the reason no such su
    the owner bar. "What may I do here" describes only the person asking.
 2. It takes NO subject. A self-view that accepts a ``user`` is the enumeration question renamed, and
    would need the owner gate back.
-3. The subject is prefix-aware. An OIDC ``sub`` may already carry a type prefix; prefixing
-   unconditionally yields ``user:user:<sub>``, which matches no tuple, so every relation answers a
-   correct-looking ``false`` and the page renders "you may do nothing" for an owner.
+3. The subject is the caller's principal, turned into its OpenFGA user once (``fga.user_object``); a
+   user id that matches no tuple makes every relation answer a correct-looking ``false``, and the page
+   renders "you may do nothing" for an owner.
 
 Sync via ``asyncio.run`` — no async-plugin dependency (this repo does not set ``asyncio_mode``).
 """
@@ -27,6 +27,8 @@ from openfga_sdk.client import OpenFgaClient
 from catalog.api.v1.endpoints import access
 from catalog.core.config import Settings
 from service_kit.governed.oidc import IDToken
+from service_kit.governed.person_identity import PersonPrincipal
+from service_kit.governed.principal import Principal
 
 
 def _run(
@@ -53,7 +55,9 @@ def _run(
     monkeypatch.setattr(access.fga, "check", fake_check)
     client = cast("OpenFgaClient", object())  # injected now (catalog-api-09); the fga.* module functions are faked below
     settings = cast(Settings, SimpleNamespace(fga_enabled=fga_enabled, delimiter="$"))
-    token = cast(IDToken, SimpleNamespace(sub=sub)) if token_present else None
+    token = (
+        PersonPrincipal(principal=Principal(idp_id="dex", subject=sub), claims=IDToken(iss="i", sub=sub, aud="lance", exp=1, iat=1)) if token_present else None
+    )
     resp = asyncio.run(access._my_permissions(client, settings, token, fga_type, ident))
     return resp, asked
 

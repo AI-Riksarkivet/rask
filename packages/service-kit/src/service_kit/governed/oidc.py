@@ -506,8 +506,8 @@ class OIDCVerifier:
                 # token to bind against), so there is nothing to disable — unlike
                 # python-jose, no ``verify_at_hash`` option exists or is needed here.
                 options={
-                    # ``sub`` is required here (not just in the model): the whole authz layer keys
-                    # grants and checks on it, and some IdP-issued tokens legitimately omit it —
+                    # ``sub`` is required here (not just in the model, `IDToken.sub`): some IdP-issued
+                    # tokens legitimately omit it —
                     # without the require, such a token failed pydantic OUTSIDE the 401 mapping (500).
                     "require": ["exp", "iat", "aud", "sub"],
                     "verify_exp": True,

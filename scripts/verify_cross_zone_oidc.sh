@@ -57,14 +57,16 @@ for i in $(seq 1 30); do
   sleep 1
 done
 
-# Seed alice = admin on project:acme. Mint her Dex token, decode the
-# sub, write the tuple, and wait until the check is readable (OpenFGA is eventually consistent).
+# Seed alice = admin on project:acme. Mint her Dex token, read the principal it proves (LH-063: the development Dex's
+# connector `local` is the idp id `dex`, and the user id is the one Dex reports in `federated_claims`), write the tuple
+# as the OpenFGA user that principal is, and wait until the check is readable (OpenFGA is eventually consistent).
 mint() { curl -s http://localhost:5556/dex/token -d grant_type=password -d client_id=lance-catalog \
-  -d client_secret=lance-catalog-secret -d scope=openid -d username="$1" -d password=password | \
+  -d client_secret=lance-catalog-secret -d "scope=openid federated:id" -d username="$1" -d password=password | \
   python3 -c "import sys,json;print(json.load(sys.stdin).get('id_token',''))"; }
-sub_of() { python3 -c "import sys,base64,json;t=sys.argv[1].split('.')[1];t+='='*(-len(t)%4);print(json.loads(base64.urlsafe_b64decode(t)).get('sub',''))" "$1"; }
+principal_of() { python3 -c "import sys,base64,json;t=sys.argv[1].split('.')[1];t+='='*(-len(t)%4);print('dex~'+json.loads(base64.urlsafe_b64decode(t))['federated_claims']['user_id'])" "$1"; }
 ID="$(mint alice@example.com)"; [ -n "$ID" ] || fail "could not mint alice's Dex token (is dex ready?)"
-SUB="$(sub_of "$ID")"; [ -n "$SUB" ] || fail "could not decode alice's sub"
+PRINCIPAL="$(principal_of "$ID")"; [ -n "$PRINCIPAL" ] || fail "alice's token names no connector user"
+SUB="$(uv run python -c "import sys; from service_kit.governed.fga import user_object; print(user_object(sys.argv[1]).removeprefix('user:'))" "$PRINCIPAL")"
 SID="$(fga store list --api-url http://localhost:8081 --api-token "$FGA_TOKEN" 2>/dev/null | python3 -c "import sys,json;s=json.load(sys.stdin).get('stores',[]);print(s[0]['id'] if s else '')")"
 [ -n "$SID" ] || fail "no OpenFGA store (is auth.enabled + the model provisioned?)"
 fga tuple write --api-url http://localhost:8081 --api-token "$FGA_TOKEN" --store-id "$SID" "user:$SUB" admin project:acme >/dev/null 2>&1 || true

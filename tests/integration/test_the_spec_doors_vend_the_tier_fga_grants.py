@@ -30,12 +30,15 @@ from catalog.core.config import Settings, get_settings
 from catalog.core.vending import VendedCredentials
 from service_kit.governed import fga as fga_module
 from service_kit.governed.oidc import IDToken
+from service_kit.governed.person_identity import PersonPrincipal
+from service_kit.governed.principal import Principal
 
 
 def _auth_settings() -> Settings:
     return Settings.model_validate(
         {
             "oidc_enabled": True,
+            "oidc_connectors": {"local": "dex"},
             "oidc_issuer": "https://idp.example",
             "oidc_audience": "lance",
             "fga_enabled": True,
@@ -51,7 +54,9 @@ def vendor(client: TestClient, fake_ns: MagicMock) -> Iterator[MagicMock]:
     """Alice signed in with FGA on, and a vendor that records each tier it is asked for."""
     client.app.dependency_overrides[get_settings] = _auth_settings
     verifier = MagicMock()
-    verifier.verify.return_value = IDToken(iss="i", sub="alice", aud="lance", exp=1, iat=1)
+    verifier.verify.return_value = PersonPrincipal(
+        principal=Principal(idp_id="dex", subject="alice"), claims=IDToken(iss="i", sub="alice", aud="lance", exp=1, iat=1)
+    )
     client.app.state.oidc = verifier
     fga_client = MagicMock()
     fga_client.close = AsyncMock()

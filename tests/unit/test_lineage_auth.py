@@ -32,6 +32,8 @@ from lineage.services.provenance import ProvenanceStore
 from service_kit.governed import fga
 from service_kit.governed.decider import OpenFgaDecider
 from service_kit.governed.oidc import IDToken
+from service_kit.governed.person_identity import PersonPrincipal
+from service_kit.governed.principal import Principal
 
 
 _ISSUER = "https://idp.example.com"
@@ -42,8 +44,8 @@ def _settings(**values: Any) -> LineageSettings:
     return LineageSettings.model_validate(values)
 
 
-def _token(sub: str = "alice") -> IDToken:
-    return IDToken(iss=_ISSUER, sub=sub, aud="lance", exp=0, iat=0)
+def _token(name: str = "alice") -> PersonPrincipal:
+    return PersonPrincipal(principal=Principal(idp_id="dex", subject=name), claims=IDToken(iss=_ISSUER, sub=name, aud="lance", exp=0, iat=0))
 
 
 def _request(**state: object) -> Request:
@@ -59,6 +61,7 @@ _FULL_AUTH = {
     "oidc_enabled": True,
     "oidc_issuer": _ISSUER,
     "oidc_audience": "lance",
+    "oidc_connectors": {"local": "dex"},
     "fga_enabled": True,
     "fga_store_id": "store",
     "fga_model_id": "model",
@@ -72,7 +75,7 @@ _FULL_AUTH = {
 
 def test_oidc_enabled_requires_issuer_and_audience() -> None:
     with pytest.raises(ValidationError):
-        _settings(oidc_enabled=True)
+        _settings(oidc_enabled=True, oidc_connectors={"local": "dex"})
 
 
 def test_fga_enabled_requires_oidc() -> None:
@@ -86,16 +89,16 @@ def test_fga_enabled_requires_oidc() -> None:
 
 
 def test_authenticate_enabled_unwired_verifier_fails_closed() -> None:
-    settings = _settings(oidc_enabled=True, oidc_issuer=_ISSUER, oidc_audience="lance")
+    settings = _settings(oidc_enabled=True, oidc_issuer=_ISSUER, oidc_audience="lance", oidc_connectors={"local": "dex"})
     with pytest.raises(ServiceUnavailableError):
         security.authenticate(_request(), settings, _creds())
 
 
 def test_authenticate_enabled_verifies_token() -> None:
-    settings = _settings(oidc_enabled=True, oidc_issuer=_ISSUER, oidc_audience="lance")
+    settings = _settings(oidc_enabled=True, oidc_issuer=_ISSUER, oidc_audience="lance", oidc_connectors={"local": "dex"})
     verifier = SimpleNamespace(verify=lambda _t: _token("dee"))
     token = security.authenticate(_request(oidc=verifier), settings, _creds())
-    assert token is not None and token.sub == "dee"
+    assert token is not None and token.subject == "dex~dee"
 
 
 # --------------------------------------------------------------------------- #
@@ -130,7 +133,7 @@ def test_gate_denies_without_permission(monkeypatch: pytest.MonkeyPatch) -> None
     with pytest.raises(PermissionDeniedError):
         asyncio.run(fga_deps.require_metadata_access("a$b", _request(decider=OpenFgaDecider(client)), _settings(**_FULL_AUTH), _token()))
     # The denial must be on the right user/object/relation, not just "some" denial.
-    assert captured == {"user": "alice", "relation": "can_get_metadata", "obj": "table:a$b"}
+    assert captured == {"user": "dex~alice", "relation": "can_get_metadata", "obj": "table:a$b"}
 
 
 # --------------------------------------------------------------------------- #
@@ -273,7 +276,7 @@ def test_ingest_handler_binds_verified_author() -> None:
     repo = _FakeStore()
     event = _event(claimed_author="attacker")
     asyncio.run(ingest_event(event.model_dump(by_alias=True), _request(), cast(ProvenanceStore, repo), _settings(), _token("real-user")))
-    assert repo.recorded is not None and repo.recorded.author == "real-user"  # body claim overridden
+    assert repo.recorded is not None and repo.recorded.author == "dex~real-user"  # body claim overridden
 
 
 def test_ingest_handler_keeps_body_author_when_oidc_off() -> None:
@@ -372,7 +375,7 @@ def test_service_principal_is_attributed_and_fga_bounded() -> None:
                     principal,
                 )
             )
-    assert checked["user"] == trainer  # NOT an opaque Dex sub
+    assert checked["user"] == trainer  # the service principal, never a person's
     assert checked["relation"] == "can_write_data"
     assert checked["objects"] == ["table:models$churn"]
 

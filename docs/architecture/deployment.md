@@ -263,8 +263,10 @@ sealing key are the store's (`frontend-session-secret`), written by ESO into `<r
 value. `scripts/verify_cross_zone_oidc.sh` drives a real headless Dex login through the edge origin and checks
 that the cookie carries across a zone boundary and that per-user authorization holds.
 
-`auth.bootstrapAdmin` names the first estate admin by Dex subject: a post-install/upgrade hook Job grants that subject
-`owner` on the FGA root object, the grant the estate-wide surfaces gate on. Empty renders no Job.
+`auth.bootstrapAdmin` names the first estate admin by principal, `<idp-id>~<user id>` (the idp id `auth.oidc.connectors`
+gives their Dex connector; `dex~<userID>` for a development Dex user, LH-063), and the render refuses a bare name: a
+post-install/upgrade hook Job grants that principal `owner` on the default warehouse and `admin` on the estate root,
+the grants the estate-wide surfaces gate on. Empty seeds no human grant.
 
 ### StorageClasses: omit, don't guess
 

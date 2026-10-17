@@ -28,6 +28,7 @@ def test_a_caller_sees_only_the_obligations_it_maintains(real_ns_client: TestCli
         {
             "root": str(tmp_path),
             "oidc_enabled": True,
+            "oidc_connectors": {"local": "dex"},
             "oidc_issuer": "https://idp.example",
             "oidc_audience": "lance",
             "fga_enabled": True,
@@ -51,7 +52,7 @@ def test_a_caller_sees_only_the_obligations_it_maintains(real_ns_client: TestCli
             predicate_digest=erasure_obligations.digest("pii = 'alice'"),
             retain_days=0,
             refs={"main": 3},
-            requested_by="user:olivia",
+            requested_by="user:dex~olivia",
             requested_at=now,
             deadline=now + timedelta(days=30),
         )

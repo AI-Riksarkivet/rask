@@ -1,6 +1,6 @@
 """A service writing on a person's behalf could not name them, and the field to do it already existed.
 
-`enforce_author` OVERWRITES `author` with the authenticating service's sub — "never trust the request
+`enforce_author` OVERWRITES `author` with the authenticating service's principal key — "never trust the request
 body" doing its job — so a catalog write made by a service for a human can never author as the human.
 `lance.originator` is the field invented for exactly that, and the emitter carried it end to end:
 protocol, no-op, HTTP emitter and the run-event builder all take `originator`.
@@ -60,10 +60,10 @@ class TestTheBindingCannotCrossRequests:
     def test_two_bindings_over_one_emitter_do_not_see_each_other(self) -> None:
         """The exact hazard that rules out stashing the claim on the app-scoped emitter."""
         inner = _Recording()
-        _emit(OriginatorBoundEmitter(inner, "alice"))
-        _emit(OriginatorBoundEmitter(inner, "bob"))
+        _emit(OriginatorBoundEmitter(inner, "dex~alice"))
+        _emit(OriginatorBoundEmitter(inner, "dex~bob"))
         _emit(OriginatorBoundEmitter(inner, None))
-        assert [w["originator"] for w in inner.writes] == ["alice", "bob", None]
+        assert [w["originator"] for w in inner.writes] == ["dex~alice", "dex~bob", None]
 
 
 class TestTheHeaderIsAClaimAndIsBounded:
@@ -110,12 +110,12 @@ def _optional() -> EmitFields:
         inputs=[InputRef("acme", "acme$src", 2)],
         run=RunContext(run_id="pipeline-7", job="nightly"),
         project="acme",
-        originator="bob",
+        originator="dex~bob",
     )
 
 
 async def _create(emitter: Any, **optional: Unpack[EmitFields]) -> None:
-    await emitter.emit_create(table_id="acme$t", namespace="acme", author="alice", version=4, **optional)
+    await emitter.emit_create(table_id="acme$t", namespace="acme", author="dex~alice", version=4, **optional)
 
 
 def test_every_field_in_the_bundle_reaches_the_emitted_event() -> None:
@@ -125,7 +125,7 @@ def test_every_field_in_the_bundle_reaches_the_emitted_event() -> None:
     facets = event["run"]["facets"]
     assert event["run"]["runId"] == "run-1"
     assert facets["lance"]["project"] == "acme"
-    assert facets["lance"]["originator"] == "bob"
+    assert facets["lance"]["originator"] == "dex~bob"
     assert (facets["lance"]["runId"], facets["lance"]["job"]) == ("pipeline-7", "nightly")
     assert event["inputs"][0]["name"] == "acme$src"
     assert event["outputs"][0]["facets"]["dataSource"]["uri"] == "s3://bkt/t.lance"
@@ -133,9 +133,9 @@ def test_every_field_in_the_bundle_reaches_the_emitted_event() -> None:
 
 def test_the_originator_binding_still_overrides_only_an_absent_claim() -> None:
     inner = _RecordingEmitter()
-    asyncio.run(_create(OriginatorBoundEmitter(inner, "carol"), **_optional()))
-    assert inner.events[-1]["run"]["facets"]["lance"]["originator"] == "bob", "an explicit originator must win"
+    asyncio.run(_create(OriginatorBoundEmitter(inner, "dex~carol"), **_optional()))
+    assert inner.events[-1]["run"]["facets"]["lance"]["originator"] == "dex~bob", "an explicit originator must win"
     absent = _optional()
     absent["originator"] = None
-    asyncio.run(_create(OriginatorBoundEmitter(inner, "carol"), **absent))
-    assert inner.events[-1]["run"]["facets"]["lance"]["originator"] == "carol", "the bound claim must fill an absent one"
+    asyncio.run(_create(OriginatorBoundEmitter(inner, "dex~carol"), **absent))
+    assert inner.events[-1]["run"]["facets"]["lance"]["originator"] == "dex~carol", "the bound claim must fill an absent one"

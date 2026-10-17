@@ -58,6 +58,8 @@ from catalog.api.v1.endpoints.access import _can_relations as _model_can_relatio
 from catalog.core.config import Settings, get_settings
 from service_kit.governed import fga as fga_module
 from service_kit.governed.oidc import IDToken
+from service_kit.governed.person_identity import PersonPrincipal
+from service_kit.governed.principal import Principal
 from service_kit.lancekit.arrow_ipc import encode_arrow_stream
 
 
@@ -72,6 +74,7 @@ def _auth_settings() -> Settings:
     return Settings.model_validate(
         {
             "oidc_enabled": True,
+            "oidc_connectors": {"local": "dex"},
             "oidc_issuer": "https://idp.example",
             "oidc_audience": "lance",
             "fga_enabled": True,
@@ -85,12 +88,14 @@ def _auth_settings() -> Settings:
 def _wire(client: TestClient) -> MagicMock:
     """Enable OIDC+FGA, inject a faked verifier + a sentinel FGA client.
 
-    The verifier returns user ``alice``; the FGA client is a sentinel that the faked
+    The verifier proves the person ``dex~alice``; the FGA client is a sentinel that the faked
     ``fga.*`` functions ignore. Returns the sentinel so a test can drop it (fail-closed).
     """
     client.app.dependency_overrides[get_settings] = _auth_settings
     verifier = MagicMock()
-    verifier.verify.return_value = IDToken(iss="i", sub="alice", aud="lance", exp=1, iat=1)
+    verifier.verify.return_value = PersonPrincipal(
+        principal=Principal(idp_id="dex", subject="alice"), claims=IDToken(iss="i", sub="alice", aud="lance", exp=1, iat=1)
+    )
     client.app.state.oidc = verifier
     fga_client = MagicMock()  # sentinel; the faked fga.* functions below ignore it
     fga_client.close = AsyncMock()  # closed by the lifespan on shutdown
@@ -162,7 +167,7 @@ def test_read_op_checks_reader_and_allows(client: TestClient, fake_ns: MagicMock
     # No credential asked for: the vend's own tier probe is `test_the_spec_doors_vend_the_tier_fga_grants.py`'s.
     resp = client.post("/v1/table/db1$users/describe", json={"vend_credentials": False}, headers={"Authorization": "Bearer t"})
     assert resp.status_code == 200
-    assert captured == [{"user": "alice", "relation": "can_get_metadata", "obj": "table:db1$users"}]
+    assert captured == [{"user": "dex~alice", "relation": "can_get_metadata", "obj": "table:db1$users"}]
 
 
 def test_blob_read_checks_data_reader_and_denies(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
@@ -183,8 +188,8 @@ def test_blob_read_checks_data_reader_and_denies(client: TestClient, fake_ns: Ma
     # meaning. A denied read now also asks whether the caller holds the parent's read rung, because an
     # absent object under a readable parent answers 404 rather than 403 — that second check is a
     # different question and must not be able to change what this one pins.
-    assert {"user": "alice", "relation": "can_read_data", "obj": "table:db1$users"} in captured
-    assert captured[0] == {"user": "alice", "relation": "can_read_data", "obj": "table:db1$users"}
+    assert {"user": "dex~alice", "relation": "can_read_data", "obj": "table:db1$users"} in captured
+    assert captured[0] == {"user": "dex~alice", "relation": "can_read_data", "obj": "table:db1$users"}
 
 
 def test_generic_mutation_checks_writer(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
@@ -199,7 +204,7 @@ def test_generic_mutation_checks_writer(client: TestClient, fake_ns: MagicMock, 
         headers={"Authorization": "Bearer t"},
     )
     assert resp.status_code == 403
-    assert captured[-1] == {"user": "alice", "relation": "can_write_data", "obj": "table:db1$users"}
+    assert captured[-1] == {"user": "dex~alice", "relation": "can_write_data", "obj": "table:db1$users"}
 
 
 def test_rename_is_owner_tier_not_writer(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
@@ -216,7 +221,7 @@ def test_rename_is_owner_tier_not_writer(client: TestClient, fake_ns: MagicMock,
 
     resp = client.post("/v1/table/db1$users/rename", json={"new_table_name": "u2"}, headers={"Authorization": "Bearer t"})
     assert resp.status_code == 403
-    assert captured[-1] == {"user": "alice", "relation": "can_drop", "obj": "table:db1$users"}
+    assert captured[-1] == {"user": "dex~alice", "relation": "can_drop", "obj": "table:db1$users"}
     revoke.assert_not_awaited()  # the true owner is NOT evicted
     grant.assert_not_awaited()
 
@@ -260,7 +265,7 @@ def test_drop_table_requires_owner_and_403_is_problem_json(client: TestClient, m
     assert resp.status_code == 403
     assert resp.headers["content-type"].startswith("application/problem+json")
     assert resp.json()["code"] == 15  # PERMISSION_DENIED
-    assert captured[-1] == {"user": "alice", "relation": "can_drop", "obj": "table:db1$users"}
+    assert captured[-1] == {"user": "dex~alice", "relation": "can_drop", "obj": "table:db1$users"}
 
 
 def test_deregister_table_requires_owner(client: TestClient, monkeypatch) -> None:
@@ -283,7 +288,7 @@ def test_drop_namespace_requires_owner_on_namespace_object(client: TestClient, m
 
     resp = client.post("/v1/namespace/db1/drop", headers={"Authorization": "Bearer t"})
     assert resp.status_code == 403
-    assert captured[-1] == {"user": "alice", "relation": "can_delete", "obj": "namespace:db1"}
+    assert captured[-1] == {"user": "dex~alice", "relation": "can_delete", "obj": "namespace:db1"}
 
 
 def test_hash_or_question_in_id_cannot_downgrade_the_owner_tier(client: TestClient, monkeypatch) -> None:
@@ -298,11 +303,11 @@ def test_hash_or_question_in_id_cannot_downgrade_the_owner_tier(client: TestClie
 
     resp = client.post("/v1/table/db1$us%23ers/drop", headers={"Authorization": "Bearer t"})
     assert resp.status_code == 403
-    assert captured[-1] == {"user": "alice", "relation": "can_drop", "obj": "table:db1$us#ers"}
+    assert captured[-1] == {"user": "dex~alice", "relation": "can_drop", "obj": "table:db1$us#ers"}
 
     resp = client.post("/v1/table/db1$us%3Fers/deregister", headers={"Authorization": "Bearer t"})
     assert resp.status_code == 403
-    assert captured[-1] == {"user": "alice", "relation": "can_deregister", "obj": "table:db1$us?ers"}
+    assert captured[-1] == {"user": "dex~alice", "relation": "can_deregister", "obj": "table:db1$us?ers"}
 
 
 # --------------------------------------------------------------------------- #
@@ -326,7 +331,7 @@ def test_create_table_checks_writer_on_parent_namespace(client: TestClient, fake
         headers={"Authorization": "Bearer t", **ARROW_STREAM},
     )
     assert resp.status_code == 403
-    assert captured[-1] == {"user": "alice", "relation": "can_create_table", "obj": "namespace:db1"}
+    assert captured[-1] == {"user": "dex~alice", "relation": "can_create_table", "obj": "namespace:db1"}
 
 
 def _existok_over_an_existing_table(client: TestClient, fake_ns: MagicMock, monkeypatch) -> list[tuple[str, str, str]]:
@@ -399,8 +404,8 @@ def test_a_create_at_a_dropped_tables_name_leaves_only_the_creators_grants(clien
     monkeypatch.setattr(fga_module, "check", _fake_check([], allow=True))
     store = _TupleStore(
         {
-            ("user:bob", "owner", "table:db1$users"),
-            ("user:carol", "reader", "table:db1$users"),
+            ("user:dex~bob", "owner", "table:db1$users"),
+            ("user:dex~carol", "reader", "table:db1$users"),
             ("namespace:db1", "parent", "table:db1$users"),
         }
     )
@@ -410,7 +415,7 @@ def test_a_create_at_a_dropped_tables_name_leaves_only_the_creators_grants(clien
 
     assert resp.status_code == 200, resp.text
     assert {t for t in store.tuples if t[2] == "table:db1$users"} == {
-        ("user:alice", "owner", "table:db1$users"),
+        ("user:dex~alice", "owner", "table:db1$users"),
         ("namespace:db1", "parent", "table:db1$users"),
     }
 
@@ -443,7 +448,7 @@ def test_declare_table_is_create_on_parent(client: TestClient, fake_ns: MagicMoc
 
     resp = client.post("/v1/table/db1$users/declare", json={}, headers={"Authorization": "Bearer t"})
     assert resp.status_code == 403
-    assert captured[-1] == {"user": "alice", "relation": "can_create_table", "obj": "namespace:db1"}
+    assert captured[-1] == {"user": "dex~alice", "relation": "can_create_table", "obj": "namespace:db1"}
 
 
 def test_create_namespace_seeds_owner_and_parent_link(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
@@ -461,7 +466,7 @@ def test_create_namespace_seeds_owner_and_parent_link(client: TestClient, fake_n
     resp = client.post("/v1/namespace/parent$child/create", json={}, headers={"Authorization": "Bearer t"})
     assert resp.status_code == 200
     # authorize() checked can_create_namespace on the parent namespace, not the child.
-    assert captured[-1] == {"user": "alice", "relation": "can_create_namespace", "obj": "namespace:parent"}
+    assert captured[-1] == {"user": "dex~alice", "relation": "can_create_namespace", "obj": "namespace:parent"}
     grant.assert_awaited_once()
     call = grant.await_args
     assert call is not None
@@ -571,7 +576,7 @@ def test_rename_table_seeds_destination_then_revokes_source(client: TestClient, 
 
     async def _read(_c: object, obj: str, **_k: object) -> list[fga_module.ClientTuple]:
         order.append(f"read:{obj}")
-        return [fga_module.ClientTuple(user="user:bob", relation="reader", object=obj)]
+        return [fga_module.ClientTuple(user="user:dex~bob", relation="reader", object=obj)]
 
     async def _grant(_c: object, **kw: object) -> None:
         carried = cast("list[fga_module.ClientTuple]", kw["carried"])
@@ -589,7 +594,7 @@ def test_rename_table_seeds_destination_then_revokes_source(client: TestClient, 
     assert resp.status_code == 200
     # The destination is a fresh id, so whatever an earlier incarnation left there goes first ([[LH-480]]); the source's
     # grants ride the seed batch ([[LH-215]]).
-    assert order == ["read:table:db1$users", "revoke:table:db1$u2", "grant:db1$u2:user:bob#reader@table:db1$u2", "revoke:table:db1$users"]
+    assert order == ["read:table:db1$users", "revoke:table:db1$u2", "grant:db1$u2:user:dex~bob#reader@table:db1$u2", "revoke:table:db1$users"]
 
 
 def test_overwrite_by_owner_keeps_every_grant_and_grants_the_overwriter_no_ownership(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
@@ -731,7 +736,7 @@ def test_batch_commit_deregister_requires_owner_tier(client: TestClient, fake_ns
     body = {"operations": [{"deregister_table": {"id": ["db1", "a"]}}]}
     resp = client.post("/v1/table/batch-commit", json=body, headers={"Authorization": "Bearer t"})
     assert resp.status_code == 403
-    assert captured[-1] == {"user": "alice", "relation": "can_deregister", "obj": "table:db1$a"}
+    assert captured[-1] == {"user": "dex~alice", "relation": "can_deregister", "obj": "table:db1$a"}
 
 
 class _BatchOpenFga:
@@ -841,7 +846,7 @@ def test_transaction_namespaced_is_parent_scoped(client: TestClient, fake_ns: Ma
     # describe → can_get_metadata on the enclosing namespace
     resp = client.post("/v1/transaction/db1$txn1/describe", headers={"Authorization": "Bearer t"})
     assert resp.status_code == 403
-    assert captured[-1] == {"user": "alice", "relation": "can_get_metadata", "obj": "namespace:db1"}
+    assert captured[-1] == {"user": "dex~alice", "relation": "can_get_metadata", "obj": "namespace:db1"}
 
     # alter (may commit/abort) → the namespace WRITER rung: can_update_properties (`writer`), the same
     # rung `transaction#can_set_status: committer` resolves to for a parented txn (committer ⊇ writer
@@ -852,7 +857,7 @@ def test_transaction_namespaced_is_parent_scoped(client: TestClient, fake_ns: Ma
         headers={"Authorization": "Bearer t"},
     )
     assert resp.status_code == 403
-    assert captured[-1] == {"user": "alice", "relation": "can_update_properties", "obj": "namespace:db1"}
+    assert captured[-1] == {"user": "dex~alice", "relation": "can_update_properties", "obj": "namespace:db1"}
 
 
 def test_materialized_view_create_is_create_on_parent(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
@@ -887,7 +892,7 @@ def test_materialized_view_refresh_checks_can_refresh(client: TestClient, fake_n
 
     resp = client.post("/v1/materialized_view/db1$mv/refresh", headers={"Authorization": "Bearer t"})
     assert resp.status_code == 403
-    assert captured[-1] == {"user": "alice", "relation": "can_refresh", "obj": "materialized_view:db1$mv"}
+    assert captured[-1] == {"user": "dex~alice", "relation": "can_refresh", "obj": "materialized_view:db1$mv"}
 
 
 def test_table_restore_is_owner_tier(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
@@ -899,7 +904,7 @@ def test_table_restore_is_owner_tier(client: TestClient, fake_ns: MagicMock, mon
 
     resp = client.post("/v1/table/db1$t/restore", json={"version": 1}, headers={"Authorization": "Bearer t"})
     assert resp.status_code == 403
-    assert captured[-1] == {"user": "alice", "relation": "can_restore", "obj": "table:db1$t"}
+    assert captured[-1] == {"user": "dex~alice", "relation": "can_restore", "obj": "table:db1$t"}
 
 
 @pytest.mark.parametrize(
@@ -925,7 +930,7 @@ def test_a_trash_door_asks_the_rung_of_the_drop_it_answers(
     # The door's own rung is its first check; a read door then asks the parent's, to tell an absent child from a
     # forbidden one.
     assert resp.status_code == 403, resp.text
-    assert captured[0] == {"user": "alice", "relation": relation, "obj": obj}
+    assert captured[0] == {"user": "dex~alice", "relation": relation, "obj": obj}
 
 
 def test_table_branch_and_tag_create_are_owner_tier(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
@@ -944,7 +949,7 @@ def test_table_branch_and_tag_create_are_owner_tier(client: TestClient, fake_ns:
     for suffix, body, relation in cases:
         resp = client.post(f"/v1/table/db1$t/{suffix}", json=body, headers={"Authorization": "Bearer t"})
         assert resp.status_code == 403, suffix
-        assert captured[-1] == {"user": "alice", "relation": relation, "obj": "table:db1$t"}, suffix
+        assert captured[-1] == {"user": "dex~alice", "relation": relation, "obj": "table:db1$t"}, suffix
 
 
 # --------------------------------------------------------------------------- #
@@ -1030,7 +1035,7 @@ def test_list_tables_filtered_by_list_objects(client: TestClient, fake_ns: Magic
     # list silently skips or repeats rows. Asserting the source order here pinned a shape the endpoint
     # has not had since the cursor landed.
     assert resp.json()["tables"] == ["orders", "users"]  # secret filtered out
-    assert seen == {"user": "alice", "relation": "can_read_data", "object_type": "table"}
+    assert seen == {"user": "dex~alice", "relation": "can_read_data", "object_type": "table"}
 
 
 def test_list_tables_unfiltered_when_fga_disabled(client: TestClient, fake_ns: MagicMock) -> None:
@@ -1075,7 +1080,7 @@ def test_authz_decision_emits_an_audit_event(client: TestClient, fake_ns: MagicM
     events = [r.__dict__ for r in records if r.__dict__.get("audit.action") == "can_get_metadata"]
     assert events, "the authz gate emitted no audit event"
     assert events[0]["audit.outcome"] == "allow"
-    assert events[0]["audit.subject"] == "alice"
+    assert events[0]["audit.subject"] == "dex~alice"
     assert events[0]["audit.resource"] == "table:db1$users"
 
 
@@ -1092,7 +1097,7 @@ def test_table_policy_set_requires_owner_via_can_drop(client: TestClient, monkey
         json={"retention_days": 7},
     )
     assert resp.status_code == 403
-    assert captured[-1] == {"user": "alice", "relation": "can_drop", "obj": "table:db1$users"}
+    assert captured[-1] == {"user": "dex~alice", "relation": "can_drop", "obj": "table:db1$users"}
 
 
 def test_namespace_policy_set_requires_owner_via_can_delete(client: TestClient, monkeypatch) -> None:
@@ -1106,7 +1111,7 @@ def test_namespace_policy_set_requires_owner_via_can_delete(client: TestClient, 
         json={"retain_versions": 5},
     )
     assert resp.status_code == 403
-    assert captured[-1] == {"user": "alice", "relation": "can_delete", "obj": "namespace:silver"}
+    assert captured[-1] == {"user": "dex~alice", "relation": "can_delete", "obj": "namespace:silver"}
 
 
 def test_table_policy_describe_is_reader_tier(client: TestClient, monkeypatch) -> None:
@@ -1118,7 +1123,7 @@ def test_table_policy_describe_is_reader_tier(client: TestClient, monkeypatch) -
 
     resp = client.post("/management/v1/table/db1$users/policy/describe", headers={"Authorization": "Bearer t"})
     assert resp.status_code == 404  # gate passed; no policy stored in this fixture
-    assert captured[-1] == {"user": "alice", "relation": "can_get_metadata", "obj": "table:db1$users"}
+    assert captured[-1] == {"user": "dex~alice", "relation": "can_get_metadata", "obj": "table:db1$users"}
 
 
 def test_project_policy_set_requires_project_admin(client: TestClient, monkeypatch) -> None:
@@ -1139,7 +1144,7 @@ def test_project_policy_set_requires_project_admin(client: TestClient, monkeypat
         json={"retention_days": 90},
     )
     assert resp.status_code == 403
-    assert captured[-1] == {"user": "alice", "relation": "can_administer", "obj": "project:acme"}
+    assert captured[-1] == {"user": "dex~alice", "relation": "can_administer", "obj": "project:acme"}
     assert registry_reads == []  # fail-closed ORDER: gate first, registry read only after an allow
 
 
@@ -1152,7 +1157,7 @@ def test_project_policy_describe_and_delete_require_project_admin(client: TestCl
     for action in ("describe", "delete"):
         resp = client.post(f"/management/v1/project/acme/policy/{action}", headers={"Authorization": "Bearer t"})
         assert resp.status_code == 403, action
-        assert captured[-1] == {"user": "alice", "relation": "can_administer", "obj": "project:acme"}
+        assert captured[-1] == {"user": "dex~alice", "relation": "can_administer", "obj": "project:acme"}
 
 
 def test_project_policies_list_requires_project_admin(client: TestClient, monkeypatch) -> None:
@@ -1173,7 +1178,7 @@ def test_project_policies_list_requires_project_admin(client: TestClient, monkey
 
     resp = client.get("/management/v1/projects/acme/policies", headers={"Authorization": "Bearer t"})
     assert resp.status_code == 403
-    assert captured[-1] == {"user": "alice", "relation": "can_administer", "obj": "project:acme"}
+    assert captured[-1] == {"user": "dex~alice", "relation": "can_administer", "obj": "project:acme"}
     assert registry_reads == []  # gate first, registry read only after an allow
 
 
@@ -1193,7 +1198,7 @@ def test_table_access_list_requires_owner_via_can_drop(client: TestClient, monke
 
     resp = client.post("/management/v1/table/db1$users/access/list", headers={"Authorization": "Bearer t"})
     assert resp.status_code == 403
-    assert captured[-1] == {"user": "alice", "relation": "can_drop", "obj": "table:db1$users"}
+    assert captured[-1] == {"user": "dex~alice", "relation": "can_drop", "obj": "table:db1$users"}
     assert queried == []  # the enumeration never ran for a denied reviewer
 
 
@@ -1204,7 +1209,7 @@ def test_namespace_access_list_requires_owner_via_can_delete(client: TestClient,
 
     resp = client.post("/management/v1/namespace/silver/access/list", headers={"Authorization": "Bearer t"})
     assert resp.status_code == 403
-    assert captured[-1] == {"user": "alice", "relation": "can_delete", "obj": "namespace:silver"}
+    assert captured[-1] == {"user": "dex~alice", "relation": "can_delete", "obj": "namespace:silver"}
 
 
 def test_access_list_enumerates_grants_for_an_owner(client: TestClient, monkeypatch) -> None:
@@ -1215,7 +1220,7 @@ def test_access_list_enumerates_grants_for_an_owner(client: TestClient, monkeypa
 
     async def fake_list_users(_c: object, *, relation: str, obj: str) -> list[str]:
         del obj
-        return ["alice", "bob"] if relation == "can_get_metadata" else ["alice"]
+        return ["dex~alice", "dex~bob"] if relation == "can_get_metadata" else ["dex~alice"]
 
     monkeypatch.setattr(fga_module, "list_users", fake_list_users)
 
@@ -1224,8 +1229,8 @@ def test_access_list_enumerates_grants_for_an_owner(client: TestClient, monkeypa
     body = resp.json()
     assert body["object"] == "table:db1$users"
     grants = {g["relation"]: g["users"] for g in body["grants"]}
-    assert grants["can_get_metadata"] == ["alice", "bob"]
-    assert grants["can_drop"] == ["alice"]
+    assert grants["can_get_metadata"] == ["dex~alice", "dex~bob"]
+    assert grants["can_drop"] == ["dex~alice"]
     # The enumerated set is exactly the model's can_* actions for the type (pinned in the
     # model-contract test; spot-checked here through the real route).
     assert set(grants) == set(_model_can_relations("table"))
@@ -1266,7 +1271,7 @@ def test_access_list_reports_truncation_instead_of_silently_shortening(client: T
     async def fake_list_users(_c: object, *, relation: str, obj: str, **_kw: object) -> list[str]:
         # Exactly ONE relation is at the cap — the rest are small. A response-level-only flag would
         # lose which, and a test that capped everything could not tell the two designs apart.
-        return capped if relation == "can_read_data" else ["user:alice"]
+        return capped if relation == "can_read_data" else ["user:dex~alice"]
 
     monkeypatch.setattr(fga_module, "list_users", fake_list_users)
 
@@ -1288,7 +1293,7 @@ def test_access_list_is_not_flagged_truncated_when_it_is_complete(client: TestCl
     monkeypatch.setattr(fga_module, "check", _fake_check([], allow=True))
 
     async def fake_list_users(_c: object, *, relation: str, obj: str, **_kw: object) -> list[str]:
-        return ["user:alice", "user:bob"]
+        return ["user:dex~alice", "user:dex~bob"]
 
     monkeypatch.setattr(fga_module, "list_users", fake_list_users)
     body = client.post("/management/v1/table/db1$users/access/list", headers={"Authorization": "Bearer t"}).json()

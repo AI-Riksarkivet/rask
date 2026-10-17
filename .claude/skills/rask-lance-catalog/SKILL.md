@@ -397,9 +397,10 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   catalog's own address. The maintain tier opens to
   `can_vend_maintain` alone ([[LH-473]], ADR 0156 C4): the model's `maintenance` relation, which the catalog writes
   for `LANCE_FGA_MAINTAINERS` on every warehouse (`cascade_tuples`, backfilled at startup, and the chart's
-  `bootstrap-admin` hook) and no grant door hands out. The list holds subjects, maintenance's service-account subject
+  `bootstrap-admin` hook) and no grant door hands out. The list holds principals, maintenance's service-account principal
   (`kubernetes~system:serviceaccount:<ns>:<release>-sa-maintenance`, `lance.saSubject`), each written as the user it is
-  (`fga.user_object`). An owner is a maintainer and keeps the maintainer doors, and is
+  (`fga.user_object`); a bare name in it is refused when the catalog's settings are read ([[LH-063]]). An owner is a
+  maintainer and keeps the maintainer doors, and is
   not vended the tier.
 - **Stock clients commit through `version/create`** ([[LH-471]], ADR 0157). `DescribeTable` and `DeclareTable`
   answer `managed_versioning=true`, so pylance stages `_versions/<n>.manifest-<uuid>` (its `manifest_path` is the

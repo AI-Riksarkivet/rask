@@ -88,6 +88,11 @@ auth:
     discoveryUrl: ""
     # rask's `auth.oidc.clientId`.
     audience: lance-catalog
+    # rask's `auth.oidc.connectors` as its doors render it (`lance.oidcConnectors`), exactly: the idp id each Dex
+    # connector's users are principals of, so a connector only rask's map names signs nobody in here. The development
+    # Dex's password database `local` is `dex`.
+    connectors:
+      local: dex
   fga:
     # rask's catalog, whose decision door answers this pod's authorization questions; empty derives
     # `http://<rask>-catalog:2333`. The door answers this pod's projected `rask-catalog` token only when rask's

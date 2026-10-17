@@ -49,13 +49,9 @@ def _settings(**over: object) -> _Governed:
         "RASK_OIDC_ENABLED": True,
         "RASK_OIDC_ISSUER": "https://issuer.test",
         "RASK_OIDC_AUDIENCE": "rask",
+        "RASK_OIDC_CONNECTORS": {"local": "dex"},
     }
     return _Governed.model_validate({**base, **over})
-
-
-def test_an_http_issuer_is_refused_at_construction() -> None:
-    with pytest.raises(ValueError, match="HTTPS"):
-        _settings(RASK_OIDC_ISSUER="http://issuer.test")
 
 
 def test_the_dev_escape_hatch_still_works() -> None:
@@ -67,6 +63,27 @@ def test_the_dev_escape_hatch_still_works() -> None:
 def test_the_check_is_skipped_when_oidc_is_off() -> None:
     """An issuer nobody verifies against is not a misconfiguration."""
     assert _Governed.model_validate({"RASK_OIDC_ENABLED": False, "RASK_OIDC_ISSUER": "http://x"}) is not None
+
+
+@pytest.mark.parametrize(
+    ("over", "refusal"),
+    [
+        pytest.param({"RASK_OIDC_ISSUER": "http://issuer.test"}, "HTTPS", id="an-http-issuer"),
+        pytest.param({"RASK_OIDC_CONNECTORS": {}}, "RASK_OIDC_CONNECTORS is required", id="no-connector-names-anyone"),
+        pytest.param({"RASK_OIDC_CONNECTORS": {"local": "kubernetes"}}, "service-account issuer's idp id", id="a-connector-claims-the-clusters-idp-id"),
+        pytest.param({"RASK_OIDC_CONNECTORS": {"local": "Corp~1"}}, "no principal can carry", id="an-idp-id-outside-the-grammar"),
+        pytest.param(
+            {"RASK_SA_ISSUER": "https://issuer.test/", "RASK_SA_AUDIENCE": "rask-catalog"}, "name one issuer", id="the-cluster-and-the-idp-named-as-one-issuer"
+        ),
+    ],
+)
+def test_settings_no_bearer_could_pass_are_refused_at_construction(over: dict[str, object], refusal: str) -> None:
+    """Each is refused when the settings are built, not met one request at a time: an issuer verified over http answers
+    401 to every bearer. A person is the principal their Dex connector maps to ([[LH-063]]), so a map naming nobody, or
+    an id no principal can carry, answers 401 to every person; a connector given the cluster's idp id makes its people
+    service accounts; and one issuer named for both routes every person's token as a service account's."""
+    with pytest.raises(ValueError, match=refusal):
+        _settings(**over)
 
 
 def test_the_runtime_backstop_logs_what_its_comment_promises(caplog: pytest.LogCaptureFixture) -> None:
@@ -97,6 +114,7 @@ def test_the_catalog_twin_refuses_it_too() -> None:
         "LANCE_REST_IMPL": "dir",
         "RASK_OIDC_ENABLED": True,
         "RASK_OIDC_AUDIENCE": "rask",
+        "RASK_OIDC_CONNECTORS": {"local": "dex"},
         "LANCE_S3_ACCESS_KEY_ID": "k",
         "LANCE_S3_SECRET_ACCESS_KEY": "s",
     }

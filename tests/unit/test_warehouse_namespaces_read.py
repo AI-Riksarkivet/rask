@@ -28,7 +28,7 @@ def _settings(tmp_path: Any, *, fga_enabled: bool = False) -> Settings:
         # The Settings model refuses FGA without OIDC ("authz needs a user") — a real guard, so the
         # FGA-on case carries a matching issuer rather than being waved through.
         "fga_enabled": fga_enabled,
-        **({"oidc_enabled": True, "oidc_issuer": "https://issuer.test", "oidc_audience": "test"} if fga_enabled else {}),
+        **({"oidc_enabled": True, "oidc_issuer": "https://issuer.test", "oidc_audience": "test", "oidc_connectors": {"local": "dex"}} if fga_enabled else {}),
         "control_root": f"file://{tmp_path}",
         "s3_access_key_id": "x",
         "s3_secret_access_key": "x",
@@ -110,6 +110,8 @@ def test_the_estate_read_is_FILTERED_to_what_the_caller_may_see(monkeypatch: pyt
     from catalog.api.v1.endpoints import warehouses as wh_ep
     from service_kit.governed import fga as fga_module
     from service_kit.governed.oidc import IDToken
+    from service_kit.governed.person_identity import PersonPrincipal
+    from service_kit.governed.principal import Principal
 
     settings = _settings(tmp_path, fga_enabled=True)
     _seed(settings, warehouse_id="mine-wh", bindings=("mine",))
@@ -120,7 +122,11 @@ def test_the_estate_read_is_FILTERED_to_what_the_caller_may_see(monkeypatch: pyt
 
     monkeypatch.setattr(fga_module, "list_objects", _only_mine)
     result = asyncio.run(
-        wh_ep.list_estate_bindings(settings=settings, token=IDToken(iss="i", sub="alice", aud="lance", exp=1, iat=1), client=cast(Any, object()))
+        wh_ep.list_estate_bindings(
+            settings=settings,
+            token=PersonPrincipal(principal=Principal(idp_id="dex", subject="alice"), claims=IDToken(iss="i", sub="alice", aud="lance", exp=1, iat=1)),
+            client=cast(Any, object()),
+        )
     )
     assert result.bindings == {"mine": "mine-wh"}, "another tenant's namespace leaked through the filter"
 

@@ -155,7 +155,7 @@ async def vend_credentials(
         audit(
             "vend_credentials",
             SUCCESS,
-            subject=token.sub if token is not None else None,
+            subject=token.subject if token is not None else None,
             resource=obj,
             tier=tier,
             door="credentials",

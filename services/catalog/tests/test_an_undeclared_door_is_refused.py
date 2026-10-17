@@ -41,6 +41,8 @@ from catalog.core import tier_policy
 from catalog.core.config import Settings, get_settings
 from service_kit.governed.audit import AUDIT_LOGGER, FAILURE
 from service_kit.governed.oidc import IDToken
+from service_kit.governed.person_identity import PersonPrincipal
+from service_kit.governed.principal import Principal
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
@@ -57,6 +59,7 @@ def _settings() -> Settings:
             "oidc_enabled": True,
             "oidc_issuer": "https://idp.example",
             "oidc_audience": "lance",
+            "oidc_connectors": {"local": "dex"},
             "fga_enabled": True,
             "fga_api_url": "http://openfga:8080",
             "s3_access_key_id": "x",
@@ -65,8 +68,11 @@ def _settings() -> Settings:
     )
 
 
-def _token() -> IDToken:
-    return IDToken(iss="https://idp.example", sub="alice", aud="lance", exp=2_000_000_000, iat=1_000_000_000)
+def _token() -> PersonPrincipal:
+    return PersonPrincipal(
+        principal=Principal(idp_id="dex", subject="alice"),
+        claims=IDToken(iss="https://idp.example", sub="alice", aud="lance", exp=2_000_000_000, iat=1_000_000_000),
+    )
 
 
 def _request(template: str, body: dict[str, object], query: str = "") -> Request:
@@ -145,7 +151,7 @@ def test_the_guard_refuses_an_undeclared_door_before_asking_openfga(
     assert asked == [], f"the guard asked OpenFGA {asked} for a door nobody declared"
     audited = [r.__dict__ for r in caplog.records if r.name == AUDIT_LOGGER]
     assert [(r["audit.action"], r["audit.outcome"], r["audit.subject"], r["audit.resource"], r["audit.reason"], r["audit.suffix"]) for r in audited] == [
-        ("authz", FAILURE, "alice", resource, "undeclared_door", _UNDECLARED)
+        ("authz", FAILURE, "dex~alice", resource, "undeclared_door", _UNDECLARED)
     ], audited
     path = template.replace("{id}", _ID)
     errors = [r for r in caplog.records if r.name == fga_deps.log.name and r.levelno == logging.ERROR]
@@ -214,7 +220,7 @@ def _grant_body(template: str) -> dict[str, object]:
     assert resource is not None
     grantable = sorted(fga_deps._grant_actions(fga_deps._FGA_TYPE[resource]))
     assert grantable, f"{resource} defines no can_grant_* rung, so its grant door can never be authorized"
-    return {"relation": grantable[0].removeprefix("can_grant_"), "user": "bob"}
+    return {"relation": grantable[0].removeprefix("can_grant_"), "user": "dex~bob"}
 
 
 @pytest.fixture

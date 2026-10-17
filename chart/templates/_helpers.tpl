@@ -551,6 +551,33 @@ securityContext:
 {{- $issuer -}}
 {{- end -}}
 
+{{- define "lance.oidcConnectors" -}}
+{{- $connectors := deepCopy (.Values.auth.oidc.connectors | default dict) -}}
+{{- if and .Values.dex.enabled (not (hasKey $connectors "local")) -}}
+{{- $_ := set $connectors "local" "dex" -}}
+{{- end -}}
+{{- if not $connectors -}}
+{{- fail "auth.oidc.connectors must name the idp id of each of the IdP's Dex connectors (e.g. {ldap: corp}): a person is the principal <idp-id>~<user id> their connector maps to, and a connector named nowhere signs nobody in" -}}
+{{- end -}}
+{{- range $connector, $idp := $connectors -}}
+{{- if not $connector -}}
+{{- fail "auth.oidc.connectors names an empty connector id: Dex names every connector" -}}
+{{- end -}}
+{{- if or (not (kindIs "string" $idp)) (eq $idp "kubernetes") (not (regexMatch "^[a-z0-9-]+$" $idp)) -}}
+{{- fail (printf "auth.oidc.connectors.%s=%v is not an idp id: lower-case letters, digits and '-', never kubernetes, the service-account issuer's" $connector $idp) -}}
+{{- end -}}
+{{- end -}}
+{{- toJson $connectors -}}
+{{- end -}}
+
+{{- define "lance.bootstrapAdmin" -}}
+{{- $admin := .Values.auth.bootstrapAdmin | default "" | toString -}}
+{{- if and $admin (or (hasPrefix "kubernetes~" $admin) (not (regexMatch "^[a-z0-9-]+~[^[:cntrl:]]+$" $admin))) -}}
+{{- fail (printf "auth.bootstrapAdmin=%s is not a person's principal: name them <idp-id>~<user id>, the idp id auth.oidc.connectors gives their Dex connector and the user id it reports (dex~<userID> for a development Dex user)" $admin) -}}
+{{- end -}}
+{{- $admin -}}
+{{- end -}}
+
 {{- define "lance.governedOidcEnv" -}}
 {{- $root := . }}
 - { name: RASK_OIDC_ENABLED, value: "true" }
@@ -560,6 +587,7 @@ securityContext:
 {{- end }}
 - { name: RASK_OIDC_AUDIENCE, value: {{ $root.Values.auth.oidc.clientId | quote }} }
 - { name: RASK_OIDC_ALLOW_INSECURE, value: {{ ternary "true" "false" $root.Values.dex.enabled | quote }} }
+- { name: RASK_OIDC_CONNECTORS, value: {{ include "lance.oidcConnectors" $root | quote }} }
 {{- end -}}
 
 {{- define "lance.governedFgaEnv" -}}

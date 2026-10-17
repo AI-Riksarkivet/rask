@@ -42,8 +42,8 @@ from service_kit.control_events import CatalogControlEvent
 from service_kit.exceptions import register_handlers
 
 
-MANAGER = "alice"
-ASSIGNEE = "bob"
+MANAGER = "dex~alice"
+ASSIGNEE = "dex~bob"
 PROJECT_ID = "proj-e2e"
 
 

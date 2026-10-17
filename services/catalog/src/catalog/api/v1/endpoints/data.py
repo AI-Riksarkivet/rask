@@ -41,7 +41,7 @@ from catalog.api.dependencies import (
     StorageOptionsDep,
 )
 from catalog.api.rask_params import RaskDataBase, RaskExternalBlobBase, RaskFlag
-from catalog.api.security import CurrentToken, Principal
+from catalog.api.security import Caller, CurrentToken
 from catalog.core import provenance_guard, run_context
 from catalog.core.formats import reject_unsupported_properties
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
@@ -98,9 +98,9 @@ management_router = APIRouter(prefix="/management/v1/table", tags=["data-managem
 # `properties` map and none of them called it while it was private to this module.
 
 
-def _stamp(run: RunContext | None, token: Principal | None) -> dict[str, str] | None:
+def _stamp(run: RunContext | None, token: Caller | None) -> dict[str, str] | None:
     """The transaction properties a write door stamps: the request's run, committed by the verified caller."""
-    return run_context.commit_properties(run, author=token.sub if token is not None else None)
+    return run_context.commit_properties(run, author=token.subject if token is not None else None)
 
 
 @router.post("/{id}/create", response_model_exclude_none=True)
@@ -529,14 +529,13 @@ def _column_names(columns: object) -> list[str] | None:
     return None
 
 
-def _reader(token: object) -> str:
+def _reader(token: Caller | None) -> str:
     """Who is reading — the verified subject, or the service itself on an unauthenticated profile.
 
     Same expression the grant doors use (`members.py`), and it must never be blank: a read record whose
     subject is empty answers the one question the log exists for with silence.
     """
-    sub = getattr(token, "sub", None)
-    return str(sub) if sub else "system:catalog"
+    return token.subject if token is not None else "system:catalog"
 
 
 @router.post("/{id}/query", responses=_serves(ARROW_FILE), response_class=ArrowFileResponse)

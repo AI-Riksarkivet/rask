@@ -35,6 +35,8 @@ from lance_namespace import ServiceUnavailableError
 from catalog.api import dependencies
 from catalog.core.config import Settings, get_settings
 from service_kit.governed.oidc import IDToken
+from service_kit.governed.person_identity import PersonPrincipal
+from service_kit.governed.principal import Principal
 from service_kit.governed.user_state import (
     DAPR_APP_ID_SEPARATOR,
     StoredState,
@@ -244,6 +246,7 @@ def _oidc_settings(root: str) -> Settings:
             "oidc_enabled": True,
             "oidc_issuer": "https://idp.example",
             "oidc_audience": "lance",
+            "oidc_connectors": {"local": "dex"},
             "s3_access_key_id": "x",
             "s3_secret_access_key": "x",
             "impl": "dir",
@@ -253,10 +256,12 @@ def _oidc_settings(root: str) -> Settings:
 
 
 class _SubjectIsTheToken:
-    """A verifier where the bearer string IS the subject — so a test can be two people trivially."""
+    """A verifier where the bearer string IS the person's subject — so a test can be two people trivially."""
 
-    def verify(self, token: str) -> IDToken:
-        return IDToken(iss="https://idp.example", sub=token, aud="lance", exp=1, iat=1)
+    def verify(self, token: str) -> PersonPrincipal:
+        return PersonPrincipal(
+            principal=Principal(idp_id="dex", subject=token), claims=IDToken(iss="https://idp.example", sub=token, aud="lance", exp=1, iat=1)
+        )
 
 
 @pytest.fixture
@@ -302,12 +307,12 @@ def _as(client: TestClient, who: str) -> dict[str, str]:
 def test_alice_writes_and_reads_her_own_document(app_client: TestClient, document: str, value: Any) -> None:
     put = app_client.put(f"/management/v1/user-state/{document}", json=value, headers=_as(app_client, "alice"))
     assert put.status_code == 200, put.text
-    assert put.json()["subject"] == "alice"
+    assert put.json()["subject"] == "dex~alice"
 
     got = app_client.get(f"/management/v1/user-state/{document}", headers=_as(app_client, "alice"))
     assert got.status_code == 200
     body = got.json()
-    assert body["exists"] is True and body["subject"] == "alice"
+    assert body["exists"] is True and body["subject"] == "dex~alice"
     assert body["value"] == value
 
 
@@ -324,7 +329,7 @@ def test_bob_cannot_read_alices_state(app_client: TestClient) -> None:
     bob = app_client.get("/management/v1/user-state/workflow-graph", headers=_as(app_client, "bob"))
     assert bob.status_code == 200
     body = bob.json()
-    assert body["subject"] == "bob"
+    assert body["subject"] == "dex~bob"
     assert body["exists"] is False
     assert "value" not in body  # not alice's canvas, and not a null pretending to be one
 

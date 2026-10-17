@@ -31,6 +31,9 @@ from lance_namespace import PermissionDeniedError
 
 from catalog.api import fga_deps
 from catalog.api.v1.endpoints import columns as ep
+from service_kit.governed.oidc import IDToken
+from service_kit.governed.person_identity import PersonPrincipal
+from service_kit.governed.principal import Principal
 
 
 @pytest.fixture
@@ -65,7 +68,7 @@ def _call(updates: list[dict[str, Any]]) -> Any:
             ns=cast("Any", object()),
             settings=cast("Any", SimpleNamespace(fga_enabled=True, delimiter="$")),
             so=cast("Any", {}),
-            token=cast("Any", SimpleNamespace(sub="alice")),
+            token=PersonPrincipal(principal=Principal(idp_id="dex", subject="alice"), claims=IDToken(iss="i", sub="alice", aud="lance", exp=1, iat=1)),
             client=cast("Any", object()),
             emitter=cast("Any", object()),
             authorization=None,

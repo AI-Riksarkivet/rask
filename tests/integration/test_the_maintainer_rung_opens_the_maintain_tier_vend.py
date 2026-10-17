@@ -34,6 +34,7 @@ from fastapi.testclient import TestClient
 from lance_namespace import DescribeTableResponse
 
 from catalog.core.vending import Tier, VendedCredentials
+from service_kit.governed.machine_identity import ServicePrincipal
 
 
 class _Vendor:
@@ -69,7 +70,7 @@ def governed(fake_ns: MagicMock, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     app.dependency_overrides[get_vendor] = lambda: _Vendor()
     app.dependency_overrides[get_fga_client] = lambda: object()
     app.dependency_overrides[settings_dep] = lambda: governed_settings
-    app.dependency_overrides[security.authenticate] = lambda: _Token()
+    app.dependency_overrides[security.authenticate] = lambda: _MAINTENANCE
 
     checked: list[str] = []
     with TestClient(app) as test_client:
@@ -78,8 +79,8 @@ def governed(fake_ns: MagicMock, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     get_settings.cache_clear()
 
 
-class _Token:
-    sub = "service-maintenance"
+#: The maintenance service's own principal, the caller every test here vends as.
+_MAINTENANCE = ServicePrincipal(service_account="system:serviceaccount:rask:maintenance")
 
 
 #: The ROUTER's own rung, enforced by `fga_deps` before this door is reached. Always granted here and

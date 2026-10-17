@@ -25,7 +25,6 @@ import json
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import ExitStack
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, ClassVar
 
 import httpx
@@ -38,14 +37,28 @@ from lance_namespace import connect
 
 from lineage_kit import SIGNATURE_FACET, RefusalReason, SignatureError, verify_control_signature, verify_signature
 from service_kit.control_events import CONTROL_TOPIC
+from service_kit.governed.machine_identity import ServicePrincipal
+from service_kit.governed.oidc import IDToken
+from service_kit.governed.person_identity import PersonPrincipal
+from service_kit.governed.principal import Principal
+from service_kit.governed.signing_key import signing_key_name
 from service_kit.lakehouse import outbox
 
 
-CATALOG = "service-catalog"
-PERSON = "CiQwOGE4Njg0Yi1kYjg4LTRiNzMtOTBhOS0zY2QxNjYxZjU0NjY"
+#: The catalog's own service account, whose principal it signs as on the estate (`lance.saSubject`).
+CATALOG_ACCOUNT = "system:serviceaccount:default:rask-sa-catalog"
+CATALOG = f"kubernetes~{CATALOG_ACCOUNT}"
+#: The principal of a person the dev Dex's password connector reports, under the idp id `local` maps to.
+PERSON = "dex~08a8684b-db88-4b73-90a9-3cd1661f5466"
 SECRETS = "http://localhost:3500/v1.0/secrets/lance-secrets"
 ARROW_STREAM = {"content-type": "application/vnd.apache.arrow.stream"}
 LINEAGE_TOPIC = "lineage.events.v1"
+
+
+def _person(key: str) -> PersonPrincipal:
+    """The verified caller `key` names, as the catalog's person door resolves it."""
+    principal = Principal.parse(key)
+    return PersonPrincipal(principal=principal, claims=IDToken(iss="https://dex", sub=principal.subject, aud="lance", exp=1, iat=1))
 
 
 class _Sidecar:
@@ -138,8 +151,8 @@ def boot(tmp_path: Path, control_outbox: str, monkeypatch: pytest.MonkeyPatch, r
         def _boot(seed: httpx.Response, keys: httpx.Response, token: object) -> TestClient:
             stack.enter_context(respx.mock)
             respx.get(f"{SECRETS}/lance").mock(return_value=httpx.Response(200, json={"minio-access-key": "test", "minio-secret-key": "the-s3-secret"}))
-            respx.get(f"{SECRETS}/signing-key-{CATALOG}").mock(return_value=seed)
-            respx.get(f"{SECRETS}/signing-public-{CATALOG}").mock(return_value=keys)
+            respx.get(f"{SECRETS}/signing-key-{signing_key_name(CATALOG)}").mock(return_value=seed)
+            respx.get(f"{SECRETS}/signing-public-{signing_key_name(CATALOG)}").mock(return_value=keys)
             namespace = connect("dir", {"root": str(tmp_path / "warehouse")})
             main.app.dependency_overrides[get_namespace] = lambda: namespace
             main.app.dependency_overrides[get_storage_options] = lambda: {}
@@ -158,17 +171,18 @@ def _write_a_table_and_a_row(client: TestClient) -> None:
 
 
 @pytest.mark.parametrize(
-    ("subject", "on_behalf_of"),
+    ("caller", "on_behalf_of"),
     [
-        pytest.param(PERSON, PERSON, id="a-person-the-catalog-authenticated"),
-        pytest.param(CATALOG, None, id="the-catalog-itself"),
+        pytest.param(_person(PERSON), PERSON, id="a-person-the-catalog-authenticated"),
+        pytest.param(ServicePrincipal(service_account=CATALOG_ACCOUNT), None, id="the-catalog-itself"),
     ],
 )
 def test_every_event_a_write_causes_is_signed_as_the_catalog_for_the_subject_it_authenticated(
-    boot: Boot, event_signer: Any, subject: str, on_behalf_of: str | None
+    boot: Boot, event_signer: Any, caller: PersonPrincipal | ServicePrincipal, on_behalf_of: str | None
 ) -> None:
+    subject = caller.subject
     pair = event_signer(CATALOG)
-    client = boot(httpx.Response(200, json={"seed": pair.seed}), httpx.Response(200, json={"keys": pair.public}), SimpleNamespace(sub=subject))
+    client = boot(httpx.Response(200, json={"seed": pair.seed}), httpx.Response(200, json={"keys": pair.public}), caller)
 
     _write_a_table_and_a_row(client)
 
@@ -203,7 +217,7 @@ def test_a_write_nobody_authenticated_is_announced_unsigned_and_its_control_even
 @pytest.mark.parametrize(
     "token",
     [
-        pytest.param(SimpleNamespace(sub=PERSON), id="a-write-by-a-person"),
+        pytest.param(_person(PERSON), id="a-write-by-a-person"),
     ],
 )
 def test_a_catalog_without_its_key_commits_the_write_announces_nothing_stages_nothing_and_is_not_ready(boot: Boot, control_outbox: str, token: object) -> None:

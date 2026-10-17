@@ -57,7 +57,7 @@ from catalog.api.dependencies import (
 )
 from catalog.api.pagination import paginate
 from catalog.api.rask_params import RaskFlag
-from catalog.api.security import CurrentToken, Principal, RawBearerToken
+from catalog.api.security import Caller, CurrentToken, RawBearerToken
 from catalog.core.base_judge import BaseJudge, GovernedStorage
 from catalog.core.config import Settings
 from catalog.core.formats import reject_unsupported_properties
@@ -225,7 +225,7 @@ async def list_all_tables(
         # `.objects` + `.truncated`: past OpenFGA's 1000-object cap this listing is SHORT, and the
         # page cursor below would be minted from the shortened list. Surfaced to the caller rather
         # than only logged — a client cannot otherwise tell a small estate from a truncated answer.
-        listing = await fga.list_objects(client, user=token.sub, relation="can_read_data", object_type="table")
+        listing = await fga.list_objects(client, user=token.subject, relation="can_read_data", object_type="table")
         allowed = set(listing.objects)
         authorization_truncated = listing.truncated
         response.tables = [name for name in response.tables if f"table:{name}" in allowed]
@@ -288,7 +288,7 @@ async def _vend_on_spec_door(
     settings: Settings,
     so: dict[str, str],
     vendor: CredentialVendor,
-    token: Principal | None,
+    token: Caller | None,
     client: OpenFgaClient | None,
     web_identity_token: str | None,
     asked: bool,
@@ -331,7 +331,7 @@ async def _vend_on_spec_door(
         return None
     if options is not None:
         resource = f"table:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}"
-        audit("vend_credentials", SUCCESS, subject=token.sub if token is not None else None, resource=resource, tier=tier, door=door)
+        audit("vend_credentials", SUCCESS, subject=token.subject if token is not None else None, resource=resource, tier=tier, door=door)
     return options
 
 
@@ -410,7 +410,7 @@ async def declare_table(
         emitter,
         segments,
         delimiter=settings.delimiter,
-        author=token.sub if token is not None else None,
+        author=token.subject if token is not None else None,
         version=None,
         operation=DECLARE_TABLE,
         authorization=authorization,
@@ -421,7 +421,7 @@ async def declare_table(
         action="table_declared",
         object_type="table",
         object_id=f"table:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}",
-        actor=f"user:{token.sub}" if token is not None else None,
+        actor=f"user:{token.subject}" if token is not None else None,
         extra={"location": response.location},
     )
     return response
@@ -681,7 +681,7 @@ async def drop_table(
             record = trash.make_record(
                 canonical,
                 location=described.location,
-                dropped_by=f"user:{token.sub}" if token is not None else None,
+                dropped_by=f"user:{token.subject}" if token is not None else None,
                 grace_days=settings.trash_grace_days,
             )
             await run_in_threadpool(trash.put, settings.registry_root, settings.storage_options(), record)
@@ -723,7 +723,7 @@ async def drop_table(
         emitter,
         segments,
         delimiter=settings.delimiter,
-        author=token.sub if token is not None else None,
+        author=token.subject if token is not None else None,
         version=None,
         operation=DROP_TABLE,
         authorization=authorization,
@@ -740,7 +740,7 @@ async def drop_table(
         action="table_dropped",
         object_type="table",
         object_id=f"table:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}",
-        actor=f"user:{token.sub}" if token is not None else None,
+        actor=f"user:{token.subject}" if token is not None else None,
         extra={"recoverable": trashed},
     )
     await converge.remember(200, response)
@@ -794,7 +794,7 @@ async def deregister_table(
         emitter,
         segments,
         delimiter=settings.delimiter,
-        author=token.sub if token is not None else None,
+        author=token.subject if token is not None else None,
         version=None,
         operation=DEREGISTER_TABLE,
         authorization=authorization,
@@ -805,7 +805,7 @@ async def deregister_table(
         action="table_deregistered",
         object_type="table",
         object_id=f"table:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}",
-        actor=f"user:{token.sub}" if token is not None else None,
+        actor=f"user:{token.subject}" if token is not None else None,
         extra={},
     )
     await converge.remember(200, response)
@@ -1068,7 +1068,7 @@ async def register_table(
         emitter,
         segments,
         delimiter=settings.delimiter,
-        author=token.sub if token is not None else None,
+        author=token.subject if token is not None else None,
         version=None,
         operation=REGISTER_TABLE,
         authorization=authorization,
@@ -1079,7 +1079,7 @@ async def register_table(
         action="table_registered",
         object_type="table",
         object_id=f"table:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}",
-        actor=f"user:{token.sub}" if token is not None else None,
+        actor=f"user:{token.subject}" if token is not None else None,
         extra={"location": location},
     )
     await converge.remember(200, response)
@@ -1213,7 +1213,7 @@ async def undrop_table(
         emitter,
         segments,
         delimiter=settings.delimiter,
-        author=token.sub if token is not None else None,
+        author=token.subject if token is not None else None,
         version=None,
         operation=REGISTER_TABLE,
         authorization=authorization,
@@ -1225,7 +1225,7 @@ async def undrop_table(
         action="table_undropped",
         object_type="table",
         object_id=f"table:{canonical}",
-        actor=f"user:{token.sub}" if token is not None else None,
+        actor=f"user:{token.subject}" if token is not None else None,
         extra={},
     )
     return response
@@ -1256,7 +1256,7 @@ async def set_table_protection(
             "kind": "table",
             "id": canonical,
             "protected": "true",
-            "set_by": f"user:{token.sub}" if token is not None else "anonymous",
+            "set_by": f"user:{token.subject}" if token is not None else "anonymous",
         }
         await run_in_threadpool(protection.set_protection, settings.registry_root, so, record)
     else:
@@ -1266,7 +1266,7 @@ async def set_table_protection(
         action="table_protected" if body.protected else "table_unprotected",
         object_type="table",
         object_id=f"table:{canonical}",
-        actor=f"user:{token.sub}" if token is not None else None,
+        actor=f"user:{token.subject}" if token is not None else None,
         extra={},
     )
     return ProtectionResponse(id=canonical, protected=body.protected)
@@ -1393,7 +1393,7 @@ async def rename_table(
         emitter,
         segments,
         delimiter=settings.delimiter,
-        author=token.sub if token is not None else None,
+        author=token.subject if token is not None else None,
         version=None,
         operation=DEREGISTER_TABLE,
         authorization=authorization,
@@ -1408,7 +1408,7 @@ async def rename_table(
         emitter,
         new_segments,
         delimiter=settings.delimiter,
-        author=token.sub if token is not None else None,
+        author=token.subject if token is not None else None,
         version=None,
         operation=REGISTER_TABLE,
         authorization=authorization,
@@ -1424,7 +1424,7 @@ async def rename_table(
         action="table_renamed",
         object_type="table",
         object_id=f"table:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}",
-        actor=f"user:{token.sub}" if token is not None else None,
+        actor=f"user:{token.subject}" if token is not None else None,
         extra={
             "from": fga.canonical_object_id(segments, delimiter=settings.delimiter),
             "to": fga.canonical_object_id(new_segments, delimiter=settings.delimiter),

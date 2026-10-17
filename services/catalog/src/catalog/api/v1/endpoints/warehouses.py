@@ -65,7 +65,7 @@ from catalog.api.dependencies import (
     estate_namespace,
     namespace_for_root,
 )
-from catalog.api.security import CurrentToken, Principal
+from catalog.api.security import Caller, CurrentToken
 from catalog.api.v1.endpoints import namespaces as namespaces_api
 from catalog.core import tier_policy
 from catalog.core.config import Settings
@@ -341,7 +341,7 @@ async def create_warehouse(
         record = await _converge()
     await fga_deps.seed_warehouse(client, settings, token, warehouse_id=warehouse_id, project=project)
     log.info("warehouse_created", extra={"warehouse": warehouse_id, "bucket": bucket, "project": project})
-    actor = f"user:{token.sub}" if token else None
+    actor = f"user:{token.subject}" if token else None
     await emit_control(
         control,
         action="warehouse_created",
@@ -364,7 +364,7 @@ async def list_warehouses(response: Response, settings: SettingsDep, token: Curr
         # `.objects` + `.truncated`: past OpenFGA's 1000-object cap this listing is SHORT, and the
         # page cursor below would be minted from the shortened list. Surfaced to the caller rather
         # than only logged — a client cannot otherwise tell a small estate from a truncated answer.
-        listing = await fga.list_objects(client, user=token.sub, relation="can_get_metadata", object_type="warehouse")
+        listing = await fga.list_objects(client, user=token.subject, relation="can_get_metadata", object_type="warehouse")
         allowed = set(listing.objects)
         authorization_truncated = listing.truncated
         records = [r for r in records if f"warehouse:{r['id']}" in allowed]
@@ -423,7 +423,7 @@ async def list_estate_bindings(
         # `.objects` + `.truncated`: past OpenFGA's 1000-object cap this listing is SHORT, and the
         # page cursor below would be minted from the shortened list. Surfaced to the caller rather
         # than only logged — a client cannot otherwise tell a small estate from a truncated answer.
-        listing = await fga.list_objects(client, user=token.sub, relation="can_get_metadata", object_type="warehouse")
+        listing = await fga.list_objects(client, user=token.subject, relation="can_get_metadata", object_type="warehouse")
         allowed = set(listing.objects)
         authorization_truncated = listing.truncated
         records = [r for r in records if f"warehouse:{r.get('warehouse_id')}" in allowed]
@@ -463,7 +463,7 @@ async def list_warehouse_namespaces(
     # A namespace name discloses how a tenant organises data, which is why the answer is FILTERED
     # rather than refused — refusing would break the breadcrumb the widened relation exists to serve.
     if settings.fga_enabled and token is not None and client is not None:
-        listing = await fga.list_objects(client, user=token.sub, relation="can_get_metadata", object_type="namespace")
+        listing = await fga.list_objects(client, user=token.subject, relation="can_get_metadata", object_type="namespace")
         allowed = set(listing.objects)
         bound = [name for name in bound if f"namespace:{name}" in allowed]
     return WarehouseNamespacesResponse(namespaces=bound)
@@ -473,7 +473,7 @@ async def _set_warehouse_status(
     warehouse_id: str,
     status: str,
     settings: Settings,
-    token: Principal | None,
+    token: Caller | None,
     client: OpenFgaClient | None,
 ) -> WarehouseResponse:
     """Shared deactivate/activate: admin-gate on the warehouse's OWN project, flip ``status``, persist.
@@ -519,7 +519,7 @@ async def deactivate_warehouse(
         action="warehouse_deactivated",
         object_type="warehouse",
         object_id=f"warehouse:{warehouse_id}",
-        actor=f"user:{token.sub}" if token else None,
+        actor=f"user:{token.subject}" if token else None,
         extra={},
     )
     return result
@@ -541,7 +541,7 @@ async def activate_warehouse(
         action="warehouse_activated",
         object_type="warehouse",
         object_id=f"warehouse:{warehouse_id}",
-        actor=f"user:{token.sub}" if token else None,
+        actor=f"user:{token.subject}" if token else None,
         extra={},
     )
     return result
@@ -688,7 +688,7 @@ async def create_warehouse_namespace(
         action="warehouse_bound",
         object_type="warehouse",
         object_id=f"warehouse:{warehouse_id}",
-        actor=f"user:{token.sub}" if token else None,
+        actor=f"user:{token.subject}" if token else None,
         extra={"namespace": ns_name},
     )
     return response
@@ -769,7 +769,7 @@ async def unbind_warehouse_namespace(
         action="warehouse_unbound",
         object_type="warehouse",
         object_id=f"warehouse:{warehouse_id}",
-        actor=f"user:{token.sub}" if token else None,
+        actor=f"user:{token.subject}" if token else None,
         extra={"namespace": top_ns},
     )
     return UnbindWarehouseNamespaceResponse(warehouse_id=warehouse_id, namespace=top_ns, unbound=True)
@@ -1143,7 +1143,7 @@ async def delete_warehouse(
         action="warehouse_deleted",
         object_type="warehouse",
         object_id=f"warehouse:{warehouse_id}",
-        actor=f"user:{token.sub}" if token else None,
+        actor=f"user:{token.subject}" if token else None,
         extra={
             "project": project,
             "bucket": bucket,

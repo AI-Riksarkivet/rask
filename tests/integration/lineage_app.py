@@ -5,7 +5,7 @@ what it records is driven against the real catalog app on a real `dir` namespace
 because lineage reaches it through the spec's REST client.
 
 What stands in, and why each may: OpenFGA, as `openfga_grants.Grants` answering from a set of granted relations, and
-the verified caller, as lineage's `authenticate` reading the subject a test names in a header. Authorization is the
+the verified caller, as lineage's `authenticate` reading the principal key a test names in a header. Authorization is the
 claim of none of the tests that use them; what the doors record is.
 """
 
@@ -31,6 +31,9 @@ from openfga_sdk import OpenFgaClient
 from service_kit.governed.decider import OpenFgaDecider
 from service_kit.governed.fga import user_object
 from service_kit.governed.machine_identity import ServicePrincipal
+from service_kit.governed.oidc import IDToken
+from service_kit.governed.person_identity import PersonPrincipal
+from service_kit.governed.principal import Principal
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 from tests.integration.openfga_grants import Grants
 
@@ -38,7 +41,7 @@ from tests.integration.openfga_grants import Grants
 if TYPE_CHECKING:
     from lineage.services.provenance import ProvenanceStore
 
-#: The header a test names the calling subject in; lineage's `authenticate` is overridden to read it.
+#: The header a test names the caller's principal key in; lineage's `authenticate` is overridden to read it.
 SUBJECT_HEADER = "x-test-subject"
 #: The relay tick's binding name, which `governed_lineage` mounts the tick at, as the chart names it.
 RELAY = "lineage-relay-cron"
@@ -147,8 +150,9 @@ def service(name: str) -> ServicePrincipal:
 def governed_lineage(catalog_url: str, monkeypatch: pytest.MonkeyPatch, granted: set[tuple[str, str, str]]) -> Generator[TestClient]:
     """Lineage's router behind its real authentication-then-FGA gate, recording into the catalog at ``catalog_url``.
 
-    The caller is the subject a request names in :data:`SUBJECT_HEADER`, as a person's verified token would name
-    it; OpenFGA answers from ``granted``. The relay tick is mounted at :data:`RELAY` behind its sidecar-token guard,
+    The caller is the principal a request names by key in :data:`SUBJECT_HEADER`: a `kubernetes~` key is a service
+    principal, any other a person, as a verified token would prove either; OpenFGA answers from ``granted``, whose
+    subjects are principal keys. The relay tick is mounted at :data:`RELAY` behind its sidecar-token guard,
     with the forward client lineage's lifespan builds when a graph backend is configured.
     """
     from lineage.api.relay_cron import build_relay_cron_router
@@ -156,19 +160,23 @@ def governed_lineage(catalog_url: str, monkeypatch: pytest.MonkeyPatch, granted:
     from lineage.api.v1.router import api_router
     from lineage.core.config import get_settings
     from lineage.services.provenance import ProvenanceStore
-    from service_kit.governed.oidc import IDToken
 
     monkeypatch.setenv("LINEAGE_CATALOG_URL", catalog_url)
     monkeypatch.setenv("RASK_FGA_ENABLED", "true")
     monkeypatch.setenv("RASK_OIDC_ENABLED", "true")
     monkeypatch.setenv("RASK_OIDC_ISSUER", "https://idp.invalid/dex")
     monkeypatch.setenv("RASK_OIDC_AUDIENCE", "rask")
+    monkeypatch.setenv("RASK_OIDC_CONNECTORS", '{"local": "dex"}')
     get_settings.cache_clear()
     store = ProvenanceStore.from_settings(get_settings())
     ensure_tables(store)
 
-    def caller(subject: str = Header(alias=SUBJECT_HEADER)) -> IDToken:
-        return IDToken(iss="https://idp.invalid/dex", sub=subject, aud="rask", exp=4102444800, iat=0)
+    def caller(subject: str = Header(alias=SUBJECT_HEADER)) -> PersonPrincipal | ServicePrincipal:
+        principal = Principal.parse(subject)
+        if principal.is_service:
+            return ServicePrincipal(service_account=principal.subject)
+        claims = IDToken(iss="https://idp.invalid/dex", sub=principal.subject, aud="rask", exp=4102444800, iat=0)
+        return PersonPrincipal(principal=principal, claims=claims)
 
     settings = get_settings()
 

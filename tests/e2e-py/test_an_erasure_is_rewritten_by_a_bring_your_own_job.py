@@ -153,7 +153,7 @@ def test_a_job_rewrites_every_surface_and_the_catalog_releases_what_it_verifies(
     #    (delete, index drop, the compaction's reservation and rewrite, the index rebuild).
     after = lance.dataset(namespace_client=owner, table_id=table_id).version
     authors = _authors_of(job, since=start, table=table, versions=set(range(before + 1, after + 1)))
-    assert (len(authors), set(authors.values())) == (5, {job.sub}), authors
+    assert (len(authors), set(authors.values())) == (5, {job.principal}), authors
 
     # 5. The listing shows the obligation released, and no object under the table's prefix holds the subject's bytes.
     listed = ok(job.http.get(f"{CATALOG}/management/v1/erasures", params={"limit": 1000}, timeout=30))["obligations"]

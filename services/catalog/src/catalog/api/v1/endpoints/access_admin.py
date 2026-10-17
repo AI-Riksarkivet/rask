@@ -32,7 +32,7 @@ from openfga_sdk import OpenFgaClient
 
 from catalog.api import fga_deps
 from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, SettingsDep
-from catalog.api.security import CurrentToken, Principal
+from catalog.api.security import Caller, CurrentToken
 from catalog.schemas import (
     AccessCheckBody,
     AccessCheckResult,
@@ -234,7 +234,7 @@ async def read_access_tuples(
         )
     else:
         obj_filter = None  # no filter at all → the whole store, paginated
-    subject = token.sub if token else "anonymous"
+    subject = token.subject if token else "anonymous"
     resource = obj_filter or "*"
     try:
         tuples, next_token = await fga.read_tuples(
@@ -309,9 +309,9 @@ def _validated_write_tuple(body: AccessTuple, *, evaluated: bool) -> fga.ClientT
     return tup
 
 
-async def _mutate_tuple(client: OpenFgaClient, control: ControlEmitter, token: Principal | None, body: AccessTuple, *, write: bool) -> AccessTuple:
+async def _mutate_tuple(client: OpenFgaClient, control: ControlEmitter, token: Caller | None, body: AccessTuple, *, write: bool) -> AccessTuple:
     tup = _validated_write_tuple(body, evaluated=write)
-    actor = token.sub if token else "anonymous"
+    actor = token.subject if token else "anonymous"
     event = "access_tuple_write" if write else "access_tuple_delete"
     try:
         if write:
@@ -333,7 +333,7 @@ async def _mutate_tuple(client: OpenFgaClient, control: ControlEmitter, token: P
         action="grant_added" if write else "grant_revoked",
         object_type="grant",
         object_id=tup.object,
-        actor=f"user:{token.sub}" if token else None,
+        actor=f"user:{token.subject}" if token else None,
         extra={"relation": tup.relation, "subject": tup.user} | ({"condition": condition.name} if condition is not None else {}),
     )
     return _as_access_tuple(tup)
@@ -390,7 +390,7 @@ async def check_access(client: EstateFgaClient, token: CurrentToken, body: Acces
     if body.relation not in _defined_relations(fga_type):
         raise InvalidInputError(f"{body.relation!r} is not a relation the model defines on {fga_type}")
     user = _qualified_subject(body.user)
-    subject = token.sub if token else "anonymous"
+    subject = token.subject if token else "anonymous"
     try:
         allowed = await fga.check(client, user=user, relation=body.relation, obj=obj, qualify=False, context=body.context or None)
     except ServiceUnavailableError:
@@ -427,7 +427,7 @@ async def list_access_objects(client: EstateFgaClient, token: CurrentToken, body
         raise InvalidInputError(f"{body.type!r} is not a type the authorization model defines")
     relation = _validated_relation(body.type, body.relation)
     user = _qualified_subject(body.user)
-    subject = token.sub if token else "anonymous"
+    subject = token.subject if token else "anonymous"
     try:
         objects = (await fga.list_objects(client, user=user, relation=relation, object_type=body.type, qualify=False)).objects
     except ServiceUnavailableError:
@@ -452,7 +452,7 @@ async def list_access_users(client: EstateFgaClient, token: CurrentToken, body: 
         raise InvalidInputError(f"{body.user_type!r} is not a type the authorization model defines")
     if body.user_relation is not None and body.user_relation not in _defined_relations(body.user_type):
         raise InvalidInputError(f"{body.user_relation!r} is not a relation the model defines on {body.user_type}")
-    subject = token.sub if token else "anonymous"
+    subject = token.subject if token else "anonymous"
     try:
         users = await fga.list_users(
             client,
@@ -495,7 +495,7 @@ async def expand_access(client: EstateFgaClient, token: CurrentToken, body: Acce
     obj = _validated_object(body.object)
     relation = _validated_relation(obj, body.relation)
     depth = max(1, min(body.depth, fga.MAX_EXPAND_TREE_DEPTH))
-    subject = token.sub if token else "anonymous"
+    subject = token.subject if token else "anonymous"
     try:
         tree = await fga.expand_tree(client, relation=relation, obj=obj, max_depth=depth)
     except ServiceUnavailableError:
@@ -537,7 +537,7 @@ async def simulate_access(client: EstateFgaClient, token: CurrentToken, body: Ac
     user = _qualified_subject(body.user)
     # Validated, not merely parsed — same gate a real write clears.
     hypothetical = [_validated_write_tuple(t, evaluated=True) for t in body.hypothetical]
-    subject = token.sub if token else "anonymous"
+    subject = token.subject if token else "anonymous"
     try:
         # Two checks, one round trip each. The baseline cannot be skipped when `hypothetical` is empty
         # either: the caller still asked for a delta, and answering with allowed == baseline is the

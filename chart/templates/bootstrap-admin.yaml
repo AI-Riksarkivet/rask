@@ -47,7 +47,7 @@ spec:
               import json, os, sys, time
               import httpx
               from service_kit.governed.auth.write_model import STORE_NAME, fga_headers, history, model_document
-              from service_kit.governed.fga import grantee_object, newest_store, user_object
+              from service_kit.governed.fga import newest_store, user_object
 
               api = os.environ["FGA_API_URL"].rstrip("/")
               token_file = os.environ["RASK_FGA_TOKEN_FILE"]
@@ -57,8 +57,8 @@ spec:
               # rolling when it runs; writing the tuples one release AHEAD of the repoint is what keeps
               # the window between them from being a window of 403s.
               estate_obj = "estate:rask"
-              subject = {{ .Values.auth.bootstrapAdmin | quote }}
-              user = grantee_object(subject)
+              subject = {{ include "lance.bootstrapAdmin" . | quote }}
+              user = user_object(subject) if subject else None
 
               # The store the services use (RASK_FGA_STORE_ID pins one), and in it the model THIS image
               # carries ([[LH-201]]). A tuple naming no model is checked against the store's newest, i.e.

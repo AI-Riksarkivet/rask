@@ -1609,7 +1609,7 @@ export interface paths {
          *     have one — identity is this estate's concern, not the format's. The actor per version already lives in
          *     the lineage store, on the ``author`` run facet
          *     (``GET /datasets/{name}/producers`` → ``dataset_version`` + ``author`` + ``operation``), which is written
-         *     from the verified OIDC subject on every governed write. A who/when/what view joins the two on the version
+         *     from the verified caller's principal key on every governed write. A who/when/what view joins the two on the version
          *     number. Two sources, each authoritative for its own half — a third that merged them would just be a copy
          *     of one of them, free to drift.
          *
@@ -5031,7 +5031,7 @@ export interface components {
          * CatalogControlEvent
          * @description One control-plane mutation notice, published AFTER the mutation it announces succeeds.
          *
-         *     `actor` is the person the emitting service authenticated (`user:<sub>`), or a service principal or None when a
+         *     `actor` is the person the emitting service authenticated (`user:<principal>`), or a service principal or None when a
          *     service acts for itself. Several services publish on this topic (`control_signer_role` names the one that signs
          *     each action), so to a consumer the actor is a claim until the envelope's `rask_signature` proves who stamped it
          *     (`lineage_kit.signing.verify_control_signature`). The model ignores that member, so a signed and an unsigned
@@ -5741,7 +5741,7 @@ export interface components {
         };
         /**
          * DecisionCheck
-         * @description May ``user`` (a bare subject, as a token's ``sub``) hold ``relation`` on each of ``objects``.
+         * @description May ``user`` (a principal key, as a caller's ``subject``) hold ``relation`` on each of ``objects``.
          */
         DecisionCheck: {
             /** Objects */
@@ -6658,7 +6658,7 @@ export interface components {
             requested_at: string;
             /**
              * Requested By
-             * @description Who asked for the erasure, as `user:<sub>`.
+             * @description Who asked for the erasure: `user:` and the principal key their token proved.
              */
             requested_by: string | null;
             /**

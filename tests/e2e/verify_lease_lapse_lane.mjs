@@ -45,16 +45,22 @@ async function mintToken(email) {
 			'content-type': 'application/x-www-form-urlencoded',
 			authorization: `Basic ${Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString('base64')}`,
 		},
-		body: new URLSearchParams({ grant_type: 'password', username: email, password: PASSWORD, scope: 'openid profile email' }),
+		body: new URLSearchParams({ grant_type: 'password', username: email, password: PASSWORD, scope: 'openid profile email federated:id' }),
 	});
 	if (!res.ok) throw new Error(`dex refused ${email}: HTTP ${res.status}`);
 	const json = await res.json();
 	return json.id_token ?? json.access_token;
 }
 
+/** The principal a Dex token proves (LH-063): the idp id the chart gives the development Dex's connector `local`
+ *  (`dex`, `lance.oidcConnectors`) and the user id Dex reports in `federated_claims`, which it does only when the
+ *  client asks for `federated:id`. It is simultaneously the FGA principal, the InboxActor id and what
+ *  `enforce_author` stamps, so all three come from here. */
 function subjectOf(token) {
-	const body = Buffer.from(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
-	return JSON.parse(body).sub;
+	const json = Buffer.from(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
+	const federated = JSON.parse(json).federated_claims;
+	if (!federated?.user_id) throw new Error('token carries no federated_claims (ask Dex for federated:id)');
+	return `dex~${federated.user_id}`;
 }
 
 async function api(url, token, method = 'GET', body) {

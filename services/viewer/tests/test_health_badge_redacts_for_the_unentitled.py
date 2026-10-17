@@ -68,7 +68,7 @@ class _State:
     http = _FailingHttp()
 
 
-def _app(*, fga_enabled: bool, allow: bool, subject: str = "eve", monkeypatch: pytest.MonkeyPatch) -> TestClient:
+def _app(*, fga_enabled: bool, allow: bool, subject: str = "dex~eve", monkeypatch: pytest.MonkeyPatch) -> TestClient:
     # BOTH names: the gate reads `security._media_state.dataset_handle`, the handler bound its own
     # `dataset_handle` at import — patching one leaves the other resolving a fake state for real.
     monkeypatch.setattr(security._media_state, "dataset_handle", lambda *_a, **_k: _Handle())
@@ -84,6 +84,7 @@ def _app(*, fga_enabled: bool, allow: bool, subject: str = "eve", monkeypatch: p
             "RASK_OIDC_ENABLED": fga_enabled,
             "RASK_OIDC_ISSUER": "https://issuer.test",
             "RASK_OIDC_AUDIENCE": "rask",
+            "RASK_OIDC_CONNECTORS": {"local": "dex"},
         }
     )
     app.dependency_overrides[get_viewer_settings] = lambda: settings

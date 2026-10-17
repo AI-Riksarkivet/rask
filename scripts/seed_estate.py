@@ -42,10 +42,10 @@ Three fixture tuples are deliberately NOT seeded, each for the ghost reason this
 registry, not the catalog's), and ``user:root_admin owner warehouse:lance_catalog`` (the estate root is
 the bootstrap job's to grant, not a demo seed's).
 
-THE SUBJECT MAPPING is inherited verbatim from ``fga_seed_demo.py``: the fixtures say ``user:alice``, a
-real store keys on the OIDC ``sub``, and seeding the literal makes every check for the signed-in alice
-deny — correctly, and confusingly. Demo identities are rewritten to their real subs; the rest stay
-literal (personas with no IdP account, which still make the graph worth reading).
+THE SUBJECT MAPPING follows ``fga_seed_demo.py``: the fixtures say ``user:alice``, and a grant names a principal,
+``<idp-id>~<user id>`` ([[LH-063]]), so the catalog refuses the literal. The development Dex's identities are rewritten
+to their principals; every other name is a persona with no IdP account, named under the ``demo`` idp id no connector
+maps, so it still makes the graph worth reading and still names an identity provider.
 
 Idempotent by construction: project, warehouse and tuple creates are idempotent server-side, and the two
 that are not (namespace, table) treat an already-exists 409 as convergence and SAY so. Re-running over a
@@ -95,15 +95,19 @@ CATALOG_TOKEN = os.environ.get("SEED_CATALOG_TOKEN", "")
 #: checks another.
 DELIMITER = os.environ.get("SEED_NS_DELIMITER", "$")
 
-#: Dex's two static demo identities, encoded the way an OIDC `sub` actually arrives. Kept in step with
-#: ``fga_seed_demo._DEX_SUBS`` (the chart pins these userIDs in ``chart/templates/dex.yaml``) — a seed
-#: that drifted from them would grant a subject nobody can sign in as.
-DEX_SUBS: Mapping[str, str] = MappingProxyType(
+#: The development Dex's two static demo identities as the principals they are: `dex~` and the userID the Dex fixture
+#: declares (deploy/fixtures/dex/chart/values.yaml, `scripts/dex_principal.py`). Kept in step with
+#: ``fga_seed_demo._DEX_PRINCIPALS`` — a seed that drifted from them would grant a principal nobody can sign in as.
+DEX_PRINCIPALS: Mapping[str, str] = MappingProxyType(
     {
-        "alice": "CiQwOGE4Njg0Yi1kYjg4LTRiNzMtOTBhOS0zY2QxNjYxZjU0NjYSBWxvY2Fs",
-        "bob": "CiQxYjZlMmY1YS03YzRkLTRlOWItOWYxYS0yZDNjNGI1YTZlN2YSBWxvY2Fs",
+        "alice": "dex~08a8684b-db88-4b73-90a9-3cd1661f5466",
+        "bob": "dex~1b6e2f5a-7c4d-4e9b-9f1a-2d3c4b5a6e7f",
     }
 )
+
+#: The idp id a demo persona is a principal of. No connector maps it, so no token signs in as a persona: it exists only
+#: in the graph it makes worth reading, and still names an identity provider, as every grant must ([[LH-063]]).
+DEMO_IDP = "demo"
 
 #: A status a step tolerates → (outcome state, the word printed for it).
 #:
@@ -310,16 +314,16 @@ class Step:
     refuses: tuple[str, ...] = ()
 
 
-def remap_subject(subject: str, subs: Mapping[str, str]) -> str:
-    """Rewrite ``user:<name>`` to ``user:<oidc-sub>`` for identities that really exist in the IdP.
+def remap_subject(subject: str, principals: Mapping[str, str]) -> str:
+    """The principal a demo grant's ``user:<name>`` names: an IdP identity's own, else a persona's under ``demo``.
 
-    Only the subject side is rewritten. A ``user:`` id never appears as an OBJECT in this model, and
-    rewriting one would invent a resource rather than name a principal.
+    Only the subject side is rewritten, and never the wildcard ``user:*``. A ``user:`` id never appears as an OBJECT in
+    this model, and rewriting a userset or an object would invent a resource rather than name a principal.
     """
-    if not subject.startswith("user:"):
+    if not subject.startswith("user:") or subject == "user:*":
         return subject
     name = subject.removeprefix("user:")
-    return f"user:{subs[name]}" if name in subs else subject
+    return principals.get(name, f"{DEMO_IDP}~{name}")
 
 
 def _warehouse_pairs(estate: Estate) -> list[tuple[Project, Warehouse]]:
@@ -348,7 +352,7 @@ def _warehouse_body(project: Project, warehouse: Warehouse) -> dict[str, object]
     return body
 
 
-def plan(estate: Estate, subs: Mapping[str, str], *, delimiter: str = DELIMITER, adopt_existing: bool = False) -> list[Step]:
+def plan(estate: Estate, principals: Mapping[str, str], *, delimiter: str = DELIMITER, adopt_existing: bool = False) -> list[Step]:
     """The estate description flattened into calls, LAYER BY LAYER: projects, warehouses, namespaces,
     tables, then grants.
 
@@ -419,7 +423,7 @@ def plan(estate: Estate, subs: Mapping[str, str], *, delimiter: str = DELIMITER,
         # lookup all speak of the SAME object; resolving it in only one of the three is how a grant
         # ends up correctly addressed and wrongly ordered, or the reverse.
         obj = grant.object.replace("{delimiter}", delimiter)
-        user = remap_subject(grant.user, subs)
+        user = remap_subject(grant.user, principals)
         steps.append(
             Step(
                 layer="grant",
@@ -627,7 +631,9 @@ def main(argv: Sequence[str] | None = None, *, transport: httpx.BaseTransport | 
     parser.add_argument("--delimiter", default=DELIMITER, help=f"namespace/table delimiter, must match LANCE_NS_DELIMITER (default {DELIMITER!r})")
     parser.add_argument("--timeout", type=float, default=30.0, help="per-request timeout in seconds (default 30)")
     parser.add_argument("--dry-run", action="store_true", help="print the calls in order, make none of them")
-    parser.add_argument("--map", action="append", default=[], metavar="NAME=SUB", help="override a demo identity's OIDC subject (repeatable)")
+    parser.add_argument(
+        "--map", action="append", default=[], metavar="NAME=PRINCIPAL", help="override a demo identity's principal, <idp-id>~<user id> (repeatable)"
+    )
     parser.add_argument(
         "--adopt-existing",
         action="store_true",
@@ -639,17 +645,17 @@ def main(argv: Sequence[str] | None = None, *, transport: httpx.BaseTransport | 
     )
     args = parser.parse_args(argv)
 
-    subs = dict(DEX_SUBS)
+    principals = dict(DEX_PRINCIPALS)
     for pair in args.map:
-        name, _, sub = pair.partition("=")
-        if not sub:
-            print(f"!! --map wants NAME=SUB, got {pair!r}", file=sys.stderr)
+        name, _, principal = pair.partition("=")
+        if not principal:
+            print(f"!! --map wants NAME=PRINCIPAL, got {pair!r}", file=sys.stderr)
             return 1
-        subs[name] = sub
+        principals[name] = principal
 
-    steps = plan(DEMO_ESTATE, subs, delimiter=args.delimiter, adopt_existing=args.adopt_existing)
+    steps = plan(DEMO_ESTATE, principals, delimiter=args.delimiter, adopt_existing=args.adopt_existing)
     print(f"  {len(steps)} steps against {args.catalog}")
-    print(f"  identities mapped to their OIDC subject: {', '.join(sorted(subs))}")
+    print(f"  identities mapped to their principal: {', '.join(sorted(principals))}")
     print(f"  bearer: {'yes' if args.token else 'NO — assuming an auth-off stack'}")
     if args.dry_run:
         for step in steps:

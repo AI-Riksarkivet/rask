@@ -57,6 +57,7 @@ from service_kit.exceptions import register_handlers
 from service_kit.governed.audit import AUDIT_LOGGER
 from service_kit.governed.deps import make_auth_deps
 from service_kit.governed.oidc import UNKNOWN_KID_REFRESH_INTERVAL_SECONDS, OIDCVerifier
+from service_kit.governed.person_identity import PersonVerifier
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
@@ -198,7 +199,7 @@ def idp(rsa_key: rsa.RSAPrivateKey) -> Iterator[_IdP]:
 
 def _token(idp: _IdP, key: rsa.RSAPrivateKey | ec.EllipticCurvePrivateKey, algorithm: str, *, kid: str | None = KID) -> str:
     now = int(time.time())
-    claims = {"iss": idp.issuer, "sub": "gina", "aud": AUDIENCE, "iat": now, "exp": now + 300}
+    claims = {"iss": idp.issuer, "sub": "gina", "aud": AUDIENCE, "iat": now, "exp": now + 300, "federated_claims": {"connector_id": "corp", "user_id": "gina"}}
     return jwt.encode(claims, key, algorithm=algorithm, headers={} if kid is None else {"kid": kid})
 
 
@@ -215,7 +216,7 @@ def _client(idp: _IdP, *, clock: Callable[[], float] = time.monotonic) -> TestCl
     app = FastAPI()
     register_handlers(app)
     install_problem_handlers(app, logging.getLogger(__name__))
-    app.state.oidc = OIDCVerifier(idp.issuer, AUDIENCE, cache_ttl=300, allow_insecure=True, clock=clock)
+    app.state.oidc = PersonVerifier(OIDCVerifier(idp.issuer, AUDIENCE, cache_ttl=300, allow_insecure=True, clock=clock), {"corp": "corp"})
 
     @app.get("/gated")
     def _gated(subject: _Subject) -> dict[str, str]:
@@ -251,7 +252,7 @@ def test_a_token_the_key_set_signed_is_accepted(door: str, idp: _IdP, rsa_key: r
     status, body = _call(idp, door, _token(idp, rsa_key, "RS256"))
 
     assert status == 200, body
-    assert json.loads(body) == {"subject": "gina"}
+    assert json.loads(body) == {"subject": "corp~gina"}
 
 
 @pytest.mark.parametrize("door", ["/gated"])

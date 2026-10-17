@@ -32,6 +32,7 @@ from typing import Any
 import pyarrow as pa
 import pytest
 import requests
+from principals import DEX_SCOPE
 
 
 CATALOG = os.environ.get("LANCE_E2E_CATALOG_URL", "")
@@ -63,7 +64,7 @@ def _auth_headers() -> dict[str, str]:
         "client_id": "lance-catalog",
         "username": "alice@example.com",
         "password": "password",
-        "scope": "openid",
+        "scope": DEX_SCOPE,
     }
     if DEX_SECRET:
         data["client_secret"] = DEX_SECRET

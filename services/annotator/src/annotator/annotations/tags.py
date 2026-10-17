@@ -94,7 +94,7 @@ def apply_tags(
     state: StateDep,
     # The VERIFIED subject, never a header (docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit": any caller could sign another
     # person's name onto annotation provenance via `X-User`). `current_subject` is `anon` with
-    # OIDC off (byte-identical dev behaviour), the token's `sub` with it on, 401 with no token,
+    # OIDC off (byte-identical dev behaviour), the token's principal key with it on, 401 with no token,
     # 503 when enabled-but-unwired — the same no-header-fallback rule the projects plane got.
     author: CurrentSubject,
     body: TagBatch,

@@ -28,7 +28,8 @@ from fastapi.testclient import TestClient
 from tests.integration.lineage_app import SUBJECT_HEADER, free_port, governed_lineage, live_catalog, live_lineage, run_event
 
 
-_PIPELINE = "etl-runner"
+#: The pipeline reading the feed, under its own service account.
+_PIPELINE = "kubernetes~system:serviceaccount:etl:etl-runner"
 _ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
 
 #: The tables the pipeline may see. `acme-silver$hidden` and `globex-silver$orders` are someone else's.

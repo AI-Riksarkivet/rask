@@ -60,6 +60,7 @@ from annotator.projects.models import (
     Task,
     TaskState,
     Transition,
+    notified_user,
 )
 from annotator.projects.ontology import LinkLike, ShapeLike, validate_against_ontology
 from annotator.projects.project_actor import AnnotationProjectActorInterface
@@ -511,5 +512,5 @@ class AnnotationTaskActor(Actor, AnnotationTaskActorInterface, Remindable):
                 # independent of the actor runtime — which is what makes it assertable at all.
                 object_id=f"annotation_task:{task_id}",
                 actor="system:annotator",
-                extra={"subject": f"user:{holder}", "event": "lease_expired"},
+                extra={"subject": notified_user(holder), "event": "lease_expired"},
             )

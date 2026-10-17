@@ -2,7 +2,7 @@
 
 Pins: only a grantable BASE rung (owner/writer/reader/validator) may be written — a derived ``can_*`` action
 or the structural ``parent`` edge is a 4xx, never a junk tuple; the grantee is resolved like access/check
-(bare id → ``user:…``, a qualified userset verbatim); grant writes, revoke deletes; an OpenFGA outage
+(a principal key → ``user:…``, a qualified userset verbatim); grant writes, revoke deletes; an OpenFGA outage
 propagates (fail-closed), never a silent no-op. Sync via ``asyncio.run`` — no async-plugin dependency.
 """
 
@@ -23,7 +23,13 @@ from catalog.core.config import Settings
 from service_kit.control_emit import NoopControlEmitter
 from service_kit.governed.audit import AUDIT_LOGGER, FAILURE, SUCCESS, configure_audit
 from service_kit.governed.oidc import IDToken
+from service_kit.governed.person_identity import PersonPrincipal
+from service_kit.governed.principal import Principal
 from service_kit.lakehouse.ns_errors import status_for
+
+
+def _person(name: str) -> PersonPrincipal:
+    return PersonPrincipal(principal=Principal(idp_id="dex", subject=name), claims=IDToken(iss="i", sub=name, aud="lance", exp=1, iat=1))
 
 
 def _run(
@@ -62,7 +68,7 @@ def _run(
     # digs either out of `request.app.state`, so the drive hands them over directly.
     client = cast(OpenFgaClient, object())
     settings = cast(Settings, SimpleNamespace(fga_enabled=True, delimiter="$"))
-    token = cast(IDToken, SimpleNamespace(sub="alice"))
+    token = _person("alice")
     body = access.AccessGrantRequest(user=user, relation=relation)
     resp = asyncio.run(access._access_mutate(client, NoopControlEmitter(), settings, token, fga_type, ident, body, grant=grant))
     return resp, captured
@@ -112,7 +118,7 @@ def test_grantable_relations_are_the_base_rungs_only() -> None:
 
 
 def test_revoke_deletes_the_tuple_and_reports_not_granted(monkeypatch: pytest.MonkeyPatch) -> None:
-    resp, captured = _run(monkeypatch, user="bob", relation="writer", grant=False)
+    resp, captured = _run(monkeypatch, user="dex~bob", relation="writer", grant=False)
     assert resp.granted is False
     assert captured[0].relation == "writer"
 
@@ -125,7 +131,7 @@ def test_userset_grantee_passes_through_verbatim(monkeypatch: pytest.MonkeyPatch
 def test_derived_can_relation_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
     # InvalidInput (400), not UnsupportedOperation (501): the rung NAME is client input — catalog-api-10.
     with pytest.raises(InvalidInputError):
-        _run(monkeypatch, user="bob", relation="can_read_data", grant=True)
+        _run(monkeypatch, user="dex~bob", relation="can_read_data", grant=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -140,11 +146,11 @@ def test_derived_can_relation_is_rejected(monkeypatch: pytest.MonkeyPatch) -> No
 def test_check_with_an_unknown_relation_is_a_400(monkeypatch: pytest.MonkeyPatch) -> None:
     """``access/check`` with a relation the model does not define answers InvalidInput (400), not 406."""
     monkeypatch.setattr(access, "_can_relations", lambda fga_type: ("can_get_metadata", "can_read_data"))
-    body = access.AccessCheckRequest(user="gina", relation="not_a_real_relation")
+    body = access.AccessCheckRequest(user="dex~gina", relation="not_a_real_relation")
     # The injected OpenFGA client is never used: the check refuses before any call.
     client = cast(OpenFgaClient, object())
     settings = cast(Settings, SimpleNamespace(fga_enabled=True, delimiter="$"))
-    token = cast(IDToken, SimpleNamespace(sub="alice"))
+    token = _person("alice")
     with pytest.raises(InvalidInputError) as exc:
         asyncio.run(access._access_check(client, settings, token, "table", "db1$users", body))
     assert status_for(int(exc.value.code)) == 400, "a client-supplied bad relation must surface as the client's error"
@@ -156,8 +162,8 @@ def test_the_auth_off_answer_stays_unsupported() -> None:
     the feature."""
     client = cast(OpenFgaClient, object())
     settings = cast(Settings, SimpleNamespace(fga_enabled=False, delimiter="$"))
-    token = cast(IDToken, SimpleNamespace(sub="alice"))
-    body = access.AccessCheckRequest(user="gina", relation="can_read_data")
+    token = _person("alice")
+    body = access.AccessCheckRequest(user="dex~gina", relation="can_read_data")
     with pytest.raises(Exception) as exc:
         asyncio.run(access._access_check(client, settings, token, "table", "db1$users", body))
     assert (
@@ -169,7 +175,7 @@ def test_access_graph_builds_nodes_and_edges(monkeypatch: pytest.MonkeyPatch) ->
     # #81: read_object_tuples → a one-hop graph. A grant tuple is an inbound edge subject→obj labelled with
     # the rung; the parent tuple is an outbound edge obj→parent.
     tuples: list[Any] = [
-        access.fga.ClientTuple(user="user:alice", relation="owner", object="table:db1$t"),
+        access.fga.ClientTuple(user="user:dex~alice", relation="owner", object="table:db1$t"),
         access.fga.ClientTuple(user="role:eng#assignee", relation="reader", object="table:db1$t"),
         access.fga.ClientTuple(user="namespace:db1", relation="parent", object="table:db1$t"),
     ]
@@ -180,15 +186,15 @@ def test_access_graph_builds_nodes_and_edges(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr(access.fga, "read_object_tuples", fake_read)
     client = cast(OpenFgaClient, object())
     settings = cast(Settings, SimpleNamespace(fga_enabled=True, delimiter="$"))
-    token = cast(IDToken, SimpleNamespace(sub="alice"))
+    token = _person("alice")
     resp = asyncio.run(access._access_graph(client, settings, token, "table", "db1$t"))
 
     assert resp.object == "table:db1$t"
-    assert {n.id for n in resp.nodes} == {"table:db1$t", "user:alice", "role:eng#assignee", "namespace:db1"}
+    assert {n.id for n in resp.nodes} == {"table:db1$t", "user:dex~alice", "role:eng#assignee", "namespace:db1"}
     # the table node is typed from its prefix
     assert next(n for n in resp.nodes if n.id == "table:db1$t").type == "table"
     edges = {(e.source, e.target, e.relation) for e in resp.edges}
-    assert ("user:alice", "table:db1$t", "owner") in edges  # grant: subject → obj
+    assert ("user:dex~alice", "table:db1$t", "owner") in edges  # grant: subject → obj
     assert ("role:eng#assignee", "table:db1$t", "reader") in edges
     assert ("table:db1$t", "namespace:db1", "parent") in edges  # container: obj → parent
 
@@ -218,15 +224,15 @@ def test_the_grant_audit_row_carries_full_provenance(monkeypatch: pytest.MonkeyP
     logger.addHandler(handler)
     configure_audit(enabled=True)
     try:
-        _run(monkeypatch, user="bob", relation="writer", grant=True, ident="db1$users")
+        _run(monkeypatch, user="dex~bob", relation="writer", grant=True, ident="db1$users")
     finally:
         logger.removeHandler(handler)
 
     rows = [{k: v for k, v in r.__dict__.items() if k.startswith("audit.")} for r in handler.records if r.__dict__.get("audit.action") == "access_grant"]
     assert rows, "the grant door emitted no access_grant audit row — provenance is unrecoverable"
     row = rows[-1]
-    assert row["audit.subject"] == "alice", "the GRANTOR is missing — this is the field the tuple cannot carry"
-    assert row["audit.grantee"] == "user:bob"
+    assert row["audit.subject"] == "dex~alice", "the GRANTOR is missing — this is the field the tuple cannot carry"
+    assert row["audit.grantee"] == "user:dex~bob"
     assert row["audit.relation"] == "writer"
     assert row["audit.resource"] == "table:db1$users"
     assert row["audit.outcome"] == SUCCESS
@@ -241,13 +247,13 @@ def test_a_failed_grant_is_audited_too_so_attempts_are_reviewable(monkeypatch: p
     configure_audit(enabled=True)
     try:
         with pytest.raises(ServiceUnavailableError):
-            _run(monkeypatch, user="bob", relation="writer", grant=True, outage=True)
+            _run(monkeypatch, user="dex~bob", relation="writer", grant=True, outage=True)
     finally:
         logger.removeHandler(handler)
 
     rows = [{k: v for k, v in r.__dict__.items() if k.startswith("audit.")} for r in handler.records if r.__dict__.get("audit.action") == "access_grant"]
     assert rows and rows[-1]["audit.outcome"] == FAILURE
-    assert rows[-1]["audit.subject"] == "alice" and rows[-1]["audit.grantee"] == "user:bob"
+    assert rows[-1]["audit.subject"] == "dex~alice" and rows[-1]["audit.grantee"] == "user:dex~bob"
 
 
 # --------------------------------------------------------------------------- #

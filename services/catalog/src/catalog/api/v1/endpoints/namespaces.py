@@ -45,7 +45,7 @@ from catalog.api import fga_deps
 from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, LineageEmitterDep, NamespaceDep, SettingsDep, namespace_for_root
 from catalog.api.pagination import paginate
 from catalog.api.rask_params import RaskFlag
-from catalog.api.security import CurrentToken, Principal
+from catalog.api.security import Caller, CurrentToken
 from catalog.core import tier_policy
 from catalog.core.config import Settings
 from catalog.core.formats import reject_unsupported_properties
@@ -232,7 +232,7 @@ async def create_namespace(
             action="namespace_created",
             object_type="namespace",
             object_id=f"namespace:{id}",
-            actor=f"user:{token.sub}" if token else None,
+            actor=f"user:{token.subject}" if token else None,
             extra={"mode": req.mode, "properties": req.properties},
         )
     return response
@@ -311,7 +311,7 @@ async def create_or_keep_namespace(ns: LanceNamespace, segments: list[str], req:
         return CreateNamespaceResponse(properties=getattr(described, "properties", None)), True
 
 
-async def _forget_namespace(settings: Settings, client: OpenFgaClient | None, token: Principal | None, segments: list[str], *, unbind: bool) -> None:
+async def _forget_namespace(settings: Settings, client: OpenFgaClient | None, token: Caller | None, segments: list[str], *, unbind: bool) -> None:
     """Remove every governance record a dropped namespace leaves keyed by its id: the warehouse binding (``unbind``,
     top-level only), then its protection, maintenance policy and FGA tuples, with those of every child an earlier
     attempt removed, which its `child` edges still name (``fga_deps.end_removed_subtree``).
@@ -328,7 +328,7 @@ async def _forget_namespace(settings: Settings, client: OpenFgaClient | None, to
 async def _judge_tier_declaration(
     ns: LanceNamespace,
     settings: Settings,
-    token: Principal | None,
+    token: Caller | None,
     client: OpenFgaClient | None,
     segments: list[str],
     *,
@@ -365,7 +365,7 @@ async def _judge_tier_declaration(
 async def _create_or_replace_empty_namespace(
     ns: LanceNamespace,
     settings: Settings,
-    token: Principal | None,
+    token: Caller | None,
     client: OpenFgaClient | None,
     segments: list[str],
     req: CreateNamespaceRequest,
@@ -486,7 +486,7 @@ async def list_namespaces(
         names = _merge_bound_top_namespaces(names, await _bound_top_namespaces(settings))
 
     if settings.fga_enabled and token is not None and client is not None:
-        listing = await fga.list_objects(client, user=token.sub, relation="can_get_metadata", object_type="namespace")
+        listing = await fga.list_objects(client, user=token.subject, relation="can_get_metadata", object_type="namespace")
         allowed = set(listing.objects)
         names = [name for name in names if f"namespace:{fga.canonical_object_id([*segments, name], delimiter=settings.delimiter)}" in allowed]
 
@@ -502,9 +502,7 @@ def describe_namespace(id: str, ns: NamespaceDep, settings: SettingsDep, body: D
     return native.call(ns, "describe_namespace", req)
 
 
-async def _trash_subtree(
-    ns: LanceNamespace, settings: Settings, token: Principal | None, segments: list[str], descendants: list[tuple[str, list[str]]]
-) -> None:
+async def _trash_subtree(ns: LanceNamespace, settings: Settings, token: Caller | None, segments: list[str], descendants: list[tuple[str, list[str]]]) -> None:
     """DETACH the subtree instead of destroying it — the recoverable half of a cascade (#96).
 
     A trash record pointing at bytes the native cascade already deleted would be a LIE: undrop
@@ -521,7 +519,7 @@ async def _trash_subtree(
     all-or-nothing native destroy it replaces.
     """
     so = settings.storage_options()
-    dropped_by = f"user:{token.sub}" if token is not None else None
+    dropped_by = f"user:{token.subject}" if token is not None else None
     tables = [child for resource, child in descendants if resource == "table"]
     # Deepest-first, so every namespace is empty by the time its own drop runs.
     child_namespaces = sorted((child for resource, child in descendants if resource == "namespace"), key=len, reverse=True)
@@ -662,7 +660,7 @@ async def _destroy_subtree(
 
 
 async def _announce_removed(
-    emitter: LineageEmitter, settings: Settings, segments: list[str], *, operation: str, token: Principal | None, authorization: str | None
+    emitter: LineageEmitter, settings: Settings, segments: list[str], *, operation: str, token: Caller | None, authorization: str | None
 ) -> None:
     """Tell lineage a table stopped existing, so its reconcile does not read it as live forever ([[LH-144]]).
 
@@ -675,7 +673,7 @@ async def _announce_removed(
             emitter,
             segments,
             delimiter=settings.delimiter,
-            author=token.sub if token is not None else None,
+            author=token.subject if token is not None else None,
             version=None,
             operation=operation,
             authorization=authorization,
@@ -709,7 +707,7 @@ async def _require_descendants_unprotected(settings: Settings, descendants: list
         fga_deps.require_not_protected(record or {}, kind=resource, obj_id=canonical, force=False)
 
 
-async def _skip_absent_namespace(settings: Settings, client: OpenFgaClient | None, token: Principal | None, segments: list[str]) -> DropNamespaceResponse:
+async def _skip_absent_namespace(settings: Settings, client: OpenFgaClient | None, token: Caller | None, segments: list[str]) -> DropNamespaceResponse:
     """``mode=Skip`` on a namespace that is not there: succeed, after finishing the trailer a previous drop left.
 
     Skip is the retry lever, and the retry it exists for is a drop that removed the namespace and failed
@@ -871,7 +869,7 @@ async def drop_namespace(
         action="namespace_dropped",
         object_type="namespace",
         object_id=f"namespace:{id}",
-        actor=f"user:{token.sub}" if token else None,
+        actor=f"user:{token.subject}" if token else None,
         extra={"cascade": cascade, "recoverable": recoverable, "descendants_revoked": 0 if recoverable else len(descendants)},
     )
     return response
@@ -1025,7 +1023,7 @@ async def undrop_namespace(
                     emitter,
                     parse_identifier(t_id, settings.delimiter),
                     delimiter=settings.delimiter,
-                    author=token.sub if token is not None else None,
+                    author=token.subject if token is not None else None,
                     version=None,
                     operation=REGISTER_TABLE,
                     authorization=authorization,
@@ -1055,7 +1053,7 @@ async def undrop_namespace(
         action="namespace_undropped",
         object_type="namespace",
         object_id=f"namespace:{canonical}",
-        actor=f"user:{token.sub}" if token is not None else None,
+        actor=f"user:{token.subject}" if token is not None else None,
         extra={"namespaces": len(namespace_records), "tables": len(table_records) - skipped, "declared_only_skipped": skipped},
     )
     return response
@@ -1089,7 +1087,7 @@ async def set_namespace_protection(
             "kind": "namespace",
             "id": canonical,
             "protected": "true",
-            "set_by": f"user:{token.sub}" if token is not None else "anonymous",
+            "set_by": f"user:{token.subject}" if token is not None else "anonymous",
         }
         await run_in_threadpool(protection.set_protection, settings.registry_root, so, record)
     else:
@@ -1099,7 +1097,7 @@ async def set_namespace_protection(
         action="namespace_protected" if body.protected else "namespace_unprotected",
         object_type="namespace",
         object_id=f"namespace:{canonical}",
-        actor=f"user:{token.sub}" if token is not None else None,
+        actor=f"user:{token.subject}" if token is not None else None,
         extra={},
     )
     return ProtectionResponse(id=canonical, protected=body.protected)
@@ -1162,7 +1160,7 @@ async def list_tables(
         # `.objects` + `.truncated`: past OpenFGA's 1000-object cap this listing is SHORT, and the
         # page cursor below would be minted from the shortened list. Surfaced to the caller rather
         # than only logged — a client cannot otherwise tell a small estate from a truncated answer.
-        listing = await fga.list_objects(client, user=token.sub, relation="can_read_data", object_type="table")
+        listing = await fga.list_objects(client, user=token.subject, relation="can_read_data", object_type="table")
         allowed = set(listing.objects)
         authorization_truncated = listing.truncated
         names = [name for name in names if f"table:{fga.canonical_object_id([*segments, name], delimiter=settings.delimiter)}" in allowed]

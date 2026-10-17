@@ -30,9 +30,11 @@ _ROWS = pa.table({"id": pa.array([1, 2], pa.int64())})
 
 @pytest.fixture
 def governed(real_ns_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> Iterator[TupleStore]:
-    """The real catalog with OIDC and FGA on, as alice, over an in-memory tuple store, with one table ``db$src``."""
+    """The real catalog with OIDC and FGA on, as the person `dex~alice`, over an in-memory tuple store, with one table ``db$src``."""
     app = real_ns_client.app
-    settings = get_settings().model_copy(update={"oidc_enabled": True, "oidc_issuer": "https://idp.example", "oidc_audience": "lance", "fga_enabled": True})
+    settings = get_settings().model_copy(
+        update={"oidc_enabled": True, "oidc_connectors": {"local": "dex"}, "oidc_issuer": "https://idp.example", "oidc_audience": "lance", "fga_enabled": True}
+    )
     app.dependency_overrides[get_settings] = lambda: settings
     monkeypatch.setattr(app.state, "oidc", MagicMock())
     act_as(real_ns_client, "alice")
@@ -59,13 +61,13 @@ def _protected(client: TestClient, table: str) -> bool:
 def test_a_forced_rename_carries_a_direct_grant_protection_and_policy_and_leaves_nothing_at_the_old_id(
     real_ns_client: TestClient, governed: TupleStore
 ) -> None:
-    _ok(real_ns_client, "/management/v1/table/db$src/access/grant", json={"user": "bob", "relation": "reader"})
+    _ok(real_ns_client, "/management/v1/table/db$src/access/grant", json={"user": "dex~bob", "relation": "reader"})
     _ok(real_ns_client, "/management/v1/table/db$src/protection", json={"protected": True})
     _ok(real_ns_client, "/management/v1/table/db$src/policy/set", json={"retention_days": 7})
 
     _ok(real_ns_client, "/v1/table/db$src/rename", params={"force": "true"}, json={"new_table_name": "dst"})
 
-    assert ("user:bob", "reader", "table:db$dst") in governed.tuples, f"bob's reader grant did not follow the table: {sorted(governed.tuples)}"
+    assert ("user:dex~bob", "reader", "table:db$dst") in governed.tuples, f"bob's reader grant did not follow the table: {sorted(governed.tuples)}"
     assert governed.naming(["table:db$src"]) == {}, "a tuple still names the old id, which no table holds"
     assert _protected(real_ns_client, "db$dst"), "the renamed table arrived unprotected"
     assert not _protected(real_ns_client, "db$src"), "the old id is still protected, so a table created there is born protected"

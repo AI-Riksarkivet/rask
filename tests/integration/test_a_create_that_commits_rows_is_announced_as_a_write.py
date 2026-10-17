@@ -7,7 +7,7 @@ names no run, hides v1's rows from a follower acting on writes and leaves v1 wit
 
 Driven over real sockets, as `test_the_commit_feed_is_a_lance_table_followed_forward.py` is: the real catalog app on a
 real `dir` namespace announces each commit to lineage's own app, which records it in the feed this test follows. The
-verified caller is a stand-in (`authenticate` answers alice), because who is signed in is not the claim; that the
+verified caller is a stand-in (`authenticate` answers the person `dex~alice`), because who is signed in is not the claim; that the
 announcement carries the caller as its author is.
 """
 
@@ -26,6 +26,8 @@ import pyarrow.ipc as ipc
 import pytest
 
 from service_kit.governed.oidc import IDToken
+from service_kit.governed.person_identity import PersonPrincipal
+from service_kit.governed.principal import Principal
 from tests.integration.lineage_app import free_port, live_catalog, live_lineage
 
 
@@ -55,12 +57,14 @@ DOORS: dict[str, Callable[[str, pa.Table], None]] = {"create": _through_the_crea
 
 
 @contextmanager
-def _signed_in(subject: str) -> Generator[None]:
-    """Every request to the catalog authenticated as ``subject``."""
+def _signed_in(key: str) -> Generator[None]:
+    """Every request to the catalog authenticated as the person whose principal key is ``key``."""
     from catalog.api.security import authenticate
     from catalog.main import app
 
-    app.dependency_overrides[authenticate] = lambda: IDToken(iss="https://idp.invalid/dex", sub=subject, aud="rask", exp=4102444800, iat=0)
+    principal = Principal.parse(key)
+    claims = IDToken(iss="https://idp.invalid/dex", sub=principal.subject, aud="rask", exp=4102444800, iat=0)
+    app.dependency_overrides[authenticate] = lambda: PersonPrincipal(principal=principal, claims=claims)
     try:
         yield
     finally:
@@ -93,7 +97,7 @@ def test_a_create_that_commits_rows_is_announced_as_a_write(tmp_path: Path, monk
     with (
         live_catalog(tmp_path / "catalog", monkeypatch, **announced) as catalog_url,
         live_lineage(catalog_url, monkeypatch, port=port) as lineage_url,
-        _signed_in("alice"),
+        _signed_in("dex~alice"),
     ):
         assert httpx.post(f"{catalog_url}/v1/namespace/{_NAMESPACE}/create", json={}, timeout=60).status_code == 200
         DOORS[door](catalog_url, _rows(count))
@@ -101,7 +105,7 @@ def test_a_create_that_commits_rows_is_announced_as_a_write(tmp_path: Path, monk
 
     assert len(creates) == 1, f"{door}: the create must appear once in the feed, got {creates}"
     row, event = creates[0], creates[0]["event"]
-    assert _facets(event)["author"]["sub"] == "alice", f"{door}: the create is not the verified caller's: {_facets(event)}"
+    assert _facets(event)["author"]["sub"] == "dex~alice", f"{door}: the create is not the verified caller's: {_facets(event)}"
     if count == 0:
         assert row["job"] is None and "run" not in event, f"{door}: a create that committed no rows ran no job: {event}"
         return

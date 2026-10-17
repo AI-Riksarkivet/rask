@@ -14,6 +14,8 @@ from lance_namespace import ListTablesResponse, UnauthenticatedError
 
 from catalog.core.config import Settings, get_settings
 from service_kit.governed.oidc import IDToken
+from service_kit.governed.person_identity import PersonPrincipal
+from service_kit.governed.principal import Principal
 
 
 def _enabled_settings() -> Settings:
@@ -22,6 +24,7 @@ def _enabled_settings() -> Settings:
     return Settings.model_validate(
         {
             "oidc_enabled": True,
+            "oidc_connectors": {"local": "dex"},
             "oidc_issuer": "https://idp.example",
             "oidc_audience": "lance",
             "s3_access_key_id": "x",
@@ -42,7 +45,7 @@ def test_oidc_enabled_missing_token_is_401_problem_json(client: TestClient) -> N
 def test_oidc_enabled_valid_token_passes_through(client: TestClient, fake_ns: MagicMock) -> None:
     fake_ns.list_all_tables.return_value = ListTablesResponse(tables=[])
     verifier = MagicMock()
-    verifier.verify.return_value = IDToken(iss="i", sub="s", aud="lance", exp=1, iat=1)
+    verifier.verify.return_value = PersonPrincipal(principal=Principal(idp_id="dex", subject="s"), claims=IDToken(iss="i", sub="s", aud="lance", exp=1, iat=1))
     client.app.dependency_overrides[get_settings] = _enabled_settings
     client.app.state.oidc = verifier
 
@@ -53,7 +56,7 @@ def test_oidc_enabled_valid_token_passes_through(client: TestClient, fake_ns: Ma
 
 @pytest.mark.parametrize("missing", ["issuer", "audience"])
 def test_settings_rejects_enabled_oidc_without_provider(missing: str) -> None:
-    kwargs: dict[str, object] = {"oidc_issuer": "https://idp.example", "oidc_audience": "lance"}
+    kwargs: dict[str, object] = {"oidc_issuer": "https://idp.example", "oidc_audience": "lance", "oidc_connectors": {"local": "dex"}}
     kwargs[f"oidc_{missing}"] = None
     with pytest.raises(ValueError, match="OIDC"):
         Settings.model_validate({"oidc_enabled": True, "s3_access_key_id": "x", "s3_secret_access_key": "x", **kwargs})

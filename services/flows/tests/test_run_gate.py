@@ -51,7 +51,7 @@ def test_a_denial_is_a_403_that_names_the_missing_tuple() -> None:
     async def _deny(*, user: str, relation: str, obj: str) -> bool:
         return False
 
-    app.dependency_overrides[security._deps.current_subject] = lambda: "mallory"
+    app.dependency_overrides[security._deps.current_subject] = lambda: "dex~mallory"
     app.dependency_overrides[security._deps.get_checker] = lambda: _deny
     with TestClient(app) as client:
         resp = client.post("/api/flows/runs", json=BODY)
@@ -73,7 +73,7 @@ def test_an_allow_proceeds_to_the_run() -> None:
     async def _allow(*, user: str, relation: str, obj: str) -> bool:
         return True
 
-    app.dependency_overrides[security._deps.current_subject] = lambda: "alice"
+    app.dependency_overrides[security._deps.current_subject] = lambda: "dex~alice"
     app.dependency_overrides[security._deps.get_checker] = lambda: _allow
     with TestClient(app) as client:
         resp = client.post("/api/flows/runs", json=BODY)
@@ -94,6 +94,7 @@ def test_a_governed_stack_with_no_verifier_is_a_503_not_an_open_door() -> None:
         # either way; what these tests exercise is the missing VERIFIER, not the scheme.
         oidc_issuer="https://dex.test/dex",
         oidc_audience="rask",
+        oidc_connectors={"local": "dex"},
         fga_enabled=True,
     )
     with TestClient(_app(settings)) as client:
@@ -124,7 +125,7 @@ def test_reading_a_run_is_refused_with_the_same_named_tuple() -> None:
     async def _deny(*, user: str, relation: str, obj: str) -> bool:
         return False
 
-    app.dependency_overrides[security._deps.current_subject] = lambda: "mallory"
+    app.dependency_overrides[security._deps.current_subject] = lambda: "dex~mallory"
     app.dependency_overrides[security._deps.get_checker] = lambda: _deny
     with TestClient(app) as client:
         resp = client.get("/api/flows/runs/run-abc")
@@ -145,7 +146,7 @@ def test_a_denied_reader_cannot_tell_a_real_run_from_a_missing_one() -> None:
     async def _deny(*, user: str, relation: str, obj: str) -> bool:
         return False
 
-    app.dependency_overrides[security._deps.current_subject] = lambda: "mallory"
+    app.dependency_overrides[security._deps.current_subject] = lambda: "dex~mallory"
     app.dependency_overrides[security._deps.get_checker] = lambda: _deny
     with TestClient(app) as client:
         assert client.get("/api/flows/runs/run-abc").status_code == 403
@@ -160,7 +161,7 @@ def test_the_writer_tier_reads_its_own_run() -> None:
     async def _allow(*, user: str, relation: str, obj: str) -> bool:
         return True
 
-    app.dependency_overrides[security._deps.current_subject] = lambda: "alice"
+    app.dependency_overrides[security._deps.current_subject] = lambda: "dex~alice"
     app.dependency_overrides[security._deps.get_checker] = lambda: _allow
     with TestClient(app) as client:
         resp = client.get("/api/flows/runs/run-abc")
@@ -179,6 +180,7 @@ def test_a_governed_stack_with_no_verifier_will_not_read_a_run_either() -> None:
         # either way; what these tests exercise is the missing VERIFIER, not the scheme.
         oidc_issuer="https://dex.test/dex",
         oidc_audience="rask",
+        oidc_connectors={"local": "dex"},
         fga_enabled=True,
     )
     app = _app(settings)

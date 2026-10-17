@@ -34,6 +34,8 @@ def _auth_on(client: TestClient) -> None:
     """Turn on OIDC + FGA with a verifier that returns alice, mirroring `test_authz.py::_wire`."""
     from catalog.core.config import Settings
     from service_kit.governed.oidc import IDToken
+    from service_kit.governed.person_identity import PersonPrincipal
+    from service_kit.governed.principal import Principal
 
     def _settings() -> Settings:
         # `model_validate`, not `Settings(...)`: the fields carry LANCE_* aliases and
@@ -41,6 +43,7 @@ def _auth_on(client: TestClient) -> None:
         return Settings.model_validate(
             {
                 "oidc_enabled": True,
+                "oidc_connectors": {"local": "dex"},
                 "oidc_issuer": "https://idp.example",
                 "oidc_audience": "lance",
                 "fga_enabled": True,
@@ -52,7 +55,9 @@ def _auth_on(client: TestClient) -> None:
 
     client.app.dependency_overrides[get_settings] = _settings
     verifier = MagicMock()
-    verifier.verify.return_value = IDToken(iss="i", sub="alice", aud="lance", exp=1, iat=1)
+    verifier.verify.return_value = PersonPrincipal(
+        principal=Principal(idp_id="dex", subject="alice"), claims=IDToken(iss="i", sub="alice", aud="lance", exp=1, iat=1)
+    )
     client.app.state.oidc = verifier
     fga_client = MagicMock()
     fga_client.close = AsyncMock()

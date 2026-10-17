@@ -63,7 +63,7 @@ ZERO_REFUSALS: dict[tuple[str, str], int] = {(door.value, reason): 0 for door in
 RUN_EVENT: dict[str, Any] = {
     "eventType": "FAIL",
     "eventTime": "2026-08-09T12:00:00+00:00",
-    "run": {"runId": "run-77", "facets": {"author": {"name": "alice", "sub": "alice"}}},
+    "run": {"runId": "run-77", "facets": {"author": {"name": "alice", "sub": "dex~alice"}}},
     "outputs": [{"namespace": "bronze", "name": "bronze$pages"}],
 }
 
@@ -75,8 +75,8 @@ GRANT: dict[str, Any] = {
     "action": "grant_added",
     "object_type": "grant",
     "object_id": "table:acme$gold",
-    "actor": "user:admin",
-    "extra": {"relation": "reader", "subject": "user:alice"},
+    "actor": "user:dex~admin",
+    "extra": {"relation": "reader", "subject": "user:dex~alice"},
 }
 TASK: dict[str, Any] = {
     "event_id": "evt-task",
@@ -84,15 +84,15 @@ TASK: dict[str, Any] = {
     "action": "task_assigned",
     "object_type": "annotation_task",
     "object_id": "annotation_task:proj-1/task-1",
-    "actor": "user:manager",
-    "extra": {"subject": "user:bob"},
+    "actor": "user:dex~manager",
+    "extra": {"subject": "user:dex~bob"},
 }
 ANNOTATION_GRANT: dict[str, Any] = {
     **GRANT,
     "event_id": "evt-annotation-grant",
     "object_id": "annotation_project:proj-1",
-    "actor": "user:manager",
-    "extra": {"relation": "annotator", "subject": "user:carol"},
+    "actor": "user:dex~manager",
+    "extra": {"relation": "annotator", "subject": "user:dex~carol"},
 }
 
 
@@ -127,11 +127,11 @@ def _run_event(case: str, *, catalog: Any, intruder: Any) -> dict[str, Any]:
         case "wrong-signer":
             return intruder.sign(RUN_EVENT)
         case "tampered":
-            signed = catalog.sign(RUN_EVENT, on_behalf_of="alice")
+            signed = catalog.sign(RUN_EVENT, on_behalf_of="dex~alice")
             signed["outputs"] = [{"namespace": "gold", "name": "gold$pages"}]
             return signed
         case "valid" | "store-down":
-            return catalog.sign(RUN_EVENT, on_behalf_of="alice")
+            return catalog.sign(RUN_EVENT, on_behalf_of="dex~alice")
         case "unsigned-start":
             return {**RUN_EVENT, "eventType": "START"}
     raise AssertionError(f"no run event for case {case!r}")
@@ -144,13 +144,13 @@ def _control_event(case: str, *, catalog: Any, maintenance: Any) -> dict[str, An
         case "unsigned-catalog-grant":
             return GRANT
         case "grant-signed-by-another-role":
-            return maintenance.sign_control(GRANT, on_behalf_of="user:admin")
+            return maintenance.sign_control(GRANT, on_behalf_of="user:dex~admin")
         case "tampered-grant":
-            signed = catalog.sign_control(GRANT, on_behalf_of="user:admin")
-            signed["extra"]["subject"] = "user:mallory"
+            signed = catalog.sign_control(GRANT, on_behalf_of="user:dex~admin")
+            signed["extra"]["subject"] = "user:dex~mallory"
             return signed
         case "catalog-grant":
-            return catalog.sign_control(GRANT, on_behalf_of="user:admin")
+            return catalog.sign_control(GRANT, on_behalf_of="user:dex~admin")
         case "unsigned-task":
             return TASK
         case "unsigned-annotation-grant":
@@ -273,10 +273,10 @@ def _after_one_delivery(door: str, counted: tuple[str, str] | None) -> Counts:
         pytest.param("enforce", "unsigned", "SUCCESS", {}, ("notifications.signature.refused", "unsigned"), id="enforce-an-unsigned-run"),
         pytest.param("enforce", "wrong-signer", "SUCCESS", {}, ("notifications.signature.refused", "signer"), id="enforce-a-signer-the-estate-does-not-list"),
         pytest.param("enforce", "tampered", "SUCCESS", {}, ("notifications.signature.refused", "signature"), id="enforce-a-run-changed-after-it-was-signed"),
-        pytest.param("enforce", "valid", "SUCCESS", {"alice": 1}, None, id="enforce-a-run-the-catalog-signed-for-its-author"),
+        pytest.param("enforce", "valid", "SUCCESS", {"dex~alice": 1}, None, id="enforce-a-run-the-catalog-signed-for-its-author"),
         pytest.param("enforce", "store-down", "RETRY", {}, None, id="enforce-keys-the-sidecar-cannot-serve"),
         pytest.param("enforce", "unsigned-start", "SUCCESS", {}, None, id="enforce-a-run-the-route-ignores-is-not-checked"),
-        pytest.param("observe", "unsigned", "SUCCESS", {"alice": 1}, ("notifications.signature.would_refuse", "unsigned"), id="observe-an-unsigned-run"),
+        pytest.param("observe", "unsigned", "SUCCESS", {"dex~alice": 1}, ("notifications.signature.would_refuse", "unsigned"), id="observe-an-unsigned-run"),
     ],
     indirect=["signing_door"],
 )
@@ -313,11 +313,13 @@ def test_a_delivery_carrying_the_sidecars_token_reaches_an_inbox_only_when_a_lis
         pytest.param("enforce", "unsigned-catalog-grant", {}, ("notifications.signature.refused", "unsigned"), id="enforce-an-unsigned-catalog-grant"),
         pytest.param("enforce", "grant-signed-by-another-role", {}, ("notifications.signature.refused", "signer"), id="enforce-a-grant-maintenance-signed"),
         pytest.param("enforce", "tampered-grant", {}, ("notifications.signature.refused", "signature"), id="enforce-a-grant-changed-after-it-was-signed"),
-        pytest.param("enforce", "catalog-grant", {"alice": 1}, None, id="enforce-a-grant-the-catalog-signed-for-its-actor"),
-        pytest.param("enforce", "unsigned-task", {"bob": 1}, None, id="enforce-an-unsigned-task-is-exempt-r3"),
-        pytest.param("enforce", "unsigned-annotation-grant", {"carol": 1}, None, id="enforce-an-unsigned-annotation-project-grant-is-exempt-r5"),
+        pytest.param("enforce", "catalog-grant", {"dex~alice": 1}, None, id="enforce-a-grant-the-catalog-signed-for-its-actor"),
+        pytest.param("enforce", "unsigned-task", {"dex~bob": 1}, None, id="enforce-an-unsigned-task-is-exempt-r3"),
+        pytest.param("enforce", "unsigned-annotation-grant", {"dex~carol": 1}, None, id="enforce-an-unsigned-annotation-project-grant-is-exempt-r5"),
         pytest.param("enforce", "unsigned-unnamed-action", {}, None, id="enforce-an-action-the-route-ignores-is-not-checked"),
-        pytest.param("observe", "unsigned-catalog-grant", {"alice": 1}, ("notifications.signature.would_refuse", "unsigned"), id="observe-an-unsigned-grant"),
+        pytest.param(
+            "observe", "unsigned-catalog-grant", {"dex~alice": 1}, ("notifications.signature.would_refuse", "unsigned"), id="observe-an-unsigned-grant"
+        ),
     ],
     indirect=["signing_door"],
 )

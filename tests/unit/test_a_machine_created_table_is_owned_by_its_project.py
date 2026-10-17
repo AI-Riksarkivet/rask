@@ -26,11 +26,13 @@ from typing import TYPE_CHECKING, Any, cast
 import pytest
 
 from catalog.api import fga_deps
-from catalog.api.security import Principal
+from catalog.api.security import Caller
 from catalog.core.config import Settings
 from service_kit.governed import fga
 from service_kit.governed.machine_identity import ServicePrincipal
 from service_kit.governed.oidc import IDToken
+from service_kit.governed.person_identity import PersonPrincipal
+from service_kit.governed.principal import Principal
 
 
 if TYPE_CHECKING:
@@ -40,11 +42,18 @@ if TYPE_CHECKING:
 def _settings() -> Settings:
     base = {"LANCE_S3_ACCESS_KEY_ID": "x", "LANCE_S3_SECRET_ACCESS_KEY": "y"}
     return Settings.model_validate(
-        {**base, "RASK_FGA_ENABLED": True, "RASK_OIDC_ENABLED": True, "RASK_OIDC_ISSUER": "https://dex", "RASK_OIDC_AUDIENCE": "rask"}
+        {
+            **base,
+            "RASK_FGA_ENABLED": True,
+            "RASK_OIDC_ENABLED": True,
+            "RASK_OIDC_ISSUER": "https://dex",
+            "RASK_OIDC_AUDIENCE": "rask",
+            "RASK_OIDC_CONNECTORS": {"local": "dex"},
+        }
     )
 
 
-async def _tuples_written(token: Principal, monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str, str]]:
+async def _tuples_written(token: Caller, monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str, str]]:
     """The TUPLES one table create actually writes, as (user, relation, object).
 
     Captured at `write_tuples` rather than at `grant_on_create`, because the call still happens either
@@ -88,5 +97,6 @@ async def test_a_HUMAN_creating_a_table_still_owns_it(monkeypatch: pytest.Monkey
     """The half that must not change. A person who creates a table owns it, exactly as before —
     this narrows machines, not people, and a fix that took the human's grant too would make every
     interactive create unmanageable by its own author."""
-    written = await _tuples_written(IDToken(sub="alice", iss="https://dex", aud="rask", iat=0, exp=1), monkeypatch)
-    assert ("user:alice", "owner", "table:acme-silver$features") in written, f"a human create seeded no ownership: {written}"
+    alice = PersonPrincipal(principal=Principal(idp_id="dex", subject="alice"), claims=IDToken(sub="alice", iss="https://dex", aud="rask", iat=0, exp=1))
+    written = await _tuples_written(alice, monkeypatch)
+    assert ("user:dex~alice", "owner", "table:acme-silver$features") in written, f"a human create seeded no ownership: {written}"

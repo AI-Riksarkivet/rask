@@ -19,8 +19,6 @@ Run: ``kubectl port-forward svc/lance-ns-catalog 8000:8000`` + ``svc/lance-ns-de
 
 from __future__ import annotations
 
-import base64
-import json
 import os
 import subprocess
 import time
@@ -28,6 +26,7 @@ from typing import Any
 
 import pytest
 import requests
+from principals import DEX_SCOPE, principal_of
 
 
 CATALOG = os.environ.get("LANCE_E2E_CATALOG_URL", "")
@@ -64,7 +63,7 @@ def _token(user: str) -> str:
             "client_secret": "lance-catalog-secret",
             "username": user,
             "password": "password",
-            "scope": "openid email",
+            "scope": DEX_SCOPE,
         },
         timeout=10,
     )
@@ -73,9 +72,8 @@ def _token(user: str) -> str:
 
 
 def _sub(token: str) -> str:
-    payload = token.split(".")[1]
-    payload += "=" * (-len(payload) % 4)
-    return json.loads(base64.urlsafe_b64decode(payload))["sub"]
+    """The principal the catalog keys this bearer on ([[LH-063]])."""
+    return principal_of(CATALOG, token)
 
 
 @pytest.fixture(scope="module")

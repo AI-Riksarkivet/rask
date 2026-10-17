@@ -32,13 +32,13 @@ import asyncio
 import functools
 import json
 import logging
-import re
 import unicodedata
 from collections.abc import Awaitable, Callable, Iterable, Sequence
 from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Final, Literal, NamedTuple, Self, cast, override
+from urllib.parse import unquote
 
 import aiohttp
 from lance_namespace import InvalidInputError, ServiceUnavailableError
@@ -85,6 +85,7 @@ from tenacity import (
 
 from service_kit.governed.audit import SUCCESS, audit
 from service_kit.governed.machine_identity import read_identity_token
+from service_kit.governed.principal import Principal
 
 
 log = logging.getLogger(__name__)
@@ -187,41 +188,43 @@ def model_types() -> frozenset[str]:
     return frozenset(str(definition["type"]) for definition in load_model()["type_definitions"])
 
 
-#: The two characters a subject may carry that a `user` object id may not. OpenFGA refuses a user with a second `:`
-#: ("the 'user' field is malformed", HTTP 400, measured on the live store 2026-10-14 with
-#: `user:kubernetes~system:serviceaccount:default:rask-sa-maintenance`) and accepts the same id with `:` written `%3A`.
-#: `%` is encoded first so the encoding is reversible; nothing else is touched, so an IdP subject, which carries
-#: neither, is its own id and every tuple that already names one is unchanged.
-_SUBJECT_ESCAPES: Final = (("%", "%25"), (":", "%3A"))
-_ENCODED_SUBJECT: Final = re.compile("%(25|3A)")
+#: The model's typed wildcard: `managed_access` is typed `[user:*, role:*]`, and a grant API may name it as written.
+USER_WILDCARD: Final = "user:*"
 
 
 def user_object(subject: str) -> str:
-    """The OpenFGA user a subject is: ``user:`` and the subject, percent-encoded so OpenFGA accepts the id.
+    """The OpenFGA user a subject is (`Principal.fga_user`): `user:` and the principal key, percent-encoded.
 
-    The one place a subject becomes a ``user`` id; :func:`subject_of` is its inverse, for ids read back from the store.
+    The one place a subject becomes a `user` id; :func:`subject_of` is its inverse, for ids read back from the store. A
+    subject that is not a principal (`<idp-id>~<subject>`) is refused `InvalidInputError`, so no tuple, seed or check
+    can name a bare name nobody can authenticate as ([[LH-063]]).
     """
-    for raw, escaped in _SUBJECT_ESCAPES:
-        subject = subject.replace(raw, escaped)
-    return f"user:{subject}"
+    try:
+        return Principal.parse(subject).fga_user
+    except ValueError as exc:
+        raise InvalidInputError(f"{subject!r} is not a principal: {exc}") from exc
 
 
 def subject_of(user_id: str) -> str:
     """The subject a ``user`` object id names (the id after ``user:``): the inverse of :func:`user_object`."""
-    return _ENCODED_SUBJECT.sub(lambda escape: "%" if escape.group(1) == "25" else ":", user_id)
+    return unquote(user_id)
 
 
 def grantee_object(grantee: str) -> str:
-    """The OpenFGA user a grant names: an object of another model type passes, a subject becomes its ``user``.
+    """The OpenFGA user a grant names: an object of another model type passes, a principal becomes its ``user``.
 
-    ``team:eng#member``, ``role:validators#assignee`` and ``project:p`` name objects of the model's own types and pass
-    as written. ``user:<subject>`` and a bare subject are the user that subject is, encoded by :func:`user_object`, so a
-    service account's subject (``kubernetes~system:serviceaccount:<ns>:<sa>``) is granted the way a person's is.
+    ``team:eng#member``, ``role:validators#assignee``, ``project:p`` and the typed wildcard ``user:*`` name objects of
+    the model's own grammar and pass as written. ``user:<id>`` is an OpenFGA user id, the form the store hands back,
+    so it is decoded and encoded again (:func:`subject_of`, :func:`user_object`): a stored id a reader echoes back names
+    the tuple it came from. A bare value is a principal key (``<idp-id>~<subject>``), a service account's included, and
+    is encoded once. Anything that names no principal is refused ``InvalidInputError``.
     """
+    if grantee == USER_WILDCARD:
+        return grantee
     kind, typed, rest = grantee.partition(":")
     if typed and kind != "user" and kind in model_types():
         return grantee
-    return user_object(rest if typed and kind == "user" else grantee)
+    return user_object(subject_of(rest) if typed and kind == "user" else grantee)
 
 
 def is_object_id(obj: str) -> bool:
@@ -1104,7 +1107,7 @@ async def check(
     wrong. Contextual tuples are per-request and never persisted, but they are evaluated like stored
     ones, so one carrying the clock is refused (:func:`reject_stored_clock`) before anything is sent.
 
-    Callers pass a BARE subject id (the token's ``sub``) and this sends the user it is (:func:`user_object`). Pass
+    Callers pass a principal key (the caller's ``subject``) and this sends the user it is (:func:`user_object`). Pass
     ``qualify=False`` when ``user`` is ALREADY a full subject — a ``type:id`` user or a ``type:id#rel``
     userset — so it is sent verbatim (the access-simulator probes arbitrary subjects, incl. usersets;
     double-prefixing them to ``user:user:…`` would make every Check falsely deny — review 2026-07-20).
@@ -1249,7 +1252,7 @@ async def list_objects(
 ) -> ObjectListing:
     """Return the objects of ``object_type`` the user has ``relation`` on (e.g. ``table:…``).
 
-    Callers pass a BARE subject id (the token's ``sub``) and this sends the user it is (:func:`user_object`). Pass
+    Callers pass a principal key (the caller's ``subject``) and this sends the user it is (:func:`user_object`). Pass
     ``qualify=False`` when ``user`` is ALREADY a full subject — a ``type:id`` user or a ``type:id#rel``
     userset — exactly as :func:`check` does. Without that hatch the estate-admin explorer could only ask
     "what can this *user* reach", never "what can ``team:eng#member`` reach", and in THIS model the
@@ -2042,7 +2045,7 @@ async def grant_on_create(
 ) -> None:
     """Grant the creator ownership of a just-created object, in a single write.
 
-    Always writes ``user:<sub> owner <resource>:<obj_id>`` so the creator can
+    Always writes ``user:<principal> owner <resource>:<obj_id>`` (:func:`user_object` of the creator) so the creator can
     manage what they made. When ``parent_object`` is given it *also* writes
     ``<resource>:<obj_id> parent <parent_object>`` so the object inherits
     reader/writer/owner down the hierarchy (per the model). Compute it with

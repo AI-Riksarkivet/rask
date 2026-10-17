@@ -27,8 +27,8 @@ from tests.integration.lineage_app import SUBJECT_HEADER, governed_lineage, live
 
 
 _TABLE = "acme-silver$pages"
-_ALICE = "alice"
-_BOB = "bob"
+_ALICE = "dex~alice"
+_BOB = "dex~bob"
 
 
 @pytest.fixture

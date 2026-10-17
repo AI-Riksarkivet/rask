@@ -29,7 +29,7 @@ from openfga_sdk import OpenFgaClient
 
 from catalog.api import fga_deps
 from catalog.api.dependencies import FgaClientDep, SettingsDep
-from catalog.api.security import CurrentToken, Principal
+from catalog.api.security import Caller, CurrentToken
 from catalog.core.config import Settings
 from service_kit.governed import fga
 from service_kit.governed.audit import FAILURE, SUCCESS, audit
@@ -73,7 +73,7 @@ _ACTION: Final = "authz_decision"
 management_router = APIRouter(prefix=DECISIONS_PREFIX, tags=["decisions"])
 
 
-async def _require(client: OpenFgaClient | None, settings: Settings, token: Principal | None, *, permission: str) -> None:
+async def _require(client: OpenFgaClient | None, settings: Settings, token: Caller | None, *, permission: str) -> None:
     """Refuse a caller that does not hold ``permission`` on the estate root: 401, 403, 406 or 503."""
     wired = fga_deps.require_fga(settings, client, feature="authorization decisions")
     if token is None:
@@ -125,7 +125,7 @@ async def decide_check(client: WiredFgaClient, token: CurrentToken, body: Decisi
 
     An object that is no object id is answered False unasked, as `fga.batch_check` answers it: no tuple can name it.
     """
-    caller = token.sub if token else "anonymous"
+    caller = token.subject if token else "anonymous"
     asked = {"grantee": body.user, "relation": body.relation, "objects": ",".join(body.objects)}
     if not _is_decidable(body.relation):
         raise _refused(caller, "check", f"{body.relation!r} is not a relation a decision may ask about", **asked)
@@ -143,7 +143,7 @@ async def decide_check(client: WiredFgaClient, token: CurrentToken, body: Decisi
 @management_router.post("/list-users", dependencies=[Depends(require_can_expand_members)])
 async def decide_list_users(client: WiredFgaClient, token: CurrentToken, body: DecisionListUsers) -> DecisionListUsersResult:
     """The people in a membership userset (``role:<id>#assignee``, ``team:<id>#member``, ``project:<id>#member``)."""
-    caller = token.sub if token else "anonymous"
+    caller = token.subject if token else "anonymous"
     asked = {"resource": body.object, "relation": body.relation}
     obj_type, sep, obj_id = body.object.partition(":")
     if not (sep and obj_id and fga.is_object_id(body.object)) or (obj_type, body.relation) not in _EXPANDABLE_USERSETS:
@@ -160,7 +160,7 @@ async def decide_list_users(client: WiredFgaClient, token: CurrentToken, body: D
 @management_router.post("/governed", dependencies=[Depends(require_can_probe_governance)])
 async def decide_governed(client: WiredFgaClient, token: CurrentToken, body: DecisionGoverned) -> DecisionGovernedResult:
     """Whether any tuple names each ``table:`` object: a refusal on an object nothing governs can never be granted away."""
-    caller = token.sub if token else "anonymous"
+    caller = token.subject if token else "anonymous"
     asked = {"objects": ",".join(body.objects)}
     if foreign := sorted(o for o in body.objects if o.partition(":")[0] not in _PROBEABLE_TYPES):
         raise _refused(caller, "governed", f"governed answers for {', '.join(sorted(_PROBEABLE_TYPES))} objects only, not {', '.join(foreign[:5])}", **asked)

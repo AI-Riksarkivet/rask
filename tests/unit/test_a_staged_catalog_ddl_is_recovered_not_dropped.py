@@ -38,13 +38,15 @@ from lineage_kit.signing import signature_of
 from service_kit.governed import fga
 from service_kit.governed.decider import OpenFgaDecider
 from service_kit.governed.oidc import IDToken
+from service_kit.governed.person_identity import PersonPrincipal
+from service_kit.governed.principal import Principal
 from service_kit.lakehouse import outbox, outbox_metrics
 from service_kit.openlineage import event_identity, run_id_for
 
 
 _CATALOG = "service-catalog"
 _SECRETS = "http://localhost:3500/v1.0/secrets/lance-secrets"
-_AUTHOR = "CgVhbGljZRIFbG9jYWw"
+_AUTHOR = "dex~alice"
 _TABLE = "gov$bronze"
 #: Bytes `json.loads` refuses with something other than `JSONDecodeError`: a plain `ValueError` past 4300
 #: digits and a `RecursionError` past the nesting limit. Any stager holding the outbox credential can write them.
@@ -100,9 +102,20 @@ def catalog(event_signer: Any, respx_allows_unused_routes: None) -> Iterator[Any
         yield signer
 
 
+def _person(name: str) -> PersonPrincipal:
+    return PersonPrincipal(principal=Principal(idp_id="dex", subject=name), claims=IDToken(iss="i", sub=name, aud="lance", exp=0, iat=0))
+
+
 def _settings(tmp_path: Path, *, fga_enabled: bool, signers: frozenset[str] = frozenset({_CATALOG})) -> LineageSettings:
     """Signing enforced, the catalog the one delegator and `signers` the identities that may sign, as the chart renders it."""
-    auth = {"oidc_enabled": True, "oidc_issuer": "https://dex.example", "oidc_audience": "lance", "fga_store_id": "s", "fga_model_id": "m"}
+    auth = {
+        "oidc_enabled": True,
+        "oidc_issuer": "https://dex.example",
+        "oidc_audience": "lance",
+        "oidc_connectors": {"local": "dex"},
+        "fga_store_id": "s",
+        "fga_model_id": "m",
+    }
     return LineageSettings.model_validate(
         {
             "outbox_uri": str(tmp_path / "outbox"),
@@ -250,7 +263,7 @@ def test_the_drain_re_ingests_a_staged_create_through_the_dataset_door(tmp_path:
 @pytest.mark.parametrize(
     ("unsigned", "writer", "reason_names"),
     [
-        pytest.param(False, "somebody-else", "can_write_data", id="a-stamped-author-who-may-not-write"),
+        pytest.param(False, "dex~somebody-else", "can_write_data", id="a-stamped-author-who-may-not-write"),
         pytest.param(True, _AUTHOR, "no signature", id="an-event-no-listed-signer-signed"),
     ],
 )
@@ -456,7 +469,7 @@ def test_a_create_the_feed_already_holds_is_a_replay_and_not_a_loss(tmp_path: Pa
     static change by its derived id, never by a run id it does not have."""
     settings = _settings(tmp_path, fga_enabled=True)
     _, staged_json = _stage_a_create(settings, catalog)
-    _arm_gate(monkeypatch, writer="somebody-else")
+    _arm_gate(monkeypatch, writer="dex~somebody-else")
     held = DatasetEvent.model_validate(json.loads(staged_json))
 
     class _FeedHoldsIt(_Repo):
@@ -490,7 +503,7 @@ def test_the_dlq_replay_refuses_a_create_it_may_not_record_and_leaves_it_staged(
         return dict.fromkeys(objects, relation == "can_get_metadata" or unsigned)
 
     monkeypatch.setattr(fga, "batch_check", see_not_write)
-    operator = IDToken(iss="i", sub="operator", aud="lance", exp=0, iat=0)
+    operator = _person("operator")
     repo, publisher = _Repo(), _Publisher()
 
     with pytest.raises(PermissionDeniedError) as refused:
@@ -556,9 +569,9 @@ def test_the_dlq_replay_refuses_a_signed_create_its_stamped_author_may_not_write
     write the table still cannot replay provenance the catalog attests for a subject who may not."""
     settings = _settings(tmp_path, fga_enabled=True)
     key, _ = _stage_a_create(settings, catalog)
-    _rewrite_staged(settings, key, _restamped(catalog, "somebody-else"))
-    _arm_gate(monkeypatch, writer="operator")
-    operator = IDToken(iss="i", sub="operator", aud="lance", exp=0, iat=0)
+    _rewrite_staged(settings, key, _restamped(catalog, "dex~somebody-else"))
+    _arm_gate(monkeypatch, writer="dex~operator")
+    operator = _person("operator")
     repo, publisher = _Repo(), _Publisher()
 
     with pytest.raises(PermissionDeniedError) as refused:
@@ -573,7 +586,7 @@ def test_a_create_for_a_table_the_operator_cannot_see_is_neither_listed_nor_repl
     settings = _settings(tmp_path, fga_enabled=True)
     key, _ = _stage_a_create(settings, catalog)
     _arm_gate(monkeypatch, writer=_AUTHOR)
-    stranger = IDToken(iss="i", sub="stranger", aud="lance", exp=0, iat=0)
+    stranger = _person("stranger")
     audited: list[tuple[str, str]] = []
     monkeypatch.setattr(dlq.audit, "audit", lambda action, outcome, **_kw: audited.append((action, outcome)))
     repo, publisher = _Repo(), _Publisher()

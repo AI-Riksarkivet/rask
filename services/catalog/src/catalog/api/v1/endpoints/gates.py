@@ -83,7 +83,7 @@ async def set_gate(
         action="gate_set",
         object_type="gate",
         object_id=project,
-        actor=f"user:{token.sub}" if token else None,
+        actor=f"user:{token.subject}" if token else None,
         extra={
             "review_band": str(spec.review_band),
             "review_enabled": str(spec.review_enabled),
@@ -130,7 +130,7 @@ async def delete_gate(
         action="gate_deleted",
         object_type="gate",
         object_id=project,
-        actor=f"user:{token.sub}" if token else None,
+        actor=f"user:{token.subject}" if token else None,
     )
     return {"removed": removed}
 

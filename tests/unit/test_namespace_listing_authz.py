@@ -28,6 +28,9 @@ from lance_namespace import ListTablesResponse
 
 from catalog.api.v1.endpoints import namespaces as ns_ep
 from catalog.core.config import Settings
+from service_kit.governed.oidc import IDToken
+from service_kit.governed.person_identity import PersonPrincipal
+from service_kit.governed.principal import Principal
 
 
 class _Settings:
@@ -58,14 +61,18 @@ async def _list(
     async def _fake_list_objects(_client: object, *, user: str, relation: str, object_type: str) -> ns_ep.fga.ObjectListing:
         assert relation == "can_read_data", f"the listing must be filtered on data access, not on {relation!r}"
         assert object_type == "table"
-        assert user == "ivan"
+        assert user == "dex~ivan"
         # `ObjectListing`, not a bare list: the helper reports whether OpenFGA truncated its answer,
         # and a double returning the old shape would pass while the route reads `.objects` off a list.
         return ns_ep.fga.ObjectListing(objects=list(allowed or []), truncated=False)
 
     monkeypatch.setattr(ns_ep.fga, "list_objects", _fake_list_objects)
 
-    token = None if not fga_enabled else MagicMock(sub="ivan")
+    token = (
+        None
+        if not fga_enabled
+        else PersonPrincipal(principal=Principal(idp_id="dex", subject="ivan"), claims=IDToken(iss="i", sub="ivan", aud="lance", exp=1, iat=1))
+    )
     return await ns_ep.list_tables(
         id="acme-gold",
         ns=MagicMock(),

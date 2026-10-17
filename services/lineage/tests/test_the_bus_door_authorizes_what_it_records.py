@@ -112,6 +112,7 @@ def test_the_ROUTE_itself_refuses_an_unauthorized_delivery(monkeypatch: pytest.M
     monkeypatch.setenv("RASK_OIDC_ENABLED", "true")
     monkeypatch.setenv("RASK_OIDC_ISSUER", "https://idp.invalid/dex")
     monkeypatch.setenv("RASK_OIDC_AUDIENCE", "rask")
+    monkeypatch.setenv("RASK_OIDC_CONNECTORS", '{"local": "dex"}')
 
     from lineage.api.dapr import register_dapr
     from lineage.core.config import get_settings
@@ -132,7 +133,7 @@ def test_the_ROUTE_itself_refuses_an_unauthorized_delivery(monkeypatch: pytest.M
     app.state.provenance = repo
     app.state.decider = OpenFgaDecider(cast("OpenFgaClient", object()))
 
-    payload = {"data": _event(author={"name": "mallory", "sub": "mallory"}).model_dump(by_alias=True)}
+    payload = {"data": _event(author={"name": "mallory", "sub": "dex~mallory"}).model_dump(by_alias=True)}
     response = TestClient(app).post("/lineage-events", json=payload, headers={"dapr-api-token": "s3cret"})
 
     assert response.status_code == 200, "a refusal must be an ACK, not an error the sidecar retries"
@@ -191,7 +192,7 @@ def test_a_BYTE_IDENTICAL_redelivery_is_not_a_new_assertion(monkeypatch: pytest.
     from lineage.api import fga_deps
 
     _deny_all(monkeypatch)
-    event = _event(author={"name": "someone", "sub": "someone"})
+    event = _event(author={"name": "someone", "sub": "dex~someone"})
     stored = event.model_dump(by_alias=True)
     asyncio.run(fga_deps.enforce_bus_authz(event, _request(_Feed(stored)), cast(Any, _Settings()), event.model_dump(by_alias=True)))
 
@@ -206,8 +207,8 @@ def test_a_replay_that_DIFFERS_IN_ANY_FIELD_is_still_refused(monkeypatch: pytest
     from lineage.api import fga_deps
 
     _deny_all(monkeypatch)
-    event = _event(author={"name": "mallory", "sub": "mallory"})
-    stored = _event(author={"name": "the-real-author", "sub": "the-real-author"}).model_dump(by_alias=True)
+    event = _event(author={"name": "mallory", "sub": "dex~mallory"})
+    stored = _event(author={"name": "the-real-author", "sub": "dex~the-real-author"}).model_dump(by_alias=True)
     with pytest.raises(PermissionDeniedError):
         asyncio.run(fga_deps.enforce_bus_authz(event, _request(_Feed(stored)), cast(Any, _Settings()), event.model_dump(by_alias=True)))
 

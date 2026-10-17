@@ -43,6 +43,7 @@ _REAL = (
     f"openbao.externalAddr={SECRET_STORE_URL}",
     "dex.enabled=false",
     "auth.oidc.issuer=https://auth.example.com/dex",
+    "auth.oidc.connectors.ldap=corp",
     "signing.provisioned=true",
     "nats.auth.provisioned=true",
 )

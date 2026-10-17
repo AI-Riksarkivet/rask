@@ -40,6 +40,7 @@ import uuid
 import pyarrow as pa
 import pytest
 import requests
+from principals import DEX_SCOPE
 
 
 lance_namespace = pytest.importorskip("lance_namespace")
@@ -78,7 +79,7 @@ def _token(user: str) -> str:
             "client_secret": DEX_SECRET,
             "username": user,
             "password": "password",
-            "scope": "openid",
+            "scope": DEX_SCOPE,
         },
         timeout=15,
     )

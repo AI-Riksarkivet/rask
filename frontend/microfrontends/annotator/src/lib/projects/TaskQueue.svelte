@@ -976,7 +976,7 @@
 				if (targets && assignee.trim()) void bulkAssign(targets, assignee.trim());
 			}}
 		>
-			<Input bind:value={assignee} placeholder="annotator (OIDC subject or username)" />
+			<Input bind:value={assignee} placeholder="annotator (principal: idp~user id)" />
 			<div class="flex justify-end gap-2">
 				<Button type="button" variant="outline" onclick={() => (bulkAssignFor = null)}
 					>Cancel</Button
@@ -1006,7 +1006,7 @@
 				if (task && assignee.trim()) void fire(task, 'assign', { assignee: assignee.trim() });
 			}}
 		>
-			<Input bind:value={assignee} placeholder="annotator (OIDC subject or username)" />
+			<Input bind:value={assignee} placeholder="annotator (principal: idp~user id)" />
 			<div class="flex justify-end gap-2">
 				<Button type="button" variant="outline" onclick={() => (assignFor = null)}>Cancel</Button>
 				<Button type="submit" disabled={!assignee.trim()}>Assign</Button>

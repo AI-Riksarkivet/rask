@@ -39,7 +39,7 @@ if TYPE_CHECKING:
     from openfga_sdk import OpenFgaClient
 
 
-CALLER = "alice"
+CALLER = "dex~alice"
 _UNANSWERED = CheckError(input_error="validation_error", message="relation not found in the pinned model")
 
 

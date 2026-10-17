@@ -30,8 +30,8 @@ from catalog.api.dependencies import get_namespace
 from catalog.core.config import Settings, get_settings
 from catalog.services import warehouses
 from service_kit.control_emit import CatalogControlEvent
-from service_kit.governed.oidc import IDToken
 from service_kit.lakehouse import maintenance_policies, protection
+from tests.integration.openfga_grants import act_as
 
 
 AUTH = {"Authorization": "Bearer t"}
@@ -78,15 +78,10 @@ class _Announced:
         self.actions.append(event.action)
 
 
-def _act_as(client: TestClient, sub: str) -> None:
-    verifier = client.app.state.oidc
-    verifier.verify.return_value = IDToken(iss="i", sub=sub, aud="lance", exp=1, iat=1)
-
-
 @pytest.fixture
 def governed(real_ns_client: TestClient, tmp_path: Path) -> Iterator[_TupleStore]:
     """The real catalog with OIDC, FGA and warehouses on, as the chart deploys it (`catalog.warehouses.enabled:
-    true` → `LANCE_WAREHOUSES_ENABLED`), acting as alice over an in-memory tuple store, with warehouse
+    true` → `LANCE_WAREHOUSES_ENABLED`), acting as the person `dex~alice` over an in-memory tuple store, with warehouse
     ``WAREHOUSE`` rooted at the catalog's own root."""
     root = str(tmp_path)
     settings = Settings.model_validate(
@@ -94,6 +89,7 @@ def governed(real_ns_client: TestClient, tmp_path: Path) -> Iterator[_TupleStore
             "root": root,
             "warehouses_enabled": True,
             "oidc_enabled": True,
+            "oidc_connectors": {"local": "dex"},
             "oidc_issuer": "https://idp.example",
             "oidc_audience": "lance",
             "fga_enabled": True,
@@ -104,7 +100,7 @@ def governed(real_ns_client: TestClient, tmp_path: Path) -> Iterator[_TupleStore
     )
     real_ns_client.app.dependency_overrides[get_settings] = lambda: settings
     real_ns_client.app.state.oidc = MagicMock()
-    _act_as(real_ns_client, "alice")
+    act_as(real_ns_client, "alice")
     store = _TupleStore()
     real_ns_client.app.state.fga = store
     record = {"id": WAREHOUSE, "bucket": WAREHOUSE, "root_uri": root, "project": "acme", "status": "active", "created_at": "t"}
@@ -156,14 +152,14 @@ def test_overwrite_replaces_an_empty_namespace_with_fresh_ownership(real_ns_clie
     """
     _create_top_level(real_ns_client, "ghost")
     assert real_ns_client.post("/management/v1/namespace/ghost/policy/set", json={"retention_days": 7}, headers=AUTH).status_code == 200
-    governed.tuples.add(("user:carol", "reader", "namespace:ghost"))
+    governed.tuples.add(("user:dex~carol", "reader", "namespace:ghost"))
     edges = {t for t in governed.naming("namespace:ghost") if t[1] in ("parent", "child")}
-    _act_as(real_ns_client, "bob")
+    act_as(real_ns_client, "bob")
 
     resp = real_ns_client.post("/v1/namespace/ghost/create", json={"mode": "Overwrite", "properties": {"team": "b"}}, headers=AUTH)
 
     assert resp.status_code == 200, resp.text
-    assert governed.naming("namespace:ghost") == {("user:bob", "owner", "namespace:ghost"), *edges}
+    assert governed.naming("namespace:ghost") == {("user:dex~bob", "owner", "namespace:ghost"), *edges}
     assert maintenance_policies.get_policy(str(tmp_path), {}, "namespace", "ghost") is None
     assert (warehouses.binding_for_namespace(str(tmp_path), {}, "ghost") or {}).get("warehouse_id") == WAREHOUSE
     described = real_ns_client.post("/v1/namespace/ghost/describe", json={}, headers=AUTH)

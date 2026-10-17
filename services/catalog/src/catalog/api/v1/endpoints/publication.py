@@ -47,7 +47,7 @@ from catalog.api.dependencies import (
 )
 from catalog.api.fga_deps import require_relation
 from catalog.api.pagination import paginate
-from catalog.api.security import CurrentToken, Principal
+from catalog.api.security import Caller, CurrentToken
 from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier
 from catalog.core.lineage_emit import PUBLISH_TABLE, RESTORE_TABLE, LineageEmitter, emit_write_event, is_person_subject
@@ -90,7 +90,7 @@ class ProjectSource(Protocol):
 #: door was added to eliminate (`.claude/skills/rask-notifications`, trap 1).
 
 
-def publication_originator(claimed: str, token: Principal | None) -> str:
+def publication_originator(claimed: str, token: Caller | None) -> str:
     """The PERSON this publication is for, or `""` when it is for nobody.
 
     THE CATALOG IS THE ONLY COMPONENT THAT CAN ANSWER THIS, which is why the decision lives here
@@ -104,8 +104,8 @@ def publication_originator(claimed: str, token: Principal | None) -> str:
     * A SERVICE caller's `claimed` wins. A service principal publishes as itself, so the actor is a
       role, not an address; the human is only on the request body, carried there by the pipeline
       running on their behalf.
-    * A PERSON's own sub wins over anything they claimed. Someone publishing by hand IS the
-      originator, and honouring a body field over a verified sub would let a caller redirect a
+    * A PERSON's own principal wins over anything they claimed. Someone publishing by hand IS the
+      originator, and honouring a body field over a verified principal would let a caller redirect a
       notification into somebody else's inbox.
 
     Neither is trusted as authorization: the notifications plane re-derives every recipient's
@@ -124,22 +124,22 @@ def publication_originator(claimed: str, token: Principal | None) -> str:
     # `ServicePrincipal`, so a person's IdP token cannot pass for a service by carrying an extra field.
     if isinstance(token, ServicePrincipal):
         return _addressable(claimed)
-    return _addressable(token.sub)
+    return _addressable(token.subject)
 
 
 def _addressable(subject: str) -> str:
-    """`subject` if it names a person, else `""` — the `named_subject` rule the control lane applies.
+    """`subject` if it names a person, else `""` — the person rule the control lane applies.
 
     The optional `user:` prefix is STRIPPED rather than refused, because both spellings reach this
-    field honestly: the medallion carries a bare sub (what `authorize_produce` returns) while an FGA
-    principal is written `user:<sub>`. Refusing one of them would drop a real person for a wire-shape
-    difference, silently and with a 200.
+    field honestly: a pipeline carries a bare principal key while a person's verified actor is written
+    `user:<principal key>`. Refusing one of them would drop a real person for a wire-shape difference,
+    silently and with a 200.
     """
     # STRIP BEFORE CHECKING. `is_person_subject` treats a `user:`-prefixed value as an FGA object id
-    # rather than a subject, so checking first would refuse `user:alice` — a real person, written in
-    # the spelling an FGA principal arrives in. Strip, then let the canonical check judge the bare sub.
+    # rather than a subject, so checking first would refuse `user:dex~<id>` — a real person, written in
+    # the spelling an actor arrives in. Strip, then let the canonical check judge the principal key.
     candidate = subject.strip().removeprefix("user:").strip()
-    return "" if not is_person_subject(candidate) or "#" in candidate else candidate
+    return candidate if is_person_subject(candidate) else ""
 
 
 async def publication_extra(
@@ -360,7 +360,7 @@ async def publish_table(
             segments=segments,
             result=result,
             review=gate.review,
-            requested_by=token.sub if token is not None else None,
+            requested_by=token.subject if token is not None else None,
             originator=publication_originator(body.originator, token),
             cascade_id=body.cascade_id,
             opened_at=clock(),
@@ -371,7 +371,7 @@ async def publish_table(
             action="promotion_held",
             object_type="table",
             object_id=f"table:{standing.table}",
-            actor=f"user:{token.sub}" if token is not None else None,
+            actor=f"user:{token.subject}" if token is not None else None,
             extra={
                 "version": standing.version,
                 "published_version": standing.published_version,
@@ -488,7 +488,7 @@ async def _announce_publication(
     control: ControlEmitter,
     settings: Settings,
     segments: list[str],
-    token: Principal | None,
+    token: Caller | None,
     authorization: str | None,
     from_version: int | None,
     to_version: int,
@@ -510,7 +510,7 @@ async def _announce_publication(
         lineage,
         segments,
         delimiter=settings.delimiter,
-        author=token.sub if token is not None else None,
+        author=token.subject if token is not None else None,
         version=to_version,
         operation=PUBLISH_TABLE,
         authorization=authorization,
@@ -521,7 +521,7 @@ async def _announce_publication(
         action="table_published",
         object_type="table",
         object_id=f"table:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}",
-        actor=f"user:{token.sub}" if token is not None else None,
+        actor=f"user:{token.subject}" if token is not None else None,
         # I2: the caller names {project, dataset}, the CATALOG vends the URI and the tenant.
         # Both were rebuilt downstream before this, and the tenant was rebuilt wrongly.
         extra=await publication_extra(
@@ -545,7 +545,7 @@ async def _decision(
     *,
     version: int,
     state: Literal["approved", "rejected"],
-    token: Principal | None,
+    token: Caller | None,
     at: datetime,
 ) -> tuple[promotions.Hold, bool]:
     """Record ``state`` on the table's open hold on ``version``: the hold as decided, and whether this call decided it.
@@ -575,7 +575,7 @@ async def _decision(
             version=version,
             location=location,
             state=state,
-            by=token.sub if token is not None else None,
+            by=token.subject if token is not None else None,
             at=at,
             restore_owed=state == "rejected" and previous is not None,
         )
@@ -674,7 +674,7 @@ async def reject_promotion(
             action="promotion_rejected",
             object_type="table",
             object_id=f"table:{decided.table}",
-            actor=f"user:{token.sub}" if token is not None else None,
+            actor=f"user:{token.subject}" if token is not None else None,
             extra={"version": decided.version, "published_version": published, "restored_version": decided.restored_version},
         )
     return PromotionDecision(hold=_view(decided), published_version=published, restored_version=decided.restored_version)
@@ -693,7 +693,7 @@ async def list_promotions(
     """
     holds = await run_in_threadpool(promotions.open_holds, settings.registry_root, settings.storage_options())
     if settings.fga_enabled and token is not None and client is not None:
-        visible = await fga.batch_check(client, user=token.sub, relation="can_get_metadata", objects=[f"table:{hold.table}" for hold in holds])
+        visible = await fga.batch_check(client, user=token.subject, relation="can_get_metadata", objects=[f"table:{hold.table}" for hold in holds])
         holds = [hold for hold in holds if visible.get(f"table:{hold.table}")]
     by_table = {hold.table: hold for hold in holds}
     page, next_token = paginate(sorted(by_table), page_token, limit)

@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Literal, Self
 from pydantic import AliasChoices, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from service_kit.governed.principal import PrincipalKey
 from service_kit.governed.settings import GovernedAuthSettings
 from service_kit.governed.store_credential import S3KeyPair, store_key_pair
 from service_kit.lakehouse.endpoint_scheme import allow_http_for
@@ -276,7 +277,7 @@ class CatalogLineageSettings(BaseSettings):
     # Lineage emission (opt-in). When enabled, the catalog emits an OpenLineage event to the lineage
     # service on a table write — fire-and-forget + best-effort, so the lineage service being down can
     # never block or fail a catalog write. The catalog is the only component that knows the verified
-    # principal, so it is the authoritative source of "who created/changed a table" (author = token.sub).
+    # principal, so it is the authoritative source of "who created/changed a table" (author = token.subject).
     # Transport: ``http`` (direct POST — dev / external producers) or ``dapr`` (publish to the Dapr
     # ``pubsub.jetstream`` component via the local sidecar — durable, decoupled, the production path).
     lineage_emit_enabled: bool = Field(default=False, alias="LANCE_LINEAGE_EMIT_ENABLED")
@@ -300,10 +301,10 @@ class CatalogLineageSettings(BaseSettings):
     #: under it on lineage, because lineage records every announcement as a row of those tables. Empty, the code
     #: default, keeps no such namespace; the chart names one whenever it deploys lineage.
     provenance_namespace: str = Field(default="", alias="LANCE_PROVENANCE_NAMESPACE")
-    #: The subjects that write the provenance namespace: lineage's service-account subject
+    #: The principals that write the provenance namespace: lineage's service-account principal
     #: (`kubernetes~system:serviceaccount:<ns>:<sa>`). Each is granted `writer` on the namespace at boot, which
-    #: reaches every table in it and nothing outside it.
-    provenance_writers: list[str] = Field(default_factory=list, alias="LANCE_PROVENANCE_WRITERS")
+    #: reaches every table in it and nothing outside it. A bare name is refused when the settings are read.
+    provenance_writers: list[PrincipalKey] = Field(default_factory=list, alias="LANCE_PROVENANCE_WRITERS")
 
 
 class CatalogMaintenanceSettings(BaseSettings):
@@ -402,7 +403,8 @@ class CatalogAuthzSettings(BaseSettings):
     #: (`kubernetes~system:serviceaccount:<ns>:<sa>`), the subject its signed events are authored as.
     signing_identity: str = Field(default="", alias="RASK_SIGNING_IDENTITY")
     #: The MAINTENANCE identities — the sweep, and anything else that rewrites HOW a dataset is stored. Each is a
-    #: SUBJECT (on the estate, maintenance's service-account subject); the tuple names the user it is (`fga.user_object`).
+    #: PRINCIPAL (on the estate, maintenance's service-account principal), refused when it is a bare name; the tuple
+    #: names the user it is (`fga.user_object`).
     #:
     #: Maintenance compacts, optimizes indices and reclaims versions, and must hold ``maintainer`` and nothing
     #: else. The model keeps it apart from the data rungs in both directions (``can_maintain`` neither implies
@@ -413,7 +415,7 @@ class CatalogAuthzSettings(BaseSettings):
     #: tier and every table below it, and the sweep's reach stays enumerable.
     #:
     #: EMPTY BY DEFAULT, on the same terms: an estate declaring nothing keeps exactly today's tuples.
-    fga_maintainers: list[str] = Field(default_factory=list, alias="LANCE_FGA_MAINTAINERS")
+    fga_maintainers: list[PrincipalKey] = Field(default_factory=list, alias="LANCE_FGA_MAINTAINERS")
     # When False (default), any authenticated caller may create a TOP-LEVEL namespace/
     # table and becomes its owner (the "users create their own workspaces" model). When
     # True, top-level creation also requires can_create_* on fga_root_object — an admin-gated

@@ -56,7 +56,13 @@ DECLARED = Declared.model_validate(
 )
 
 SETTINGS = SearchSettings.model_validate(
-    {"RASK_FGA_ENABLED": True, "RASK_OIDC_ENABLED": True, "RASK_OIDC_ISSUER": "https://i.test", "RASK_OIDC_AUDIENCE": "rask"}
+    {
+        "RASK_FGA_ENABLED": True,
+        "RASK_OIDC_ENABLED": True,
+        "RASK_OIDC_ISSUER": "https://i.test",
+        "RASK_OIDC_AUDIENCE": "rask",
+        "RASK_OIDC_CONNECTORS": {"local": "dex"},
+    }
 )
 
 DEFAULT_OBJECT = corpus_object(SETTINGS, DATASET, "default_rows")

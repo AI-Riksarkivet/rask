@@ -88,7 +88,7 @@ async def create_table_branch(
         action="table_branch_created",
         object_type="table",
         object_id=f"table:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}",
-        actor=f"user:{token.sub}" if token is not None else None,
+        actor=f"user:{token.subject}" if token is not None else None,
         # `name`, not `branch` — that is the field `CreateTableBranchRequest` declares. "Branched from
         # what" is the question a consumer asks next, and it is answered from the DATASET rather than
         # from the request: a branch taken from main sends no `from_version` and records main's current
@@ -167,7 +167,7 @@ async def delete_table_branch(
         action="table_branch_deleted",
         object_type="table",
         object_id=f"table:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}",
-        actor=f"user:{token.sub}" if token is not None else None,
+        actor=f"user:{token.subject}" if token is not None else None,
         extra={"branch": body.name, **({dataplane.BRANCH_IDENTIFIER_KEY: identifier} if identifier is not None else {})},
     )
     return response

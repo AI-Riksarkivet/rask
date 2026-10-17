@@ -33,13 +33,17 @@ sleep 2
 dex_token() {  # dex_token <email> -> id_token on stdout
   curl -s -X POST "$DEX/token" \
     -d grant_type=password -d client_id=lance-catalog \
-    -d "username=$1" -d password=password -d scope=openid \
+    -d "username=$1" -d password=password -d "scope=openid federated:id" \
     | python3 -c "import sys,json;print(json.load(sys.stdin)['id_token'])"
 }
 
-sub_of() {  # sub_of <id_token> -> sub claim on stdout
-  printf '%s' "$1" | python3 -c \
-    "import sys,base64,json;p=sys.stdin.read().split('.')[1];p+='='*(-len(p)%4);print(json.loads(base64.urlsafe_b64decode(p))['sub'])"
+principal_of() {  # principal_of <id_token> -> the principal the catalog keys that bearer on (LH-063)
+  curl -s "$SERVER/management/v1/me" -H "Authorization: Bearer $1" \
+    | python3 -c "import sys,json;print(json.load(sys.stdin)['sub'])"
+}
+
+fga_user() {  # fga_user <principal> -> the OpenFGA user it is, through the seam every tuple writer uses
+  uv run --no-sync python -c "import sys; from service_kit.governed.fga import user_object; print(user_object(sys.argv[1]))" "$1"
 }
 
 code() { curl -s -o /dev/null -w "%{http_code}" "$@"; }
@@ -91,10 +95,11 @@ PY
 echo "== tokens from Dex =="
 ALICE=$(dex_token alice@example.com)
 BOB=$(dex_token bob@example.com)
-ALICE_SUB=$(sub_of "$ALICE")
-BOB_SUB=$(sub_of "$BOB")
+ALICE_PRINCIPAL=$(principal_of "$ALICE")
+BOB_PRINCIPAL=$(principal_of "$BOB")
+ALICE_USER=$(fga_user "$ALICE_PRINCIPAL")
 store_model
-echo "  store=$STORE model=$MODEL alice=$ALICE_SUB bob=$BOB_SUB"
+echo "  store=$STORE model=$MODEL alice=$ALICE_PRINCIPAL bob=$BOB_PRINCIPAL"
 
 ALICE_H=(-H "Authorization: Bearer $ALICE")
 BOB_H=(-H "Authorization: Bearer $BOB")
@@ -109,13 +114,13 @@ expect 401 "$(code -X POST "$SERVER/v1/namespace/$NS/create" "${JSON[@]}" -d '{}
 echo "== 2. alice creates namespace -> 200 (app seeds owner) =="
 expect 200 "$(code -X POST "$SERVER/v1/namespace/$NS/create" "${ALICE_H[@]}" "${JSON[@]}" -d '{}')" \
   "alice create namespace"
-assert_tuple "user:$ALICE_SUB" owner "$NS_OBJ" "namespace owner seeded on create"
+assert_tuple "$ALICE_USER" owner "$NS_OBJ" "namespace owner seeded on create"
 
 echo "== 3. alice creates table -> 200 (owner cascades to writer; app seeds owner+parent) =="
 expect 200 "$(code -X POST "$SERVER/v1/table/$TID/create" \
   "${ALICE_H[@]}" -H "content-type: application/vnd.apache.arrow.stream" \
   --data-binary "@$ARROW")" "alice create table"
-assert_tuple "user:$ALICE_SUB" owner "$TBL_OBJ" "table owner seeded on create"
+assert_tuple "$ALICE_USER" owner "$TBL_OBJ" "table owner seeded on create"
 assert_tuple "$NS_OBJ" parent "$TBL_OBJ" "table parent link seeded on create"
 
 echo "== 4. alice reads table -> 200 (reader cascades from owner) =="

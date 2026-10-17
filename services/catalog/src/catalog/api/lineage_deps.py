@@ -20,7 +20,7 @@ from __future__ import annotations
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import LanceNamespace
 
-from catalog.api.security import Principal
+from catalog.api.security import Caller
 from catalog.core.config import Settings
 from catalog.core.lineage_emit import LineageEmitter, emit_write_event, run_inputs
 from catalog.core.run_context import RunContext
@@ -35,7 +35,7 @@ async def emit_measured_write(
     ns: LanceNamespace,
     so: StorageOptions,
     settings: Settings,
-    token: Principal | None,
+    token: Caller | None,
     operation: str,
     authorization: str | None,
     pin_version: int | None,
@@ -71,7 +71,7 @@ async def emit_measured_write(
         emitter,
         segments,
         delimiter=settings.delimiter,
-        author=token.sub if token is not None else None,
+        author=token.subject if token is not None else None,
         version=version,
         operation=operation,
         authorization=authorization,

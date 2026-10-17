@@ -27,6 +27,7 @@ def test_a_caller_sees_only_the_due_tables_it_maintains(real_ns_client: TestClie
         {
             "root": str(tmp_path),
             "oidc_enabled": True,
+            "oidc_connectors": {"local": "dex"},
             "oidc_issuer": "https://idp.example",
             "oidc_audience": "lance",
             "fga_enabled": True,

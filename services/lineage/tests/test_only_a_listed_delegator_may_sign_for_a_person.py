@@ -27,7 +27,7 @@ from lineage.models import DatasetEvent
 from service_kit.governed.decider import OpenFgaDecider
 
 
-CATALOG, STAGE, UNLISTED, PERSON = "service-catalog", "service-bronze-to-silver", "service-trainer", "CgVhbGljZRIFbG9jYWw"
+CATALOG, STAGE, UNLISTED, PERSON = "service-catalog", "service-bronze-to-silver", "service-trainer", "dex~alice"
 SECRETS = "http://localhost:3500/v1.0/secrets/lance-secrets"
 
 
@@ -79,6 +79,7 @@ def _door(monkeypatch: pytest.MonkeyPatch, *, grant: bool) -> tuple[TestClient, 
         "RASK_OIDC_ENABLED": "true",
         "RASK_OIDC_ISSUER": "https://idp.invalid/dex",
         "RASK_OIDC_AUDIENCE": "rask",
+        "RASK_OIDC_CONNECTORS": json.dumps({"local": "dex"}),
         "LINEAGE_SIGNERS": json.dumps([CATALOG, STAGE]),
         "LINEAGE_DELEGATORS": json.dumps([CATALOG]),
     }.items():

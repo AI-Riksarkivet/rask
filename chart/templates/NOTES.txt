@@ -89,7 +89,7 @@ Auth (Dex OIDC + OpenFGA): {{ if .enabled }}ENABLED{{ else }}off — set auth.en
 {{- if .enabled }}
 {{- if not .bootstrapAdmin }}
   No estate admin is seeded, so the estate-wide admin surfaces (/admin/events, /admin/streams,
-  /admin/tenants) stay closed. Install with --set auth.bootstrapAdmin=<dex-sub> to open them.
+  /admin/tenants) stay closed. Install with --set auth.bootstrapAdmin=<idp-id>~<user id> to open them.
 {{- end }}
   Admin ops pages (behind the zone BFF's admin gate): /admin/audit (compliance trail), /admin/dlq
   (lineage DLQ replay), /admin/events (control-plane change feed), /admin/streams (JetStream health +

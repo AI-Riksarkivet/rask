@@ -39,8 +39,8 @@ from typing import Final, Protocol
 from fastapi import FastAPI, Request
 
 from service_kit.draining import RETRY
+from service_kit.governed.principal import Principal
 from service_kit.governed.secrets import fetch_dapr_secret
-from service_kit.lakehouse.subjects import SERVICE_ACCOUNT_SUBJECT_PREFIX
 from service_kit.probes import ReadyCheck
 from service_kit.schemas.health import Readiness, ReadinessStatus
 
@@ -106,7 +106,11 @@ def signing_key_name(identity: str) -> str:
     The signers are the release's own accounts, all in the release's namespace, so the account name alone is unique in
     the store the release reads; the chart names the same keys (`lance.signingKeys`).
     """
-    return identity.rpartition(":")[2] if identity.startswith(SERVICE_ACCOUNT_SUBJECT_PREFIX) else identity
+    try:
+        principal = Principal.parse(identity)
+    except ValueError:
+        return identity
+    return principal.subject.rpartition(":")[2] if principal.is_service else identity
 
 
 def signing_key_secret(identity: str) -> str:

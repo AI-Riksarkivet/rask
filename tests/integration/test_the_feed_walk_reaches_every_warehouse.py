@@ -66,7 +66,7 @@ TENANT_RUN = {
     "run": {
         "runId": "run-tenant",
         "facets": {
-            "author": {"name": "alice", "sub": "alice"},
+            "author": {"name": "dex~alice", "sub": "dex~alice"},
             "lance": {"operation": "insert", "project": "acme", "run_id": "ingest-7"},
             "errorMessage": {"message": "row 12: value out of range", "programmingLanguage": "python"},
         },
@@ -87,7 +87,7 @@ DEFAULT_RUN = {
     "eventType": "FAIL",
     "eventTime": "2026-10-05T07:00:00+00:00",
     "producer": "https://rask.invalid/train",
-    "run": {"runId": "run-default", "facets": {"author": {"name": "bob", "sub": "bob"}}},
+    "run": {"runId": "run-default", "facets": {"author": {"name": "dex~bob", "sub": "dex~bob"}}},
     "outputs": [{"namespace": "gold", "name": "gold$catalog"}],
 }
 
@@ -158,6 +158,7 @@ def lineage(monkeypatch: pytest.MonkeyPatch) -> Iterator[FastAPI]:
     monkeypatch.setenv("RASK_OIDC_ENABLED", "true")
     monkeypatch.setenv("RASK_OIDC_ISSUER", "https://idp.invalid/dex")
     monkeypatch.setenv("RASK_OIDC_AUDIENCE", "rask")
+    monkeypatch.setenv("RASK_OIDC_CONNECTORS", '{"local": "dex"}')
     get_settings.cache_clear()
     app = FastAPI()
     install_problem_handlers(app, logging.getLogger(__name__))
@@ -199,8 +200,8 @@ async def test_the_walk_reaches_a_tenant_warehouse_run_and_is_sent_only_what_tar
 
     assert (result.scanned, result.cursor) == (2, 2)
     assert {subject: [(row["notification_id"], row["object_id"], row["source_run_id"]) for row in rows] for subject, rows in boxes.items()} == {
-        "alice": [("run-tenant@COMPLETE", "acme-gold$catalog", "ingest-7")],
-        "bob": [("run-default@FAIL", "gold$catalog", None)],
+        "dex~alice": [("run-tenant@COMPLETE", "acme-gold$catalog", "ingest-7")],
+        "dex~bob": [("run-default@FAIL", "gold$catalog", None)],
     }
     assert {row["seq"]: row["event"] for page in sent for row in page["events"]}[2] == {
         "eventType": "COMPLETE",
@@ -208,7 +209,7 @@ async def test_the_walk_reaches_a_tenant_warehouse_run_and_is_sent_only_what_tar
         "producer": "https://rask.invalid/ingest",
         "run": {
             "runId": "run-tenant",
-            "facets": {"author": {"name": "alice", "sub": "alice"}, "lance": {"operation": "insert", "project": "acme", "run_id": "ingest-7"}},
+            "facets": {"author": {"name": "dex~alice", "sub": "dex~alice"}, "lance": {"operation": "insert", "project": "acme", "run_id": "ingest-7"}},
         },
         "outputs": [{"namespace": "acme-gold", "name": "acme-gold$catalog"}],
     }

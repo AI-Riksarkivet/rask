@@ -35,6 +35,7 @@ from dotenv import dotenv_values
 from pydantic import Field, model_validator
 
 from service_kit.control_events import ControlSigner
+from service_kit.governed.principal import SERVICE_ACCOUNT_IDP, require_idp_id
 
 
 #: The names the 2026-08-30 hard rename deleted. Kept as a REFUSAL list, never as an alias list: an
@@ -184,6 +185,11 @@ class OidcSettings:
     oidc_cache_ttl: int = Field(default=3600, alias="RASK_OIDC_CACHE_TTL")
     oidc_leeway: int = Field(default=60, alias="RASK_OIDC_LEEWAY")
     oidc_allow_insecure: bool = Field(default=False, alias="RASK_OIDC_ALLOW_INSECURE")
+    #: The idp id each Dex connector's users are principals of, keyed by the connector id Dex reports in
+    #: `federated_claims` ([[LH-063]], `service_kit.governed.person_identity`): `{"local": "dex"}` makes the user id
+    #: `u` of connector `local` the principal `dex~u`. Renaming a connector adds its new id under the same idp id, so
+    #: no grant is re-keyed. A connector absent here authenticates nobody.
+    oidc_connectors: dict[str, str] = Field(default_factory=dict, alias="RASK_OIDC_CONNECTORS")
     #: AN ACKNOWLEDGEMENT, NOT A SWITCH — it turns nothing off. `oidc_enabled` already decides whether
     #: this service authenticates; this says an operator MEANT the answer to be "no". Without it,
     #: "auth off because I meant it" and "auth off because nothing set it" are indistinguishable, and
@@ -206,6 +212,27 @@ class OidcSettings:
             raise ValueError("RASK_SA_AUDIENCE is required with RASK_SA_ISSUER")
         if self.sa_issuer and not self.sa_issuer.startswith("https://"):
             raise ValueError("RASK_SA_ISSUER must use HTTPS")
+        # A door routes a bearer by its unverified `iss`, the service-account issuer first, so one issuer named twice
+        # would answer every person's token as a service account's. Lakekeeper refuses two providers claiming one
+        # issuer at boot (crates/lakekeeper/src/service/authn.rs).
+        if self.oidc_enabled and self.sa_issuer and self.oidc_issuer and self.sa_issuer.rstrip("/") == self.oidc_issuer.rstrip("/"):
+            raise ValueError("RASK_SA_ISSUER and RASK_OIDC_ISSUER name one issuer: its tokens would be routed as service accounts' and never as a person's")
+        return self
+
+    @model_validator(mode="after")
+    def _validate_connectors(self) -> Self:
+        """A connector maps to an idp id a principal can carry, never the service-account issuer's."""
+        if self.oidc_enabled and not self.oidc_connectors:
+            raise ValueError("RASK_OIDC_CONNECTORS is required when OIDC is enabled: a person is the principal their Dex connector maps to")
+        for connector, idp_id in self.oidc_connectors.items():
+            if not connector:
+                raise ValueError("RASK_OIDC_CONNECTORS names an empty connector id")
+            if idp_id == SERVICE_ACCOUNT_IDP:
+                raise ValueError(f"RASK_OIDC_CONNECTORS maps {connector!r} to {SERVICE_ACCOUNT_IDP!r}, the service-account issuer's idp id")
+            try:
+                require_idp_id(idp_id)
+            except ValueError as exc:
+                raise ValueError(f"RASK_OIDC_CONNECTORS maps {connector!r} to an idp id no principal can carry: {exc}") from exc
         return self
 
     @model_validator(mode="after")

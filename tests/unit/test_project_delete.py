@@ -32,6 +32,9 @@ from lance_namespace import (
 
 from catalog.api.v1.endpoints import projects as ep
 from service_kit.governed.audit import AUDIT_LOGGER, configure_audit
+from service_kit.governed.oidc import IDToken
+from service_kit.governed.person_identity import PersonPrincipal
+from service_kit.governed.principal import Principal
 
 
 class _Emitter:
@@ -55,10 +58,10 @@ def _settings(*, fga_enabled: bool = False) -> Any:
     )
 
 
-_TOKEN = SimpleNamespace(sub="alice")
+_TOKEN = PersonPrincipal(principal=Principal(idp_id="dex", subject="alice"), claims=IDToken(iss="i", sub="alice", aud="lance", exp=1, iat=1))
 
 #: A live tenant record, as ``POST /management/v1/projects`` writes it.
-_RECORD: dict[str, str] = {"id": "acme", "created_at": "2026-08-04T00:00:00+00:00", "created_by": "alice", "protected": "false"}
+_RECORD: dict[str, str] = {"id": "acme", "created_at": "2026-08-04T00:00:00+00:00", "created_by": "dex~alice", "protected": "false"}
 
 #: One warehouse belonging to ANOTHER tenant — present in every world, so "empty" is proven to mean
 #: "holds no warehouse OF ITS OWN", not "the estate holds no warehouses".
@@ -252,9 +255,9 @@ def test_empty_project_is_deleted_and_its_tuples_revoked(monkeypatch: pytest.Mon
     assert world.deleted == ["acme"]
     # Revoked on the PROJECT object (the admin/member/team-edge tuples), stamped as a lifecycle delete so
     # the tuple-level audit rows say why the grants went away.
-    assert world.revoked == [{"obj": "project:acme", "actor": "alice", "origin": "lifecycle_delete"}]
+    assert world.revoked == [{"obj": "project:acme", "actor": "dex~alice", "origin": "lifecycle_delete"}]
     event = control.events[0]
-    assert (event.action, event.object_type, event.object_id, event.actor) == ("project_deleted", "project", "project:acme", "user:alice")
+    assert (event.action, event.object_type, event.object_id, event.actor) == ("project_deleted", "project", "project:acme", "user:dex~alice")
 
 
 def test_an_openfga_outage_aborts_the_delete_instead_of_reporting_a_half_success(monkeypatch: pytest.MonkeyPatch, audited: list[logging.LogRecord]) -> None:

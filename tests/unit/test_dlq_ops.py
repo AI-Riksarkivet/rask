@@ -31,6 +31,8 @@ from service_kit.governed import fga
 from service_kit.governed.audit import AUDIT_LOGGER, configure_audit
 from service_kit.governed.decider import OpenFgaDecider
 from service_kit.governed.oidc import IDToken
+from service_kit.governed.person_identity import PersonPrincipal
+from service_kit.governed.principal import Principal
 from service_kit.lakehouse import outbox
 
 
@@ -38,6 +40,7 @@ _FULL_AUTH = {
     "oidc_enabled": True,
     "oidc_issuer": "https://dex.example",
     "oidc_audience": "lance",
+    "oidc_connectors": {"local": "dex"},
     "fga_enabled": True,
     "fga_store_id": "store",
     "fga_model_id": "model",
@@ -86,8 +89,8 @@ def _request(**state: object) -> Any:
     return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(**state)))
 
 
-def _token(sub: str = "alice") -> IDToken:
-    return IDToken(iss="i", sub=sub, aud="lance", exp=0, iat=0)
+def _token(name: str = "alice") -> PersonPrincipal:
+    return PersonPrincipal(principal=Principal(idp_id="dex", subject=name), claims=IDToken(iss="i", sub=name, aud="lance", exp=0, iat=0))
 
 
 def _filter(request: Any, settings: LineageSettings, token: Any) -> DatasetFilter:
@@ -278,6 +281,6 @@ def test_replay_audits_success_with_the_actor(tmp_path: Path, audit_records: lis
     assert fields == {
         "audit.action": "dlq_replay",
         "audit.outcome": "success",
-        "audit.subject": "alice",
+        "audit.subject": "dex~alice",
         "audit.resource": "run:r1",
     }

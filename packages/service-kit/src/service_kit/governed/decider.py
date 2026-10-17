@@ -52,7 +52,7 @@ _TRANSPORT_ATTEMPTS: Final = 3
 
 
 class DecisionCheck(BaseModel):
-    """May ``user`` (a bare subject, as a token's ``sub``) hold ``relation`` on each of ``objects``."""
+    """May ``user`` (a principal key, as a caller's ``subject``) hold ``relation`` on each of ``objects``."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 

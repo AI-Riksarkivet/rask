@@ -121,7 +121,7 @@ async def grant_member(
     await fga_deps.require_relation(client, settings, token, relation=f"can_grant_{payload.relation}", obj=obj)
     wired = _client_or_conflict(client, settings)
     user = _user_string(payload.user)
-    actor = token.sub if token else "system:catalog"
+    actor = token.subject if token else "system:catalog"
 
     existing = await fga.read_object_tuples(wired, obj)
     granted = not any(t.object == obj and t.relation == payload.relation and t.user == user for t in existing)
@@ -142,7 +142,7 @@ async def grant_member(
             action="grant_added",
             object_type="grant",
             object_id=obj,
-            actor=f"user:{token.sub}" if token else None,
+            actor=f"user:{token.subject}" if token else None,
             extra={"relation": payload.relation, "subject": user},
         )
     return MemberList(members=_direct_grants(existing, obj))
@@ -165,7 +165,7 @@ async def revoke_member(
     await fga_deps.require_relation(client, settings, token, relation=f"can_grant_{payload.relation}", obj=obj)
     wired = _client_or_conflict(client, settings)
     user = _user_string(payload.user)
-    actor = token.sub if token else "system:catalog"
+    actor = token.subject if token else "system:catalog"
 
     existing = await fga.read_object_tuples(wired, obj)
     if not any(t.object == obj and t.relation == payload.relation and t.user == user for t in existing):
@@ -190,7 +190,7 @@ async def revoke_member(
         action="grant_revoked",
         object_type="grant",
         object_id=obj,
-        actor=f"user:{token.sub}" if token else None,
+        actor=f"user:{token.subject}" if token else None,
         extra={"relation": payload.relation, "subject": user},
     )
     return MemberList(members=_direct_grants(await fga.read_object_tuples(wired, obj), obj))

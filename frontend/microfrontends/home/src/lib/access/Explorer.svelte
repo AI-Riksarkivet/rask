@@ -163,10 +163,10 @@
 	/** The store is bigger than MAX_GRAPH_PAGES. Said out loud rather than silently clipped. */
 	let truncated = $state(false);
 	/**
-	 * The signed-in identity. Load-bearing, not decoration: the OIDC `sub` here is what the tuple store
-	 * actually keys on, and under Dex that is an opaque base64 blob like `CiQwOGE4Njg0Yi1kYjg4…`. Nobody
-	 * can type that, and typing the obvious `user:alice` returns a CORRECT denial that reads like a bug.
-	 * So the subject field is seeded from this, and a "me" chip puts it back one click away.
+	 * The signed-in identity. Load-bearing, not decoration: `sub` here is the principal key the tuple store
+	 * keys on (`<idp-id>~<user id>`, a long id like `dex~08a8684b-…`, LH-063). Nobody types that, and the
+	 * obvious `alice` names no principal. So the subject field is seeded from this, and a "me" chip puts it
+	 * back one click away.
 	 */
 	let me = $state<{ sub: string; name: string | null; estate_admin: boolean } | null>(null);
 
@@ -195,7 +195,7 @@
 		if (!parsed) return;
 		me = { sub: parsed.sub, name: parsed.name, estate_admin: parsed.estate_admin };
 		// Seed the subject only if the user has not already typed or linked one.
-		if (!user.trim()) user = `user:${parsed.sub}`;
+		if (!user.trim()) user = parsed.sub;
 	}
 
 	async function loadModel(): Promise<void> {
@@ -568,7 +568,7 @@
 	/** Reset EVERYTHING — query, answer, facets, selection — back to the whole graph at rest. */
 	function clearAll(): void {
 		kind = 'why';
-		user = me ? `user:${me.sub}` : '';
+		user = me?.sub ?? '';
 		relation = '';
 		object = '';
 		objectType = 'table';
@@ -696,18 +696,17 @@
 		</span>
 	</div>
 
-	<!-- One-click entry points. The old tabbed view had registry chips and this one dropped them for a
-	     free-text box, which meant the only way in was to already know that a subject id is
-	     `user:CiQwOGE4Njg0Yi1kYjg4…` and an object is `table:bronze$pages`. Nobody knows that. -->
+	<!-- One-click entry points, so the way in does not depend on already knowing that a person is
+	     `dex~08a8684b-…` and an object is `table:bronze$pages`. -->
 	<div class="flex flex-wrap items-center gap-1.5 text-xs">
 		<span class="text-muted-foreground">Jump to:</span>
 		{#if me}
 			<Button
 				size="sm"
 				variant="outline"
-				title="Your own OIDC subject — what the tuple store actually keys on"
+				title="Your own principal — what the tuple store keys on"
 				onclick={() => {
-					user = `user:${me?.sub}`;
+					user = me?.sub ?? '';
 					kind = 'what';
 					pushUrl({});
 				}}

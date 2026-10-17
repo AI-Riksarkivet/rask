@@ -37,6 +37,7 @@ def _settings() -> Settings:
             "oidc_enabled": True,
             "oidc_issuer": "https://idp.example",
             "oidc_audience": "lance",
+            "oidc_connectors": {"local": "dex"},
             "fga_enabled": True,
             "fga_api_url": "http://openfga:8080",
             "s3_access_key_id": "x",
@@ -77,7 +78,7 @@ def _drive(body: dict[str, Any], *, allow: bool = True) -> tuple[list[str], list
     try:
         monkey.setattr(fga_deps.fga, "check", rec_check)
         monkey.setattr(fga_deps.fga, "batch_check", rec_batch)
-        asyncio.run(fga_deps._authorize_batch(cast("Request", _FakeRequest(body)), _CLIENT, _settings(), user="alice"))
+        asyncio.run(fga_deps._authorize_batch(cast("Request", _FakeRequest(body)), _CLIENT, _settings(), user="dex~alice"))
     finally:
         monkey.undo()
     return singles, batches

@@ -187,11 +187,11 @@ async def create_project(
     await fga_deps.require_relation(client, settings, token, relation="can_observe_events", obj=settings.fga_root_object)
     so = settings.storage_options()
     existing = await run_in_threadpool(project_registry.get_project, settings.registry_root, so, project_id)
-    actor = f"user:{token.sub}" if token else None
+    actor = f"user:{token.subject}" if token else None
     record = {
         "id": project_id,
         "created_at": (existing.get("created_at") if existing else None) or datetime.now(UTC).isoformat(),
-        "created_by": (existing.get("created_by") if existing else None) or (token.sub if token else ""),
+        "created_by": (existing.get("created_by") if existing else None) or (token.subject if token else ""),
         # Deletion protection (Decision 5): mutable lifecycle field, carried forward on re-create —
         # an idempotent re-POST must never silently strip protection, same rule as warehouse `status`.
         "protected": (existing.get("protected") if existing else None) or "false",
@@ -218,13 +218,14 @@ async def create_project(
         object_id=f"project:{project_id}",
         actor=actor,
     )
-    if granted:
+    # `seed_project_admin` writes a grant only for a named admin, so `granted` implies one.
+    if granted and admin is not None:
         audit(
             "access_grant",
             SUCCESS,
             subject=actor,
             resource=f"project:{project_id}",
-            grantee=f"user:{admin}",
+            grantee=fga.user_object(admin),
             relation="admin",
             reason="project_created",
         )
@@ -234,7 +235,7 @@ async def create_project(
             object_type="grant",
             object_id=f"project:{project_id}",
             actor=actor,
-            extra={"relation": "admin", "subject": f"user:{admin}", "reason": "project_created"},
+            extra={"relation": "admin", "subject": fga.user_object(admin), "reason": "project_created"},
         )
     return ProjectResponse(project=project_id, warehouses=[], admins=await _admins_for(client, settings, project_id))
 
@@ -250,14 +251,14 @@ async def _visible_projects(client: OpenFgaClient | None, settings: Settings, to
         return None
     root = settings.fga_root_object
     try:
-        observer = await fga.check(client, user=token.sub, relation="can_observe_events", obj=root)
-        objects = None if observer else (await fga.list_objects(client, user=token.sub, relation="member", object_type="project")).objects
+        observer = await fga.check(client, user=token.subject, relation="can_observe_events", obj=root)
+        objects = None if observer else (await fga.list_objects(client, user=token.subject, relation="member", object_type="project")).objects
     except ServiceUnavailableError:
-        audit("list_projects", FAILURE, subject=token.sub, resource=root, reason="authz_unavailable")
+        audit("list_projects", FAILURE, subject=token.subject, resource=root, reason="authz_unavailable")
         raise
     # The estate-wide listing is the disclosure the root object guards, so its decision is audited like
     # every gate; a member's listing is scoped to their own tenants.
-    audit("can_observe_events", ALLOW if observer else DENY, subject=token.sub, resource=root, reason="list_projects")
+    audit("can_observe_events", ALLOW if observer else DENY, subject=token.subject, resource=root, reason="list_projects")
     return None if objects is None else {o.removeprefix("project:") for o in objects}
 
 
@@ -296,7 +297,7 @@ async def get_project(project_id: str, settings: SettingsDep, token: CurrentToke
 def _is_principal(user: str) -> bool:
     """True for a subject an inbox can be addressed to — a person or a group of them.
 
-    `user:<sub>` is a person; `role:x#assignee` / `team:y#member` are usersets the notifications lane
+    `user:<principal>` is a person; `role:x#assignee` / `team:y#member` are usersets the notifications lane
     expands into people. Everything else revoked alongside them is an object-to-object edge (`team`,
     `parent`, `child`) and names no one.
     """
@@ -372,7 +373,7 @@ async def delete_project(
             f"project:{project_id}",
             # The caller who retired the tenant. `system:catalog` is the honest fallback for an auth-off
             # stack, where there genuinely is no principal — never a stand-in for one we failed to thread.
-            actor=token.sub if token is not None else "system:catalog",
+            actor=token.subject if token is not None else "system:catalog",
             origin="lifecycle_delete",
         )
         revoked = True
@@ -386,7 +387,7 @@ async def delete_project(
     # a dangling cross-store edge is precisely the drift Decision 4's reconciler reports rather than guesses at.
     await run_in_threadpool(project_registry.delete_project_record, settings.registry_root, so, project_id)
 
-    actor = f"user:{token.sub}" if token else None
+    actor = f"user:{token.subject}" if token else None
     log.info("project_deleted", extra={"project": project_id, "tuples_revoked": len(removed), "forced": force})
     if revoked:
         # Mirrors create_project's grant audit, and only when the revoke really ran: an FGA-off stack must
@@ -417,7 +418,7 @@ async def delete_project(
     #
     # STRUCTURAL EDGES ARE NOT PEOPLE: the same call removes `team`/`parent`/`child` tuples whose USER
     # is another OBJECT, and announcing one would address an inbox named `team:writers`. A principal is
-    # `user:<sub>` or a userset (`role:x#assignee`, which the lane expands); anything else is plumbing.
+    # `user:<principal>` or a userset (`role:x#assignee`, which the lane expands); anything else is plumbing.
     for tup in removed:
         if _is_principal(tup.user):
             await emit_control(

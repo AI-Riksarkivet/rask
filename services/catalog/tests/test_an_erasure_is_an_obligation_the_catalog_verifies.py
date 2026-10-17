@@ -15,7 +15,6 @@ from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import lance
@@ -32,6 +31,9 @@ from catalog.api.v1.endpoints import erasure as door
 from catalog.core.config import Settings, get_settings
 from catalog.core.namespace import open_dataset
 from catalog.services.dataplane import create_table, read_arrow_body
+from service_kit.governed.oidc import IDToken
+from service_kit.governed.person_identity import PersonPrincipal
+from service_kit.governed.principal import Principal
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
@@ -66,7 +68,7 @@ def _subjects(root: Path) -> LanceNamespace:
 
 @contextmanager
 def _catalog(ns: LanceNamespace, control: Path, clock: _Clock) -> Generator[TestClient]:
-    """The erasure doors, the owner ``olivia`` signed in, authorization off."""
+    """The erasure doors, the owner ``dex~olivia`` signed in, authorization off."""
     settings = Settings(LANCE_S3_ACCESS_KEY_ID="k", LANCE_S3_SECRET_ACCESS_KEY="s", LANCE_CONTROL_ROOT=str(control))
     application = FastAPI()
     install_problem_handlers(application, logging.getLogger(__name__))
@@ -74,7 +76,9 @@ def _catalog(ns: LanceNamespace, control: Path, clock: _Clock) -> Generator[Test
     application.dependency_overrides[get_settings] = lambda: settings
     application.dependency_overrides[get_namespace] = lambda: ns
     application.dependency_overrides[get_storage_options] = lambda: {}
-    application.dependency_overrides[authenticate] = lambda: SimpleNamespace(sub="olivia")
+    application.dependency_overrides[authenticate] = lambda: PersonPrincipal(
+        principal=Principal(idp_id="dex", subject="olivia"), claims=IDToken(iss="i", sub="olivia", aud="lance", exp=1, iat=1)
+    )
     application.dependency_overrides[get_clock] = lambda: clock
     with TestClient(application, raise_server_exceptions=False) as client:
         yield client
@@ -105,7 +109,7 @@ def test_the_door_records_an_obligation_and_commits_nothing(tmp_path: Path) -> N
     with _catalog(ns, tmp_path / "control", _Clock()) as client:
         obligation = _record(client)
 
-    expected = ("open", {"main": history[-1]}, "user:olivia", [])
+    expected = ("open", {"main": history[-1]}, "user:dex~olivia", [])
     assert (obligation["state"], obligation["refs"], obligation["requested_by"], obligation["open_surfaces"]) == expected
     after = lance.dataset(location)
     assert ([entry["version"] for entry in after.versions()], after.count_rows(filter=_PREDICATE)) == (history, 1)

@@ -100,6 +100,7 @@ def _app() -> FastAPI:
             "RASK_OIDC_ENABLED": True,
             "RASK_OIDC_ISSUER": "https://issuer.test",
             "RASK_OIDC_AUDIENCE": "rask",
+            "RASK_OIDC_CONNECTORS": {"local": "dex"},
         }
     )
     app.dependency_overrides[get_viewer_settings] = lambda: settings

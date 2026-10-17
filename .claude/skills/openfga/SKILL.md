@@ -106,13 +106,20 @@ When a workflow step points to a rule ID, open the matching file in `references/
 |------|-------------|
 | `references/grant-provenance.md` | Who GAVE a grant — the audit-join review procedure, and why a tuple cannot answer it |
 
-**A subject becomes a `user` id in one place, `service_kit.governed.fga.user_object`** (ADR 0156 C5, [[LH-474]]). A
-service account's subject is `kubernetes~system:serviceaccount:<ns>:<sa>`, and OpenFGA refuses a user id with a second
-`:` ("the 'user' field is malformed", HTTP 400, measured on the live store 2026-10-14), so `user_object` writes `%` as
-`%25` and `:` as `%3A`: `user:kubernetes~system%3Aserviceaccount%3A<ns>%3A<sa>`. An IdP subject carries neither and is
-its own id. `subject_of` decodes an id read back (`list_users` does), and a grant API's grantee goes through
-`grantee_object` (an object of another model type passes as written). A tuple, a seed or a test that spells a service's
-user by hand with raw `:` is refused by the store; spell it through `user_object`.
+**Every subject is a principal, `<idp-id>~<subject>`, and becomes a `user` id in one place,
+`service_kit.governed.fga.user_object`** (ADR 0159 D5, ADR 0156 C5, [[LH-063]], [[LH-474]];
+`service_kit.governed.principal`). A service account is `kubernetes~system:serviceaccount:<ns>:<sa>`; a person is the idp
+id the deployment names their Dex connector (`RASK_OIDC_CONNECTORS`, chart `auth.oidc.connectors`; the dev Dex's
+`local` is `dex`) and the user id Dex reports in `federated_claims`, never Dex's `sub`, which encodes the connector.
+`user_object` refuses a value that names no identity provider (`InvalidInputError`, 400), so no tuple, seed or check
+names a bare name, and writes `user:` and the key percent-encoded as Lakekeeper encodes a `UserId`
+(`urllib.parse.quote(key, safe="")`): OpenFGA refuses a user id with a second `:` ("the 'user' field is malformed",
+HTTP 400, measured on the live store 2026-10-14) and reads a `#` as a userset, so `user:kubernetes~system%3Aserviceaccount
+%3A<ns>%3A<sa>` and `user:corp~a%23b` are each one user. `subject_of` decodes an id read back (`list_users` does). A grant
+API's grantee goes through `grantee_object`: `user:*` and an object of another model type pass as written, a `user:<id>`
+is the stored id (decoded and encoded again, so an id a reader echoes back names its tuple), and a bare value is a
+principal key. A tuple, a seed or a test that spells a user by hand is refused by the store or names the wrong one;
+spell it through `user_object`.
 
 ### Testing
 | File | Description |

@@ -6,6 +6,8 @@ services:
       RASK_OIDC_ENABLED: "true"
       RASK_OIDC_ISSUER: http://dex:5556/dex
       RASK_OIDC_AUDIENCE: lance-catalog
+      # The dev Dex's password database is connector `local`; its users are principals `dex~<userID>` (LH-063).
+      RASK_OIDC_CONNECTORS: '{"local":"dex"}'
       # Dex dev IdP serves discovery/JWKS over http; allow it (dev only — never in prod).
       RASK_OIDC_ALLOW_INSECURE: "true"
       RASK_FGA_ENABLED: "true"

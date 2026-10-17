@@ -27,6 +27,8 @@ from catalog.core.config import Settings
 from service_kit.control_emit import NoopControlEmitter
 from service_kit.exceptions import ForbiddenError
 from service_kit.governed.oidc import IDToken
+from service_kit.governed.person_identity import PersonPrincipal
+from service_kit.governed.principal import Principal
 
 
 def _tuple(user: str, relation: str, obj: str) -> SimpleNamespace:
@@ -93,8 +95,8 @@ def _settings(*, fga_enabled: bool = True) -> Settings:
     return cast(Settings, SimpleNamespace(fga_enabled=fga_enabled, delimiter="$"))
 
 
-def _token() -> IDToken:
-    return cast(IDToken, SimpleNamespace(sub="alice"))
+def _token() -> PersonPrincipal:
+    return PersonPrincipal(principal=Principal(idp_id="dex", subject="alice"), claims=IDToken(iss="i", sub="alice", aud="lance", exp=1, iat=1))
 
 
 def _grant(h: _Harness, user: str, relation: str, control: _RecordingControl | None = None) -> members.MemberList:
@@ -116,7 +118,7 @@ def _revoke(h: _Harness, user: str, relation: str, control: _RecordingControl | 
 def test_granting_is_gated_on_that_rungs_own_action(monkeypatch: pytest.MonkeyPatch, rung: str) -> None:
     h = _Harness()
     h.install(monkeypatch)
-    _grant(h, "bob", rung)
+    _grant(h, "dex~bob", rung)
     assert h.gated == [(f"can_grant_{rung}", "project:acme")]
 
 
@@ -124,7 +126,7 @@ def test_a_denied_gate_writes_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
     h = _Harness(allow=False)
     h.install(monkeypatch)
     with pytest.raises(ForbiddenError):
-        _grant(h, "bob", "admin")
+        _grant(h, "dex~bob", "admin")
     assert h.written == []
 
 
@@ -136,10 +138,10 @@ def test_a_denied_gate_writes_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_grant_writes_the_tuple_and_normalises_a_bare_subject(monkeypatch: pytest.MonkeyPatch) -> None:
     h = _Harness()
     h.install(monkeypatch)
-    out = _grant(h, "bob", "member")
+    out = _grant(h, "dex~bob", "member")
     assert len(h.written) == 1
-    assert (h.written[0].user, h.written[0].relation, h.written[0].object) == ("user:bob", "member", "project:acme")
-    assert members.Member(user="user:bob", relation="member") in out.members
+    assert (h.written[0].user, h.written[0].relation, h.written[0].object) == ("user:dex~bob", "member", "project:acme")
+    assert members.Member(user="user:dex~bob", relation="member") in out.members
 
 
 def test_a_qualified_userset_passes_through_verbatim(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -153,9 +155,9 @@ def test_a_qualified_userset_passes_through_verbatim(monkeypatch: pytest.MonkeyP
 def test_regranting_what_someone_already_holds_is_a_noop(monkeypatch: pytest.MonkeyPatch) -> None:
     """Not an optimisation: an OpenFGA Write is transactional and REJECTS an existing tuple, so without
     the pre-read the second call would 400."""
-    h = _Harness([_tuple("user:bob", "member", "project:acme")])
+    h = _Harness([_tuple("user:dex~bob", "member", "project:acme")])
     h.install(monkeypatch)
-    _grant(h, "bob", "member")
+    _grant(h, "dex~bob", "member")
     assert h.written == []
 
 
@@ -168,36 +170,36 @@ def test_revoking_the_last_admin_is_refused_and_named(monkeypatch: pytest.Monkey
     """The lock-out guard. Without it, admin-grantable means admin-STRANDABLE: `can_administer` gates
     membership AND delete, so a tenant with no admin can be neither administered nor retired from
     inside the product — recoverable only by estate intervention."""
-    h = _Harness([_tuple("user:alice", "admin", "project:acme")])
+    h = _Harness([_tuple("user:dex~alice", "admin", "project:acme")])
     h.install(monkeypatch)
     with pytest.raises(ConcurrentModificationError, match="only remaining admin"):
-        _revoke(h, "alice", "admin")
+        _revoke(h, "dex~alice", "admin")
     assert h.deleted == []
 
 
 def test_revoking_an_admin_is_allowed_while_another_remains(monkeypatch: pytest.MonkeyPatch) -> None:
-    h = _Harness([_tuple("user:alice", "admin", "project:acme"), _tuple("user:bob", "admin", "project:acme")])
+    h = _Harness([_tuple("user:dex~alice", "admin", "project:acme"), _tuple("user:dex~bob", "admin", "project:acme")])
     h.install(monkeypatch)
-    _revoke(h, "bob", "admin")
+    _revoke(h, "dex~bob", "admin")
     assert len(h.deleted) == 1
-    assert h.deleted[0].user == "user:bob"
+    assert h.deleted[0].user == "user:dex~bob"
 
 
 def test_revoking_the_last_MEMBER_is_fine(monkeypatch: pytest.MonkeyPatch) -> None:
     """Only `admin` is administrative. Stranding is about who can GRANT, not about who is present."""
-    h = _Harness([_tuple("user:alice", "admin", "project:acme"), _tuple("user:gina", "member", "project:acme")])
+    h = _Harness([_tuple("user:dex~alice", "admin", "project:acme"), _tuple("user:dex~gina", "member", "project:acme")])
     h.install(monkeypatch)
-    _revoke(h, "gina", "member")
+    _revoke(h, "dex~gina", "member")
     assert len(h.deleted) == 1
 
 
 def test_revoking_something_absent_is_a_noop_not_a_404(monkeypatch: pytest.MonkeyPatch) -> None:
     """The caller asked for a state and that state already holds."""
-    h = _Harness([_tuple("user:alice", "admin", "project:acme")])
+    h = _Harness([_tuple("user:dex~alice", "admin", "project:acme")])
     h.install(monkeypatch)
-    out = _revoke(h, "nobody", "member")
+    out = _revoke(h, "dex~nobody", "member")
     assert h.deleted == []
-    assert members.Member(user="user:alice", relation="admin") in out.members
+    assert members.Member(user="user:dex~alice", relation="admin") in out.members
 
 
 # --------------------------------------------------------------------------- #
@@ -210,7 +212,7 @@ def test_the_team_edge_is_never_listed_as_a_member(monkeypatch: pytest.MonkeyPat
     row would invite someone to revoke the thing that makes the tenant resolvable at all."""
     h = _Harness(
         [
-            _tuple("user:alice", "admin", "project:acme"),
+            _tuple("user:dex~alice", "admin", "project:acme"),
             _tuple("team:eng", "team", "project:acme"),
         ]
     )

@@ -25,7 +25,7 @@ export RASK_EXPECT_CONTEXT
 # script port-forwards read-only; run it OUTSIDE auto mode (or `!`-prefix the invocation).
 #
 # Alice's estate-admin grant is ASSERTED, not seeded (goal cond 4): the chart's auth.bootstrapAdmin
-# post-install hook Job owns that grant now (deploy with --set auth.bootstrapAdmin=<alice's Dex sub>).
+# post-install hook Job owns that grant now (deploy with --set auth.bootstrapAdmin=dex~<alice's userID>).
 # Pass --seed for legacy runs to seed it manually via the fga CLI. Bob's project-admin tuple is a pure
 # negative-test fixture (a PROJECT admin must 403 on the estate feed) and is seeded in both modes.
 #
@@ -63,16 +63,20 @@ for i in $(seq 1 30); do
 done
 ok "catalog + dex + openfga reachable"
 
-# Mint a user's Dex id_token (password grant) and decode its `sub` (the verified subject the catalog stamps).
+# Mint a user's Dex id_token (password grant), and ask the catalog for the principal it proves (LH-063): the verified
+# subject the catalog stamps, and the OpenFGA user that principal is, through the seam every tuple writer uses.
 mint() { curl -s http://localhost:5556/dex/token -d grant_type=password -d client_id=lance-catalog \
-  -d client_secret=lance-catalog-secret -d scope=openid -d username="$1" -d password=password | \
+  -d client_secret=lance-catalog-secret -d "scope=openid federated:id" -d username="$1" -d password=password | \
   python3 -c "import sys,json;print(json.load(sys.stdin).get('id_token',''))"; }
-sub_of() { python3 -c "import sys,base64,json;t=sys.argv[1].split('.')[1];t+='='*(-len(t)%4);print(json.loads(base64.urlsafe_b64decode(t)).get('sub',''))" "$1"; }
+principal_of() { curl -s "http://localhost:$CAT_PORT/management/v1/me" -H "Authorization: Bearer $1" | \
+  python3 -c "import sys,json;print(json.load(sys.stdin).get('sub',''))"; }
+fga_user() { uv run python -c "import sys; from service_kit.governed.fga import user_object; print(user_object(sys.argv[1]))" "$1"; }
 
 ALICE="$(mint alice@example.com)"; [ -n "$ALICE" ] || fail "could not mint alice's Dex token (is dex ready?)"
 BOB="$(mint bob@example.com)"; [ -n "$BOB" ] || fail "could not mint bob's Dex token"
-ALICE_SUB="$(sub_of "$ALICE")"; BOB_SUB="$(sub_of "$BOB")"
-[ -n "$ALICE_SUB" ] && [ -n "$BOB_SUB" ] || fail "could not decode subs"
+ALICE_SUB="$(principal_of "$ALICE")"; BOB_SUB="$(principal_of "$BOB")"
+[ -n "$ALICE_SUB" ] && [ -n "$BOB_SUB" ] || fail "the catalog named no principal for alice or bob"
+ALICE_USER="$(fga_user "$ALICE_SUB")"; BOB_USER="$(fga_user "$BOB_SUB")"
 
 # Estate-admin grant: ASSERT by default — the chart's auth.bootstrapAdmin hook Job owns seeding alice's
 # `owner warehouse:lance_catalog` now (cond 4); --seed writes it manually for legacy stacks. Bob's
@@ -81,16 +85,16 @@ ALICE_SUB="$(sub_of "$ALICE")"; BOB_SUB="$(sub_of "$BOB")"
 SID="$(fga store list --api-url http://localhost:8081 --api-token "$FGA_TOKEN" 2>/dev/null | python3 -c "import sys,json;s=json.load(sys.stdin).get('stores',[]);print(s[0]['id'] if s else '')")"
 [ -n "$SID" ] || fail "no OpenFGA store (is fga provisioned?)"
 if [ "$SEED" = "1" ]; then
-  fga tuple write --api-url http://localhost:8081 --api-token "$FGA_TOKEN" --store-id "$SID" "user:$ALICE_SUB" owner warehouse:lance_catalog >/dev/null 2>&1 || true
+  fga tuple write --api-url http://localhost:8081 --api-token "$FGA_TOKEN" --store-id "$SID" "$ALICE_USER" owner warehouse:lance_catalog >/dev/null 2>&1 || true
 fi
 # Bob's project is a THROWAWAY fixture project, deliberately NOT a real tenant: granting him admin on
 # acme polluted the tenants panel's admin list, and a project-admin check needs bob to be a real
 # non-admin of acme (found when two verify scripts ran against one persisted store 2026-07-24).
-fga tuple write --api-url http://localhost:8081 --api-token "$FGA_TOKEN" --store-id "$SID" "user:$BOB_SUB" admin project:ctlfixture >/dev/null 2>&1 || true
+fga tuple write --api-url http://localhost:8081 --api-token "$FGA_TOKEN" --store-id "$SID" "$BOB_USER" admin project:ctlfixture >/dev/null 2>&1 || true
 # --seed polls longer (a fresh write can lag through OpenFGA); assert mode expects a pre-existing grant.
 TRIES=$([ "$SEED" = "1" ] && echo 20 || echo 5)
 for i in $(seq 1 "$TRIES"); do
-  a="$(fga query check --api-url http://localhost:8081 --api-token "$FGA_TOKEN" --store-id "$SID" "user:$ALICE_SUB" can_observe_events warehouse:lance_catalog 2>/dev/null | python3 -c "import sys,json;print(json.load(sys.stdin).get('allowed',False))" 2>/dev/null || true)"
+  a="$(fga query check --api-url http://localhost:8081 --api-token "$FGA_TOKEN" --store-id "$SID" "$ALICE_USER" can_observe_events warehouse:lance_catalog 2>/dev/null | python3 -c "import sys,json;print(json.load(sys.stdin).get('allowed',False))" 2>/dev/null || true)"
   [ "$a" = "True" ] && break
   if [ "$i" = "$TRIES" ]; then
     if [ "$SEED" = "1" ]; then

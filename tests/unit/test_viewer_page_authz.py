@@ -42,7 +42,7 @@ def _app(
     *,
     allow: Any,
     seen: list[dict[str, Any]] | None = None,
-    subject: str = "gina",
+    subject: str = "dex~gina",
     token: str | None = "caller-jwt",
     http: Any | None = None,
 ) -> FastAPI:
@@ -61,6 +61,7 @@ def _app(
             "RASK_OIDC_ENABLED": True,
             "RASK_OIDC_ISSUER": "https://issuer.test",
             "RASK_OIDC_AUDIENCE": "rask",
+            "RASK_OIDC_CONNECTORS": {"local": "dex"},
         }
     )
     app.dependency_overrides[get_viewer_settings] = lambda: settings

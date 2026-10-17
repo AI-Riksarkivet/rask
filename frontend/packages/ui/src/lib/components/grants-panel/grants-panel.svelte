@@ -242,7 +242,7 @@
 				<div class="sim-form">
 					<input
 						class="mono"
-						placeholder="OIDC sub, or role:…#assignee / team:…#member"
+						placeholder="principal (idp~user id), or role:…#assignee / team:…#member"
 						bind:value={simUser}
 						onkeydown={(e) => e.key === 'Enter' && runCheck()}
 					/>

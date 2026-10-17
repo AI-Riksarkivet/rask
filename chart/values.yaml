@@ -756,6 +756,13 @@ auth:
     issuer: ""
     # -- The OIDC client id: the audience every governed door checks (`RASK_OIDC_AUDIENCE`), the client the zones sign in as, and the development Dex's static client.
     clientId: lance-catalog
+    # A PERSON IS THE PRINCIPAL THEIR DEX CONNECTOR MAPS TO ([[LH-063]], ADR 0159 D5): `<idp-id>~<user id>`, with
+    # the idp id named here for the connector id Dex reports in `federated_claims` and the upstream user id that
+    # connector reports. Every grant, inbox and attribution keys on it, so renaming a connector in Dex is one more
+    # entry under the same idp id and re-keys no grant. The development Dex's one connector, its password database
+    # `local`, is `dex` whenever `dex.enabled`; without it every connector of the platform's Dex is named here.
+    # -- The idp id each Dex connector's users are principals of, keyed by connector id (`RASK_OIDC_CONNECTORS`; `{ldap: corp}` makes user `u` of connector `ldap` the principal `corp~u`). An idp id is lower-case letters, digits and `-`, never `kubernetes`. With `dex.enabled` the development Dex's `local` connector is `dex` unless named here; otherwise at least one entry is required.
+    connectors: {}
   # Permit auth.enabled=true WITHOUT a frontend sign-in flow. Off by default, and the chart REFUSES
   # that combination (templates/auth-consistency.yaml): it installs green and then shows every user
   # a governed UI with no way in, while the catalog 401s each read. Set this only for an estate that
@@ -796,14 +803,16 @@ auth:
   fgaStoreId: ""
   # -- Pin the OpenFGA authorization model id every service checks against, whatever its image carries. Empty = the store's latest model.
   fgaModelId: ""
-  # First estate admin, seeded BY THE CHART (goal cond 4): a Dex subject (the id_token's `sub`) granted
+  # First estate admin, seeded BY THE CHART (goal cond 4): a person's principal, `<idp-id>~<user id>` (the idp id
+  # `auth.oidc.connectors` gives their connector; `dex~<userID>` for a development Dex user), which the render
+  # refuses when it is a bare name, a `user:` id or a service account's. It is granted
   # TWO tuples by the bootstrap-admin post-install/upgrade hook Job, because they are two authorities —
   # `owner` on the default warehouse (warehouse:lance_catalog), which cascades into every namespace and
   # table it parents, and `admin` on the estate root (estate:rask), which every estate-wide surface
   # (GET /management/v1/events, the object browser, the admin console) gates on. Empty (default) = the human grants
   # stay out-of-band (seed scripts / the UI) while the SERVICE grants below still render.
   # Requires auth.enabled.
-  # -- Dex subject (id_token `sub`) the bootstrap-admin hook grants `owner` on the default warehouse and `admin` on estate:rask. Empty = human grants are made out of band.
+  # -- The person's principal (`<idp-id>~<user id>`, e.g. `dex~<userID>`) the bootstrap-admin hook grants `owner` on the default warehouse and `admin` on estate:rask; a bare name fails the render. Empty = human grants are made out of band.
   bootstrapAdmin: ""
 
 # === Data-plane credential vending (Track B). How a client gets storage_options for DIRECT object I/O. ====

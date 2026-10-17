@@ -125,12 +125,12 @@ event = {
     "run": {
         "runId": str(run_uuid),  # the notification id is `runId@STATE`
         "facets": {
-            # (2) The VERIFIED token sub. NOT settings.author, NOT a role/team string,
-            #     NOT a display name. `{name, sub}` together is what every verifying writer stamps.
+            # (2) The VERIFIED principal key (`token.subject`, `<idp-id>~<user id>`, [[LH-063]]). NOT settings.author,
+            #     NOT a role/team string, NOT a display name. `{name, sub}` together is what every verifying writer stamps.
             #     (5) binds it: a signer is its own author, so a service stamps its own signing
             #     identity and the person rides in `lance.originator` (Q2). Only the catalog signs
             #     for a person it authenticated (`on_behalf_of=`).
-            "author": {"name": token.sub, "sub": token.sub},
+            "author": {"name": token.subject, "sub": token.subject},
             "lance": {
                 "operation": "promote",
                 "run_id": producer_run_id,  # what YOUR detail door answers to
@@ -155,14 +155,19 @@ await emit_control(  # best-effort; never raises into a committed mutation
     action="grant_revoked",  # MUST be in NAMED_ACTIONS
     object_type="grant",
     object_id=f"project:{project_id}",
-    actor=f"user:{token.sub}",  # the VERIFIED principal that made the change
-    extra={"relation": relation, "subject": user},  # `subject` = WHO this is about, `user:bob`
+    actor=f"user:{token.subject}",  # the VERIFIED principal that made the change, `user:` and its key
+    extra={"relation": relation, "subject": fga.user_object(principal)},  # WHO this is about, as the OpenFGA user it is
 )
 ```
 
 Call it **after** the backend mutation and its audit succeed, so a real change is never announced.
-`extra.subject` is the entire targeting: `named_subject` returns `None` for a missing subject, a bare
-`user:`, and the `*` wildcard, and the event is then filed IGNORED with a `SUCCESS` ack.
+`extra.subject` is the entire targeting, and it is the OpenFGA user the change names (`fga.user_object`: `user:` and the
+principal key percent-encoded, or a userset). `named_subjects` decodes a `user:` id back to the principal key
+(`fga.subject_of`), so a key carrying an encoded character addresses the inbox its owner's token reaches, and keeps only
+a person (`is_person_subject`): a missing subject, a bare `user:`, the `*` wildcard and a service account's principal
+address nobody, and the event is then filed IGNORED with a `SUCCESS` ack. A raw `f"user:{key}"` in `extra.subject` is the
+defect, though the `actor` keeps that form: it addresses another inbox whenever the key carries a character the encoding
+escapes.
 
 **The emitter signs, and `make_control_emitter(sign=...)` has no default** ([[XC-078]]). A producer passes
 `attach_control_signature` over its own `SigningKeyHolder` (the catalog's, `catalog/core/control_signing.py`,

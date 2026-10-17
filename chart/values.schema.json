@@ -81,7 +81,7 @@
                     "type": "boolean"
                 },
                 "bootstrapAdmin": {
-                    "description": "Dex subject (id_token `sub`) the bootstrap-admin hook grants `owner` on the default warehouse and `admin` on estate:rask. Empty = human grants are made out of band.",
+                    "description": "The person's principal (`\u003cidp-id\u003e~\u003cuser id\u003e`, e.g. `dex~\u003cuserID\u003e`) the bootstrap-admin hook grants `owner` on the default warehouse and `admin` on estate:rask; a bare name fails the render. Empty = human grants are made out of band.",
                     "type": "string"
                 },
                 "enabled": {
@@ -123,6 +123,10 @@
                         "clientId": {
                             "description": "The OIDC client id: the audience every governed door checks (`RASK_OIDC_AUDIENCE`), the client the zones sign in as, and the development Dex's static client.",
                             "type": "string"
+                        },
+                        "connectors": {
+                            "description": "The idp id each Dex connector's users are principals of, keyed by connector id (`RASK_OIDC_CONNECTORS`; `{ldap: corp}` makes user `u` of connector `ldap` the principal `corp~u`). An idp id is lower-case letters, digits and `-`, never `kubernetes`. With `dex.enabled` the development Dex's `local` connector is `dex` unless named here; otherwise at least one entry is required.",
+                            "type": "object"
                         },
                         "issuer": {
                             "description": "The OIDC issuer every governed door trusts (`RASK_OIDC_ISSUER`; a token is accepted only when its `iss` equals it) and the zones sign in at (`OIDC_ISSUER`). Required when `auth.enabled` or `frontend.oidc.enabled`; https unless `dex.enabled`.",

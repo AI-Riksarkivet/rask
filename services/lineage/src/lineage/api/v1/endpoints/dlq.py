@@ -159,13 +159,13 @@ async def replay_dlq(
     try:
         await republish_staged(publisher, settings, event_json)
     except Exception as exc:
-        audit.audit("dlq_replay", FAILURE, subject=token.sub if token else "", resource=_audited(event, run_id))
+        audit.audit("dlq_replay", FAILURE, subject=token.subject if token else "", resource=_audited(event, run_id))
         log.warning("lineage_dlq_replay_unannounced", extra={"run_id": run_id, "error": str(exc)})
         raise ServiceUnavailableError(f"replayed {run_id} into the feed, but re-announcing it failed; it stays staged for the relay to retry") from exc
     # Drop exactly what was replayed — dropping by run id would miss it and leave a redundant object.
     await run_in_threadpool(outbox.drop_event, settings.outbox_uri, opts, staged_key)
     # A completed ACTION records SUCCESS unconditionally (house vocabulary: ALLOW/DENY belong to authz
     # decisions — mirror access_grant/vend_credentials); the subject is empty in auth-off dev.
-    audit.audit("dlq_replay", SUCCESS, subject=token.sub if token else "", resource=_audited(event, run_id))
-    log.info("lineage_dlq_replayed", extra={"run_id": run_id, "sub": token.sub if token else None})
+    audit.audit("dlq_replay", SUCCESS, subject=token.subject if token else "", resource=_audited(event, run_id))
+    log.info("lineage_dlq_replayed", extra={"run_id": run_id, "sub": token.subject if token else None})
     return DlqReplayResponse(status="replayed", run_id=run_id)

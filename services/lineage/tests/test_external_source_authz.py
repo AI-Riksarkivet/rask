@@ -39,6 +39,7 @@ from lineage.models import Dataset, Job, Run, RunEvent
 from lineage.schemas import EventRecord
 from service_kit.governed import fga
 from service_kit.governed.decider import OpenFgaDecider
+from service_kit.governed.machine_identity import ServicePrincipal
 
 
 GOVERNED = "bind86-bronze$pages"
@@ -69,8 +70,8 @@ def _event(*, inputs: list[Dataset] | None = None, outputs: list[Dataset] | None
     )
 
 
-class _Principal:
-    sub = "service-pipeline"
+#: The pipeline's own account, the caller every authorization question below is asked as.
+_PIPELINE = ServicePrincipal(service_account="system:serviceaccount:etl:service-pipeline")
 
 
 class _FakeFGA:
@@ -100,6 +101,7 @@ def settings() -> LineageSettings:
         oidc_enabled=True,
         oidc_issuer="https://example.invalid/realms/rask",
         oidc_audience="rask",
+        oidc_connectors={"local": "dex"},
         fga_object_type="table",
     )
 
@@ -129,7 +131,7 @@ async def test_a_GOVERNED_input_the_caller_cannot_see_is_STILL_refused(settings,
     event = _event(inputs=[_dataset("gold", "gold$catalog")])
 
     with pytest.raises(PermissionDeniedError, match="can_get_metadata"):
-        await enforce_output_authz(event, request, settings, _Principal())
+        await enforce_output_authz(event, request, settings, _PIPELINE)
 
 
 @pytest.mark.anyio
@@ -146,7 +148,7 @@ async def test_a_FORGED_external_namespace_cannot_launder_a_governed_name(settin
     forged = _dataset("s3://anything", "gold$catalog")
     event = _event(inputs=[forged])
 
-    await enforce_output_authz(event, request, settings, _Principal())
+    await enforce_output_authz(event, request, settings, _PIPELINE)
 
     # ASSERTED ON THE IDENTITY KEY the edges use, never on `(forged.namespace, forged.name)` against a literal,
     # which is unconditionally true and cannot fail.
@@ -163,7 +165,7 @@ async def test_OUTPUTS_are_never_exempted(settings, request_with) -> None:
     event = _event(outputs=[_dataset(EXTERNAL_NS, EXTERNAL_NAME)])
 
     with pytest.raises(PermissionDeniedError, match="can_write_data"):
-        await enforce_output_authz(event, request, settings, _Principal())
+        await enforce_output_authz(event, request, settings, _PIPELINE)
 
 
 @pytest.mark.anyio
@@ -172,7 +174,7 @@ async def test_a_MIXED_event_authorizes_the_governed_input_and_skips_the_externa
     request, fake = request_with({f"table:{GOVERNED}"})
     event = _event(inputs=[_dataset(EXTERNAL_NS, EXTERNAL_NAME), _dataset("bind86-bronze", GOVERNED)])
 
-    await enforce_output_authz(event, request, settings, _Principal())
+    await enforce_output_authz(event, request, settings, _PIPELINE)
 
     assert f"table:{GOVERNED}" in fake.asked, "the governed input was not authorized"
     assert not any(EXTERNAL_NAME in o for o in fake.asked), "the external input was authorized"
@@ -313,7 +315,7 @@ async def test_a_GOVERNED_column_upstream_is_AUTHORIZED_not_written_blind(settin
     event = _event_with_column_upstream(_dataset("mine", "mine$table"), "gold", GOVERNED)
 
     with pytest.raises(PermissionDeniedError):
-        await enforce_output_authz(event, request, settings, _Principal())
+        await enforce_output_authz(event, request, settings, _PIPELINE)
 
 
 @pytest.mark.anyio
@@ -323,7 +325,7 @@ async def test_a_column_upstream_the_caller_CAN_see_passes(settings, request_wit
     request, fake = request_with({"table:mine$table", f"table:{GOVERNED}"})
     event = _event_with_column_upstream(_dataset("mine", "mine$table"), "gold", GOVERNED)
 
-    await enforce_output_authz(event, request, settings, _Principal())
+    await enforce_output_authz(event, request, settings, _PIPELINE)
 
     assert f"table:{GOVERNED}" in fake.asked, "the governed column upstream was never presented to a check"
 
@@ -336,4 +338,4 @@ async def test_an_EXTERNAL_column_upstream_stays_exempt(settings, request_with) 
     request, _fake = request_with({"table:mine$table"})
     event = _event_with_column_upstream(_dataset("mine", "mine$table"), "s3://raw", "gold$catalog")
 
-    await enforce_output_authz(event, request, settings, _Principal())
+    await enforce_output_authz(event, request, settings, _PIPELINE)

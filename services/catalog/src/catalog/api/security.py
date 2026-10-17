@@ -11,9 +11,10 @@ configured-but-broken auth layer must never degrade to open access.
 
 A service is the Kubernetes service account its projected token names ([[LH-220]], ADR 0156 C5). The bearer's
 unverified ``iss`` routes it: the cluster's service-account issuer goes to ``app.state.sa_oidc``, which
-verifies it offline and answers the subject ``kubernetes~system:serviceaccount:<ns>:<sa>``, from any namespace;
-every other issuer goes to the IdP, which refuses a token it did not sign (401). A service-account token never
-falls through to the IdP, no header names the caller, and OpenFGA alone decides what the subject may do.
+verifies it offline and answers the principal ``kubernetes~system:serviceaccount:<ns>:<sa>``, from any namespace;
+every other issuer goes to the IdP, which refuses a token it did not sign (401), and answers a person as the
+principal their Dex connector maps to, ``<idp-id>~<user id>`` ([[LH-063]]). A service-account token never falls
+through to the IdP, no header names the caller, and OpenFGA alone decides what the principal may do.
 """
 
 from __future__ import annotations
@@ -29,16 +30,17 @@ from catalog.api.dependencies import SettingsDep
 from service_kit.governed.audit import FAILURE, SUCCESS, audit
 from service_kit.governed.deps import ANONYMOUS_SUBJECT
 from service_kit.governed.machine_identity import ServiceAccountVerifier, ServicePrincipal
-from service_kit.governed.oidc import IDToken, OIDCVerifier, ProviderUnavailableError
+from service_kit.governed.oidc import ProviderUnavailableError
+from service_kit.governed.person_identity import PersonPrincipal, PersonVerifier
 
 
 # auto_error=False: we raise UnauthenticatedError ourselves so 401s are problem+json.
 _bearer = HTTPBearer(auto_error=False, description="OIDC bearer token")
 _CredentialsDep = Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)]
 
-#: A verified caller: a person's IdP token, or a service the cluster vouched for. Authorization reads
-#: `.sub` off either; `isinstance(token, ServicePrincipal)` is the estate's one machine test.
-type Principal = IDToken | ServicePrincipal
+#: A verified caller: a person the IdP vouched for, or a service the cluster vouched for. Authorization reads the
+#: principal key off either as `.subject`; `isinstance(token, ServicePrincipal)` is the estate's one machine test.
+type Caller = PersonPrincipal | ServicePrincipal
 
 
 def _claims_issuer(bearer: str, issuer: str | None) -> bool:
@@ -67,7 +69,7 @@ def _service_principal(verifier: ServiceAccountVerifier | None, bearer: str) -> 
     except UnauthenticatedError:
         audit("authn", FAILURE, reason="invalid_token")
         raise
-    audit("authn", SUCCESS, subject=principal.sub)
+    audit("authn", SUCCESS, subject=principal.subject)
     return principal
 
 
@@ -75,7 +77,7 @@ def authenticate(
     request: Request,
     settings: SettingsDep,
     credentials: _CredentialsDep,
-) -> Principal | None:
+) -> Caller | None:
     """Authenticate the request: a projected service-account token (a service) or an OIDC bearer (a person).
 
     The service-account verifier is chosen by the token's unverified ``iss`` and then checks the
@@ -91,7 +93,7 @@ def authenticate(
     if bearer and (sa_verifier.issued(bearer) if sa_verifier is not None else _claims_issuer(bearer, settings.sa_issuer)):
         return _service_principal(sa_verifier, bearer)
 
-    verifier: OIDCVerifier | None = getattr(request.app.state, "oidc", None)
+    verifier: PersonVerifier | None = getattr(request.app.state, "oidc", None)
     if verifier is None:
         # OIDC is enabled but no verifier is available: fail closed, never open.
         audit("authn", FAILURE, reason="verifier_unavailable")
@@ -109,18 +111,18 @@ def authenticate(
     except Exception:
         audit("authn", FAILURE, reason="invalid_token")
         raise
-    audit("authn", SUCCESS, subject=token.sub)  # #41 record the authenticated principal
+    audit("authn", SUCCESS, subject=token.subject)  # #41 record the authenticated principal
     return token
 
 
 #: The authenticated caller (``None`` when OIDC is disabled). Endpoints that need claims depend on
 #: this and narrow with ``isinstance``; router-level use enforces authentication.
-CurrentToken = Annotated[Principal | None, Depends(authenticate)]
+CurrentToken = Annotated[Caller | None, Depends(authenticate)]
 
 
 def current_subject(token: CurrentToken) -> str:
-    """The verified caller as the estate's subject id: the principal's ``sub``, or ``anon`` with OIDC off."""
-    return token.sub if token is not None else ANONYMOUS_SUBJECT
+    """The verified caller as the estate's subject id: its principal key, or ``anon`` with OIDC off."""
+    return token.subject if token is not None else ANONYMOUS_SUBJECT
 
 
 CurrentSubject = Annotated[str, Depends(current_subject)]

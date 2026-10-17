@@ -199,7 +199,15 @@ def tenant(moto_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[_Tenant]:
         return httpx.Response(200)
 
     with TestClient(app, headers={"Authorization": "Bearer t"}) as client:
-        governed = get_settings().model_copy(update={"oidc_enabled": True, "oidc_issuer": "https://idp.example", "oidc_audience": "lance", "fga_enabled": True})
+        governed = get_settings().model_copy(
+            update={
+                "oidc_enabled": True,
+                "oidc_connectors": {"local": "dex"},
+                "oidc_issuer": "https://idp.example",
+                "oidc_audience": "lance",
+                "fga_enabled": True,
+            }
+        )
         app.dependency_overrides[get_settings] = lambda: governed
         monkeypatch.setattr(app.state, "oidc", MagicMock())
         act_as(client, "alice")

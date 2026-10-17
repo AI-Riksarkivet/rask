@@ -51,9 +51,9 @@ def test_a_tick_without_the_sidecars_token_forwards_nothing(tmp_path: Path, monk
         monkeypatch.setenv("LINEAGE_FORWARD_URL", url)
         with (
             live_catalog(tmp_path / "catalog", monkeypatch) as catalog_url,
-            governed_lineage(catalog_url, monkeypatch, {("alice", "can_write_data", f"table:{_TABLE}")}) as lineage,
+            governed_lineage(catalog_url, monkeypatch, {("dex~alice", "can_write_data", f"table:{_TABLE}")}) as lineage,
         ):
-            assert lineage.post("/api/v1/lineage", json=run, headers={SUBJECT_HEADER: "alice"}).status_code == 201
+            assert lineage.post("/api/v1/lineage", json=run, headers={SUBJECT_HEADER: "dex~alice"}).status_code == 201
             refused = [lineage.post(f"/{RELAY}").status_code, lineage.post(f"/{RELAY}", headers={"dapr-api-token": "wrong"}).status_code]
             sent_while_refused = len(graph.received)
             tick = lineage.post(f"/{RELAY}", headers={"dapr-api-token": "s3cret"})

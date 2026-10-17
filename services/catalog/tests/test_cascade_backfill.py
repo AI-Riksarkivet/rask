@@ -25,6 +25,7 @@ def _fga_settings(**overrides: object) -> Settings:
         RASK_OIDC_ENABLED=True,
         RASK_OIDC_ISSUER="https://dex",
         RASK_OIDC_AUDIENCE="rask",
+        RASK_OIDC_CONNECTORS={"local": "dex"},
         **overrides,
     )
 

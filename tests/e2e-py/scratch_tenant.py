@@ -7,8 +7,6 @@ deleted again at the end: the tables first, then the warehouse with its bucket, 
 
 from __future__ import annotations
 
-import base64
-import json
 import os
 import uuid
 from collections.abc import Callable, Iterator, Sequence
@@ -16,6 +14,7 @@ from typing import Any
 
 import lance_namespace
 import requests
+from principals import DEX_SCOPE, principal_of
 
 
 CATALOG = os.environ.get("LANCE_E2E_CATALOG_URL", "").rstrip("/")
@@ -27,7 +26,7 @@ JOB_USER = os.environ.get("LANCE_E2E_PIPELINE_USER", "publisher@rask.internal")
 
 
 class Identity:
-    """One Dex user: its bearer, and the subject the estate's grants name."""
+    """One Dex user: its bearer, and the principal the estate's grants name ([[LH-063]])."""
 
     def __init__(self, email: str) -> None:
         answer = requests.post(
@@ -38,14 +37,13 @@ class Identity:
                 "client_secret": DEX_SECRET,
                 "username": email,
                 "password": "password",
-                "scope": "openid email",
+                "scope": DEX_SCOPE,
             },
             timeout=20,
         )
         answer.raise_for_status()
         self.bearer = str(answer.json()["id_token"])
-        claims = self.bearer.split(".")[1]
-        self.sub = str(json.loads(base64.urlsafe_b64decode(claims + "=" * (-len(claims) % 4)))["sub"])
+        self.principal = principal_of(CATALOG, self.bearer)
         self.http = requests.Session()
         self.http.headers["authorization"] = f"Bearer {self.bearer}"
 
@@ -78,7 +76,7 @@ class Tenant:
         body = {"namespace": self.bronze, "properties": {"rask.tier": "bronze"}}
         ok(admin.http.post(f"{CATALOG}/management/v1/warehouses/{self.project}/namespaces", json=body))
         for relation in self.grants:
-            ok(admin.http.post(f"{CATALOG}/management/v1/namespace/{self.bronze}/access/grant", json={"user": self.job.sub, "relation": relation}))
+            ok(admin.http.post(f"{CATALOG}/management/v1/namespace/{self.bronze}/access/grant", json={"user": self.job.principal, "relation": relation}))
 
     def tear_down(self) -> list[str]:
         """Drop every table, then the warehouse with its bucket, then the project; what failed."""

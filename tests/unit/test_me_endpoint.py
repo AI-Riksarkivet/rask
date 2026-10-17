@@ -19,14 +19,16 @@ from lance_namespace import ServiceUnavailableError, UnauthenticatedError
 
 from catalog.api.v1.endpoints import me as ep
 from service_kit.governed.oidc import IDToken
+from service_kit.governed.person_identity import PersonPrincipal
+from service_kit.governed.principal import Principal
 
 
 def _settings(*, fga_enabled: bool = False) -> Any:
     return SimpleNamespace(fga_enabled=fga_enabled, fga_root_object="warehouse:lance_catalog")
 
 
-def _token(**claims: Any) -> IDToken:
-    return IDToken(iss="i", sub="alice", aud="lance", exp=1, iat=1, **claims)
+def _token(**claims: Any) -> PersonPrincipal:
+    return PersonPrincipal(principal=Principal(idp_id="dex", subject="alice"), claims=IDToken(iss="i", sub="alice", aud="lance", exp=1, iat=1, **claims))
 
 
 def _me(settings: Any, *, token: Any, client: Any = None) -> ep.MeResponse:
@@ -49,7 +51,7 @@ def test_anonymous_is_401(fga_enabled: bool) -> None:
 
 def test_fga_off_dev_parity() -> None:
     result = _me(_settings(), token=_token(name="Alice A", email="alice@example.com"))
-    assert result.sub == "alice"
+    assert result.sub == "dex~alice"
     assert result.name == "Alice A" and result.email == "alice@example.com"
     assert result.estate_admin is True  # every require_* gate is a no-op there — say so honestly
     assert result.projects == []

@@ -83,7 +83,7 @@ DEX_SECRET="$(kubectl get cm "$RELEASE-dex" -o jsonpath='{.data.config\.yaml}' 2
 : "${DEX_CLIENT:=lance-catalog}" ; : "${DEX_SECRET:=lance-catalog-secret}"
 mint() {
   curl -s -m 20 "http://$DEX/dex/token" -d grant_type=password -d client_id="$DEX_CLIENT" \
-    -d client_secret="$DEX_SECRET" -d scope="openid email" -d username="$1" -d password=password \
+    -d client_secret="$DEX_SECRET" -d scope="openid email federated:id" -d username="$1" -d password=password \
     | uv run python -c "import sys,json;print(json.load(sys.stdin).get('id_token',''))"
 }
 ALICE="$(mint alice@example.com)"; BOB="$(mint bob@example.com)"
@@ -175,13 +175,13 @@ try:
     print(carried_model(sys.argv[1], token_file=sys.argv[3], pinned=sys.argv[2])[1])
 except LookupError as exc:
     sys.exit(f'   note: {exc}')" "http://$FGA" "$STORE_ID" "$FGA_TOKEN_FILE" || true)"
-  sub_of() { TOK="$1" uv run python -c "
-import base64, json, os
-b = os.environ['TOK'].split('.')[1]; b += '=' * (-len(b) % 4)
-print(json.loads(base64.urlsafe_b64decode(b))['sub'])" 2>/dev/null || true; }
+  # The principal the catalog keys a bearer on (LH-063), and the OpenFGA user it is, through the one seam.
+  principal_of() { curl -s -m 20 "http://$CATALOG/management/v1/me" -H "authorization: Bearer $1" \
+    | uv run python -c "import sys,json;print(json.load(sys.stdin).get('sub',''))" 2>/dev/null || true; }
+  fga_user() { uv run python -c "import sys; from service_kit.governed.fga import user_object; print(user_object(sys.argv[1]))" "$1" 2>/dev/null || true; }
   can_administer() {
     curl -s -m 10 -X POST "http://$FGA/stores/$STORE_ID/check" -H "$FGA_AUTH" -H 'content-type: application/json' \
-      -d "{\"authorization_model_id\":\"$MODEL_ID\",\"tuple_key\":{\"user\":\"user:$1\",\"relation\":\"can_administer\",\"object\":\"project:${LANCE_E2E_PROJECT:-acme}\"}}" \
+      -d "{\"authorization_model_id\":\"$MODEL_ID\",\"tuple_key\":{\"user\":\"$(fga_user "$1")\",\"relation\":\"can_administer\",\"object\":\"project:${LANCE_E2E_PROJECT:-acme}\"}}" \
       | uv run python -c "import sys,json;print(json.load(sys.stdin).get('allowed'))" 2>/dev/null || true
   }
   # ASK THE ESTATE WHICH IDENTITY IS ACTUALLY NON-ADMIN rather than naming one. The suite asserts a
@@ -192,9 +192,9 @@ print(json.loads(base64.urlsafe_b64decode(b))['sub'])" 2>/dev/null || true; }
     for CAND_NAME in publisher bob; do
       eval "CAND_TOK=\${$(echo "$CAND_NAME" | tr '[:lower:]' '[:upper:]'):-}"
       [ -n "$CAND_TOK" ] || continue
-      CAND_SUB="$(sub_of "$CAND_TOK")"
-      [ -n "$CAND_SUB" ] || continue
-      if [ "$(can_administer "$CAND_SUB")" = "False" ]; then
+      CAND_PRINCIPAL="$(principal_of "$CAND_TOK")"
+      [ -n "$CAND_PRINCIPAL" ] || continue
+      if [ "$(can_administer "$CAND_PRINCIPAL")" = "False" ]; then
         export LANCE_E2E_NONADMIN_TOKEN="$CAND_TOK"
         printf '   non-admin identity: %s (can_administer on %s is False)\n' "$CAND_NAME" "${LANCE_E2E_PROJECT:-acme}"
         break
@@ -296,16 +296,14 @@ if [ -n "$CATALOG" ] && [ -n "$ALICE" ] && [ -n "$BOB" ]; then
   B_CODE="$(curl -s -o /dev/null -w '%{http_code}' -m 20 -X POST "http://$CATALOG/management/v1/projects" \
     -H "authorization: Bearer $ALICE" -H 'content-type: application/json' \
     -d "{\"id\":\"$TENANT_B\"}" 2>/dev/null || true)"
-  BOB_SUB="$(TOK="$BOB" uv run python -c "
-import base64, json, os
-b = os.environ['TOK'].split('.')[1]; b += '=' * (-len(b) % 4)
-print(json.loads(base64.urlsafe_b64decode(b))['sub'])" 2>/dev/null || true)"
+  BOB_PRINCIPAL="$(curl -s -m 20 "http://$CATALOG/management/v1/me" -H "authorization: Bearer $BOB" \
+    | uv run python -c "import sys,json;print(json.load(sys.stdin).get('sub',''))" 2>/dev/null || true)"
   if [ "$B_CODE" = "200" ] || [ "$B_CODE" = "201" ] || [ "$B_CODE" = "409" ]; then
     # Bob administers tenant B while alice administers acme, which is what makes the isolation legs a
     # real cross-tenant test rather than one principal talking to two of its own projects.
-    [ -n "$BOB_SUB" ] && curl -s -o /dev/null -m 20 -X POST "http://$CATALOG/management/v1/access/tuples" \
+    [ -n "$BOB_PRINCIPAL" ] && curl -s -o /dev/null -m 20 -X POST "http://$CATALOG/management/v1/access/tuples" \
       -H "authorization: Bearer $ALICE" -H 'content-type: application/json' \
-      -d "{\"user\":\"user:$BOB_SUB\",\"relation\":\"admin\",\"object\":\"project:$TENANT_B\"}" 2>/dev/null || true
+      -d "{\"user\":\"$BOB_PRINCIPAL\",\"relation\":\"admin\",\"object\":\"project:$TENANT_B\"}" 2>/dev/null || true
     export LANCE_E2E_PROJECT_B="$TENANT_B"
     export LANCE_E2E_TENANT_B_TOKEN="$BOB"
     printf '   tenant B: %s (admin=bob) — the credential-isolation legs will RUN\n' "$TENANT_B"

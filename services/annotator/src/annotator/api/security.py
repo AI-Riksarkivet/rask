@@ -20,7 +20,7 @@ from fastapi import Depends
 
 from annotator.core.config import AnnotatorSettings, get_annotator_settings
 from service_kit.governed.deps import ANONYMOUS_SUBJECT, FgaChecker, RawBearerToken, make_auth_deps
-from service_kit.governed.oidc import IDToken
+from service_kit.governed.person_identity import PersonPrincipal
 
 
 __all__ = [
@@ -49,7 +49,7 @@ current_subject = _deps.current_subject
 get_checker = _deps.get_checker
 get_fga_client = _deps.get_fga_client
 
-CurrentToken = Annotated[IDToken | None, Depends(authenticate)]
+CurrentToken = Annotated[PersonPrincipal | None, Depends(authenticate)]
 CurrentSubject = Annotated[str, Depends(current_subject)]
 CheckerDep = Annotated[FgaChecker, Depends(get_checker)]
 FgaClientDep = Annotated[object | None, Depends(get_fga_client)]

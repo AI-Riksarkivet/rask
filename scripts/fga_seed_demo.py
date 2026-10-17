@@ -15,11 +15,11 @@ reaches gold only through a role, a grant on a parentless transaction). Those ar
 never been loadable into a running store. This script is that missing half — it reads the SAME file
 CI asserts against, so the demo estate and the tested estate cannot drift.
 
-THE SUBJECT MAPPING is the part that matters. The fixtures say ``user:alice``; a real OpenFGA store
-keys on the OIDC ``sub``, which under Dex is a base64 protobuf (``CiQwOGE4Njg0Yi1kYjg4…``). Seed the
-literal ``user:alice`` and every check for the signed-in alice denies — correctly, and confusingly.
-So the demo identities are rewritten to their real subs, and the rest are left literal (they are
-personas with no IdP account, and they still make the graph worth reading).
+THE SUBJECT MAPPING is the part that matters. The fixtures say ``user:alice``; a real OpenFGA store keys a person on
+their principal, ``<idp-id>~<user id>`` ([[LH-063]]), and no door seeds a bare name. So the development Dex's identities
+are rewritten to their principals (``dex~<userID>``), and every other name is a persona with no IdP account, a principal
+of the ``demo`` idp id no connector maps: it still makes the graph worth reading, and still names an identity
+provider.
 
 Usage (needs the OpenFGA API reachable — ``kubectl port-forward svc/rask-openfga 18080:8080``):
 
@@ -47,17 +47,21 @@ import urllib.request
 from pathlib import Path
 
 from service_kit.governed.auth.write_model import carried_model, fga_headers
+from service_kit.governed.fga import user_object
 
 
 _FIXTURES = Path(__file__).resolve().parents[1] / "packages/service-kit/src/service_kit/governed/auth/model.fga.yaml"
 
-#: Dex's two static demo identities, encoded the way an OIDC `sub` actually arrives. Kept here rather
-#: than derived, because the chart pins these userIDs (chart/templates/dex.yaml) and a seed that
-#: silently drifted from them would grant a subject nobody can sign in as.
-_DEX_SUBS = {
-    "alice": "CiQwOGE4Njg0Yi1kYjg4LTRiNzMtOTBhOS0zY2QxNjYxZjU0NjYSBWxvY2Fs",
-    "bob": "CiQxYjZlMmY1YS03YzRkLTRlOWItOWYxYS0yZDNjNGI1YTZlN2YSBWxvY2Fs",
+#: The development Dex's two static demo identities as the principals they are ([[LH-063]]): `dex~` and the userID the
+#: Dex fixture declares (deploy/fixtures/dex/chart/values.yaml). Kept in step with ``seed_estate.DEX_PRINCIPALS`` — a
+#: seed that drifted from them would grant a principal nobody can sign in as.
+_DEX_PRINCIPALS = {
+    "alice": "dex~08a8684b-db88-4b73-90a9-3cd1661f5466",
+    "bob": "dex~1b6e2f5a-7c4d-4e9b-9f1a-2d3c4b5a6e7f",
 }
+
+#: The idp id a fixture persona is a principal of: no connector maps it, so no token signs in as one.
+_DEMO_IDP = "demo"
 
 _TUPLE_RE = re.compile(r"-\s*\{\s*user:\s*\"?(?P<user>[^,\"]+)\"?\s*,\s*relation:\s*\"?(?P<relation>[^,\"]+)\"?\s*,\s*object:\s*\"?(?P<object>[^}\"]+)\"?\s*\}")
 
@@ -86,19 +90,19 @@ def load_fixtures() -> list[dict[str, str]]:
     return [{k: v.strip() for k, v in m.groupdict().items()} for m in _TUPLE_RE.finditer(block.group(1))]
 
 
-def remap(tuples: list[dict[str, str]], subs: dict[str, str]) -> list[dict[str, str]]:
-    """Rewrite ``user:<name>`` to ``user:<oidc-sub>`` for identities that really exist in the IdP.
+def remap(tuples: list[dict[str, str]], principals: dict[str, str]) -> list[dict[str, str]]:
+    """Rewrite ``user:<name>`` to the OpenFGA user of its principal: an IdP identity's own, else a persona's under ``demo``.
 
-    Only the subject side is rewritten. A `user:` id never appears as an OBJECT in this model, and
-    rewriting one would invent a resource rather than name a principal.
+    Every person is written as the principal it is (``fga.user_object``), so this seed writes no tuple naming a bare
+    name ([[LH-063]]). Only the subject side is rewritten, and never the wildcard ``user:*``: a `user:` id never appears
+    as an OBJECT in this model, and rewriting one would invent a resource rather than name a principal.
     """
     out: list[dict[str, str]] = []
     for t in tuples:
         user = t["user"]
-        if user.startswith("user:"):
+        if user.startswith("user:") and user != "user:*":
             name = user.removeprefix("user:")
-            if name in subs:
-                user = f"user:{subs[name]}"
+            user = user_object(principals.get(name, f"{_DEMO_IDP}~{name}"))
         out.append({"user": user, "relation": t["relation"], "object": t["object"]})
     return out
 
@@ -116,22 +120,22 @@ def main() -> int:
         "--map",
         action="append",
         default=[],
-        metavar="NAME=SUB",
-        help="override a fixture identity's OIDC subject (repeatable)",
+        metavar="NAME=PRINCIPAL",
+        help="override a fixture identity's principal, <idp-id>~<user id> (repeatable)",
     )
     args = ap.parse_args()
 
-    subs = dict(_DEX_SUBS)
+    principals = dict(_DEX_PRINCIPALS)
     for pair in args.map:
-        name, _, sub = pair.partition("=")
-        if not sub:
-            print(f"!! --map wants NAME=SUB, got {pair!r}", file=sys.stderr)
+        name, _, principal = pair.partition("=")
+        if not principal:
+            print(f"!! --map wants NAME=PRINCIPAL, got {pair!r}", file=sys.stderr)
             return 1
-        subs[name] = sub
+        principals[name] = principal
 
-    tuples = remap(load_fixtures(), subs)
+    tuples = remap(load_fixtures(), principals)
     print(f"  {len(tuples)} fixture tuples from {_FIXTURES.name}")
-    print(f"  identities mapped to their OIDC subject: {', '.join(sorted(subs))}")
+    print(f"  identities mapped to their principal: {', '.join(sorted(principals))}")
 
     if args.dry_run:
         for t in tuples:

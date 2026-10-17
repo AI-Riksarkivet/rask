@@ -6,8 +6,8 @@ every release revision, under a 1 MiB ceiling. Each section is headed by the tem
 ## `apiVersion: batch/v1`
 
 FGA grant bootstrap (goal cond 4): the chart itself seeds the estate's standing tuples instead of an
-out-of-band `fga tuple write`. A post-install/post-upgrade hook grants the Dex subject in
-auth.bootstrapAdmin two things, on TWO objects, because they are two different authorities:
+out-of-band `fga tuple write`. A post-install/post-upgrade hook grants the person's principal in
+auth.bootstrapAdmin (`<idp-id>~<user id>`, [[LH-063]]) two things, on TWO objects, because they are two different authorities:
 `owner` on the default warehouse (warehouse:lance_catalog — RASK_FGA_DEFAULT_WAREHOUSE_OBJECT's
 default), which cascades down into every namespace and table that warehouse parents; and `admin` on
 the estate root (estate:rask — RASK_FGA_ROOT_OBJECT's default), which is what can_observe_events,
@@ -52,6 +52,12 @@ The explicit component label is the P4 landmine (docs/adr/0124-chart-unification
 component-scoped NetworkPolicy `from` list. Today the openfga pods sit under the general
 intra-namespace ingress allow, but the label keeps this hook admissible (and greppable) the day
 the openfga ingress gets an exclusive client list like openbao/age/minio.
+
+## `subject = {{ include "lance.bootstrapAdmin" . | quote }}`
+
+The principal the render accepted (`lance.bootstrapAdmin`), written as the one OpenFGA user it is through
+`fga.user_object`, the seam every other tuple writer uses: its key percent-encoded, so a user id carrying `:` or `#` is
+one user and never a userset.
 
 ## `- { name: FGA_ROOT_OBJECT, value: "warehouse:lance_catalog" }`
 

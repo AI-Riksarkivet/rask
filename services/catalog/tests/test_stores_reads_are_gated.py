@@ -37,6 +37,9 @@ from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
 from catalog.api import fga_deps
+from service_kit.governed.oidc import IDToken
+from service_kit.governed.person_identity import PersonPrincipal
+from service_kit.governed.principal import Principal
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
@@ -49,7 +52,12 @@ from service_kit.lakehouse.ns_errors import install_problem_handlers
 # the call through, and what refuses is the endpoint's own gate.
 
 
-def _app(*, fga_enabled: bool, allow: bool, subject: str | None = "carol") -> FastAPI:
+def _person(key: str) -> PersonPrincipal:
+    principal = Principal.parse(key)
+    return PersonPrincipal(principal=principal, claims=IDToken(iss="i", sub=principal.subject, aud="lance", exp=1, iat=1))
+
+
+def _app(*, fga_enabled: bool, allow: bool, subject: str | None = "dex~carol") -> FastAPI:
     from catalog.api.dependencies import get_fga_client, get_settings, get_user_state_store
     from catalog.api.security import authenticate
     from catalog.api.v1.router import api_router
@@ -63,7 +71,7 @@ def _app(*, fga_enabled: bool, allow: bool, subject: str | None = "carol") -> Fa
     app.state.fga = object() if fga_enabled else None
     app.dependency_overrides[get_settings] = lambda: settings
     app.dependency_overrides[get_fga_client] = lambda: object() if fga_enabled else None
-    app.dependency_overrides[authenticate] = lambda: SimpleNamespace(sub=subject) if subject else None
+    app.dependency_overrides[authenticate] = lambda: _person(subject) if subject else None
     app.dependency_overrides[get_user_state_store] = lambda: None
     return app
 
@@ -223,9 +231,9 @@ def test_membership_without_authz_is_a_503_in_the_spec_envelope() -> None:
     IS tuples, so authz-off is the service being UNAVAILABLE for this operation, not a conflict with
     anything; `access.py` already answers 503 for the identical condition, and two doors giving two
     statuses for one condition is how a client learns the wrong lesson."""
-    response = TestClient(_app(fga_enabled=False, allow=True, subject="carol"), raise_server_exceptions=False).put(
+    response = TestClient(_app(fga_enabled=False, allow=True, subject="dex~carol"), raise_server_exceptions=False).put(
         "/management/v1/projects/proj1/members",
-        json={"user": "user:bob", "relation": "member"},
+        json={"user": "user:dex~bob", "relation": "member"},
     )
     assert response.status_code == 503, f"authz-off membership answered {response.status_code}"
     body = response.json()

@@ -41,12 +41,21 @@ from catalog.api.dependencies import ControlEmitterDep, NamespaceDep, SettingsDe
 from catalog.api.security import CurrentToken
 from catalog.api.v1.endpoints import branches as branch_door
 from catalog.services.dataplane import create_table
+from service_kit.governed.oidc import IDToken
+from service_kit.governed.person_identity import PersonPrincipal
+from service_kit.governed.principal import Principal
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
 lance = pytest.importorskip("lance")
 
+#: A person the dev Dex's password connector reports: `sub` is Dex's packing of its user id with the connector id,
+#: and the principal is the user id under the idp id `local` maps to.
 _SUB = "CiQwOGE4Njg0Yi1kYjg4LTRiNzMtOTBhOS0zY2QxNjYxZjU0NjY"
+_CALLER = PersonPrincipal(
+    principal=Principal(idp_id="dex", subject="08a8684b-db88-4b73-90a9-3cd1661f5466"),
+    claims=IDToken(iss="https://dex", sub=_SUB, aud="lance", exp=1, iat=1),
+)
 TABLE = ["alpha"]
 TABLE_PATH = "alpha"
 
@@ -81,7 +90,7 @@ def app(ns, emitted: list[dict[str, Any]], tmp_path: Path, monkeypatch: pytest.M
     application.dependency_overrides[SettingsDep.__metadata__[0].dependency] = lambda: settings
     application.dependency_overrides[NamespaceDep.__metadata__[0].dependency] = lambda: ns
     application.dependency_overrides[StorageOptionsDep.__metadata__[0].dependency] = lambda: {}
-    application.dependency_overrides[CurrentToken.__metadata__[0].dependency] = lambda: SimpleNamespace(sub=_SUB)
+    application.dependency_overrides[CurrentToken.__metadata__[0].dependency] = lambda: _CALLER
     application.dependency_overrides[ControlEmitterDep.__metadata__[0].dependency] = lambda: None
 
     async def _record(_emitter: Any, **kwargs: Any) -> None:

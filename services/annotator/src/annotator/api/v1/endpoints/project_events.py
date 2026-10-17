@@ -45,7 +45,7 @@ from annotator.projects.machines import (
     project_transition,
     refuse_unreadable_ontology,
 )
-from annotator.projects.models import AnnotationProject, ItemSource, MediaRef, ProjectState, Shape, Task, TaskState, new_id
+from annotator.projects.models import AnnotationProject, ItemSource, MediaRef, ProjectState, Shape, Task, TaskState, new_id, notified_user
 from annotator.projects.ontology import LabelOntology, ShapeLike, membership_violation
 from annotator.projects.project_actor import AnnotationProjectActorInterface
 from service_kit.control_emit import emit_control
@@ -356,7 +356,7 @@ async def drop_task(
             object_type="annotation_task",
             object_id=f"annotation_task:{task_id}",
             actor=f"user:{subject}",
-            extra={"subject": f"user:{holder}", "project": project_id, "event": "drop_task"},
+            extra={"subject": notified_user(holder), "project": project_id, "event": "drop_task"},
         )
     return DropReceipt.model_validate(result)
 

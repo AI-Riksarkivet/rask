@@ -23,6 +23,8 @@ from catalog.services import projects as proj_svc
 from catalog.services import warehouses as wh_svc
 from service_kit.governed import fga as fga_module
 from service_kit.governed.oidc import IDToken
+from service_kit.governed.person_identity import PersonPrincipal
+from service_kit.governed.principal import Principal
 
 
 def _settings(tmp_path: Any, *, enabled: bool = True, fga: bool = False, reserved: str = "") -> Settings:
@@ -40,6 +42,7 @@ def _settings(tmp_path: Any, *, enabled: bool = True, fga: bool = False, reserve
             {
                 "fga_enabled": True,
                 "oidc_enabled": True,
+                "oidc_connectors": {"local": "dex"},
                 "oidc_issuer": "https://idp",
                 "oidc_audience": "lance",
             }
@@ -327,7 +330,9 @@ def test_deactivate_hides_existence_from_non_admin_404(client: TestClient, tmp_p
         },
     )
     verifier = MagicMock()
-    verifier.verify.return_value = IDToken(iss="i", sub="mallory", aud="lance", exp=1, iat=1)
+    verifier.verify.return_value = PersonPrincipal(
+        principal=Principal(idp_id="dex", subject="mallory"), claims=IDToken(iss="i", sub="mallory", aud="lance", exp=1, iat=1)
+    )
     client.app.state.oidc = verifier
     client.app.state.fga = MagicMock()
 
@@ -345,7 +350,9 @@ def test_create_denied_for_non_admin_403(client: TestClient, tmp_path: Any, monk
     # on POST /management/v1/projects would interfere — and project existence is not the layer under test.
     proj_svc.put_project(f"file://{tmp_path}", {}, {"id": "acme", "created_at": "t", "created_by": "seed", "protected": "false"})
     verifier = MagicMock()
-    verifier.verify.return_value = IDToken(iss="i", sub="mallory", aud="lance", exp=1, iat=1)
+    verifier.verify.return_value = PersonPrincipal(
+        principal=Principal(idp_id="dex", subject="mallory"), claims=IDToken(iss="i", sub="mallory", aud="lance", exp=1, iat=1)
+    )
     client.app.state.oidc = verifier
     fga_client = MagicMock()
     fga_client.close = AsyncMock()
@@ -529,7 +536,9 @@ def _wh_with_fake_backend(client: TestClient, tmp_path: Any, monkeypatch: pytest
         {"id": wid, "bucket": wid, "root_uri": f"s3://{wid}", "project": "acme", "status": "active"},
     )
     verifier = MagicMock()
-    verifier.verify.return_value = IDToken(iss="i", sub="alice", aud="lance", exp=1, iat=1)
+    verifier.verify.return_value = PersonPrincipal(
+        principal=Principal(idp_id="dex", subject="alice"), claims=IDToken(iss="i", sub="alice", aud="lance", exp=1, iat=1)
+    )
     client.app.state.oidc = verifier
     fga_client = MagicMock()
     fga_client.close = AsyncMock()

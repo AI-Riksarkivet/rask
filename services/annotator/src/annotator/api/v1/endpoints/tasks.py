@@ -45,12 +45,13 @@ from annotator.projects.machines import (
     refuse_unreadable_ontology,
     task_transition,
 )
-from annotator.projects.models import Draft, Link, ProjectState, Shape, Task, TaskState
+from annotator.projects.models import Draft, Link, ProjectState, Shape, Task, TaskState, notified_user
 from annotator.projects.ontology import LabelOntology
 from service_kit.control_emit import emit_control
 from service_kit.control_events import ControlAction
-from service_kit.exceptions import ConflictError, ForbiddenError, NotFoundError, ServiceUnavailableError
+from service_kit.exceptions import ConflictError, ForbiddenError, NotFoundError, ServiceUnavailableError, ValidationError
 from service_kit.governed.audit import FAILURE, SUCCESS, audit
+from service_kit.governed.principal import is_principal
 
 
 def require_actor_plane(request: Request) -> None:
@@ -230,7 +231,9 @@ _NOTIFIED_EDGES: Final[dict[str, tuple[ControlAction, str | None]]] = {
 
 
 @router.post("/{task_id}/events", status_code=status.HTTP_200_OK)
-async def fire_task_event(task_id: TaskId, payload: FireRequest, checker: CheckerDep, subject: CurrentSubject, control: ControlEmitterDep) -> dict[str, Any]:
+async def fire_task_event(
+    task_id: TaskId, payload: FireRequest, checker: CheckerDep, subject: CurrentSubject, control: ControlEmitterDep, settings: SettingsDep
+) -> dict[str, Any]:
     """Drive one task transition.
 
     The permission comes from the transition table, so adding an edge to `TASK_EDGES` automatically
@@ -254,6 +257,10 @@ async def fire_task_event(task_id: TaskId, payload: FireRequest, checker: Checke
 
     project_id = str(current["project_id"])
     await _authorize(checker, subject, permission, project_id, f"task.{payload.event}")
+    # An assignee is the subject the assigned person's own token will prove ([[LH-063]]): with authentication on that
+    # is a principal, so a bare name, which no token proves, is refused rather than stored for nobody to claim.
+    if settings.oidc_enabled and payload.assignee is not None and not is_principal(payload.assignee):
+        raise ValidationError(f"assignee {payload.assignee!r} is not a principal: '<idp-id>~<subject>'")
 
     project_state = await _verified_project_state(project_id, payload.event)
 
@@ -335,7 +342,7 @@ async def fire_task_event(task_id: TaskId, payload: FireRequest, checker: Checke
                 object_type="annotation_task",
                 object_id=f"annotation_task:{task_id}",
                 actor=f"user:{subject}",
-                extra={"subject": f"user:{told}", "project": project_id, "event": payload.event},
+                extra={"subject": notified_user(told), "project": project_id, "event": payload.event},
             )
     # NOT `Task.model_validate(updated)`. The actor returns a PARTIAL document — it carries the
     # transition it just made, not `source`/`media`, which live on the task record the actor does not

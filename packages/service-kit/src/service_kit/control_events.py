@@ -163,7 +163,7 @@ ORIGINATOR_MAX_LENGTH = 256
 class CatalogControlEvent(BaseModel):
     """One control-plane mutation notice, published AFTER the mutation it announces succeeds.
 
-    `actor` is the person the emitting service authenticated (`user:<sub>`), or a service principal or None when a
+    `actor` is the person the emitting service authenticated (`user:<principal>`), or a service principal or None when a
     service acts for itself. Several services publish on this topic (`control_signer_role` names the one that signs
     each action), so to a consumer the actor is a claim until the envelope's `rask_signature` proves who stamped it
     (`lineage_kit.signing.verify_control_signature`). The model ignores that member, so a signed and an unsigned
@@ -179,11 +179,13 @@ class CatalogControlEvent(BaseModel):
     #: The mutated object's canonical id (e.g. `warehouse:acme`, `table:db1$t`, `namespace:db1`, or the
     #: `table:<id>` a grant/policy is scoped to). What a consumer keys its invalidation off.
     object_id: str
-    #: The verified principal that made the change (the OIDC sub, e.g. `user:alice`), or `None` on a
-    #: service/unauthenticated mutation (auth-off dev).
+    #: The verified principal that made the change, `user:` and its key (`user:dex~<user id>`, [[LH-063]]), or `None`
+    #: on a service/unauthenticated mutation (auth-off dev).
     actor: str | None = None
     #: Action-specific detail — kept small (claim-check: pointers, never data). E.g. a grant's
-    #: `{relation, subject}`, a rename's `{from, to}`, a warehouse bind's `{namespace}`.
+    #: `{relation, subject}`, a rename's `{from, to}`, a warehouse bind's `{namespace}`. A `subject` is the OpenFGA
+    #: user the change names (`fga.user_object`: the principal key percent-encoded, or a userset), which the
+    #: notifications plane decodes back to the principal whose inbox it is.
     extra: dict[str, Any] = Field(default_factory=dict)
 
 

@@ -65,7 +65,7 @@ def test_check_fails_closed_on_network_error() -> None:
         asyncio.run(
             fga.check(
                 _down(),
-                user="alice",
+                user="dex~alice",
                 relation="can_read_data",
                 obj="table:t",
                 retry_attempts=1,
@@ -87,10 +87,10 @@ class _CapturingCheck:
 
 
 def test_check_qualifies_bare_subject() -> None:
-    """The common case — callers pass a bare token.sub; fga.check prepends ``user:``."""
+    """The common case — callers pass the caller's principal key; fga.check prepends ``user:``."""
     c = _CapturingCheck()
-    asyncio.run(fga.check(cast(OpenFgaClient, c), user="alice", relation="can_read_data", obj="table:t"))
-    assert c.seen == ["user:alice"]
+    asyncio.run(fga.check(cast(OpenFgaClient, c), user="dex~alice", relation="can_read_data", obj="table:t"))
+    assert c.seen == ["user:dex~alice"]
 
 
 def test_check_qualify_false_sends_subject_verbatim() -> None:
@@ -244,15 +244,15 @@ class _CapturingList:
 
 
 def test_list_objects_qualifies_a_bare_subject() -> None:
-    """The common case: callers pass the token's bare `sub` and the wrapper prepends `user:`.
+    """The common case: callers pass the caller's principal key and the wrapper prepends `user:`.
 
     `check` has had this pinned since the 2026-07-20 double-prefix bug; the listing door had the
     identical hatch and no test, and its failure is quieter — a double-prefixed `user:user:alice`
     denies every check loudly, but returns an EMPTY LIST here, which renders as "you have no tables".
     """
     client = _CapturingList()
-    asyncio.run(fga.list_objects(cast(OpenFgaClient, client), user="alice", relation="can_get_metadata", object_type="table"))
-    assert [r.user for r in client.requests] == ["user:alice"]
+    asyncio.run(fga.list_objects(cast(OpenFgaClient, client), user="dex~alice", relation="can_get_metadata", object_type="table"))
+    assert [r.user for r in client.requests] == ["user:dex~alice"]
 
 
 def test_list_objects_qualify_false_sends_a_userset_verbatim() -> None:

@@ -81,7 +81,7 @@ def test_a_walk_from_a_source_reaches_every_table_built_from_it_and_nothing_an_o
 def test_an_answer_that_hides_a_derived_table_says_it_is_incomplete(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from lineage.models import parse_event
 
-    granted = {("eraser", "can_get_metadata", f"table:{name}") for name in ("acme-bronze$events", "acme-silver$pages")}
+    granted = {("dex~eraser", "can_get_metadata", f"table:{name}") for name in ("acme-bronze$events", "acme-silver$pages")}
     chain = [
         run_event(str(uuid.uuid4()), "COMPLETE", "2026-10-15T10:00:01+00:00", outputs=["acme-silver$pages"], inputs=("acme-bronze$events",)),
         run_event(str(uuid.uuid4()), "COMPLETE", "2026-10-15T10:00:02+00:00", outputs=["acme-gold$catalog"], inputs=("acme-silver$pages",)),
@@ -90,7 +90,7 @@ def test_an_answer_that_hides_a_derived_table_says_it_is_incomplete(tmp_path: Pa
         for event in chain:
             asyncio.run(lineage.app.state.provenance.record(parse_event(event)))
 
-        answer = lineage.get("/tables/acme-bronze$events/derived", headers={SUBJECT_HEADER: "eraser"})
+        answer = lineage.get("/tables/acme-bronze$events/derived", headers={SUBJECT_HEADER: "dex~eraser"})
 
     assert answer.status_code == 200, answer.text
     assert answer.json() == {"table": "acme-bronze$events", "derived": [{"table": "acme-silver$pages", "depth": 1}], "complete": False}

@@ -28,12 +28,21 @@ from catalog.api.security import CurrentToken
 from catalog.api.v1.endpoints import namespaces as namespace_doors
 from catalog.api.v1.endpoints import tables as table_doors
 from catalog.services.dataplane import create_table
+from service_kit.governed.oidc import IDToken
+from service_kit.governed.person_identity import PersonPrincipal
+from service_kit.governed.principal import Principal
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
 pytest.importorskip("lance")
 
+#: A person the dev Dex's password connector reports: `sub` is Dex's packing of its user id with the connector id,
+#: and the principal is the user id under the idp id `local` maps to.
 _SUB = "CiQwOGE4Njg0Yi1kYjg4LTRiNzMtOTBhOS0zY2QxNjYxZjU0NjY"
+_CALLER = PersonPrincipal(
+    principal=Principal(idp_id="dex", subject="08a8684b-db88-4b73-90a9-3cd1661f5466"),
+    claims=IDToken(iss="https://dex", sub=_SUB, aud="lance", exp=1, iat=1),
+)
 NS = "zone"
 TABLES = (["zone", "alpha"], ["zone", "beta"])
 
@@ -68,7 +77,7 @@ def client(tmp_path: Path, emitted: list[dict[str, Any]], monkeypatch: pytest.Mo
     for dependency, value in (
         (SettingsDep, settings),
         (NamespaceDep, ns),
-        (CurrentToken, SimpleNamespace(sub=_SUB)),
+        (CurrentToken, _CALLER),
         (FgaClientDep, None),
         (ControlEmitterDep, None),
     ):

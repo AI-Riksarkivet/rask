@@ -38,8 +38,8 @@
 		 *  only ever name one of these — a derived `can_*` is rejected by the catalog — so the dialog
 		 *  offers exactly them instead of a free-text box that learns the rule from a 400. */
 		assignableRelations: readonly string[];
-		/** The signed-in subject, so "grant to me" is one click and nobody has to know their own
-		 *  opaque OIDC sub. */
+		/** The signed-in principal key, so "grant to me" is one click and nobody has to type their own
+		 *  `<idp-id>~<user id>`. */
 		mySub: string | null;
 		/** The stored tuples the current verdict rests on — exported WITH the assertion so the pasted
 		 *  test is self-contained. See `toFgaYaml`: `fga model test` never reads the live store. */
@@ -454,7 +454,7 @@
 							type="button"
 							class="h-6 text-[11px]"
 							onclick={() => {
-								gUser = `user:${mySub}`;
+								gUser = mySub ?? '';
 								preview = null;
 							}}
 						>
@@ -465,19 +465,19 @@
 				<Input
 					bind:value={gUser}
 					class="font-mono text-xs"
-					placeholder="user:&lt;oidc-sub&gt;"
+					placeholder="&lt;idp-id&gt;~&lt;user id&gt;"
 					aria-label="Grant subject"
 					oninput={() => {
 						preview = null;
 						previewFailed = false;
 					}}
 				/>
-				<!-- The single most confusing thing about this store, stated rather than implied: a subject
-				     is TYPE-PREFIXED, and for a person it is the OIDC `sub`, not a username. Under Dex that
-				     is an opaque base64 blob, so `user:alice` is a valid-LOOKING id that matches nothing and
-				     denies — a correct answer that reads exactly like a bug. -->
+				<!-- The single most confusing thing about this store, stated rather than implied: a person
+				     is a PRINCIPAL, the identity provider that vouched for them and the id it reports
+				     (LH-063), not a username, and the catalog refuses a bare name no token could prove. -->
 				<p class="text-[11px] text-muted-foreground">
-					<span class="font-mono">user:&lt;oidc-sub&gt;</span> — not a username. Or a userset:
+					<span class="font-mono">&lt;idp-id&gt;~&lt;user id&gt;</span> — not a username. Or a
+					userset:
 					<span class="font-mono">team:eng#member</span>,
 					<span class="font-mono">role:validators#assignee</span>.
 				</p>

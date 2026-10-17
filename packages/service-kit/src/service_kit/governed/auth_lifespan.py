@@ -45,6 +45,7 @@ exactly as it did before it had a door.
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Protocol
 
 from lance_namespace import ServiceUnavailableError
@@ -108,6 +109,8 @@ class _GovernedSettings(_DeciderSettings, Protocol):
     def oidc_audience(self) -> str | None: ...
     @property
     def oidc_discovery_url(self) -> str | None: ...
+    @property
+    def oidc_connectors(self) -> Mapping[str, str]: ...
     @property
     def sa_issuer(self) -> str | None: ...
     @property
@@ -232,18 +235,23 @@ async def attach_auth(
     app.state.decider = None
     if settings.oidc_enabled and settings.oidc_issuer and settings.oidc_audience:
         try:
-            from service_kit.governed import oidc
+            from service_kit.governed import oidc, person_identity
 
-            app.state.oidc = oidc.OIDCVerifier(
-                settings.oidc_issuer,
-                settings.oidc_audience,
-                settings.oidc_cache_ttl,
-                leeway=settings.oidc_leeway,
-                allow_insecure=settings.oidc_allow_insecure,
-                # Split-horizon (reverse-proxied IdP): fetch discovery/JWKS in-cluster while tokens
-                # keep the public issuer string. The omission of this argument at ONE of six doors
-                # broke every signed-in ingest; it is centralized here so there is no sixth door.
-                discovery_overrides=({settings.oidc_issuer: settings.oidc_discovery_url} if settings.oidc_discovery_url else None),
+            # A person is the principal their Dex connector maps to ([[LH-063]]), so the IdP's verifier is wrapped with
+            # the deployment's connector map rather than handed to the doors on its own.
+            app.state.oidc = person_identity.PersonVerifier(
+                oidc.OIDCVerifier(
+                    settings.oidc_issuer,
+                    settings.oidc_audience,
+                    settings.oidc_cache_ttl,
+                    leeway=settings.oidc_leeway,
+                    allow_insecure=settings.oidc_allow_insecure,
+                    # Split-horizon (reverse-proxied IdP): fetch discovery/JWKS in-cluster while tokens
+                    # keep the public issuer string. The omission of this argument at ONE of six doors
+                    # broke every signed-in ingest; it is centralized here so there is no sixth door.
+                    discovery_overrides=({settings.oidc_issuer: settings.oidc_discovery_url} if settings.oidc_discovery_url else None),
+                ),
+                settings.oidc_connectors,
             )
             # PROVED, not asserted. The constructor above performs no I/O, so until this call the
             # log line "verifier ready" said only that a Python object existed. `warm` resolves every

@@ -37,7 +37,8 @@ from service_kit.governed import fga
 from service_kit.governed.decider import OpenFgaDecider
 
 
-PERSON = "CiQwOGE4Njg0Yi1kYjg4LTRiNzMtOTBhOS0zY2QxNjYxZjU0NjY"
+#: The person the catalog acts for, as the principal key their Dex connector maps to.
+PERSON = "dex~08a8684b-db88-4b73-90a9-3cd1661f5466"
 CATALOG = "service-catalog"
 SECRETS = "http://localhost:3500/v1.0/secrets/lance-secrets"
 #: Fixed, so an event is the same document on every run: a signature over a generated id would still verify, and a failure
@@ -85,7 +86,14 @@ PRODUCERS = [
 
 
 def _settings(signers: set[str], delegators: set[str], *, fga_enabled: bool = False) -> LineageSettings:
-    auth = {"oidc_enabled": True, "oidc_issuer": "https://dex.example", "oidc_audience": "lance", "fga_store_id": "s", "fga_model_id": "m"}
+    auth = {
+        "oidc_enabled": True,
+        "oidc_connectors": {"local": "dex"},
+        "oidc_issuer": "https://dex.example",
+        "oidc_audience": "lance",
+        "fga_store_id": "s",
+        "fga_model_id": "m",
+    }
     return LineageSettings.model_validate(
         {"signing": Signing(signers=frozenset(signers), delegators=frozenset(delegators)), "fga_enabled": fga_enabled, **(auth if fga_enabled else {})}
     )

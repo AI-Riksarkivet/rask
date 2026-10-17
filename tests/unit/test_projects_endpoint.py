@@ -19,6 +19,9 @@ import pytest
 from lance_namespace import InvalidInputError, ServiceUnavailableError, TableNotFoundError
 
 from catalog.api.v1.endpoints import projects as ep
+from service_kit.governed.oidc import IDToken
+from service_kit.governed.person_identity import PersonPrincipal
+from service_kit.governed.principal import Principal
 
 
 def _settings(*, fga_enabled: bool = False) -> Any:
@@ -121,7 +124,7 @@ def test_the_list_is_the_callers_projects(monkeypatch: pytest.MonkeyPatch, estat
         return estate_observer
 
     async def _fake_list_objects(_client: Any, *, user: str, relation: str, object_type: str, **_kw: Any) -> Any:
-        assert (user, relation, object_type) == ("bob", "member", "project")
+        assert (user, relation, object_type) == ("dex~bob", "member", "project")
         return SimpleNamespace(objects=["project:globex", "project:fresh", "project:ghost"])
 
     async def _no_admins(*_a: Any, **_k: Any) -> list[str]:
@@ -130,9 +133,13 @@ def test_the_list_is_the_callers_projects(monkeypatch: pytest.MonkeyPatch, estat
     monkeypatch.setattr(ep.fga, "check", _fake_check)
     monkeypatch.setattr(ep.fga, "list_objects", _fake_list_objects)
     monkeypatch.setattr(ep.fga, "list_users", _no_admins)
-    result = _list(_settings(fga_enabled=True), token=SimpleNamespace(sub="bob"), client=object())
+    result = _list(
+        _settings(fga_enabled=True),
+        token=PersonPrincipal(principal=Principal(idp_id="dex", subject="bob"), claims=IDToken(iss="i", sub="bob", aud="lance", exp=1, iat=1)),
+        client=object(),
+    )
     assert [p.project for p in result] == expected
-    assert checks == [("bob", "can_observe_events", "warehouse:lance_catalog")]
+    assert checks == [("dex~bob", "can_observe_events", "warehouse:lance_catalog")]
 
 
 def test_one_tenants_detail_is_estate_observer_gated(monkeypatch: pytest.MonkeyPatch) -> None:

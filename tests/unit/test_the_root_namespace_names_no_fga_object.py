@@ -48,10 +48,12 @@ from fastapi.testclient import TestClient
 from lance_namespace import InvalidInputError, PermissionDeniedError
 
 from catalog.api import fga_deps
+from service_kit.governed.oidc import IDToken
+from service_kit.governed.person_identity import PersonPrincipal
+from service_kit.governed.principal import Principal
 
 
-class _Token:
-    sub = "user:alice"
+_CALLER = PersonPrincipal(principal=Principal(idp_id="dex", subject="alice"), claims=IDToken(iss="i", sub="alice", aud="lance", exp=1, iat=1))
 
 
 class _Settings:
@@ -82,9 +84,9 @@ def _drive(monkeypatch: pytest.MonkeyPatch, path: str, object_id: str) -> list[s
     monkeypatch.setattr(fga_deps.fga, "check", _record_check)
     monkeypatch.setattr(fga_deps.fga, "batch_check", _record_batch)
     # CAST, the idiom `test_the_bus_door_authorizes_what_it_records` uses: the stand-ins carry exactly
-    # the attributes the guard reads, and constructing a real Request/Settings/IDToken/OpenFgaClient
-    # would drag a whole app and a live store into a test about one composed object id.
-    asyncio.run(fga_deps.authorize(cast(Any, _Request(path, object_id)), cast(Any, _Settings()), cast(Any, _Token()), cast(Any, object())))
+    # the attributes the guard reads, and constructing a real Request/Settings/OpenFgaClient would drag
+    # a whole app and a live store into a test about one composed object id. The caller is a real one.
+    asyncio.run(fga_deps.authorize(cast(Any, _Request(path, object_id)), cast(Any, _Settings()), _CALLER, cast(Any, object())))
     return asked
 
 

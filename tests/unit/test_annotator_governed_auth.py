@@ -29,6 +29,9 @@ from annotator.api.security import (
 )
 from annotator.core.config import AnnotatorSettings
 from service_kit.exceptions import register_handlers
+from service_kit.governed.oidc import IDToken
+from service_kit.governed.person_identity import PersonPrincipal
+from service_kit.governed.principal import Principal
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
@@ -82,19 +85,16 @@ def test_an_x_user_header_can_no_longer_choose_the_subject() -> None:
     assert got["subject"] != "attacker"
 
 
-def test_with_oidc_on_the_subject_is_the_verified_token_sub() -> None:
-    class _Token:
-        sub = "gina"
-
+def test_with_oidc_on_the_subject_is_the_verified_principal() -> None:
     class _Verifier:
-        def verify(self, token: str) -> Any:
+        def verify(self, token: str) -> PersonPrincipal:
             assert token == "good-token"
-            return _Token()
+            return PersonPrincipal(principal=Principal(idp_id="dex", subject="gina"), claims=IDToken(iss="i", sub="gina", aud="lance", exp=1, iat=1))
 
     client = TestClient(_app(_settings(oidc_enabled=True, fga_enabled=False), oidc=_Verifier()))
     r = client.get("/whoami", headers={"Authorization": "Bearer good-token"})
     assert r.status_code == 200
-    assert r.json() == {"subject": "gina"}
+    assert r.json() == {"subject": "dex~gina"}
 
 
 # --------------------------------------------------------------------------------------------------
@@ -130,6 +130,7 @@ def test_authorization_without_authentication_is_refused_at_construction(monkeyp
 
 def test_oidc_without_issuer_and_audience_is_refused_at_construction(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("RASK_OIDC_ENABLED", "true")
+    monkeypatch.setenv("RASK_OIDC_CONNECTORS", '{"local": "dex"}')
     monkeypatch.delenv("RASK_OIDC_ISSUER", raising=False)
     monkeypatch.delenv("RASK_OIDC_AUDIENCE", raising=False)
     with pytest.raises(ValueError, match="RASK_OIDC_ISSUER and RASK_OIDC_AUDIENCE are required"):
@@ -167,7 +168,7 @@ def _author_dependency(route_fn: object) -> object:
 )
 def test_the_write_routes_take_their_author_from_the_VERIFIED_subject(route: str) -> None:
     """Asserted on the dependency IDENTITY: FastAPI runs exactly this callable, so the author can
-    only be what `current_subject` answers — the verified `sub`, `anon` with OIDC off, 401 with OIDC
+    only be what `current_subject` answers — the verified principal, `anon` with OIDC off, 401 with OIDC
     on and no token, 503 when enabled-but-unwired. No header is consulted anywhere on that path."""
     from annotator.annotations import save, tags
     from annotator.api import security

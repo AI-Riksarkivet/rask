@@ -97,7 +97,7 @@ async def create_table_tag(
         action="table_tag_created",
         object_type="table",
         object_id=f"table:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}",
-        actor=f"user:{token.sub}" if token is not None else None,
+        actor=f"user:{token.subject}" if token is not None else None,
         extra={"tag": body.tag, "version": body.version, **await run_in_threadpool(_ref_of, ns, so, segments, body.branch)},
     )
     return response
@@ -138,7 +138,7 @@ async def update_table_tag(
         action="table_tag_updated",
         object_type="table",
         object_id=f"table:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}",
-        actor=f"user:{token.sub}" if token is not None else None,
+        actor=f"user:{token.subject}" if token is not None else None,
         extra={"tag": body.tag, "version": body.version, **await run_in_threadpool(_ref_of, ns, so, segments, body.branch)},
     )
     return response
@@ -177,7 +177,7 @@ async def delete_table_tag(
         action="table_tag_deleted",
         object_type="table",
         object_id=f"table:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}",
-        actor=f"user:{token.sub}" if token is not None else None,
+        actor=f"user:{token.subject}" if token is not None else None,
         extra={"tag": body.tag, **await run_in_threadpool(_ref_of, ns, so, segments, pinned.branch if pinned is not None else None)},
     )
     return response

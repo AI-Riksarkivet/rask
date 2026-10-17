@@ -31,6 +31,9 @@ from lance_namespace import ListNamespacesResponse
 
 from catalog.api.v1.endpoints import namespaces as ns_ep
 from catalog.core.config import Settings
+from service_kit.governed.oidc import IDToken
+from service_kit.governed.person_identity import PersonPrincipal
+from service_kit.governed.principal import Principal
 
 
 class _Settings:
@@ -58,7 +61,7 @@ async def _list(
     async def _fake_list_objects(_client: object, *, user: str, relation: str, object_type: str) -> ns_ep.fga.ObjectListing:
         assert relation == "can_get_metadata", f"a namespace listing is filtered on metadata visibility, not {relation!r}"
         assert object_type == "namespace"
-        assert user == "bob"
+        assert user == "dex~bob"
         return ns_ep.fga.ObjectListing(objects=list(allowed or []), truncated=False)
 
     monkeypatch.setattr(ns_ep.fga, "list_objects", _fake_list_objects)
@@ -67,7 +70,11 @@ async def _list(
         id="zz_top",
         ns=MagicMock(),
         settings=cast(Settings, _Settings(fga_enabled=fga_enabled)),
-        token=(MagicMock(sub="bob") if fga_enabled else None),
+        token=(
+            PersonPrincipal(principal=Principal(idp_id="dex", subject="bob"), claims=IDToken(iss="i", sub="bob", aud="lance", exp=1, iat=1))
+            if fga_enabled
+            else None
+        ),
         client=MagicMock(),
         **kwargs,
     )

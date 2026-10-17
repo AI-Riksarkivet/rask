@@ -18,6 +18,8 @@ from catalog.api import fga_deps
 from catalog.core.config import Settings
 from service_kit.governed import fga
 from service_kit.governed.oidc import IDToken
+from service_kit.governed.person_identity import PersonPrincipal
+from service_kit.governed.principal import Principal
 
 
 if TYPE_CHECKING:
@@ -34,7 +36,14 @@ def _fga_settings(**overrides: object) -> Settings:
     """Settings with FGA on. The model fail-closes — `RASK_OIDC_ENABLED is required when
     RASK_FGA_ENABLED is set (authz needs a user)` — so authorization can never be switched on
     without an identity source behind it."""
-    return _settings(RASK_FGA_ENABLED=True, RASK_OIDC_ENABLED=True, RASK_OIDC_ISSUER="https://dex", RASK_OIDC_AUDIENCE="rask", **overrides)
+    return _settings(
+        RASK_FGA_ENABLED=True,
+        RASK_OIDC_ENABLED=True,
+        RASK_OIDC_ISSUER="https://dex",
+        RASK_OIDC_AUDIENCE="rask",
+        RASK_OIDC_CONNECTORS={"local": "dex"},
+        **overrides,
+    )
 
 
 async def _captured_tuples(fn, monkeypatch) -> list[fga.ClientTuple]:
@@ -90,7 +99,10 @@ async def test_creating_a_warehouse_grants_it(monkeypatch) -> None:
     97 warehouses without the tuple were the 4 newest, every one created after the hand-written grants.
     """
     settings = _fga_settings(LANCE_FGA_MAINTAINERS=["kubernetes~system:serviceaccount:rask:rask-sa-maintenance"])
-    token = IDToken.model_validate({"sub": "alice", "iss": "https://dex", "aud": "rask", "iat": 0, "exp": 1})
+    token = PersonPrincipal(
+        principal=Principal(idp_id="dex", subject="alice"),
+        claims=IDToken.model_validate({"sub": "alice", "iss": "https://dex", "aud": "rask", "iat": 0, "exp": 1}),
+    )
 
     seen = await _captured_tuples(
         lambda: fga_deps.seed_warehouse(cast("OpenFgaClient", object()), settings, token, warehouse_id="wh1", project="acme"),

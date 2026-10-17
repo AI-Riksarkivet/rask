@@ -264,7 +264,7 @@ def test_a_grant_is_never_written_against_an_object_whose_create_failed() -> Non
     grants = [_body(request) for request in recorded if request.url.path == "/management/v1/access/tuples"]
     assert not [grant for grant in grants if grant["object"] == "namespace:acme-gold"]
     # Everything the failure does NOT block still lands: one broken branch must not empty the estate.
-    assert {"user:dave", "user:carol", "user:gina"} <= {str(grant["user"]) for grant in grants}
+    assert {"demo~dave", "demo~carol", "demo~gina"} <= {str(grant["user"]) for grant in grants}
 
 
 def test_a_failed_create_blocks_only_its_own_descendants() -> None:
@@ -381,22 +381,24 @@ def test_the_demo_estate_covers_every_tenant_warehouse_and_namespace_the_fga_fix
     assert wanted("namespace:") == {namespace.name for _, namespace in seed_estate._namespace_pairs(estate)}
 
 
-def test_a_demo_identity_is_seeded_as_its_oidc_subject_and_a_persona_stays_literal() -> None:
-    # Seeding the literal `user:alice` makes every check for the signed-in alice deny — correctly, and
-    # confusingly. Personas with no IdP account stay literal; they still make the graph worth reading.
-    subs = dict(seed_estate.DEX_SUBS)
-    assert seed_estate.remap_subject("user:alice", subs) == f"user:{subs['alice']}"
-    assert seed_estate.remap_subject("user:carol", subs) == "user:carol"
-    # Only the SUBJECT side: a userset or an object type is never a principal to remap.
-    assert seed_estate.remap_subject("role:validators#assignee", subs) == "role:validators#assignee"
-    assert seed_estate.remap_subject("team:eng", subs) == "team:eng"
+def test_a_demo_identity_is_seeded_as_its_principal_and_a_persona_under_the_demo_idp() -> None:
+    # A grant names a principal ([[LH-063]]), so the catalog refuses the literal `user:alice`. The development Dex's
+    # identities are their principals; a persona with no IdP account is a principal of the `demo` idp id, which still
+    # makes the graph worth reading and names an identity provider.
+    principals = dict(seed_estate.DEX_PRINCIPALS)
+    assert seed_estate.remap_subject("user:alice", principals) == principals["alice"] == "dex~08a8684b-db88-4b73-90a9-3cd1661f5466"
+    assert seed_estate.remap_subject("user:carol", principals) == "demo~carol"
+    # Only the SUBJECT side: the wildcard, a userset or an object type is never a principal to remap.
+    assert seed_estate.remap_subject("user:*", principals) == "user:*"
+    assert seed_estate.remap_subject("role:validators#assignee", principals) == "role:validators#assignee"
+    assert seed_estate.remap_subject("team:eng", principals) == "team:eng"
 
 
 def test_the_demo_estate_grants_the_anonymous_principal_nothing() -> None:
     """``service-web`` is the identity the zones' BFF sends when there is NO session, so it is the anonymous
     principal: a grant to it is a grant to every logged-out visitor (Q17-8 / §F2-4). Fail closed is the
     ruling (owner, 2026-09-07) — an operator grants it exactly what should be public, deliberately."""
-    steps = seed_estate.plan(seed_estate.DEMO_ESTATE, dict(seed_estate.DEX_SUBS))
+    steps = seed_estate.plan(seed_estate.DEMO_ESTATE, dict(seed_estate.DEX_PRINCIPALS))
 
     granting = [step.label for step in steps if "service-web" in json.dumps(step.body)]
 

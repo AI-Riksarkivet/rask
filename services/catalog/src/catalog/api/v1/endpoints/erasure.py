@@ -117,7 +117,7 @@ async def erase_subject(
         predicate_digest=erasure_obligations.digest(body.predicate),
         retain_days=body.retain_days,
         refs=await run_in_threadpool(erasure.ref_heads, dataset),
-        requested_by=f"user:{token.sub}" if token is not None else None,
+        requested_by=f"user:{token.subject}" if token is not None else None,
         requested_at=now,
         deadline=now + timedelta(days=settings.erasure_deadline_days),
     )
@@ -125,7 +125,7 @@ async def erase_subject(
     audit(
         "erasure_obligation_recorded",
         SUCCESS,
-        subject=token.sub if token is not None else None,
+        subject=token.subject if token is not None else None,
         resource=obligation.object_id,
         obligation=obligation.obligation_id,
         deadline=obligation.deadline.isoformat(),
@@ -194,7 +194,7 @@ async def verify_erasure(
     audit(
         "erasure_obligation_verified",
         SUCCESS,
-        subject=token.sub if token is not None else None,
+        subject=token.subject if token is not None else None,
         resource=obligation.object_id,
         obligation=obligation_id,
         state=standing.state,
@@ -216,7 +216,7 @@ async def list_erasure_obligations(
     earliest deadline first: what each still owes, whether it is overdue, and the release it scheduled."""
     obligations = await run_in_threadpool(erasure_obligations.list_obligations, settings.registry_root, settings.storage_options())
     if settings.fga_enabled and token is not None and client is not None:
-        allowed = await fga.batch_check(client, user=token.sub, relation="can_maintain", objects=sorted({o.object_id for o in obligations}))
+        allowed = await fga.batch_check(client, user=token.subject, relation="can_maintain", objects=sorted({o.object_id for o in obligations}))
         obligations = [obligation for obligation in obligations if allowed.get(obligation.object_id)]
     by_key = {f"{obligation.deadline.isoformat()}|{obligation.obligation_id}": obligation for obligation in obligations}
     page, next_token = paginate(sorted(by_key), page_token, limit)
@@ -251,7 +251,10 @@ async def _schedule_release(
         )
         holders = []
     requester = obligation.requested_by
-    notified = list(dict.fromkeys([*([requester] if requester else []), *sorted(holders)]))
+    # `requested_by` is the notice's actor, `user:` and the principal key as the door verified it; a notice names its
+    # subject as the OpenFGA user, the form the owners are listed in, so the requester is encoded to be told ([[LH-063]]).
+    told = [fga.user_object(requester.removeprefix("user:"))] if requester else []
+    notified = list(dict.fromkeys([*told, *sorted(holders)]))
     record = erasure_release.new_release(
         report.pinned_by,
         release_id=obligation.obligation_id,

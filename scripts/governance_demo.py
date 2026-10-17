@@ -24,8 +24,6 @@ Exits non-zero if any governance invariant does not hold.
 
 from __future__ import annotations
 
-import base64
-import json
 import os
 import sys
 import time
@@ -65,7 +63,7 @@ def token(username: str) -> str:
             "client_id": "lance-catalog",
             "username": username,
             "password": "password",
-            "scope": "openid",
+            "scope": "openid federated:id",
         },
         timeout=10,
     )
@@ -74,9 +72,10 @@ def token(username: str) -> str:
 
 
 def sub_of(tok: str) -> str:
-    payload = tok.split(".")[1]
-    payload += "=" * (-len(payload) % 4)
-    return json.loads(base64.urlsafe_b64decode(payload))["sub"]
+    """The principal the catalog keys this bearer on (`<idp-id>~<user id>`, [[LH-063]])."""
+    resp = requests.get(f"{CATALOG}/management/v1/me", headers={"Authorization": f"Bearer {tok}"}, timeout=10)
+    resp.raise_for_status()
+    return str(resp.json()["sub"])
 
 
 def ipc(table: pa.Table) -> bytes:

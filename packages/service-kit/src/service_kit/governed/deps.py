@@ -58,7 +58,8 @@ from openfga_sdk import OpenFgaClient
 from service_kit.exceptions import ServiceUnavailableError
 from service_kit.governed.audit import FAILURE, SUCCESS, audit
 from service_kit.governed.decider import AccessDecider
-from service_kit.governed.oidc import IDToken, OIDCVerifier, ProviderUnavailableError
+from service_kit.governed.oidc import ProviderUnavailableError
+from service_kit.governed.person_identity import PersonPrincipal, PersonVerifier
 
 
 #: The subject used when OIDC is disabled. Named rather than inlined so a grep for who can act
@@ -86,7 +87,7 @@ class FgaChecker(Protocol):
 #: business — each closure declares whatever `Request` / settings / credentials it needs injected, and
 #: pinning those here would make the annotation a lie the moment one grows a parameter. What a caller
 #: actually depends on is the RESULT type, and that is what these name.
-type _Authenticate = Callable[..., IDToken | None]
+type _Authenticate = Callable[..., PersonPrincipal | None]
 type _NamesSubject = Callable[..., str]
 type _ResolvesChecker = Callable[..., FgaChecker]
 type _ResolvesClient = Callable[..., OpenFgaClient | None]
@@ -140,11 +141,11 @@ def make_auth_deps(settings_dep: Any) -> AuthDeps:
     translated.
     """
 
-    def authenticate(request: Request, settings: settings_dep, credentials: _CredentialsDep) -> IDToken | None:
-        """Verify the bearer, returning the parsed token (or `None` when OIDC is off)."""
+    def authenticate(request: Request, settings: settings_dep, credentials: _CredentialsDep) -> PersonPrincipal | None:
+        """Verify the bearer, returning the person it proves (or `None` when OIDC is off)."""
         if not settings.oidc_enabled:
             return None
-        verifier: OIDCVerifier | None = getattr(request.app.state, "oidc", None)
+        verifier: PersonVerifier | None = getattr(request.app.state, "oidc", None)
         if verifier is None:
             audit("authn", FAILURE, reason="verifier_unavailable")
             raise ServiceUnavailableError("Authentication is enabled but unavailable")
@@ -166,15 +167,15 @@ def make_auth_deps(settings_dep: Any) -> AuthDeps:
         except Exception:
             audit("authn", FAILURE, reason="invalid_token")
             raise
-        audit("authn", SUCCESS, subject=token.sub)
+        audit("authn", SUCCESS, subject=token.subject)
         return token
 
-    def current_subject(request: Request, token: Annotated[IDToken | None, Depends(authenticate)]) -> str:
+    def current_subject(request: Request, token: Annotated[PersonPrincipal | None, Depends(authenticate)]) -> str:
         """The verified principal as the FGA subject id (no `user:` prefix — `fga.check` qualifies it).
 
-        With OIDC off this is `anon`, which keeps a dev stack working. With OIDC on it is the token's
-        `sub` and nothing else: there is deliberately no header fallback, because a fallback is what
-        turns "verified subject" back into "whatever the caller claimed".
+        With OIDC off this is `anon`, which keeps a dev stack working. With OIDC on it is the principal key the
+        verified token proves (`<idp-id>~<user id>`) and nothing else: there is deliberately no header fallback,
+        because a fallback is what turns "verified subject" back into "whatever the caller claimed".
 
         **IT IS ALSO PUBLISHED ON `request.state`, and that is not incidental.** `rate_limit.by_subject`
         reads `request.state.subject` and falls back to the client IP; nothing in the estate ever wrote
@@ -187,7 +188,7 @@ def make_auth_deps(settings_dep: Any) -> AuthDeps:
         here rather than per-service so every route on this dependency is keyed correctly, not just the
         one service that happened to notice.
         """
-        subject = token.sub if token is not None else ANONYMOUS_SUBJECT
+        subject = token.subject if token is not None else ANONYMOUS_SUBJECT
         request.state.subject = subject
         return subject
 
@@ -203,7 +204,7 @@ def make_auth_deps(settings_dep: Any) -> AuthDeps:
         """
         if not settings.oidc_enabled:
             return ANONYMOUS_SUBJECT
-        verifier: OIDCVerifier | None = getattr(request.app.state, "oidc", None)
+        verifier: PersonVerifier | None = getattr(request.app.state, "oidc", None)
         if verifier is None:
             audit("authn", FAILURE, reason="verifier_unavailable")
             raise ServiceUnavailableError("Authentication is enabled but unavailable")
@@ -220,7 +221,7 @@ def make_auth_deps(settings_dep: Any) -> AuthDeps:
         except Exception:
             audit("authn", FAILURE, reason="invalid_token")
             raise
-        return token.sub
+        return token.subject
 
     def get_checker(request: Request, settings: settings_dep) -> FgaChecker:
         """Resolve the FGA checker — see this module's docstring for the three outcomes."""

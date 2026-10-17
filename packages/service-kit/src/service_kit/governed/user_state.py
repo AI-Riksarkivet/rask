@@ -19,7 +19,7 @@ an identity provider, so they are not ours to trust with that constraint, and th
 work — the key travels in the URL PATH of the sidecar's state API, which decodes it, so a
 percent-encoded ``%7C%7C`` arrives at the store as ``||`` again. The encoding therefore has to be
 decode-stable: base64url (``A-Za-z0-9-_``, padding stripped) cannot express ``|`` at all, whatever an
-identity provider puts in ``sub``, and stays reversible so an operator can read a Postgres row back to a
+principal key carries, and stays reversible so an operator can read a Postgres row back to a
 person.
 
 **Transport.** The local Dapr sidecar's HTTP state API, exactly as :mod:`service_kit.governed.secrets` reaches the

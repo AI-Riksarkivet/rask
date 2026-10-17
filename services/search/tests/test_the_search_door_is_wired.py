@@ -42,6 +42,7 @@ def _governed_settings() -> SearchSettings:
             "RASK_OIDC_ENABLED": True,
             "RASK_OIDC_ISSUER": "https://issuer.test",
             "RASK_OIDC_AUDIENCE": "rask",
+            "RASK_OIDC_CONNECTORS": {"local": "dex"},
             "RASK_FGA_STORE_ID": "01JSTORE",
             "RASK_FGA_MODEL_ID": "01JMODEL",
         }

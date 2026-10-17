@@ -47,7 +47,7 @@ from lance_namespace import (
 
 from catalog.api import fga_deps
 from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, NamespaceDep, SettingsDep
-from catalog.api.security import CurrentToken, Principal
+from catalog.api.security import Caller, CurrentToken
 from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier
 from catalog.schemas import PolicyDeleteResponse, PolicyRequest, PolicyResponse, ProjectPoliciesResponse
@@ -129,7 +129,7 @@ async def _describe(settings: Settings, kind: str, canonical: str, missing: type
     return _response(record)
 
 
-async def _delete(settings: Settings, control: ControlEmitter, token: Principal | None, kind: str, canonical: str) -> PolicyDeleteResponse:
+async def _delete(settings: Settings, control: ControlEmitter, token: Caller | None, kind: str, canonical: str) -> PolicyDeleteResponse:
     """Remove one policy (idempotent), log it and announce it — once for all three rungs."""
     await run_in_threadpool(policies.delete_policy, settings.registry_root, settings.storage_options(), kind, canonical)
     log.info("maintenance_policy_deleted", extra={"kind": kind, "id": canonical})
@@ -138,7 +138,7 @@ async def _delete(settings: Settings, control: ControlEmitter, token: Principal 
         action="policy_deleted",
         object_type="policy",
         object_id=f"{kind}:{canonical}",
-        actor=f"user:{token.sub}" if token else None,
+        actor=f"user:{token.subject}" if token else None,
         extra={"kind": kind},
     )
     return PolicyDeleteResponse(status="deleted", kind=kind, id=canonical)
@@ -168,7 +168,7 @@ async def set_table_policy(
         action="policy_set",
         object_type="policy",
         object_id=f"table:{canonical}",
-        actor=f"user:{token.sub}" if token else None,
+        actor=f"user:{token.subject}" if token else None,
         extra={"kind": "table", "path": record["path"]},
     )
     return _response(record)
@@ -205,7 +205,7 @@ async def set_namespace_policy(id: str, body: PolicyRequest, settings: SettingsD
         action="policy_set",
         object_type="policy",
         object_id=f"namespace:{canonical}",
-        actor=f"user:{token.sub}" if token else None,
+        actor=f"user:{token.subject}" if token else None,
         extra={"kind": "namespace", "path": record["path"]},
     )
     return _response(record)
@@ -280,7 +280,7 @@ async def set_project_policy(
         action="policy_set",
         object_type="policy",
         object_id=f"project:{project}",
-        actor=f"user:{token.sub}" if token else None,
+        actor=f"user:{token.subject}" if token else None,
         extra={"kind": "project", "buckets": buckets},
     )
     return _response(record)

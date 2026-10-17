@@ -55,7 +55,7 @@ async def test_a_result_at_the_cap_is_reported(caplog: pytest.LogCaptureFixture)
 
     objects = [f"table:t{i}" for i in range(fga.LIST_OBJECTS_SERVER_CAP)]
     with caplog.at_level(logging.WARNING):
-        result = await fga.list_objects(cast("OpenFgaClient", _Client(objects)), user="gina", relation="can_get_metadata", object_type="table")
+        result = await fga.list_objects(cast("OpenFgaClient", _Client(objects)), user="dex~gina", relation="can_get_metadata", object_type="table")
 
     assert len(result.objects) == fga.LIST_OBJECTS_SERVER_CAP
     assert "openfga_list_objects_possibly_truncated" in caplog.text, (
@@ -73,5 +73,5 @@ async def test_an_ordinary_result_is_silent(caplog: pytest.LogCaptureFixture) ->
     from openfga_sdk.client import OpenFgaClient
 
     with caplog.at_level(logging.WARNING):
-        await fga.list_objects(cast("OpenFgaClient", _Client(["table:a", "table:b"])), user="gina", relation="can_get_metadata", object_type="table")
+        await fga.list_objects(cast("OpenFgaClient", _Client(["table:a", "table:b"])), user="dex~gina", relation="can_get_metadata", object_type="table")
     assert "possibly_truncated" not in caplog.text

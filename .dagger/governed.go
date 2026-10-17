@@ -24,6 +24,10 @@ const (
 	lineageIdentity     = "lineage@rask.internal"
 	provenanceNamespace = "provenance"
 	lineageTokenPath    = "/var/run/rask/catalog-token"
+	// laneConnectors is the catalog's `RASK_OIDC_CONNECTORS` in these lanes ([[LH-063]]): the lane Dex's one connector,
+	// its password database `local`, is the idp id `laneIDP`, as the chart maps the development Dex's.
+	laneConnectors = `{"local":"dex"}`
+	laneIDP        = "dex"
 )
 
 // lineageDexUser is the static Dex password entry for `lineageIdentity`, appended to `.docker/dex.config.yaml`'s
@@ -203,6 +207,7 @@ func (m *Rask) catalogService(src *dagger.Directory, stack *governedStack, auth 
 			WithEnvVariable("RASK_OIDC_ENABLED", "true").
 			WithEnvVariable("RASK_OIDC_ISSUER", "http://dex:5556/dex").
 			WithEnvVariable("RASK_OIDC_AUDIENCE", "lance-catalog").
+			WithEnvVariable("RASK_OIDC_CONNECTORS", laneConnectors).
 			// Dex serves discovery over http here. Dev only — the chart never sets this.
 			WithEnvVariable("RASK_OIDC_ALLOW_INSECURE", "true").
 			WithEnvVariable("RASK_FGA_ENABLED", "true").
@@ -237,7 +242,9 @@ func (m *Rask) catalogService(src *dagger.Directory, stack *governedStack, auth 
 }
 
 // lineageToken mints the token lineage presents to the catalog: a password grant for `lineageIdentity` against the
-// lane's Dex. Answers the token file and the subject it names, which the catalog lists as a provenance writer.
+// lane's Dex. Answers the token file and the principal it proves, which the catalog lists as a provenance writer: the
+// connector's idp id (`laneConnectors`) and the user id Dex reports in `federated_claims`, read from the token because
+// the catalog that would answer `/management/v1/me` boots with this very list.
 //
 // DEX MUST STAY UP FROM THE MINT TO THE LAST CHECK. Its signing keys live in memory, so a Dex that stops when
 // this step drops its last reference comes back with new keys, and the catalog then refuses the minted token
@@ -247,7 +254,7 @@ func (m *Rask) lineageToken(ctx context.Context, src *dagger.Directory, dex *dag
 		WithServiceBinding("dex", dex).
 		WithExec([]string{"uv", "run", "--no-sync", "python", "-c", `
 import base64, json, pathlib, time, urllib.parse, urllib.request
-form = urllib.parse.urlencode({"grant_type": "password", "client_id": "lance-catalog", "username": "` + lineageIdentity + `", "password": "password", "scope": "openid email"}).encode()
+form = urllib.parse.urlencode({"grant_type": "password", "client_id": "lance-catalog", "username": "` + lineageIdentity + `", "password": "password", "scope": "openid email federated:id"}).encode()
 for _ in range(60):
     try:
         body = json.load(urllib.request.urlopen("http://dex:5556/dex/token", form, timeout=5))
@@ -262,7 +269,7 @@ claims += "=" * (-len(claims) % 4)
 out = pathlib.Path("/out")
 out.mkdir(exist_ok=True)
 (out / "token").write_text(token)
-(out / "sub").write_text(json.loads(base64.urlsafe_b64decode(claims))["sub"])
+(out / "sub").write_text("` + laneIDP + `~" + json.loads(base64.urlsafe_b64decode(claims))["federated_claims"]["user_id"])
 `})
 	sub, err := minted.File("/out/sub").Contents(ctx)
 	if err != nil {

@@ -32,7 +32,7 @@ from fastapi import Header
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import ConcurrentModificationError, InvalidInputError
 
-from catalog.api.security import Principal
+from catalog.api.security import Caller
 from catalog.core.config import Settings
 from service_kit.lakehouse import idempotency
 
@@ -51,10 +51,10 @@ IdempotencyKeyHeader = Annotated[
 _ANONYMOUS_SCOPE = "anonymous"
 
 
-def _scope(token: Principal | None) -> str:
+def _scope(token: Caller | None) -> str:
     if token is None:
         return _ANONYMOUS_SCOPE
-    return hashlib.blake2s(token.sub.encode("utf-8"), digest_size=8).hexdigest()
+    return hashlib.blake2s(token.subject.encode("utf-8"), digest_size=8).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -93,7 +93,7 @@ class Converge:
         )
 
 
-async def begin(settings: Settings, storage_options: dict[str, str], token: Principal | None, key: str | None, *, endpoint: str) -> Converge:
+async def begin(settings: Settings, storage_options: dict[str, str], token: Caller | None, key: str | None, *, endpoint: str) -> Converge:
     """Claim `key` for `endpoint`, or return the no-op when the caller sent none.
 
     The two failures are translated to the spec's own vocabulary rather than a hand-picked status, per

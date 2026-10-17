@@ -20,8 +20,6 @@ has its own e2e. This test focuses on catalog authz + provenance authorship + ti
 
 from __future__ import annotations
 
-import base64
-import json
 import os
 import time
 from collections.abc import Callable
@@ -30,11 +28,14 @@ from typing import Any
 import pyarrow as pa
 import pytest
 import requests
+from principals import DEX_SCOPE, principal_of
 from topology import OUTSIDER, assert_parent_exists, create_top_level
 
 from lineage.models import author_sub_from_payload
+from service_kit.governed import fga
 from service_kit.governed.auth.write_model import STORE_NAME, fga_headers
 from service_kit.governed.fga import newest_store
+from service_kit.governed.principal import is_principal
 from service_kit.openlineage import RUN_EVENT_SCHEMA_URL, custom_facet, run_id_for
 
 
@@ -77,7 +78,7 @@ def _token(username: str) -> str:
         "client_id": "lance-catalog",
         "username": username,
         "password": "password",
-        "scope": "openid",
+        "scope": DEX_SCOPE,
     }
     if DEX_SECRET:  # confidential client (kind); omit for a public-client Dex (docker-compose)
         data["client_secret"] = DEX_SECRET
@@ -88,9 +89,8 @@ def _token(username: str) -> str:
 
 
 def _sub(token: str) -> str:
-    payload = token.split(".")[1]
-    payload += "=" * (-len(payload) % 4)
-    return json.loads(base64.urlsafe_b64decode(payload))["sub"]
+    """The principal the catalog keys this bearer on ([[LH-063]])."""
+    return principal_of(SERVER, token)
 
 
 def _ipc(table: pa.Table) -> bytes:
@@ -199,17 +199,46 @@ def test_governance_flow(stack: tuple[str, str]) -> None:
     down = _poll(_bronze_derived, [silver])
     assert isinstance(down, list) and silver in down, f"expected {silver} derived from {bronze}, got {down}"
 
+    # 7. Every subject the store holds names its identity provider ([[LH-063]]): each `user` a tuple names decodes to
+    # a principal, `<idp-id>~<subject>`, the owner tuples this flow's creates seeded among them.
+    users = _store_users()
+    assert fga.user_object(alice_sub) in users, f"the store holds no tuple naming alice's principal {alice_sub}, so the claim would pass vacuously"
+    bare = sorted(user for user in users if user != fga.USER_WILDCARD and not is_principal(fga.subject_of(user.removeprefix("user:"))))
+    assert not bare, f"the store holds subjects that name no identity provider: {bare}"
 
-def _tuples_on(obj: str) -> list[dict[str, Any]]:
-    """Every tuple the catalog's OpenFGA store holds whose object is ``obj``: what the reconciler counts as a ghost."""
+
+def _store() -> tuple[dict[str, str], str]:
+    """The headers and the id of the catalog's OpenFGA store, read directly."""
     assert FGA, "set LANCE_E2E_FGA: this claim is about the tuples the store holds"
     headers = fga_headers(FGA_TOKEN_FILE)
     named = newest_store(requests.get(f"{FGA}/stores", headers=headers, timeout=10).json().get("stores") or [], STORE_NAME)
     store = FGA_STORE or (str(named["id"]) if named else "")
     assert store, f"the OpenFGA at {FGA} holds no store named {STORE_NAME!r}"
+    return headers, store
+
+
+def _tuples_on(obj: str) -> list[dict[str, Any]]:
+    """Every tuple the catalog's OpenFGA store holds whose object is ``obj``: what the reconciler counts as a ghost."""
+    headers, store = _store()
     read = requests.post(f"{FGA}/stores/{store}/read", headers=headers, json={"tuple_key": {"object": obj}}, timeout=10)
     assert read.status_code == 200, read.text
     return read.json().get("tuples") or []
+
+
+def _store_users() -> set[str]:
+    """Every `user:` subject a tuple in the store names, across every page of an unfiltered read."""
+    headers, store = _store()
+    users: set[str] = set()
+    continuation = ""
+    while True:
+        body: dict[str, Any] = {"page_size": 100, **({"continuation_token": continuation} if continuation else {})}
+        read = requests.post(f"{FGA}/stores/{store}/read", headers=headers, json=body, timeout=10)
+        assert read.status_code == 200, read.text
+        page = read.json()
+        users |= {t["key"]["user"] for t in page.get("tuples") or [] if t["key"]["user"].startswith("user:")}
+        continuation = page.get("continuation_token") or ""
+        if not continuation:
+            return users
 
 
 def test_a_forced_rename_carries_a_direct_grant_and_protection_and_leaves_no_tuple_on_the_old_name(stack: tuple[str, str]) -> None:

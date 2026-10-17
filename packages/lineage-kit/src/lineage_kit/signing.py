@@ -36,8 +36,8 @@ else; covering the author in the bytes does not stop that. So the identity that 
 it stamped, or it has to declare `onBehalfOf` equal to that author and be one of the delegators the verifier is
 configured with. An event with no author binds to nothing and does not verify.
 
-A CONTROL EVENT'S `actor` PLAYS THE AUTHOR'S ROLE, with one difference: a service names no author. An actor `user:<sub>` is a
-person the catalog authenticated, so only a delegator may sign for it, declaring `onBehalfOf` equal to the whole `user:<sub>`
+A CONTROL EVENT'S `actor` PLAYS THE AUTHOR'S ROLE, with one difference: a service names no author. An actor `user:<principal>` is a
+person the catalog authenticated, so only a delegator may sign for it, declaring `onBehalfOf` equal to the whole `user:<principal>`
 string. An absent actor, or one that is not a `user:` principal (`system:annotator`), is a service acting for itself, so any
 listed signer signs it with no delegation declared.
 """
@@ -96,7 +96,7 @@ _NKEY_ALPHABET = re.compile(r"[A-Z2-7]+")
 _SIGNATURE_TEXT = re.compile(r"[A-Za-z0-9_-]{86}")
 _KID_TEXT = r"^[0-9a-f]{16}$"
 
-#: How a control event names a PERSON as its actor: `user:<sub>`, what the catalog stamps from the verified OIDC subject.
+#: How a control event names a PERSON as its actor: `user:<principal>`, what the catalog stamps from the principal its door verified.
 #: Any other actor, or none, is a service acting for itself.
 _PERSON_ACTOR_PREFIX = "user:"
 
@@ -400,7 +400,7 @@ def control_signature_of(envelope: Mapping[str, Any]) -> Signature | None:
 
 
 def _person_actor(envelope: Mapping[str, Any]) -> str | None:
-    """The whole `user:<sub>` a control event names as its actor, or None for a service: no actor, or one that is not a person."""
+    """The whole `user:<principal>` a control event names as its actor, or None for a service: no actor, or one that is not a person."""
     actor = envelope.get("actor")
     return actor if isinstance(actor, str) and actor.startswith(_PERSON_ACTOR_PREFIX) else None
 
@@ -501,7 +501,7 @@ def attach_control_signature(envelope: Mapping[str, Any], *, key: SigningKey, id
     holding a datetime: a consumer verifies the arrived JSON, so that is the document signed.
 
     `identity`, `on_behalf_of` and the order in which the facet and its value are written are `attach_signature`'s. The
-    envelope's `actor` plays the author: a PERSON actor (`user:<sub>`) is signed for only by a delegator that declares
+    envelope's `actor` plays the author: a PERSON actor (`user:<principal>`) is signed for only by a delegator that declares
     `on_behalf_of` equal to the whole actor string, and a service actor (none, or any other principal) declares no
     delegation. A person's event signed with no delegation could never verify, and a door acknowledges a refusal, so the
     event would be lost; it is refused here, where the producer still sees it.
@@ -681,7 +681,7 @@ def verify_control_signature(envelope: Mapping[str, Any], *, source: PublicKeySo
     published keys (never a refusal when unreadable), then the bytes. What differs is whom the signer vouches for. The
     envelope's `actor` plays the author:
 
-    * ``user:<sub>``, a person: the signer is a delegator and declares `onBehalfOf` equal to the whole actor string. A signer
+    * ``user:<principal>``, a person: the signer is a delegator and declares `onBehalfOf` equal to the whole actor string. A signer
       that is listed but no delegator is refused as `delegation`; no declared delegation, or one naming another subject, as
       `author`.
     * none, ``system:<...>`` or any other principal, a service: the signer is listed and declares no delegation.

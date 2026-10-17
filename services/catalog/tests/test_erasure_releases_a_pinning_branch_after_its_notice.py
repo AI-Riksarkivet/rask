@@ -21,7 +21,6 @@ from collections.abc import Generator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import lance
@@ -42,6 +41,9 @@ from catalog.services import erasure_release
 from catalog.services.dataplane import create_table, read_arrow_body
 from catalog.services.erasure import Pin
 from service_kit.control_events import CatalogControlEvent
+from service_kit.governed.oidc import IDToken
+from service_kit.governed.person_identity import PersonPrincipal
+from service_kit.governed.principal import Principal
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
@@ -116,12 +118,14 @@ def _catalog(ns: LanceNamespace, tmp_path: Path, *, grace_days: int, emitter: _R
 
     async def _owners(obj: str) -> list[str]:
         assert obj == "table:subjects"
-        return ["user:olivia", "user:alice"]
+        return ["user:dex~olivia", "user:dex~alice%40corp"]
 
     application.dependency_overrides[get_settings] = lambda: settings
     application.dependency_overrides[get_namespace] = lambda: ns
     application.dependency_overrides[get_storage_options] = lambda: {}
-    application.dependency_overrides[authenticate] = lambda: SimpleNamespace(sub="alice")
+    application.dependency_overrides[authenticate] = lambda: PersonPrincipal(
+        principal=Principal(idp_id="dex", subject="alice@corp"), claims=IDToken(iss="i", sub="alice", aud="lance", exp=1, iat=1)
+    )
     application.dependency_overrides[get_control_emitter] = lambda: emitter
     application.dependency_overrides[door.get_table_owners] = lambda: _owners
     application.dependency_overrides[get_clock] = lambda: clock
@@ -157,10 +161,10 @@ def test_a_settled_erasure_tells_each_person_then_releases_its_pin_at_the_deadli
         assert ([pin["ref"] for pin in verified["report"]["pinned_by"]], verified["obligation"]["state"]) == (refs, "released")
         release = verified["report"]["release"]
         due = datetime.fromisoformat(release["due_at"])
-        assert (release["refs"], release["notified"], due) == (refs, ["user:alice", "user:olivia"], clock.now + timedelta(days=7))
+        assert (release["refs"], release["notified"], due) == (refs, ["user:dex~alice%40corp", "user:dex~olivia"], clock.now + timedelta(days=7))
         notices = [event for event in emitter.events if event.action == _NOTICE]
         assert [(e.object_id, e.actor, e.extra["subject"], e.extra["refs"], datetime.fromisoformat(e.extra["due_at"])) for e in notices] == [
-            ("table:subjects", "user:alice", subject, refs, due) for subject in ("user:alice", "user:olivia")
+            ("table:subjects", "user:dex~alice@corp", subject, refs, due) for subject in ("user:dex~alice%40corp", "user:dex~olivia")
         ]
 
         clock.now = due - timedelta(seconds=1)
@@ -199,8 +203,8 @@ def test_a_release_an_earlier_verification_scheduled_settles_the_obligation_only
             table="subjects",
             location=open_dataset(ns, {}, _TABLE_ID).uri,
             object_id="table:subjects",
-            requested_by="user:alice",
-            notified=["user:alice", "user:olivia"],
+            requested_by="user:dex~alice",
+            notified=["user:dex~alice", "user:dex~olivia"],
             due_at=clock.now + timedelta(days=7),
         )
         erasure_release.schedule(str(tmp_path / "control"), {}, earlier)
@@ -238,8 +242,8 @@ def test_a_release_cut_short_is_finished_at_the_reference_it_recorded(tmp_path: 
         table="subjects",
         location=open_dataset(ns, {}, _TABLE_ID).uri,
         object_id="table:subjects",
-        requested_by="user:alice",
-        notified=["user:alice"],
+        requested_by="user:dex~alice",
+        notified=["user:dex~alice"],
         due_at=clock.now,
     )
     erasure_release.schedule(str(tmp_path / "control"), {}, release)

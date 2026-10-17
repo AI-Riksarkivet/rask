@@ -2,10 +2,11 @@
 
 A door verifies the token offline against the cluster issuer's key set (`OIDCVerifier`, carrying the fetch
 credential and CA that issuer demands): signature, issuer, the door's audience and expiry. Any token that verifies is
-a subject, `kubernetes~<sub>`, where the token's `sub` is the account's full username,
-`system:serviceaccount:<ns>:<sa>` (Lakekeeper's `username` subject source, crates/lakekeeper/src/config.rs). No list
-of accounts stands in front of the door: an account in any namespace authenticates, and what it may do is decided by
-OpenFGA alone, against the tuples that name that subject. An account with no tuple is authenticated and refused.
+the principal `kubernetes~<sub>` (`service_kit.governed.principal`), where the token's `sub` is the account's full
+username, `system:serviceaccount:<ns>:<sa>` (Lakekeeper's `username` subject source, crates/lakekeeper/src/config.rs).
+No list of accounts stands in front of the door: an account in any namespace authenticates, and what it may do is
+decided by OpenFGA alone, against the tuples that name that principal. An account with no tuple is authenticated and
+refused.
 
 A caller reads its own token from the file the kubelet projects, on every request: the kubelet replaces it at 80%
 of a 600 s lifetime (measured: rotated at age 515 s), so a copy kept for the life of the process is refused within
@@ -22,36 +23,40 @@ from pydantic import BaseModel, ConfigDict
 
 from service_kit.exceptions import ServiceUnavailableError
 from service_kit.governed.oidc import OIDCVerifier
-from service_kit.lakehouse.subjects import SERVICE_ACCOUNT_SUBJECT_PREFIX
+from service_kit.governed.principal import SERVICE_ACCOUNT_IDP, Principal
 
 
 #: The username prefix the Kubernetes API server gives every service account (`system:serviceaccount:<ns>:<sa>`).
 _ACCOUNT_PREFIX = "system:serviceaccount:"
 
 
-def service_account_subject(account: str) -> str:
-    """The subject a service account is: `kubernetes~` and its full username. `UnauthenticatedError` for any other username.
+def service_account_principal(account: str) -> Principal:
+    """The principal a service account is: `kubernetes~` and its full username. `UnauthenticatedError` for any other username.
 
     A token the issuer signed for something other than a service account (a node, a user it impersonates) names no
-    account, so it proves no subject here. Namespace and account name are DNS labels and never empty.
+    account, so it proves no principal here. Namespace and account name are DNS labels and never empty.
     """
     namespace, _, name = account.removeprefix(_ACCOUNT_PREFIX).partition(":")
     if not account.startswith(_ACCOUNT_PREFIX) or not namespace or not name or ":" in name:
         raise UnauthenticatedError("Invalid or expired token")
-    return f"{SERVICE_ACCOUNT_SUBJECT_PREFIX}{namespace}:{name}"
+    return Principal(idp_id=SERVICE_ACCOUNT_IDP, subject=account)
 
 
 class ServicePrincipal(BaseModel):
-    """A caller the cluster vouched for: the service account its token names, and the subject that account is."""
+    """A caller the cluster vouched for: the service account its token names, and the principal that account is."""
 
     model_config = ConfigDict(frozen=True)
 
     service_account: str
 
     @property
-    def sub(self) -> str:
-        """The subject, under the name every door's authorization reads from a verified caller."""
-        return service_account_subject(self.service_account)
+    def principal(self) -> Principal:
+        return service_account_principal(self.service_account)
+
+    @property
+    def subject(self) -> str:
+        """The principal key, the subject id every door's authorization reads from a verified caller."""
+        return self.principal.key
 
 
 class ServiceAccountVerifier:
@@ -85,7 +90,7 @@ class ServiceAccountVerifier:
     def verify(self, token: str) -> ServicePrincipal:
         """The principal the token proves; `UnauthenticatedError` for a token at fault, `ProviderUnavailableError` for the issuer."""
         account = self._oidc.verify(token).sub
-        service_account_subject(account)
+        service_account_principal(account)
         return ServicePrincipal(service_account=account)
 
 

@@ -30,6 +30,7 @@ PROD_VALUES="${PROD_VALUES:-deploy/values-prod.yaml}"
 # nats.auth.provisioned the same for the NATS users (templates/nats-provisioned.yaml). nats.url is the platform's NATS
 # bus, a prerequisite values-prod leaves for the deployer to name.
 # observability.export.endpoint is the platform's OTLP backend, which values-prod leaves for the deployer to name, and
+# auth.oidc.connectors the idp id of each of the platform's Dex connectors ([[LH-063]]),
 # auth.fgaApiUrl and age.externalHost the platform's OpenFGA and Postgres ([[XC-132]]), openbao.externalAddr its secret
 # store ([[XC-149]]), and route.* the platform's Gateway, its in-cluster address and the egress that reaches it (ADR 0165),
 # and the egress that reaches the API server, the telemetry backend, the platform's OpenFGA and its secret store, which
@@ -37,6 +38,7 @@ PROD_VALUES="${PROD_VALUES:-deploy/values-prod.yaml}"
 COMMON=(--api-versions external-secrets.io/v1/ExternalSecret --api-versions dapr.io/v1alpha1
         --set auth.oidc.issuer=https://auth.example.com/dex
         --set frontend.oidc.publicOrigin=https://lance.example.com
+        --set-json 'auth.oidc.connectors={"ldap":"corp"}'
         --set image.repository=ghcr.io/example/rask
         --set signing.provisioned=true
         --set nats.auth.provisioned=true

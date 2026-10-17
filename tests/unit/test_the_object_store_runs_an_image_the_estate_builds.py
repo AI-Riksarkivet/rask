@@ -23,6 +23,7 @@ _REGISTRY_ARGS = (
     "--set", "openbao.enabled=false",
     "--set-string", f"openbao.externalAddr={SECRET_STORE_URL}",
     "--set", "dex.enabled=false",
+    "--set", "auth.oidc.connectors.ldap=corp",
     "--set", "signing.provisioned=true",
     "--set", "nats.auth.provisioned=true",
 )  # fmt: skip

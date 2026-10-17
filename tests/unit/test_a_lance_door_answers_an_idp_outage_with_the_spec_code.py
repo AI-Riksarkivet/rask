@@ -45,6 +45,7 @@ from lineage.core.config import LineageSettings
 from service_kit.exceptions import register_handlers
 from service_kit.governed import oidc
 from service_kit.governed.oidc import OIDCVerifier
+from service_kit.governed.person_identity import PersonVerifier
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
@@ -56,7 +57,13 @@ type _Door = Callable[[Request, str, str], Awaitable[object]]
 
 
 def _oidc_on(issuer: str) -> dict[str, object]:
-    return {"RASK_OIDC_ENABLED": True, "RASK_OIDC_ISSUER": issuer, "RASK_OIDC_AUDIENCE": AUDIENCE, "RASK_OIDC_ALLOW_INSECURE": True}
+    return {
+        "RASK_OIDC_ENABLED": True,
+        "RASK_OIDC_ISSUER": issuer,
+        "RASK_OIDC_AUDIENCE": AUDIENCE,
+        "RASK_OIDC_ALLOW_INSECURE": True,
+        "RASK_OIDC_CONNECTORS": {"local": "dex"},
+    }
 
 
 def _credentials(bearer: str) -> HTTPAuthorizationCredentials:
@@ -172,7 +179,7 @@ def _client(door: _Door, provider: _BrokenProvider) -> TestClient:
     app = FastAPI()
     register_handlers(app)
     install_problem_handlers(app, logging.getLogger(__name__))
-    app.state.oidc = provider.verifier
+    app.state.oidc = PersonVerifier(provider.verifier, {"local": "dex"})
     # Never verified: every fault is met before a signature is checked. The `kid` carries it to the key-set fetch.
     claims = {"iss": provider.issuer, "sub": "gina", "aud": AUDIENCE, "iat": 0, "exp": 1 << 31}
     bearer = jwt.encode(claims, "unverified", algorithm="HS256", headers={"kid": "k1"})

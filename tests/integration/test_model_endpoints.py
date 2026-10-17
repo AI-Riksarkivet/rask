@@ -1,7 +1,7 @@
 """Integration tests for the #17 model-promotion endpoints — governance + flow through the REAL catalog app.
 
-Mirrors ``test_authz``'s harness: OIDC+FGA enabled via a ``get_settings`` override, a faked verifier (user
-``alice``) + a sentinel FGA client, and ``fga.check`` monkeypatched to allow/deny. The registry is a REAL
+Mirrors ``test_authz``'s harness: OIDC+FGA enabled via a ``get_settings`` override, a faked verifier (the person
+``dex~alice``) + a sentinel FGA client, and ``fga.check`` monkeypatched to allow/deny. The registry is a REAL
 Lance dataset written under ``<root>/medallion/models/<model>`` (a local ``dir`` root), so the endpoint's
 URI-direct open, metrics gate, and blessed-tag move are exercised end to end. The rung SEPARATION against a
 real OpenFGA (validator promotes, writer denied) is proven additionally by the live e2e.
@@ -23,6 +23,8 @@ from catalog.api.dependencies import get_settings
 from catalog.core.config import Settings
 from service_kit.governed import fga as fga_module
 from service_kit.governed.oidc import IDToken
+from service_kit.governed.person_identity import PersonPrincipal
+from service_kit.governed.principal import Principal
 
 
 def _publish(uri: str, metrics: dict[str, Any], token: str, *, first: bool) -> int:
@@ -57,6 +59,7 @@ def models_client(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> Iterator[tu
                 "impl": "dir",
                 "root": root,
                 "oidc_enabled": True,
+                "oidc_connectors": {"local": "dex"},
                 "oidc_issuer": "https://idp.example",
                 "oidc_audience": "lance",
                 "fga_enabled": True,
@@ -77,7 +80,9 @@ def models_client(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> Iterator[tu
     with TestClient(app) as client:
         client.app.dependency_overrides[get_settings] = _settings
         verifier = MagicMock()
-        verifier.verify.return_value = IDToken(iss="i", sub="alice", aud="lance", exp=1, iat=1)
+        verifier.verify.return_value = PersonPrincipal(
+            principal=Principal(idp_id="dex", subject="alice"), claims=IDToken(iss="i", sub="alice", aud="lance", exp=1, iat=1)
+        )
         client.app.state.oidc = verifier
         fga_client = MagicMock()
         fga_client.close = AsyncMock()
@@ -105,7 +110,7 @@ def test_promote_checks_can_promote_and_moves_blessed_tag(models_client: tuple[T
 
     assert resp.status_code == 200, resp.text
     assert resp.json()["blessed_version"] == 2
-    assert {"user": "alice", "relation": "can_promote", "obj": "table:models$demo"} in captured
+    assert {"user": "dex~alice", "relation": "can_promote", "obj": "table:models$demo"} in captured
     assert lance.dataset(registry).tags.get_version("blessed") == 2  # the tag really moved
 
 
@@ -154,7 +159,7 @@ def test_describe_checks_reader_and_reports_candidate_plus_blessed(models_client
     body = resp.json()
     assert body["latest_version"] == 2
     assert body["candidate_metrics"] == {"rows_seen": 9, "features": 1}
-    assert {"user": "alice", "relation": "can_get_metadata", "obj": "table:models$demo"} in captured
+    assert {"user": "dex~alice", "relation": "can_get_metadata", "obj": "table:models$demo"} in captured
 
 
 def test_promote_unknown_model_is_404(models_client: tuple[TestClient, str], monkeypatch: pytest.MonkeyPatch) -> None:
@@ -210,7 +215,7 @@ def test_list_models_filters_to_readable_and_reports_versions(models_client: tup
         # caller could not previously tell from a truncated one.
         "page_token": None,
     }
-    assert captured == [{"user": "alice", "relation": "can_get_metadata", "object_type": "table"}]
+    assert captured == [{"user": "dex~alice", "relation": "can_get_metadata", "object_type": "table"}]
 
 
 def test_list_models_is_empty_for_a_caller_with_no_grants(models_client: tuple[TestClient, str], monkeypatch: pytest.MonkeyPatch) -> None:

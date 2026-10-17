@@ -36,12 +36,13 @@ from lance_namespace import (
 )
 
 from lineage.api.dependencies import SettingsDep
-from lineage.api.security import CurrentToken, Principal
+from lineage.api.security import Caller, CurrentToken
 from lineage.core.config import LineageSettings
 from lineage.models import MAINTENANCE_OPERATIONS, DatasetEvent, ForeignRunError, RunEvent, UnauthoredRunError, UngovernedOutputError, author_sub_from_payload
 from lineage.services.signature import verify_arrived_event
 from lineage_kit.signing import VerifiedSignature
 from service_kit.governed.decider import AccessDecider
+from service_kit.governed.principal import is_principal
 from service_kit.openlineage import lifecycle_state
 
 
@@ -139,7 +140,7 @@ async def _none_are_governed(decider: AccessDecider, *, names: list[str], object
     return True
 
 
-async def _require_relation(relation: str, name: str, request: Request, settings: LineageSettings, token: Principal | None) -> None:
+async def _require_relation(relation: str, name: str, request: Request, settings: LineageSettings, token: Caller | None) -> None:
     """The one fail-closed authz ladder every per-``{name}`` gate shares (audit 2026-07-16: it had
     grown four near-copies). No-op when FGA is off; unwired client → 503; unauthenticated → 401;
     deny → 403; an unanswerable decision → 503, never allow."""
@@ -151,8 +152,8 @@ async def _require_relation(relation: str, name: str, request: Request, settings
     if token is None:
         raise UnauthenticatedError("authentication required")
     obj = f"{settings.fga_object_type}:{name}"
-    if not await decider.check(user=token.sub, relation=relation, obj=obj):
-        log.info("access_denied", extra={"sub": token.sub, "relation": relation, "object": obj})
+    if not await decider.check(user=token.subject, relation=relation, obj=obj):
+        log.info("access_denied", extra={"sub": token.subject, "relation": relation, "object": obj})
         raise PermissionDeniedError(f"{relation} required on {obj}")
 
 
@@ -160,7 +161,7 @@ async def _require_relation(relation: str, name: str, request: Request, settings
 _EVENT_FEED_RELATION: Final = "can_read_event_feed"
 
 
-async def require_event_feed_reader(request: Request, settings: LineageSettings, token: Principal | None) -> None:
+async def require_event_feed_reader(request: Request, settings: LineageSettings, token: Caller | None) -> None:
     """Gate the unfiltered run feed on ``can_read_event_feed`` at the configured root object ([[CTL-021]]).
 
     The sibling of :func:`_require_relation` and deliberately not a call into it: that helper composes
@@ -183,8 +184,8 @@ async def require_event_feed_reader(request: Request, settings: LineageSettings,
     if token is None:
         raise UnauthenticatedError("authentication required")
     obj = settings.fga_root_object
-    if not await decider.check(user=token.sub, relation=_EVENT_FEED_RELATION, obj=obj):
-        log.info("access_denied", extra={"sub": token.sub, "relation": _EVENT_FEED_RELATION, "object": obj})
+    if not await decider.check(user=token.subject, relation=_EVENT_FEED_RELATION, obj=obj):
+        log.info("access_denied", extra={"sub": token.subject, "relation": _EVENT_FEED_RELATION, "object": obj})
         raise PermissionDeniedError(f"{_EVENT_FEED_RELATION} required on {obj}")
 
 
@@ -194,7 +195,7 @@ async def require_metadata_access(name: str, request: Request, settings: Setting
     await _require_relation("can_get_metadata", name, request, settings, token)
 
 
-def enforce_author(event: RunEvent | DatasetEvent, token: Principal | None) -> None:
+def enforce_author(event: RunEvent | DatasetEvent, token: Caller | None) -> None:
     """Bind the author to the *verified* principal — never trust the request body.
 
     When the request is authenticated, overwrite the ``author`` facet with the token subject so a
@@ -209,7 +210,7 @@ def enforce_author(event: RunEvent | DatasetEvent, token: Principal | None) -> N
     """
     if token is None:
         return
-    stamp = {"name": token.sub, "sub": token.sub}
+    stamp = {"name": token.subject, "sub": token.subject}
     if isinstance(event, DatasetEvent):
         event.dataset.facets["author"] = stamp
     else:
@@ -262,7 +263,7 @@ def is_external_source(namespace: str, name: str) -> bool:
 
 
 class _StampedAuthor:
-    """The subject a BUS producer stamped on its own event, as a :class:`Principal`.
+    """The subject a BUS producer stamped on its own event, as a :class:`Caller`.
 
     WHAT AUTHENTICATES THE STAMP IS THE SIGNATURE, not the bus. The door authenticates the SIDECAR (a shared
     app token), so on an estate that does not enforce signing nothing proves the stamp, and what the gate changes
@@ -273,10 +274,10 @@ class _StampedAuthor:
     subject is then authorized exactly as below.
     """
 
-    __slots__ = ("sub",)
+    __slots__ = ("subject",)
 
-    def __init__(self, sub: str) -> None:
-        self.sub = sub
+    def __init__(self, subject: str) -> None:
+        self.subject = subject
 
 
 async def enforce_bus_authz(event: RunEvent | DatasetEvent, request: Request, settings: LineageSettings, arrived: Mapping[str, Any]) -> None:
@@ -333,6 +334,9 @@ async def enforce_bus_authz(event: RunEvent | DatasetEvent, request: Request, se
     try:
         if not subject:
             raise UnauthoredRunError("a bus-delivered run must carry a verified author sub to be authorized")
+        # A stamp that names no principal is no author: nothing could be authorized as it ([[LH-063]]).
+        if not is_principal(subject):
+            raise UnauthoredRunError(f"a bus-delivered run's author {subject[:128]!r} is not a principal (<idp-id>~<subject>)")
         await enforce_output_authz(event, request, settings, _StampedAuthor(subject), relations=relations_for_operation(event.operation))
     except PermissionDeniedError:
         if not await _is_replay(event, payload, request):
@@ -392,7 +396,7 @@ async def _is_replay(event: RunEvent | DatasetEvent, payload: dict[str, object],
 
 
 async def enforce_output_authz(
-    event: RunEvent | DatasetEvent, request: Request, settings: LineageSettings, token: Principal | None, *, relations: tuple[str, ...] = _WRITE_RELATIONS
+    event: RunEvent | DatasetEvent, request: Request, settings: LineageSettings, token: Caller | None, *, relations: tuple[str, ...] = _WRITE_RELATIONS
 ) -> None:
     """Output-scoped ingest authz: require the producer may WRITE every output dataset it claims.
 
@@ -428,14 +432,14 @@ async def enforce_output_authz(
     provenance = getattr(request.app.state, "provenance", None)
     if provenance is not None and event.run_id:
         author = await provenance.run_author(event.run_id)
-        if author is not None and author != token.sub:
-            log.info("ingest_run_mutation_denied", extra={"sub": token.sub, "run_id": event.run_id, "author": author})
+        if author is not None and author != token.subject:
+            log.info("ingest_run_mutation_denied", extra={"sub": token.subject, "run_id": event.run_id, "author": author})
             raise ForeignRunError(f"run {event.run_id} was founded by another subject; only its author may extend it")
     outputs = [d.name for d in event.outputs if d.name]
     if outputs:
-        denied = await _denied_objects(decider, user=token.sub, relations=relations, names=outputs, object_type=object_type)
+        denied = await _denied_objects(decider, user=token.subject, relations=relations, names=outputs, object_type=object_type)
         if denied:
-            log.info("ingest_denied", extra={"sub": token.sub, "relation": "|".join(relations), "outputs": denied})
+            log.info("ingest_denied", extra={"sub": token.subject, "relation": "|".join(relations), "outputs": denied})
             reason = f"{' or '.join(relations)} required on outputs: {', '.join(denied)}"
             if await _none_are_governed(decider, names=denied, object_type=object_type):
                 raise UngovernedOutputError(reason)
@@ -459,12 +463,12 @@ async def enforce_output_authz(
     inputs = sorted({d.name for d in event.inputs if d.name and not is_external_source(d.namespace, d.name)} | column_upstreams)
     if inputs:
         objs = [f"{object_type}:{n}" for n in inputs]
-        seen = await decider.batch_check(user=token.sub, relation="can_get_metadata", objects=objs)
+        seen = await decider.batch_check(user=token.subject, relation="can_get_metadata", objects=objs)
         hidden = sorted(n for n in inputs if not seen.get(f"{object_type}:{n}"))
         if hidden:
             log.info(
                 "ingest_input_denied",
-                extra={"sub": token.sub, "relation": "can_get_metadata", "inputs": hidden},
+                extra={"sub": token.subject, "relation": "can_get_metadata", "inputs": hidden},
             )
             raise PermissionDeniedError(f"can_get_metadata required on inputs: {', '.join(hidden)}")
 
@@ -480,7 +484,7 @@ class DatasetFilter:
     when FGA is off (dev/tests).
     """
 
-    def __init__(self, request: Request, settings: LineageSettings, token: Principal | None) -> None:
+    def __init__(self, request: Request, settings: LineageSettings, token: Caller | None) -> None:
         self._request = request
         self._settings = settings
         self._token = token
@@ -501,7 +505,7 @@ class DatasetFilter:
         # by the decider without being sent; other external names are sent and answered not granted.
         unique = list(dict.fromkeys(names))
         allowed = await decider.batch_check(
-            user=self._token.sub,
+            user=self._token.subject,
             relation="can_get_metadata",
             objects=[f"{object_type}:{n}" for n in unique],
         )

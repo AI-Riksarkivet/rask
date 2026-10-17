@@ -28,7 +28,7 @@ def token(username: str) -> str:
             "grant_type": "password",
             "client_id": "lance-catalog",
             "client_secret": "lance-catalog-secret",
-            "scope": "openid email",
+            "scope": "openid email federated:id",
             "username": username,
             "password": "password",
         },

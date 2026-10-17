@@ -33,6 +33,13 @@ _Avoid_: Ray, compute plane, cluster
 
 ### Governance
 
+**Principal**:
+Who a verified caller is, `<idp-id>~<subject>`: the identity provider that vouched for them and the subject it names. A
+service is `kubernetes~system:serviceaccount:<ns>:<sa>`; a person is the idp id the deployment gives their Dex connector
+and the user id that connector reports, so renaming a connector re-keys no grant. Every grant, inbox and attribution
+names a principal, and a bare name, which no token can prove, is refused wherever one is required.
+_Avoid_: sub, subject id, user name, OIDC sub
+
 **Tier**:
 One of the governed stages of a table's data: bronze, silver or gold. Raw is the external world, never a tier. A
 table's tier is the one its nearest enclosing namespace declares, and a namespace declares it once, when it is created,

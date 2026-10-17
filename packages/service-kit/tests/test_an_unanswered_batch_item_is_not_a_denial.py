@@ -65,7 +65,7 @@ class _BatchOpenFga:
 
 def _ask(client: _BatchOpenFga, objects: list[str], *, attempts: int = 1) -> dict[str, bool]:
     return asyncio.run(
-        fga.batch_check(cast("OpenFgaClient", client), user="alice", relation="can_read_data", objects=objects, retry_attempts=attempts, **_NO_WAIT)
+        fga.batch_check(cast("OpenFgaClient", client), user="dex~alice", relation="can_read_data", objects=objects, retry_attempts=attempts, **_NO_WAIT)
     )
 
 
@@ -136,7 +136,7 @@ def _over_the_wire(objects: list[str]) -> dict[str, bool]:
         async with TestServer(app) as server:
             client = fga.make_client(str(server.make_url("")).rstrip("/"), _STORE_ID, _MODEL_ID, token_file=None)
             try:
-                return await fga.batch_check(client, user="alice", relation="can_read_data", objects=objects, retry_attempts=1, **_NO_WAIT)
+                return await fga.batch_check(client, user="dex~alice", relation="can_read_data", objects=objects, retry_attempts=1, **_NO_WAIT)
             finally:
                 await client.close()
 

@@ -9,7 +9,7 @@ wherever it is set. What must never appear is a LITERAL on either side — a rou
 happens to be `/api` and 404s the moment it is not. That trap has been paid for once already.
 
 **Every route is SUBJECT-DERIVED.** No path param, no body field and no header names an inbox: the
-actor id is `encode_subject(token.sub)`, minted from the verified token, so there is no parameter
+actor id is `encode_subject(subject)`, the verified token's principal key, so there is no parameter
 anyone could forget to check. That is also why the two mutations run no authorization check — a
 subject marking their own rows read is not a decision anyone else has a stake in, and adding an FGA
 call there would be authorization theatre over an object the caller already is.

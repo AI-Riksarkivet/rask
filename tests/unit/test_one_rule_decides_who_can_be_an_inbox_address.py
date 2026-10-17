@@ -19,10 +19,12 @@ from service_kit.lakehouse.subjects import is_person_subject
 
 
 # NO WORKLOAD NAME is asserted here, deliberately: the platform is forbidden to know about one, so a
-# denylist entry for a modality would be the defect rather than the fix. These are the chart's generic
-# stage authors plus the shapes that address everyone or name an FGA object instead of a subject.
-_NOT_ADDRESSES = ["data_eng", "team:eng#member", "user:alice"]
-_ADDRESSES = ["alice"]
+# denylist entry for a modality would be the defect rather than the fix. These are a generic stage author,
+# a bare name no identity provider vouches for, a machine's principal, and the shapes that address everyone
+# or name an FGA object instead of a subject ([[LH-063]]: a person is a principal some IdP other than the
+# cluster's issuer vouched for).
+_NOT_ADDRESSES = ["data_eng", "alice", "kubernetes~system:serviceaccount:default:rask-sa-catalog", "team:eng#member", "user:dex~alice"]
+_ADDRESSES = ["dex~alice"]
 
 
 @pytest.mark.parametrize("value", _NOT_ADDRESSES)
@@ -42,7 +44,7 @@ def test_the_CATALOG_builder_drops_it_too(value: str) -> None:
     event = build_write_event(
         table_id="acme$silver$features",
         namespace="acme$silver",
-        author="alice",
+        author="dex~alice",
         version=1,
         operation="insert_into_table",
         run_id="r1",

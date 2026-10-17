@@ -116,7 +116,8 @@ def publish_token(settings: Any) -> str | None:
         "grant_type": "password",
         "username": settings.publish_username,
         "password": bundle["publisher-oidc-password"],
-        "scope": "openid profile email",
+        # `federated:id` puts the connector and the upstream user id in the token: the publisher's principal ([[LH-063]]).
+        "scope": "openid profile email federated:id",
     }
     # The client secret comes from the SAME bundle when the store serves it — this credential was the
     # one outside the estate's fail-closed secrets guard, riding plaintext pod env while the comment

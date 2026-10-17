@@ -102,7 +102,7 @@ async def list_models(
         # `.objects` + `.truncated`: past OpenFGA's 1000-object cap this listing is SHORT, and the
         # page cursor below would be minted from the shortened list. Surfaced to the caller rather
         # than only logged — a client cannot otherwise tell a small estate from a truncated answer.
-        listing = await fga.list_objects(client, user=token.sub, relation="can_get_metadata", object_type="table")
+        listing = await fga.list_objects(client, user=token.subject, relation="can_get_metadata", object_type="table")
         allowed = set(listing.objects)
         authorization_truncated = listing.truncated
         names = [name for name in names if f"table:{fga.canonical_object_id(_segments(name), delimiter=settings.delimiter)}" in allowed]
@@ -151,7 +151,7 @@ async def promote_model(
         emitter,
         segments,
         delimiter=settings.delimiter,
-        author=token.sub if token is not None else None,
+        author=token.subject if token is not None else None,
         version=blessed,
         operation=PROMOTE_MODEL,
         authorization=authorization,

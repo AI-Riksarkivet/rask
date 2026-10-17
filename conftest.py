@@ -414,6 +414,118 @@ def sa_issuer(tmp_path_factory: pytest.TempPathFactory) -> Iterator[ServiceAccou
     issuer.close()
 
 
+def dex_subject(user_id: str, connector: str) -> str:
+    """Dex's own `sub`: the base64url of the protobuf `IDTokenSubject{user_id = 1, conn_id = 2}`, unpadded.
+
+    Measured on the dev Dex v2.42.0 (2026-10-16): alice (`08a8684b-…`, connector `local`) is
+    `CiQwOGE4Njg0Yi1kYjg4LTRiNzMtOTBhOS0zY2QxNjYxZjU0NjYSBWxvY2Fs`, which this reproduces. The connector is part of it.
+    """
+    import base64
+
+    def varint(value: int) -> bytes:
+        out = bytearray()
+        while True:
+            low, value = value & 0x7F, value >> 7
+            out.append(low | (0x80 if value else 0))
+            if not value:
+                return bytes(out)
+
+    def field(number: int, text: str) -> bytes:
+        raw = text.encode()
+        return varint(number << 3 | 2) + varint(len(raw)) + raw
+
+    return base64.urlsafe_b64encode(field(1, user_id) + field(2, connector)).rstrip(b"=").decode()
+
+
+class DexIssuer:
+    """A Dex issuer on loopback, answering as the dev Dex v2.42.0 does ([[LH-063]]).
+
+    Measured 2026-10-16 on the dev Dex's password grant: with `federated:id` in the scope, the id token and the access
+    token both carry `federated_claims: {connector_id, user_id}`; without it, neither does. `sub` is `dex_subject`, so a
+    renamed connector changes it for the same user. Discovery and the key set are plain HTTP to anyone, as the dev Dex
+    serves them, so a verifier reaches it with `allow_insecure`.
+    """
+
+    def __init__(self) -> None:
+        import base64
+        import http.server
+        import json
+        import threading
+
+        from cryptography.hazmat.primitives.asymmetric import rsa
+
+        self._signing_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        self.kid = "test-dex-key"
+        numbers = self._signing_key.public_key().public_numbers()
+
+        def b64(value: int) -> str:
+            return base64.urlsafe_b64encode(value.to_bytes((value.bit_length() + 7) // 8, "big")).rstrip(b"=").decode()
+
+        jwks = {"keys": [{"kty": "RSA", "kid": self.kid, "use": "sig", "alg": "RS256", "n": b64(numbers.n), "e": b64(numbers.e)}]}
+        issuer_ref: dict[str, str] = {}
+
+        class _Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self) -> None:
+                if self.path == "/.well-known/openid-configuration":
+                    body: object = {
+                        "issuer": issuer_ref["issuer"],
+                        "jwks_uri": f"{issuer_ref['issuer']}/keys",
+                        "id_token_signing_alg_values_supported": ["RS256"],
+                    }
+                elif self.path == "/keys":
+                    body = jwks
+                else:
+                    self.send_response(404)
+                    self.end_headers()
+                    return
+                payload = json.dumps(body).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+            def log_message(self, format: str, *args: object) -> None:  # noqa: A002 — stdlib's own parameter name
+                return
+
+        self._server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+        self.issuer = issuer_ref["issuer"] = f"http://127.0.0.1:{self._server.server_address[1]}"
+        self._thread = threading.Thread(target=self._server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
+        self._thread.start()
+
+    def mint(self, user_id: str, *, connector: str, audience: str, federated: bool = True, ttl: int = 600) -> str:
+        """The token Dex issues `user_id` of `connector`, with `federated_claims` when the client asked for `federated:id`."""
+        import time
+
+        import jwt
+
+        now = int(time.time())
+        claims: dict[str, object] = {
+            "iss": self.issuer,
+            "sub": dex_subject(user_id, connector),
+            "aud": audience,
+            "iat": now,
+            "exp": now + ttl,
+            "email": f"{user_id}@example.com",
+            "email_verified": True,
+        }
+        if federated:
+            claims["federated_claims"] = {"connector_id": connector, "user_id": user_id}
+        return jwt.encode(claims, self._signing_key, algorithm="RS256", headers={"kid": self.kid})
+
+    def close(self) -> None:
+        self._server.shutdown()
+        self._server.server_close()
+
+
+@pytest.fixture(scope="session")
+def dex_issuer() -> Iterator[DexIssuer]:
+    """One loopback Dex per worker; read-only, so session scope holds."""
+    issuer = DexIssuer()
+    yield issuer
+    issuer.close()
+
+
 def _crc16_xmodem(data: bytes) -> int:
     crc = 0
     for byte in data:

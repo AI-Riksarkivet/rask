@@ -37,6 +37,8 @@ from lineage.core.config import LineageSettings
 from lineage.models import RunEvent
 from service_kit.governed.decider import OpenFgaDecider
 from service_kit.governed.oidc import IDToken
+from service_kit.governed.person_identity import PersonPrincipal
+from service_kit.governed.principal import Principal
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
@@ -70,7 +72,7 @@ def _event(*, outputs: tuple[str, ...] = ("bronze$pages",), inputs: tuple[str, .
         {
             "eventType": "COMPLETE",
             "eventTime": "2026-09-09T00:00:00+00:00",
-            "run": {"runId": "11111111-1111-1111-1111-111111111111", "facets": {"author": {"name": "alice", "sub": "alice"}}},
+            "run": {"runId": "11111111-1111-1111-1111-111111111111", "facets": {"author": {"name": "alice", "sub": "dex~alice"}}},
             "job": {"namespace": "bus", "name": "probe"},
             "inputs": [{"namespace": "bronze", "name": name} for name in inputs],
             "outputs": [{"namespace": "bronze", "name": name} for name in outputs],
@@ -102,6 +104,7 @@ def _bus_door(monkeypatch: pytest.MonkeyPatch, fga_client: _OpenFga) -> tuple[Te
     monkeypatch.setenv("RASK_OIDC_ENABLED", "true")
     monkeypatch.setenv("RASK_OIDC_ISSUER", "https://idp.invalid/dex")
     monkeypatch.setenv("RASK_OIDC_AUDIENCE", "rask")
+    monkeypatch.setenv("RASK_OIDC_CONNECTORS", '{"local": "dex"}')
 
     from lineage.api.dapr import register_dapr
     from lineage.core.config import get_settings
@@ -170,13 +173,21 @@ def _filter(fga_client: _OpenFga) -> fga_deps.DatasetFilter:
             "oidc_enabled": True,
             "oidc_issuer": "https://idp.example.com",
             "oidc_audience": "lance",
+            "oidc_connectors": {"local": "dex"},
             "fga_enabled": True,
             "fga_store_id": "s",
             "fga_model_id": "m",
         }
     )
     request = cast(Request, SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(fga=cast(OpenFgaClient, fga_client)))))
-    return fga_deps.DatasetFilter(request, settings, IDToken(iss="https://idp.example.com", sub="alice", aud="lance", exp=0, iat=0))
+    return fga_deps.DatasetFilter(
+        request,
+        settings,
+        PersonPrincipal(
+            principal=Principal(idp_id="dex", subject="alice"),
+            claims=IDToken(iss="https://idp.example.com", sub="alice", aud="lance", exp=0, iat=0),
+        ),
+    )
 
 
 def test_a_dataset_openfga_could_not_answer_is_a_503_not_hidden() -> None:

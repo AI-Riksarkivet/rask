@@ -30,7 +30,7 @@ const CFG: OidcConfig = {
 	clientId: 'lance-web',
 	clientSecret: null,
 	redirectUri: 'https://app.example.com/auth/callback',
-	scopes: 'openid profile email',
+	scopes: 'openid profile email federated:id',
 	sessionKey: null,
 };
 
@@ -73,7 +73,7 @@ describe('authorize URL', () => {
 		expect(p.get('response_type')).toBe('code');
 		expect(p.get('client_id')).toBe('lance-web');
 		expect(p.get('redirect_uri')).toBe(CFG.redirectUri);
-		expect(p.get('scope')).toBe('openid profile email');
+		expect(p.get('scope')).toBe('openid profile email federated:id');
 		expect(p.get('state')).toBe('st4te');
 		expect(p.get('code_challenge')).toBe('ch4llenge');
 		expect(p.get('code_challenge_method')).toBe('S256');

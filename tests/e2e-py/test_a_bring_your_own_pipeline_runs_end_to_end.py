@@ -25,7 +25,6 @@ every address from the release, or `make e2e-byo-pipeline` with the addresses se
 
 from __future__ import annotations
 
-import base64
 import io
 import json
 import os
@@ -43,6 +42,7 @@ import pytest
 import requests
 from botocore.config import Config
 from botocore.exceptions import ClientError
+from principals import DEX_SCOPE, principal_of
 
 
 CATALOG = os.environ.get("LANCE_E2E_CATALOG_URL", "").rstrip("/")
@@ -70,7 +70,7 @@ pytestmark = [
 
 
 class Identity:
-    """One Dex user: its bearer, and the subject the estate's grants name."""
+    """One Dex user: its bearer, and the principal the estate's grants name ([[LH-063]])."""
 
     def __init__(self, email: str) -> None:
         answer = requests.post(
@@ -81,14 +81,13 @@ class Identity:
                 "client_secret": DEX_SECRET,
                 "username": email,
                 "password": "password",
-                "scope": "openid email",
+                "scope": DEX_SCOPE,
             },
             timeout=20,
         )
         answer.raise_for_status()
         self.bearer = str(answer.json()["id_token"])
-        claims = self.bearer.split(".")[1]
-        self.sub = str(json.loads(base64.urlsafe_b64decode(claims + "=" * (-len(claims) % 4)))["sub"])
+        self.principal = principal_of(CATALOG, self.bearer)
         self.http = requests.Session()
         self.http.headers["authorization"] = f"Bearer {self.bearer}"
 
@@ -134,8 +133,8 @@ class Tenant:
         for namespace, tier in ((self.bronze, "bronze"), (self.silver, "silver")):
             body = {"namespace": namespace, "properties": {"rask.tier": tier}}
             _ok(admin.http.post(f"{CATALOG}/management/v1/warehouses/{self.project}/namespaces", json=body))
-            _ok(admin.http.post(f"{CATALOG}/management/v1/namespace/{namespace}/access/grant", json={"user": self.pipeline.sub, "relation": "writer"}))
-        _ok(admin.http.post(f"{CATALOG}/management/v1/namespace/{self.silver}/access/grant", json={"user": self.validator.sub, "relation": "validator"}))
+            _ok(admin.http.post(f"{CATALOG}/management/v1/namespace/{namespace}/access/grant", json={"user": self.pipeline.principal, "relation": "writer"}))
+        _ok(admin.http.post(f"{CATALOG}/management/v1/namespace/{self.silver}/access/grant", json={"user": self.validator.principal, "relation": "validator"}))
         self.declare_gate(review=False)
 
     def declare_gate(self, *, review: bool) -> None:
@@ -260,7 +259,7 @@ def test_a_pipeline_seeds_bronze_derives_silver_and_its_breach_waits_for_a_valid
     # The validator approves; the admin, watching from just before, is told by the approval's announcement.
     tenant.watch()
     approved = _ok(validator.http.post(f"{CATALOG}/management/v1/table/{silver_table}/promotion/approve", json={"version": 2}, timeout=120))
-    assert (approved["published_version"], approved["hold"]["decided_by"]) == (2, validator.sub), approved
+    assert (approved["published_version"], approved["hold"]["decided_by"]) == (2, validator.principal), approved
     assert _published_rows(admin, silver_id) == 24
 
     # 5. Following silver's feed reads its writes and both publications in commit order.

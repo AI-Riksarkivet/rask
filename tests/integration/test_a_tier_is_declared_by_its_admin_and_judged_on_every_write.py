@@ -43,6 +43,7 @@ def grants(real_ns_client: TestClient, tmp_path: Path) -> Iterator[Grants]:
             "root": root,
             "warehouses_enabled": True,
             "oidc_enabled": True,
+            "oidc_connectors": {"local": "dex"},
             "oidc_issuer": "https://idp.example",
             "oidc_audience": "lance",
             "fga_enabled": True,

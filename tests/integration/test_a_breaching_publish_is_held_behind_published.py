@@ -113,6 +113,7 @@ def estate(real_ns_client: TestClient, tmp_path: Path) -> Iterator[Estate]:
             "root": root,
             "warehouses_enabled": True,
             "oidc_enabled": True,
+            "oidc_connectors": {"local": "dex"},
             "oidc_issuer": "https://idp.example",
             "oidc_audience": "lance",
             "fga_enabled": True,
@@ -231,11 +232,11 @@ def test_approval_moves_published_and_tells_the_watchers_and_rejection_restores_
     approved = estate.decide("bob", "approve", 2)
 
     assert approved.status_code == 200, approved.text
-    assert (approved.json()["published_version"], approved.json()["hold"]["state"], approved.json()["hold"]["decided_by"]) == (2, "approved", "bob")
+    assert (approved.json()["published_version"], approved.json()["hold"]["state"], approved.json()["hold"]["decided_by"]) == (2, "approved", "dex~bob")
     assert (estate.rows("published"), estate.holds()) == (12, [])
     announced = [event for event in lineage if event["run"]["facets"]["lance"]["operation"] == "publish_table"]
     assert [event["outputs"][0]["facets"]["version"]["datasetVersion"] for event in announced] == ["2"]
-    assert _told(announced[-1], watchers=["wendy"]) == {"bob": [("author", TABLE)], "wendy": [("watch", TABLE)]}
+    assert _told(announced[-1], watchers=["dex~wendy"]) == {"dex~bob": [("author", TABLE)], "dex~wendy": [("watch", TABLE)]}
 
     estate.insert(range(12, 40))
     assert estate.publish(3)["held"] is True
