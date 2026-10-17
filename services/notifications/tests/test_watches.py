@@ -5,7 +5,8 @@ badge that counts other people's work is the failure the whole plane was built t
 "everyone in the project is told about everything in it" is that failure wearing a justification.
 """
 
-from typing import Any, cast
+from datetime import UTC, datetime
+from typing import Any
 
 import pytest
 from fastapi import FastAPI
@@ -14,64 +15,38 @@ from fastapi.testclient import TestClient
 from notifications.api import watches as watches_module
 from notifications.api.watches import WATCH_RELATION
 from notifications.config import get_notifications_settings
-from notifications.watch_actor import WATCHERS_KEY, WatchIndexActor
+from notifications.watch_actor import WatchIndexActor
 
 
-class _StateManager:
-    """The actor state manager's contract in memory."""
-
-    def __init__(self) -> None:
-        self.store: dict[str, str] = {}
-
-    async def try_get_state(self, key: str) -> tuple[bool, str | None]:
-        return (key in self.store, self.store.get(key))
-
-    async def set_state(self, key: str, value: str) -> None:
-        self.store[key] = value
-
-    async def save_state(self) -> None:
-        return None
-
-
-def _index() -> tuple[WatchIndexActor, _StateManager]:
-    actor = WatchIndexActor.__new__(WatchIndexActor)
-    state = _StateManager()
-    # Cast rather than ignore: the fake satisfies the manager's contract structurally, and the SDK's
-    # generic handle is not something a unit test should have to construct. Same shape as
-    # `test_inbox_actor.py`.
-    actor._state_manager = cast(Any, state)
-    return actor, state
+def _now() -> dict[str, str]:
+    """The `ListWatchers` payload asking who watches at this instant."""
+    return {"at": datetime.now(UTC).isoformat()}
 
 
 class TestWatchIndexActor:
     @pytest.mark.asyncio
-    async def test_watching_registers_the_subject(self) -> None:
-        actor, state = _index()
-        assert await actor.watch({"subject": "alice"}) == {"added": True, "total": 1}
-        assert await actor.list_watchers() == {"subjects": ["alice"], "total": 1}
-        assert WATCHERS_KEY in state.store
+    async def test_watching_registers_the_subject(self, watch_index: WatchIndexActor) -> None:
+        assert await watch_index.watch({"subject": "alice"}) == {"added": True, "total": 1}
+        assert await watch_index.list_watchers(_now()) == {"subjects": ["alice"], "total": 1}
 
     @pytest.mark.asyncio
-    async def test_watching_twice_is_idempotent_rather_than_a_duplicate(self) -> None:
+    async def test_watching_twice_is_idempotent_rather_than_a_duplicate(self, watch_index: WatchIndexActor) -> None:
         """A retried request must not double-list — the `tenant_actor` rule, and the reason a fan-out
         can trust the list it reads."""
-        actor, _ = _index()
-        await actor.watch({"subject": "alice"})
-        assert await actor.watch({"subject": "alice"}) == {"added": False, "total": 1}
-        assert (await actor.list_watchers())["subjects"] == ["alice"]
+        await watch_index.watch({"subject": "alice"})
+        assert await watch_index.watch({"subject": "alice"}) == {"added": False, "total": 1}
+        assert (await watch_index.list_watchers(_now()))["subjects"] == ["alice"]
 
     @pytest.mark.asyncio
-    async def test_unwatching_removes_only_that_subject(self) -> None:
-        actor, _ = _index()
-        await actor.watch({"subject": "alice"})
-        await actor.watch({"subject": "bob"})
-        assert await actor.unwatch({"subject": "alice"}) == {"removed": True, "total": 1}
-        assert (await actor.list_watchers())["subjects"] == ["bob"]
+    async def test_unwatching_removes_only_that_subject(self, watch_index: WatchIndexActor) -> None:
+        await watch_index.watch({"subject": "alice"})
+        await watch_index.watch({"subject": "bob"})
+        assert await watch_index.unwatch({"subject": "alice"}) == {"removed": True, "total": 1}
+        assert (await watch_index.list_watchers(_now()))["subjects"] == ["bob"]
 
     @pytest.mark.asyncio
-    async def test_unwatching_something_unwatched_is_not_an_error(self) -> None:
-        actor, _ = _index()
-        assert await actor.unwatch({"subject": "ghost"}) == {"removed": False, "total": 0}
+    async def test_unwatching_something_unwatched_is_not_an_error(self, watch_index: WatchIndexActor) -> None:
+        assert await watch_index.unwatch({"subject": "ghost"}) == {"removed": False, "total": 0}
 
 
 class _FakeInbox:

@@ -10,9 +10,12 @@ Per-file `pytestmark = pytest.mark.e2e` is the convention, but one forgotten fil
 make an offline run hit a live endpoint. Location decides, so enforce by location.
 """
 
+from __future__ import annotations
+
 import sys
 from collections.abc import Iterator
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 
 # This directory on `sys.path`, so a flat helper beside a suite is importable BY NAME.
@@ -25,6 +28,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 import pytest
+
+
+if TYPE_CHECKING:
+    from byo_scenario import ScenarioRun, Tenant
 
 
 _HERE = Path(__file__).parent
@@ -42,6 +49,32 @@ from require_live import pytest_addoption, pytest_sessionfinish  # noqa: E402 â€
 
 
 __all__ = ["pytest_addoption", "pytest_sessionfinish"]
+
+
+@pytest.fixture(scope="session")
+def byo_tenant() -> Iterator[Tenant]:
+    """The scratch tenant the bring-your-own scenario runs on (`byo_scenario`), made once and removed at session end.
+
+    Imported here rather than at the top: an offline collection of this directory loads this file, and it must not
+    load a Lance client to collect suites it then deselects.
+    """
+    from byo_scenario import Tenant
+
+    made = Tenant()
+    try:
+        made.create()
+        yield made
+    finally:
+        left = made.tear_down()
+        assert not left, f"the scratch tenant {made.project} was not fully removed: {left}"
+
+
+@pytest.fixture(scope="session")
+def byo_run(byo_tenant: Tenant) -> ScenarioRun:
+    """One drive of the scenario on the session's tenant, read by every module that asserts on it."""
+    from byo_scenario import drive
+
+    return drive(byo_tenant)
 
 
 @pytest.fixture(scope="session", autouse=True)

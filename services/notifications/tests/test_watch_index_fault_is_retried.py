@@ -23,6 +23,7 @@ delivering the author's own notification.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -31,18 +32,22 @@ from notifications import proxies
 from notifications.proxies import WatchIndexUnavailable, watchers_of
 
 
+#: The instant a lookup asks about: when the run happened.
+_WHEN = datetime(2026, 8, 25, 12, 0, tzinfo=UTC)
+
+
 @pytest.mark.asyncio
 async def test_a_TRANSPORT_fault_is_raised_so_the_handler_can_retry(monkeypatch: pytest.MonkeyPatch) -> None:
     """THE WEDGE. Returning [] here is the bus lane deciding this project has no watchers."""
 
     class _Down:
-        async def list_watchers(self) -> dict[str, Any]:
+        async def list_watchers(self, _payload: dict[str, Any]) -> dict[str, Any]:
             raise ConnectionError("actor host is rebalancing")
 
     monkeypatch.setattr(proxies, "watch_index_for", lambda _p: _Down())
 
     with pytest.raises(WatchIndexUnavailable):
-        await watchers_of("acme")
+        await watchers_of("acme", _WHEN)
 
 
 @pytest.mark.asyncio
@@ -55,7 +60,7 @@ async def test_an_UNUSABLE_project_id_is_still_absorbed(monkeypatch: pytest.Monk
 
     monkeypatch.setattr(proxies, "watch_index_for", _refuse)
 
-    assert await watchers_of("") == []
+    assert await watchers_of("", _WHEN) == []
 
 
 @pytest.mark.asyncio
@@ -63,26 +68,24 @@ async def test_a_project_with_NO_watchers_still_answers_empty(monkeypatch: pytes
     """The case the swallow used to be indistinguishable from. It must stay an ordinary empty answer."""
 
     class _Empty:
-        async def list_watchers(self) -> dict[str, Any]:
+        async def list_watchers(self, _payload: dict[str, Any]) -> dict[str, Any]:
             return {"subjects": []}
 
     monkeypatch.setattr(proxies, "watch_index_for", lambda _p: _Empty())
 
-    assert await watchers_of("acme") == []
+    assert await watchers_of("acme", _WHEN) == []
 
 
 @pytest.mark.asyncio
 async def test_the_handler_answers_RETRY_rather_than_acking_a_partial_fan_out(monkeypatch: pytest.MonkeyPatch) -> None:
     """The whole point, at the seam that decides. Bounded by the subscription's deadLetterTopic, so a
     fault that does not heal parks visibly instead of redelivering forever."""
-    from datetime import UTC, datetime
-
     from notifications.api.fanout import audience_for
     from notifications.api.lineage_events import Notifiable
     from notifications.models import InboxPointer, NotificationReason
 
     class _Down:
-        async def list_watchers(self) -> dict[str, Any]:
+        async def list_watchers(self, _payload: dict[str, Any]) -> dict[str, Any]:
             raise ConnectionError("state store failover")
 
     monkeypatch.setattr(proxies, "watch_index_for", lambda _p: _Down())
@@ -120,8 +123,6 @@ class TestMembershipIsRECHECKEDAtDelivery:
 
     @staticmethod
     def _notice() -> Any:
-        from datetime import UTC, datetime
-
         from notifications.api.lineage_events import Notifiable
         from notifications.models import InboxPointer, NotificationReason
 
@@ -143,7 +144,7 @@ class TestMembershipIsRECHECKEDAtDelivery:
         """THE WEDGE. Nothing re-asked, so the watch outlived the membership that justified it."""
         from notifications.api.fanout import audience_for
 
-        async def _watchers(_project: str) -> list[str]:
+        async def _watchers(_project: str, _at: datetime) -> list[str]:
             return ["bob"]
 
         async def _never_a_member(_subject: str, _project: str) -> bool:
@@ -157,7 +158,7 @@ class TestMembershipIsRECHECKEDAtDelivery:
     async def test_a_CURRENT_member_is_still_delivered_to(self) -> None:
         from notifications.api.fanout import audience_for
 
-        async def _watchers(_project: str) -> list[str]:
+        async def _watchers(_project: str, _at: datetime) -> list[str]:
             return ["bob"]
 
         async def _is_a_member(_subject: str, _project: str) -> bool:
@@ -172,7 +173,7 @@ class TestMembershipIsRECHECKEDAtDelivery:
         from notifications.api.fanout import audience_for
         from service_kit.exceptions import ServiceUnavailableError
 
-        async def _watchers(_project: str) -> list[str]:
+        async def _watchers(_project: str, _at: datetime) -> list[str]:
             return ["bob"]
 
         async def _down(_subject: str, _project: str) -> bool:
@@ -189,7 +190,7 @@ class TestMembershipIsRECHECKEDAtDelivery:
 
         asked: list[str] = []
 
-        async def _watchers(_project: str) -> list[str]:
+        async def _watchers(_project: str, _at: datetime) -> list[str]:
             return []
 
         async def _record(subject: str, _project: str) -> bool:

@@ -115,11 +115,16 @@ helm repo update >/dev/null && helm dependency build ./chart >/dev/null
 # The governed stack's values, shared with scripts/install_from_empty.sh so the two lanes install one shape.
 # shellcheck source=scripts/stack_values.sh
 . "$(dirname "$0")/stack_values.sh"
-# THIS LANE'S OWN EXTRAS OFF: no suite it runs reaches flows or notifications, and on a 4-core runner their two builds
-# and two sidecar pods are what the lane's budget goes to. Measured 2026-10-16: with them, the fixture installs ran
-# beside four builds and Dapr's took 90 s instead of 13 s. Scaled to zero, the render schedules no pod for either, so
-# the side-loaded set below asks for neither image; install_from_empty keeps both, since it proves every workload starts.
-HELM_SET+=(--set services.flows.replicas=0 --set services.notifications.replicas=0)
+# FLOWS OFF: no suite this lane runs reaches it, and on a 4-core runner its build and sidecar pod are what the lane's
+# budget goes to (measured 2026-10-16: with flows and notifications on, the fixture installs ran beside four builds and
+# Dapr's took 90 s instead of 13 s). Scaled to zero, the render schedules no pod for it, so the side-loaded set below
+# asks for no flows image; install_from_empty keeps it, since it proves every workload starts. NOTIFICATIONS STAYS ON:
+# criterion 4's module reads the inboxes the shared scenario fills (tests/e2e-py/test_events_are_correct.py).
+#
+# A VENDED CREDENTIAL NAMES THE ADDRESS THE RUNNER REACHES THE STORE AT, the port-forward below: the scenario's stock
+# client writes from this runner to the endpoint the catalog vends, and the catalog's own `rask-minio:9000` resolves
+# only in the cluster (`vending.endpoint`, LH-489). Every other suite here brings its own storage options.
+HELM_SET+=(--set services.flows.replicas=0 --set-string vending.endpoint=http://localhost:9900)
 
 # EVERY SIDE-LOADED IMAGE THE CHART SCHEDULES, derived from the render rather than a list kept here.
 # `image.localImages=true` means a bare `<component>:dev` resolves on the NODE, so an image this
@@ -273,7 +278,7 @@ JOB_LOGS="$(mktemp)"
 # Recreate the app pods. Pod DELETE, not `rollout restart`: on a re-run against an existing cluster a rebuilt
 # same-tag image only lands on a freshly-scheduled pod, and delete forces that reschedule to pull the just-loaded
 # digest from the node cache (IfNotPresent) — the kind same-tag staleness fix (memory: kind-same-tag-image-gotcha).
-for d in catalog lineage; do
+for d in catalog lineage notifications; do
   kubectl delete pods -l "app.kubernetes.io/instance=$RELEASE,app.kubernetes.io/component=$d" \
     --ignore-not-found >/dev/null 2>&1 || true
 done
@@ -284,6 +289,19 @@ done
 kubectl rollout status deploy/"$RELEASE"-openfga --timeout=300s
 kubectl rollout status deploy/"$RELEASE"-catalog --timeout=300s
 kubectl rollout status deploy/"$RELEASE"-lineage --timeout=300s
+kubectl rollout status deploy/"$RELEASE"-notifications --timeout=300s
+# A ROLLED-OUT SUBSCRIBER IS NOT YET A LISTENING ONE: its sidecar registers its subscriptions and the inbox actors'
+# host after the pod is Ready, and the inbox suite needs both. The sidecar's own `/v1.0/metadata` says when, as
+# scripts/e2e_live.sh's settle gate reads it.
+for i in $(seq 1 60); do
+  kubectl exec "deploy/$RELEASE-notifications" -c notifications -- python -c '
+import json, sys, urllib.request
+m = json.load(urllib.request.urlopen("http://127.0.0.1:3500/v1.0/metadata", timeout=5))
+sys.exit(0 if {s.get("topic") for s in (m.get("subscriptions") or [])} and (m.get("actorRuntime") or {}).get("hostReady") else 1)
+' >/dev/null 2>&1 && { echo "   notifications' sidecar subscribed and hosting its actors"; break; }
+  [ "$i" = "60" ] && { echo "!! notifications' sidecar never registered its subscriptions and actors"; exit 1; }
+  sleep 3
+done
 
 # Every running container of a side-loaded image must serve the archive this run built — the definitive proof the whole
 # suite tests fresh code, not a stale same-tag image (the failure mode this guard exists for). A container's `imageID`
@@ -317,6 +335,9 @@ kubectl port-forward "svc/$RELEASE-lineage" 18000:8000 >/tmp/pf-lin.log 2>&1 & P
 kubectl port-forward "svc/$RELEASE-minio"  9900:9000 >/tmp/pf-rfs.log 2>&1 & PF_PIDS+=($!)
 kubectl port-forward "svc/$RELEASE-dex"     5556:5556 >/tmp/pf-dex.log 2>&1 & PF_PIDS+=($!)
 kubectl port-forward "svc/$RELEASE-openfga" 8081:8080 >/tmp/pf-fga.log 2>&1 & PF_PIDS+=($!)
+kubectl port-forward "svc/$RELEASE-notifications" 8850:8850 >/tmp/pf-not.log 2>&1 & PF_PIDS+=($!)
+# The bus `nats.url` names (stack_values.sh): criterion 4's module reads its streams and publishes on it.
+kubectl port-forward svc/rask-nats 4222:4222 >/tmp/pf-nats.log 2>&1 & PF_PIDS+=($!)
 for i in $(seq 1 40); do
   c=$(curl -s -o /dev/null -w '%{http_code}' -m2 http://localhost:2333/livez 2>/dev/null || true)
   l=$(curl -s -o /dev/null -w '%{http_code}' -m2 http://localhost:18000/livez 2>/dev/null || true)
@@ -468,6 +489,11 @@ export LANCE_E2E_BASE_A="$BASE_A"
 export LANCE_E2E_BASE_B="$BASE_B"
 export LANCE_E2E_OUTBOX_URI="s3://lance-catalog/_lineage_outbox"
 export LANCE_E2E_RELAY_BINDING=lineage-relay-cron
+# The bring-your-own scenario and criterion 4's module: the notifications service under the release's API prefix, the
+# bus, and the release whose ServiceAccounts sign.
+export LANCE_E2E_NOTIFICATIONS_URL="http://localhost:8850$(kubectl get cm "$RELEASE-config" -o jsonpath='{.data.RASK_API_PREFIX}')"
+export LANCE_E2E_NATS_URL=nats://localhost:4222
+export LANCE_E2E_RELEASE="$RELEASE"
 
 PYTHONPATH=services uv run pytest \
   tests/e2e-py/test_credential_isolation_e2e.py \
@@ -477,6 +503,8 @@ PYTHONPATH=services uv run pytest \
   tests/e2e-py/test_outbox_crash_e2e.py \
   tests/e2e-py/test_maintenance_s3_e2e.py \
   tests/e2e-py/test_track_a_acceptance.py \
+  tests/e2e-py/test_a_bring_your_own_pipeline_runs_end_to_end.py \
+  tests/e2e-py/test_events_are_correct.py \
   -v -rs -p no:cacheprovider | tee /tmp/e2e-stack.log
 
 # NO SILENT SKIPS. Every suite above is skip-guarded on "is the stack reachable?" — which is the right

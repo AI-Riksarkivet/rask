@@ -211,7 +211,7 @@ def _told(event: dict[str, Any], *, watchers: list[str]) -> dict[str, list[tuple
     ``(reason, object)`` rows."""
     inboxes = _Inboxes()
 
-    async def _watching(project: str) -> list[str]:
+    async def _watching(project: str, _at: datetime) -> list[str]:
         return watchers if project == PROJECT else []
 
     status = asyncio.run(

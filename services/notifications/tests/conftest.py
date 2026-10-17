@@ -27,10 +27,12 @@ env above, once so the next suite does not inherit this one's settings object.
 
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
 from notifications.config import get_notifications_settings
+from notifications.watch_actor import WatchIndexActor
 
 
 @pytest.fixture(autouse=True)
@@ -46,6 +48,32 @@ def _notifications_env() -> Iterator[None]:
         get_notifications_settings.cache_clear()
         yield
         get_notifications_settings.cache_clear()
+
+
+class _ActorState:
+    """An actor's state manager in memory: the contract an actor reads and writes its state through."""
+
+    def __init__(self) -> None:
+        self.store: dict[str, str] = {}
+
+    async def try_get_state(self, key: str) -> tuple[bool, str | None]:
+        return (key in self.store, self.store.get(key))
+
+    async def set_state(self, key: str, value: str) -> None:
+        self.store[key] = value
+
+    async def save_state(self) -> None:
+        return None
+
+
+@pytest.fixture
+def watch_index() -> WatchIndexActor:
+    """One project's real `WatchIndexActor`, over an in-memory state manager."""
+    actor = WatchIndexActor.__new__(WatchIndexActor)
+    # Cast rather than ignore: the fake satisfies the manager's contract structurally, and the SDK's generic handle is
+    # not something a test should have to construct. Same shape as `test_inbox_actor.py`.
+    actor._state_manager = cast(Any, _ActorState())
+    return actor
 
 
 @pytest.fixture

@@ -71,6 +71,12 @@ MAINT="$(svc "$RELEASE-maintenance")" || true
 NOTIFICATIONS="$(svc "$RELEASE-notifications")" || true
 # The notifications service mounts its routers under the fleet's API prefix, read from the release's own config.
 API_PREFIX="$(kubectl get cm "$RELEASE-config" -o jsonpath='{.data.RASK_API_PREFIX}' 2>/dev/null || true)"
+# THE BUS THE RELEASE'S PUB/SUB COMPONENTS DIAL (`nats.url`), read off one of them and resolved to that Service's
+# ClusterIP like every address above: the NATS fixture's `rask-nats` on a dev estate. A bus that is no Service in this
+# cluster resolves to nothing, and the suites that read the bus skip.
+NATS_HOST="$(kubectl get components.dapr.io lineage-pubsub -o jsonpath='{.spec.metadata[?(@.name=="natsURL")].value}' 2>/dev/null | sed -E 's#^nats://([^:/.]+).*#\1#' || true)"
+NATS=""
+[ -n "$NATS_HOST" ] && NATS="$(svc "$NATS_HOST")" || true
 [ -n "$CATALOG" ] || fail "no $RELEASE-catalog service — is the release deployed?"
 printf '   catalog=%s lineage=%s edge=%s s3=%s\n' "$CATALOG" "$LINEAGE" "$EDGE" "$S3"
 
@@ -133,6 +139,7 @@ url LANCE_E2E_FGA             "$FGA"
 url LANCE_E2E_GREPTIME_URL    "$GREPTIME"
 url LANCE_E2E_MAINTENANCE_URL "$MAINT"
 url LANCE_E2E_NOTIFICATIONS_URL "$NOTIFICATIONS" "$API_PREFIX"
+if [ -n "$NATS" ]; then export LANCE_E2E_NATS_URL="nats://$NATS"; else _missing="$_missing LANCE_E2E_NATS_URL"; fi
 [ -z "$_missing" ] || printf '   NOT DISCOVERED (their suites will skip):%s\n' "$_missing"
 export LANCE_E2E_TOKEN="$ALICE"
 export LANCE_E2E_ADMIN_TOKEN="$ALICE"
@@ -210,6 +217,9 @@ export LANCE_E2E_DEX_SECRET="$DEX_SECRET"
 export LANCE_E2E_PROJECT="${LANCE_E2E_PROJECT:-acme}"
 export LANCE_E2E_DELIM='$'
 export LANCE_E2E_RELEASE="$RELEASE"
+# The namespace the release runs in: its ServiceAccounts are the services' signing identities.
+LANCE_E2E_RELEASE_NAMESPACE="$(kubectl config view --minify -o jsonpath='{..namespace}' 2>/dev/null || true)"
+export LANCE_E2E_RELEASE_NAMESPACE="${LANCE_E2E_RELEASE_NAMESPACE:-default}"
 export LANCE_E2E_OUTBOX_URI="s3://lance-catalog/_lineage_outbox"
 export LANCE_E2E_RELAY_BINDING=lineage-relay-cron
 export LANCE_E2E_MAINTENANCE_BINDING=maintenance-cron

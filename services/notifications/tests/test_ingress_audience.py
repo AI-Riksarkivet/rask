@@ -14,6 +14,7 @@ fan-out does with the answers, which is where the rules either hold or quietly s
 """
 
 import logging
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
@@ -24,6 +25,7 @@ from notifications.api.fanout import audience_for, fan_out
 from notifications.api.lineage_events import LineageRunEvent, Notifiable, notifiable
 from notifications.api.visibility import METADATA_RELATION, NOTIFY_RELATION, Visibility
 from notifications.proxies import TypedActorProxy
+from notifications.watch_actor import WatchIndexActor
 from service_kit.governed.decider import OpenFgaDecider
 
 
@@ -35,21 +37,21 @@ WIRED = cast("OpenFgaClient", object())
 OPEN = Visibility(decider=None, enabled=False)
 
 
-def _event(*, author: str = "alice", outputs: list[str] | None = None, project: str | None = None) -> dict[str, Any]:
+def _event(*, author: str = "alice", outputs: list[str] | None = None, project: str | None = None, at: datetime | None = None) -> dict[str, Any]:
     facets: dict[str, Any] = {"author": {"name": author, "sub": author}}
     if project is not None:
         # The same `lance` facet `run_id` rides — the producer stamps the tenant there.
         facets["lance"] = {"project": project}
     return {
         "eventType": "FAIL",
-        "eventTime": "2026-08-09T12:00:00+00:00",
+        "eventTime": (at or datetime(2026, 8, 9, 12, 0, tzinfo=UTC)).isoformat(),
         "run": {"runId": "run-1", "facets": facets},
         "outputs": [{"namespace": "silver", "name": name} for name in (outputs if outputs is not None else ["silver$pages"])],
     }
 
 
-def _notice(*, author: str = "alice", outputs: list[str] | None = None, project: str | None = None) -> Notifiable:
-    notice = notifiable(LineageRunEvent.model_validate(_event(author=author, outputs=outputs, project=project)))
+def _notice(*, author: str = "alice", outputs: list[str] | None = None, project: str | None = None, at: datetime | None = None) -> Notifiable:
+    notice = notifiable(LineageRunEvent.model_validate(_event(author=author, outputs=outputs, project=project, at=at)))
     assert notice is not None
     return notice
 
@@ -122,23 +124,36 @@ def _governed(monkeypatch: pytest.MonkeyPatch, allowed: dict[str, set[str]]) -> 
 
 
 @pytest.mark.asyncio
-async def test_a_project_watch_widens_the_audience_but_never_replaces_the_author() -> None:
-    """v2 targeting: author UNION watchers, author FIRST — the one recipient guaranteed to exist."""
+@pytest.mark.parametrize(
+    ("ran", "audience"),
+    [
+        pytest.param(timedelta(minutes=1), ("alice", "bob", "carol"), id="a-run-after-the-watch-began-reaches-the-watchers"),
+        pytest.param(-timedelta(minutes=1), ("alice",), id="a-run-before-the-watch-began-reaches-only-its-author"),
+    ],
+)
+async def test_a_watch_widens_the_audience_to_runs_after_it_began_and_never_replaces_the_author(
+    watch_index: WatchIndexActor, ran: timedelta, audience: tuple[str, ...]
+) -> None:
+    """v2 targeting: author UNION the project's watchers, author FIRST — the one recipient guaranteed to exist. The
+    watchers are those whose watch had begun when the run happened, read off the real watch index: every run arrives
+    twice, on the bus and again on the reconciler's tick, so whichever delivers it, and however late, both must name
+    the same watchers ([[XC-094]])."""
+    await watch_index.watch({"subject": "bob"})
+    await watch_index.watch({"subject": "carol"})
+    began = datetime.now(UTC)
 
-    async def watchers(project: str) -> list[str]:
+    async def watchers(project: str, at: datetime) -> list[str]:
         assert project == "acme"
-        return ["bob", "carol"]
+        return list((await watch_index.list_watchers({"at": at.isoformat()}))["subjects"])
 
-    audience = await audience_for(_notice(author="alice", project="acme"), watchers=watchers)
-
-    assert audience == ("alice", "bob", "carol")
+    assert await audience_for(_notice(author="alice", project="acme", at=began + ran), watchers=watchers) == audience
 
 
 @pytest.mark.asyncio
 async def test_an_author_who_also_watches_is_told_once() -> None:
     """Deduped, so a project owner who watches their own project does not get two pointers."""
 
-    async def watchers(_project: str) -> list[str]:
+    async def watchers(_project: str, _at: datetime) -> list[str]:
         return ["alice", "bob"]
 
     assert await audience_for(_notice(author="alice", project="acme"), watchers=watchers) == ("alice", "bob")
@@ -152,7 +167,7 @@ async def test_a_run_with_no_project_reaches_its_author_and_no_watchers() -> Non
     notifying the wrong one.
     """
 
-    async def watchers(_project: str) -> list[str]:
+    async def watchers(_project: str, _at: datetime) -> list[str]:
         raise AssertionError("a project-less run must not resolve watchers at all")
 
     assert await audience_for(_notice(author="alice"), watchers=watchers) == ("alice",)

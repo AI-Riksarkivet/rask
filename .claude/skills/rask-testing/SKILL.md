@@ -61,6 +61,11 @@ consequences it does not spell out.
   A change that deletes a suite deletes its marker, its target, its `E2E_SUITES` entry and every
   script line that names it: pytest exits 4 on a path that does not exist and 5 on a marker no test
   carries, and either kills the lane.
+- **Phase 1's acceptance reads one drive.** A `phase1` module (one per criterion, XC-090) asserts on the
+  bring-your-own scenario `tests/e2e-py/byo_scenario.py` drives once per session (`conftest.py`'s `byo_tenant`
+  and `byo_run`), so a session running several modules reads one tenant and one run; add what a new criterion
+  needs to `ScenarioRun` rather than driving again. The bus is read through `tests/e2e-py/bus.py`, by sequence,
+  with no consumer of its own. `make e2e-phase1` and the e2e-stack lane run them.
 - **A runner suite runs only from the Makefile.** No root testpath reaches `runners/`. `make test`
   and `make test-slow` loop over every `runners/*/tests`, running `uv run --frozen pytest` from inside
   that runner's directory, so a new `runners/<name>/tests` runs in both with no edit; `--frozen` needs

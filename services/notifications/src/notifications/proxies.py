@@ -15,6 +15,7 @@ Every call into an inbox goes through :func:`inbox_for`, and every inbox id thro
 
 import logging
 from collections.abc import Awaitable, Callable
+from datetime import datetime
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
@@ -162,8 +163,8 @@ class WatchIndexUnavailable(RuntimeError):
     """
 
 
-async def watchers_of(project_id: str) -> list[str]:
-    """The subjects watching `project_id`.
+async def watchers_of(project_id: str, at: datetime) -> list[str]:
+    """The subjects watching `project_id` at the instant `at`: a run's, so both lanes that deliver it agree.
 
     RAISES `WatchIndexUnavailable` when the index cannot be read, so the bus handler answers RETRY.
     This wrapper used to absorb every fault and return `[]`, on the stated ground that "a watcher-index
@@ -180,7 +181,7 @@ async def watchers_of(project_id: str) -> list[str]:
     and wrong for a transient fault.
     """
     try:
-        result = await watch_index_for(project_id).list_watchers()
+        result = await watch_index_for(project_id).list_watchers({"at": at.isoformat()})
     except ValueError:
         logger.exception("watch_index_unusable_project", extra={"project_id": project_id})
         return []

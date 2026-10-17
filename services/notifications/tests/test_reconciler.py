@@ -394,7 +394,7 @@ async def test_the_feed_lane_tells_a_project_watcher_not_only_the_author() -> No
     plane = _Plane()
     store, _ = _store(8)
 
-    async def watchers_of(project: str) -> list[str]:
+    async def watchers_of(project: str, _at: datetime) -> list[str]:
         return ["carol"] if project == "p1" else []
 
     await reconcile(

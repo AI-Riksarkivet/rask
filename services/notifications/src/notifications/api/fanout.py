@@ -19,6 +19,7 @@ is the same (RETRY), and routing it through the same counter keeps one path inst
 
 import logging
 from collections.abc import Awaitable, Callable, Sequence
+from datetime import datetime
 
 from opentelemetry import trace
 from pydantic import BaseModel, ConfigDict
@@ -59,9 +60,10 @@ class FanoutResult(BaseModel):
         return self.failed > 0
 
 
-#: How a caller resolves a project's watchers. A CALLABLE rather than a proxy import so the fan-out
-#: stays testable without a sidecar — the same seam `InboxOpener` already is.
-type WatcherLookup = Callable[[str], Awaitable[Sequence[str]]]
+#: How a caller resolves who was watching a project at an instant: the run's, so both lanes that deliver it name
+#: the same watchers. A CALLABLE rather than a proxy import so the fan-out stays testable without a sidecar — the
+#: same seam `InboxOpener` already is.
+type WatcherLookup = Callable[[str, datetime], Awaitable[Sequence[str]]]
 
 #: Re-checks one subject's `project#member` at DELIVERY. Raises on an authorization outage — the
 #: caller maps that to RETRY, because a silent False is indistinguishable from a revoked membership,
@@ -83,6 +85,10 @@ async def audience_for(notice: Notifiable, *, watchers: WatcherLookup | None = N
     authorizes anything — every recipient's visibility is re-derived at delivery, which is what makes
     a stale watch harmless rather than a leak.
 
+    THE WATCHERS ARE THOSE WATCHING WHEN THE RUN HAPPENED (`occurred_at`), never when it is delivered.
+    Every run arrives twice, on the bus and again on the reconciler's tick, so an audience read at delivery
+    would hand a watch begun between the two the work from before it (`watch_actor`, [[XC-094]]).
+
     ORDER IS AUTHOR-FIRST AND DEDUPED, so an author who also watches their own project is told once,
     and the one recipient guaranteed to exist is the one attempted first. `watchers=None` (and a
     project-less run) is v1's exact behaviour, which is what a lookup failure degrades to: a
@@ -100,7 +106,7 @@ async def audience_for(notice: Notifiable, *, watchers: WatcherLookup | None = N
     if notice.originator and notice.originator not in audience:
         audience.append(notice.originator)
     if watchers is not None and notice.project:
-        for subject in await watchers(notice.project):
+        for subject in await watchers(notice.project, notice.delivery.occurred_at):
             if subject in audience:
                 continue
             # RE-CHECKED AT DELIVERY, which three docstrings in this plane already claimed and none

@@ -65,7 +65,11 @@ self-emitted lane or the post-mortem one.
 
 `AUTHOR` needs no registry and no opt-in — you may always be told about your own run
 (`fanout.py:87`). `WATCH` is an explicit `project#member`-gated opt-in: **membership gates watching and
-never implies it**, so no audience widens by default.
+never implies it**, so no audience widens by default. **A watch covers what happens after it began.** The
+`WatchIndexActor` records when each watch began, and the fan-out asks who was watching at the run's
+`occurred_at`, never at delivery. Every run arrives twice, on the bus and again on the reconciler's tick, so an
+audience read at delivery would hand a watch begun between the two the work from before it (measured on the
+e2e-stack lane, [[XC-094]]); keyed on the run's time, both lanes name the same people.
 
 **Q6 needs ONE ACTION PER EDGE, not a generic one.** The panel renders the reason as each row's
 user-visible label, so a distinct verb is not decoration — telling somebody their reviewed work was
