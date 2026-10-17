@@ -82,7 +82,8 @@ def main() -> int:
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap = argparse.ArgumentParser(description="Build Swedish topic layers on chunks via Toponymy.")
     ap.add_argument("--db", required=True, help="Lance DB dir (contains chunks.lance).")
-    ap.add_argument("--llm-url", default=os.getenv("MEDIA_TOPICS_LLM_URL", "http://127.0.0.1:8003/v1"))
+    llm_url = os.getenv("MEDIA_TOPICS_LLM_URL", "").strip() or "http://127.0.0.1:8003/v1"
+    ap.add_argument("--llm-url", default=llm_url)
     ap.add_argument("--llm-model", default=os.getenv("MEDIA_TOPICS_LLM_MODEL", "google/gemma-4-31B-it"))
     ap.add_argument("--embed-url", default=os.getenv("MEDIA_TOPICS_EMBED_URL", "http://127.0.0.1:8001/v1"))
     ap.add_argument(
@@ -99,11 +100,6 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def _build(args: argparse.Namespace) -> int:
     """The whole topic build; returns the number of chunks written."""
-    # Point the OpenAI client at the local Gemma via env (belt-and-suspenders with
-    # the explicit base_url below); the embedder's explicit :8001 still wins for it.
-    os.environ["OPENAI_API_KEY"] = "local"
-    os.environ["OPENAI_BASE_URL"] = args.llm_url
-
     import lance
     import pyarrow as pa
     from toponymy import KeyphraseBuilder, Toponymy, ToponymyClusterer
