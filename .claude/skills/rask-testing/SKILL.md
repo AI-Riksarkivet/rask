@@ -40,7 +40,7 @@ reverted, and the commit message carries the delta.
 | One member's code, through its app or public API  | `packages/<m>/tests`, `services/<m>/tests`                                                      |
 | Several members in one flow, or a fixture from `tests/integration/conftest.py` (`real_ns_client`) | `tests/integration`: a conftest's fixtures reach only the tests beneath it |
 | The rendered chart, or a fixture's render         | `tests/unit`, through `tests/unit/chart_render.py` (`render_fixture` for `deploy/fixtures/<name>`) |
-| A deployed stack                                  | `tests/e2e-py`, run by name from a lane: § Wiring                                               |
+| A deployed stack                                  | `tests/e2e-py`, run by the e2e-stack lane unless it carries a marker the lane leaves out: § Wiring |
 | A sealed runner's code                            | `runners/<name>/tests`, under that runner's own `pyproject.toml`, run by the Makefile's runner loop: § Wiring |
 
 ## Wiring
@@ -52,12 +52,16 @@ consequences it does not spell out.
   the moment it exists; only a new top-level `tests/<x>/` needs adding by hand. Coverage's
   `source = ["services", "packages"]` with `[tool.coverage.report] include_namespace_packages` counts
   every member's `src` in the denominator with no edit.
-- **A live suite runs only when something names it, and nothing offline checks that it is named.**
-  Every offline lane deselects `e2e`. A new `tests/e2e-py` file needs a per-suite marker registered in
-  the root `pyproject.toml` with a `make e2e-<suite>` target (listed in `E2E_SUITES`), or its path in
-  `ci.yml`, a `.dagger/*.go` lane or a `scripts/*.sh`. A `make e2e-<suite>` target alone is not CI: CI
-  runs only the files `scripts/e2e_stack.sh` and `.dagger/*.go` name.
-  `tests/unit/test_e2e_collection_gate.py` checks only that every `tests/e2e-py/test_*.py` collects.
+- **The e2e-stack lane runs every `tests/e2e-py` module it can serve** (ADR 0167). Every offline lane
+  deselects `e2e`; the lane's first session selects by the markers a module does NOT carry (`phase1`,
+  `nats_auth`, `observability`, `edge`, `media_catalog`, `user_state`, each with its reason in
+  `scripts/e2e_stack.sh`), under `--require-live`, so a new module runs on push the day it lands and one
+  the lane cannot serve fails the lane. A module that needs what the lane does not stand up gets a
+  per-suite marker registered in the root `pyproject.toml` with a `make e2e-<suite>` target (listed in
+  `E2E_SUITES`), the lane's exclusion with its reason, and either the lane that runs it (`ci.yml`, a
+  `.dagger/*.go` lane) or the reason it runs only against a deployed estate. A `make e2e-<suite>` target
+  alone is not CI. `tests/unit/test_e2e_collection_gate.py` checks only that every
+  `tests/e2e-py/test_*.py` collects.
   A change that deletes a suite deletes its marker, its target, its `E2E_SUITES` entry and every
   script line that names it: pytest exits 4 on a path that does not exist and 5 on a marker no test
   carries, and either kills the lane.
@@ -117,9 +121,10 @@ consequences it does not spell out.
 | `make test-slow`                                  | `-m "not e2e"`, then every runner suite unfiltered                                                                |
 | `make coverage`                                   | `-m "not e2e and not slow" --cov`, on request only                                                                |
 | CI: `dagger call test` (`.dagger/test.go`)        | the `make test` marker filter, serially, with `--timeout=300 --timeout-method=thread`, helm installed. **No runner suite** |
-| CI: `dagger call auth-chain`, `dagger call governance-chain` | a real Dex, OpenFGA and catalog as Dagger services (plus lineage for `governance-chain`), asserting through `scripts/auth_chain.sh` and `tests/e2e-py/test_governance_e2e.py` respectively |
-| CI: `dagger call nats-auth` (= `make nats-auth`, ms-gates leg `nats-auth`) | `tests/e2e-py/test_nats_admits_each_client_only_to_its_own_subjects.py` (marker `nats_auth`): the NATS fixture's nats-server in operator mode with test-only nsc keys, the permission table read off the render's dev seed, every user's call set, foreign and credential-less publishes refused, and one real daprd 1.18.1 per component shape, judged by the broker's log ([[XC-078]]) |
-| CI: `e2e-stack` (= `make e2e-ci`) | against a stack the lane brings up, three sessions under `--require-live`: the `tests/e2e-py` files named in `scripts/e2e_stack.sh`, then Phase 1's acceptance (`-m phase1 --chaos --keep-drive`), then its soak at once (`-m soak`) |
+| CI: `dagger call auth-chain`, `dagger call governance-chain` | a real Dex, OpenFGA and catalog as Dagger services on RustFS (plus lineage for `governance-chain`), asserting through `scripts/auth_chain.sh` and `tests/e2e-py/test_governance_e2e.py` (under `--require-live`) respectively |
+| CI: `dagger call rustfs-lifecycle`, `dagger call smoke-rustfs` | `tests/e2e-py/test_e2e.py` under `--require-live` against a catalog whose bytes are on RustFS, and `scripts/smoke_rustfs.py` through `packages/storage` |
+| CI: `dagger call nats-auth` (= `make nats-auth`, ms-gates leg `nats-auth`) | `tests/e2e-py/test_nats_admits_each_client_only_to_its_own_subjects.py` (marker `nats_auth`) under `--require-live`: the NATS fixture's nats-server in operator mode with test-only nsc keys, the permission table read off the render's dev seed, every user's call set, foreign and credential-less publishes refused, and one real daprd 1.18.1 per component shape, judged by the broker's log ([[XC-078]]) |
+| CI: `e2e-stack` (= `make e2e-ci`) | against a stack the lane brings up, three sessions under `--require-live`: every `tests/e2e-py` module carrying none of the markers the lane leaves out, then Phase 1's acceptance (`-m phase1 --chaos --keep-drive`), then its soak at once (`-m soak`) |
 | `make fga-test` (part of `make check`)            | the OpenFGA model's own `.fga.yaml` suite                                                                         |
 | `make e2e-<suite>`, `make e2e-live`               | `tests/e2e-py` against a stack already deployed: one marker at the addresses you pass, or `-m e2e` against the k3s release |
 

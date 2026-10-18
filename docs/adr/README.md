@@ -179,3 +179,4 @@ before they had a record here; each names its source document and the date of th
 | [0164](0164-a-stock-client-commits-on-a-branch-through-create-table-version.md) | LH-490 | A stock client commits on a branch through `CreateTableVersion`; `CreateTableBranch` creates it (2026-10-15) |
 | [0165](0165-the-edge-is-the-platforms-gateway-api.md) | XC-150 | The edge is the platform's Gateway: HTTPRoutes with a prefix rewrite, one `RASK_EDGE_URL`, Traefik's Gateway provider in development (2026-10-16) |
 | [0166](0166-a-secret-read-from-the-store-is-re-read-on-a-ttl.md) | XC-082 | A secret read from the store is re-read on a TTL; a service's own S3 key pair is held in the store (2026-10-16) |
+| [0167](0167-the-deployed-estate-is-driven-per-deploy-not-on-a-clock.md) | XC-033 | The deployed estate is driven per deploy, not on a clock; the e2e lane runs every module it can serve (2026-10-18) |

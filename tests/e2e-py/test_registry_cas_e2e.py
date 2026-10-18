@@ -1,4 +1,4 @@
-"""F1 live half — contended registry-create against the DEPLOYED store (RustFS).
+"""F1 live half — contended registry-create against the DEPLOYED store (MinIO, ADR 0063).
 
 ``tests/unit/test_registry_cas.py`` proves the seam's logic (local-FS exclusivity + the boto3
 ``IfNoneMatch`` call shape); THIS suite proves the deployed store actually arbitrates it under
@@ -7,9 +7,9 @@ that ignores the header accepts both PUTs and the tenant-isolation guards are ba
 last-writer-wins, invisibly). Mirrors that suite's tier-2 shape through the REGISTRY seam:
 barrier-gated threads race ``records.create_json`` on one key; exactly one must win per round.
 
-Run: port-forward RustFS + set ``LANCE_E2E_S3_*`` (same env as its sibling). Writes under
-``__cas_stress/`` — the compaction sweep skips ``__`` prefixes, so this never collides with the
-lakehouse or gets GC'd.
+Run: the e2e-stack lane runs it on every push; elsewhere port-forward the store + set ``LANCE_E2E_S3_*`` (same env
+as its sibling). Writes under ``__cas_stress/`` — the compaction sweep skips ``__`` prefixes, so this never collides
+with the lakehouse or gets GC'd.
 """
 
 from __future__ import annotations
@@ -47,7 +47,7 @@ def live_root() -> str:
     try:
         records._s3_client(_SO).head_bucket(Bucket=BUCKET)
     except (ClientError, BotoCoreError) as exc:
-        pytest.skip(f"RustFS bucket {BUCKET!r} unreachable at {ENDPOINT}: {exc}")
+        pytest.skip(f"bucket {BUCKET!r} unreachable at {ENDPOINT}: {exc}")
     return f"s3://{BUCKET}"
 
 

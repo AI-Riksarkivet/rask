@@ -71,9 +71,10 @@ func (m *Rask) NatsAuth(
 		WithEnvVariable("RASK_NATS_AUTH_VALUES", "/opt/nats-auth/values.yaml").
 		// A hang detector, as in Test: a stuck broker or sidecar would otherwise print nothing at all, because
 		// Dagger buffers an exec's output until it completes. The test's measured runtime is under a minute.
+		// `--require-live`: a skip in a lane that stood its stack up is a test that ran nowhere, so it fails the lane.
 		WithExec([]string{
 			"uv", "run", "--no-sync", "pytest", "tests/e2e-py/test_nats_admits_each_client_only_to_its_own_subjects.py",
-			"-m", "nats_auth", "-v", "-p", "no:cacheprovider", "--timeout=600", "--timeout-method=thread",
+			"-m", "nats_auth", "-v", "-rs", "-p", "no:cacheprovider", "--timeout=600", "--timeout-method=thread", "--require-live",
 		}).
 		Stdout(ctx)
 }

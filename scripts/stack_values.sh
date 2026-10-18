@@ -1,5 +1,6 @@
 # The governed stack the live lanes install (scripts/e2e_stack.sh on kind, scripts/install_from_empty.sh on an empty
-# cluster), sourced by both so they install one shape: auth ON, the #3-A/#3-B/#4 flags ON, the heavy extras OFF.
+# cluster), sourced by both so they install one shape: auth ON, the #3-A/#3-B/#4 flags ON, maintenance ON, the
+# telemetry chain and the zones OFF.
 # Expects RELEASE; sets BASE_A, BASE_B, ADMIN_PRINCIPAL and HELM_SET.
 
 # The two data-distribution buckets #3-B spreads fragments across (must be allowlisted in the chart AND
@@ -24,7 +25,8 @@ HELM_SET=(
   --set services.lineage.outbox.enabled=true
   --set services.lineage.relay.enabled=true
   --set observability.enabled=false
-  --set maintenance.enabled=false
+  # Maintenance is a lakehouse component: the e2e lane drives its deployed sweep (tests/e2e-py/test_maintenance_e2e.py).
+  --set maintenance.enabled=true
   --set frontend.enabled=false
   # The lanes drive each service directly, not through an edge, and a lane cluster runs no Gateway.
   --set route.enabled=false

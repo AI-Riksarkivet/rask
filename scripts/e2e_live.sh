@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 # Run the e2e suites against the LIVE estate — the deployed k3s release, not a throwaway cluster.
 #
-# WHY THIS EXISTS. 111 e2e test functions across 30 files gate the estate's headline behaviour, and
-# nothing ran them against what is deployed: `make test` excludes the marker (`-m "not e2e"`), and
-# `scripts/e2e_stack.sh` builds its own kind cluster with a reduced feature set (no observability, no
-# maintenance, no web) precisely so a GitHub runner can hold it. So every "verified live" claim in this
-# repo rested on a manual terminal session — reproducible only by the person who ran it, and by nobody
-# tomorrow. This makes the live estate a target, so a regression is a failing suite instead of a memory.
+# WHY THIS EXISTS. The e2e suites (80 test functions in 26 files, counted 2026-10-18) gate the estate's headline
+# behaviour, and `make test` excludes their marker (`-m "not e2e"`). `scripts/e2e_stack.sh` runs every module it can
+# serve on each push, against a kind cluster it installs from scratch with the telemetry chain, the zones and the
+# Gateway off, so a GitHub runner can hold it. Whether the release actually deployed works is the question it cannot
+# answer: this makes the live estate a target, so a regression there is a failing suite instead of a memory.
+#
+# DRIVEN PER DEPLOY, NOT ON A CLOCK (ADR 0167): each row's read-back runs it after a deploy, and Phase 1's soak reads a
+# kept drive a day later.
 #
 # NOT A REPLACEMENT for `e2e_stack.sh`. That script OWNS its cluster: it installs, seeds, asserts and
 # tears down, which is what CI needs. This one owns NOTHING — it discovers a running release, derives

@@ -94,3 +94,8 @@ in `CLAUDE.md`. Add a line when a trap costs a session, and delete one when the 
   `tests/e2e-py/conftest.py` ("unrecognized arguments"); a flag with no value is unaffected. `scripts/e2e_live.sh`
   roots a pathless run at `tests/e2e-py` (XC-090, 2026-10-17).
 - **A CI gate no local gate mirrors goes red unnoticed.** Rows land straight on `main`, so `dagger call charts` (ms-charts) failed on every push from LH-063 to XC-092: its render args lacked the `auth.oidc.connectors` LH-063's guard began to require. A change that adds a render guard runs `dagger call charts` locally before it lands (XC-095, 2026-10-17).
+- **A pinned pre-release store can refuse a valid request.** RustFS 1.0.0-alpha.60, the governed Dagger lanes' store,
+  answered pyarrow 25's multipart `UploadPart` with `XAmzContentSHA256Mismatch`, so the catalog's boot write of a
+  protection record failed, lineage was never granted its provenance tables, and `governance-chain` was red on every
+  push for two days. RustFS 1.0.1 takes the same write: run rask's own writer against the pinned and a current release
+  before changing rask (XC-033, 2026-10-17).

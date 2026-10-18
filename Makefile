@@ -1023,7 +1023,7 @@ kind-down: ## Delete the rask kind cluster
 e2e-live: ## Run the e2e suites against the DEPLOYED k3s release (discovers addresses + credentials from the cluster)
 	@bash scripts/e2e_live.sh $(ARGS)
 
-e2e-ci: bootstrap ## Governed kind stack + the 5 live e2e suites (CAS/#2/#3-A/#3-B/#4) == CI e2e-stack
+e2e-ci: bootstrap ## Governed kind stack + every tests/e2e-py module it can serve, then Phase 1's acceptance and its soak == CI e2e-stack
 	CLUSTER=$(KIND_CLUSTER) RELEASE=rask bash scripts/e2e_stack.sh
 
 # The tenant-isolation attack (#74's live half), as a STANDALONE target against an already-deployed
@@ -1107,10 +1107,13 @@ e2e-chaos:          ## Criterion 5's dependency-outage drills (XC-095): each tak
 	@test -n "$(LANCE_E2E_NATS_URL)" || { echo "  !! e2e-chaos needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_NOTIFICATIONS_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL, LANCE_E2E_S3, and kubectl on the release's cluster — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
 	@test -n "$(LANCE_E2E_S3)" || { echo "  !! e2e-chaos needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_NOTIFICATIONS_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL, LANCE_E2E_S3, and kubectl on the release's cluster — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
 	LANCE_E2E_CATALOG_URL=$(LANCE_E2E_CATALOG_URL) LANCE_E2E_LINEAGE_URL=$(LANCE_E2E_LINEAGE_URL) LANCE_E2E_NOTIFICATIONS_URL=$(LANCE_E2E_NOTIFICATIONS_URL) LANCE_E2E_DEX=$(LANCE_E2E_DEX) LANCE_E2E_NATS_URL=$(LANCE_E2E_NATS_URL) LANCE_E2E_S3=$(LANCE_E2E_S3) uv run pytest tests/e2e-py -m chaos -v --require-live --chaos
-e2e-compaction:     ## Maintenance sweep / compaction / GC proofs (needs LANCE_E2E_MAINTENANCE_URL, LANCE_E2E_GREPTIME_URL)
-	@test -n "$(LANCE_E2E_MAINTENANCE_URL)" || { echo "  !! e2e-compaction needs LANCE_E2E_MAINTENANCE_URL, LANCE_E2E_GREPTIME_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	@test -n "$(LANCE_E2E_GREPTIME_URL)" || { echo "  !! e2e-compaction needs LANCE_E2E_MAINTENANCE_URL, LANCE_E2E_GREPTIME_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	LANCE_E2E_MAINTENANCE_URL=$(LANCE_E2E_MAINTENANCE_URL) LANCE_E2E_GREPTIME_URL=$(LANCE_E2E_GREPTIME_URL) uv run pytest tests/e2e-py -m compaction -v
+e2e-compaction:     ## Maintenance sweep proofs: the deployed service's sweep and the in-process sweep on real S3 (needs LANCE_E2E_MAINTENANCE_URL, LANCE_E2E_DAPR_TOKEN, LANCE_E2E_S3_ENDPOINT with its LANCE_E2E_S3_ACCESS_KEY and LANCE_E2E_S3_SECRET_KEY)
+	@test -n "$(LANCE_E2E_MAINTENANCE_URL)" || { echo "  !! e2e-compaction needs LANCE_E2E_MAINTENANCE_URL, LANCE_E2E_DAPR_TOKEN, LANCE_E2E_S3_ENDPOINT, LANCE_E2E_S3_ACCESS_KEY, LANCE_E2E_S3_SECRET_KEY — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	@test -n "$(LANCE_E2E_DAPR_TOKEN)" || { echo "  !! e2e-compaction needs LANCE_E2E_MAINTENANCE_URL, LANCE_E2E_DAPR_TOKEN, LANCE_E2E_S3_ENDPOINT, LANCE_E2E_S3_ACCESS_KEY, LANCE_E2E_S3_SECRET_KEY — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	@test -n "$(LANCE_E2E_S3_ENDPOINT)" || { echo "  !! e2e-compaction needs LANCE_E2E_MAINTENANCE_URL, LANCE_E2E_DAPR_TOKEN, LANCE_E2E_S3_ENDPOINT, LANCE_E2E_S3_ACCESS_KEY, LANCE_E2E_S3_SECRET_KEY — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	@test -n "$(LANCE_E2E_S3_ACCESS_KEY)" || { echo "  !! e2e-compaction needs LANCE_E2E_MAINTENANCE_URL, LANCE_E2E_DAPR_TOKEN, LANCE_E2E_S3_ENDPOINT, LANCE_E2E_S3_ACCESS_KEY, LANCE_E2E_S3_SECRET_KEY — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	@test -n "$(LANCE_E2E_S3_SECRET_KEY)" || { echo "  !! e2e-compaction needs LANCE_E2E_MAINTENANCE_URL, LANCE_E2E_DAPR_TOKEN, LANCE_E2E_S3_ENDPOINT, LANCE_E2E_S3_ACCESS_KEY, LANCE_E2E_S3_SECRET_KEY — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	LANCE_E2E_MAINTENANCE_URL=$(LANCE_E2E_MAINTENANCE_URL) LANCE_E2E_DAPR_TOKEN=$(LANCE_E2E_DAPR_TOKEN) LANCE_E2E_S3_ENDPOINT=$(LANCE_E2E_S3_ENDPOINT) LANCE_E2E_S3_ACCESS_KEY=$(LANCE_E2E_S3_ACCESS_KEY) LANCE_E2E_S3_SECRET_KEY=$(LANCE_E2E_S3_SECRET_KEY) uv run pytest tests/e2e-py -m compaction -v --require-live
 # THE ITERATION LOOP, and the measurement that made it a target. `tests/unit` + `tests/integration` is
 # what every change runs before it is pushed, and it took 9m57s serially on a 64-core machine. Measured
 # 2026-09-19 at `-n 16 --dist loadfile`: **1m17s, 4,947 passed, zero failures** — 7.7x, because the

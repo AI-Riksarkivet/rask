@@ -6,10 +6,18 @@ import (
 	"dagger/rask/internal/dagger"
 )
 
-// rustfsImage is the S3-compatible backend the storage smoke runs against. Pinned rather than
-// `:latest`, which is what the retired `make rustfs-up` used: a smoke test whose backend version
-// changes underneath it cannot tell a rask regression from an upstream one.
-const rustfsImage = "rustfs/rustfs:1.0.0-alpha.60"
+// rustfsImage is the S3-compatible backend the storage smoke, the RustFS lifecycle and the governed lanes run
+// against. Pinned rather than `:latest`: a smoke test whose backend version changes underneath it cannot tell a rask
+// regression from an upstream one. The pin must take a multipart upload from pyarrow, the writer of the catalog's
+// record store (`service_kit.lakehouse.record_store`): measured 2026-10-17 with pyarrow 25.0.0, 1.0.1 takes it, and
+// 1.0.0-alpha.60 answers its `UploadPart` with `XAmzContentSHA256Mismatch`, which stops the catalog's boot before it
+// grants lineage its provenance tables.
+const rustfsImage = "rustfs/rustfs:1.0.1"
+
+// rustfsUser owns a cache volume mounted at the image's data path. The server runs as the image's own user (uid 10001
+// in 1.0.1), and a volume mounted root-owned stops it at boot with `Permission denied (os error 13)` (measured
+// 2026-10-18).
+const rustfsUser = "rustfs"
 
 // SmokeRustfs proves `packages/storage` works against a REAL S3 backend rather than moto.
 //
@@ -97,7 +105,7 @@ func (m *Rask) RustfsLifecycle(
 		// dropping the bucket in the bootstrap — did nothing, because Dagger caches that exec by its
 		// inputs and the command never changes. A fresh volume gives durability inside the run and
 		// isolation between runs, which is what an e2e actually wants from both.
-		WithMountedCache("/data", dag.CacheVolume("rask-rustfs-e2e-"+runToken())).
+		WithMountedCache("/data", dag.CacheVolume("rask-rustfs-e2e-"+runToken()), dagger.ContainerWithMountedCacheOpts{Owner: rustfsUser}).
 		WithExposedPort(9000).
 		// NO `/data` argument, despite the compose overlay carrying `command: ["/data"]`. The image
 		// has no ENTRYPOINT to prepend it to, so passing it makes Dagger try to EXECUTE `/data`
@@ -144,6 +152,7 @@ func (m *Rask) RustfsLifecycle(
 	return m.base(src).
 		WithServiceBinding("catalog", catalog).
 		WithEnvVariable("LANCE_REST_E2E_URL", "http://catalog:2333").
-		WithExec([]string{"uv", "run", "--no-sync", "pytest", "tests/e2e-py/test_e2e.py", "-v"}).
+		// `--require-live`: a skip in a lane that stood its stack up is a test that ran nowhere, so it fails the lane.
+		WithExec([]string{"uv", "run", "--no-sync", "pytest", "tests/e2e-py/test_e2e.py", "-v", "-rs", "--require-live"}).
 		Stdout(ctx)
 }

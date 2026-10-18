@@ -84,7 +84,7 @@ func (m *Rask) governedStack(ctx context.Context, src *dagger.Directory) (*gover
 		WithEnvVariable("RUSTFS_ACCESS_KEY", "rustfsadmin").
 		WithEnvVariable("RUSTFS_SECRET_KEY", "rustfsadmin").
 		WithEnvVariable("RUSTFS_ADDRESS", ":9000").
-		WithMountedCache("/data", dag.CacheVolume("rask-governed-store-"+run)).
+		WithMountedCache("/data", dag.CacheVolume("rask-governed-store-"+run), dagger.ContainerWithMountedCacheOpts{Owner: rustfsUser}).
 		WithExposedPort(9000).
 		AsService()
 
@@ -457,7 +457,8 @@ echo "lineage-api never became ready"; exit 1`}).
 			if demo {
 				return c.WithExec([]string{"sh", "-c", "LANCE_E2E_DEX_SECRET= uv run --no-sync python scripts/governance_demo.py"})
 			}
-			return c.WithExec([]string{"sh", "-c", "LANCE_E2E_DEX_SECRET= uv run --no-sync pytest tests/e2e-py/test_governance_e2e.py -v"})
+			// `--require-live`: a skip in a lane that stood its stack up is a test that ran nowhere, so it fails the lane.
+			return c.WithExec([]string{"sh", "-c", "LANCE_E2E_DEX_SECRET= uv run --no-sync pytest tests/e2e-py/test_governance_e2e.py -v -rs --require-live"})
 		}).
 		Stdout(ctx)
 }

@@ -2,20 +2,24 @@
 
 The offline suite drives the sweep over moto; this proves what only the deployed release can: the service lists the
 lakehouse bucket, opens the real Lance datasets the catalog wrote, expires their versions and evaluates their due
-records without error (it compacts nothing, ADR 0155) — and the OTel sweep metric lands in GreptimeDB. This is the only signal that the Dapr-cron maintenance path works against real
-storage. (The cron route is invoked directly here; the Dapr binding fires the same route on schedule.)
+records without error (it compacts nothing, ADR 0155). This is the only signal that the Dapr-cron maintenance path
+works against real storage. (The cron route is invoked directly here; the Dapr binding fires the same route on
+schedule.)
 
-Run (port-forward maintenance + greptime), or `make e2e-compaction`:
+What the sweep's metric does once it leaves the service is not asserted here, or by any test: OpenTelemetry is rask's
+boundary, and the store behind the Collector is the platform's (ADR 0167). `test_observability_e2e.py` proves that a
+service's metric crosses rask's Collector, with lineage's.
+
+The e2e-stack lane runs it on every push. Against a deployed release, `bash scripts/e2e_live.sh
+tests/e2e-py/test_maintenance_e2e.py` discovers the address and the token, or by hand:
 
     kubectl port-forward svc/rask-maintenance 8000:8000 &
-    kubectl port-forward -n observability svc/greptimedb 4000:4000 &
-    LANCE_E2E_MAINTENANCE_URL=http://localhost:8000 LANCE_E2E_GREPTIME_URL=http://localhost:4000 \
+    LANCE_E2E_MAINTENANCE_URL=http://localhost:8000 LANCE_E2E_DAPR_TOKEN=<the app token> \
     uv run pytest tests/e2e-py/test_maintenance_e2e.py -v
 
-The chart renders every object as `{{ include "lance.fullname" . }}-…` (= `rask-…`, the release name).
-The telemetry store is the platform's; on a dev estate it is the observability fixture's `greptimedb`
-in namespace `observability`. A port-forward against a Service that does not exist fails with
-`services … not found`, which reads as "the release is broken" rather than "this instruction is old".
+The chart renders every object as `{{ include "lance.fullname" . }}-…` (= `rask-…`, the release name). A port-forward
+against a Service that does not exist fails with `services … not found`, which reads as "the release is broken"
+rather than "this instruction is old".
 """
 
 from __future__ import annotations
@@ -29,38 +33,27 @@ import requests
 
 
 MAINTENANCE = os.environ.get("LANCE_E2E_MAINTENANCE_URL", "")
-GREPTIME = os.environ.get("LANCE_E2E_GREPTIME_URL", "")
 BINDING = os.environ.get("LANCE_E2E_MAINTENANCE_BINDING", "maintenance-cron")
-# The cron route is sidecar-only (§1 fail-closed): a direct POST must present the same
-# `dapr-api-token` the sidecar stamps. `make e2e-compaction` reads it from the app-token secret.
+# The cron route is sidecar-only (§1 fail-closed): a direct POST must present the same `dapr-api-token` the sidecar
+# stamps. scripts/e2e_stack.sh and scripts/e2e_live.sh read it from the app-token secret.
 DAPR_TOKEN = os.environ.get("LANCE_E2E_DAPR_TOKEN", "")
 _TOKEN_HEADER = {"dapr-api-token": DAPR_TOKEN} if DAPR_TOKEN else {}
 
 pytestmark = [pytest.mark.e2e, pytest.mark.compaction]
 
 
-def _prom_sum(query: str) -> float:
-    r = requests.get(f"{GREPTIME}/v1/prometheus/api/v1/query", params={"query": query}, timeout=10)
-    r.raise_for_status()
-    return sum(float(s["value"][1]) for s in r.json()["data"]["result"])
-
-
 @pytest.fixture(scope="module")
-def urls() -> tuple[str, str]:
-    if not (MAINTENANCE and GREPTIME):
-        pytest.skip("set LANCE_E2E_MAINTENANCE_URL and LANCE_E2E_GREPTIME_URL (see module docstring)")
+def maintenance() -> str:
+    if not MAINTENANCE:
+        pytest.skip("set LANCE_E2E_MAINTENANCE_URL (see module docstring)")
     try:
         requests.get(f"{MAINTENANCE.rstrip('/')}/livez", timeout=5).raise_for_status()
-        requests.get(f"{GREPTIME.rstrip('/')}/health", timeout=5).raise_for_status()
-    except Exception:
-        pytest.skip("compaction or greptime not reachable")
-    return MAINTENANCE.rstrip("/"), GREPTIME.rstrip("/")
+    except requests.RequestException:
+        pytest.skip("maintenance not reachable")
+    return MAINTENANCE.rstrip("/")
 
 
-def test_the_sweep_expires_real_datasets_and_meters(urls: tuple[str, str]) -> None:
-    maintenance, _greptime = urls  # _prom_sum reads the module-level GREPTIME
-    before = _prom_sum("sum(compaction_runs_total)")
-
+def test_the_sweep_expires_real_datasets(maintenance: str) -> None:
     # Trigger one sweep (the same route the Dapr cron binding POSTs on schedule),
     # authenticating exactly like the sidecar does (dapr-api-token header).
     # The tick opens one manifest per dataset, so it costs what the estate is worth:
@@ -86,11 +79,3 @@ def test_the_sweep_expires_real_datasets_and_meters(urls: tuple[str, str]) -> No
     assert body["errors"] == {}, f"a dataset failed its pass: {body['errors']}"
     assert "versions_removed" in body and "due" in body, f"the tick reports neither its reclamation nor its due decisions: {body}"
     assert "failed" not in body["due"], f"a due evaluation could not decide: {body['due']}"
-
-    # The OTel sweep counter incremented in GreptimeDB (the maintenance path is observable).
-    deadline = time.monotonic() + 30.0
-    while time.monotonic() < deadline:
-        if _prom_sum("sum(compaction_runs_total)") > before:
-            return
-        time.sleep(3)
-    pytest.fail("compaction_runs_total did not increment in GreptimeDB after the sweep")

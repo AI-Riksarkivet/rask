@@ -7,11 +7,12 @@
 # tomorrow would be silent. This script makes the live proof an artifact that runs on every push.
 #
 # It brings up the GOVERNED stack (Dex OIDC + OpenFGA + Dapr + NATS + MinIO + OpenBao) on kind with the feature
-# flags the suites need, seeds the exact grants/buckets they assume, then runs the lane's own suites, Phase 1's
-# acceptance (`-m phase1`, XC-090) and its soak, each in a session of its own.
+# flags the suites need, seeds the exact grants/buckets they assume, then runs every tests/e2e-py module the lane can
+# serve, Phase 1's acceptance (`-m phase1`, XC-090) and its soak, each in a session of its own (ADR 0167).
 #
-# Heavy optional components (observability: the OTel Collector, web, maintenance) are DISABLED — they
-# are not under test here and a GitHub runner is 2 cores / 7 GB. `make e2e-obs` covers observability.
+# The telemetry chain and the zones are off: OpenTelemetry is rask's boundary and the store behind the Collector is the
+# platform's, and no zone is under test here. Maintenance is on, because its deployed sweep is a lakehouse claim
+# (`tests/e2e-py/test_maintenance_e2e.py`).
 #
 # Idempotent: safe to re-run against an existing cluster. Env overrides: CLUSTER, RELEASE, KEEP_STACK=1.
 set -euo pipefail
@@ -227,7 +228,7 @@ rm -rf "$IMAGE_DIR"
 # the estate's values-live-pins.yaml, a tag in a registry this cluster cannot reach.
 "$(dirname "$0")/fixtures.sh" minio -- --set-string image.repository=minio --set-string "image.tag=$TAG"
 
-step "4/9 deploy the governed stack (auth ON, #3-A/#3-B/#4 flags ON, heavy extras OFF)"
+step "4/9 deploy the governed stack (auth ON, #3-A/#3-B/#4 flags ON, maintenance ON, telemetry and zones OFF)"
 # HISTORY: `--wait` used to DEADLOCK on a fresh cluster, which is why this job never once passed in CI.
 # helm's order is: apply manifests → (--wait) block until every resource is Ready → run post-install hooks.
 # The OpenFGA schema migration WAS a post-install hook, and the OpenFGA server cannot become Ready until its
@@ -278,7 +279,7 @@ JOB_LOGS="$(mktemp)"
 # Recreate the app pods. Pod DELETE, not `rollout restart`: on a re-run against an existing cluster a rebuilt
 # same-tag image only lands on a freshly-scheduled pod, and delete forces that reschedule to pull the just-loaded
 # digest from the node cache (IfNotPresent) — the kind same-tag staleness fix (memory: kind-same-tag-image-gotcha).
-for d in catalog lineage notifications; do
+for d in catalog lineage maintenance notifications; do
   kubectl delete pods -l "app.kubernetes.io/instance=$RELEASE,app.kubernetes.io/component=$d" \
     --ignore-not-found >/dev/null 2>&1 || true
 done
@@ -289,6 +290,7 @@ done
 kubectl rollout status deploy/"$RELEASE"-openfga --timeout=300s
 kubectl rollout status deploy/"$RELEASE"-catalog --timeout=300s
 kubectl rollout status deploy/"$RELEASE"-lineage --timeout=300s
+kubectl rollout status deploy/"$RELEASE"-maintenance --timeout=300s
 kubectl rollout status deploy/"$RELEASE"-notifications --timeout=300s
 # A ROLLED-OUT SUBSCRIBER IS NOT YET A LISTENING ONE: its sidecar registers its subscriptions and the inbox actors'
 # host after the pod is Ready, and the inbox suite needs both. The sidecar's own `/v1.0/metadata` says when, as
@@ -351,6 +353,7 @@ forward() {
 }
 forward "$RELEASE-catalog" 2333:2333 /tmp/pf-cat.log
 forward "$RELEASE-lineage" 18000:8000 /tmp/pf-lin.log
+forward "$RELEASE-maintenance" 18001:8000 /tmp/pf-mnt.log
 # `minio`, not `rustfs`. The chart has rendered the object store as StatefulSet + Service
 # `rask-minio` since 2026-09-11; nothing renders `-rustfs` any more, so this port-forward addressed an
 # object that does not exist. Verified against the running estate rather than the templates: `svc/rask-minio` and
@@ -364,12 +367,13 @@ forward rask-nats 4222:4222 /tmp/pf-nats.log
 for i in $(seq 1 40); do
   c=$(curl -s -o /dev/null -w '%{http_code}' -m2 http://localhost:2333/livez 2>/dev/null || true)
   l=$(curl -s -o /dev/null -w '%{http_code}' -m2 http://localhost:18000/livez 2>/dev/null || true)
+  m=$(curl -s -o /dev/null -w '%{http_code}' -m2 http://localhost:18001/livez 2>/dev/null || true)
   d=$(curl -s -o /dev/null -w '%{http_code}' -m2 http://localhost:5556/dex/.well-known/openid-configuration 2>/dev/null || true)
-  [ "$c" = "200" ] && [ "$l" = "200" ] && [ "$d" = "200" ] && break
+  [ "$c" = "200" ] && [ "$l" = "200" ] && [ "$m" = "200" ] && [ "$d" = "200" ] && break
   sleep 2
 done
-echo "   catalog=$c lineage=$l dex=$d"
-[ "$c" = "200" ] && [ "$l" = "200" ] && [ "$d" = "200" ] || { echo "!! services never became ready"; exit 1; }
+echo "   catalog=$c lineage=$l maintenance=$m dex=$d"
+[ "$c" = "200" ] && [ "$l" = "200" ] && [ "$m" = "200" ] && [ "$d" = "200" ] || { echo "!! services never became ready"; exit 1; }
 
 step "6/9 provision the #3-B data buckets (the allowlist GOVERNS, it does not provision)"
 # THE STORE'S OWN ROOT PAIR, from the Secret its StatefulSet reads. The store is seeded with a generated secret, so a
@@ -476,9 +480,30 @@ door "$ALICE" POST /management/v1/projects "{\"id\":\"$TENANT_B\"}" 200 201 409 
 door "$ALICE" PUT "/management/v1/projects/$TENANT_B/members" "{\"user\":\"$BOB_PRINCIPAL\",\"relation\":\"admin\"}" 200 || exit 1
 echo "   tenant B: $TENANT_B (admin=bob)"
 
-step "8/9 the outbox suite's Dapr app token"
+step "8/9 the outbox suite's Dapr app token, and maintenance's first sweep"
 DAPR_TOKEN="$(kubectl get secret "$RELEASE-dapr-app-token" -o jsonpath='{.data.token}' | base64 -d)"
 [ -n "$DAPR_TOKEN" ] || { echo "!! no dapr app token"; exit 1; }
+# A FRESH ESTATE REFUSES EVERY COMPACTION UNTIL MAINTENANCE HAS SWEPT ONCE: `version/create` judges a compaction against
+# the clone list the sweep writes, and a missing list refuses (ADR 0162). The sweep that writes it is the backstop on
+# `maintenance.schedule`, every 1800 s, so the lane runs the first one itself, on the route the cron binding posts to,
+# and the erasure drill's compaction a minute later is judged as it would be on an estate that has run for a while.
+# A SWEEP RAN WHEN ITS SUMMARY CAME BACK, and nothing else counts: the route answers `skipped` while the signing key is
+# unresolved or another sweep holds the lock, and the forward answers nothing while the pod is out of its Service, which
+# a signer is until it re-resolves a key the dev store minted after it booted (within five minutes, the signer's
+# re-read). Each distinct answer is printed, so a lane that gives up says what it saw.
+SWEEP_OUT="$(mktemp)"
+seen=""
+for i in $(seq 1 60); do
+  code="$(curl -s -m 600 -o "$SWEEP_OUT" -w '%{http_code}' -X POST "http://localhost:18001/maintenance-cron" -H "dapr-api-token: $DAPR_TOKEN" || true)"
+  if [ "$code" = "200" ] && python3 -c 'import json, sys; sys.exit(0 if "datasets" in json.load(open(sys.argv[1])) else 1)' "$SWEEP_OUT" 2>/dev/null; then
+    echo "   maintenance swept once: the clone list is written"
+    break
+  fi
+  answer="HTTP ${code:-none} $(head -c 200 "$SWEEP_OUT" 2>/dev/null)"
+  [ "$answer" = "$seen" ] || { echo "   no sweep yet: $answer"; seen="$answer"; }
+  [ "$i" = "60" ] && { echo "!! maintenance's first sweep never ran in ten minutes (last answer: $answer)"; exit 1; }
+  sleep 10
+done
 
 step "9/9 run the guarded e2e suites against the live stack"
 export LANCE_E2E_S3=http://localhost:9900
@@ -492,13 +517,20 @@ export LANCE_E2E_S3_ENDPOINT=http://localhost:9900
 export LANCE_E2E_S3_ACCESS_KEY="$S3_KEY"
 export LANCE_E2E_S3_SECRET_KEY="$S3_SECRET"
 export LANCE_E2E_CATALOG_URL=http://localhost:2333
+# The same catalog under the names the lifecycle and governance suites read.
+export LANCE_REST_E2E_URL=http://localhost:2333
+export LANCE_E2E_AUTH_SERVER=http://localhost:2333
 export LANCE_E2E_LINEAGE_URL=http://localhost:18000
+# The maintenance service, whose cron route its suite calls with the Dapr app token below.
+export LANCE_E2E_MAINTENANCE_URL=http://localhost:18001
 # WITH the /dex path prefix — that is what every suite defaults to, and what Dex actually serves the OIDC
 # discovery document under. Exporting the bare host OVERRODE the correct default with a broken one, so the
 # client-direct suite's reachability probe 404'd and it SKIPPED — silently, on every run.
 export LANCE_E2E_DEX=http://localhost:5556/dex
 export LANCE_E2E_FGA=http://localhost:8081
 export LANCE_E2E_FGA_TOKEN_FILE="$FGA_TOKEN_FILE"
+# The store the tenant above was seeded in, so every suite that reads OpenFGA reads that one.
+export LANCE_E2E_FGA_STORE_ID="$SID"
 export LANCE_E2E_TOKEN="$ALICE"
 export LANCE_E2E_NONADMIN_TOKEN="$BOB"
 export LANCE_E2E_DAPR_TOKEN="$DAPR_TOKEN"
@@ -530,15 +562,16 @@ export LANCE_E2E_SERVICE_TOKEN_FILE="$SERVICE_TOKEN_FILE"
 PYTEST=(env PYTHONPATH=services uv run pytest -v -rs -p no:cacheprovider --require-live)
 failed=()
 
-# The lane's own suites, a session of their own.
-"${PYTEST[@]}" \
-  tests/e2e-py/test_credential_isolation_e2e.py \
-  tests/e2e-py/test_object_store_cas_e2e.py \
-  tests/e2e-py/test_warehouses_e2e.py \
-  tests/e2e-py/test_multibase_e2e.py \
-  tests/e2e-py/test_outbox_crash_e2e.py \
-  tests/e2e-py/test_maintenance_s3_e2e.py \
-  tests/e2e-py/test_track_a_acceptance.py \
+# EVERY MODULE THE LANE CAN SERVE, a session of their own (ADR 0167). Chosen by the markers a module does NOT carry, so
+# a new module runs on push the day it lands, and one that needs what this stack does not stand up fails the session
+# under `--require-live` rather than running nowhere. Each marker left out runs elsewhere or is outside the lakehouse:
+#   phase1         Phase 1's acceptance, the next session, which reads one drive of the scenario
+#   nats_auth      its own lane (`dagger call nats-auth`): a broker in operator mode, which this stack's bus is not
+#   observability  the telemetry chain: it reads the platform's store behind the Collector, so a deployed estate runs it
+#   edge           the Gateway's routes, which this stack does not render (stack_values.sh)
+#   media_catalog  the annotator's media backend, outside the lakehouse
+#   user_state     the zones' per-person state the catalog keeps, outside the lakehouse
+"${PYTEST[@]}" tests/e2e-py -m "not phase1 and not nats_auth and not observability and not edge and not media_catalog and not user_state" \
   || failed+=("the lane's suites")
 
 # PHASE 1'S ACCEPTANCE (XC-090), BY ITS MARKER, so a module joins the lane by carrying `phase1`: one drive of the
