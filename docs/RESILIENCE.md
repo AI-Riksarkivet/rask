@@ -32,7 +32,7 @@ whole run, outage and recovery included, on the e2e-stack kind lane (run 3904982
 
 | Dependency | Taken down | What the doors answer while it is gone | Kind lane, 2026-10-17 |
 | --- | --- | --- | --- |
-| Object store (`rask-rustfs`)¹ | scaled to zero | A write through the catalog's insert door is refused 503 code 17, or gets no answer within the bound the catalog's own store timeouts set (2 × 6 listings × (retries + 1) × max(connect, request): 60 s at the defaults). It never lands while the store is gone. | 28 s |
+| Object store (`rask-rustfs`)¹ | scaled to zero | A write through the catalog's insert door is refused 503 code 17, or gets no answer within the bound the catalog's own store timeouts set (2 × 6 listings × (retries + 1) × max(connect, request): 60 s at the defaults). It never lands while the store is gone. | 24 s |
 | OpenFGA | scaled to zero | A governed write answers 503 code 17 at its authorization check: never an allow, and never a deny that would read as a missing grant. | 20 s |
 | Lineage | scaled to zero | Commits go on landing; its durable consumer resumes where it stopped and records each announcement once. | 39 s |
 | The bus (`rask-nats`, three nodes) | scaled 3 → 0 for 150 s | Commits and grants land, their announcements staged in the outboxes, and the lineage relay records the staged writes without the bus. The outage closes every sidecar's connection for good (below), and each service restarts its own sidecar once the bus greets a connection again. | 320 s, 150 s of it the outage |
@@ -40,8 +40,8 @@ whole run, outage and recovery included, on the e2e-stack kind lane (run 3904982
 | The secret store (`rask-openbao`) | sealed in place | Within one re-read of its key (300 s) the catalog drops its signing key, then refuses every write it would announce with 503 code 17 before committing it. The store's contents survive the seal, so nothing is minted again. | 290 s, most of it the re-read |
 | The catalog | its uvicorn SIGKILLed, four writers committing through `version/create` | Every acknowledged commit lands once, a commit whose answer the kill lost lands at most once, and no run lands twice: Lance's put-if-not-exists of each `_versions/` manifest keeps one history. | 168 s |
 
-¹ Run 39049821010 drilled the object-store row against the MinIO fixture; the RustFS fixture (ADR 0168) has not
-run this drill yet, so its 28 s and its answers are unmeasured on RustFS.
+¹ Measured on the RustFS fixture (ADR 0168): run 39129931426, main's e2e-stack lane, 2026-10-18; the drill passed
+again on the estate rebuilt on RustFS from empty the same day (helm rev 1, "XC-163 from empty 9858db38").
 
 **A bus outage longer than about two minutes stops every sidecar's pub/sub until the sidecar restarts.** Dapr 1.18.1's
 `pubsub.jetstream` component connects with none of nats.go's reconnect options, so each NATS client gives up after its
