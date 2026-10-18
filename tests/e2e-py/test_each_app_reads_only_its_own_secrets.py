@@ -59,6 +59,18 @@ def _run(*args: str, stdin: str = "") -> subprocess.CompletedProcess[str]:
     return subprocess.run(command, input=stdin, capture_output=True, text=True, check=False, timeout=chaos.SETTLE_SECONDS)  # noqa: S603 — a fixed tool, argv built here
 
 
+def _sidecars() -> dict[str, str]:
+    """app -> the Deployment that runs its sidecar, for each app the `lance-secrets` component is scoped to that the release
+    runs: a release that renders no explorer runs no annotator, search or viewer."""
+    scopes = set(json.loads(chaos.kubectl("get", "components.dapr.io", "lance-secrets", "-o", "json")).get("scopes") or [])
+    running: dict[str, str] = {}
+    for deployment in json.loads(chaos.kubectl("get", "deployments", "-o", "json"))["items"]:
+        app = ((deployment["spec"]["template"].get("metadata") or {}).get("annotations") or {}).get("dapr.io/app-id")
+        if isinstance(app, str) and app in scopes:
+            running[app] = deployment["metadata"]["name"]
+    return running
+
+
 def _store_component() -> dict[str, str]:
     """The `lance-secrets` component's metadata, as the cluster serves it."""
     component = json.loads(chaos.kubectl("get", "components.dapr.io", "lance-secrets", "-o", "json"))
@@ -88,10 +100,14 @@ def _read_as(pod: str, token: str, secret: str) -> tuple[int, str]:
 
 
 def test_each_sidecar_serves_its_app_only_its_own_secrets() -> None:
+    sidecars = _sidecars()
+    assert sidecars, "the release runs no app the store is scoped to"
+    assert sidecars.keys() <= SIDECAR_READS.keys(), f"the store is scoped to {sorted(sidecars.keys() - SIDECAR_READS.keys())}, which this test does not ask"
     found: dict[str, object] = {}
-    for app, (own, field, foreign) in SIDECAR_READS.items():
+    for app, deployment in sorted(sidecars.items()):
+        own, field, foreign = SIDECAR_READS[app]
         names = [name for name in (own, foreign) if name]
-        done = _run("exec", f"deployment/{chaos.RELEASE}-{app}", "-c", app, "--", "python", "-c", _ASK_THE_SIDECAR, *names)
+        done = _run("exec", f"deployment/{deployment}", "-c", app, "--", "python", "-c", _ASK_THE_SIDECAR, *names)
         assert done.returncode == 0, f"{app}'s pod could not ask its sidecar: {done.stderr.strip()[-300:]}"
         answers = json.loads(done.stdout)
         if own is not None:
