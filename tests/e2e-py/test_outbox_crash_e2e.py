@@ -53,8 +53,8 @@ DAPR_TOKEN = os.environ.get("LANCE_E2E_DAPR_TOKEN", "")
 BINDING = os.environ.get("LANCE_E2E_RELAY_BINDING", "lineage-relay-cron")
 OUTBOX_URI = os.environ.get("LANCE_E2E_OUTBOX_URI", "s3://lance-catalog/_lineage_outbox")
 S3 = os.environ.get("LANCE_E2E_S3", "http://localhost:9900")
-S3_ACCESS_KEY = os.environ.get("LANCE_E2E_S3_ACCESS_KEY", "minioadmin")
-S3_SECRET_KEY = os.environ.get("LANCE_E2E_S3_SECRET_KEY", "minioadmin")
+S3_ACCESS_KEY = os.environ.get("LANCE_E2E_S3_ACCESS_KEY", "rustfsadmin")
+S3_SECRET_KEY = os.environ.get("LANCE_E2E_S3_SECRET_KEY", "rustfsadmin")
 
 #: The job namespace the catalog stamps on its own events (`LANCE_LINEAGE_JOB_NAMESPACE`, default `lance-catalog`).
 #: The staged event is the one the catalog's insert announces, so it names the job the way the catalog does.

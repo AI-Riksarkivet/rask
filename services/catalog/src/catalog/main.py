@@ -1,7 +1,7 @@
 """Lance Namespace REST Catalog — FastAPI application entry.
 
 A Python/FastAPI adapter exposing the full Lance Namespace REST API (spec.yaml)
-over a native ``lance.namespace`` backend (``DirectoryNamespace`` on MinIO/S3 by
+over a native ``lance.namespace`` backend (``DirectoryNamespace`` on the object store by
 default), with the pylance data plane filling operations the backend stubs.
 """
 

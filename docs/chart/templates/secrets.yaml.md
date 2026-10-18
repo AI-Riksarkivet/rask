@@ -7,13 +7,13 @@ every release revision, under a 1 MiB ceiling. Each section is headed by the tem
 
 App secret is generated only when the operator did not supply existingSecret.
 
-## `AWS_ACCESS_KEY_ID: {{ .Values.minio.accessKey | quote }}`
+## `HCP_ENDPOINT: {{ include "lance.s3Endpoint" . | quote }}`
 
-NO `AWS_SECRET_ACCESS_KEY` HERE, and its absence is the point. A root secret in this Secret would be
-read by nothing — verified against the live release 2026-09-16: the only
-consumers of this Secret are `rask-annotator` and `rask-search`, both taking `AWS_ACCESS_KEY_ID`
-as `MEDIA_S3_ACCESS_KEY_ID`; no container mounts it with `envFrom`, and no template references it
-by name outside this file. A credential at rest that nothing consumes is exposure bought for
-nothing, on an estate whose posture is that a secret reaches a workload from ESO, the Dapr secret
-store or STS. The ID stays because it is read and because the estate's own code calls an access
-key id configuration, not a secret.
+THE S3 ENDPOINT AND NO STORE CREDENTIAL, neither half. Every workload that touches the store presents its own scoped
+identity: a Dapr app reads its secret from the secret store, a pod without a sidecar mounts a Secret ESO writes, and a
+Lance client takes a session the catalog vends. The access key id of each identity is config on the pod that uses
+it (explorer.yaml sets the corpus readers'), so nothing reads one from this Secret. The store's root is named only by
+the scoped-users hook and the dev store's seed (ADR 0168): on RustFS the root secret signs every STS session token, so a root access key id
+here would be the first half of the one credential that can forge any vended session, mounted into every pod with
+`ambientStorage` (fleet.yaml). `tests/unit/test_the_root_storage_secret_reaches_only_its_users.py` holds the root's
+identity to those two.

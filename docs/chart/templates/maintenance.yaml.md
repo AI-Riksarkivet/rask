@@ -91,7 +91,7 @@ publishing too (`lance.subPubsub`): the queue group affects
 subscription only. With the write-event lane off it is a publish-only component, maintenance's own
 connection either way (values.yaml `nats.auth`).
 
-## `- { name: MAINTENANCE_LINEAGE_OUTBOX_URI, value: "s3://{{ .Values.minio.bucket }}/_lineage_outbox" }`
+## `- { name: MAINTENANCE_LINEAGE_OUTBOX_URI, value: "s3://{{ .Values.objectStore.bucket }}/_lineage_outbox" }`
 
 Stage the emit so a bus blip does not lose it. A maintenance run is emitted ONLY when the
 sweep does MATERIAL work (`sweep.py::_did_material_work` gates on fragments or versions
@@ -172,14 +172,13 @@ from `kubectl describe`, and this one gates whether the purge can certify at all
 The purge announces each reclamation on the catalog's control topic, through maintenance's own
 component (dapr-component.yaml): one the sidecar is not scoped to refuses the publish SILENTLY.
 
-## `{{- $scoped := .Values.minio.maintenanceAccessKey }}`
+## `{{- $_ := required "objectStore.maintenanceAccessKey names maintenance's scoped store identity; …" .Values.objectStore.maintenanceAccessKey }}`
 
-THE SCOPED PAIR WINS, BOTH HALVES OR NEITHER. `minio.accessKey` is the TENANT ROOT, and
-maintenance compacts with it — a write — so it also reaches `_projects/`, `_protection/`
-and `_policies/`, the records that govern maintenance itself. A provisioned scoped user
-(minio-scoped-users) replaces it; empty leaves today's behaviour exactly, because
-repointing a live service at a credential nobody created would take the sweep down on
-upgrade. Requiring BOTH halves is the Ray pair's measured lesson: setting one gives
+THE SCOPED PAIR, BOTH HALVES, and `required`. Maintenance compacts — a write — so the store's root would
+also reach `_projects/`, `_protection/` and `_policies/`, the records that govern maintenance itself;
+it presents the scoped user `object-store-scoped-users` provisions instead, and a blank access key fails the
+render: no service presents the store's root, whose secret signs every STS session token on RustFS (ADR 0168), so
+there is no pair to fall back to. Naming BOTH halves is the Ray pair's measured lesson: setting one gives
 `SignatureDoesNotMatch` on every operation.
 
 The ACCESS KEY alone scopes the plane; the secret is derived in-cluster
@@ -198,15 +197,14 @@ id cannot be configuration.
 
 ## `- { name: MAINTENANCE_DAPR_SECRET_S3_FIELD, value: "maintenance-s3-secret-key" }`
 
-THE OTHER HALF OF THE PAIR. `dapr_secret_s3_field` defaults to `minio-secret-key` — the
-TENANT ROOT's secret — so a scoped access key left on that default is signed with a
-mismatched pair and every operation fails `SignatureDoesNotMatch`. That is the Ray pair's
-measured lesson, and the field was already configurable; only the chart had to use it.
+THE OTHER HALF OF THE PAIR, named beside the key id because a scoped key signed with any other
+secret fails `SignatureDoesNotMatch` on every operation (the Ray pair's measured lesson).
+`dapr_secret_s3_field` defaults to the same field, so a service run without the chart reads its own pair too.
 
 ## `{{- $extra := list }}`
 
 The #50 policy registry root defaults to this bucket, matching the catalog's
-LANCE_REST_ROOT (also .Values.minio.bucket, services.yaml). If LANCE_CONTROL_ROOT ever
+LANCE_REST_ROOT (also .Values.objectStore.bucket, services.yaml). If LANCE_CONTROL_ROOT ever
 moves the catalog's registry, set MAINTENANCE_POLICY_ROOT to the same value — a wrong root
 lists cleanly as "no policies" (the sweep logs compaction_policies_loaded per tick).
 
@@ -222,10 +220,10 @@ RUNTIME, so they are appended by the operator as tenants are onboarded.
 PLATFORM buckets — infrastructure the estate creates for ITSELF, which no warehouse
 record will ever claim. Without them `orphan_buckets` reports each one as drift on
 every tick forever, and a report whose contract is "clean certifies the estate" can
-then never be clean. Measured 2026-08-16: `rask-observability`, created by this
-chart's own minio-mkbucket Job for GreptimeDB's object store, sat in that list.
-Sourced from `lance.maintenancePlatformBuckets`: the Job's platform set plus the
-multibase bases.
+then never be clean. Measured 2026-08-16: `rask-observability`, a platform bucket the
+estate made for GreptimeDB's object store, sat in that list.
+Sourced from `lance.maintenancePlatformBuckets`: `objectStore.buckets` (the set the
+scoped-users hook creates on the dev store) plus the multibase bases.
 
 ## `- { name: MAINTENANCE_RECONCILE_BINDING_NAME, value: {{ .Values.maintenance.reconcileBindingName | quote }} }`
 

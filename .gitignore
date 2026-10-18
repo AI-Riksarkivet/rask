@@ -74,3 +74,6 @@ deploy/fixtures/*/chart/charts/
 # host's builds and registry, which a fresh estate anywhere else cannot pull ([[XC-152]]).
 deploy/values-live-pins.yaml
 deploy/fixtures/*/values-live-pins.yaml
+
+# The compose stack's object-store root pair (.docker/docker-compose.yml secrets:); a secret never enters the repo.
+.docker/secrets/

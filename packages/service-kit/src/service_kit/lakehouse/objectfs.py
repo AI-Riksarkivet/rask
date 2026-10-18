@@ -42,7 +42,7 @@ def lance_storage_options(
 ) -> StorageOptions:
     """The lance-style ``storage_options`` dict every service opens datasets with.
 
-    Path-style addressing is the default (``virtual_hosted=False``): RustFS/MinIO reject virtual-hosted
+    Path-style addressing is the default (``virtual_hosted=False``): RustFS rejects virtual-hosted
     signing with 403 ``SignatureDoesNotMatch``, and one omitted key in a hand-rolled copy is exactly the
     drift this builder exists to prevent.
 

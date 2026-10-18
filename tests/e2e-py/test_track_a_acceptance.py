@@ -81,8 +81,8 @@ import requests
 CATALOG = os.environ.get("LANCE_E2E_CATALOG_URL", "").rstrip("/")
 TOKEN = os.environ.get("LANCE_E2E_TOKEN", "")
 S3_ENDPOINT = os.environ.get("LANCE_E2E_S3_ENDPOINT", "")
-S3_ACCESS_KEY = os.environ.get("LANCE_E2E_S3_ACCESS_KEY", "minioadmin")
-S3_SECRET_KEY = os.environ.get("LANCE_E2E_S3_SECRET_KEY", "minioadmin")
+S3_ACCESS_KEY = os.environ.get("LANCE_E2E_S3_ACCESS_KEY", "rustfsadmin")
+S3_SECRET_KEY = os.environ.get("LANCE_E2E_S3_SECRET_KEY", "rustfsadmin")
 S3_REGION = os.environ.get("LANCE_E2E_S3_REGION", "us-east-1")
 DELIM = os.environ.get("LANCE_E2E_DELIM", "$")
 
@@ -106,7 +106,7 @@ def _storage_options() -> dict[str, str]:
     """The object-store connection the CATALOG itself writes through, so this suite reads the same bytes.
 
     Mirrors `catalog.core.config.Settings.storage_options`. `allow_http` and the path-style flag are not
-    optional against RustFS/MinIO: without them the object-store client upgrades to HTTPS and rewrites the
+    optional against RustFS: without them the object-store client upgrades to HTTPS and rewrites the
     bucket into the hostname, and every open fails in a way that reads as a missing dataset.
     """
     return {

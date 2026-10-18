@@ -60,7 +60,7 @@ spec:
             {{- include "lance.lineageEmitEnv" (list $root) | nindent 12 }}
             - { name: LANCE_REST_DOCS, value: {{ $root.Values.docs.enabled | quote }} }
             - { name: LANCE_REST_IMPL, value: "dir" }
-            - { name: LANCE_REST_ROOT, value: "s3://{{ .Values.minio.bucket }}" }
+            - { name: LANCE_REST_ROOT, value: "s3://{{ .Values.objectStore.bucket }}" }
             - { name: LANCE_NS_DELIMITER, value: "$" }
             - { name: LANCE_ALLOW_EXTERNAL_BLOBS, value: {{ .Values.vending.allowExternalBlobs | quote }} }
             - { name: LANCE_EXTERNAL_BLOB_BASES, value: {{ include "lance.externalBlobBases" . | quote }} }
@@ -116,13 +116,13 @@ spec:
             - { name: LANCE_DAPR_PUBSUB, value: {{ .Values.pubsub.name | quote }} }
             - { name: LANCE_DAPR_TOPIC, value: {{ .Values.pubsub.topic | quote }} }
             {{- if .Values.services.lineage.outbox.enabled }}
-            - { name: LANCE_LINEAGE_OUTBOX_URI, value: "s3://{{ .Values.minio.bucket }}/_lineage_outbox" }
+            - { name: LANCE_LINEAGE_OUTBOX_URI, value: "s3://{{ .Values.objectStore.bucket }}/_lineage_outbox" }
             {{- end }}
             - { name: LANCE_PROVENANCE_NAMESPACE, value: {{ .Values.services.lineage.provenanceNamespace | quote }} }
             - { name: LANCE_CONTROL_EMIT_ENABLED, value: {{ hasKey .Values.catalog "controlEmit" | ternary .Values.catalog.controlEmit false | quote }} }
             - { name: LANCE_CONTROL_PUBSUB, value: {{ .Values.pubsub.controlName | default "catalog-control-pubsub" | quote }} }
             {{- if and .Values.catalog.controlEmit .Values.catalog.controlOutbox.enabled }}
-            - { name: LANCE_CONTROL_OUTBOX_URI, value: "s3://{{ .Values.minio.bucket }}/_control_outbox" }
+            - { name: LANCE_CONTROL_OUTBOX_URI, value: "s3://{{ .Values.objectStore.bucket }}/_control_outbox" }
             - { name: LANCE_CONTROL_RELAY_BINDING_NAME, value: {{ .Values.catalog.controlOutbox.bindingName | quote }} }
             {{- end }}
             - { name: LANCE_ERASURE_DEADLINE_DAYS, value: {{ required "catalog.erasure.deadlineDays is required" .Values.catalog.erasure.deadlineDays | quote }} }
@@ -282,13 +282,11 @@ spec:
             {{- end }}
             - { name: LINEAGE_S3_ENDPOINT, value: "{{ include "lance.s3Endpoint" . }}" }
 
-            {{- $linScoped := .Values.minio.lineageAccessKey }}
-            {{- if $linScoped }}
+            {{- $_ := required "objectStore.lineageAccessKey names lineage's scoped store identity; no service presents the store's root, which signs every STS token (ADR 0168)" .Values.objectStore.lineageAccessKey }}
             - { name: LINEAGE_DAPR_SECRET_S3_ID_FIELD, value: "lineage-s3-access-key" }
             - { name: LINEAGE_DAPR_SECRET_S3_FIELD, value: "lineage-s3-secret-key" }
-            {{- end }}
             {{- if .Values.services.lineage.outbox.enabled }}
-            - { name: LINEAGE_OUTBOX_URI, value: "s3://{{ .Values.minio.bucket }}/_lineage_outbox" }
+            - { name: LINEAGE_OUTBOX_URI, value: "s3://{{ .Values.objectStore.bucket }}/_lineage_outbox" }
             {{- end }}
             {{- if not .Values.auth.enabled }}
             {{- include "lance.governedAuthAck" . | nindent 12 }}

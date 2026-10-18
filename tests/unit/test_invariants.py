@@ -19,9 +19,9 @@ a guess. Each test below fails on the ORIGINAL buggy code and passes now.
 from __future__ import annotations
 
 import functools
-import importlib.util
 import json
 import re
+import shlex
 import subprocess
 import urllib.parse
 from pathlib import Path
@@ -69,24 +69,24 @@ def test_no_SCOPED_storage_identity_is_published_with_the_ROOT_secret() -> None:
 
     The estate mints scoped users and publishes each one's secret into OpenBao for ESO to sync. Four
     derived it from the root; `ray-compute` alone read
-    `rayComputeSecretKey | default minio.secretKey` — and `rayComputeSecretKey` ships empty, so the
+    `rayComputeSecretKey | default objectStore.secretKey` — and `rayComputeSecretKey` ships empty, so the
     published value WAS the RustFS root credential.
 
     MEASURED on the live estate 2026-09-11, by hash so nothing was disclosed: `ray-compute-secret-key`,
-    `ray-compute-access-key` and `minio-secret-key` in `rask-infra-credentials` were byte-identical,
+    `ray-compute-access-key` and `object-store-secret-key` in `rask-infra-credentials` were byte-identical,
     all three 11 bytes. The chart CREATES `rask-ray-compute` with the derived secret
-    (`minio-scoped-users.yaml`) and PUBLISHED the root one under its name, so the pair can never
+    (`object-store-scoped-users.yaml`) and PUBLISHED the root one under its name, so the pair can never
     match: a consumer either signs as root — defeating the scoping entirely — or fails
     `SignatureDoesNotMatch`. The Ray head's own manifest asserts the opposite in a comment, which is
     how it survived.
 
     ASSERTED ON THE RENDER: the root is never in it ([[XC-004]]), so the dev OpenBao's seed writes each
     field from a file, and a scoped field must name the file `scoped_secret` derived for its identity,
-    never the root's (`$G/minio-secret-key`). Generic over every scoped field the seed writes.
+    never the root's (`$G/object-store-secret-key`). Generic over every scoped field the seed writes.
     """
     rendered = _helm_template("auth.bootstrapAdmin=dex~gate-probe")
 
-    fields = re.findall(r"([a-z-]*(?<!minio-)secret-key)=@\"([^\"]+)\"", rendered)
+    fields = re.findall(r"([a-z-]*(?<!object-store-)secret-key)=@\"([^\"]+)\"", rendered)
     assert fields, "the seed writes no scoped secret field, so this gate would pass vacuously"
     offenders = [f"{field}={source}" for field, source in fields if "/seed/scoped-" not in source]
     assert offenders == [], "a SCOPED identity is published with the ROOT storage secret:\n  " + "\n  ".join(offenders)
@@ -188,39 +188,21 @@ def _job_by_component(rendered: str, component: str) -> str | None:
     return None
 
 
-def _run_bucket_init(rendered: str, monkeypatch: pytest.MonkeyPatch) -> tuple[int, set[str]]:
-    """Run the rendered bucket-init Job's own argv through `scripts/ensure_bucket.py`'s own `main` over an
-    EMPTY moto store; return its exit code and the buckets the store then holds.
+def _hook_buckets(rendered: str) -> list[str]:
+    """The buckets the scoped-users hook's provisioning step is told to create, in order (`rustfs_admin.py --bucket`).
 
-    BOTH HOPS IN ONE RUN: the render decides what the Job names and the script decides what happens to
-    each name, so a check of either half alone passes while the other half drops a bucket.
+    The step makes each one on the store it provisions (the `rustfs-provisioning` lane runs it against a real RustFS),
+    so what is left to hold offline is the render: which names reach it.
     """
-    from moto import mock_aws
-
-    job = _job_by_component(rendered, "minio-mkbucket")
-    assert job is not None, "the bucket-init Job does not render"
-    command = yaml.safe_load(job)["spec"]["template"]["spec"]["containers"][0]["command"]
-    assert command[:2] == ["python", "/srv/ensure_bucket.py"], f"the Job no longer runs the bucket script this test drives: {command[:2]}"
-
-    spec = importlib.util.spec_from_file_location("ensure_bucket_under_test", REPO / "scripts" / "ensure_bucket.py")
-    assert spec is not None and spec.loader is not None
-    script = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(script)
-    # The Job's endpoint is the in-cluster Service, so the env chain must not point anywhere but moto.
-    for name in ("RASK_S3_ENDPOINT_URL", "S3_ENDPOINT_URL", "HCP_ENDPOINT", "HCP_USERNAME", "HCP_PASSWORD"):
-        monkeypatch.delenv(name, raising=False)
-    monkeypatch.setenv("AWS_REGION", "us-east-1")
-    monkeypatch.setattr(script.time, "sleep", lambda _seconds: None)
-    with mock_aws():
-        import boto3
-
-        exit_code = script.main(command[1:])
-        present = {bucket["Name"] for bucket in boto3.client("s3", region_name="us-east-1").list_buckets()["Buckets"]}
-    return exit_code, present
+    job = _job_by_component(rendered, "object-store-scoped-users")
+    assert job is not None, "the scoped-users hook does not render"
+    script = yaml.safe_load(job)["spec"]["template"]["spec"]["containers"][0]["command"][-1]
+    argv = shlex.split(script[script.index("exec python /srv/rustfs_admin.py") :].replace("\\\n", " "))
+    return [argv[i + 1] for i, arg in enumerate(argv) if arg == "--bucket"]
 
 
-def test_the_bucket_init_creates_every_platform_bucket_and_every_zone(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-    """Every bucket a value hands the bucket-init Job must exist once it has run on an EMPTY store.
+def test_the_hook_creates_every_platform_bucket_and_every_zone() -> None:
+    """Every bucket a value names reaches the step that creates it.
 
     Each source is its own hop in the template, and a hop dropped is invisible while another value names
     the same bucket. So the root, the platform bucket and the zone here are each named by one value only.
@@ -228,31 +210,31 @@ def test_the_bucket_init_creates_every_platform_bucket_and_every_zone(monkeypatc
     rendered = _helm_template(
         "singleTenant.enabled=true",
         "explorer.enabled=true",
-        "minio.bucket=root-x",
-        "minio.buckets={extra-platform}",
+        "objectStore.bucket=root-x",
+        "objectStore.buckets={extra-platform}",
         "medallion.buckets.gold=acme-gold",
     )
-    exit_code, present = _run_bucket_init(rendered, monkeypatch)
 
-    assert exit_code == 0, f"the bucket-init Job fails on a store it provisioned itself (exit {exit_code}):\n{capsys.readouterr().err}"
-    missing = {"root-x", "extra-platform", "acme-gold"} - present
-    assert not missing, f"the Job left these buckets uncreated: {sorted(missing)}"
+    missing = {"root-x", "extra-platform", "acme-gold"} - set(_hook_buckets(rendered))
+
+    assert not missing, f"the hook is told to create none of these buckets: {sorted(missing)}"
 
 
-def test_a_renamed_bucket_leaves_nothing_behind_under_its_old_name(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-    """Rename the root: the Job makes it under its new name only. A default spelled a second time in the values
-    shows up here as a bucket the Job makes under the old name, which nothing uses.
+def test_a_renamed_bucket_leaves_nothing_behind_under_its_old_name() -> None:
+    """Rename the root: the hook makes it under its new name only. A default spelled a second time in the values
+    shows up here as a bucket the hook makes under the old name, which nothing uses.
 
-    With no platform bucket declared the platform set is empty, which is the render that hands the Job an empty
+    With no platform bucket declared the platform set is empty, which is the render that hands the hook an empty
     name unless the template drops it.
     """
     values = yaml.safe_load((CHART / "values.yaml").read_text())
-    spellings = {"root-x", values["minio"]["bucket"]}
-    rendered = _helm_template("singleTenant.enabled=true", "explorer.enabled=true", "minio.bucket=root-x", "minio.buckets=null")
-    exit_code, present = _run_bucket_init(rendered, monkeypatch)
+    spellings = {"root-x", values["objectStore"]["bucket"]}
+    rendered = _helm_template("singleTenant.enabled=true", "explorer.enabled=true", "objectStore.bucket=root-x", "objectStore.buckets=null")
 
-    assert exit_code == 0, f"the bucket-init Job fails on a store it provisioned itself (exit {exit_code}):\n{capsys.readouterr().err}"
-    assert present & spellings == {"root-x"}, f"the Job made {sorted(present & spellings)} of {sorted(spellings)}, wanted ['root-x']"
+    buckets = _hook_buckets(rendered)
+
+    assert set(buckets) & spellings == {"root-x"}, f"the hook makes {sorted(set(buckets) & spellings)} of {sorted(spellings)}, wanted ['root-x']"
+    assert "" not in buckets and len(buckets) == len(set(buckets)), f"the hook is told to create {buckets}"
 
 
 def test_every_dapr_annotated_pod_carries_the_injector_webhook_label() -> None:
@@ -303,6 +285,8 @@ _REAL_REGISTRY = (
     "auth.oidc.connectors.ldap=corp",
     "signing.provisioned=true",
     "nats.auth.provisioned=true",
+    "objectStore.enabled=false",
+    "objectStore.externalEndpoint=https://s3.example.com",
 )
 
 
@@ -421,42 +405,48 @@ def test_every_DURABLE_pubsub_component_has_a_sidecar_retry_target() -> None:
     )
 
 
-def test_the_object_store_carries_NO_plaintext_credential() -> None:
-    """The object store's OIDC client secret must be a `secretKeyRef`, never a `value:`.
+def test_the_object_store_carries_NO_credential_in_its_environment() -> None:
+    """The store pod reads every credential from a mounted file; its environment carries none.
 
-    THE REGRESSION THIS GATES. `RUSTFS_IDENTITY_OPENID_CLIENT_SECRET` shipped as
-    a plaintext `value:` — readable in `kubectl get statefulset -o yaml`, `kubectl describe` and
-    `helm get manifest` — while every sibling credential in the estate was already behind a guard. It
-    sat outside that guard because the object store has no daprd sidecar and so cannot read the Dapr
-    secret store the fleet services use. That is the case the ESO-written `infra-credentials` exists
-    for, and this asserts the store actually uses it.
+    The root pair signs every request as root and every STS session token the store issues, so it is the
+    estate's storage trust root. RustFS reads it from `RUSTFS_ACCESS_KEY_FILE` / `RUSTFS_SECRET_KEY_FILE`
+    (`.claude/skills/rask-rustfs/references/config.md`), so no env var need hold it: an env value or a
+    `secretKeyRef` is readable by anything that can read the process environment, a file in a 0400 secret
+    volume is not. The OIDC client secret has no `_FILE` variant and web-identity verification needs only the
+    client id (`references/security.md` § Web identity), so the store is given none at all.
 
-    Latent-by-default is not a defence: `minio.oidc.enabled` is off in the shipped values, so this
-    renders only on estates running STS credential vending — which is precisely where a leaked client
-    secret is worth the most.
+    The files must also RESOLVE: a secret volume naming a key nothing writes is a pod that never starts.
     """
-    # The store is the minio fixture's ([[XC-131]]); the Secret it reads is the one release `rask` writes.
-    docs = list(chart_render.render(*chart_render.DEFAULT_ARGS, "--set", "minio.oidc.enabled=true"))
-    fixture = chart_render.render_fixture("minio", "--set", "oidc.enabled=true")
-    stores = [d for d in fixture if d.get("kind") == "StatefulSet" and any(c["name"] == "minio" for c in d["spec"]["template"]["spec"]["containers"])]
+    docs = list(chart_render.render(*chart_render.DEFAULT_ARGS))
+    written = _written_secrets(docs)
+    stores = [d for d in chart_render.render_fixture("rustfs") if d.get("kind") == "StatefulSet"]
     assert stores, "the object store did not render — this gate would pass vacuously"
 
     for store in stores:
-        for container in store["spec"]["template"]["spec"]["containers"]:
-            for env in container.get("env") or []:
-                if not str(env.get("name", "")).endswith("_CLIENT_SECRET"):
-                    continue
-                assert "value" not in env, f"{env['name']} renders a PLAINTEXT value on the store: {env!r}"
-                ref = ((env.get("valueFrom") or {}).get("secretKeyRef")) or {}
-                assert ref.get("name") and ref.get("key"), f"{env['name']} has neither a value nor a usable secretKeyRef: {env!r}"
+        pod = store["spec"]["template"]["spec"]
+        volumes = {v["name"]: v for v in pod.get("volumes") or []}
+        for container in [*pod.get("initContainers", []), *pod["containers"]]:
+            env = container.get("env") or []
+            for entry in env:
+                assert "valueFrom" not in entry, f"{entry['name']} reaches the store's environment from a reference: {entry!r}"
+                name = str(entry["name"])
+                if not name.endswith("_FILE"):
+                    assert not re.search(r"(SECRET|ACCESS_KEY|PASSWORD|TOKEN)", name), f"{name} carries a credential in the store's env"
 
-                # The reference must RESOLVE — a secretKeyRef at an absent key is a pod that never
-                # starts, and it would only surface on the enabled path, which is the narrowest
-                # possible place to discover it.
-                written = _written_secrets(docs)
-                keys = written.get(ref["name"])
-                assert keys is not None, f"{env['name']} references Secret {ref['name']!r}, which nothing rask's chart renders writes"
-                assert ref["key"] in keys, f"{env['name']} references key {ref['key']!r}, absent from Secret {ref['name']!r} (has {sorted(keys)})"
+            files = {e["name"]: str(e.get("value", "")) for e in env if e["name"] in ("RUSTFS_ACCESS_KEY_FILE", "RUSTFS_SECRET_KEY_FILE")}
+            assert set(files) == {"RUSTFS_ACCESS_KEY_FILE", "RUSTFS_SECRET_KEY_FILE"}, f"the store reads its root pair from {sorted(files)}"
+            for var, path in files.items():
+                mount = next((m for m in container.get("volumeMounts") or [] if path.startswith(m["mountPath"].rstrip("/") + "/")), None)
+                assert mount is not None, f"{var}={path} is under no mount of the store container"
+                secret = (volumes.get(mount["name"]) or {}).get("secret")
+                assert secret, f"{var}={path} is mounted from {mount['name']!r}, not a secret volume"
+                assert secret.get("optional") is not True, f"{var}'s secret volume is optional: the store would boot on its default root pair"
+                filename = path.removeprefix(mount["mountPath"].rstrip("/") + "/")
+                keys = [i["key"] for i in secret.get("items") or [] if i["path"] == filename]
+                assert keys, f"{var}={path} maps to no key of Secret {secret['secretName']!r}"
+                held = written.get(secret["secretName"])
+                assert held is not None, f"{var} reads Secret {secret['secretName']!r}, which nothing rask's chart renders writes"
+                assert keys[0] in held, f"{var} reads key {keys[0]!r}, absent from Secret {secret['secretName']!r} (has {sorted(held)})"
 
 
 def test_the_notifications_pod_asks_for_a_sidecar_and_is_allowed_to_receive_one() -> None:
@@ -661,10 +651,10 @@ def test_every_bus_client_dials_the_bus_the_estate_names_and_the_render_runs_non
     assert not bus, f"the render runs part of a NATS bus, which is the platform's: {bus}"
 
 
-@pytest.mark.parametrize("stand_in", ["dex", "minio", "openbao"])
+@pytest.mark.parametrize("stand_in", ["dex", "rustfs", "openbao"])
 def test_the_render_runs_no_development_stand_in(stand_in: str) -> None:
     """[[XC-131]]: the development stand-ins are fixtures (ADR 0153), so a render with every gate that names one on
-    (`dex.enabled`, `minio.enabled`, `openbao.enabled`) runs no pod of it and serves none; rask reaches each by its
+    (`dex.enabled`, `objectStore.enabled`, `openbao.enabled`) runs no pod of it and serves none; rask reaches each by its
     endpoint."""
     docs = chart_render.render(*chart_render.DEFAULT_ARGS, "--set", "auth.enabled=true")
     found = [
@@ -1003,7 +993,7 @@ def test_the_chart_TURNS_DOCS_OFF_by_default_and_ON_when_asked() -> None:
 #:    silently pre-empt it. It is listed HERE, visibly, rather than being missing from a
 #:    hand-written first-party tuple where nobody could tell the difference.
 _UNCOVERED_DEPLOYMENTS = (
-    "dapr", "nats", "openfga", "dex", "minio",
+    "dapr", "nats", "openfga", "dex", "rustfs",
     "otel-collector",
 )  # fmt: skip
 

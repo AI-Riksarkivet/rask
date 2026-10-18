@@ -13,7 +13,7 @@ signed with what the catalog vended, over what it brought. moto lets an unsigned
 with no credential at all would prove nothing here.
 
 The writer runs where the catalog's own store address does not answer it, as an off-cluster client cannot resolve
-``rask-minio``: that address is a proxy admitting only requests signed with the estate key, and the catalog vends the
+``rask-rustfs``: that address is a proxy admitting only requests signed with the estate key, and the catalog vends the
 store's address for clients (``LANCE_S3_VENDED_ENDPOINT``). pylance applies the vended ``storage_options`` over the
 client's own (measured on pylance 13.0.0), so the endpoint the catalog vends is the one the client writes to.
 

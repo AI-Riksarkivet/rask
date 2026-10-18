@@ -199,6 +199,7 @@ nav = [
         "adr/0163-an-erasure-is-an-obligation-a-job-fulfils-and-the-catalog-verifies.md",
         "adr/0164-a-stock-client-commits-on-a-branch-through-create-table-version.md",
         "adr/0165-the-edge-is-the-platforms-gateway-api.md",
+        "adr/0168-the-development-object-store-is-rustfs.md",
       ]},
       { "Tier Governance" = "TIER-GOVERNANCE.md" },
       { "Lineage" = "LINEAGE.md" },

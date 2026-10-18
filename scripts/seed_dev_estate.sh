@@ -129,7 +129,7 @@ say "3/4 lakehouse: the annotations table, created through the catalog"
 if [ "${RASK_SEED_SKIP_LAKEHOUSE:-0}" = "1" ]; then
   echo "  skipped (RASK_SEED_SKIP_LAKEHOUSE=1)"
 else
-  kubectl port-forward -n "$NS" svc/rask-minio 19900:9000 >/dev/null 2>&1 &
+  kubectl port-forward -n "$NS" svc/rask-rustfs 19900:9000 >/dev/null 2>&1 &
   RUSTFS_PID=$!
   kubectl port-forward -n "$NS" svc/rask-catalog 12433:2333 >/dev/null 2>&1 &
   CATALOG_PID=$!

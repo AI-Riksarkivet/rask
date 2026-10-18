@@ -88,13 +88,11 @@ func (m *Rask) governedStack(ctx context.Context, src *dagger.Directory) (*gover
 		WithExposedPort(9000).
 		AsService()
 
-	// THE ESTATE'S OWN S3 SEAM, not a third-party CLI. `minio/mc` refuses anonymous pulls on every
-	// registry ([[XC-075]]) — Docker Hub hands out a token with `access: []`, quay.io one with
-	// `actions: []` and a 401 on the manifest — so this lane could not start its object store at all
-	// and `e2e-auth` failed on the image RESOLVE rather than on anything it tests. `m.base` carries
-	// uv, python and this repo; `packages/storage` is the same client the fleet uses, in an image no
-	// registry can withdraw. The retry `mc` needed rides along in the script: a service binding
-	// resolves before the store is listening.
+	// THE ESTATE'S OWN S3 SEAM, not a third-party CLI image: a registry can close one to anonymous pulls
+	// ([[XC-075]]: Docker Hub hands out a token with `access: []`, quay.io one with `actions: []` and a 401 on
+	// the manifest), and the lane then fails on the image RESOLVE rather than on anything it tests. `m.base`
+	// carries uv, python and this repo; `packages/storage` is the same client the fleet uses, in an image no
+	// registry can withdraw. The script retries: a service binding resolves before the store is listening.
 	if _, err := m.base(src).
 		WithServiceBinding("store", store).
 		WithEnvVariable("RASK_S3_ENDPOINT_URL", "http://store:9000").

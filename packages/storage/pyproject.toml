@@ -1,7 +1,7 @@
 [project]
 name = "storage"
 version = "0.1.0"
-description = "Filesystem and S3 (MinIO/rustfs/AWS) source/sink helpers used by runner and core."
+description = "Filesystem and S3 (RustFS/AWS/any S3) source/sink helpers used by runner and core."
 requires-python = ">=3.13"
 license = "Apache-2.0"
 dependencies = [

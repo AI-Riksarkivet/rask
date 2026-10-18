@@ -194,7 +194,8 @@ func (m *Rask) Charts(
 // platform's NATS bus the same way: a prerequisite rask never installs ([[XC-129]]), and `route.*` the platform's Gateway
 // the routes attach to and its in-cluster address (ADR 0165). `networkPolicy.apiServerEgress`, `route.edgeEgress` and
 // `openbao.egress` state the peers the isolation layer admits the API server, the Gateway and the platform's secret store
-// at, which no URL can derive ([[XC-143]]).
+// at, which no URL can derive ([[XC-143]]). `objectStore.externalEndpoint` names the platform's S3: a real deployment
+// refuses the development store (`templates/prod-credentials.yaml`), whose root signs every STS token on RustFS.
 const renderArgs = "--set image.repository=ghcr.io/example/rask " +
 	"--set-string ray.dashboardUrl=http://ray.example.com:8265 " +
 	"--set-string nats.url=nats://nats.example.com:4222 " +
@@ -215,6 +216,8 @@ const renderArgs = "--set image.repository=ghcr.io/example/rask " +
 	"--set openbao.egress[0].ports[0].port=8200 " +
 	"--set signing.provisioned=true " +
 	"--set nats.auth.provisioned=true " +
+	"--set objectStore.enabled=false " +
+	"--set-string objectStore.externalEndpoint=https://s3.example.com " +
 	"--set dex.enabled=false"
 
 // networkPolicyGate: the NetworkPolicy layer is off by default and, when flipped on, renders the full

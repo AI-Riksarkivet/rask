@@ -36,7 +36,7 @@ then writes it, treating a duplicate-write 400/409 as success.
 ## `"helm.sh/hook-weight": "10"`
 
 After every hook this Job waits on: `openfga-model` (0), whose model must hold the relations it writes, and
-`minio-scoped-users` (5), whose S3 user the catalog it waits for cannot start without. On a first install the latter is
+`object-store-scoped-users` (5), whose S3 user the catalog it waits for cannot start without. On a first install the latter is
 `post-install` only, and at one weight Helm runs the two by name, this Job first, so the install timed out on it
 (XC-133, CI run 38217921913). Pinned by `tests/unit/test_the_authorization_model_reaches_the_store.py`.
 
@@ -51,7 +51,7 @@ before-hook-creation delete policy never matches the previous one — without a 
 The explicit component label is the P4 landmine (docs/adr/0124-chart-unification-one-control-plane-each-one-object-store.md): hook pods without one are invisible to any
 component-scoped NetworkPolicy `from` list. Today the openfga pods sit under the general
 intra-namespace ingress allow, but the label keeps this hook admissible (and greppable) the day
-the openfga ingress gets an exclusive client list like openbao/age/minio.
+the openfga ingress gets an exclusive client list like openbao/age/the object store.
 
 ## `subject = {{ include "lance.bootstrapAdmin" . | quote }}`
 

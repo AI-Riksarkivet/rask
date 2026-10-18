@@ -40,7 +40,7 @@ Current deployables (each = a workspace member + a `.docker/<name>.dockerfile`):
 
 **The product chart deploys these and nothing it does not own** (ADR 0153). The prerequisites (the External Secrets
 Operator, the Dapr control plane, NATS JetStream, the CloudNativePG operator, the Ray engine, the telemetry store) and
-the development stand-ins (Dex, MinIO, OpenBao) are each their own release, installed in development from
+the development stand-ins (Dex, RustFS, OpenBao) are each their own release, installed in development from
 `deploy/fixtures/<name>` by `make k3s-fixtures`; OpenFGA and the Postgres (`rask-age`) behind OpenFGA and the Dapr state store stay optional in the
 chart and are the platform's in production (`auth.fgaApiUrl`, `age.externalHost`). A new deployable is a chart
 Deployment; a new piece of infrastructure is a fixture, never a subchart (`rask-helm` §2).

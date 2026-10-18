@@ -33,7 +33,7 @@ from maintenance.core.config import MaintenanceSettings
 from maintenance.services import credentials
 
 
-AMBIENT = {"aws_access_key_id": "minioadmin"}
+AMBIENT = {"aws_access_key_id": "rustfsadmin"}
 SCOPED = {"aws_access_key_id": "SCOPED"}
 CASCADE_URI = "s3://lance-catalog/medallion/bronze"
 FLAT_URI = "s3://lance-catalog/6ecbe11e_transcripts_v2$annotations"

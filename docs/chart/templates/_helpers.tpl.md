@@ -44,8 +44,9 @@ Component labels: pass (list . "<component>")
 
 ## `{{- define "rask.daprPodLabels" -}}`
 
-The ONE store's root identity is minio.accessKey (a value) and the store's `minio-secret-key`
-(never a value): the server, `<release>-infra-credentials` and the hooks all read that pair.
+The ONE store's root identity is objectStore.accessKey (a value) and the store's `object-store-secret-key`
+(never a value), held together in `<release>-object-store-root`: the dev store and the scoped-users hook are its
+only readers, since on RustFS the root secret signs every STS session token (ADR 0168).
 
 Dapr sidecar pod annotations (no-op unless dapr.enabled) — the ONE annotation surface for the whole
 estate: the rask fleet AND the lance planes (services.yaml catalog/lineage,
@@ -223,7 +224,7 @@ outnumbered `GET /api/health` three to one.
 lance-ns — grafted verbatim from lance-ns main@083b49a chart/templates/_helpers.tpl.
 
 Every one of these is referenced by a grafted lance template (services.yaml, maintenance.yaml,
-explorer.yaml, fleet.yaml, minio-buckets.yaml, openbao-seed.yaml, age-postgres.yaml,
+explorer.yaml, fleet.yaml, object-store-scoped-users.yaml, openbao-seed.yaml, age-postgres.yaml,
 otel-collector.yaml, network-policy.yaml, ha.yaml, runners.yaml, …). None of them
 was renamed: no lance name collided with a rask name.
 
@@ -233,10 +234,10 @@ VALUES THEY REQUIRE (the values.yaml merge must land these or the render breaks)
   idleTimeoutSeconds,oidc.*} · route.edgeUrl · image.catalog.{repository,tag} · lifecycle.preStopSeconds ·
   medallion.buckets · nats.url ·
   observability.{enabled,environment} · openbao.{enabled,port,externalAddr} · pubsub.name ·
-  resources.{default,<component>} · minio.{bucket,port,externalEndpoint} · security.readOnlyRootFilesystem ·
+  resources.{default,<component>} · objectStore.{bucket,port,externalEndpoint} · security.readOnlyRootFilesystem ·
   services.{catalog,lineage}.{port,daprAppId} · services.lineage.relay.bindingName
-`minio.bucket` (singular) is the one that is easy to lose: rask's values ship `minio.buckets` (a
-LIST) and lance's templates read `minio.bucket` (a STRING) — both must exist.
+`objectStore.bucket` (singular) is the one that is easy to lose: rask's values ship `objectStore.buckets` (a
+LIST) and lance's templates read `objectStore.bucket` (a STRING) — both must exist.
 ---------------------------------------------------------------------------------------------------
 
 Release name is the fullname (install as `helm install rask ./chart` → all names = rask-*).
@@ -290,9 +291,9 @@ Answers the string "true" or "" so a caller can use it in a `ternary` or an `if`
 
 In-cluster hostnames (subcharts derive their service name from the release).
 
-## `{{- define "lance.minioHost" -}}{{ include "rask.fullname" . }}-minio{{- end -}}`
+## `{{- define "lance.objectStoreHost" -}}{{ include "rask.fullname" . }}-rustfs{{- end -}}`
 
-The ONE object store's S3 host — the Service in front of the minio fixture's StatefulSet ([[XC-131]]).
+The ONE object store's S3 host — the Service in front of the rustfs fixture's StatefulSet ([[XC-131]]).
 P4's store unification (docs/adr/0124-chart-unification-one-control-plane-each-one-object-store.md) still holds ("the ONE store"); what changed with LH-133 is the store and
 therefore its Service name, since a first-party StatefulSet names its own Service
 to name is deleted, so fleet + lakehouse + observability all resolve the same endpoint.
@@ -318,6 +319,10 @@ CONSUMER endpoints — return the EXTERNAL override when set (the in-cluster com
 disabled, e.g. a managed S3 / Postgres / Vault / collector in prod), else the in-cluster address. The
 component's OWN Service/StatefulSet keeps the plain *Host helper above; only the apps that CONNECT switch.
 This is what makes the docs/DURABILITY.md tier-3 externalization real (values-prod.yaml sets the overrides).
+
+THE S3 ENDPOINT HAS NO SILENT DEFAULT: with `objectStore.enabled=false` and no `externalEndpoint` the render fails.
+The in-cluster address names the dev store's Service, so an estate without that store would otherwise dial a host
+nothing serves; the S3 behind a real estate is the platform's, and the chart only names it.
 
 ## `{{- define "lance.otlpEndpoint" -}}`
 
@@ -523,7 +528,7 @@ kind still schedules every replica. Gated by the caller on podDisruptionBudget.e
 that also bumps replicas). Call: include "lance.spreadConstraints" "<component-label>". (prod-readiness P2)
 
 Per-workload resource tier: resources.<comp> if defined, else resources.default. Lets a stateful store
-(age/minio) or the Arrow-IPC-buffering catalog be sized ABOVE the stateless-pod default without a
+(age) or the Arrow-IPC-buffering catalog be sized ABOVE the stateless-pod default without a
 per-template edit — just set resources.<comp> in values(-prod). Every workload shared one 1-CPU/512Mi
 default before, so the stores + the 256MiB-body catalog were sized like request pods (audit). Call:
 include "lance.resources" (dict "root" $ "comp" "catalog"). (prod-readiness P2)
@@ -852,11 +857,10 @@ Modes are unchanged (emptyDir | pvc | hostPath) and so is their rationale — se
 lance.bootstrapJobDeadline — the wall-clock ceiling on a bootstrap Job.
 
 WHY EVERY WAITING JOB NEEDS ONE, measured rather than argued. `backoffLimit` counts POD failures, and
-these Jobs wait on a dependency with a shell loop — `until mc alias set …; do echo wait-minio; sleep 3;
-done`. If the dependency never answers, the loop never exits, so the container never exits, so the pod
+these Jobs wait on a dependency with a loop. If the dependency never answers and the loop is unbounded, it never exits, so the container never exits, so the pod
 never fails, so `backoffLimit` never counts and `ttlSecondsAfterFinished` never fires (a TTL applies
 only after completion). The Job runs forever. Observed on the live estate 2026-09-24:
-`rask-minio-scoped-users-r229` Running 27h, its pod still printing `wait-minio`, provisioning nothing.
+the scoped-users Job of revision r229 Running 27h, its pod still printing its wait line, provisioning nothing.
 
 `activeDeadlineSeconds` is the only one of the three that bounds a pod that is HEALTHY and stuck, so it
 is the backstop the other two cannot be. Thirty minutes is deliberately generous — a bootstrap that has
@@ -870,10 +874,35 @@ one bound that applies actually fires here.
 ## `{{- define "lance.catalogSecretField" -}}`
 
 The bundle field the catalog reads its S3 secret from, and so the field a per-base credential carries.
+`objectStore.catalogAccessKey` is `required`: the catalog presents its own scoped identity (the `rask-catalog`
+policy), which signs its STS `AssumeRole` calls, and never the store's root, whose secret signs every STS session
+token on RustFS (ADR 0168), so there is no field to fall back to.
 
 ## `{{- define "lance.catalogKeyIdField" -}}`
 
-The bundle field the catalog reads its S3 key id from, beside the secret ([[XC-082]], ADR 0166).
+The bundle field the catalog reads its S3 key id from, beside the secret ([[XC-082]], ADR 0166), under the same
+`required`.
+
+## `{{- define "lance.mediaApps" -}}`
+
+The app-ids that read the media corpus with the `media-s3` identity: annotator and search. One derivation, read by
+the deny list in `lance.daprAppSpec` (every other app is denied `media-s3`).
+
+## `{{- define "lance.mediaIdentity" -}}`
+
+The corpus readers' access key, `objectStore.mediaAccessKey`, when explorer serves a corpus
+(`explorer.enabled` and `explorer.corpusS3Root`), else empty. Every consumer branches on this one value: the
+scoped-users hook's `rask-media` user and policy, the seed's `secret/media-s3`, and annotator's and search's
+`MEDIA_S3_ACCESS_KEY_ID` (explorer.yaml), so the user the store holds, the secret the store's seed writes and the
+key a pod presents cannot disagree. `required` while a corpus is served: a blank key would leave the two readers with
+no identity, and they never fall back to the root (ADR 0168).
+
+## `{{- define "lance.backupIdentity" -}}`
+
+The backups' access key, `objectStore.backupAccessKey`, when either backup CronJob is on
+(`backups.pgDump.enabled` or `backups.controlRoot.enabled`), else empty. One value gates the `rask-backup` user and
+policy, the seed's `secret/backup-s3`, ESO's read of it, the `<release>-backup-s3` Secret and both CronJobs'
+`AWS_ACCESS_KEY_ID`. `required` while a backup is on, so a backup never presents the store's root.
 
 ## `{{- define "lance.baseFixture" -}}`
 
@@ -887,7 +916,7 @@ cluster: `scoped_secret <identity> <file>` writes sha256("<identity>-s3-<root>")
 store's root secret in `$root`, never to output, argv or the render.
 
 WHY DERIVED. The two halves of a scoped pair are made by two pods, the dev OpenBao's seed (the field a
-service reads) and `minio-scoped-users` (`mc admin user add`), and they agree only by computing the same
+service reads) and `object-store-scoped-users` (RustFS `add-user`), and they agree only by computing the same
 function of the same inputs. Both read the root from a file, so naming an identity in a values file is
 the whole setting and no secret is a value ([[XC-004]]). Deterministic, so a re-run is not a rotation;
 rotating the root rotates every derived secret with it.
@@ -1159,6 +1188,16 @@ The graph backend's API key (values.yaml `services.lineage.forward.authSecret`),
 every other app's sidecar is denied it. Rendered only when a key is named, so an estate without one keeps every
 Configuration's spec, and therefore its name, unchanged.
 
+## `{{- $denied = concat $denied (list "nats-root" "nats-route" "object-store-root" "backup-s3") }}`
+
+SECRETS NO DAPR APP READS. `nats-root` and `nats-route` are the bus's trust root and route credential.
+`object-store-root` is the dev store's root pair, whose secret on RustFS signs every STS session token
+(GHSA-m77q-r63m-pj89): an app that could read it could forge any credential the catalog vends (ADR 0168). `backup-s3`
+belongs to the backup CronJobs, which have no sidecar and take it from ESO. Then each corpus identity is denied to
+every app but its readers: `media-s3` to all but `lance.mediaApps`, `viewer-s3` to all but the viewer, so a
+compromised app reads no identity but its own. `tests/unit/test_the_root_storage_secret_reaches_only_its_users.py`
+follows the root through this path with the other two (a mounted Secret, an ESO fetch).
+
 ## `{{- define "lance.daprAppConfigName" -}}`
 
 Named by the hash of its spec, so an edit renames it; the object and the pod's `dapr.io/config` both use this ([[LH-064]], values.yaml `signing:`).
@@ -1201,15 +1240,15 @@ The shape checks the mint and seed scripts share: an NKEY user seed is SU + 56 a
 
 ## `{{- define "lance.platformBuckets" -}}`
 
-The PLATFORM buckets, comma-joined: `minio.buckets`. The bucket-init
-Job creates them and `orphan_buckets` exempts them, both from here.
+The PLATFORM buckets, comma-joined: `objectStore.buckets`. The scoped-users hook
+creates them on the dev store and `orphan_buckets` exempts them, both from here.
 
 ## `{{- define "lance.maintenancePlatformBuckets" -}}`
 
 Buckets `orphan_buckets` must never report, as ONE expression both maintenance deployments read.
 The category's contract is that a clean report certifies the estate, so a finding no operator can
 action holds the total above zero forever and blocks the trash purge with it — the config's own
-comment records `rask-observability` doing exactly that until `minio.buckets` was wired in.
+comment records `rask-observability` doing exactly that until `objectStore.buckets` was wired in.
 
 A MULTIBASE DATA BASE IS THE SAME KIND OF THING and was missed: `catalog.multibase.dataBases` is an
 estate DECLARATION that a bucket exists and may be addressed, and no warehouse record claims it, so

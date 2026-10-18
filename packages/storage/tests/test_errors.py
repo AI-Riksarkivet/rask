@@ -21,7 +21,7 @@ def _client():
 def test_head_on_a_missing_bucket_is_always_a_storage_error() -> None:
     """A HEAD has no response body, so WHICH of the two it maps to is backend-dependent.
 
-    moto (like MinIO) still volunteers a `NoSuchBucket` code; AWS answers a bare `404`,
+    moto still volunteers a `NoSuchBucket` code; AWS answers a bare `404`,
     which is indistinguishable from a missing key and therefore lands on the key branch.
     Pinned as a `StorageError` either way — the taxonomy's contract is "never a raw
     botocore exception", and disambiguating a body-less 404 needs a bucket probe, which is

@@ -196,15 +196,15 @@ def _resolve_missing(client: object, exc: ObjectNotFoundError, *, store: str) ->
     """Turn a key-level not-found into the RIGHT 404, on any S3 backend.
 
     A `HEAD` has no response body, so some backends answer a missing bucket with a bare
-    `404` that is indistinguishable from a missing key (moto and MinIO volunteer
+    `404` that is indistinguishable from a missing key (moto volunteers
     `NoSuchBucket`; AWS does not). Rather than let the answer depend on which store is
     plugged in — the storage-agnostic contract forbids exactly that — probe the bucket
     once, on the error path only, and say which thing is actually absent.
 
     `exc.bucket` is the real bucket (that is what the boto call named), while `store` is what the
     CALLER addressed. The key-level answer uses the caller's vocabulary and the bucket-level one
-    uses the operator's — VS-22: both used to be the store name, so the bucket-not-found 404 sent an
-    operator to look for a `minio.buckets` entry that had never been named that.
+    uses the operator's (VS-22): a bucket-not-found 404 naming the store would send an operator to look
+    for an `objectStore.buckets` entry nobody named.
     """
     return _missing_bucket(exc.bucket) if _bucket_missing(client, exc.bucket) else NotFoundError(f"object not found: {store}/{exc.key}")
 

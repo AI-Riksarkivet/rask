@@ -1,0 +1,8 @@
+apiVersion: v2
+name: object-store
+description: >-
+  NOT FOR PRODUCTION. A development S3 store for rask: one RustFS server on one local volume, its root credential the
+  one rask's dev store issues. A platform runs its own S3; rask names it.
+type: application
+version: 0.2.0
+appVersion: "1.0.3"

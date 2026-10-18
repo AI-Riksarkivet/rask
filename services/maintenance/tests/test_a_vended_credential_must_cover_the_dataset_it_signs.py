@@ -32,7 +32,7 @@ from maintenance.core.config import MaintenanceSettings
 from maintenance.services import credentials
 
 
-AMBIENT = {"aws_access_key_id": "minioadmin"}
+AMBIENT = {"aws_access_key_id": "rustfsadmin"}
 SCOPED = {"aws_access_key_id": "SCOPED"}
 
 

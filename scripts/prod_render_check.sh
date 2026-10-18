@@ -47,6 +47,7 @@ COMMON=(--api-versions external-secrets.io/v1/ExternalSecret --api-versions dapr
         --set-string observability.export.endpoint=http://otlp.example.com:4318/v1/otlp
         --set-string auth.fgaApiUrl=https://fga.example.com
         --set-string age.externalHost=pg.example.com
+        --set-string objectStore.externalEndpoint=https://s3.example.com
         --set-string openbao.externalAddr=https://vault.example.com:8200
         --set-json 'openbao.egress=[{"to":[{"ipBlock":{"cidr":"198.51.100.20/32"}}],"ports":[{"protocol":"TCP","port":8200}]}]'
         --set-json 'route.parentRefs=[{"name":"edge","namespace":"edge-system"}]'
@@ -75,8 +76,8 @@ grep -q "name: rask-allow-secret-store-egress" "$OUT" || fail "prod NetworkPolic
 # two explicit rules must render: 4222 (clients, port-scoped from any in-namespace pod — the daprd
 # sidecars live in nearly every app pod) and 8222 (monitor) from the web-lakehouse zone pods. The windowed
 # greps pin the from-selector + port to THEIR rule, not a stray match elsewhere.
-grep -qF "values: [openbao, age, minio, nats, authorization-controller]" "$OUT" \
-  || fail "the general intra-namespace ingress allow must exclude the nats pods (with openbao/age/minio)"
+grep -qF "values: [openbao, age, rustfs, nats, authorization-controller]" "$OUT" \
+  || fail "the general intra-namespace ingress allow must exclude the nats pods (with openbao/age/rustfs)"
 grep -q "name: rask-nats-clients" "$OUT" || fail "prod NetworkPolicy set missing the nats-clients (4222) rule"
 grep -A20 "name: rask-nats-clients" "$OUT" | grep -q "port: 4222" \
   || fail "the nats-clients rule must target the 4222 client port"
@@ -189,14 +190,11 @@ peak=$((cap * body + headroom))
 [ "$peak" -le "$(to_bytes "$cat_mem")" ] \
   || fail "catalog sizing incoherent: $cap × $body buffered bodies + 512Mi headroom = $peak bytes > the $cat_mem limit"
 
-# 10. Externalizing the object store leaves no in-cluster store DNS anywhere in the render (app env, jobs, configs).
-EXT_S3=https://s3.ext.example.com
-atomic=$(helm template rask "$CHART" -f "$PROD_VALUES" \
-  --set image.catalog.tag=v0 --set frontend.image.tag=v0 \
-  --set backups.volumeSnapshot.snapshotClassName=csi-snapclass --set route.hostnames[0]=lance.example.com \
-  --set minio.enabled=false --set minio.externalEndpoint="$EXT_S3" "${COMMON[@]}")
-grep -q "rask-minio:9000" <<<"$atomic" && fail "externalizing the object store still leaks in-cluster store DNS"
-grep -q "$EXT_S3" <<<"$atomic" || fail "the externalized object store endpoint reaches nothing in the render"
+# 10. The production overlay names the platform's S3: no in-cluster store DNS anywhere in the render (app env, jobs,
+# configs), nothing provisioned on the store with its root, and the endpoint it names reaches the render.
+grep -q "rask-rustfs" "$OUT" && fail "a production render dials the development object store"
+grep -q "app.kubernetes.io/component: object-store-scoped-users" "$OUT" && fail "a production render provisions users on the store with its root: objectStore.enabled must be false"
+grep -q "https://s3.example.com" "$OUT" || fail "the platform's S3 at objectStore.externalEndpoint reaches nothing in the render"
 
 # 11. The prod render takes every credential from the store through ESO: the SecretStore and the
 # ExternalSecrets render, no Secret the chart renders carries a credential key, and nothing is generated
@@ -206,10 +204,9 @@ grep -q "name: rask-infra-credentials" "$OUT" || fail "prod must render the infr
 grep -q "kind: Password" "$OUT" && fail "prod must not generate credentials (the Password generator is the dev OpenBao's)"
 
 # 12. Every Job/CronJob POD TEMPLATE carries a component label (the P4 landmine, docs/adr/0124-chart-unification-one-control-plane-each-one-object-store.md, audit 2026-07-24: the
-# unlabeled minio-mkbucket hook matched no minio-ingress client and every prod install wedged before a
-# bucket existed). Pod-template label indents only — 8 spaces (Job) / 12 (CronJob) — so the heredoc'd
-# VolumeSnapshot labels inside a command string can't satisfy the check. Then pin the load-bearing pair:
-# the mkbucket pod label AND its admission in the minio ingress client list.
+# an unlabeled bucket-provisioning hook matches no object-store ingress client, and every prod install wedges before
+# a bucket exists). Pod-template label indents only — 8 spaces (Job) / 12 (CronJob) — so the heredoc'd
+# VolumeSnapshot labels inside a command string can't satisfy the check.
 # post-delete hooks are exempt: the landmine class is INSTALL-time wedging (an unlabeled hook pod
 # that no netpol ingress rule admits), and a post-delete hook cannot wedge an install. Today's only
 # such job is the vendored nfd 0.17.3 prune (node-API-only, needs no ingress admission), whose
@@ -224,8 +221,6 @@ jobs_missing=$(awk '
 ' "$OUT")
 [ -z "$jobs_missing" ] \
   || fail "Job/CronJob pod templates missing the component label (invisible to component-scoped NetworkPolicies): $(tr '\n' ' ' <<<"$jobs_missing")"
-grep -q "app.kubernetes.io/component: minio-mkbucket" "$OUT" || fail "the mkbucket hook pod must carry its component label"
-grep -q -- "- minio-mkbucket" "$OUT" || fail "the minio ingress client list must admit the mkbucket hook component"
 
 # POD IDENTITY. Asserted on the RENDER: a template that stops naming its SA is invisible to any values
 # grep. Every workload's pod names a ServiceAccount, and every name it gives is one this render creates, so no
@@ -257,4 +252,4 @@ grep -q 'dapr.io/sidecar-seccomp-profile-type: RuntimeDefault' "$OUT" \
 grep -q "deployment.environment.name=prod" "$OUT" \
   || fail "prod telemetry must carry deployment.environment.name=prod (observability.environment) — it renders $(grep -oE 'deployment\.environment\.name=[^,\"]*' "$OUT" | sort -u | head -1)"
 
-echo "✓ prod-render-check: NetworkPolicy=$np, OpenFGA+Postgres+secret store external, Dapr control plane external, PDBs=$pdb (backends+zones named), spread=$spread, tiers=$tiers, export named, no-bespoke-scraper, write-cap=$cap fits $cat_mem, minio-externalize atomic, ESO path renders, hook pods labeled, ServiceAccounts=$sa, token-automount-refusals=$automount"
+echo "✓ prod-render-check: NetworkPolicy=$np, OpenFGA+Postgres+secret store external, Dapr control plane external, PDBs=$pdb (backends+zones named), spread=$spread, tiers=$tiers, export named, no-bespoke-scraper, write-cap=$cap fits $cat_mem, object-store-externalize atomic, ESO path renders, hook pods labeled, ServiceAccounts=$sa, token-automount-refusals=$automount"

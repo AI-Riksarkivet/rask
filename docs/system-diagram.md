@@ -31,7 +31,7 @@ lineage feed row and edge name (how/who). The diagram is built around that singl
 | Plane | Question | Component in the diagram |
 |---|---|---|
 | **Control** | who may, where is it | **Catalog** (FastAPI/pylance) + **OIDC** + **OpenFGA** |
-| **Data** | the bytes | **Object store** (MinIO / S3-compatible), reached by **Mode B** (server-mediated) or **STS vending** |
+| **Data** | the bytes | **Object store** (S3-compatible; RustFS in development), reached by **Mode B** (server-mediated) or **STS vending** |
 | **Provenance** | how/who did it change | **Lineage svc** (OpenLineage) → **commit feed + edge list** (Lance tables in the catalog's provenance namespace) → a bring-your-own graph backend *(catalog commit-events + job-emitted)* |
 
 > ✅ **Provenance records the verified principal (audit `w8u4rc2tg` P0 #2/#3).** The catalog emits
@@ -51,18 +51,18 @@ flow runs in both — only the credential/byte-path changes.
 
 | | **Mode B** *(server-mediated, default)* | **STS vending** *(S3 direct, recommended)* |
 |---|---|---|
-| Object store | MinIO / S3-compatible (AWS, Ceph RGW) | same — any STS-capable S3 (MinIO / Ceph / AWS) |
+| Object store | S3-compatible (RustFS, AWS, Ceph RGW) | same — any STS-capable S3 (RustFS / Ceph / AWS) |
 | Credential | **none leaves the catalog** | short-TTL, table-scoped **STS token** (`AssumeRole`) |
 | Byte path | **server-mediated** (catalog reads on the client's behalf) | client reads storage **directly** with the vended token |
 | OpenBao | not consulted per-request | catalog reads its base/role credential (Dapr secret store — built) to mint STS |
 
-The target is **S3-compatible storage** — MinIO is the default test backend; AWS S3, Ceph RGW and
+The target is **S3-compatible storage** — RustFS is the development and CI backend (ADR 0168); AWS S3, Ceph RGW and
 GCS-via-interop work the same way. The design is **vending-first** with a pluggable
 `CredentialVendor` (`services/catalog/core/vending.py`, three modes: `StsVendor` (`sts`),
 `WebIdentityVendor` (`web_identity`) and `ModeBVendor` (`mode_b`)).
 The toggle is the *credential-delivery* shape — both modes run on the **same** S3 storage.
 
-> ℹ️ **STS works on MinIO** (and Ceph RGW, AWS): `StsVendor` points boto3's STS client at the S3
+> ℹ️ **STS works on RustFS** (and Ceph RGW, AWS; measured on RustFS 1.0.1, 2026-10-18): `StsVendor` points boto3's STS client at the S3
 > endpoint and calls `AssumeRole` with an inline session policy scoped to the table's bucket/prefix
 > → a short-TTL `{access_key, secret_key, session_token}`. `WebIdentityVendor`
 > (`vending.mode=web_identity`) exchanges the caller's OIDC token through `AssumeRoleWithWebIdentity`
@@ -85,7 +85,7 @@ The toggle is the *credential-delivery* shape — both modes run on the **same**
 | **OpenBao** | seed (orange) | secrets · KV v2 — **catalog + lineage only**; jobs use workload identity (planned) |
 | **Catalog** | orch (sky) | FastAPI over native `pylance` `DirectoryNamespace`; the control plane |
 | **OpenFGA** | vector (violet) | authz (Postgres) — `can_*` actions, concentric owner⊇writer⊇reader, parent cascade |
-| **Object store** | vector (violet) | the data plane — MinIO / S3-compatible; the mode toggle swaps the credential path (Mode B vs STS), not the backend |
+| **Object store** | vector (violet) | the data plane — S3-compatible (RustFS in development); the mode toggle swaps the credential path (Mode B vs STS), not the backend |
 | **Lineage svc** | orch (sky) | FastAPI, no database; ingests OpenLineage, serves the commit feed (`GET /events`) and what derives from a table (`GET /tables/{name}/derived`), forwards every event to a graph backend |
 | **Provenance tables** | vector (violet) | `provenance$events` and `provenance$edges`: Lance tables in the catalog's provenance namespace, written through its `merge_insert` door as lineage's own principal |
 

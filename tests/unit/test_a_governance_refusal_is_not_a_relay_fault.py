@@ -15,7 +15,7 @@ once, and `drained=0 stranded=6` then reads as a wedged relay when the relay is 
 
 WHY NOT MOVE THE EVENT ASIDE to a `<outbox>/_refused/` prefix: that is a PutObject, and the chart grants
 the relay exactly `s3:DeleteObject` on its own outbox (`DrainItsOwnOutboxAndNothingElse` in
-`chart/templates/minio-scoped-users.yaml`). Widening that grant to tidy a counter would trade a real
+`chart/templates/object-store-scoped-users.yaml`). Widening that grant to tidy a counter would trade a real
 least-privilege boundary for a cosmetic one. The durable copy of a refusal is a row instead: the verdict
 and the event go to the provenance store's refusals table first ([[LH-182]]), and only then is the object dropped.
 Never destroy the only durable copy of a committed write's provenance to answer "you may not record this".

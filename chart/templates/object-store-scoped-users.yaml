@@ -1,0 +1,354 @@
+{{- $maint := .Values.objectStore.maintenanceAccessKey }}
+{{- $lineage := .Values.objectStore.lineageAccessKey }}
+{{- $viewer := .Values.objectStore.viewerAccessKey }}
+{{- $catalog := .Values.objectStore.catalogAccessKey }}
+{{- $media := include "lance.mediaIdentity" . }}
+{{- $backup := include "lance.backupIdentity" . }}
+{{- $fixture := include "lance.baseFixture" . | fromJson }}
+{{- if .Values.objectStore.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "rask.fullname" . }}-object-store-scoped-users-{{ include "rask.bootstrapRev" . }}
+  labels: {{- include "lance.labels" . | nindent 4 }}
+  {{- if not .Release.IsInstall }}
+  annotations:
+    "helm.sh/hook": pre-upgrade,post-upgrade
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation
+  {{- end }}
+spec:
+  ttlSecondsAfterFinished: 3600
+  {{- include "lance.bootstrapJobDeadline" . | nindent 2 }}
+  backoffLimit: 20
+  template:
+    metadata:
+      labels:
+        {{- include "rask.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: object-store-scoped-users
+    spec:
+      restartPolicy: OnFailure
+      securityContext: { fsGroup: 10001 }
+      serviceAccountName: {{ include "lance.fullname" . }}-sa-hooks
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      # THE ROOT PAIR IS A TRUST ROOT, NOT ONLY AN ADMIN LOGIN: RustFS signs every STS session token with the root
+      # secret, so whoever reads it can forge any vended credential. This hook and the store are its only readers
+      # (`<release>-object-store-root`), and here it reaches both containers as a FILE, never env or argv.
+      volumes:
+        {{- include "lance.tmpVolume" . | nindent 8 }}
+        - { name: keys, emptyDir: { medium: Memory, sizeLimit: 1Mi } }
+        - name: store-root
+          secret: { secretName: {{ include "lance.fullname" . }}-object-store-root, items: [{ key: object-store-secret-key, path: object-store-secret-key }], defaultMode: 0400 }
+      initContainers:
+        # Derives each scoped secret from the root secret (`lance.scopedSecretFn`), the same function the dev
+        # OpenBao seed runs, so the store and the secret store agree without one handing the other a key.
+        - name: derive
+          image: {{ include "lance.catalogImage" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- include "lance.rootlessSecurityContext" 10001 | nindent 10 }}
+          volumeMounts:
+            - { name: keys, mountPath: /keys }
+            - { name: store-root, mountPath: /store-root, readOnly: true }
+          env:
+            - { name: KEYS, value: /keys }
+            - { name: ROOT_FILE, value: /store-root/object-store-secret-key }
+          resources:
+            requests: { cpu: "10m", memory: "16Mi" }
+            limits: { cpu: "100m", memory: "32Mi" }
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              root=$(cat "$ROOT_FILE")
+              {{- include "lance.scopedSecretFn" . | nindent 14 }}
+              {{- range $id := list $maint $lineage $catalog $viewer $media $backup | compact | uniq }}
+              scoped_secret {{ $id }} "$KEYS/{{ $id }}"
+              {{- end }}
+              {{- range $ref, $_ := $fixture }}
+              scoped_secret {{ $ref }} "$KEYS/{{ $ref }}"
+              {{- end }}
+      containers:
+        # RustFS's native admin API, driven by `scripts/rustfs_admin.py` out of rask's own image: canned policies
+        # first, then each user (an existing one gets its secret set again) and its binding. A binding to a policy
+        # that does not exist denies the user's STS AssumeRole, so the script creates every policy before it binds
+        # any, and it deletes none. Every policy below names S3 actions only: no `admin:*`, no `sts:*` (RustFS
+        # evaluates AssumeRole deny-only, so a user needs a resolving binding and no grant), and no
+        # `s3:ForceDelete*`, which `s3:*` does not imply.
+        - name: provision
+          image: {{ include "lance.catalogImage" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- include "lance.rootlessSecurityContext" 10001 | nindent 10 }}
+          volumeMounts:
+            {{- include "lance.tmpMount" . | nindent 12 }}
+            - { name: keys, mountPath: /keys, readOnly: true }
+            - { name: store-root, mountPath: /store-root, readOnly: true }
+          resources:
+            requests: { cpu: "10m", memory: "64Mi" }
+            limits: { cpu: "200m", memory: "256Mi" }
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              mkdir -p /tmp/policies
+
+
+              {{- if $maint }}
+              # --- MAINTENANCE: rewrite data, never the records that govern the rewrite. -------------
+              cat >/tmp/policies/rask-maintenance.json <<'POLICY'
+              {
+                "Version": "2012-10-17",
+                "Statement": [
+                  {
+                    "Sid": "ListAccountForReconcileDriftReport",
+                    "Effect": "Allow",
+                    "Action": ["s3:ListAllMyBuckets"],
+                    "Resource": ["arn:aws:s3:::*"]
+                  },
+                  {
+                    "Sid": "RewriteDataInAnyBucketTheSweepDiscovers",
+                    "Effect": "Allow",
+                    "Action": [
+                      "s3:ListBucket",
+                      "s3:GetBucketLocation",
+                      "s3:GetObject",
+                      "s3:PutObject",
+                      "s3:DeleteObject",
+                      "s3:AbortMultipartUpload",
+                      "s3:ListMultipartUploadParts"
+                    ],
+                    "Resource": ["arn:aws:s3:::*", "arn:aws:s3:::*/*"]
+                  },
+                  {
+                    "Sid": "ForgetABaseRecordNeverWriteOne",
+                    "Effect": "Deny",
+                    "Action": ["s3:PutObject"],
+                    "Resource": ["arn:aws:s3:::*/_bases/*"]
+                  },
+                  {
+                    "Sid": "NeverTheRecordsThatGovernMaintenance",
+                    "Effect": "Deny",
+                    "Action": ["s3:PutObject", "s3:DeleteObject"],
+                    "Resource": [
+                      "arn:aws:s3:::*/_projects/*",
+                      "arn:aws:s3:::*/_protection/*",
+                      "arn:aws:s3:::*/_warehouses/*",
+                      "arn:aws:s3:::*/_gates/*",
+                      "arn:aws:s3:::*/__manifest/*"
+                    ]
+                  }
+                ]
+              }
+              POLICY
+              # The deny is on WRITES only: the sweep must READ `_warehouses/` to resolve the buckets it
+              # sweeps and `_protection/` to compute the pre-pass verdict, and blinding it there would
+              # widen what it destroys rather than narrow it.
+              #
+              # `_policies/` is NOT denied, and that exception is load-bearing rather than an oversight:
+              # `_stamp_cadence` writes the per-dataset cadence stamp under `_policies/state/` on every
+              # maintained dataset, and `_policy_skip_reason` reads a missing stamp as "maintain" — so
+              # denying it would silently stop the cadence pacing anything and compact every policied
+              # dataset on every tick, with nothing going red. The POLICY RECORDS themselves live at
+              # `_policies/<kind>/` and are written only by the catalog, which holds a different
+              # credential; this user can reach them, and narrowing that needs the stamp to move first.
+              {{- end }}
+
+              {{- if $lineage }}
+              cat >/tmp/policies/rask-lineage.json <<'POLICY'
+              {
+                "Version": "2012-10-17",
+                "Statement": [
+                  {
+                    "Sid": "FindTheBucket",
+                    "Effect": "Allow",
+                    "Action": ["s3:GetBucketLocation"],
+                    "Resource": ["arn:aws:s3:::*"]
+                  },
+                  {
+                    "Sid": "ListItsOwnOutbox",
+                    "Effect": "Allow",
+                    "Action": ["s3:ListBucket"],
+                    "Resource": ["arn:aws:s3:::*"],
+                    "Condition": { "StringLike": { "s3:prefix": ["_lineage_outbox", "_lineage_outbox/*"] } }
+                  },
+                  {
+                    "Sid": "DrainItsOwnOutboxAndNothingElse",
+                    "Effect": "Allow",
+                    "Action": ["s3:GetObject", "s3:DeleteObject"],
+                    "Resource": ["arn:aws:s3:::*/_lineage_outbox", "arn:aws:s3:::*/_lineage_outbox/*"]
+                  }
+                ]
+              }
+              POLICY
+              {{- end }}
+
+              {{- if $catalog }}
+              cat >/tmp/policies/rask-catalog.json <<'POLICY'
+              {
+                "Version": "2012-10-17",
+                "Statement": [
+                  {
+                    "Sid": "TheWholeDataPlaneItGoverns",
+                    "Effect": "Allow",
+                    "Action": [
+                      "s3:ListBucket", "s3:GetBucketLocation", "s3:ListAllMyBuckets",
+                      "s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload",
+                      "s3:CreateBucket", "s3:DeleteBucket"
+                    ],
+                    "Resource": ["arn:aws:s3:::*", "arn:aws:s3:::*/*"]
+                  }
+                ]
+              }
+              POLICY
+              {{- end }}
+
+              {{- if $viewer }}
+              cat >/tmp/policies/rask-viewer.json <<'POLICY'
+              {
+                "Version": "2012-10-17",
+                "Statement": [
+                  {
+                    "Sid": "BrowseAnythingItCanShow",
+                    "Effect": "Allow",
+                    "Action": ["s3:ListBucket", "s3:GetBucketLocation", "s3:GetObject"],
+                    "Resource": ["arn:aws:s3:::*", "arn:aws:s3:::*/*"]
+                  }
+                ]
+              }
+              POLICY
+              {{- end }}
+
+              {{- with $media }}
+              {{- $corpus := splitList "/" (trimSuffix "/" (trimPrefix "s3://" $.Values.explorer.corpusS3Root)) }}
+              {{- $prefix := join "/" (rest $corpus) }}
+              cat >/tmp/policies/rask-media.json <<'POLICY'
+              {
+                "Version": "2012-10-17",
+                "Statement": [
+                  {
+                    "Sid": "FindTheCorpus",
+                    "Effect": "Allow",
+                    "Action": ["s3:GetBucketLocation"],
+                    "Resource": ["arn:aws:s3:::{{ first $corpus }}"]
+                  },
+                  {
+                    "Sid": "ListTheCorpus",
+                    "Effect": "Allow",
+                    "Action": ["s3:ListBucket"],
+                    "Resource": ["arn:aws:s3:::{{ first $corpus }}"]{{ if $prefix }},
+                    "Condition": { "StringLike": { "s3:prefix": ["{{ $prefix }}", "{{ $prefix }}/*"] } }{{ end }}
+                  },
+                  {
+                    "Sid": "ReadTheCorpusAndNothingElse",
+                    "Effect": "Allow",
+                    "Action": ["s3:GetObject"],
+                    "Resource": ["arn:aws:s3:::{{ first $corpus }}/{{ if $prefix }}{{ $prefix }}/{{ end }}*"]
+                  }
+                ]
+              }
+              POLICY
+              {{- end }}
+
+              {{- with $backup }}
+              {{- $control := $.Values.objectStore.bucket }}
+              {{- $records := list "_projects" "_warehouses" "_trash" "_protection" "_policies" "_gates" "_bases" }}
+              {{- $dest := splitList "/" (trimSuffix "/" (trimPrefix "s3://" $.Values.backups.controlRoot.dest)) | compact }}
+              cat >/tmp/policies/rask-backup.json <<'POLICY'
+              {
+                "Version": "2012-10-17",
+                "Statement": [
+                  {
+                    "Sid": "FindTheBuckets",
+                    "Effect": "Allow",
+                    "Action": ["s3:GetBucketLocation"],
+                    "Resource": ["arn:aws:s3:::{{ $control }}"{{ if $dest }}, "arn:aws:s3:::{{ first $dest }}"{{ end }}]
+                  },
+                  {
+                    "Sid": "ListTheRecordsItCopiesAndItsOwnBackups",
+                    "Effect": "Allow",
+                    "Action": ["s3:ListBucket"],
+                    "Resource": ["arn:aws:s3:::{{ $control }}"],
+                    "Condition": { "StringLike": { "s3:prefix": [{{ range $records }}"{{ . }}", "{{ . }}/*", {{ end }}"_backups", "_backups/*"] } }
+                  },
+                  {
+                    "Sid": "ReadTheRecordsItCopies",
+                    "Effect": "Allow",
+                    "Action": ["s3:GetObject"],
+                    "Resource": [{{ range $i, $r := $records }}{{ if $i }}, {{ end }}"arn:aws:s3:::{{ $control }}/{{ $r }}/*"{{ end }}]
+                  },
+                  {
+                    "Sid": "WriteAndPruneItsOwnBackups",
+                    "Effect": "Allow",
+                    "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts"],
+                    "Resource": ["arn:aws:s3:::{{ $control }}/_backups/*"{{ if $dest }}, "arn:aws:s3:::{{ join "/" $dest }}/*"{{ end }}]
+                  }{{ if $dest }},
+                  {
+                    "Sid": "ListItsDestination",
+                    "Effect": "Allow",
+                    "Action": ["s3:ListBucket"],
+                    "Resource": ["arn:aws:s3:::{{ first $dest }}"]{{ with join "/" (rest $dest) }},
+                    "Condition": { "StringLike": { "s3:prefix": ["{{ . }}", "{{ . }}/*"] } }{{ end }}
+                  }{{ end }}
+                ]
+              }
+              POLICY
+              {{- end }}
+
+              {{- range $ref, $locs := $fixture }}
+              cat >/tmp/policies/rask-base-{{ $ref }}.json <<'POLICY'
+              {
+                "Version": "2012-10-17",
+                "Statement": [
+                  {{- range $i, $l := $locs }}
+                  {{- $objects := ternary (printf "%s/%s/*" $l.bucket $l.prefix) (printf "%s/*" $l.bucket) (ne $l.prefix "") }}
+                  {{ if $i }},{{ end }}{ "Effect": "Allow", "Action": ["s3:GetBucketLocation", "s3:ListBucketMultipartUploads"], "Resource": ["arn:aws:s3:::{{ $l.bucket }}"] },
+                  { "Effect": "Allow", "Action": ["s3:ListBucket"], "Resource": ["arn:aws:s3:::{{ $l.bucket }}"]{{ if $l.prefix }}, "Condition": { "StringLike": { "s3:prefix": ["{{ $l.prefix }}", "{{ $l.prefix }}/*"] } }{{ end }} },
+                  { "Effect": "Allow", "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts"], "Resource": ["arn:aws:s3:::{{ $objects }}"] }
+                  {{- end }}
+                ]
+              }
+              POLICY
+              {{- end }}
+              exec python /srv/rustfs_admin.py \
+                --endpoint {{ include "lance.s3Endpoint" . | quote }} \
+                --root-access-key {{ .Values.objectStore.accessKey | quote }} \
+                --root-secret-file /store-root/object-store-secret-key \
+                {{- $buckets := concat (list .Values.objectStore.bucket) (splitList "," (include "lance.platformBuckets" .)) }}
+                {{- range $_, $zone := .Values.medallion.buckets }}
+                {{- $buckets = append $buckets $zone }}
+                {{- end }}
+                {{- range $ref, $locs := $fixture }}
+                {{- range $locs }}
+                {{- $buckets = append $buckets .bucket }}
+                {{- end }}
+                {{- end }}
+                {{- range compact $buckets | uniq }}
+                --bucket {{ . | quote }} \
+                {{- end }}
+                {{- if $maint }}
+                --policy rask-maintenance=/tmp/policies/rask-maintenance.json --user {{ printf "%s=rask-maintenance" $maint | quote }} \
+                {{- end }}
+                {{- if $lineage }}
+                --policy rask-lineage=/tmp/policies/rask-lineage.json --user {{ printf "%s=rask-lineage" $lineage | quote }} \
+                {{- end }}
+                {{- if $catalog }}
+                --policy rask-catalog=/tmp/policies/rask-catalog.json --user {{ printf "%s=rask-catalog" $catalog | quote }} \
+                {{- end }}
+                {{- if $viewer }}
+                --policy rask-viewer=/tmp/policies/rask-viewer.json --user {{ printf "%s=rask-viewer" $viewer | quote }} \
+                {{- end }}
+                {{- with $media }}
+                --policy rask-media=/tmp/policies/rask-media.json --user {{ printf "%s=rask-media" . | quote }} \
+                {{- end }}
+                {{- with $backup }}
+                --policy rask-backup=/tmp/policies/rask-backup.json --user {{ printf "%s=rask-backup" . | quote }} \
+                {{- end }}
+                {{- range $ref, $_ := $fixture }}
+                --policy {{ printf "rask-base-%s=/tmp/policies/rask-base-%s.json" $ref $ref | quote }} --user {{ printf "%s=rask-base-%s" $ref $ref | quote }} \
+                {{- end }}
+                --keys-dir /keys
+{{- end }}

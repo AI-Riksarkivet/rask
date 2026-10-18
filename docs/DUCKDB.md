@@ -6,8 +6,8 @@ output directly — no export, no bespoke reader. DuckDB does this through its *
 consumer**, not an embedded query engine for the platform (the in-process query/consumption engine stays
 parked, `#20`); it is the "an analyst can point DuckDB at our tables" path.
 
-The read path below was proven live against pylance 8.0.0 datasets over the RustFS store the estate ran then; it
-has not been re-proven against pylance 13 datasets (file version 2.2) on MinIO. No test guards it: it exercises
+The read path below was proven live against pylance 8.0.0 datasets over RustFS; it
+has not been re-proven against pylance 13 datasets (file version 2.2). No test guards it: it exercises
 pylance and DuckDB's extension, and no rask code sits between them.
 
 ## Install

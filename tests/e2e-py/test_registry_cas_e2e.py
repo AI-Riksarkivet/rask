@@ -1,4 +1,4 @@
-"""F1 live half — contended registry-create against the DEPLOYED store (MinIO, ADR 0063).
+"""F1 live half — contended registry-create against the DEPLOYED store (RustFS, ADR 0063).
 
 ``tests/unit/test_registry_cas.py`` proves the seam's logic (local-FS exclusivity + the boto3
 ``IfNoneMatch`` call shape); THIS suite proves the deployed store actually arbitrates it under
@@ -25,8 +25,8 @@ from service_kit.lakehouse import records
 
 
 ENDPOINT = os.environ.get("LANCE_E2E_S3_ENDPOINT", "")
-ACCESS_KEY = os.environ.get("LANCE_E2E_S3_ACCESS_KEY", "minioadmin")
-SECRET_KEY = os.environ.get("LANCE_E2E_S3_SECRET_KEY", "minioadmin")
+ACCESS_KEY = os.environ.get("LANCE_E2E_S3_ACCESS_KEY", "rustfsadmin")
+SECRET_KEY = os.environ.get("LANCE_E2E_S3_SECRET_KEY", "rustfsadmin")
 BUCKET = os.environ.get("LANCE_E2E_S3_BUCKET", "lance-catalog")
 PREFIX = "__cas_stress/registry"
 

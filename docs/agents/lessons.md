@@ -8,8 +8,9 @@ in `CLAUDE.md`. Add a line when a trap costs a session, and delete one when the 
 
 - **Two kubeconfigs, one is dead.** The live estate is `/etc/rancher/k3s/k3s.yaml`; `~/.kube/config` is a stale kind
   cluster that still answers.
-- **The object store is MinIO.** `rask-minio-0` serves the lakehouse in development; the RustFS pod in `htr-batch` is
-  another team's. Measure store behaviour (policy, CAS, STS) on MinIO.
+- **The object store is RustFS** (ADR 0168). `rask-rustfs-0` in rask's namespace serves the lakehouse in development,
+  and every CI lane runs the same `rustfs/rustfs` tag; the RustFS pod in `htr-batch` is another team's. Measure store
+  behaviour (policy, CAS, STS) on rask's fixture or a Dagger lane, and see `rask-rustfs` before reading its docs.
 - **Current state is test data.** "Destructive on real data" is not a blocker before production; only owner-held facts
   and missing permissions are.
 - **The observability seam is the OTel Collector.** The store behind it is swappable and out of scope; prove the
@@ -76,9 +77,9 @@ in `CLAUDE.md`. Add a line when a trap costs a session, and delete one when the 
 - **A Dagger lane uploads the whole host tree.** `+defaultPath="/"` sends ~15 GB here and looks hung for 30+ min; run lanes with --src a clean `git ls-files` copy.
 - **Build the local loop before the CI round.** 2026-10-12: seven blind 30-40 min CI rounds; a local Dagger k3s found the cause in minutes; reproduce first.
 - **The node runs out of inotify before memory.** 2026-10-14: root held 127 of 128 instances (one per container, the containerd shim OOM watch); the Dagger engine dnsmasq exited 5 and builds died on DNS; `make k3s-install` sets 8192.
-- **An access key cannot sign MinIO's AssumeRole.** the catalog vends through STS, so on MinIO its rotated credential is a second user under the same policy; rotated to a key, every vend answered 503 (XC-082, 2026-10-16).
+- **An access key cannot sign AssumeRole.** RustFS refuses `AssumeRole` from a service account (`rustfs@1.0.3:rustfs/src/admin/handlers/sts.rs:219-221`), and so does MinIO (measured 2026-10-16: every vend 503 while the catalog held a key, XC-082); the catalog vends through STS, so its rotated credential is a second user under the same policy.
 - **A new required store field restarts the first pods.** a pod that boots before the dev seed writes the field fails closed until the seed lands (4 restarts, about 2 min, rev 32); the old pods serve meanwhile, so read the previous log before calling it a fault.
-- **A port-forward hides a keep-alive close.** a server's close of an idle connection reaches the client only as its next request fails (`RemoteDisconnected`, XC-094 on the kind lane, 2026-10-17); retry an idempotent GET on a fresh connection.
+- **A port-forward hides a keep-alive close.** a server's close of an idle connection reaches the client only as its next request fails (`RemoteDisconnected`, XC-094 on the kind lane, 2026-10-17; again 2026-10-18, a scratch tenant's teardown after 7-8.5 s idle); every e2e client closes each request (`byo_scenario.CLOSE_EACH_REQUEST`), since a POST must not be retried.
 - **An empty JetStream stream has no sequence 0.** a fresh stream reports 0 at both ends and a get of sequence 0 answers 400; read by sequence only while `messages` > 0 (XC-094, 2026-10-17).
 - **A stock client may decline a spec op itself.** pylance's `RestNamespace` implements 51 of the 54: `UpdateFieldMetadata`, `BatchCreateTableVersions` and `BatchCommitTables` fall to the base class, which answers code 0 and sends nothing; a probe read that as the catalog declining (XC-092, 2026-10-17). Drive those through `lance_namespace_urllib3_client`.
 - **Ray under `uv run` starts no worker.** Ray 2.58 relaunches each worker with the driver's own `uv run` command line, which under pytest never starts: five retries and a nine-minute wait, against 2.9 s with `RAY_ENABLE_UV_RUN_RUNTIME_ENV=0` (XC-092, 2026-10-17).
@@ -97,5 +98,5 @@ in `CLAUDE.md`. Add a line when a trap costs a session, and delete one when the 
 - **A pinned pre-release store can refuse a valid request.** RustFS 1.0.0-alpha.60, the governed Dagger lanes' store,
   answered pyarrow 25's multipart `UploadPart` with `XAmzContentSHA256Mismatch`, so the catalog's boot write of a
   protection record failed, lineage was never granted its provenance tables, and `governance-chain` was red on every
-  push for two days. RustFS 1.0.1 takes the same write: run rask's own writer against the pinned and a current release
-  before changing rask (XC-033, 2026-10-17).
+  push for two days. RustFS 1.0.1 and 1.0.3 take the same write: run rask's own writer against the pinned and a current
+  release before changing rask (XC-033, 2026-10-17; XC-163, 2026-10-18).

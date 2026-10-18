@@ -10,7 +10,7 @@ unreachable (HTTP 500)" on a missing bucket, live-proof 2026-07-28) or caught
 ``Exception`` and flattened three very different situations into one message.
 
 The codes matched below are **standard S3 REST error codes**, not a vendor dialect —
-AWS, MinIO and RustFS all return `NoSuchBucket` / `NoSuchKey`, and a `HEAD` (which has
+AWS and RustFS both return `NoSuchBucket` / `NoSuchKey`, and a `HEAD` (which has
 no body to carry a code) surfaces as the bare HTTP status `404`/`NotFound` on every one
 of them. That keeps the storage-agnostic contract intact: swapping backends stays an
 env change.

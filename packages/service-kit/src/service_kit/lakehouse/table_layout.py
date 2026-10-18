@@ -6,7 +6,7 @@ under ``_indices/``, branch and tag pointers under ``_refs/``, each branch's own
 ``tree/<branch>/`` and the MemWAL under ``_mem_wal/``.
 
 A writer-tier client is a managed-versioning writer (ADR 0157): it writes everything a commit needs except
-the commit itself. Measured with stock pylance 13.0.0 against MinIO ``RELEASE.2025-04-22T22-12-26Z`` through
+the commit itself. Measured with stock pylance 13.0.0 against the development object store through
 a namespace advertising ``managed_versioning=true`` (LH-469, #594): a create and an append put
 ``data/<file>.lance``, ``_transactions/<n>-<uuid>.txn`` and the staged ``_versions/<n>.manifest-<uuid>``, and
 the namespace finalized ``_versions/<n>.manifest``; the writer fails without the transaction grant. Delete and

@@ -620,7 +620,7 @@ jobs:
 
   # THE GUARDED LIVE PROOF (ADR 0001, P0.1: the gap that made every "live-verified" claim in this repo an
   # anecdote). The offline `test` job runs `-m "not e2e"`, so a live suite is guarded only where a lane runs it.
-  # This job boots a REAL governed kind stack (Dex OIDC + OpenFGA + Dapr + NATS + MinIO + OpenBao, with the
+  # This job boots a REAL governed kind stack (Dex OIDC + OpenFGA + Dapr + NATS + RustFS + OpenBao, with the
   # #3-A/#3-B/#4 flags and maintenance on) and runs every tests/e2e-py module it can serve, then Phase 1's
   # acceptance and its soak, failing on any skip (ADR 0167).
   #
@@ -762,11 +762,12 @@ jobs:
   # what makes those fixes stay fixed; the unit gates that ship with them catch the next one before
   # a build, and this catches what a unit gate cannot see.
   #
-  # THREE PROOFS, one per seam: `smoke-rustfs` that `packages/storage` works against a real S3
-  # backend rather than moto, `rustfs-lifecycle` that the catalog is S3-AGNOSTIC (the same lifecycle
-  # with the bytes on RustFS instead of MinIO), and `governance-chain` that authorization and
-  # catalog->lineage provenance hold together with real Dex tokens and no hand-written tuple. All
-  # three are pure `dagger call`, so `make <lane>` and this job are the same code — the ms-gates
+  # FOUR PROOFS, one per seam: `smoke-rustfs` that `packages/storage` works against a real S3
+  # backend rather than moto, `rustfs-lifecycle` that the catalog is S3-AGNOSTIC (its lifecycle with
+  # the bytes on a RustFS service bound to one exec), `rustfs-provisioning` that the scoped-users hook
+  # fails on a policy the store refuses before it binds anyone, and `governance-chain` that authorization
+  # and catalog->lineage provenance hold together with real Dex tokens and no hand-written tuple. All
+  # four are pure `dagger call`, so `make <lane>` and this job are the same code — the ms-gates
   # contract every other leg here holds.
   e2e-lakehouse-lanes:
     runs-on: ubuntu-latest
@@ -775,7 +776,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        lane: [governance-chain, rustfs-lifecycle, smoke-rustfs]
+        lane: [governance-chain, rustfs-lifecycle, rustfs-provisioning, smoke-rustfs]
     steps:
       - uses: actions/checkout@v4
 

@@ -1,15 +1,15 @@
 """Upload a finished Postgres dump directory to S3 under a timestamped prefix, then prune old ones.
 
-WHY THIS EXISTS RATHER THAN `mc`. The chart's `backups.pgDump` CronJob ran `minio/mc` —
-`mc cp --recursive`, `mc ls | sort -r | tail -n +N`, `mc rm --recursive`. Measured 2026-09-24 with
-the bearer DECODED, that image refuses ANONYMOUS pulls on every registry this estate can reach:
-Docker Hub issues a token whose `access` is `[]`, quay.io one with `actions: []`, both 401 on the
-manifest ([[XC-075]]). The dump it uploads is the authorization store (OpenFGA) and the Dapr state
-store, so on a node that pulls fresh the estate's two most irreplaceable databases back up
-nowhere — and a CronJob that cannot start says so once, in an event nobody reads.
+WHY THIS EXISTS RATHER THAN A STORE VENDOR'S CLI. A vendor client image is the obvious shape for the
+chart's `backups.pgDump` CronJob, and a fragile one: measured 2026-09-24 with the bearer DECODED, the
+`minio/mc` image refuses ANONYMOUS pulls on every registry this estate can reach — Docker Hub issues a
+token whose `access` is `[]`, quay.io one with `actions: []`, both 401 on the manifest ([[XC-075]]).
+The dump is the authorization store (OpenFGA) and the Dapr state store, so a CronJob that cannot pull
+backs the estate's two most irreplaceable databases up nowhere, and says so once, in an event nobody
+reads. This runs in rask's own image, against any S3 store.
 
-Every verb it used is plain S3: `cp` is `put_object`, `ls` + `rm` are the retention walk that
-`storage.prune_timestamped_prefixes` now owns for both backup lanes.
+Every verb such a CLI offers here is plain S3: `cp` is `put_object`, `ls` + `rm` are the retention
+walk that `storage.prune_timestamped_prefixes` owns for both backup lanes.
 
     RASK_S3_ENDPOINT_URL=… AWS_ACCESS_KEY_ID=… AWS_SECRET_ACCESS_KEY=… \\
         uv run python scripts/pg_dump_upload.py /dump s3://bucket/_backups/pg --keep 7
@@ -18,6 +18,7 @@ Every verb it used is plain S3: `cp` is `put_object`, `ls` + `rm` are the retent
 from __future__ import annotations
 
 import argparse
+import os
 import pathlib
 import sys
 from datetime import UTC, datetime
@@ -51,7 +52,16 @@ def main(argv: list[str]) -> int:
 
     bucket, base = split_s3_uri(args.dest)
     stamp = _stamp()
-    client = s3_client()
+    secret_file = os.environ.get("RASK_S3_SECRET_KEY_FILE")
+    if secret_file:
+        access_key = os.environ.get("AWS_ACCESS_KEY_ID")
+        secret = pathlib.Path(secret_file).read_text(encoding="utf-8").strip()
+        if not (access_key and secret):
+            print(f"!! RASK_S3_SECRET_KEY_FILE={secret_file} needs AWS_ACCESS_KEY_ID and a non-empty file", file=sys.stderr)
+            return 1
+        client = s3_client(access_key=access_key, secret_key=secret)
+    else:
+        client = s3_client()
     for path in files:
         key = f"{base.rstrip('/')}/{stamp}/{path.relative_to(args.source).as_posix()}"
         with path.open("rb") as handle:

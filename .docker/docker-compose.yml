@@ -1,26 +1,126 @@
 # Run from repo root:  docker compose -f .docker/docker-compose.yml up -d --build
 # Build context is the repo root (..), so .dockerignore and pyproject/uv.lock apply.
+#
+# THE OBJECT STORE'S ROOT PAIR ARRIVES AS FILES, never as an environment value. Write the two files this stack
+# mounts as compose secrets before the first `up` (paths relative to this directory; override with
+# RASK_OBJECT_STORE_ACCESS_KEY_FILE / RASK_OBJECT_STORE_SECRET_KEY_FILE):
+#
+#   mkdir -p .docker/secrets && umask 022
+#   printf '%s' "$(openssl rand -hex 12)" > .docker/secrets/object-store-access-key
+#   printf '%s' "$(openssl rand -hex 24)" > .docker/secrets/object-store-secret-key
+#
+# A missing file stops `up` instead of booting RustFS on its built-in default pair. Compose outside swarm
+# bind-mounts a file secret with the HOST file's owner and mode, so both files must be readable by uid 10001
+# (RustFS's and rask's image user): 0644 on a single-user dev host, or owned by 10001.
 services:
-  server:
-    build:
+  # --- The development object store: RustFS, S3 only (the console is off) ---
+  rustfs:
+    # The GA tag the Dagger lanes run (`.dagger/storage.go`), pinned by its multi-arch index digest (Docker Hub,
+    # read 2026-10-18): the image carries no signature to verify, so the digest is what fixes its bytes.
+    image: rustfs/rustfs:1.0.3@sha256:9ca9559533b537d10482fe923288b676ad08f92a7069d9a17327fbae3cab688b
+    container_name: lance-rustfs
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp
+    # uid 10001 owns the image's /data, and a new named volume copies that ownership; a root-owned mount stops
+    # the server at boot with `Permission denied (os error 13)`.
+    user: "10001:10001"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    secrets:
+      - object-store-access-key
+      - object-store-secret-key
+    environment:
+      RUSTFS_VOLUMES: /data
+      RUSTFS_ADDRESS: ":9000"
+      RUSTFS_ACCESS_KEY_FILE: /run/secrets/object-store-access-key
+      RUSTFS_SECRET_KEY_FILE: /run/secrets/object-store-secret-key
+      RUSTFS_CONSOLE_ENABLE: "false"
+      RUSTFS_CHECK_UPDATE: "false"
+      RUSTFS_HEALTH_MINIMAL_RESPONSE_ENABLE: "true"
+      # Empty sends the logs to stdout; the image's default `/logs` writes files nobody reads.
+      RUSTFS_OBS_LOG_DIRECTORY: ""
+      RUSTFS_OBS_PROFILING_EXPORT_ENABLED: "false"
+    volumes:
+      - rustfs-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9000/health/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+    ports:
+      - "9000:9000"   # S3 (path-style)
+
+  # One-shot: create the catalog root bucket with the root pair, in rask's own image (python + boto3), then exit.
+  object-store-buckets:
+    build: &catalog-build
       context: ..
       dockerfile: .docker/rest-catalog.dockerfile
+    image: lance-rest-catalog:dev
+    container_name: lance-object-store-buckets
+    read_only: true
+    depends_on:
+      rustfs:
+        condition: service_healthy
+    secrets:
+      - object-store-access-key
+      - object-store-secret-key
+    environment:
+      OBJECT_STORE_ENDPOINT: http://rustfs:9000
+      OBJECT_STORE_BUCKETS: lance-catalog
+    entrypoint: ["python", "-c"]
+    command:
+      - |
+        import os, pathlib, boto3
+        from botocore.config import Config
+        from botocore.exceptions import ClientError
+        read = lambda name: pathlib.Path("/run/secrets", name).read_text().strip()
+        s3 = boto3.client("s3", endpoint_url=os.environ["OBJECT_STORE_ENDPOINT"], region_name="us-east-1",
+                          aws_access_key_id=read("object-store-access-key"), aws_secret_access_key=read("object-store-secret-key"),
+                          config=Config(s3={"addressing_style": "path"}))
+        for bucket in os.environ["OBJECT_STORE_BUCKETS"].split():
+            try:
+                s3.create_bucket(Bucket=bucket)
+                print("created", bucket)
+            except ClientError as err:
+                if err.response["Error"]["Code"] not in ("BucketAlreadyOwnedByYou", "BucketAlreadyExists"):
+                    raise
+                print("exists", bucket)
+
+  server:
+    build: *catalog-build
     image: lance-rest-catalog:dev
     container_name: lance-rest-catalog
     init: true
     read_only: true
     tmpfs:
       - /tmp
+    depends_on:
+      object-store-buckets:
+        condition: service_completed_successfully
+    secrets:
+      - object-store-access-key
+      - object-store-secret-key
+    # The catalog reads its key pair from LANCE_S3_ACCESS_KEY_ID / LANCE_S3_SECRET_ACCESS_KEY when the secret store
+    # is off, so the pair is read from the secret files at start, inside the container: it never sits in this file,
+    # the host environment or the container's recorded config.
+    entrypoint:
+      - /bin/sh
+      - -c
+      - >-
+        LANCE_S3_ACCESS_KEY_ID="$$(cat /run/secrets/object-store-access-key)" &&
+        LANCE_S3_SECRET_ACCESS_KEY="$$(cat /run/secrets/object-store-secret-key)" &&
+        export LANCE_S3_ACCESS_KEY_ID LANCE_S3_SECRET_ACCESS_KEY &&
+        exec uvicorn catalog.main:app --host 0.0.0.0 --port 2333
     environment:
       LANCE_REST_IMPL: dir
       LANCE_REST_ROOT: s3://lance-catalog
       LANCE_NS_DELIMITER: "$$"            # $$ -> literal $ in compose
-      # NO OBJECT STORE SHIPS IN THIS FILE: the upstream MinIO images refuse anonymous pulls, and the
-      # estate's own store image is built by Dagger (`.docker/minio.dockerfile`) for the chart. Point
-      # these at an S3 endpoint you run, with the `lance-catalog` bucket already created.
-      LANCE_S3_ENDPOINT: ${LANCE_S3_ENDPOINT:-}
-      LANCE_S3_ACCESS_KEY_ID: ${LANCE_S3_ACCESS_KEY_ID:-}
-      LANCE_S3_SECRET_ACCESS_KEY: ${LANCE_S3_SECRET_ACCESS_KEY:-}
+      LANCE_S3_ENDPOINT: http://rustfs:9000
+      # A vended credential names the address a client on the host reaches the store at.
+      LANCE_S3_VENDED_ENDPOINT: http://localhost:9000
       LANCE_S3_REGION: us-east-1
       LANCE_S3_VIRTUAL_HOSTED: "false"
       # --- Auth is OFF by default. Uncomment to enforce OIDC (Dex) + OpenFGA authz.
@@ -86,5 +186,12 @@ services:
     ports:
       - "5556:5556"
 
+secrets:
+  object-store-access-key:
+    file: ${RASK_OBJECT_STORE_ACCESS_KEY_FILE:-./secrets/object-store-access-key}
+  object-store-secret-key:
+    file: ${RASK_OBJECT_STORE_SECRET_KEY_FILE:-./secrets/object-store-secret-key}
+
 volumes:
   fga-postgres-data:
+  rustfs-data:

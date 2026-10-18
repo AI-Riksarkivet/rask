@@ -3,7 +3,7 @@
 A render is stored whole in the release (`helm get manifest`, `hooks`, `values`), every revision of it, so
 a credential that passes through one is a secret at rest outside the store. Three ways one used to: a
 template minting it (`randAlphaNum` for the Ray token), a value carrying it (`dapr.appToken`,
-`frontend.oidc.sessionSecret`, `minio.secretKey`, ...), and a template rendering it into a Secret or a Job.
+`frontend.oidc.sessionSecret`, `objectStore.secretKey`, ...), and a template rendering it into a Secret or a Job.
 The credentials now live in the store and reach pods through ESO, a prerequisite the chart checks for.
 The dev store's are generated in-cluster; `test_the_dev_openbao_is_seeded_by_its_own_pod.py` runs that half.
 """
@@ -38,9 +38,9 @@ def test_a_cluster_less_render_mints_no_credential(overlay: str) -> None:
 def test_a_credential_passed_as_a_value_is_refused_naming_it() -> None:
     """A credential the chart once read from a value is refused, by name, on any render."""
     with pytest.raises(subprocess.CalledProcessError) as refused:
-        render_text(*DEFAULT_ARGS, "--set-string", "dapr.appToken=a-token", "--set-string", "minio.secretKey=a-root-secret")
+        render_text(*DEFAULT_ARGS, "--set-string", "dapr.appToken=a-token", "--set-string", "objectStore.secretKey=a-root-secret")
 
-    assert "A CREDENTIAL IS NOT A CHART VALUE: dapr.appToken, minio.secretKey." in refused.value.stderr
+    assert "A CREDENTIAL IS NOT A CHART VALUE: dapr.appToken, objectStore.secretKey." in refused.value.stderr
 
 
 def test_a_real_deployment_refuses_the_bundled_dev_idp() -> None:

@@ -52,7 +52,7 @@ flowchart TB
   `the-lakehouse-knows-no-engine`). The `compute` service (Ray dashboard introspection and the Serve proxy) is the
   companion of a bring-your-own Ray engine and ships in its own chart, which publishes `/api/ray` and `/api/serve` with its own
   HTTPRoute. A workload's model environment is a sealed `runners/<workload>` project.
-- **State** is the Lance tables on S3 (MinIO in development), lineage's among them, plus Postgres for OpenFGA and the
+- **State** is the Lance tables on S3 (RustFS in development), lineage's among them, plus Postgres for OpenFGA and the
   Dapr state store. The
   Helm chart in `chart/` deploys rask's own services; Dapr, NATS, the object store, the secret store and the
   observability store are prerequisites the platform runs.

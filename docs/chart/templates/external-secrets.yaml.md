@@ -15,8 +15,8 @@ install or upgrade; a cluster-less render states the target with `--api-versions
 
 AN ESTATE THAT ALREADY HOLDS DATA KEEPS ITS CREDENTIALS. The AGE database and the object store keep the
 password and root they were initialised with, so generating fresh ones beside them hands every consumer a
-credential its server refuses. The object store counts only when its StatefulSet and the
-`<release>-infra-credentials` Secret it reads both exist (`$objectStore`). On an upgrade of an estate whose stores exist, the credential Secret must
+credential its server refuses. The object store counts only when its StatefulSet and its root's Secret,
+`<release>-object-store-root`, both exist (`$objectStore`). On an upgrade of an estate whose stores exist, the credential Secret must
 already exist: created from the current credentials before the first upgrade, and rotated in place
 afterwards (docs/OPERATORS.md 8). `lookup` answers only against a cluster, so a cluster-less render and a
 fresh install, where no store exists yet, generate.
@@ -35,6 +35,24 @@ A Secret that exists with no owner was carried forward by the operator from the 
 hold, so nothing here generates beside it; one ESO created (owned by this ExternalSecret) keeps it rendered,
 since removing the owner would garbage-collect the Secret.
 
+## `name: {{ include "lance.fullname" . }}-infra-credentials`
+
+THE INFRA TIER'S SECRET, for the pods without a sidecar that need the AGE password: the AGE server and openfga
+migrate. It carries `postgres-password`, and `openfga-datastore-uri` assembled from it, and no store credential: the
+object store's root has a Secret of its own (below), so a pod that mounts this one for the database reads nothing
+that signs an STS token.
+
+## `{{- if .Values.objectStore.enabled }}`
+
+THE DEVELOPMENT STORE'S ROOT PAIR, `<release>-object-store-root`, rendered only with the dev store. On RustFS the root
+secret signs every STS session token (GHSA-m77q-r63m-pj89, ADR 0168), so the Secret has exactly two readers, the
+store (the rustfs fixture's `rootCredentials`) and the scoped-users hook, and ESO fetches it from
+`secret/object-store-root`, a path every Dapr app's Configuration denies (`lance.daprAppSpec`). BOTH HALVES come from
+ONE object: the store mounts both as files from a non-optional secret volume, so a pair split across two sources is a
+pod that cannot start rather than one that signs wrongly. A platform's S3 has no such Secret here: its operator holds
+its root and provisions rask's identities. `tests/unit/test_the_root_storage_secret_reaches_only_its_users.py` gates
+who reads it.
+
 ## `apiVersion: external-secrets.io/v1`
 
 The in-chart Collector's credential for the audit store, mounted as files (otel-collector.yaml).
@@ -47,14 +65,18 @@ states that "rask's Ray is managed outside this repo, so an external address is 
 and the fleet must present a bearer token to an external cluster too (measured 2026-08-16: a
 narrower gate left rask-compute in CreateContainerConfigError and the release in pending-upgrade).
 
-## `apiVersion: external-secrets.io/v1`
+## `{{- if include "lance.backupIdentity" . }}`
 
-The control-root backup's S3 credential, written by ESO for a pod that MOUNTS it as a file.
+THE BACKUPS' IDENTITY, `<release>-backup-s3`, one Secret for both backup CronJobs and rendered when either is on. It
+holds the scoped pair `objectStore.backupAccessKey` names (the `rask-backup` policy in object-store-scoped-users.yaml),
+fetched from `secret/backup-s3`, and never the store's root.
 
 A CronJob pod carries no Dapr sidecar, so the secret-store path is unavailable to it and ESO is the
-one the estate admits. It is consumed as a FILE rather than a `secretKeyRef` env row deliberately:
-`--credentials-file` is the only way `control_root_backup.py` accepts a credential without falling
-back to the environment chain, which is the delivery path the estate forbids.
+one the estate admits. Both consumers MOUNT it as a file rather than taking a `secretKeyRef` env row, and each
+reads the shape its tool takes: `secret-key` for the pg dump's uploader (`RASK_S3_SECRET_KEY_FILE`, the access key
+id is config), and `credentials.json`, the pair as one JSON file, for `control_root_backup.py`, whose
+`--credentials-file` is the only way it accepts a credential without falling back to the environment chain. One
+file holding both halves means a partial write never looks like a valid credential.
 
 ## `{{- if hasKey (include "lance.natsFiles" . | fromJson) "nats-admin-creds" }}`
 

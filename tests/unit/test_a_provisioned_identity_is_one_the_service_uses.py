@@ -1,12 +1,12 @@
 """A scoped storage identity the chart PROVISIONS must be the one its service actually presents.
 
-`minio-scoped-users.yaml` creates a least-privilege RustFS user and policy for the maintenance
+`object-store-scoped-users.yaml` creates a least-privilege RustFS user and policy for the maintenance
 and lineage planes on every install and upgrade. Both were OFF by default —
-`rustfs.<plane>AccessKey: ""` falls back to the tenant ROOT credential — so the chart builds the
-identity, provisions it, and then hands the service `minioadmin` anyway.
+`objectStore.<plane>AccessKey: ""` falls back to the tenant ROOT credential — so the chart builds the
+identity, provisions it, and then hands the service the root key id anyway.
 
 MEASURED ON THE RUNNING ESTATE 2026-09-08, reading each pod's real environment rather than the
-templates: catalog, lineage, ingest and viewer all present `minioadmin`. The operator had armed
+templates: catalog, lineage, ingest and viewer all present the root key id. The operator had armed
 maintenance and medallion by hand in a values file; lineage — whose policy is the TIGHTEST of the
 three, needing no PutObject at all — was still root because nobody knew to name it.
 
@@ -38,15 +38,15 @@ REPO = Path(__file__).resolve().parents[2]
 CHART = REPO / "chart"
 
 #: `{env var naming the store field the identity's key id is read from: the workload that presents it}` — one
-#: row per plane the chart provisions a scoped RustFS user for in `minio-scoped-users.yaml`. The pair is the
+#: row per plane the chart provisions a scoped RustFS user for in `object-store-scoped-users.yaml`. The pair is the
 #: store's (ADR 0166), so the identity a plane presents is the one behind the field it is told to read.
 PROVISIONED_PLANES = {
     "MAINTENANCE_DAPR_SECRET_S3_ID_FIELD": "maintenance",
     "LINEAGE_DAPR_SECRET_S3_ID_FIELD": "lineage",
 }
 
-#: The store field holding the tenant ROOT account's key id, seeded from `minio.accessKey`.
-ROOT_ID_FIELD = "minio-access-key"
+#: The store field holding the tenant ROOT account's key id, seeded from `objectStore.accessKey`.
+ROOT_ID_FIELD = "object-store-access-key"
 
 
 def _render(*extra: str) -> str:
@@ -92,6 +92,6 @@ def test_no_provisioned_plane_falls_back_to_the_storage_root() -> None:
         assert rendered, f"{var} renders nowhere — this pin is asserting nothing about {plane}"
         assert ROOT_ID_FIELD not in rendered, (
             f"{plane} reads the tenant ROOT credential's key id ({ROOT_ID_FIELD!r}) on a default install, while "
-            f"`minio-scoped-users.yaml` provisions a least-privilege user for it in the same release. "
+            f"`object-store-scoped-users.yaml` provisions a least-privilege user for it in the same release. "
             "Root by default is not a deployment choice anyone made."
         )

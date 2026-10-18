@@ -28,3 +28,10 @@ secret and publisher password are chart configuration, XC-025) and the dev OpenB
 are the only credentials a render still carries, and only a dev render. A real deployment refuses the dev
 OpenBao (which is also what stops the chart generating credentials for one: `lance.mintsDevCredentials`
 needs `openbao.enabled`) and refuses the bundled Dex; it points at the platform's store and IdP.
+
+A REAL DEPLOYMENT ALSO REFUSES THE DEVELOPMENT OBJECT STORE (`objectStore.enabled=true`, the rustfs fixture). Its
+root secret is one the dev OpenBao generates, and on RustFS that secret signs every STS session token the store
+issues (GHSA-m77q-r63m-pj89, ADR 0168), so a real estate on it would hold a trust root rask minted. Platform services
+are external in production: a real deployment sets `objectStore.enabled=false` and `objectStore.externalEndpoint` to
+the platform's S3, whose operator provisions rask's identities (`lance.s3Endpoint` fails the render when neither is
+set).

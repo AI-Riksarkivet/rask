@@ -15,9 +15,9 @@ spec:
       backoffLimit: 3
       template:
         metadata:
-          # The component label is load-bearing under the prod NetworkPolicy: the age-postgres and minio
+          # The component label is load-bearing under the prod NetworkPolicy: the age-postgres and object-store
           # ingress rules allow `from` component=backup-pg — without this label the CronJob pod matches
-          # neither, default-deny drops its pg_dump SYN + mc upload, and the backup silently never runs.
+          # neither, default-deny drops its pg_dump SYN + S3 upload, and the backup silently never runs.
           labels:
             {{- include "lance.labels" . | nindent 12 }}
             app.kubernetes.io/component: backup-pg
@@ -28,8 +28,12 @@ spec:
           imagePullSecrets:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+          securityContext: { fsGroup: 10001 }
           volumes:
             - { name: dump, emptyDir: {} }
+            # The backups' scoped identity (`objectStore.backupAccessKey`), never the store's root: a FILE, never env.
+            - name: backup-s3
+              secret: { secretName: {{ include "lance.fullname" . }}-backup-s3, items: [{ key: secret-key, path: secret-key }], defaultMode: 0400 }
           initContainers:
             - name: pg-dump
               image: {{ .Values.age.image }}
@@ -79,22 +83,21 @@ spec:
               resources:
                 requests: { cpu: "50m", memory: "64Mi" }
                 limits: { cpu: "500m", memory: "512Mi" }
-              # THE SECRET IS NAMED, NEVER CARRIED. `packages/storage` reads the canonical
-              # `RASK_S3_ENDPOINT_URL` plus the standard AWS pair; `configured_endpoint` owns that
-              # resolution order, so nothing here restates it.
+              # THE SECRET IS A MOUNTED FILE, never env: `pg_dump_upload.py` reads it from
+              # `RASK_S3_SECRET_KEY_FILE`. `configured_endpoint` owns the endpoint's resolution order.
               env:
-                - name: AWS_SECRET_ACCESS_KEY
-                  valueFrom:
-                    secretKeyRef: { name: {{ include "lance.fullname" . }}-infra-credentials, key: minio-secret-key }
-                - { name: AWS_ACCESS_KEY_ID, value: {{ .Values.minio.accessKey | quote }} }
+                - { name: RASK_S3_SECRET_KEY_FILE, value: /backup-s3/secret-key }
+                - { name: AWS_ACCESS_KEY_ID, value: {{ include "lance.backupIdentity" . | quote }} }
                 - { name: RASK_S3_ENDPOINT_URL, value: {{ include "lance.s3Endpoint" . | quote }} }
                 - { name: AWS_REGION, value: "us-east-1" }
               command:
                 - python
                 - /srv/pg_dump_upload.py
                 - /dump
-                - {{ printf "s3://%s/_backups/pg" .Values.minio.bucket | quote }}
+                - {{ printf "s3://%s/_backups/pg" .Values.objectStore.bucket | quote }}
                 - --keep
                 - {{ .Values.backups.pgDump.keep | quote }}
-              volumeMounts: [{ name: dump, mountPath: /dump }]
+              volumeMounts:
+                - { name: dump, mountPath: /dump }
+                - { name: backup-s3, mountPath: /backup-s3, readOnly: true }
 {{- end }}

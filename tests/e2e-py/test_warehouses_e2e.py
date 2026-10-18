@@ -1,7 +1,7 @@
 """#3-A — live per-warehouse physical isolation against the DEPLOYED catalog.
 
 Proves the completion condition end to end: an admin provisions warehouse A→bucket-a and B→bucket-b
-(distinct buckets, created at RUNTIME by the API — not the Helm mc-mb loop); a namespace bound to A + a
+(distinct buckets, created at RUNTIME by the API — not the chart's bucket hook); a namespace bound to A + a
 table created under it physically land in bucket-a and are ABSENT from bucket-b; and ``POST /management/v1/warehouses``
 as a non-admin is denied 403.
 
@@ -27,8 +27,8 @@ TOKEN = os.environ.get("LANCE_E2E_TOKEN", "")
 PROJECT = os.environ.get("LANCE_E2E_PROJECT", "acme")
 DELIM = os.environ.get("LANCE_E2E_DELIM", "$")
 S3 = os.environ.get("LANCE_E2E_S3", "http://localhost:9900")
-S3_ACCESS_KEY = os.environ.get("LANCE_E2E_S3_ACCESS_KEY", "minioadmin")
-S3_SECRET_KEY = os.environ.get("LANCE_E2E_S3_SECRET_KEY", "minioadmin")
+S3_ACCESS_KEY = os.environ.get("LANCE_E2E_S3_ACCESS_KEY", "rustfsadmin")
+S3_SECRET_KEY = os.environ.get("LANCE_E2E_S3_SECRET_KEY", "rustfsadmin")
 ARROW_STREAM = "application/vnd.apache.arrow.stream"
 #: The top-level namespace this suite binds into warehouse A — OWNED BY THIS FILE ALONE.
 #:

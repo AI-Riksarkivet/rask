@@ -32,6 +32,15 @@ the retention alert it guards goes blind. Gated on the conditions that render
 the Collector and its receiver, so an estate without them carries no
 allow-entry for a pod it never deploys.
 
+## `name: {{ include "lance.fullname" . }}-object-store-ingress`
+
+THE STORE ADMITS ITS NAMED CLIENTS ONLY, by component label: the data-plane services, the corpus readers (viewer,
+search, annotator), the scoped-users hook, which creates every platform bucket and every scoped user and so must reach
+the store before anything else can, and both backup CronJobs (`backup-pg`, `backup-control-root`), each writing under
+`_backups/`. A backup pod absent from the list is dropped in silence under default-deny and its CronJob stays green
+while nothing is copied. The rule cannot narrow the admin API, which RustFS serves on the S3 port: that plane is held
+by IAM, since no rask identity carries `admin:*` and only the hook holds the root (ADR 0168).
+
 ## `{{- $apiClients := list }}`
 
 The pods that call the Kubernetes API, each under the condition its template renders: the token verifiers (catalog

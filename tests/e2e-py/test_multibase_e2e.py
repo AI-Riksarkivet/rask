@@ -29,8 +29,8 @@ CATALOG = os.environ.get("LANCE_E2E_CATALOG_URL", "").rstrip("/")
 TOKEN = os.environ.get("LANCE_E2E_TOKEN", "")
 DELIM = os.environ.get("LANCE_E2E_DELIM", "$")
 S3 = os.environ.get("LANCE_E2E_S3", "http://localhost:9900")
-S3_ACCESS_KEY = os.environ.get("LANCE_E2E_S3_ACCESS_KEY", "minioadmin")
-S3_SECRET_KEY = os.environ.get("LANCE_E2E_S3_SECRET_KEY", "minioadmin")
+S3_ACCESS_KEY = os.environ.get("LANCE_E2E_S3_ACCESS_KEY", "rustfsadmin")
+S3_SECRET_KEY = os.environ.get("LANCE_E2E_S3_SECRET_KEY", "rustfsadmin")
 #: NO DEFAULTS. `s3://mb-a` / `s3://mb-b` are `scripts/e2e_stack.sh`'s install-time constants, and that
 #: script is the only thing that provisions them — so on any OTHER deployed estate the defaults named
 #: two buckets that do not exist, and the fan-out leg failed as though multi-base were broken.

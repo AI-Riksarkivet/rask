@@ -43,7 +43,7 @@ _SCOPED = {
     "endpoint": "https://s3.public.example",
     "allow_http": "false",
 }
-_AMBIENT = {"aws_access_key_id": "minioadmin", "aws_secret_access_key": "minioadmin", "endpoint": "http://rustfs:9000"}
+_AMBIENT = {"aws_access_key_id": "rustfsadmin", "aws_secret_access_key": "rustfsadmin", "endpoint": "http://rustfs:9000"}
 
 
 class _Response:
@@ -81,7 +81,7 @@ def test_the_pass_is_signed_by_the_vended_credential(door: list[dict[str, Any]])
     options = credentials.write_options_for("s3://acme-bucket/4c49d010_acme-bronze$events", settings, fallback=_AMBIENT)
     assert settings.s3_endpoint.startswith("http://")
     assert options == {**_SCOPED, "endpoint": settings.s3_endpoint, "allow_http": "true"}
-    assert options["aws_access_key_id"] != "minioadmin"
+    assert options["aws_access_key_id"] != "rustfsadmin"
 
 
 @pytest.mark.parametrize(

@@ -32,13 +32,16 @@ whole run, outage and recovery included, on the e2e-stack kind lane (run 3904982
 
 | Dependency | Taken down | What the doors answer while it is gone | Kind lane, 2026-10-17 |
 | --- | --- | --- | --- |
-| Object store (`rask-minio`) | scaled to zero | A write through the catalog's insert door is refused 503 code 17, or gets no answer within the bound the catalog's own store timeouts set (2 × 6 listings × (retries + 1) × max(connect, request): 60 s at the defaults). It never lands while the store is gone. | 28 s |
+| Object store (`rask-rustfs`)¹ | scaled to zero | A write through the catalog's insert door is refused 503 code 17, or gets no answer within the bound the catalog's own store timeouts set (2 × 6 listings × (retries + 1) × max(connect, request): 60 s at the defaults). It never lands while the store is gone. | 28 s |
 | OpenFGA | scaled to zero | A governed write answers 503 code 17 at its authorization check: never an allow, and never a deny that would read as a missing grant. | 20 s |
 | Lineage | scaled to zero | Commits go on landing; its durable consumer resumes where it stopped and records each announcement once. | 39 s |
 | The bus (`rask-nats`, three nodes) | scaled 3 → 0 for 150 s | Commits and grants land, their announcements staged in the outboxes, and the lineage relay records the staged writes without the bus. The outage closes every sidecar's connection for good (below), and each service restarts its own sidecar once the bus greets a connection again. | 320 s, 150 s of it the outage |
 | Dex | its Service cut from its pod | A door holding the issuer's key set (300 s) accepts an existing token. A door that must fetch the key set answers 503 code 17, never 401, and accepts the token again once Dex is back, with no restart. | 69 s |
 | The secret store (`rask-openbao`) | sealed in place | Within one re-read of its key (300 s) the catalog drops its signing key, then refuses every write it would announce with 503 code 17 before committing it. The store's contents survive the seal, so nothing is minted again. | 290 s, most of it the re-read |
 | The catalog | its uvicorn SIGKILLed, four writers committing through `version/create` | Every acknowledged commit lands once, a commit whose answer the kill lost lands at most once, and no run lands twice: Lance's put-if-not-exists of each `_versions/` manifest keeps one history. | 168 s |
+
+¹ Run 39049821010 drilled the object-store row against the MinIO fixture; the RustFS fixture (ADR 0168) has not
+run this drill yet, so its 28 s and its answers are unmeasured on RustFS.
 
 **A bus outage longer than about two minutes stops every sidecar's pub/sub until the sidecar restarts.** Dapr 1.18.1's
 `pubsub.jetstream` component connects with none of nats.go's reconnect options, so each NATS client gives up after its
@@ -151,7 +154,7 @@ semantics, so it must not undercut the slowest handler. Either way the window co
    - **NATS / JetStream** — three nodes, `streamReplicas=3`, each on its own volume; the Dapr pub/sub backbone. All
      down → no event flows: the catalog's writes still land and stage their announcements in its outboxes, which the
      relays deliver once the bus is back.
-   - **The object store** (the MinIO fixture in development) — the S3 data plane. Down → no Lance read/write.
+   - **The object store** (the RustFS fixture in development) — the S3 data plane. Down → no Lance read/write.
    - **The secret store / OpenFGA / Dex** — one pod each in development (the store and Dex are fixtures; production
      names the platform's). The store sealed: a signer drops its key within one re-read (300 s) and the catalog refuses
      every write it would announce, and every other secret a pod holds expires 300 to 600 s after the store last

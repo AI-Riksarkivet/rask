@@ -56,9 +56,9 @@ first spill instead of failing at deploy time.
 
 ## `{{- if $svc.ambientStorage }}`
 
-THE FLEET SECRET GOES ONLY TO SERVICES THAT USE IT, and until 2026-09-08 it went to
-every one of them. It carries four keys — AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY,
-HCP_ENDPOINT, HF_TOKEN — and the AWS pair is the store's ROOT credential.
+THE FLEET SECRET GOES ONLY TO SERVICES THAT USE IT. It carries the store's endpoint
+(HCP_ENDPOINT) and no access key: every plane presents its own scoped identity, and only the
+scoped-users hook names the store's root (ADR 0168).
 
 MEASURED INSIDE THE RUNNING PODS: `rask-ingest` listed 106 buckets with it (the whole
 estate) while `rask-maintenance`, on its scoped identity, was denied the same call. So

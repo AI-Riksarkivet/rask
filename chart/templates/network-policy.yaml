@@ -6,7 +6,7 @@
 #   (2) the kube-dns egress allow ships IN THIS SAME FILE (default-deny egress without it bricks
 #       name resolution — the audit's named footgun);
 #   (3) targeted allows for the guarded stores (the secret store ← the pods whose sidecar reads it,
-#       as ingress on the dev store and egress to the platform's; age-postgres:5432 ← its real clients; minio:9000 ← the data plane; nats ← 4222 intra-namespace
+#       as ingress on the dev store and egress to the platform's; age-postgres:5432 ← its real clients; the object store:9000 ← the data plane; nats ← 4222 intra-namespace
 #       + 8222 admin-only, other ports closed) — every OTHER pod gets plain intra-namespace ingress,
 #       EXCLUDING the guarded stores so the targeted lists stay exclusive (NetworkPolicies are
 #       additive: the general allow must NOT cover the stores);
@@ -70,7 +70,7 @@ spec:
 {{- if .Values.openfga.enabled }}{{ $apiClients = append $apiClients "issuer-mirror" }}{{ end }}
 {{- if .Values.openbao.enabled }}{{ $apiClients = append $apiClients "openbao" }}{{ end }}
 {{- if .Values.observability.enabled }}{{ $apiClients = append $apiClients "otel-collector" }}{{ end }}
-{{- if .Values.backups.volumeSnapshot.enabled }}{{ $apiClients = append $apiClients "minio-backup" }}{{ end }}
+{{- if .Values.backups.volumeSnapshot.enabled }}{{ $apiClients = append $apiClients "object-store-backup" }}{{ end }}
 {{- if and .Values.dapr.enabled .Values.dapr.dashboard.enabled }}{{ $apiClients = append $apiClients "dapr-dashboard" }}{{ end }}
 {{- if $apiClients }}
 apiVersion: networking.k8s.io/v1
@@ -204,7 +204,7 @@ metadata:
 spec:
   podSelector:
     matchExpressions:
-      - { key: app.kubernetes.io/component, operator: NotIn, values: [openbao, age, minio, nats, authorization-controller] }
+      - { key: app.kubernetes.io/component, operator: NotIn, values: [openbao, age, rustfs, nats, authorization-controller] }
   policyTypes: [Ingress]
   ingress:
     - from:
@@ -319,18 +319,20 @@ spec:
         - { protocol: TCP, port: {{ .Values.age.port }} }
 {{- end }}
 ---
-# (3d) minio:9000 — the lakehouse bytes. Clients: the data-plane services + the snapshot backup job. A client outside the release's
-# labels is added via networkPolicy.minioExtraFrom.
-# The development store (the minio fixture) stamps this component label on its pods; a managed S3 runs outside the
-# namespace and needs no rule.
+# (3d) the object store:9000 — the lakehouse bytes. Clients: the data-plane services, the provisioning hooks and the
+# backup jobs. A client outside the release's labels is added via networkPolicy.objectStoreExtraFrom.
+# The development store (the rustfs fixture) stamps this component label on its pods; a managed S3 runs outside the
+# namespace and needs no rule. RustFS serves S3, its admin API and internode RPC on this one port, so the rule
+# cannot split them: the admin plane is guarded by IAM (no `admin:*` on any rask identity, root held only by the
+# scoped-users hook), not by the port.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: {{ include "lance.fullname" . }}-minio-ingress
+  name: {{ include "lance.fullname" . }}-object-store-ingress
   labels: {{- include "lance.labels" . | nindent 4 }}
 spec:
   podSelector:
-    matchLabels: { app.kubernetes.io/component: minio }
+    matchLabels: { app.kubernetes.io/component: rustfs }
   policyTypes: [Ingress]
   ingress:
     - from:
@@ -341,10 +343,11 @@ spec:
                 values:
                   - catalog
                   - lineage
-                  - compaction
-                  - minio-backup
+                  - maintenance
+                  - object-store-backup
                   - backup-pg # the pg-backup CronJob uploads its dumps to the lakehouse (_backups/pg/)
-                  - minio-mkbucket # the bucket-provisioning hook Job — blocked, no install ever gets buckets
+                  - backup-control-root # the control-root backup copies the registries to _backups/control/
+                  - object-store-scoped-users # the identity-provisioning hook — blocked, every scoped user is absent
                   # The media-plane viewer serves the S3 object browser (ported from the retired
                   # volumes-api in the R6/R20 wave) — it reads s3://images-batch* from its pod, so
                   # blocking it here kills the lakehouse storage browser under prod default-deny
@@ -364,11 +367,11 @@ spec:
         - podSelector:
             matchLabels: { ray.io/is-ray-node: "yes" }
         {{- end }}
-        {{- with .Values.networkPolicy.minioExtraFrom }}
+        {{- with .Values.networkPolicy.objectStoreExtraFrom }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
       ports:
-        - { protocol: TCP, port: {{ .Values.minio.port }} }
+        - { protocol: TCP, port: {{ .Values.objectStore.port }} }
 ---
 # The front door: the micro-frontend zones accept ingress from ANYWHERE (the Gateway's data plane,
 # NodePort, port-forward) — they are the intended entry points and carry their own L7 guards (OIDC on the

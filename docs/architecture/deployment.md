@@ -38,15 +38,20 @@ backend at `externalSecrets.kubernetesAuthPath`, as the role `externalSecrets.ro
 whose policy reads the paths the chart's ExternalSecrets name.
 
 THE FIELDS `secret/lance` MUST HOLD. Nothing seeds the platform's store and no credential is a chart value, so an
-unprovisioned field is a fail-closed outage at first use, not a fallback: minio-access-key, minio-secret-key,
+unprovisioned field is a fail-closed outage at first use, not a fallback:
 postgres-password, publisher-oidc-password, publisher-oidc-client-secret (the IdP client secret),
 dapr-state-connection-string, dapr-app-token (the app-API token: ESO writes it into the `dapr-app-token` Secret daprd
 stamps the header from, and the doors compare against this field), frontend-session-secret (the zones' cookie sealing
-key), ray-auth-token, and for each scoped identity named in values.yaml `minio` its key pair:
-`<plane>-s3-access-key` (the key id) beside `<plane>-s3-secret-key` (sha256("<identity>-s3-<minio-secret-key>")[:40],
-`lance.scopedSecretFn`, which `minio-scoped-users` derives too). Both halves are read from the store and read again
-every few minutes (ADR 0166), so a rotation writes them together; during an app-token rotation the bundle also holds
-`dapr-app-token-previous` (docs/OPERATORS.md § 8).
+key), ray-auth-token, and for the catalog, lineage and maintenance identities named in values.yaml `objectStore` their
+key pairs: `<plane>-s3-access-key` (the key id) beside `<plane>-s3-secret-key` (on the dev store,
+sha256("<identity>-s3-<root secret>")[:40], `lance.scopedSecretFn`, which `object-store-scoped-users` derives too). Both
+halves are read from the store and read again every few minutes (ADR 0166), so a rotation writes them together; during
+an app-token rotation the bundle also holds `dapr-app-token-previous` (docs/OPERATORS.md § 8). The bundle holds no store
+root: rask presents none in production, and on the dev store the root sits at `object-store-root`, which no Dapr app may
+read (ADR 0168).
+Beside the bundle, one secret (fields `access_key`, `secret_key`) for each identity a single plane presents:
+`viewer-s3` (the viewer), `media-s3` (annotator and search, read-only on `explorer.corpusS3Root`, when explorer serves
+a corpus) and `backup-s3` (the backups, when one is on); every other app's Configuration denies each one.
 With `secrets.hfTokenInStore`, `hf-token` (field `token`). Beside the bundle, for every identity in
 `lance.signingIdentities`, two secrets: `signing-public-<identity>` (field `keys`) and then `signing-key-<identity>`
 (field `seed`), described in values.yaml `signing:`; the render refuses the platform's store until its operator
@@ -56,12 +61,12 @@ created them and `signing.provisioned` says so. Likewise `nats-user-<user>` per 
 (`chart/templates/openbao-seed.yaml`) writes the same list into the dev store; keep the two in step.
 
 SEVERAL CONSUMERS, ONE KEY (2026-08-09). `publisher-oidc-client-secret` serves the annotator's publish client
-(`explorer.yaml`), the zones' OIDC client (the frontend-session ExternalSecret in `external-secrets.yaml`) AND, with
-`minio.oidc.enabled`, the object store's STS AssumeRoleWithWebIdentity config: there is one IdP client
-(`auth.oidc.clientId`), so there is one secret. The object store reaches it by a different ROUTE, not a different key:
-it has no daprd sidecar, so it cannot read the Dapr secret store, and it consumes the value as a `secretKeyRef` into
-the infra-credentials Secret (ESO syncs that key FROM this one). Do NOT seed a second `dex-client-secret` field to tidy
-the naming: a rotation that updates one copy and not the other breaks STS-assume on a path nothing tests.
+(`explorer.yaml`) and the zones' OIDC client (the frontend-session ExternalSecret in `external-secrets.yaml`): there is
+one IdP client (`auth.oidc.clientId`), so there is one secret. Do NOT seed a second copy under another name: a rotation
+that updates one copy and not the other breaks a sign-in on a path nothing tests. The object store holds no copy at
+all: verifying a web-identity token needs only the client id, and RustFS reads an OIDC client secret from env alone
+(no `_FILE` variant, `.claude/skills/rask-rustfs/references/security.md` § Web identity), so a store given one would
+carry a credential in its environment.
 
 ## Prerequisite: the Dapr control plane
 
@@ -131,17 +136,23 @@ backups belong to the platform, so production runs no `pg_dump` CronJob.
 ## Development stand-ins
 
 A real deployment brings its own identity provider, object store and secret store, and the chart takes them by
-reference (`auth.oidc.issuer`, https, and `auth.oidc.clientId`; `minio.externalEndpoint` and the scoped
+reference (`auth.oidc.issuer`, https, and `auth.oidc.clientId`; `objectStore.externalEndpoint` and the scoped
 credentials; `openbao.externalAddr`).
 Development runs stand-ins from `deploy/fixtures` (ADR 0153), and the chart renders none of them:
 
 - **Dex** (`deploy/fixtures/dex`, release `dex`, Service `rask-dex`): the OIDC issuer with the demo users and rask's
   static client. `dex.enabled` says the estate uses it: the cluster route serves it at `/dex`, the publisher's password is
   seeded into the dev store, and a real deployment's render refuses it.
-- **MinIO** (`deploy/fixtures/minio`, release `minio`, StatefulSet and Service `rask-minio`): the S3 store, on the
-  claims `data-<n>-rask-minio-<i>`. `minio.enabled` says the estate uses it: rask's dev store issues its root
-  credential (`rask-infra-credentials`, through ESO), and rask's hooks provision its buckets and scoped users. Its
-  server starts once rask is installed, so the fixture install does not wait for it.
+- **RustFS** (`deploy/fixtures/rustfs`, release `rustfs`, StatefulSet and Service `rask-rustfs`, ADR 0168): the S3
+  store, one replica on the claim `data-rask-rustfs-0`, S3 on 9000 and the dev NodePort 30900, the upstream
+  `rustfs/rustfs` image pinned by digest. `objectStore.enabled` says the estate uses it: rask's dev store issues its
+  root pair (`object-store-access-key`/`object-store-secret-key` in `rask-object-store-root`, through ESO from
+  `secret/object-store-root`, which no Dapr app may read), which the server reads as files, never env; rask's
+  scoped-users hook (`object-store-scoped-users`, on rask's own image) provisions its buckets, policies and scoped
+  users through RustFS's admin API. Its server starts once
+  rask is installed, so the fixture install does not wait for it. The root secret signs every STS session token, so
+  the chart hands it only to the store pod and the scoped-users hook (`rask-rustfs` § 3); the dev OpenBao's published
+  root token still reads it, as every secret, until XC-165 (#659) gives each app its own secret-store token (ADR 0168).
 - **OpenBao in dev mode** (`deploy/fixtures/openbao`, release `openbao`, Deployment and Service `rask-openbao`): the
   in-memory secret store. `openbao.enabled` says the estate uses it, and a real deployment's render refuses it. What
   goes into it stays rask's: the chart renders the seed scripts into `<release>-openbao-seed` (the dev credentials,
@@ -167,7 +178,7 @@ make k3s-down         # uninstall   |   make k3s-purge  # + delete PVCs
 
 `k3s-build` builds every image through `scripts/dagger-image.sh --out`, as an OCI tarball in `build/k3s-images/`:
 `compute`, `notifications` and `flows`, the seven zone images (`web-<zone>`), `lance-rest-catalog` (the
-lakehouse image that serves catalog, lineage, maintenance and the media trio), `minio` and the `ray-cluster` image the
+lakehouse image that serves catalog, lineage, maintenance and the media trio) and the `ray-cluster` image the
 development engine fixture runs. `k3s-import` loads each tarball into k3s containerd as `<image>:dev` with
 `sudo k3s ctr images import`; neither step runs docker. The release installs into `RELEASE_NAMESPACE` (default
 `default`, the fixtures' namespace), and `values-live-pins.yaml` files are per-host state from `make k3s-pins`, never
@@ -186,7 +197,6 @@ locally and in CI.
 | `flows`, `notifications`, `compute` | `<name>.dockerfile` | One per service, `uv sync --frozen --package <name>` against the root `uv.lock`. `compute` ships in its own chart (`deploy/fixtures/compute`). |
 | `web-<zone>` (7 images) | `frontend.dockerfile` | One parametrized dockerfile, `--build-arg APP=<zone>`. SSR via `svelte-adapter-bun`; `home` is the catch-all (owns `/`), the six domain zones (lakehouse, explorer, annotator, compute, models, studio) each pin a bare base `/<zone>`, and the cluster route (`<release>-web`) sends each base there as a `PathPrefix` match with no rewrite. Probes are TCP, because a zone's `/` 404s under its own base. tini as PID 1, non-root UID 10001. |
 | `ray-cluster`, `ray-<runner>` | `ray-cluster.dockerfile`, `ray-runner.dockerfile` | The development engine's head image and one image per sealed runner (`--runner <runner>`); neither is part of the product chart. |
-| `minio` | `minio.dockerfile` | The `mc` the chart's scoped-users hook drives, and the dev store's server, built from pinned upstream tags. |
 
 The one frontend dockerfile encodes a non-obvious build contract (documented in its header): `svelte-adapter-bun`
 externalizes `@sveltejs/kit`, so the final image must ship `node_modules` (`build/` is not standalone). And bun 1.3's
@@ -243,12 +253,12 @@ with `--address ray://…:10001`.
 - **Optional, in-chart for development and the platform's in production** ([[XC-132]]): `openfga.enabled` (the
   OpenFGA subchart) and `age.enabled` (the apache/age Postgres StatefulSet behind OpenFGA and the Dapr state store); see *Prerequisites in production*.
 - **Its own configuration of what it does not run**: the Dapr Components, Configurations and Resiliency, the NATS stream
-  Job, the ExternalSecrets and SecretStore, the MinIO bucket and user hooks, and the dev OpenBao's seed scripts.
+  Job, the ExternalSecrets and SecretStore, the object store's bucket and user hooks, and the dev OpenBao's seed scripts.
 - **The OTel Collector**, with `observability.enabled` (see below).
 
 Everything else is a separate release ([[XC-085]], ADR 0153). `make k3s-up` installs the development set from
 `deploy/fixtures` first (`make k3s-fixtures`): the External Secrets Operator, Dapr, NATS, the CloudNativePG operator,
-Dex, MinIO, OpenBao, the telemetry chain, and the development engine (the KubeRay operator, a Ray cluster and the
+Dex, RustFS, OpenBao, the telemetry chain, and the development engine (the KubeRay operator, a Ray cluster and the
 `compute` chart). A platform brings its own.
 
 ### Per-user login across the zones
@@ -326,7 +336,7 @@ Sensitive config comes from an operator-created Secret (`existingSecret`, defaul
 
 ## State stores
 
-- **The object store** (MinIO in development, the platform's S3 in production): every Lance table the catalog
+- **The object store** (RustFS in development, the platform's S3 in production): every Lance table the catalog
   governs (lineage's commit feed, edge list, outbox refusals and forwarder cursors among them, in the catalog's
   provenance namespace, ADR 0158), the outbox, the trash and the registries. Lance puts its commit CAS in the store,
   so neither the catalog nor lineage needs a relational database.

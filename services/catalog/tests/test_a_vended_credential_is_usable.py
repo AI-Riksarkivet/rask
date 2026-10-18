@@ -71,7 +71,7 @@ def test_a_vended_credential_carries_what_a_lance_client_needs_to_build(kind: Ve
     """`allow_http` and path-style addressing are not optional extras.
 
     Without `allow_http`, object_store refuses to construct a client for an `http://` endpoint at all.
-    Without path-style, RustFS/MinIO reject virtual-hosted signing with 403 `SignatureDoesNotMatch` —
+    Without path-style, RustFS rejects virtual-hosted signing with 403 `SignatureDoesNotMatch` —
     the same reason `lance_storage_options` defaults `virtual_hosted=False`.
     """
     opts = _vend(kind, "http://rustfs:9000")

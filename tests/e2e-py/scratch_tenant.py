@@ -14,6 +14,7 @@ from typing import Any
 
 import lance_namespace
 import requests
+from byo_scenario import CLOSE_EACH_REQUEST
 from principals import DEX_SCOPE, principal_of
 
 
@@ -26,7 +27,13 @@ JOB_USER = os.environ.get("LANCE_E2E_PIPELINE_USER", "publisher@rask.internal")
 
 
 class Identity:
-    """One Dex user: its bearer, and the principal the estate's grants name ([[LH-063]])."""
+    """One Dex user: its bearer, and the principal the estate's grants name ([[LH-063]]).
+
+    Every request it sends closes its connection (`byo_scenario.CLOSE_EACH_REQUEST`): the admin's session sits idle
+    while a drill runs, and a keep-alive connection the catalog closed meanwhile reaches the client through the lane's
+    port-forward only as the teardown's first request fails (`RemoteDisconnected`, three of four e2e-stack runs on
+    2026-10-18, each after 7-8.5 s idle).
+    """
 
     def __init__(self, email: str) -> None:
         answer = requests.post(
@@ -46,10 +53,11 @@ class Identity:
         self.principal = principal_of(CATALOG, self.bearer)
         self.http = requests.Session()
         self.http.headers["authorization"] = f"Bearer {self.bearer}"
+        self.http.headers["connection"] = CLOSE_EACH_REQUEST
 
     def namespace(self) -> lance_namespace.LanceNamespace:
         """The stock client a job off the cluster gets."""
-        return lance_namespace.connect("rest", {"uri": CATALOG, "headers.Authorization": f"Bearer {self.bearer}"})
+        return lance_namespace.connect("rest", {"uri": CATALOG, "headers.Authorization": f"Bearer {self.bearer}", "headers.Connection": CLOSE_EACH_REQUEST})
 
 
 def ok(answer: requests.Response) -> dict[str, Any]:

@@ -9,9 +9,9 @@ A `can_write_data` holder is a managed-versioning writer (ADR 0157): it puts dat
 deletion files, index files and a STAGED manifest `_versions/<n>.manifest-<uuid>`, and the catalog finalizes
 the version under its own credential. So the writer tier never reaches a final `_versions/<n>.manifest`, the
 version hint or `_refs/`, and that refusal is an explicit Deny: an Allow on `_versions/*.manifest-*` alone
-also matches `<n>.manifest-<uuid>.manifest`, which pylance reads as a final manifest. Measured on MinIO
-`RELEASE.2025-04-22T22-12-26Z` with stock pylance 13.0.0, on a throwaway store and on the deployed
-`rask-minio` (LH-469, #594). Whole-prefix write and delete belong to `can_maintain`.
+also matches `<n>.manifest-<uuid>.manifest`, which pylance reads as a final manifest. Measured with stock
+pylance 13.0.0 on a throwaway store and on the deployed one (LH-469, #594); RustFS lets an explicit Deny win
+(R3, `docs/audits/2026-10-18/rustfs-zero-trust.md`). Whole-prefix write and delete belong to `can_maintain`.
 
 DRIVEN THROUGH THE REAL DOOR AND THE REAL VENDOR. The catalog runs on a moto server, the vendor is the
 estate's `StsVendor`, and its AssumeRole goes to moto's STS; the only thing added is a recorder of the

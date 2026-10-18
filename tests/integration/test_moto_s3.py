@@ -1,4 +1,4 @@
-"""End-to-end catalog round-trip against a moto-mocked S3 (no MinIO needed).
+"""End-to-end catalog round-trip against a moto-mocked S3 (no object-store server needed).
 
 Runs the real app + native backend + pylance data plane against an in-process
 moto S3 server, exercising the full create → insert → count → query path on fake

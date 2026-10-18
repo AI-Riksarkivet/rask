@@ -6,11 +6,11 @@ workload:
 
 - **Jobs and StatefulSets.** Six Jobs and the AGE StatefulSet render with none of the baseline. A Job
   runs with the same reach as a Deployment and several of these hold credentials — the OpenBao seed and
-  the MinIO user-provisioning Jobs by definition.
+  the object store's user-provisioning Jobs by definition.
 - **initContainers.** `rask-lineage` hardens its app container while its `wait-age` init container
   carries nothing. An init container shares the pod and runs FIRST.
 - **Workloads the exemption list calls subcharts and we actually template.** `_UNCOVERED_DEPLOYMENTS`
-  lumps "not ours to template" together with OpenBao, Dex and MinIO — all rendered from
+  lumps "not ours to template" together with OpenBao and Dex — both rendered from
   `rask/templates/`. The row's title names the first two as the ones that most need it: the secret
   store and the IdP.
 
@@ -99,7 +99,7 @@ def _first_party_workloads() -> list[tuple[str, str, dict]]:
 #: a new unhardened container reds this gate — and every line removed is a container hardened for good.
 #:
 #: WHY IT IS NOT SIMPLY FIXED IN ONE GO. Most of these run THIRD-PARTY IMAGES the chart templates itself
-#: (postgres, minio, dex, the mc/nats/kubectl CLIs), where `readOnlyRootFilesystem` is the key
+#: (postgres, dex, the nats/kubectl CLIs), where `readOnlyRootFilesystem` is the key
 #: that breaks things: each writes somewhere under its own root unless given a mount. Applying the
 #: baseline blind would trade a hardening gap for a crash loop, so each comes off this list with its pod
 #: observed running, which is a per-workload piece of work rather than one edit.
@@ -114,8 +114,6 @@ _UNHARDENED_TODAY: dict[str, dict[str, tuple[str, ...]]] = {
     # with its pod observed running rather than by adding a line here.
     "StatefulSet/age/postgres": {"containers": BASELINE},
     "Deployment/dex/dex": {"containers": BASELINE},
-    # PARTIAL, and the numbers are why the ratchet names keys rather than containers.
-    "StatefulSet/minio/minio": {"containers": ("runAsNonRoot", "seccompProfile")},
     # The nats CLI answers `could not load schema` as EVERY non-root uid tried — 65532, 1000 and 65534,
     # on nats-box 0.14.5 and 0.19.7 — while the same command as root succeeds. Bisected key by key:
     # `readOnlyRootFilesystem` alone is fine. So it takes the other three and is listed for this one.

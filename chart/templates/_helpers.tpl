@@ -141,7 +141,7 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 
 {{- define "lance.dexHost" -}}{{ .Release.Name }}-dex{{- end -}}
 
-{{- define "lance.minioHost" -}}{{ include "rask.fullname" . }}-minio{{- end -}}
+{{- define "lance.objectStoreHost" -}}{{ include "rask.fullname" . }}-rustfs{{- end -}}
 
 {{- define "lance.openbaoHost" -}}{{ .Release.Name }}-openbao{{- end -}}
 
@@ -151,7 +151,10 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end -}}
 
 {{- define "lance.s3Endpoint" -}}
-{{- if .Values.minio.externalEndpoint -}}{{ .Values.minio.externalEndpoint }}{{- else -}}http://{{ include "lance.minioHost" . }}:{{ .Values.minio.port }}{{- end -}}
+{{- if .Values.objectStore.externalEndpoint -}}{{ .Values.objectStore.externalEndpoint }}
+{{- else if .Values.objectStore.enabled -}}http://{{ include "lance.objectStoreHost" . }}:{{ .Values.objectStore.port }}
+{{- else -}}{{ fail "objectStore.enabled is false, so the S3 behind the lakehouse is the platform's: set objectStore.externalEndpoint to it (docs/architecture/deployment.md, Prerequisites)" }}
+{{- end -}}
 {{- end -}}
 
 {{- define "lance.ageConnectHost" -}}
@@ -696,18 +699,36 @@ activeDeadlineSeconds: 1800
 {{- end -}}
 
 {{- define "lance.catalogSecretField" -}}
-{{- ternary "catalog-s3-secret-key" "minio-secret-key" (not (not .Values.minio.catalogAccessKey)) -}}
+{{- $_ := required "objectStore.catalogAccessKey names the catalog's scoped store identity; the catalog never presents the store's root, which signs every STS token (ADR 0168)" .Values.objectStore.catalogAccessKey -}}
+catalog-s3-secret-key
 {{- end -}}
 
 {{- define "lance.catalogKeyIdField" -}}
-{{- ternary "catalog-s3-access-key" "minio-access-key" (not (not .Values.minio.catalogAccessKey)) -}}
+{{- $_ := required "objectStore.catalogAccessKey names the catalog's scoped store identity; the catalog never presents the store's root, which signs every STS token (ADR 0168)" .Values.objectStore.catalogAccessKey -}}
+catalog-s3-access-key
+{{- end -}}
+
+{{- define "lance.mediaApps" -}}
+{{- join " " (list .Values.explorer.services.annotator.daprAppId .Values.explorer.services.search.daprAppId) -}}
+{{- end -}}
+
+{{- define "lance.mediaIdentity" -}}
+{{- if and .Values.explorer.enabled .Values.explorer.corpusS3Root -}}
+{{- required "objectStore.mediaAccessKey names annotator's and search's read-only identity on explorer.corpusS3Root; they never present the store's root (ADR 0168)" .Values.objectStore.mediaAccessKey -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "lance.backupIdentity" -}}
+{{- if or .Values.backups.pgDump.enabled .Values.backups.controlRoot.enabled -}}
+{{- required "objectStore.backupAccessKey names the backups' identity; a backup never holds the store's root (ADR 0168)" .Values.objectStore.backupAccessKey -}}
+{{- end -}}
 {{- end -}}
 
 {{- define "lance.baseFixture" -}}
 {{- $out := dict -}}
 {{- if .Values.catalog.multibase.devSeed -}}
-{{- if or (include "rask.isRealDeployment" .) (not .Values.minio.enabled) (not .Values.openbao.enabled) -}}
-{{- fail "catalog.multibase.devSeed is a local fixture: it needs minio.enabled, the development store (openbao.enabled) and side-loaded images" -}}
+{{- if or (include "rask.isRealDeployment" .) (not .Values.objectStore.enabled) (not .Values.openbao.enabled) -}}
+{{- fail "catalog.multibase.devSeed is a local fixture: it needs objectStore.enabled, the development store (openbao.enabled) and side-loaded images" -}}
 {{- end -}}
 {{- range $base, $ref := .Values.catalog.multibase.baseCredentialRefs | default dict -}}
 {{- if not (and (hasPrefix "s3://" $base) (regexMatch "^[a-z0-9][a-z0-9-]*$" $ref)) -}}
@@ -838,7 +859,13 @@ scoped_secret() {
         {{- $denied = append $denied . }}
         {{- end }}
         {{- end }}
-        {{- $denied = concat $denied (list "nats-root" "nats-route") }}
+        {{- $denied = concat $denied (list "nats-root" "nats-route" "object-store-root" "backup-s3") }}
+        {{- if not (has $app (include "lance.mediaApps" $cfgRoot | splitList " ")) }}
+        {{- $denied = append $denied "media-s3" }}
+        {{- end }}
+        {{- if ne $app $cfgRoot.Values.explorer.services.viewer.daprAppId }}
+        {{- $denied = append $denied "viewer-s3" }}
+        {{- end }}
         {{- if $denied }}
         deniedSecrets:
           {{- range $denied }}
@@ -917,7 +944,7 @@ keys_shaped() { case "$1" in *,) return 1 ;; *,*) pub_shaped "${1%%,*}" && pub_s
 {{- end -}}
 
 {{- define "lance.platformBuckets" -}}
-{{- $buckets := .Values.minio.buckets | default list -}}
+{{- $buckets := .Values.objectStore.buckets | default list -}}
 {{- join "," (compact $buckets | uniq) -}}
 {{- end -}}
 
@@ -930,7 +957,7 @@ keys_shaped() { case "$1" in *,) return 1 ;; *,*) pub_shaped "${1%%,*}" && pub_s
 {{- end -}}
 
 {{- define "lance.externalBlobBases" -}}
-{{ .Values.vending.externalBlobBases | default (printf "s3://%s/models/" .Values.minio.bucket) }}
+{{ .Values.vending.externalBlobBases | default (printf "s3://%s/models/" .Values.objectStore.bucket) }}
 {{- end }}
 
 {{- define "rask.rayDashboardUrl" -}}

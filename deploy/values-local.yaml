@@ -93,30 +93,20 @@ docs:
 
 # THE SCOPED STORAGE IDENTITIES this estate actually runs on.
 #
-# They were live long before they were written down: the Deployments held `rask-maintenance`
-# while `helm get values` carried no `minio` section at all. That is drift Helm
-# cannot correct — it only patches fields that CHANGED between releases, so a hand-set env survives
-# every upgrade and reverts to the tenant ROOT the moment one values edit touches the field, with
-# nothing going red. The same class as the corpus PVC this file's header describes, and worse: the
-# symptom is a credential quietly widening rather than a 500.
+# Declared here rather than left to a hand-set env: Helm only patches fields that CHANGED between
+# releases, so a hand-set env survives every upgrade and reverts to the store's ROOT the moment one values
+# edit touches the field, with nothing going red. The same class as the corpus PVC this file's header
+# describes, and worse: the symptom is a credential quietly widening rather than a 500.
 #
 # Only the NAME is needed. Each secret is derived in-cluster from it plus the store's root secret
 # (`lance.scopedSecretFn`), so declaring the identities costs no secret anywhere, and the one
-# string reaches the OpenBao seed and the `mc` user creation together — a scoped access
+# string reaches the OpenBao seed and the store's user creation together — a scoped access
 # key beside any other secret is `SignatureDoesNotMatch` on every call.
 #
-# `minio-scoped-users` provisions each policy and user as a post-upgrade hook, and naming an
-# identity here is enough even when the user already exists: `mc admin user add` ROTATES an existing
-# user's secret. Probed 2026-09-07 against this estate's own mc image on a throwaway user — after a
-# second `add` with a different secret, the NEW secret reaches `Access Denied` (a valid credential
-# with no policy attached) while the OLD one fails `SignatureDoesNotMatch`. Read the error text, not
-# the exit code: both an unprovisioned credential and a wrong one fail an `mc ls`, and only the
-# message tells them apart.
-#
-# The hook runs POST-upgrade, so on the one upgrade that first names an identity the pods read the
-# derived secret from OpenBao before the store has been told about it. Expect a brief window of failed
-# S3 calls there.
-minio:
+# `object-store-scoped-users` provisions each policy and user as a pre- and post-upgrade hook, and naming
+# an identity here is enough even when the user already exists: RustFS's `add-user` on an existing access
+# key sets its secret again (`scripts/rustfs_admin.py`).
+objectStore:
   maintenanceAccessKey: rask-maintenance
 
 # THE CONTROL ROOT'S SCHEDULED BACKUP ([[LH-110]]), on here so the lane is exercised rather than only

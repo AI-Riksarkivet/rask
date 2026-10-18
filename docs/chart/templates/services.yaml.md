@@ -100,7 +100,7 @@ asked for: an empty value would reach the writer as an option object_store does 
 recognise, and it drops those silently — plaintext under a config claiming otherwise.
 The catalog REFUSES an invalid pairing at boot rather than passing it on.
 
-## `- { name: LANCE_LINEAGE_OUTBOX_URI, value: "s3://{{ .Values.minio.bucket }}/_lineage_outbox" }`
+## `- { name: LANCE_LINEAGE_OUTBOX_URI, value: "s3://{{ .Values.objectStore.bucket }}/_lineage_outbox" }`
 
 #4 transactional outbox on the catalog's LINEAGE lane. The emit is inline-awaited and
 best-effort AFTER the Lance write commits, so without staging a crash between the commit and
@@ -127,7 +127,7 @@ under topic catalog.control.v1; every replica buffers every event for GET /manag
 ternary (NOT `| default`, which treats false as empty) so a key missing under
 `helm upgrade --reuse-values` renders the default, not "" (pydantic bool_parsing crash).
 
-## `- { name: LANCE_CONTROL_OUTBOX_URI, value: "s3://{{ .Values.minio.bucket }}/_control_outbox" }`
+## `- { name: LANCE_CONTROL_OUTBOX_URI, value: "s3://{{ .Values.objectStore.bucket }}/_control_outbox" }`
 
 #4 transactional outbox on the CONTROL lane + the cron that RELAYS it. A control event lost
 to a NATS blip (a grant, a `table_published`) reaches nobody — not the notifications control
@@ -319,26 +319,23 @@ Bound the DaprClient gRPC deadline (the SDK env) — covers the boot-time secret
 
 Mounts the relay tick's route at this binding name (matches the bindings.cron component above).
 
-## `{{- $linScoped := .Values.minio.lineageAccessKey }}`
+## `{{- $_ := required "objectStore.lineageAccessKey names lineage's scoped store identity; …" .Values.objectStore.lineageAccessKey }}`
 
-THE LINEAGE PLANE'S SCOPED IDENTITY (§F2-1). The ACCESS KEY alone scopes the plane; the
-secret is DERIVED in-cluster (`lance.scopedSecretFn`), so naming the identity needs no
-secret anywhere. Empty falls back to the tenant ROOT, which is what an
-install runs until one is named — a chart that silently repointed a live service at a
-credential nobody created would take it down on upgrade.
+THE LINEAGE PLANE'S SCOPED IDENTITY (§F2-1), and `required`: a blank access key fails the render, since the only
+other pair lineage could present is the store's root, whose secret signs every STS session token on RustFS
+(ADR 0168). The ACCESS KEY alone scopes the plane; the secret is DERIVED in-cluster (`lance.scopedSecretFn`), so
+naming the identity needs no secret anywhere.
 
 ## `- { name: LINEAGE_DAPR_SECRET_S3_ID_FIELD, value: "lineage-s3-access-key" }`
 
 The scoped identity's key id, read from the store with its secret ([[XC-082]], ADR 0166): a rotation
-issues a new id, so the id cannot be configuration. Unscoped, the default field is the root pair's
-`minio-access-key`.
+issues a new id, so the id cannot be configuration.
 
 ## `- { name: LINEAGE_DAPR_SECRET_S3_FIELD, value: "lineage-s3-secret-key" }`
 
-THE OTHER HALF OF THE PAIR, and the half that has bitten twice. `dapr_secret_s3_field`
-defaults to `minio-secret-key` — the tenant ROOT's secret — so a SCOPED access key left
-on that default is signed with a mismatched pair and every operation fails
-`SignatureDoesNotMatch`. The Ray and maintenance pairs each paid for this.
+THE OTHER HALF OF THE PAIR, named beside the key id because a scoped key signed with any other
+secret fails `SignatureDoesNotMatch` on every operation (measured on the Ray and maintenance pairs).
+`dapr_secret_s3_field` defaults to the same field, so a service run without the chart reads its own pair too.
 
 ## `{{- include "lance.governedOidcEnv" . | nindent 12 }}`
 

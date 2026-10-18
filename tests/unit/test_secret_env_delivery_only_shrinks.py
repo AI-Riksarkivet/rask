@@ -40,11 +40,12 @@ from tests.unit.test_invariants import _helm_template
 #: 30 -> 23 when the seven zones' `LINEAGE_SERVICE_TOKEN` became a MOUNTED FILE ([[XC-001]]): the
 #: value left the environment, and `readSecretFile` re-reads it per request so an ESO rotation reaches
 #: a running pod without the watcher that row's other option would have needed.
-#: 23 -> 22 when the minio-scoped-users Job took the store root as a mounted file ([[XC-004]]).
-#: 22 -> 20 when the store's server, whose two root-credential env vars these were, became the minio fixture ([[XC-131]]).
+#: 23 -> 22 when the object store's scoped-users Job took the store root as a mounted file ([[XC-004]]).
+#: 22 -> 20 when the store's server, whose two root-credential env vars these were, became a fixture of its own ([[XC-131]]).
 #: 20 -> 19 when compute, whose APP_API_TOKEN this was, became its own release (deploy/fixtures/compute, ADR 0155).
+#: 19 -> 18 when the object store's bucket Job took the store root as a mounted file ([[XC-163]]).
 #: Lowering it is the point; raising it means a workload took the banned path and the rule lost ground.
-SECRET_ENV_BASELINE = 19
+SECRET_ENV_BASELINE = 18
 
 
 def _secret_env_entries() -> list[tuple[str, str, bool]]:
@@ -91,8 +92,8 @@ def test_the_baseline_is_not_stale_upward() -> None:
 #: is a flag. Measured 2026-09-24: the value shape finds six entries and no false positive.
 _MINTED_MATERIAL = re.compile(r"^(?:[0-9a-f]{40}|[A-Za-z0-9]{40})$")
 
-#: Entries carrying that material as a LITERAL env value, measured 2026-09-24. All six are
-#: `minio-scoped-users`' `mc admin user add` arguments.
+#: Entries carrying that material as a LITERAL env value, measured 2026-09-24: six, all of them the object
+#: store's scoped-users Job's user-creation arguments.
 #:
 #: WORSE THAN A `secretKeyRef`, WHICH IS WHY IT NEEDS ITS OWN NUMBER. The ratchet above counts the
 #: banned DELIVERY path; this counts material that never reaches a Secret at all — it is in the

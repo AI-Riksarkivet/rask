@@ -3,7 +3,7 @@
 That category's contract is that a clean drift report certifies the estate's storage state, and the
 trash purge gates on it. So a finding no operator can action holds the total above zero forever and
 blocks reclamation with it — the maintenance config's own comment records `rask-observability` doing
-exactly that until `minio.buckets` was wired into `MAINTENANCE_S3_PLATFORM_BUCKETS`.
+exactly that until `objectStore.buckets` was wired into `MAINTENANCE_S3_PLATFORM_BUCKETS`.
 
 A MULTIBASE DATA BASE IS THE SAME KIND OF THING AND WAS MISSED. `catalog.multibase.dataBases` is an
 estate declaration that a bucket exists and may be addressed, and no warehouse record claims it, so
@@ -78,20 +78,20 @@ def test_a_renamed_root_is_exempt_under_its_new_name_only() -> None:
     makes, behind which a real orphan of that name would hide.
     """
     values = yaml.safe_load((_ROOT / "chart" / "values.yaml").read_text())
-    docs = _render("--set", "minio.bucket=root-x", "--set", "minio.buckets={extra-platform}")
+    docs = _render("--set", "objectStore.bucket=root-x", "--set", "objectStore.buckets={extra-platform}")
     found = _platform_buckets(docs)
 
     assert set(found) == set(_MAINTENANCE), f"the platform-bucket env is missing from: {sorted(set(_MAINTENANCE) - set(found))}"
     for name, buckets in found.items():
-        assert buckets == ["extra-platform"], f"{name} exempts {buckets}, wanted only the declared platform bucket (not {values['minio']['bucket']!r})"
+        assert buckets == ["extra-platform"], f"{name} exempts {buckets}, wanted only the declared platform bucket (not {values['objectStore']['bucket']!r})"
     root = _maintenance_env(docs, "MAINTENANCE_S3_BUCKET")
     assert root == dict.fromkeys(_MAINTENANCE, "root-x"), f"the renamed root is not the bucket maintenance sweeps and exempts: {root}"
 
 
 def test_an_empty_platform_set_adds_no_empty_bucket() -> None:
-    """With `minio.buckets` empty the platform set is the empty string, which splits to one empty name.
+    """With `objectStore.buckets` empty the platform set is the empty string, which splits to one empty name.
     Only the declared base may remain."""
-    docs = _render("--set", "minio.buckets=null", "--set", "catalog.multibase.dataBases[0]=s3://second-store/data")
+    docs = _render("--set", "objectStore.buckets=null", "--set", "catalog.multibase.dataBases[0]=s3://second-store/data")
     found = _maintenance_env(docs, "MAINTENANCE_S3_PLATFORM_BUCKETS")
 
     assert set(found) == set(_MAINTENANCE), f"the platform-bucket env is missing from: {sorted(set(_MAINTENANCE) - set(found))}"

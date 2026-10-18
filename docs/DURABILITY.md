@@ -20,7 +20,7 @@ no-op for data.
 ### 2. Durable data — must persist + be backed up
 | Store | Holds | Persistence | Lifecycle |
 |-------|-------|-------------|-----------|
-| **Object store (S3)** | the **lakehouse** (Lance datasets), lineage's provenance tables (the commit feed and edge list, in the catalog's `provenance` namespace), the lineage outbox, trash and the registries | the MinIO fixture's PVCs in development; the platform's S3 in production | the permanent data asset — lives for months/years |
+| **Object store (S3)** | the **lakehouse** (Lance datasets), lineage's provenance tables (the commit feed and edge list, in the catalog's `provenance` namespace), the lineage outbox, trash and the registries | the RustFS fixture's PVC in development; the platform's S3 in production | the permanent data asset — lives for months/years |
 | **Apache AGE / Postgres** | OpenFGA's authz store + the Dapr state store (notifications' inbox read state) | PVC (`volumeClaimTemplates`) | grows with history; permanent |
 | **NATS JetStream** | the catalog→lineage event buffer | PVC (`fileStore`) | transient (replay window); survives restart so no event is lost across a roll |
 | **Secret store** | secrets | none in the chart ([[XC-149]]): the platform's Vault or OpenBao in production (tier 3); the dev OpenBao fixture is in memory and its seed writes it again | permanent, the platform's |
@@ -33,9 +33,9 @@ store to guarantee **exactly one writer wins** that race (`lance_docs/file_forma
 store that silently *ignores* the header accepts both PUTs and silently loses a commit — a real failure mode
 (GCS S3-interop) that a single-writer smoke test never catches, so a store has to be proven, not assumed.
 
-**Measured 2026-07-05 against RustFS, the store at the time: it enforces CAS.** No measurement against MinIO, the
-store since [ADR 0063](adr/0063-the-object-store-is-minio-and-the-reason-is-who-may-call.md), is recorded here;
-`make e2e-cas` against the MinIO fixture is the check. The `tests/e2e/test_object_store_cas_e2e.py` harness (`make
+**RustFS enforces CAS: measured 2026-07-05 with the harness below, and again 2026-10-18 on RustFS 1.0.1** (16 writers
+racing `If-None-Match: *` on one key, one winner in each of 20 rounds; `If-Match` with a stale ETag answers 412;
+`docs/audits/2026-10-18/rustfs-zero-trust.md`, [ADR 0168](adr/0168-the-development-object-store-is-rustfs.md)). The `tests/e2e/test_object_store_cas_e2e.py` harness (`make
 e2e-cas`) validates it in three tiers against the deployed store, asserting **data invariants** (not S3 error
 names): (1) a second `If-None-Match: *` PUT of a live key is rejected **412** and does not overwrite; (2) 8
 threads racing the same key at a barrier yield **exactly one winner per round** (the silent-ignore detector);
@@ -52,7 +52,7 @@ the apps at the external endpoint:
 
 | Service | Why external in prod | How (wired) |
 |---------|----------------------|-----|
-| **S3 lakehouse** | the permanent system of record; you want a managed, replicated, lifecycle-policied object store (AWS S3 / a MinIO cluster) | `minio.enabled=false` + `minio.externalEndpoint=…` → catalog/lineage/maintenance + vending connect there |
+| **S3 lakehouse** | the permanent system of record; you want a managed, replicated, lifecycle-policied object store (AWS S3 / a multi-node RustFS or Ceph cluster) | `objectStore.enabled=false` + `objectStore.externalEndpoint=…` → catalog/lineage/maintenance + vending connect there |
 | **Postgres (AGE)** | a managed DB (RDS/Cloud SQL/CNPG) for backups, HA, PITR | `age.enabled=false` + `age.externalHost=…` (+ matching user/password/dbs) → the OpenFGA datastore Secret and the Dapr state store point there (also override the openfga subchart's `datastore.uri`) |
 | **OpenBao / secrets — app tier** | a hardened external Vault / cloud KMS | `openbao.enabled=false` + `openbao.externalAddr=…` → the apps consume from the external Vault via their Dapr sidecar (`secretsViaDapr` keys off `externalAddr`, so there is **no** plaintext-env fallback); the chart renders no store in any mode, and `openbao.egress` admits only the store's readers to it |
 | **infra-tier Secret** | the `infra-credentials` + `observability-s3` Secrets (AGE and object-store root creds; GreptimeDB's S3 **secret** key) should come from Vault, not chart values | `externalSecrets.enabled=true` → the external-secrets.io operator syncs `<release>-infra-credentials` **and** `<release>-observability-s3` from Vault (both static Secrets are skipped); the openfga DSN is assembled from the fetched password. The non-sensitive S3 access-key *id* is still templated (it ships in app env regardless) |
@@ -85,8 +85,8 @@ So: a long-lived lakehouse with provenance, and a version-expiry lifecycle that 
 
 ## Backup strategy
 - **Lakehouse (S3)** — the highest-value asset. In prod: an external object store with versioning +
-  cross-region replication + lifecycle rules. In-cluster: `backups.volumeSnapshot` (off by default) snapshots the MinIO
-  fixture's data PVCs (`VolumeSnapshot` on a CSI StorageClass). Lance datasets are immutable-versioned on disk, so an object-store snapshot is consistent.
+  cross-region replication + lifecycle rules. In-cluster: `backups.volumeSnapshot` (off by default) snapshots the RustFS
+  fixture's data PVC (`VolumeSnapshot` on a CSI StorageClass). Lance datasets are immutable-versioned on disk, so an object-store snapshot is consistent.
 - **AGE / Postgres** — `pg_dump` / WAL archiving (managed DB does PITR); or PVC `VolumeSnapshot`. The
   in-cluster pg-backup CronJob (`backup-pg.yaml`) dumps `openfga` + `daprstate` gzipped to
   `_backups/pg/<UTC>/` on the object store and prunes all but the newest `backups.pgDump.keep` dumps (default 7;

@@ -6,7 +6,7 @@
 # MANUAL terminal run while `ci.yml` ran `pytest -m "not e2e"`. Nothing guarded them, so a regression
 # tomorrow would be silent. This script makes the live proof an artifact that runs on every push.
 #
-# It brings up the GOVERNED stack (Dex OIDC + OpenFGA + Dapr + NATS + MinIO + OpenBao) on kind with the feature
+# It brings up the GOVERNED stack (Dex OIDC + OpenFGA + Dapr + NATS + RustFS + OpenBao) on kind with the feature
 # flags the suites need, seeds the exact grants/buckets they assume, then runs every tests/e2e-py module the lane can
 # serve, Phase 1's acceptance (`-m phase1`, XC-090) and its soak, each in a session of its own (ADR 0167).
 #
@@ -123,7 +123,7 @@ helm repo update >/dev/null && helm dependency build ./chart >/dev/null
 # criterion 4's module reads the inboxes the shared scenario fills (tests/e2e-py/test_events_are_correct.py).
 #
 # A VENDED CREDENTIAL NAMES THE ADDRESS THE RUNNER REACHES THE STORE AT, the port-forward below: the scenario's stock
-# client writes from this runner to the endpoint the catalog vends, and the catalog's own `rask-minio:9000` resolves
+# client writes from this runner to the endpoint the catalog vends, and the catalog's own `rask-rustfs:9000` resolves
 # only in the cluster (`vending.endpoint`, LH-489). Every other suite here brings its own storage options.
 HELM_SET+=(--set services.flows.replicas=0 --set-string vending.endpoint=http://localhost:9900)
 
@@ -224,9 +224,8 @@ print(config, manifest)' "$IMAGE_DIR/$stem.tar")"
   echo "   loaded $img (image id ${digests:0:12}…)"
 done <<<"$SIDE_LOADED"
 rm -rf "$IMAGE_DIR"
-# The object store runs rask's first-party image, imported above under the name rask's own hooks use. A `--set` beats
-# the estate's values-live-pins.yaml, a tag in a registry this cluster cannot reach.
-"$(dirname "$0")/fixtures.sh" minio -- --set-string image.repository=minio --set-string "image.tag=$TAG"
+# The object store runs the upstream RustFS image its fixture pins by digest, which the node pulls itself.
+"$(dirname "$0")/fixtures.sh" rustfs
 
 step "4/9 deploy the governed stack (auth ON, #3-A/#3-B/#4 flags ON, maintenance ON, telemetry and zones OFF)"
 # HISTORY: `--wait` used to DEADLOCK on a fresh cluster, which is why this job never once passed in CI.
@@ -354,11 +353,8 @@ forward() {
 forward "$RELEASE-catalog" 2333:2333 /tmp/pf-cat.log
 forward "$RELEASE-lineage" 18000:8000 /tmp/pf-lin.log
 forward "$RELEASE-maintenance" 18001:8000 /tmp/pf-mnt.log
-# `minio`, not `rustfs`. The chart has rendered the object store as StatefulSet + Service
-# `rask-minio` since 2026-09-11; nothing renders `-rustfs` any more, so this port-forward addressed an
-# object that does not exist. Verified against the running estate rather than the templates: `svc/rask-minio` and
-# `statefulset.apps/rask-minio`.
-forward "$RELEASE-minio" 9900:9000 /tmp/pf-rfs.log
+# The object store fixture's StatefulSet and Service, `rask-rustfs` (deploy/fixtures/rustfs).
+forward "$RELEASE-rustfs" 9900:9000 /tmp/pf-rfs.log
 forward "$RELEASE-dex" 5556:5556 /tmp/pf-dex.log
 forward "$RELEASE-openfga" 8081:8080 /tmp/pf-fga.log
 forward "$RELEASE-notifications" 8850:8850 /tmp/pf-not.log
@@ -377,11 +373,11 @@ echo "   catalog=$c lineage=$l maintenance=$m dex=$d"
 
 step "6/9 provision the #3-B data buckets (the allowlist GOVERNS, it does not provision)"
 # THE STORE'S OWN ROOT PAIR, from the Secret its StatefulSet reads. The store is seeded with a generated secret, so a
-# literal `minioadmin` signs every request with the wrong key: the store answers SignatureDoesNotMatch, the data
+# literal `rustfsadmin` signs every request with the wrong key: the store answers SignatureDoesNotMatch, the data
 # buckets are never made, and the suites that reach the store directly report it unreachable.
-S3_KEY="$(kubectl get secret "$RELEASE-infra-credentials" -o jsonpath='{.data.minio-access-key}' | base64 -d)"
-S3_SECRET="$(kubectl get secret "$RELEASE-infra-credentials" -o jsonpath='{.data.minio-secret-key}' | base64 -d)"
-[ -n "$S3_KEY" ] && [ -n "$S3_SECRET" ] || { echo "!! $RELEASE-infra-credentials holds no object-store pair"; exit 1; }
+S3_KEY="$(kubectl get secret "$RELEASE-object-store-root" -o jsonpath='{.data.object-store-access-key}' | base64 -d)"
+S3_SECRET="$(kubectl get secret "$RELEASE-object-store-root" -o jsonpath='{.data.object-store-secret-key}' | base64 -d)"
+[ -n "$S3_KEY" ] && [ -n "$S3_SECRET" ] || { echo "!! $RELEASE-object-store-root holds no object-store pair"; exit 1; }
 S3_KEY="$S3_KEY" S3_SECRET="$S3_SECRET" uv run python - "${BASE_A#s3://}" "${BASE_B#s3://}" <<'PYEOF'
 import os, sys
 import boto3
@@ -567,11 +563,12 @@ failed=()
 # under `--require-live` rather than running nowhere. Each marker left out runs elsewhere or is outside the lakehouse:
 #   phase1         Phase 1's acceptance, the next session, which reads one drive of the scenario
 #   nats_auth      its own lane (`dagger call nats-auth`): a broker in operator mode, which this stack's bus is not
+#   rustfs_provisioning  its own lane (`dagger call rustfs-provisioning`): it provisions IAM on a throwaway store
 #   observability  the telemetry chain: it reads the platform's store behind the Collector, so a deployed estate runs it
 #   edge           the Gateway's routes, which this stack does not render (stack_values.sh)
 #   media_catalog  the annotator's media backend, outside the lakehouse
 #   user_state     the zones' per-person state the catalog keeps, outside the lakehouse
-"${PYTEST[@]}" tests/e2e-py -m "not phase1 and not nats_auth and not observability and not edge and not media_catalog and not user_state" \
+"${PYTEST[@]}" tests/e2e-py -m "not phase1 and not nats_auth and not rustfs_provisioning and not observability and not edge and not media_catalog and not user_state" \
   || failed+=("the lane's suites")
 
 # PHASE 1'S ACCEPTANCE (XC-090), BY ITS MARKER, so a module joins the lane by carrying `phase1`: one drive of the

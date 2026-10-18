@@ -2,7 +2,7 @@
 #
 # Simpler than the Postgres stack in docker-compose.yml: one OpenFGA datastore
 # file on a shared volume, a one-shot `migrate`, then `run`. Use it as an
-# OVERLAY on top of the base compose (server + MinIO) and turn auth ON:
+# OVERLAY on top of the base compose (server + RustFS) and turn auth ON:
 #
 #   docker compose -f .docker/docker-compose.yml \
 #                  -f .docker/docker-compose.auth.sqlite.yml up -d

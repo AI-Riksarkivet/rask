@@ -41,17 +41,13 @@ def _render(*sets: str) -> subprocess.CompletedProcess[str]:
 
 
 def test_the_object_store_does_not_inherit_the_generic_APP_memory_ceiling() -> None:
-    """The object store sits under the whole lakehouse, and its server is the minio fixture's ([[XC-131]]). With no
+    """The object store sits under the whole lakehouse, and its server is the rustfs fixture's ([[XC-131]]). With no
     `resources` tier of its own it inherited `default`: 512Mi, sized for a stateless FastAPI shell. Measured 2026-08-05 on the dev estate:
     370Mi at IDLE and **33 OOMKills**, each one taking every Lance read and write in the cluster
     down with it. The failure is invisible in review (the values file simply lacks a key) and reads
     in the cluster as "the lakehouse is flaky".
     """
-    stores = [
-        doc
-        for doc in render_fixture("minio")
-        if doc.get("kind") == "StatefulSet" and any(c["name"] == "minio" for c in doc["spec"]["template"]["spec"]["containers"])
-    ]
+    stores = [doc for doc in render_fixture("rustfs") if doc.get("kind") == "StatefulSet"]
     assert stores, "the object store did not render — this test would pass vacuously"
 
     def _mib(quantity: str) -> int:

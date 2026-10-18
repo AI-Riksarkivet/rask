@@ -12,12 +12,15 @@ it, which is the one loss the lakehouse cannot reconstruct from storage.
 `scripts/control_root_backup.py` already shipped backup/verify/restore/prune and
 `docs/runbooks/RUNBOOK-restore.md` documents the drill; what did not exist was anything that RUNS it.
 The tool is baked into the catalog image (one file, not all of `scripts/`) so this job and the
-service share one implementation — a shell reimplementation with `mc` would be a second one to keep
+service share one implementation — a shell reimplementation with an S3 CLI would be a second one to keep
 in step, and a ConfigMap copy would be a third place the same code lives.
 
 THE CREDENTIAL ARRIVES AS A FILE, never on the environment. The estate admits three secret paths and
 env is not among them; this pod carries no Dapr sidecar, so the one that fits is ESO writing a Secret
-the pod MOUNTS. `--credentials-file` refuses to fall back to the env chain when that file is
+the pod MOUNTS: `credentials.json` of `<release>-backup-s3`, the backups' scoped identity
+(`objectStore.backupAccessKey`), never the store's root, which on RustFS signs every STS session token (ADR 0168).
+The `rask-backup` policy (object-store-scoped-users.yaml) lets it read the control-root record prefixes it copies
+and write and prune under `_backups/` and `backups.controlRoot.dest`, and nothing else. `--credentials-file` refuses to fall back to the env chain when that file is
 unreadable, so a credential that moved fails the job loudly instead of silently signing as whatever
 the pod's own role happens to be.
 

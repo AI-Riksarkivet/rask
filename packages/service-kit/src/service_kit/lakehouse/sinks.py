@@ -1,7 +1,7 @@
 """Provider-agnostic external SINK adapters — the egress seam.
 
 The mirror of :mod:`service_kit.lakehouse.sources`: push curated artifacts OUT of the lakehouse to a local directory, an
-S3/MinIO bucket, or — as plugins — any external store. The pipeline needs only ``put(key, data) -> uri``
+S3-compatible bucket, or — as plugins — any external store. The pipeline needs only ``put(key, data) -> uri``
 (the returned URI is recorded as the terminal lineage output); the provider client stays behind the
 ``SinkAdapter`` protocol.
 """
@@ -34,10 +34,10 @@ class LocalDirSink:
 
 
 class S3FileSystemSink:
-    """A :class:`SinkAdapter` writing into an S3/MinIO bucket prefix; returns the ``s3://`` URI.
+    """A :class:`SinkAdapter` writing into an S3-compatible bucket prefix; returns the ``s3://`` URI.
 
     ``fs`` is a configured ``pyarrow.fs.S3FileSystem`` (endpoint + creds live there), so the same adapter
-    serves MinIO, RustFS, or AWS by swapping the filesystem — which is what the name states.
+    serves RustFS, AWS or any S3-compatible store by swapping the filesystem — which is what the name states.
 
     Renamed from ``S3Sink`` 2026-08-30 for the reason given on
     :class:`service_kit.lakehouse.sources.S3FileSystemSource`: it shadowed :class:`storage.S3Sink`, whose

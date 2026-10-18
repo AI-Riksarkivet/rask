@@ -391,9 +391,10 @@ class MaintenanceSettings(SignatureDoorSettings, FgaSettings, BaseSettings):
     #: This pod's projected service-account token for the catalog's doors (audience `rask-catalog`),
     #: re-read on every call because the kubelet rotates it at ~515 s of its 600 s life.
     catalog_identity_token_file: str = Field(default="/var/run/secrets/rask/identity/rask-catalog/token", alias="RASK_CATALOG_IDENTITY_TOKEN_FILE")
-    dapr_secret_s3_field: str = Field(default="minio-secret-key", alias="MAINTENANCE_DAPR_SECRET_S3_FIELD")
+    #: Maintenance's own scoped pair (`objectStore.maintenanceAccessKey`), never the store's root (ADR 0168).
+    dapr_secret_s3_field: str = Field(default="maintenance-s3-secret-key", alias="MAINTENANCE_DAPR_SECRET_S3_FIELD")
     #: The field of the same secret holding the key id the secret signs under, read with it.
-    dapr_secret_s3_id_field: str = Field(default="minio-access-key", alias="MAINTENANCE_DAPR_SECRET_S3_ID_FIELD")
+    dapr_secret_s3_id_field: str = Field(default="maintenance-s3-access-key", alias="MAINTENANCE_DAPR_SECRET_S3_ID_FIELD")
 
     @property
     def resolved_policy_root(self) -> str:

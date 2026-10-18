@@ -1,7 +1,0 @@
-apiVersion: v2
-name: object-store
-description: >-
-  NOT FOR PRODUCTION. A development S3 store for rask: one MinIO server on local volumes, its root credential the one
-  rask's dev store issues. A platform runs its own S3; rask names it.
-type: application
-version: 0.1.0

@@ -301,7 +301,7 @@ FgaClientDep = Annotated[OpenFgaClient | None, Depends(get_fga_client)]
 
 
 def get_storage_options(settings: SettingsDep) -> dict[str, str]:
-    """Object-store options (S3/MinIO credentials, region) for direct pylance access, under the DATA plane's bounds.
+    """Object-store options (S3 credentials, region) for direct pylance access, under the DATA plane's bounds.
 
     Every door opens its pylance handle with these and reads or writes rows through it, and a handle's
     object-store bounds are fixed when it opens, so they are the data plane's (`CatalogReadBounds`). A

@@ -38,7 +38,7 @@ def _root(tmp_path: Any) -> str:
 
 
 # --------------------------------------------------------------------------- #
-# provisioning (idempotent, like `mc mb --ignore-existing`)
+# provisioning (idempotent: an owned bucket is a no-op)
 # --------------------------------------------------------------------------- #
 
 _SO = {"endpoint": "http://rf:9000", "access_key_id": "k", "secret_access_key": "s", "region": "us-east-1"}

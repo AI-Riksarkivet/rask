@@ -53,7 +53,7 @@ BACKOFF_INITIAL_SECONDS = 0.5
 BACKOFF_MULTIPLIER = 1.5
 
 #: A dependency restart is the event the window exists to survive: measured on this estate, a catalog
-#: or AGE pod is back inside ~60s and MinIO inside ~90s. 300s is that with room, and it is well under
+#: or AGE pod is back inside ~60s and the object store inside ~90s. 300s is that with room, and it is well under
 #: the 720s ack window the components carry.
 MINIMUM_USEFUL_WINDOW_SECONDS = 300.0
 

@@ -18,7 +18,7 @@ type STSClient = Any
 
 
 def sts_client(*, region: str, endpoint: str | None = None, unsigned: bool = False, access_key: str | None = None, secret_key: str | None = None) -> Any:  # noqa: ANN401 — boto3 client has no public stub
-    """Build a boto3 STS client for AWS or an S3-compatible store's STS endpoint (RustFS/MinIO/Ceph).
+    """Build a boto3 STS client for AWS or an S3-compatible store's STS endpoint (RustFS/Ceph).
 
     ``endpoint`` ``None`` leaves botocore to resolve the regional AWS endpoint; a self-hosted store
     passes its own. ``region`` is required rather than env-resolved because the caller vending a

@@ -1,10 +1,10 @@
 """rustfs (S3-compatible) storage smoke — proves rask's storage works against a REAL
 rustfs backend, not just moto.
 
-Run (with rustfs up on :9000 via `make rustfs-up`):
+Run (Dagger starts a RustFS service for the life of the smoke):
     make smoke-rustfs
 
-or manually against any S3-compatible endpoint (rustfs / MinIO / AWS):
+or manually against any S3-compatible endpoint (RustFS / AWS / any S3):
     RASK_S3_ENDPOINT_URL=http://localhost:9000 \
     AWS_ACCESS_KEY_ID=rustfsadmin AWS_SECRET_ACCESS_KEY=rustfsadmin \
     RASK_S3_INSECURE=1 uv run python scripts/smoke_rustfs.py
@@ -14,7 +14,7 @@ It exercises the SAME code the services use:
   - LanceDB over `s3://` (the search/catalog path — object_store, the strictest
     S3-compat surface): create a table, read it back.
 Exits non-zero on any failure. No credentials are hard-coded; everything is env-driven
-(the agnostic invariant — swap rustfs/MinIO/AWS with env only).
+(the agnostic invariant — swap RustFS/AWS/any S3 with env only).
 """
 
 from __future__ import annotations
@@ -50,7 +50,7 @@ def main() -> int:
     print(f"endpoint: {endpoint}", flush=True)
     print(f"creds set: {bool(os.getenv('AWS_ACCESS_KEY_ID') and os.getenv('AWS_SECRET_ACCESS_KEY'))}", flush=True)
     if not endpoint:
-        print("RASK_S3_ENDPOINT_URL not set — point it at rustfs (`make rustfs-up` serves :9000).", flush=True)
+        print("RASK_S3_ENDPOINT_URL not set — point it at an S3 endpoint (`make smoke-rustfs` runs this against RustFS).", flush=True)
         return 2
 
     bucket = os.getenv("RASK_SMOKE_BUCKET", "rask-rustfs-smoke")

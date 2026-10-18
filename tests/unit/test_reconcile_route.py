@@ -258,7 +258,7 @@ def test_a_PLATFORM_bucket_is_never_reported_as_an_orphan() -> None:
     """A finding no operator can action keeps the drift report permanently non-clean.
 
     `orphan_buckets` reports buckets that exist in storage and that no warehouse record claims. The
-    estate creates some for ITSELF — a `minio.buckets` entry the chart's minio-mkbucket Job provisions —
+    estate creates some for ITSELF — an `objectStore.buckets` entry the scoped-users hook provisions on the dev store —
     and no warehouse record will ever claim one, because they hold no governed tables.
 
     MEASURED live 2026-08-16: it sat in orphan_buckets on every tick. Since `report_is_clean` blocks the
@@ -267,7 +267,7 @@ def test_a_PLATFORM_bucket_is_never_reported_as_an_orphan() -> None:
     MAINTAINS and says nothing about infrastructure it does not.
 
     The declared set comes from the chart's `lance.maintenancePlatformBuckets`: `lance.platformBuckets`,
-    which the mkbucket Job creates, plus the multibase bases.
+    which the scoped-users hook creates, plus the multibase bases.
     """
     from maintenance.core.config import MaintenanceSettings
 

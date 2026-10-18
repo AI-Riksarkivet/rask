@@ -170,7 +170,7 @@ def test_a_missing_key_and_a_missing_bucket_do_not_read_the_same(client: TestCli
 
 def test_a_body_less_404_still_names_the_bucket(monkeypatch: pytest.MonkeyPatch) -> None:
     """The backend-independence leg. A `HEAD` carries no body, so AWS answers a missing
-    bucket with a bare `404` that looks exactly like a missing key (moto/MinIO volunteer
+    bucket with a bare `404` that looks exactly like a missing key (moto volunteers
     `NoSuchBucket`; AWS does not). The endpoint must not let the quality of its own error
     message depend on which S3 implementation is plugged in — the storage-agnostic rule —
     so it probes the bucket on the error path. This stubs the AWS shape."""

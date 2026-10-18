@@ -44,6 +44,10 @@ _PLATFORM_STORE = (
     "dex.enabled=false",
     "--set",
     "auth.oidc.connectors.ldap=corp",
+    "--set",
+    "objectStore.enabled=false",
+    "--set-string",
+    "objectStore.externalEndpoint=https://s3.example.com",
 )
 
 

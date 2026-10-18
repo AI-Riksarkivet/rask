@@ -85,8 +85,8 @@ UNNAMED_RAY_ARGS: tuple[str, ...] = (
 #: those guards.
 OIDC_ARGS: tuple[str, ...] = (*UNNAMED_RAY_ARGS, *RAY_ARGS)
 
-#: The local-development overlay: side-loaded images, MinIO on.
-DEFAULT_ARGS: tuple[str, ...] = ("--set", "image.localImages=true", "--set", "minio.enabled=true")
+#: The local-development overlay: side-loaded images, the object store on.
+DEFAULT_ARGS: tuple[str, ...] = ("--set", "image.localImages=true", "--set", "objectStore.enabled=true")
 
 #: The production overlay with the inputs its fail-closed guards refuse to render without, the set
 #: `scripts/prod_render_check.sh` supplies.
@@ -100,6 +100,7 @@ PROD_ARGS: tuple[str, ...] = (
     "--set-string", "auth.fgaApiUrl=https://fga.example.com",
     "--set-json", 'auth.oidc.connectors={"ldap":"corp"}',
     "--set-string", "age.externalHost=pg.example.com",
+    "--set-string", "objectStore.externalEndpoint=https://s3.example.com",
     "--set-string", f"openbao.externalAddr={SECRET_STORE_URL}",
     "--set-json", f'openbao.egress=[{{"to":[{{"ipBlock":{{"cidr":"{SECRET_STORE_CIDR}"}}}}],"ports":[{{"protocol":"TCP","port":8200}}]}}]',
     "--set", "backups.volumeSnapshot.snapshotClassName=csi-snapclass",

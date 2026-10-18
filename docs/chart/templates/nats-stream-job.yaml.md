@@ -27,7 +27,7 @@ before-hook-creation delete policy never matches the previous one — without a 
 The explicit component label (the P4 landmine, see bootstrap-admin.yaml): nats:4222 is pod-open
 under the prod NetworkPolicy so nothing blocks today, but the label keeps this pod visible to
 release inventory (`kubectl get pods -l app.kubernetes.io/instance=…`) and admissible the day the
-nats ingress gets an exclusive client list like openbao/age/minio.
+nats ingress gets an exclusive client list like openbao/age/the object store.
 
 ## `env:`
 

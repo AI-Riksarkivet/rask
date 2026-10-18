@@ -25,7 +25,7 @@ where we are right now, and what's next**. Skim the diagrams; read the section y
 rask's catalog is a **REST catalog for Lance datasets** — a thin HTTP service (FastAPI) that
 lets clients create/list/describe namespaces & tables, read/write table data (Arrow-IPC),
 and does it with **authentication** (OIDC) and **fine-grained authorization** (OpenFGA,
-Zanzibar-style). The actual table bytes live in object storage (MinIO/S3) as **Lance
+Zanzibar-style). The actual table bytes live in object storage (S3; RustFS in development) as **Lance
 datasets**; the catalog is the *control plane* that names them, locates them, hands out
 scoped credentials, and decides **who may do what**. Think "Iceberg REST catalog /
 Lakekeeper, but for Lance (multimodal: vectors + blobs + columns)."
@@ -46,7 +46,7 @@ Lakekeeper, but for Lance (multimodal: vectors + blobs + columns)."
    └─────────────────────────────────────┘   └──────────────────────────────┘
                     │                                        │
                     ▼                                        ▼
-        OpenFGA (tuples)  +  OIDC IdP (Dex)          Object store (MinIO/S3)
+        OpenFGA (tuples)  +  OIDC IdP (Dex)          Object store (S3)
                                                       Lance dataset dirs (*.lance)
 ```
 
@@ -65,7 +65,7 @@ vend, and that write credentials never reach `_refs/` or a final manifest, is LH
 1. **STS vending (`StsVendor`) — recommended.** The catalog calls the S3 backend's STS
    `AssumeRole` with an **inline session policy** scoped to *just this table's bucket/prefix and
    tier* (read vs write), and gets a **short-TTL** `{access_key, secret_key, session_token}`. The
-   client reads/writes the bytes directly with that token. Works on **MinIO, Ceph RGW, AWS**.
+   client reads/writes the bytes directly with that token. Works on **RustFS, Ceph RGW, AWS**.
 2. **Mode B (`ModeBVendor`) — safe default.** No credential is vended; the client uses the
    catalog's server-mediated Arrow-IPC endpoints. Backend-agnostic; nothing is delegated.
 3. **Web-identity (`WebIdentityVendor`, `web_identity`).** The caller's OIDC token is exchanged via
@@ -96,7 +96,7 @@ flowchart LR
   API -->|verify JWT via JWKS| DEX[(OIDC IdP — Dex in dev)]
   API -->|check can_* / write tuples| FGA[(OpenFGA)]
   FGA --> PG[(OpenFGA datastore — Postgres or SQLite)]
-  API -->|pylance DirectoryNamespace| OS[(Object store — MinIO/S3)]
+  API -->|pylance DirectoryNamespace| OS[(Object store — S3)]
   OS --- L[Lance dataset dirs: bronze/…, silver/…, gold/…]
 ```
 
@@ -307,7 +307,7 @@ Full design + API in [`docs/LINEAGE.md`](LINEAGE.md).
 uv run pytest -q
 uvx ruff check . && uvx ty check
 
-# full auth stack end-to-end (Dagger services: catalog + Dex + OpenFGA + Postgres + MinIO)
+# full auth stack end-to-end (Dagger services: catalog + Dex + OpenFGA + Postgres + RustFS)
 make auth-chain                 # = dagger call auth-chain: anon 401 → alice create/read/write 200 → bob 403
 ```
 

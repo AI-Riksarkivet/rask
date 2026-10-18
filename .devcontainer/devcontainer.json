@@ -7,11 +7,10 @@
             "moby": false
         }
     },
-    "forwardPorts": [2333, 9000, 9001],
+    "forwardPorts": [2333, 9000],
     "portsAttributes": {
         "2333": { "label": "REST Catalog" },
-        "9000": { "label": "MinIO S3" },
-        "9001": { "label": "MinIO Console" }
+        "9000": { "label": "RustFS S3" }
     },
     "customizations": {
         "vscode": {

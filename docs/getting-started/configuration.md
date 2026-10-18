@@ -66,8 +66,8 @@ dev `/api` proxies are per zone: `compute`/`studio`/`models` → `VIEWER_BACKEND
 
 ## Storage
 
-The object store is S3-compatible: the MinIO fixture in development, the platform's S3 in production
-(`minio.externalEndpoint`). Services reach it through `packages/storage` and the catalog's vended credentials; the
+The object store is S3-compatible: the RustFS fixture in development, the platform's S3 in production
+(`objectStore.externalEndpoint`). Services reach it through `packages/storage` and the catalog's vended credentials; the
 store's root key is held by the store alone, and each service presents a scoped identity.
 
 Changes to the environment are read once at service startup — restart the relevant service to pick them up.

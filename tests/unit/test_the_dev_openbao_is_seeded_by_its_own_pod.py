@@ -31,7 +31,7 @@ from the store behind the Service, else minted, so a surge keeps the credential 
 [[XC-004]] makes every other credential of the store a generated one: ESO's Password generator fills
 `<release>-dev-credentials` once, the pod mounts it, and the seed writes each field from the file, deriving
 each scoped storage secret from the root there, so no credential is in the render, an argument list or an
-output stream. The `minio-scoped-users` Job derives the same scoped secrets for `mc admin user add`, and a
+output stream. The `object-store-scoped-users` Job derives the same scoped secrets for the store users it creates, and a
 service reads its field by name: the field each service is told to read must hold the secret the Job gives
 the user named by that service's access key, or every S3 call is `SignatureDoesNotMatch`. A store missing a
 generated credential is never Ready. A rotated key of the mounted Secret (and the operator's hf-token) reaches the
@@ -87,8 +87,15 @@ exit 1
 
 _WRITES = ("kv put ", "auth ", "write ", "policy ")
 
-#: What ESO's Password generator writes into `<release>-dev-credentials` (templates/external-secrets.yaml).
-_GENERATED = ("minio-secret-key", "postgres-password", "dapr-app-token", "ray-auth-token", "frontend-session-secret")
+#: What ESO's Password generator writes into `<release>-dev-credentials` (templates/external-secrets.yaml), and the
+#: store secret each lands in: the store's root at a path of its own, which no Dapr app may read (ADR 0168).
+_GENERATED = {
+    "object-store-secret-key": "secret/object-store-root",
+    "postgres-password": "secret/lance",
+    "dapr-app-token": "secret/lance",
+    "ray-auth-token": "secret/lance",
+    "frontend-session-secret": "secret/lance",
+}
 
 
 def _seed(docs: tuple[dict, ...]) -> tuple[str, dict]:
@@ -418,17 +425,21 @@ def test_the_dev_store_is_seeded_by_its_own_pod_and_keeps_its_signing_keys(  # n
         generated["postgres-password"] = (stores / "rotate").read_text()
         if "secrets.hfTokenInStore=true" in overlay:
             assert _store(stores, "local", "secret/hf-token").get("token") == generated["postgres-password"], "a rotated hf-token never reached the store"
-    assert {key: bundle.get(key) for key in _GENERATED} == generated, "the store does not hold the credentials ESO generated"
+    assert {key: _store(stores, "local", path).get(key) for key, path in _GENERATED.items()} == generated, (
+        "the store does not hold the credentials ESO generated"
+    )
     assert f":{generated['postgres-password']}@" in bundle.get("dapr-state-connection-string", ""), (
         "the state store DSN is not built from the generated password"
     )
-    [job] = [d for d in docs if d.get("kind") == "Job" and d["metadata"]["name"].startswith("rask-minio-scoped-users-")]
+    [job] = [d for d in docs if d.get("kind") == "Job" and d["metadata"]["name"].startswith("rask-object-store-scoped-users-")]
     pod_spec = job["spec"]["template"]["spec"]
     [derive] = pod_spec["initContainers"]
-    [mc] = pod_spec["containers"]
+    [provision] = pod_spec["containers"]
     keys_dir = tmp_path / "scoped-keys"
     keys_dir.mkdir()
-    root_file = _as_mounted(pod_spec, derive, "minio-root", generated_dir, tmp_path / "minio-root") / "minio-secret-key"
+    root_path = Path(chart_render.env_of(derive)["ROOT_FILE"])
+    [root_volume] = [m["name"] for m in derive["volumeMounts"] if Path(m["mountPath"]) == root_path.parent]
+    root_file = _as_mounted(pod_spec, derive, root_volume, generated_dir, tmp_path / "store-root") / root_path.name
     derived = subprocess.run(
         ["sh", "-c", derive["command"][-1]],  # noqa: S607
         env={**os.environ, "KEYS": str(keys_dir), "ROOT_FILE": str(root_file)},
@@ -438,7 +449,10 @@ def test_the_dev_store_is_seeded_by_its_own_pod_and_keeps_its_signing_keys(  # n
         check=False,
     )
     assert derived.returncode == 0, f"the Job's derive step failed: {derived.stderr[-500:]}"
-    [mc_keys] = [m["mountPath"] for m in mc["volumeMounts"] if m["name"] == "keys"]
+    [provision_keys] = [m["mountPath"] for m in provision["volumeMounts"] if m["name"] == "keys"]
+    assert f"--keys-dir {provision_keys}" in provision["command"][-1], (
+        "the Job's provisioning step reads its users' secrets from somewhere the derive step did not write"
+    )
     # (the store field holding a service's key id, the one holding its secret): the pair is the store's (ADR 0166).
     pairs = {
         (env[name.replace("_DAPR_SECRET_S3_FIELD", "_DAPR_SECRET_S3_ID_FIELD")], field)
@@ -452,10 +466,8 @@ def test_the_dev_store_is_seeded_by_its_own_pod_and_keeps_its_signing_keys(  # n
         assert identity, f"the store holds no {id_field}, the key id {field} signs under"
         minted = (keys_dir / identity).read_text()
         assert bundle.get(field) == minted, f"{field} in the store is not the secret the Job gives {identity}: every S3 call signs with a mismatched pair"
-        assert minted != generated["minio-secret-key"], f"{identity} is published with the store's ROOT secret"
-        assert f'mc admin user add rfs {identity} "$(cat {mc_keys}/{identity})"' in mc["command"][-1], (
-            f"the Job does not create {identity} with the secret it derived for it"
-        )
+        assert minted != generated["object-store-secret-key"], f"{identity} is published with the store's ROOT secret"
+        assert f'--user "{identity}=' in provision["command"][-1], f"the Job does not create {identity}, so the secret it derived for it reaches no store user"
     assert len(seeded) == (2 if local in {"restart", "rotate", "change"} else 1), f"seeds that completed: {len(seeded)}"
 
     root = _store(stores, "local", "secret/nats-server")

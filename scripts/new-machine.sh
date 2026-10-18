@@ -290,7 +290,7 @@ if confirm "Build every pinned image and install? (a long run, once)"; then
       *) if [[ -f ".docker/$name.dockerfile" ]]; then push --name "$name" --push "172.17.0.1:5000/$name:$tag"; else note "$name: public image, pulled as-is"; fi ;;
     esac
   done < <(pins deploy/values-live-pins.yaml)
-  for f in deploy/fixtures/ray-cluster/values-live-pins.yaml deploy/fixtures/minio/values-live-pins.yaml deploy/fixtures/compute/values-live-pins.yaml; do
+  for f in deploy/fixtures/ray-cluster/values-live-pins.yaml deploy/fixtures/compute/values-live-pins.yaml; do
     [[ -f "$f" ]] || continue
     repo=$(sed -n 's/^ *repository: *"\(.*\)"/\1/p' "$f"); tag=$(sed -n 's/^ *tag: *"\(.*\)"/\1/p' "$f"); stem=${repo##*/}
     push --name "$stem" --push "172.17.0.1:5000/$stem:$tag"

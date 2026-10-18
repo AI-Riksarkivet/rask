@@ -37,9 +37,8 @@ trap diagnose EXIT
 
 echo "==> fixtures"
 scripts/fixtures.sh external-secrets dapr nats dex openbao
-# The object store runs rask's first-party image under the name rask's own hooks use. A `--set` beats the estate's
-# values-live-pins.yaml, a tag in a registry this cluster cannot reach.
-scripts/fixtures.sh minio -- --set-string image.repository=minio --set-string "image.tag=$TAG"
+# The object store runs the upstream RustFS image its fixture pins by digest, which the node pulls itself.
+scripts/fixtures.sh rustfs
 
 echo "==> rask"
 # A Job that exhausts its backoff has its pod deleted, and that pod's log with it: record each Job pod's state and log

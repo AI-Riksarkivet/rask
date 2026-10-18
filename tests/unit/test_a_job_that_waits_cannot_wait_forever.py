@@ -5,13 +5,13 @@ THE THREE BOUNDS A JOB CAN HAVE ARE NOT INTERCHANGEABLE, which is the whole find
 touches a pod that is healthy and stuck — and that is exactly what these Jobs become, because each
 waits on a dependency with a shell loop:
 
-    until mc alias set rfs <endpoint> <key> "$MINIO_SECRET_KEY"; do echo wait-minio; sleep 3; done
+    until <reach the store at its endpoint>; do echo waiting; sleep 3; done
 
 If the dependency never answers, the loop never exits, the container never exits, the pod never
 fails, `backoffLimit` never counts, and the TTL never fires because nothing completed.
 
-MEASURED on the live estate 2026-09-24: `rask-minio-scoped-users-r229` Running 27h, its pod still
-printing `wait-minio` and `mkdir /.mc: read-only file system`, having provisioned nothing. Its TTL was
+MEASURED on the live estate 2026-09-24: the object store's scoped-users Job at revision r229 Running 27h, its
+pod still printing its wait line, having provisioned nothing. Its TTL was
 set and could never apply. It was one of SIX rendered Jobs that wait and had no deadline;
 `activeDeadlineSeconds` is the only one of the three that bounds this shape.
 

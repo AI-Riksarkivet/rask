@@ -11,7 +11,7 @@ Driven through the real create, register and credentials doors on the two-store 
 (``conftest.two_store_catalog``), on the approved data base that carries no credential reference — a
 base with one is never vended directly ([[LH-273]]). moto's S3 does not enforce a session policy, so the
 policy the lifespan-built ``StsVendor`` hands to AssumeRole is judged by moto's IAM evaluator
-(``IAMPolicy``) against the object keys each table's fragments occupy. Whether MinIO's STS enforces it
+(``IAMPolicy``) against the object keys each table's fragments occupy. Whether RustFS's STS enforces it
 is the live probe's question.
 """
 

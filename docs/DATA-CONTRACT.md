@@ -43,8 +43,8 @@ Plus the provenance guard: a writer cannot drop, rename or rewrite the provenanc
 
 **Enforced today and proven (unit and/or live):**
 - Immutable versions + CAS commits — the storage half of the contract rests on put-if-not-exists, which the
-  3-tier contended-write harness proved against RustFS (`docs/DURABILITY.md`); the same harness is the check for
-  MinIO, the store now in use, and no MinIO run is recorded there.
+  3-tier contended-write harness proved against RustFS (`docs/DURABILITY.md`), and 16 racing conditional writers
+  left one winner in each of 20 rounds on RustFS 1.0.1 (`docs/audits/2026-10-18/rustfs-zero-trust.md`).
 - The publish-time quality gate, FGA gates and the provenance guard — all shipped with tests.
 - **Additive** schema evolution is safe *by construction*: `add_columns` makes a new version;
   old versions stay readable; each version's manifest carries its own schema.

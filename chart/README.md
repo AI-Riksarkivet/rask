@@ -86,12 +86,12 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | catalog.maxConcurrentWrites | int | `16` | Cap on concurrent in-flight Arrow-IPC writes; over it the catalog answers 429 + Retry-After. Peak buffer memory is this times `maxBodyBytes`. 0 disables shedding. |
 | catalog.multibase.baseCredentialRefs | object | `{}` | Map of data-base URI to a Dapr secret-store reference naming that base's credential. Every key must also be in `dataBases` or the render fails. Empty = estate options. |
 | catalog.multibase.dataBases | list | `[]` | Allowlist of bucket URIs one table's fragments may be spread across (`?data_base=` on create). Empty = multi-base off, single-location creates. |
-| catalog.multibase.devSeed | bool | `false` | Local fixture: create each referenced base's bucket, scoped MinIO user and dev-store secret. Refused on a real deployment, without MinIO or without the development store. |
+| catalog.multibase.devSeed | bool | `false` | Local fixture: create each referenced base's bucket, scoped store user and dev-store secret. Refused on a real deployment, without `objectStore.enabled` or without the development store. |
 | catalog.promotion.bindingName | string | `"catalog-promotion-expiry-cron"` | Name of the promotion-expiry Dapr cron Component; also the catalog's LANCE_PROMOTION_EXPIRY_BINDING_NAME and the route it serves. |
 | catalog.promotion.schedule | string | `"@every 60s"` | Dapr cron schedule on which promotion holds past their review deadline expire; lateness only costs time. |
 | catalog.trashGraceDays | int | `7` | Days a dropped table or namespace stays undroppable before the trash purge may reclaim it (LANCE_TRASH_GRACE_DAYS). 0 destroys immediately. |
-| catalog.warehouses.enabled | bool | `true` | Per-warehouse physical multi-tenancy: POST /management/v1/warehouses provisions a bucket per warehouse and binds top-level namespaces to it. Unbound namespaces use `minio.bucket`. |
-| config.AWS_REGION | string | `"us-east-1"` | AWS region written to the fleet ConfigMap for S3 clients; any value works against RustFS/MinIO. |
+| catalog.warehouses.enabled | bool | `true` | Per-warehouse physical multi-tenancy: POST /management/v1/warehouses provisions a bucket per warehouse and binds top-level namespaces to it. Unbound namespaces use `objectStore.bucket`. |
+| config.AWS_REGION | string | `"us-east-1"` | AWS region written to the fleet ConfigMap for S3 clients to sign with. RustFS's default region is `us-east-1`; whether it accepts another signing region is not measured, so keep `us-east-1` against it. |
 | config.HCP_INSECURE | string | `"true"` | Skips TLS verification for the S3 client (`storage.client` reads it as an alias of RASK_S3_INSECURE). String "true" or "false". |
 | config.RASK_API_PREFIX | string | `"/api"` | Path prefix the fleet apps mount their API under, via the shared fleet ConfigMap. |
 | dapr.apiTimeoutSeconds | int | `30` | Deadline in seconds for every DaprClient gRPC call (DAPR_API_TIMEOUT_SECONDS), so a wedged sidecar fails a publish instead of hanging it. |
@@ -142,7 +142,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | externalSecrets.namespace | string | `"external-secrets"` | Namespace of the External Secrets Operator ServiceAccount the Vault role is bound to. |
 | externalSecrets.refreshInterval | string | `"1h"` | How often each ExternalSecret re-syncs from the store (a duration, e.g. `1h`). |
 | externalSecrets.role | string | `"lance-infra"` | Vault role the operator's ServiceAccount assumes; also names its read policy. |
-| externalSecrets.secretPath | string | `"lance"` | KV key holding the infra bundle (postgres-password, minio-secret-key), e.g. `lance` for secret/data/lance. |
+| externalSecrets.secretPath | string | `"lance"` | KV key holding the shared bundle (postgres-password, the Dapr app token, each plane's scoped store pair; never the store's root), e.g. `lance` for secret/data/lance. |
 | externalSecrets.serviceAccount | string | `"external-secrets"` | Name of the External Secrets Operator ServiceAccount the Vault role is bound to, so no other pod can assume it. |
 | forwardedAllowIps | string | `"127.0.0.1"` | Peers whose x-forwarded-* headers uvicorn trusts in every pod the route reaches (--forwarded-allow-ips). Set to the Gateway data plane's pod CIDR; `*` is refused. |
 | frontend.apps | list | `[{"catchAll":true,"name":"home"},{"name":"compute","path":"/compute"},{"name":"studio","path":"/studio"},{"name":"models","path":"/models"},{"name":"lakehouse","path":"/lakehouse"},{"name":"explorer","path":"/explorer"},{"name":"annotator","path":"/annotator"}]` | The zones to deploy: `name` (image `web-<name>`), `path` (/<name>) or `catchAll` for home at /, and an optional per-zone image `tag`. |
@@ -211,18 +211,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | maintenance.tupleRebuildDryRun | bool | `true` | Plan and report the tuple rebuild without writing. Defaults true. |
 | maintenance.tupleRebuildMaxPerTick | int | `50` | Maximum tuples the rebuild writes per tick; the remainder is reported as capped. |
 | maintenance.vendWriteCredentials | bool | `true` | Sign maintenance's writes (version expiry) with a per-table credential vended by the catalog instead of the deployment's S3 key; falls back per dataset. |
-| medallion.buckets | object | `{}` | Map of tier namespace to S3 bucket (e.g. `{gold: lance-sink}`); unset namespaces use `minio.bucket`. Listed buckets are auto-created, swept by maintenance and reserved from warehouses. |
-| minio.accessKey | string | `"minioadmin"` | Access key id of the store's root account; its secret is the store's `minio-secret-key`. No service should present it. |
-| minio.bucket | string | `"lance-catalog"` | The lakehouse root bucket (catalog `LANCE_REST_ROOT`, warehouse registry, lineage outbox). |
-| minio.buckets | list | `[]` | Extra platform buckets the bucket-init Job creates and the reconcile exempts from orphan_buckets; governed tiers only, not the root or feature buckets. |
-| minio.catalogAccessKey | string | `"rask-catalog"` | Access key of the catalog's scoped store identity; the secret derives in-cluster (`lance.scopedSecretFn`). Wide on data, no admin rights. |
-| minio.enabled | bool | `true` | This estate uses the development object store (deploy/fixtures/minio, Service `<release>-minio`): rask runs its bucket-init Job and scoped-users hook against it and its dev store issues the root credential. Off with `externalEndpoint` set uses a managed S3. The chart renders no MinIO server. |
-| minio.externalEndpoint | string | `""` | S3 endpoint the apps use instead of the in-cluster MinIO; pair with `minio.enabled=false`. Empty uses the in-cluster store. |
-| minio.lineageAccessKey | string | `"rask-lineage"` | Access key of the lineage service's scoped store identity (read-only plus deletes of its own outbox); secret derives in-cluster. |
-| minio.maintenanceAccessKey | string | `"rask-maintenance"` | Access key of maintenance's scoped store identity, the fallback when vending degrades; secret derives in-cluster. |
-| minio.oidc.enabled | bool | `false` | The development store trusts Dex id_tokens for STS AssumeRoleWithWebIdentity (`vending.mode: web_identity`): ESO writes the Dex client secret it reads into `<release>-infra-credentials`. Turn on the fixture's `oidc.enabled` with it. |
-| minio.port | int | `9000` | S3 API port of the development store's Service. |
-| minio.viewerAccessKey | string | `"rask-viewer"` | Access key of the object browser's scoped identity (list and get only); secret derives in-cluster. |
+| medallion.buckets | object | `{}` | Map of tier namespace to S3 bucket (e.g. `{gold: lance-sink}`); unset namespaces use `objectStore.bucket`. Listed buckets are auto-created, swept by maintenance and reserved from warehouses. |
 | nameOverride | string | `""` | Overrides the chart name used in `rask.name` labels when `fullnameOverride` is empty. Empty uses the chart name. |
 | nats.auth.flagged | object | `{"explorer.controlEmit":{"annotator":{"publish":["catalog.control.v1"],"subscribe":["_INBOX.>"]}},"maintenance.arrivalEnabled":{"maintenance":{"publish":["dlq.maintenance.arrival","$JS.API.CONSUMER.INFO.LINEAGE.maintenance-durable","$JS.API.CONSUMER.CREATE.LINEAGE.maintenance-durable.>","$JS.ACK.LINEAGE.maintenance-durable.>"]}},"maintenance.controlEmit":{"maintenance":{"publish":["catalog.control.v1"]}}}` | Extra user grants keyed by a values flag path, merged into `nats.auth.users` only while that flag is true (lance.natsTable). |
 | nats.auth.provisioned | bool | `false` | Attests the platform's store holds every `nats-user-<user>`; required when the store is the platform's (`openbao.enabled` false). |
@@ -233,8 +222,20 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | networkPolicy.apiServerEgress | list | `[]` | NetworkPolicy egress rules ({to, ports}) admitting the pods that call the Kubernetes API to its endpoints. Required under networkPolicy.enabled while any such pod renders. |
 | networkPolicy.enabled | bool | `false` | Renders default-deny NetworkPolicies with explicit allows and exclusive client lists for the guarded stores. Needs a policy-enforcing CNI. |
 | networkPolicy.extraEgress | list | `[]` | List of extra egress rules, verbatim NetworkPolicy entries, for external backends (off-cluster S3, managed NATS, Postgres, Ray, the IdP). Each rule names its `to` peers; the render refuses one that admits every destination. |
-| networkPolicy.minioExtraFrom | list | `[]` | List of extra NetworkPolicy `from` peers allowed to reach the object store. |
+| networkPolicy.objectStoreExtraFrom | list | `[]` | List of extra NetworkPolicy `from` peers allowed to reach the object store. |
 | networkPolicy.openbaoExtraFrom | list | `[]` | List of extra NetworkPolicy `from` peers allowed to reach the development store (`openbao.enabled`; e.g. the external-secrets namespace). |
+| objectStore.accessKey | string | `"rustfsadmin"` | Access key id of the store's root account (`rustfsadmin` is RustFS's built-in default id); its secret is `object-store-secret-key` in `<release>-object-store-root`, which only the store and the scoped-users hook mount. No service presents it. |
+| objectStore.backupAccessKey | string | `"rask-backup"` | Access key of the backups' identity (reads the control-root records, writes `_backups/`); secret derives in-cluster. |
+| objectStore.bucket | string | `"lance-catalog"` | The lakehouse root bucket (catalog `LANCE_REST_ROOT`, warehouse registry, lineage outbox). |
+| objectStore.buckets | list | `[]` | Extra platform buckets the scoped-users hook creates on the dev store and the reconcile exempts from orphan_buckets; governed tiers only, not the root or feature buckets. |
+| objectStore.catalogAccessKey | string | `"rask-catalog"` | Access key of the catalog's scoped store identity; the secret derives in-cluster (`lance.scopedSecretFn`). Wide on data, no admin rights. Required: no service presents the store's root. |
+| objectStore.enabled | bool | `true` | This estate uses the development object store (deploy/fixtures/rustfs, Service `<release>-rustfs`): rask runs its scoped-users hook against it (the platform buckets and every scoped user), and the dev secret store issues its root credential. Off with `externalEndpoint` set uses the platform's S3. The chart renders no store server. |
+| objectStore.externalEndpoint | string | `""` | S3 endpoint the apps use instead of the development store; pair with `objectStore.enabled=false`. Empty uses the development store. |
+| objectStore.lineageAccessKey | string | `"rask-lineage"` | Access key of the lineage service's scoped store identity (read-only plus deletes of its own outbox); secret derives in-cluster. Required: no service presents the store's root. |
+| objectStore.maintenanceAccessKey | string | `"rask-maintenance"` | Access key of maintenance's scoped store identity, the fallback when vending degrades; secret derives in-cluster. Required: no service presents the store's root. |
+| objectStore.mediaAccessKey | string | `"rask-media"` | Access key of annotator's and search's read-only identity on the media corpus (`explorer.corpusS3Root`); secret derives in-cluster. |
+| objectStore.port | int | `9000` | S3 API port of the development store's Service. |
+| objectStore.viewerAccessKey | string | `"rask-viewer"` | Access key of the object browser's scoped identity (list and get only); secret derives in-cluster. |
 | observability.enabled | bool | `false` | Deploy rask's OTel Collector and turn on OTLP export from the fleet, Dapr and OpenFGA to it; needs `export.endpoint`. |
 | observability.environment | string | `"rask"` | Value of the `deployment.environment.name` OTel resource attribute; empty falls back to the release namespace. |
 | observability.export.auditHeaders | object | `{"x-greptime-log-table-name":"lance_audit"}` | Headers added to the export of `lance.audit` records, which leave on their own exporter. |
@@ -303,7 +304,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | services.flows.module | string | `"flows:app"` | uvicorn import path the flows (studio flow-builder server) Deployment runs. |
 | services.flows.port | int | `8840` | Container and Service port of the flows app. |
 | services.flows.replicas | int | `1` | Replica count of the flows Deployment; 0 scales it to zero. |
-| services.flows.waitFor | list | `[]` | List of dependencies flows waits for in an init container; only `minio` is honoured (when minio.enabled). |
+| services.flows.waitFor | list | `[]` | List of dependencies flows waits for in an init container; only `objectStore` is honoured (when objectStore.enabled). |
 | services.lineage.daprAppId | string | `"lineage"` | Dapr app-id of lineage; also names its pubsub, DLQ and durable consumers and scopes its relay cron. |
 | services.lineage.eventsRetentionDays | int | `7` | Days of arrival time the durable /events feed keeps, pruned on the relay tick; bounds how long a notifications outage it survives. 0 is unbounded. |
 | services.lineage.forward.authSecret.key | string | `"api-key"` | Field of that secret the API key is under. |
@@ -311,7 +312,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | services.lineage.forward.endpoint | string | `"api/v1/lineage"` | Path the events are POSTed to under `url` (the transport's `endpoint`). |
 | services.lineage.forward.url | string | `""` | Base URL of the graph backend the relay forwards every recorded event to (the OpenLineage HTTP transport's `url`). Empty forwards nothing. |
 | services.lineage.module | string | `"lineage.main:app"` | uvicorn import path the lineage Deployment runs (templates/services.yaml). |
-| services.lineage.outbox.enabled | bool | `true` | Stages each lineage event to `s3://<minio.bucket>/_lineage_outbox` before publishing, drained by the relay. Requires relay.enabled. |
+| services.lineage.outbox.enabled | bool | `true` | Stages each lineage event to `s3://<objectStore.bucket>/_lineage_outbox` before publishing, drained by the relay. Requires relay.enabled. |
 | services.lineage.port | int | `8000` | Container and Service port of the lineage service. |
 | services.lineage.provenanceNamespace | string | `"provenance"` | Namespace the catalog keeps for lineage's feed and edge list (`LANCE_PROVENANCE_NAMESPACE`, `LINEAGE_PROVENANCE_NAMESPACE`). |
 | services.lineage.relay.bindingName | string | `"lineage-relay-cron"` | Name of the relay cron binding; the sidecar POSTs to /<bindingName>. |
@@ -334,11 +335,11 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | services.notifications.reconcileBindingName | string | `"notifications-reconcile-cron"` | Name of the reconcile cron binding; also rendered as RASK_NOTIFICATIONS_BINDING_NAME so the tick reaches the matching route. |
 | services.notifications.reconcileSchedule | string | `"@every 30s"` | Schedule of the reconcile cron over lineage's /events feed; must stay above the app's 25 s reconcile budget. |
 | services.notifications.replicas | int | `1` | Replica count of the notifications Deployment; replicas form a competing-consumer group. 0 scales it to zero. |
-| services.notifications.waitFor | list | `[]` | List of dependencies notifications waits for in an init container; only `minio` is honoured (when minio.enabled). |
+| services.notifications.waitFor | list | `[]` | List of dependencies notifications waits for in an init container; only `objectStore` is honoured (when objectStore.enabled). |
 | signing.doors | string | `"enforce"` | Mode of the bus doors' signature check: "off", "observe" (count would-refuse) or "enforce" (ack and refuse). Always quoted. |
 | signing.enforce | bool | `true` | Lineage refuses unsigned or non-verifying events when the secret store and auth are also on. False renders no signer sets and lineage verifies nothing. |
 | signing.provisioned | bool | `false` | Attest that signing keys exist for every identity in the platform's store; the render fails until it is true there. |
-| singleTenant.enabled | bool | `false` | Renders the single-tenant default workloads (every fleet service, domain zones). False installs front-door services only; the object store is gated by `minio.enabled`. |
+| singleTenant.enabled | bool | `false` | Renders the single-tenant default workloads (every fleet service, domain zones). False installs front-door services only; the object store is gated by `objectStore.enabled`. |
 | stateStore.componentVersion | string | `"v1"` | Version of the Dapr Postgres state store component. |
 | stateStore.enabled | bool | `true` | Render the Dapr Postgres state store component (actor and workflow state) on the AGE `stateDb`. |
 | stateStore.metadataTableName | string | `"dapr_metadata"` | Table the Dapr state store keeps its own metadata in. |
@@ -351,6 +352,6 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | vending.assumeRoleArn | string | `"arn:aws:iam::000000000000:role/lance-vend"` | Role ARN passed on AssumeRole in `sts`/`web_identity` mode (LANCE_S3_ASSUME_ROLE_ARN); stores with inherited policies ignore it but boto3 requires it. |
 | vending.encryption | object | `{}` | Server-side encryption for direct writes, carried in vended storage options: `algorithm` (AES256, aws:kms, aws:kms:dsse) and `kmsKeyId` (kms only). Empty = bucket default. |
 | vending.endpoint | string | `""` | Object-store endpoint every vended credential names (LANCE_S3_VENDED_ENDPOINT). Empty = the catalog's own store endpoint. |
-| vending.externalBlobBases | string | `""` | Comma-separated allowlist of base URIs external blob pointers may live under (LANCE_EXTERNAL_BLOB_BASES). Empty = `s3://<minio.bucket>/models/`; a value replaces that default. |
+| vending.externalBlobBases | string | `""` | Comma-separated allowlist of base URIs external blob pointers may live under (LANCE_EXTERNAL_BLOB_BASES). Empty = `s3://<objectStore.bucket>/models/`; a value replaces that default. |
 | vending.mode | string | `"sts"` | How the catalog vends storage credentials for direct object I/O: `mode_b` (none, server-mediated), `web_identity`, `sts` (default, scoped AssumeRole) or `static`. |
 | vending.ttlSeconds | int | `900` | Lifetime in seconds of a vended STS / web-identity credential (LANCE_VENDING_TTL_SECONDS). |

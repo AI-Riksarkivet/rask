@@ -12,8 +12,8 @@
 # (every warehouse whose registry record belongs to a keep-project, plus any explicitly-listed id).
 #
 # Prereqs — port-forward the two services this talks to (same shape as e2e_stack.sh):
-#   kubectl port-forward svc/lance-ns-rustfs  9900:9000 &
-#   kubectl port-forward svc/lance-ns-openfga 8081:8080 &
+#   kubectl port-forward svc/rask-rustfs  9900:9000 &
+#   kubectl port-forward svc/rask-openfga 8081:8080 &
 # Then:
 #   scripts/demo_reset.sh            # enumerate only (dry-run)
 #   scripts/demo_reset.sh --apply    # actually delete
@@ -29,9 +29,9 @@ DEBRIS_PREFIXES="${DEBRIS_PREFIXES:-ctlverify e2e cd pol sec fmt}"
 
 # ── endpoints (the e2e_stack.sh port-forward defaults) ───────────────────────────────────────────────
 S3_ENDPOINT="${S3_ENDPOINT:-http://localhost:9900}"
-S3_ACCESS_KEY="${S3_ACCESS_KEY:-minioadmin}"
-S3_SECRET_KEY="${S3_SECRET_KEY:-minioadmin}"
-ROOT_BUCKET="${ROOT_BUCKET:-lance-catalog}" # the catalog root/registry bucket (minio.bucket)
+S3_ACCESS_KEY="${S3_ACCESS_KEY:-rustfsadmin}"
+S3_SECRET_KEY="${S3_SECRET_KEY:-rustfsadmin}"
+ROOT_BUCKET="${ROOT_BUCKET:-lance-catalog}" # the catalog root/registry bucket (objectStore.bucket)
 OPENFGA_API_URL="${OPENFGA_API_URL:-http://localhost:8081}"
 # OpenFGA admits only a projected `rask-openfga` token (XC-077): `kubectl create token rask-sa-jobs --audience rask-openfga > "$OPENFGA_TOKEN_FILE"`.
 OPENFGA_TOKEN_FILE="${OPENFGA_TOKEN_FILE:-}"

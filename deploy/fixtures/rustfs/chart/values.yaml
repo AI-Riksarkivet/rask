@@ -1,0 +1,35 @@
+# NOT FOR PRODUCTION (deploy/fixtures/README.md).
+
+# -- The StatefulSet and Service name, what rask's `lance.objectStoreHost` dials for release `rask`; the claim is named
+# after it (`data-<name>-0`), so it is also what keeps the bytes.
+name: rask-rustfs
+# The upstream image at the GA tag and digest the Dagger lanes run (`.dagger/storage.go`), its multi-arch OCI index
+# (Docker Hub, `rustfs/rustfs:1.0.3`, read from the registry 2026-10-18): the image carries no signature to verify, so
+# the digest is what makes the server the one measured (docs/audits/2026-10-18/rustfs-zero-trust.md). The bare tag is
+# the musl build, which leaves the console to the env below.
+image:
+  repository: rustfs/rustfs
+  tag: "1.0.3"
+  digest: sha256:9ca9559533b537d10482fe923288b676ad08f92a7069d9a17327fbae3cab688b
+  pullPolicy: IfNotPresent
+port: 9000
+# -- The node port the S3 API is also reached on, so a client off the cluster reaches the store at the address rask's
+# catalog vends for it (`vending.endpoint`, LH-489): the node's address answers a pod and this host alike. Empty keeps
+# the Service ClusterIP.
+nodePort: 30900
+# One drive (EC:0): RustFS refuses several local paths on one device unless a bypass is set, and the bypass is never set.
+storage: 60Gi
+# "" uses the cluster's default StorageClass.
+storageClass: ""
+# -- The Secret holding the root pair (`object-store-access-key`, `object-store-secret-key`): rask's, written by ESO
+# from its dev store. Mounted as files, never env. The scoped users rask provisions are made with this root.
+# The root secret also signs every STS session token the store issues, so only this pod and rask's provisioning hook
+# read it.
+rootCredentials: rask-object-store-root
+# The region the server answers for; rask's clients sign with it.
+region: us-east-1
+# RustFS's footprint on this estate is not measured; these bounds leave room for an estate of ~100 buckets and
+# ~8,000 datasets, where an OOM mid-write is the partially-failed write the orphan scan exists to report.
+resources:
+  requests: { cpu: 100m, memory: 1Gi }
+  limits: { cpu: "2", memory: 6Gi }

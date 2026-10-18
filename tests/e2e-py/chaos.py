@@ -53,7 +53,8 @@ NOTIFICATIONS = f"{RELEASE}-notifications"
 #: announces, lineage records and relays, notifications acknowledges (`lance.busEnv`).
 BUS_CLIENTS = (CATALOG, LINEAGE, NOTIFICATIONS)
 #: The dev fixtures standing in for the platform's dependencies.
-STORE = os.environ.get("LANCE_E2E_STORE_WORKLOAD", "rask-minio")
+#: The object store's StatefulSet (`deploy/fixtures/rustfs`), which the store drill scales to zero.
+STORE = os.environ.get("LANCE_E2E_STORE_WORKLOAD", "rask-rustfs")
 BUS = os.environ.get("LANCE_E2E_BUS_WORKLOAD", "rask-nats")
 ISSUER = os.environ.get("LANCE_E2E_ISSUER_SERVICE", "rask-dex")
 SECRET_STORE = os.environ.get("LANCE_E2E_SECRET_STORE_WORKLOAD", "rask-openbao")
@@ -279,9 +280,14 @@ def catalog_answers() -> bool:
 
 
 def store_answers() -> bool:
-    """Whether the object store answers its liveness at the address the suites reach it at."""
+    """Whether the object store is ready to serve S3 at the address the suites reach it at.
+
+    Readiness, not liveness: RustFS answers `/health/live` 200 while its S3 API still answers 503 during start-up
+    (`.claude/skills/rask-rustfs/references/operations.md`), so a liveness reading calls the store back before a
+    request against it can succeed.
+    """
     try:
-        return requests.get(f"{STORE_URL}/minio/health/live", timeout=5).status_code == 200
+        return requests.get(f"{STORE_URL}/health/ready", timeout=5).status_code == 200
     except requests.RequestException:
         return False
 

@@ -22,6 +22,19 @@ corpus — the same class of silent-wrong as the hostPath wedge this replaced, o
 Shared annotation surface (app-id = $svc.daprAppId — viewer/search/annotator, the exact
 ids the sidecar registers them under); the helper owns the full set so it never drifts.
 
+## `{{- if $root.Values.explorer.corpusS3Root }}`
+
+EACH CORPUS READER PRESENTS ITS OWN SCOPED IDENTITY, never the store's root, which on RustFS signs every STS session
+token (ADR 0168). The pod carries the access key id as config and names the Dapr secret that holds its other half:
+`MEDIA_S3_SECRET_KEY` is the secret's name and `MEDIA_S3_SECRET_FIELD=secret_key` its field, which
+`service_kit.media` fetches fail-closed through the sidecar. The viewer reads `viewer-s3` (`objectStore.viewerAccessKey`,
+the object browser's list-and-get identity); annotator and search read `media-s3` (`lance.mediaIdentity`, the
+`rask-media` policy: GetObject and a prefix-held list on `explorer.corpusS3Root`, nothing else), since neither writes
+to the corpus. Every other app's Configuration denies both secrets (`lance.daprAppSpec`), so the identity a pod reads
+is the one its own row names. Both are set on every reader, though `service_kit.media` defaults to `media-s3` and
+`secret_key`, so the render names the identity each pod reads. A blank `objectStore.viewerAccessKey` or
+`objectStore.mediaAccessKey` fails the render rather than falling back to a wider credential.
+
 ## `{{- $enc := $root.Values.encoders | default dict }}`
 
 `default dict`, not a bare field access: `encoders` is a NEW top-level key, so under

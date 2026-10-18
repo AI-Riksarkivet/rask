@@ -387,8 +387,10 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   under `tree/*` ([[LH-490]], ADR 0164): a stock client opens a branch with the table's `DescribeTable` and stages
   the branch's commits with it, and `can_write_data` writes every branch. Measured on MinIO
   `RELEASE.2025-04-22T22-12-26Z`, that grant leaves a write credential fitting a table prefix of 89 characters at a
-  63-character bucket (109 before), inside MinIO's 2,048-byte session policy. The Deny is load-bearing, measured on
-  MinIO and on the deployed `rask-minio` (LH-469, #594): the staged Allow also matches
+  63-character bucket, inside a 2,048-byte session policy; RustFS enforces the same 2,048-byte limit, counted after it
+  re-serialises the policy, and its boundary is unmeasured (`docs/audits/2026-10-18/rustfs-zero-trust.md` R5). The
+  Deny is load-bearing, measured on MinIO (LH-469, #594) and enforced by RustFS's Deny-first evaluation (R3): the
+  staged Allow also matches
   `<n>.manifest-<uuid>.manifest`, which pylance reads as a final manifest, and `tree/*` reaches every branch's
   `_versions/`. The catalog finalizes what the writer staged (`version/create`, below). `maintain` (`can_maintain`) gets put/delete on the whole prefix for compaction and
   cleanup, and is also the shape for the warehouse scope probe. The management vend door checks the one rung its
@@ -401,7 +403,7 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   (`services/catalog/tests/test_a_stock_client_opens_on_the_vended_credential.py`). The endpoint a vend names
   is `LANCE_S3_VENDED_ENDPOINT` (chart `vending.endpoint`), else the catalog's own `LANCE_S3_ENDPOINT` ([[LH-489]]):
   pylance applies vended options over the client's own, so an off-cluster writer reaches only what is vended. The
-  dev estate vends the minio fixture's node port (`DEV_VENDED_ENDPOINT`); the warehouse scope probe keeps the
+  dev estate vends the RustFS fixture's node port (`DEV_VENDED_ENDPOINT`); the warehouse scope probe keeps the
   catalog's own address. The maintain tier opens to
   `can_vend_maintain` alone ([[LH-473]], ADR 0156 C4): the model's `maintenance` relation, which the catalog writes
   for `LANCE_FGA_MAINTAINERS` on every warehouse (`cascade_tuples`, backfilled at startup, and the chart's

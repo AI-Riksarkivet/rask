@@ -17,7 +17,7 @@ SO A TRANSACTION OR DELETION FILE ABOVE THE FLOOR IS PERMANENT, not late. A data
 live version holds every such file written after that surviving commit forever, and nothing Lance
 offers will enumerate it. That is not a pathological case: **any** restore, re-upload or lifecycle
 rehydrate rewrites object mtimes above the manifest timestamps that reference them and recreates it
-wholesale. Measured on the deployed estate 2026-09-19 — the MinIO PVCs were created
+wholesale. Measured on the deployed estate 2026-09-19 — the object store's PVCs were created
 `2026-09-11T10:50:09Z` while `m2proof_silver$m2-proof-1788537252` embeds epoch `2026-09-04T15:54:12Z`,
 so every object was re-uploaded a week after the commit that references it and the whole dataset sat
 above its own floor.

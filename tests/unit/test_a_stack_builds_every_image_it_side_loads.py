@@ -80,9 +80,9 @@ def test_a_workload_scaled_to_zero_asks_the_node_for_no_image() -> None:
         "---\nkind: Deployment\nspec:\n  replicas: 1\n  template:\n    spec:\n      containers:\n"
         '        - image: "lance-rest-catalog:dev"\n'
         "---\nkind: Job\nspec:\n  template:\n    spec:\n      containers:\n"
-        '        - image: "minio:dev"\n'
+        '        - image: "notifications:dev"\n'
     )
-    assert _SLI.side_loaded(render, "dev") == ["lance-rest-catalog:dev", "minio:dev"]
+    assert _SLI.side_loaded(render, "dev") == ["lance-rest-catalog:dev", "notifications:dev"]
 
 
 def test_an_image_that_is_not_ours_is_left_alone() -> None:

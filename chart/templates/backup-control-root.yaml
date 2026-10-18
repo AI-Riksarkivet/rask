@@ -31,7 +31,8 @@ spec:
           volumes:
             - name: s3-credentials
               secret:
-                secretName: {{ include "lance.fullname" . }}-control-root-backup-s3
+                secretName: {{ include "lance.fullname" . }}-backup-s3
+                items: [{ key: credentials.json, path: credentials.json }]
                 optional: false
           containers:
             - name: backup
@@ -62,7 +63,7 @@ spec:
                 - --root
                 # The SAME expression `services.yaml:75` renders as LANCE_REST_ROOT, so the backup and
                 # the catalog cannot disagree about which root is the control root.
-                - "s3://{{ .Values.minio.bucket }}"
+                - "s3://{{ .Values.objectStore.bucket }}"
                 - --keep
                 - {{ .Values.backups.controlRoot.keep | quote }}
                 {{- with .Values.backups.controlRoot.dest }}

@@ -17,7 +17,7 @@ before trusting either in an incident.
 | Artifact | What | Where | Template |
 |---|---|---|---|
 | **pg_dump** (gzip) | the `openfga` DB (authz tuples) **and** the `daprstate` DB (Dapr state store: inbox read state + workflow/actor instances) | the object store, `_backups/pg/<UTC>/` | `backup-pg.yaml` (CronJob, `backups.pgDump`) |
-| **VolumeSnapshot** | the MinIO fixture's data PVCs = the **Lance lakehouse** (every tier + registry data, and lineage's provenance tables) | cluster CSI VolumeSnapshot | `backup-snapshot.yaml` (`backups.volumeSnapshot`) |
+| **VolumeSnapshot** | the RustFS fixture's data PVC = the **Lance lakehouse** (every tier + registry data, and lineage's provenance tables) | cluster CSI VolumeSnapshot | `backup-snapshot.yaml` (`backups.volumeSnapshot`) |
 | **control-root records** | the governance objects: `_projects/`, `_warehouses/` (registry + namespace bindings), `_trash/`, `_protection/`, `_policies/`, `_gates/`, `_transforms/`, `_tasks/` | a timestamped prefix, `_backups/control/<UTC>/` by default | `scripts/control_root_backup.py` |
 
 > **The VolumeSnapshot row needs a cluster that can take one.** Measured 2026-09-14 on the k3s dev
@@ -48,7 +48,10 @@ and AGE's hook needs `ag_catalog` to exist, so a database without it fails every
 target must therefore have the extension available. Do NOT `psql < dump` into a database that already holds data —
 drop/recreate it first.
 
-1. **Fetch the dumps** from S3: `mc cp rfs/<bucket>/_backups/pg/<UTC>/openfga.sql.gz .` (and `daprstate.sql.gz`).
+1. **Fetch the dumps** from S3 with the backups' identity (`backup-s3` in the store), through the estate's S3 seam:
+   `uv run python -c "from storage import s3_client; s3_client().download_file('<bucket>', '_backups/pg/<UTC>/openfga.sql.gz', 'openfga.sql.gz')"`
+   with `RASK_S3_ENDPOINT_URL`, `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` set to that pair (and the same for
+   `daprstate.sql.gz`).
 2. **Recreate the target DB** clean (managed PG or the in-cluster `age-postgres`):
    `DROP DATABASE IF EXISTS openfga; CREATE DATABASE openfga;`
 3. **Ensure the extension is installable** in the target (the AGE image ships it):
@@ -80,7 +83,7 @@ drop/recreate it first.
 ## Restore — the object store (the Lance lakehouse)
 
 1. Provision a new PVC from the VolumeSnapshot (`dataSource: {kind: VolumeSnapshot, name: <snap>}`).
-2. Point the MinIO fixture's StatefulSet at it (or restore into the existing PVC per your CSI driver's clone flow).
+2. Point the RustFS fixture's StatefulSet at it (or restore into the existing PVC per your CSI driver's clone flow).
 3. Restart the store; then `catalog`/`lineage`/`maintenance` reconnect (their `/readyz` gates hold them out until the
    object store answers). Lineage's commit feed and edge list come back with the store: they are Lance tables in
    the catalog's `provenance` namespace, restored like any other table.
@@ -119,10 +122,11 @@ Three things that exercise taught, each of which had already produced a wrong an
 - **A backup of a live root is not a point-in-time snapshot.** Three `_tasks/` records changed between
   the listing and the copy on a single run. The manifest records the ETag of what was COPIED, so `verify`
   answers "is this backup intact", and the records that moved are reported separately as `raced`.
-- **Clear a failed restore's residue before retrying.** MinIO stores objects as files, so a partial run
-  that left a zero-byte object named `<prefix>` blocks the correct run from creating `<prefix>/...`:
-  `head_object` finds the child and `list_objects_v2` does not. `mc rm --recursive --force` the target
-  prefix first, and confirm with the same API the tool uses.
+- **Clear a failed restore's residue before retrying.** A store that keeps objects as files can be
+  left by a partial run with a zero-byte object named `<prefix>` that blocks the correct run from creating
+  `<prefix>/...`: `head_object` finds the child and `list_objects_v2` does not (measured on MinIO; unmeasured on
+  RustFS, which also lays objects out on a filesystem). Delete every key under the target prefix first, and the
+  `<prefix>` key itself (boto3 `list_objects_v2` then `delete_objects`), and confirm with the same API the tool uses.
 
 ## After restore
 

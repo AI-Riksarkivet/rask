@@ -16,8 +16,8 @@ Services (ClusterIP):
 {{- end }}
 {{- end }}
   - age:       {{ include "lance.ageConnectHost" . }}:{{ .Values.age.port }} (Apache AGE — the lineage graph{{ if .Values.age.externalHost }}; the platform's Postgres{{ end }})
-{{- if .Values.minio.enabled }}
-  - minio:    {{ include "rask.fullname" $root }}-minio:{{ .Values.minio.port }} (the minio fixture's development store)
+{{- if .Values.objectStore.enabled }}
+  - store:     {{ include "lance.objectStoreHost" $root }}:{{ .Values.objectStore.port }} (the rustfs fixture's development store)
 {{- end }}
 {{- with include "rask.rayDashboardUrl" . }}
   - ray:       {{ . }} (the engine's; rask installs no Ray)
@@ -122,7 +122,7 @@ Reminders:
 {{- end }}
 {{- if not $relay }}
        - services.lineage.relay.enabled=false -> nothing drains the outbox, prunes the feed or forwards it.
-         A lost event stays lost, and staged events accumulate in s3://{{ $.Values.minio.bucket }}/_lineage_outbox forever.
+         A lost event stays lost, and staged events accumulate in s3://{{ $.Values.objectStore.bucket }}/_lineage_outbox forever.
 {{- end }}
      Re-enable with: helm upgrade ... --set services.lineage.outbox.enabled=true --set services.lineage.relay.enabled=true
 {{- end }}

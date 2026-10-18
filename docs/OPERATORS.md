@@ -236,11 +236,12 @@ No credential is a chart value (`templates/prod-credentials.yaml` refuses one by
 dev Dex's configuration (XC-025) and the dev OpenBao's root token (XC-079); a real-deployment render refuses
 both (the bundled Dex and the dev OpenBao).
 
-- **Dev (the chart's `server -dev` OpenBao).** `<release>-dev-credentials` holds `minio-secret-key`,
+- **Dev (the chart's `server -dev` OpenBao).** `<release>-dev-credentials` holds `object-store-secret-key`,
   `postgres-password`, `dapr-app-token`, `ray-auth-token` and `frontend-session-secret`. On a fresh install ESO's
   Password generator creates it once (`refreshPolicy: CreatedOnce`, `helm.sh/resource-policy: keep`). The OpenBao
-  pod mounts it, and its seed writes every field of `secret/lance` from it as `@file`, deriving the scoped storage
-  secrets from the root (`lance.scopedSecretFn`, which `minio-scoped-users` runs too). The Secret outlives an
+  pod mounts it, and its seed writes the root to `secret/object-store-root` and the other generated fields to
+  `secret/lance` as `@file`, deriving the scoped storage secrets from the root (`lance.scopedSecretFn`, which
+  `object-store-scoped-users` runs too). The Secret outlives an
   OpenBao replacement, so the AGE database and the object store, which keep what they were initialised with, see
   the same values after a re-seed. The seed re-reads the mounted Secret every 5 s and re-seeds when it changes,
   so a rotation never needs the OpenBao pod replaced. Third-party credentials (the Hugging Face token) are
@@ -259,13 +260,14 @@ both (the bundled Dex and the dev OpenBao).
   hold it and its consumers restart right after:
   1. Change the key of `<release>-dev-credentials` (a real deployment: the field in the store) with a value
      generated in the cluster; wait for the seed's "the mounted credentials changed; seeding again".
-  2. Force-sync every ExternalSecret that reads the store (`infra-credentials`, `observability-s3`,
-     `control-root-backup-s3`, `dapr-app-token`, `frontend-session`, `hf-token`) with the `force-sync`
+  2. Force-sync every ExternalSecret that reads the store (`infra-credentials`, `object-store-root`, `observability-s3`,
+     `backup-s3`, `dapr-app-token`, `frontend-session`, `hf-token`) with the `force-sync`
      annotation, and wait for Ready. Their refresh is otherwise `externalSecrets.refreshInterval`, and a pod
      restarted before it takes the old value.
   3. Tell the server, when one holds the credential: `ALTER ROLE` inside AGE from stdin for `postgres-password`;
-     restart `rask-minio`, then run `make k3s-up` again so `minio-scoped-users` re-derives every scoped user, for
-     `minio-secret-key`.
+     restart `rask-rustfs`, then run `make k3s-up` again so `object-store-scoped-users` re-derives every scoped user,
+     for `object-store-secret-key`. RustFS signs every STS session token with the root secret, so rotating root
+     invalidates every outstanding vended credential at once: clients re-vend, and a long write in flight fails.
   4. Restart the consumers at once: a `secretKeyRef` env and the injector's app token are read at pod creation,
      so nothing rolls on its own. AGE: the sidecar Deployments, OpenFGA, the OTel Collector. The root: the
      sidecar Deployments, GreptimeDB and the Ray head (delete its pod; the RayCluster recreates it). The app
@@ -275,20 +277,22 @@ both (the bundled Dex and the dev OpenBao).
   pair from `secret/lance` and read it again every few minutes, and the catalog reads a data base's credential
   reference again within ten minutes, so a rotation needs no restart:
   1. Issue a second credential for the identity, beside the one it holds: a second access key for the IAM user on AWS
-     (each allows two). On MinIO, an access key (`mc admin accesskey create <alias> rask-lineage`) serves lineage and
-     maintenance, which make plain S3 calls, but MinIO refuses an STS `AssumeRole` an access key signs (measured
-     2026-10-16: `AccessDenied`, every vend 503 while the catalog held one), and the catalog vends through
-     `AssumeRole`. The catalog's second credential is therefore a second user under the same policy (`mc admin user
-     add`, then `mc admin policy attach`).
-  2. Check the new pair before writing it: list the bucket under an alias holding it (`mc ls`), and for the catalog
-     also run an STS `AssumeRole` signed with it. Nothing probes it after the write, and a wrong pair would be what
-     every pod signs with.
+     (each allows two). On RustFS a second user under the same policy serves every service: lineage and maintenance
+     make plain S3 calls, and the catalog vends through `AssumeRole`, which RustFS refuses from a service account
+     (`rustfs@1.0.3:rustfs/src/admin/handlers/sts.rs:219-221`; a key-signed vend answered `AccessDenied`, every
+     vend 503, measured 2026-10-16 on MinIO, which refuses it the same way). Make it through RustFS's admin API with
+     the root pair, SigV4 and plain JSON: `PUT /rustfs/admin/v3/add-user?accessKey=<id>`, then
+     `PUT /rustfs/admin/v3/set-user-or-group-policy?policyName=<the identity's policy>&userOrGroup=<id>&isGroup=false`
+     (`rask-rustfs` § 4).
+  2. Check the new pair before writing it: list the bucket with it (any S3 client, e.g. boto3 `list_objects_v2`), and
+     for the catalog also run an STS `AssumeRole` signed with it. Nothing probes it after the write, and a wrong
+     pair would be what every pod signs with.
   3. Write both halves at once: `bao kv patch secret/lance catalog-s3-access-key=<id> catalog-s3-secret-key=<secret>`
      (a data base's reference: patch its own secret's key id and secret fields). `kv patch`, never `kv put`, which
      replaces every other field of the bundle.
   4. Wait ten minutes. Each pod logs `store_credential_rotated`, naming the old and new key ids, when it switches.
-  5. Revoke the old credential: `mc admin accesskey rm` for an access key, or remove (or reset the secret of) the
-     user that held it. No restart.
+  5. Revoke the old credential: remove the user that held it (`DELETE /rustfs/admin/v3/remove-user?accessKey=<old id>`)
+     or delete the IAM access key on AWS. No restart.
 
   The dev seed writes `secret/lance` from its own list whenever it re-seeds (a change to the seed, or to a dev
   credential), so a pair rotated by hand in the dev store is replaced by the seeded one then: put the seeded user's

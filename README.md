@@ -10,7 +10,7 @@ say where its data came from.
 
 A **Lance lakehouse** under Lance Namespace (a governed REST catalog that enforces the bronze → silver → gold
 tiers in its write path, and OpenLineage provenance), **events** on Dapr + NATS JetStream, and **governance** over
-all of it — Dex OIDC for identity, OpenFGA for authorization, S3-compatible storage (MinIO in development, the
+all of it — Dex OIDC for identity, OpenFGA for authorization, S3-compatible storage (RustFS in development, the
 platform's S3 in production). The lakehouse runs no ingest, no pipeline stage, no training and no workflow engine:
 compute and orchestration are the user's, and a pipeline writes every tier through the catalog's Lance Namespace
 doors like any other client (ADRs 0154 and 0155).

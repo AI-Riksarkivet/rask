@@ -1,4 +1,4 @@
-"""Standalone S3 smoke test — head-bucket + list, against any backend (HCP / MinIO / rustfs / AWS).
+"""Standalone S3 smoke test — head-bucket + list, against any backend (HCP / RustFS / AWS / any S3).
 
 Run:
     HCP_INSECURE=1 uv run python scripts/smoke_s3.py [bucket] [prefix]

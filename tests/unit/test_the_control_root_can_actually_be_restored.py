@@ -7,7 +7,7 @@ about who may touch it does not.
 
 NOTHING COULD HAVE TESTED IT BEFORE, which is why the row said "untested" rather than "broken".
 Measured 2026-09-14: `backups.pgDump` covers the lineage and OpenFGA databases, `backups.volumeSnapshot`
-covers the MinIO PVCs, both default OFF and neither is enabled in the live release — and this cluster
+covers the object store's PVCs, both default OFF and neither is enabled in the live release — and this cluster
 has no `volumesnapshotclass` resource type at all, so the snapshot path could not run here even if it
 were switched on.
 
@@ -44,7 +44,7 @@ BUCKET = "lance-catalog"
 ROOT = f"s3://{BUCKET}"
 
 #: One record per governed prefix, plus an outbox entry that must NOT travel — and the ZERO-BYTE
-#: DIRECTORY MARKERS a real S3 store keeps. MinIO writes `_projects/` as an object; moto does not, and
+#: DIRECTORY MARKERS a real S3 store can keep. The live estate's store held `_projects/` as an object; moto does not, and
 #: that difference is not cosmetic: it broke the first version of this tool on the live estate while
 #: every test here passed. The path join stripped the trailing slash, so `_projects/` became the key
 #: `_projects` and all 92 records under it overwrote that one object — 1,464 copies landed as 9.
@@ -181,7 +181,7 @@ def test_retention_prunes_the_oldest_backups_and_keeps_the_newest(s3: Any) -> No
     without bound while its sibling `backups.pgDump` already honours `keep: 7`.
 
     The stamps are `%Y%m%dT%H%M%SZ`, so newest-first is a reverse lexical sort — the same property
-    `backup-pg.yaml` relies on when it pipes `mc ls … | sort -r | tail -n +N`. Keeping that identical
+    the Postgres dump's uploader relies on (`scripts/pg_dump_upload.py`). Keeping that identical
     across the two lanes matters more than it looks: an operator reading one and reasoning about the
     other must not find two different orderings.
     """

@@ -6,7 +6,7 @@
 # `make k3s-up`: the development fixtures (deploy/fixtures,
 # each its own release; the NVIDIA device plugin is one, for a GPU node), then the Helm
 # chart (chart/Chart.yaml dependencies + templates) with NATS, Dapr,
-# OpenFGA, Postgres, MinIO and the rask fleet. k3s and helm are the only bootstrap.
+# OpenFGA, Postgres, RustFS and the rask fleet. k3s and helm are the only bootstrap.
 #
 # Host prerequisite for the GPU: nvidia-container-toolkit (nvidia-ctk) installed,
 # so k3s auto-detects the nvidia containerd runtime.

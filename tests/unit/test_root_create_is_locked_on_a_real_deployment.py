@@ -46,6 +46,8 @@ _REAL = (
     "auth.oidc.connectors.ldap=corp",
     "signing.provisioned=true",
     "nats.auth.provisioned=true",
+    "objectStore.enabled=false",
+    "objectStore.externalEndpoint=https://s3.example.com",
 )
 
 

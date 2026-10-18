@@ -4,14 +4,14 @@ A *warehouse* = one physical S3 bucket owned by a project (the FGA model's catal
 ``service_kit/governed/auth/model.fga``: "A warehouse = exactly one S3 bucket, owned by one project"). Today
 the catalog is single-bucket (one ``LANCE_REST_ROOT``); this makes a warehouse a **runtime-provisioned,
 physically isolated bucket**, so a table created under warehouse A lands in bucket-a and is ABSENT from
-bucket-b — physical multi-tenancy, provisioned through an admin API rather than a static
-Helm ``mc mb`` loop.
+bucket-b — physical multi-tenancy, provisioned through an admin API rather than a bucket list fixed in the
+chart's values.
 
 Stateless-over-object-store, the same shape as ``service_kit/lakehouse/outbox.py``: the registry IS a set of JSON
 objects under ``<control_root>/_warehouses/`` — there is no DB to add. A warehouse record lives at
 ``_warehouses/<id>.json``; a namespace→warehouse binding at ``_warehouses/bindings/<top_ns>.json`` (so any
-op on a bound namespace can resolve its physical root). Bucket creation uses boto3 ``create_bucket``,
-idempotent like the chart's ``mc mb --ignore-existing``. All IO here is blocking; callers threadpool it.
+op on a bound namespace can resolve its physical root). Bucket creation uses boto3 ``create_bucket``, idempotent:
+an existing bucket the catalog owns is a no-op. All IO here is blocking; callers threadpool it.
 """
 
 from __future__ import annotations
@@ -46,7 +46,7 @@ def _bucket_client(storage_options: StorageOptions) -> Any:  # noqa: ANN401 — 
 
     Via ``storage.s3_client``, the estate's canonical S3 seam, never a raw ``boto3.client``: path-style
     addressing, s3v4 signing, retries and timeouts live there once, and a hand-rolled client silently
-    forfeits all of them (against RustFS/MinIO, virtual-hosted addressing resolves a DNS name that does
+    forfeits all of them (against RustFS, virtual-hosted addressing resolves a DNS name that does
     not exist). The region rides on ``create_bucket``'s ``LocationConstraint`` where it matters — see
     :func:`provision_bucket` — so it is not threaded through here.
     """
@@ -62,7 +62,7 @@ def _bucket_client(storage_options: StorageOptions) -> Any:  # noqa: ANN401 — 
 
 
 def provision_bucket(bucket: str, storage_options: StorageOptions) -> None:
-    """Create the physical S3 bucket, idempotently (like ``mc mb --ignore-existing``).
+    """Create the physical S3 bucket, idempotently: one the catalog already owns is a no-op.
 
     Uses boto3 against the same endpoint/credentials the catalog already holds. An already-owned/existing
     bucket is a no-op (a re-provision on a warehouse-create retry must not fail). Blocking IO; threadpool it.
@@ -71,7 +71,7 @@ def provision_bucket(bucket: str, storage_options: StorageOptions) -> None:
 
     region = storage_options.get("region") or "us-east-1"
     client = _bucket_client(storage_options)
-    # Real AWS S3 REJECTS create_bucket without a LocationConstraint outside us-east-1; RustFS/MinIO ignore
+    # Real AWS S3 REJECTS create_bucket without a LocationConstraint outside us-east-1; RustFS ignores
     # it. Sending it only when region != us-east-1 keeps RustFS working and a real-S3 backend correct.
     # dict[str, object] makes the **splat mismatch every typed create_bucket parameter
     # (boto3-stubs types each one); Any is the correct annotation for a kwargs splat.

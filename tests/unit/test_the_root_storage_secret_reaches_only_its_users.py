@@ -1,91 +1,159 @@
-"""The fleet secret carries the ROOT storage credential, so it goes only where it is used.
+"""The store's root secret reaches the store, the dev secret store that seeds it, and the scoped-users hook, nothing else.
 
-the lakehouse register, row H8 (drained 2026-09-10; in git history).
+On RustFS the root secret also signs every STS session token the store issues (GHSA-m77q-r63m-pj89, intentionally
+unfixed: `rustfs@1.0.3:crates/iam/src/root_credentials.rs:25-36`), so a workload that can read it can forge any credential
+the catalog vends (ADR 0168). A secret reaches a pod three ways in this chart, and the gate follows all three through the
+dev estate as `make k3s-up` renders it, with every plane that holds a store credential switched on:
 
-MEASURED INSIDE THE RUNNING PODS 2026-09-08, because the Deployment's `env:` list does not answer this
-and reading only that list produces the opposite conclusion — the credential arrives through
-`envFrom`, which an `env:` survey cannot see:
+1. a Secret the pod mounts or references (a volume, `env.valueFrom.secretKeyRef`, `envFrom`);
+2. a Secret ESO fills (`data`, `dataFrom.extract`) from where the dev store holds the root, read off the seeds rask
+   renders for it (`bao kv put secret/<name> ...`) by the value written, the generated file or the shell variable the
+   seed holds it in, whatever the property is called; or from the Password generator that mints it;
+3. the Dapr secret store: an app scoped to it reads every secret its Configuration does not deny
+   (`defaultAccess: allow` with `deniedSecrets`, `lance.daprAppSpec`), with every field of that secret.
 
-    rask-ingest        ListBuckets -> 106 buckets (the whole estate)   AWS_ACCESS_KEY_ID=minioadmin
-    rask-maintenance   ListBuckets -> AWS Error ACCESS_DENIED          (its scoped F2-1 identity)
+The same holds for the root's identity: a pod that presents the root access key with any secret is either root or
+broken, so only the hook names it, and the dev secret store's seed, which writes it.
 
-That is the difference between the root credential and a scoped one, driven rather than inferred from
-the key's name. The secret was mounted into `gateway`, `notifications`, `compute` and `flows` as well —
-none of which constructs an S3 client at all (zero imports of `lance`, `pyarrow`, `boto3`, `storage` or
-any `service_kit.lakehouse` storage module, no HF code, no HF/boto dependency). Blast radius no code
-could use.
-
-IT IS ALSO THE FORBIDDEN MECHANISM, which is why this gate is about the mount and not only the breadth.
-Owner ruling 2026-09-08: *"Never secret through envs. Either from ESO, secret store dapr and STS for
-zero trust"* — the rule `CLAUDE.md` already states as *"Secrets from the Dapr secret store only — never
-env, never a fallback."* Withholding the secret here does not make the remaining consumer correct;
-`ingest` still receives it, and § H8's remaining half is to replace that with an STS credential, which
-`catalog.core.vending.build_session_policy` already implements scoped by bucket + prefix.
-
-SO THIS GATE PINS THE DIRECTION, NOT THE DESTINATION: the set of services holding the root credential
-may shrink and must never grow.
+The gate follows what the chart hands a pod, not what the dev store's own token reaches: the dev OpenBao runs
+`server -dev` with a published root token, so a pod that calls it directly reads every secret it holds. Per-app
+secret-store identities, which close that, are XC-165 (#659; ADR 0168).
 """
 
 from __future__ import annotations
 
+import re
+from collections.abc import Iterator
 from typing import Final
 
-import yaml
-from chart_yaml import FAST_LOADER
-
-from tests.unit.test_invariants import _helm_template
+from tests.unit.chart_render import REPO, containers, render, render_fixture, seed_scripts, with_dev_store
 
 
-#: EMPTY, and it is meant to stay that way. The mount is its own `ambientStorage` declaration, which
-#: nothing sets, so the estate's widest storage credential reaches no pod at all through env.
-#:
-#: A NAME ADDED HERE IS A DECISION, not a convenience: it hands that service AWS_ACCESS_KEY_ID=<root>
-#: (measured: 106 buckets, the whole estate) through the mechanism the owner's rule forbids. The answer
-#: for a service that genuinely needs storage is a scoped 900 s STS vend
-#: (`vending.build_session_policy`, by bucket + prefix), or a registered store declaring a `secret` the
-#: Dapr store holds — both already implemented.
-_MAY_HOLD_THE_ROOT_CREDENTIAL: Final = frozenset()
+ROOT_SECRET: Final = "object-store-secret-key"
+ROOT_ID: Final = "object-store-access-key"
+
+#: The dev estate as `make k3s-up` renders it, with the planes that hold a store credential switched on.
+DEV_ESTATE: Final = (
+    "--set", "image.localImages=true", "-f", str(REPO / "deploy/values-local.yaml"),
+    "--set", "explorer.enabled=true", "--set", "search.enabled=true",
+    "--set", "backups.pgDump.enabled=true", "--set", "backups.controlRoot.enabled=true",
+)  # fmt: skip
+
+#: `bao kv put secret/<name> <property>=<value> ...`, one command per logical line of the rendered seed.
+_KV_PUT: Final = re.compile(r"bao kv put secret/(\S+)((?: +[\w-]+=\S+)+)")
+#: A seeded value that IS the root: the generated file (`$G` mounts the Password generator's Secret) or `$root`, which
+#: the seed derives the scoped secrets from.
+_ROOT_VALUE: Final = re.compile(r"\$G/object-store-secret-key\b|\$\{?root\b")
 
 
-def _fleet_secret_holders(*set_values: str) -> set[str]:
-    """Every Deployment mounting the app secret, by its service suffix."""
-    docs = [d for d in yaml.load_all(_helm_template("dapr.enabled=true", *set_values), Loader=FAST_LOADER) if d and d.get("kind") == "Deployment"]
-    holders: set[str] = set()
+def _seeded(script: str) -> dict[str, dict[str, str]]:
+    """Each secret the dev store's seed writes, with its properties and their literal values."""
+    seeded: dict[str, dict[str, str]] = {}
+    for match in _KV_PUT.finditer(script.replace("\\\n", " ")):
+        pairs = (token.split("=", 1) for token in match.group(2).split())
+        seeded.setdefault(match.group(1), {}).update(dict(pairs))
+    return seeded
+
+
+def _pods(docs: tuple[dict, ...]) -> Iterator[tuple[str, dict, dict]]:
+    """`(kind/name, pod template metadata, pod spec)` for every workload shape."""
     for doc in docs:
-        name = doc["metadata"]["name"]
-        for container in doc["spec"]["template"]["spec"]["containers"]:
-            for source in container.get("envFrom", []):
-                ref = (source.get("secretRef") or {}).get("name", "")
-                if ref.endswith("-app"):
-                    holders.add(name.rsplit("-", 1)[-1])
-            # BOTH MECHANISMS, because scanning one of them is how this gate missed a holder.
-            # It was written about `envFrom` — the mount an `env:` survey cannot see — and the viewer
-            # took the same credential the OTHER way, as an explicit `secretKeyRef` on
-            # `AWS_SECRET_ACCESS_KEY`. Measured on the running pod 2026-09-09:
-            # `AWS_ACCESS_KEY_ID=minioadmin` in a service this gate reported as clean. A gate that
-            # knows one spelling of a mount certifies the other.
-            for entry in container.get("env", []):
-                ref = ((entry.get("valueFrom") or {}).get("secretKeyRef") or {}).get("name", "")
-                if ref.endswith("-app") and "SECRET" in entry.get("name", "").upper():
-                    holders.add(name.rsplit("-", 1)[-1])
-    return holders
+        kind = doc.get("kind")
+        if kind in {"Deployment", "StatefulSet", "DaemonSet", "Job"}:
+            template = doc["spec"]["template"]
+        elif kind == "CronJob":
+            template = doc["spec"]["jobTemplate"]["spec"]["template"]
+        else:
+            continue
+        yield f"{kind}/{doc['metadata']['name']}", template.get("metadata") or {}, template["spec"]
 
 
-def test_only_a_service_that_uses_storage_holds_the_root_credential() -> None:
-    """The headline: a service with no S3 client must not be handed the estate's widest storage key.
+def _carriers(docs: tuple[dict, ...], root_fields: frozenset[tuple[str, str]]) -> dict[str, frozenset[str]]:
+    """Each Kubernetes Secret that carries the root secret, with the keys in it that do."""
+    root_paths = {path for path, _ in root_fields}
+    minted = {doc["metadata"]["name"] for doc in docs if doc.get("kind") == "Password" and ROOT_SECRET in (doc["spec"].get("secretKeys") or [])}
+    carriers: dict[str, frozenset[str]] = {}
+    for doc in docs:
+        if doc.get("kind") != "ExternalSecret":
+            continue
+        spec = doc["spec"]
+        target = (spec.get("target") or {}).get("name") or doc["metadata"]["name"]
+        bound: set[str] = set()
+        for source in spec.get("dataFrom") or []:
+            assert not {"find", "rewrite"} & source.keys(), f"{target}: this gate does not model `dataFrom` {sorted(source)}"
+            if ((source.get("sourceRef") or {}).get("generatorRef") or {}).get("name") in minted:
+                bound.add(ROOT_SECRET)
+            path = (source.get("extract") or {}).get("key")
+            bound |= {prop for field_path, prop in root_fields if field_path == path}
+        for entry in spec.get("data") or []:
+            ref = entry["remoteRef"]
+            if (ref["key"], ref.get("property")) in root_fields or (ref["key"] in root_paths and not ref.get("property")):
+                bound.add(entry["secretKey"])
+        if not bound:
+            continue
+        template = (spec.get("target") or {}).get("template") or {}
+        rendered = {key for key, value in (template.get("data") or {}).items() if any(var in value for var in bound)}
+        kept = bound if not template.get("data") or template.get("mergePolicy") == "Merge" else set()
+        carriers[target] = frozenset(rendered | kept)
+    return carriers
 
-    RENDERED WITH THE OPTIONAL PLANES ON, and that is the half this gate was missing. It rendered
-    DEFAULT values, where `explorer.enabled` is off and the viewer's Deployment does not exist — so a
-    service could hold the root credential and be certified clean by a gate that never rendered it.
-    Measured 2026-09-09 on the running estate, which does enable it: `AWS_ACCESS_KEY_ID=minioadmin`
-    in the viewer's own environment, on a pod that HAS a Dapr sidecar. A gate that only renders the
-    default deployment is a gate about a deployment nobody runs.
-    """
-    unexpected = sorted(_fleet_secret_holders("explorer.enabled=true", "search.enabled=true") - _MAY_HOLD_THE_ROOT_CREDENTIAL)
 
-    assert not unexpected, (
-        f"these services receive the fleet secret carrying AWS_ACCESS_KEY_ID=<root>: {unexpected}. It is "
-        "the widest storage credential in the estate (measured: 106 buckets) delivered by the mechanism "
-        "the estate forbids (env). If one of them genuinely needs storage, give it an STS credential "
-        "(`vending.build_session_policy`, scoped by bucket + prefix) rather than adding it here"
+def _reads_a_carrier(pod: dict, carriers: dict[str, frozenset[str]]) -> bool:
+    for volume in pod.get("volumes") or []:
+        sources = [volume.get("secret"), *(source.get("secret") for source in (volume.get("projected") or {}).get("sources") or [])]
+        for source in filter(None, sources):
+            keys = carriers.get(source.get("secretName") or source.get("name") or "")
+            if keys is not None and (not source.get("items") or any(item["key"] in keys for item in source["items"])):
+                return True
+    for container in [*(pod.get("initContainers") or []), *pod["containers"]]:
+        for entry in container.get("env") or []:
+            ref = (entry.get("valueFrom") or {}).get("secretKeyRef") or {}
+            if ref.get("key") in carriers.get(ref.get("name", ""), frozenset()):
+                return True
+        if any((source.get("secretRef") or {}).get("name") in carriers for source in container.get("envFrom") or []):
+            return True
+    return False
+
+
+def _dapr_reads(docs: tuple[dict, ...], metadata: dict, root_paths: frozenset[str]) -> bool:
+    """Whether the pod's sidecar may fetch a secret of the Vault store that holds the root."""
+    annotations = metadata.get("annotations") or {}
+    if annotations.get("dapr.io/enabled") != "true":
+        return False
+    app, config = annotations.get("dapr.io/app-id"), annotations.get("dapr.io/config")
+    for store in (doc for doc in docs if doc.get("kind") == "Component" and doc["spec"].get("type") == "secretstores.hashicorp.vault"):
+        if store.get("scopes") and app not in store["scopes"]:
+            continue
+        secrets = next((doc["spec"].get("secrets") or {} for doc in docs if doc.get("kind") == "Configuration" and doc["metadata"]["name"] == config), {})
+        rule = next((scope for scope in secrets.get("scopes") or [] if scope["storeName"] == store["metadata"]["name"]), {})
+        allowed, denied = set(rule.get("allowedSecrets") or []), set(rule.get("deniedSecrets") or [])
+        if any(path in allowed or (rule.get("defaultAccess", "allow") == "allow" and path not in denied) for path in root_paths):
+            return True
+    return False
+
+
+def _names_the_root_id(container: dict, root_id: str) -> bool:
+    """A literal root access key in the command line or env, or an access key taken from the fleet's `-app` Secret,
+    which carries the root's (`chart/templates/secrets.yaml`)."""
+    literals = [*(container.get("command") or []), *(container.get("args") or []), *(entry.get("value") for entry in container.get("env") or [])]
+    from_app = (((entry.get("valueFrom") or {}).get("secretKeyRef") or {}) for entry in container.get("env") or [])
+    return any(root_id in str(literal) for literal in literals) or any(
+        ref.get("name", "").endswith("-app") and ref.get("key") == "AWS_ACCESS_KEY_ID" for ref in from_app
     )
+
+
+def test_the_root_secret_and_its_identity_reach_only_the_store_its_seeder_and_the_provisioning_hook() -> None:
+    chart = render(*DEV_ESTATE)
+    estate = (*with_dev_store(chart), *render_fixture("rustfs"))
+    seeded = _seeded("\n".join(seed_scripts(chart).values()))
+    root_fields = frozenset((path, prop) for path, properties in seeded.items() for prop, value in properties.items() if _ROOT_VALUE.search(value))
+    root_paths = frozenset(path for path, _ in root_fields)
+    root_id = next(properties[ROOT_ID] for properties in seeded.values() if ROOT_ID in properties)
+    carriers = _carriers(chart, root_fields)
+
+    readers = {workload for workload, metadata, pod in _pods(estate) if _reads_a_carrier(pod, carriers) or _dapr_reads(chart, metadata, root_paths)}
+    presenters = {f"{workload}/{name}" for workload, name, container in containers(estate) if _names_the_root_id(container, root_id)}
+
+    assert root_fields == {("object-store-root", ROOT_SECRET)}, f"the dev store holds the root secret at {sorted(root_fields)}"
+    assert readers == {"Deployment/rask-openbao", "StatefulSet/rask-rustfs", "Job/rask-object-store-scoped-users-r1"}, sorted(readers)
+    assert presenters == {"Deployment/rask-openbao/seed", "Job/rask-object-store-scoped-users-r1/provision"}, sorted(presenters)

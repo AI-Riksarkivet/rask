@@ -53,7 +53,7 @@ def test_sts_vendor_with_fake_assume_role() -> None:
     vendor = StsVendor(
         role_arn="arn:aws:iam::1:role/r",
         region="us-east-1",
-        endpoint="http://minio:9000",
+        endpoint="http://rask-rustfs:9000",
         ttl_seconds=900,
         assume_role=fake_assume_role,
     )
@@ -63,7 +63,7 @@ def test_sts_vendor_with_fake_assume_role() -> None:
     assert opts["aws_access_key_id"] == "AK"
     assert opts["aws_secret_access_key"] == "SK"
     assert opts["aws_session_token"] == "TK"
-    assert opts["endpoint"] == "http://minio:9000"
+    assert opts["endpoint"] == "http://rask-rustfs:9000"
     assert out.expires_at_millis is not None and out.expires_at_millis > 0
     # the inline session policy was passed, scoped to the table prefix + write actions
     assert captured["DurationSeconds"] == 900
@@ -128,8 +128,8 @@ def test_make_vendor_builds_web_identity() -> None:
 
 def test_sts_vendor_against_a_real_assume_role_implementation() -> None:
     """End-to-end against moto's STS (a real AssumeRole impl) — proves the default boto3 path vends valid
-    scoped creds, not just the injected-fake path. (RustFS's STS can't AssumeRole — it needs WebIdentity —
-    so a compliant STS like moto/MinIO/AWS/Ceph is what exercises the live boto3 client.)"""
+    scoped creds, not just the injected-fake path. moto's STS runs in-process, so the live boto3 client is
+    exercised offline; the deployed store's own AssumeRole is the e2e lanes' to prove."""
     moto = pytest.importorskip("moto")
     with moto.mock_aws():
         vendor = StsVendor(role_arn="arn:aws:iam::123456789012:role/lance-vend", region="us-east-1", ttl_seconds=900)

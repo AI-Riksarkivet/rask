@@ -14,7 +14,7 @@ these are found by watching the Perses dashboards (`make dashboards`) or a user 
   `notifications`, `flows`, and the zones (`web-<zone>`); public `/api/*` reaches them through the platform's Gateway on the chart's HTTPRoutes. The lakehouse runs no stage and no pipeline: moving data
   between tiers is the user's job on their own compute ([ADR 0155](../adr/0155-the-medallion-is-tier-governance-in-the-catalog.md)).
 - **Stores**: `age-postgres` (OpenFGA's datastore **AND** the Dapr state store — one pod, dual-purpose),
-  the object store (MinIO in development: every Lance table, lineage's provenance tables included, and the registries), `openfga` (authz), the secret store (the openbao
+  the object store (RustFS in development: every Lance table, lineage's provenance tables included, and the registries), `openfga` (authz), the secret store (the openbao
   fixture in development; the platform's Vault or OpenBao in production), `greptimedb` (metrics), `dex` (OIDC).
 - **Signals**: Perses panels (`make dashboards`), `kubectl logs`, and the domain metrics —
   `lineage_events_processed_total{lance_lineage_outcome}` (incl. `DEAD_LETTERED`),
@@ -185,13 +185,14 @@ mean something other than the catalog wrote under `_control_outbox`: treat that 
 
 **Symptom.** Catalog reads/writes fail; Lance datasets unreadable.
 
-**Cause.** In development the object store is the `minio` fixture (`deploy/fixtures/minio`, StatefulSet
-`rask-minio`), a data-plane single point of failure. The production answer is the platform's managed S3
-(`minio.externalEndpoint` — see
+**Cause.** In development the object store is the `rustfs` fixture (`deploy/fixtures/rustfs`, StatefulSet
+`rask-rustfs`), a data-plane single point of failure. The production answer is the platform's managed S3
+(`objectStore.externalEndpoint` — see
 [docs/adr/0033-p4-p7-backups-structural-spofs-the-prod-answer-is.md "P4/P7"](../adr/0033-p4-p7-backups-structural-spofs-the-prod-answer-is.md)).
 
-**Diagnose.** `kubectl get pods -l app.kubernetes.io/component=minio`; check its claims
-(`data-<n>-rask-minio-<i>`) are bound and the node can mount them.
+**Diagnose.** `kubectl get pods -l app.kubernetes.io/component=rustfs`; check its claim
+(`data-rask-rustfs-0`) is bound and the node can mount it. The pod is Ready only when `/health/ready` answers on
+:9000; liveness answers during startup while every S3 request still gets 503, so judge "back" by readiness.
 
 **Act.** Recover the pod/volume; for prod durability, use the platform's managed S3.
 

@@ -1,8 +1,8 @@
 """No deployment gets the RustFS tenant root by forgetting to configure a credential.
 
-`s3_access_key_id` defaulted to `minioadmin` — the tenant root. The chart always sets it, so no
-shipped deployment relied on that default, which is exactly what made it dangerous: nothing would have
-caught its removal and nothing announces its use. A deployment that configures a scoped SECRET and
+A default `s3_access_key_id` naming the store's root key id (`rustfsadmin` on the development store) is the
+tenant root. The chart always sets it, so no shipped deployment would rely on such a default, which is exactly
+what makes it dangerous: nothing would catch its removal and nothing announces its use. A deployment that configures a scoped SECRET and
 forgets the key silently pairs a scoped secret with the root key id; one that configures neither runs
 the whole sweep as tenant root.
 

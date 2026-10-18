@@ -1,9 +1,9 @@
-"""A generic boto3 S3 client for any S3-compatible backend (MinIO / rustfs / AWS).
+"""A generic boto3 S3 client for any S3-compatible backend (RustFS / AWS / any S3).
 
 rask is storage-agnostic: the client below speaks only standard S3, so the
 backend is a runtime choice (endpoint + credentials), never a code one.
 `derive_hcp_creds` is an isolated, opt-in bridge for the current HCP dev backend
-(a no-op for MinIO/rustfs/AWS); remove it once fully migrated off HCP.
+(a no-op for RustFS/AWS); remove it once fully migrated off HCP.
 """
 
 import base64
@@ -58,7 +58,7 @@ def derive_hcp_creds() -> dict[str, str] | None:
     """Opt-in HCP credential bridge; returns `{access_key, secret_key}` or None.
 
     Returns the derived pair when HCP_USERNAME/PASSWORD are set and no AWS_* key
-    already wins (so MinIO/rustfs/AWS with keys set directly are untouched), else
+    already wins (so RustFS/AWS with keys set directly are untouched), else
     None. Pure — never mutates the process environment, so one process can address
     more than one backend. The current HCP dev backend issues S3 keys as
     access_key = base64(username), secret_key = md5(password) hex. `s3_client`
@@ -85,10 +85,10 @@ def s3_client(
     region: str | None = None,
     insecure: bool | None = None,
 ) -> Any:  # noqa: ANN401 — boto3 client has no public stub
-    """Build a boto3 S3 client for any S3-compatible backend (MinIO / rustfs / AWS / HCP).
+    """Build a boto3 S3 client for any S3-compatible backend (RustFS / AWS / HCP).
 
     Endpoint/CA/insecure flags resolve from env (RASK_S3_*/S3_*, with HCP_* as the
-    legacy bridge). Path-style + s3v4 are the MinIO-safe, AWS-accepted defaults.
+    legacy bridge). Path-style + s3v4 are the RustFS-safe, AWS-accepted defaults.
 
     ``access_key``/``secret_key``/``session_token``/``region``/``insecure`` override the env for THIS
     client only. Env-only credentials are a single global pair, so one process could address exactly

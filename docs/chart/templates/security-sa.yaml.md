@@ -17,7 +17,7 @@ tests/unit/test_a_first_party_pod_cannot_read_a_secret_through_the_kube_api.py.
 ## `"hooks"` in the component list
 
 `<release>-sa-hooks`, the identity of the hooks that run before the release manifest (openfga-model at
-pre-upgrade, minio-scoped-users), is an ORDINARY ServiceAccount: an identity is never a hook ([[XC-126]]). A
+pre-upgrade, object-store-scoped-users), is an ORDINARY ServiceAccount: an identity is never a hook ([[XC-126]]). A
 hook-shaped SA, Role or binding has a lifecycle of its own, deleted by `hook-succeeded` while a failed hook's pod
 still holds its token, so every later hook on it is refused, and it does not exist between upgrades. An ordinary SA
 exists from the revision that introduces it on, so a pre-upgrade hook on any later upgrade finds it. The one upgrade
@@ -30,4 +30,4 @@ that introduces an ordinary SA runs its pre-upgrade hooks before the manifest cr
 The SA issuer's discovery document and JWKS, which the API server serves only to a grant. The D1
 verifiers (LH-220) read them to validate a caller's projected token offline; an in-cluster reader
 authenticates this request with its own projected token. A third-party verifier that fetches
-anonymously reads them through the issuer mirror (OpenFGA, XC-077); MinIO STS does not yet.
+anonymously reads them through the issuer mirror (OpenFGA, XC-077); the object store's STS does not yet.

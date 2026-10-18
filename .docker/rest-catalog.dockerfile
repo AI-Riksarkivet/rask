@@ -86,25 +86,24 @@ ENV PATH="/opt/venv/bin:$PATH" \
 WORKDIR /srv
 # The venv is root-owned and the app runs as 10001, so it is immutable to the account running it.
 COPY --from=builder --link /opt/venv /opt/venv
-# THREE FILES OUT OF `scripts/`, NAMED ONE BY ONE. Each is run by a chart workload, so each has to
+# FOUR FILES OUT OF `scripts/`, NAMED ONE BY ONE. Each is run by a chart workload, so each has to
 # exist in an image; copying the whole directory would put every dev and ops script into a
-# request-serving image for the sake of two. Both import stdlib plus `storage`, which the venv above
-# already carries, so neither adds a dependency.
+# request-serving image for the sake of four. Each imports stdlib plus what the venv above already
+# carries (`storage`, boto3/botocore, pydantic), so none adds a dependency, and no chart Job needs a
+# third-party image that a registry could withdraw.
 #
 # INTO THE FINAL STAGE, not the builder: the builder hands over `/opt/venv` and nothing else, so a
 # file staged there ships nowhere.
 #
 #   control_root_backup.py — the backup CronJob (`backups.controlRoot`).
-#   ensure_bucket.py       — the bucket-init Job, which used to be `minio/mc`. That image refuses
-#                            anonymous pulls on every registry this estate can reach (measured
-#                            2026-09-24: `access: []` on Docker Hub, `actions: []` on quay.io, 401
-#                            on both manifests), so on a node that pulls fresh the Job never started
-#                            and the lakehouse's buckets were simply absent ([[XC-075]]).
-#   pg_dump_upload.py      — the `backups.pgDump` CronJob, off the same unpullable image. What it
-#                            uploads is the lineage graph and the authorization store.
+#   pg_dump_upload.py      — the `backups.pgDump` CronJob. What it uploads is the lineage graph and
+#                            the authorization store.
+#   rustfs_admin.py        — the scoped-users hook (`object-store-scoped-users`): RustFS's native
+#                            admin API, SigV4-signed with the root pair read from a mounted file.
+#                            Its `derive` init container also runs in this image (sh + sha256sum).
 COPY --link scripts/control_root_backup.py /srv/control_root_backup.py
-COPY --link scripts/ensure_bucket.py /srv/ensure_bucket.py
 COPY --link scripts/pg_dump_upload.py /srv/pg_dump_upload.py
+COPY --link scripts/rustfs_admin.py /srv/rustfs_admin.py
 
 # ── the import gate ──────────────────────────────────────────────────────────
 # Import every module this image serves, against the venv the runtime stage ships. A missing

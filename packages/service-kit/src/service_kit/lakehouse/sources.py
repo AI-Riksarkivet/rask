@@ -1,6 +1,6 @@
 """Provider-agnostic external SOURCE adapters — the ingest seam.
 
-A *source* is anything that yields raw objects to land in the lakehouse: a local directory, an S3/MinIO
+A *source* is anything that yields raw objects to land in the lakehouse: a local directory, an S3-compatible
 bucket, or — as plugins outside this module — any protocol a workload needs. The lakehouse ingest needs
 only each object's bytes plus a stable source URI (for lineage provenance); the provider client stays
 behind the small ``SourceAdapter`` protocol so no provider code leaks into the pipeline.
@@ -90,10 +90,10 @@ class LocalDirSource:
 
 
 class S3FileSystemSource:
-    """A :class:`SourceAdapter` over an S3/MinIO bucket prefix — each object's bytes + its ``s3://`` URI.
+    """A :class:`SourceAdapter` over an S3-compatible bucket prefix — each object's bytes + its ``s3://`` URI.
 
     ``fs`` is a configured ``pyarrow.fs.S3FileSystem`` (endpoint + creds live there, not here), so the same
-    adapter serves MinIO, RustFS, or AWS by swapping the filesystem — the exact provider-agnostic seam,
+    adapter serves RustFS, AWS or any S3-compatible store by swapping the filesystem — the exact provider-agnostic seam,
     and what the name says: this adapter reaches S3 through a pyarrow FILESYSTEM.
 
     **The long name is the point.** :class:`storage.S3Source` is a live, differently-shaped class (boto3

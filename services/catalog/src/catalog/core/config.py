@@ -83,7 +83,7 @@ class CatalogStorageSettings(BaseSettings):
     #: It was a separate bool the chart pinned to "true" for every deployment, which let a TLS
     #: endpoint keep permission to fall back to plaintext — silent, because object_store consults
     #: the flag only when a request would otherwise be refused. One fact, so the two cannot disagree.
-    s3_endpoint: str = Field(default="http://minio:9000", alias="LANCE_S3_ENDPOINT")
+    s3_endpoint: str = Field(default="http://rask-rustfs:9000", alias="LANCE_S3_ENDPOINT")
     #: The key pair the catalog signs with when the secret store is OFF. With `secrets_from_dapr` on, the pair is the
     #: store's (`dapr_secret_s3_id_field` and `dapr_secret_s3_field`, ADR 0166) and these two are not read; off, a
     #: missing id is refused here and a missing secret by the lifespan.
@@ -108,7 +108,7 @@ class CatalogStorageSettings(BaseSettings):
     s3_sts_endpoint: str | None = Field(default=None, alias="LANCE_S3_STS_ENDPOINT")
     #: The object-store endpoint every vended credential names, for a client reaching the store from where it
     #: runs ([[LH-489]]). The catalog's own `s3_endpoint` may be an address only the cluster resolves
-    #: (`rask-minio:9000`), and pylance applies a vended `endpoint` over the client's own (measured on pylance
+    #: (`rask-rustfs:9000`), and pylance applies a vended `endpoint` over the client's own (measured on pylance
     #: 13.0.0, both `endpoint` and `aws_endpoint` lose), so a client off the cluster writes only to what is
     #: vended here. Unset, the catalog vends its own `s3_endpoint`. In production the platform names the
     #: store's public address.
@@ -252,10 +252,12 @@ class CatalogDaprSettings(BaseSettings):
     #: still be moved on its own.
     dapr_secret_store: str = Field(default="lance-secrets", validation_alias=AliasChoices("LANCE_DAPR_SECRET_STORE", "RASK_SECRET_STORE"))
     dapr_secret_key: str = Field(default="lance", alias="LANCE_DAPR_SECRET_KEY")
-    dapr_secret_s3_field: str = Field(default="minio-secret-key", alias="LANCE_DAPR_SECRET_S3_FIELD")
+    #: The catalog's own scoped pair (`objectStore.catalogAccessKey`): no service holds the store's root, which signs every
+    #: STS token on RustFS (ADR 0168).
+    dapr_secret_s3_field: str = Field(default="catalog-s3-secret-key", alias="LANCE_DAPR_SECRET_S3_FIELD")
     #: The field of the same secret holding the key id the secret signs under: a rotation issues a new id, so the id
     #: is read from the store with its secret.
-    dapr_secret_s3_id_field: str = Field(default="minio-access-key", alias="LANCE_DAPR_SECRET_S3_ID_FIELD")
+    dapr_secret_s3_id_field: str = Field(default="catalog-s3-access-key", alias="LANCE_DAPR_SECRET_S3_ID_FIELD")
     # Dapr pub/sub transport (used when lineage_transport == "dapr"). The component name is what the
     # sidecar resolves to NATS JetStream; the topic is versioned (a breaking schema change → a new .vN).
     dapr_pubsub: str = Field(default="lineage-pubsub", alias="LANCE_DAPR_PUBSUB")
@@ -374,9 +376,9 @@ class CatalogVendingSettings(BaseSettings):
     """
 
     # Data-plane credential vending (pluggable; see services/catalog/core/vending.py). Target = S3-compatible
-    # storage (MinIO default, AWS S3, Ceph RGW, RustFS). Default "mode_b": server-mediated — no
+    # storage (RustFS in development, AWS S3, Ceph RGW). Default "mode_b": server-mediated — no
     # credential leaves the catalog (the simplest, backend-agnostic default). "sts": STS AssumeRole
-    # short-TTL per-table scoped tokens (the recommended path; MinIO/Ceph/AWS all implement STS).
+    # short-TTL per-table scoped tokens (the recommended path; RustFS/Ceph/AWS all implement STS).
     # Client-DIRECT writes stage a manifest the catalog judges and finalizes (CreateTableVersion, ADR 0157);
     # the vending MODE is the separate CREDENTIAL mechanism. Default `mode_b` (server_mediated) is safe on
     # any store; `web_identity`/`sts` are the SCOPED-credential upgrade and are opt-in because they need an

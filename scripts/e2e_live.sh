@@ -62,13 +62,9 @@ CATALOG="$(svc "$RELEASE-catalog")"  || true
 LINEAGE="$(svc "$RELEASE-lineage")"  || true
 # The edge is the cluster's Gateway: on k3s, Traefik's Service, which serves the release's HTTPRoutes.
 EDGE="$(svc traefik kube-system)"   || true
-# THE OBJECT STORE ANSWERS TO WHICHEVER BACKEND THE RELEASE INSTALLED, and the name is not a
-# formality: `rustfs.enabled` renders a RustFS Tenant at `<release>-rustfs-io` while the MinIO path
-# renders `<release>-minio`. Discovering only one of them is how this script exported the literal
-# string `http://` and handed 17 suites `ValueError: Invalid endpoint` from inside botocore —
-# measured 2026-09-14 against a MinIO-backed release. Ask for each, take the one that exists.
-S3="$(svc "$RELEASE-minio")"         || true
-[ -n "$S3" ] || S3="$(svc "$RELEASE-rustfs-io")" || true
+# The object store fixture's Service (deploy/fixtures/rustfs). An estate on a platform's S3 has none, and the address
+# stays empty rather than the literal `http://` botocore refuses with `ValueError: Invalid endpoint`.
+S3="$(svc "$RELEASE-rustfs")"        || true
 DEX="$(svc "$RELEASE-dex")"          || true
 FGA="$(svc "$RELEASE-openfga")"      || true
 # The telemetry store is the platform's; on a dev estate, the observability fixture's (deploy/fixtures/observability).
@@ -112,16 +108,9 @@ step "3/4 reading the estate's own secrets"
 # From the Dapr app-token Secret, never from a values file: the token the sidecar stamps is the one
 # the doors verify, and any other copy is a guess.
 DAPR_TOKEN="$(kubectl get secret "$RELEASE-dapr-app-token" -o jsonpath='{.data.token}' 2>/dev/null | base64 -d || true)"
-# Same two-backend rule as the address above, and the key NAMES differ as well as the secret's: the
-# MinIO path keeps its root credential in the shared `<release>-infra-credentials` under
-# `minio-access-key`/`minio-secret-key` (read off the running StatefulSet's own env, 2026-09-14),
-# where RustFS ships a dedicated `<release>-rustfs` with `accesskey`/`secretkey`.
-S3_KEY="$(kubectl get secret "$RELEASE-infra-credentials" -o jsonpath='{.data.minio-access-key}' 2>/dev/null | base64 -d || true)"
-S3_SECRET="$(kubectl get secret "$RELEASE-infra-credentials" -o jsonpath='{.data.minio-secret-key}' 2>/dev/null | base64 -d || true)"
-if [ -z "$S3_KEY" ]; then
-  S3_KEY="$(kubectl get secret "$RELEASE-rustfs" -o jsonpath='{.data.accesskey}' 2>/dev/null | base64 -d || true)"
-  S3_SECRET="$(kubectl get secret "$RELEASE-rustfs" -o jsonpath='{.data.secretkey}' 2>/dev/null | base64 -d || true)"
-fi
+# The store's root pair, from the Secret the fixture's server mounts (`<release>-object-store-root`, written by ESO).
+S3_KEY="$(kubectl get secret "$RELEASE-object-store-root" -o jsonpath='{.data.object-store-access-key}' 2>/dev/null | base64 -d || true)"
+S3_SECRET="$(kubectl get secret "$RELEASE-object-store-root" -o jsonpath='{.data.object-store-secret-key}' 2>/dev/null | base64 -d || true)"
 
 # AN ADDRESS THAT DID NOT RESOLVE IS EXPORTED AS NOTHING, never as the scheme alone. Every line below
 # used to be `export X="http://$Y"` unconditionally, so a service this script could not find became the
@@ -251,7 +240,7 @@ export AWS_ACCESS_KEY_ID="$S3_KEY"
 export AWS_SECRET_ACCESS_KEY="$S3_SECRET"
 # THE S3 PAIR IS READ UNDER ITS OWN NAMES TOO, and exporting only the AWS_* spelling is why suites
 # that reach the store directly reported it UNREACHABLE rather than skipping honestly: they read
-# `LANCE_E2E_S3_ACCESS_KEY`/`_SECRET_KEY`, whose defaults are `minioadmin`/`minioadmin` — a valid
+# `LANCE_E2E_S3_ACCESS_KEY`/`_SECRET_KEY`, whose defaults are `rustfsadmin`/`rustfsadmin` — a valid
 # key with the wrong secret, so every request signed and every request was refused.
 export LANCE_E2E_S3_ACCESS_KEY="$S3_KEY"
 export LANCE_E2E_S3_SECRET_KEY="$S3_SECRET"

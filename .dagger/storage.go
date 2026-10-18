@@ -2,21 +2,24 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 
 	"dagger/rask/internal/dagger"
 )
 
-// rustfsImage is the S3-compatible backend the storage smoke, the RustFS lifecycle and the governed lanes run
-// against. Pinned rather than `:latest`: a smoke test whose backend version changes underneath it cannot tell a rask
-// regression from an upstream one. The pin must take a multipart upload from pyarrow, the writer of the catalog's
-// record store (`service_kit.lakehouse.record_store`): measured 2026-10-17 with pyarrow 25.0.0, 1.0.1 takes it, and
-// 1.0.0-alpha.60 answers its `UploadPart` with `XAmzContentSHA256Mismatch`, which stops the catalog's boot before it
-// grants lineage its provenance tables.
-const rustfsImage = "rustfs/rustfs:1.0.1"
+// rustfsImage is the S3-compatible backend the storage smoke, the RustFS lifecycle, the provisioning and the governed
+// lanes run against: the development fixture's tag and digest (deploy/fixtures/rustfs/chart/values.yaml), so CI runs the
+// server the estate runs. Pinned rather than `:latest`: a smoke test whose backend version changes underneath it cannot
+// tell a rask regression from an upstream one. The pin must take a multipart upload from pyarrow, the writer of the
+// catalog's record store (`service_kit.lakehouse.record_store`): measured with pyarrow 25.0.0, 1.0.1 (2026-10-17) and
+// 1.0.3 (2026-10-18) take it, and 1.0.0-alpha.60 answers its `UploadPart` with `XAmzContentSHA256Mismatch`, which stops
+// the catalog's boot before it grants lineage its provenance tables.
+const rustfsImage = "rustfs/rustfs:1.0.3@sha256:9ca9559533b537d10482fe923288b676ad08f92a7069d9a17327fbae3cab688b"
 
 // rustfsUser owns a cache volume mounted at the image's data path. The server runs as the image's own user (uid 10001
-// in 1.0.1), and a volume mounted root-owned stops it at boot with `Permission denied (os error 13)` (measured
-// 2026-10-18).
+// in 1.0.3, `rustfs@1.0.3:Dockerfile:107-125`), and a volume mounted root-owned stops it at boot with `Permission denied
+// (os error 13)` (measured 2026-10-18).
 const rustfsUser = "rustfs"
 
 // SmokeRustfs proves `packages/storage` works against a REAL S3 backend rather than moto.
@@ -33,7 +36,7 @@ const rustfsUser = "rustfs"
 // forget. `dagger call smoke-rustfs` is the whole thing.
 //
 // The credentials are env-driven on purpose — the estate's storage layer must swap
-// rustfs/MinIO/AWS with environment variables alone, and hard-coding them here would quietly test a
+// RustFS, a platform's S3 and AWS with environment variables alone, and hard-coding them here would quietly test a
 // narrower contract than the one `packages/storage` promises.
 func (m *Rask) SmokeRustfs(
 	ctx context.Context,
@@ -60,8 +63,51 @@ func (m *Rask) SmokeRustfs(
 		Stdout(ctx)
 }
 
-// RustfsLifecycle runs the SAME catalog lifecycle e2e the MinIO stack runs, with the bytes on RustFS —
-// proving the catalog is genuinely S3-agnostic rather than MinIO-shaped.
+// RustfsProvisioning proves the scoped-users hook's provisioning script against a RustFS service bound to this one
+// exec: tests/e2e-py/test_a_policy_the_store_refuses_fails_the_scoped_users_hook.py runs `scripts/rustfs_admin.py`
+// through the CLI the hook runs, and holds a policy the store refuses to failing the run before it binds anyone.
+//
+//	dagger call rustfs-provisioning
+//
+// The store boots as the fixture boots it (deploy/fixtures/rustfs): the root pair from files through
+// `RUSTFS_ACCESS_KEY_FILE` and `RUSTFS_SECRET_KEY_FILE`, never env, with a secret made for this run, which reaches the
+// test only as the file the script reads.
+func (m *Rask) RustfsProvisioning(
+	ctx context.Context,
+	// +defaultPath="/"
+	// +optional
+	src *dagger.Directory,
+) (string, error) {
+	raw := make([]byte, 20)
+	if _, err := rand.Read(raw); err != nil {
+		return "", err
+	}
+	rootSecret := dag.SetSecret("rustfs-provisioning-root-secret", hex.EncodeToString(raw))
+	store := dag.Container().
+		From(rustfsImage).
+		WithNewFile("/run/secrets/rustfs/access_key", "rustfsadmin").
+		WithMountedSecret("/run/secrets/rustfs/secret_key", rootSecret, dagger.ContainerWithMountedSecretOpts{Owner: rustfsUser}).
+		WithEnvVariable("RUSTFS_ACCESS_KEY_FILE", "/run/secrets/rustfs/access_key").
+		WithEnvVariable("RUSTFS_SECRET_KEY_FILE", "/run/secrets/rustfs/secret_key").
+		WithExposedPort(9000).
+		AsService()
+
+	return m.base(src).
+		WithServiceBinding("rustfs", store).
+		WithMountedSecret("/run/secrets/rustfs/secret_key", rootSecret).
+		WithEnvVariable("RASK_RUSTFS_PROVISIONING_ENDPOINT", "http://rustfs:9000").
+		WithEnvVariable("RASK_RUSTFS_PROVISIONING_ROOT_ACCESS_KEY", "rustfsadmin").
+		WithEnvVariable("RASK_RUSTFS_PROVISIONING_ROOT_SECRET_FILE", "/run/secrets/rustfs/secret_key").
+		// `--require-live`: a skip in a lane that stood its store up is a test that ran nowhere, so it fails the lane.
+		WithExec([]string{
+			"uv", "run", "--no-sync", "pytest", "tests/e2e-py/test_a_policy_the_store_refuses_fails_the_scoped_users_hook.py",
+			"-m", "rustfs_provisioning", "-v", "-rs", "-p", "no:cacheprovider", "--timeout=300", "--timeout-method=thread", "--require-live",
+		}).
+		Stdout(ctx)
+}
+
+// RustfsLifecycle runs the catalog lifecycle e2e with the bytes on a RustFS service bound to this one exec,
+// proving the catalog speaks plain S3 through `packages/storage` rather than one store's dialect.
 //
 // It replaces `scripts/rustfs_e2e.sh`, which drove `docker compose up -d --build` over
 // `docker-compose.yml` + `docker-compose.rustfs.yml`. That script was invisible to the estate's own
@@ -115,8 +161,8 @@ func (m *Rask) RustfsLifecycle(
 		AsService()
 
 	// The bucket, before anything reads it. `Sync` is what orders this against the catalog below.
-	// THE ESTATE'S OWN S3 SEAM, not a third-party CLI. `minio/mc` refuses anonymous pulls on every
-	// registry ([[XC-075]]), so a lane that pulls fresh cannot bootstrap its store at all. `m.base`
+	// THE ESTATE'S OWN S3 SEAM, not a third-party CLI image, which a registry can close to anonymous pulls
+	// ([[XC-075]]) so that a lane that pulls fresh cannot bootstrap its store at all. `m.base`
 	// carries uv, python and this repo — `packages/storage` is the same client the fleet uses.
 	if _, err := m.base(src).
 		WithServiceBinding("rustfs", rustfs).

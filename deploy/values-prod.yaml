@@ -78,6 +78,15 @@ openfga:
 age:
   enabled: false
 
+# The lakehouse's bytes live on the platform's S3: rask names it and provisions nothing on it (no buckets, no users).
+# The platform's operator creates rask's buckets and one scoped identity per plane in the store's secret store, the
+# layout the dev seed writes (docs/chart/templates/openbao-seed.yaml.md). The development store is refused on a real
+# deployment (templates/prod-credentials.yaml), and the render refuses an empty endpoint; the NetworkPolicy reaches it
+# through `networkPolicy.extraEgress`.
+objectStore:
+  enabled: false
+  externalEndpoint: "" # e.g. https://s3.us-east-1.amazonaws.com
+
 # Network isolation: default-deny + DNS egress + the EXCLUSIVE secret-store egress (only the pods whose sidecar
 # reads the store reach its addresses, `openbao.egress`). The chart ships the full, correct impl (templates/network-policy.yaml);
 # it was simply never enabled on the documented prod overlay — the security audit's headline gap. REQUIRES a
@@ -117,12 +126,9 @@ resources:
   catalog:
     requests: { cpu: 200m, memory: 512Mi }
     limits: { cpu: "2", memory: 1Gi } # sized by catalog.maxConcurrentWrites above (cap×256MiB + 512Mi)
-  rustfs:
-    requests: { cpu: 200m, memory: 512Mi }
-    limits: { cpu: "2", memory: 1Gi } # the lakehouse + observability object store under real load
 
 # --- Backups (P4): the Postgres is the platform's, and its operator does PITR and scheduled backups, so the pg_dump
-# CronJob is off. The volume snapshot covers the in-cluster RustFS PVC; with a managed S3 set it false too.
+# CronJob is off. The volume snapshot covers the development store's PVC; with the platform's S3 set it false too.
 # (snapshotClassName must be a real CSI VolumeSnapshotClass.) ----
 backups:
   pgDump:
@@ -179,14 +185,6 @@ security:
   infraContexts:
     enabled: true
 
-# --- Durable lakehouse storage: the rustfs-operator Tenant's volumeClaimTemplate (the ONE store,
-# docs/adr/0124-chart-unification-one-control-plane-each-one-object-store.md). SIZE it for prod — per Tenant volume (4 volumes/pod), holding the lakehouse AND
-# 14d of full-sampling observability. Set a snapshot-capable storageClass for the documented
-# VolumeSnapshot backups (backups.volumeSnapshot snapshots the Tenant PVCs). --------------------------
-rustfs:
-  storage: 200Gi
-  storageClass: "" # "" = the cluster default SC; prod: a CSI class that supports VolumeSnapshot + encryption
-
 # --- Version retention (the backstop sweep keeps the chart's cadence, under the clone-list maximum age) ---
 maintenance:
   olderThanDays: 7
@@ -224,9 +222,6 @@ observability:
 # AND set its external endpoint — the apps then connect to the managed service (verified: no in-cluster
 # DNS leaks into app env). Uncomment per service.
 # ---------------------------------------------------------------------------------------------------
-# rustfs (rustfs-operator / any managed S3):         # managed S3 for the lakehouse
-#   enabled: false
-#   externalEndpoint: https://s3.us-east-1.amazonaws.com
 # externalSecrets:                                   # the platform's ESO role on its store (see `openbao` above)
 #   role: lance
 # nats (the platform's JetStream, REQUIRED):        # a prerequisite rask never installs (ADR 0153); bus down =

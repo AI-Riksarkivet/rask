@@ -2,7 +2,7 @@
 
 A *warehouse* = one physically separate S3 bucket owned by a project (the FGA model's catalog-root type).
 These routes are the **control plane** the catalog lacked: an authorized project-admin provisions a bucket
-at RUNTIME (not the static Helm `mc mb` loop) and creates namespaces bound to it, so tables under those
+at RUNTIME (not from a bucket list fixed in the chart's values) and creates namespaces bound to it, so tables under those
 namespaces land in that warehouse's bucket — physically isolated from every other tenant's. Physical
 multi-tenancy: one project may hold many warehouses, and a table's bytes live in the bucket its
 namespace is bound to, never in a neighbour's.

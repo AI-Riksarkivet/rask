@@ -81,7 +81,11 @@ line-length = 160
 #
 # `lance_docs/` is vendored upstream text (`lance_docs/PROVENANCE.md`): its bytes are the release's, so
 # formatting the Python blocks inside its Markdown would make the copy disagree with the tag it names.
-extend-exclude = [".vulture-whitelist.py", "lance_docs"]
+#
+# `docs/audits/` keeps a measurement script exactly as it was run against a store: it is the evidence the
+# audit's numbers rest on, and it talks to the store raw on purpose (no `storage.s3_client`, a direct
+# `lance.write_dataset`), so production's code-shape bans do not describe it and a reformat would change it.
+extend-exclude = [".vulture-whitelist.py", "lance_docs", "docs/audits"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "S", "C4", "SIM", "RUF", "C901", "RET", "PERF", "FURB", "A", "ANN"]
@@ -331,6 +335,7 @@ markers = [
     "nats_auth: operator-mode NATS admits each bus client only to its own subjects (run by `dagger call nats-auth`, which provides the broker, nsc and daprd)",
     "observability: observability (OTLP/Greptime) e2e",
     "phase1: Phase 1's acceptance (XC-090): one drive of the bring-your-own scenario (`byo_scenario`), its own claims, and one module per criterion read off that drive; criterion 1, provenance, is XC-091, criterion 2, the catalog, is XC-092, criterion 4, events, is XC-094, and criterion 5, resilience, is XC-095, whose drills also carry `chaos`; criterion 3, no engine, is the import contracts `make lint-imports` runs, on a release the e2e-stack lane installs with no engine",
+    "rustfs_provisioning: the scoped-users hook's provisioning script against a real RustFS (run by `dagger call rustfs-provisioning`, which binds a throwaway store; XC-163)",
     "soak: Phase 1's soak (XC-090): a drive an acceptance run kept with --keep-drive, read again a day later; deselected unless the run names that drive with --soak",
     "track_a: Track A acceptance e2e (tier contract, gate/publish symmetry, branch isolation) against a live catalog",
     "user_state: user-state live e2e",

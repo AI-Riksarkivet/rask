@@ -1,4 +1,4 @@
-.PHONY: fga-store-check fga-estate-migrate sbom zone-sbom registry-gc dagger-gc dev-gc help install build test test-slow lint lint-imports fmt clean storybook typecheck knip comment-gate check coverage fga-test ci dev-micro dev-frontends dev-frontends-k3s dev-zone home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-fixtures k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap dev-registry e2e frontend-images prod-render-check chart-docs chart-docs-check alert-rules-check alert-rules-drill notifications-lanes notifications-rig audit smoke-rustfs rustfs-lifecycle auth-chain governance-chain nats-auth go-fmt scan-config scan-secrets scan-image scan-zone-image seed-corpus e2e-isolation e2e-container-deletes e2e-fga-model
+.PHONY: fga-store-check fga-estate-migrate sbom zone-sbom registry-gc dagger-gc dev-gc help install build test test-slow lint lint-imports fmt clean storybook typecheck knip comment-gate check coverage fga-test ci dev-micro dev-frontends dev-frontends-k3s dev-zone home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-fixtures k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap dev-registry e2e frontend-images prod-render-check chart-docs chart-docs-check alert-rules-check alert-rules-drill notifications-lanes notifications-rig audit smoke-rustfs rustfs-lifecycle rustfs-provisioning auth-chain governance-chain nats-auth go-fmt scan-config scan-secrets scan-image scan-zone-image seed-corpus e2e-isolation e2e-container-deletes e2e-fga-model
 
 help:
 	@echo "Targets:"
@@ -503,7 +503,7 @@ ray-up:
 	@if ray status >/dev/null 2>&1; then \
 	  echo "Ray already running. ray-status / ray-down to inspect / stop."; \
 	else \
-	  S3_SECRET=$${S3_SECRET:-minioadmin} LINEAGE_SERVICE_TOKEN=$${APP_API_TOKEN:-} \
+	  S3_SECRET=$${S3_SECRET:-rustfsadmin} LINEAGE_SERVICE_TOKEN=$${APP_API_TOKEN:-} \
 	  S3_ENDPOINT=$${S3_ENDPOINT:-http://localhost:9000} S3_REGION=$${S3_REGION:-us-east-1} \
 	  uv run ray start --head --port=$(RAY_HEAD_PORT) \
 	    --dashboard-host=0.0.0.0 --dashboard-port=$(RAY_DASHBOARD_PORT); \
@@ -610,12 +610,17 @@ seed-dev: ## Seed the dev estate: media corpus + a labeling task with items (nee
 smoke-rustfs: ## Storage smoke vs a REAL rustfs S3 backend (round-trip + LanceDB over s3://)
 	dagger call smoke-rustfs
 
-# The storage-AGNOSTIC proof: the same catalog lifecycle e2e the MinIO stack runs, with the bytes on
-# RustFS. Replaced `scripts/rustfs_e2e.sh`, which drove `docker compose up -d --build` over two
+# The storage-AGNOSTIC proof: the catalog lifecycle e2e with the bytes on a RustFS service bound to one
+# exec. Replaced `scripts/rustfs_e2e.sh`, which drove `docker compose up -d --build` over two
 # compose files and was invisible to the estate's own docker gate for most of a day — the gate wanted
 # `up` on the same line as `compose`, and the script wrapped it.
 rustfs-lifecycle: ## Catalog lifecycle e2e with the bytes on RustFS (proves S3-agnosticism)
 	dagger call rustfs-lifecycle
+
+# The scoped-users hook's provisioning script against a throwaway RustFS that boots as the fixture does (root pair
+# from files): a policy the store refuses fails the run before it binds anyone (XC-163).
+rustfs-provisioning: ## Scoped-users provisioning vs a REAL RustFS (a refused policy fails the hook, binds nobody)
+	dagger call rustfs-provisioning
 
 # The app-side-seeding authorization chain against a REAL Dex and a REAL OpenFGA: seven steps proving
 # the app seeds ownership tuples on create (no tuple is written by hand), that owner cascades to
@@ -667,7 +672,7 @@ KUBECONFIG ?= /etc/rancher/k3s/k3s.yaml
 # Postgres, and against the default Secret backend helm reports it ABSENT and `upgrade --install`
 # re-installs over a live estate WITHOUT erroring. Read-only subcommands pass straight through.
 # The release's namespace, stated rather than inherited from the kubeconfig context ([[XC-152]]): the fixtures it reads
-# by name (rask-minio, rask-dex, rask-openbao, rask-nats, compute) install into `default` (each fixture.env), so the
+# by name (rask-rustfs, rask-dex, rask-openbao, rask-nats, compute) install into `default` (each fixture.env), so the
 # release must share it. Helm reads HELM_NAMESPACE; kubectl takes the flag, and a later `-n`/`-A` in a recipe wins.
 RELEASE_NAMESPACE ?= default
 HELM ?= KUBECONFIG=$(KUBECONFIG) HELM_NAMESPACE=$(RELEASE_NAMESPACE) ./scripts/helm.sh
@@ -675,9 +680,8 @@ KUBECTL ?= KUBECONFIG=$(KUBECONFIG) kubectl --namespace $(RELEASE_NAMESPACE)
 # lance-rest-catalog is the ONE lakehouse image (catalog + lineage + maintenance +
 # media trio — chart `image.catalog`); the default render runs 8 containers from it, so the
 # build/import set must carry it or kind/k3s deploys ImagePullBackOff on every lakehouse pod.
-# minio is the object store's server and the `mc` its scoped-users hook runs, compiled from pinned upstream
-# source because the upstream images refuse anonymous pulls ([[XC-075]]).
-K3S_IMAGES = $(COMPOSE_IMAGES) $(ZONES:%=web-%) ray-cluster lance-rest-catalog minio
+# The object store fixture runs the upstream RustFS image by digest, which the node pulls; nothing here builds it.
+K3S_IMAGES = $(COMPOSE_IMAGES) $(ZONES:%=web-%) ray-cluster lance-rest-catalog
 # Where k3s-build leaves each image as an OCI tarball and k3s-import reads it: no docker daemon on either side.
 K3S_IMAGE_DIR ?= build/k3s-images
 
@@ -708,7 +712,6 @@ k3s-build: ## Build all fleet + frontend zone + ray-cluster images as OCI tarbal
 	# The lakehouse fleet image — dockerfile name (rest-catalog) != image name, so it can't
 	# ride the COMPOSE_IMAGES loop. Same build scripts/e2e_stack.sh does.
 	bash scripts/dagger-image.sh --name rest-catalog --out $(K3S_IMAGE_DIR)/lance-rest-catalog.tar
-	bash scripts/dagger-image.sh --name minio --out $(K3S_IMAGE_DIR)/minio.tar
 
 k3s-import: ## Side-load the k3s-build tarballs into k3s containerd as <image>:dev (sudo, no docker)
 	@for s in $(K3S_IMAGES); do \
@@ -755,19 +758,19 @@ CORPUS_ACCESS_MODE ?= ReadWriteOnce
 # Override them from the environment for a differently-addressed dev cluster.
 DEV_ISSUER          ?= http://localhost:8080/dex
 DEV_ORIGIN          ?= http://localhost:8080
-# The store address the catalog vends (LH-489): the minio fixture's node port on the node's own address, which a pod
-# and this host both reach, where `rask-minio:9000` resolves only in the cluster.
+# The store address the catalog vends (LH-489): the rustfs fixture's node port on the node's own address, which a pod
+# and this host both reach, where `rask-rustfs:9000` resolves only in the cluster.
 DEV_NODE_IP         ?= $(shell $(KUBECTL) get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null)
-DEV_STORE_NODE_PORT := $(shell sed -n 's/^nodePort: *//p' deploy/fixtures/minio/chart/values.yaml)
+DEV_STORE_NODE_PORT := $(shell sed -n 's/^nodePort: *//p' deploy/fixtures/rustfs/chart/values.yaml)
 DEV_VENDED_ENDPOINT ?= http://$(DEV_NODE_IP):$(DEV_STORE_NODE_PORT)
 
 # THE CREDENTIAL KEYS A RELEASE MAY STILL CARRY from before [[XC-004]], dropped from every upgrade that
 # re-feeds the live values (`-f $$LIVE`). templates/prod-credentials.yaml refuses each of them as a value,
 # and `null` is how Helm removes a key a values file supplies. The two lists name the same keys.
 DROP_CREDENTIAL_VALUES := --set dapr.appToken=null --set frontend.oidc.sessionSecret=null \
-  --set secrets.hfToken=null --set ray.auth.token=null --set age.password=null --set minio.secretKey=null \
-  --set minio.maintenanceSecretKey=null \
-  --set minio.catalogSecretKey=null --set minio.lineageSecretKey=null --set minio.viewerSecretKey=null
+  --set secrets.hfToken=null --set ray.auth.token=null --set age.password=null --set objectStore.secretKey=null \
+  --set objectStore.maintenanceSecretKey=null \
+  --set objectStore.catalogSecretKey=null --set objectStore.lineageSecretKey=null --set objectStore.viewerSecretKey=null
 
 # THE ONE BOOTSTRAP SECRET a dev estate is given by hand: the operator-supplied third-party credentials
 # (today the Hugging Face token), which nothing in the cluster can generate. The dev OpenBao seeds the
@@ -777,12 +780,12 @@ DROP_CREDENTIAL_VALUES := --set dapr.appToken=null --set frontend.oidc.sessionSe
 # (NOT FOR PRODUCTION; deploy/fixtures/README.md). Dapr's control plane comes first after ESO, so its injector is
 # Ready before any pod that wants a sidecar exists; the NATS bus every pub/sub component dials follows. The CloudNativePG
 # operator serves the AGE-on-CNPG Cluster; its CRDs come from k3s-crds, which runs first. Dex is the dev OIDC issuer,
-# given the issuer and origin rask is given; minio and openbao are the dev object and secret stores, which start once
+# given the issuer and origin rask is given; rustfs and openbao are the dev object and secret stores, which start once
 # rask is installed: the object store's root credential and the secret store's seed scripts are rask's. The Ray engine is
 # two of them, the operator first, and compute (the Ray dashboard and Serve companion) follows it, starting once rask's
 # app token and Dapr Configuration exist; observability is the store, dashboards and alerting rask's Collector
 # exports to. A GPU node with no device plugin yet adds nvidia-device-plugin.
-FIXTURES ?= external-secrets dapr nats cloudnative-pg dex minio openbao kuberay-operator ray-cluster compute observability marquez
+FIXTURES ?= external-secrets dapr nats cloudnative-pg dex rustfs openbao kuberay-operator ray-cluster compute observability marquez
 
 k3s-fixtures: ## Install the development fixtures (FIXTURES) as their own releases, before the rask chart
 	$(if $(filter-out dex compute,$(FIXTURES)),KUBECONFIG=$(KUBECONFIG) ./scripts/fixtures.sh $(filter-out dex compute,$(FIXTURES)))
@@ -846,7 +849,7 @@ k3s-up: k3s-crds k3s-fixtures k3s-deps k3s-stem-check ## Apply CRDs, install fix
 	  --set explorer.corpus.accessMode=$(CORPUS_ACCESS_MODE) \
 	  $(DROP_CREDENTIAL_VALUES) \
 	  $$HFARGS \
-	  $${AWS_ACCESS_KEY_ID:+--set-string minio.accessKey=$$AWS_ACCESS_KEY_ID}
+	  $${AWS_ACCESS_KEY_ID:+--set-string objectStore.accessKey=$$AWS_ACCESS_KEY_ID}
 	$(KUBECTL) rollout status deploy/rask-catalog --timeout=300s
 	@echo "UI → http://<node-ip>/   (host-less routes on Traefik's Gateway; over VS Code/ssh -L forward port 80 → http://localhost:<port>/)"
 	@echo "API → http://<node-ip>/api/catalog/livez"
@@ -976,7 +979,6 @@ kind-images: ## Build the full :dev image set into docker's image store, which `
 	@for a in $(ZONES); do bash scripts/dagger-image.sh --zone $$a --tag web-$$a:dev || exit 1; done
 	bash scripts/dagger-image.sh --name ray-cluster --tag ray-cluster:dev
 	bash scripts/dagger-image.sh --name rest-catalog --tag lance-rest-catalog:dev
-	bash scripts/dagger-image.sh --name minio --tag minio:dev
 
 kind-load: ## Side-load the :dev image set into the kind cluster
 	$(KIND) load docker-image $(foreach i,$(KIND_IMAGES),$(i):dev) --name $(KIND_CLUSTER)
@@ -988,10 +990,9 @@ kind-load: ## Side-load the :dev image set into the kind cluster
 # actual render (not a hand-list, which would rot) with our own :dev images filtered out. An image
 # with NO tag is skipped (a subchart default the render leaves incomplete — the pod that resolves it
 # pulls it). The character classes are DELIBERATELY case-sensitive-inclusive: docker tags allow
-# uppercase, and a lowercase-only class silently TRUNCATED `apache/age:release_PG16_1.5.0` to
-# `apache/age:release_` and `minio/mc:RELEASE.…` to `minio/mc:` — so the two images the OpenFGA
-# migration and the bucket-init hook block on were the only ones this target never preloaded, which
-# is exactly backwards.
+# uppercase, and a lowercase-only class silently TRUNCATES `apache/age:release_PG16_1.5.0` to
+# `apache/age:release_`, so the image the OpenFGA migration blocks on would be the one this target
+# never preloads.
 kind-preload: bootstrap ## Pull the chart's third-party images into the host cache, then side-load them
 	@imgs=$$(helm template rask ./chart --set singleTenant.enabled=true --set explorer.enabled=true \
 	    --set observability.enabled=true 2>/dev/null \

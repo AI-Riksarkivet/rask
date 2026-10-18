@@ -10,7 +10,7 @@ Replaces the legacy `ra-batch` CLI: no YAML, no custom Stage/Runner kernel — j
 # Local mode (single process, no cluster)
 uv run runner --input ./images --output ./alto --pipeline fake
 
-# Against MinIO / HCP
+# Against an S3 store (RustFS, HCP, AWS)
 uv run runner \
     --input s3://images-batch \
     --output s3://images-batch-alto \

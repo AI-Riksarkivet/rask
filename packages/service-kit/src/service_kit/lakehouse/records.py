@@ -60,7 +60,7 @@ def _s3_client(storage_options: StorageOptions) -> Any:  # noqa: ANN401 — boto
 
     ``packages/storage`` is the estate's canonical S3 seam and owns, in one place, everything a
     hand-rolled client silently forfeits: path-style addressing (matching
-    ``lance_storage_options(virtual_hosted=False)`` — RustFS/MinIO reject virtual-hosted signing with
+    ``lance_storage_options(virtual_hosted=False)`` — RustFS rejects virtual-hosted signing with
     403 SignatureDoesNotMatch), s3v4, adaptive retries, and connect/read timeouts. The timeouts matter
     most here: these doors are on the synchronous path of every warehouse and project mint, and
     botocore's default is to wait forever.

@@ -2,9 +2,9 @@
 
 [[LH-067]] / [[LH-273]]. `catalog.multibase.baseCredentialRefs` maps a data base to the NAME of a secret in
 the Dapr secret store. On the live estate (2026-10-05) the one reference, `lh067-second-store`, named an
-OpenBao entry and a MinIO user someone made by hand; the entry was gone and Dapr answered 500 for it, so
+OpenBao entry and a store user someone made by hand; the entry was gone and Dapr answered 500 for it, so
 the per-base credential path could not be proved. `catalog.multibase.devSeed` makes the chart own that
-fixture: per reference, a MinIO user whose policy reaches only its bases, and the OpenBao entry carrying
+fixture: per reference, a store user whose policy reaches only its bases, and the OpenBao entry carrying
 that user's pair in the shape `warehouse_credentials.resolve` reads.
 
 Pinned here, from the render: the user, its policy and the entry render for a configured reference; the
@@ -31,7 +31,7 @@ FIXTURE = json.dumps(
         "baseCredentialRefs": {"s3://fixture-store/data": REF, "s3://root-store": REF},
     }
 )
-_POLICY = re.compile(r"cat >/tmp/base-" + REF + r"\.json <<'POLICY'\n(.*?)\n\s*POLICY\n", re.DOTALL)
+_POLICY = re.compile(r"cat >/tmp/policies/rask-base-" + REF + r"\.json <<'POLICY'\n(.*?)\n\s*POLICY\n", re.DOTALL)
 
 
 def _args(*, dev_seed: bool) -> tuple[str, ...]:
@@ -57,9 +57,9 @@ def _allowed(policy: dict, action: str, resource: str, prefix: str | None = None
 
 def test_a_configured_ref_gets_a_scoped_user_and_its_openbao_entry_only_when_the_local_fixture_is_on() -> None:
     docs = render(*_args(dev_seed=True))
-    mc, seed = _script(docs, "mc"), seed_scripts(docs)["seed.sh"]
+    provision, seed = _script(docs, "provision"), seed_scripts(docs)["seed.sh"]
 
-    match = _POLICY.search(mc)
+    match = _POLICY.search(provision)
     assert match, "the scoped-users Job renders no policy for the reference"
     policy = json.loads(match.group(1))
     assert _allowed(policy, "s3:PutObject", "fixture-store/data/t.lance/x")
@@ -68,16 +68,16 @@ def test_a_configured_ref_gets_a_scoped_user_and_its_openbao_entry_only_when_the
     assert not _allowed(policy, "s3:PutObject", "fixture-store/data-other/x")
     assert not _allowed(policy, "s3:ListBucket", "fixture-store", prefix="data-other/")
     assert not _allowed(policy, "s3:PutObject", "lance-catalog/data/x")
-    assert f"mc admin policy create rfs rask-base-{REF} " in mc
-    assert f'mc admin user add rfs {REF} "$(cat /keys/{REF})"' in mc
-    assert f"--user {REF}" in mc
+    assert f'--policy "rask-base-{REF}=/tmp/policies/rask-base-{REF}.json"' in provision
+    assert f'--user "{REF}=rask-base-{REF}"' in provision
+    assert "--keys-dir /keys" in provision
 
     field = next(
         env_of(c)["LANCE_DAPR_SECRET_S3_FIELD"] for w, _, c in containers(docs) if w.endswith("-catalog") and "LANCE_DAPR_SECRET_S3_FIELD" in env_of(c)
     )
     assert f'bao kv put secret/{REF} aws_access_key_id={REF} {field}=@"$HOME/seed/base-{REF}"' in seed
 
-    derived = hashlib.sha256(f"{REF}-s3-minioadmin".encode()).hexdigest()[:40]
+    derived = hashlib.sha256(f"{REF}-s3-rustfsadmin".encode()).hexdigest()[:40]
     assert derived not in render_text(*_args(dev_seed=True)), "the fixture secret is rendered into the manifest"
 
     off = render_text(*_args(dev_seed=False))

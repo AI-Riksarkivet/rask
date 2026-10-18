@@ -1,0 +1,113 @@
+{{- $root := required "rootCredentials names the Secret holding the store's root pair; without it RustFS boots on rustfsadmin" .Values.rootCredentials }}
+{{- $labels := dict "app.kubernetes.io/name" "rustfs" "app.kubernetes.io/instance" .Release.Name "app.kubernetes.io/component" "rustfs" }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.name }}
+  labels: {{- toYaml $labels | nindent 4 }}
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.name }}
+  labels: {{- toYaml $labels | nindent 4 }}
+spec:
+  {{- if .Values.nodePort }}
+  type: NodePort
+  {{- end }}
+  selector: {{- toYaml $labels | nindent 4 }}
+  ports:
+    - { name: s3, port: {{ .Values.port }}, targetPort: s3{{ with .Values.nodePort }}, nodePort: {{ . }}{{ end }} }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.name }}-hl
+  labels: {{- toYaml $labels | nindent 4 }}
+spec:
+  clusterIP: None
+  selector: {{- toYaml $labels | nindent 4 }}
+  ports:
+    - { name: s3, port: {{ .Values.port }}, targetPort: s3 }
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ .Values.name }}
+  labels: {{- toYaml $labels | nindent 4 }}
+spec:
+  serviceName: {{ .Values.name }}-hl
+  replicas: 1
+  selector:
+    matchLabels: {{- toYaml $labels | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- toYaml $labels | nindent 8 }}
+    spec:
+      serviceAccountName: {{ .Values.name }}
+      automountServiceAccountToken: false
+      securityContext:
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        runAsNonRoot: true
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: rustfs
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}{{ with .Values.image.digest }}@{{ . }}{{ end }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - { name: RUSTFS_VOLUMES, value: /data }
+            - { name: RUSTFS_ADDRESS, value: ":{{ .Values.port }}" }
+            - { name: RUSTFS_ACCESS_KEY_FILE, value: /run/secrets/rustfs/access_key }
+            - { name: RUSTFS_SECRET_KEY_FILE, value: /run/secrets/rustfs/secret_key }
+            - { name: RUSTFS_REGION, value: {{ .Values.region | quote }} }
+            - { name: RUSTFS_CONSOLE_ENABLE, value: "false" }
+            - { name: RUSTFS_CHECK_UPDATE, value: "false" }
+            - { name: RUSTFS_HEALTH_MINIMAL_RESPONSE_ENABLE, value: "true" }
+            - { name: RUSTFS_OBS_LOG_DIRECTORY, value: "" }
+            - { name: RUSTFS_OBS_PROFILING_EXPORT_ENABLED, value: "false" }
+          ports:
+            - { name: s3, containerPort: {{ .Values.port }} }
+          livenessProbe:
+            httpGet: { path: /health/live, port: s3 }
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          readinessProbe:
+            httpGet: { path: /health/ready, port: s3 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources: {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: data, mountPath: /data }
+            - { name: root-credentials, mountPath: /run/secrets/rustfs, readOnly: true }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: root-credentials
+          secret:
+            secretName: {{ $root }}
+            optional: false
+            defaultMode: 0400
+            items:
+              - { key: object-store-access-key, path: access_key }
+              - { key: object-store-secret-key, path: secret_key }
+        - { name: tmp, emptyDir: { sizeLimit: "2Gi" } }
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          app.kubernetes.io/instance: {{ .Release.Name }}
+          app.kubernetes.io/component: rustfs
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: {{ .Values.storage | quote }}
+        {{- with .Values.storageClass }}
+        storageClassName: {{ . | quote }}
+        {{- end }}

@@ -1,7 +1,7 @@
 """Backend namespace construction and dataset resolution.
 
 The REST server is an adapter over a native ``LanceNamespace`` backend
-(``DirectoryNamespace`` on MinIO/S3 by default). ``open_dataset`` resolves a
+(``DirectoryNamespace`` on the object store by default). ``open_dataset`` resolves a
 table's storage location via the namespace and opens it with pylance — used by
 the data-plane service for operations the native backend does not implement.
 """

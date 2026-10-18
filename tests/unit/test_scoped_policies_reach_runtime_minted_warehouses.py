@@ -28,7 +28,6 @@ names, and a registry-discovered one is by definition not among them.
 from __future__ import annotations
 
 import json
-import re
 import textwrap
 from fnmatch import fnmatchcase
 
@@ -48,7 +47,7 @@ _BUCKET_ACTIONS = frozenset({"s3:ListBucket", "s3:GetBucketLocation", "s3:ListAl
 
 def _render() -> str:
     return _helm_template(
-        "minio.maintenanceAccessKey=rask-maintenance",
+        "objectStore.maintenanceAccessKey=rask-maintenance",
     )
 
 
@@ -56,11 +55,11 @@ def _policy(rendered: str, name: str) -> dict:
     """The policy document the Job writes for `name`, parsed.
 
     Read out of the heredoc rather than out of a values file on purpose: what governs the credential
-    is the JSON `mc admin policy create` is handed, and a template that renders valid YAML around
+    is the JSON the hook hands the store's `add-canned-policy` call, and a template that renders valid YAML around
     invalid JSON is exactly the failure this parse catches.
     """
-    job = rendered[rendered.index("component: minio-scoped-users") :]
-    start = job.index(f"cat >/tmp/{name}.json <<'POLICY'")
+    job = rendered[rendered.index("component: object-store-scoped-users") :]
+    start = job.index(f"cat >/tmp/policies/rask-{name}.json <<'POLICY'")
     body = job[start:]
     body = body[body.index("\n") + 1 :]
     body = body[: body.index("POLICY\n")]
@@ -137,20 +136,3 @@ def test_the_sweep_still_reads_the_records_it_must_read(maintenance: dict) -> No
     assert allowed(maintenance, action="s3:GetObject", bucket=CONTROL_BUCKET, key=record)
     assert allowed(maintenance, action="s3:DeleteObject", bucket=CONTROL_BUCKET, key=record)
     assert not allowed(maintenance, action="s3:PutObject", bucket=CONTROL_BUCKET, key=record)
-
-
-# ---- the provisioning step itself ----------------------------------------------------------------
-
-
-def test_a_malformed_policy_fails_the_hook_instead_of_leaving_the_old_one_attached() -> None:
-    """`mc admin policy create` OVERWRITES an existing policy on this RustFS — probed 2026-09-04: a
-    second create with different content returned exit 0 and the readback showed the new document. So
-    the `|| true` that used to sit on the create was not protecting against "already exists"; all it
-    could do was swallow a REAL failure (malformed JSON, admin denied) and let the hook report success
-    while the credential kept its old policy. The user-add keeps its `|| true`, which genuinely does
-    guard a re-run."""
-    rendered = _render()
-    job = rendered[rendered.index("component: minio-scoped-users") :]
-    creates = re.findall(r"mc admin policy create rfs \S+ \S+( \|\| true)?", job)
-    assert creates, "no policy is created at all"
-    assert not any(creates), "a policy create still swallows its failure — a bad policy renders as a successful hook"

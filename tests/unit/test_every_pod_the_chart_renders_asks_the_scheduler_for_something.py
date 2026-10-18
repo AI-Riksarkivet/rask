@@ -45,7 +45,7 @@ _OIDC_ARGS = [
     "--set-string", "frontend.oidc.publicOrigin=https://lance.example.com",
 ]  # fmt: skip
 
-_DEFAULT_ARGS = ["--set", "image.localImages=true", "--set", "minio.enabled=true"]
+_DEFAULT_ARGS = ["--set", "image.localImages=true", "--set", "objectStore.enabled=true"]
 
 
 @functools.cache

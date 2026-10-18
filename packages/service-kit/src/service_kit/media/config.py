@@ -140,24 +140,25 @@ class MediaSettings(BaseSettings):
     docs_enabled: bool = Field(default=False, alias="MEDIA_DOCS")
 
     # Optional S3 object-store backing (RASK_LANDING §4). Set MEDIA_S3_ENDPOINT to
-    # serve datasets from RustFS / MinIO / AWS: the registry then lists + opens
+    # serve datasets from RustFS / AWS / any S3: the registry then lists + opens
     # under MEDIA_S3_DB_ROOT (an s3:// URI) with these storage_options. All unset
     # (the default) = the local-filesystem db_root path, byte-identical to before.
     s3_endpoint: str | None = Field(default=None, alias="MEDIA_S3_ENDPOINT")
     s3_access_key_id: str | None = Field(default=None, alias="MEDIA_S3_ACCESS_KEY_ID")
     s3_secret_access_key: str | None = Field(default=None, alias="MEDIA_S3_SECRET_ACCESS_KEY")
     # The SECRET half comes from the Dapr secret store, fail-closed — the MEDIA_PUBLISH_* precedent
-    # below: coordinates are config, the secret is not. `minio-secret-key` is already seeded in the
-    # `lance` bundle by the chart's infra-credentials plane. MEDIA_S3_SECRET_ACCESS_KEY exists for
-    # tests and sidecar-less dev only; the chart never sets it.
+    # below: coordinates are config, the secret is not. The corpus readers' scoped identity is the secret
+    # `media-s3` (`objectStore.mediaAccessKey`), the viewer's `viewer-s3`, each denied to every other app; the
+    # store's root never reaches a reader (ADR 0168). MEDIA_S3_SECRET_ACCESS_KEY exists for tests and
+    # sidecar-less dev only; the chart never sets it.
     #: THE ONE STORE, NAMED ONCE (DUP-17). The estate runs a single Dapr secret-store component and
     #: seven env vars named it, each defaulting to the same literal and none of them set by the chart —
     #: so repointing the store meant finding all seven. `RASK_SECRET_STORE` is the estate-wide name
     #: (already what viewer and ingest read); the per-service alias stays FIRST so a single service can
     #: still be moved on its own.
     s3_secret_store: str = Field(default="lance-secrets", validation_alias=AliasChoices("MEDIA_S3_SECRET_STORE", "RASK_SECRET_STORE"))
-    s3_secret_key: str = Field(default="lance", alias="MEDIA_S3_SECRET_KEY")
-    s3_secret_field: str = Field(default="minio-secret-key", alias="MEDIA_S3_SECRET_FIELD")
+    s3_secret_key: str = Field(default="media-s3", alias="MEDIA_S3_SECRET_KEY")
+    s3_secret_field: str = Field(default="secret_key", alias="MEDIA_S3_SECRET_FIELD")
     s3_region: str = Field(default="us-east-1", alias="MEDIA_S3_REGION")
     s3_db_root: str | None = Field(default=None, alias="MEDIA_S3_DB_ROOT")
 
@@ -283,7 +284,7 @@ class MediaSettings(BaseSettings):
         request-path call a pure dict build.
 
         Path-style addressing is forced (``virtual_hosted_style_request=false``)
-        because RustFS/MinIO reject virtual-hosted signing — verified live.
+        because RustFS rejects virtual-hosted signing — verified live.
 
         The credential keys are ``aws_``-prefixed for the reason ``lance_storage_options`` records:
         every fleet pod exports ``AWS_ACCESS_KEY_ID``/``AWS_SECRET_ACCESS_KEY``, and the bare spellings

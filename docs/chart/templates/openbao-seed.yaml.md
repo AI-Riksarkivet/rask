@@ -74,17 +74,15 @@ THE APP-API-TOKEN, so a pod can authenticate its Dapr doors without the value pa
 through its environment (`RASK_APP_TOKEN_FROM_STORE`). ESO writes the same field into the
 `dapr-app-token` Secret daprd stamps the header from, so the two agree by construction.
 
-## `{{- if $.Values.minio.maintenanceAccessKey }}`
+## `{{- if $.Values.objectStore.maintenanceAccessKey }}`
 
-THE MAINTENANCE PLANE'S SCOPED S3 SECRET, when one is provisioned. Its own field
-rather than a second value on `minio-secret-key`: that field IS the tenant root's
-secret and other services read it, so overwriting it would repoint the whole
-estate at a credential scoped to maintenance's prefixes. Seeded only when the
-access key is set, matching the Deployment's own `$scoped` test — a
+THE MAINTENANCE PLANE'S SCOPED S3 SECRET, when one is provisioned, as its own pair of fields in the
+`lance` bundle. The bundle holds no root pair: the store's root lives at `secret/object-store-root`, which no Dapr
+app may read (below). Seeded only when the access key is set, matching the Deployment's own `$scoped` test — a
 field the service is told to read and nothing writes is a fail-closed boot, since
 `fetch_required_secrets` raises rather than degrading.
 
-## `{{- if $.Values.minio.catalogAccessKey }}`
+## `{{- if $.Values.objectStore.catalogAccessKey }}`
 
 THE CATALOG'S OWN GATE, matching the Deployment's own `$catalogScoped` test in
 `services.yaml`, exactly as the lineage block below matches `$linScoped`. Gated on another
@@ -94,12 +92,34 @@ fail-closed boot. Measured 2026-09-24 by rendering with the other plane's access
 the catalog Deployment carried `LANCE_DAPR_SECRET_S3_FIELD = "catalog-s3-secret-key"` while the
 seed wrote only lineage's and maintenance's fields.
 
-## `{{- if $.Values.minio.lineageAccessKey }}`
+## `{{- if $.Values.objectStore.lineageAccessKey }}`
 
-THE LINEAGE PLANE'S SCOPED S3 SECRET, on the same terms as the two above: its own
-field rather than a second value on `minio-secret-key`, which IS the tenant root's
-secret that other services read. Seeded only when the access key is set, matching
-the Deployment's own `$linScoped` test.
+THE LINEAGE PLANE'S SCOPED S3 SECRET, on the same terms as the two above: its own pair of fields in the
+`lance` bundle. Seeded only when the access key is set, matching the Deployment's own `$linScoped` test.
+
+## `bao kv put secret/object-store-root object-store-access-key={{ $.Values.objectStore.accessKey }} \`
+
+THE DEVELOPMENT STORE'S ROOT PAIR, at a path of its own and only with `objectStore.enabled`. On RustFS the root
+secret signs every STS session token the store issues (GHSA-m77q-r63m-pj89, intentionally unfixed), so whoever reads it
+can forge any credential the catalog vends (ADR 0168). Outside the `lance` bundle, no Dapr app reads it: every app's
+Configuration denies `object-store-root` (`lance.daprAppSpec`), and ESO, whose policy below names the path, writes it
+into `<release>-object-store-root` for the store and the scoped-users hook alone. Both halves sit in one object, as
+the store's non-optional secret volume needs them. `tests/unit/test_the_root_storage_secret_reaches_only_its_users.py`
+follows the root through every path a pod reads a secret by.
+
+## `bao kv put secret/media-s3 access_key={{ . }} secret_key=@"$HOME/seed/scoped-{{ . }}" >/dev/null`
+
+THE MEDIA CORPUS READERS' IDENTITY (values.yaml `objectStore.mediaAccessKey`), seeded when explorer serves a corpus
+(`lance.mediaIdentity`). Annotator and search read it from their sidecar as `MEDIA_S3_SECRET_KEY=media-s3`
+(explorer.yaml), with the `access_key`/`secret_key` fields the viewer's `viewer-s3` carries, and every other app's
+Configuration denies it. Its secret is derived from the root in `derive()` by `lance.scopedSecretFn`, the function
+the scoped-users hook runs, so the store's user and this field agree without either handing the other a key.
+
+## `bao kv put secret/backup-s3 access_key={{ . }} secret_key=@"$HOME/seed/scoped-{{ . }}" >/dev/null`
+
+THE BACKUPS' IDENTITY (values.yaml `objectStore.backupAccessKey`), seeded when either backup CronJob is on
+(`lance.backupIdentity`) and derived in `derive()` like `media-s3`. The CronJobs carry no sidecar, so ESO reads this
+path (the policy below names it) and writes `<release>-backup-s3`; every Dapr app's Configuration denies it.
 
 ## `c="$HOME/seed/otel-collector-export"`
 
@@ -134,9 +154,12 @@ token and already writes the exact path the role must be allowed to read; a
 separate bootstrap would need a second copy of both.
 
 THE POLICY IS SCOPED TO NAMED PATHS, not the mount. ESO is a controller with standing
-access, so `read` on `secret/data/lance`, and on each NATS credential a pod without a
-sidecar mounts (`lance.natsFiles`), is the whole grant — no list, no other path, no
-write. Zero trust applies to the thing fetching the secrets too.
+access, so `read` on `secret/data/lance`, on each NATS credential a pod without a
+sidecar mounts (`lance.natsFiles`), and on each path an ExternalSecret fetches as a
+whole (`object-store-root` with the dev store, `backup-s3` with a backup, the
+Collector's and the hf-token's when they are seeded) is the whole grant — no list, no
+other path, no write. `media-s3` and `viewer-s3` are absent: their readers have sidecars.
+Zero trust applies to the thing fetching the secrets too.
 
 EVERY STEP IS IDEMPOTENT: `auth enable` on an existing mount is the only one that
 errors, and it is the expected outcome on re-run.

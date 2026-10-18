@@ -43,15 +43,15 @@ spec:
       serviceAccountName: {{ include "lance.fullname" $root }}-sa-{{ $name }}
       {{- $waits := list -}}
       {{- range $dep := ($svc.waitFor | default list) -}}
-      {{- if and (eq $dep "minio") $root.Values.minio.enabled }}{{- $waits = append $waits $dep -}}{{- end -}}
+      {{- if and (eq $dep "objectStore") $root.Values.objectStore.enabled }}{{- $waits = append $waits $dep -}}{{- end -}}
       {{- end -}}
       {{- if $waits }}
       initContainers:
         {{- range $dep := $waits }}
-        {{- if eq $dep "minio" }}
-        - name: wait-minio
+        {{- if eq $dep "objectStore" }}
+        - name: wait-object-store
           image: busybox:1.36
-          command: ["sh","-c","until nc -z {{ include "lance.minioHost" $root }} {{ $root.Values.minio.port }}; do echo waiting s3; sleep 2; done"]
+          command: ["sh","-c","until nc -z {{ include "lance.objectStoreHost" $root }} {{ $root.Values.objectStore.port }}; do echo waiting s3; sleep 2; done"]
         {{- end }}
         {{- end }}
       {{- end }}

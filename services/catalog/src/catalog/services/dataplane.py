@@ -889,7 +889,7 @@ def dataset_fs(uri: str, so: StorageOptions) -> tuple[pafs.FileSystem, str]:
 
     A local ``file://`` / bare-path location (the ``dir`` backend default) needs no credentials; an
     ``s3://`` location builds an ``S3FileSystem`` from the SAME storage options the datasets are opened
-    with (path-style, http-ok endpoint) — mirroring the media head's filesystem so RustFS/MinIO work.
+    with (path-style, http-ok endpoint) — mirroring the media head's filesystem so RustFS works.
     """
     if uri.startswith("s3://") and so.get("endpoint"):
         return s3_filesystem(so), uri[len("s3://") :]

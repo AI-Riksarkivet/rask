@@ -3,29 +3,28 @@
 The catalog authenticates (OIDC) and authorizes (OpenFGA), then a
 :class:`CredentialVendor` turns *(table object-store location, access tier)* into
 the ``storage_options`` a client (LanceDB SDK / lance-ray / pylance) uses to reach
-object storage directly. The target is **S3-compatible** storage — RustFS (this project's default store),
-MinIO, AWS S3, Ceph RGW, GCS via S3 interop. The design is
-**vending-first**; each deployment picks the strongest plug it wants:
+object storage directly. The target is **S3-compatible** storage: the platform's object store in
+production (AWS S3, Ceph RGW, RustFS, GCS via S3 interop), and RustFS as the development store. The
+design is **vending-first**; each deployment picks the strongest plug its store implements:
 
 * :class:`WebIdentityVendor` — STS ``AssumeRoleWithWebIdentity`` + an inline session policy: the caller's
   OIDC id_token is exchanged BY THE STORE for short-TTL, per-table, read/write-scoped creds.
-  Token-authenticated. For stores that implement web identity; **RustFS does not** (see below).
+  Token-authenticated, so the catalog holds no store credential for the exchange.
 * :class:`StsVendor` — STS ``AssumeRole`` + an inline session policy: short-TTL,
-  per-table, read/write-scoped tokens. For backends that implement plain ``AssumeRole`` — AWS, MinIO,
-  Ceph RGW, **and RustFS**, which is why `chart/values.yaml` ships ``vending.mode: sts``.
+  per-table, read/write-scoped tokens, signed with the catalog's own scoped (non-root) pair. For stores
+  that implement plain ``AssumeRole`` — AWS, Ceph RGW and RustFS — which is why `chart/values.yaml`
+  ships ``vending.mode: sts``.
 
-WHICH ACTION RUSTFS ANSWERS IS MEASURED, not inferred, because getting it backwards costs the whole
-data plane: the wrong vendor returns no usable credential and every direct-to-store read fails with a
-signature error that names the client. Probed against ``rustfs/rustfs:1.0.0-alpha.60`` — the tag this
-repo pins — on 2026-09-24, with SigV4 signing proven working by a 200 on ``GET /``:
-
-    POST / Action=AssumeRole                  -> 200, real temporary credentials
-    POST / Action=AssumeRoleWithWebIdentity   -> 400 InvalidArgument "not support action"
-    POST / Action=NotARealAction  (control)   -> 400 InvalidArgument "not support action"
-
-The control is what makes the second line readable: RustFS answers an unknown action and web identity
-identically, so web identity is absent rather than misconfigured. It also requires a signature on the
-STS call, which AWS web identity deliberately does not.
+WHAT THE DEVELOPMENT STORE ANSWERS IS MEASURED, not inferred, because getting it backwards costs the
+whole data plane: the wrong vendor returns no usable credential and every direct-to-store read fails
+with a signature error that names the client. Measured 2026-10-18 on ``rustfs/rustfs`` 1.0.1 and 1.0.3 (ADR 0168;
+`docs/audits/2026-10-18/rustfs-zero-trust.md`): a scoped user whose canned policy grants S3 actions on
+its buckets and names no ``sts:`` action calls ``AssumeRole`` with a session policy and is issued
+credentials, ``DurationSeconds=900`` honoured; the session policy is enforced as an intersection with
+the user's own (a read session's GET in scope 200, another prefix and another bucket 403, PUT and
+DELETE 403; a write session's PUT in scope 200, out of scope 403), and Lance creates and appends a
+dataset on the vended credential. ``AssumeRoleWithWebIdentity`` against rask's issuer was not measured
+there, so the development estate vends through :class:`StsVendor`.
 * :class:`ModeBVendor` — ``vend`` returns ``None``: no credential ever leaves the
   catalog; the client uses the server-mediated (Arrow-IPC) data endpoints. The
   simplest, backend-agnostic default — nothing is delegated.
@@ -149,8 +148,8 @@ _MAINTAIN_ACTIONS = (
     "s3:AbortMultipartUpload",
 )
 
-# Default role ARN for STS vending. RustFS ignores it (it authorizes by the OIDC token + ROLE_POLICY); AWS /
-# MinIO / Ceph resolve it. boto3 requires the param either way. Override via LANCE_S3_ASSUME_ROLE_ARN.
+# Default role ARN for STS vending. RustFS accepts it for AWS compatibility and puts no role in the session
+# (the session is bounded by the caller's own policy and the session policy); AWS / Ceph resolve it. boto3 requires the param either way. Override via LANCE_S3_ASSUME_ROLE_ARN.
 _DEFAULT_VEND_ROLE_ARN = "arn:aws:iam::000000000000:role/lance-vend"
 
 
@@ -500,9 +499,10 @@ def build_session_policy(
       that could put under ``_refs/`` could move a tag, forge a branch or fail every ref listing with a child
       prefix. The Deny is load-bearing, measured (LH-469, #594): the staged Allow also matches
       ``<n>.manifest-<uuid>.manifest``, a name pylance reads as final, and a session policy's explicit Deny
-      overrides any Allow on MinIO and on AWS S3 alike. Measured on MinIO ``RELEASE.2025-04-22T22-12-26Z``,
-      the ``tree/`` grant costs 20 characters of the table prefix a write credential fits within MinIO's
-      2,048-byte session policy (109 to 89 at a 63-character bucket).
+      overrides any Allow on RustFS and on AWS S3 alike (Deny statements are evaluated first). The
+      ``tree/`` grant costs 20 characters of the table prefix a write credential fits within a 2,048-byte
+      session policy, the limit RustFS and AWS both enforce (109 to 89 at a 63-character bucket, counted on
+      the policy as this module serialises it).
     * ``maintain`` (``can_vend_maintain``, the maintenance identity alone): get, put, delete and abort-upload on ``<prefix>/*``: compaction
       commits versions and cleanup deletes them, and an object store cannot tell a rewrite from a write.
 
@@ -714,16 +714,15 @@ def _expiry_millis(expiration: object, ttl_seconds: int) -> int:
 class StsVendor:
     """STS ``AssumeRole`` + inline session policy → short-TTL, per-table creds.
 
-    The gold-standard plug for S3-family stores that implement the plain ``AssumeRole`` flow — AWS, MinIO,
-    Ceph RGW, moto **and RustFS**, this project's default store.
+    The gold-standard plug for S3-family stores that implement the plain ``AssumeRole`` flow — AWS,
+    Ceph RGW, moto and RustFS, the development store.
 
-    RUSTFS ACCEPTS IT, MEASURED. `AssumeRole` with an inline session policy against the live RustFS STS
-    endpoint returns a session token (2026-08-30, from the Ray head, boto3 with the tenant credential),
-    and the policy is ENFORCED: in-scope list/GET allowed, an out-of-scope prefix and bucket refused 403,
-    a read-tier PUT refused, a write-tier in-scope PUT allowed. An UNSIGNED probe fails with
-    ``InvalidRequest`` because RustFS verifies STS requests as SigV4-signed ``s3`` — which is a statement
-    about signing, not about the operation being unsupported, and reading it as the latter is what put
-    this plug out of reach.
+    RUSTFS ACCEPTS IT FROM A SCOPED USER, MEASURED 2026-10-18 on ``rustfs/rustfs`` 1.0.1 and 1.0.3: a non-root user
+    whose policy names no ``sts:`` action is issued a session token, and the session policy is ENFORCED —
+    in-scope list/GET allowed, an out-of-scope prefix and bucket refused 403, a read-tier PUT refused, a
+    write-tier in-scope PUT allowed, and a bucket the parent does not hold is not widened into. RustFS
+    verifies STS requests as SigV4-signed ``s3``, so an UNSIGNED probe fails with ``InvalidRequest``: a
+    statement about signing, not about the operation.
 
     That matters for which mode can serve which caller. ``web_identity`` requires the CALLER to present an
     OIDC token, so it cannot serve a service principal at all: one authenticates with a projected
@@ -798,7 +797,7 @@ class StsVendor:
         # BUILT THROUGH THE SHARED BUILDER, not hand-rolled. The hand-rolled dict carried the key pair,
         # the token, the region and the endpoint — and Lance refused to construct a client from it,
         # failing in 13µs with `HTTP error: builder error` (measured 2026-09-03). object_store will not
-        # build an S3 client for an `http://` endpoint without `allow_http`, and RustFS/MinIO reject
+        # build an S3 client for an `http://` endpoint without `allow_http`, and RustFS rejects
         # virtual-hosted signing with 403 `SignatureDoesNotMatch`. A credential that is correct and
         # unusable is the worst shape: the vend returns 200 with a full triple and every use of it fails
         # somewhere else. `lance_storage_options`' own docstring names this — "one omitted key in a
@@ -824,9 +823,10 @@ class StsVendor:
 class WebIdentityVendor:
     """STS ``AssumeRoleWithWebIdentity`` — the caller's OIDC JWT (e.g. a Dex id_token) is exchanged BY THE
     STORE for short-TTL creds bound to the provider's ``ROLE_POLICY``, which the inline session policy then
-    narrows per-table. The native flow for RustFS (it trusts the OIDC issuer and does NOT support plain
-    ``AssumeRole``). Token-authenticated, so — unlike ``AssumeRole`` — it needs no SigV4-signed catalog creds
-    (RustFS verifies the JWT, not a request signature); the request goes out UNSIGNED. ``assume`` is the
+    narrows per-table. Token-authenticated, so — unlike ``AssumeRole`` — it needs no SigV4-signed catalog
+    creds (the store verifies the JWT's signature, issuer, audience and expiry, not a request signature);
+    the request goes out UNSIGNED. RustFS 1.0 implements it in source; against rask's issuer it is not
+    measured, so the development estate does not ship this mode. ``assume`` is the
     boto3 ``assume_role_with_web_identity`` and is injectable for tests.
     """
 

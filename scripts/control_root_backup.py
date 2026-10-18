@@ -6,7 +6,7 @@ gates, transform declarations, the task registry, and the trash records that mak
 Lose them and the Lance data survives while every statement about who may touch it does not.
 
 WHAT THE CHART OFFERS DOES NOT COVER THIS, measured 2026-09-14. `backups.pgDump` dumps the OpenFGA and
-Dapr state databases; `backups.volumeSnapshot` takes a CSI VolumeSnapshot of the MinIO PVCs. Both default
+Dapr state databases; `backups.volumeSnapshot` takes a CSI VolumeSnapshot of the object store's PVCs. Both default
 OFF, neither is enabled in the live release, and this cluster has no `volumesnapshotclass` resource
 type at all — the snapshot path could not run here even if it were switched on. So the control root's
 recoverability was untested because nothing was capable of testing it.
@@ -71,7 +71,7 @@ def is_directory_marker(key: str) -> bool:
     """A zero-length key ending in ``/`` — the object a store writes to make a prefix look like a folder.
 
     NOT A RECORD, and skipping it is load-bearing rather than tidy. Measured against the live estate
-    2026-09-14: MinIO keeps `_projects/` as an object, and joining it onto a destination prefix drops
+    2026-09-14: the store keeps `_projects/` as an object, and joining it onto a destination prefix drops
     the trailing slash, so every record under `_projects/` targeted the single key `_projects` and
     overwrote it in turn — 1,464 copies landed as 9 objects, and the restore then failed `NoSuchKey`.
     moto creates no such markers, so the unit tests passed while the real store did not.
@@ -181,8 +181,8 @@ def do_prune(client: Any, *, dest: str, keep: int) -> dict[str, Any]:  # noqa: A
     quietly started deleting backups the first time it was upgraded would be a worse failure than the
     growth it fixes.
 
-    Newest-first is a REVERSE LEXICAL SORT of the ``%Y%m%dT%H%M%SZ`` stamps — the same property
-    `backup-pg.yaml` relies on when it pipes ``mc ls … | sort -r | tail -n +N``. Both lanes order their
+    Newest-first is a REVERSE LEXICAL SORT of the ``%Y%m%dT%H%M%SZ`` stamps — the same property the
+    Postgres dump's uploader relies on (``scripts/pg_dump_upload.py``). Both lanes order their
     backups identically on purpose: an operator reading one and reasoning about the other must not meet
     two different answers to "which is the newest".
     """

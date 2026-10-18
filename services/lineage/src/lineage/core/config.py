@@ -156,9 +156,10 @@ class LineageSettings(GovernedAuthSettings, BaseSettings):
     #: still be moved on its own.
     dapr_secret_store: str = Field(default="lance-secrets", validation_alias=AliasChoices("LINEAGE_DAPR_SECRET_STORE", "RASK_SECRET_STORE"))
     dapr_secret_key: str = Field(default="lance", alias="LINEAGE_DAPR_SECRET_KEY")
-    dapr_secret_s3_field: str = Field(default="minio-secret-key", alias="LINEAGE_DAPR_SECRET_S3_FIELD")
+    #: Lineage's own scoped pair (`objectStore.lineageAccessKey`), never the store's root (ADR 0168).
+    dapr_secret_s3_field: str = Field(default="lineage-s3-secret-key", alias="LINEAGE_DAPR_SECRET_S3_FIELD")
     #: The field of the same secret holding the key id the secret signs under, read with it.
-    dapr_secret_s3_id_field: str = Field(default="minio-access-key", alias="LINEAGE_DAPR_SECRET_S3_ID_FIELD")
+    dapr_secret_s3_id_field: str = Field(default="lineage-s3-access-key", alias="LINEAGE_DAPR_SECRET_S3_ID_FIELD")
 
     # --- Feed retention, in DAYS of arrival time (the estate's own `received_at`, never the
     # producer-supplied eventTime). 0 = unbounded. Pruned once per relay tick, never on the ingest path.

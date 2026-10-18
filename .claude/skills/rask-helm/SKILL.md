@@ -102,9 +102,9 @@ second case. Kueue's upstream docs only ever install it as its own release in `k
 - **What leaves the chart lands in `deploy/fixtures/`** (ADR 0153, [[XC-124]]): one directory per prerequisite, an
   upstream chart pinned in `fixture.env`, installed as its own release by `scripts/fixtures.sh` before rask's
   (`make k3s-fixtures`, a prerequisite of `make k3s-up`; `FIXTURES` names which, default `external-secrets dapr nats
-  cloudnative-pg dex minio openbao kuberay-operator ray-cluster compute observability marquez`: Dapr's control plane in dapr-system ([[XC-128]]), the NATS
+  cloudnative-pg dex rustfs openbao kuberay-operator ray-cluster compute observability marquez`: Dapr's control plane in dapr-system ([[XC-128]]), the NATS
   JetStream bus `rask-nats` in rask's namespace that `nats.url` names ([[XC-129]]), the CloudNativePG operator in
-  cnpg-system that the AGE-on-CNPG `Cluster` needs, its CRDs still applied by `make k3s-crds` first ([[XC-130]]), the dev OIDC issuer `rask-dex`, object store `rask-minio` and secret store `rask-openbao` ([[XC-131]]; both stores' fixtures are `WAIT=false`: the object store's root credential and the secret store's seed scripts are rask's), the dev Ray engine
+  cnpg-system that the AGE-on-CNPG `Cluster` needs, its CRDs still applied by `make k3s-crds` first ([[XC-130]]), the dev OIDC issuer `rask-dex`, object store `rask-rustfs` ([[XC-163]], ADR 0168) and secret store `rask-openbao` ([[XC-131]]; both stores' fixtures are `WAIT=false`: the object store's root credential and the secret store's seed scripts are rask's), the dev Ray engine
   ([[XC-125]]) and its companion `compute` service (a local chart, release `compute` in rask's namespace, `WAIT=false`:
   it reads rask's Dapr token, Dex, catalog and Collector by reference, and asks the catalog's decision door, which
   answers its account only through `auth.externalDeciders`), the telemetry chain the Collector exports to ([[XC-127]]), and the OpenLineage graph backend
@@ -208,7 +208,7 @@ for zero trust."*
 | `env: valueFrom: secretKeyRef` marked ✅ "secrets from secretKeyRef" | **Not approved.** Whether an ESO-written Secret delivered this way satisfies the rule is backlog XC-002, awaiting a ruling. Default: a working secret never enters process env. |
 | `helm-secrets` / SOPS: encrypted secrets in a values file | **No.** A chart value never carries a secret, encrypted or not. A record NAMES a secret. |
 | `templates/secret.yaml` rendering a Secret from `.Values` | **No.** Credentials come from the secret store (the platform's Vault or OpenBao; the dev OpenBao fixture) via the Dapr secret store or ESO. |
-| a literal `value:` in a Job's env for a derived credential | **No** — readable by anyone with `get jobs`; `minio-scoped-users.yaml` derives each one into a memory file in-cluster ([[XC-004]]). |
+| a literal `value:` in a Job's env for a derived credential | **No** — readable by anyone with `get jobs`; `object-store-scoped-users.yaml` derives each one into a memory file in-cluster ([[XC-004]]). |
 | Docker-based chart tooling | **Dagger.** `dagger call charts` runs the chart gate. |
 
 ## 8. `default` is a shared identity, and a subchart can hand it every Secret
@@ -235,7 +235,7 @@ catalog, lineage, maintenance, the medallion, OpenBao and Dex ran as `default` w
 - **An identity is never a hook** ([[XC-126]]): no ServiceAccount, Role, ClusterRole or binding carries
   `helm.sh/hook`. A hook-shaped identity is deleted by `hook-succeeded` while a failed hook's pod still holds
   its token (every later hook on it 401s), and exists only during its own phases. `rask-sa-hooks`, the identity
-  of the pre-manifest hooks (`openfga-model`, `minio-scoped-users`), is an ordinary SA, so a `pre-upgrade` hook
+  of the pre-manifest hooks (`openfga-model`, `object-store-scoped-users`), is an ordinary SA, so a `pre-upgrade` hook
   finds it from the previous revision. The one upgrade that INTRODUCES an ordinary SA runs its `pre-upgrade`
   hooks before the manifest creates it (measured 2026-10-02 on rev 259: `serviceaccount "rask-sa-jobs" not
   found`, the release stuck `pending-upgrade`): create it by hand first and let `make k3s-up`'s

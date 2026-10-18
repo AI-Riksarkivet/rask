@@ -1,7 +1,7 @@
 """A service's own object-store key pair: read from the secret store, and read again while the service runs ([[XC-082]], ADR 0166).
 
 THE PAIR LIVES IN THE STORE, both halves. Every S3-family store rotates by issuing a new key id (AWS cannot change a
-key's secret; MinIO changing a user's secret kills the old one at once), so a rotation without an outage adds a second
+key's secret, and a secret changed in place leaves no window in which both sign), so a rotation without an outage adds a second
 key, writes its id and secret to the store together, waits out the TTL, then revokes the first. An id held in
 configuration would leave the new secret signing under the old id. Lakekeeper keeps the same pair as one secret
 (`S3AccessKeyCredential`, `crates/lakekeeper/src/service/storage/s3.rs`).

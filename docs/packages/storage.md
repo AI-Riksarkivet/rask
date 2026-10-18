@@ -32,9 +32,9 @@ Every S3 call is wrapped in `s3_errors`, so a caller meets `BucketNotFoundError`
 
 ## S3 client (`s3_client`)
 
-`s3_client(endpoint=None)` builds a boto3 client tuned for HCP/MinIO:
+`s3_client(endpoint=None)` builds a boto3 client tuned for HCP and other S3-compatible stores:
 
-- **path-style addressing** (required by HCP/MinIO),
+- **path-style addressing** (required by HCP, and by RustFS unless its server domains are set),
 - s3v4 signing, adaptive retries,
 - checksum calculation/validation set to `when_required` (HCP compatibility),
 - 10s connect / 60s read timeouts.
@@ -53,8 +53,8 @@ credentials by HCP's fixed convention, or `None`:
 - `secret_key = md5(HCP_PASSWORD)` (hex)
 
 It returns `None` unless both `HCP_USERNAME` and `HCP_PASSWORD` are set, and also
-when an `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` is already set — so MinIO,
-rustfs and real AWS are left untouched.
+when an `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` is already set — so RustFS
+and real AWS are left untouched.
 
 It is **pure: it never writes to `os.environ`**, which is what lets one process
 address more than one backend. `s3_client` applies it per client (`client.py:98`),

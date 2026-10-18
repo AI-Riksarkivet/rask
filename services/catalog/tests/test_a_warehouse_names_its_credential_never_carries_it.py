@@ -44,10 +44,10 @@ def test_the_reference_resolves_through_the_dapr_store_door(monkeypatch: pytest.
 
     monkeypatch.setattr(warehouse_credentials, "fetch_required_secrets", _fetch)
 
-    pair = warehouse_credentials.resolve(store="lance-secrets", ref="wh-eu", field="minio-secret-key")
+    pair = warehouse_credentials.resolve(store="lance-secrets", ref="wh-eu", field="object-store-secret-key")
 
     assert pair == {"aws_secret_access_key": "the-second-stores-secret", "aws_access_key_id": "second-store-key-id"}
-    assert calls == [("lance-secrets", "wh-eu", "minio-secret-key")], f"the resolver did not go through the store door: {calls}"
+    assert calls == [("lance-secrets", "wh-eu", "object-store-secret-key")], f"the resolver did not go through the store door: {calls}"
 
 
 def test_a_reference_the_store_cannot_satisfy_REFUSES_rather_than_falling_back(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -65,7 +65,7 @@ def test_a_reference_the_store_cannot_satisfy_REFUSES_rather_than_falling_back(m
     monkeypatch.setattr(warehouse_credentials, "fetch_required_secrets", _fetch)
 
     with pytest.raises(RuntimeError, match="failing closed"):
-        warehouse_credentials.resolve(store="lance-secrets", ref="missing", field="minio-secret-key")
+        warehouse_credentials.resolve(store="lance-secrets", ref="missing", field="object-store-secret-key")
 
 
 def test_an_UNSET_reference_resolves_to_nothing_rather_than_to_the_estate_key() -> None:
@@ -78,7 +78,7 @@ def test_an_UNSET_reference_resolves_to_nothing_rather_than_to_the_estate_key() 
     """
     from catalog.services import warehouse_credentials
 
-    assert warehouse_credentials.resolve(store="lance-secrets", ref="", field="minio-secret-key") is None
+    assert warehouse_credentials.resolve(store="lance-secrets", ref="", field="object-store-secret-key") is None
 
 
 def _unused(_: Any) -> None:  # pragma: no cover - keeps the import surface honest
@@ -100,4 +100,4 @@ def test_a_bundle_carrying_only_the_SECRET_is_refused(monkeypatch: pytest.Monkey
     )
 
     with pytest.raises(RuntimeError, match="half a credential signs nothing"):
-        warehouse_credentials.resolve(store="lance-secrets", ref="wh-eu", field="minio-secret-key")
+        warehouse_credentials.resolve(store="lance-secrets", ref="wh-eu", field="object-store-secret-key")
