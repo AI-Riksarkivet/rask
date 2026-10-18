@@ -102,9 +102,11 @@ audience, an expired token, a forged one and another issuer's are each refused.
 ## Consequences
 
 - **The catalog holds no store key of its own** on any estate the chart renders: no pair in its environment, none in
-  the secret store (`tests/unit/test_every_secret_in_the_dev_store_has_exactly_its_readers.py`), and no store user. The
-  live estate is the row's closing step: deploy, then read back that the catalog signs with sessions, that
-  `rask-catalog` is gone, and that another account's token is refused.
+  the secret store (`tests/unit/test_every_secret_in_the_dev_store_has_exactly_its_readers.py`), and no store user. Read
+  back live 2026-10-18 at helm rev 3 (`XC-083 3e3924df`, rustfs fixture rev 2): the catalog's pod reads no pair and
+  logs its session issued from its token, its vends are issued the same way, the post-upgrade prune removed the
+  `rask-catalog` user and policy and nothing else, and a token for another account (`rask-sa-jobs`) is refused 400
+  `InvalidRequest`.
 - **One static pair remains**: a data base read under its own credential reference ([[LH-067]], [[LH-273]],
   `catalog.multibase.baseCredentialRefs`), on the dev estate `lh067-second-store`. Parked by the owner as XC-168 (#662).
 - **STS rides the store's own endpoint.** `LANCE_S3_STS_ENDPOINT` is the store's address, where RustFS and Ceph serve it;
