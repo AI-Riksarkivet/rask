@@ -1,8 +1,8 @@
 # rask
 
-An agnostic, multimodal lakehouse: Lance tables governed by a catalog, with lineage, authorization, events and
-annotation across them. Every write, from any engine the user brings, comes in through the catalog's Lance
-Namespace doors; the lakehouse runs no compute and no workflow engine of its own.
+An agnostic, multimodal lakehouse: Lance tables governed by a catalog, with lineage, authorization and events across
+them. Every write, from any engine or tool the user brings, comes in through the catalog's Lance Namespace doors; the
+lakehouse runs no compute, no workflow engine and no annotation tool of its own.
 
 ## Language
 
@@ -23,8 +23,16 @@ development and that production replaces with an external instance.
 _Avoid_: embedded database, internal service
 
 **Fixture**:
-A throwaway install of a prerequisite for development or CI, never for production and never part of the product chart.
+A throwaway install, for development or CI and never for production, of a prerequisite or of a client the lakehouse is
+developed against; never part of the product chart.
 _Avoid_: dev stack, bundled copy, stand-in
+
+**Client**:
+Anything that reaches the lakehouse only through its public doors: the catalog's namespace and management doors, the
+credentials it vends, lineage's event feed, and the identity provider. A user's pipeline on their engine is a client,
+and so is an annotation tool, rask's annotator and Label Studio alike. The lakehouse never calls a client and holds none
+of its state, vocabulary or authorization.
+_Avoid_: integration, plugin, consumer service
 
 **Engine**:
 The user's bring-your-own compute and orchestrator, which runs their pipeline and writes into the lakehouse through
