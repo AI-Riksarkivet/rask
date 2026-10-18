@@ -14,6 +14,13 @@ rask is **single-context**: one root `CONTEXT.md` glossary (created lazily) and 
 
 If any of these files don't exist, **proceed silently**. Don't flag their absence; don't suggest creating them upfront. The `/domain-modeling` skill (reached via `/grill-with-docs` and `/improve-codebase-architecture`) creates them lazily when terms or decisions actually get resolved.
 
+## Judge every output by the four facts
+
+Every design, option, spec, ticket, refactor proposal and review is held to the four facts in `CLAUDE.md`
+§ Engineering principles, GitOps first: **GitOps** (the estate is what git declares, and a reconciler re-applying it
+converges), **cloud native**, **Lance-namespace/table-idiomatic** (settled from `lance_docs/`) and **zero trust**. Name
+the fact each option meets or breaks; an option that breaks one is offered only with that said.
+
 ## File structure
 
 Single-context repo (most repos):

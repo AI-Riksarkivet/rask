@@ -66,11 +66,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   the owner, or before anything destructive. Every delegated agent's report marks what it could not
   confirm and where it looked; a reviewer lists only problems it would block the merge for, each with
   the file and line, why it is wrong, and how to show it fails.
-- **Three facts judge every design (owner, 2026-10-12): zero trust, cloud native, Lance-idiomatic.** Put them in
-  every agent brief and test every option against them before offering it. A change whose purpose is closing a
-  zero-trust gap (an unsigned writer admitted, a credential that never rotates, an identity trusted by position) is
-  pre-approved: do it and report it. Still ask before anything destructive on shared live state, and still ask a
-  real trade-off between two zero-trust-correct designs.
+- **Four facts judge every design, GitOps first (owner, 2026-10-12 and 2026-10-18): GitOps, cloud native,
+  Lance-namespace/table-idiomatic, zero trust, always.** Put them in every agent brief, every mattpocock skill step
+  (`/grill-with-docs`, `/to-spec`, `/to-tickets`, `/implement`, `/tdd`, `/code-review`) and every option, naming the fact
+  each one meets or breaks, before offering it. **GitOps**: the estate is what git declares. Every object, value,
+  identity and policy is rendered from the repo and converges when a reconciler (Argo CD, Flux, the planned rask
+  operator) re-applies it, with no imperative step, live-only state or hand-run command that an install from git would
+  miss, and drift is corrected by the next reconcile. **Cloud native**: platform services are named, never bundled
+  ("Platform services are external" below), and every component is a declarative Kubernetes workload.
+  **Lance-namespace/table-idiomatic**: data is reached through lance-namespace's doors and Lance's own table primitives,
+  settled from `lance_docs/` ("Lance-idiomatic" above). **Zero trust**: no identity trusted by position, no secret
+  through env, every credential scoped and short-lived, and the store refuses what a credential was not granted. A change
+  whose purpose is closing a zero-trust gap (an unsigned writer admitted, a credential that never rotates, an identity
+  trusted by position) is pre-approved: do it and report it. Still ask before anything destructive on shared live
+  state, and still ask a real trade-off between two designs that both meet the four facts.
 - **Platform services are external in production** (owner, 2026-10-04). OpenBao, Dex, S3, the OTel backend, ESO, the
   operators, NATS and OpenFGA's Postgres are the platform's; the bundled copies are development fixtures. rask
   references them by name, mints no production trust root, and does not engineer a fixture's durability. The app
@@ -383,7 +392,8 @@ GitHub Issues on `AI-Riksarkivet/rask`, one issue per row (`LH-243: …`), order
 
 ### Workflow (the mattpocock skills, plugin `mattpocock-skills`)
 
-Work moves idea → ship along one path, and `/ask-matt` explains any step:
+Work moves idea → ship along one path, and `/ask-matt` explains any step. Every step holds its output to the four
+facts in § Engineering principles, GitOps first (GitOps, cloud native, Lance-namespace/table-idiomatic, zero trust):
 
 1. `/grill-with-docs` sharpens an idea by interview and records terms in `CONTEXT.md` and decisions as ADRs.
 2. `/to-spec` writes the spec as an issue; `/to-tickets` splits it into rows with native blocking edges.
