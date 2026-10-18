@@ -61,12 +61,13 @@ def _run(*args: str, stdin: str = "") -> subprocess.CompletedProcess[str]:
 
 def _sidecars() -> dict[str, str]:
     """app -> the Deployment that runs its sidecar, for each app the `lance-secrets` component is scoped to that the release
-    runs: a release that renders no explorer runs no annotator, search or viewer."""
+    runs a pod of: a release that renders no explorer runs no annotator, search or viewer, and the kind lane scales flows
+    to none (`scripts/stack_values.sh`). A Deployment that asks for a pod and has none running stays, and fails the ask."""
     scopes = set(json.loads(chaos.kubectl("get", "components.dapr.io", "lance-secrets", "-o", "json")).get("scopes") or [])
     running: dict[str, str] = {}
     for deployment in json.loads(chaos.kubectl("get", "deployments", "-o", "json"))["items"]:
         app = ((deployment["spec"]["template"].get("metadata") or {}).get("annotations") or {}).get("dapr.io/app-id")
-        if isinstance(app, str) and app in scopes:
+        if isinstance(app, str) and app in scopes and deployment["spec"].get("replicas", 1):
             running[app] = deployment["metadata"]["name"]
     return running
 
