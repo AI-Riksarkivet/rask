@@ -44,7 +44,7 @@ from service_kit.governed.auth_lifespan import attach_auth
 from service_kit.governed.dapr_auth import assert_app_token_configured
 from service_kit.governed.settings import assert_authentication_configured
 from service_kit.governed.signing_key import attach_signing, make_signing_holder, signing_ready_check
-from service_kit.governed.store_credential import make_store_credential
+from service_kit.governed.store_session import StoreSession
 from service_kit.governed.user_state import UserStateStore
 from service_kit.lakehouse.lance_metrics import instrument_lance_if_available
 from service_kit.lance_app import build_lance_service_app
@@ -99,14 +99,14 @@ async def _backfill_cascade_grants(app: FastAPI) -> None:
 
 
 def require_env_secret(settings: Settings) -> None:
-    """With the secret store off, refuse to boot without a plaintext secret.
+    """With no projected token, refuse to boot without the environment's secret.
 
     The catalog's own posture: an empty key is a boot failure rather than a service that comes up and
-    signs every S3 request wrong. With the store on, `StoreCredential.start` fails the boot closed instead.
+    signs every S3 request wrong. With a token, `StoreSession.start` fails the boot closed instead.
     A named function, not an inline block, so the unit tier can drive the decision without a lifespan.
     """
-    if not settings.secrets_from_dapr and not settings.s3_secret_access_key.get_secret_value():
-        raise RuntimeError("LANCE_S3_SECRET_ACCESS_KEY is required when secrets_from_dapr is off")
+    if settings.web_identity is None and not settings.s3_secret_access_key.get_secret_value():
+        raise RuntimeError("LANCE_S3_SECRET_ACCESS_KEY is required when the catalog holds no projected token (LANCE_S3_WEB_IDENTITY_TOKEN_FILE)")
 
 
 def bound_lance_scans(settings: Settings) -> None:
@@ -164,20 +164,20 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     )
     instrument_lance_if_available()  # Lance-native IO metrics onto the global MeterProvider
     bound_lance_scans(settings)
-    # The S3 key pair from the Dapr secret store (OpenBao) — the store is the SOLE source of truth, NOT a
-    # fallback. With secrets_from_dapr on, the chart renders neither half into pod env: the pair is read
-    # here, waiting out a store that is still seeding, and the boot FAILS CLOSED if it never arrives; then
-    # a background loop reads it again whenever half its TTL is used, so a pair rotated in the store is
-    # the one every request signs with within that TTL, with no restart ([[XC-082]], ADR 0166). Every
-    # `storage_options()` read peeks at what that loop holds, and nothing built here keeps a pair of its
-    # own: the connections are keyed on it, the vendor and the judge read it at each use, and the
-    # emitters take `storage_options` as a callable.
-    store_credential = make_store_credential(settings)
-    if store_credential is None:
+    # THE CATALOG HOLDS NO STORE KEY ([[XC-083]], ADR 0170). Its identity is the ServiceAccount token its pod projects
+    # for the store's audience, exchanged here for a session (`AssumeRoleWithWebIdentity`), waiting out a store or a
+    # provisioning hook still starting, and the boot FAILS CLOSED if none is issued; a background loop exchanges again
+    # once half the session's life is used, so every request signs with an unexpired session and no restart is ever
+    # needed. Every `storage_options()` read peeks at what that loop holds, and nothing built here keeps a credential of
+    # its own: the connections are keyed on it, the judge reads it at each use, and the emitters take
+    # `storage_options` as a callable. With no token (the offline and Dagger lanes) the environment's pair signs.
+    store_session = None
+    if (identity := settings.web_identity) is None:
         require_env_secret(settings)
     else:
-        await store_credential.start()
-    app.state.store_credential = store_credential
+        store_session = StoreSession(identity, session_name="catalog", duration_seconds=settings.s3_session_seconds)
+        await store_session.start()
+    app.state.store_session = store_session
     app.state.connections = NamespaceConnections()
     app.state.connections.connection(settings)  # fail fast if storage misconfigured
     # #3-A warehouse routing cache (only used when warehouses_enabled): top-level-namespace → its physical
@@ -201,19 +201,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     )
     # Credential vending (data plane): turn an authorized (table location, tier) into the scoped
     # storage_options a client uses to reach object storage DIRECTLY. mode_b (default) vends nothing —
-    # clients use the server-mediated Arrow-IPC endpoints; sts (AssumeRole + per-table session policy) /
-    # static delegate short-TTL or per-bucket creds. Built once from config (see core/vending.py).
+    # clients use the server-mediated Arrow-IPC endpoints; web_identity exchanges the catalog's own token for a
+    # session narrowed to the table and tier by an inline session policy. Built once from config (see core/vending.py).
     app.state.vendor = make_vendor(
         settings.vending_mode,
-        region=settings.s3_region,
-        sts_endpoint=settings.s3_sts_endpoint,
+        identity=settings.web_identity,
         store_endpoint=settings.vended_store_endpoint,
-        assume_role_arn=settings.s3_assume_role_arn,
         ttl_seconds=settings.vending_ttl_seconds,
-        # The credential the vendor DELEGATES FROM, read at each vend so a rotated pair signs the next
-        # AssumeRole. Passed explicitly because botocore's default chain reads the environment, and this
-        # estate deliberately never puts the S3 secret there.
-        credential=settings.s3_key_pair,
         encryption=EncryptionAtRest(
             algorithm=settings.s3_server_side_encryption,
             kms_key_id=settings.s3_sse_kms_key_id,
@@ -369,8 +363,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
             await bus_watchdog.stop()
         if signing is not None:
             await signing.stop()
-        if store_credential is not None:
-            await store_credential.stop()
+        if store_session is not None:
+            await store_session.stop()
         fga_client = getattr(app.state, "fga", None)
         # Each close is isolated so one failing teardown can't strand the other resource.
         if fga_client is not None:

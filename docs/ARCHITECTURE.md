@@ -59,17 +59,17 @@ data between tiers is the user's job, while the rules a tier write must satisfy 
 A client asks for a **credential** to reach object storage directly through the spec's own parameter,
 `DescribeTable` / `DeclareTable` with `vend_credentials` (`lance_docs/ns_catalog/spec.yaml`), or through rask's
 extension `POST /management/v1/table/{id}/credentials?tier=read|write`, which names a tier. Which tier the spec doors
-vend, and that write credentials never reach `_refs/` or a final manifest, is LH-229 (#149). Three pluggable modes
-(`chart` `vending.mode`; `services/catalog/core/vending.py`, `VendingMode`), strongest first:
+vend, and that write credentials never reach `_refs/` or a final manifest, is LH-229 (#149). Two pluggable modes
+(`chart` `vending.mode`; `services/catalog/core/vending.py`, `VendingMode`):
 
-1. **STS vending (`StsVendor`) — recommended.** The catalog calls the S3 backend's STS
-   `AssumeRole` with an **inline session policy** scoped to *just this table's bucket/prefix and
-   tier* (read vs write), and gets a **short-TTL** `{access_key, secret_key, session_token}`. The
-   client reads/writes the bytes directly with that token. Works on **RustFS, Ceph RGW, AWS**.
-2. **Mode B (`ModeBVendor`) — safe default.** No credential is vended; the client uses the
-   catalog's server-mediated Arrow-IPC endpoints. Backend-agnostic; nothing is delegated.
-3. **Web-identity (`WebIdentityVendor`, `web_identity`).** The caller's OIDC token is exchanged via
-   `AssumeRoleWithWebIdentity` for creds bound to a role policy, narrowed per table by an inline session policy.
+1. **Web identity (`WebIdentityVendor`, `web_identity`) — the default.** The catalog exchanges its OWN projected
+   ServiceAccount token through the store's STS `AssumeRoleWithWebIdentity` with an **inline session policy** scoped
+   to *just this table's bucket/prefix and tier* (read vs write), and gets a **short-TTL**
+   `{access_key, secret_key, session_token}` named for the verified caller. The client reads/writes the bytes directly
+   with that token. The catalog holds no store key at all: its own IO signs with a session the same token is exchanged
+   for (ADR 0170). Works on **RustFS, Ceph RGW, AWS**.
+2. **Mode B (`ModeBVendor`, `mode_b`).** No credential is vended; the client uses the catalog's server-mediated
+   Arrow-IPC endpoints. Backend-agnostic; nothing is delegated.
 
 **Why STS is the right default for a *governed* lakehouse:**
 

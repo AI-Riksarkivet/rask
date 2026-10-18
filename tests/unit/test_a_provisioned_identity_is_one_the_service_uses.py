@@ -23,6 +23,7 @@ root key.
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -31,7 +32,7 @@ import pytest
 import yaml
 from chart_yaml import FAST_LOADER
 
-from tests.unit.chart_render import PREREQ_ARGS, RAY_ARGS
+from tests.unit.chart_render import PREREQ_ARGS, RAY_ARGS, containers, env_of, render, render_fixture
 
 
 REPO = Path(__file__).resolve().parents[2]
@@ -95,3 +96,48 @@ def test_no_provisioned_plane_falls_back_to_the_storage_root() -> None:
             f"`object-store-scoped-users.yaml` provisions a least-privilege user for it in the same release. "
             "Root by default is not a deployment choice anyone made."
         )
+
+
+def test_the_catalog_presents_the_store_identity_the_chart_provisions_for_its_account() -> None:
+    """[[XC-083]] The catalog holds no store key: the store grants its token the policy the hook names after its account.
+
+    The catalog's pod projects a token for the audience the dev store trusts as its identity provider's client, and the
+    store grants a token exactly the canned policy its `sub` names, with no role policy (ADR 0170; measured on RustFS
+    1.0.3, `docs/audits/2026-10-18/rustfs_web_identity_measure.py`). Each part alone is a distinct failure: a policy named
+    for another account leaves the catalog's token mapping to nothing, so every exchange is refused; an audience the
+    store does not trust is refused at verification; a role policy grants the catalog's data plane to every
+    ServiceAccount token in the cluster; and a discovery URL that is not rask's issuer mirror leaves the store unable to
+    fetch the keys it verifies with.
+    """
+    chart = render("--set", "image.localImages=true", "-f", str(REPO / "deploy/values-local.yaml"))
+    [server] = [env_of(container) for _, name, container in containers(render_fixture("rustfs")) if name == "rustfs"]
+    [(pod, catalog)] = [
+        (doc["spec"]["template"]["spec"], container)
+        for doc in chart
+        if doc.get("kind") == "Deployment" and doc["metadata"]["name"] == "rask-catalog"
+        for container in doc["spec"]["template"]["spec"]["containers"]
+        if container["name"] == "catalog"
+    ]
+    env = env_of(catalog)
+    token_dir = str(Path(env["LANCE_S3_WEB_IDENTITY_TOKEN_FILE"]).parent)
+    [mounted] = [mount["name"] for mount in catalog["volumeMounts"] if mount["mountPath"] == token_dir]
+    [audience] = [
+        source["serviceAccountToken"]["audience"]
+        for volume in pod["volumes"]
+        if volume["name"] == mounted
+        for source in volume["projected"]["sources"]
+        if "serviceAccountToken" in source
+    ]
+    [hook] = [container for workload, name, container in containers(chart) if workload.startswith("Job/rask-object-store-scoped-users") and name == "provision"]
+    [mirror] = [doc for doc in chart if doc.get("kind") == "Service" and doc["metadata"]["name"] == "rask-issuer-mirror"]
+    origin = f"http://{mirror['metadata']['name']}:{mirror['spec']['ports'][0]['port']}"
+
+    assert not {"LANCE_S3_ACCESS_KEY_ID", "LANCE_S3_SECRET_ACCESS_KEY", "LANCE_DAPR_SECRET_KEY"} & set(env), sorted(env)
+    assert audience == server["RUSTFS_IDENTITY_OPENID_CLIENT_ID"]
+    assert (server["RUSTFS_IDENTITY_OPENID_CLAIM_NAME"], "RUSTFS_IDENTITY_OPENID_ROLE_POLICY" in server) == ("sub", False)
+    command = " ".join(hook["command"])
+    policy = f"system:serviceaccount:default:{pod['serviceAccountName']}"
+    assert f'--policy "{policy}=' in command
+    assert [user for user, bound in re.findall(r'--user "([^"=]+)=([^"]+)"', command) if bound == policy] == [], "a store user holds the catalog's policy"
+    assert (server["RUSTFS_IDENTITY_OPENID_CONFIG_URL"], server["RUSTFS_OUTBOUND_ALLOW_ORIGINS"]) == (f"{origin}/.well-known/openid-configuration", origin)
+    assert server["RUSTFS_IDENTITY_OPENID_ISSUER"] == env["RASK_SA_ISSUER"]

@@ -59,7 +59,7 @@ ALL, read-only root, no privilege escalation, `values.yaml:282-293`). Its README
 | PVC labels | `app.kubernetes.io/instance`, `app.kubernetes.io/component: <store component>` | backup selector |
 | Root pair | Secret volume (not optional) with `items` mapping the ESO keys to `access_key`/`secret_key`; env `RUSTFS_ACCESS_KEY_FILE`, `RUSTFS_SECRET_KEY_FILE` | no secret in env (`cli.rs:1551-1564`); set ONLY the `_FILE` pair, each is in a clap group with its inline form |
 | Security | pod `runAsUser`/`runAsGroup`/`fsGroup` 10001, `runAsNonRoot`; container read-only root, drop ALL, no privilege escalation | the image's user (`rustfs@1.0.3:Dockerfile:107-125`) |
-| SA token | `automountServiceAccountToken: false` | nothing in standalone mode is known to need the API (web identity with a projected token is the exception, `security.md`) |
+| SA token | `automountServiceAccountToken: false` | nothing in standalone mode needs the API: the store verifies the catalog's token with the key set it reads from rask's issuer mirror, unauthenticated (`security.md` § Web identity) |
 | `/tmp` | `emptyDir` with a size limit | whether RustFS writes to `/tmp` is not measured |
 | Probes | liveness `httpGet /health/live :9000`; readiness `httpGet /health/ready :9000` | `rustfs@1.0.3:rustfs/src/server/prefix.rs:30-49`; the official chart probes liveness at `/health`, an alias of `/health/live`, and readiness at `/health/ready` (`values.yaml:422-444`; `rustfs@1.0.3:rustfs/src/server/layer.rs:1440-1442`) |
 | Env | see `config.md` § Fixture env | console off, no update check, stdout logs, minimal health |

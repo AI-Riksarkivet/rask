@@ -7,21 +7,30 @@ ONLY holder of the store's root pair besides the store itself (rask's runtime ma
 2. create each named bucket (S3 CreateBucket, idempotent);
 3. create or replace each canned policy (`PUT /rustfs/admin/v3/add-canned-policy?name=`, body = the policy JSON);
 4. for each user, create it or set its secret again (`PUT /rustfs/admin/v3/add-user?accessKey=`), then bind its
-   policy (`PUT /rustfs/admin/v3/set-user-or-group-policy`), which replaces the user's binding.
+   policy (`PUT /rustfs/admin/v3/set-user-or-group-policy`), which replaces the user's binding;
+5. with `--prune`, remove every regular user the run does not declare (`GET list-users`, `DELETE remove-user`), then
+   every canned policy rask owns that it does not create (`GET list-canned-policies`, `DELETE remove-canned-policy`), so
+   the store's identities are what git declares ([[XC-083]]).
 
-Every policy exists before any binding names it: a binding to a missing policy denies the user's STS AssumeRole, and
-the catalog vends through that call. Nothing here deletes a policy or a user.
+Every policy exists before any binding names it: a binding to a missing policy refuses every request the user signs.
+A policy is named after a ServiceAccount (`system:serviceaccount:<ns>:<sa>`) when no user holds it: the store grants it
+to the token that account projects (ADR 0170). The hook prunes only after an upgrade has replaced every pod, because a
+pod still presenting a retired user would be cut off mid-flight; `list-users` names no session and no service account
+(`rustfs@1.0.3:crates/iam/src/manager.rs:1367-1377`), and a policy rask does not own (RustFS's built-ins, an operator's)
+is never removed.
 
 THE ROOT SECRET IS READ FROM A FILE, and so is every scoped secret: none travels through env or argv, where a pod
 spec, `ps` or a crash report would carry it. Requests are SigV4-signed (service `s3`) with botocore and sent with
 urllib; the bodies are plain JSON, which the `/rustfs/admin` prefix takes (the admin API's compatibility alias expects
-encrypted bodies). Measured on rustfs/rustfs 1.0.1 and 1.0.3 for the three admin calls
-(docs/audits/2026-10-18/rustfs-zero-trust.md, "Measured on RustFS"); a refused policy fails the run before it binds
-anyone (tests/e2e-py/test_a_policy_the_store_refuses_fails_the_scoped_users_hook.py).
+encrypted bodies). Measured on rustfs/rustfs 1.0.1 and 1.0.3 for the three provisioning calls
+(docs/audits/2026-10-18/rustfs-zero-trust.md, "Measured on RustFS"), and on 1.0.3 for `list-users` and `remove-user`
+(docs/audits/2026-10-18/rustfs_web_identity_measure.py); a refused policy fails the run before it binds anyone, and a
+pruning run removes what it does not declare (tests/e2e-py/test_a_policy_the_store_refuses_fails_the_scoped_users_hook.py).
 
     python scripts/rustfs_admin.py --endpoint http://rask-rustfs:9000 --root-access-key rustfsadmin \\
         --root-secret-file /store-root/object-store-secret-key --keys-dir /keys \\
-        --bucket lance-catalog --policy rask-catalog=/tmp/policies/catalog.json --user rask-catalog=rask-catalog
+        --bucket lance-catalog --policy rask-lineage=/tmp/policies/lineage.json --user rask-lineage=rask-lineage \\
+        --policy system:serviceaccount:default:rask-sa-catalog=/tmp/policies/catalog.json --prune
 """
 
 from __future__ import annotations
@@ -56,6 +65,8 @@ DELAY_SECONDS = 2.0
 #: Admin calls get a short retry of their own for a 5xx: RustFS answers `iam is not initialized` while its IAM
 #: store loads, which can trail the first S3 answer.
 ADMIN_ATTEMPTS = 10
+#: The canned policies a run owns, by name: rask's own, and the ones named after a ServiceAccount (ADR 0170).
+OWNED_POLICY_PREFIXES = ("rask-", "system:serviceaccount:")
 
 
 class ProvisionError(RuntimeError):
@@ -83,6 +94,7 @@ class Plan(BaseModel):
     buckets: tuple[str, ...]
     policies: dict[str, Path]
     users: tuple[UserSpec, ...]
+    prune: bool = False
 
     def check(self) -> dict[str, bytes]:
         """Refuse a plan that binds a policy it does not create, names a missing or malformed file, or makes root a user.
@@ -136,18 +148,35 @@ class AdminClient:
 
     def put(self, operation: str, query: dict[str, str], body: bytes) -> None:
         """PUT one admin operation; raise `ProvisionError` on a refusal, retry a 5xx a bounded number of times."""
+        self._call("PUT", operation, query, body)
+
+    def get(self, operation: str) -> dict[str, object]:
+        """GET one admin listing, a JSON object keyed by name."""
+        listing = json.loads(self._call("GET", operation, {}, b""))
+        if not isinstance(listing, dict):
+            raise ProvisionError(f"{operation} answered {type(listing).__name__}, not an object keyed by name")
+        return listing
+
+    def delete(self, operation: str, query: dict[str, str]) -> None:
+        """DELETE one admin object; one already gone (404) is the outcome asked for."""
+        self._call("DELETE", operation, query, b"", absent_ok=True)
+
+    def _call(self, method: str, operation: str, query: dict[str, str], body: bytes, *, absent_ok: bool = False) -> bytes:
         from botocore.auth import S3SigV4Auth
         from botocore.awsrequest import AWSRequest
 
-        url = f"{self._endpoint}{ADMIN_PREFIX}/{operation}?{urllib.parse.urlencode(query)}"
+        # No bare `?`: RustFS decodes an empty query string as a malformed one (400 "failed to decode query", measured on 1.0.3).
+        url = f"{self._endpoint}{ADMIN_PREFIX}/{operation}" + (f"?{urllib.parse.urlencode(query)}" if query else "")
         for attempt in range(1, ADMIN_ATTEMPTS + 1):
-            request = AWSRequest(method="PUT", url=url, data=body, headers={"Content-Type": "application/json"})
+            request = AWSRequest(method=method, url=url, data=body, headers={"Content-Type": "application/json"})
             S3SigV4Auth(self._credentials, "s3", REGION).add_auth(request)
-            prepared = urllib.request.Request(url, data=body, headers=dict(request.headers.items()), method="PUT")  # noqa: S310 — the endpoint is the chart's own store URL
+            prepared = urllib.request.Request(url, data=body or None, headers=dict(request.headers.items()), method=method)  # noqa: S310 — the endpoint is the chart's own store URL
             try:
-                with urllib.request.urlopen(prepared, timeout=30):  # noqa: S310 — as above
-                    return
+                with urllib.request.urlopen(prepared, timeout=30) as response:  # noqa: S310 — as above
+                    return response.read()
             except urllib.error.HTTPError as exc:
+                if absent_ok and exc.code == 404:
+                    return b""
                 # The store's error body names the refused argument; it never echoes a request body, so it carries no secret.
                 detail = exc.read().decode("utf-8", "replace")[:500]
                 if exc.code < 500 or attempt == ADMIN_ATTEMPTS:
@@ -156,6 +185,7 @@ class AdminClient:
                 if attempt == ADMIN_ATTEMPTS:
                     raise ProvisionError(f"{operation} {query} unreachable: {exc.reason}") from exc
             time.sleep(DELAY_SECONDS)
+        raise ProvisionError(f"{operation} {query} was not attempted")
 
 
 def _s3(plan: Plan, secret: str) -> S3Client:
@@ -199,8 +229,24 @@ def _ensure_buckets(client: S3Client, buckets: Sequence[str]) -> None:
             print(f"rustfs_admin: bucket {bucket} already exists")
 
 
+def prune(admin: AdminClient, plan: Plan) -> None:
+    """Remove every regular user the plan does not declare, then every policy rask owns that it does not create.
+
+    Users first: removing a user ends its binding, and RustFS refuses removing a bound policy
+    (`rustfs@1.0.3:crates/iam/src/manager.rs:555-557`).
+    """
+    declared = {user.access_key for user in plan.users} | {plan.root_access_key}
+    for access_key in sorted(set(admin.get("list-users")) - declared):
+        admin.delete("remove-user", {"accessKey": access_key})
+        print(f"rustfs_admin: removed undeclared user {access_key}")
+    for name in sorted(set(admin.get("list-canned-policies")) - set(plan.policies)):
+        if name.startswith(OWNED_POLICY_PREFIXES):
+            admin.delete("remove-canned-policy", {"name": name})
+            print(f"rustfs_admin: removed undeclared policy {name}")
+
+
 def provision(plan: Plan) -> None:
-    """Run the plan against the store: buckets, then every policy, then every user and its binding."""
+    """Run the plan against the store: buckets, then every policy, then every user and its binding, then the prune."""
     documents = plan.check()
     root_secret = _read_secret(plan.root_secret_file)
     s3 = _s3(plan, root_secret)
@@ -216,6 +262,8 @@ def provision(plan: Plan) -> None:
         admin.put("add-user", {"accessKey": user.access_key}, body)
         admin.put("set-user-or-group-policy", {"policyName": user.policy, "userOrGroup": user.access_key, "isGroup": "false"}, b"")
         print(f"rustfs_admin: provisioned scoped user {user.access_key} ({user.policy})")
+    if plan.prune:
+        prune(admin, plan)
 
 
 def _plan(argv: Sequence[str]) -> Plan:
@@ -227,6 +275,7 @@ def _plan(argv: Sequence[str]) -> Plan:
     parser.add_argument("--bucket", action="append", default=[], help="a bucket to create if absent (repeatable)")
     parser.add_argument("--policy", action="append", default=[], type=lambda raw: _pair(raw, "--policy"), help="NAME=FILE: a canned policy (repeatable)")
     parser.add_argument("--user", action="append", default=[], type=lambda raw: _pair(raw, "--user"), help="ACCESS_KEY=POLICY (repeatable)")
+    parser.add_argument("--prune", action="store_true", help="remove every user, and every rask policy, the run does not declare")
     args = parser.parse_args(argv)
     return Plan(
         endpoint=args.endpoint,
@@ -236,6 +285,7 @@ def _plan(argv: Sequence[str]) -> Plan:
         buckets=tuple(args.bucket),
         policies={name: Path(path) for name, path in args.policy},
         users=tuple(UserSpec(access_key=key, policy=policy) for key, policy in args.user),
+        prune=args.prune,
     )
 
 

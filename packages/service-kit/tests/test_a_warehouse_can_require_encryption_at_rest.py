@@ -23,8 +23,14 @@ caught before the bytes land.
 
 from __future__ import annotations
 
-import pytest
+from datetime import UTC, datetime
+from pathlib import Path
 
+import pytest
+from pydantic import SecretStr
+
+from service_kit.governed.store_credential import S3KeyPair
+from service_kit.governed.store_session import IssuedSession, WebIdentity
 from service_kit.lakehouse.objectfs import lance_storage_options
 
 
@@ -52,36 +58,34 @@ def test_bucket_keys_ride_along_when_asked() -> None:
     assert opts["aws_sse_bucket_key_enabled"] == "true", "bucket-key enablement did not reach the writer"
 
 
+def _identity() -> WebIdentity:
+    return WebIdentity(token_file=Path("projected-token"), endpoint="http://s3:9000", region="eu-north-1", role_arn="arn:aws:iam::0:role/r")
+
+
+def _issued(*_a: object, **_kw: object) -> IssuedSession:
+    return IssuedSession(
+        key_pair=S3KeyPair(access_key_id="AK", secret_access_key=SecretStr("SK"), session_token=SecretStr("ST")), expiration=datetime(2030, 1, 1, tzinfo=UTC)
+    )
+
+
 def test_the_VENDED_credential_carries_it_to_a_direct_writer() -> None:
     """The end of the chain, and the only part that matters operationally.
 
     A vended client writes to object storage with the catalog out of the path, so encryption reaches it
-    through the storage options or not at all. This drives the real `StsVendor` with a stubbed
-    AssumeRole — the credential is fake, the option assembly is the production one.
+    through the storage options or not at all. This drives the real `WebIdentityVendor` with a stubbed
+    exchange — the credential is fake, the option assembly is the production one.
     """
-    from catalog.core.vending import EncryptionAtRest, StsVendor
+    from catalog.core.vending import EncryptionAtRest, WebIdentityVendor
 
-    def _assume(**_kw: object) -> dict[str, object]:
-        return {
-            "Credentials": {
-                "AccessKeyId": "AK",
-                "SecretAccessKey": "SK",
-                "SessionToken": "ST",
-                "Expiration": None,
-            }
-        }
-
-    vendor = StsVendor(
-        role_arn="arn:aws:iam::0:role/r",
-        region="eu-north-1",
-        endpoint="http://s3:9000",
-        assume_role=_assume,
+    vendor = WebIdentityVendor(
+        identity=_identity(),
+        exchange=_issued,
         encryption=EncryptionAtRest(algorithm="aws:kms", kms_key_id="arn:aws:kms:eu-north-1:1:key/abc"),
     )
-    vended = vendor.vend(table_location="s3://bucket/ns/t.lance", tier="write")
+    vended = vendor.vend(table_location="s3://bucket/ns/t.lance", tier="write", session_name="writer")
     # `vend` answers None on the postures that offer no credential (mode_b); a None here would mean the
-    # STS vendor declined, which is a different failure from the one under test and must not read as it.
-    assert vended is not None, "the STS vendor vended nothing at all"
+    # vendor declined, which is a different failure from the one under test and must not read as it.
+    assert vended is not None, "the vendor vended nothing at all"
     assert vended.storage_options.get("aws_server_side_encryption") == "aws:kms", (
         "the vended credential does not tell the writer to encrypt — the catalog is out of the path, so nothing else can"
     )
@@ -90,15 +94,10 @@ def test_the_VENDED_credential_carries_it_to_a_direct_writer() -> None:
 
 def test_an_UNCONFIGURED_vendor_vends_exactly_what_it_did_before() -> None:
     """Every deployment that asks for nothing is untouched — no uninvited option reaches the writer."""
-    from catalog.core.vending import StsVendor
+    from catalog.core.vending import WebIdentityVendor
 
-    vendor = StsVendor(
-        role_arn="arn:aws:iam::0:role/r",
-        region="eu-north-1",
-        endpoint="http://s3:9000",
-        assume_role=lambda **_k: {"Credentials": {"AccessKeyId": "AK", "SecretAccessKey": "SK", "SessionToken": "ST", "Expiration": None}},
-    )
-    vended = vendor.vend(table_location="s3://bucket/ns/t.lance", tier="write")
-    assert vended is not None, "the STS vendor vended nothing at all"
+    vendor = WebIdentityVendor(identity=_identity(), exchange=_issued)
+    vended = vendor.vend(table_location="s3://bucket/ns/t.lance", tier="write", session_name="writer")
+    assert vended is not None, "the vendor vended nothing at all"
     opts = vended.storage_options
     assert not [k for k in opts if "encryption" in k or "sse" in k], f"encryption keys appeared unasked: {sorted(opts)}"

@@ -3,18 +3,18 @@
 [[LH-067]]. The endpoint half shipped: a warehouse record carries an optional `endpoint` and
 `build_namespace_for_root` opens it there. The credential half cannot follow the same shape, and the
 estate's standing rule is why — material never travels in a record, and a scoped static key is not a
-fix. So the record names a REFERENCE and the catalog resolves it at the Dapr secret store door it
-already uses for its own S3 secret (`dapr_secret_store` / `dapr_secret_key` / `dapr_secret_s3_field`).
+fix. So the record names a REFERENCE and the catalog resolves it at the Dapr secret store door it already uses for
+its other secrets (`dapr_secret_store` / `dapr_secret_s3_field`).
 
 RESOLVED ON THE REQUEST PATH, NOT AT BOOT, and that distinction is load-bearing rather than
-incidental. The catalog's own pair is one credential, named in configuration and kept confirmed from
-boot; a warehouse's credential is per-RECORD and discovered when a request names that warehouse, so it
+incidental. The catalog's own credential is one session, exchanged for its token at boot and renewed in the
+background; a warehouse's credential is per-RECORD and discovered when a request names that warehouse, so it
 is read on demand, held by reference for the store's TTL so a hot path does not re-fetch, and never
 written onto `Settings`.
 
 FAILS CLOSED, on the same rule `fetch_required_secrets` already encodes: when a record names a
 reference the store cannot satisfy, the answer is a refusal, never a silent fall-back to the estate's
-own key. Falling back would be worse than failing: the write would SUCCEED, against the wrong store,
+own credential. Falling back would be worse than failing: the write would SUCCEED, against the wrong store,
 with the estate's credential — which is precisely the blast radius per-warehouse credentials exist to
 contain.
 

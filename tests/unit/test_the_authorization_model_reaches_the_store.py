@@ -70,7 +70,7 @@ def test_bootstrap_admin_runs_AFTER_the_jobs_it_waits_on(phase: str) -> None:
     bootstrap = next((j for name, j in jobs.items() if "bootstrap-admin" in name), None)
     if bootstrap is None:
         pytest.skip("bootstrap-admin does not render here; the ordering it must beat is not present")
-    [scoped] = [j for name, j in jobs.items() if "-object-store-scoped-users" in name]
+    [scoped] = [j for name, j in jobs.items() if "-object-store-scoped-users" in name and "-object-store-scoped-users-prune" not in name]
     hook = (scoped["metadata"].get("annotations") or {}).get("helm.sh/hook")
     if phase == "install":
         assert hook is None, f"on install the scoped-users Job is a {hook!r} hook; the catalog waits on it, so --wait deadlocks"

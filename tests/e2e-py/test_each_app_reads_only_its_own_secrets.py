@@ -26,13 +26,14 @@ import pytest
 pytestmark = pytest.mark.e2e
 
 #: app -> (a secret its own sidecar serves its code, a field of it, a secret it may not read through its sidecar). flows reads
-#: nothing itself: the state store's DSN is resolved by its component, so its own read of `dapr-state` is refused.
+#: nothing itself: the state store's DSN is resolved by its component, so its own read of `dapr-state` is refused. The
+#: catalog holds no store pair (ADR 0170), so its own read is the app token its door checks.
 SIDECAR_READS: Final[dict[str, tuple[str | None, str | None, str]]] = {
-    "catalog": ("catalog-s3", "access_key", "lineage-s3"),
-    "lineage": ("lineage-s3", "access_key", "catalog-s3"),
-    "maintenance": ("maintenance-s3", "access_key", "catalog-s3"),
-    "notifications": ("dapr-app-token", "token", "catalog-s3"),
-    "annotator": ("publisher-oidc", "password", "catalog-s3"),
+    "catalog": ("dapr-app-token", "token", "lineage-s3"),
+    "lineage": ("lineage-s3", "access_key", "maintenance-s3"),
+    "maintenance": ("maintenance-s3", "access_key", "lineage-s3"),
+    "notifications": ("dapr-app-token", "token", "lineage-s3"),
+    "annotator": ("publisher-oidc", "password", "lineage-s3"),
     "viewer": ("viewer-s3", "access_key", "media-s3"),
     "search": ("media-s3", "access_key", "viewer-s3"),
     "flows": (None, None, "dapr-state"),
@@ -126,7 +127,7 @@ def test_the_store_refuses_each_app_s_token_another_app_s_secret_and_role() -> N
     mount, role = meta["vaultKubernetesMountPath"], meta["vaultKubernetesRole"]
     pod = _store_pod()
     found: dict[str, object] = {}
-    for app, foreign in (("catalog", "lineage"), ("lineage", "catalog")):
+    for app, foreign in (("lineage", "maintenance"), ("maintenance", "lineage")):
         deployment = json.loads(chaos.kubectl("get", f"deployment/{chaos.RELEASE}-{app}", "-o", "json"))["spec"]["template"]["spec"]
         account = deployment["serviceAccountName"]
         [audience] = [
@@ -145,7 +146,7 @@ def test_the_store_refuses_each_app_s_token_another_app_s_secret_and_role() -> N
             found[f"{app} reading {foreign}-s3"] = other
         if _login(pod, mount, role.replace("{appID}", foreign), account, audience)[0] == 0:
             found[f"{app}'s account logging in as {foreign}"] = "admitted"
-    published = _read_as(pod, "root", "catalog-s3")
+    published = _read_as(pod, "root", "lineage-s3")
     if published[0] == 0 or "permission denied" not in published[1]:
         found["the once-published root token"] = published
     assert not found, f"the store admitted a token to a secret or a role it was not granted: {found}"

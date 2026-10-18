@@ -3,11 +3,10 @@
 A warehouse may live in a different object store from the estate's own. Its ADDRESS is non-secret and
 rides the record (`endpoint`); its CREDENTIAL cannot, under the estate's standing rule — material never
 travels in a record, and a scoped static key is not a fix. So the record names a REFERENCE and the
-material is fetched here, from the same Dapr secret store the catalog already resolves its own S3
-secret from.
+material is fetched here, from the Dapr secret store the catalog reads its other secrets from.
 
-WHY NOT THE CATALOG'S OWN CREDENTIAL HOLDER. `service_kit.governed.store_credential` keeps ONE pair,
-named in configuration, confirmed by a background loop from boot. A warehouse credential is per-RECORD
+WHY NOT THE CATALOG'S OWN CREDENTIAL HOLDER. `service_kit.governed.store_session` keeps ONE session, the
+catalog's token exchanged at boot and renewed in the background (ADR 0170). A warehouse credential is per-RECORD
 and is discovered when a request names that warehouse, so it is read on demand, and must never be
 written onto settings.
 

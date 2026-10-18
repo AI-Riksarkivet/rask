@@ -1506,8 +1506,8 @@ export interface paths {
          * Vend Credentials
          * @description Vend scoped ``storage_options`` for direct object-store access to this table at ``tier``.
          *
-         *     ``web_identity_token`` is the caller's raw bearer JWT (via the shared HTTPBearer seam), forwarded to the
-         *     object store for the web_identity flow (AssumeRoleWithWebIdentity exchanges it); other vendors ignore it.
+         *     The credential is a session the catalog's own token is exchanged for, named at the store for the verified caller
+         *     it is vended to; the caller's own token never leaves the catalog.
          */
         post: operations["vend_credentials_management_v1_table__id__credentials_post"];
         delete?: never;

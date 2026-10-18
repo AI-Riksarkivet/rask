@@ -9,7 +9,8 @@ Two duplications share one surface here:
   no longer exists. `RASK_SECRET_STORE` was already the estate-wide name two services read; this pins
   that ONE name repointing every consumer, with each per-service alias kept as an override.
 * **DUP-09** — the read that consumes that store for a service's S3 pair has one implementation,
-  `service_kit.governed.store_credential`, which the catalog, lineage and maintenance lifespans all start.
+  `service_kit.governed.store_credential`, which the lineage and maintenance lifespans start; the catalog holds no
+  pair, its store identity is its ServiceAccount token (ADR 0170).
 """
 
 from __future__ import annotations

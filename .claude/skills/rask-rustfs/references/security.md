@@ -59,11 +59,13 @@ GitOps first: GitOps, cloud native, Lance-namespace/table-idiomatic, zero trust 
   (`rustfs@1.0.3:crates/iam/src/sys.rs:1494-1525`); MFA-enrolled identities need a TokenCode (`sts.rs:250-270`).
 - Duration clamped to 900–43,200 s, default 3,600 (`sts.rs:64-83`). `RoleArn`, `RoleSessionName`, `ExternalId` are
   accepted and ignored (audit R7).
-- Every vend persists a temp user in the IAM store (`sts.rs:311-314`). An expired identity is deleted, with its policy
+- Every session persists a temp user in the IAM store, an `AssumeRole` one (`sts.rs:311-314`) and a web-identity one
+  alike (`rustfs@1.0.3:rustfs/src/admin/service/federated_identity.rs:431`). An expired identity is deleted, with its policy
   mapping, when the store loads it (`rustfs@1.0.3:crates/iam/src/store/object.rs:628-633`), and a full load walks every
   user (`object.rs:904-930`). A full load runs every 120 s unless `RUSTFS_SKIP_BACKGROUND_TASK` is set
   (`rustfs@1.0.3:crates/iam/src/manager.rs:209-224`), so the store holds about one identity for each vend of the last
-  900 + 120 s: bounded by the vend rate, since rask vends per request and caches nothing. A vend cache (Lakekeeper keeps one,
+  900 + 120 s, plus the catalog's own hour-long sessions, one per half hour: bounded by the vend rate, since rask vends
+  per request and caches nothing. A vend cache (Lakekeeper keeps one,
   single-flight per table and permission) would shrink that and hand one credential to several callers, which the
   store's audit cannot tell apart; rask does not cache.
 
@@ -85,17 +87,25 @@ GitOps first: GitOps, cloud native, Lance-namespace/table-idiomatic, zero trust 
   different claim, each with `..._CLAIM_PREFIX` prepended (`mapper.rs:257-298`; `runtime.rs:827-845`). A token mapping
   to no policy and no group is refused (`rustfs@1.0.3:crates/iam/src/federation/transaction.rs:135-148`).
 - **Hazard**: a role policy is granted to ANY token the issuer signs for that audience, and the token holder can call
-  STS without a session policy. In rask that means: a role policy must be no broader than what any holder of such a
-  token may do, with a dedicated audience/client. A Dex user token for the catalog's client must not be exchangeable
-  for the catalog's full data plane.
+  STS without a session policy. On a Kubernetes issuer any pod may project a token for any audience as its own
+  ServiceAccount, so rask sets NO role policy: with `..._CLAIM_NAME=sub` a verified token is granted the canned policy
+  its `sub` names, which the hook writes only for the catalog's account (`system:serviceaccount:<ns>:<release>-sa-catalog`,
+  ADR 0170). Any other account's token maps to a policy that does not exist and is refused 400 `InvalidRequest`, "OIDC
+  policy mapping did not resolve to current policies" (`federated_identity.rs:322-440`). A policy name may hold `:`
+  (`rustfs@1.0.3:crates/iam/src/sys.rs:1888-1897`).
 - A Kubernetes ServiceAccount issuer works as a "workload" provider when `..._HIDE_FROM_UI` is on and its discovery has
-  no `authorization_endpoint` (`rustfs@1.0.3:crates/iam/src/oidc/provider.rs:104-153,375-386`). This is the mode where
-  the catalog holds no store key at all: a projected token with audience = client id, a minimal role policy, and the
-  catalog's per-table session policy. Source only; not measured.
+  no `authorization_endpoint` (`rustfs@1.0.3:crates/iam/src/oidc/provider.rs:104-153,375-386`). With an explicit
+  `..._ISSUER`, discovery is fetched from `..._CONFIG_URL` and the discovered `issuer` must equal the explicit one
+  (`provider.rs:498-588`), which is how the store reads rask's issuer mirror (k3s answers discovery only to a bearer)
+  while verifying tokens whose `iss` is the cluster's. Measured on 1.0.3 with a stand-in issuer, 20 of 20
+  (`docs/audits/2026-10-18/rustfs_web_identity_measure.py`): the catalog-subject token is issued a session bounded by
+  its canned policy and the session policy; another account's, a same-named account in another namespace, another
+  audience's, an expired, a forged and another issuer's token are refused.
 - Outbound OIDC discovery/JWKS goes through an egress guard that refuses loopback, private, shared and reserved
   addresses unless the exact origin is listed in `RUSTFS_OUTBOUND_ALLOW_ORIGINS`; link-local and metadata addresses stay
   forbidden (`rustfs@1.0.3:crates/utils/src/egress.rs:25-29,362-372,490-530`). In-cluster Dex and the API server are
-  private addresses: list their origins (and every private origin in their discovery's `jwks_uri`).
+  private addresses: list their origins (and every private origin in their discovery's `jwks_uri`). The fixture lists
+  the issuer mirror's alone, whose discovery points `jwks_uri` at itself.
 - The OIDC client secret has no `_FILE` variant (grep of `crates/config`): prefer a public client for STS-only use.
 
 ## Provisioning (the hook)
@@ -107,12 +117,19 @@ Native admin API under `/rustfs/admin/v3`, SigV4 (service `s3`) with the root pa
 - `PUT add-user?accessKey=`, body `{"secretKey":"…","status":"enabled"}` (`rustfs@1.0.3:rustfs/src/admin/handlers/user_lifecycle.rs:44`)
 - `PUT set-user-or-group-policy?policyName=&userOrGroup=&isGroup=false`, replaces the binding (`policies.rs:83`)
 - `POST idp/builtin/policy/attach`, adds to it (`policies.rs:93`)
-- `DELETE remove-user`, `DELETE remove-canned-policy` (`user_lifecycle.rs:38`; `policies.rs:77`)
+- `DELETE remove-user`, `DELETE remove-canned-policy` (`user_lifecycle.rs:38`; `policies.rs:77`); remove-user answers
+  404 once the user is gone (measured on 1.0.3)
+- `GET list-users`: plain JSON keyed by access key, regular users only, no session and no service account
+  (`user_lifecycle.rs:26`; `rustfs@1.0.3:crates/iam/src/manager.rs:1367-1377`, measured on 1.0.3); `GET
+  list-canned-policies`, a plain JSON map of name to policy (`policies.rs:59`)
 - `GET export-iam` (`rustfs@1.0.3:rustfs/src/admin/route_registration_test.rs:159`)
 
 The same routes answer under `/minio/admin` with madmin's body encryption
 (`rustfs@1.0.3:rustfs/src/admin/utils.rs:31-62`), which is what `mc admin` would hit; that is unmeasured, and `mc` is
-archived upstream. A Python script with botocore's SigV4 signer and boto3 for `CreateBucket` needs no new tool. Admin
+archived upstream. A Python script with botocore's SigV4 signer and boto3 for `CreateBucket` needs no new tool:
+`scripts/rustfs_admin.py`, whose `--prune` (the install and post-upgrade runs) removes every regular user the run does
+not declare and every rask-owned policy (`rask-*`, `system:serviceaccount:*`) it does not create, so the store's
+identities are what git declares. Admin
 request bodies are capped at 1 MiB (`rustfs@1.0.3:crates/config/src/constants/body_limits.rs:24`).
 
 ## TLS
@@ -187,6 +204,10 @@ entry; an open design choice.
 What rask demands of a production store, beyond the audit's list (R1-R11, R13, R15):
 
 - No default root credential; root held by the platform only (STS tokens are signed with it).
+- STS `AssumeRoleWithWebIdentity` trusting the cluster's ServiceAccount issuer for the catalog's audience
+  (`objectStore.identity.audience`), granting a token only what its subject is given (a canned policy named by `sub`,
+  or a role whose trust policy names the subject), never a role policy every token for the audience gets; the catalog
+  holds no store key (ADR 0170).
 - An explicit `RUSTFS_RPC_SECRET` (or the equivalent) on multi-node.
 - TLS with a CA rask trusts; rask's vended endpoint is `https`.
 - Console and admin API unreachable from workload namespaces, or reachable only by identities without `admin:*`.

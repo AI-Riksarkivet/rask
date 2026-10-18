@@ -105,12 +105,13 @@ THE APP-API TOKEN, so a pod can authenticate its Dapr doors without the value pa
 (`RASK_APP_TOKEN_FROM_STORE`). ESO writes the same field into the `dapr-app-token` Secret daprd stamps the header from,
 so the two agree by construction. One estate-wide token, read by the apps with a Dapr door and by ESO.
 
-## `{{- range $plane, $id := dict "maintenance" .Values.objectStore.maintenanceAccessKey "catalog" .Values.objectStore.catalogAccessKey "lineage" .Values.objectStore.lineageAccessKey }}`
+## `{{- range $plane, $id := dict "maintenance" .Values.objectStore.maintenanceAccessKey "lineage" .Values.objectStore.lineageAccessKey }}`
 
 EACH PLANE'S SCOPED S3 PAIR, as its own secret `<plane>-s3` with the `access_key`/`secret_key` fields every scoped pair
-carries, readable by that app alone. No secret holds a root pair: the store's root lives at `secret/object-store-root`,
-which only ESO reads (below). Seeded only when the access key is set, and a blank one fails the render
-(`tests/unit/test_a_blank_plane_identity_fails_the_render.py`), so a field a service is told to read is always written.
+carries, readable by that app alone. The catalog has none: its store identity is its ServiceAccount token (ADR 0170).
+No secret holds a root pair: the store's root lives at `secret/object-store-root`, which only ESO reads (below). Seeded
+only when the access key is set, and a blank one fails the render
+(`tests/unit/test_a_blank_store_identity_fails_the_render.py`), so a field a service is told to read is always written.
 
 ## `bao kv put secret/object-store-root object-store-access-key={{ $.Values.objectStore.accessKey }} \`
 

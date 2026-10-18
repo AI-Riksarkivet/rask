@@ -68,6 +68,17 @@ spec:
             - { name: RUSTFS_HEALTH_MINIMAL_RESPONSE_ENABLE, value: "true" }
             - { name: RUSTFS_OBS_LOG_DIRECTORY, value: "" }
             - { name: RUSTFS_OBS_PROFILING_EXPORT_ENABLED, value: "false" }
+            {{- with .Values.identityProvider }}
+            {{- if .configUrl }}
+            {{- $discovery := urlParse .configUrl }}
+            - { name: RUSTFS_IDENTITY_OPENID_CONFIG_URL, value: {{ .configUrl | quote }} }
+            - { name: RUSTFS_IDENTITY_OPENID_ISSUER, value: {{ required "identityProvider.issuer names the issuer the cluster's tokens carry" .issuer | quote }} }
+            - { name: RUSTFS_IDENTITY_OPENID_CLIENT_ID, value: {{ required "identityProvider.clientId names the audience rask's catalog projects its token for" .clientId | quote }} }
+            - { name: RUSTFS_IDENTITY_OPENID_CLAIM_NAME, value: "sub" }
+            - { name: RUSTFS_IDENTITY_OPENID_HIDE_FROM_UI, value: "true" }
+            - { name: RUSTFS_OUTBOUND_ALLOW_ORIGINS, value: {{ printf "%s://%s" $discovery.scheme $discovery.host | quote }} }
+            {{- end }}
+            {{- end }}
           ports:
             - { name: s3, containerPort: {{ .Values.port }} }
           livenessProbe:

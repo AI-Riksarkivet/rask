@@ -112,7 +112,7 @@
                     "type": "object",
                     "properties": {
                         "enabled": {
-                            "description": "Render the issuer mirror (templates/openfga-authn.yaml) that republishes the SA issuer's discovery and JWKS unauthenticated for OpenFGA; off only for a publicly served issuer.",
+                            "description": "Render the issuer mirror (templates/issuer-mirror.yaml) that republishes the SA issuer's discovery and JWKS unauthenticated for OpenFGA and the development store; off only for a publicly served issuer.",
                             "type": "boolean"
                         }
                     }
@@ -1252,10 +1252,6 @@
                     "description": "Extra platform buckets the scoped-users hook creates on the dev store and the reconcile exempts from orphan_buckets; governed tiers only, not the root or feature buckets.",
                     "type": "array"
                 },
-                "catalogAccessKey": {
-                    "description": "Access key of the catalog's scoped store identity; the secret derives in-cluster (`lance.scopedSecretFn`). Wide on data, no admin rights. Required: no service presents the store's root.",
-                    "type": "string"
-                },
                 "enabled": {
                     "description": "This estate uses the development object store (deploy/fixtures/rustfs, Service `\u003crelease\u003e-rustfs`): rask runs its scoped-users hook against it (the platform buckets and every scoped user), and the dev secret store issues its root credential. Off with `externalEndpoint` set uses the platform's S3. The chart renders no store server.",
                     "type": "boolean"
@@ -1263,6 +1259,19 @@
                 "externalEndpoint": {
                     "description": "S3 endpoint the apps use instead of the development store; pair with `objectStore.enabled=false`. Empty uses the development store.",
                     "type": "string"
+                },
+                "identity": {
+                    "type": "object",
+                    "properties": {
+                        "audience": {
+                            "description": "The audience the catalog's ServiceAccount token is projected for, which the object store trusts as its identity provider's client (the rustfs fixture's `identityProvider.clientId`; `sts.amazonaws.com` for AWS). Required.",
+                            "type": "string"
+                        },
+                        "sessionSeconds": {
+                            "description": "How long a session for the catalog's own IO lasts (LANCE_S3_SESSION_SECONDS, 900 to 43200 s); it is renewed at half its life.",
+                            "type": "integer"
+                        }
+                    }
                 },
                 "lineageAccessKey": {
                     "description": "Access key of the lineage service's scoped store identity (read-only plus deletes of its own outbox); secret derives in-cluster. Required: no service presents the store's root.",
@@ -2300,7 +2309,7 @@
                     "type": "boolean"
                 },
                 "assumeRoleArn": {
-                    "description": "Role ARN passed on AssumeRole in `sts`/`web_identity` mode (LANCE_S3_ASSUME_ROLE_ARN); stores with inherited policies ignore it but boto3 requires it.",
+                    "description": "The role the catalog's token is exchanged for (LANCE_S3_ASSUME_ROLE_ARN), for its own IO and every vend: AWS assumes it; a store granting the policy the token's subject names (RustFS) ignores it, and boto3 requires one.",
                     "type": "string"
                 },
                 "encryption": {
@@ -2316,7 +2325,7 @@
                     "type": "string"
                 },
                 "mode": {
-                    "description": "How the catalog vends storage credentials for direct object I/O: `mode_b` (none, server-mediated), `web_identity`, `sts` (default, scoped AssumeRole) or `static`.",
+                    "description": "How the catalog vends storage credentials for direct object I/O: `web_identity` (default, its own token exchanged for a per-table session) or `mode_b` (none, server-mediated).",
                     "type": "string"
                 },
                 "ttlSeconds": {

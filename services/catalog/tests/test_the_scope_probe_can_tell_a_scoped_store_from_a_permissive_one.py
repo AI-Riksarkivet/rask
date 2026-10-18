@@ -38,9 +38,7 @@ class _Vendor:
         self._error = error
         self.asked: list[tuple[str, str]] = []
 
-    def vend(
-        self, *, table_location: str, tier: str, web_identity_token: str | None = None, bases: Sequence[str] = (), branch: str = ""
-    ) -> VendedCredentials | None:
+    def vend(self, *, table_location: str, tier: str, session_name: str, bases: Sequence[str] = (), branch: str = "") -> VendedCredentials | None:
         self.asked.append((table_location, tier))
         if self._error is not None:
             raise self._error
@@ -131,7 +129,7 @@ def store_factory(monkeypatch: pytest.MonkeyPatch) -> Callable[..., _Installed]:
 
 
 def _run(vendor: _Vendor) -> list[ProbeCheck]:
-    return endpoint._run_scope_probe(ROOT, vendor, "http://store:9000")  # noqa: SLF001 — the unit under test
+    return endpoint._run_scope_probe(ROOT, vendor=vendor, store_endpoint="http://store:9000", session_name="admin")  # noqa: SLF001 — the unit under test
 
 
 def _named(checks: list[ProbeCheck]) -> dict[str, str]:
@@ -182,7 +180,7 @@ class TestAnUnexercisedControlIsUNKNOWNNotHealthy:
         vendor = _Vendor(credentials=None)
         store_factory(scoped=True)
 
-        checks = endpoint._run_scope_probe(ROOT, vendor, "http://store:9000")  # noqa: SLF001
+        checks = endpoint._run_scope_probe(ROOT, vendor=vendor, store_endpoint="http://store:9000", session_name="admin")  # noqa: SLF001
 
         outcomes = _named(checks)
         assert outcomes["issue"] == "skip"
@@ -193,7 +191,7 @@ class TestAnUnexercisedControlIsUNKNOWNNotHealthy:
         vendor = _Vendor(credentials=None, error=RuntimeError("STS unreachable"))
         store_factory(scoped=True)
 
-        checks = endpoint._run_scope_probe(ROOT, vendor, "http://store:9000")  # noqa: SLF001
+        checks = endpoint._run_scope_probe(ROOT, vendor=vendor, store_endpoint="http://store:9000", session_name="admin")  # noqa: SLF001
 
         assert _named(checks)["issue"] == "fail"
         assert "STS unreachable" in next(c.detail for c in checks if c.name == "issue")
@@ -357,6 +355,10 @@ class TestTheDoorGatesBeforeItWrites:
 
 
 def _token() -> Any:
+    """A verified person, the shape `CurrentToken` resolves to."""
     from service_kit.governed.oidc import IDToken
+    from service_kit.governed.person_identity import PersonPrincipal
+    from service_kit.governed.principal import Principal
 
-    return IDToken(iss="https://dex.test/dex", sub="user-1", aud="lance-catalog", iat=0, exp=1 << 31)
+    claims = IDToken(iss="https://dex.test/dex", sub="user-1", aud="lance-catalog", iat=0, exp=1 << 31)
+    return PersonPrincipal(principal=Principal(idp_id="dex", subject="user-1"), claims=claims)

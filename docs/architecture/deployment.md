@@ -50,10 +50,15 @@ login and never served to the app.
 
 THE SECRETS THE STORE MUST HOLD. Nothing seeds the platform's store and no credential is a chart value, so an
 unprovisioned secret is a fail-closed outage at first use, not a fallback. Each secret has exactly the readers it is for:
-- `catalog-s3`, `lineage-s3`, `maintenance-s3` (fields `access_key`, `secret_key`): the scoped key pair of the identity
-  values.yaml `objectStore` names for that plane, read by that app alone. On the dev store the secret half is
+- `lineage-s3`, `maintenance-s3` (fields `access_key`, `secret_key`): the scoped key pair of the identity values.yaml
+  `objectStore` names for that plane, read by that app alone. On the dev store the secret half is
   sha256("<identity>-s3-<root secret>")[:40] (`lance.scopedSecretFn`, which `object-store-scoped-users` derives too).
   Both halves are read from the store and read again every few minutes (ADR 0166), so a rotation writes them together.
+  The catalog has no such secret (ADR 0170): the object store trusts the cluster's ServiceAccount issuer for
+  `objectStore.identity.audience` and grants the catalog's subject, `system:serviceaccount:<namespace>:<release>-sa-catalog`,
+  the catalog's policy, and the catalog exchanges its projected token for sessions through STS
+  `AssumeRoleWithWebIdentity`. A platform store's owner provisions that trust; on AWS it is an IAM OIDC provider and
+  the role `vending.assumeRoleArn` names, whose trust policy names the subject.
 - `viewer-s3` (the viewer), `media-s3` (annotator and search, read-only on `explorer.corpusS3Root`, when explorer serves
   a corpus) and `backup-s3` (ESO, for the backups, when one is on), fields `access_key`, `secret_key`.
 - `dapr-app-token` (fields `token` and, during a rotation, `previous`; docs/OPERATORS.md § 8): the app-API token, read by

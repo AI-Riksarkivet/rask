@@ -56,7 +56,6 @@ def _settings() -> SimpleNamespace:
     return SimpleNamespace(
         fga_enabled=False,
         delimiter="$",
-        vending_mode="sts",
         multibase_data_base_list=[],
         storage_options=lambda: {},
         # The base judge's two inputs ([[LH-279]]). These tables declare no base outside their own root,
@@ -96,7 +95,7 @@ def _vend(location: str) -> tuple[Any, _Vendor]:
             token=None,
             client=None,
             vendor=vendor,
-            web_identity_token=None,
+            subject="anon",
             tier="read",
             branch="",
         )

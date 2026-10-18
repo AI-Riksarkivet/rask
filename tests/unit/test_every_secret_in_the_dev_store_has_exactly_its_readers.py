@@ -60,7 +60,6 @@ _MAINTENANCE_VERIFIERS: Final = frozenset({"lineage", "maintenance", "notificati
 
 #: secret -> {"store": identities whose login reads it, "dapr": apps whose sidecar API serves it, "pods": workloads given it by ESO}.
 EXPECTED: Final[dict[str, dict[str, frozenset[str]]]] = {
-    "catalog-s3": {"store": frozenset({"catalog"}), "dapr": frozenset({"catalog"})},
     "lineage-s3": {"store": frozenset({"lineage"}), "dapr": frozenset({"lineage"})},
     "maintenance-s3": {"store": frozenset({"maintenance"}), "dapr": frozenset({"maintenance"})},
     "viewer-s3": {"store": frozenset({"viewer"}), "dapr": frozenset({"viewer"})},

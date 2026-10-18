@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import uuid
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
 
 import boto3
@@ -12,6 +13,7 @@ import lance
 import pytest
 from fastapi.testclient import TestClient
 from moto import settings as moto_settings
+from moto.core.authorization import ActionAuthenticatorMixin
 from moto.iam.access_control import IAMRequestBase
 from moto.server import ThreadedMotoServer
 from pydantic import BaseModel
@@ -19,6 +21,8 @@ from pydantic import BaseModel
 
 #: The name the reference gives the second store's secret.
 SECOND_REF = "second-store"
+#: The account moto files every role and session under.
+ACCOUNT = "123456789012"
 
 
 class Key(BaseModel):
@@ -58,6 +62,23 @@ class TwoStores(BaseModel):
     def plain_base(self) -> str:
         """An approved data base with NO credential reference: the estate key reads it, and a vend may grant it."""
         return f"s3://{self.estate_bucket}/shared-data"
+
+    def role_on(self, bucket: str) -> str:
+        """A new role allowed ``bucket``, the one a catalog's token is exchanged for; per call, so no session is another's."""
+        name = f"catalog-{uuid.uuid4().hex[:12]}"
+        iam = self.iam()
+        iam.create_role(RoleName=name, AssumeRolePolicyDocument=json.dumps({"Version": "2012-10-17", "Statement": []}))
+        iam.put_role_policy(
+            RoleName=name,
+            PolicyName=f"{bucket}-only",
+            PolicyDocument=json.dumps(
+                {
+                    "Version": "2012-10-17",
+                    "Statement": [{"Effect": "Allow", "Action": ["s3:*"], "Resource": [f"arn:aws:s3:::{bucket}", f"arn:aws:s3:::{bucket}/*"]}],
+                }
+            ),
+        )
+        return f"arn:aws:iam::{ACCOUNT}:role/{name}"
 
 
 def _user_on(iam: Any, user: str, bucket: str) -> Key:  # noqa: ANN401 — a boto3 IAM client
@@ -100,6 +121,11 @@ def two_stores() -> Iterator[TwoStores]:
 
     Names are per instance because moto's backends are process-global: a second server in the same
     worker (another module, or this one set up again under xdist) sees the first one's users and buckets.
+
+    ``AssumeRoleWithWebIdentity`` is answered unauthenticated, as AWS answers it: the token in the body is the
+    credential, so the call carries no signature, and moto 5.2.2's gate authenticates every action but a few Cognito
+    targets (`moto/core/authorization.py`), answering the unsigned exchange 500. A session it issues is still held to
+    its role's policy.
     """
     suffix = uuid.uuid4().hex[:10]
     server = ThreadedMotoServer(port=0)
@@ -119,8 +145,15 @@ def two_stores() -> Iterator[TwoStores]:
         second=_user_on(iam, f"second-{suffix}", second_bucket),
         admin=_admin(iam, f"admin-{suffix}"),
     )
+    gate = ActionAuthenticatorMixin._authenticate_and_authorize_normal_action
+
+    def _as_aws_gates(self: Any, resource: str = "*") -> None:  # noqa: ANN401 — the moto response class the mixin is mixed into
+        if self._get_action() != "AssumeRoleWithWebIdentity":
+            gate(self, resource)
+
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(IAMRequestBase, "check_signature", lambda _self: None)
+        patch.setattr(ActionAuthenticatorMixin, "_authenticate_and_authorize_normal_action", _as_aws_gates)
         patch.setattr(moto_settings, "INITIAL_NO_AUTH_ACTION_COUNT", 0)
         yield stores
     server.stop()
@@ -139,33 +172,37 @@ def plain_base(two_stores: TwoStores) -> str:
 
 
 @pytest.fixture
-def two_store_catalog(two_stores: TwoStores, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
-    """The real catalog app on the estate key, with the second store's ``data`` base approved and referenced to its key.
+def two_store_catalog(two_stores: TwoStores, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+    """The real catalog app on a session under the estate's role, with the second store's ``data`` base approved and referenced to its key.
 
-    The Dapr secret store is the one collaborator replaced: it answers the reference with the second
-    store's bundle, in the shape ``warehouse_credentials.resolve`` reads. Vending is ``sts``, so the
-    lifespan builds the deployed ``StsVendor`` with the deployed allowlist; a test that vends replaces
-    only its ``_assume_role``, the call that would reach the store.
+    The catalog's projected token is exchanged on moto's STS for a session under a role allowed the estate bucket, as
+    the deployed catalog's is (ADR 0170). The Dapr secret store is the one collaborator replaced: it answers the
+    reference with the second store's bundle, in the shape ``warehouse_credentials.resolve`` reads. Vending is
+    ``web_identity``, so the lifespan builds the deployed ``WebIdentityVendor`` with the deployed allowlist; a test that
+    vends replaces only its ``_exchange``, the call that would reach the store.
     """
     from catalog.services import warehouse_credentials
 
+    token = tmp_path / "projected-rask-object-store-token"
+    token.write_text("projected-for-rask-object-store")
     for key, value in {
         "LANCE_REST_IMPL": "dir",
         "LANCE_REST_ROOT": f"s3://{two_stores.estate_bucket}",
         "LANCE_CONTROL_ROOT": f"s3://{two_stores.estate_bucket}",
         "LANCE_S3_ENDPOINT": two_stores.url,
-        "LANCE_S3_ACCESS_KEY_ID": two_stores.estate.aws_access_key_id,
-        "LANCE_S3_SECRET_ACCESS_KEY": two_stores.estate.aws_secret_access_key,
+        "LANCE_S3_WEB_IDENTITY_TOKEN_FILE": str(token),
+        "LANCE_S3_STS_ENDPOINT": two_stores.url,
+        "LANCE_S3_ASSUME_ROLE_ARN": two_stores.role_on(two_stores.estate_bucket),
         "LANCE_MULTIBASE_DATA_BASES": f"{two_stores.second_base},{two_stores.plain_base}",
         "LANCE_MULTIBASE_BASE_CREDENTIAL_REFS": f"{two_stores.second_base}={SECOND_REF}",
         "LANCE_CONTROL_EMIT_ENABLED": "false",
-        "LANCE_VENDING_MODE": "sts",
-        "LANCE_S3_STS_ENDPOINT": two_stores.url,
-        "LANCE_S3_ASSUME_ROLE_ARN": "arn:aws:iam::123456789012:role/lance-vend",
+        "LANCE_VENDING_MODE": "web_identity",
         "RASK_OIDC_ENABLED": "false",
         "RASK_FGA_ENABLED": "false",
     }.items():
         monkeypatch.setenv(key, value)
+    monkeypatch.delenv("LANCE_S3_ACCESS_KEY_ID", raising=False)
+    monkeypatch.delenv("LANCE_S3_SECRET_ACCESS_KEY", raising=False)
 
     def _secret_store(store: str, ref: str, *, require: str, timeout: float = 5.0, retries: int = 10, backoff: float = 3.0) -> dict[str, str]:
         assert ref == SECOND_REF, f"the catalog asked the secret store for {ref!r}"

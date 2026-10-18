@@ -395,6 +395,11 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   `_versions/`. The catalog finalizes what the writer staged (`version/create`, below). `maintain` (`can_maintain`) gets put/delete on the whole prefix for compaction and
   cleanup, and is also the shape for the warehouse scope probe. The management vend door checks the one rung its
   tier names, never either. A put over an existing key is the residue no session policy can refuse.
+  **Each vend is a session of its own** ([[XC-083]], ADR 0170): the catalog exchanges its OWN projected ServiceAccount
+  token through STS `AssumeRoleWithWebIdentity` with that session policy, named for the verified caller
+  (`vending.role_session_name`), and a refused or unanswered exchange answers 503 code 17 (`vending.vend_or_refuse`).
+  The catalog holds no store key: its own IO signs with an hour's session of the same token, renewed at half life
+  (`service_kit.governed.store_session`), so a running catalog never needs a restart for its credential.
   **The spec doors vend the highest tier FGA grants the caller** (ADR 0156 C3, `fga_deps.spec_vend_tier`):
   `DescribeTable` and `DeclareTable` vend unless the request sets `vend_credentials` false (unset, the spec lets the
   server decide), write on `can_write_data` (judged by the tier judge), read on `can_read_data`, otherwise none.

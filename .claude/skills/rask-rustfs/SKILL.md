@@ -1,6 +1,6 @@
 ---
 name: rask-rustfs
-description: "RustFS as rask's object store: the development and CI fixture (production S3 is the platform's), the zero-trust model rask depends on (scoped users, STS AssumeRole with session policies, deny-only sts evaluation, rotation as a second user, web identity as the strongest mode), the S3 behaviours Lance and the catalog need and their measured status, how scoped users and policies are provisioned through RustFS's admin API, and the traps (uid 10001 volumes, path-style, a pre-GA image refusing pyarrow multipart, default root credentials, the console and update check on by default, file-only logs in the image). Use whenever you deploy, configure, secure, test, upgrade or debug RustFS; touch deploy/fixtures/<store>, the scoped-users hook, .dagger/storage.go or the kind lane's store; write a vending or CAS test against a real store; state what rask demands of a platform S3 store; or reach for a RustFS docs page or the official RustFS Helm chart."
+description: "RustFS as rask's object store: the development and CI fixture (production S3 is the platform's), the zero-trust model rask depends on (the catalog's ServiceAccount token as its only store identity through AssumeRoleWithWebIdentity, a canned policy named by the token's subject, session policies, scoped users for the other planes, the provisioning hook that prunes what git does not declare), the S3 behaviours Lance and the catalog need and their measured status, how scoped users and policies are provisioned through RustFS's admin API, and the traps (uid 10001 volumes, path-style, a pre-GA image refusing pyarrow multipart, default root credentials, the console and update check on by default, file-only logs in the image). Use whenever you deploy, configure, secure, test, upgrade or debug RustFS; touch deploy/fixtures/<store>, the scoped-users hook, .dagger/storage.go or the kind lane's store; write a vending or CAS test against a real store; state what rask demands of a platform S3 store; or reach for a RustFS docs page or the official RustFS Helm chart."
 ---
 
 # rask × RustFS — the store fixture, its trust model, and what the docs get wrong
@@ -40,7 +40,7 @@ on RustFS", `docs/audits/2026-10-18/rustfs_sts_measure.py`): 26 checks, all as r
 
 | Need | Status |
 |---|---|
-| A non-root, policy-scoped user calls STS `AssumeRole` with an inline session policy (R1) | measured |
+| A non-root, policy-scoped user calls STS `AssumeRole` with an inline session policy (R1; no rask caller since ADR 0170) | measured |
 | The session policy is intersected with the parent's on every request; a session cannot widen its parent (R2) | measured |
 | An explicit Deny on `sts:AssumeRole` refuses the user's AssumeRole; `s3:prefix` `StringLike` gates ListBucket (R4) | measured |
 | A session policy's explicit Deny beats an Allow (R3, rask's `NeverAFinalManifest`) | source only (`rustfs@1.0.3:crates/policy/src/policy/policy.rs:70-76`) |
@@ -53,17 +53,22 @@ on RustFS", `docs/audits/2026-10-18/rustfs_sts_measure.py`): 26 checks, all as r
 | Conditional CompleteMultipartUpload (R11) | source only (`rustfs@1.0.3:crates/ecstore/src/set_disk/ops/multipart.rs:2702-2742`) |
 | Warehouse purge: DeleteObjects then DeleteBucket (R13) | not measured |
 | Session policy at the 2,048-byte boundary (R5) | source only (`rustfs@1.0.3:rustfs/src/admin/service/session_policy.rs:34-39`) |
-| AssumeRoleWithWebIdentity (R18) | source only |
+| AssumeRoleWithWebIdentity for a Kubernetes-shaped token, granted the canned policy its `sub` names; another account's, another audience's, an expired, forged or other-issuer token refused (R18) | measured on 1.0.3 with a stand-in issuer, 20 of 20 (`docs/audits/2026-10-18/rustfs_web_identity_measure.py`) |
 | Conditional writes exclusive across nodes (multi-node) | source only: the precondition is re-checked under a namespace write lock that, on a distributed store, needs a majority of the set's lockers (`rustfs@1.0.3:crates/ecstore/src/set_disk/ops/locking.rs:46-61`); not measured |
 
 ## 3. The zero-trust model rask relies on
 
-- **The catalog signs AssumeRole with its own scoped USER, never root.** The handler refuses a caller carrying a
-  session token, a temporary credential or a service account (`rustfs@1.0.3:rustfs/src/admin/handlers/sts.rs:212-221`).
-  It evaluates `sts:AssumeRole` with `deny_only: true` (`sts.rs:225-240`), so the user needs **no** `sts:` grant, only
-  at least one bound policy that resolves (`rustfs@1.0.3:crates/iam/src/sys.rs:1494-1525`). A binding that names a
-  missing policy denies AssumeRole: create a policy before attaching it, and never delete a policy still bound to the
-  catalog user, or every vend fails closed.
+- **The catalog's store identity is its ServiceAccount token, and it holds no key** (ADR 0170). Its pod projects a token
+  for `objectStore.identity.audience` (`rask-object-store`), and unsigned STS `AssumeRoleWithWebIdentity` exchanges it
+  for every session the catalog signs with: its own IO's (an hour, renewed at half life,
+  `service_kit.governed.store_session`) and each vend's (900 s, narrowed by the per-table session policy, named for the
+  caller). The fixture's provider (§5) sets `CLAIM_NAME=sub` and no role policy, so a verified token is granted the
+  canned policy its `sub` names (`rustfs@1.0.3:crates/iam/src/federation/mapper.rs:257-298`), and the hook writes the
+  catalog's under `system:serviceaccount:<ns>:<release>-sa-catalog` with no user bound to it. A `sub` naming no
+  policy is refused 400 `InvalidRequest` (`rustfs@1.0.3:rustfs/src/admin/service/federated_identity.rs:322-440`), so
+  another pod's token for the same audience gets nothing; a token failing verification is refused 403. A session is
+  allowed only where its session policy and the claim-named policy both allow (`rustfs@1.0.3:crates/iam/src/sys.rs:1532-1665`),
+  and the policy is resolved again on every request: deleting it cuts every live session off at once.
 - **Never vend from root.** A credential whose parent is root counts as owner and can bypass a bucket-policy Deny on
   Get/Put/DeleteBucketPolicy (`rustfs@1.0.3:rustfs/src/storage/access.rs:1220-1231`), and owner semantics bypass
   identity policy (`rustfs@1.0.3:crates/policy/src/policy/policy.rs:57-96`). The session policy still bounds a root
@@ -91,15 +96,15 @@ on RustFS", `docs/audits/2026-10-18/rustfs_sts_measure.py`): 26 checks, all as r
 - **`s3:*` does not grant force-delete.** `s3:ForceDeleteBucket`/`s3:ForceDeleteObject` must be named explicitly
   (`rustfs@1.0.3:crates/policy/src/policy/action.rs:184-198`). The catalog's purge works with `s3:DeleteBucket`
   alone; never name the force actions in a rask policy.
-- **Rotation is a second USER** (ADR 0166). AssumeRole refuses a service account (`sts.rs:219-221`), so the rotated
-  signing pair is another user under the same policy, exactly as on MinIO.
-- **Web identity is the strongest mode** (R18): the catalog holds no store key. `AssumeRoleWithWebIdentity` exists
-  (`sts.rs:186-195,399-441`), takes an inline session policy (`rustfs@1.0.3:rustfs/src/admin/service/federated_identity.rs:287-289`)
-  and checks signature, issuer, audience and expiry (`rustfs@1.0.3:crates/iam/src/oidc/runtime.rs:731-797`).
-  The hazard: with `RUSTFS_IDENTITY_OPENID_ROLE_POLICY` set, **every** valid token for the audience gets the whole role
-  policy, and a token holder can call STS directly with no session policy
-  (`rustfs@1.0.3:crates/iam/src/federation/mapper.rs:257-298`). The role policy must itself be minimal and tied to a
-  dedicated audience. See `references/security.md` § Web identity.
+- **Rotation is a second USER** (ADR 0166) for the planes that still hold a pair (lineage, maintenance, a data base's
+  credential reference). AssumeRole refuses a service account (`sts.rs:219-221`), so a pair that signed AssumeRole
+  would rotate to another user under the same policy; no rask pair signs AssumeRole any more.
+- **Never set `RUSTFS_IDENTITY_OPENID_ROLE_POLICY`.** With it, **every** valid token for the audience gets the whole
+  role policy, and any pod may project a token for any audience as its own ServiceAccount
+  (`rustfs@1.0.3:crates/iam/src/federation/mapper.rs:257-298`). Without it the token's `groups` claim is mapped to
+  policies too (`OIDC_DEFAULT_GROUPS_CLAIM`, `rustfs@1.0.3:crates/config/src/constants/oidc.rs:102`); a ServiceAccount
+  token carries none. `tests/unit/test_a_provisioned_identity_is_one_the_service_uses.py` fails a fixture render that
+  sets a role policy. See `references/security.md` § Web identity.
 - **There is one listener for S3, admin and internode RPC** (`:9000`): the admin API (`/rustfs/admin`, alias
   `/minio/admin`), the Iceberg REST catalog (`/iceberg/v1`, `/_iceberg/v1`) and peer RPC share it
   (`rustfs@1.0.3:rustfs/src/server/prefix.rs:51-73`; `rustfs@1.0.3:rustfs/src/server/hybrid.rs:35`). A
@@ -119,6 +124,17 @@ rask's runtime makes no admin call (R17). Users, policies and buckets are made o
 | bind (replaces) | `PUT /rustfs/admin/v3/set-user-or-group-policy?policyName=<p>&userOrGroup=<ak>&isGroup=false` | `policies.rs:83` |
 | bind (adds) | `POST /rustfs/admin/v3/idp/builtin/policy/attach` | `policies.rs:93` |
 | bucket | S3 `CreateBucket` (boto3) | S3 API |
+| list users | `GET /rustfs/admin/v3/list-users`: plain JSON keyed by access key, regular users only (no session, no service account) | `user_lifecycle.rs:26`; `rustfs@1.0.3:crates/iam/src/manager.rs:1367-1377` |
+| remove user | `DELETE /rustfs/admin/v3/remove-user?accessKey=<ak>`: 404 once absent | `user_lifecycle.rs:38` |
+| list / remove policy | `GET /rustfs/admin/v3/list-canned-policies`; `DELETE /rustfs/admin/v3/remove-canned-policy?name=<p>` | `policies.rs:59,77` |
+
+THE STORE'S IDENTITIES ARE WHAT GIT DECLARES (ADR 0170). The hook's install run and its post-upgrade run
+(`<release>-object-store-scoped-users-prune-<rev>`) pass `--prune`: every regular user the run does not declare is
+removed (the root aside), then every canned policy rask owns (`rask-*`, or named after a ServiceAccount,
+`scripts/rustfs_admin.py` `OWNED_POLICY_PREFIXES`) that it does not create; a policy rask does not own is never
+touched. The pre-upgrade run prunes nothing, because the previous release's pods still present what it would remove. A
+user or policy made by hand on the dev store is therefore gone at the next upgrade. Pinned against a real RustFS by
+`tests/e2e-py/test_a_policy_the_store_refuses_fails_the_scoped_users_hook.py`.
 
 Rules: the policy before the binding; a user name must not equal the root access key; access keys alphanumeric (a `/`
 breaks SigV4 credential scope, `docs:operations/credentials.md`); bucket names match
@@ -148,6 +164,14 @@ The fixture is **a local chart** (`deploy/fixtures/rustfs/chart`, `CHART=chart`,
   `RUSTFS_OBS_LOG_DIRECTORY=""`, `RUSTFS_OBS_PROFILING_EXPORT_ENABLED=false`; `RUSTFS_DURABILITY_MODE` unset (strict).
   Each with its source line in `references/config.md`.
 - Service exposes S3 only (no console port), NodePort 30900 for the vended endpoint (LH-489).
+- The identity provider, from `identityProvider` (ADR 0170): `RUSTFS_IDENTITY_OPENID_CONFIG_URL` at rask's issuer
+  mirror (`http://rask-issuer-mirror:8080/.well-known/openid-configuration`; k3s answers discovery only to a bearer),
+  `RUSTFS_IDENTITY_OPENID_ISSUER` the cluster's issuer, which the discovered `issuer` must equal
+  (`rustfs@1.0.3:crates/iam/src/oidc/provider.rs:498-588`), `CLIENT_ID` the catalog's store audience, `CLAIM_NAME=sub`,
+  `HIDE_FROM_UI=true` (a discovery document with no `authorization_endpoint` is a workload provider only then,
+  `provider.rs:128-153`), and `RUSTFS_OUTBOUND_ALLOW_ORIGINS` the mirror's origin, the one private origin the store's
+  egress guard admits (`rustfs@1.0.3:crates/utils/src/egress.rs:25-29`). No role policy (§3). The settings live in the
+  pod template, so a change rolls the store.
 
 ## 6. Traps (each measured or read in source)
 
@@ -197,6 +221,14 @@ The fixture is **a local chart** (`deploy/fixtures/rustfs/chart`, `CHART=chart`,
 - **Region.** The server defaults to `us-east-1` (`rustfs@1.0.3:crates/config/src/constants/app.rs:289-292`).
   Whether it rejects another signing region is not traced (the check lives in the `s3s` dependency).
   `AWS_REGION` in `chart/values.yaml` defaults to `us-east-1` for that reason. Sign with `us-east-1`.
+- **An admin route refuses a bare `?`.** A call with an empty query string answers 400 "failed to decode query"
+  (found against 1.0.3, 2026-10-18); `scripts/rustfs_admin.py` sends no `?` without parameters.
+- **A refused token costs a round trip to the issuer.** A token that fails verification makes the store fetch discovery
+  and the key set again, once, before it refuses (`rustfs@1.0.3:crates/iam/src/oidc/runtime.rs:740-798`): on the estate
+  a request to the issuer mirror and one from it to the API server.
+- **A provider whose discovery fails at boot is recovered in the background,** backing off to 30 s
+  (`rustfs@1.0.3:crates/iam/src/oidc/runtime.rs:151-216`), so a store that starts before the issuer mirror refuses every
+  exchange until the mirror answers, and the catalog's boot exchange waits out a minute of it.
 
 ## 7. Testing against RustFS
 

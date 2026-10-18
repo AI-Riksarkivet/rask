@@ -6,19 +6,19 @@ every release revision, under a 1 MiB ceiling. Each section is headed by the tem
 ## `apiVersion: batch/v1`
 
 SCOPED USERS AND PLATFORM BUCKETS — the one provisioning step for the development store, rendered whenever
-`objectStore.enabled`. It creates every bucket the estate makes for itself (below) and every plane identity named in
-values.yaml `objectStore` (maintenance, lineage, catalog, viewer, the media corpus readers, the backups, and each
-multi-base data base). Without a step in the release, a scoped identity is a values knob only a hand-run admin session
-can turn, and a fresh install comes up on the store's root. It is the only workload that presents the root
+`objectStore.enabled`. It creates every bucket the estate makes for itself (below), every plane identity named in
+values.yaml `objectStore` (maintenance, lineage, viewer, the media corpus readers, the backups, and each multi-base data
+base), and the catalog's policy, named after its ServiceAccount and held by no user: the store grants it to the token
+the catalog's pod projects (ADR 0170). Without a step in the release, a scoped identity is a values knob only a hand-run
+admin session can turn, and a fresh install comes up on the store's root. It is the only workload that presents the root
 (ADR 0168; `tests/unit/test_every_secret_in_the_dev_store_has_exactly_its_readers.py`). A platform's S3 gets neither from
 rask: its operator makes the buckets and the identities.
 
 WHY A POLICY AND NOT JUST A USER: the point of this Job is the DENY — the maintenance credential must not
 write `_projects/`, `_protection/`, `_warehouses/`, `_gates/` or `__manifest/`, the records that decide what
 maintenance is permitted to do. A credential that can rewrite its own governing records can turn off the
-shallow-clone guard that stops a compaction destroying another dataset's source. And on RustFS a user's STS
-`AssumeRole` needs at least one bound policy that resolves (it is evaluated deny-only), so a user with no
-binding, or one bound to a missing policy, cannot vend at all.
+shallow-clone guard that stops a compaction destroying another dataset's source. And on RustFS a binding that names a
+missing policy refuses every request the user signs, so every policy is written before any binding names it.
 
 THREE POLICY LESSONS, each of which cost a broken pipeline, and none of which is recoverable by
 reading the docs:
@@ -34,14 +34,21 @@ data are minted at runtime by `POST /management/v1/warehouses`. See the long not
 IDEMPOTENT, CALL BY CALL, on RustFS's native admin API (`scripts/rustfs_admin.py`):
 `add-canned-policy` replaces a policy of the same name; `add-user` on an existing access key sets its secret
 again, which is what makes a derived secret converge; `set-user-or-group-policy` replaces the user's binding.
-The script creates every policy before it binds any, deletes nothing, and exits non-zero on the first
-refusal, so a malformed policy or a denied call fails the hook instead of leaving a credential on its previous
-policy while the hook reports success. A canned policy must carry `Version` (`rustfs@1.0.3:rustfs/src/admin/handlers/policies.rs:229-231`);
+The script creates every policy before it binds any, and exits non-zero on the first refusal, so a malformed policy or
+a denied call fails the hook instead of leaving a credential on its previous policy while the hook reports success. Its
+pruning runs (`--prune`) then remove every regular user and every rask policy (`rask-*`, or named after a ServiceAccount)
+the plan does not declare, so the store's identities are what git declares and a retired one is not left signing
+([[XC-083]]: the catalog's `rask-catalog` user). A policy rask does not own, RustFS's built-ins or an operator's, is
+never removed. A canned policy must carry `Version` (`rustfs@1.0.3:rustfs/src/admin/handlers/policies.rs:229-231`);
 every policy here does.
 
-## `"helm.sh/hook": pre-upgrade,post-upgrade`
+## `"helm.sh/hook": {{ $phase }}`
 
-TWO HOOK PHASES, AND EACH ANSWERS A DIFFERENT FAILURE; on a fresh install the Job is a plain release object.
+ONE JOB PER PHASE, AND EACH ANSWERS A DIFFERENT FAILURE; on a fresh install the Job is a plain release object that
+provisions and prunes, since no pod of an earlier release can be presenting a retired identity. On an upgrade the
+`pre-upgrade` Job provisions and prunes nothing, and the `post-upgrade` one (`…-prune-<rev>`) provisions again and
+prunes: a user this release retires is still what the previous release's pods present until the upgrade has replaced
+them, so removing it before then cuts them off mid-flight.
 `pre-upgrade` is what lets the identities be NAMED by default. With only `post-upgrade` the
 store's user is created after the Deployments have been updated, so pods restart holding a
 credential the object store has never heard of and 403 until the hook catches up — and that
@@ -186,11 +193,13 @@ the prefix itself before listing it.
 
 WIDE ON DATA, AND THAT IS THE POINT — what it drops is ADMIN.
 
-This identity exists so the catalog never presents the store's ROOT account. Under `vending.mode: sts` it SIGNS
-`AssumeRole`: RustFS evaluates that call deny-only, so this user needs a resolving policy binding and no `sts:`
-grant, and the session policy the catalog passes is enforced on the credential it issues (measured 2026-10-18 on
-rustfs/rustfs 1.0.1, docs/audits/2026-10-18/rustfs-zero-trust.md). Rotation of this pair is a second user under
-the same policy (ADR 0166): RustFS refuses AssumeRole from a service account.
+NO USER HOLDS IT ([[XC-083]], ADR 0170). It is written under the catalog's account name,
+`system:serviceaccount:<ns>:<release>-sa-catalog` (`lance.saAccount`), and the store's identity provider grants a
+verified token exactly the canned policy its `sub` names, with no role policy (deploy/fixtures/rustfs
+`identityProvider`). So the catalog's projected token is exchanged for sessions under this policy, its own IO and every
+vend, the vend's narrowed further by a per-table session policy, and every other account's token maps to no policy
+and is refused (measured on rustfs/rustfs 1.0.3, docs/audits/2026-10-18/rustfs_web_identity_measure.py). There is no
+key to rotate: each session lives an hour at most, and the kubelet rotates the token it is exchanged for.
 
 The DATA grant cannot be narrowed by bucket: warehouse buckets are minted at RUNTIME by
 `POST /management/v1/warehouses`, so a render-time list is stale by construction — the same reason

@@ -13,11 +13,10 @@ also matches `<n>.manifest-<uuid>.manifest`, which pylance reads as a final mani
 pylance 13.0.0 on a throwaway store and on the deployed one (LH-469, #594); RustFS lets an explicit Deny win
 (R3, `docs/audits/2026-10-18/rustfs-zero-trust.md`). Whole-prefix write and delete belong to `can_maintain`.
 
-DRIVEN THROUGH THE REAL DOOR AND THE REAL VENDOR. The catalog runs on a moto server, the vendor is the
-estate's `StsVendor`, and its AssumeRole goes to moto's STS; the only thing added is a recorder of the
-session policy that call carried. moto's S3 does not enforce session policies, so the policy is judged
-with moto's IAM evaluator (`IAMPolicy`), which applies IAM's wildcard semantics and an explicit Deny's
-precedence. The store's own 403s are the deployed probe's job.
+DRIVEN THROUGH THE REAL DOOR AND THE REAL VENDOR. The catalog runs on a moto server, the vendor is the one its
+lifespan builds, and its token exchange goes to moto's STS, which records the session policy each session carries.
+moto's S3 does not enforce session policies, so the policy is judged with moto's IAM evaluator (`IAMPolicy`), which
+applies IAM's wildcard semantics and an explicit Deny's precedence. The store's own 403s are the deployed probe's job.
 """
 
 from __future__ import annotations
@@ -39,8 +38,8 @@ import pyarrow as pa
 import pytest
 import uvicorn
 from moto.iam.access_control import IAMPolicy, PermissionResult
+from moto.sts.models import sts_backends
 
-from catalog.core.vending import StsVendor
 from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 
 
@@ -55,8 +54,8 @@ def _rows(ids: list[int], blob_bytes: int = 16) -> pa.Table:
 class _Estate:
     """The catalog on moto, one table and a branch of it created through the door, and every session policy vended."""
 
-    def __init__(self, client: httpx.Client, s3: Any, bucket: str, policies: list[str]) -> None:
-        self.client, self.s3, self.bucket, self.policies = client, s3, bucket, policies
+    def __init__(self, client: httpx.Client, s3: Any, bucket: str) -> None:  # noqa: ANN401 — a boto3 S3 client
+        self.client, self.s3, self.bucket = client, s3, bucket
         assert client.post("/v1/namespace/db/create", json={}).status_code == 200
         self.location = self._create(_TABLE)
         created = client.post(f"/v1/table/{_TABLE}/branches/create", json={"name": "b1"})
@@ -68,12 +67,14 @@ class _Estate:
         return str(created.json()["location"])
 
     def vend(self, tier: str, branch: str = "") -> tuple[dict[str, str], dict[str, Any]]:
-        """The storage options the door vends, and the session policy the vendor sent to STS for them."""
+        """The storage options the door vends, and the session policy the vendor sent to STS for them, as moto recorded it."""
         params = {"tier": tier, **({"branch": branch} if branch else {})}
         vended = self.client.post(f"/management/v1/table/{_TABLE}/credentials", params=params)
         assert vended.status_code == 200, vended.text
         assert vended.json()["mode"] == "direct", vended.text
-        return vended.json()["credentials"]["storage_options"], json.loads(self.policies[-1])
+        options = vended.json()["credentials"]["storage_options"]
+        session = next(role for role in sts_backends["123456789012"]["aws"].assumed_roles if role.access_key_id == options["aws_access_key_id"])
+        return options, json.loads(session.policy)
 
     def keys(self) -> set[str]:
         return {o["Key"] for page in self.s3.get_paginator("list_objects_v2").paginate(Bucket=self.bucket) for o in page.get("Contents", [])}
@@ -84,31 +85,27 @@ def estate(moto_url: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> It
     bucket = f"lh202-{uuid.uuid4().hex[:10]}"
     s3 = boto3.client("s3", endpoint_url=moto_url, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1")
     s3.create_bucket(Bucket=bucket)
+    token = tmp_path / "projected-rask-object-store-token"
+    token.write_text("projected-for-rask-object-store")
     for key, value in {
         "LANCE_REST_IMPL": "dir",
         "LANCE_REST_ROOT": f"s3://{bucket}",
         "LANCE_CONTROL_ROOT": f"s3://{bucket}",
         "LANCE_S3_ENDPOINT": moto_url,
-        "LANCE_S3_ACCESS_KEY_ID": "test",
-        "LANCE_S3_SECRET_ACCESS_KEY": "test",
+        "LANCE_S3_WEB_IDENTITY_TOKEN_FILE": str(token),
+        "LANCE_S3_STS_ENDPOINT": moto_url,
+        "LANCE_S3_ASSUME_ROLE_ARN": "arn:aws:iam::123456789012:role/lance-vend",
+        "LANCE_VENDING_MODE": "web_identity",
         "LANCE_CONTROL_EMIT_ENABLED": "false",
     }.items():
         monkeypatch.setenv(key, value)
-    from catalog.api.dependencies import get_vendor
+    monkeypatch.delenv("LANCE_S3_ACCESS_KEY_ID", raising=False)
+    monkeypatch.delenv("LANCE_S3_SECRET_ACCESS_KEY", raising=False)
     from catalog.core.config import get_settings
 
     get_settings.cache_clear()
     from catalog.main import app
 
-    sts = boto3.client("sts", endpoint_url=moto_url, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1")
-    policies: list[str] = []
-
-    def _assume_role(**kwargs: Any) -> dict[str, object]:
-        policies.append(str(kwargs["Policy"]))
-        return sts.assume_role(**kwargs)
-
-    vendor = StsVendor(role_arn="arn:aws:iam::123456789012:role/lance-vend", region="us-east-1", endpoint=moto_url, assume_role=_assume_role)
-    app.dependency_overrides[get_vendor] = lambda: vendor
     server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=0, log_level="warning", lifespan="on"))
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
@@ -118,10 +115,9 @@ def estate(moto_url: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> It
             raise RuntimeError("uvicorn did not start")
         time.sleep(0.05)
     with httpx.Client(base_url=f"http://127.0.0.1:{server.servers[0].sockets[0].getsockname()[1]}", timeout=120) as client:
-        yield _Estate(client, s3, bucket, policies)
+        yield _Estate(client, s3, bucket)
     server.should_exit = True
     thread.join(timeout=30)
-    app.dependency_overrides.clear()
     get_settings.cache_clear()
 
 

@@ -7,10 +7,8 @@ anything connects. That refusal, at every door that builds a warehouse connectio
 the real app by `tests/integration/test_a_foreign_store_is_refused_until_its_credential_is_consumed.py`.
 What stays here is the builder's own behaviour and the resolver handing it the record's endpoint.
 
-CREDENTIALS ARE DELIBERATELY NOT HERE. Material never travels in a record. The catalog resolves its own
-S3 secret from the Dapr secret store (`dapr_secret_store`/`dapr_secret_key`/`dapr_secret_s3_field`), so
-a second store's material belongs behind the same door under its own key, with the record naming a
-REFERENCE.
+CREDENTIALS ARE DELIBERATELY NOT HERE. Material never travels in a record: a second store's material belongs
+behind the Dapr secret store (`dapr_secret_store`/`dapr_secret_s3_field`), with the record naming a REFERENCE.
 """
 
 from __future__ import annotations

@@ -2,7 +2,7 @@
 
 THE ESTATE is the real catalog app on a moto bucket whose ``models/`` prefix holds a victim model's
 weights, with ``LANCE_EXTERNAL_BLOB_BASES`` naming that prefix (the chart's default) and a separate
-corpus bucket, and the lifespan's own STS vendor, whose ``AssumeRole`` call is captured so the session
+corpus bucket, and the lifespan's own vendor, whose token exchange is captured so the session
 policy it would send is what the test reads. Measured before the fix: every create registered the
 ``models/`` base, so a plain create's read vend granted ``ListBucket`` and ``GetObject`` on
 ``<bucket>/models/*``, and a create whose rows named the victim's weights by ``Blob.from_uri`` was
@@ -19,6 +19,8 @@ from __future__ import annotations
 import json
 import uuid
 from collections.abc import Iterator
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
@@ -28,7 +30,10 @@ import pyarrow as pa
 import pytest
 from fastapi.testclient import TestClient
 from lance.blob import Blob, blob_array
+from pydantic import SecretStr
 
+from service_kit.governed.store_credential import S3KeyPair
+from service_kit.governed.store_session import IssuedSession, WebIdentity
 from service_kit.lakehouse import blobs
 from service_kit.lakehouse.objectfs import lance_storage_options
 from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
@@ -59,32 +64,38 @@ class _Estate:
             headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE},
         )
 
-    def capture(self, **kwargs: Any) -> dict[str, Any]:  # noqa: ANN401 — boto3's AssumeRole keyword arguments
-        self.policies.append(json.loads(str(kwargs["Policy"])))
-        return {"Credentials": {"AccessKeyId": "AK", "SecretAccessKey": "SK", "SessionToken": "ST"}}
+    def capture(self, _identity: WebIdentity, *, session_name: str, duration_seconds: int, policy: str | None = None) -> IssuedSession:
+        self.policies.append(json.loads(str(policy)))
+        return IssuedSession(
+            key_pair=S3KeyPair(access_key_id="AK", secret_access_key=SecretStr("SK"), session_token=SecretStr("ST")),
+            expiration=datetime(2030, 1, 1, tzinfo=UTC),
+        )
 
 
 @pytest.fixture
-def estate(moto_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[_Estate]:
+def estate(moto_url: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[_Estate]:
     bucket, corpus = f"lh209-{uuid.uuid4().hex[:10]}", f"lh209c-{uuid.uuid4().hex[:10]}"
     s3 = boto3.client("s3", endpoint_url=moto_url, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1")
     for name in (bucket, corpus):
         s3.create_bucket(Bucket=name)
     s3.put_object(Bucket=bucket, Key="models/victim/tok/weights.bin", Body=b"VICTIM-WEIGHTS")
+    token = tmp_path / "projected-rask-object-store-token"
+    token.write_text("projected-for-rask-object-store")
     for key, value in {
         "LANCE_REST_IMPL": "dir",
         "LANCE_REST_ROOT": f"s3://{bucket}",
         "LANCE_CONTROL_ROOT": f"s3://{bucket}",
         "LANCE_S3_ENDPOINT": moto_url,
-        "LANCE_S3_ACCESS_KEY_ID": "test",
-        "LANCE_S3_SECRET_ACCESS_KEY": "test",
+        "LANCE_S3_WEB_IDENTITY_TOKEN_FILE": str(token),
         "LANCE_CONTROL_EMIT_ENABLED": "false",
-        "LANCE_VENDING_MODE": "sts",
+        "LANCE_VENDING_MODE": "web_identity",
         "LANCE_S3_STS_ENDPOINT": moto_url,
         "LANCE_S3_ASSUME_ROLE_ARN": "arn:aws:iam::000000000000:role/lance-vend",
         "LANCE_EXTERNAL_BLOB_BASES": f"s3://{bucket}/models/,s3://{corpus}/media/",
     }.items():
         monkeypatch.setenv(key, value)
+    monkeypatch.delenv("LANCE_S3_ACCESS_KEY_ID", raising=False)
+    monkeypatch.delenv("LANCE_S3_SECRET_ACCESS_KEY", raising=False)
     from catalog.core.config import get_settings
 
     get_settings.cache_clear()
@@ -92,7 +103,7 @@ def estate(moto_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[_Estate]:
 
     with TestClient(app) as client:
         made = _Estate(moto_url, client, bucket, corpus)
-        app.state.vendor._assume_role = made.capture  # noqa: SLF001 — the injection point the lifespan's vendor does not expose
+        app.state.vendor._exchange = made.capture  # noqa: SLF001 — the injection point the lifespan's vendor does not expose
         yield made
     get_settings.cache_clear()
 

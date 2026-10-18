@@ -129,17 +129,23 @@ def control_outbox(tmp_path: Path) -> str:
 
 
 @pytest.fixture
-def boot(tmp_path: Path, control_outbox: str, monkeypatch: pytest.MonkeyPatch, respx_allows_unused_routes: None) -> Iterator[Boot]:
+def boot(tmp_path: Path, control_outbox: str, two_stores: Any, monkeypatch: pytest.MonkeyPatch, respx_allows_unused_routes: None) -> Iterator[Boot]:  # noqa: ANN401 — conftest.TwoStores
     """Boot the real catalog with signing configured: `boot(seed, keys, token)` answers the running client.
 
     The order is the one `tests/integration/conftest.py::real_ns_client` documents: env, then the settings cache, then
     the app imported inside the fixture. `token` is what the catalog's door resolves for the caller: a subject, or None
-    for a write nobody authenticated. Both lanes are on, and the control lane stages, as the chart deploys them.
+    for a write nobody authenticated. Both lanes are on, and the control lane stages, as the chart deploys them; the
+    catalog's store identity is its projected token, exchanged on the module's moto STS.
     """
+    projected = tmp_path / "projected-rask-object-store-token"
+    projected.write_text("projected-for-rask-object-store")
     env = {
         "LANCE_REST_IMPL": "dir",
         "LANCE_REST_ROOT": str(tmp_path / "warehouse"),
         "LANCE_SECRETS_FROM_DAPR": "true",
+        "LANCE_S3_WEB_IDENTITY_TOKEN_FILE": str(projected),
+        "LANCE_S3_STS_ENDPOINT": two_stores.url,
+        "LANCE_S3_ASSUME_ROLE_ARN": two_stores.role_on(two_stores.estate_bucket),
         "RASK_SIGNING_IDENTITY": CATALOG,
         "LANCE_LINEAGE_EMIT_ENABLED": "true",
         "LANCE_LINEAGE_TRANSPORT": "dapr",
@@ -151,6 +157,7 @@ def boot(tmp_path: Path, control_outbox: str, monkeypatch: pytest.MonkeyPatch, r
     }
     for name, value in env.items():
         monkeypatch.setenv(name, value)
+    monkeypatch.delenv("LANCE_S3_ACCESS_KEY_ID", raising=False)
     monkeypatch.delenv("LANCE_S3_SECRET_ACCESS_KEY", raising=False)
     from catalog import main
     from catalog.api.dependencies import get_namespace, get_storage_options
@@ -164,7 +171,6 @@ def boot(tmp_path: Path, control_outbox: str, monkeypatch: pytest.MonkeyPatch, r
 
         def _boot(seed: httpx.Response, keys: httpx.Response, token: object) -> TestClient:
             stack.enter_context(respx.mock)
-            respx.get(f"{SECRETS}/catalog-s3").mock(return_value=httpx.Response(200, json={"access_key": "test", "secret_key": "the-s3-secret"}))
             respx.get(f"{SECRETS}/signing-key-{signing_key_name(CATALOG)}").mock(return_value=seed)
             respx.get(f"{SECRETS}/signing-public-{signing_key_name(CATALOG)}").mock(return_value=keys)
             namespace = connect("dir", {"root": str(tmp_path / "warehouse")})

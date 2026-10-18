@@ -1,0 +1,61 @@
+{{- if and .Values.auth.issuerMirror.enabled (or .Values.openfga.enabled .Values.objectStore.enabled) }}
+{{- $name := printf "%s-issuer-mirror" .Release.Name }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels: {{- include "rask.componentLabels" (list . "issuer-mirror") | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app.kubernetes.io/component: issuer-mirror, app.kubernetes.io/instance: {{ .Release.Name }} }
+  template:
+    metadata:
+      labels: {{- include "rask.componentLabels" (list . "issuer-mirror") | nindent 8 }}
+    spec:
+      terminationGracePeriodSeconds: {{ .Values.lifecycle.terminationGracePeriodSeconds }}
+      serviceAccountName: {{ include "lance.fullname" . }}-sa-issuer-mirror
+      securityContext: { runAsNonRoot: true, seccompProfile: { type: RuntimeDefault } }
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: mirror
+          image: "{{ include "lance.catalogImage" . }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- include "lance.securityContext" . | nindent 10 }}
+          {{- include "lance.preStop" . | nindent 10 }}
+          args:
+            - "uvicorn"
+            - "--factory"
+            - "service_kit.governed.issuer_mirror:create_app"
+            - "--host=0.0.0.0"
+            - "--port=8080"
+            {{- include "rask.shutdownArg" . | nindent 12 }}
+          env:
+            - { name: RASK_ISSUER_MIRROR_ISSUER, value: {{ .Values.auth.serviceAccountIssuer | quote }} }
+            - { name: RASK_ISSUER_MIRROR_PUBLIC_URL, value: "http://{{ $name }}:8080" }
+            - { name: RASK_ISSUER_MIRROR_TOKEN_FILE, value: /var/run/secrets/rask/sa-fetch/token }
+            - { name: RASK_ISSUER_MIRROR_CA_FILE, value: /var/run/secrets/rask/sa-fetch/ca.crt }
+          ports: [{ name: http, containerPort: 8080 }]
+          readinessProbe: { httpGet: { path: /.well-known/openid-configuration, port: http }, periodSeconds: 10, timeoutSeconds: 5 }
+          livenessProbe: { tcpSocket: { port: http }, periodSeconds: 20 }
+          resources:
+            requests: { cpu: 10m, memory: 96Mi }
+            limits: { memory: 256Mi }
+          volumeMounts:
+            {{- include "lance.tmpMount" . | nindent 12 }}
+            {{- include "lance.saFetch" "mounts" | nindent 12 }}
+      volumes:
+        {{- include "lance.tmpVolume" . | nindent 8 }}
+        {{- include "lance.saFetch" "volumes" | nindent 8 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels: {{- include "rask.componentLabels" (list . "issuer-mirror") | nindent 4 }}
+spec:
+  selector: { app.kubernetes.io/component: issuer-mirror, app.kubernetes.io/instance: {{ .Release.Name }} }
+  ports: [{ name: http, port: 8080, targetPort: http }]
+{{- end }}

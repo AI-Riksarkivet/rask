@@ -10,8 +10,9 @@ the same path with a trailing slash, or its parent, is not matched and the read 
 
 REFERENCES, NEVER MATERIAL. What an operator configures is base URI -> secret NAME
 (``LANCE_MULTIBASE_BASE_CREDENTIAL_REFS``). The material is fetched through the Dapr secret-store door
-the catalog already uses for its own S3 secret, so nothing secret is in configuration, in a record, or
-in an environment variable.
+the catalog reads its other secrets through, so nothing secret is in configuration, in a record, or in an
+environment variable. It is the one static key the catalog holds ([[XC-168]]): its own store identity is its
+ServiceAccount token (ADR 0170).
 
 A CONFIGURED BASE COVERS WHAT LIES BENEATH IT. A table's manifest registers its own directory under the
 configured base, so the reference applies to every declared base path at or under the configured URI,

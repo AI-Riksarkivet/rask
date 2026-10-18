@@ -25,6 +25,12 @@ true, `rustfs@1.0.3:rustfs/src/init.rs:78-86`).
 | `RUSTFS_REGION` | unset (`us-east-1`) | `us-east-1` | `cli.rs:1600`; `app.rs:289-292` |
 | `RUSTFS_SERVER_DOMAINS` | unset (path-style) | unset | `cli.rs:1535-1548` |
 | `RUSTFS_ON_DEMAND_MIGRATION_ENABLED` | `false` (optional) | on; no outbound call unless a bucket has a source | `rustfs/src/module_switches.rs:41` |
+| `RUSTFS_IDENTITY_OPENID_CONFIG_URL` | `identityProvider.configUrl`: rask's issuer mirror's discovery | unset (no provider) | `crates/iam/src/oidc/config.rs:566-602` |
+| `RUSTFS_IDENTITY_OPENID_ISSUER` | `identityProvider.issuer`: the cluster's issuer, which the discovered `issuer` must equal | unset (the config URL's issuer) | `crates/iam/src/oidc/provider.rs:498-588` |
+| `RUSTFS_IDENTITY_OPENID_CLIENT_ID` | `identityProvider.clientId`: the catalog's store audience | unset | `crates/iam/src/oidc/runtime.rs:740-798` |
+| `RUSTFS_IDENTITY_OPENID_CLAIM_NAME` | `sub`, with no `ROLE_POLICY`: a token gets the canned policy its subject names | unset | `crates/iam/src/federation/mapper.rs:257-298` |
+| `RUSTFS_IDENTITY_OPENID_HIDE_FROM_UI` | `true`: a discovery with no `authorization_endpoint` is a workload provider | `false` | `crates/iam/src/oidc/provider.rs:128-153` |
+| `RUSTFS_OUTBOUND_ALLOW_ORIGINS` | the issuer mirror's origin | empty; private origins refused | `crates/utils/src/egress.rs:25-29` |
 
 ## Leave unset (each opens a surface)
 

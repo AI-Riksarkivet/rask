@@ -1,8 +1,9 @@
 # 0166. A secret read from the store is re-read on a TTL; a service's own S3 key pair is held in the store (2026-10-16)
 
-**Status:** accepted. Source: owner, 2026-10-16, two decisions on XC-082 (#215) through the multi-question tool: where
-a service's own S3 key id lives (in the store with its secret, Lakekeeper's model), and which tests pin the row (the
-real apps over a moto server that enforces key ids). Reference: Lakekeeper's secret cache
+**Status:** accepted; amended by [ADR 0170](0170-the-catalogs-store-identity-is-its-serviceaccount.md), under which the
+catalog holds no key pair: its store identity is its ServiceAccount token. Source: owner, 2026-10-16, two decisions on
+XC-082 (#215) through the multi-question tool: where a service's own S3 key id lives (in the store with its secret,
+Lakekeeper's model), and which tests pin the row (the real apps over a moto server that enforces key ids). Reference: Lakekeeper's secret cache
 (`crates/lakekeeper/src/service/secrets.rs`, `service/cache_ttl.rs`) and credential update
 (`api/management/v1/warehouse/mod.rs`, `update_storage_credential`), read at `0b3fb120`.
 

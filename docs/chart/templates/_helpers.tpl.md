@@ -744,6 +744,14 @@ The subject one of the release's own services is: `kubernetes~system:serviceacco
 names for a service is this, so none can name a subject the pod does not authenticate as.
 Call: include "lance.saSubject" (list $root <name>).
 
+## `{{- define "lance.saAccount" -}}`
+
+The ServiceAccount username one of the release's services runs as, `system:serviceaccount:<release namespace>:<release>-sa-<name>`:
+the `sub` the cluster's issuer puts in its tokens, and `lance.saSubject` without the issuer prefix. The object store's
+identity provider maps a token to the canned policy its `sub` names, so the scoped-users hook writes the catalog's
+policy under this name (ADR 0170).
+Call: include "lance.saAccount" (list $root <name>).
+
 ## `{{- define "lance.saVerifier" -}}`
 
 The SA verifier a door builds beside Dex: its env, and the API-audience token + cluster CA it fetches
@@ -873,17 +881,19 @@ sleep 3; done` — r229's exact shape — and a 20-second deadline was terminate
 `Failed=DeadlineExceeded` (2026-09-24). The three-bound reasoning above is only worth anything if the
 one bound that applies actually fires here.
 
-## `{{- define "lance.catalogSecretField" -}}`
+## `{{- define "lance.baseSecretField" -}}`
 
-The bundle field the catalog reads its S3 secret from, and so the field a per-base credential carries.
-`objectStore.catalogAccessKey` is `required`: the catalog presents its own scoped identity (the `rask-catalog`
-policy), which signs its STS `AssumeRole` calls, and never the store's root, whose secret signs every STS session
-token on RustFS (ADR 0168), so there is no field to fall back to.
+The field a data base's credential reference carries its S3 secret in (`catalog.multibase.baseCredentialRefs`,
+[[LH-067]]), beside `aws_access_key_id`. It is the one static pair the catalog still reads, parked as [[XC-168]]; the
+catalog's own identity holds no key (ADR 0170).
 
-## `{{- define "lance.catalogKeyIdField" -}}`
+## `{{- define "lance.objectStoreAudience" -}}`
 
-The bundle field the catalog reads its S3 key id from, beside the secret ([[XC-082]], ADR 0166), under the same
-`required`.
+The audience the catalog's store token is projected for, `objectStore.identity.audience` (ADR 0170). One value names
+both halves: the token the catalog's pod mounts (`lance.identityTokens`) and the client id the store trusts as its
+identity provider's (`deploy/fixtures/rustfs` `identityProvider.clientId`, which
+`tests/unit/test_a_provisioned_identity_is_one_the_service_uses.py` holds equal). `required`: a blank audience would
+leave the catalog no identity at the store, and there is no key pair to fall back to.
 
 ## `{{- define "lance.mediaIdentity" -}}`
 

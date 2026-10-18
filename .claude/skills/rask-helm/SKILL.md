@@ -242,6 +242,19 @@ catalog, lineage, maintenance, the medallion, OpenBao and Dex ran as `default` w
   `--take-ownership` adopt it. The gate is that test file's identity test: the `identities rendered as hooks`
   bucket, and a pre-upgrade hook may run only as an SA in its `_ESTABLISHED` set, so naming a new one is a
   deliberate edit there, which is the reminder to pre-create it.
+- **A hook that removes what git no longer declares runs post-upgrade** ([[XC-083]], ADR 0170).
+  `object-store-scoped-users.yaml` renders one Job per phase, `range $phase := ternary (list "install") (list
+  "pre-upgrade" "post-upgrade") .Release.IsInstall`: the pre-upgrade run provisions what the new revision's pods need
+  before they roll and prunes nothing, because the previous release's pods still present what a prune would remove;
+  the post-upgrade run (`<release>-object-store-scoped-users-prune-<rev>`) runs once the manifest has replaced them and
+  removes every store user and rask-owned policy the chart does not declare; an install has no old pods and prunes in
+  its one run. Helm's `ternary` evaluates both arms, so neither may fail on the other's input.
+- **The catalog's store identity is a projected token, named by one value** ([[XC-083]], ADR 0170):
+  `objectStore.identity.audience` (`lance.objectStoreAudience`, `required`) is both the token the catalog mounts
+  through `lance.identityTokens` and the client id the dev store's provider trusts (`deploy/fixtures/rustfs`
+  `identityProvider.clientId`); the hook writes the catalog's canned policy under `lance.saAccount` (`list . "catalog"`),
+  the token's `sub`, and binds no user to it. `tests/unit/test_a_provisioned_identity_is_one_the_service_uses.py` holds
+  the two charts' halves equal.
 - **A tokenless daprd needs `dapr.io/disable-builtin-k8s-secret-store`.** daprd initialises its built-in
   Kubernetes secret store at boot from the pod's token and treats a failure as fatal, so dropping the
   annotation from `lance.daprSidecarResources` crash-loops every injected pod (live 2026-07-13).
@@ -306,8 +319,8 @@ catalog, lineage, maintenance, the medallion, OpenBao and Dex ran as `default` w
   a template never builds either address itself. The OpenFGA subchart's schema refuses unknown keys, so a rask value
   about OpenFGA lives under `auth`, never under `openfga`.
 - **OpenFGA admits only a projected `rask-openfga` token from a listed ServiceAccount** ([[XC-077]]): OIDC
-  against the cluster SA issuer, keys fetched through the issuer mirror in `templates/openfga-authn.yaml`
-  (OpenFGA fetches discovery with no bearer and k3s answers that 401), the subject allow-list from
+  against the cluster SA issuer, keys fetched through the issuer mirror in `templates/issuer-mirror.yaml`
+  (OpenFGA fetches discovery with no bearer and k3s answers that 401; the dev object store reads the same mirror), the subject allow-list from
   `lance.openfgaSubjects` (a ConfigMap OpenFGA reads at start, so a new client needs an OpenFGA restart),
   playground off, CORS closed. A pod that names OpenFGA renders all three parts of `lance.fgaToken` (env,
   volume, mount) under the condition its URL has, and `lance.openfgaSubjects` must list its account under

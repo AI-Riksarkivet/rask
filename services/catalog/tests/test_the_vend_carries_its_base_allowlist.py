@@ -1,4 +1,4 @@
-"""A vendor built with no allowlist drops a foreign base from the STS policy it renders.
+"""A vendor built with no allowlist drops a foreign base from the session policy it renders.
 
 That the deployed allowlist reaches the lifespan-built vendor, and a table's own directory beneath it is
 granted, is driven through the credentials door by
@@ -9,9 +9,15 @@ granted, is driven through the credentials door by
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
-from catalog.core.vending import StsVendor
+from pydantic import SecretStr
+
+from catalog.core.vending import WebIdentityVendor
+from service_kit.governed.store_credential import S3KeyPair
+from service_kit.governed.store_session import IssuedSession, WebIdentity
 
 
 TABLE = "s3://lakehouse/acme-wh/mine$t"
@@ -20,19 +26,15 @@ FOREIGN = "s3://data-bases/acme"
 TABLE_DIRECTORY = f"{FOREIGN}/t-1"
 
 
-def _capturing_assume(sink: dict[str, Any]):
-    def _assume(**kwargs: Any) -> dict[str, Any]:
-        sink["policy"] = json.loads(str(kwargs["Policy"]))
-        return {
-            "Credentials": {
-                "AccessKeyId": "AK",
-                "SecretAccessKey": "SK",
-                "SessionToken": "ST",
-                "Expiration": None,
-            }
-        }
+def _capturing_exchange(sink: dict[str, Any]):
+    def _exchange(_identity: WebIdentity, *, session_name: str, duration_seconds: int, policy: str | None = None) -> IssuedSession:
+        sink["policy"] = json.loads(str(policy))
+        return IssuedSession(
+            key_pair=S3KeyPair(access_key_id="AK", secret_access_key=SecretStr("SK"), session_token=SecretStr("ST")),
+            expiration=datetime(2030, 1, 1, tzinfo=UTC),
+        )
 
-    return _assume
+    return _exchange
 
 
 def _base_resources(policy: dict[str, Any]) -> list[str]:
@@ -44,12 +46,9 @@ def _base_resources(policy: dict[str, Any]) -> list[str]:
 def test_a_vendor_with_no_allowlist_drops_the_same_base() -> None:
     """If the allowlist were ignored entirely and every base granted, this would fail."""
     sink: dict[str, Any] = {}
-    vendor = StsVendor(
-        role_arn="arn:aws:iam::000000000000:role/lance-vend",
-        region="us-east-1",
-        assume_role=_capturing_assume(sink),
-    )
+    identity = WebIdentity(token_file=Path("projected-token"), endpoint=None, region="us-east-1", role_arn="arn:aws:iam::000000000000:role/lance-vend")
+    vendor = WebIdentityVendor(identity=identity, exchange=_capturing_exchange(sink))
 
-    vendor.vend(table_location=TABLE, tier="read", bases=(TABLE_DIRECTORY,))
+    vendor.vend(table_location=TABLE, tier="read", session_name="reader", bases=(TABLE_DIRECTORY,))
 
     assert _base_resources(sink["policy"]) == [], "an unsanctioned foreign base must not be granted"

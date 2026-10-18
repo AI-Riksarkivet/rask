@@ -21,66 +21,64 @@ on pylance 12.0.0 against a closed port: `http://` with `allow_http=false` dies 
 (`builder error`), `https://` with `allow_http=false` proceeds to a TLS request — so the scheme alone
 decides both halves and there is nothing a caller could need to override.
 
-The triple itself (key, secret, token, endpoint) is asserted by `tests/unit/test_vending.py`; this file
-is about whether a client can BUILD from what it was handed.
+What the exchange sends and the triple it answers are driven on a moto STS by
+`test_the_catalog_signs_only_with_sessions_its_token_is_exchanged_for.py`; this file is about whether a client can
+BUILD from what it was handed.
 """
 
 from __future__ import annotations
 
 import logging
 from collections.abc import Iterator
-from typing import Any, Literal
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from lance_namespace import DescribeNamespaceResponse, DescribeTableResponse
+from pydantic import SecretStr
 
 from catalog.api.dependencies import get_namespace, get_settings
 from catalog.api.v1.endpoints import tables
 from catalog.core.config import Settings
-from catalog.core.vending import StsVendor, VendFacts
+from catalog.core.vending import VendFacts, WebIdentityVendor
+from service_kit.governed.store_credential import S3KeyPair
+from service_kit.governed.store_session import IssuedSession, WebIdentity
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
-VendorKind = Literal["sts", "web_identity"]
-
-#: Both plugs that issue a credential. `mode_b` issues none, so it has no options to get wrong.
-_VENDORS: tuple[VendorKind, ...] = ("sts", "web_identity")
-
-
-def _fake_credentials(**_: Any) -> dict[str, Any]:
-    return {"Credentials": {"AccessKeyId": "AK", "SecretAccessKey": "SK", "SessionToken": "TOK"}}
+def _fake_exchange(*_: Any, **__: Any) -> IssuedSession:
+    return IssuedSession(
+        key_pair=S3KeyPair(access_key_id="AK", secret_access_key=SecretStr("SK"), session_token=SecretStr("TOK")), expiration=datetime(2030, 1, 1, tzinfo=UTC)
+    )
 
 
-def _vend(kind: VendorKind, endpoint: str | None) -> dict[str, str]:
-    from catalog.core.vending import StsVendor, WebIdentityVendor
+def _vendor(endpoint: str | None) -> WebIdentityVendor:
+    identity = WebIdentity(token_file=Path("projected-token"), endpoint=endpoint, region="us-east-1", role_arn="arn:aws:iam::000000000000:role/vend")
+    return WebIdentityVendor(identity=identity, exchange=_fake_exchange)
 
-    if kind == "sts":
-        vendor = StsVendor(role_arn="arn:aws:iam::000000000000:role/vend", region="us-east-1", endpoint=endpoint, assume_role=_fake_credentials)
-        vended = vendor.vend(table_location="s3://bucket/tbl", tier="read")
-    else:
-        web = WebIdentityVendor(region="us-east-1", endpoint=endpoint, assume=_fake_credentials)
-        vended = web.vend(table_location="s3://bucket/tbl", tier="read", web_identity_token="a.jwt.here")
+
+def _vend(endpoint: str | None) -> dict[str, str]:
+    vended = _vendor(endpoint).vend(table_location="s3://bucket/tbl", tier="read", session_name="reader")
     assert vended is not None
     return vended.storage_options
 
 
-@pytest.mark.parametrize("kind", _VENDORS)
-def test_a_vended_credential_carries_what_a_lance_client_needs_to_build(kind: VendorKind) -> None:
+def test_a_vended_credential_carries_what_a_lance_client_needs_to_build() -> None:
     """`allow_http` and path-style addressing are not optional extras.
 
     Without `allow_http`, object_store refuses to construct a client for an `http://` endpoint at all.
     Without path-style, RustFS rejects virtual-hosted signing with 403 `SignatureDoesNotMatch` —
     the same reason `lance_storage_options` defaults `virtual_hosted=False`.
     """
-    opts = _vend(kind, "http://rustfs:9000")
+    opts = _vend("http://rustfs:9000")
     assert opts["allow_http"] == "true"
     assert opts["virtual_hosted_style_request"] == "false"
 
 
-@pytest.mark.parametrize("kind", ["sts"])
-def test_an_https_endpoint_is_not_downgraded(kind: VendorKind) -> None:
+def test_an_https_endpoint_is_not_downgraded() -> None:
     """A TLS endpoint keeps TLS AND is not handed a plaintext permit beside it.
 
     The endpoint alone was never enough: object_store consults `allow_http` only when a request would
@@ -88,25 +86,24 @@ def test_an_https_endpoint_is_not_downgraded(kind: VendorKind) -> None:
     until something downgrades — and then permits it. The same trap `s3_filesystem` documents, where
     hardcoding `http` once silently downgraded a secured connection.
     """
-    opts = _vend(kind, "https://s3.example.com")
+    opts = _vend("https://s3.example.com")
     assert opts["endpoint"] == "https://s3.example.com"
     assert opts["allow_http"] == "false", "an https store was vended a credential that also permits plaintext"
 
 
-@pytest.mark.parametrize("kind", _VENDORS)
-def test_a_vend_against_aws_proper_permits_no_plaintext(kind: VendorKind) -> None:
+def test_a_vend_against_aws_proper_permits_no_plaintext() -> None:
     """No configured endpoint means botocore's regional AWS endpoint, which is `https://`.
 
     The `endpoint` key is REMOVED for that case, so the scheme the permit follows is AWS's own — and a
     permit derived from an empty endpoint must read as "no plaintext", since the store it names is TLS.
     """
-    opts = _vend(kind, None)
+    opts = _vend(None)
     assert "endpoint" not in opts
     assert opts["allow_http"] == "false", "a credential for AWS proper permits plaintext"
 
 
 class _Namespace:
-    """A backend whose `describe_table` answers an `s3://` location, the only kind `StsVendor` scopes."""
+    """A backend whose `describe_table` answers an `s3://` location, the only kind a vend scopes."""
 
     def describe_table(self, request: Any) -> DescribeTableResponse:
         return DescribeTableResponse(location="s3://lakehouse/abc12345_ns$t")
@@ -121,9 +118,7 @@ def describe_client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     application = FastAPI()
     install_problem_handlers(application, logging.getLogger(__name__))
     application.include_router(tables.router)
-    application.state.vendor = StsVendor(
-        role_arn="arn:aws:iam::000000000000:role/vend", region="us-east-1", endpoint="https://s3.example.com", assume_role=_fake_credentials
-    )
+    application.state.vendor = _vendor("https://s3.example.com")
     # The manifest read is the catalog's own root-credential open, not the vend, and needs a live store.
     monkeypatch.setattr(tables, "dataset_facts", lambda location, storage_options: VendFacts(read_version=1))
     # The catalog's OWN connection is plaintext and root-keyed, so the production `get_storage_options`

@@ -95,7 +95,7 @@ def build_namespace_for_root(settings: Settings, root_uri: str, *, endpoint: str
 
     Same impl, endpoint and CREDENTIALS as the default connection. ``endpoint`` is the warehouse
     record's ([[LH-067]]), and it is JUDGED here rather than applied ([[LH-205]]): the connection carries
-    the estate's own key pair, so a record naming another store is refused before anything connects,
+    the estate's own credential, so a record naming another store is refused before anything connects,
     or every open under that warehouse would sign toward a host a project admin chose. Every
     warehouse-rooted connection is built here, so this is the one place the refusal has to hold.
 

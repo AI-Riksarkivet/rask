@@ -67,7 +67,7 @@ spec:
 # API-server egress: only the pods that call the Kubernetes API, to the peers the platform states.
 {{- $apiClients := list }}
 {{- if .Values.auth.enabled }}{{ $apiClients = concat $apiClients (list "catalog" "lineage") }}{{ end }}
-{{- if .Values.openfga.enabled }}{{ $apiClients = append $apiClients "issuer-mirror" }}{{ end }}
+{{- if and .Values.auth.issuerMirror.enabled (or .Values.openfga.enabled .Values.objectStore.enabled) }}{{ $apiClients = append $apiClients "issuer-mirror" }}{{ end }}
 {{- if .Values.openbao.enabled }}{{ $apiClients = append $apiClients "openbao" }}{{ end }}
 {{- if .Values.observability.enabled }}{{ $apiClients = append $apiClients "otel-collector" }}{{ end }}
 {{- if .Values.backups.volumeSnapshot.enabled }}{{ $apiClients = append $apiClients "object-store-backup" }}{{ end }}

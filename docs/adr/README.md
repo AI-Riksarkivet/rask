@@ -182,3 +182,4 @@ before they had a record here; each names its source document and the date of th
 | [0167](0167-the-deployed-estate-is-driven-per-deploy-not-on-a-clock.md) | XC-033 | The deployed estate is driven per deploy, not on a clock; the e2e lane runs every module it can serve (2026-10-18) |
 | [0168](0168-the-development-object-store-is-rustfs.md) | XC-163 | The development and CI object store is RustFS; MinIO leaves the repo (2026-10-18) |
 | [0169](0169-each-app-reads-only-its-own-secrets-every-sidecar-logs-in-as-itself.md) | XC-165 | Each app reads only its own secrets: every sidecar logs in to the store as its own ServiceAccount (2026-10-18) |
+| [0170](0170-the-catalogs-store-identity-is-its-serviceaccount.md) | XC-083 | The catalog's store identity is its ServiceAccount: its own IO and every vend are sessions its token is exchanged for (2026-10-18) |

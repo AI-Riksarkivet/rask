@@ -43,12 +43,17 @@ _REREAD_BACKOFF: Final = 0.25
 
 
 class S3KeyPair(BaseModel):
-    """An object-store access key: its id and its secret, which sign only together."""
+    """An object-store access key: its id and its secret, which sign only together, and the session token a temporary one carries.
+
+    A store-held pair has no token. A session STS issued (`service_kit.governed.store_session`) signs only with its token
+    beside the pair, and the store refuses the pair without it.
+    """
 
     model_config = ConfigDict(frozen=True)
 
     access_key_id: str
     secret_access_key: SecretStr
+    session_token: SecretStr | None = None
 
 
 class StoreCredentialSource(Protocol):

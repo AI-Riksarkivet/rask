@@ -16,8 +16,8 @@ not run), **open** (neither).
 | ListObjectsV2 prefix/delimiter | Lance listing, sweep | measured (prefix-scoped list) + gated | `implemented_tests.txt` |
 | DeleteObjects (≤1,000 keys) | warehouse purge (`services/catalog/src/catalog/services/warehouses.py:605-630`), sweep | gated; purge not measured | limit `rustfs@1.0.3:rustfs/src/app/object/delete.rs:471-474` |
 | CreateBucket / DeleteBucket | warehouse lifecycle | open (purge path not traced) | `rustfs@1.0.3:crates/ecstore/src/store/bucket.rs:36-86` |
-| STS AssumeRole + session token on every call | vending | measured | `rustfs@1.0.3:rustfs/src/admin/handlers/sts.rs:212-333` |
-| AssumeRoleWithWebIdentity | `vending.mode: web_identity` | source | `sts.rs:399-441` |
+| STS AssumeRole + session token on every call | no rask caller (ADR 0170) | measured | `rustfs@1.0.3:rustfs/src/admin/handlers/sts.rs:212-333` |
+| AssumeRoleWithWebIdentity for a ServiceAccount token, the canned policy its `sub` names, an inline session policy | the catalog's own IO and every vend (`vending.mode: web_identity`, ADR 0170) | measured on 1.0.3 (stand-in issuer, `docs/audits/2026-10-18/rustfs_web_identity_measure.py`) | `sts.rs:399-441`; `rustfs@1.0.3:crates/iam/src/federation/mapper.rs:257-298` |
 | HEAD of a missing key under a prefix-scoped policy | Lance probes | open: `test_head_object_404_with_policy_prefix` is unimplemented (403 possible where AWS answers 404) | `rustfs@1.0.3:scripts/s3-tests/unimplemented_tests.txt` |
 | Conditional DeleteObject (`If-Match`) | none found in `records.py` | excluded from the gate | `rustfs@1.0.3:scripts/s3-tests/excluded_tests.txt:138-156` |
 | CopyObject with destination conditions | none | source: parsed and checked; atomicity under contention not traced | `rustfs@1.0.3:rustfs/src/storage/options.rs:476-495` |

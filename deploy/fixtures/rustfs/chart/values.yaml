@@ -28,6 +28,19 @@ storageClass: ""
 rootCredentials: rask-object-store-root
 # The region the server answers for; rask's clients sign with it.
 region: us-east-1
+# -- The identity provider the store trusts for web identity ([[XC-083]], ADR 0170): the cluster's ServiceAccount issuer,
+# read through rask's issuer mirror, since k3s serves its discovery and keys only to a bearer. The store grants a token
+# the canned policy its `sub` names and sets no role policy, so only an account rask's scoped-users hook names a policy
+# for is exchanged (measured on 1.0.3, docs/audits/2026-10-18/rustfs_web_identity_measure.py). Empty `configUrl` wires no
+# provider.
+identityProvider:
+  # The discovery document rask's issuer mirror serves (`<release>-issuer-mirror:8080`), whose `issuer` is the cluster's.
+  # Its origin is the one outbound origin the store may reach (`RUSTFS_OUTBOUND_ALLOW_ORIGINS`).
+  configUrl: http://rask-issuer-mirror:8080/.well-known/openid-configuration
+  # The issuer the cluster's tokens carry: rask's `auth.serviceAccountIssuer`.
+  issuer: https://kubernetes.default.svc.cluster.local
+  # The audience the catalog projects its token for: rask's `objectStore.identity.audience`.
+  clientId: rask-object-store
 # RustFS's footprint on this estate is not measured; these bounds leave room for an estate of ~100 buckets and
 # ~8,000 datasets, where an OOM mid-write is the partially-failed write the orphan scan exists to report.
 resources:

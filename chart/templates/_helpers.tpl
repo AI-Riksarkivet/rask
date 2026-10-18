@@ -521,8 +521,12 @@ securityContext:
 {{- end -}}
 
 {{- define "lance.saSubject" -}}
+{{- printf "kubernetes~%s" (include "lance.saAccount" .) -}}
+{{- end -}}
+
+{{- define "lance.saAccount" -}}
 {{- $root := index . 0 -}}
-{{- printf "kubernetes~system:serviceaccount:%s:%s-sa-%s" $root.Release.Namespace (include "lance.fullname" $root) (index . 1) -}}
+{{- printf "system:serviceaccount:%s:%s-sa-%s" $root.Release.Namespace (include "lance.fullname" $root) (index . 1) -}}
 {{- end -}}
 
 {{- define "lance.saVerifier" -}}
@@ -699,14 +703,12 @@ catalog maintenance annotator
 activeDeadlineSeconds: 1800
 {{- end -}}
 
-{{- define "lance.catalogSecretField" -}}
-{{- $_ := required "objectStore.catalogAccessKey names the catalog's scoped store identity; the catalog never presents the store's root, which signs every STS token (ADR 0168)" .Values.objectStore.catalogAccessKey -}}
+{{- define "lance.baseSecretField" -}}
 secret_key
 {{- end -}}
 
-{{- define "lance.catalogKeyIdField" -}}
-{{- $_ := required "objectStore.catalogAccessKey names the catalog's scoped store identity; the catalog never presents the store's root, which signs every STS token (ADR 0168)" .Values.objectStore.catalogAccessKey -}}
-access_key
+{{- define "lance.objectStoreAudience" -}}
+{{- required "objectStore.identity.audience names the audience the catalog's store token is projected for, which the store trusts as its identity provider's client; the catalog holds no store key (ADR 0170)" .Values.objectStore.identity.audience -}}
 {{- end -}}
 
 {{- define "lance.mediaIdentity" -}}
@@ -759,7 +761,7 @@ scoped_secret() {
 {{- $own := dict -}}
 {{- range (include "lance.signers" . | fromJsonArray) }}{{- $_ := set $own .app (concat (get $own .app | default list) (list (printf "signing-key-%s" .key) (printf "signing-public-%s" .key))) }}{{- end -}}
 {{- $apps := list
-  (dict "app" $v.services.catalog.daprAppId "sa" "catalog" "api" (concat (list "catalog-s3" "dapr-app-token") (values ($v.catalog.multibase.baseCredentialRefs | default dict))) "bus" true)
+  (dict "app" $v.services.catalog.daprAppId "sa" "catalog" "api" (concat (list "dapr-app-token") (values ($v.catalog.multibase.baseCredentialRefs | default dict))) "bus" true)
   (dict "app" $v.services.lineage.daprAppId "sa" "lineage" "api" (concat (list "lineage-s3" "dapr-app-token") (compact (list $v.services.lineage.forward.authSecret.name)) (ternary $everySigner list (and $v.auth.enabled ($v.signing).enforce))) "bus" true) -}}
 {{- if $v.maintenance.enabled -}}
 {{- $apps = append $apps (dict "app" $v.maintenance.daprAppId "sa" "maintenance" "api" (concat (list "maintenance-s3" "dapr-app-token") (ternary $everySigner list (and $v.auth.enabled $doors $v.maintenance.arrivalEnabled))) "bus" (or $v.maintenance.arrivalEnabled $v.maintenance.lineageEmit (and $v.catalog.controlEmit $v.maintenance.controlEmit))) -}}

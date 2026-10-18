@@ -1,8 +1,9 @@
 """No store identity may be blank: the render refuses it.
 
-Each governed service is handed the NAMES of its scoped S3 key pair (`LANCE_DAPR_SECRET_KEY` with
-`LANCE_DAPR_SECRET_S3_FIELD` and `LANCE_DAPR_SECRET_S3_ID_FIELD`, `LINEAGE_…`, `MAINTENANCE_…`) and fetches both halves
-from the Dapr secret store (ADR 0166), while the dev store's seed writes a plane's pair only when its identity is named.
+Lineage and maintenance are each handed the NAMES of their scoped S3 key pair (`LINEAGE_…`, `MAINTENANCE_…`) and fetch
+both halves from the Dapr secret store (ADR 0166), while the dev store's seed writes a plane's pair only when its identity
+is named. The catalog holds no pair: its store identity is the token its pod projects for `objectStore.identity.audience`
+(ADR 0170), which the store trusts as its identity provider's client, so a blank audience is refused like a blank pair.
 The two can disagree only where an identity is blank, and the only other pair a plane could present is the store's root,
 which on RustFS signs every STS session token (ADR 0168), so a blank identity is refused at render. That every pair a
 service is told to read is the one the seed writes is read by running the seed
@@ -23,7 +24,7 @@ from tests.unit.chart_render import REPO, render_chart_text
 
 #: Each identity the render refuses blank, by the value that names it: the planes' scoped pairs, each refused by the
 #: template that tells a plane its field names, and the audience every sidecar's store login is bound to.
-_IDENTITIES = ("objectStore.catalogAccessKey", "objectStore.lineageAccessKey", "objectStore.maintenanceAccessKey", "openbao.identity.audience")
+_IDENTITIES = ("objectStore.identity.audience", "objectStore.lineageAccessKey", "objectStore.maintenanceAccessKey", "openbao.identity.audience")
 
 _BASE = ("--set", "image.localImages=true")
 

@@ -1,4 +1,4 @@
-"""A policy the store refuses fails the scoped-users hook, binds no user to it, and leaves every binding as it was.
+"""A policy the store refuses fails the scoped-users hook and binds no one; a pruning run removes what it does not declare.
 
 `chart/templates/object-store-scoped-users.yaml` runs `scripts/rustfs_admin.py` on every install and upgrade: each
 canned policy first, then each user and its binding. A refusal the hook let through would report a green upgrade while
@@ -14,12 +14,18 @@ statement that names no Resource (`rustfs@1.0.3:crates/policy/src/policy/stateme
 answers 400 InvalidRequest (`rustfs@1.0.3:rustfs/src/admin/handlers/policies.rs:216-226`). A template edit that drops a
 policy's Resource line renders exactly this.
 
+[[XC-083]] The hook's runs outside the pre-upgrade one pass `--prune`, so the store's identities are what git declares: a
+user an earlier release made and this one does not declare (the catalog's retired `rask-catalog`) is removed, and so is a
+rask policy it no longer creates, while a policy rask does not own is left. Removing a user ends every credential it
+signs, so the assert is the store refusing the retired key.
+
 Run by `dagger call rustfs-provisioning` (`make rustfs-provisioning`), which binds a throwaway RustFS to the exec and
 names it in the `RASK_RUSTFS_PROVISIONING_*` variables; nothing else sets them, so no other run touches a store's IAM.
 """
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import re
@@ -89,11 +95,10 @@ def _identity(keys: Path, prefix: str) -> Identity:
     return identity
 
 
-def _provision(store: ThrowawayStore, keys: Path, *, policy: tuple[str, dict[str, object]], users: Sequence[Identity]) -> subprocess.CompletedProcess[str]:
-    """One run of the hook's provisioning step, with the arguments the hook passes it."""
-    name, document = policy
-    document_file = keys.parent / f"{name}.json"
-    document_file.write_text(json.dumps(document), encoding="utf-8")
+def _provision(
+    store: ThrowawayStore, keys: Path, *, policies: dict[str, dict[str, object]], users: Sequence[tuple[Identity, str]], prune: bool = False
+) -> subprocess.CompletedProcess[str]:
+    """One run of the hook's provisioning step, with the arguments the hook passes it: each user bound to its policy."""
     argv = [
         sys.executable, str(SCRIPT),
         "--endpoint", store.endpoint,
@@ -101,11 +106,26 @@ def _provision(store: ThrowawayStore, keys: Path, *, policy: tuple[str, dict[str
         "--root-secret-file", str(store.root_secret_file),
         "--keys-dir", str(keys),
         "--bucket", BUCKET,
-        "--policy", f"{name}={document_file}",
     ]  # fmt: skip
-    for user in users:
-        argv += ["--user", f"{user.access_key}={name}"]
+    for name, document in policies.items():
+        document_file = keys.parent / f"{name}.json"
+        document_file.write_text(json.dumps(document), encoding="utf-8")
+        argv += ["--policy", f"{name}={document_file}"]
+    for user, policy in users:
+        argv += ["--user", f"{user.access_key}={policy}"]
+    if prune:
+        argv.append("--prune")
     return subprocess.run(argv, capture_output=True, text=True, timeout=300, check=False)
+
+
+def _canned_policies(store: ThrowawayStore) -> set[str]:
+    """The names of the store's canned policies, read with its root pair through the script's own admin client."""
+    spec = importlib.util.spec_from_file_location("rustfs_admin", SCRIPT)
+    assert spec is not None and spec.loader is not None
+    script = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(script)
+    admin = script.AdminClient(store.endpoint, store.root_access_key, store.root_secret_file.read_text(encoding="utf-8").strip())
+    return set(admin.get("list-canned-policies"))
 
 
 def _client(store: ThrowawayStore, identity: Identity):  # noqa: ANN202 — boto3's client type is generated at runtime
@@ -124,10 +144,10 @@ def test_a_policy_the_store_refuses_fails_the_run_before_it_binds_anyone(store: 
     keys.mkdir()
     bound, unbound = _identity(keys, "refusal-bound-"), _identity(keys, "refusal-new-")
     name = f"rask-refusal-{uuid.uuid4().hex[:8]}"
-    provisioned = _provision(store, keys, policy=(name, FINDS_THE_BUCKET), users=[bound])
+    provisioned = _provision(store, keys, policies={name: FINDS_THE_BUCKET}, users=[(bound, name)])
     assert provisioned.returncode == 0, provisioned.stderr
 
-    refused = _provision(store, keys, policy=(name, NAMES_NO_RESOURCE), users=[bound, unbound])
+    refused = _provision(store, keys, policies={name: NAMES_NO_RESOURCE}, users=[(bound, name), (unbound, name)])
 
     assert refused.returncode == 1, refused.stdout + refused.stderr
     assert re.search(rf"^!! rustfs_admin: add-canned-policy \{{'name': '{name}'\}} refused: HTTP 400 .*InvalidRequest", refused.stderr, re.MULTILINE), (
@@ -137,3 +157,25 @@ def test_a_policy_the_store_refuses_fails_the_run_before_it_binds_anyone(store: 
         _client(store, unbound).list_buckets()
     assert never_made.value.response["Error"]["Code"] == "InvalidAccessKeyId"
     assert _client(store, bound).get_bucket_location(Bucket=BUCKET)["ResponseMetadata"]["HTTPStatusCode"] == 200
+
+
+def test_a_pruning_run_removes_every_user_and_rask_policy_it_does_not_declare(store: ThrowawayStore, tmp_path: Path) -> None:
+    keys = tmp_path / "keys"
+    keys.mkdir()
+    kept, retired = _identity(keys, "prune-kept-"), _identity(keys, "prune-retired-")
+    suffix = uuid.uuid4().hex[:8]
+    held, dropped, foreign = f"rask-prune-held-{suffix}", f"rask-prune-dropped-{suffix}", f"ops-prune-{suffix}"
+    made = _provision(
+        store, keys, policies={held: FINDS_THE_BUCKET, dropped: FINDS_THE_BUCKET, foreign: FINDS_THE_BUCKET}, users=[(kept, held), (retired, dropped)]
+    )
+    assert made.returncode == 0, made.stderr
+
+    pruned = _provision(store, keys, policies={held: FINDS_THE_BUCKET}, users=[(kept, held)], prune=True)
+
+    assert pruned.returncode == 0, pruned.stdout + pruned.stderr
+    with pytest.raises(ClientError) as gone:
+        _client(store, retired).list_buckets()
+    assert gone.value.response["Error"]["Code"] == "InvalidAccessKeyId"
+    assert _client(store, kept).get_bucket_location(Bucket=BUCKET)["ResponseMetadata"]["HTTPStatusCode"] == 200
+    policies = _canned_policies(store)
+    assert (held in policies, dropped in policies, foreign in policies) == (True, False, True), sorted(policies)

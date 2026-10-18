@@ -1,4 +1,4 @@
-"""The commit-error taxonomy the catalog's own commits share, and the vending mode's fail-closed STS guard.
+"""The commit-error taxonomy the catalog's own commits share, and the catalog's fail-closed store identity.
 
 A conflict is classified by what the caller must do next: a stale commit after an Overwrite is a non-retryable 400,
 a lost race a 409, a schema mismatch a 400, a store outage a 503, never a blanket 409 that loops a doomed retry.
@@ -47,13 +47,30 @@ def test_classify_commit_error_maps_the_taxonomy() -> None:
     )
 
 
-def test_vending_mode_requires_sts_endpoint_fail_closed() -> None:
-    # A token-egress guard: web_identity/sts without an STS endpoint would POST the caller's token to the
-    # PUBLIC AWS STS endpoint — the config must fail closed at boot instead.
+@pytest.mark.parametrize(
+    ("given", "refusal"),
+    [
+        pytest.param({"vending_mode": "web_identity"}, "LANCE_S3_WEB_IDENTITY_TOKEN_FILE", id="a-vend-with-no-token-to-exchange"),
+        pytest.param({"s3_web_identity_token_file": "/t"}, "LANCE_S3_STS_ENDPOINT", id="a-token-sent-to-the-public-aws-sts"),
+        pytest.param(
+            {"s3_web_identity_token_file": "/t", "s3_sts_endpoint": "http://sts:9000", "s3_access_key_id": "x", "s3_secret_access_key": "x"},
+            "second identity",
+            id="a-key-pair-beside-the-token",
+        ),
+        pytest.param(
+            {"secrets_from_dapr": True, "s3_access_key_id": "x", "s3_secret_access_key": "x"},
+            "LANCE_S3_WEB_IDENTITY_TOKEN_FILE",
+            id="a-key-pair-with-the-secret-store-on",
+        ),
+    ],
+)
+def test_the_catalogs_store_identity_fails_closed_at_boot(given: dict[str, object], refusal: str) -> None:
+    """A catalog boots with exactly one store identity, and on the estate that is its ServiceAccount token (ADR 0170).
+
+    Without an STS endpoint boto3 resolves the PUBLIC AWS STS endpoint and would POST the token there; a pair beside
+    the token is a second identity; and a catalog reading its secrets from the store holds no pair of its own.
+    """
     from catalog.core.config import Settings
 
-    base = {"s3_access_key_id": "x", "s3_secret_access_key": "x"}
-    with pytest.raises(ValueError, match="LANCE_S3_STS_ENDPOINT"):
-        Settings.model_validate({**base, "vending_mode": "web_identity"})
-    ok = Settings.model_validate({**base, "vending_mode": "web_identity", "s3_sts_endpoint": "http://sts:9000"})
-    assert ok.vending_mode == "web_identity"
+    with pytest.raises(ValueError, match=refusal):
+        Settings.model_validate(given)

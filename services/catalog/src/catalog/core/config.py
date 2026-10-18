@@ -11,6 +11,7 @@ deployment fails fast at boot.
 from __future__ import annotations
 
 from functools import lru_cache
+from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Self
 
 from pydantic import AliasChoices, Field, SecretStr, model_validator
@@ -18,7 +19,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from service_kit.governed.principal import PrincipalKey
 from service_kit.governed.settings import GovernedAuthSettings
-from service_kit.governed.store_credential import S3KeyPair, store_key_pair
+from service_kit.governed.store_credential import S3KeyPair
+from service_kit.governed.store_session import WebIdentity, held_session
 from service_kit.lakehouse.endpoint_scheme import allow_http_for
 from service_kit.lakehouse.naming import CATALOG_DELIMITER
 from service_kit.lakehouse.objectfs import StoreTimeouts
@@ -84,14 +86,22 @@ class CatalogStorageSettings(BaseSettings):
     #: endpoint keep permission to fall back to plaintext — silent, because object_store consults
     #: the flag only when a request would otherwise be refused. One fact, so the two cannot disagree.
     s3_endpoint: str = Field(default="http://rask-rustfs:9000", alias="LANCE_S3_ENDPOINT")
-    #: The key pair the catalog signs with when the secret store is OFF. With `secrets_from_dapr` on, the pair is the
-    #: store's (`dapr_secret_s3_id_field` and `dapr_secret_s3_field`, ADR 0166) and these two are not read; off, a
-    #: missing id is refused here and a missing secret by the lifespan.
+    #: THE CATALOG'S IDENTITY AT THE OBJECT STORE ([[XC-083]], ADR 0170): the ServiceAccount token its pod projects for
+    #: the store's audience. Set, the catalog's own IO and every vend sign with sessions STS exchanges it for
+    #: (`AssumeRoleWithWebIdentity` at `s3_sts_endpoint`), and the catalog reads no key pair from anywhere.
+    s3_web_identity_token_file: Path | None = Field(default=None, alias="LANCE_S3_WEB_IDENTITY_TOKEN_FILE")
+    #: How long a session for the catalog's own IO lasts. It is renewed at half its life, so a request that took the
+    #: old one still has half of it to finish. RustFS takes 900 to 43,200 s (`rustfs@1.0.3:rustfs/src/admin/handlers/sts.rs:64-83`).
+    s3_session_seconds: int = Field(default=3600, ge=900, le=43200, alias="LANCE_S3_SESSION_SECONDS")
+    #: The key pair the catalog signs with when it holds no token: the offline and Dagger lanes' fixture, with the secret
+    #: store off. A missing id is refused here and a missing secret by the lifespan.
     s3_access_key_id: str = Field(default="", alias="LANCE_S3_ACCESS_KEY_ID")
     s3_secret_access_key: SecretStr = Field(default=SecretStr(""), alias="LANCE_S3_SECRET_ACCESS_KEY")
     s3_region: str = Field(default="us-east-1", alias="LANCE_S3_REGION")
     s3_virtual_hosted: bool = Field(default=False, alias="LANCE_S3_VIRTUAL_HOSTED")
-    s3_assume_role_arn: str | None = Field(default=None, alias="LANCE_S3_ASSUME_ROLE_ARN")
+    #: The role the token is exchanged for. AWS assumes it; a store that grants the policy the token's subject names
+    #: (RustFS, measured in `docs/audits/2026-10-18/rustfs_web_identity_measure.py`) ignores it, and boto3 requires one.
+    s3_assume_role_arn: str = Field(default="arn:aws:iam::000000000000:role/lance-vend", alias="LANCE_S3_ASSUME_ROLE_ARN")
     #: ENCRYPTION AT REST, carried INTO the vended credential (§ J5). A client vended credentials writes
     #: straight to object storage with the catalog out of the path, so whatever the estate intends must
     #: travel in the storage options or it does not happen.
@@ -118,6 +128,13 @@ class CatalogStorageSettings(BaseSettings):
     def vended_store_endpoint(self) -> str:
         """The endpoint a vended credential names: `s3_vended_endpoint`, else the catalog's own."""
         return self.s3_vended_endpoint or self.s3_endpoint
+
+    @property
+    def web_identity(self) -> WebIdentity | None:
+        """The catalog's identity at the store, or ``None`` when it signs with the environment's pair."""
+        if self.s3_web_identity_token_file is None:
+            return None
+        return WebIdentity(token_file=self.s3_web_identity_token_file, endpoint=self.s3_sts_endpoint, region=self.s3_region, role_arn=self.s3_assume_role_arn)
 
 
 class CatalogReadBounds(BaseSettings):
@@ -240,10 +257,10 @@ class CatalogDaprSettings(BaseSettings):
     every one of its fields, aliases and defaults.
     """
 
-    # Secret consumption — when on, the S3 key pair is the Dapr secret store's (OpenBao), read at boot and
-    # again while the catalog runs (`service_kit.governed.store_credential`), never plaintext env. The store
-    # is then the STRICT sole source: the chart renders neither half into pod env, and a store miss FAILS
-    # CLOSED, at boot and once a held pair's TTL passes (no env fallback).
+    # Secret consumption — when on, every secret the catalog reads is the Dapr secret store's (OpenBao): its signing key,
+    # its app token and each data base's credential, never plaintext env, and a store miss FAILS CLOSED (no env
+    # fallback). Its object-store identity is then its ServiceAccount token (`s3_web_identity_token_file`), which the
+    # validator below requires: no key pair of the catalog's own is in the store either.
     secrets_from_dapr: bool = Field(default=False, alias="LANCE_SECRETS_FROM_DAPR")
     #: THE ONE STORE, NAMED ONCE (DUP-17). The estate runs a single Dapr secret-store component and
     #: seven env vars named it, each defaulting to the same literal and none of them set by the chart —
@@ -251,13 +268,9 @@ class CatalogDaprSettings(BaseSettings):
     #: (already what viewer and ingest read); the per-service alias stays FIRST so a single service can
     #: still be moved on its own.
     dapr_secret_store: str = Field(default="lance-secrets", validation_alias=AliasChoices("LANCE_DAPR_SECRET_STORE", "RASK_SECRET_STORE"))
-    #: The catalog's own secret in the store: its scoped pair (`objectStore.catalogAccessKey`), readable by the catalog
-    #: alone ([[XC-165]]). No service holds the store's root, which signs every STS token on RustFS (ADR 0168).
-    dapr_secret_key: str = Field(default="catalog-s3", alias="LANCE_DAPR_SECRET_KEY")
+    #: The field of a data base's credential secret (`LANCE_MULTIBASE_BASE_CREDENTIAL_REFS`) holding its secret key
+    #: ([[LH-067]]); the key id rides the same secret (`catalog.services.base_credentials`).
     dapr_secret_s3_field: str = Field(default="secret_key", alias="LANCE_DAPR_SECRET_S3_FIELD")
-    #: The field of the same secret holding the key id the secret signs under: a rotation issues a new id, so the id
-    #: is read from the store with its secret.
-    dapr_secret_s3_id_field: str = Field(default="access_key", alias="LANCE_DAPR_SECRET_S3_ID_FIELD")
     # Dapr pub/sub transport (used when lineage_transport == "dapr"). The component name is what the
     # sidecar resolves to NATS JetStream; the topic is versioned (a breaking schema change → a new .vN).
     dapr_pubsub: str = Field(default="lineage-pubsub", alias="LANCE_DAPR_PUBSUB")
@@ -375,17 +388,13 @@ class CatalogVendingSettings(BaseSettings):
     every one of its fields, aliases and defaults.
     """
 
-    # Data-plane credential vending (pluggable; see services/catalog/core/vending.py). Target = S3-compatible
-    # storage (RustFS in development, AWS S3, Ceph RGW). Default "mode_b": server-mediated — no
-    # credential leaves the catalog (the simplest, backend-agnostic default). "sts": STS AssumeRole
-    # short-TTL per-table scoped tokens (the recommended path; RustFS/Ceph/AWS all implement STS).
-    # Client-DIRECT writes stage a manifest the catalog judges and finalizes (CreateTableVersion, ADR 0157);
-    # the vending MODE is the separate CREDENTIAL mechanism. Default `mode_b` (server_mediated) is safe on
-    # any store; `web_identity`/`sts` are the SCOPED-credential upgrade and are opt-in because they need an
-    # STS endpoint — WITHOUT one, boto3 resolves to the PUBLIC AWS STS endpoint and would POST the caller's
-    # OIDC token there (audit 2026-07-14). The chart pairs `web_identity` with the endpoint + rustfs.oidc,
-    # and `_validate_vending` below fails closed if the mode needs an endpoint that isn't set.
-    vending_mode: Literal["mode_b", "sts", "web_identity"] = Field(default="mode_b", alias="LANCE_VENDING_MODE")
+    # Data-plane credential vending (see services/catalog/core/vending.py). Target = S3-compatible storage (RustFS in
+    # development, AWS S3, Ceph RGW). Default "mode_b": server-mediated — no credential leaves the catalog.
+    # "web_identity": every vend is a short-TTL session STS exchanges the catalog's OWN token for, narrowed to one table
+    # and tier by an inline session policy (ADR 0170), so the vend's parent is the catalog's ServiceAccount and no key.
+    # Client-DIRECT writes stage a manifest the catalog judges and finalizes (CreateTableVersion, ADR 0157); the vending
+    # MODE is the separate CREDENTIAL mechanism. The chart turns `web_identity` on with the catalog's token mounted.
+    vending_mode: Literal["mode_b", "web_identity"] = Field(default="mode_b", alias="LANCE_VENDING_MODE")
     vending_ttl_seconds: int = Field(default=900, ge=60, alias="LANCE_VENDING_TTL_SECONDS")
 
 
@@ -670,35 +679,42 @@ class Settings(
         return self
 
     @model_validator(mode="after")
-    def _validate_vending(self) -> Self:
-        """Fail closed on a token-egressing vending config (audit 2026-07-14).
+    def _validate_store_identity(self) -> Self:
+        """Fail closed on a store identity that is absent, doubled, or would send the token to the public AWS STS.
 
-        ``sts``/``web_identity`` build an STS client; without ``LANCE_S3_STS_ENDPOINT`` boto3 resolves the
-        PUBLIC AWS STS endpoint and would POST the caller's OIDC token there. Refuse to boot instead — a
-        clear misconfig error, never a silent third-party token egress.
+        Without ``LANCE_S3_STS_ENDPOINT`` boto3 resolves the PUBLIC AWS STS endpoint and would POST the catalog's token
+        there (audit 2026-07-14), so the endpoint is named, never defaulted. A key pair beside the token is a second
+        identity, and one with the secret store on would be a secret in the environment, which the store exists to keep
+        out; a deployment reading its secrets from the store signs with its ServiceAccount's sessions alone.
         """
-        if self.vending_mode in ("sts", "web_identity") and not self.s3_sts_endpoint:
+        if self.vending_mode == "web_identity" and self.s3_web_identity_token_file is None:
+            raise ValueError("LANCE_VENDING_MODE=web_identity exchanges the catalog's own token: set LANCE_S3_WEB_IDENTITY_TOKEN_FILE")
+        if self.s3_web_identity_token_file is not None:
+            if not self.s3_sts_endpoint:
+                raise ValueError(
+                    "LANCE_S3_STS_ENDPOINT is required with LANCE_S3_WEB_IDENTITY_TOKEN_FILE (else the token would be sent to the public AWS STS endpoint)"
+                )
+            if self.s3_access_key_id or self.s3_secret_access_key.get_secret_value():
+                raise ValueError(
+                    "a key pair beside LANCE_S3_WEB_IDENTITY_TOKEN_FILE is a second identity: the catalog signs only with sessions its token is exchanged for"
+                )
+            return self
+        if self.secrets_from_dapr:
             raise ValueError(
-                f"LANCE_S3_STS_ENDPOINT is required for vending_mode={self.vending_mode!r} "
-                "(else the caller's token would be sent to the public AWS STS endpoint)"
+                "with LANCE_SECRETS_FROM_DAPR the catalog's object-store identity is its ServiceAccount token: set LANCE_S3_WEB_IDENTITY_TOKEN_FILE"
             )
-        return self
-
-    @model_validator(mode="after")
-    def _validate_env_credential(self) -> Self:
-        """With the secret store off, the key id is the environment's, and an absent one is refused at boot."""
-        if not self.secrets_from_dapr and not self.s3_access_key_id:
-            raise ValueError("LANCE_S3_ACCESS_KEY_ID is required when the secret store is off (LANCE_SECRETS_FROM_DAPR)")
+        if not self.s3_access_key_id:
+            raise ValueError("LANCE_S3_ACCESS_KEY_ID is required when the catalog holds no projected token (LANCE_S3_WEB_IDENTITY_TOKEN_FILE)")
         return self
 
     def s3_key_pair(self) -> S3KeyPair:
-        """The key pair the catalog signs object-store requests with: the store's, or the environment's when the store is off.
+        """What the catalog signs object-store requests with: the session its token was exchanged for, or the environment's pair.
 
         Raises:
-            StoreCredentialUnavailableError: The store has not confirmed the pair within its TTL (503).
+            StoreCredentialUnavailableError: No unexpired session is held (503).
         """
-        if self.secrets_from_dapr:
-            return store_key_pair(self)
+        if (identity := self.web_identity) is not None:
+            return held_session(identity)
         return S3KeyPair(access_key_id=self.s3_access_key_id, secret_access_key=self.s3_secret_access_key)
 
     def namespace_properties(self, *, root: str | None = None, plane: StorePlane = "metadata") -> dict[str, str]:
@@ -709,7 +725,7 @@ class Settings(
         one of them drifts.
 
         THE ENDPOINT IS NOT OVERRIDABLE, and that is the [[LH-205]] invariant stated as a signature: these
-        properties carry the estate's own key pair, so the only store they may address is the estate's.
+        properties carry the estate's own credential, so the only store they may address is the estate's.
         A warehouse record naming another store is refused before a connection is built
         (``catalog.core.store_endpoint``); its credential would belong behind the Dapr secret store
         with the record naming a reference, and no door consumes one yet.
@@ -717,15 +733,17 @@ class Settings(
         ``allow_http`` is derived from the endpoint's scheme, never set on its own, so a TLS endpoint
         cannot keep permission to fall back to plaintext.
 
-        The key pair is the one in force when this is called (:meth:`s3_key_pair`), so a caller holding the
-        result past a rotation holds a pair the store has replaced.
+        The credential is the one in force when this is called (:meth:`s3_key_pair`), so a caller holding the result
+        past a renewal holds a session the store will expire.
         """
         pair = self.s3_key_pair()
+        session = {f"{_STORAGE_PREFIX}session_token": pair.session_token.get_secret_value()} if pair.session_token is not None else {}
         return {
             "root": root or self.root,
             f"{_STORAGE_PREFIX}endpoint": self.s3_endpoint,
             f"{_STORAGE_PREFIX}access_key_id": pair.access_key_id,
             f"{_STORAGE_PREFIX}secret_access_key": pair.secret_access_key.get_secret_value(),
+            **session,
             f"{_STORAGE_PREFIX}region": self.s3_region,
             f"{_STORAGE_PREFIX}allow_http": allow_http_for(self.s3_endpoint),
             f"{_STORAGE_PREFIX}virtual_hosted_style_request": str(self.s3_virtual_hosted).lower(),

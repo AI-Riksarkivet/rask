@@ -65,38 +65,37 @@ not name — so the request was refused before the per-base credential was ever 
 and nothing said why (measured 2026-09-22). A render-time failure names the mistake; the
 runtime one is indistinguishable from a caller inventing a bucket.
 
-## `- { name: LANCE_DAPR_SECRET_KEY, value: "catalog-s3" }`
+## `- { name: LANCE_S3_WEB_IDENTITY_TOKEN_FILE, value: "/var/run/secrets/rask/identity/{{ include "lance.objectStoreAudience" . }}/token" }`
 
-The catalog's own secret in the store, which only the catalog's Configuration allows and only its store login reads
-([[XC-165]]).
+THE CATALOG'S STORE IDENTITY IS ITS SERVICEACCOUNT ([[XC-083]], ADR 0170). The pod projects a token for
+`objectStore.identity.audience` (the volume `lance.identityTokens` renders), and the catalog exchanges it through STS
+`AssumeRoleWithWebIdentity` for every session it signs with: its own IO's, renewed at half life, and each vend's. It
+holds no key pair, in its environment or in the store, so nothing it reads outlives a session.
 
-## `- { name: LANCE_DAPR_SECRET_S3_ID_FIELD, value: {{ include "lance.catalogKeyIdField" . | quote }} }`
+## `- { name: LANCE_S3_STS_ENDPOINT, value: "{{ include "lance.s3Endpoint" . }}" }`
 
-THE KEY ID IS THE STORE'S TOO ([[XC-082]], ADR 0166). Every S3-family store rotates by issuing a NEW key
-id, so an id held in pod env would pair a rotated secret with the old id. The catalog reads both fields
-from one fetch, at boot and again while it runs, and refuses a secret carrying only one of them.
+The store's own endpoint, where RustFS and Ceph RGW serve STS. Always named: without it boto3 would send the catalog's
+token to the public AWS STS, and the catalog refuses to boot (`Settings._validate_store_identity`). An AWS deployment
+needs its regional STS endpoint here, for which the chart has no value yet.
 
-## `- { name: LANCE_DAPR_SECRET_S3_FIELD, value: {{ include "lance.catalogSecretField" . | quote }} }`
+## `- { name: LANCE_DAPR_SECRET_S3_FIELD, value: {{ include "lance.baseSecretField" . | quote }} }`
 
-NAMED HERE rather than left to the service's own default, which is what every sibling
-already does (lineage and maintenance each render their own field). The catalog
-was the one that did not, so the FIELD NAME lived only in its image — and when the seed
-started writing a differently-named property, a running pod asked OpenBao for a field
-that no longer existed and failed closed at startup on an estate whose store was
-otherwise healthy. A name the chart writes and the chart seeds cannot drift apart.
+The field a data base's credential reference carries its secret in (`catalog.multibase.baseCredentialRefs`), named
+here, as lineage and maintenance name theirs, so a field the seed writes and a field the catalog asks for cannot drift
+apart.
 
 ## `- { name: LANCE_SECRETS_FROM_DAPR, value: "true" }`
 
-The S3 key pair comes ONLY from the Dapr secret store, read at boot and again whenever half its TTL is
-used ([[XC-082]], ADR 0166); it is never in pod env. The catalog fails closed if the store can't provide
-it: at boot, and once a held pair goes unconfirmed for its TTL. Needs the lance-secrets component
-(scoped to catalog).
+The catalog's secrets (its signing key, a data base's credential reference) come ONLY from the Dapr secret store, read
+at boot and again on a TTL (ADR 0166); none is in pod env. With it on, the catalog refuses to boot without its store
+token (`Settings._validate_store_identity`), so no key pair can stand in for its ServiceAccount. Needs the
+lance-secrets component (scoped to catalog).
 
 ## `- { name: LANCE_VENDING_MODE, value: {{ .Values.vending.mode | quote }} }`
 
-Data-plane credential vending (Track B). mode_b (default) = server-mediated, no creds leave the
-catalog; sts = AssumeRole + per-table session policy against the store's STS endpoint (short-TTL
-scoped creds the client uses for direct object I/O).
+Data-plane credential vending (Track B). web_identity (default) = the catalog's own token exchanged through
+`AssumeRoleWithWebIdentity` with a per-table session policy (short-TTL scoped creds the client uses for direct object
+I/O, named for the caller); mode_b = server-mediated, no creds leave the catalog.
 
 ## `{{- with .Values.vending.encryption }}`
 

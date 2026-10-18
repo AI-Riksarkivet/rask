@@ -39,10 +39,12 @@ _BUCKET_CLAIMS_PREFIX = "_warehouses/bucket-claims"
 
 
 def _bucket_client(storage_options: StorageOptions) -> Any:  # noqa: ANN401 — boto3 client has no public stub
-    """The S3 client the bucket lifecycle ops share, built from the catalog's own credentials.
+    """The S3 client the bucket lifecycle ops share, built from the catalog's own credential, its session token included.
 
     Kept in ONE place so provisioning and purging can never address different endpoints — creating a
-    bucket on one backend and deleting it on another is a failure mode that reports success.
+    bucket on one backend and deleting it on another is a failure mode that reports success. The catalog's
+    credential is a session (ADR 0170), and a session's key signed without its token is an identity the
+    store does not hold.
 
     Via ``storage.s3_client``, the estate's canonical S3 seam, never a raw ``boto3.client``: path-style
     addressing, s3v4 signing, retries and timeouts live there once, and a hand-rolled client silently
@@ -53,11 +55,12 @@ def _bucket_client(storage_options: StorageOptions) -> Any:  # noqa: ANN401 — 
     from service_kit.lakehouse.objectfs import credential_of
     from storage import s3_client
 
-    _access_key, _secret_key, _ = credential_of(storage_options)
+    _access_key, _secret_key, _session_token = credential_of(storage_options)
     return s3_client(
         storage_options.get("endpoint"),
         access_key=_access_key,
         secret_key=_secret_key,
+        session_token=_session_token,
     )
 
 

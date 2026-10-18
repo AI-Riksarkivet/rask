@@ -5,35 +5,32 @@ credential its environment holds. The client here is pylance's own ``lance.datas
 table_id=...)`` over ``lance_namespace.connect("rest", ...)``, with no rask import in its construction, against
 the real catalog served by uvicorn.
 
-The store is a moto server that enforces IAM, so a key decides what answers. The catalog holds the estate key;
-the vendor makes a real STS ``AssumeRole`` against a role that may read the bucket. The client brings its own
-credential, a key the store refuses (the control asserts it), as an ambient key outside the governed estate is;
-the process environment carries no ``AWS_*`` key and instance metadata is off. So a client that opens the table
-signed with what the catalog vended, over what it brought. moto lets an unsigned request through, so a client
-with no credential at all would prove nothing here.
+The store is a moto server that enforces IAM (``conftest.two_stores``), so a key decides what answers. The catalog
+holds no key: its projected token is exchanged on moto's STS for sessions under a role that may read the bucket (ADR
+0170), its own and each vend's. The client brings its own credential, a key the store refuses (the control asserts
+it), as an ambient key outside the governed estate is; the process environment carries no ``AWS_*`` key and instance
+metadata is off. So a client that opens the table signed with what the catalog vended, over what it brought. moto lets
+an unsigned request through, so a client with no credential at all would prove nothing here.
 
 The writer runs where the catalog's own store address does not answer it, as an off-cluster client cannot resolve
-``rask-rustfs``: that address is a proxy admitting only requests signed with the estate key, and the catalog vends the
-store's address for clients (``LANCE_S3_VENDED_ENDPOINT``). pylance applies the vended ``storage_options`` over the
-client's own (measured on pylance 13.0.0), so the endpoint the catalog vends is the one the client writes to.
-
-moto's signature check is off and its policy check is on, as in ``conftest.two_stores``: measured on moto 5.2.2,
-its canonicalisation refuses the object_store client's list request while boto3's identical one passes.
+``rask-rustfs``: that address is a proxy admitting only requests signed with the catalog's own session, and the catalog
+vends the store's address for clients (``LANCE_S3_VENDED_ENDPOINT``). pylance applies the vended ``storage_options``
+over the client's own (measured on pylance 13.0.0), so the endpoint the catalog vends is the one the client writes to.
 """
 
 from __future__ import annotations
 
 import http.client
-import json
 import re
 import threading
 import time
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from typing import Any
 from urllib.parse import urlsplit
 
-import boto3
 import httpx
 import lance
 import lance_namespace
@@ -41,56 +38,30 @@ import pyarrow as pa
 import pytest
 import uvicorn
 from fastapi import FastAPI
-from moto import settings as moto_settings
-from moto.iam.access_control import IAMRequestBase
-from moto.server import ThreadedMotoServer
-from pydantic import BaseModel, SecretStr
+from moto.sts.models import sts_backends
+from pydantic import BaseModel
 
-from catalog.api.dependencies import get_vendor
-from catalog.core.vending import StsVendor
-from service_kit.governed.store_credential import S3KeyPair
 from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 
 
 _REGION = "us-east-1"
+#: The account moto files every role and session under.
+_ACCOUNT = "123456789012"
 
 
 class _Store(BaseModel):
     url: str
     bucket: str
-    estate_key: str
-    estate_secret: str
     role_arn: str
+    token_file: str
 
 
 @pytest.fixture
-def store() -> Iterator[_Store]:
-    suffix = uuid.uuid4().hex[:10]
-    server = ThreadedMotoServer(port=0)
-    server.start()
-    host, port = server.get_host_and_port()
-    url = f"http://{host}:{port}"
-    bucket = f"lh229-{suffix}"
-    boto3.client("s3", endpoint_url=url, aws_access_key_id="test", aws_secret_access_key="test", region_name=_REGION).create_bucket(Bucket=bucket)
-    iam = boto3.client("iam", endpoint_url=url, aws_access_key_id="test", aws_secret_access_key="test", region_name=_REGION)
-    objects = {"Effect": "Allow", "Action": ["s3:*"], "Resource": [f"arn:aws:s3:::{bucket}", f"arn:aws:s3:::{bucket}/*"]}
-    role = iam.create_role(
-        RoleName=f"lance-vend-{suffix}",
-        AssumeRolePolicyDocument=json.dumps(
-            {"Version": "2012-10-17", "Statement": [{"Effect": "Allow", "Principal": {"AWS": "*"}, "Action": "sts:AssumeRole"}]}
-        ),
-    )["Role"]
-    iam.put_role_policy(RoleName=role["RoleName"], PolicyName="table", PolicyDocument=json.dumps({"Version": "2012-10-17", "Statement": [objects]}))
-    user = f"estate-{suffix}"
-    iam.create_user(UserName=user)
-    assume = {"Effect": "Allow", "Action": ["sts:AssumeRole"], "Resource": [role["Arn"]]}
-    iam.put_user_policy(UserName=user, PolicyName="estate", PolicyDocument=json.dumps({"Version": "2012-10-17", "Statement": [objects, assume]}))
-    key = iam.create_access_key(UserName=user)["AccessKey"]
-    with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(IAMRequestBase, "check_signature", lambda _self: None)
-        patch.setattr(moto_settings, "INITIAL_NO_AUTH_ACTION_COUNT", 0)
-        yield _Store(url=url, bucket=bucket, estate_key=key["AccessKeyId"], estate_secret=key["SecretAccessKey"], role_arn=role["Arn"])
-    server.stop()
+def store(two_stores: Any, tmp_path: Path) -> _Store:  # noqa: ANN401 — conftest.TwoStores
+    """The estate bucket, a role allowed it that this test's catalog's token is exchanged for, and the projected token."""
+    token = tmp_path / "projected-rask-object-store-token"
+    token.write_text("projected-for-rask-object-store")
+    return _Store(url=two_stores.url, bucket=two_stores.estate_bucket, role_arn=two_stores.role_on(two_stores.estate_bucket), token_file=str(token))
 
 
 def _serve(app: FastAPI) -> Iterator[str]:
@@ -113,8 +84,10 @@ def _catalog_env(store: _Store, monkeypatch: pytest.MonkeyPatch, **extra: str) -
         "LANCE_REST_ROOT": f"s3://{store.bucket}",
         "LANCE_CONTROL_ROOT": f"s3://{store.bucket}",
         "LANCE_S3_ENDPOINT": store.url,
-        "LANCE_S3_ACCESS_KEY_ID": store.estate_key,
-        "LANCE_S3_SECRET_ACCESS_KEY": store.estate_secret,
+        "LANCE_S3_WEB_IDENTITY_TOKEN_FILE": store.token_file,
+        "LANCE_S3_STS_ENDPOINT": store.url,
+        "LANCE_S3_ASSUME_ROLE_ARN": store.role_arn,
+        "LANCE_VENDING_MODE": "web_identity",
         "LANCE_CONTROL_EMIT_ENABLED": "false",
         "RASK_OIDC_ENABLED": "false",
         "RASK_FGA_ENABLED": "false",
@@ -122,7 +95,7 @@ def _catalog_env(store: _Store, monkeypatch: pytest.MonkeyPatch, **extra: str) -
         **extra,
     }.items():
         monkeypatch.setenv(key, value)
-    for ambient in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_PROFILE"):
+    for ambient in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_PROFILE", "LANCE_S3_ACCESS_KEY_ID", "LANCE_S3_SECRET_ACCESS_KEY"):
         monkeypatch.delenv(ambient, raising=False)
     from catalog.core.config import get_settings
 
@@ -131,29 +104,35 @@ def _catalog_env(store: _Store, monkeypatch: pytest.MonkeyPatch, **extra: str) -
 
 @pytest.fixture
 def catalog_url(store: _Store, monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
-    """The real catalog on the estate key, served by uvicorn, vending through moto's STS; the environment holds no key."""
+    """The real catalog on its token's session, served by uvicorn, vending through moto's STS; the environment holds no key."""
     _catalog_env(store, monkeypatch)
     from catalog.core.config import get_settings
     from catalog.main import app
 
-    def estate() -> S3KeyPair:
-        return S3KeyPair(access_key_id=store.estate_key, secret_access_key=SecretStr(store.estate_secret))
-
-    vendor = StsVendor(role_arn=store.role_arn, region=_REGION, endpoint=store.url, credential=estate)
-    app.dependency_overrides[get_vendor] = lambda: vendor
     yield from _serve(app)
-    app.dependency_overrides.clear()
     get_settings.cache_clear()
 
 
 _SIGNER = re.compile(r"Credential=([^/]+)/")
 
 
-def _estate_only(upstream: str, estate_key: str) -> ThreadingHTTPServer:
-    """A forwarding proxy to ``upstream`` that answers 403 to any request not signed with ``estate_key``.
+def _catalogs_own(role_arn: str) -> Callable[[str], bool]:
+    """Whether an access key is a session the catalog exchanged for its own IO under ``role_arn``, by moto's record."""
+
+    def _owned(key: str) -> bool:
+        return any(
+            role.access_key_id == key and role.role_arn == role_arn and role.session_name == "catalog" for role in sts_backends[_ACCOUNT]["aws"].assumed_roles
+        )
+
+    return _owned
+
+
+def _catalog_only(upstream: str, admits: Callable[[str], bool]) -> ThreadingHTTPServer:
+    """A forwarding proxy to ``upstream`` that answers 403 to any request not signed with a key ``admits``.
 
     It is the catalog's in-cluster store address as an off-cluster client meets it: the catalog reaches the store
-    through it, and a request signed with anything else, a vended session key among them, does not get through.
+    through it with its own session, and a request signed with anything else, a vended session among them, does not
+    get through.
     """
     target = urlsplit(upstream)
 
@@ -176,7 +155,7 @@ def _estate_only(upstream: str, estate_key: str) -> ThreadingHTTPServer:
         def _forward(self) -> None:
             body = self._body()
             signer = _SIGNER.search(self.headers.get("Authorization", ""))
-            if signer is None or signer.group(1) != estate_key:
+            if signer is None or not admits(signer.group(1)):
                 self.send_response(403)
                 self.send_header("Content-Length", "0")
                 self.end_headers()
@@ -206,18 +185,10 @@ def _estate_only(upstream: str, estate_key: str) -> ThreadingHTTPServer:
 
 @pytest.fixture
 def off_cluster_catalog_url(store: _Store, monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
-    """The real catalog reaching the store through an address only the estate key passes, vending the store's own."""
-    proxy = _estate_only(store.url, store.estate_key)
+    """The real catalog reaching the store through an address only its own session passes, vending the store's own."""
+    proxy = _catalog_only(store.url, _catalogs_own(store.role_arn))
     internal = f"http://127.0.0.1:{proxy.server_address[1]}"
-    _catalog_env(
-        store,
-        monkeypatch,
-        LANCE_S3_ENDPOINT=internal,
-        LANCE_VENDING_MODE="sts",
-        LANCE_S3_STS_ENDPOINT=internal,
-        LANCE_S3_ASSUME_ROLE_ARN=store.role_arn,
-        LANCE_S3_VENDED_ENDPOINT=store.url,
-    )
+    _catalog_env(store, monkeypatch, LANCE_S3_ENDPOINT=internal, LANCE_S3_VENDED_ENDPOINT=store.url)
     from catalog.core.config import get_settings
     from catalog.main import app
 
@@ -227,10 +198,11 @@ def off_cluster_catalog_url(store: _Store, monkeypatch: pytest.MonkeyPatch) -> I
 
 
 def test_a_stock_client_opens_a_table_on_the_vended_credential_and_not_its_environment(store: _Store, catalog_url: str) -> None:
+    namespace = f"db{uuid.uuid4().hex[:8]}"
     with httpx.Client(base_url=catalog_url, timeout=60) as catalog:
-        assert catalog.post("/v1/namespace/db/create", json={}).status_code == 200
+        assert catalog.post(f"/v1/namespace/{namespace}/create", json={}).status_code == 200
         rows = encode_arrow_stream(pa.table({"id": pa.array([1, 2, 3], pa.int64())}))
-        created = catalog.post("/v1/table/db$t/create", content=rows, headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE})
+        created = catalog.post(f"/v1/table/{namespace}$t/create", content=rows, headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE})
         assert created.status_code == 200, created.text
         location = created.json()["location"]
 
@@ -240,18 +212,19 @@ def test_a_stock_client_opens_a_table_on_the_vended_credential_and_not_its_envir
         lance.dataset(location, storage_options=own).count_rows()
 
     stock = lance_namespace.connect("rest", {"uri": catalog_url})
-    dataset = lance.dataset(namespace_client=stock, table_id=["db", "t"], storage_options=own)
+    dataset = lance.dataset(namespace_client=stock, table_id=[namespace, "t"], storage_options=own)
 
     assert dataset.count_rows() == 3
 
 
 def test_a_stock_client_off_the_cluster_creates_and_appends_through_the_endpoint_vended_for_it(store: _Store, off_cluster_catalog_url: str) -> None:
+    namespace = f"db{uuid.uuid4().hex[:8]}"
     with httpx.Client(base_url=off_cluster_catalog_url, timeout=60) as catalog:
-        assert catalog.post("/v1/namespace/db/create", json={}).status_code == 200
+        assert catalog.post(f"/v1/namespace/{namespace}/create", json={}).status_code == 200
 
     stock = lance_namespace.connect("rest", {"uri": off_cluster_catalog_url})
     rows = pa.table({"id": pa.array([1, 2], pa.int64())})
-    lance.write_dataset(rows, namespace_client=stock, table_id=["db", "w"], mode="create", data_storage_version="2.2", enable_stable_row_ids=True)
-    lance.write_dataset(pa.table({"id": pa.array([3], pa.int64())}), namespace_client=stock, table_id=["db", "w"], mode="append")
+    lance.write_dataset(rows, namespace_client=stock, table_id=[namespace, "w"], mode="create", data_storage_version="2.2", enable_stable_row_ids=True)
+    lance.write_dataset(pa.table({"id": pa.array([3], pa.int64())}), namespace_client=stock, table_id=[namespace, "w"], mode="append")
 
-    assert lance.dataset(namespace_client=stock, table_id=["db", "w"]).to_table().column("id").to_pylist() == [1, 2, 3]
+    assert lance.dataset(namespace_client=stock, table_id=[namespace, "w"]).to_table().column("id").to_pylist() == [1, 2, 3]

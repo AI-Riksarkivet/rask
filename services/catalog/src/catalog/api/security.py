@@ -126,21 +126,3 @@ def current_subject(token: CurrentToken) -> str:
 
 
 CurrentSubject = Annotated[str, Depends(current_subject)]
-
-
-def raw_bearer(credentials: _CredentialsDep, token: CurrentToken) -> str | None:
-    """A PERSON's raw bearer JWT string (scheme-stripped), or ``None`` when there is none to forward.
-
-    For routes that must FORWARD the caller's token rather than only verify it — e.g. credential vending's
-    web_identity flow re-presents it to the object store (AssumeRoleWithWebIdentity). Reuses the single
-    ``HTTPBearer`` seam, so parsing matches :func:`authenticate` (case-insensitive scheme — ``BEARER …`` too).
-    A service's projected token answers ``None``: it was minted for this door's audience alone, and
-    re-presenting it to the object store would hand a credential to a party it was never issued for.
-    """
-    if credentials is None or isinstance(token, ServicePrincipal):
-        return None
-    return credentials.credentials
-
-
-#: The caller's raw bearer JWT (``None`` when absent or a service's) — for forwarding, not verification.
-RawBearerToken = Annotated[str | None, Depends(raw_bearer)]

@@ -44,14 +44,14 @@ The verdict column judges RustFS's SOURCE at `3b0ee83` (and the GA tags where st
 
 | # | Requirement | rask evidence | RustFS evidence | Verdict |
 |---|---|---|---|---|
-| R1 | A non-root, policy-scoped user can call STS `AssumeRole`. The catalog signs it with its own scoped pair. | `StsVendor` signs with the pair it reads at every vend: `services/catalog/src/catalog/core/vending.py:773-784`. The catalog user's policy carries S3 actions only, no `sts:*`: `chart/templates/minio-scoped-users.yaml:186-210`. `vending.mode: sts` is the chart default: `chart/values.yaml:852`. | The handler refuses only temporary and service-account callers: `rustfs@3b0ee83:rustfs/src/admin/handlers/sts.rs:219-221`. It checks `sts:AssumeRole` with `deny_only: true`: `sts.rs:225-240`. With `deny_only`, the engine returns allow when no Deny matches: `crates/policy/src/policy/policy.rs:70-81`. The user still needs at least one bound policy that resolves, or the request is denied: `crates/iam/src/sys.rs:1488-1530`. `sts:AssumeRole` is a parseable action: `crates/policy/src/policy/action.rs:732-737`. The same gate is in tags 1.0.0, 1.0.1 and 1.0.3 (`sts.rs:219,235` at each tag). The doc page says the same: https://docs.rustfs.com/en/security-compliance/iam/sts. | **Met in source** (1.0.0 and later). Live: pending. |
-| R2 | The inline session policy narrows the vended credential on every request (intersection with the parent's policy). | The policy is built per table and tier and passed as `Policy=`: `vending.py:786-796`. Its own docstring states the intersection-only premise: `vending.py:507-509`. | The handler parses and stores the policy in the session claims: `rustfs@3b0ee83:rustfs/src/admin/service/session_policy.rs:21-48`. At request time a temporary credential takes the STS path: `crates/iam/src/sys.rs:1407-1415`. The session policy is read from claims: `sys.rs:1852-1873`. The verdict is `session_ok && (is_owner \|\| parent_policy_allows)`: `sys.rs:1450-1458`. So even a session minted by root stays bounded by its session policy. A session policy that fails to parse becomes deny-all: `sys.rs:1857-1859`. | **Met in source.** Live: pending. |
-| R3 | An explicit `Deny` in the session policy beats an `Allow` (rask's `NeverAFinalManifest`). | `vending.py:609-611`. The docstring calls this Deny load-bearing: `vending.py:494-499`. | Deny statements are evaluated before Allow: `rustfs@3b0ee83:crates/policy/src/policy/policy.rs:70-76`. A session policy is evaluated through the same `is_allowed`: `crates/iam/src/sys.rs:2001-2005`. | **Met in source.** Live: pending. |
-| R4 | `s3:ListBucket` is gated by an `s3:prefix` `StringLike` condition. | `vending.py:578-584`, `vending.py:646-652`; scoped users: `chart/templates/minio-scoped-users.yaml:166-172`, `:241`. | `s3:prefix` is a condition key: `rustfs@3b0ee83:crates/policy/src/policy/function/key_name.rs:219-220`. The `prefix` query parameter of ListBucket, ListBucketVersions and ListBucketMultipartUploads is copied into the conditions: `rustfs/src/storage/access.rs:819-841`. `StringLike` is supported: `crates/policy/src/policy/function/condition.rs:32,69`. | **Met in source.** |
-| R5 | A session policy up to rask's size fits. rask sizes write credentials against a 2,048-byte limit. | `vending.py:500-502` (measured on MinIO). | RustFS refuses a session policy over 2,048 bytes, measured after it re-serialises the parsed policy: `rustfs@3b0ee83:rustfs/src/admin/service/session_policy.rs:34-39`. It re-serialises without empty fields (`crates/policy/src/policy/policy.rs:57-66`; `crates/policy/src/policy/statement.rs:26-41`) and without the spaces Python's `json.dumps` adds, so the counted size should not exceed MinIO's. | **Met in source** (same limit). Unclear at the boundary: not measured. |
-| R6 | `DurationSeconds=900` is honoured. | `chart/values.yaml:854`; `vending.py:795`. | AssumeRole clamps to 900–43200 s: `rustfs@3b0ee83:rustfs/src/admin/handlers/sts.rs:64-83`. | **Met in source.** |
-| R7 | The `RoleArn` rask sends is a placeholder that the store ignores. | `chart/values.yaml:861-862`; `vending.py:154`. | AssumeRole does not put `RoleArn` in the session claims: `sts.rs:249-283`. The STS evaluator uses a role mapping only when a `roleArn` claim exists: `crates/iam/src/sys.rs:1548,1555-1568`; `crates/policy/src/policy/policy.rs:49-51`. The docs say RoleArn is "accepted for AWS compatibility". | **Met in source.** |
-| R8 | Key rotation (ADR 0166): the catalog's pair signs AssumeRole, so a rotated pair must be another USER, not an access key. | `docs/adr/0166-a-secret-read-from-the-store-is-re-read-on-a-ttl.md:77-80`; `docs/agents/lessons.md:79`. | RustFS also refuses AssumeRole from a service account (access key): `rustfs@3b0ee83:rustfs/src/admin/handlers/sts.rs:219-221`. The docs page says the same. | **Same as MinIO.** ADR 0166's "second user under the same policy" model carries over unchanged. |
+| R1 | A non-root, policy-scoped user can call STS `AssumeRole`. | No rask caller needs it: the catalog's vends and its own IO exchange its ServiceAccount token instead (R18, ADR 0170), and no other plane calls STS. Each scoped user's policy carries S3 actions only, no `sts:*`: `chart/templates/object-store-scoped-users.yaml`. | The handler refuses only temporary and service-account callers: `rustfs@3b0ee83:rustfs/src/admin/handlers/sts.rs:219-221`. It checks `sts:AssumeRole` with `deny_only: true`: `sts.rs:225-240`. With `deny_only`, the engine returns allow when no Deny matches: `crates/policy/src/policy/policy.rs:70-81`. The user still needs at least one bound policy that resolves, or the request is denied: `crates/iam/src/sys.rs:1488-1530`. `sts:AssumeRole` is a parseable action: `crates/policy/src/policy/action.rs:732-737`. The same gate is in tags 1.0.0, 1.0.1 and 1.0.3 (`sts.rs:219,235` at each tag). The doc page says the same: https://docs.rustfs.com/en/security-compliance/iam/sts. | **Met in source** (1.0.0 and later). Live: pending. |
+| R2 | The inline session policy narrows the vended credential on every request (intersection with the parent's policy). | The policy is built per table and tier and passed as `Policy=`: `vending.py:731-734`. Its own docstring states the intersection-only premise: `vending.py:503-505`. | The handler parses and stores the policy in the session claims: `rustfs@3b0ee83:rustfs/src/admin/service/session_policy.rs:21-48`. At request time a temporary credential takes the STS path: `crates/iam/src/sys.rs:1407-1415`. The session policy is read from claims: `sys.rs:1852-1873`. The verdict is `session_ok && (is_owner \|\| parent_policy_allows)`: `sys.rs:1450-1458`. So even a session minted by root stays bounded by its session policy. A session policy that fails to parse becomes deny-all: `sys.rs:1857-1859`. | **Met in source.** Live: pending. |
+| R3 | An explicit `Deny` in the session policy beats an `Allow` (rask's `NeverAFinalManifest`). | `vending.py:603`. The docstring calls this Deny load-bearing: `vending.py:491-495`. | Deny statements are evaluated before Allow: `rustfs@3b0ee83:crates/policy/src/policy/policy.rs:70-76`. A session policy is evaluated through the same `is_allowed`: `crates/iam/src/sys.rs:2001-2005`. | **Met in source.** Live: pending. |
+| R4 | `s3:ListBucket` is gated by an `s3:prefix` `StringLike` condition. | `vending.py:576`, `vending.py:644`; scoped users: `chart/templates/object-store-scoped-users.yaml:179,244,276,295,310`. | `s3:prefix` is a condition key: `rustfs@3b0ee83:crates/policy/src/policy/function/key_name.rs:219-220`. The `prefix` query parameter of ListBucket, ListBucketVersions and ListBucketMultipartUploads is copied into the conditions: `rustfs/src/storage/access.rs:819-841`. `StringLike` is supported: `crates/policy/src/policy/function/condition.rs:32,69`. | **Met in source.** |
+| R5 | A session policy up to rask's size fits. rask sizes write credentials against a 2,048-byte limit. | `vending.py:495-498` (measured on MinIO). | RustFS refuses a session policy over 2,048 bytes, measured after it re-serialises the parsed policy: `rustfs@3b0ee83:rustfs/src/admin/service/session_policy.rs:34-39`. It re-serialises without empty fields (`crates/policy/src/policy/policy.rs:57-66`; `crates/policy/src/policy/statement.rs:26-41`) and without the spaces Python's `json.dumps` adds, so the counted size should not exceed MinIO's. | **Met in source** (same limit). Unclear at the boundary: not measured. |
+| R6 | `DurationSeconds=900` is honoured. | `chart/values.yaml:842`; `vending.py:734`. | AssumeRole clamps to 900–43200 s: `rustfs@3b0ee83:rustfs/src/admin/handlers/sts.rs:64-83`. | **Met in source.** |
+| R7 | The `RoleArn` rask sends is a placeholder that the store ignores. | `chart/values.yaml:850`; `services/catalog/src/catalog/core/config.py:104`. | AssumeRole does not put `RoleArn` in the session claims: `sts.rs:249-283`. The STS evaluator uses a role mapping only when a `roleArn` claim exists: `crates/iam/src/sys.rs:1548,1555-1568`; `crates/policy/src/policy/policy.rs:49-51`. AssumeRoleWithWebIdentity reads neither `RoleArn` nor `RoleSessionName`: neither appears in `rustfs/src/admin/service/federated_identity.rs`. The docs say RoleArn is "accepted for AWS compatibility". | **Met in source.** |
+| R8 | Key rotation (ADR 0166): a pair that signs AssumeRole must rotate to another USER, not an access key. | No rask pair signs AssumeRole (ADR 0170): the catalog holds no pair, and lineage's and maintenance's sign S3 requests only, so they rotate as ADR 0166 states. | RustFS also refuses AssumeRole from a service account (access key): `rustfs@3b0ee83:rustfs/src/admin/handlers/sts.rs:219-221`. The docs page says the same. | **Same as MinIO.** ADR 0166's "second user under the same policy" model carries over unchanged. |
 | R9 | Put-if-not-exists (`If-None-Match: *`) answers 412 to the loser, and concurrent conditional writers are arbitrated atomically. This is Lance's commit primitive and rask's registry CAS. | Lance needs put-if-not-exists or rename-if-not-exists so that "exactly one writer succeeds": `lance_docs/file_format.md:6709-6716`. rask's registry create: `packages/service-kit/src/service_kit/lakehouse/records.py:95-111`. The warehouse probe checks that a second conditional put is refused: `services/catalog/src/catalog/api/v1/endpoints/warehouses.py:1282-1291`. Contended harness: `tests/e2e-py/test_object_store_cas_e2e.py:1-19`. | The header is parsed for PutObject and CompleteMultipartUpload: `rustfs@3b0ee83:rustfs/src/storage/options.rs:316-329,421,471`. PutObject does an advisory check before the body: `crates/ecstore/src/set_disk/ops/object.rs:4214-4226`. It takes the object's namespace write lock at commit: `object.rs:4771`. It re-checks under that lock: `object.rs:4780-4784`. An existing object fails the check: `crates/ecstore/src/set_disk/core/io_primitives.rs:6405-6442`. That error maps to S3 `PreconditionFailed`: `rustfs/src/error.rs:807`. | **Met in source** (check under lock). Live: pending. |
 | R10 | `If-Match: <etag>` on PutObject, for the registry's read-modify-write. | `records.py:235-256`. | Same path as R9, `should_prevent_write` with `if_match`: `io_primitives.rs:6427-6433`. | **Met in source.** |
 | R11 | Conditional CompleteMultipartUpload (a large manifest or record may be multipart). | Lance's commit protocol (R9). rask itself sends conditional headers only on single `put_object` (`records.py:105,249`). | The app layer checks early: `rustfs@3b0ee83:rustfs/src/app/multipart_usecase.rs:585-627`. The store takes the object write lock, then checks: `crates/ecstore/src/set_disk/ops/multipart.rs:2702-2713`. It holds the lock through commit: `multipart.rs:2733-2742`. | **Met in source.** |
@@ -61,7 +61,7 @@ The verdict column judges RustFS's SOURCE at `3b0ee83` (and the GA tags where st
 | R15 | Session token forwarded by every client that uses a vended credential. | Lance options: `objectfs.py:99-100`. pyarrow: `objectfs.py:252-264`. boto3 records: `records.py:63`. | Store-agnostic. RustFS issues a session token: `sts.rs:323-333`. | **Met** (client side). |
 | R16 | Scoped users and policies provisioned by `mc admin` (`policy create`, `user add`, `policy attach`). | `chart/templates/minio-scoped-users.yaml:86,149-151,182-184,206-208,226-228,248-252`. `mc` is pinned to `RELEASE.2025-08-13T08-35-41Z`: `.docker/minio.dockerfile:24-25`. | RustFS serves `/minio/admin/...` as an alias of `/rustfs/admin/...`: `rustfs@3b0ee83:rustfs/src/server/prefix.rs:54-68`; `rustfs/src/admin/router.rs:3154-3162`. A body on the `/minio/admin` path is decrypted the way madmin encrypts it: `rustfs/src/admin/utils.rs:31-62`. The routes exist: add-user `rustfs/src/admin/handlers/user_lifecycle.rs:42-46`; policy attach `rustfs/src/admin/handlers/policies.rs:93`; add-canned-policy and set-policy are in the route test `rustfs/src/admin/route_registration_test.rs:163-166`. | **Met in source.** Whether this `mc` release interoperates: pending live. |
 | R17 | No runtime admin calls from a service. | No `mc admin`, `/minio/admin` or `madmin` in `services/`, `packages/` or `scripts/` Python (grep, 2026-10-18). The only store-specific runtime path is the fixture's health probe: `deploy/fixtures/minio/chart/templates/minio.yaml:82,86`; `tests/e2e-py/chaos.py:284`. | n/a | **Met.** A swap touches the fixture chart and the hook job, not service code. |
-| R18 | AssumeRoleWithWebIdentity, the mode in which the catalog holds no store credential at all. | `vending.py:823-890`; `chart/values.yaml:823-827`. | Supported since 1.0.0 (alpha.60 refused it): `rustfs@3b0ee83:rustfs/src/admin/handlers/sts.rs:186-195,399-441`. The token's signature, issuer, audience and expiry are checked: `crates/iam/src/oidc/runtime.rs:732-740`. A provider is configured by `config_url`, `client_id`, `other_audiences` and a fixed `role_policy`: `crates/iam/src/oidc/config.rs:644-736`. | **Met in source** for a Dex id_token. Whether a Kubernetes projected ServiceAccount token works: **unclear** (see Open questions). |
+| R18 | AssumeRoleWithWebIdentity for the cluster's ServiceAccount issuer, granting a token the policy its subject names: the catalog's own IO and every vend, so the catalog holds no store credential at all (ADR 0170). | `services/catalog/src/catalog/core/vending.py` (`WebIdentityVendor`); `packages/service-kit/src/service_kit/governed/store_session.py`; `chart/values.yaml` `objectStore.identity`, `vending.mode: web_identity`; `deploy/fixtures/rustfs/chart/values.yaml` `identityProvider`. | Supported since 1.0.0 (alpha.60 refused it): `rustfs@3b0ee83:rustfs/src/admin/handlers/sts.rs:186-195,399-441`. The token's signature, issuer, audience and expiry are checked: `rustfs@1.0.3:crates/iam/src/oidc/runtime.rs:740-798`. With `claim_name=sub` and no `role_policy`, a token gets the canned policy its `sub` names: `rustfs@1.0.3:crates/iam/src/federation/mapper.rs:257-298`. | **Measured** on 1.0.3 with a Kubernetes-shaped token and a stand-in issuer, 20 of 20 checks (§ "Measured: web identity"). The cluster's own issuer, through rask's mirror, is read back on the live estate when XC-083 deploys. |
 | R19 | Non-root image, anonymously pullable, multi-arch. | The fixture runs MinIO from a source build because `minio/minio` and `minio/mc` refuse anonymous pulls: `.docker/minio.dockerfile:4-8`. rask's Dagger lanes already pull `rustfs/rustfs:1.0.1`: `.dagger/storage.go:15`. rask measured uid 10001: `.dagger/storage.go:17-20`. | The image creates and runs as uid/gid 10001: `rustfs@3b0ee83:Dockerfile:107-125`. CI pushes to `rustfs/rustfs` and `quay.io/rustfs/rustfs`: `.github/workflows/docker.yml:67-69,468`. Docker Hub tag `1.0.3` lists amd64 and arm64 (hub.docker.com API, 2026-10-18). | **Met.** |
 | R20 | A maintained upstream that ships security fixes. | CLAUDE.md "three facts": zero trust, cloud native, Lance-idiomatic. | Apache-2.0 (GitHub license API). GA releases: 1.0.0 2026-09-16, 1.0.1 2026-10-03, 1.0.2 2026-10-16, 1.0.3 2026-10-17 (GitHub releases API). Recent fixes include a SigV4 unsigned-header bypass (GHSA-xm99-m3gq-83g8) and presigned URLs (GHSA-g8w9-qw9q-fghr): `CHANGELOG.md:10-12,24-25`. | **Met.** |
 
@@ -72,8 +72,8 @@ The verdict column judges RustFS's SOURCE at `3b0ee83` (and the GA tags where st
   `DenyOnly` own-account check skipped the session policy. Affected: "all". Patched in `RELEASE.2025-10-15T17-29-55Z`
   (GitHub security advisory API).
 - rask hands session-scoped credentials to any authenticated client: `docs/adr/0144-storage-credentials-are-vended-to-any-authenticated-client.md:22-26`.
-  The parent of those credentials is the catalog user, which holds the whole data plane:
-  `chart/templates/minio-scoped-users.yaml:192-201`. The advisory's scenario matches that shape. Whether the catalog
+  The parent of those credentials is the catalog's ServiceAccount, whose policy holds the whole data plane
+  (`chart/templates/object-store-scoped-users.yaml`, ADR 0170). The advisory's scenario matches that shape. Whether the catalog
   user may create a service account on MinIO by default was not measured.
 - The fixture runs MinIO `RELEASE.2025-04-22T22-12-26Z`: `.docker/minio.dockerfile:19-23`. That is before the fix.
 - RustFS's `add-service-account` requires an explicit Allow for `admin:CreateServiceAccount`, never deny-only:
@@ -151,8 +151,42 @@ for `*`, so the store-level check under the object's write lock decides alone, a
 (`crates/ecstore/src/set_disk/ops/multipart.rs:2702-2742`) reads the same at 1.0.3. The skill cites the 1.0.3 tag.
 
 Not measured here: `mc admin` against RustFS (R16: rask's `mc` build could not be pulled from the local registry
-through this session's Dagger engine), conditional CompleteMultipartUpload (R11), the warehouse purge (R13),
-AssumeRoleWithWebIdentity (R18), a multi-node deployment, and the 2,048-byte boundary (R5).
+through this session's Dagger engine), conditional CompleteMultipartUpload (R11), the warehouse purge (R13), a
+multi-node deployment, and the 2,048-byte boundary (R5). AssumeRoleWithWebIdentity (R18) is measured in its own section
+below.
+
+## Measured: web identity
+
+Measured 2026-10-18 on `rustfs/rustfs:1.0.3@sha256:9ca9559533b537d10482fe923288b676ad08f92a7069d9a17327fbae3cab688b`,
+a fresh single node run through Dagger with its root pair set, configured as the rustfs fixture configures it
+(`deploy/fixtures/rustfs/chart/values.yaml` `identityProvider`): `RUSTFS_IDENTITY_OPENID_CONFIG_URL` at a stand-in issuer
+on the host, `RUSTFS_IDENTITY_OPENID_ISSUER=https://kubernetes.default.svc.cluster.local`,
+`RUSTFS_IDENTITY_OPENID_CLIENT_ID=rask-object-store`, `RUSTFS_IDENTITY_OPENID_CLAIM_NAME=sub`,
+`RUSTFS_IDENTITY_OPENID_HIDE_FROM_UI=true`, `RUSTFS_OUTBOUND_ALLOW_ORIGINS` the issuer's origin, and no role policy. The
+stand-in issuer (`rustfs_web_identity_measure.py serve`, beside this file) serves what rask's issuer mirror serves: a
+discovery document whose `issuer` is the cluster's and whose `jwks_uri` points at itself, with no
+`authorization_endpoint`, and its key set. Tokens carry the claims k3s projects (`iss`, `sub`, `aud`, `exp`, `iat`, `nbf`,
+`jti`, `kubernetes.io`), RS256 with a `kid`. 20 checks, all as rask needs them:
+
+| Check | Answer |
+|---|---|
+| A canned policy named by the catalog's ServiceAccount subject (`system:serviceaccount:default:rask-sa-catalog`, colons) is created | 200 |
+| The catalog's token, no session policy | issued: the policy its subject names |
+| That session writes where the canned policy allows; reads a bucket it does not name | 200; `AccessDenied` (403) |
+| `DurationSeconds=3600` | honoured (expires in 3,599 s) |
+| A read session on `tenant-a/t1/*`: GET in scope; another prefix; another tenant; a PUT in scope | 200; 403; 403; 403 |
+| A session policy naming a bucket the canned policy lacks | grants nothing (403) |
+| Lance creates and appends a dataset through a write session | 6 rows, 2 commits |
+| Another ServiceAccount's token for the same audience; a same-named account in another namespace | refused: `InvalidRequest` (400), "OIDC policy mapping did not resolve to current policies" |
+| The catalog's token for another audience; an expired token; one signed by another key; one from another issuer | refused: `AccessDenied` (403), "token verification failed" (invalid audience, expired, signature, no provider for the issuer) |
+| `GET /rustfs/admin/v3/list-users` | plain JSON keyed by access key; names no STS session |
+| `DELETE /rustfs/admin/v3/remove-user` | 200, then 404 for the same user |
+
+The issuer's log shows the store fetched discovery and the key set at boot, and fetched both again for each token that
+failed verification: RustFS retries a failed verification once after refreshing the provider
+(`rustfs@1.0.3:crates/iam/src/oidc/runtime.rs:740-798`), so every forged or expired token costs one round trip to the
+issuer. A request to an admin route with a bare `?` and no parameters is refused 400 "failed to decode query"
+(`scripts/rustfs_admin.py` sends none).
 
 ## What the sources prove and do not prove
 
@@ -178,10 +212,8 @@ Not proven:
 
 Contradictions inside rask's own record:
 
-- `vending.py` still calls RustFS "this project's default store". It says AssumeRole was measured working and
-  enforced on RustFS on 2026-08-30 "with the tenant credential": `vending.py:6,13-15,715-731`. It also says RustFS
-  does not support web identity and that web identity is "the native flow for RustFS": `vending.py:10-12,824-830`.
-  These disagree with ADR 0063 and with each other. Whether "the tenant credential" was root is not stated.
+- None remains in `vending.py`: its module docstring states what the measurements in this file show, and its one
+  credential-issuing plug exchanges the catalog's own token (ADR 0170).
 
 ## Does rask need MinIO at all?
 
@@ -199,8 +231,9 @@ Contradictions inside rask's own record:
 
 ### What rask must demand of ANY platform store (requirement list)
 
-1. STS `AssumeRole` callable by a non-root, policy-scoped identity that holds no `sts:` grant (or a grantable one).
-   The identity signs with a long-term user key (R1, R8).
+1. STS `AssumeRoleWithWebIdentity` that trusts the cluster's ServiceAccount issuer for the catalog's audience and grants
+   a token only the policy its subject is given (a canned policy named by `sub`, or a role whose trust policy names
+   it), with an inline session policy honoured (R18, ADR 0170). No rask identity signs `AssumeRole` with a key.
 2. An inline session policy, enforced as an intersection with the parent's policy on every request. An explicit Deny
    must win. The size budget must be at least 2,048 bytes (R2, R3, R5).
 3. Resource ARNs with key-prefix wildcards, and an `s3:prefix` `StringLike` condition on ListBucket (R4).
@@ -211,17 +244,19 @@ Contradictions inside rask's own record:
 7. Bucket create, delete and multi-object delete for a warehouse that owns its bucket (R13).
 8. The session token honoured on every data-plane call (R15).
 9. Optional: SSE (AES256 or aws:kms) when the deployment sets `vending.encryption` (R14).
-10. Optional, and the strongest mode: AssumeRoleWithWebIdentity against rask's OIDC issuer (R18).
-11. A maintained upstream that ships security fixes (R20).
+10. A maintained upstream that ships security fixes (R20).
 
 ## Open questions
 
-- Can a Kubernetes projected ServiceAccount token act as the web identity on RustFS? The provider takes a
-  `config_url` (OIDC discovery), audiences and a fixed `role_policy` (`crates/iam/src/oidc/config.rs:644-736`). The
-  verifier checks signature, issuer, audience and expiry (`crates/iam/src/oidc/runtime.rs:732-740`). Whether the
-  cluster's issuer discovery is reachable from the store, and whether the verifier accepts a token with no `groups`
-  claim when `role_policy` is set, was not traced or measured.
+- Answered: a Kubernetes projected ServiceAccount token acts as the web identity on RustFS 1.0.3. The cluster's
+  issuer is a workload provider: its discovery has no `authorization_endpoint`, which RustFS accepts under
+  `HIDE_FROM_UI` (`rustfs@1.0.3:crates/iam/src/oidc/provider.rs:128-153`). k3s serves discovery only to a bearer, so the
+  store reads it from rask's issuer mirror: with an explicit `ISSUER`, RustFS fetches discovery from `CONFIG_URL` and
+  requires the discovered `issuer` to equal the explicit one (`provider.rs:498-588`), the mirror's private origin being
+  the one `RUSTFS_OUTBOUND_ALLOW_ORIGINS` admits (`rustfs@1.0.3:crates/utils/src/egress.rs:25-29`). A token needs no
+  `groups` claim: with `CLAIM_NAME=sub` and no role policy it is granted the canned policy its `sub` names
+  (`rustfs@1.0.3:crates/iam/src/federation/mapper.rs:257-298`), and a `sub` naming none is refused 400
+  (`rustfs@1.0.3:rustfs/src/admin/service/federated_identity.rs:322-440`). Measured in § "Measured: web identity".
 - Which RustFS commit fixed pyarrow 25's `UploadPart` `XAmzContentSHA256Mismatch` between alpha.60 and 1.0.1?
 - Does the namespace write lock serialise conditional writes across nodes, the way the single-node path does?
-- Should `vending.py`'s RustFS prose (`vending.py:1-27,715-731,824-830`) be rewritten to match whatever the live
-  measurement shows? It currently contradicts ADR 0063.
+- Answered: `vending.py`'s prose is rewritten to the measurements (ADR 0170).

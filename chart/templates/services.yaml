@@ -84,17 +84,17 @@ spec:
             {{- end }}
             - { name: LANCE_MULTIBASE_BASE_CREDENTIAL_REFS, value: {{ $pairs | join "," | quote }} }
             - { name: LANCE_S3_ENDPOINT, value: "{{ include "lance.s3Endpoint" . }}" }
-            - { name: LANCE_DAPR_SECRET_KEY, value: "catalog-s3" }
-            - { name: LANCE_DAPR_SECRET_S3_ID_FIELD, value: {{ include "lance.catalogKeyIdField" . | quote }} }
-            - { name: LANCE_DAPR_SECRET_S3_FIELD, value: {{ include "lance.catalogSecretField" . | quote }} }
+            - { name: LANCE_S3_WEB_IDENTITY_TOKEN_FILE, value: "/var/run/secrets/rask/identity/{{ include "lance.objectStoreAudience" . }}/token" }
+            - { name: LANCE_S3_STS_ENDPOINT, value: "{{ include "lance.s3Endpoint" . }}" }
+            - { name: LANCE_S3_ASSUME_ROLE_ARN, value: {{ .Values.vending.assumeRoleArn | quote }} }
+            - { name: LANCE_S3_SESSION_SECONDS, value: {{ .Values.objectStore.identity.sessionSeconds | quote }} }
+            - { name: LANCE_DAPR_SECRET_S3_FIELD, value: {{ include "lance.baseSecretField" . | quote }} }
             - { name: LANCE_SECRETS_FROM_DAPR, value: "true" }
             {{- with include "lance.signingEnv" (list $root .Values.services.catalog.daprAppId) }}{{ . | nindent 12 }}{{- end }}
             - { name: LANCE_S3_REGION, value: "us-east-1" }
             - { name: LANCE_S3_VIRTUAL_HOSTED, value: "false" }
             - { name: LANCE_VENDING_MODE, value: {{ .Values.vending.mode | quote }} }
-            {{- if or (eq .Values.vending.mode "sts") (eq .Values.vending.mode "web_identity") }}
-            - { name: LANCE_S3_STS_ENDPOINT, value: "{{ include "lance.s3Endpoint" . }}" }
-            - { name: LANCE_S3_ASSUME_ROLE_ARN, value: {{ .Values.vending.assumeRoleArn | quote }} }
+            {{- if eq .Values.vending.mode "web_identity" }}
             - { name: LANCE_VENDING_TTL_SECONDS, value: {{ .Values.vending.ttlSeconds | quote }} }
             {{- with .Values.vending.endpoint }}
             - { name: LANCE_S3_VENDED_ENDPOINT, value: {{ . | quote }} }
@@ -166,11 +166,13 @@ spec:
             {{- include "lance.tmpMount" . | nindent 12 }}
             {{- include "lance.saVerifier" (list $root "mounts" "catalog") | nindent 12 }}
             {{- if .Values.auth.enabled }}{{ include "lance.fgaToken" (list "mounts") | nindent 12 }}{{ end }}
+            {{- include "lance.identityTokens" (list "mounts" (include "lance.objectStoreAudience" .)) | nindent 12 }}
       volumes:
         {{- include "lance.tmpVolume" . | nindent 8 }}
         {{- include "lance.storeIdentity" (list $root .Values.services.catalog.daprAppId "volumes") | nindent 8 }}
         {{- include "lance.saVerifier" (list $root "volumes" "catalog") | nindent 8 }}
         {{- if .Values.auth.enabled }}{{ include "lance.fgaToken" (list "volumes") | nindent 8 }}{{ end }}
+        {{- include "lance.identityTokens" (list "volumes" (include "lance.objectStoreAudience" .)) | nindent 8 }}
 ---
 apiVersion: v1
 kind: Service

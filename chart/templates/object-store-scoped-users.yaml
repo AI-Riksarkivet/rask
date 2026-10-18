@@ -1,36 +1,38 @@
 {{- $maint := .Values.objectStore.maintenanceAccessKey }}
 {{- $lineage := .Values.objectStore.lineageAccessKey }}
 {{- $viewer := .Values.objectStore.viewerAccessKey }}
-{{- $catalog := .Values.objectStore.catalogAccessKey }}
+{{- $catalogAccount := include "lance.saAccount" (list . "catalog") }}
 {{- $media := include "lance.mediaIdentity" . }}
 {{- $backup := include "lance.backupIdentity" . }}
 {{- $fixture := include "lance.baseFixture" . | fromJson }}
 {{- if .Values.objectStore.enabled }}
+{{- range $phase := ternary (list "install") (list "pre-upgrade" "post-upgrade") .Release.IsInstall }}
+---
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: {{ include "rask.fullname" . }}-object-store-scoped-users-{{ include "rask.bootstrapRev" . }}
-  labels: {{- include "lance.labels" . | nindent 4 }}
-  {{- if not .Release.IsInstall }}
+  name: {{ include "rask.fullname" $ }}-object-store-scoped-users-{{ if eq $phase "post-upgrade" }}prune-{{ end }}{{ include "rask.bootstrapRev" $ }}
+  labels: {{- include "lance.labels" $ | nindent 4 }}
+  {{- if ne $phase "install" }}
   annotations:
-    "helm.sh/hook": pre-upgrade,post-upgrade
+    "helm.sh/hook": {{ $phase }}
     "helm.sh/hook-weight": "5"
     "helm.sh/hook-delete-policy": before-hook-creation
   {{- end }}
 spec:
   ttlSecondsAfterFinished: 3600
-  {{- include "lance.bootstrapJobDeadline" . | nindent 2 }}
+  {{- include "lance.bootstrapJobDeadline" $ | nindent 2 }}
   backoffLimit: 20
   template:
     metadata:
       labels:
-        {{- include "rask.selectorLabels" . | nindent 8 }}
+        {{- include "rask.selectorLabels" $ | nindent 8 }}
         app.kubernetes.io/component: object-store-scoped-users
     spec:
       restartPolicy: OnFailure
       securityContext: { fsGroup: 10001 }
-      serviceAccountName: {{ include "lance.fullname" . }}-sa-hooks
-      {{- with .Values.imagePullSecrets }}
+      serviceAccountName: {{ include "lance.fullname" $ }}-sa-hooks
+      {{- with $.Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
@@ -38,16 +40,16 @@ spec:
       # secret, so whoever reads it can forge any vended credential. This hook and the store are its only readers
       # (`<release>-object-store-root`), and here it reaches both containers as a FILE, never env or argv.
       volumes:
-        {{- include "lance.tmpVolume" . | nindent 8 }}
+        {{- include "lance.tmpVolume" $ | nindent 8 }}
         - { name: keys, emptyDir: { medium: Memory, sizeLimit: 1Mi } }
         - name: store-root
-          secret: { secretName: {{ include "lance.fullname" . }}-object-store-root, items: [{ key: object-store-secret-key, path: object-store-secret-key }], defaultMode: 0400 }
+          secret: { secretName: {{ include "lance.fullname" $ }}-object-store-root, items: [{ key: object-store-secret-key, path: object-store-secret-key }], defaultMode: 0400 }
       initContainers:
         # Derives each scoped secret from the root secret (`lance.scopedSecretFn`), the same function the dev
         # OpenBao seed runs, so the store and the secret store agree without one handing the other a key.
         - name: derive
-          image: {{ include "lance.catalogImage" . | quote }}
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          image: {{ include "lance.catalogImage" $ | quote }}
+          imagePullPolicy: {{ $.Values.image.pullPolicy }}
           {{- include "lance.rootlessSecurityContext" 10001 | nindent 10 }}
           volumeMounts:
             - { name: keys, mountPath: /keys }
@@ -64,8 +66,8 @@ spec:
             - |
               set -e
               root=$(cat "$ROOT_FILE")
-              {{- include "lance.scopedSecretFn" . | nindent 14 }}
-              {{- range $id := list $maint $lineage $catalog $viewer $media $backup | compact | uniq }}
+              {{- include "lance.scopedSecretFn" $ | nindent 14 }}
+              {{- range $id := list $maint $lineage $viewer $media $backup | compact | uniq }}
               scoped_secret {{ $id }} "$KEYS/{{ $id }}"
               {{- end }}
               {{- range $ref, $_ := $fixture }}
@@ -73,17 +75,18 @@ spec:
               {{- end }}
       containers:
         # RustFS's native admin API, driven by `scripts/rustfs_admin.py` out of rask's own image: canned policies
-        # first, then each user (an existing one gets its secret set again) and its binding. A binding to a policy
-        # that does not exist denies the user's STS AssumeRole, so the script creates every policy before it binds
-        # any, and it deletes none. Every policy below names S3 actions only: no `admin:*`, no `sts:*` (RustFS
-        # evaluates AssumeRole deny-only, so a user needs a resolving binding and no grant), and no
-        # `s3:ForceDelete*`, which `s3:*` does not imply.
+        # first, then each user (an existing one gets its secret set again) and its binding, then, outside the
+        # pre-upgrade run, every user and rask policy the run does not declare is removed, so the store holds what git
+        # declares ([[XC-083]]). Pruning waits for the post-upgrade run because a pod still presenting a retired user
+        # serves until the upgrade has replaced it. The catalog has no user: the store grants its ServiceAccount token
+        # the policy named after its account (ADR 0170). Every policy below names S3 actions only: no `admin:*`, no
+        # `sts:*`, and no `s3:ForceDelete*`, which `s3:*` does not imply.
         - name: provision
-          image: {{ include "lance.catalogImage" . | quote }}
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          image: {{ include "lance.catalogImage" $ | quote }}
+          imagePullPolicy: {{ $.Values.image.pullPolicy }}
           {{- include "lance.rootlessSecurityContext" 10001 | nindent 10 }}
           volumeMounts:
-            {{- include "lance.tmpMount" . | nindent 12 }}
+            {{- include "lance.tmpMount" $ | nindent 12 }}
             - { name: keys, mountPath: /keys, readOnly: true }
             - { name: store-root, mountPath: /store-root, readOnly: true }
           resources:
@@ -186,7 +189,6 @@ spec:
               POLICY
               {{- end }}
 
-              {{- if $catalog }}
               cat >/tmp/policies/rask-catalog.json <<'POLICY'
               {
                 "Version": "2012-10-17",
@@ -204,7 +206,6 @@ spec:
                 ]
               }
               POLICY
-              {{- end }}
 
               {{- if $viewer }}
               cat >/tmp/policies/rask-viewer.json <<'POLICY'
@@ -314,11 +315,11 @@ spec:
               POLICY
               {{- end }}
               exec python /srv/rustfs_admin.py \
-                --endpoint {{ include "lance.s3Endpoint" . | quote }} \
-                --root-access-key {{ .Values.objectStore.accessKey | quote }} \
+                --endpoint {{ include "lance.s3Endpoint" $ | quote }} \
+                --root-access-key {{ $.Values.objectStore.accessKey | quote }} \
                 --root-secret-file /store-root/object-store-secret-key \
-                {{- $buckets := concat (list .Values.objectStore.bucket) (splitList "," (include "lance.platformBuckets" .)) }}
-                {{- range $_, $zone := .Values.medallion.buckets }}
+                {{- $buckets := concat (list $.Values.objectStore.bucket) (splitList "," (include "lance.platformBuckets" $)) }}
+                {{- range $_, $zone := $.Values.medallion.buckets }}
                 {{- $buckets = append $buckets $zone }}
                 {{- end }}
                 {{- range $ref, $locs := $fixture }}
@@ -335,9 +336,7 @@ spec:
                 {{- if $lineage }}
                 --policy rask-lineage=/tmp/policies/rask-lineage.json --user {{ printf "%s=rask-lineage" $lineage | quote }} \
                 {{- end }}
-                {{- if $catalog }}
-                --policy rask-catalog=/tmp/policies/rask-catalog.json --user {{ printf "%s=rask-catalog" $catalog | quote }} \
-                {{- end }}
+                --policy {{ printf "%s=/tmp/policies/rask-catalog.json" $catalogAccount | quote }} \
                 {{- if $viewer }}
                 --policy rask-viewer=/tmp/policies/rask-viewer.json --user {{ printf "%s=rask-viewer" $viewer | quote }} \
                 {{- end }}
@@ -350,5 +349,9 @@ spec:
                 {{- range $ref, $_ := $fixture }}
                 --policy {{ printf "rask-base-%s=/tmp/policies/rask-base-%s.json" $ref $ref | quote }} --user {{ printf "%s=rask-base-%s" $ref $ref | quote }} \
                 {{- end }}
+                {{- if ne $phase "pre-upgrade" }}
+                --prune \
+                {{- end }}
                 --keys-dir /keys
+{{- end }}
 {{- end }}

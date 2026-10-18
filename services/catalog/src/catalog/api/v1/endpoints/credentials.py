@@ -3,8 +3,8 @@
 Track B: instead of every byte flowing through the catalog (Mode B, the server-mediated Arrow-IPC path),
 an authorized caller can request short-TTL, per-table, tier-scoped credentials and read/write the Lance
 data on object storage itself (LanceDB SDK / lance-ray / pylance). The vendor plug is chosen at boot
-(``LANCE_VENDING_MODE``): ``sts`` (AssumeRole + a per-table session policy — the recommended path),
-``static`` (per-bucket keys), or ``mode_b`` (vends nothing → the client uses the data endpoints).
+(``LANCE_VENDING_MODE``): ``web_identity`` (the catalog's own token exchanged for a session narrowed by a
+per-table session policy, ADR 0170) or ``mode_b`` (vends nothing → the client uses the data endpoints).
 
 Authz: the router-level :func:`catalog.api.fga_deps.authorize` decides before this door runs. A read-tier
 vend needs ``can_read_data`` (or, for a maintainer, ``can_maintain``); a writing tier is a write, so the
@@ -28,10 +28,10 @@ from lance_namespace import (
 )
 
 from catalog.api.dependencies import FgaClientDep, NamespaceDep, SettingsDep, VendorDep
-from catalog.api.security import CurrentToken, RawBearerToken
+from catalog.api.security import CurrentSubject, CurrentToken
 from catalog.core.base_judge import BaseJudge
 from catalog.core.identifiers import parse_identifier
-from catalog.core.vending import Tier, dataset_facts, require_vendable_bases, table_has_branch, unsanctioned_bases, vend_or_refuse
+from catalog.core.vending import Tier, dataset_facts, require_vendable_bases, role_session_name, table_has_branch, unsanctioned_bases, vend_or_refuse
 from catalog.schemas import CredentialResponse
 from catalog.services import native
 from service_kit.governed import fga
@@ -53,9 +53,9 @@ async def vend_credentials(
     ns: NamespaceDep,
     settings: SettingsDep,
     token: CurrentToken,
+    subject: CurrentSubject,
     client: FgaClientDep,
     vendor: VendorDep,
-    web_identity_token: RawBearerToken,
     tier: Annotated[
         Tier,
         Query(
@@ -76,15 +76,15 @@ async def vend_credentials(
 ) -> CredentialResponse:
     """Vend scoped ``storage_options`` for direct object-store access to this table at ``tier``.
 
-    ``web_identity_token`` is the caller's raw bearer JWT (via the shared HTTPBearer seam), forwarded to the
-    object store for the web_identity flow (AssumeRoleWithWebIdentity exchanges it); other vendors ignore it.
+    The credential is a session the catalog's own token is exchanged for, named at the store for the verified caller
+    it is vended to; the caller's own token never leaves the catalog.
     """
     segments = parse_identifier(id, settings.delimiter)
     described: DescribeTableResponse = await run_in_threadpool(native.call, ns, "describe_table", DescribeTableRequest(id=segments))
     if described.location is None:  # no object-store location to scope to → fall back to server-mediated
         return CredentialResponse(mode="server_mediated")
     # The client-direct write target + optimistic-commit base version (a declared-only/new table reads as 0).
-    # A tiny ROOT-cred manifest read to learn the version — not the byte-proxy (no data bytes move).
+    # A tiny manifest read under the catalog's own credential to learn the version — not the byte-proxy (no data bytes move).
     # THE BRANCH MUST BE ONE THE TABLE HAS ([[LH-056]]), checked before anything is minted. `branch` is
     # caller-chosen and `build_session_policy` guards only `*`, `?` and `..` — the format allows `/`
     # inside a branch name, so a shape rule cannot answer this and a lookup has to. Unchecked, the grant
@@ -131,20 +131,19 @@ async def vend_credentials(
     # already one the catalog sanctioned (above); what remains is whether the session policy can ADDRESS
     # it — `build_session_policy` grants each allowlisted base a `ListBase<n>`/`BaseObjects<n>` pair, so the
     # client reaches its own bytes. A sanctioned base the policy cannot grant is reachable only through
-    # the catalog's root credential, which is what the server-mediated answer routes the caller to.
+    # the catalog's own credential, which is what the server-mediated answer routes the caller to.
     if missed := unsanctioned_bases(described.location, bases, settings.multibase_data_base_list):
         log.info("vend_server_mediated_unreachable_bases", extra={"location": described.location, "bases": list(missed)})
         return CredentialResponse(mode="server_mediated")
-    # The blocking STS call (AssumeRole / AssumeRoleWithWebIdentity) runs in the threadpool; a refused or
-    # unreachable exchange answers 401 or 503 (`vend_or_refuse`), never a bare 500.
+    # The blocking STS exchange runs in the threadpool; a refused or unreachable exchange answers 503
+    # (`vend_or_refuse`), never a bare 500.
     creds = await run_in_threadpool(
         partial(
             vend_or_refuse,
             vendor,
-            vending_mode=settings.vending_mode,
             table_location=described.location,
             tier=tier,
-            web_identity_token=web_identity_token,
+            session_name=role_session_name(subject),
             bases=bases,
             branch=branch,
         )

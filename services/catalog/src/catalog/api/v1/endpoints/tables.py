@@ -57,7 +57,7 @@ from catalog.api.dependencies import (
 )
 from catalog.api.pagination import paginate
 from catalog.api.rask_params import RaskFlag
-from catalog.api.security import Caller, CurrentToken, RawBearerToken
+from catalog.api.security import Caller, CurrentToken
 from catalog.core.base_judge import BaseJudge, GovernedStorage
 from catalog.core.config import Settings
 from catalog.core.formats import reject_unsupported_properties
@@ -73,12 +73,22 @@ from catalog.core.lineage_emit import (
 )
 from catalog.core.modes import RegisterMode
 from catalog.core.namespace import judged_native_version, open_dataset_unchecked, registered_dataset_facts, warn_if_mixed_file_versions
-from catalog.core.vending import CredentialVendor, ModeBVendor, Tier, dataset_facts, require_vendable_bases, unsanctioned_bases, vend_or_refuse
+from catalog.core.vending import (
+    CredentialVendor,
+    ModeBVendor,
+    Tier,
+    dataset_facts,
+    require_vendable_bases,
+    role_session_name,
+    unsanctioned_bases,
+    vend_or_refuse,
+)
 from catalog.schemas import ProtectionResponse, SetProtectionRequest, TrashEntry
 from catalog.services import dataplane, native, table_bases, table_claims, warehouses
 from service_kit.control_emit import emit_control
 from service_kit.governed import fga
 from service_kit.governed.audit import SUCCESS, audit
+from service_kit.governed.deps import ANONYMOUS_SUBJECT
 from service_kit.lakehouse import base_registry, location_claims, object_records, protection, trash
 from service_kit.lakehouse.ns_errors import PartiallyApplied
 
@@ -248,7 +258,7 @@ def _vendable_bases(location: str, settings: Settings, so: dict[str, str]) -> tu
     * a classified column cannot be excluded from an object-store grant, because Lance's field-to-file mapping
       is write-order dependent ([[LH-058]], `credentials.py`);
     * a base under its own credential is read only through the catalog ([[LH-273]]);
-    * a sanctioned base the session policy cannot address is reachable only with the catalog's root credential.
+    * a sanctioned base the session policy cannot address is reachable only with the catalog's own credential.
 
     Raises:
         InvalidTableStateError: A base the catalog did not sanction, refused rather than read through ([[LH-279]]).
@@ -260,9 +270,7 @@ def _vendable_bases(location: str, settings: Settings, so: dict[str, str]) -> tu
     return bases
 
 
-def _mint(
-    location: str, tier: Tier, bases: tuple[str, ...], settings: Settings, vendor: CredentialVendor, web_identity_token: str | None
-) -> dict[str, str] | None:
+def _mint(location: str, *, tier: Tier, bases: tuple[str, ...], vendor: CredentialVendor, session_name: str) -> dict[str, str] | None:
     """The ``storage_options`` the vendor mints for ``location`` at ``tier``, with the expiry the spec reads.
 
     THE EXPIRY GOES INSIDE ``storage_options``, where the spec puts it and the only place a stock client looks
@@ -270,7 +278,7 @@ def _mint(
     ``expires_at_millis`` key ..."). Without it a temporary credential looks permanent, and the client discovers
     the TTL by failing at the 900-second mark instead of refreshing.
     """
-    creds = vend_or_refuse(vendor, vending_mode=settings.vending_mode, table_location=location, tier=tier, web_identity_token=web_identity_token, bases=bases)
+    creds = vend_or_refuse(vendor, table_location=location, tier=tier, session_name=session_name, bases=bases)
     if creds is None:
         return None
     options = dict(creds.storage_options)
@@ -290,7 +298,6 @@ async def _vend_on_spec_door(
     vendor: CredentialVendor,
     token: Caller | None,
     client: OpenFgaClient | None,
-    web_identity_token: str | None,
     asked: bool,
 ) -> dict[str, str] | None:
     """Vend the highest tier FGA grants the caller on ``segments`` (ADR 0156 C3), and record the issuance (#41).
@@ -323,7 +330,8 @@ async def _vend_on_spec_door(
                     f"can_read_data required on table:{fga.canonical_object_id(segments, delimiter=settings.delimiter)} to vend credentials"
                 )
             return None
-        options = await run_in_threadpool(_mint, location, tier, bases, settings, vendor, web_identity_token)
+        subject = token.subject if token is not None else ANONYMOUS_SUBJECT
+        options = await run_in_threadpool(partial(_mint, location, tier=tier, bases=bases, vendor=vendor, session_name=role_session_name(subject)))
     except LanceNamespaceError:
         if asked:
             raise
@@ -348,7 +356,6 @@ async def declare_table(
     client: FgaClientDep,
     emitter: LineageEmitterDep,
     control: ControlEmitterDep,
-    web_identity_token: RawBearerToken,
     body: DeclareTableRequest | None = None,
     authorization: Annotated[str | None, Header()] = None,
 ) -> DeclareTableResponse:
@@ -397,7 +404,6 @@ async def declare_table(
                 vendor=vendor,
                 token=token,
                 client=client,
-                web_identity_token=web_identity_token,
                 asked=req.vend_credentials is True,
             )
         except Exception:
@@ -465,7 +471,6 @@ async def describe_table(
     vendor: VendorDep,
     token: CurrentToken,
     client: FgaClientDep,
-    web_identity_token: RawBearerToken,
     body: DescribeTableRequest | None = None,
     with_table_uri: bool | None = None,
     load_detailed_metadata: bool | None = None,
@@ -558,7 +563,6 @@ async def describe_table(
             vendor=vendor,
             token=token,
             client=client,
-            web_identity_token=web_identity_token,
             asked=vend_credentials is True,
         )
     return response

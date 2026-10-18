@@ -73,7 +73,7 @@ from catalog.core.formats import reject_unsupported_properties
 from catalog.core.identifiers import parse_identifier
 from catalog.core.lineage_emit import DEREGISTER_TABLE
 from catalog.core.store_endpoint import names_the_estate_store, require_estate_store
-from catalog.core.vending import CredentialVendor
+from catalog.core.vending import CredentialVendor, role_session_name
 from catalog.schemas import (
     CreateWarehouseNamespaceRequest,
     CreateWarehouseRequest,
@@ -87,6 +87,7 @@ from catalog.services import native, table_claims, warehouses
 from catalog.services.vend_probe import CAS_CHECK, CAS_RESERVE, SCOPE_CHECK, ProbeCheck, ProbeReport, summarize_probe
 from service_kit.control_emit import emit_control
 from service_kit.governed import fga
+from service_kit.governed.deps import ANONYMOUS_SUBJECT
 from service_kit.lakehouse import base_registry, location_claims, object_records, trash
 from service_kit.lakehouse.naming import CONTROL_ID_RE
 from service_kit.lakehouse.ns_errors import PartiallyApplied
@@ -246,7 +247,9 @@ async def create_warehouse(
     # guarantee is the request's problem, 400, and retrying changes nothing. A probe that could not reach the
     # store or its STS learned nothing about it, 503, and the retry is the right move; a GitOps re-POST of a
     # live warehouse must not read a store blip as a verdict on its store.
-    report = summarize_probe(await run_in_threadpool(_run_scope_probe, root_uri, vendor, settings.s3_endpoint))
+    creator = role_session_name(token.subject if token is not None else ANONYMOUS_SUBJECT)
+    probe = partial(_run_scope_probe, root_uri, vendor=vendor, store_endpoint=settings.s3_endpoint, session_name=creator)
+    report = summarize_probe(await run_in_threadpool(probe))
     failed = [c.name for c in report.checks if c.outcome == "fail"]
     if broken := [name for name in failed if name in _CONFORMANCE_CHECKS]:
         log.warning("warehouse_store_failed_probe", extra={"warehouse": warehouse_id, "bucket": bucket, "failed": broken})
@@ -1204,16 +1207,18 @@ async def validate_warehouse_credentials(
     # a record naming another store it would vend and write against the wrong store entirely.
     require_estate_store(record.get("endpoint"), estate=settings.s3_endpoint, subject=f"warehouse {warehouse_id!r}")
 
-    checks = await run_in_threadpool(_run_scope_probe, str(record["root_uri"]), vendor, settings.s3_endpoint)
+    subject = token.subject if token is not None else ANONYMOUS_SUBJECT
+    probe = partial(_run_scope_probe, str(record["root_uri"]), vendor=vendor, store_endpoint=settings.s3_endpoint, session_name=role_session_name(subject))
+    checks = await run_in_threadpool(probe)
     return summarize_probe(checks)
 
 
-def _run_scope_probe(root_uri: str, vendor: CredentialVendor, store_endpoint: str) -> list[ProbeCheck]:
+def _run_scope_probe(root_uri: str, *, vendor: CredentialVendor, store_endpoint: str, session_name: str) -> list[ProbeCheck]:
     """The IO half: vend, write in, read in, write OUT (must fail), clean up.
 
     The probe signs with the vended credential and reaches the store at ``store_endpoint``, the catalog's own
     address: the vended endpoint is the one a client reaches from where it runs ([[LH-489]]), which the catalog's
-    pod need not resolve.
+    pod need not resolve. The credential is named ``session_name`` at the store, for the admin who asked.
 
     Every step records its own outcome and the ones it makes impossible are SKIPPED rather than
     reported as failures — a probe that could not write has learned nothing about scope, and saying so
@@ -1231,7 +1236,7 @@ def _run_scope_probe(root_uri: str, vendor: CredentialVendor, store_endpoint: st
 
     checks: list[ProbeCheck] = []
     try:
-        vended = vendor.vend(table_location=f"s3://{bucket}/{probe_prefix}", tier="maintain")
+        vended = vendor.vend(table_location=f"s3://{bucket}/{probe_prefix}", tier="maintain", session_name=session_name)
     except Exception as exc:  # noqa: BLE001 — any vend failure is one reportable outcome, not a 500
         checks.append(ProbeCheck(name="issue", outcome="fail", detail=f"{type(exc).__name__}: {exc}"))
         vended = None

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import time
 import uuid
+from datetime import UTC, datetime
 
 import httpx
 import pyarrow as pa
@@ -23,9 +24,12 @@ import pyarrow.ipc as ipc
 import pytest
 import respx
 from fastapi.testclient import TestClient
+from pydantic import SecretStr
 
 from catalog.services import warehouse_credentials
 from service_kit.governed import secret_cache, secrets
+from service_kit.governed.store_credential import S3KeyPair
+from service_kit.governed.store_session import IssuedSession
 
 
 ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
@@ -71,9 +75,9 @@ def test_a_read_of_a_table_on_a_second_store_uses_that_stores_credential(
         replaced = two_store_catalog.post(f"/v1/table/{table}/create?mode=overwrite&data_base={second_base}", content=_ipc(REPLACED), headers=ARROW)
         assert replaced.status_code == 200, f"the overwrite did not land on the base under its own credential: {replaced.text}"
     # The one call that would reach the store: a vend that minted would answer `direct` with these.
-    two_store_catalog.app.state.vendor._assume_role = lambda **_kw: {  # noqa: SLF001
-        "Credentials": {"AccessKeyId": "AK", "SecretAccessKey": "SK", "SessionToken": "ST", "Expiration": None}
-    }
+    two_store_catalog.app.state.vendor._exchange = lambda *_a, **_kw: IssuedSession(  # noqa: SLF001
+        key_pair=S3KeyPair(access_key_id="AK", secret_access_key=SecretStr("SK"), session_token=SecretStr("ST")), expiration=datetime(2030, 1, 1, tzinfo=UTC)
+    )
 
     response = two_store_catalog.post(door.format(table=table), json=body)
 

@@ -49,24 +49,25 @@ lineage feed row and edge name (how/who). The diagram is built around that singl
 Modes are **not** alternate flows; they're the deployment shape of the *data plane*. The same
 flow runs in both — only the credential/byte-path changes.
 
-| | **Mode B** *(server-mediated, default)* | **STS vending** *(S3 direct, recommended)* |
+| | **Mode B** *(server-mediated)* | **Web-identity vending** *(S3 direct, the default)* |
 |---|---|---|
 | Object store | S3-compatible (RustFS, AWS, Ceph RGW) | same — any STS-capable S3 (RustFS / Ceph / AWS) |
-| Credential | **none leaves the catalog** | short-TTL, table-scoped **STS token** (`AssumeRole`) |
+| Credential | **none leaves the catalog** | short-TTL, table-scoped **STS token** (`AssumeRoleWithWebIdentity` on the catalog's own ServiceAccount token) |
 | Byte path | **server-mediated** (catalog reads on the client's behalf) | client reads storage **directly** with the vended token |
-| OpenBao | not consulted per-request | catalog reads its base/role credential (Dapr secret store — built) to mint STS |
+| OpenBao | not consulted per-request | not consulted: the catalog holds no store key (ADR 0170); a data base under its own credential reference reads that pair from the Dapr secret store |
 
 The target is **S3-compatible storage** — RustFS is the development and CI backend (ADR 0168); AWS S3, Ceph RGW and
 GCS-via-interop work the same way. The design is **vending-first** with a pluggable
-`CredentialVendor` (`services/catalog/core/vending.py`, three modes: `StsVendor` (`sts`),
-`WebIdentityVendor` (`web_identity`) and `ModeBVendor` (`mode_b`)).
+`CredentialVendor` (`services/catalog/core/vending.py`, two modes: `WebIdentityVendor` (`web_identity`) and
+`ModeBVendor` (`mode_b`)).
 The toggle is the *credential-delivery* shape — both modes run on the **same** S3 storage.
 
-> ℹ️ **STS works on RustFS** (and Ceph RGW, AWS; measured on RustFS 1.0.1, 2026-10-18): `StsVendor` points boto3's STS client at the S3
-> endpoint and calls `AssumeRole` with an inline session policy scoped to the table's bucket/prefix
-> → a short-TTL `{access_key, secret_key, session_token}`. `WebIdentityVendor`
-> (`vending.mode=web_identity`) exchanges the caller's OIDC token through `AssumeRoleWithWebIdentity`
-> instead. For a backend with neither, `ModeBVendor` keeps every credential inside the catalog.
+> ℹ️ **Web identity works on RustFS** (and Ceph RGW, AWS; measured on RustFS 1.0.3, 2026-10-18,
+> `docs/audits/2026-10-18/rustfs_web_identity_measure.py`): `WebIdentityVendor` sends the catalog's own projected
+> ServiceAccount token, unsigned, to the store's STS `AssumeRoleWithWebIdentity` with an inline session policy scoped
+> to the table's bucket/prefix → a short-TTL `{access_key, secret_key, session_token}`. The store grants the token the
+> policy its subject names, and the session is the intersection of the two. For a backend with no STS, `ModeBVendor`
+> keeps every credential inside the catalog.
 
 > 🔑 **Who holds secrets (least-privilege).** Only the **catalog** and **lineage svc** consume OpenBao.
 > A pipeline job (the user's, on their own compute) **never** reads OpenBao — it gets short-TTL scoped creds

@@ -1,15 +1,13 @@
-"""[[XC-082]] A credential rotated in the secret store is served by the running catalog once its TTL passes, with no restart.
+"""[[XC-082]] A base's credential rotated in the secret store is served by the running catalog once its TTL passes, with no restart.
 
-The secret store is the sole source of every credential the catalog signs object-store requests with: its own key
-pair, and each data base's credential reference ([[LH-273]]). A rotation follows the order an operator runs it in
-(ADR 0166): issue a second key, write it to the store, wait out the TTL, revoke the first. moto refuses a key that is
-gone (``conftest.two_stores``), so a door still signing with the revoked key fails. Each door the key travels through
-is driven: the native namespace connection, a pylance write, the STS client a vend signs with, and a base read under
-its own credential reference.
+The secret store is the sole source of each data base's credential reference ([[LH-273]]); the catalog's own identity
+is its ServiceAccount token (ADR 0170), whose sessions renew themselves
+(`test_the_catalog_signs_only_with_sessions_its_token_is_exchanged_for.py`). A rotation follows the order an operator
+runs it in (ADR 0166): issue a second key, write it to the store, wait out the TTL, revoke the first. moto refuses a
+key that is gone (``conftest.two_stores``), so a base read still signing with the revoked key fails.
 
 The store double is the sidecar's secret API, answered by respx over the real fetch. The clock is the secret cache's
-own, moved past the TTL, and the catalog's credential holder is asked whether its pair is due, which is the call its
-background loop makes on every wake.
+own, moved past the TTL.
 """
 
 from __future__ import annotations
@@ -18,6 +16,7 @@ import json
 import re
 import uuid
 from collections.abc import Callable, Iterator
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -34,11 +33,8 @@ from service_kit.governed import secret_cache
 #: The port the store double answers on. Nothing listens there; respx answers the sidecar's secret API.
 DAPR_PORT = "3597"
 SIDECAR = f"http://localhost:{DAPR_PORT}/v1.0/secrets/lance-secrets"
-#: The secret the data base's credential reference names.
+#: The secret the data base's credential reference names, and the field holding its secret key (`LANCE_DAPR_SECRET_S3_FIELD`).
 BASE_REF = "rotated-base"
-#: The catalog's own secret in the store and its pair's fields (`LANCE_DAPR_SECRET_KEY` and its two field settings).
-SECRET = "catalog-s3"
-ID_FIELD = "access_key"
 SECRET_FIELD = "secret_key"
 ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
 ROWS = pa.table({"id": pa.array([1, 2, 3], pa.int64()), "v": ["a", "b", "c"]})
@@ -67,44 +63,34 @@ class _Clock:
 
 
 class _Rig:
-    """The running catalog, the store double it reads, and the identities whose keys the test issues and revokes.
+    """The running catalog, the store double it reads, and the base's identity whose keys the test issues and revokes."""
 
-    ``credential`` names which of the catalog's two store-held credentials a step means: ``estate``, its own pair in
-    the ``lance`` secret, or ``base``, the data base's pair behind its credential reference.
-    """
-
-    def __init__(self, *, catalog: TestClient, iam: Any, users: dict[str, str], bundles: dict[str, dict[str, str]], clock: _Clock, second_base: str) -> None:  # noqa: ANN401 — a boto3 IAM client
+    def __init__(self, *, catalog: TestClient, iam: Any, user: str, bundles: dict[str, dict[str, str]], clock: _Clock, second_base: str) -> None:  # noqa: ANN401 — a boto3 IAM client
         self.catalog = catalog
         self.second_base = second_base
         self.iam = iam
-        self.users = users
+        self.user = user
         self.bundles = bundles
         self.clock = clock
 
-    def issue(self, credential: str) -> Key:
-        """A new key for the identity behind ``credential``, beside the one it holds."""
-        return _issue(self.iam, self.users[credential])
+    def issue(self) -> Key:
+        """A new key for the base's identity, beside the one it holds."""
+        return _issue(self.iam, self.user)
 
-    def revoke(self, credential: str, key: Key) -> None:
-        self.iam.delete_access_key(UserName=self.users[credential], AccessKeyId=key.aws_access_key_id)
+    def revoke(self, key: Key) -> None:
+        self.iam.delete_access_key(UserName=self.user, AccessKeyId=key.aws_access_key_id)
 
-    def in_store(self, credential: str) -> Key:
-        """The pair the store holds for ``credential``."""
-        if credential == "estate":
-            return Key(aws_access_key_id=self.bundles[SECRET][ID_FIELD], aws_secret_access_key=self.bundles[SECRET][SECRET_FIELD])
+    def in_store(self) -> Key:
+        """The pair the store holds for the base."""
         return Key(aws_access_key_id=self.bundles[BASE_REF]["aws_access_key_id"], aws_secret_access_key=self.bundles[BASE_REF][SECRET_FIELD])
 
-    def store(self, credential: str, key: Key) -> None:
-        """Write ``key`` into the store as ``credential``, in the shape the catalog reads it."""
-        if credential == "estate":
-            self.bundles[SECRET] = {ID_FIELD: key.aws_access_key_id, SECRET_FIELD: key.aws_secret_access_key}
-        else:
-            self.bundles[BASE_REF] = {SECRET_FIELD: key.aws_secret_access_key, "aws_access_key_id": key.aws_access_key_id}
+    def store(self, key: Key) -> None:
+        """Write ``key`` into the store as the base's credential, in the shape the catalog reads it."""
+        self.bundles[BASE_REF] = {SECRET_FIELD: key.aws_secret_access_key, "aws_access_key_id": key.aws_access_key_id}
 
     def past_the_ttl(self) -> None:
-        """Move the cache's clock past every entry's TTL, then wake the catalog's credential holder once."""
+        """Move the cache's clock past every entry's TTL."""
         self.clock.now += secret_cache.SECRET_TTL_SECONDS
-        self.catalog.app.state.store_credential.refresh_if_due()
 
 
 def _issue(iam: Any, user: str) -> Key:  # noqa: ANN401 — a boto3 IAM client
@@ -113,8 +99,8 @@ def _issue(iam: Any, user: str) -> Key:  # noqa: ANN401 — a boto3 IAM client
 
 
 def _identity_on(iam: Any, bucket: str) -> str:  # noqa: ANN401 — a boto3 IAM client
-    """A new IAM user holding no key yet, allowed ``bucket`` and AssumeRole. moto, like AWS, allows two keys per user,
-    which a rotation needs both of."""
+    """A new IAM user holding no key yet, allowed ``bucket``. moto, like AWS, allows two keys per user, which a rotation
+    needs both of."""
     user = f"rot-{uuid.uuid4().hex[:12]}"
     iam.create_user(UserName=user)
     iam.put_user_policy(
@@ -123,10 +109,7 @@ def _identity_on(iam: Any, bucket: str) -> str:  # noqa: ANN401 — a boto3 IAM 
         PolicyDocument=json.dumps(
             {
                 "Version": "2012-10-17",
-                "Statement": [
-                    {"Effect": "Allow", "Action": ["s3:*"], "Resource": [f"arn:aws:s3:::{bucket}", f"arn:aws:s3:::{bucket}/*"]},
-                    {"Effect": "Allow", "Action": ["sts:AssumeRole"], "Resource": ["*"]},
-                ],
+                "Statement": [{"Effect": "Allow", "Action": ["s3:*"], "Resource": [f"arn:aws:s3:::{bucket}", f"arn:aws:s3:::{bucket}/*"]}],
             }
         ),
     )
@@ -134,10 +117,10 @@ def _identity_on(iam: Any, bucket: str) -> str:  # noqa: ANN401 — a boto3 IAM 
 
 
 @pytest.fixture
-def rotation(two_stores: Any, monkeypatch: pytest.MonkeyPatch) -> Iterator[_Rig]:  # noqa: ANN401 — conftest.TwoStores
-    """The real catalog app in store mode: every key it signs with comes from the store double, none from the environment.
+def rotation(two_stores: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[_Rig]:  # noqa: ANN401 — conftest.TwoStores
+    """The real catalog app in store mode: its own IO on its token's session, the base's key from the store double.
 
-    Each test's identities are its own, so a revocation never touches the ``two_stores`` users, which the other
+    The base's identity is this test's own, so a revocation never touches the ``two_stores`` users, which the other
     tests on this module's moto server keep using.
     """
     from catalog.core.config import get_settings
@@ -145,27 +128,25 @@ def rotation(two_stores: Any, monkeypatch: pytest.MonkeyPatch) -> Iterator[_Rig]
     clock = _Clock()
     monkeypatch.setattr(secret_cache, "STORE_READS", secret_cache.SecretCache(clock=clock))
     iam = two_stores.iam()
-    users = {"estate": _identity_on(iam, two_stores.estate_bucket), "base": _identity_on(iam, two_stores.second_bucket)}
-    estate, base = _issue(iam, users["estate"]), _issue(iam, users["base"])
-    bundles = {
-        SECRET: {ID_FIELD: estate.aws_access_key_id, SECRET_FIELD: estate.aws_secret_access_key},
-        BASE_REF: {SECRET_FIELD: base.aws_secret_access_key, "aws_access_key_id": base.aws_access_key_id},
-    }
+    user = _identity_on(iam, two_stores.second_bucket)
+    base = _issue(iam, user)
+    bundles = {BASE_REF: {SECRET_FIELD: base.aws_secret_access_key, "aws_access_key_id": base.aws_access_key_id}}
+    token = tmp_path / "projected-rask-object-store-token"
+    token.write_text("projected-for-rask-object-store")
     for key, value in {
         "LANCE_REST_IMPL": "dir",
         "LANCE_REST_ROOT": f"s3://{two_stores.estate_bucket}",
         "LANCE_CONTROL_ROOT": f"s3://{two_stores.estate_bucket}",
         "LANCE_S3_ENDPOINT": two_stores.url,
+        "LANCE_S3_WEB_IDENTITY_TOKEN_FILE": str(token),
+        "LANCE_S3_STS_ENDPOINT": two_stores.url,
+        "LANCE_S3_ASSUME_ROLE_ARN": two_stores.role_on(two_stores.estate_bucket),
         "LANCE_SECRETS_FROM_DAPR": "true",
-        "LANCE_DAPR_SECRET_S3_ID_FIELD": ID_FIELD,
         "LANCE_DAPR_SECRET_S3_FIELD": SECRET_FIELD,
         "DAPR_HTTP_PORT": DAPR_PORT,
         "LANCE_MULTIBASE_DATA_BASES": two_stores.second_base,
         "LANCE_MULTIBASE_BASE_CREDENTIAL_REFS": f"{two_stores.second_base}={BASE_REF}",
         "LANCE_CONTROL_EMIT_ENABLED": "false",
-        "LANCE_VENDING_MODE": "sts",
-        "LANCE_S3_STS_ENDPOINT": two_stores.url,
-        "LANCE_S3_ASSUME_ROLE_ARN": "arn:aws:iam::123456789012:role/lance-vend",
         "RASK_OIDC_ENABLED": "false",
         "RASK_FGA_ENABLED": "false",
     }.items():
@@ -183,27 +164,9 @@ def rotation(two_stores: Any, monkeypatch: pytest.MonkeyPatch) -> Iterator[_Rig]
         sidecar.get(url__regex=rf"^{re.escape(SIDECAR)}/(?P<name>[^/?]+)$").mock(side_effect=_sidecar)
         with TestClient(app) as client:
             assert client.post("/v1/namespace/rot/create", json={}).status_code in {200, 409}
-            yield _Rig(catalog=client, iam=iam, users=users, bundles=bundles, clock=clock, second_base=two_stores.second_base)
+            yield _Rig(catalog=client, iam=iam, user=user, bundles=bundles, clock=clock, second_base=two_stores.second_base)
     app.dependency_overrides.clear()
     get_settings.cache_clear()
-
-
-def _a_namespace_create(rig: _Rig) -> Callable[[], httpx.Response]:
-    return lambda: rig.catalog.post(f"/v1/namespace/rot{uuid.uuid4().hex[:10]}/create", json={})
-
-
-def _a_table_create(rig: _Rig) -> Callable[[], httpx.Response]:
-    return lambda: rig.catalog.post(f"/v1/table/rot${uuid.uuid4().hex[:10]}/create", content=_ipc(ROWS), headers=ARROW)
-
-
-def _a_vend(rig: _Rig) -> Callable[[], httpx.Response]:
-    table = f"rot${uuid.uuid4().hex[:10]}"
-    created = rig.catalog.post(f"/v1/table/{table}/create", content=_ipc(ROWS), headers=ARROW)
-    assert created.status_code == 200, created.text
-    vended = rig.catalog.post(f"/management/v1/table/{table}/credentials")
-    assert vended.status_code == 200, vended.text
-    assert vended.json()["mode"] == "direct", f"this door must sign an STS call to prove anything: {vended.text}"
-    return lambda: rig.catalog.post(f"/management/v1/table/{table}/credentials")
 
 
 def _a_base_read(rig: _Rig) -> Callable[[], httpx.Response]:
@@ -215,43 +178,14 @@ def _a_base_read(rig: _Rig) -> Callable[[], httpx.Response]:
     )
 
 
-@pytest.mark.parametrize(
-    ("door", "credential"),
-    [
-        pytest.param(_a_namespace_create, "estate", id="the-native-namespace-connection"),
-        pytest.param(_a_table_create, "estate", id="a-pylance-write"),
-        pytest.param(_a_vend, "estate", id="the-sts-client-a-vend-signs-with"),
-        pytest.param(_a_base_read, "base", id="a-base-read-under-its-own-credential-reference"),
-    ],
-)
-def test_a_credential_rotated_in_the_store_is_served_after_its_ttl_without_a_restart(
-    rotation: _Rig, door: Callable[[_Rig], Callable[[], httpx.Response]], credential: str
-) -> None:
-    call = door(rotation)
+def test_a_bases_credential_rotated_in_the_store_is_served_after_its_ttl_without_a_restart(rotation: _Rig) -> None:
+    call = _a_base_read(rotation)
     assert call().status_code == 200
-    old = rotation.in_store(credential)
-    rotation.store(credential, rotation.issue(credential))
+    old = rotation.in_store()
+    rotation.store(rotation.issue())
 
     rotation.past_the_ttl()
-    rotation.revoke(credential, old)
+    rotation.revoke(old)
     response = call()
 
-    assert response.status_code == 200, f"the running catalog still signs with the key the store replaced: {response.text}"
-
-
-def test_a_pair_the_store_stops_confirming_is_refused_once_its_ttl_passes(rotation: _Rig) -> None:
-    """Fail closed: past its TTL, a pair the store did not confirm again signs nothing, and the door says it is unavailable.
-
-    The store answers nothing here, as one whose secret was removed or that cannot be reached does. A pair served
-    on regardless would keep signing with a key nobody can vouch for, so the request is refused with the spec's
-    ServiceUnavailable (code 17, 503), which a client retries, rather than a 5xx that reads as a broken catalog.
-    """
-    call = _a_namespace_create(rotation)
-    assert call().status_code == 200
-    rotation.bundles.clear()
-
-    rotation.past_the_ttl()
-    response = call()
-
-    assert (response.status_code, response.headers["content-type"]) == (503, "application/problem+json"), response.text
-    assert response.json()["code"] == 17, response.text
+    assert response.status_code == 200, f"the running catalog still reads the base with the key the store replaced: {response.text}"

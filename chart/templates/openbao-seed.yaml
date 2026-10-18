@@ -183,7 +183,7 @@ data:
       done
       root=$(cat "$G/object-store-secret-key")
       (umask 077; printf 'postgres://%s:%s@%s:%s/%s?sslmode=disable' {{ .Values.age.user | squote }} "$(cat "$G/postgres-password")" {{ include "lance.ageConnectHost" . | squote }} {{ .Values.age.port | squote }} {{ .Values.age.stateDb | squote }} > "$HOME/seed/dapr-state-dsn")
-      {{- range $id := list .Values.objectStore.maintenanceAccessKey .Values.objectStore.catalogAccessKey .Values.objectStore.lineageAccessKey .Values.objectStore.viewerAccessKey (include "lance.mediaIdentity" .) (include "lance.backupIdentity" .) | compact | uniq }}
+      {{- range $id := list .Values.objectStore.maintenanceAccessKey .Values.objectStore.lineageAccessKey .Values.objectStore.viewerAccessKey (include "lance.mediaIdentity" .) (include "lance.backupIdentity" .) | compact | uniq }}
       scoped_secret {{ $id }} "$HOME/seed/scoped-{{ $id }}"
       {{- end }}
       {{- range $ref, $_ := $baseFixture }}
@@ -200,7 +200,7 @@ data:
     bao kv put secret/frontend-session secret=@"$G/frontend-session-secret" >/dev/null
     bao kv put secret/oidc-client client-secret={{ .Values.dex.clientSecret }} >/dev/null
     bao kv put secret/publisher-oidc password={{ .Values.dex.publisher.password }} >/dev/null
-    {{- range $plane, $id := dict "maintenance" .Values.objectStore.maintenanceAccessKey "catalog" .Values.objectStore.catalogAccessKey "lineage" .Values.objectStore.lineageAccessKey }}
+    {{- range $plane, $id := dict "maintenance" .Values.objectStore.maintenanceAccessKey "lineage" .Values.objectStore.lineageAccessKey }}
     {{- if $id }}
     bao kv put secret/{{ $plane }}-s3 access_key={{ $id }} secret_key=@"$HOME/seed/scoped-{{ $id }}" >/dev/null
     {{- end }}
@@ -244,7 +244,7 @@ data:
     {{- end }}
 
     {{- range $ref, $_ := $baseFixture }}
-    bao kv put secret/{{ $ref }} aws_access_key_id={{ $ref }} {{ include "lance.catalogSecretField" $ }}=@"$HOME/seed/base-{{ $ref }}" >/dev/null
+    bao kv put secret/{{ $ref }} aws_access_key_id={{ $ref }} {{ include "lance.baseSecretField" $ }}=@"$HOME/seed/base-{{ $ref }}" >/dev/null
     echo "seeded secret/{{ $ref }} into OpenBao"
     {{- end }}
     {{- if $.Values.secrets.hfTokenInStore }}

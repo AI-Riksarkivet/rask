@@ -38,7 +38,7 @@ from service_kit.governed.machine_identity import ServicePrincipal
 
 
 class _Vendor:
-    def vend(self, *, table_location: str, tier: Tier, web_identity_token: str | None = None, bases: Sequence[str] = (), branch: str = "") -> VendedCredentials:
+    def vend(self, *, table_location: str, tier: Tier, session_name: str, bases: Sequence[str] = (), branch: str = "") -> VendedCredentials:
         return VendedCredentials(storage_options={"access_key_id": "AK", "secret_access_key": "SK", "session_token": "ST"}, expires_at_millis=1)
 
 

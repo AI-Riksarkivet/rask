@@ -724,16 +724,17 @@ auth:
   # templates/openfga-authn.yaml refuses a render where the two differ.
   # -- The Kubernetes ServiceAccount token issuer every door verifies service tokens against (RASK_SA_ISSUER); must equal OpenFGA's issuer alias or the render fails.
   serviceAccountIssuer: &serviceAccountIssuer https://kubernetes.default.svc.cluster.local
-  # THE ISSUER MIRROR ([[XC-077]]): templates/openfga-authn.yaml republishes this issuer's discovery document
-  # and key set, unauthenticated, at http://<release>-issuer-mirror:8080 for a verifier that fetches them with
-  # no credential. OpenFGA is that verifier: v1.18.3 fetches `<issuer>/.well-known/openid-configuration` and
-  # its `jwks_uri` with a bare HTTP client and will not start when either fails (internal/authn/oidc/oidc.go),
-  # and k3s answers both 401 without a bearer (measured 2026-10-05). The mirror fetches them with its own
-  # API-audience token and the cluster CA, as the rask doors do (`lance.saFetch`), serves only that public
-  # material, and caches nothing. Turn it off only on a platform whose issuer serves discovery to anyone (a
-  # managed cluster's public OIDC issuer), and point `openfga.authn.oidc.issuer` at that issuer instead.
+  # THE ISSUER MIRROR ([[XC-077]], [[XC-083]]): templates/issuer-mirror.yaml republishes this issuer's discovery
+  # document and key set, unauthenticated, at http://<release>-issuer-mirror:8080 for a verifier that fetches them with
+  # no credential. Two verifiers do. OpenFGA v1.18.3 fetches `<issuer>/.well-known/openid-configuration` and its
+  # `jwks_uri` with a bare HTTP client and will not start when either fails (internal/authn/oidc/oidc.go). The
+  # development object store verifies the catalog's projected token (ADR 0170) and fetches both from this mirror
+  # (deploy/fixtures/rustfs). k3s answers both 401 without a bearer (measured 2026-10-05). The mirror fetches them with
+  # its own API-audience token and the cluster CA, as the rask doors do (`lance.saFetch`), serves only that public
+  # material, and caches nothing. Turn it off only on a platform whose issuer serves discovery to anyone (a managed
+  # cluster's public OIDC issuer), and point `openfga.authn.oidc.issuer` and the store's provider at that issuer instead.
   issuerMirror:
-    # -- Render the issuer mirror (templates/openfga-authn.yaml) that republishes the SA issuer's discovery and JWKS unauthenticated for OpenFGA; off only for a publicly served issuer.
+    # -- Render the issuer mirror (templates/issuer-mirror.yaml) that republishes the SA issuer's discovery and JWKS unauthenticated for OpenFGA and the development store; off only for a publicly served issuer.
     enabled: true
   # ON BY DEFAULT (2026-08-06). It was `false`, and values-prod.yaml flipped it — which meant every
   # install that forgot to pass a values file came up UNGOVERNED, silently and green. That is exactly
@@ -819,41 +820,24 @@ auth:
 
 # === Data-plane credential vending (Track B). How a client gets storage_options for DIRECT object I/O. ====
 # POST /management/v1/table/<id>/credentials?tier=read|write returns scoped creds (or mode=server_mediated). Modes:
-#   mode_b        (default) — nothing vended; clients use the server-mediated Arrow-IPC data endpoints.
-#   web_identity  — the caller's Dex id_token is exchanged via AssumeRoleWithWebIdentity for creds bound
-#                   to ROLE_POLICY, narrowed per-table by an inline session policy. Requires auth.enabled (the
-#                   caller presents a token) and a store that trusts the issuer: the platform's S3 is configured
-#                   for that by its owner, and the development RustFS fixture is not (web identity is unmeasured
-#                   against rask's issuer, ADR 0168). It is the only mode
-#                   under which the catalog holds NO storage credential at all — but it cannot serve a
-#                   caller that never holds a bearer.
-#   sts           — plain AssumeRole + session policy. Works on a compliant STS: AWS / RustFS / Ceph / moto.
-#                   WHO MAY CALL IT IS THE PART THAT BITES: the catalog signs AssumeRole with its own
-#                   scoped USER (`objectStore.catalogAccessKey`), never root. RustFS evaluates
-#                   `sts:AssumeRole` deny-only, so a user with a resolving policy binding and no `sts:`
-#                   grant may assume (measured 2026-10-18 on rustfs/rustfs 1.0.1,
-#                   docs/audits/2026-10-18/rustfs-zero-trust.md). A store that only lets ROOT vend forces
-#                   the catalog to hold the root key, which is the opposite of what this mode is for.
-#   static        — pre-provisioned per-bucket keys.
+#   mode_b        — nothing vended; clients use the server-mediated Arrow-IPC data endpoints.
+#   web_identity  (default) — STS AssumeRoleWithWebIdentity with the CATALOG'S OWN projected ServiceAccount token
+#                   (`objectStore.identity`) and an inline session policy: a short-TTL credential narrowed to one table
+#                   and tier, under the policy the store grants the catalog's subject ([[XC-083]], ADR 0170). The
+#                   vend's parent is the catalog's ServiceAccount, so the catalog holds no store key, and the
+#                   caller's own token never leaves the catalog. A service caller is vended for as a person is.
 vending:
-  # STS by default, because scoped short-lived credentials ARE the zero-trust posture and `mode_b`
-  # vends nothing at all — under it no worker can ever hold a per-table credential, so every direct
-  # reader falls back to a shared root key or to routing bytes through the server.
+  # SCOPED SHORT-LIVED CREDENTIALS ARE THE ZERO-TRUST POSTURE, and `mode_b` vends nothing at all — under it no
+  # worker can ever hold a per-table credential, so every direct reader routes its bytes through the server.
   #
-  # It defaulted to `mode_b` for a reason that turned out to be a DEFECT rather than a choice: the STS
-  # vendor built its boto client without credentials, so every AssumeRole raised `NoCredentialsError`
-  # and the door answered 503 (fixed 01222590), and the credential it then returned omitted `allow_http`
-  # so no Lance client could be built from it (fixed 3cb13c88). `sts` was unusable, not unwanted.
-  #
-  # PROVEN, which is what makes this default honest rather than aspirational: a credential vended for
-  # one table read that table (4 rows) and was refused on another with 403 AccessDenied (2026-09-03).
-  # Measured on rustfs/rustfs 1.0.1 on 2026-10-18 from a SCOPED (non-root) caller — in-scope GET allowed,
-  # another prefix, another tenant and a read-session PUT all AccessDenied, and a session policy naming a
-  # bucket the parent does not hold granted nothing (docs/audits/2026-10-18/rustfs-zero-trust.md). The store
-  # enforces the session policy from an identity that is not root, which is the whole property the
-  # zero-trust posture rests on.
-  # -- How the catalog vends storage credentials for direct object I/O: `mode_b` (none, server-mediated), `web_identity`, `sts` (default, scoped AssumeRole) or `static`.
-  mode: sts # mode_b | web_identity | sts | static
+  # MEASURED on rustfs/rustfs 1.0.3 on 2026-10-18 (docs/audits/2026-10-18/rustfs_web_identity_measure.py): a
+  # Kubernetes-shaped token for the store's audience whose subject names a canned policy is exchanged; its session
+  # policy is enforced as an intersection (a read session's GET in scope 200, another prefix, another tenant and a PUT
+  # 403; a session policy naming a bucket the canned policy lacks grants nothing); Lance creates and appends on the
+  # session; another ServiceAccount's token, another audience, an expired, a forged and another issuer's token are
+  # each refused.
+  # -- How the catalog vends storage credentials for direct object I/O: `web_identity` (default, its own token exchanged for a per-table session) or `mode_b` (none, server-mediated).
+  mode: web_identity # mode_b | web_identity
   # -- Lifetime in seconds of a vended STS / web-identity credential (LANCE_VENDING_TTL_SECONDS).
   ttlSeconds: 900
   # A vended credential names the object store's address, and a stock client writes to that address and not
@@ -862,8 +846,8 @@ vending:
   # it reaches the store at. In production the platform names the store's public address here (LH-489).
   # -- Object-store endpoint every vended credential names (LANCE_S3_VENDED_ENDPOINT). Empty = the catalog's own store endpoint.
   endpoint: ""
-  # -- Role ARN passed on AssumeRole in `sts`/`web_identity` mode (LANCE_S3_ASSUME_ROLE_ARN); stores with inherited policies ignore it but boto3 requires it.
-  assumeRoleArn: "arn:aws:iam::000000000000:role/lance-vend" # inherited-policy stores ignore it; boto3 requires the param
+  # -- The role the catalog's token is exchanged for (LANCE_S3_ASSUME_ROLE_ARN), for its own IO and every vend: AWS assumes it; a store granting the policy the token's subject names (RustFS) ignores it, and boto3 requires one.
+  assumeRoleArn: "arn:aws:iam::000000000000:role/lance-vend"
   # ENCRYPTION AT REST for every DIRECT write, carried in the vended storage options (§ J5). A vended
   # client writes to object storage with the catalog out of the path, so this is the only channel that
   # reaches it.
@@ -956,7 +940,7 @@ catalog:
     #     only that reference's bases (the bucket's metadata, a LIST conditioned on the base prefix on a
     #     path boundary, object read/write under `<prefix>/`), and a user named `<ref>` holding it;
     #   * the dev OpenBao's seed writes `secret/<ref>` with `aws_access_key_id=<ref>` and the secret under
-    #     the field the catalog reads (`lance.catalogSecretField`), the bundle shape
+    #     the field the catalog reads (`lance.baseSecretField`), the bundle shape
     #     `catalog/services/warehouse_credentials.py::resolve` requires.
     # THE SECRET IS DERIVED IN THE CLUSTER, never rendered: sha256("<ref>-s3-<the store root secret>")[:40],
     # the function `lance.scopedSecretFn` writes, computed by both pods from the root secret they already
@@ -1704,22 +1688,22 @@ objectStore:
   # a different user; the secret is still derived (`lance.scopedSecretFn`).
   # -- Access key of maintenance's scoped store identity, the fallback when vending degrades; secret derives in-cluster. Required: no service presents the store's root.
   maintenanceAccessKey: rask-maintenance
-  # THE CATALOG'S OWN IDENTITY — the last service that presented the store's ROOT account (LH-051).
+  # THE CATALOG'S IDENTITY IS ITS SERVICEACCOUNT, and it holds no store key ([[XC-083]], ADR 0170). Its pod projects a
+  # token for `identity.audience`; the store trusts the cluster's ServiceAccount issuer for that audience and grants a
+  # token the canned policy its `sub` names, so the catalog's token (`system:serviceaccount:<ns>:<release>-sa-catalog`)
+  # maps to the policy the scoped-users hook writes under that name and every other account's maps to nothing. STS
+  # `AssumeRoleWithWebIdentity` exchanges it for the catalog's own sessions and for every vend's. The dev store's
+  # provider is the rustfs fixture's (`identityProvider`), and a platform store's is its owner's to configure for this
+  # audience and subject.
   #
-  # Under `vending.mode: sts` this user SIGNS AssumeRole. RustFS lets a policy-bound user assume with no
-  # `sts:` grant (it evaluates AssumeRole deny-only) and enforces the session policy on the credential it
-  # issues (measured 2026-10-18 on rustfs/rustfs 1.0.1: in-scope GET allowed, another tenant and a read-session
-  # PUT both AccessDenied; docs/audits/2026-10-18/rustfs-zero-trust.md). A binding to a missing policy denies
-  # AssumeRole, so the hook creates the policy before it binds the user and never deletes it.
-  #
-  # Its policy is WIDE on data and holds no admin rights — see `object-store-scoped-users.yaml`. Warehouse
-  # buckets are minted at runtime, so a bucket list here would be
-  # stale by construction; what the scoping removes is the ability to mint identities and rewrite the
-  # policies that govern every other plane.
-  #
-  # The access key is the whole setting; the secret derives in-cluster (`lance.scopedSecretFn`).
-  # -- Access key of the catalog's scoped store identity; the secret derives in-cluster (`lance.scopedSecretFn`). Wide on data, no admin rights. Required: no service presents the store's root.
-  catalogAccessKey: rask-catalog
+  # The policy is WIDE on data and holds no admin rights — see `object-store-scoped-users.yaml`. Warehouse buckets are
+  # minted at runtime, so a bucket list there would be stale by construction; what the scoping removes is the ability
+  # to mint identities and rewrite the policies that govern every other plane.
+  identity:
+    # -- The audience the catalog's ServiceAccount token is projected for, which the object store trusts as its identity provider's client (the rustfs fixture's `identityProvider.clientId`; `sts.amazonaws.com` for AWS). Required.
+    audience: rask-object-store
+    # -- How long a session for the catalog's own IO lasts (LANCE_S3_SESSION_SECONDS, 900 to 43200 s); it is renewed at half its life.
+    sessionSeconds: 3600
   # THE LINEAGE SERVICE'S SCOPED IDENTITY, and its policy is the TIGHTEST of the three because its S3
   # surface is the smallest — measured 2026-09-07 rather than assumed. Lineage opens datasets READ-ONLY
   # to probe versions, schema and dangling blobs (`core/reconcile.py`, `demo.py`), and the only bytes it

@@ -1,33 +1,25 @@
-"""Pluggable credential vending for the catalog data plane.
+"""Credential vending for the catalog data plane.
 
-The catalog authenticates (OIDC) and authorizes (OpenFGA), then a
-:class:`CredentialVendor` turns *(table object-store location, access tier)* into
-the ``storage_options`` a client (LanceDB SDK / lance-ray / pylance) uses to reach
-object storage directly. The target is **S3-compatible** storage: the platform's object store in
-production (AWS S3, Ceph RGW, RustFS, GCS via S3 interop), and RustFS as the development store. The
-design is **vending-first**; each deployment picks the strongest plug its store implements:
+The catalog authenticates (OIDC) and authorizes (OpenFGA), then a :class:`CredentialVendor` turns *(table
+object-store location, access tier)* into the ``storage_options`` a client (LanceDB SDK / lance-ray / pylance) uses
+to reach object storage directly. The target is **S3-compatible** storage: the platform's object store in production
+(AWS S3, Ceph RGW, RustFS), and RustFS as the development store. Two plugs:
 
-* :class:`WebIdentityVendor` — STS ``AssumeRoleWithWebIdentity`` + an inline session policy: the caller's
-  OIDC id_token is exchanged BY THE STORE for short-TTL, per-table, read/write-scoped creds.
-  Token-authenticated, so the catalog holds no store credential for the exchange.
-* :class:`StsVendor` — STS ``AssumeRole`` + an inline session policy: short-TTL,
-  per-table, read/write-scoped tokens, signed with the catalog's own scoped (non-root) pair. For stores
-  that implement plain ``AssumeRole`` — AWS, Ceph RGW and RustFS — which is why `chart/values.yaml`
-  ships ``vending.mode: sts``.
+* :class:`WebIdentityVendor` — STS ``AssumeRoleWithWebIdentity`` with the CATALOG'S OWN projected ServiceAccount
+  token and an inline session policy: a short-TTL credential narrowed to one table and tier, under the policy the
+  store grants the catalog's subject ([[XC-083]], ADR 0170). The vend's parent is the catalog's ServiceAccount, so
+  the catalog holds no store key to sign it with, and the caller's own token never leaves the catalog.
+* :class:`ModeBVendor` — ``vend`` returns ``None``: no credential ever leaves the catalog; the client uses the
+  server-mediated (Arrow-IPC) data endpoints. The backend-agnostic default — nothing is delegated.
 
-WHAT THE DEVELOPMENT STORE ANSWERS IS MEASURED, not inferred, because getting it backwards costs the
-whole data plane: the wrong vendor returns no usable credential and every direct-to-store read fails
-with a signature error that names the client. Measured 2026-10-18 on ``rustfs/rustfs`` 1.0.1 and 1.0.3 (ADR 0168;
-`docs/audits/2026-10-18/rustfs-zero-trust.md`): a scoped user whose canned policy grants S3 actions on
-its buckets and names no ``sts:`` action calls ``AssumeRole`` with a session policy and is issued
-credentials, ``DurationSeconds=900`` honoured; the session policy is enforced as an intersection with
-the user's own (a read session's GET in scope 200, another prefix and another bucket 403, PUT and
-DELETE 403; a write session's PUT in scope 200, out of scope 403), and Lance creates and appends a
-dataset on the vended credential. ``AssumeRoleWithWebIdentity`` against rask's issuer was not measured
-there, so the development estate vends through :class:`StsVendor`.
-* :class:`ModeBVendor` — ``vend`` returns ``None``: no credential ever leaves the
-  catalog; the client uses the server-mediated (Arrow-IPC) data endpoints. The
-  simplest, backend-agnostic default — nothing is delegated.
+WHAT THE DEVELOPMENT STORE ANSWERS IS MEASURED, not inferred, because getting it backwards costs the whole data
+plane: a vendor the store refuses vends nothing, and every direct-to-store read falls back or fails. Measured
+2026-10-18 on ``rustfs/rustfs`` 1.0.3 (`docs/audits/2026-10-18/rustfs_web_identity_measure.py`): a Kubernetes-shaped
+token for the store's audience whose subject names a canned policy is exchanged; its session policy is enforced as an
+intersection with that policy (a read session's GET in scope 200, another prefix, another tenant and a PUT 403, and a
+session policy naming a bucket the canned policy lacks grants nothing); Lance creates and appends a dataset on the
+session; and another ServiceAccount's token, another audience, an expired token, a forged one and another issuer's
+are each refused.
 
 OpenFGA decides the tier: ``can_read_data`` -> ``"read"``, ``can_write_data`` -> ``"write"``,
 ``can_vend_maintain`` -> ``"maintain"`` (:func:`build_session_policy` says what each grants).
@@ -37,18 +29,20 @@ from __future__ import annotations
 
 import json
 import logging
-import time
+import re
 from collections.abc import Callable, Sequence
-from typing import Any, Final, Literal, Protocol, assert_never, cast, runtime_checkable
+from typing import Any, Final, Literal, Protocol, assert_never, runtime_checkable
 from urllib.parse import urlsplit
 
 from botocore.exceptions import BotoCoreError, ClientError
-from lance_namespace import InvalidInputError, ServiceUnavailableError, UnauthenticatedError
+from lance_namespace import InvalidInputError, ServiceUnavailableError
 from pydantic import BaseModel, Field
 
 from catalog.core.base_judge import BaseJudge, require_sanctioned_bases
 from catalog.core.namespace import base_store_params_for, open_location
-from service_kit.governed.store_credential import S3KeyPair
+from service_kit.governed import store_session
+from service_kit.governed.machine_identity import IdentityTokenUnavailableError
+from service_kit.governed.store_session import IssuedSession, WebIdentity
 from service_kit.lakehouse.base_refs import location_within
 from service_kit.lakehouse.base_registry import BaseJudgement, BaseRole, BaseStanding
 from service_kit.lakehouse.branch_layout import BRANCH_CONTAINER, BRANCH_FILE_DIRS
@@ -69,7 +63,7 @@ log = logging.getLogger(__name__)
 #:   because compaction commits versions and cleanup deletes them. Also the shape for a prefix with no
 #:   Lance layout to narrow by (the warehouse scope probe).
 Tier = Literal["read", "write", "maintain"]
-VendingMode = Literal["mode_b", "sts", "web_identity"]
+VendingMode = Literal["mode_b", "web_identity"]
 
 
 class VendedCredentials(BaseModel):
@@ -100,27 +94,15 @@ class EncryptionAtRest(BaseModel):
     kms_key_id: str | None = None
     bucket_key_enabled: bool | None = None
 
-    def as_options(self) -> dict[str, object]:
-        """The keyword arguments `lance_storage_options` takes — one place, so a rename cannot half-land."""
-        return {
-            "server_side_encryption": self.algorithm,
-            "sse_kms_key_id": self.kms_key_id,
-            "sse_bucket_key_enabled": self.bucket_key_enabled,
-        }
-
 
 @runtime_checkable
 class CredentialVendor(Protocol):
     """Vend scoped storage credentials for one table prefix at one tier."""
 
-    def vend(
-        self, *, table_location: str, tier: Tier, web_identity_token: str | None = None, bases: Sequence[str] = (), branch: str = ""
-    ) -> VendedCredentials | None:
-        """Return creds for ``table_location`` at ``tier``.
+    def vend(self, *, table_location: str, tier: Tier, session_name: str, bases: Sequence[str] = (), branch: str = "") -> VendedCredentials | None:
+        """Return creds for ``table_location`` at ``tier``, named ``session_name`` at the store (:func:`role_session_name`).
 
-        ``web_identity_token`` is the caller's OIDC JWT — used ONLY by :class:`WebIdentityVendor` (the store
-        exchanges the token for creds); other vendors ignore it. ``None`` means "no direct credential" — the
-        caller falls back to the server-mediated (Mode B) data path.
+        ``None`` means "no direct credential" — the caller falls back to the server-mediated (Mode B) data path.
         """
         ...
 
@@ -148,9 +130,20 @@ _MAINTAIN_ACTIONS = (
     "s3:AbortMultipartUpload",
 )
 
-# Default role ARN for STS vending. RustFS accepts it for AWS compatibility and puts no role in the session
-# (the session is bounded by the caller's own policy and the session policy); AWS / Ceph resolve it. boto3 requires the param either way. Override via LANCE_S3_ASSUME_ROLE_ARN.
-_DEFAULT_VEND_ROLE_ARN = "arn:aws:iam::000000000000:role/lance-vend"
+#: What AWS lets a RoleSessionName hold (2 to 64 of `[\w+=,.@-]`); RustFS accepts the name and keeps none of it.
+_SESSION_NAME_UNSAFE: Final = re.compile(r"[^A-Za-z0-9_+=,.@-]")
+_SESSION_NAME_MAX: Final = 64
+
+
+def role_session_name(subject: str) -> str:
+    """The STS session name a vend for ``subject`` carries: the subject, each character AWS refuses turned to ``-``.
+
+    The name is what AWS's CloudTrail records a vended session under, so a session reads as the person or service
+    it was vended for (`kubernetes~system:serviceaccount:rask:rask-sa-maintenance` becomes
+    `kubernetes-system-serviceaccount-rask-rask-sa-maintenance`). Longer than 64 characters, it is cut; shorter than
+    the two AWS requires, it is padded with ``-``.
+    """
+    return _SESSION_NAME_UNSAFE.sub("-", subject)[:_SESSION_NAME_MAX].ljust(2, "-")
 
 
 #: The characters that are WILDCARDS inside a Resource ARN and an `s3:prefix` condition, with no
@@ -268,7 +261,7 @@ def unsanctioned_bases(table_location: str, bases: Sequence[str], sanctioned_bas
     store on the first fragment that lived elsewhere. The policy grants every sanctioned base now
     (:func:`build_session_policy`), so the question is no longer "does this table have bases" but
     "is there a base this credential could not reach" — and only the second justifies proxying the
-    table through the catalog's root credential.
+    table through the catalog's own credential.
 
     Empty answer = direct-vendable. A table declaring no bases, which is the overwhelming majority,
     costs nothing here.
@@ -346,7 +339,7 @@ def classified_columns(dataset: Any) -> tuple[str, ...]:
 
 
 class VendFacts(BaseModel):
-    """What a vend needs to know about the ref it vends, read from ONE root-credential open."""
+    """What a vend needs to know about the ref it vends, read from ONE open under the catalog's own credential."""
 
     #: The client's optimistic-append base; 0 for a declared-only table with no readable dataset yet.
     read_version: int = 0
@@ -362,7 +355,7 @@ class VendFacts(BaseModel):
 
 
 def dataset_facts(location: str, storage_options: dict[str, str], *, branch: str = "") -> VendFacts:
-    """The version, declared bases and classified columns of the REF being vended, from ONE root-cred open.
+    """The version, declared bases and classified columns of the REF being vended, from ONE open under the catalog's own credential.
 
     The version is the client's optimistic-append base; 0 for a declared-only/new table with no
     readable dataset yet. The bases are what the vended policy must also be able to READ — a table
@@ -666,30 +659,29 @@ def build_session_policy(
 def vend_or_refuse(
     vendor: CredentialVendor,
     *,
-    vending_mode: VendingMode,
     table_location: str,
     tier: Tier,
-    web_identity_token: str | None,
+    session_name: str,
     bases: Sequence[str],
     branch: str = "",
 ) -> VendedCredentials | None:
     """``vendor.vend``, with a failed exchange answered as the spec's typed error rather than a bare 500.
 
-    Every door that mints a credential calls this, so a refused exchange means one thing at each of them.
+    Every door that mints a credential calls this, so a refused exchange means one thing at each of them. The token
+    is the catalog's own, so a refusal is never the caller's fault: it is the store's configuration or an outage, and
+    a 401 would send an authorized caller into a futile re-login loop.
 
     Raises:
-        UnauthenticatedError: The store rejected a web-identity exchange, which re-presents the caller's own
-            token, so the token is what it refused.
-        ServiceUnavailableError: The store rejected the exchange in any other mode (a configuration fault), or
-            could not be reached (an outage, never an auth problem: a 401 would send an authorized caller
-            into a futile re-login loop).
+        ServiceUnavailableError: The catalog's token could not be read, the store refused the exchange, or the store
+            could not be reached.
     """
     try:
-        return vendor.vend(table_location=table_location, tier=tier, web_identity_token=web_identity_token, bases=bases, branch=branch)
+        return vendor.vend(table_location=table_location, tier=tier, session_name=session_name, bases=bases, branch=branch)
+    except IdentityTokenUnavailableError as exc:
+        raise ServiceUnavailableError("the catalog's projected token could not be read, so no credential was vended") from exc
     except ClientError as exc:
-        if vending_mode == "web_identity":
-            raise UnauthenticatedError("credential exchange rejected — token invalid or untrusted") from exc
-        raise ServiceUnavailableError("credential vending backend rejected the request") from exc
+        log.warning("vend_exchange_refused", extra={"code": exc.response.get("Error", {}).get("Code"), "location": table_location})
+        raise ServiceUnavailableError("the object store refused the catalog's credential exchange") from exc
     except BotoCoreError as exc:
         raise ServiceUnavailableError("credential vending backend unavailable") from exc
 
@@ -697,247 +689,92 @@ def vend_or_refuse(
 class ModeBVendor:
     """No vending: data flows through the catalog's server-mediated endpoints."""
 
-    def vend(
-        self, *, table_location: str, tier: Tier, web_identity_token: str | None = None, bases: Sequence[str] = (), branch: str = ""
-    ) -> VendedCredentials | None:
+    def vend(self, *, table_location: str, tier: Tier, session_name: str, bases: Sequence[str] = (), branch: str = "") -> VendedCredentials | None:
         return None
 
 
-def _expiry_millis(expiration: object, ttl_seconds: int) -> int:
-    """Epoch millis for an STS ``Expiration`` (a datetime), or now + ttl."""
-    ts = getattr(expiration, "timestamp", None)
-    if callable(ts):
-        return int(ts() * 1000)
-    return int((time.time() + ttl_seconds) * 1000)
+class WebIdentityVendor:
+    """STS ``AssumeRoleWithWebIdentity`` with the catalog's own token + an inline session policy → a short-TTL, per-table credential.
 
+    The session is bounded twice: by the policy the store grants the catalog's subject (on RustFS the canned policy
+    named by the token's ``sub``), and by the session policy :func:`build_session_policy` writes for the table and
+    tier. A session policy can only restrict, so a vend never reaches beyond the catalog's own grant. Each vend is
+    its own exchange, never the catalog's own session, so what a client holds is scoped to the table it was vended
+    for, and its name (:func:`role_session_name`) says who it was vended for.
 
-class StsVendor:
-    """STS ``AssumeRole`` + inline session policy → short-TTL, per-table creds.
-
-    The gold-standard plug for S3-family stores that implement the plain ``AssumeRole`` flow — AWS,
-    Ceph RGW, moto and RustFS, the development store.
-
-    RUSTFS ACCEPTS IT FROM A SCOPED USER, MEASURED 2026-10-18 on ``rustfs/rustfs`` 1.0.1 and 1.0.3: a non-root user
-    whose policy names no ``sts:`` action is issued a session token, and the session policy is ENFORCED —
-    in-scope list/GET allowed, an out-of-scope prefix and bucket refused 403, a read-tier PUT refused, a
-    write-tier in-scope PUT allowed, and a bucket the parent does not hold is not widened into. RustFS
-    verifies STS requests as SigV4-signed ``s3``, so an UNSIGNED probe fails with ``InvalidRequest``: a
-    statement about signing, not about the operation.
-
-    That matters for which mode can serve which caller. ``web_identity`` requires the CALLER to present an
-    OIDC token, so it cannot serve a service principal at all: one authenticates with a projected
-    service-account token minted for the catalog's audience alone, which ``raw_bearer`` never forwards, so
-    the vend returns ``None``. This plug has no such requirement.
-
-    ``assume_role`` defaults to a lazily-built boto3 STS client's ``assume_role`` and is injectable for
-    tests.
+    ``exchange`` is :func:`service_kit.governed.store_session.exchange` and is injectable for tests.
     """
 
     def __init__(
         self,
         *,
-        role_arn: str,
-        region: str,
-        endpoint: str | None = None,
+        identity: WebIdentity,
         store_endpoint: str | None = None,
         ttl_seconds: int = 900,
-        assume_role: Callable[..., dict[str, object]] | None = None,
-        credential: Callable[[], S3KeyPair] | None = None,
         encryption: EncryptionAtRest | None = None,
         sanctioned_bases: Sequence[str] = (),
+        exchange: Callable[..., IssuedSession] = store_session.exchange,
     ) -> None:
         #: Travels with every vend: a direct writer has no other channel to learn it (§ J5).
         self._encryption = encryption or EncryptionAtRest()
-        #: The operator's allowlist of legitimate FOREIGN base paths. Deployment config rather than a
-        #: `vend` argument: which buckets belong to this lakehouse is not a per-request question, and a
-        #: per-request one would be answerable by the caller whose manifest is the untrusted input.
+        #: The operator's allowlist of legitimate FOREIGN base paths. Deployment config rather than a `vend` argument:
+        #: which buckets belong to this lakehouse is not a per-request question, and a per-request one would be
+        #: answerable by the caller whose manifest is the untrusted input.
         self._sanctioned_bases = tuple(sanctioned_bases)
-        self._role_arn = role_arn
-        self._region = region
-        self._endpoint = endpoint
-        #: The object-store address the credential is used at, which a client off the cluster reaches and the
-        #: STS endpoint need not be ([[LH-489]]). ``None`` is the STS endpoint's own address.
-        self._store_endpoint = endpoint if store_endpoint is None else store_endpoint
+        self._identity = identity
+        #: The object-store address the credential is used at, which a client off the cluster reaches and the STS
+        #: endpoint need not be ([[LH-489]]). ``None`` is the STS endpoint's own address.
+        self._store_endpoint = identity.endpoint if store_endpoint is None else store_endpoint
         self._ttl = ttl_seconds
-        #: The credential this vendor DELEGATES FROM, read at every vend. Required, not optional in
-        #: practice: AssumeRole is a signed call and botocore's default chain finds nothing here, because
-        #: the S3 pair reaches the catalog from the Dapr secret store and never the process env.
-        self._credential = credential
-        self._assume_role = assume_role or self._default_assume_role
-        #: The boto3 STS client and the pair it signs with. A client keeps its pair, so a rotated one builds
-        #: a new client ([[XC-082]]): the old one would sign every AssumeRole with a revoked key.
-        self._client: Any = None
-        self._client_pair: S3KeyPair | None = None
+        self._exchange = exchange
 
-    def _default_assume_role(self, **kwargs: object) -> dict[str, object]:
-        pair = self._credential() if self._credential is not None else None
-        if self._client is None or pair != self._client_pair:
-            from storage import sts_client  # lazy: only needed when STS vending is actually enabled
-
-            # `storage` is where boto3 is declared and imported, so the timeouts and retry policy are
-            # decided once; a client built here would inherit botocore's timeout-free defaults and an
-            # unresponsive STS endpoint would hang the vend instead of failing it.
-            access_key, secret_key = (pair.access_key_id, pair.secret_access_key.get_secret_value()) if pair is not None else (None, None)
-            self._client = sts_client(region=self._region, endpoint=self._endpoint, access_key=access_key, secret_key=secret_key)
-            self._client_pair = pair
-        return cast(dict[str, object], self._client.assume_role(**kwargs))
-
-    def vend(
-        self, *, table_location: str, tier: Tier, web_identity_token: str | None = None, bases: Sequence[str] = (), branch: str = ""
-    ) -> VendedCredentials | None:
+    def vend(self, *, table_location: str, tier: Tier, session_name: str, bases: Sequence[str] = (), branch: str = "") -> VendedCredentials | None:
         bucket, prefix = split_s3_location(table_location)
         policy = build_session_policy(bucket, prefix, tier, bases, sanctioned_bases=self._sanctioned_bases, branch=branch)
-        resp = self._assume_role(
-            RoleArn=self._role_arn,
-            RoleSessionName="lance-catalog-vend",
-            Policy=json.dumps(policy),
-            DurationSeconds=self._ttl,
-        )
-        creds = cast(dict[str, object], resp["Credentials"])
-        # BUILT THROUGH THE SHARED BUILDER, not hand-rolled. The hand-rolled dict carried the key pair,
-        # the token, the region and the endpoint — and Lance refused to construct a client from it,
-        # failing in 13µs with `HTTP error: builder error` (measured 2026-09-03). object_store will not
-        # build an S3 client for an `http://` endpoint without `allow_http`, and RustFS rejects
-        # virtual-hosted signing with 403 `SignatureDoesNotMatch`. A credential that is correct and
-        # unusable is the worst shape: the vend returns 200 with a full triple and every use of it fails
-        # somewhere else. `lance_storage_options`' own docstring names this — "one omitted key in a
-        # hand-rolled copy is exactly the drift this builder exists to prevent".
+        issued = self._exchange(self._identity, session_name=session_name, duration_seconds=self._ttl, policy=json.dumps(policy))
+        session_token = issued.key_pair.session_token
+        # BUILT THROUGH THE SHARED BUILDER, not hand-rolled. A hand-rolled dict carried the bare credential spellings,
+        # which do not displace a pod's ambient AWS_* environment — object_store blends the two and signs as neither
+        # identity (`403 SignatureDoesNotMatch`, measured in-cluster 2026-09-03) — and omitted `allow_http` and
+        # `virtual_hosted_style_request`, without which Lance builds no client for an `http://` endpoint and RustFS
+        # refuses virtual-hosted signing.
         opts = lance_storage_options(
             self._store_endpoint or "",
-            str(creds["AccessKeyId"]),
-            str(creds["SecretAccessKey"]),
-            self._region,
-            session_token=str(creds["SessionToken"]),
-            **self._encryption.as_options(),  # ty: ignore[invalid-argument-type]
+            issued.key_pair.access_key_id,
+            issued.key_pair.secret_access_key.get_secret_value(),
+            self._identity.region,
+            session_token=session_token.get_secret_value() if session_token is not None else None,
+            server_side_encryption=self._encryption.algorithm,
+            sse_kms_key_id=self._encryption.kms_key_id,
+            sse_bucket_key_enabled=self._encryption.bucket_key_enabled,
         )
         if not self._store_endpoint:
-            # AWS proper: botocore resolves the regional endpoint, and an empty string would pin the
-            # client to nothing. The builder always emits the key, so it is removed rather than skipped.
+            # AWS proper: botocore resolves the regional endpoint, and an empty string would pin the client to
+            # nothing. The builder always emits the key, so it is removed rather than skipped.
             opts.pop("endpoint", None)
-        return VendedCredentials(
-            storage_options=opts,
-            expires_at_millis=_expiry_millis(creds.get("Expiration"), self._ttl),
-        )
-
-
-class WebIdentityVendor:
-    """STS ``AssumeRoleWithWebIdentity`` — the caller's OIDC JWT (e.g. a Dex id_token) is exchanged BY THE
-    STORE for short-TTL creds bound to the provider's ``ROLE_POLICY``, which the inline session policy then
-    narrows per-table. Token-authenticated, so — unlike ``AssumeRole`` — it needs no SigV4-signed catalog
-    creds (the store verifies the JWT's signature, issuer, audience and expiry, not a request signature);
-    the request goes out UNSIGNED. RustFS 1.0 implements it in source; against rask's issuer it is not
-    measured, so the development estate does not ship this mode. ``assume`` is the
-    boto3 ``assume_role_with_web_identity`` and is injectable for tests.
-    """
-
-    def __init__(
-        self,
-        *,
-        region: str,
-        endpoint: str | None = None,
-        store_endpoint: str | None = None,
-        role_arn: str = _DEFAULT_VEND_ROLE_ARN,
-        ttl_seconds: int = 900,
-        assume: Callable[..., dict[str, object]] | None = None,
-        encryption: EncryptionAtRest | None = None,
-        sanctioned_bases: Sequence[str] = (),
-    ) -> None:
-        #: Travels with every vend: a direct writer has no other channel to learn it (§ J5).
-        self._encryption = encryption or EncryptionAtRest()
-        #: The operator's allowlist of legitimate FOREIGN base paths — see :class:`StsVendor`. Both
-        #: plugs carry it because both render a session policy from a writer-chosen manifest.
-        self._sanctioned_bases = tuple(sanctioned_bases)
-        self._region = region
-        self._endpoint = endpoint
-        #: See :class:`StsVendor`.
-        self._store_endpoint = endpoint if store_endpoint is None else store_endpoint
-        self._role_arn = role_arn  # RustFS ignores it; boto3 requires the param
-        self._ttl = ttl_seconds
-        self._assume = assume or self._default_assume
-        self._client: Any = None  # boto3 STS client, built once (the vendor is a lifespan singleton)
-
-    def _default_assume(self, **kwargs: object) -> dict[str, object]:
-        if self._client is None:
-            from storage import sts_client  # lazy: only when web_identity vending is enabled
-
-            # `unsigned`: token-authenticated, not SigV4 — the JWT in the body is the credential, and
-            # this caller holds no key to sign with. Built through `storage` so the connect/read
-            # timeouts apply here too; the vend is on a data-plane request's critical path.
-            self._client = sts_client(region=self._region, endpoint=self._endpoint, unsigned=True)
-        return cast(dict[str, object], self._client.assume_role_with_web_identity(**kwargs))
-
-    def vend(
-        self, *, table_location: str, tier: Tier, web_identity_token: str | None = None, bases: Sequence[str] = (), branch: str = ""
-    ) -> VendedCredentials | None:
-        if not web_identity_token:  # no caller token to exchange → fall back to server-mediated
-            return None
-        bucket, prefix = split_s3_location(table_location)
-        resp = self._assume(
-            RoleArn=self._role_arn,
-            RoleSessionName="lance-catalog-vend",
-            WebIdentityToken=web_identity_token,
-            Policy=json.dumps(build_session_policy(bucket, prefix, tier, bases, sanctioned_bases=self._sanctioned_bases, branch=branch)),
-            DurationSeconds=self._ttl,
-        )
-        creds = cast(dict[str, object], resp["Credentials"])
-        # Through the ONE builder, like `StsVendor` beside it. Hand-rolling this dict is how it came to
-        # carry the bare credential spellings, which do not displace a pod's ambient AWS_* environment —
-        # object_store blends the two and signs as neither identity (`403 SignatureDoesNotMatch`,
-        # measured in-cluster 2026-09-03). It also silently omitted `allow_http` and
-        # `virtual_hosted_style_request`, which RustFS needs.
-        opts = lance_storage_options(
-            self._store_endpoint or "",
-            str(creds["AccessKeyId"]),
-            str(creds["SecretAccessKey"]),
-            self._region,
-            session_token=str(creds["SessionToken"]),
-            **self._encryption.as_options(),  # ty: ignore[invalid-argument-type]
-        )
-        if not self._store_endpoint:
-            opts.pop("endpoint", None)
-        return VendedCredentials(storage_options=dict(opts), expires_at_millis=_expiry_millis(creds.get("Expiration"), self._ttl))
+        return VendedCredentials(storage_options=opts, expires_at_millis=int(issued.expiration.timestamp() * 1000))
 
 
 def make_vendor(
     mode: VendingMode,
     *,
-    region: str = "us-east-1",
-    sts_endpoint: str | None = None,
+    identity: WebIdentity | None = None,
     store_endpoint: str | None = None,
-    assume_role_arn: str | None = None,
     ttl_seconds: int = 900,
-    credential: Callable[[], S3KeyPair] | None = None,
     encryption: EncryptionAtRest | None = None,
     sanctioned_bases: Sequence[str] = (),
 ) -> CredentialVendor:
     """Build the configured :class:`CredentialVendor`.
 
     Raises:
-        ValueError: for ``sts`` mode without ``assume_role_arn``, or an unknown mode.
+        ValueError: for ``web_identity`` mode without the catalog's identity, or an unknown mode.
     """
     if mode == "mode_b":
         return ModeBVendor()
-    if mode == "sts":
-        if not assume_role_arn:
-            raise ValueError("assume_role_arn is required for sts vending mode")
-        return StsVendor(
-            role_arn=assume_role_arn,
-            region=region,
-            endpoint=sts_endpoint,
-            store_endpoint=store_endpoint,
-            ttl_seconds=ttl_seconds,
-            credential=credential,
-            encryption=encryption,
-            sanctioned_bases=sanctioned_bases,
-        )
     if mode == "web_identity":
+        if identity is None:
+            raise ValueError("web_identity vending exchanges the catalog's own token, and this catalog holds none")
         return WebIdentityVendor(
-            region=region,
-            endpoint=sts_endpoint,
-            store_endpoint=store_endpoint,
-            role_arn=assume_role_arn or _DEFAULT_VEND_ROLE_ARN,
-            ttl_seconds=ttl_seconds,
-            encryption=encryption,
-            sanctioned_bases=sanctioned_bases,
+            identity=identity, store_endpoint=store_endpoint, ttl_seconds=ttl_seconds, encryption=encryption, sanctioned_bases=sanctioned_bases
         )
     assert_never(mode)

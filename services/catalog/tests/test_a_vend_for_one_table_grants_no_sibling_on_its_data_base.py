@@ -10,7 +10,7 @@ that table's fragments.
 Driven through the real create, register and credentials doors on the two-store estate
 (``conftest.two_store_catalog``), on the approved data base that carries no credential reference — a
 base with one is never vended directly ([[LH-273]]). moto's S3 does not enforce a session policy, so the
-policy the lifespan-built ``StsVendor`` hands to AssumeRole is judged by moto's IAM evaluator
+policy the lifespan-built ``WebIdentityVendor`` sends with its token exchange is judged by moto's IAM evaluator
 (``IAMPolicy``) against the object keys each table's fragments occupy. Whether RustFS's STS enforces it
 is the live probe's question.
 """
@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import boto3
@@ -29,7 +29,10 @@ import pyarrow.ipc as ipc
 import pytest
 from fastapi.testclient import TestClient
 from moto.iam.access_control import IAMPolicy, PermissionResult
+from pydantic import SecretStr
 
+from service_kit.governed.store_credential import S3KeyPair
+from service_kit.governed.store_session import IssuedSession
 from service_kit.lakehouse import location_claims
 from service_kit.lakehouse.features import manifest_base_path_refs
 
@@ -85,11 +88,14 @@ def _permits_get(policy: dict[str, Any], bucket: str, key: str) -> bool:
 def _capture_policy(client: TestClient) -> dict[str, Any]:
     sent: dict[str, Any] = {}
 
-    def _assume_role(**kwargs: Any) -> dict[str, Any]:  # noqa: ANN401
-        sent["policy"] = json.loads(str(kwargs["Policy"]))
-        return {"Credentials": {"AccessKeyId": "AK", "SecretAccessKey": "SK", "SessionToken": "ST", "Expiration": None}}
+    def _exchange(_identity: Any, *, session_name: str, duration_seconds: int, policy: str | None = None) -> IssuedSession:  # noqa: ANN401
+        sent["policy"] = json.loads(str(policy))
+        return IssuedSession(
+            key_pair=S3KeyPair(access_key_id="AK", secret_access_key=SecretStr("SK"), session_token=SecretStr("ST")),
+            expiration=datetime(2030, 1, 1, tzinfo=UTC),
+        )
 
-    client.app.state.vendor._assume_role = _assume_role  # noqa: SLF001 — the one call that would reach the store
+    client.app.state.vendor._exchange = _exchange  # noqa: SLF001 — the one call that would reach the store
     return sent
 
 

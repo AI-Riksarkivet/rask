@@ -274,31 +274,34 @@ configuration (XC-025); the dev OpenBao's administrator token is generated in-cl
      sidecar Deployments, GreptimeDB and the Ray head (delete its pod; the RayCluster recreates it). The app
      token and session key: the sidecar Deployments and the zones (an app token rotated as below refuses no
      delivery in between). The HF token: the Ray head.
-- **Rotating a service's S3 key pair, with no restart (ADR 0166).** The catalog, lineage and maintenance read their
-  pair from their own secret (`catalog-s3`, `lineage-s3`, `maintenance-s3`) and read it again every few minutes, and
-  the catalog reads a data base's credential
-  reference again within ten minutes, so a rotation needs no restart:
+- **The catalog's store identity needs no rotation (ADR 0170).** It holds no key pair: its pod projects a token for
+  `objectStore.identity.audience`, which the kubelet replaces before it expires, and the catalog exchanges it through
+  STS `AssumeRoleWithWebIdentity` for an hour's session, again once half of it is used. A catalog whose session cannot
+  be renewed logs `store_session_renewal_failed`, then `store_session_expired` once the session runs out, and answers
+  503 (code 17) until an exchange succeeds. What the store grants it is the canned policy named by its ServiceAccount's
+  subject, `system:serviceaccount:<namespace>:<release>-sa-catalog`, which the scoped-users hook writes on the dev store
+  and a platform store's owner provisions.
+- **Rotating a service's S3 key pair, with no restart (ADR 0166).** Lineage and maintenance read their pair from their
+  own secret (`lineage-s3`, `maintenance-s3`) and read it again every few minutes, and the catalog reads a data base's
+  credential reference again within ten minutes, so a rotation needs no restart:
   1. Issue a second credential for the identity, beside the one it holds: a second access key for the IAM user on AWS
-     (each allows two). On RustFS a second user under the same policy serves every service: lineage and maintenance
-     make plain S3 calls, and the catalog vends through `AssumeRole`, which RustFS refuses from a service account
-     (`rustfs@1.0.3:rustfs/src/admin/handlers/sts.rs:219-221`; a key-signed vend answered `AccessDenied`, every
-     vend 503, measured 2026-10-16 on MinIO, which refuses it the same way). Make it through RustFS's admin API with
-     the root pair, SigV4 and plain JSON: `PUT /rustfs/admin/v3/add-user?accessKey=<id>`, then
+     (each allows two). On RustFS a second user under the same policy, made through RustFS's admin API with the root
+     pair, SigV4 and plain JSON: `PUT /rustfs/admin/v3/add-user?accessKey=<id>`, then
      `PUT /rustfs/admin/v3/set-user-or-group-policy?policyName=<the identity's policy>&userOrGroup=<id>&isGroup=false`
      (`rask-rustfs` § 4).
-  2. Check the new pair before writing it: list the bucket with it (any S3 client, e.g. boto3 `list_objects_v2`), and
-     for the catalog also run an STS `AssumeRole` signed with it. Nothing probes it after the write, and a wrong
-     pair would be what every pod signs with.
-  3. Write both halves at once: `bao kv put secret/catalog-s3 access_key=<id> secret_key=<secret>` (a data base's
+  2. Check the new pair before writing it: list the bucket with it (any S3 client, e.g. boto3 `list_objects_v2`).
+     Nothing probes it after the write, and a wrong pair would be what every pod signs with.
+  3. Write both halves at once: `bao kv put secret/lineage-s3 access_key=<id> secret_key=<secret>` (a data base's
      reference: its own secret's `aws_access_key_id` and `secret_key`). On the dev store run it in the seed container,
      whose `bao` reads the store's administrator token (`kubectl exec deploy/rask-openbao -c seed -- bao kv put ...`).
   4. Wait ten minutes. Each pod logs `store_credential_rotated`, naming the old and new key ids, when it switches.
   5. Revoke the old credential: remove the user that held it (`DELETE /rustfs/admin/v3/remove-user?accessKey=<old id>`)
      or delete the IAM access key on AWS. No restart.
 
-  The dev seed writes each service's secret from its own list whenever it re-seeds (a change to the seed, or to a dev
-  credential), so a pair rotated by hand in the dev store is replaced by the seeded one then: put the seeded user's
-  secret back before that happens.
+  On the dev store a hand-made user is drift from git, and the next reconcile removes it: the scoped-users hook's
+  post-upgrade run deletes every user the chart does not declare, and the dev seed writes each service's secret from
+  its own list whenever it re-seeds (a change to the seed, or to a dev credential). Put the declared user's pair back
+  before the next `helm upgrade`, or the pods sign with a user the store no longer holds.
 - **Rotating the Dapr app token, with no refused delivery (ADR 0166).** A door accepts the `token` and the `previous`
   field of the secret `dapr-app-token`, and daprd keeps the token its pod started with.
   1. `bao kv put secret/dapr-app-token previous=<the current token> token=<the new token>`, then

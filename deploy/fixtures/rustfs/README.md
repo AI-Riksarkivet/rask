@@ -67,8 +67,28 @@ session token, so only this pod and rask's provisioning hook read the Secret.
 
 The console is on by default and the image sets its CORS to `*`: off. `RUSTFS_CHECK_UPDATE=false` stops the startup
 call to `version.rustfs.com`. `RUSTFS_OBS_LOG_DIRECTORY=""` sends logs to stdout, where `kubectl logs` and the
-Collector's filelog receiver read them (the image writes to `/logs`). Profiling export is off. No identity provider is
-wired: web identity on RustFS is unmeasured, and the catalog vends through its own scoped user.
+Collector's filelog receiver read them (the image writes to `/logs`). Profiling export is off.
+
+## `{{- with .Values.identityProvider }}`
+
+The store's one identity provider is the cluster's ServiceAccount issuer ([[XC-083]], ADR 0170): the catalog holds no
+store key, and STS `AssumeRoleWithWebIdentity` exchanges its projected token for its sessions and every vend's. k3s
+serves its discovery and keys only to a bearer, so the store reads them from rask's issuer mirror
+(`<release>-issuer-mirror:8080`, `chart/templates/issuer-mirror.yaml`), named as `configUrl` with the cluster's issuer
+explicit, which RustFS requires the discovered `issuer` to equal (`rustfs@1.0.3:crates/iam/src/oidc/provider.rs:498-565`).
+`HIDE_FROM_UI` makes it a workload provider, one with no browser login (`provider.rs:128-147`). The mirror is a
+private address, so its exact origin is the store's one outbound allowance (`RUSTFS_OUTBOUND_ALLOW_ORIGINS`,
+`rustfs@1.0.3:crates/utils/src/egress.rs:25-29`).
+
+THE POLICY IS CHOSEN BY THE TOKEN'S SUBJECT, NEVER BY A ROLE POLICY. `CLAIM_NAME=sub` with no `ROLE_POLICY` grants a
+verified token the canned policy its `sub` names, and refuses one whose `sub` names none
+(`rustfs@1.0.3:crates/iam/src/federation/mapper.rs:257-281`; `rustfs@1.0.3:rustfs/src/admin/service/federated_identity.rs:332-410`),
+so only an account rask's scoped-users hook writes a policy for is exchanged. A role policy would be granted to every
+token the issuer signs for the audience, which any pod in the cluster can project. Measured on 1.0.3 against a
+stand-in issuer (`docs/audits/2026-10-18/rustfs_web_identity_measure.py`): the catalog's subject is exchanged and its
+session policy enforced; another account's token, another audience, an expired, a forged and another issuer's token are
+each refused. A provider whose discovery is unreachable at boot is recovered in the background, so the store starts
+before rask's mirror does (`rustfs@1.0.3:crates/iam/src/oidc/runtime.rs:151-197`).
 
 ## `livenessProbe:`
 
