@@ -79,7 +79,7 @@ _SLEEP = """\
 #!/bin/sh
 n=$(cat "$STORES/sleeps" 2>/dev/null || echo 0)
 echo $((n + 1)) > "$STORES/sleeps"
-if [ -e "$STORES/restart" ] && [ "$n" -eq 0 ]; then mv "$STORES/local" "$STORES/before-restart"; : > "$STORES/served.refused"; exit 0; fi
+if [ -e "$STORES/restart" ] && [ "$n" -eq 0 ]; then mv "$STORES/local" "$STORES/before-restart"; rm -f "$STORES/local.state" "$STORES/local.tokens" "$STORES/local.kv"; : > "$STORES/served.refused"; exit 0; fi
 if [ -e "$STORES/rotate" ] && [ "$n" -eq 0 ]; then cp "$STORES/rotate" "$DEV_CREDENTIALS/postgres-password"; cp "$STORES/rotate" "$SUPPLIED_CREDENTIALS/hf-token"; exit 0; fi
 if [ -e "$STORES/change" ] && [ "$n" -eq 0 ]; then cp "$STORES/local/secret/nats-server" "$STORES/first-nats-server"; echo "# a later rask render" >> "$SEED_SCRIPT"; exit 0; fi
 exit 1
@@ -90,17 +90,23 @@ _WRITES = ("kv put ", "auth ", "write ", "policy ")
 #: What ESO's Password generator writes into `<release>-dev-credentials` (templates/external-secrets.yaml), and the
 #: store secret each lands in: the store's root at a path of its own, which no Dapr app may read (ADR 0168).
 _GENERATED = {
-    "object-store-secret-key": "secret/object-store-root",
-    "postgres-password": "secret/lance",
-    "dapr-app-token": "secret/lance",
-    "ray-auth-token": "secret/lance",
-    "frontend-session-secret": "secret/lance",
+    "object-store-secret-key": ("secret/object-store-root", "object-store-secret-key"),
+    "postgres-password": ("secret/postgres", "password"),
+    "dapr-app-token": ("secret/dapr-app-token", "token"),
+    "ray-auth-token": ("secret/ray-auth-token", "token"),
+    "frontend-session-secret": ("secret/frontend-session", "secret"),
 }
+
+#: What the stand-in store answers an init with, and the administrator token id the fixture generates: none may reach an
+#: argument list or an output stream.
+_UNSEAL_KEY = "c3RhbmQtaW4gdW5zZWFsIGtleSB0aGF0IG11c3Qgc3RheQ=="
+_INIT_TOKEN = "s.standininittokenthatmustberevoked"
+_ADMIN_TOKEN = "Adm1nTokenTheFixtureGeneratesInCluster40"
 
 
 def _seed(docs: tuple[dict, ...]) -> tuple[str, dict]:
-    """The workload and container that write `secret/lance`, wherever the chart puts them."""
-    [found] = [(workload, c) for workload, _, c in chart_render.containers(docs) if "bao kv put secret/lance" in " ".join(c.get("command") or [])]
+    """The workload and container that seed the store, wherever the chart puts them: the one that writes its readiness key."""
+    [found] = [(workload, c) for workload, _, c in chart_render.containers(docs) if f"bao kv put {_SENTINEL} " in " ".join(c.get("command") or [])]
     return found
 
 
@@ -128,6 +134,15 @@ def _as_mounted(pod_spec: dict, container: dict, volume: str, source: Path, into
         if readable and (source / key).exists():
             (into / key).write_bytes((source / key).read_bytes())
     return into
+
+
+def _mounted_config_map(docs: tuple[dict, ...], pod_spec: dict, container: dict, path: str) -> dict[str, str]:
+    """The keys of the ConfigMap ``container`` mounts at ``path``, as the render holds them."""
+    [volume] = [m["name"] for m in container["volumeMounts"] if Path(m["mountPath"]) == Path(path)]
+    [name] = [v["configMap"]["name"] for v in pod_spec["volumes"] if v["name"] == volume]
+    found = [d["data"] for d in docs if d.get("kind") == "ConfigMap" and d["metadata"]["name"] == name]
+    assert found, f"the seed mounts ConfigMap {name} at {path}, which no release renders"
+    return dict(found[0])
 
 
 def _store(stores: Path, name: str, key: str) -> dict[str, str]:
@@ -311,6 +326,10 @@ def test_the_dev_store_is_seeded_by_its_own_pod_and_keeps_its_signing_keys(  # n
         (stores / "served").rmdir()
         (stores / "local" / "secret").mkdir(parents=True)
         (stores / "served").symlink_to(stores / "local")
+        (stores / "served.tokens").symlink_to(stores / "local.tokens")
+    if not (stores / "served.tokens").is_symlink():
+        # The outgoing pod a surge carries from was initialized by its own seed, with the same administrator token.
+        (stores / "served.tokens").write_text(f"{_ADMIN_TOKEN}\n")
     install(tmp_path, bao=BAO, sleep=_SLEEP, nk=NK, nsc=NSC)
     (tmp_path / "home" / "seed").mkdir(parents=True)
     pool = [event_signer(f"pair-{i}") for i in range(4 * len(ids))]
@@ -341,6 +360,17 @@ def test_the_dev_store_is_seeded_by_its_own_pod_and_keeps_its_signing_keys(  # n
     [server_pod] = [d["spec"]["template"]["spec"] for d in docs if f"{d.get('kind')}/{d.get('metadata', {}).get('name')}" == workload]
     generated_dir = _as_mounted(server_pod, container, "dev-credentials", generated_dir, tmp_path / "dev-credentials-mounted")
     supplied_dir = _as_mounted(server_pod, container, "supplied-credentials", supplied_dir, tmp_path / "supplied-mounted")
+    root_dir = tmp_path / "root-token"
+    root_dir.mkdir()
+    (root_dir / Path(env["STORE_ROOT_TOKEN"]).name).write_text(_ADMIN_TOKEN)
+    [root_volume] = [m["name"] for m in container["volumeMounts"] if Path(m["mountPath"]) == Path(env["STORE_ROOT_TOKEN"]).parent]
+    root_dir = _as_mounted(server_pod, container, root_volume, root_dir, tmp_path / "root-token-mounted")
+    identities = tmp_path / "store-identities"
+    identities.mkdir()
+    for name, text in _mounted_config_map(docs, server_pod, container, env["STORE_IDENTITIES"]).items():
+        (identities / name).write_text(text)
+    store_keys = tmp_path / "store-keys"
+    store_keys.mkdir()
     [service] = [d for d in docs if d.get("kind") == "Service" and f"Deployment/{d['metadata']['name']}" == workload]
     service_addr = f"http://{service['metadata']['name']}:{service['spec']['ports'][0]['port']}"
     here = {
@@ -358,7 +388,13 @@ def test_the_dev_store_is_seeded_by_its_own_pod_and_keeps_its_signing_keys(  # n
         "NK_GARBAGE": "",
         "NSC_CALLS": str(tmp_path / "nsc-calls"),
         "NSC_FAIL": "1" if case == "nats-mint-failed" else "",
-        "SEED_SCRIPT": str(scripts / "seed.sh"),
+        "SEED_SCRIPT": str(scripts / "open-and-seed.sh"),
+        "SEED_DIR": str(scripts),
+        "STORE_IDENTITIES": str(identities),
+        "STORE_ROOT_TOKEN": str(root_dir / Path(env["STORE_ROOT_TOKEN"]).name),
+        "STORE_KEYS": str(store_keys),
+        "STANDIN_UNSEAL_KEY": _UNSEAL_KEY,
+        "STANDIN_INIT_TOKEN": _INIT_TOKEN,
         **nk,
     }
     carried = _arrange_nats(case, stores, tmp_path, {**os.environ, **here, "NSC_FAIL": "", "NSC_CALLS": str(tmp_path / "earlier-calls")})
@@ -374,7 +410,7 @@ def test_the_dev_store_is_seeded_by_its_own_pod_and_keeps_its_signing_keys(  # n
     if local == "change":
         # As the pod runs it: from the file the ConfigMap mounts, which is what the seed watches.
         ran = subprocess.run(
-            ["sh", str(scripts / "seed.sh")],
+            ["sh", str(scripts / "open-and-seed.sh")],
             env={**os.environ, **chart_render.env_of(container), **here},
             capture_output=True,
             text=True,
@@ -395,6 +431,10 @@ def test_the_dev_store_is_seeded_by_its_own_pod_and_keeps_its_signing_keys(  # n
     assert not leaked, "a private seed reached an output stream, a bao argument list or an nsc argument list"
     exposed = [key for key, value in generated.items() if value in streams]
     assert not exposed, f"the generated {exposed} reached an output stream or a bao argument list"
+    store_tokens = [
+        name for name, value in (("unseal key", _UNSEAL_KEY), ("init token", _INIT_TOKEN), ("administrator token", _ADMIN_TOKEN)) if value in streams
+    ]
+    assert not store_tokens, f"the store's {store_tokens} reached an output stream or a bao argument list"
     writes = [call for call in calls if call.split(" ", 1)[1].startswith(_WRITES)]
     assert writes or not succeeds, "the seed wrote nothing"
     assert all(call.startswith(f"{_OWN} ") for call in writes), (
@@ -420,17 +460,29 @@ def test_the_dev_store_is_seeded_by_its_own_pod_and_keeps_its_signing_keys(  # n
         return
     assert writes[-1].startswith(f"{_OWN} kv put {_SENTINEL} "), f"the readiness key is not the last write: {writes[-1]}"
 
-    bundle = _store(stores, "local", "secret/lance")
     if local == "rotate":
         generated["postgres-password"] = (stores / "rotate").read_text()
         if "secrets.hfTokenInStore=true" in overlay:
             assert _store(stores, "local", "secret/hf-token").get("token") == generated["postgres-password"], "a rotated hf-token never reached the store"
-    assert {key: _store(stores, "local", path).get(key) for key, path in _GENERATED.items()} == generated, (
+    assert {key: _store(stores, "local", path).get(field) for key, (path, field) in _GENERATED.items()} == generated, (
         "the store does not hold the credentials ESO generated"
     )
-    assert f":{generated['postgres-password']}@" in bundle.get("dapr-state-connection-string", ""), (
+    assert f":{generated['postgres-password']}@" in _store(stores, "local", "secret/dapr-state").get("connection-string", ""), (
         "the state store DSN is not built from the generated password"
     )
+    assert (stores / "local.tokens").read_text().split() == [_ADMIN_TOKEN], "the store answers a token beside its administrator: the init token was not revoked"
+    assert (store_keys / "unseal-key").read_text() == _UNSEAL_KEY and stat.S_IMODE((store_keys / "unseal-key").stat().st_mode) == 0o600, (
+        "the unseal key is not kept for its owner alone, so a sealed store could not be unsealed"
+    )
+    assert not (store_keys / "init").exists(), "the init answer, with its root token, outlives the init"
+    documents = {name: (identities / name).read_text() for name in os.listdir(identities)}
+    applied = {
+        f"{kind}-{p.name}.json": p.read_text()
+        for kind, held in (("policy", stores / "local.policies"), ("role", stores / "local.roles"))
+        if held.is_dir()
+        for p in held.iterdir()
+    }
+    assert documents and applied == documents, f"the store holds {sorted(applied)}, not the policies and roles rask renders: {sorted(documents)}"
     [job] = [d for d in docs if d.get("kind") == "Job" and d["metadata"]["name"].startswith("rask-object-store-scoped-users-")]
     pod_spec = job["spec"]["template"]["spec"]
     [derive] = pod_spec["initContainers"]
@@ -453,19 +505,21 @@ def test_the_dev_store_is_seeded_by_its_own_pod_and_keeps_its_signing_keys(  # n
     assert f"--keys-dir {provision_keys}" in provision["command"][-1], (
         "the Job's provisioning step reads its users' secrets from somewhere the derive step did not write"
     )
-    # (the store field holding a service's key id, the one holding its secret): the pair is the store's (ADR 0166).
+    # (the secret holding a service's pair, its key id field, its secret field): the pair is the store's (ADR 0166).
     pairs = {
-        (env[name.replace("_DAPR_SECRET_S3_FIELD", "_DAPR_SECRET_S3_ID_FIELD")], field)
+        (env[name.replace("_DAPR_SECRET_S3_FIELD", "_DAPR_SECRET_KEY")], env[name.replace("_DAPR_SECRET_S3_FIELD", "_DAPR_SECRET_S3_ID_FIELD")], field)
         for env in (chart_render.env_of(c) for _, _, c in chart_render.containers(docs))
         for name, field in env.items()
-        if name.endswith("_DAPR_SECRET_S3_FIELD") and name.replace("_DAPR_SECRET_S3_FIELD", "_DAPR_SECRET_S3_ID_FIELD") in env
+        if name.endswith("_DAPR_SECRET_S3_FIELD")
+        and {name.replace("_DAPR_SECRET_S3_FIELD", suffix) for suffix in ("_DAPR_SECRET_KEY", "_DAPR_SECRET_S3_ID_FIELD")} <= set(env)
     }
     assert pairs, "no service reads a scoped storage pair, so this pairing would pass vacuously"
-    for id_field, field in sorted(pairs):
-        identity = bundle.get(id_field, "")
-        assert identity, f"the store holds no {id_field}, the key id {field} signs under"
+    for secret, id_field, field in sorted(pairs):
+        held = _store(stores, "local", f"secret/{secret}")
+        identity = held.get(id_field, "")
+        assert identity, f"secret/{secret} holds no {id_field}, the key id {field} signs under"
         minted = (keys_dir / identity).read_text()
-        assert bundle.get(field) == minted, f"{field} in the store is not the secret the Job gives {identity}: every S3 call signs with a mismatched pair"
+        assert held.get(field) == minted, f"{field} of secret/{secret} is not the secret the Job gives {identity}: every S3 call signs with a mismatched pair"
         assert minted != generated["object-store-secret-key"], f"{identity} is published with the store's ROOT secret"
         assert f'--user "{identity}=' in provision["command"][-1], f"the Job does not create {identity}, so the secret it derived for it reaches no store user"
     assert len(seeded) == (2 if local in {"restart", "rotate", "change"} else 1), f"seeds that completed: {len(seeded)}"
@@ -575,6 +629,7 @@ def test_the_dev_store_is_seeded_by_its_own_pod_and_keeps_its_signing_keys(  # n
         f"the OpenBao lock does not admit the signers {sorted(signers - admitted)}: their sidecars cannot read their own keys"
     )
     [server] = [c for c in pod["containers"] if c["name"] == "openbao"]
-    probe = server["readinessProbe"]["httpGet"]
-    assert probe["path"] == f"/v1/{_SENTINEL.replace('/', '/data/', 1)}", f"the server is Ready on {probe['path']}, before the seed is complete"
-    assert {"name": "X-Vault-Token", "value": env["BAO_TOKEN"]} in probe.get("httpHeaders", []), "the readiness read carries no token the server accepts"
+    assert server["readinessProbe"]["httpGet"] == {"path": "/v1/sys/health", "port": 8200}, f"the server's readiness is {server['readinessProbe']}"
+    assert container["readinessProbe"]["exec"]["command"] == ["bao", "kv", "get", "-field=pod", _SENTINEL], (
+        f"the pod is Ready on {container['readinessProbe']}, not on the key the seed writes last"
+    )

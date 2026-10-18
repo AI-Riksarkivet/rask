@@ -55,8 +55,8 @@ frontend:
   # templates/auth-consistency.yaml REFUSES that combination without a sign-in flow — the prod
   # overlay could not render at all until this landed, which nothing noticed because the render
   # check itself was unreachable (its `make prod-render-check` target did not exist).
-  # Its two secrets (the session sealing key and the client secret) come from the store, field
-  # `frontend-session-secret` and `publisher-oidc-client-secret` of `<kvMount>/<secretPath>`; auth.oidc.issuer
+  # Its two secrets (the session sealing key and the client secret) come from the store: `secret` of
+  # `<kvMount>/frontend-session` and `client-secret` of `<kvMount>/oidc-client`; auth.oidc.issuer
   # and publicOrigin are configuration, supplied at deploy, and the render fails closed on each.
   oidc:
     enabled: true
@@ -69,7 +69,7 @@ podDisruptionBudget:
 # NetworkPolicy rule reaching its addresses, for the pods that dial it) and `age.externalHost`, and the render refuses
 # any of them empty. No credential is a value: an FGA client presents its projected `rask-openfga`
 # ServiceAccount token, which the platform's OpenFGA admits by OIDC against the cluster's ServiceAccount issuer for the
-# subjects `lance.openfgaSubjects` lists, and the Postgres password is the store's `postgres-password`, which ESO
+# subjects `lance.openfgaSubjects` lists, and the Postgres password is the store's `postgres` secret, which ESO
 # delivers. The platform's Postgres carries the `openfga` and `daprstate` databases; lineage keeps no database
 # (ADR 0158). OpenFGA is the authz chokepoint every governed call fails closed through, so the platform runs it highly
 # available.

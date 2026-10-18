@@ -65,11 +65,16 @@ not name — so the request was refused before the per-base credential was ever 
 and nothing said why (measured 2026-09-22). A render-time failure names the mistake; the
 runtime one is indistinguishable from a caller inventing a bucket.
 
+## `- { name: LANCE_DAPR_SECRET_KEY, value: "catalog-s3" }`
+
+The catalog's own secret in the store, which only the catalog's Configuration allows and only its store login reads
+([[XC-165]]).
+
 ## `- { name: LANCE_DAPR_SECRET_S3_ID_FIELD, value: {{ include "lance.catalogKeyIdField" . | quote }} }`
 
 THE KEY ID IS THE STORE'S TOO ([[XC-082]], ADR 0166). Every S3-family store rotates by issuing a NEW key
 id, so an id held in pod env would pair a rotated secret with the old id. The catalog reads both fields
-from one fetch, at boot and again while it runs, and refuses a bundle carrying only one of them.
+from one fetch, at boot and again while it runs, and refuses a secret carrying only one of them.
 
 ## `- { name: LANCE_DAPR_SECRET_S3_FIELD, value: {{ include "lance.catalogSecretField" . | quote }} }`
 
@@ -292,8 +297,8 @@ Durable /events feed retention in days of ARRIVAL time (0 = unbounded), pruned o
 
 The forwarder (ADR 0158): the relay tick sends every recorded event, as standard OpenLineage over the HTTP transport, to
 `<url>/<endpoint>`; an empty URL forwards nothing. The API key is never a value: `LINEAGE_FORWARD_API_KEY_SECRET` names
-the secret in the Dapr secret store lineage reads it from on every tick, and `lance.daprAppSpec` denies it to every
-other app.
+the secret in the Dapr secret store lineage reads it from on every tick, and only lineage's Configuration allows it and
+only lineage's store login reads it (`lance.storeReads`).
 
 ## `- { name: LINEAGE_DAPR_PUBSUB, value: {{ include "lance.subPubsub" (list $root .Values.services.lineage.dap...`
 
@@ -326,12 +331,16 @@ other pair lineage could present is the store's root, whose secret signs every S
 (ADR 0168). The ACCESS KEY alone scopes the plane; the secret is DERIVED in-cluster (`lance.scopedSecretFn`), so
 naming the identity needs no secret anywhere.
 
-## `- { name: LINEAGE_DAPR_SECRET_S3_ID_FIELD, value: "lineage-s3-access-key" }`
+## `- { name: LINEAGE_DAPR_SECRET_KEY, value: "lineage-s3" }`
+
+Lineage's own secret in the store, which only lineage's Configuration allows and only its store login reads ([[XC-165]]).
+
+## `- { name: LINEAGE_DAPR_SECRET_S3_ID_FIELD, value: "access_key" }`
 
 The scoped identity's key id, read from the store with its secret ([[XC-082]], ADR 0166): a rotation
 issues a new id, so the id cannot be configuration.
 
-## `- { name: LINEAGE_DAPR_SECRET_S3_FIELD, value: "lineage-s3-secret-key" }`
+## `- { name: LINEAGE_DAPR_SECRET_S3_FIELD, value: "secret_key" }`
 
 THE OTHER HALF OF THE PAIR, named beside the key id because a scoped key signed with any other
 secret fails `SignatureDoesNotMatch` on every operation (measured on the Ray and maintenance pairs).

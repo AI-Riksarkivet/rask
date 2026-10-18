@@ -15,5 +15,5 @@ Lance client takes a session the catalog vends. The access key id of each identi
 it (explorer.yaml sets the corpus readers'), so nothing reads one from this Secret. The store's root is named only by
 the scoped-users hook and the dev store's seed (ADR 0168): on RustFS the root secret signs every STS session token, so a root access key id
 here would be the first half of the one credential that can forge any vended session, mounted into every pod with
-`ambientStorage` (fleet.yaml). `tests/unit/test_the_root_storage_secret_reaches_only_its_users.py` holds the root's
+`ambientStorage` (fleet.yaml). `tests/unit/test_every_secret_in_the_dev_store_has_exactly_its_readers.py` holds the root's
 identity to those two.

@@ -219,8 +219,15 @@ _STREAM = re.compile(r'^[^\S\n]*add(?:_workqueue)?_if_missing ([A-Z_]+) "([^"]+)
 
 
 def seed_scripts(docs: tuple[dict, ...]) -> dict[str, str]:
-    """The dev store's seed scripts rask renders (`<release>-openbao-seed`: `mint.sh`, `seed.sh`); empty when it renders none."""
+    """The dev store's seed scripts rask renders (`<release>-openbao-seed`: `mint.sh`, `open-and-seed.sh`); empty when it renders none."""
     found = [d for d in docs if d.get("kind") == "ConfigMap" and d["metadata"]["name"].endswith("-openbao-seed")]
+    return dict(found[0]["data"]) if found else {}
+
+
+def store_identities(docs: tuple[dict, ...]) -> dict[str, str]:
+    """The role and policy of every identity that reads the secret store, which rask renders for any store
+    (`<release>-secret-store-identities`: `policy-<role>.json`, `role-<role>.json`); empty when it renders none."""
+    found = [d for d in docs if d.get("kind") == "ConfigMap" and d["metadata"]["name"].endswith("-secret-store-identities")]
     return dict(found[0]["data"]) if found else {}
 
 
@@ -249,7 +256,7 @@ def nats_users(docs: tuple[dict, ...]) -> dict[str, tuple[frozenset[str], frozen
     Read off the seed script rask renders, so it is the table as the chart passes it to nsc (values.yaml `nats.auth.users`).
     """
     issued: dict[str, tuple[frozenset[str], frozenset[str]]] = {}
-    for user, publish, subscribe in _NATS_USER.findall(seed_scripts(docs).get("seed.sh", "")):
+    for user, publish, subscribe in _NATS_USER.findall(seed_scripts(docs).get("open-and-seed.sh", "")):
         issued[user] = (frozenset(publish.split(",")), frozenset(subscribe.split(",")))
     return issued
 

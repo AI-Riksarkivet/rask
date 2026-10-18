@@ -21,6 +21,55 @@ subjects:
     name: {{ .Values.serviceAccount }}
     namespace: {{ .Release.Namespace }}
 ---
+# The id of the store's administrator token, generated in-cluster once: the seed mints that token in every server it
+# initializes, so a surge's new pod reads the outgoing one with it. Only the seed container mounts it.
+apiVersion: generators.external-secrets.io/v1alpha1
+kind: Password
+metadata:
+  name: {{ .Values.name }}-root
+  labels: {{- toYaml $labels | nindent 4 }}
+spec:
+  length: 40
+  digits: 10
+  symbols: 0
+  noUpper: false
+  allowRepeat: true
+  secretKeys: [token]
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: {{ .Values.name }}-root
+  labels: {{- toYaml $labels | nindent 4 }}
+spec:
+  refreshPolicy: CreatedOnce
+  target:
+    name: {{ .Values.name }}-root
+    creationPolicy: Owner
+  dataFrom:
+    - sourceRef:
+        generatorRef:
+          apiVersion: generators.external-secrets.io/v1alpha1
+          kind: Password
+          name: {{ .Values.name }}-root
+---
+# Not `server -dev`: a dev server prints its root token and unseal key to its log (openbao 2.2.0 command/server.go:2720,
+# 2732). This one starts uninitialized and the seed initializes it, so neither leaves the seed container.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.name }}-config
+  labels: {{- toYaml $labels | nindent 4 }}
+data:
+  server.hcl: |
+    storage "inmem" {}
+    listener "tcp" {
+      address     = "0.0.0.0:{{ .Values.port }}"
+      tls_disable = true
+    }
+    ui       = false
+    api_addr = "http://127.0.0.1:{{ .Values.port }}"
+---
 apiVersion: v1
 kind: Service
 metadata:
@@ -68,18 +117,18 @@ spec:
       containers:
         - name: openbao
           image: {{ .Values.image }}
-          args: ["server", "-dev", "-dev-root-token-id={{ .Values.devToken }}", "-dev-listen-address=0.0.0.0:8200"]
+          # The image's entrypoint runs `bao server -config=/openbao/config`; its dev flags are ignored outside -dev.
+          args: ["server"]
           env:
             - { name: BAO_ADDR, value: "http://127.0.0.1:8200" }
           ports:
             - { name: http, containerPort: 8200 }
-          # Ready only once the seed beside it has written its last key.
+          # 200 once the seed has initialized and unsealed it; the seed's own probe holds the pod until it is seeded.
           readinessProbe:
-            httpGet:
-              path: /v1/secret/data/openbao-seeded
-              port: 8200
-              httpHeaders: [{ name: X-Vault-Token, value: {{ .Values.devToken | quote }} }]
+            httpGet: { path: /v1/sys/health, port: 8200 }
             periodSeconds: 3
+          volumeMounts:
+            - { name: config, mountPath: /openbao/config, readOnly: true }
           resources: {{- toYaml .Values.resources | nindent 12 }}
         # The seed writes only to the server beside it (127.0.0.1): through the Service it would reach whichever pod the
         # Service picks, during a rollout the outgoing one, whose store goes with it.
@@ -89,8 +138,11 @@ spec:
           volumeMounts:
             - { name: tmp, mountPath: /tmp }
             - { name: seed-scripts, mountPath: /seed, readOnly: true }
+            - { name: store-identities, mountPath: /seed-identities, readOnly: true }
             - { name: dev-credentials, mountPath: /dev-credentials, readOnly: true }
             - { name: supplied-credentials, mountPath: /supplied, readOnly: true }
+            - { name: root-token, mountPath: /run/openbao-root, readOnly: true }
+            - { name: store-keys, mountPath: /run/openbao-keys }
             - { name: signing, mountPath: /signing }
             - { name: nats-tools, mountPath: /nats-tools, readOnly: true }
           resources:
@@ -98,16 +150,30 @@ spec:
             limits: { cpu: "200m", memory: "128Mi" }
           env:
             - { name: BAO_ADDR, value: "http://127.0.0.1:8200" }
-            - { name: BAO_TOKEN, value: {{ .Values.devToken | quote }} }
             - { name: HOME, value: /tmp }
+            - { name: SEED_DIR, value: /seed }
+            - { name: STORE_IDENTITIES, value: /seed-identities }
+            - { name: STORE_ROOT_TOKEN, value: /run/openbao-root/token }
+            - { name: STORE_KEYS, value: /run/openbao-keys }
             - { name: DEV_CREDENTIALS, value: /dev-credentials }
             - { name: SUPPLIED_CREDENTIALS, value: /supplied }
             - { name: SIGNING_DIR, value: /signing }
             - { name: NATS_TOOLS, value: /nats-tools }
-          command: ["sh", "/seed/seed.sh"]
+          # Ready only once this pod's store holds the key the seed writes last; `bao` reads the administrator token the
+          # seed links into $HOME/.vault-token.
+          readinessProbe:
+            exec:
+              command: ["bao", "kv", "get", "-field=pod", "secret/openbao-seeded"]
+            periodSeconds: 5
+          command: ["sh", "/seed/open-and-seed.sh"]
       volumes:
         - { name: tmp, emptyDir: { sizeLimit: "2Gi" } }
+        - { name: config, configMap: { name: {{ .Values.name }}-config, defaultMode: 0444 } }
+        - { name: root-token, secret: { secretName: {{ .Values.name }}-root, defaultMode: 0444 } }
+        # The unseal key and the init answer never reach node disk, and outlive a restart of the seed container.
+        - { name: store-keys, emptyDir: { medium: Memory, sizeLimit: 1Mi } }
         - { name: seed-scripts, configMap: { name: {{ .Values.seedScripts }}, defaultMode: 0444 } }
+        - { name: store-identities, configMap: { name: {{ .Values.storeIdentities }}, defaultMode: 0444 } }
         - { name: dev-credentials, secret: { secretName: {{ .Values.devCredentials }}, defaultMode: 0444 } }
         - { name: supplied-credentials, secret: { secretName: {{ .Values.suppliedCredentials }}, optional: true, defaultMode: 0444 } }
         # Signing seeds never reach node disk.

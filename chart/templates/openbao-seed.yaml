@@ -32,10 +32,50 @@ data:
       cp "$(command -v nsc)" "$(command -v nk)" "$NATS_TOOLS/" && echo "mint: nsc and nk for the seed" || echo "mint: could not copy nsc and nk"
     fi
     exit 0
-  seed.sh: |
+  open-and-seed.sh: |
     set -e
     mkdir -p "$HOME/seed"
     cd "$HOME"
+    [ -s "${STORE_ROOT_TOKEN:-}" ] || { echo "no root token is mounted at STORE_ROOT_TOKEN, so this seed cannot administer its store" >&2; exit 1; }
+    [ -d "${STORE_KEYS:-}" ] || { echo "no memory volume is mounted at STORE_KEYS for the store's unseal key" >&2; exit 1; }
+    [ -d "${STORE_IDENTITIES:-}" ] || { echo "no store identities are mounted at STORE_IDENTITIES, so no identity could log in" >&2; exit 1; }
+    ln -sf "$STORE_ROOT_TOKEN" "$HOME/.vault-token"
+    store_state() {
+      if out=$(bao status -format=json 2>/dev/null); then echo unsealed; return; fi
+      case "$out" in
+        *'"initialized": false'*) echo uninitialized ;;
+        *'"sealed": true'*) echo sealed ;;
+        *) echo down ;;
+      esac
+    }
+    open_store() {
+      while :; do
+        state=$(store_state)
+        case "$state" in
+          unsealed) [ ! -e "$STORE_KEYS/init" ] && break ;;
+          uninitialized)
+            rm -f "$STORE_KEYS/init" "$STORE_KEYS/unseal-key"
+            (umask 077; bao operator init -key-shares=1 -key-threshold=1 -format=json > "$STORE_KEYS/init.new")
+            mv "$STORE_KEYS/init.new" "$STORE_KEYS/init"
+            echo "initialized this pod's store" ;;
+          sealed) [ -e "$STORE_KEYS/init" ] || { echo "this pod's store is sealed; waiting for it to be unsealed"; sleep 5; continue; } ;;
+          *) echo wait-openbao; sleep 1; continue ;;
+        esac
+        [ -e "$STORE_KEYS/init" ] || continue
+        flat=$(tr -d ' \n' < "$STORE_KEYS/init")
+        key=${flat#*\"unseal_keys_b64\":[\"}; key=${key%%\"*}
+        first=${flat#*\"root_token\":\"}; first=${first%%\"*}
+        [ -n "$key" ] && [ -n "$first" ] || { echo "the store's init answer names no unseal key or root token" >&2; exit 1; }
+        [ "$(store_state)" = sealed ] && printf '%s' "$key" | bao write sys/unseal key=- >/dev/null
+        if ! bao token lookup >/dev/null 2>&1; then
+          printf '{"id":"%s","policies":["root"],"no_parent":true,"display_name":"seed"}' "$(cat "$STORE_ROOT_TOKEN")" | BAO_TOKEN="$first" bao write auth/token/create - >/dev/null
+        fi
+        BAO_TOKEN="$first" bao token revoke -self >/dev/null 2>&1 || true
+        bao secrets list -format=json | grep -q '"{{ .Values.externalSecrets.kvMount }}/"' || bao secrets enable -path={{ .Values.externalSecrets.kvMount }} -version=2 kv >/dev/null
+        (umask 077; printf '%s' "$key" > "$STORE_KEYS/unseal-key")
+        rm -f "$STORE_KEYS/init"
+      done
+    }
     svc_get() {
       if got=$(BAO_ADDR=http://{{ include "lance.openbaoHost" . }}:{{ .Values.openbao.port }} BAO_CLIENT_TIMEOUT=5s bao kv get -field="$2" "secret/$1" 2>&1); then return 0; fi
       case "$got" in
@@ -153,29 +193,19 @@ data:
     seed() {
     seen=$(fingerprint)
     derive
-    bao kv put secret/lance postgres-password=@"$G/postgres-password" \
-      publisher-oidc-password={{ .Values.dex.publisher.password }} \
-      publisher-oidc-client-secret={{ .Values.dex.clientSecret }} \
-      dapr-state-connection-string=@"$HOME/seed/dapr-state-dsn" \
-      dapr-app-token=@"$G/dapr-app-token" ray-auth-token=@"$G/ray-auth-token" \
-      frontend-session-secret=@"$G/frontend-session-secret" \
-
-      {{- if $.Values.objectStore.maintenanceAccessKey }}
-      maintenance-s3-access-key={{ $.Values.objectStore.maintenanceAccessKey }} \
-      maintenance-s3-secret-key=@"$HOME/seed/scoped-{{ $.Values.objectStore.maintenanceAccessKey }}" \
-      {{- end }}
-
-      {{- if $.Values.objectStore.catalogAccessKey }}
-      catalog-s3-access-key={{ $.Values.objectStore.catalogAccessKey }} \
-      catalog-s3-secret-key=@"$HOME/seed/scoped-{{ $.Values.objectStore.catalogAccessKey }}" \
-      {{- end }}
-
-      {{- if $.Values.objectStore.lineageAccessKey }}
-      lineage-s3-access-key={{ $.Values.objectStore.lineageAccessKey }} \
-      lineage-s3-secret-key=@"$HOME/seed/scoped-{{ $.Values.objectStore.lineageAccessKey }}" \
-      {{- end }}
-
-    echo "seeded secret/lance into OpenBao"
+    bao kv put secret/postgres password=@"$G/postgres-password" >/dev/null
+    bao kv put secret/dapr-state connection-string=@"$HOME/seed/dapr-state-dsn" >/dev/null
+    bao kv put secret/dapr-app-token token=@"$G/dapr-app-token" >/dev/null
+    bao kv put secret/ray-auth-token token=@"$G/ray-auth-token" >/dev/null
+    bao kv put secret/frontend-session secret=@"$G/frontend-session-secret" >/dev/null
+    bao kv put secret/oidc-client client-secret={{ .Values.dex.clientSecret }} >/dev/null
+    bao kv put secret/publisher-oidc password={{ .Values.dex.publisher.password }} >/dev/null
+    {{- range $plane, $id := dict "maintenance" .Values.objectStore.maintenanceAccessKey "catalog" .Values.objectStore.catalogAccessKey "lineage" .Values.objectStore.lineageAccessKey }}
+    {{- if $id }}
+    bao kv put secret/{{ $plane }}-s3 access_key={{ $id }} secret_key=@"$HOME/seed/scoped-{{ $id }}" >/dev/null
+    {{- end }}
+    {{- end }}
+    echo "seeded the estate's credentials into OpenBao"
     {{- if $.Values.objectStore.enabled }}
     bao kv put secret/object-store-root object-store-access-key={{ $.Values.objectStore.accessKey }} \
       object-store-secret-key=@"$G/object-store-secret-key" >/dev/null
@@ -227,41 +257,24 @@ data:
     {{- end }}
     bao auth enable -path={{ $.Values.externalSecrets.kubernetesAuthPath }} kubernetes 2>/dev/null || echo "kubernetes auth already enabled"
     bao write auth/{{ $.Values.externalSecrets.kubernetesAuthPath }}/config \
-      kubernetes_host="https://$KUBERNETES_SERVICE_HOST:$KUBERNETES_SERVICE_PORT"
-    bao policy write {{ $.Values.externalSecrets.role }} - <<'POLICY'
-    path "{{ $.Values.externalSecrets.kvMount }}/data/{{ $.Values.externalSecrets.secretPath }}" {
-      capabilities = ["read"]
-    }
-    {{- range $files := include "lance.natsFiles" $ | fromJson }}{{- range $files }}
-    path "{{ $.Values.externalSecrets.kvMount }}/data/{{ . }}" { capabilities = ["read"] }
-    {{- end }}{{- end }}
-    {{- if $.Values.secrets.hfTokenInStore }}
-    path "{{ $.Values.externalSecrets.kvMount }}/data/hf-token" { capabilities = ["read"] }
-    {{- end }}
-    {{- if $otelSeed }}
-    path "{{ $.Values.externalSecrets.kvMount }}/data/otel-collector-export" { capabilities = ["read"] }
-    {{- end }}
-    {{- if $.Values.objectStore.enabled }}
-    path "{{ $.Values.externalSecrets.kvMount }}/data/object-store-root" { capabilities = ["read"] }
-    {{- end }}
-    {{- if include "lance.backupIdentity" $ }}
-    path "{{ $.Values.externalSecrets.kvMount }}/data/backup-s3" { capabilities = ["read"] }
-    {{- end }}
-    POLICY
-    bao write auth/{{ $.Values.externalSecrets.kubernetesAuthPath }}/role/{{ $.Values.externalSecrets.role }} \
-      bound_service_account_names={{ $.Values.externalSecrets.serviceAccount | default "external-secrets" }} \
-      bound_service_account_namespaces={{ $.Values.externalSecrets.namespace | default "external-secrets" }} \
-      policies={{ $.Values.externalSecrets.role }} ttl=1h
-    echo "provisioned kubernetes auth + role {{ $.Values.externalSecrets.role }} for ESO"
+      kubernetes_host="https://$KUBERNETES_SERVICE_HOST:$KUBERNETES_SERVICE_PORT" >/dev/null
+    for doc in "$STORE_IDENTITIES"/policy-*.json; do
+      name=${doc##*/policy-}; bao policy write "${name%.json}" "$doc" >/dev/null
+    done
+    for doc in "$STORE_IDENTITIES"/role-*.json; do
+      name=${doc##*/role-}; bao write "auth/{{ $.Values.externalSecrets.kubernetesAuthPath }}/role/${name%.json}" @"$doc" >/dev/null
+    done
+    echo "provisioned the store's kubernetes auth: a role and a policy for each identity that reads it"
     bao kv put secret/openbao-seeded pod="$HOSTNAME" >/dev/null
     (umask 077; printf '%s' "$seen" > "$HOME/seed/fingerprint")
     echo "seeded this pod's store"
     }
-    until bao status >/dev/null 2>&1; do echo wait-openbao; sleep 1; done
-    self=$(sha256sum "$0" 2>/dev/null || true)
+    rendered() { cat "$SEED_DIR"/*.sh "$STORE_IDENTITIES"/*.json 2>/dev/null | sha256sum; }
+    open_store
+    self=$(rendered)
     seed
     while sleep 5; do
-      if [ -f "$0" ] && [ "$(sha256sum "$0" 2>/dev/null || true)" != "$self" ]; then
+      if [ -f "$0" ] && [ "$(rendered)" != "$self" ]; then
         {{- if $nats }}
         # The users are issued again under the root the store holds, read back through the Service: one that answers
         # without it would have the seed mint a root the running bus refuses, so the seed waits for it instead.
@@ -269,8 +282,11 @@ data:
         {{- end }}
         echo "rask's seed changed; minting a pair for any new signing identity and seeding again"
         rm -rf "$HOME/seed/nats"
-        PATH="$NATS_TOOLS:$PATH" sh "$(dirname "$0")/mint.sh" || true
+        PATH="$NATS_TOOLS:$PATH" sh "$SEED_DIR/mint.sh" || true
         exec sh "$0"
+      fi
+      if [ "$(store_state)" = uninitialized ]; then
+        echo "this pod's server restarted empty; initializing it and seeding it again"; open_store; seed; continue
       fi
       if out=$(bao kv get -field=pod secret/openbao-seeded 2>&1); then
         [ "$(fingerprint)" = "$(cat "$HOME/seed/fingerprint")" ] && continue

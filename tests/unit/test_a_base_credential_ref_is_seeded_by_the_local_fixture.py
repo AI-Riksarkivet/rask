@@ -57,7 +57,7 @@ def _allowed(policy: dict, action: str, resource: str, prefix: str | None = None
 
 def test_a_configured_ref_gets_a_scoped_user_and_its_openbao_entry_only_when_the_local_fixture_is_on() -> None:
     docs = render(*_args(dev_seed=True))
-    provision, seed = _script(docs, "provision"), seed_scripts(docs)["seed.sh"]
+    provision, seed = _script(docs, "provision"), seed_scripts(docs)["open-and-seed.sh"]
 
     match = _POLICY.search(provision)
     assert match, "the scoped-users Job renders no policy for the reference"

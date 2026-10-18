@@ -127,6 +127,7 @@ spec:
             {{- toYaml (index $root.Values.resources $name | default $root.Values.resources.fleet) | nindent 12 }}
       volumes:
         {{- include "lance.tmpVolume" $root | nindent 8 }}
+        {{- include "lance.storeIdentity" (list $root $name "volumes") | nindent 8 }}
         {{- include "lance.identityTokens" (prepend (include "lance.fleetAudiences" (list $name $svc) | splitList " " | compact) "volumes") | nindent 8 }}
         {{- if and $root.Values.auth.enabled $svc.governedAuth }}{{ include "lance.fgaCredential" (list $root "volumes" $name (has "rask-catalog" ($svc.identityAudiences | default list))) | nindent 8 }}{{ end }}
 ---

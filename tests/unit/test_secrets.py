@@ -62,7 +62,7 @@ def test_lineage_reads_no_store_when_secrets_from_dapr_is_off(monkeypatch: pytes
 def test_lineage_takes_the_outbox_pair_from_the_store_alone(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "service_kit.governed.secrets.fetch_dapr_secret",
-        lambda *_a, **_k: {"lineage-s3-access-key": "id-from-store", "lineage-s3-secret-key": "from-store"},
+        lambda *_a, **_k: {"access_key": "id-from-store", "secret_key": "from-store"},
     )
     settings = LineageSettings.model_validate({"secrets_from_dapr": True, "s3_access_key_id": "id-from-env", "s3_secret_access_key": "from-env"})
     StoreCredential(settings).read_at_boot()
@@ -70,7 +70,7 @@ def test_lineage_takes_the_outbox_pair_from_the_store_alone(monkeypatch: pytest.
     assert (options["aws_access_key_id"], options["aws_secret_access_key"]) == ("id-from-store", "from-store")
 
 
-@pytest.mark.parametrize("bundle", [{}, {"lineage-s3-secret-key": "only-the-secret"}], ids=["store-empty", "secret-without-its-key-id"])
+@pytest.mark.parametrize("bundle", [{}, {"secret_key": "only-the-secret"}], ids=["store-empty", "secret-without-its-key-id"])
 def test_lineage_refuses_to_boot_without_the_whole_outbox_pair(monkeypatch: pytest.MonkeyPatch, bundle: dict[str, str]) -> None:
     # Store empty, or half a pair, AND no env fallback → must raise, never boot signing with half a credential.
     monkeypatch.setattr("service_kit.governed.secrets.fetch_dapr_secret", lambda *_a, **_k: dict(bundle))

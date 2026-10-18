@@ -700,7 +700,7 @@ frontend:
     enabled: true
     # -- Browser-reachable app origin, e.g. https://app.example.com; forms the /auth/callback redirect URI. Required when `oidc.enabled`.
     publicOrigin: "" # browser-reachable origin, e.g. https://app.example.com (forms the redirect URI)
-    # The session-cookie sealing key is not a value: it is the store's `frontend-session-secret`, written
+    # The session-cookie sealing key is not a value: it is the store's `frontend-session` (field `secret`), written
     # by ESO into `<release>-frontend-session` beside the client secret.
 
 # === Governance (Dex OIDC + OpenFGA). Off → open dev mode; on → the full governed demo. ============
@@ -1744,14 +1744,14 @@ objectStore:
   viewerAccessKey: rask-viewer
   # THE MEDIA CORPUS READERS: annotator and search list and open the corpus under `explorer.corpusS3Root` and write
   # nothing there (their annotations go through the catalog, `explorer.writeBackend`), so this identity reads that
-  # root and nothing else. It reaches the two services from the Dapr secret `media-s3`, which every other app's
-  # Configuration denies; a platform store holds that secret for them in production.
+  # root and nothing else. It reaches the two services from the Dapr secret `media-s3`, which only their Configurations
+  # allow and only their store logins read; a platform store holds that secret for them in production.
   # -- Access key of annotator's and search's read-only identity on the media corpus (`explorer.corpusS3Root`); secret derives in-cluster.
   mediaAccessKey: rask-media
   # THE BACKUPS: the control-root backup reads the registry prefixes it copies, and both backups write and prune under
   # `_backups/` in `objectStore.bucket`, so this identity holds that and never the root, which on RustFS signs every
   # STS session token (ADR 0168). It reaches the backup CronJobs as files ESO writes (`<release>-backup-s3`) from the
-  # secret `backup-s3`, which every app's Configuration denies.
+  # secret `backup-s3`, which only ESO's store login reads.
   # -- Access key of the backups' identity (reads the control-root records, writes `_backups/`); secret derives in-cluster.
   backupAccessKey: rask-backup
   # The Lance lakehouse ROOT bucket (catalog LANCE_REST_ROOT + the warehouse registry). Referenced by
@@ -1853,8 +1853,9 @@ nats:
   # account key, so issuing or re-issuing a user never touches the server.
   #
   # THE TABLE (`users`) IS THE ONE DECLARATION: one user per Dapr app-id that holds a pubsub.jetstream Component, plus `admin`
-  # (the stream Job) and `monitor` (nats-box, read-only). The dev seed issues exactly these permissions, every app's deny list
-  # hides every user's secret, the components name them, and the attestation below lists them. The rules, from the
+  # (the stream Job) and `monitor` (nats-box, read-only). The dev seed issues exactly these permissions, each user's secret is
+  # read only by its own app's store login (no app's Configuration lets its code read one), the components name them, and the
+  # attestation below lists them. The rules, from the
   # components and the call sites, measured on nats-server 2.14.2 with protocol tracing on 2026-10-04:
   #   - a publisher may publish its topics and receive on _INBOX.>, where the publish acknowledgement arrives;
   #   - a subscriber on stream S through durable D also requests $JS.API.STREAM.NAMES (no component sets streamName),
@@ -1907,7 +1908,7 @@ nats:
   # prefix); the catalog's ack on CATALOG_CONTROL is stream-wide, because its broadcast consumer's name is the server's, so a
   # compromised catalog could ack or terminate notifications' control deliveries (a lesser power than the
   # one it already holds: it signs every control event; ackPolicy none does not stop daprd 1.18.1 acking, measured);
-  # 8222 monitoring is unauthenticated by design; and anything holding OpenBao's dev root token reads the store (XC-079).
+  # and 8222 monitoring is unauthenticated by design.
   auth:
     # -- Attests the platform's store holds every `nats-user-<user>`; required when the store is the platform's (`openbao.enabled` false).
     provisioned: false
@@ -2263,7 +2264,7 @@ openfga:
     engine: postgres
     # DSN comes from the infra-credentials Secret (key openfga-datastore-uri) — the SAME secret the AGE
     # servers + our migrate Job consume, written by the external-secrets operator from the
-    # store's `postgres-password`. No plaintext password in values/env: the subchart's
+    # store's `postgres` (field `password`). No plaintext password in values/env: the subchart's
     # existingSecret+secretKeys branch turns this into a secretKeyRef. (Subchart values can't template,
     # so the release-prefixed secret name is hardcoded — it is `<release>-infra-credentials`, and the
     # release is `rask`.)
@@ -2317,9 +2318,9 @@ age:
   # governed comes up on an arm64 host at all.
   # -- Postgres+AGE image for the StatefulSet and the pg_dump backup job (PG16; 1.6.0 is multi-arch amd64+arm64).
   image: apache/age:release_PG16_1.6.0
-  # -- Postgres user every AGE client connects as; its password is the store's `postgres-password` secret, never a value.
+  # -- Postgres user every AGE client connects as; its password is the store's `postgres` secret (field `password`), never a value.
   user: lance
-  # No password value: the AGE password is the store's `postgres-password` ([[XC-004]]).
+  # No password value: the AGE password is the store's `postgres` secret ([[XC-004]]).
   # The database the server initialises (`POSTGRES_DB`) and its readiness probe names. No client reads it: lineage
   # keeps no database (ADR 0158), and OpenFGA and the Dapr state store each have their own below. It keeps the name
   # the deployed volume was initialised with, because a new one rolls the StatefulSet that serves both; it leaves
@@ -2336,7 +2337,7 @@ age:
   port: 5432
   # Externalize ([[XC-132]]): with age.enabled=false every client (the in-chart OpenFGA's datastore DSN, the
   # Dapr state store, the Collector's state-store scrape, the dump) dials THIS host. user and the database names must
-  # match the platform's; the password is never a value: it is the secret store's `postgres-password`, which ESO
+  # match the platform's; the password is never a value: it is the secret store's `postgres` secret, which ESO
   # delivers and the dev seed writes into its DSNs.
   # -- Postgres host OpenFGA and the Dapr state store use instead of the in-cluster AGE; the render refuses it empty with age.enabled=false.
   externalHost: "" # e.g. rask-postgres-rw (the CNPG Cluster's -rw service)
@@ -2367,7 +2368,7 @@ dex:
   enabled: true
   # -- Port of the development Dex's Service.
   port: 5556
-  # -- The development Dex's static client secret (demo value); seeded into OpenBao as `publisher-oidc-client-secret`.
+  # -- The development Dex's static client secret (demo value); seeded into OpenBao as `oidc-client` (field `client-secret`).
   clientSecret: lance-catalog-secret
   # The publish saga's SERVICE ACCOUNT (dex has no client-credentials grant, so machine identity is
   # a dedicated password-grant user). The annotator mints a FRESH token per publish with it — the
@@ -2381,14 +2382,25 @@ dex:
 
 # === The secret store the Dapr secret store and ESO read: the platform's, or the dev OpenBao fixture =====
 # The chart renders no secret store ([[XC-149]], ADR 0153). Production names the platform's Vault or OpenBao; development
-# uses deploy/fixtures/openbao, an in-memory OpenBao with a fixed root token that this chart seeds.
+# uses deploy/fixtures/openbao, an in-memory OpenBao that this chart's seed initializes and seeds.
 openbao:
-  # -- This estate uses the development store (deploy/fixtures/openbao, Service `<release>-openbao`): in memory, auto-unsealed, a fixed root token, seeded by the scripts this chart renders (`<release>-openbao-seed`). A real deployment refuses it. False reads the platform's store at `externalAddr`.
+  # -- This estate uses the development store (deploy/fixtures/openbao, Service `<release>-openbao`): in memory, initialized and seeded by the scripts this chart renders (`<release>-openbao-seed`), its administrator token generated in-cluster. A real deployment refuses it. False reads the platform's store at `externalAddr`.
   enabled: true
   # -- Port of the development store's Service.
   port: 8200
-  # -- Root token of the development store (the openbao fixture's `devToken`), which the Dapr secret store presents.
-  devToken: root
+  # EACH APP'S SIDECAR LOGS IN AS ITSELF ([[XC-165]]). The one `lance-secrets` component logs every sidecar in with the
+  # store's Kubernetes auth method (`externalSecrets.kubernetesAuthPath`), as the role `<release>-<app id>` (Dapr fills
+  # `{appID}` into a component's metadata), presenting a ServiceAccount token the kubelet projects for `audience` into
+  # daprd alone. Each role is bound to that app's own ServiceAccount, and its policy reads exactly the secrets the app and
+  # its components read (`lance.storeReads`): the dev store's seed writes both, and a platform store's operator creates
+  # them from the same render (the `policy-*.json` and `role-*.json` documents of `<release>-secret-store-identities`).
+  identity:
+    # -- Audience of the token projected into each sidecar for its store login; every app's role accepts only this one.
+    audience: rask-openbao
+    # -- Lifetime of the store token a sidecar's login returns; daprd renews it in the background.
+    tokenTtl: 15m
+    # -- The longest a sidecar's store token lives; daprd then logs in again with its current projected token.
+    tokenMaxTtl: 1h
   # The platform's store is reached over TLS only: every sidecar sends the store's token to it, so the render refuses an
   # http address. Its certificate must chain to a CA the sidecars and ESO trust by default; the chart names no CA bundle.
   # -- The platform's Vault or OpenBao (https), which the Dapr secret store and ESO's SecretStore read when `enabled` is false; required then, and refused beside `enabled`.
@@ -2401,7 +2413,7 @@ openbao:
 # === Event signing keys ([[LH-064]]) ======================================================================
 # Every identity in `lance.signingIdentities` (the catalog and maintenance) signs the lineage it emits with its own Ed25519 key, so lineage holds public keys only and cannot
 # forge what it verifies. The store holds two secrets per identity, never two fields of one, because Dapr scopes a
-# secret by NAME and a per-app deny list can only name a whole secret. <key> is the signer's ServiceAccount name
+# secret by NAME and a per-app allow list can only name a whole secret. <key> is the signer's ServiceAccount name
 # (`lance.signingKeys`); the identity is that account's subject (`lance.saSubject`), which no secret name can carry:
 #   signing-public-<key>   field `keys`  comma-separated public NKEYs, current first, at most one previous
 #   signing-key-<key>      field `seed`  the NKEY user seed, readable only by the sidecars of the identity's own app-id
@@ -2430,7 +2442,7 @@ openbao:
 # keys go with the old store, so an event signed before the loss is refused once enforcement is on (acked and
 # counted); every signer re-resolves within 5 minutes and heals in place.
 #
-# THE DENY LISTS REACH A SIDECAR THROUGH THE NAME OF ITS CONFIGURATION. daprd reads its Configuration once, at boot
+# THE ALLOW LISTS REACH A SIDECAR THROUGH THE NAME OF ITS CONFIGURATION. daprd reads its Configuration once, at boot
 # (HotReload is off), and Helm applies a Deployment before the dapr.io Configuration it names, so an edit made under an
 # unchanged name is loaded stale by any pod that boots in the gap, for the life of the pod, with every probe green.
 # Each per-app Configuration is therefore named `lance-config-<app>-<first 10 hex of the sha256 of its spec>`
@@ -2445,8 +2457,8 @@ openbao:
 # (pkg/injector/patcher/sidecar_container.go:102-104, pkg/injector/service/pod_patch.go:133-148). Reference a
 # Configuration through the pod's `dapr.io/config`, never by a name built from the app-id.
 #
-# RESIDUAL (owner, 2026-10-02): this is the Dapr-scope claim. A pod that holds OpenBao's root token or reaches :8200
-# reads the store without a sidecar until XC-079.
+# THE STORE HOLDS THE SAME LINE ([[XC-165]]): each sidecar logs in as its own ServiceAccount, and its role's policy reads
+# `signing-key-<key>` only for the app that signs with it, so reaching :8200 without that app's login reads no private key.
 signing:
   # LINEAGE'S SWITCH. True renders LINEAGE_SIGNERS and LINEAGE_DELEGATORS (lance.signingIdentities, lance.delegatorIdentities),
   # and only when the secret store and auth.enabled are on as well: lineage then refuses an unsigned or non-verifying event
@@ -2512,9 +2524,7 @@ externalSecrets:
   kvMount: secret # the Vault KV mount path
   # -- KV engine version of `kvMount` (`v1` or `v2`).
   kvVersion: "v2"
-  # -- KV key holding the shared bundle (postgres-password, the Dapr app token, each plane's scoped store pair; never the store's root), e.g. `lance` for secret/data/lance.
-  secretPath: lance # the KV key holding the shared bundle (e.g. secret/data/lance)
-  # -- Mount path of the Vault/OpenBao Kubernetes auth backend the SecretStore authenticates through.
+  # -- Mount path of the store's Kubernetes auth method, which ESO's SecretStore and every app's sidecar log in through.
   kubernetesAuthPath: kubernetes # the Vault Kubernetes auth backend mount
   # -- Vault role the operator's ServiceAccount assumes; also names its read policy.
   role: lance-infra # the Vault role the operator's ServiceAccount assumes (also names its policy)

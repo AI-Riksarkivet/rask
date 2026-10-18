@@ -358,7 +358,8 @@ def _is_a_delegators_drop(event: RunEvent | DatasetEvent, verified: VerifiedSign
     trusts cannot differ from the name the catalog signs under. A `rask_signature` merely PRESENT proves nothing
     and is not read here: where signing is not enforced `verified` is None and the shortcut is off, and an unsigned
     drop, or one signed by any other identity, keeps the full check. The signing key's reach bounds this
-    attestation: custody of the keys is the Dapr-scope claim until XC-079.
+    attestation: only the catalog's own sidecar may read its private key, at the Dapr scope and at the store, where the
+    catalog's login is the only one whose policy grants it (ADR 0169).
     """
     return (
         isinstance(event, DatasetEvent)

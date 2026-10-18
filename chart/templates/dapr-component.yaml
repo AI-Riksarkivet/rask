@@ -159,21 +159,15 @@ spec:
   version: v1
   metadata:
     - { name: vaultAddr, value: "{{ include "lance.vaultAddr" . }}" }
-    {{- if .Values.openbao.enabled }}
-    - { name: vaultToken, value: {{ .Values.openbao.devToken | quote }} }
-    {{- else }}
-    - name: vaultToken
-      secretKeyRef:
-        name: {{ .Release.Name }}-openbao-token
-        key: token
-    {{- end }}
-    - { name: enginePath, value: "secret" }
+    - { name: vaultAuthMethod, value: kubernetes }
+    - { name: vaultKubernetesRole, value: {{ include "lance.storeRole" (list . "{appID}") | quote }} }
+    - { name: vaultKubernetesMountPath, value: {{ .Values.externalSecrets.kubernetesAuthPath | quote }} }
+    - { name: vaultServiceAccountTokenPath, value: /var/run/secrets/rask/openbao/token }
+    - { name: enginePath, value: {{ .Values.externalSecrets.kvMount | quote }} }
     - { name: vaultKVUsePrefix, value: "false" }
-    - { name: skipVerify, value: {{ ternary "false" "true" (hasPrefix "https://" (include "lance.vaultAddr" .)) | quote }} }
-
-{{- $secretScopes := splitList "," (include "lance.secretScopes" .) }}
+    - { name: skipVerify, value: "false" }
 scopes:
-{{- range ($secretScopes | uniq) }}
+{{- range (splitList "," (include "lance.secretScopes" .) | compact) }}
   - {{ . }}
 {{- end }}
 {{- end }}

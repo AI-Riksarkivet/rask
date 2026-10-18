@@ -164,9 +164,7 @@ def boot(tmp_path: Path, control_outbox: str, monkeypatch: pytest.MonkeyPatch, r
 
         def _boot(seed: httpx.Response, keys: httpx.Response, token: object) -> TestClient:
             stack.enter_context(respx.mock)
-            respx.get(f"{SECRETS}/lance").mock(
-                return_value=httpx.Response(200, json={"catalog-s3-access-key": "test", "catalog-s3-secret-key": "the-s3-secret"})
-            )
+            respx.get(f"{SECRETS}/catalog-s3").mock(return_value=httpx.Response(200, json={"access_key": "test", "secret_key": "the-s3-secret"}))
             respx.get(f"{SECRETS}/signing-key-{signing_key_name(CATALOG)}").mock(return_value=seed)
             respx.get(f"{SECRETS}/signing-public-{signing_key_name(CATALOG)}").mock(return_value=keys)
             namespace = connect("dir", {"root": str(tmp_path / "warehouse")})

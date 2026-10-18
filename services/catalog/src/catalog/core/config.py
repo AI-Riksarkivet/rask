@@ -251,13 +251,13 @@ class CatalogDaprSettings(BaseSettings):
     #: (already what viewer and ingest read); the per-service alias stays FIRST so a single service can
     #: still be moved on its own.
     dapr_secret_store: str = Field(default="lance-secrets", validation_alias=AliasChoices("LANCE_DAPR_SECRET_STORE", "RASK_SECRET_STORE"))
-    dapr_secret_key: str = Field(default="lance", alias="LANCE_DAPR_SECRET_KEY")
-    #: The catalog's own scoped pair (`objectStore.catalogAccessKey`): no service holds the store's root, which signs every
-    #: STS token on RustFS (ADR 0168).
-    dapr_secret_s3_field: str = Field(default="catalog-s3-secret-key", alias="LANCE_DAPR_SECRET_S3_FIELD")
+    #: The catalog's own secret in the store: its scoped pair (`objectStore.catalogAccessKey`), readable by the catalog
+    #: alone ([[XC-165]]). No service holds the store's root, which signs every STS token on RustFS (ADR 0168).
+    dapr_secret_key: str = Field(default="catalog-s3", alias="LANCE_DAPR_SECRET_KEY")
+    dapr_secret_s3_field: str = Field(default="secret_key", alias="LANCE_DAPR_SECRET_S3_FIELD")
     #: The field of the same secret holding the key id the secret signs under: a rotation issues a new id, so the id
     #: is read from the store with its secret.
-    dapr_secret_s3_id_field: str = Field(default="catalog-s3-access-key", alias="LANCE_DAPR_SECRET_S3_ID_FIELD")
+    dapr_secret_s3_id_field: str = Field(default="access_key", alias="LANCE_DAPR_SECRET_S3_ID_FIELD")
     # Dapr pub/sub transport (used when lineage_transport == "dapr"). The component name is what the
     # sidecar resolves to NATS JetStream; the topic is versioned (a breaking schema change → a new .vN).
     dapr_pubsub: str = Field(default="lineage-pubsub", alias="LANCE_DAPR_PUBSUB")

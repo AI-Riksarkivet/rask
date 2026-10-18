@@ -111,20 +111,20 @@ def publish_token(settings: Any) -> str | None:
 
     from service_kit.governed.secrets import fetch_required_secrets  # noqa: PLC0415 - publish path only
 
-    bundle = fetch_required_secrets(settings.publish_secret_store, settings.publish_secret_key, require="publisher-oidc-password")
+    password = fetch_required_secrets(settings.publish_secret_store, settings.publish_secret_key, require="password")["password"]
     data = {
         "grant_type": "password",
         "username": settings.publish_username,
-        "password": bundle["publisher-oidc-password"],
+        "password": password,
         # `federated:id` puts the connector and the upstream user id in the token: the publisher's principal ([[LH-063]]).
         "scope": "openid profile email federated:id",
     }
-    # The client secret comes from the SAME bundle when the store serves it — this credential was the
-    # one outside the estate's fail-closed secrets guard, riding plaintext pod env while the comment
-    # above its chart row claimed otherwise. The env field stays only as the
-    # no-OpenBao fallback, the same shape as every other guarded credential.
-    client_secret = bundle.get("publisher-oidc-client-secret") or settings.publish_client_secret or ""
-    auth = (settings.publish_client_id, client_secret) if settings.publish_client_id else None
+    # A confidential client authenticates with the IdP client's own secret, which the zones' session reads too: one
+    # client, one secret, from the store alone and failing closed like the password.
+    auth = None
+    if settings.publish_client_id:
+        bundle = fetch_required_secrets(settings.publish_secret_store, settings.publish_client_secret_key, require="client-secret")
+        auth = (settings.publish_client_id, bundle["client-secret"])
     with publish_client(15.0) as client:
         response = client.post(settings.publish_token_url, data=data, auth=auth)
     if response.status_code >= 400:

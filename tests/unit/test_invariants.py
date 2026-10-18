@@ -81,14 +81,16 @@ def test_no_SCOPED_storage_identity_is_published_with_the_ROOT_secret() -> None:
     how it survived.
 
     ASSERTED ON THE RENDER: the root is never in it ([[XC-004]]), so the dev OpenBao's seed writes each
-    field from a file, and a scoped field must name the file `scoped_secret` derived for its identity,
-    never the root's (`$G/object-store-secret-key`). Generic over every scoped field the seed writes.
+    field from a file, and a scoped field must name a file `scoped_secret` derived (for an identity, or for
+    a data base's credential reference), never the root's (`$G/object-store-secret-key`). Generic over every
+    scoped field the seed writes, under either spelling (`secret_key`, `<x>-secret-key`).
     """
     rendered = _helm_template("auth.bootstrapAdmin=dex~gate-probe")
 
-    fields = re.findall(r"([a-z-]*(?<!object-store-)secret-key)=@\"([^\"]+)\"", rendered)
+    fields = re.findall(r"\b((?:[a-z]+-)*secret[-_]key)=@\"([^\"]+)\"", rendered)
+    fields = [(field, source) for field, source in fields if field != "object-store-secret-key"]
     assert fields, "the seed writes no scoped secret field, so this gate would pass vacuously"
-    offenders = [f"{field}={source}" for field, source in fields if "/seed/scoped-" not in source]
+    offenders = [f"{field}={source}" for field, source in fields if not source.startswith(("$HOME/seed/scoped-", "$HOME/seed/base-"))]
     assert offenders == [], "a SCOPED identity is published with the ROOT storage secret:\n  " + "\n  ".join(offenders)
 
 

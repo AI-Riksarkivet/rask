@@ -93,19 +93,16 @@ class DaprDoorSettings(BaseSettings):
     #: is the same shape the S3 key pair takes (`service_kit.governed.store_credential`).
     app_token_from_store: bool = Field(default=False, alias="RASK_APP_TOKEN_FROM_STORE")
 
-    #: Which bundle holds it. The names match the per-service `*_DAPR_SECRET_STORE` / `*_DAPR_SECRET_KEY`
-    #: settings the lance services already carry, so a deployment configures ONE store, not two.
+    #: Which secret holds it: the store is the one every service names, and the secret is the estate's one app token,
+    #: readable by exactly the apps with a Dapr door ([[XC-165]]).
     secret_store: str = Field(default="lance-secrets", alias="RASK_SECRET_STORE")
-    secret_key: str = Field(default="lance", alias="RASK_DAPR_SECRET_KEY")
-    #: The field within the bundle. Hyphenated because that is how every other field in `secret/lance`
-    #: is spelled (`catalog-s3-secret-key`, `dapr-app-token`) — an underscore here would read
-    #: as an env var, which is the one thing this value must never be.
-    app_token_field: str = Field(default="dapr-app-token", alias="RASK_APP_TOKEN_FIELD")
+    secret_key: str = Field(default="dapr-app-token", alias="RASK_DAPR_SECRET_KEY")
+    app_token_field: str = Field(default="token", alias="RASK_APP_TOKEN_FIELD")
     #: The token a rotation replaced, accepted beside the current one ([[XC-082]], ADR 0166). daprd reads its
     #: token from `<release>-dapr-app-token` once, when the pod starts, and ESO syncs that Secret from the store
     #: on its own interval, so a sidecar keeps presenting the old token until its pod restarts, and a pod that
     #: restarts before ESO synced still starts with it. Absent or empty outside a rotation.
-    app_token_previous_field: str = Field(default="dapr-app-token-previous", alias="RASK_APP_TOKEN_PREVIOUS_FIELD")
+    app_token_previous_field: str = Field(default="previous", alias="RASK_APP_TOKEN_PREVIOUS_FIELD")
 
 
 class _NoCurrentToken(LookupError):

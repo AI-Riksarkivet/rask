@@ -63,7 +63,7 @@ def test_the_store_is_the_SOLE_source(monkeypatch: pytest.MonkeyPatch) -> None:
     would notice.
     """
     monkeypatch.setenv("APP_API_TOKEN", "from-the-env")
-    _store(monkeypatch, {"dapr-app-token": "from-the-store"})
+    _store(monkeypatch, {"token": "from-the-store"})
 
     with pytest.raises(PermissionDeniedError, match="invalid or missing"):
         require_dapr_token(dapr_api_token="from-the-env", dapr_caller_app_id="")
@@ -84,7 +84,7 @@ def test_a_bundle_without_the_field_refuses_rather_than_falling_back_to_env(monk
     operator believes they removed is how a "migrated" service stays on the banned path unnoticed.
     """
     monkeypatch.setenv("APP_API_TOKEN", "from-the-env")
-    _store(monkeypatch, {"catalog-s3-secret-key": "irrelevant"})
+    _store(monkeypatch, {"unrelated-field": "irrelevant"})
 
     with pytest.raises(PermissionDeniedError, match="not configured"):
         require_dapr_token(dapr_api_token="from-the-env", dapr_caller_app_id="")
@@ -137,12 +137,12 @@ def test_the_app_token_rotates_across_a_restart_with_no_403(monkeypatch: pytest.
     """
     monkeypatch.delenv("APP_API_TOKEN", raising=False)
     clock = _Clock()
-    bundle = {"dapr-app-token": "old"}
+    bundle = {"token": "old"}
     calls = _store(monkeypatch, bundle)
     running = _a_process(monkeypatch, clock)
     assert running.post("/delivered", headers={"dapr-api-token": "old"}).status_code == 200
 
-    bundle.update({"dapr-app-token": "new", "dapr-app-token-previous": "old"})
+    bundle.update({"token": "new", "previous": "old"})
     assert running.post("/delivered", headers={"dapr-api-token": "old"}).status_code == 200
     assert len(calls) == 1, f"the store was read {len(calls)} times inside the TTL"
     clock.now += secret_cache.SECRET_TTL_SECONDS
@@ -162,11 +162,11 @@ def test_the_boot_assertion_reads_the_store_too(monkeypatch: pytest.MonkeyPatch)
     check and then refuse every delivery it receives.
     """
     monkeypatch.delenv("APP_API_TOKEN", raising=False)
-    _store(monkeypatch, {"dapr-app-token": "from-the-store"})
+    _store(monkeypatch, {"token": "from-the-store"})
 
     assert_app_token_configured(dapr_enabled=True)
 
-    _store(monkeypatch, {"catalog-s3-secret-key": "irrelevant"})
+    _store(monkeypatch, {"unrelated-field": "irrelevant"})
     with pytest.raises(RuntimeError, match="failing closed"):
         assert_app_token_configured(dapr_enabled=True)
 
@@ -198,12 +198,12 @@ def test_a_LATE_seed_heals_without_a_restart(monkeypatch: pytest.MonkeyPatch) ->
     request, exactly as an unreadable one is, rather than remembered as holding no token.
     """
     monkeypatch.delenv("APP_API_TOKEN", raising=False)
-    bundle: dict[str, str] = {"catalog-s3-secret-key": "irrelevant"}
+    bundle: dict[str, str] = {"unrelated-field": "irrelevant"}
     monkeypatch.setattr("service_kit.governed.secrets.fetch_dapr_secret", lambda *_a, **_k: dict(bundle))
 
     with pytest.raises(PermissionDeniedError, match="not configured"):
         require_dapr_token(dapr_api_token="seeded-later", dapr_caller_app_id="")
 
-    bundle["dapr-app-token"] = "seeded-later"
+    bundle["token"] = "seeded-later"
 
     require_dapr_token(dapr_api_token="seeded-later", dapr_caller_app_id="")

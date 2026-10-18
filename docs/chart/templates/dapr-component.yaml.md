@@ -180,27 +180,43 @@ read secrets via their sidecar (GET /v1.0/secrets/lance-secrets/<name>) instead 
 secret-handling fix. The chart renders no store ([[XC-149]]): it names the dev fixture's (`openbao.enabled`)
 or the platform's (`openbao.externalAddr`), and the apps read either one through this component.
 
-## `- name: vaultToken`
+## `- { name: vaultAuthMethod, value: kubernetes }`
 
-The platform's store: NOT the dev root token, which only the dev store accepts. The operator supplies a
-real, scoped token via this Kubernetes secret; Dapr resolves it through its default k8s secret store.
-Create it out-of-band: kubectl create secret generic <release>-openbao-token --from-literal=token=<bao-token>.
-One static token for every sidecar is [[XC-079]].
+EACH SIDECAR LOGS IN AS ITS OWN APP ([[XC-165]], ADR 0169). Dapr's Vault store logs in with the store's Kubernetes auth
+method from 1.19 on (components-contrib#4448), presenting the pod's own ServiceAccount token and renewing its session in
+the background, logging in again with the kubelet's current token when the session's max TTL ends. So no store token
+exists anywhere: none rides this component, a Kubernetes Secret or a file, and none needs minting or rotating. The
+static token Dapr 1.18 offered was read once at init and never renewed (v1.18.0 `vault.go:400-421`), so it could not be
+both scoped to one app and short-lived.
+
+## `- { name: vaultKubernetesRole, value: {{ include "lance.storeRole" (list . "{appID}") | quote }} }`
+
+ONE COMPONENT, ONE ROLE PER APP. Dapr fills `{appID}` into any component's metadata when the sidecar starts
+(`pkg/runtime/meta/meta.go:96-97`, 1.18.1 and 1.19.0-rc.4; documented as templated metadata values), so every app's
+sidecar logs in to `<release>-<its own app id>`, a role bound to that app's ServiceAccount whose policy reads exactly its
+app's secrets (`lance.storeReads`). The store refuses the rest whatever the Configuration says, and a pod that claimed
+another app's id would still present its own account's token, which that app's role does not admit. Every other
+component keeps naming this one store (`auth.secretStore: lance-secrets`) and every service its one store name.
+
+## `- { name: vaultServiceAccountTokenPath, value: /var/run/secrets/rask/openbao/token }`
+
+The token daprd logs in with, which the pod projects for `openbao.identity.audience` and mounts into daprd alone
+(`lance.storeIdentity`): the app container cannot log in past its own sidecar's Configuration. The file is re-read on
+every login, so the kubelet's rotation reaches it.
 
 ## `- { name: vaultKVUsePrefix, value: "false" }`
 
 Dapr defaults vaultKVPrefix to "dapr", so it reads secret/data/dapr/<key>; our seed writes
 secret/data/<key>. Drop the prefix so the path is the natural secret/data/<key> (the kv-v2 nuance).
 
-## `- { name: skipVerify, value: {{ ternary "false" "true" (hasPrefix "https://" (include "lance.vaultAddr" .))...`
+## `- { name: skipVerify, value: "false" }`
 
-TLS verification tracks the Vault address scheme: the platform's store is https (`lance.platformStoreAddr`
-refuses anything else) and verified; skipVerify only for the plain-http dev OpenBao (no TLS to verify).
-An unconditional "true" would leave the component fronting EVERY app secret unverified in prod.
+TLS is verified wherever there is TLS: the platform's store is https (`lance.platformStoreAddr` refuses anything
+else); the dev store is plain http, where the setting has nothing to verify, and 1.19 logs every `true` as unsafe.
 
-## `{{- $secretScopes := splitList "," (include "lance.secretScopes" .) }}`
+## `{{- range (splitList "," (include "lance.secretScopes" .) | compact) }}`
 
-ONE derivation, in `lance.secretScopes`, because this list has a SECOND reader:
+ONE derivation, in `lance.secretScopes`, because this list has other readers:
 `lance.appTokenEnv` decides whether a workload takes its app-API token from this store or
 through the environment, and it decides by membership HERE. Restating the computation would
 let the two agree at review and diverge later — a pod pointed at a store its app-id cannot

@@ -124,7 +124,7 @@ spec:
       - key: app.kubernetes.io/component
         operator: In
         values:
-          {{- range (splitList "," (include "lance.secretScopes" .)) }}
+          {{- range (splitList "," (include "lance.secretScopes" .) | compact) }}
           - {{ . }}
           {{- end }}
   policyTypes: [Egress]
@@ -232,7 +232,7 @@ spec:
               - key: app.kubernetes.io/component
                 operator: In
                 values:
-                  {{- range (append (splitList "," (include "lance.secretScopes" .)) "openbao" | uniq) }}
+                  {{- range (append (splitList "," (include "lance.secretScopes" .) | compact) "openbao" | uniq) }}
                   - {{ . }}
                   {{- end }}
         {{- with .Values.networkPolicy.openbaoExtraFrom }}

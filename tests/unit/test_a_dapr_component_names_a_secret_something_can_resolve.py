@@ -172,6 +172,24 @@ def test_every_referenced_secret_has_a_store_to_resolve_it(label: str, overlay: 
         f"exits fatal on load and takes every app's sidecar with it:\n  " + "\n  ".join(offenders)
     )
     assert any(doc["metadata"]["name"] == STORE for doc in components), f"{label} deploys no secret store, so no bus credential can resolve"
+    [store] = [doc for doc in components if doc["metadata"]["name"] == STORE]
+    role = next(row["value"] for row in store["spec"]["metadata"] if row["name"] == "vaultKubernetesRole")
+    sidecars = {
+        ((doc["spec"]["template"].get("metadata") or {}).get("annotations") or {}).get("dapr.io/app-id")
+        for doc in docs
+        if doc.get("kind") in {"Deployment", "StatefulSet"}
+    }
+    unreadable = [
+        f"{doc['metadata']['name']} resolves {name} in {app}'s sidecar, which {app}'s store login may not read"
+        for doc in components
+        if (doc.get("auth") or {}).get("secretStore") == STORE
+        for app in sorted(set(doc.get("scopes") or []) & sidecars)
+        for name in sorted({str(ref.get("name")) for ref in _secret_refs(doc.get("spec") or {}, [])})
+        if name not in _granted(docs, role.replace("{appID}", app))
+    ]
+    assert not unreadable, (
+        f"under the {label} overlay a sidecar's own login cannot read a secret its component names, so the component never loads:\n  " + "\n  ".join(unreadable)
+    )
     problems = _bus_credential_problems(docs, components)
     assert not problems, f"under the {label} overlay a pub/sub client would connect as nobody, or as a user that may not do its job:\n  " + "\n  ".join(
         problems
@@ -183,11 +201,16 @@ def _fields(external_secret: dict) -> set[str]:
     return {item["secretKey"] for item in external_secret["spec"].get("data") or []}
 
 
+def _granted(docs: tuple[dict, ...], policy: str) -> set[str]:
+    """The store keys a policy rask renders lets its holder read: its `policy-<name>.json` in `<release>-secret-store-identities`."""
+    document = json.loads(chart_render.store_identities(docs).get(f"policy-{policy}.json", '{"path": {}}'))
+    return {match.group(1) for path in document["path"] if (match := _POLICY_PATH.match(f'path "{path}"'))}
+
+
 def _eso_reads(docs: tuple[dict, ...]) -> set[str]:
-    """The store keys the dev OpenBao's policy lets the External Secrets Operator read, off the seed script rask renders."""
-    script = chart_render.seed_scripts(docs)["seed.sh"]
-    policy = script.split("<<'POLICY'", 1)[1].split("POLICY", 1)[0]
-    return set(_POLICY_PATH.findall(policy))
+    """The store keys the dev OpenBao's policy lets the External Secrets Operator read."""
+    [role] = [doc for doc in docs if doc.get("kind") == "SecretStore"]
+    return _granted(docs, role["spec"]["provider"]["vault"]["auth"]["kubernetes"]["role"])
 
 
 def _credential_mounts(docs: tuple[dict, ...]) -> dict[str, dict[str, str]]:

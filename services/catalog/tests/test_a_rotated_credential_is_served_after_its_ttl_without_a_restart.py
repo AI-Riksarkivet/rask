@@ -36,8 +36,10 @@ DAPR_PORT = "3597"
 SIDECAR = f"http://localhost:{DAPR_PORT}/v1.0/secrets/lance-secrets"
 #: The secret the data base's credential reference names.
 BASE_REF = "rotated-base"
-ID_FIELD = "catalog-s3-access-key"
-SECRET_FIELD = "catalog-s3-secret-key"
+#: The catalog's own secret in the store and its pair's fields (`LANCE_DAPR_SECRET_KEY` and its two field settings).
+SECRET = "catalog-s3"
+ID_FIELD = "access_key"
+SECRET_FIELD = "secret_key"
 ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
 ROWS = pa.table({"id": pa.array([1, 2, 3], pa.int64()), "v": ["a", "b", "c"]})
 
@@ -89,13 +91,13 @@ class _Rig:
     def in_store(self, credential: str) -> Key:
         """The pair the store holds for ``credential``."""
         if credential == "estate":
-            return Key(aws_access_key_id=self.bundles["lance"][ID_FIELD], aws_secret_access_key=self.bundles["lance"][SECRET_FIELD])
+            return Key(aws_access_key_id=self.bundles[SECRET][ID_FIELD], aws_secret_access_key=self.bundles[SECRET][SECRET_FIELD])
         return Key(aws_access_key_id=self.bundles[BASE_REF]["aws_access_key_id"], aws_secret_access_key=self.bundles[BASE_REF][SECRET_FIELD])
 
     def store(self, credential: str, key: Key) -> None:
         """Write ``key`` into the store as ``credential``, in the shape the catalog reads it."""
         if credential == "estate":
-            self.bundles["lance"] = {ID_FIELD: key.aws_access_key_id, SECRET_FIELD: key.aws_secret_access_key}
+            self.bundles[SECRET] = {ID_FIELD: key.aws_access_key_id, SECRET_FIELD: key.aws_secret_access_key}
         else:
             self.bundles[BASE_REF] = {SECRET_FIELD: key.aws_secret_access_key, "aws_access_key_id": key.aws_access_key_id}
 
@@ -146,7 +148,7 @@ def rotation(two_stores: Any, monkeypatch: pytest.MonkeyPatch) -> Iterator[_Rig]
     users = {"estate": _identity_on(iam, two_stores.estate_bucket), "base": _identity_on(iam, two_stores.second_bucket)}
     estate, base = _issue(iam, users["estate"]), _issue(iam, users["base"])
     bundles = {
-        "lance": {ID_FIELD: estate.aws_access_key_id, SECRET_FIELD: estate.aws_secret_access_key},
+        SECRET: {ID_FIELD: estate.aws_access_key_id, SECRET_FIELD: estate.aws_secret_access_key},
         BASE_REF: {SECRET_FIELD: base.aws_secret_access_key, "aws_access_key_id": base.aws_access_key_id},
     }
     for key, value in {

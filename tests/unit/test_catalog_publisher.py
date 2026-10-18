@@ -240,17 +240,12 @@ def test_the_http_create_api_raises_the_sdk_exception_on_http_errors(monkeypatch
 # --------------------------------------------------------------------------------------------------
 
 
-class _TokenSettings:
-    # `catalog_token` USED TO BE HERE and is gone with the branch that read it. Note what its
-    # presence bought: this double carried a field the real `AnnotatorSettings` no longer has, so the
-    # test below passed against a settings shape that could not occur in production — which is how the
-    # publish path could be broken (AttributeError on every call) with this file green.
-    publish_token_url: str | None = None
-    publish_client_id: str | None = None
-    publish_client_secret: str | None = None
-    publish_username: str | None = None
-    publish_secret_store = "lance-secrets"
-    publish_secret_key = "lance"
+def _token_settings() -> Any:
+    """The annotator's real settings, so the publish path reads the fields production builds: a field the settings drop
+    or a secret name they gain reaches this test, where a hand-made double would keep its own."""
+    from annotator.core.config import AnnotatorSettings
+
+    return AnnotatorSettings()
 
 
 # `test_a_pinned_catalog_token_wins_and_touches_nothing_else` lived here and is DELETED, not adapted.
@@ -269,18 +264,19 @@ def test_minting_reads_the_store_and_posts_the_password_grant(monkeypatch: pytes
     from annotator.projects import lakehouse
     from service_kit.governed import secrets as sk_secrets
 
-    settings = _TokenSettings()
+    settings = _token_settings()
     settings.publish_token_url = "http://dex:5556/dex/token"
     settings.publish_client_id = "lance-catalog"
-    settings.publish_client_secret = "lance-catalog-secret"
     settings.publish_username = "publisher@rask.internal"
 
-    fetched: list[tuple[str, str]] = []
+    fetched: list[tuple[str, str, str]] = []
 
     def fake_fetch(store: str, key: str, *, require: str) -> dict[str, str]:
-        fetched.append((store, key))
-        assert require == "publisher-oidc-password"
-        return {"publisher-oidc-password": "s3cret"}
+        fetched.append((store, key, require))
+        return {"password": "s3cret"} if require == "password" else {"client-secret": "the-idp-client-secret"}
+
+    def optional_read(store: str, key: str) -> dict[str, str]:
+        raise AssertionError(f"{store}/{key} was read as optional, so a store that holds nothing falls through to a fallback")
 
     posted: dict[str, Any] = {}
 
@@ -289,15 +285,16 @@ def test_minting_reads_the_store_and_posts_the_password_grant(monkeypatch: pytes
         return _Resp(200, {"id_token": "minted-token"})
 
     monkeypatch.setattr(sk_secrets, "fetch_required_secrets", fake_fetch)
+    monkeypatch.setattr(sk_secrets, "fetch_dapr_secret", optional_read)
     monkeypatch.setattr(lakehouse, "publish_client", lambda _timeout: _StubClient(fake_post))
 
     assert lakehouse.publish_token(settings) == "minted-token"
-    assert fetched == [("lance-secrets", "lance")]
+    assert fetched == [("lance-secrets", "publisher-oidc", "password"), ("lance-secrets", "oidc-client", "client-secret")]
     assert posted["url"] == "http://dex:5556/dex/token"
     assert posted["data"]["grant_type"] == "password"
     assert posted["data"]["username"] == "publisher@rask.internal"
     assert posted["data"]["password"] == "s3cret"
-    assert posted["auth"] == ("lance-catalog", "lance-catalog-secret")
+    assert posted["auth"] == ("lance-catalog", "the-idp-client-secret")
 
 
 def test_an_idp_refusal_raises_with_the_reason(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -306,11 +303,11 @@ def test_an_idp_refusal_raises_with_the_reason(monkeypatch: pytest.MonkeyPatch) 
     from annotator.projects import lakehouse
     from service_kit.governed import secrets as sk_secrets
 
-    settings = _TokenSettings()
+    settings = _token_settings()
     settings.publish_token_url = "http://dex:5556/dex/token"
     settings.publish_username = "publisher@rask.internal"
 
-    monkeypatch.setattr(sk_secrets, "fetch_required_secrets", lambda *a, **k: {"publisher-oidc-password": "wrong"})
+    monkeypatch.setattr(sk_secrets, "fetch_required_secrets", lambda *a, **k: {"password": "wrong"})
     monkeypatch.setattr(lakehouse, "publish_client", lambda _timeout: _StubClient(lambda url, **kw: _Resp(401, text="invalid credentials")))
 
     with pytest.raises(RuntimeError, match="401"):

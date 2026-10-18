@@ -11,7 +11,7 @@ site and every `deadLetterTopic` (published by that app's own sidecar). `DAPR_SU
 is what each sidecar subscribes, read off every `dapr_app.subscribe`. A table that lets anyone else publish a
 subject fails, and so does one that withholds a subject or a JetStream API call a client makes.
 
-The Dapr half is measured rather than derived: real daprd 1.18.1 runs each Component shape (publisher-only, durable
+The Dapr half is measured rather than derived: the real daprd the Dapr fixture injects runs each Component shape (publisher-only, durable
 subscriber with a dead-letter topic, the catalog's ephemeral broadcast subscriber) from the chart's own render, and
 every subject it used must be one the replay of that app's subscriptions also exercises, so the replay that covers
 every other app cannot drift from what Dapr does.

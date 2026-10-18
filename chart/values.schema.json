@@ -51,7 +51,7 @@
                     "type": "string"
                 },
                 "user": {
-                    "description": "Postgres user every AGE client connects as; its password is the store's `postgres-password` secret, never a value.",
+                    "description": "Postgres user every AGE client connects as; its password is the store's `postgres` secret (field `password`), never a value.",
                     "type": "string"
                 }
             }
@@ -440,7 +440,7 @@
             "type": "object",
             "properties": {
                 "clientSecret": {
-                    "description": "The development Dex's static client secret (demo value); seeded into OpenBao as `publisher-oidc-client-secret`.",
+                    "description": "The development Dex's static client secret (demo value); seeded into OpenBao as `oidc-client` (field `client-secret`).",
                     "type": "string"
                 },
                 "enabled": {
@@ -599,7 +599,7 @@
             "type": "object",
             "properties": {
                 "kubernetesAuthPath": {
-                    "description": "Mount path of the Vault/OpenBao Kubernetes auth backend the SecretStore authenticates through.",
+                    "description": "Mount path of the store's Kubernetes auth method, which ESO's SecretStore and every app's sidecar log in through.",
                     "type": "string"
                 },
                 "kvMount": {
@@ -620,10 +620,6 @@
                 },
                 "role": {
                     "description": "Vault role the operator's ServiceAccount assumes; also names its read policy.",
-                    "type": "string"
-                },
-                "secretPath": {
-                    "description": "KV key holding the shared bundle (postgres-password, the Dapr app token, each plane's scoped store pair; never the store's root), e.g. `lance` for secret/data/lance.",
                     "type": "string"
                 },
                 "serviceAccount": {
@@ -1376,21 +1372,34 @@
         "openbao": {
             "type": "object",
             "properties": {
-                "devToken": {
-                    "description": "Root token of the development store (the openbao fixture's `devToken`), which the Dapr secret store presents.",
-                    "type": "string"
-                },
                 "egress": {
                     "description": "NetworkPolicy egress rules ({to, ports}) admitting the store's readers to the platform's store. Required under networkPolicy.enabled when `enabled` is false.",
                     "type": "array"
                 },
                 "enabled": {
-                    "description": "This estate uses the development store (deploy/fixtures/openbao, Service `\u003crelease\u003e-openbao`): in memory, auto-unsealed, a fixed root token, seeded by the scripts this chart renders (`\u003crelease\u003e-openbao-seed`). A real deployment refuses it. False reads the platform's store at `externalAddr`.",
+                    "description": "This estate uses the development store (deploy/fixtures/openbao, Service `\u003crelease\u003e-openbao`): in memory, initialized and seeded by the scripts this chart renders (`\u003crelease\u003e-openbao-seed`), its administrator token generated in-cluster. A real deployment refuses it. False reads the platform's store at `externalAddr`.",
                     "type": "boolean"
                 },
                 "externalAddr": {
                     "description": "The platform's Vault or OpenBao (https), which the Dapr secret store and ESO's SecretStore read when `enabled` is false; required then, and refused beside `enabled`.",
                     "type": "string"
+                },
+                "identity": {
+                    "type": "object",
+                    "properties": {
+                        "audience": {
+                            "description": "Audience of the token projected into each sidecar for its store login; every app's role accepts only this one.",
+                            "type": "string"
+                        },
+                        "tokenMaxTtl": {
+                            "description": "The longest a sidecar's store token lives; daprd then logs in again with its current projected token.",
+                            "type": "string"
+                        },
+                        "tokenTtl": {
+                            "description": "Lifetime of the store token a sidecar's login returns; daprd renews it in the background.",
+                            "type": "string"
+                        }
+                    }
                 },
                 "port": {
                     "description": "Port of the development store's Service.",

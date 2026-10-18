@@ -59,6 +59,7 @@ dapr.io/block-shutdown-duration: {{ printf "%ds" (int $root.Values.lifecycle.sid
 
 {{- if has $appId (splitList "," (include "lance.secretScopes" $root)) }}
 dapr.io/config: {{ include "lance.daprAppConfigName" (list $root $appId) | quote }}
+{{- include "lance.storeIdentity" (list $root $appId "annotation") }}
 {{- else }}
 dapr.io/config: "lance-tracing"
 {{- end }}
@@ -700,16 +701,12 @@ activeDeadlineSeconds: 1800
 
 {{- define "lance.catalogSecretField" -}}
 {{- $_ := required "objectStore.catalogAccessKey names the catalog's scoped store identity; the catalog never presents the store's root, which signs every STS token (ADR 0168)" .Values.objectStore.catalogAccessKey -}}
-catalog-s3-secret-key
+secret_key
 {{- end -}}
 
 {{- define "lance.catalogKeyIdField" -}}
 {{- $_ := required "objectStore.catalogAccessKey names the catalog's scoped store identity; the catalog never presents the store's root, which signs every STS token (ADR 0168)" .Values.objectStore.catalogAccessKey -}}
-catalog-s3-access-key
-{{- end -}}
-
-{{- define "lance.mediaApps" -}}
-{{- join " " (list .Values.explorer.services.annotator.daprAppId .Values.explorer.services.search.daprAppId) -}}
+access_key
 {{- end -}}
 
 {{- define "lance.mediaIdentity" -}}
@@ -750,22 +747,99 @@ scoped_secret() {
 }
 {{- end -}}
 
+{{- define "lance.storeReads" -}}
+{{- $v := .Values -}}{{- $root := . -}}
+{{- $reads := dict -}}
+{{- if $v.dapr.enabled -}}
+{{- $sa := printf "%s-sa-" (include "lance.fullname" .) -}}
+{{- $state := ternary ($v.stateStore.scopes | default list) list (and $v.stateStore.enabled true) -}}
+{{- $doors := ne (($v.signing).doors | toString) "off" -}}
+{{- $everySigner := list -}}
+{{- range (include "lance.signingKeys" (list .) | splitList " " | compact) }}{{- $everySigner = append $everySigner (printf "signing-public-%s" .) }}{{- end -}}
+{{- $own := dict -}}
+{{- range (include "lance.signers" . | fromJsonArray) }}{{- $_ := set $own .app (concat (get $own .app | default list) (list (printf "signing-key-%s" .key) (printf "signing-public-%s" .key))) }}{{- end -}}
+{{- $apps := list
+  (dict "app" $v.services.catalog.daprAppId "sa" "catalog" "api" (concat (list "catalog-s3" "dapr-app-token") (values ($v.catalog.multibase.baseCredentialRefs | default dict))) "bus" true)
+  (dict "app" $v.services.lineage.daprAppId "sa" "lineage" "api" (concat (list "lineage-s3" "dapr-app-token") (compact (list $v.services.lineage.forward.authSecret.name)) (ternary $everySigner list (and $v.auth.enabled ($v.signing).enforce))) "bus" true) -}}
+{{- if $v.maintenance.enabled -}}
+{{- $apps = append $apps (dict "app" $v.maintenance.daprAppId "sa" "maintenance" "api" (concat (list "maintenance-s3" "dapr-app-token") (ternary $everySigner list (and $v.auth.enabled $doors $v.maintenance.arrivalEnabled))) "bus" (or $v.maintenance.arrivalEnabled $v.maintenance.lineageEmit (and $v.catalog.controlEmit $v.maintenance.controlEmit))) -}}
+{{- end -}}
+{{- if $v.explorer.enabled -}}
+{{- range $name, $svc := $v.explorer.services -}}
+{{- $api := list -}}
+{{- if and (eq $name "viewer") $v.storage.stores }}{{- range $v.storage.stores }}{{- $api = append $api .secret }}{{- end }}{{- end -}}
+{{- if $v.explorer.corpusS3Root }}{{- $api = append $api (ternary "viewer-s3" "media-s3" (eq $name "viewer")) }}{{- end -}}
+{{- if eq $name "annotator" }}{{- $api = append $api "dapr-app-token" }}{{- if and $v.auth.enabled $v.dex.enabled }}{{- $api = concat $api (list "publisher-oidc" "oidc-client") }}{{- end }}{{- end -}}
+{{- $apps = append $apps (dict "app" ($svc.daprAppId | default $name) "sa" $name "api" $api "bus" (and (eq $name "annotator") $v.catalog.controlEmit $v.explorer.controlEmit)) -}}
+{{- end -}}
+{{- end -}}
+{{- range $name, $svc := $v.services -}}
+{{- if and (not (has $name (list "catalog" "lineage"))) (or $svc.frontDoor $v.singleTenant.enabled) -}}
+{{- $api := ternary (list "dapr-app-token") list ($svc.daprIngest | default false) -}}
+{{- $channels := list -}}
+{{- if eq $name "notifications" }}
+{{- $api = concat $api (ternary $everySigner list (and $v.auth.enabled $doors)) }}
+{{- range $channel := list "email" "slack" }}{{- with get ($svc.channels | default dict) $channel }}{{- if .enabled }}{{- $channels = append $channels .secretName }}{{- end }}{{- end }}{{- end }}
+{{- end -}}
+{{- $apps = append $apps (dict "app" $name "sa" $name "api" $api "bus" (eq $name "notifications") "channels" $channels) -}}
+{{- end -}}
+{{- end -}}
+{{- range $apps -}}
+{{- $api := concat .api (get $own .app | default list) | compact | uniq | sortAlpha -}}
+{{- $components := concat (ternary (list (printf "nats-user-%s" .app)) list (and .bus true)) (ternary (list "dapr-state") list (has .app $state)) (.channels | default list) | compact | uniq | sortAlpha -}}
+{{- if or $api $components -}}
+{{- $_ := set $reads .app (dict "sa" (printf "%s%s" $sa .sa) "api" $api "components" $components) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- toJson $reads -}}
+{{- end -}}
+
+{{- define "lance.esoReads" -}}
+{{- $v := .Values -}}
+{{- $reads := list "postgres" -}}
+{{- if $v.objectStore.enabled }}{{- $reads = append $reads "object-store-root" }}{{- end -}}
+{{- if $v.observability.enabled }}{{- $reads = append $reads "otel-collector-export" }}{{- end -}}
+{{- if $v.ray.auth.enabled }}{{- $reads = append $reads "ray-auth-token" }}{{- end -}}
+{{- if include "lance.backupIdentity" . }}{{- $reads = append $reads "backup-s3" }}{{- end -}}
+{{- if or $v.dapr.enabled $v.auth.enabled }}{{- $reads = append $reads "dapr-app-token" }}{{- end -}}
+{{- if and $v.frontend.enabled $v.auth.enabled $v.frontend.oidc.enabled }}{{- $reads = concat $reads (list "frontend-session" "oidc-client") }}{{- end -}}
+{{- if $v.secrets.hfTokenInStore }}{{- $reads = append $reads "hf-token" }}{{- end -}}
+{{- range $files := include "lance.natsFiles" . | fromJson }}{{- $reads = concat $reads $files }}{{- end -}}
+{{- toJson ($reads | uniq | sortAlpha) -}}
+{{- end -}}
+
+{{- define "lance.storeRole" -}}
+{{- printf "%s-%s" (include "lance.fullname" (index . 0)) (index . 1) -}}
+{{- end -}}
+
+{{- define "lance.storePolicy" -}}
+{{- $mount := (index . 0).Values.externalSecrets.kvMount -}}
+{{- $paths := dict "auth/token/lookup-self" (dict "capabilities" (list "read")) "auth/token/renew-self" (dict "capabilities" (list "update")) -}}
+{{- range (index . 1) }}{{- $_ := set $paths (printf "%s/data/%s" $mount .) (dict "capabilities" (list "read")) }}{{- end -}}
+{{- toJson (dict "path" $paths) -}}
+{{- end -}}
+
+{{- define "lance.storeIdentity" -}}
+{{- $root := index . 0 -}}{{- $appId := index . 1 -}}{{- $part := index . 2 -}}
+{{- if hasKey (include "lance.storeReads" $root | fromJson) $appId -}}
+{{- if eq $part "annotation" }}
+dapr.io/volume-mounts: "openbao-identity:/var/run/secrets/rask/openbao"
+{{- else }}
+- name: openbao-identity
+  projected:
+    sources:
+      - serviceAccountToken: { path: token, audience: {{ include "lance.storeAudience" $root | quote }}, expirationSeconds: 600 }
+{{- end }}
+{{- end -}}
+{{- end -}}
+
+{{- define "lance.storeAudience" -}}
+{{- required "openbao.identity.audience names the audience each sidecar's store token is projected for; a role bound to none admits any token its ServiceAccount holds" .Values.openbao.identity.audience -}}
+{{- end -}}
+
 {{- define "lance.secretScopes" -}}
-{{- $scopes := list .Values.services.catalog.daprAppId .Values.services.lineage.daprAppId -}}
-{{- if .Values.maintenance.enabled -}}
-{{- $scopes = append $scopes .Values.maintenance.daprAppId -}}
-{{- end -}}
-{{- if .Values.explorer.enabled -}}
-
-{{- range $name, $svc := .Values.explorer.services -}}
-{{- $scopes = append $scopes ($svc.daprAppId | default $name) -}}
-{{- end -}}
-{{- end -}}
-{{- if .Values.stateStore.enabled -}}
-
-{{- $scopes = concat $scopes .Values.stateStore.scopes -}}
-{{- end -}}
-{{- join "," ($scopes | uniq) -}}
+{{- keys (include "lance.storeReads" . | fromJson) | sortAlpha | join "," -}}
 {{- end -}}
 
 {{- define "lance.appTokenEnv" -}}
@@ -841,34 +915,10 @@ scoped_secret() {
   secrets:
     scopes:
       - storeName: lance-secrets
-        defaultAccess: allow
-
-        {{- $denied := list }}
-        {{- $signs := include "lance.signingKeys" (list $cfgRoot $app) | splitList " " }}
-        {{- range (include "lance.signingKeys" (list $cfgRoot) | splitList " ") }}
-        {{- if and . (not (has . $signs)) }}
-        {{- $denied = append $denied (printf "signing-key-%s" .) }}
-        {{- end }}
-        {{- end }}
-
-        {{- range (include "lance.natsUsers" $cfgRoot | splitList " " | compact) }}
-        {{- $denied = append $denied (printf "nats-user-%s" .) }}
-        {{- end }}
-        {{- with $cfgRoot.Values.services.lineage.forward.authSecret.name }}
-        {{- if ne $app $cfgRoot.Values.services.lineage.daprAppId }}
-        {{- $denied = append $denied . }}
-        {{- end }}
-        {{- end }}
-        {{- $denied = concat $denied (list "nats-root" "nats-route" "object-store-root" "backup-s3") }}
-        {{- if not (has $app (include "lance.mediaApps" $cfgRoot | splitList " ")) }}
-        {{- $denied = append $denied "media-s3" }}
-        {{- end }}
-        {{- if ne $app $cfgRoot.Values.explorer.services.viewer.daprAppId }}
-        {{- $denied = append $denied "viewer-s3" }}
-        {{- end }}
-        {{- if $denied }}
-        deniedSecrets:
-          {{- range $denied }}
+        defaultAccess: deny
+        {{- with (get (include "lance.storeReads" $cfgRoot | fromJson) $app).api }}
+        allowedSecrets:
+          {{- range . }}
           - {{ . }}
           {{- end }}
         {{- end }}

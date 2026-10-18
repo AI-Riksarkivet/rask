@@ -372,7 +372,8 @@ class MaintenanceSettings(SignatureDoorSettings, FgaSettings, BaseSettings):
     #: (already what viewer and ingest read); the per-service alias stays FIRST so a single service can
     #: still be moved on its own.
     dapr_secret_store: str = Field(default="lance-secrets", validation_alias=AliasChoices("MAINTENANCE_DAPR_SECRET_STORE", "RASK_SECRET_STORE"))
-    dapr_secret_key: str = Field(default="lance", alias="MAINTENANCE_DAPR_SECRET_KEY")
+    #: Maintenance's own secret in the store: its scoped pair, readable by maintenance alone ([[XC-165]]).
+    dapr_secret_key: str = Field(default="maintenance-s3", alias="MAINTENANCE_DAPR_SECRET_KEY")
 
     # THE CATALOG'S CREDENTIAL DOOR. Unset (the default) = no vending, and every expiry pass is signed by
     # the ambient credential; a deployment on `mode_b` vends nothing by design. Set, an expiry pass is signed by a
@@ -392,9 +393,9 @@ class MaintenanceSettings(SignatureDoorSettings, FgaSettings, BaseSettings):
     #: re-read on every call because the kubelet rotates it at ~515 s of its 600 s life.
     catalog_identity_token_file: str = Field(default="/var/run/secrets/rask/identity/rask-catalog/token", alias="RASK_CATALOG_IDENTITY_TOKEN_FILE")
     #: Maintenance's own scoped pair (`objectStore.maintenanceAccessKey`), never the store's root (ADR 0168).
-    dapr_secret_s3_field: str = Field(default="maintenance-s3-secret-key", alias="MAINTENANCE_DAPR_SECRET_S3_FIELD")
+    dapr_secret_s3_field: str = Field(default="secret_key", alias="MAINTENANCE_DAPR_SECRET_S3_FIELD")
     #: The field of the same secret holding the key id the secret signs under, read with it.
-    dapr_secret_s3_id_field: str = Field(default="maintenance-s3-access-key", alias="MAINTENANCE_DAPR_SECRET_S3_ID_FIELD")
+    dapr_secret_s3_id_field: str = Field(default="access_key", alias="MAINTENANCE_DAPR_SECRET_S3_ID_FIELD")
 
     @property
     def resolved_policy_root(self) -> str:

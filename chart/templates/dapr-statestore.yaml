@@ -50,11 +50,12 @@ spec:
     # integration decorative. Putting a password-bearing DSN into a k8s Secret would reintroduce exactly
     # that. The DSN is stored assembled because a Dapr metadata `secretKeyRef` substitutes the WHOLE
     # value — there is no way to splice in just the password — so the store holds it whole at
-    # secret/lance (the dev seed, openbao-seed.yaml, writes it), beside postgres-password.
+    # secret/dapr-state (the dev seed, openbao-seed.yaml, writes it), which each scoped app's sidecar reads with its own
+    # login and no app's Configuration lets its code read.
     - name: connectionString
       secretKeyRef:
-        name: lance # the secret at secret/data/lance; vaultKVUsePrefix=false drops Dapr's "dapr/" prefix
-        key: dapr-state-connection-string
+        name: dapr-state # the secret at secret/data/dapr-state; vaultKVUsePrefix=false drops Dapr's "dapr/" prefix
+        key: connection-string
     # The gate for actors and workflow both. See the header.
     - { name: actorStateStore, value: "true" }
     # Dapr creates and migrates this table itself; naming it explicitly keeps a future second store

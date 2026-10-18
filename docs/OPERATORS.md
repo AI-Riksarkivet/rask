@@ -118,8 +118,8 @@ holds two secrets per identity, named by its key (the signer's ServiceAccount na
 itself is that account's subject, `kubernetes~system:serviceaccount:<ns>:<sa>`): `signing-public-<key>` (field `keys`: comma-separated public NKEYs, current
 first, at most one previous) and `signing-key-<key>` (field `seed`: the NKEY user seed). A signer is Ready only
 while the kid of its own seed is in its list, so the list is always written before the seed it belongs to. Lineage
-reads lists only. The residual stays named: a pod that holds OpenBao's root token or reaches :8200 reads the store
-without a sidecar until XC-079.
+reads lists only. The store enforces the same split: each sidecar logs in as its own ServiceAccount, and its role's
+policy reads only its own app's secrets (XC-165, ADR 0169), so reaching :8200 without a sidecar's login reads nothing.
 
 **The dev OpenBao (`openbao.enabled`) needs nothing from you.** Its `mint` init container generates a candidate
 pair per identity on a memory volume the server never mounts, and its `seed` container chooses one pair per identity
@@ -166,9 +166,9 @@ enforcement is on (acked and counted); every signer re-resolves within 5 minutes
 after any non-surge OpenBao replacement rather than waiting for that interval.
 
 **Reading it back.** From an app's own sidecar, `GET /v1.0/secrets/lance-secrets/signing-key-<its key>` answers
-200 with a `seed` field, every other identity's key is refused, and every `signing-public-<key>` answers 200.
-Lineage's sidecar is refused every key. Each app's Dapr Configuration is named by the hash of its spec
-(`lance-config-<app>-<hash>`) and its pods name it in `dapr.io/config`, so a deny-list edit renames the object and rolls
+200 with a `seed` field, every other identity's key is refused, and `signing-public-<key>` answers 200 to that signer and
+to every verifier. Lineage's sidecar is refused every key. Each app's Dapr Configuration is named by the hash of its spec
+(`lance-config-<app>-<hash>`) and its pods name it in `dapr.io/config`, so an allow-list edit renames the object and rolls
 exactly the pods whose list changed. HotReload is off and Helm applies a Deployment before the Configuration it names:
 a pod that boots first finds no such object, its daprd exits and the kubelet restarts it until Helm has applied it, so
 no pod boots against the old list. During such an upgrade a rolled pod may show one daprd restart: that is the wait,
@@ -183,7 +183,8 @@ grants. There is one user per Dapr app-id with a pub/sub component, plus `admin`
 read-only: stream and consumer state, no messages). A grant only a flag's
 component uses sits under `nats.auth.flagged` and is issued only while that flag is on. Each user's credential is
 `nats-user-<user>` in the store (fields `jwt`, `seed`); every pub/sub Component names its own app's user by
-`secretKeyRef` through `lance-secrets`, every app's Dapr Configuration denies every `nats-user-*`, and the stream Job (rask's release) and nats-box (the fixture's) take theirs as files written
+`secretKeyRef` through `lance-secrets`, which the sidecar resolves with its own login, no app's Dapr Configuration lets
+its code read a `nats-user-*`, and the stream Job (rask's release) and nats-box (the fixture's) take theirs as files written
 by ExternalSecrets.
 
 **Production (owner ruling R1): the platform runs NATS and its store; rask owns no trust root.** Name the bus in
@@ -210,8 +211,8 @@ The fixture release keeps the setting (`--reset-then-reuse-values`), so a later 
 Write a creds file into the nats-box pod from the store, without printing it:
 
 ```
-JWT=$(kubectl exec deploy/rask-openbao -c openbao -- sh -c 'BAO_TOKEN=root bao kv get -field=jwt secret/nats-user-admin')
-SEED=$(kubectl exec deploy/rask-openbao -c openbao -- sh -c 'BAO_TOKEN=root bao kv get -field=seed secret/nats-user-admin')
+JWT=$(kubectl exec deploy/rask-openbao -c seed -- bao kv get -field=jwt secret/nats-user-admin)
+SEED=$(kubectl exec deploy/rask-openbao -c seed -- bao kv get -field=seed secret/nats-user-admin)
 printf -- '-----BEGIN NATS USER JWT-----\n%s\n------END NATS USER JWT------\n\n-----BEGIN USER NKEY SEED-----\n%s\n------END USER NKEY SEED------\n' "$JWT" "$SEED" \
   | kubectl exec -i deploy/rask-nats-box -- sh -c 'umask 077; cat > /tmp/admin.creds'
 kubectl exec deploy/rask-nats-box -- nats --no-context --server nats://rask-nats:4222 --creds /tmp/admin.creds consumer rm <STREAM> <durable> -f
@@ -226,21 +227,21 @@ does not own is refused ("Permissions Violation"), each leaving the stream's las
 **Residuals, named.** `_INBOX.>` is shared within the account, so a client could read another's replies (Dapr exposes no
 inbox prefix). The catalog's ack on CATALOG_CONTROL is stream-wide because its broadcast consumer's name is the
 server's, so a compromised catalog could ack or terminate notifications' control deliveries, a lesser
-power than the one it holds as the signer of every control event. Port 8222 is unauthenticated by design. Anything
-holding OpenBao's dev root token reads the store (XC-079).
+power than the one it holds as the signer of every control event. Port 8222 is unauthenticated by design.
 
 ## 8 · Credentials: generated for the dev store, provisioned for a real one (XC-004)
 
 No credential is a chart value (`templates/prod-credentials.yaml` refuses one by name), so none is in
-`helm get values`, the manifest, a hook or a Job spec. The two exemptions (owner, 2026-10-06) are the bundled
-dev Dex's configuration (XC-025) and the dev OpenBao's root token (XC-079); a real-deployment render refuses
-both (the bundled Dex and the dev OpenBao).
+`helm get values`, the manifest, a hook or a Job spec. The one exemption (owner, 2026-10-06) is the bundled dev Dex's
+configuration (XC-025); the dev OpenBao's administrator token is generated in-cluster and mounted into its seed alone
+(XC-165). A real-deployment render refuses both the bundled Dex and the dev OpenBao.
 
-- **Dev (the chart's `server -dev` OpenBao).** `<release>-dev-credentials` holds `object-store-secret-key`,
+- **Dev (the openbao fixture).** `<release>-dev-credentials` holds `object-store-secret-key`,
   `postgres-password`, `dapr-app-token`, `ray-auth-token` and `frontend-session-secret`. On a fresh install ESO's
   Password generator creates it once (`refreshPolicy: CreatedOnce`, `helm.sh/resource-policy: keep`). The OpenBao
-  pod mounts it, and its seed writes the root to `secret/object-store-root` and the other generated fields to
-  `secret/lance` as `@file`, deriving the scoped storage secrets from the root (`lance.scopedSecretFn`, which
+  pod mounts it, and its seed writes the root to `secret/object-store-root` and each other generated field to its own
+  secret (`postgres`, `dapr-app-token`, `ray-auth-token`, `frontend-session`) as `@file`, deriving the scoped storage
+  secrets from the root (`lance.scopedSecretFn`, which
   `object-store-scoped-users` runs too). The Secret outlives an
   OpenBao replacement, so the AGE database and the object store, which keep what they were initialised with, see
   the same values after a re-seed. The seed re-reads the mounted Secret every 5 s and re-seeds when it changes,
@@ -274,7 +275,8 @@ both (the bundled Dex and the dev OpenBao).
      token and session key: the sidecar Deployments and the zones (an app token rotated as below refuses no
      delivery in between). The HF token: the Ray head.
 - **Rotating a service's S3 key pair, with no restart (ADR 0166).** The catalog, lineage and maintenance read their
-  pair from `secret/lance` and read it again every few minutes, and the catalog reads a data base's credential
+  pair from their own secret (`catalog-s3`, `lineage-s3`, `maintenance-s3`) and read it again every few minutes, and
+  the catalog reads a data base's credential
   reference again within ten minutes, so a rotation needs no restart:
   1. Issue a second credential for the identity, beside the one it holds: a second access key for the IAM user on AWS
      (each allows two). On RustFS a second user under the same policy serves every service: lineage and maintenance
@@ -287,22 +289,22 @@ both (the bundled Dex and the dev OpenBao).
   2. Check the new pair before writing it: list the bucket with it (any S3 client, e.g. boto3 `list_objects_v2`), and
      for the catalog also run an STS `AssumeRole` signed with it. Nothing probes it after the write, and a wrong
      pair would be what every pod signs with.
-  3. Write both halves at once: `bao kv patch secret/lance catalog-s3-access-key=<id> catalog-s3-secret-key=<secret>`
-     (a data base's reference: patch its own secret's key id and secret fields). `kv patch`, never `kv put`, which
-     replaces every other field of the bundle.
+  3. Write both halves at once: `bao kv put secret/catalog-s3 access_key=<id> secret_key=<secret>` (a data base's
+     reference: its own secret's `aws_access_key_id` and `secret_key`). On the dev store run it in the seed container,
+     whose `bao` reads the store's administrator token (`kubectl exec deploy/rask-openbao -c seed -- bao kv put ...`).
   4. Wait ten minutes. Each pod logs `store_credential_rotated`, naming the old and new key ids, when it switches.
   5. Revoke the old credential: remove the user that held it (`DELETE /rustfs/admin/v3/remove-user?accessKey=<old id>`)
      or delete the IAM access key on AWS. No restart.
 
-  The dev seed writes `secret/lance` from its own list whenever it re-seeds (a change to the seed, or to a dev
+  The dev seed writes each service's secret from its own list whenever it re-seeds (a change to the seed, or to a dev
   credential), so a pair rotated by hand in the dev store is replaced by the seeded one then: put the seeded user's
   secret back before that happens.
-- **Rotating the Dapr app token, with no refused delivery (ADR 0166).** A door accepts `dapr-app-token` and
-  `dapr-app-token-previous`, and daprd keeps the token its pod started with.
-  1. `bao kv patch secret/lance dapr-app-token-previous=<the current token> dapr-app-token=<the new token>`, then
+- **Rotating the Dapr app token, with no refused delivery (ADR 0166).** A door accepts the `token` and the `previous`
+  field of the secret `dapr-app-token`, and daprd keeps the token its pod started with.
+  1. `bao kv put secret/dapr-app-token previous=<the current token> token=<the new token>`, then
      wait ten minutes, so every door holds both before any sidecar can start with the new one: a daprd that
      restarts on its own after the sync would otherwise present a token its door does not hold yet.
   2. Force-sync the `<release>-dapr-app-token` ExternalSecret and wait for Ready.
   3. `kubectl rollout restart` every sidecar Deployment, so each daprd starts with the new token.
-  4. Once every sidecar has restarted, clear the previous token (`bao kv patch secret/lance dapr-app-token-previous=`).
+  4. Once every sidecar has restarted, clear the previous token (`bao kv patch secret/dapr-app-token previous=`).
      The doors stop accepting it within ten minutes; clearing it earlier refuses a sidecar still presenting it.

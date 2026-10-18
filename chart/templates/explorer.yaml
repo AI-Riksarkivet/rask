@@ -163,8 +163,8 @@ spec:
             {{- if $root.Values.dex.enabled }}
             - { name: MEDIA_PUBLISH_TOKEN_URL, value: "http://{{ include "lance.dexHost" $root }}:{{ $root.Values.dex.port }}/dex/token" }
             - { name: MEDIA_PUBLISH_CLIENT_ID, value: {{ $root.Values.auth.oidc.clientId | quote }} }
-            # The client secret is the store's publisher-oidc-client-secret, read from the SAME bundle
-            # as the publisher password.
+            # The client secret is the store's `oidc-client`, the IdP client's one secret, which the zones'
+            # session reads too; the publisher password is the store's `publisher-oidc`.
             - { name: MEDIA_PUBLISH_USERNAME, value: {{ $root.Values.dex.publisher.username | quote }} }
             {{- end }}
             {{- end }}
@@ -235,6 +235,7 @@ spec:
             {{- if $root.Values.auth.enabled }}{{ include "lance.fgaCredential" (list $root "mounts" $name) | nindent 12 }}{{ end }}
       volumes:
         {{- include "lance.tmpVolume" $root | nindent 8 }}
+        {{- include "lance.storeIdentity" (list $root ($svc.daprAppId | default $name) "volumes") | nindent 8 }}
         {{- if $root.Values.auth.enabled }}{{ include "lance.fgaCredential" (list $root "volumes" $name) | nindent 8 }}{{ end }}
 
         {{- include "lance.corpusVolume" $root | nindent 8 }}

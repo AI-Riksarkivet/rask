@@ -13,13 +13,14 @@ selector:
 serviceAccount: rask-sa-openbao
 image: openbao/openbao:2.2.0
 port: 8200
-# The dev server's fixed root token, rask's `openbao.devToken`: anyone in the cluster can read the store with it.
-devToken: root
 # The image the mint runs: nk mints the signing pairs and the bus users, and nsc issues the users under the bus's root.
 mintImage: natsio/nats-box:0.19.7
-# What rask's chart renders, for release `rask`: the seed's scripts, the credentials ESO generates for the store, and
-# the operator's own (`make k3s-up` writes the hf-token there).
+# What rask's chart renders, for release `rask`: the seed's scripts, the credentials ESO generates for the store, and the
+# operator's own (`make k3s-up` writes the hf-token there).
 seedScripts: rask-openbao-seed
+# The roles and policies of every identity that reads the store, which rask's chart renders for any store, this one or a
+# platform's.
+storeIdentities: rask-secret-store-identities
 devCredentials: rask-dev-credentials
 suppliedCredentials: rask-supplied-credentials
 resources:

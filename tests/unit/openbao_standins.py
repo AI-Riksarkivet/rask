@@ -14,6 +14,12 @@ from pathlib import Path
 #: at $SERVICE_ADDR. A store holding `<name>.refused` refuses the connection, `<name>.forbidden` answers 403, and
 #: `local.readonly` fails every write; the messages are OpenBao 2.2.0's, measured on the estate 2026-10-02. A `key=@file` argument
 #: stores the file's content, as the CLI does, and a subcommand the scripts have no business calling fails loudly.
+#:
+#: The pod's own server starts uninitialized, as `server` with an in-memory store does (measured on openbao 2.2.0 2026-10-18:
+#: `bao status` exits 2 and prints `"initialized": false`): `$STORES/local.state` holds `sealed` or `unsealed` once the seed
+#: initializes it with STANDIN_UNSEAL_KEY and STANDIN_INIT_TOKEN, and its absence is a new server. The served store is always
+#: unsealed. A store answers only a token in `<name>.tokens`, the one in BAO_TOKEN or else in $HOME/.vault-token, as the CLI
+#: picks it; the init token is admitted once the store is initialized and leaves it when revoked.
 BAO = """\
 #!/bin/sh
 case "$BAO_ADDR" in
@@ -23,11 +29,46 @@ case "$BAO_ADDR" in
 esac
 store="$STORES/$name"
 echo "$BAO_ADDR $*" >> "$STORES/calls"
-[ "$1" = status ] && exit 0
+if [ "$name" = served ]; then state=unsealed; else state=$(cat "$store.state" 2>/dev/null || echo uninitialized); fi
+if [ "$1" = status ]; then
+  [ -e "$store.refused" ] && { echo "Error checking seal status: connection refused" >&2; exit 1; }
+  case "$state" in
+    uninitialized) printf '{\\n  "initialized": false,\\n  "sealed": true\\n}\\n'; exit 2 ;;
+    sealed) printf '{\\n  "initialized": true,\\n  "sealed": true\\n}\\n'; exit 2 ;;
+  esac
+  printf '{\\n  "initialized": true,\\n  "sealed": false\\n}\\n'; exit 0
+fi
+if [ "$1 $2" = "operator init" ]; then
+  [ "$*" = "operator init -key-shares=1 -key-threshold=1 -format=json" ] || { echo "bao stand-in: unexpected init: $*" >&2; exit 99; }
+  [ "$state" = uninitialized ] || { echo "Error initializing: Vault is already initialized" >&2; exit 2; }
+  echo sealed > "$store.state"; echo "$STANDIN_INIT_TOKEN" > "$store.tokens"
+  printf '{\\n  "unseal_keys_b64": [\\n    "%s"\\n  ],\\n  "unseal_threshold": 1,\\n  "root_token": "%s"\\n}\\n' "$STANDIN_UNSEAL_KEY" "$STANDIN_INIT_TOKEN"
+  exit 0
+fi
+if [ "$*" = "write sys/unseal key=-" ]; then
+  [ "$(cat)" = "$STANDIN_UNSEAL_KEY" ] || { echo "Error unsealing: invalid key" >&2; exit 2; }
+  echo unsealed > "$store.state"; exit 0
+fi
+[ "$state" = unsealed ] || { printf 'Error making API request.\\n\\nCode: 503. Errors:\\n\\n* Vault is sealed\\n' >&2; exit 2; }
 if [ -e "$store.refused" ]; then
   echo "Get \\"$BAO_ADDR/v1/sys/internal/ui/mounts/secret\\": dial tcp 10.43.63.224:8200: connect: connection refused" >&2; exit 2
 fi
 if [ -e "$store.forbidden" ]; then printf 'Error making API request.\\n\\nCode: 403. Errors:\\n\\n* permission denied\\n' >&2; exit 2; fi
+token=${BAO_TOKEN:-$(cat "$HOME/.vault-token" 2>/dev/null)}
+grep -qxF -- "$token" "$store.tokens" 2>/dev/null || { printf 'Error making API request.\\n\\nCode: 403. Errors:\\n\\n* permission denied\\n' >&2; exit 2; }
+case "$*" in
+  "token lookup") exit 0 ;;
+  "token revoke -self") grep -vxF -- "$token" "$store.tokens" > "$store.tokens.new"; mv "$store.tokens.new" "$store.tokens"; exit 0 ;;
+  "write auth/token/create -")
+    body=$(cat); id=${body#*\\"id\\":\\"}; id=${id%%\\"*}
+    case "$body" in *'"policies":["root"]'*'"no_parent":true'*) ;; *) echo "bao stand-in: unexpected token request: $body" >&2; exit 99 ;; esac
+    echo "$id" >> "$store.tokens"; exit 0 ;;
+  "secrets list -format=json") [ -e "$store.kv" ] && printf '{\\n  "secret/": {}\\n}\\n' || printf '{\\n  "cubbyhole/": {}\\n}\\n'; exit 0 ;;
+  "secrets enable -path=secret -version=2 kv") : > "$store.kv"; exit 0 ;;
+esac
+if [ "$1" = kv ] && [ "$name" = local ] && [ ! -e "$store.kv" ]; then printf 'Error making API request.\\n\\nCode: 404. Errors:\\n\\n* no handler for route "secret/data"\\n' >&2; exit 2; fi
+if [ "$1 $2" = "policy write" ]; then mkdir -p "$store.policies"; cp "$4" "$store.policies/$3"; exit 0; fi
+if [ "$1" = write ] && [ "${2#auth/*/role/}" != "$2" ] && [ "${3#@}" != "$3" ]; then mkdir -p "$store.roles"; cp "${3#@}" "$store.roles/${2##*/}"; exit 0; fi
 if [ "$1 $2" = "kv put" ]; then
   [ -e "$store.readonly" ] && { echo "Error writing data to $3" >&2; exit 2; }
   key=$3; shift 3

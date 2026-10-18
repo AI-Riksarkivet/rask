@@ -10,7 +10,7 @@ SCOPED USERS AND PLATFORM BUCKETS — the one provisioning step for the developm
 values.yaml `objectStore` (maintenance, lineage, catalog, viewer, the media corpus readers, the backups, and each
 multi-base data base). Without a step in the release, a scoped identity is a values knob only a hand-run admin session
 can turn, and a fresh install comes up on the store's root. It is the only workload that presents the root
-(ADR 0168; `tests/unit/test_the_root_storage_secret_reaches_only_its_users.py`). A platform's S3 gets neither from
+(ADR 0168; `tests/unit/test_every_secret_in_the_dev_store_has_exactly_its_readers.py`). A platform's S3 gets neither from
 rask: its operator makes the buckets and the identities.
 
 WHY A POLICY AND NOT JUST A USER: the point of this Job is the DENY — the maintenance credential must not

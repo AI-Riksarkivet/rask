@@ -19,7 +19,7 @@ claim below was verified against the render or the code (2026-08-28), not inheri
 | Pub/sub | ✅ | `pubsub.jetstream`, one Component per app-id that publishes or subscribes, each scoped to ONE app-id and naming that app's NATS user from the store (`jwt`/`seedKey` secretKeyRef to `nats-user-<app>`, `auth.secretStore: lance-secrets`; the permission table is `nats.auth.users` in values.yaml, [[XC-078]]); `DaprApp.subscribe` incl. a DLQ route; `queueGroupName` makes replicas competing consumers |
 | Bindings | ✅ | `bindings.cron` ×7 in the product chart: `maintenance-cron` (the sweep), `maintenance-reconcile-cron`, `lineage-relay-cron` (drains the outbox, prunes the feed, forwards to the graph backend), `notifications-reconcile-cron`, `catalog-control-relay-cron`, `catalog-erasure-release-cron` (ADR 0138, releasing an erasure's pinning tags and branches when due), `catalog-promotion-expiry-cron` (ADR 0161, expiring promotion holds past their review deadline); the compute fixture chart (`deploy/fixtures/compute`, ADR 0155) renders a seventh, `compute-prune-jobs-cron` — read the cluster for what runs, not the templates. Plus `bindings.smtp`, `bindings.http` — all delivered to `POST /<component-name>` at the pod ROOT |
 | Actors | ✅ | `DaprActor` ×17, `ActorProxy` ×28 (notifications inbox, project tasks) |
-| Secrets | ✅ | `secretstores.hashicorp.vault` → the platform's Vault or OpenBao (the dev OpenBao fixture in development; the chart renders none, [[XC-149]]). THE estate rule: sole source, fail-closed, never env fallback. Every read is held at most a jittered 300-600 s and read again (`service_kit.governed.secret_cache`, ADR 0166), so a rotation in the store reaches running pods; a service's S3 key pair (both halves) is kept confirmed in the background (`store_credential`), and the app-token door accepts the current or previous token |
+| Secrets | ✅ | `secretstores.hashicorp.vault` → the platform's Vault or OpenBao (the dev OpenBao fixture in development; the chart renders none, [[XC-149]]). ONE component, `lance-secrets`, logs each sidecar in with Kubernetes auth as the role `<release>-{appID}` (Dapr 1.19+): the pod's own ServiceAccount, a token projected into daprd alone, a policy reading exactly that app's secrets; each app's Configuration is deny-by-default with `allowedSecrets` (`lance.storeReads`, ADR 0169). THE estate rule: sole source, fail-closed, never env fallback. Every read is held at most a jittered 300-600 s and read again (`service_kit.governed.secret_cache`, ADR 0166), so a rotation in the store reaches running pods; a service's S3 key pair (both halves) is kept confirmed in the background (`store_credential`), and the app-token door accepts the current or previous token |
 | Workflow | ✅ | `DaprWorkflowClient`, `WorkflowRuntime` in `services/flows` only. The lakehouse runs no workflow: the import contract `the-lakehouse-is-not-built-on-a-workflow-engine` forbids it (ADR 0154). The promotion gate is a tag, not a saga: readers read `@published`, approval moves the tag, rejection restores main, a cron sweep expires stale holds (ADR 0156 C1, ADR 0161, [[LH-466]]) |
 | Configuration | ❌ | Ruled out — see refusals |
 | Middleware | ❌ | Ruled out — see refusals |
@@ -159,6 +159,17 @@ sidecar.
 
 ## Traps already paid for (don't rediscover)
 
+- **A Configuration's secret scope binds the app's API, never a component.** Dapr checks `secrets.scopes` only on
+  `GET /v1.0/secrets/...` (`pkg/api/universal/secrets.go:35`); a component's `secretKeyRef` resolves through the store
+  with the sidecar's own login (`pkg/runtime/processor/secret/secret.go:162-170`). So a secret only a component reads
+  (a pub/sub user, the state store's DSN) goes in the app's STORE policy and in no `allowedSecrets`, and only the
+  store's policy keeps a sidecar from a secret. Same in 1.18.1 and 1.19.0-rc.4.
+- **`{appID}` is filled into ANY component's metadata** when the sidecar starts (`pkg/runtime/meta/meta.go:96-97`,
+  documented as templated metadata values, with `{podName}`, `{namespace}`, `{uuid}`). That is how one `lance-secrets`
+  logs every sidecar in as its own app's role.
+- **A Vault store that logs in at init fails its sidecar's start closed** (1.19's Kubernetes auth): a missing role, a
+  sealed or unreachable store, or a projected token the role's audience refuses keeps daprd from starting. A running
+  sidecar renews in the background and logs in again once the store answers.
 - An actor state store the app-id is not SCOPED to ⇒ sidecar logs "Workflow engine started" and
   actor hosting silently disables — healthy pod, permanently empty feature. Probe `/v1.0/metadata`
   for the ACTOR capability, not the log line.

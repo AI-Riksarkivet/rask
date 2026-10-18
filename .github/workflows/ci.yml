@@ -113,7 +113,7 @@ jobs:
   #             it. An empty store is enough: the drill asserts the endpoint ACCEPTS the query, not
   #             that any series exists.
   #   nats-auth the chart's NATS permission table (`nats.auth.users`) on the chart's own nats-server in
-  #             operator mode with test-only keys, and real daprd 1.18.1 running the chart's
+  #             operator mode with test-only keys, and the real daprd the Dapr fixture injects, running the chart's
   #             Components against it: each bus client reaches exactly its own subjects. Hermetic,
   #             public images only. `dagger call nats-auth` == `make nats-auth`.
   ms-gates:

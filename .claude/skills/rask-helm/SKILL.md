@@ -252,7 +252,11 @@ catalog, lineage, maintenance, the medallion, OpenBao and Dex ran as `default` w
   does. KubeRay refuses the field on a cluster a RayService creates. The rask chart renders no RayCluster
   ([[XC-125]]); this holds for the `ray-cluster` fixture (`deploy/fixtures/ray-cluster/chart`), which
   carries the field.
-- **Changing the dev OpenBao's pod spec empties its store**, because `server -dev` keeps it in memory.
+- **Changing the dev OpenBao's pod spec empties its store**, because its server keeps it in memory. The server is not
+  `server -dev` (which prints its root token and unseal key to its log): it starts uninitialized, and the seed beside
+  it initializes it, mints the store's administrator under an id the fixture generates in-cluster (`rask-openbao-root`,
+  mounted into the seed alone) and revokes the init token, so no token is published anywhere ([[XC-165]], ADR 0169).
+  `bao` in the seed container is that administrator (`$HOME/.vault-token`); run an operator's `bao` there.
   The pod is the openbao fixture's ([[XC-131]]); its `mint` and `seed` run the scripts rask renders into
   `<release>-openbao-seed`, and a change rask makes to them reaches the running seed in place (it mints a pair for any
   new identity, issues the bus users again under the same root, and seeds again), so a rask upgrade replaces no store.
@@ -281,13 +285,21 @@ catalog, lineage, maintenance, the medallion, OpenBao and Dex ran as `default` w
   and a pod that boots before the new object exists fails closed (daprd exits on a missing named
   Configuration, Dapr v1.18.1 `pkg/runtime/config.go:252-254`; the injector reads none) and starts once Helm
   has applied it. Read a pod's Configuration from its `dapr.io/config`, never by a name built from the app-id.
-  The gates: `tests/unit/test_only_the_owner_may_read_its_signing_key.py` (who may read which secret) and
+  The gates: `tests/unit/test_every_secret_in_the_dev_store_has_exactly_its_readers.py` (who may read which secret, at
+  the Dapr scope and at the store) and
   `tests/unit/test_event_signing_is_wired_by_the_chart_in_every_deploy_mode.py` (the name follows the spec).
 - **The chart renders no secret store; production names the platform's** ([[XC-149]]): `openbao.enabled` means the
   estate uses the dev OpenBao fixture (a real deployment refuses it), and off it the render requires `openbao.externalAddr`
-  (https only: every sidecar presents the store's token to it) and, under `networkPolicy.enabled`, `openbao.egress`, a rule
-  admitting exactly the pods `lance.secretScopes` names. Setting both is refused. The dev store's seed stays rask's (owner,
-  2026-10-16): only rask's values know what to seed.
+  (https only: every sidecar logs in to it with its pod's ServiceAccount token) and, under `networkPolicy.enabled`,
+  `openbao.egress`, a rule admitting exactly the pods `lance.secretScopes` names. Setting both is refused. The dev store's
+  seed stays rask's (owner, 2026-10-16): only rask's values know what to seed.
+- **Who reads which secret is one table, `lance.storeReads`** ([[XC-165]], ADR 0169): per app, its ServiceAccount, the
+  secrets its code reads (its Configuration's `allowedSecrets`, deny by default) and the ones its components resolve.
+  The one `lance-secrets` component logs each sidecar in with Kubernetes auth as `<release>-{appID}` (Dapr fills
+  `{appID}` per sidecar; Dapr 1.19 is the floor), with a token projected for `openbao.identity.audience` into daprd alone
+  (`lance.storeIdentity`); each role's policy reads exactly that app's reads. The roles and policies render in every
+  mode as `role-*.json`/`policy-*.json` in `<release>-secret-store-identities`, which the dev seed applies and a platform
+  store's operator creates. A new secret a service reads is a row there, or its read is refused at both layers.
 - **OpenFGA and its Postgres are optional, and production names the platform's** ([[XC-132]]): `openfga.enabled` and
   `age.enabled` off, `auth.fgaApiUrl` and `age.externalHost` set (the render refuses either empty). Every FGA client
   dials `lance.openfgaUrl` and every Postgres client `lance.ageConnectHost` (on the AGE-on-CNPG path, `lance-pg-rw`);

@@ -181,12 +181,14 @@ class MediaSettings(BaseSettings):
     # its own machinery).
     publish_token_url: str | None = Field(default=None, alias="MEDIA_PUBLISH_TOKEN_URL")
     publish_client_id: str | None = Field(default=None, alias="MEDIA_PUBLISH_CLIENT_ID")
-    publish_client_secret: str | None = Field(default=None, alias="MEDIA_PUBLISH_CLIENT_SECRET")
     publish_username: str | None = Field(default=None, alias="MEDIA_PUBLISH_USERNAME")
     publish_secret_store: str = Field(
         default="lance-secrets", validation_alias=AliasChoices("MEDIA_PUBLISH_SECRET_STORE", "RASK_SECRET_STORE")
     )  # the one store; see s3_secret_store
-    publish_secret_key: str = Field(default="lance", alias="MEDIA_PUBLISH_SECRET_KEY")
+    #: The publish identity's password (field `password`), readable by the annotator alone ([[XC-165]]).
+    publish_secret_key: str = Field(default="publisher-oidc", alias="MEDIA_PUBLISH_SECRET_KEY")
+    #: The IdP client's secret (field `client-secret`): one client, so one secret, which the zones' session also reads.
+    publish_client_secret_key: str = Field(default="oidc-client", alias="MEDIA_PUBLISH_CLIENT_SECRET_KEY")
     # The catalog namespace annotation tables live under; unset → the dataset id.
     catalog_namespace: str | None = Field(default=None, alias="MEDIA_CATALOG_NAMESPACE")
 

@@ -100,3 +100,10 @@ in `CLAUDE.md`. Add a line when a trap costs a session, and delete one when the 
   protection record failed, lineage was never granted its provenance tables, and `governance-chain` was red on every
   push for two days. RustFS 1.0.1 and 1.0.3 take the same write: run rask's own writer against the pinned and a current
   release before changing rask (XC-033, 2026-10-17; XC-163, 2026-10-18).
+- **A dev-mode OpenBao prints its root token to its log.** `server -dev` writes `Root Token:` and `Unseal Key:` to stdout
+  even with `-dev-root-token-id` (openbao 2.2.0 `command/server.go:2720,2732`), so any log reader holds the store; an
+  in-memory server from a config file starts uninitialized and logs only that a root token was generated (XC-165,
+  measured 2026-10-18).
+- **Helm evaluates both arms of `ternary`, and `and` returns an operand, not a bool.** An arm that reads a key a values
+  map lacks fails the render even when its condition is false, and `and $missing true` hands `ternary` a nil it refuses
+  ("expected bool"); compute the arm inside an `if`, and default a flag (`| default false`) before testing it (XC-165).

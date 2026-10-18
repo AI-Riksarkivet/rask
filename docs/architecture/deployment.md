@@ -31,36 +31,54 @@ trust by default; the chart names no CA bundle. Under the production NetworkPoli
 store's addresses, and the rule admits only the pods whose sidecar reads it (the apps `lance.secretScopes` lists).
 The render refuses either one empty.
 
-Two readers name it. The Dapr secret store `lance-secrets` (`secretstores.hashicorp.vault`, KV v2 under `secret`)
-presents the token in the `<release>-openbao-token` Secret, which nothing in the chart creates; replacing that one
-shared static token is [[XC-079]]. ESO's SecretStore `<release>-vault` logs in through the store's Kubernetes auth
-backend at `externalSecrets.kubernetesAuthPath`, as the role `externalSecrets.role` bound to ESO's ServiceAccount,
-whose policy reads the paths the chart's ExternalSecrets name.
+Two kinds of identity read it, each through the store's Kubernetes auth method at `externalSecrets.kubernetesAuthPath`
+([[XC-165]], ADR 0169). Each app's sidecar logs in as its own ServiceAccount: the one Dapr secret store `lance-secrets`
+(`secretstores.hashicorp.vault`, KV v2 under `externalSecrets.kvMount`) names the role `<release>-{appID}`, which Dapr
+fills with the sidecar's own app id, and presents a token the kubelet projects for `openbao.identity.audience`
+(`rask-openbao`) into daprd alone, so no store token exists to deliver or rotate. This needs Dapr 1.19 or later, the first
+whose Vault store logs in with Kubernetes auth and renews its session (components-contrib#4448). ESO's SecretStore
+`<release>-vault` logs in as the role `externalSecrets.role`, bound to ESO's ServiceAccount.
 
-THE FIELDS `secret/lance` MUST HOLD. Nothing seeds the platform's store and no credential is a chart value, so an
-unprovisioned field is a fail-closed outage at first use, not a fallback:
-postgres-password, publisher-oidc-password, publisher-oidc-client-secret (the IdP client secret),
-dapr-state-connection-string, dapr-app-token (the app-API token: ESO writes it into the `dapr-app-token` Secret daprd
-stamps the header from, and the doors compare against this field), frontend-session-secret (the zones' cookie sealing
-key), ray-auth-token, and for the catalog, lineage and maintenance identities named in values.yaml `objectStore` their
-key pairs: `<plane>-s3-access-key` (the key id) beside `<plane>-s3-secret-key` (on the dev store,
-sha256("<identity>-s3-<root secret>")[:40], `lance.scopedSecretFn`, which `object-store-scoped-users` derives too). Both
-halves are read from the store and read again every few minutes (ADR 0166), so a rotation writes them together; during
-an app-token rotation the bundle also holds `dapr-app-token-previous` (docs/OPERATORS.md § 8). The bundle holds no store
-root: rask presents none in production, and on the dev store the root sits at `object-store-root`, which no Dapr app may
-read (ADR 0168).
-Beside the bundle, one secret (fields `access_key`, `secret_key`) for each identity a single plane presents:
-`viewer-s3` (the viewer), `media-s3` (annotator and search, read-only on `explorer.corpusS3Root`, when explorer serves
-a corpus) and `backup-s3` (the backups, when one is on); every other app's Configuration denies each one.
-With `secrets.hfTokenInStore`, `hf-token` (field `token`). Beside the bundle, for every identity in
-`lance.signingIdentities`, two secrets: `signing-public-<identity>` (field `keys`) and then `signing-key-<identity>`
-(field `seed`), described in values.yaml `signing:`; the render refuses the platform's store until its operator
-created them and `signing.provisioned` says so. Likewise `nats-user-<user>` per values.yaml `nats.auth` user, and
-`nats-route` (and `nats-server`, in operator mode), attested by `nats.auth.provisioned`. With the in-chart Collector,
-`otel-collector-export` (fields username, password), the credential the audit store admits. The dev seed
+THE ROLES AND POLICIES THE PLATFORM'S STORE MUST HOLD. The chart renders them in every mode, as the documents the dev
+store's seed applies (`<release>-secret-store-identities`, keys `role-<name>.json` and `policy-<name>.json`):
+one role per app that reads the store, `<release>-<app id>`, bound to that app's ServiceAccount in the release's namespace,
+taking only the projected audience, and holding one policy that reads exactly the secrets the app and its components read
+(`lance.storeReads`), plus ESO's role and its policy, which reads exactly the secrets the chart's ExternalSecrets name. A
+role a sidecar cannot log in to fails that sidecar's start closed. Each app's Dapr Configuration denies its code every
+secret but its own (`allowedSecrets`), so a component's secret (a bus user, the state store's DSN) is read by the sidecar's
+login and never served to the app.
+
+THE SECRETS THE STORE MUST HOLD. Nothing seeds the platform's store and no credential is a chart value, so an
+unprovisioned secret is a fail-closed outage at first use, not a fallback. Each secret has exactly the readers it is for:
+- `catalog-s3`, `lineage-s3`, `maintenance-s3` (fields `access_key`, `secret_key`): the scoped key pair of the identity
+  values.yaml `objectStore` names for that plane, read by that app alone. On the dev store the secret half is
+  sha256("<identity>-s3-<root secret>")[:40] (`lance.scopedSecretFn`, which `object-store-scoped-users` derives too).
+  Both halves are read from the store and read again every few minutes (ADR 0166), so a rotation writes them together.
+- `viewer-s3` (the viewer), `media-s3` (annotator and search, read-only on `explorer.corpusS3Root`, when explorer serves
+  a corpus) and `backup-s3` (ESO, for the backups, when one is on), fields `access_key`, `secret_key`.
+- `dapr-app-token` (fields `token` and, during a rotation, `previous`; docs/OPERATORS.md § 8): the app-API token, read by
+  the apps with a Dapr door (catalog, lineage, maintenance, notifications, annotator) and by ESO, which writes it into the
+  `<release>-dapr-app-token` Secret daprd stamps the header from.
+- `dapr-state` (field `connection-string`): the Dapr state store's DSN, read by the logins of the apps the state store
+  is scoped to.
+- `postgres` (field `password`), read by ESO for the AGE server, OpenFGA and the Collector; `frontend-session` (field
+  `secret`, the zones' cookie sealing key), read by ESO; `oidc-client` (field `client-secret`, the IdP client secret),
+  read by the annotator and by ESO for the zones; `publisher-oidc` (field `password`), read by the annotator;
+  `ray-auth-token` (field `token`), read by ESO when `ray.auth` is on.
+- For every identity in `lance.signingIdentities`, `signing-public-<identity>` (field `keys`, read by that signer and
+  every verifier) and then `signing-key-<identity>` (field `seed`, read by that signer alone), described in values.yaml
+  `signing:`; the render refuses the platform's store until its operator created them and `signing.provisioned` says so.
+- `nats-user-<user>` per values.yaml `nats.auth` user (read by that app's login, or by ESO for `admin` and `monitor`),
+  and `nats-route` (and `nats-server`, in operator mode), attested by `nats.auth.provisioned`.
+- With `secrets.hfTokenInStore`, `hf-token` (field `token`); with the in-chart Collector, `otel-collector-export`
+  (fields username, password), the credential the audit store admits; each multibase data base's credential reference
+  (`catalog.multibase.baseCredentialRefs`, fields `aws_access_key_id` and `secret_key`), read by the catalog alone.
+
+No secret holds a store root: rask presents none in production, and on the dev store the root sits at
+`object-store-root`, which only ESO reads, for the store and its provisioning hook (ADR 0168). The dev seed
 (`chart/templates/openbao-seed.yaml`) writes the same list into the dev store; keep the two in step.
 
-SEVERAL CONSUMERS, ONE KEY (2026-08-09). `publisher-oidc-client-secret` serves the annotator's publish client
+SEVERAL CONSUMERS, ONE KEY (2026-08-09). `oidc-client` serves the annotator's publish client
 (`explorer.yaml`) and the zones' OIDC client (the frontend-session ExternalSecret in `external-secrets.yaml`): there is
 one IdP client (`auth.oidc.clientId`), so there is one secret. Do NOT seed a second copy under another name: a rotation
 that updates one copy and not the other breaks a sign-in on a path nothing tests. The object store holds no copy at
@@ -79,7 +97,8 @@ control plane's namespace in `dapr.controlPlaneNamespace` (default `dapr-system`
 and under NetworkPolicy every rask pod may reach it.
 
 What the control plane must provide, and the version rask is tested against, are in `deploy/fixtures/dapr` (the
-development install `make k3s-up` runs): Dapr 1.18.1; an injector that fails closed (`webhookFailurePolicy: Fail`)
+development install `make k3s-up` runs): Dapr 1.19 (1.19.0-rc.4 until its GA release; 1.19 is the floor, since each
+sidecar's store login needs its Kubernetes auth); an injector that fails closed (`webhookFailurePolicy: Fail`)
 scoped to pods labelled `dapr.io/enabled: "true"`, which rask stamps; no `dapr_rbac.secretReader`; Sentry mTLS on.
 In production also HA (`global.ha.enabled`) and an injector that drops every sidecar capability
 (`dapr_sidecar_injector.sidecarDropALLCapabilities`), the pair to rask's `dapr.sidecarRestricted`.
@@ -151,13 +170,17 @@ Development runs stand-ins from `deploy/fixtures` (ADR 0153), and the chart rend
   scoped-users hook (`object-store-scoped-users`, on rask's own image) provisions its buckets, policies and scoped
   users through RustFS's admin API. Its server starts once
   rask is installed, so the fixture install does not wait for it. The root secret signs every STS session token, so
-  the chart hands it only to the store pod and the scoped-users hook (`rask-rustfs` § 3); the dev OpenBao's published
-  root token still reads it, as every secret, until XC-165 (#659) gives each app its own secret-store token (ADR 0168).
-- **OpenBao in dev mode** (`deploy/fixtures/openbao`, release `openbao`, Deployment and Service `rask-openbao`): the
-  in-memory secret store. `openbao.enabled` says the estate uses it, and a real deployment's render refuses it. What
-  goes into it stays rask's: the chart renders the seed scripts into `<release>-openbao-seed` (the dev credentials,
-  every signing identity's Ed25519 pair, the bus trust root and users, ESO's policy), and the fixture's pod runs them
-  beside the server.
+  the chart hands it only to the store pod and the scoped-users hook (`rask-rustfs` § 3), and in the dev store only ESO's
+  login reads it (ADR 0168, ADR 0169).
+- **OpenBao** (`deploy/fixtures/openbao`, release `openbao`, Deployment and Service `rask-openbao`): the in-memory secret
+  store. `openbao.enabled` says the estate uses it, and a real deployment's render refuses it. Its server starts
+  uninitialized, not in dev mode (which prints its root token and unseal key to its log), and the seed beside it
+  initializes it: the init's root token mints the store's administrator under an id the fixture generates in-cluster
+  (`rask-openbao-root`, mounted into the seed alone), and is revoked, and the unseal key stays on the seed's memory
+  volume. What goes into it stays rask's: the chart renders the seed scripts into `<release>-openbao-seed` (the dev
+  credentials, every signing identity's Ed25519 pair, the bus trust root and users) and the store's roles and policies
+  into `<release>-secret-store-identities` (a role and a policy for each identity that reads the store), and the
+  fixture's pod runs the scripts beside the server and applies the documents.
 - **Marquez** (`deploy/fixtures/marquez`, release `marquez`, Service `rask-marquez:5000`): the graph backend, with its
   own Postgres. The lineage graph is bring-your-own (ADR 0158), and `deploy/values-local.yaml` points lineage's
   forwarder (`services.lineage.forward.url`) at it, as a platform would point it at its own Marquez, DataHub or

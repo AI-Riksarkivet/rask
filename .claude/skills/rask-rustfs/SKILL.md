@@ -72,12 +72,12 @@ on RustFS", `docs/audits/2026-10-18/rustfs_sts_measure.py`): 26 checks, all as r
   the root secret can forge any session token, and rotating root invalidates every outstanding STS credential
   (`rustfs@1.0.3:crates/iam/src/root_credentials.rs:25-36`). The root pair is a trust root, not just an admin
   login: only the store pod, the dev secret store that seeds it and the provisioning hook read it. It sits at
-  `secret/object-store-root`, which ESO's policy names and every Dapr app's Configuration denies, and in a Secret of its
-  own, `<release>-object-store-root`; `tests/unit/test_the_root_storage_secret_reaches_only_its_users.py` follows every
+  `secret/object-store-root`, which only ESO's store policy reads, and in a Secret of its own,
+  `<release>-object-store-root`; `tests/unit/test_every_secret_in_the_dev_store_has_exactly_its_readers.py` follows every
   path the chart hands a secret through. Each plane presents a scoped identity instead, the media readers and the
-  backups included, and a blank one fails the render. The dev OpenBao is the ceiling: it runs `server -dev` with a
-  published root token, so a pod calling it directly reads every secret, the root's included, until XC-165 (#659)
-  gives each app its own secret-store token and policy (ADR 0168).
+  backups included, and a blank one fails the render. The dev OpenBao publishes no token: each app's sidecar logs in as
+  its own ServiceAccount and reads only its own secrets, and the store's administrator token is generated in-cluster and
+  held by its seed (ADR 0169).
 - **Session duration is 900–43,200 s**, default 3,600; a shorter request is clamped UP to 900
   (`sts.rs:64-83`). rask vends at 900 (`vending.ttlSeconds`, `chart/values.yaml`). rask cannot vend a credential shorter than 15 minutes.
 - **Session policies**: `Version` must be present and `2012-10-17` (`session_policy.rs:30-32`;

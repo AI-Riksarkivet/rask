@@ -102,9 +102,7 @@ def boot(monkeypatch: pytest.MonkeyPatch, respx_allows_unused_routes: None) -> I
 
         def _boot(seed: httpx.Response, keys: httpx.Response) -> TestClient:
             stack.enter_context(respx.mock)
-            respx.get(f"{SECRETS}/lance").mock(
-                return_value=httpx.Response(200, json={"maintenance-s3-access-key": "test", "maintenance-s3-secret-key": "the-s3-secret"})
-            )
+            respx.get(f"{SECRETS}/maintenance-s3").mock(return_value=httpx.Response(200, json={"access_key": "test", "secret_key": "the-s3-secret"}))
             respx.get(f"{SECRETS}/signing-key-{KEY_NAME}").mock(return_value=seed)
             respx.get(f"{SECRETS}/signing-public-{KEY_NAME}").mock(return_value=keys)
             return stack.enter_context(TestClient(service.app))

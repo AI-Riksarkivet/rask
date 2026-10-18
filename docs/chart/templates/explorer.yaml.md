@@ -30,8 +30,8 @@ token (ADR 0168). The pod carries the access key id as config and names the Dapr
 `service_kit.media` fetches fail-closed through the sidecar. The viewer reads `viewer-s3` (`objectStore.viewerAccessKey`,
 the object browser's list-and-get identity); annotator and search read `media-s3` (`lance.mediaIdentity`, the
 `rask-media` policy: GetObject and a prefix-held list on `explorer.corpusS3Root`, nothing else), since neither writes
-to the corpus. Every other app's Configuration denies both secrets (`lance.daprAppSpec`), so the identity a pod reads
-is the one its own row names. Both are set on every reader, though `service_kit.media` defaults to `media-s3` and
+to the corpus. No other app's Configuration allows either secret and no other app's store login reads it
+(`lance.storeReads`), so the identity a pod reads is the one its own row names. Both are set on every reader, though `service_kit.media` defaults to `media-s3` and
 `secret_key`, so the render names the identity each pod reads. A blank `objectStore.viewerAccessKey` or
 `objectStore.mediaAccessKey` fails the render rather than falling back to a wider credential.
 

@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import subprocess
 import time
 from collections.abc import Callable, Generator, Iterable, Mapping
@@ -226,20 +225,22 @@ def _ready(pod: str) -> bool:
 
 @contextmanager
 def sealed_store() -> Generator[None]:
-    """The dev secret store sealed in place, then unsealed with the key its server printed when it started.
+    """The dev secret store sealed in place, then unsealed with the key its seed keeps.
 
-    `server -dev` keeps the store in memory, so sealing keeps every value it holds, where a new pod would mint every
-    signing pair and the bus's trust root again (`docs/OPERATORS.md` § 6). The seal is refused unless the unseal key is
-    in the server's log first, so a drill can never leave the store sealed for good. The key reaches `bao` on the exec's
-    stdin, never as an argument, so no process listing and no failed call's message carries it.
+    The store is in memory, so sealing keeps every value it holds, where a new pod would mint every signing pair and the
+    bus's trust root again (`docs/OPERATORS.md` § 6). Its seed initialized it and keeps the unseal key on a memory volume
+    (the seed container's `STORE_KEYS`), and the seal is refused unless that key is there, so a drill can never leave the
+    store sealed for good. The key is read into this process and reaches `bao` on the exec's stdin, never as an argument,
+    so no process listing and no failed call's message carries it.
     """
     workload = Workload(kind="deployment", name=SECRET_STORE)
     pods = workload.pods()
     assert len(pods) == 1, f"{workload.ref} runs {len(pods)} pods; the seal drill expects one"
     pod = pods[0].removeprefix("pod/")
-    found = re.search(r"Unseal Key: (\S+)", kubectl("logs", pod, "-c", "openbao"))
-    assert found, f"{pod}'s server log names no unseal key, so a sealed store could not be unsealed again; not sealing it"
-    unseal_key = found.group(1)
+    keys = kubectl("get", "pod", pod, "-o", "jsonpath={.spec.containers[?(@.name=='seed')].env[?(@.name=='STORE_KEYS')].value}")
+    assert keys, f"{pod}'s seed names no STORE_KEYS, so a sealed store could not be unsealed again; not sealing it"
+    unseal_key = kubectl("exec", pod, "-c", "seed", "--", "cat", f"{keys}/unseal-key").strip()
+    assert unseal_key, f"{pod}'s seed keeps no unseal key, so a sealed store could not be unsealed again; not sealing it"
     kubectl("exec", pod, "-c", "seed", "--", "bao", "operator", "seal")
     try:
         until(lambda: _sealed(pod), f"{pod} did not seal")

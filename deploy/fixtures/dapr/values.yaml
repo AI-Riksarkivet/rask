@@ -1,4 +1,4 @@
-# NOT FOR PRODUCTION (deploy/fixtures/README.md). Values for the upstream dapr 1.18.1 chart.
+# NOT FOR PRODUCTION (deploy/fixtures/README.md). Values for the upstream dapr 1.19.0-rc.4 chart.
 
 global:
   ha:
@@ -12,7 +12,7 @@ global:
 # rask uses pub/sub, bindings, secret stores, service invocation and ACTORS, so placement and the scheduler are
 # load-bearing: the annotator's AnnotationTaskActor and AnnotationProjectActor rely on placement's single-activation
 # guarantee to serialise two annotators claiming one task, and the scheduler backs actor REMINDERS, which is how task
-# leases expire. daprd 1.18 also connects to both at startup unconditionally and never becomes Ready without them.
+# leases expire. daprd also connects to both at startup unconditionally and never becomes Ready without them.
 
 # Controller loops rather than data paths, so all sized as controllers. The injector's `resources` bound the injector
 # itself; each daprd sidecar is sized by rask's `dapr.sidecarResources` annotations.

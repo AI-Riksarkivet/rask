@@ -190,12 +190,16 @@ The S3 key pair comes ONLY from the secret store, read at boot and again while t
 ([[XC-082]], ADR 0166); never in pod env (the audit's fix — maintenance is a real S3 consumer that
 GCs the lakehouse). Fails closed.
 
-## `- { name: MAINTENANCE_DAPR_SECRET_S3_ID_FIELD, value: "maintenance-s3-access-key" }`
+## `- { name: MAINTENANCE_DAPR_SECRET_KEY, value: "maintenance-s3" }`
+
+Maintenance's own secret in the store, which only its Configuration allows and only its store login reads ([[XC-165]]).
+
+## `- { name: MAINTENANCE_DAPR_SECRET_S3_ID_FIELD, value: "access_key" }`
 
 The scoped identity's key id, read from the store with its secret: a rotation issues a new id, so the
 id cannot be configuration.
 
-## `- { name: MAINTENANCE_DAPR_SECRET_S3_FIELD, value: "maintenance-s3-secret-key" }`
+## `- { name: MAINTENANCE_DAPR_SECRET_S3_FIELD, value: "secret_key" }`
 
 THE OTHER HALF OF THE PAIR, named beside the key id because a scoped key signed with any other
 secret fails `SignatureDoesNotMatch` on every operation (the Ray pair's measured lesson).

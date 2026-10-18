@@ -23,9 +23,9 @@ differently. The signal is `openbao.enabled=false` (the platform's store), or `i
 "the images come from a registry someone else can reach" is a FACT about the deploy rather than a flag to
 remember (`localhost:`, `127.0.0.1:` and `172.17.0.1:` registries are the in-cluster dev loop).
 
-THE TWO EXEMPTIONS ARE FENCED HERE (owner, 2026-10-06): the bundled dev Dex (its static users, client
-secret and publisher password are chart configuration, XC-025) and the dev OpenBao's root token (XC-079)
-are the only credentials a render still carries, and only a dev render. A real deployment refuses the dev
+THE ONE EXEMPTION IS FENCED HERE (owner, 2026-10-06): the bundled dev Dex (its static users, client secret and
+publisher password are chart configuration, XC-025) is the only credential a render still carries, and only a dev
+render; the dev OpenBao's administrator token is generated in-cluster and held by its seed alone ([[XC-165]]). A real deployment refuses the dev
 OpenBao (which is also what stops the chart generating credentials for one: `lance.mintsDevCredentials`
 needs `openbao.enabled`) and refuses the bundled Dex; it points at the platform's store and IdP.
 

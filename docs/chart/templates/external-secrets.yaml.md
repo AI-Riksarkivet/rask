@@ -47,11 +47,11 @@ that signs an STS token.
 THE DEVELOPMENT STORE'S ROOT PAIR, `<release>-object-store-root`, rendered only with the dev store. On RustFS the root
 secret signs every STS session token (GHSA-m77q-r63m-pj89, ADR 0168), so the Secret has exactly two readers, the
 store (the rustfs fixture's `rootCredentials`) and the scoped-users hook, and ESO fetches it from
-`secret/object-store-root`, a path every Dapr app's Configuration denies (`lance.daprAppSpec`). BOTH HALVES come from
+`secret/object-store-root`, a path only ESO's store policy grants. BOTH HALVES come from
 ONE object: the store mounts both as files from a non-optional secret volume, so a pair split across two sources is a
 pod that cannot start rather than one that signs wrongly. A platform's S3 has no such Secret here: its operator holds
-its root and provisions rask's identities. `tests/unit/test_the_root_storage_secret_reaches_only_its_users.py` gates
-who reads it.
+its root and provisions rask's identities. `tests/unit/test_every_secret_in_the_dev_store_has_exactly_its_readers.py`
+gates who reads it.
 
 ## `apiVersion: external-secrets.io/v1`
 

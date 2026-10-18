@@ -41,7 +41,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | age.port | int | `5432` | Postgres port of the AGE store, used by every client DSN, the backup job and the network policy. |
 | age.stateDb | string | `"daprstate"` | Name of the database the Dapr Postgres state store owns and migrates itself. |
 | age.storage | string | `"1Gi"` | PVC size of the AGE StatefulSet. Immutable after install: the chart fails an upgrade that changes it (see docs/runbooks/RUNBOOK-restore.md). |
-| age.user | string | `"lance"` | Postgres user every AGE client connects as; its password is the store's `postgres-password` secret, never a value. |
+| age.user | string | `"lance"` | Postgres user every AGE client connects as; its password is the store's `postgres` secret (field `password`), never a value. |
 | allocator.arenaMax | int | `2` | MALLOC_ARENA_MAX set on every lakehouse container (lance.allocatorEnv) to cap glibc malloc arenas. Default 2. |
 | allocator.arrowMemoryPool | string | `"system"` | ARROW_DEFAULT_MEMORY_POOL on every lakehouse container; `system` routes Arrow through malloc so `arenaMax` bounds it. |
 | auth.allowHeadless | bool | `false` | Permit `auth.enabled` without a frontend sign-in flow, for a deliberately API-only estate; otherwise templates/auth-consistency.yaml refuses that combination. |
@@ -111,7 +111,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | dapr.workflowRetention.enabled | bool | `true` | Render a Dapr workflow `stateRetentionPolicy`, the only thing that purges workflow history; false means history grows unbounded. |
 | dapr.workflowRetention.failed | string | `"720h"` | How long a failed workflow's history is kept for post-mortems, as a positive h or m duration of at least 1h; default 720h. |
 | dapr.workflowRetention.terminated | string | `"720h"` | How long a terminated workflow's history is kept, as a positive h or m duration of at least 1h; default 720h (30 days). |
-| dex.clientSecret | string | `"lance-catalog-secret"` | The development Dex's static client secret (demo value); seeded into OpenBao as `publisher-oidc-client-secret`. |
+| dex.clientSecret | string | `"lance-catalog-secret"` | The development Dex's static client secret (demo value); seeded into OpenBao as `oidc-client` (field `client-secret`). |
 | dex.enabled | bool | `true` | This estate uses the development Dex (deploy/fixtures/dex, Service `<release>-dex`): the ingress serves it at /dex, its publisher password is seeded into the dev store, and a real deployment refuses it. The chart renders no Dex. |
 | dex.port | int | `5556` | Port of the development Dex's Service. |
 | dex.publisher.password | string | `"password"` | Plain password of the publish saga's service account, seeded into OpenBao; must match the hash the development Dex holds (demo default `password`). |
@@ -136,13 +136,12 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | explorer.services.search | object | `{"daprAppId":"search","port":8102}` | Explorer search service: `port` (its HTTP port) and `daprAppId` (its Dapr app-id). |
 | explorer.services.viewer | object | `{"daprAppId":"viewer","port":8101}` | Explorer viewer service: `port` (its HTTP port) and `daprAppId` (its Dapr app-id). |
 | explorer.writeBackend | string | `"catalog"` | Where the explorer services write annotations to (MEDIA_WRITE_BACKEND): `catalog` (governed) or `direct` (standalone dev). |
-| externalSecrets.kubernetesAuthPath | string | `"kubernetes"` | Mount path of the Vault/OpenBao Kubernetes auth backend the SecretStore authenticates through. |
+| externalSecrets.kubernetesAuthPath | string | `"kubernetes"` | Mount path of the store's Kubernetes auth method, which ESO's SecretStore and every app's sidecar log in through. |
 | externalSecrets.kvMount | string | `"secret"` | Vault/OpenBao KV mount path the SecretStore reads from. |
 | externalSecrets.kvVersion | string | `"v2"` | KV engine version of `kvMount` (`v1` or `v2`). |
 | externalSecrets.namespace | string | `"external-secrets"` | Namespace of the External Secrets Operator ServiceAccount the Vault role is bound to. |
 | externalSecrets.refreshInterval | string | `"1h"` | How often each ExternalSecret re-syncs from the store (a duration, e.g. `1h`). |
 | externalSecrets.role | string | `"lance-infra"` | Vault role the operator's ServiceAccount assumes; also names its read policy. |
-| externalSecrets.secretPath | string | `"lance"` | KV key holding the shared bundle (postgres-password, the Dapr app token, each plane's scoped store pair; never the store's root), e.g. `lance` for secret/data/lance. |
 | externalSecrets.serviceAccount | string | `"external-secrets"` | Name of the External Secrets Operator ServiceAccount the Vault role is bound to, so no other pod can assume it. |
 | forwardedAllowIps | string | `"127.0.0.1"` | Peers whose x-forwarded-* headers uvicorn trusts in every pod the route reaches (--forwarded-allow-ips). Set to the Gateway data plane's pod CIDR; `*` is refused. |
 | frontend.apps | list | `[{"catchAll":true,"name":"home"},{"name":"compute","path":"/compute"},{"name":"studio","path":"/studio"},{"name":"models","path":"/models"},{"name":"lakehouse","path":"/lakehouse"},{"name":"explorer","path":"/explorer"},{"name":"annotator","path":"/annotator"}]` | The zones to deploy: `name` (image `web-<name>`), `path` (/<name>) or `catchAll` for home at /, and an optional per-zone image `tag`. |
@@ -248,10 +247,12 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | observability.query.egress | list | `[]` | NetworkPolicy egress rules ({to, ports}) admitting the zones to the store at `url`, at the port a policy sees. Required under networkPolicy.enabled while `url` is set. |
 | observability.query.url | string | `""` | Base URL of the store's SQL and PromQL API the zones read (GREPTIME_API); empty leaves those panels without data. |
 | observability.samplingRate | string | `"1"` | Dapr tracing sampling rate in the Dapr Configuration, as a string from 0 to 1; "1" traces every request. |
-| openbao.devToken | string | `"root"` | Root token of the development store (the openbao fixture's `devToken`), which the Dapr secret store presents. |
 | openbao.egress | list | `[]` | NetworkPolicy egress rules ({to, ports}) admitting the store's readers to the platform's store. Required under networkPolicy.enabled when `enabled` is false. |
-| openbao.enabled | bool | `true` | This estate uses the development store (deploy/fixtures/openbao, Service `<release>-openbao`): in memory, auto-unsealed, a fixed root token, seeded by the scripts this chart renders (`<release>-openbao-seed`). A real deployment refuses it. False reads the platform's store at `externalAddr`. |
+| openbao.enabled | bool | `true` | This estate uses the development store (deploy/fixtures/openbao, Service `<release>-openbao`): in memory, initialized and seeded by the scripts this chart renders (`<release>-openbao-seed`), its administrator token generated in-cluster. A real deployment refuses it. False reads the platform's store at `externalAddr`. |
 | openbao.externalAddr | string | `""` | The platform's Vault or OpenBao (https), which the Dapr secret store and ESO's SecretStore read when `enabled` is false; required then, and refused beside `enabled`. |
+| openbao.identity.audience | string | `"rask-openbao"` | Audience of the token projected into each sidecar for its store login; every app's role accepts only this one. |
+| openbao.identity.tokenMaxTtl | string | `"1h"` | The longest a sidecar's store token lives; daprd then logs in again with its current projected token. |
+| openbao.identity.tokenTtl | string | `"15m"` | Lifetime of the store token a sidecar's login returns; daprd renews it in the background. |
 | openbao.port | int | `8200` | Port of the development store's Service. |
 | openfga.authn.method | string | `"oidc"` | Subchart passthrough: OpenFGA API authentication method; `oidc` admits only projected ServiceAccount tokens. |
 | openfga.authn.oidc.audience | string | `"rask-openfga"` | Token audience OpenFGA requires; templates/openfga-authn.yaml refuses a render unless it equals `lance.openfgaAudience` (rask-openfga). |

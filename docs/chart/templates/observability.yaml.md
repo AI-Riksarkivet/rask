@@ -73,7 +73,6 @@ THE SPEC BODY IS INCLUDED, NOT COPIED. HotReload, the tracing exporter, the metr
 and workflow retention are each a measured decision made once above; a per-app copy would drift from
 `lance-tracing` silently and each sidecar would get whichever version its document carried.
 
-`allowedSecrets` NAMES THE SHARED BUNDLE TOO, deliberately: after the split, `secret/lance` carries
-the estate's shared material (app API token, S3 root secret, the state-store DSN) and no identity
-credentials at all, so granting it discloses nothing about who a producer is. The scoped S3 fields
-still on that bundle are a narrower question than this row and are not addressed here.
+EACH APP'S SCOPE IS DENY-BY-DEFAULT, allowing exactly the secrets its code reads (`lance.daprAppSpec` over
+`lance.storeReads`, [[XC-165]]), and the store refuses the rest through the app's own login, so the Configuration is
+the first of two layers, not the only one.
