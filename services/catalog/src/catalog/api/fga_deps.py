@@ -597,7 +597,8 @@ async def _authorize_grant(
     delegate's own rung. ``can_grant_reader`` is ``manage_grants or (reader and pass_grants)``, so
     kevin (``writer`` + ``pass_grants``, the fixture's "delegate and no more") could DELETE carol's
     reader tuple, and every other reader/writer/validator tuple on the object including the owner's.
-    Revoke now goes to ``can_revoke_grant``, which is ``manage_grants`` alone.
+    Revoke goes to ``can_revoke_grant``, which every type the door serves defines stricter than its grants:
+    ``manage_grants`` alone on a table or a namespace, ``curator`` alone on a classification label.
 
     SQL's WITH GRANT OPTION — which this axis is modelled on — lets a delegate revoke the grants THEY
     made. That needs the granting actor recorded ON the tuple, which this store does not carry, so

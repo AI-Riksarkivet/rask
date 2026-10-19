@@ -11,9 +11,11 @@ governance. This module holds both halves on the deployed catalog, through the c
    BatchCreateTableVersions, BatchCommitTables) the spec's generated one (`lance_namespace_urllib3_client`). A
    refusal reaches the client as the spec's typed error, a hierarchy refusal included. lancedb and lance-ray open and
    read a table through the same namespace.
-2. Who may do what, as a matrix of six principals against every spec door, the vend, grant and revoke doors, and the
-   warehouse and project admin doors. On the matrix namespace the owner, the writer and the reader each hold one rung
-   of model.fga's ladder, each rung holding the ones below it. The outsider holds none, the tenant-B admin administers
+2. Who may do what, as a matrix of six principals against every spec door, the vend, grant and revoke doors, a
+   classification label's revoke door, and the warehouse and project admin doors. On the matrix namespace the owner,
+   the writer and the reader each hold one rung of model.fga's ladder, each rung holding the ones below it, and on the
+   matrix label the label's ladder: the owner is its curator, the writer a delegate holding `apply` and `pass_grants`,
+   and the reader holds `apply`. The outsider holds none, the tenant-B admin administers
    another tenant, and the service identity is a fleet service account no tuple names. A cell's verdict is read off
    that ladder and the rung each door's gate asks for, never off the model, so a loosened relation or a deleted route
    answers a cell it must not, and that cell goes red. A refused cell answers its code, leaves what the door could
@@ -28,13 +30,20 @@ governance. This module holds both halves on the deployed catalog, through the c
 A door's rung is what `catalog.api.fga_deps` asks for there, reduced to the ladder by model.fga: the reads ask
 `can_get_metadata` or `can_read_data` (reader), the writes `can_write_data` or a create on the parent (writer), and the
 lifecycle, ref-plane and grant doors `can_drop`, `can_deregister`, `can_restore`, `can_create_branch`, a tag rung or a
-grant rung, each of which ownership carries (owner). The warehouse's and the project's doors ask for a rung on the
-warehouse or the project, which no matrix principal holds. Those cells are each principal's refusal, and the tenant-B
-admin's own warehouse, which that admin makes, shows its refusals here are not those of a caller who can do nothing.
+grant rung, each of which ownership carries (owner). The label's revoke door asks `can_revoke_grant`, which only the
+label's curator holds (owner): a delegate may hand a label on and may not take one back. The warehouse's and the
+project's doors ask for a rung on the warehouse or the project, which no matrix principal holds. Those cells are each
+principal's refusal, and the tenant-B admin's own warehouse, which that admin makes, shows its refusals here are not
+those of a caller who can do nothing.
 
 THE MATRIX NAMESPACE lives in the shared tenant's warehouse (`byo_scenario.Tenant`), under a name that does not carry
 the tenant's project id, so the scenario's tables, and the events criteria 1 and 4 capture by project, stay exactly
 what the scenario made. The warehouse's cascade removes it with the tenant.
+
+THE MATRIX LABEL is a classification label of the scene's own. A label is estate vocabulary, which no tenant's cascade
+reaches, so the scene removes the label's tuples when the module ends. The estate admin names its curator through the
+raw tuple editor, the only door that writes `curator`; the curator grants the delegate through the label's grant door,
+and the delegate hands `apply` on through the same door.
 
 A KNOWN GAP is held as strict xfails: both transaction doors authorize a table's transaction on a namespace object
 nothing grants (LH-221, #143), so they refuse the table's own owner. Those cells assert what the fix must answer, and
@@ -118,7 +127,8 @@ class Role(StrEnum):
     SERVICE = "service"
 
 
-#: The rung each principal holds on the matrix namespace and on everything in it, as the scene grants it.
+#: The rung each principal holds on the matrix namespace and on everything in it, and the matching rung of the matrix
+#: label's ladder, as the scene grants them.
 HOLDS: dict[Role, Rung] = {
     Role.OWNER: Rung.OWNER,
     Role.WRITER: Rung.WRITER,
@@ -220,6 +230,8 @@ class Scene:
         self.empty = [self.namespace, "empty"]
         #: A principal no matrix role is, in the idp the people's principals name: whom the grant doors grant to.
         self.grantee = f"{callers[Role.OUTSIDER].principal.split('~', 1)[0]}~c2-grantee-{uuid.uuid4().hex[:8]}"
+        #: The matrix label: a classification label of the scene's own, its ladder held by the owner, writer and reader.
+        self.label = f"c2-label-{self.suffix}"
         self.location = ""
         #: A deregistered table's location, relative to the namespace root, which a refused register names.
         self.loose = ""
@@ -261,6 +273,26 @@ class Scene:
         self.loose = self.deregistered("loose")
         self.append(self.make_table("txn"), range(3, 5))
         self.transaction = str(self.owner.restore_table(ln.RestoreTableRequest(id=self.txn, version=1)).transaction_id)
+        self.make_label()
+
+    def make_label(self) -> None:
+        """Hold the matrix label's ladder: the owner its curator, named through the estate admin's tuple editor; the
+        writer a delegate, granted `apply` and `pass_grants` by the curator; and the reader and the grantee `apply`,
+        which the delegate hands on."""
+        curator = {"user": self.callers[Role.OWNER].principal, "relation": "curator", "object": f"classification:{self.label}"}
+        scenario.ok(self.tenant.admin.http.post(f"{CATALOG}/management/v1/access/tuples", json=curator, timeout=60))
+        eventually(lambda: self.label_permission(Role.OWNER, "can_grant_pass_grants"), "the owner's curator was not seen")
+        for relation in ("apply", "pass_grants"):
+            self.label_grant(Role.OWNER, self.callers[Role.WRITER].principal, relation)
+        eventually(lambda: self.label_permission(Role.WRITER, "can_grant_apply"), "the writer's delegation was not seen")
+        for grantee in (self.callers[Role.READER].principal, self.grantee):
+            self.label_grant(Role.WRITER, grantee, "apply")
+
+    def remove_label(self) -> list[str]:
+        """Delete every tuple the matrix label holds, as the estate admin; the ones still held after."""
+        for held in self.label_tuples():
+            self.tenant.admin.http.delete(f"{CATALOG}/management/v1/access/tuples", json=held, timeout=60)
+        return [f"{held['user']} {held['relation']}" for held in self.label_tuples()]
 
     # What a principal is, to a client.
 
@@ -350,6 +382,29 @@ class Scene:
         door = "can_create_table" if relation == "writer" else "can_get_metadata"
         return any(self.grantee in user for user in self.access(namespace).get(door, []))
 
+    def label_permission(self, role: Role, permission: str) -> bool:
+        """Whether ``role`` holds ``permission`` on the matrix label, as its own permission self-view answers. A refused
+        self-view is a holder the store does not show yet."""
+        answer = self.http(role).post(f"{CATALOG}/management/v1/classification/{self.label}/access/my-permissions", timeout=60)
+        if answer.status_code == 403:
+            return False
+        return bool(scenario.ok(answer)["permissions"].get(permission))
+
+    def label_tuples(self) -> list[dict[str, Any]]:
+        """Every tuple the store holds on the matrix label, as the estate admin reads it, page by page."""
+        found: list[dict[str, Any]] = []
+        params = {"object": f"classification:{self.label}"}
+        while True:
+            page = scenario.ok(self.tenant.admin.http.get(f"{CATALOG}/management/v1/access/tuples", params=params, timeout=60))
+            found += page["tuples"]
+            if not page.get("continuation"):
+                return found
+            params["continuation"] = page["continuation"]
+
+    def label_holders(self, relation: str) -> list[str]:
+        """The users the store holds ``relation`` for on the matrix label."""
+        return sorted(held["user"] for held in self.label_tuples() if held["relation"] == relation)
+
     def as_admin(self, path: str) -> requests.Response:
         return self.tenant.admin.http.get(f"{CATALOG}{path}", timeout=60)
 
@@ -380,6 +435,11 @@ class Scene:
     def grant(self, namespace: list[str], relation: str) -> None:
         body = {"user": self.grantee, "relation": relation}
         scenario.ok(self.http(Role.OWNER).post(f"{CATALOG}/management/v1/namespace/{'$'.join(namespace)}/access/grant", json=body, timeout=60))
+
+    def label_grant(self, role: Role, grantee: str, relation: str) -> None:
+        """``role`` grants ``grantee`` ``relation`` on the matrix label through the label's grant door."""
+        body = {"user": grantee, "relation": relation}
+        scenario.ok(self.http(role).post(f"{CATALOG}/management/v1/classification/{self.label}/access/grant", json=body, timeout=60))
 
     def deregistered(self, name: str) -> str:
         """Make a table and deregister it; its location relative to the namespace root, as a register names it."""
@@ -602,6 +662,21 @@ def _access_door(verb: str, relation: str) -> Callable[[Scene, Role, Target], re
         return scene.http(role).post(f"{CATALOG}/management/v1/namespace/{'$'.join(target.namespace)}/access/{verb}", json=body, timeout=60)
 
     return send
+
+
+def _fresh_label_holder(scene: Scene, role: Role, allowed: bool) -> Target:
+    """A grantee of its own, handed `apply` on the matrix label by the delegate, for an allowed revoke; the standing
+    grantee, which the delegate handed `apply` at the scene's making, for a refused one."""
+    if not allowed:
+        return Target(name=scene.grantee)
+    holder = f"{scene.grantee.split('~', 1)[0]}~c2-apply-{uuid.uuid4().hex[:8]}"
+    scene.label_grant(Role.WRITER, holder, "apply")
+    return Target(name=holder)
+
+
+def _revoke_label_apply(scene: Scene, role: Role, target: Target) -> requests.Response:
+    body = {"user": target.name, "relation": "apply"}
+    return scene.http(role).post(f"{CATALOG}/management/v1/classification/{scene.label}/access/revoke", json=body, timeout=60)
 
 
 def _warehouse_namespaces(scene: Scene, target: Target) -> list[str]:
@@ -1068,8 +1143,9 @@ SPEC_DOORS: tuple[Door, ...] = (
     ),
 )
 
-#: rask's own doors around the spec's: the vend, the grant and revoke of a namespace rung, and the warehouse's and the
-#: project's admin doors. A delete of the warehouse or the project answers a refused caller the spec's not-found, so it
+#: rask's own doors around the spec's: the vend, the grant and revoke of a namespace rung, the revoke of a label's
+#: `apply`, and the warehouse's and the project's admin doors. A delete of the warehouse or the project answers a
+#: refused caller the spec's not-found, so it
 #: tells nobody whether the object exists; it names no cascade, so a wrongly allowed one stops at what the tenant holds.
 MANAGEMENT_DOORS: tuple[Door, ...] = (
     Door(
@@ -1103,6 +1179,15 @@ MANAGEMENT_DOORS: tuple[Door, ...] = (
         send=_access_door("revoke", "reader"),
         watch=lambda s, t: s.access(t.namespace),
         shows=lambda s, role, t, value, before: (s.granted(t.namespace, "reader"), False),
+    ),
+    Door(
+        operation="RevokeClassificationApply",
+        rung=Rung.OWNER,
+        refused=(403, PERMISSION_DENIED),
+        aim=_fresh_label_holder,
+        send=_revoke_label_apply,
+        watch=lambda s, t: s.label_holders("apply"),
+        shows=lambda s, role, t, value, before: (any(t.name in user for user in s.label_holders("apply")), False),
     ),
     Door(
         operation="CreateWarehouseNamespace",
@@ -1198,8 +1283,9 @@ def tenant_b(byo_tenant: Tenant) -> Iterator[str]:
 
 
 @pytest.fixture(scope="module")
-def scene(byo_tenant: Tenant, tenant_b: str) -> Scene:
-    """The matrix's scene on the shared tenant, its owner the scenario's pipeline and its tenant-B admin bob."""
+def scene(byo_tenant: Tenant, tenant_b: str) -> Iterator[Scene]:
+    """The matrix's scene on the shared tenant, its owner the scenario's pipeline and its tenant-B admin bob. The
+    tenant's cascade removes what the scene made in its warehouse; the matrix label it removes itself."""
     service = Identity(Path(SERVICE_TOKEN_FILE).read_text(encoding="utf-8").strip())
     assert service.principal.startswith("kubernetes~system:serviceaccount:"), f"the service token proves {service.principal}, which is no service account"
     callers = {
@@ -1211,8 +1297,12 @@ def scene(byo_tenant: Tenant, tenant_b: str) -> Scene:
         Role.SERVICE: service,
     }
     made = Scene(byo_tenant, callers, tenant_b)
-    made.build()
-    return made
+    try:
+        made.build()
+        yield made
+    finally:
+        left = made.remove_label()
+        assert not left, f"the matrix label {made.label} still holds {left}"
 
 
 @pytest.mark.parametrize(("operation", "role"), CELLS)

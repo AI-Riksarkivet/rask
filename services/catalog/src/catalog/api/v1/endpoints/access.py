@@ -331,7 +331,7 @@ async def _access_mutate(
     *,
     grant: bool,
 ) -> AccessGrantResponse:
-    """Grant or revoke one base rung (owner/writer/reader/validator) to a subject on a table/namespace.
+    """Grant or revoke one grantable rung to a subject on a table, a namespace or a classification label.
 
     The MUTATE half of the #68 governance surface — the write counterpart of ``access/list``.
 
@@ -341,7 +341,8 @@ async def _access_mutate(
     the grant axis was separated from ownership. Neither suffix appears in ``_OWNER_SUFFIX_RELATION``
     any more; ``fga_deps`` routes both to :func:`_authorize_grant`, which reads the rung out of the body
     because the path says only THAT a grant is happening. Grant needs ``can_grant_<relation>``; revoke
-    needs ``can_revoke_grant`` (``manage_grants`` alone, deliberately stricter — a delegate must not be
+    needs ``can_revoke_grant``, which each served type defines stricter than its grants (``manage_grants``
+    alone on a table or a namespace, ``curator`` alone on a classification label — a delegate must not be
     able to strip the owner who delegated to them). Reviewing (``access/list``/``access/check``) IS
     still owner-tier, which is what made the stale sentence plausible.
     Fail-closed: only a grantable base rung the model defines is accepted (a ``can_*`` action or ``parent``

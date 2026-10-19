@@ -79,7 +79,7 @@ def _settings(*, lock_root: bool) -> Settings:
 
 
 class _FakeRequest:
-    """The only thing ``_authorize_batch`` touches on the Request is ``await request.json()``."""
+    """The only thing ``_authorize_batch`` and ``_authorize_grant`` touch on the Request is ``await request.json()``."""
 
     def __init__(self, body: dict[str, Any]) -> None:
         self._body = body
@@ -297,7 +297,18 @@ def test_every_DATA_READ_door_is_gated_as_a_READ() -> None:
         assert _action_relation("table", action) == "can_get_metadata", action
 
 
-def test_grant_routes_are_intercepted_before_the_resolver() -> None:
+def _types_served_by(suffix: str) -> set[str]:
+    """The FGA types whose ``<type>_router`` in the access endpoints carries a route ending in ``suffix``."""
+    from catalog.api.v1.endpoints import access as access_module
+
+    return {
+        name.removesuffix("_router")
+        for name, obj in vars(access_module).items()
+        if name.endswith("_router") and any(r.path.endswith(f"/{suffix}") for r in obj.routes)
+    }
+
+
+def test_grant_routes_are_intercepted_before_the_resolver(monkeypatch: pytest.MonkeyPatch) -> None:
     """CONTRACT (security, #72 + the grant axis): ``access/grant`` / ``access/revoke`` are authorized
     PER RUNG from the request body by ``_authorize_grant``, not by the suffix map.
 
@@ -308,11 +319,13 @@ def test_grant_routes_are_intercepted_before_the_resolver() -> None:
     dropped. It now pins the interception itself, which is the thing that must not regress.
 
     ``authorize`` returns inside the ``_GRANT_SUFFIXES`` branch before ``_action_relation`` is ever
-    consulted. Both halves are asserted here — that the suffixes are declared intercepted, AND that every rung the grant API
-    accepts has a ``can_grant_*`` gate to be checked against. A rung without one would be refused by
-    ``_authorize_grant``, so this cannot silently open; it would simply make the rung ungrantable."""
+    consulted. Three things are asserted here: the suffixes are declared intercepted, every rung the grant API accepts
+    has a ``can_grant_*`` gate to be checked against, and every type a revoke route serves defines the relation the
+    revoke gate checks on it. A rung without a grant gate is refused by ``_authorize_grant``, so it cannot silently
+    open; it would simply make the rung ungrantable. A type without the revoke gate's relation fails the other way:
+    OpenFGA answers a check on a relation the type does not define with a 400, which fails closed to a 503 for every
+    revoke there, the curator's included."""
     from catalog.api.fga_deps import _GRANT_SUFFIXES, _grant_actions
-    from catalog.api.v1.endpoints import access as access_module
     from catalog.api.v1.endpoints.access import _grantable_relations
 
     assert frozenset({"access/grant", "access/revoke"}) == _GRANT_SUFFIXES
@@ -325,11 +338,7 @@ def test_grant_routes_are_intercepted_before_the_resolver() -> None:
     # serves it: `estate` declares `owner`/`writer`/`reader` and has no grant route, so demanding
     # `can_grant_owner` there would be a gate on an unreachable door. A new `<type>_router` carrying
     # `/access/grant` is covered the day it is added, which is the property a list cannot have.
-    served = {
-        name.removesuffix("_router")
-        for name, obj in vars(access_module).items()
-        if name.endswith("_router") and any(r.path.endswith("/access/grant") for r in obj.routes)
-    }
+    served = _types_served_by("access/grant")
     assert served == {"table", "namespace", "classification"}, f"the grant doors changed: {sorted(served)}"
     for fga_type in sorted(served):
         grantable = _grantable_relations(fga_type)
@@ -337,6 +346,27 @@ def test_grant_routes_are_intercepted_before_the_resolver() -> None:
         actions = _grant_actions(fga_type)
         for rung in grantable:
             assert f"can_grant_{rung}" in actions, f"{fga_type}: {rung} is grantable with no can_grant_{rung} gate"
+
+    # THE REVOKE HALF IS DRIVEN, not restated: the gate asks one revoke permission on every type it serves, so the
+    # relation is read off the gate itself, for every rung the door admits. A grant door with no revoke door beside it
+    # would hand out grants nothing could take back.
+    revoked = _types_served_by("access/revoke")
+    assert revoked == served, f"each grant door needs its revoke door: grant serves {sorted(served)}, revoke {sorted(revoked)}"
+    checked: set[tuple[str, str]] = set()
+
+    async def rec_check(_client: object, *, user: str, relation: str, obj: str) -> bool:
+        checked.add((_obj_type(obj), relation))
+        return True
+
+    monkeypatch.setattr(fga_deps.fga, "check", rec_check)
+    settings = _settings(lock_root=False)
+    for fga_type in sorted(revoked):
+        for rung in _grantable_relations(fga_type):
+            request = cast("Request", _FakeRequest({"user": "dex~bob", "relation": rung}))
+            asyncio.run(fga_deps._authorize_grant(request, _CLIENT, settings, user="dex~alice", fga_type=fga_type, segments=["x"], revoking=True))
+    model = _model_relations()
+    undefined = sorted(f"{t}#{r}" for t, r in checked if r not in model[t])
+    assert not undefined, f"the revoke gate checks {undefined}, which the model does not define: OpenFGA refuses each, and every revoke there answers 503"
 
 
 # --------------------------------------------------------------------------- #

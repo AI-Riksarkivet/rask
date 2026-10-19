@@ -692,8 +692,11 @@ type classification
         define can_get_metadata: apply or curator
         # Delegation admitted on the grant, `curator` alone on the revoke — the asymmetry the
         # reference model states as "taking a privilege back is administration, never delegation".
+        # Named `can_revoke_grant` because that is the one permission the revoke door asks on every
+        # type it serves (`catalog.api.fga_deps._authorize_grant`): a served type without it answers
+        # every revoke 503 (`test_grant_routes_are_intercepted_before_the_resolver`).
         define can_grant_apply: curator or (apply and pass_grants)
-        define can_revoke_apply: curator
+        define can_revoke_grant: curator
         define pass_grants: [user, role#assignee] or curator
         # `pass_grants` is itself grantable here because `_GRANTABLE_BASE` carries it, so it needs its
         # own gate or the delegation option is handed out ungated. `curator` alone, never
