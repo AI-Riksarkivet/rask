@@ -446,6 +446,11 @@ def test_a_table_location_is_exclusive(estate: _Estate) -> None:
     as ``_bases``. A location over the model registry is refused too ([[LH-204]]): it is opened by explicit
     URI and never registered, so a table there would be vended every model's history.
 
+    Nor may a location equal, contain or sit under another registered table's ([[LH-504]]): a destructive drop
+    of the outer table would delete the inner one's bytes. Only the namespace's object index answers it, so the
+    door asks once the backend has recorded the registration and detaches the later of the two. The victim
+    was created, and a create takes no location claim, so its own location reaches this rule, not the claim.
+
     A table whose NAME the catalog percent-encodes into its location (``räksmörgås`` ->
     ``r%C3%A4ksm%C3%B6rg%C3%A5s``, ``growth%`` -> ``growth%25``) is still its own: it is created with a
     readable record, and a branch of it, whose manifest declares the root spelled so, is vended.
@@ -457,13 +462,21 @@ def test_a_table_location_is_exclusive(estate: _Estate) -> None:
     pinned at its door by `test_a_warehouse_cascade_revokes_a_grant_only_once_its_object_is_gone.py`.
     """
     victim = estate.victim.removeprefix(f"{estate.root}/")
-    for location in (".", "_bases", "%5Fbases", victim, f"{victim}/tree", f"x/.\t./{victim}", f"x/.\n./{victim}", f"x/%2e%2e/{victim}", "medallion/models/m"):
+    for location in (".", "_bases", "%5Fbases", f"x/.\t./{victim}", f"x/.\n./{victim}", f"x/%2e%2e/{victim}", "medallion/models/m"):
         resp = estate.client.post("/v1/table/db$squatter/register", json={"location": location})
         assert resp.status_code == 400, f"{location!r}: {resp.status_code} {resp.text}"
         assert estate.client.post("/v1/table/db$squatter/exists").status_code == 404, f"{location!r}: a refused registration must be detached"
         assert estate.client.post("/v1/table/db$squatter/query", json=_QUERY).status_code == 404, f"{location!r}: the victim reads through the refused id"
-    lance.write_dataset(_MINE, f"{estate.root}/fresh", storage_options=estate.key, data_storage_version="2.2", enable_stable_row_ids=True)
-    assert estate.client.post("/v1/table/db$fresh/register", json={"location": "fresh"}).status_code == 200, "the control: a location of its own registers"
+    lance.write_dataset(_MINE, f"{estate.root}/outer/inner", storage_options=estate.key, data_storage_version="2.2", enable_stable_row_ids=True)
+    assert estate.client.post("/v1/table/db$inner/register", json={"location": "outer/inner"}).status_code == 200, (
+        "the control: a location of its own registers"
+    )
+    for location in (victim, f"{victim}/tree", "outer"):
+        resp = estate.client.post("/v1/table/db$squatter/register", json={"location": location})
+        _refused(resp, _INVALID_INPUT)
+        assert resp.json()["detail"] == f"register location {location!r} equals, contains or sits under another table's location", resp.text
+        assert estate.client.post("/v1/table/db$squatter/exists").status_code == 404, f"{location!r}: a refused registration must be detached"
+        assert estate.client.post("/v1/table/db$squatter/query", json=_QUERY).status_code == 404, f"{location!r}: the victim reads through the refused id"
     for named in ("db$räksmörgås", "db$growth%"):
         location = estate.create(named)
         estate.open(location).create_branch("work")
