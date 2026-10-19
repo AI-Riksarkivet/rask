@@ -175,6 +175,15 @@ services:
       # The development graph backend, the marquez fixture (deploy/fixtures/marquez): lineage forwards every event it
       # records there, as it would to a platform's own (ADR 0158).
       url: http://rask-marquez:5000
+  notifications:
+    channels:
+      # The development SMTP relay, the mailpit fixture (deploy/fixtures/mailpit): the email channel sends there, and a
+      # read-back reads what it sent off Mailpit's API. The pair the Component presents is the dev seed's.
+      email:
+        enabled: true
+        host: rask-mailpit
+        port: 1025
+        from: notifications@rask.local
 
 # The edge on k3s is Traefik's Gateway provider (`make k3s-install` switches it on; deploy/k3s/traefik-gateway.yaml):
 # its `traefik-gateway` in kube-system, listener `web`, the same entrypoint the node's port 80 serves. The zones' server

@@ -185,6 +185,34 @@ class TestPrefsDoor:
         assert EMAIL in response.text
         assert store == {}
 
+    @pytest.mark.parametrize(
+        "destination",
+        [
+            pytest.param('"a;b"@example.test', id="a-semicolon-the-binding-splits-on"),
+            pytest.param('"a,b"@example.test', id="a-comma"),
+            pytest.param("Ada <a@example.test>", id="a-display-name"),
+            pytest.param("a@exa‮mple.test", id="an-invisible-format-character"),
+            pytest.param("a@example.test\r\nBcc: b@example.test", id="a-cr-lf"),
+            pytest.param(f"{'a' * 64}@{'d' * 61}.{'d' * 61}.{'d' * 61}.test", id="longer-than-254-characters"),
+            pytest.param("a@example.test (work)", id="not-what-the-parser-reads-back"),
+        ],
+    )
+    def test_an_email_destination_that_is_not_one_bare_address_is_refused_rather_than_stored(
+        self, prefs_client: tuple[TestClient, dict[str, Any]], destination: str
+    ) -> None:
+        """The SMTP binding reads `emailTo` as a list split on `;` and sends to every address in it, and a
+        destination it cannot parse fails every send, silently, because a failed send keeps its claim
+        ([[CTL-30]]). So an email destination is exactly one addr-spec, and anything else is refused here.
+        Each case but the CR/LF is one only its own rule refuses; a CR/LF, the audit's shape, is refused by
+        the control rule and by the parser both."""
+        client, store = prefs_client
+
+        response = client.put("/notifications/prefs", json={"channels": [EMAIL], "destinations": {EMAIL: destination}})
+
+        assert response.status_code == 400, response.text
+        assert EMAIL in response.json()["detail"], response.text
+        assert store == {}
+
     def test_an_unknown_channel_is_refused(self, prefs_client: tuple[TestClient, dict[str, Any]]) -> None:
         client, _ = prefs_client
 
@@ -314,10 +342,10 @@ class TestFanoutHook:
 # `InboxActor.claim_channel` — check-and-write inside the turn — so what is under test is the actual
 # state transition rather than a test double agreeing with itself.
 #
-# What is still NOT proven here, and is named rather than implied: a real broker redelivering to a
-# real sidecar against a real SMTP conversation. That is `make notifications-rig-up` (Mailpit + a
-# COUNTING Slack sink), because "exactly one message left the estate" is a claim about the thing a
-# person sees, and no in-process test can make it.
+# A real broker redelivering to a real sidecar against a real SMTP conversation is a claim about the
+# thing a person sees, which no in-process test can make. The live read-back makes it against the
+# mailpit fixture (deploy/fixtures/mailpit), the relay deploy/values-local.yaml names, by reading
+# Mailpit's API ([[CTL-30]]); `make notifications-rig` runs Mailpit and a COUNTING Slack sink by hand.
 
 
 class _ActorSm:

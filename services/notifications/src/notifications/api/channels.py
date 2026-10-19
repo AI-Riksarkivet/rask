@@ -25,9 +25,13 @@ changes.
 """
 
 import asyncio
+import html
 import json
 import logging
+import unicodedata
 from collections.abc import Awaitable, Callable
+from email.errors import HeaderParseError
+from email.headerregistry import Address
 from typing import Any, Final, Protocol
 
 from notifications.models import InboxPointer
@@ -40,6 +44,37 @@ log = logging.getLogger(__name__)
 #: decides which of them can actually be sent.
 EMAIL: Final = "email"
 SLACK: Final = "slack"
+
+#: RFC 5321's 256-octet path less its two angle brackets: the longest address a relay must take.
+_MAX_ADDRESS_LENGTH: Final = 254
+#: What the SMTP binding reads as a list of recipients (`;`), and what a header reads as one (`,`).
+_RECIPIENT_SEPARATORS: Final = (";", ",")
+
+
+def is_one_bare_address(value: str) -> bool:
+    """Whether `value` is exactly one addr-spec, the only email destination the channel sends to ([[CTL-30]]).
+
+    The SMTP binding reads `emailTo` as a list split on `;` and sends to every address in it, and a
+    destination it cannot parse fails every send. So a destination carries no separator, even inside a
+    quoted local part the address grammar allows; no display name, comment or padding, which the
+    stdlib parser reads back as a different string; no control or invisible format character, which
+    the parser accepts in a domain; and no more than a relay must take.
+    """
+    if len(value) > _MAX_ADDRESS_LENGTH or any(separator in value for separator in _RECIPIENT_SEPARATORS):
+        return False
+    if any(_breaks_or_hides(character) for character in value):
+        return False
+    try:
+        parsed = Address(addr_spec=value)
+    except (ValueError, HeaderParseError):
+        return False
+    return parsed.addr_spec == value
+
+
+def _breaks_or_hides(character: str) -> bool:
+    """A control, format, surrogate, private-use or unassigned code point, or a line or paragraph separator."""
+    category = unicodedata.category(character)
+    return category[0] == "C" or category in {"Zl", "Zp"}
 
 
 class DaprBindingClient(Protocol):
@@ -74,9 +109,14 @@ def render(pointer: InboxPointer) -> tuple[str, str]:
     return headline, "\n".join(lines)
 
 
-def _plain_body(subject_line: str, body: str) -> str:
-    """SMTP's wire body: the render, verbatim. `subject_line` rides in the binding metadata instead."""
-    return body
+def _html_body(subject_line: str, body: str) -> str:
+    """SMTP's wire body: the render as an HTML document, every line escaped. `subject_line` rides in the binding metadata.
+
+    The SMTP binding sends its data as `text/html` whatever it holds ([[CTL-30]]), so a plain render loses
+    its line breaks, and a `<`, `>` or `&` an object id or a run carries would be read as markup.
+    """
+    lines = "<br>\n".join(html.escape(line) for line in body.split("\n"))
+    return f"<!doctype html>\n<html><body><p>{lines}</p></body></html>\n"
 
 
 def _slack_body(subject_line: str, body: str) -> str:
@@ -95,7 +135,7 @@ def make_binding_sender(
     binding: str,
     operation: str,
     timeout_seconds: float,
-    encode: Callable[[str, str], str] = _plain_body,
+    encode: Callable[[str, str], str],
     content_type: str | None = None,
 ) -> Sender:
     """A `Sender` over a Dapr OUTPUT BINDING.
@@ -144,6 +184,26 @@ def make_slack_sender(client: DaprBindingClient, *, binding: str, timeout_second
         encode=_slack_body,
         content_type="application/json",
     )
+
+
+def make_email_sender(client: DaprBindingClient, *, binding: str, timeout_seconds: float) -> Sender:
+    """The SMTP binding's `Sender`: `create`, the render as an escaped HTML body, and one send at a time.
+
+    ONE AT A TIME IS RASK'S CONTRACT WITH THE BINDING, not a tuning ([[CTL-30]]). Measured against daprd
+    1.19.0-rc.4's `bindings.smtp`: concurrent invocations at one sidecar delivered messages to another
+    send's recipient, and the same sends one at a time delivered none. The bus lane, the reconciler's tick
+    and the digest drains can overlap, and all of them push through the one table `_channel_table` builds
+    per process, and so through this sender, and a process has one sidecar. The lock waits outside the
+    binding's timeout, so a send queued behind others still has all of its own.
+    """
+    send = make_binding_sender(client, binding=binding, operation="create", timeout_seconds=timeout_seconds, encode=_html_body)
+    one_at_a_time = asyncio.Lock()
+
+    async def send_alone(*, destination: str, subject_line: str, body: str) -> None:
+        async with one_at_a_time:
+            await send(destination=destination, subject_line=subject_line, body=body)
+
+    return send_alone
 
 
 type ChannelTable = dict[str, Sender]

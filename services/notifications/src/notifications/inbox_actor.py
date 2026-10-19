@@ -495,7 +495,16 @@ class InboxActor(Actor, InboxActorInterface, Remindable):
 
         Whole-document rather than per-field: the door hands back what the form holds, and a partial
         merge would make "I removed my Slack address" indistinguishable from "I did not mention it".
+
+        An email destination is held to the prefs door's own rule here as well, so no caller of this
+        method stores one the SMTP binding would read as several recipients ([[CTL-30]]). Imported here,
+        as `digest_push_into` is: `notifications.api` mounts the routers, which reach this module.
         """
+        from notifications.api.channels import EMAIL, is_one_bare_address
+
+        email = str((payload.get("destinations") or {}).get(EMAIL) or "")
+        if email and not is_one_bare_address(email):
+            raise ValueError(f"the {EMAIL} destination must be exactly one bare address")
         record = ChannelPrefs(
             subject=self._subject(),
             channels=[str(c) for c in (payload.get("channels") or [])],

@@ -784,7 +784,7 @@ DROP_CREDENTIAL_VALUES := --set dapr.appToken=null --set frontend.oidc.sessionSe
 # app token and Dapr Configuration exist; observability is the store, dashboards and alerting rask's Collector exports
 # to. A GPU node with no device plugin yet adds nvidia-device-plugin. The annotator is not a prerequisite: it is a client
 # of the lakehouse with its own release (ADR 0171), which `k3s-up` installs after rask (`k3s-annotator`).
-FIXTURES ?= external-secrets dapr nats cloudnative-pg dex rustfs openbao kuberay-operator ray-cluster compute observability marquez
+FIXTURES ?= external-secrets dapr nats cloudnative-pg dex rustfs openbao kuberay-operator ray-cluster compute observability marquez mailpit
 
 k3s-fixtures: ## Install the development fixtures (FIXTURES) as their own releases, before the rask chart
 	$(if $(filter-out dex compute,$(FIXTURES)),KUBECONFIG=$(KUBECONFIG) ./scripts/fixtures.sh $(filter-out dex compute,$(FIXTURES)))

@@ -226,6 +226,17 @@ data:
     fi
     bao kv put secret/otel-collector-export username=otel-collector password=@"$c" >/dev/null
     {{- end }}
+    {{- with ((.Values.services.notifications).channels).email }}
+    {{- if .enabled }}
+    m="$HOME/seed/{{ .secretName }}"
+    if [ ! -s "$m" ]; then
+      if svc_get {{ .secretName }} password; then v=$got; else v=$(head -c 30 /dev/urandom | base64 | tr '+/' '-_' | tr -d '\n'); fi
+      (umask 077; printf '%s' "$v" > "$m")
+    fi
+    bao kv put secret/{{ .secretName }} user=notifications password=@"$m" >/dev/null
+    echo "seeded secret/{{ .secretName }} into OpenBao"
+    {{- end }}
+    {{- end }}
 
     {{- if $nats }}
     nats_bundle

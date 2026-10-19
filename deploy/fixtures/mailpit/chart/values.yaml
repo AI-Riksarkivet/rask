@@ -1,0 +1,11 @@
+# NOT FOR PRODUCTION (deploy/fixtures/README.md).
+
+# -- The Service and Deployment name: the relay deploy/values-local.yaml names as rask's `services.notifications.channels.email.host`.
+name: rask-mailpit
+# The tag `.dagger/notifications.go`'s rig runs, pinned to its content.
+image: axllent/mailpit:v1.21@sha256:81370195cd4a0eab9604d17c2617a7525b0486f9365555253b6c5376c6350f1a
+smtpPort: 1025
+httpPort: 8025
+resources:
+  requests: { cpu: 10m, memory: 32Mi }
+  limits: { memory: 128Mi }

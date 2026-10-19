@@ -1,0 +1,59 @@
+{{- $labels := dict "app.kubernetes.io/name" "mailpit" "app.kubernetes.io/instance" .Release.Name "app.kubernetes.io/component" "smtp-relay" }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.name }}
+  labels: {{- toYaml $labels | nindent 4 }}
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.name }}
+  labels: {{- toYaml $labels | nindent 4 }}
+spec:
+  ports:
+    - { name: smtp, port: {{ .Values.smtpPort }}, targetPort: smtp }
+    - { name: http, port: {{ .Values.httpPort }}, targetPort: http }
+  selector: {{- toYaml $labels | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.name }}
+  labels: {{- toYaml $labels | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {{- toYaml $labels | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- toYaml $labels | nindent 8 }}
+    spec:
+      serviceAccountName: {{ .Values.name }}
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: mailpit
+          image: {{ .Values.image }}
+          args: ["--smtp", "0.0.0.0:{{ .Values.smtpPort }}", "--listen", "0.0.0.0:{{ .Values.httpPort }}"]
+          ports:
+            - { name: smtp, containerPort: {{ .Values.smtpPort }} }
+            - { name: http, containerPort: {{ .Values.httpPort }} }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            # With no `--database`, Mailpit keeps its messages in a database file under the OS temp directory.
+            - { name: tmp, mountPath: /tmp }
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            periodSeconds: 10
+          resources: {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: tmp
+          emptyDir: { medium: Memory, sizeLimit: 64Mi }

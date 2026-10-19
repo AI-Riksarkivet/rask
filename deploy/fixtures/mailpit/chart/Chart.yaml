@@ -1,0 +1,8 @@
+apiVersion: v2
+name: mailpit
+description: >-
+  NOT FOR PRODUCTION. The development SMTP relay for rask's email channel: Mailpit, keeping every message it is handed
+  and serving them on its API. A platform runs its own relay; rask names it in `services.notifications.channels.email`.
+type: application
+version: 0.1.0
+appVersion: "1.21"

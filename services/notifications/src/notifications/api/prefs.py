@@ -15,7 +15,7 @@ import logging
 from fastapi import APIRouter
 from pydantic import BaseModel, ConfigDict, Field
 
-from notifications.api.channels import EMAIL, SLACK
+from notifications.api.channels import EMAIL, SLACK, is_one_bare_address
 from notifications.api.security import CurrentSubject
 from notifications.dependencies import ActorPlaneDep
 from notifications.proxies import inbox_for
@@ -73,6 +73,9 @@ async def set_prefs(payload: ChannelPreferences, subject: CurrentSubject, _actor
     missing = sorted(channel for channel in payload.channels if not payload.destinations.get(channel))
     if missing:
         raise ValidationError(f"no destination for channel(s): {', '.join(missing)} — a channel with nowhere to send is silently off")
+    email = payload.destinations.get(EMAIL)
+    if email and not is_one_bare_address(email):
+        raise ValidationError(f"the {EMAIL} destination must be exactly one bare address: no list, display name or control character, at most 254 characters")
     result = await inbox_for(subject).set_prefs(payload.model_dump(mode="json"))
     log.info("channel_prefs_updated", extra={"channels": sorted(payload.channels), "digest": payload.digest_seconds is not None})
     return ChannelPreferences(

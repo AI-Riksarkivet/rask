@@ -142,6 +142,14 @@ path (its policy names it) and writes `<release>-backup-s3`; no app's policy nam
 THE COLLECTOR'S AUDIT-STORE CREDENTIAL ([[XC-003]]), create-if-absent: kept, else carried from the store behind
 the Service, else minted.
 
+## `m="$HOME/seed/{{ .secretName }}"`
+
+THE EMAIL CHANNEL'S SMTP CREDENTIAL ([[CTL-30]]), seeded only while `services.notifications.channels.email` is on,
+under the same create-if-absent rule as the Collector's. The `notifications-email` Component resolves its `user` and
+`password` in the notifications sidecar, whose store policy names it through `lance.storeReads`. The dev relay
+(the `mailpit` fixture) asks for no authentication, so the dev pair is one only the store holds; a platform's relay
+gets the pair its operator puts in the platform's store.
+
 ## `bao kv put secret/viewer-s3 \`
 
 THE OBJECT BROWSER'S CREDENTIALS, as their own secret. `objects.py::_creds` fetches a per-STORE secret by name and

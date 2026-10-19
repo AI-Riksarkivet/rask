@@ -75,6 +75,8 @@ EXPECTED: Final[dict[str, dict[str, frozenset[str]]]] = {
     "nats-user-lineage": {"store": frozenset({"lineage"})},
     "nats-user-maintenance": {"store": frozenset({"maintenance"})},
     "nats-user-notifications": {"store": frozenset({"notifications"})},
+    # values-local.yaml turns the email channel on: its Component resolves the SMTP pair in the notifications sidecar alone.
+    "notifications-smtp": {"store": frozenset({"notifications"})},
     "nats-user-admin": {"store": frozenset({"eso"}), "pods": frozenset({"Job/rask-nats-stream-r1"})},
     "nats-user-monitor": {"store": frozenset({"eso"}), "pods": frozenset({"Deployment/rask-nats-box"})},
     "nats-server": {"store": frozenset({"eso"}), "pods": frozenset({"StatefulSet/rask-nats"})},

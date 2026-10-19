@@ -102,13 +102,14 @@ second case. Kueue's upstream docs only ever install it as its own release in `k
 - **What leaves the chart lands in `deploy/fixtures/`** (ADR 0153, [[XC-124]]): one directory per prerequisite, an
   upstream chart pinned in `fixture.env`, installed as its own release by `scripts/fixtures.sh` before rask's
   (`make k3s-fixtures`, a prerequisite of `make k3s-up`; `FIXTURES` names which, default `external-secrets dapr nats
-  cloudnative-pg dex rustfs openbao kuberay-operator ray-cluster compute observability marquez`: Dapr's control plane in dapr-system ([[XC-128]]), the NATS
+  cloudnative-pg dex rustfs openbao kuberay-operator ray-cluster compute observability marquez mailpit`: Dapr's control plane in dapr-system ([[XC-128]]), the NATS
   JetStream bus `rask-nats` in rask's namespace that `nats.url` names ([[XC-129]]), the CloudNativePG operator in
   cnpg-system that the AGE-on-CNPG `Cluster` needs, its CRDs still applied by `make k3s-crds` first ([[XC-130]]), the dev OIDC issuer `rask-dex`, object store `rask-rustfs` ([[XC-163]], ADR 0168) and secret store `rask-openbao` ([[XC-131]]; both stores' fixtures are `WAIT=false`: the object store's root credential and the secret store's seed scripts are rask's), the dev Ray engine
   ([[XC-125]]) and its companion `compute` service (a local chart, release `compute` in rask's namespace, `WAIT=false`:
   it reads rask's Dapr token, Dex, catalog and Collector by reference, and asks the catalog's decision door, which
-  answers its account only through `auth.externalDeciders`), the telemetry chain the Collector exports to ([[XC-127]]), and the OpenLineage graph backend
-  `rask-marquez` lineage's forwarder sends to (ADR 0158); a GPU node with no device plugin yet adds `nvidia-device-plugin`).
+  answers its account only through `auth.externalDeciders`), the telemetry chain the Collector exports to ([[XC-127]]), the OpenLineage graph backend
+  `rask-marquez` lineage's forwarder sends to (ADR 0158), and the SMTP relay `rask-mailpit` the email channel sends to
+  ([[CTL-30]]); a GPU node with no device plugin yet adds `nvidia-device-plugin`).
   The annotator is no prerequisite: it is a client of the lakehouse with its own release (ADR 0171; local chart, release
   `annotator` in rask's namespace, `WAIT=false`), which `make k3s-up` installs AFTER rask (`make k3s-annotator`), as the
   e2e-stack lane does: its own Dapr state store on a CloudNativePG `Cluster` it renders, its own app token and route, and

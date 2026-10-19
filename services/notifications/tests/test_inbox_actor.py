@@ -20,7 +20,7 @@ from dapr.actor import ActorId
 from notifications.config import get_notifications_settings
 from notifications.errors import InboxUnreadable
 from notifications.feed import unread_count
-from notifications.inbox_actor import COMPACTION_REMINDER, DIGEST_KEY, DIGEST_REMINDER, META_KEY, ROWS_KEY, InboxActor
+from notifications.inbox_actor import COMPACTION_REMINDER, DIGEST_KEY, DIGEST_REMINDER, META_KEY, PREFS_KEY, ROWS_KEY, InboxActor
 from notifications.models import InboxMeta, InboxRows, NotificationReason, notification_id
 from notifications.proxies import inbox_actor_id
 
@@ -841,6 +841,19 @@ async def test_a_naive_instant_from_one_producer_cannot_take_paging_down() -> No
     page = await actor.page({"limit": 10, "state": "all"})
 
     assert [pointer["source_run_id"] for pointer in page["pointers"]] == ["naive", "aware"]
+
+
+@pytest.mark.asyncio
+async def test_set_prefs_refuses_an_email_destination_the_prefs_door_refuses() -> None:
+    """The door's rule holds at the write behind it too, so no other caller of the actor can store a
+    destination the SMTP binding would read as several recipients ([[CTL-30]])."""
+    actor = _Actor()
+
+    with pytest.raises(ValueError, match="one bare address"):
+        await actor.set_prefs({"channels": ["email"], "destinations": {"email": "alice@example.test;bob@example.test"}})
+
+    assert PREFS_KEY not in actor.sm.staged
+    assert PREFS_KEY not in actor.sm.store
 
 
 # ── the digest drain must not re-enter its own actor ───────────────────────────────────────────────
