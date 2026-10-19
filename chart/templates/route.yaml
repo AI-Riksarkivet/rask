@@ -1,6 +1,7 @@
 {{- if .Values.route.enabled }}
 {{- $root := . -}}
 {{- if not .Values.route.parentRefs }}{{ fail "route.parentRefs must name the Gateway the routes attach to: the platform's in production, Traefik's `traefik-gateway` in kube-system on k3s" }}{{ end }}
+{{- if and (include "rask.isRealDeployment" .) (not .Values.route.hostnames) }}{{ fail "route.hostnames must name the hosts the platform's Gateway routes to this release on a real deployment: a route with no hostname claims every host its listener accepts" }}{{ end }}
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:

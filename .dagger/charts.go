@@ -192,7 +192,8 @@ func (m *Rask) Charts(
 // `nats.auth.provisioned` attests every bus client's NATS user the same way (`templates/nats-provisioned.yaml`).
 // `ray.dashboardUrl` names the estate's Ray, the one address every Ray consumer renders ([[CP-041]]). `nats.url` names the
 // platform's NATS bus the same way: a prerequisite rask never installs ([[XC-129]]), and `route.*` the platform's Gateway
-// the routes attach to and its in-cluster address (ADR 0165). `networkPolicy.apiServerEgress`, `route.edgeEgress` and
+// the routes attach to, the hostnames it routes to this release, which a real deployment refuses to go without
+// ([[XC-146]]), and its in-cluster address (ADR 0165). `networkPolicy.apiServerEgress`, `route.edgeEgress` and
 // `openbao.egress` state the peers the isolation layer admits the API server, the Gateway and the platform's secret store
 // at, which no URL can derive ([[XC-143]]). `objectStore.externalEndpoint` names the platform's S3: a real deployment
 // refuses the development store (`templates/prod-credentials.yaml`), whose root signs every STS token on RustFS.
@@ -200,6 +201,7 @@ const renderArgs = "--set image.repository=ghcr.io/example/rask " +
 	"--set-string ray.dashboardUrl=http://ray.example.com:8265 " +
 	"--set-string nats.url=nats://nats.example.com:4222 " +
 	"--set route.parentRefs[0].name=edge --set route.parentRefs[0].namespace=edge-system " +
+	"--set route.hostnames[0]=lance.example.com " +
 	"--set route.edgeEgress[0].to[0].ipBlock.cidr=192.0.2.20/32 " +
 	"--set route.edgeEgress[0].ports[0].port=8080 " +
 	"--set networkPolicy.apiServerEgress[0].to[0].ipBlock.cidr=192.0.2.10/32 " +

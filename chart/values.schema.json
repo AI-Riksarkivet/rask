@@ -1822,7 +1822,7 @@
                     "type": "boolean"
                 },
                 "hostnames": {
-                    "description": "Hostnames the routes answer. Empty matches every host the Gateway's listener accepts.",
+                    "description": "Hostnames the platform's Gateway routes to this release. Required while `enabled` on a real deployment; empty, on a development estate, the routes match every host the Gateway's listener accepts.",
                     "type": "array"
                 },
                 "parentRefs": {

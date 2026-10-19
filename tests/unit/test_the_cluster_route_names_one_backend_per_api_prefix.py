@@ -6,11 +6,20 @@ service serves the public path itself. Compute's rows come from the compute fixt
 chart renders no part of a bring-your-own engine's companion (ADR 0155), and the annotator's from its own release's
 route, because the lakehouse knows no annotation tool (ADR 0171). A render that still names a gateway object keeps a
 second router in the request path.
+
+A route with no hostname claims every host its Gateway's listener accepts, and Gateway API settles two such claims on
+one prefix by the oldest route, so a second release attached host-less to the same listener silently takes or loses
+`/` and `/api`. A real deployment (`rask.isRealDeployment`) therefore names the hosts its routes answer, and the render
+refuses one that names none ([[XC-146]]); a development estate's routes stay host-less.
 """
 
 from __future__ import annotations
 
-from tests.unit.chart_render import ANNOTATOR_FIXTURE_ARGS, DEFAULT_ARGS, render, render_fixture
+import subprocess
+
+import pytest
+
+from tests.unit.chart_render import ANNOTATOR_FIXTURE_ARGS, DEFAULT_ARGS, PROD_ARGS, render, render_fixture, render_text
 
 
 #: public prefix -> (Service, port, internal prefix the route rewrites to, or None for unchanged)
@@ -61,3 +70,19 @@ def test_each_api_prefix_reaches_its_service_through_the_cluster_route_and_no_ga
         if d.get("kind") == "Ingress" or "gateway" in d.get("metadata", {}).get("name", "")
     ]
     assert leftovers == []
+
+
+def test_a_real_deployment_that_names_no_hostname_is_refused() -> None:
+    with pytest.raises(subprocess.CalledProcessError) as refused:
+        render_text(*PROD_ARGS, "--set-json", "route.hostnames=[]")
+
+    assert (
+        "route.hostnames must name the hosts the platform's Gateway routes to this release on a real deployment: "
+        "a route with no hostname claims every host its listener accepts"
+    ) in refused.value.stderr
+
+
+def test_each_route_of_a_real_deployment_carries_the_hostnames_it_names() -> None:
+    routes = {doc["metadata"]["name"]: doc["spec"].get("hostnames") for doc in render(*PROD_ARGS) if doc.get("kind") == "HTTPRoute"}
+
+    assert routes == {"rask-api": ["lance.example.com"], "rask-web": ["lance.example.com"]}

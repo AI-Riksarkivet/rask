@@ -190,8 +190,8 @@ maintenance:
   olderThanDays: 7
 
 # The edge is the platform's Gateway (Gateway API; kgateway is the intended one): templates/route.yaml attaches the
-# zones' and every /api prefix's HTTPRoute to it. The deployer names the Gateway, its in-cluster address and the
-# NetworkPolicy egress that reaches its data plane pods; the render refuses any of them empty.
+# zones' and every /api prefix's HTTPRoute to it. The deployer names the Gateway, the hostnames it routes to this release,
+# its in-cluster address and the NetworkPolicy egress that reaches its data plane pods; the render refuses any of them empty.
 route:
   enabled: true
   hostnames: [] # e.g. [lance.example.com]

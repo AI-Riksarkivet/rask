@@ -104,7 +104,8 @@ PROD_ARGS: tuple[str, ...] = (
     "--set-string", f"openbao.externalAddr={SECRET_STORE_URL}",
     "--set-json", f'openbao.egress=[{{"to":[{{"ipBlock":{{"cidr":"{SECRET_STORE_CIDR}"}}}}],"ports":[{{"protocol":"TCP","port":8200}}]}}]',
     "--set", "backups.volumeSnapshot.snapshotClassName=csi-snapclass",
-    "--set", "ingress.host=lance.example.com",
+    # `--set-json`, so a gate's later `--set-json route.hostnames=[]` replaces it: helm applies every `--set` after every `--set-json`.
+    "--set-json", 'route.hostnames=["lance.example.com"]',
     "--set", "image.repository=ghcr.io/example/rask",
 )  # fmt: skip
 

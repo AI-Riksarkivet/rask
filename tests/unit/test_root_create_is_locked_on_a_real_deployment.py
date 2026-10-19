@@ -37,8 +37,9 @@ from tests.unit.chart_render import SECRET_STORE_URL
 
 LOCK = "LANCE_FGA_LOCK_ROOT_CREATE"
 
-#: A real deployment: the platform's store, whose operator attests the keys it provisioned.
+#: A real deployment: the platform's store, whose operator attests the keys it provisioned, and the host its routes answer.
 _REAL = (
+    "route.hostnames[0]=lance.example.com",
     "openbao.enabled=false",
     f"openbao.externalAddr={SECRET_STORE_URL}",
     "dex.enabled=false",

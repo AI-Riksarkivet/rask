@@ -26,6 +26,20 @@ the Gateway (and optionally its listener as `sectionName`): the platform's in pr
 `traefik-gateway` in kube-system (listener `web`, the node's port 80) on k3s, set by
 `deploy/values-local.yaml`.
 
+## `{{- if and (include "rask.isRealDeployment" .) (not .Values.route.hostnames) }}{{ fail ... }}`
+
+A route with no hostname claims every host its Gateway's listener accepts (Gateway API `HTTPRoute.spec.hostnames`, CRD
+v1.5.1): on a listener with no hostname it matches any Host, and on a hostname-scoped listener it inherits the
+listener's host, and the chart cannot see which kind of listener the platform provides. Routes tied on hostname fall to
+the match-precedence rules, which end at the oldest route, so two releases attached host-less to one listener with the
+same prefixes are rival claims that one of them silently wins, the OIDC callback zone and `/dex` included. A route that
+names its host takes precedence over a host-less one for that host.
+
+So a real deployment names the hosts the platform's Gateway routes to it, and the render refuses one that names none
+([[XC-146]]). The condition is `rask.isRealDeployment`, the one `prod-credentials.yaml` and the root-create lock read, so
+the three cannot disagree about what "real" means. A development estate renders host-less: the k3s estate is reached on
+whatever host its listener accepts (`localhost`, the node's address), and the kind and Dagger e2e lanes render no route.
+
 ## `name: {{ include "rask.fullname" . }}-api`
 
 `<release>-api`: one rule per public `/api/*` prefix, ranged from the `rask.apiRoutes` helper
@@ -85,7 +99,7 @@ and a route to it would hand the app's own origin, under `/dex`, to whatever wor
 
 ## `{{- with .Values.route.hostnames }}`
 
-Empty hostnames match every host the Gateway's listener accepts (any Host, a bare IP, a forwarded
-localhost). A route with no hostname is a claim on every host that listener accepts, so two releases
-attached host-less to one listener are rival claims on `/` and `/api` and the Gateway picks between them;
-a second install sets its own `hostnames` or `route.enabled=false`.
+Both routes carry the hostnames the release names. Empty, which only a development estate renders (the refusal
+above), they match every host the Gateway's listener accepts (any Host, a bare IP, a forwarded localhost), so two
+releases attached host-less to one listener are rival claims on `/` and `/api`; a second development install sets its
+own `hostnames` or `route.enabled=false`.

@@ -275,11 +275,12 @@ def test_every_dapr_annotated_pod_carries_the_injector_webhook_label() -> None:
 
 
 #: A render whose images come from a registry off this node — which `prod-credentials.yaml` reads as a
-#: real deployment, so it points at the platform's store rather than the dev OpenBao. That keeps
-#: a test about IMAGE PINNING testing its own subject.
+#: real deployment, so it points at the platform's store rather than the dev OpenBao and names the host
+#: its routes answer. That keeps a test about IMAGE PINNING testing its own subject.
 _REAL_REGISTRY = (
     "image.localImages=false",
     "image.repository=reg.example",
+    "route.hostnames[0]=lance.example.com",
     "openbao.enabled=false",
     f"openbao.externalAddr={chart_render.SECRET_STORE_URL}",
     "dex.enabled=false",

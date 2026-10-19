@@ -271,7 +271,9 @@ with `--address ray://…:10001`.
 - **The cluster route** (`templates/route.yaml`) — two Gateway API HTTPRoutes on the platform's Gateway
   (`route.parentRefs`): `<release>-api` sends each public `/api/*` prefix to its service, with a `URLRewrite`
   `ReplacePrefixMatch` where the service mounts another path (the table is `rask.apiRoutes` in `_helpers.tpl`), and
-  `<release>-web` sends `/<zone>`, `/dex` and `/` to the zones and Dex. No rask process sits at the edge: an
+  `<release>-web` sends `/<zone>`, `/dex` and `/` to the zones and Dex. A real deployment names the hosts the
+  routes answer (`route.hostnames`), and the render refuses one that names none, since a host-less route claims every
+  host its listener accepts ([[XC-146]]). No rask process sits at the edge: an
   unmatched `/api/*` is the Gateway's own 404, and every service authenticates each request itself. Only Core matches
   and `URLRewrite` are used, so any conformant implementation serves them (kgateway, the intended production edge;
   Envoy Gateway, Istio, Cilium); in development it is k3s's Traefik with its Gateway provider switched on by

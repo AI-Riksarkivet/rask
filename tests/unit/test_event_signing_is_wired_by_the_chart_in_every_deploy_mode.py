@@ -33,9 +33,11 @@ from tests.unit import chart_render
 from tests.unit.chart_render import DEFAULT_ARGS
 
 
-#: The platform's store makes a real deployment, which carries no published dev credential: the bundled dev Dex is off, so the
-#: refusal under test is this one.
+#: The platform's store makes a real deployment, which carries no published dev credential and names the host its routes
+#: answer: the bundled dev Dex is off and a hostname is named, so the refusal under test is this one.
 _PLATFORM_STORE = (
+    "--set",
+    "route.hostnames[0]=lance.example.com",
     "--set",
     "openbao.enabled=false",
     "--set-string",

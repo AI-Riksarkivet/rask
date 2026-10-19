@@ -1749,13 +1749,15 @@ route:
   # only on change and SvelteKit's SSE transport sends no keepalive).
   #
   # A ROUTE WITH NO HOSTNAME IS A CLAIM ON EVERY HOST ITS GATEWAY'S LISTENER ACCEPTS. Two releases attached host-less to
-  # one listener are rival claims on `/` and `/api`, and the Gateway picks between them; a second install sets its own
-  # `hostnames` or `route.enabled=false`.
+  # one listener are rival claims on `/` and `/api`, and the Gateway gives a tie to the oldest route. So a real deployment
+  # (`rask.isRealDeployment`) names its `hostnames` and the render refuses one that names none ([[XC-146]]); a
+  # development estate may leave them empty, and a second install beside it sets its own `hostnames` or
+  # `route.enabled=false`.
   # -- Renders the HTTPRoutes publishing the zones on `/`, `/dex` and each `/api/*` prefix on the Gateway `parentRefs` names.
   enabled: true
   # -- Gateways the routes attach to, as Gateway API parentRefs ([{name, namespace, sectionName}]). Required while `enabled`.
   parentRefs: []
-  # -- Hostnames the routes answer. Empty matches every host the Gateway's listener accepts.
+  # -- Hostnames the platform's Gateway routes to this release. Required while `enabled` on a real deployment; empty, on a development estate, the routes match every host the Gateway's listener accepts.
   hostnames: []
   # -- In-cluster address of that Gateway (RASK_EDGE_URL): where the zones' server side sends `/api/*`, through the same routes a browser takes. Required while the zones render.
   edgeUrl: ""

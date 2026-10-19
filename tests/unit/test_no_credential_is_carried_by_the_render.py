@@ -48,6 +48,7 @@ def test_a_real_deployment_refuses_the_bundled_dev_idp() -> None:
     real = (
         "--set", "image.repository=ghcr.io/example/rask", "--set", "openbao.enabled=false",
         "--set-string", f"openbao.externalAddr={SECRET_STORE_URL}", "--set", "signing.provisioned=true",
+        "--set", "route.hostnames[0]=lance.example.com",
     )  # fmt: skip
     with pytest.raises(subprocess.CalledProcessError) as refused:
         render_text(*real, "--set", "nats.auth.provisioned=true")

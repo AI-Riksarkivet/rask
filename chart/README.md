@@ -282,7 +282,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | route.edgeEgress | list | `[]` | NetworkPolicy egress rules ({to, ports}) admitting the zones to the Gateway's data plane pods, at the pod port a policy sees. Required under networkPolicy.enabled while the zones render. |
 | route.edgeUrl | string | `""` | In-cluster address of that Gateway (RASK_EDGE_URL): where the zones' server side sends `/api/*`, through the same routes a browser takes. Required while the zones render. |
 | route.enabled | bool | `true` | Renders the HTTPRoutes publishing the zones on `/`, `/dex` and each `/api/*` prefix on the Gateway `parentRefs` names. |
-| route.hostnames | list | `[]` | Hostnames the routes answer. Empty matches every host the Gateway's listener accepts. |
+| route.hostnames | list | `[]` | Hostnames the platform's Gateway routes to this release. Required while `enabled` on a real deployment; empty, on a development estate, the routes match every host the Gateway's listener accepts. |
 | route.parentRefs | list | `[]` | Gateways the routes attach to, as Gateway API parentRefs ([{name, namespace, sectionName}]). Required while `enabled`. |
 | secrets.hfTokenInStore | bool | `false` | True once the Hugging Face token is in the secret store at `<kvMount>/hf-token`; renders the `<release>-hf-token` ExternalSecret. False starts Ray pods without HF_TOKEN. |
 | security.infraContexts.age | object | `{"fsGroup":999,"runAsUser":999}` | uid/fsGroup for the AGE Postgres pod (postgres image uid/gid 999). |

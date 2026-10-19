@@ -53,7 +53,7 @@ The rewrite is Gateway API `URLRewrite` `ReplacePrefixMatch`. An unmatched `/api
 | Value / variable | Meaning |
 |---|---|
 | `route.parentRefs` | The Gateway the routes attach to (required). In development, `traefik-gateway` in kube-system. |
-| `route.hostnames` | Hostnames the routes answer; empty matches every host the listener accepts. |
+| `route.hostnames` | Hostnames the platform's Gateway routes to this release. Required on a real deployment, which the render refuses with an empty list; empty, in development, the routes match every host the listener accepts. |
 | `route.edgeUrl` → `RASK_EDGE_URL` | The Gateway's in-cluster address, where the zones' server side sends `/api/*`. Required while the zones render. |
 | `route.edgeEgress` | NetworkPolicy egress rules admitting the zones to the Gateway's data plane pods; required under `networkPolicy.enabled`. |
 | `forwardedAllowIps` | The data plane's pod CIDR, trusted for `X-Forwarded-For` by every service the route publishes. |
