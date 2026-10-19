@@ -1036,7 +1036,8 @@ async def register_table(
         try:
             await run_in_threadpool(table_claims.take, ns, claims, claimed_location, canonical, segments)
         except location_claims.LocationHeldError as held:
-            raise InvalidInputError(f"register location {body.location!r} is held by table {held.claim.table!r}") from None
+            log.warning("register_refused_held_location", extra={"table": id, "location": held.claim.location, "holder": held.claim.table})
+            raise table_bases.occupied_location_refusal(body.location) from None
         verdict = await run_in_threadpool(table_bases.judge_registered_table, ns, so, segments, body.location, context)
     except Exception as refusal:
         try:
@@ -1178,7 +1179,8 @@ async def undrop_table(
     try:
         await run_in_threadpool(table_claims.take, ns, table_claims.claim_store(settings), location, canonical, segments)
     except location_claims.LocationHeldError as held:
-        raise InvalidTableStateError(f"cannot undrop {canonical}: its location is now held by table {held.claim.table!r}") from None
+        log.warning("undrop_refused_held_location", extra={"table": canonical, "location": held.claim.location, "holder": held.claim.table})
+        raise InvalidTableStateError(f"cannot undrop {canonical}: its location is now held by another table") from None
     try:
         response: RegisterTableResponse = await run_in_threadpool(native.call, ns, "register_table", body)
     except TableAlreadyExistsError:

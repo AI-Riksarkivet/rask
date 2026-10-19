@@ -104,6 +104,5 @@ def require_no_other_holder(ns: LanceNamespace, store: ClaimStore, location: str
     current = location_claims.holder(store, location)
     if current is None or current.table == table or holder_is_gone(ns, store, current):
         return
-    raise InvalidTableStateError(
-        f"cannot destroy table {table}: its location is held by table {current.table!r}, which still resolves to it; deregister {table} instead"
-    )
+    log.warning("drop_refused_held_location", extra={"table": table, "location": current.location, "holder": current.table})
+    raise InvalidTableStateError(f"cannot destroy table {table}: its location is held by another table, which still resolves to it; deregister {table} instead")

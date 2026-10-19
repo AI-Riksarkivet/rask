@@ -800,8 +800,9 @@ def rename_table(
     try:
         table_claims.take(ns, claims, source_uri, dest_id, new_segments, previous=source_id, token=uuid.uuid4().hex)
     except location_claims.LocationHeldError as held:
+        log.warning("rename_refused_held_location", extra={"source": source_id, "location": held.claim.location, "holder": held.claim.table})
         raise ConcurrentModificationError(
-            f"cannot rename {source_id}: its location is held by {held.claim.table}, by a concurrent rename or registration; describe it and retry"
+            f"cannot rename {source_id}: its location is held by another table, by a concurrent rename or registration; describe it and retry"
         ) from None
 
     def _hand_back() -> None:

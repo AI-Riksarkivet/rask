@@ -273,7 +273,10 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   `_set_warehouse_status` all collapse `PermissionDenied → TableNotFound`, so "not yours" and "does
   not exist" are byte-identical and the door cannot enumerate ids. CREATE doors deliberately do the
   opposite (`require_project_exists` 404s naming `POST /management/v1/projects`) because that 404 is a fix the
-  caller needs. Class rule, not a per-endpoint judgement call.
+  caller needs. Class rule, not a per-endpoint judgement call. **A location claim's refusal names no holder**
+  ([[LH-436]]): the holder is a table the caller may hold no grant on, so a register at a held location answers
+  the overlap judge's own sentence (`table_bases.occupied_location_refusal`), and the undrop, rename, destructive
+  drop and data-directory refusals say "another table". Each logs the holder at WARNING for the operator.
 - **A purge must prove sole ownership first.** One project may back two warehouses with one bucket
   (`projects_claiming_bucket` subtracts the caller's own project on purpose — the work+gold pair),
   so `?purge_bucket=true` checks same-project siblings AND the reserved platform buckets before the

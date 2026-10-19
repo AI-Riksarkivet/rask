@@ -450,6 +450,8 @@ def test_a_table_location_is_exclusive(estate: _Estate) -> None:
     of the outer table would delete the inner one's bytes. Only the namespace's object index answers it, so the
     door asks once the backend has recorded the registration and detaches the later of the two. The victim
     was created, and a create takes no location claim, so its own location reaches this rule, not the claim.
+    ``outer/inner`` is held by ``db$inner``'s claim, which refuses in the same words: the answer says the
+    location is taken and never which table holds it, since the caller may hold no grant on that table ([[LH-436]]).
 
     A table whose NAME the catalog percent-encodes into its location (``räksmörgås`` ->
     ``r%C3%A4ksm%C3%B6rg%C3%A5s``, ``growth%`` -> ``growth%25``) is still its own: it is created with a
@@ -471,7 +473,7 @@ def test_a_table_location_is_exclusive(estate: _Estate) -> None:
     assert estate.client.post("/v1/table/db$inner/register", json={"location": "outer/inner"}).status_code == 200, (
         "the control: a location of its own registers"
     )
-    for location in (victim, f"{victim}/tree", "outer"):
+    for location in (victim, f"{victim}/tree", "outer", "outer/inner"):
         resp = estate.client.post("/v1/table/db$squatter/register", json={"location": location})
         _refused(resp, _INVALID_INPUT)
         assert resp.json()["detail"] == f"register location {location!r} equals, contains or sits under another table's location", resp.text

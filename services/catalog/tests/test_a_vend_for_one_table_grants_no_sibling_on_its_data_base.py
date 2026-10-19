@@ -141,4 +141,9 @@ def test_a_table_on_a_data_base_reaches_none_of_another_tables_fragments(
         registered = two_store_catalog.post(f"/v1/table/mb$thief{uuid.uuid4().hex[:8]}/register", json={"location": thief_location})
 
         assert registered.status_code == 400, f"a registration declaring {owner}'s data directory was admitted: {registered.text}"
-        assert "holds" in registered.json()["detail"], registered.text
+        # The directory is the caller's own manifest's to name; the table holding it is not ([[LH-436]]).
+        directory = _directory(two_stores, owner_location).removeprefix("s3://").strip("/")
+        assert registered.json()["detail"] == (
+            f"the dataset declares the data directory {directory!r}, which another table holds; a table's data directory is its own, "
+            "so the catalog does not admit a second table reading through it"
+        ), registered.text

@@ -188,6 +188,15 @@ def _manifest_table_locations(root: str, storage_options: StorageOptions) -> lis
     return locations
 
 
+def occupied_location_refusal(relative: str) -> InvalidInputError:
+    """The refusal of a register at a location another table resolves to or holds.
+
+    One sentence for the overlap check and the location claim alike, so a caller cannot tell which of the
+    two answered, and neither names the other table: the caller may hold no grant on it ([[LH-436]]).
+    """
+    return InvalidInputError(f"register location {relative!r} equals, contains or sits under another table's location")
+
+
 def require_exclusive_location(root: str, relative: str, storage_options: StorageOptions) -> None:
     """Refuse a registered location that equals, contains or sits under another registered table's.
 
@@ -210,7 +219,7 @@ def require_exclusive_location(root: str, relative: str, storage_options: Storag
     overlapping = [location for location in locations if location != mine and (location_within(location, mine) or location_within(mine, location))]
     if same > _ONE_TABLE or overlapping:
         log.warning("register_refused_overlapping_location", extra={"location": mine, "overlaps": overlapping[:5], "same": same})
-        raise InvalidInputError(f"register location {relative!r} equals, contains or sits under another table's location")
+        raise occupied_location_refusal(relative)
 
 
 def entries_for_registration(
@@ -402,6 +411,6 @@ def claim_registered_directories(
     except location_claims.LocationHeldError as held:
         log.warning("register_refused_held_data_directory", extra={"table": holder, "directory": held.claim.location, "holder": held.claim.table})
         raise InvalidInputError(
-            f"the dataset declares the data directory {held.claim.location!r}, which table {held.claim.table!r} holds; a table's data "
+            f"the dataset declares the data directory {held.claim.location!r}, which another table holds; a table's data "
             "directory is its own, so the catalog does not admit a second table reading through it"
         ) from None

@@ -67,3 +67,8 @@ def test_concurrent_renames_of_one_table_leave_one_live_id_on_its_location(real_
     # A loser that reaches the door after the winner has finished finds no source: 404, also a refusal.
     assert len(statuses) == RENAMES and statuses.count(200) == 1 and set(statuses) <= {200, 404, 409}, answers
     assert {body.get("code") for body in losers} <= {ConcurrentModificationError.code}, losers
+    # A loser learns that the source moved, never the name another request moved it to ([[LH-436]]).
+    assert {body.get("detail") for body in losers} <= {
+        "cannot rename ns1$src: its location is held by another table, by a concurrent rename or registration; describe it and retry",
+        "cannot rename ns1$src: a concurrent rename already moved it to ns1$d0",
+    }, losers

@@ -1009,7 +1009,8 @@ async def undrop_namespace(
             try:
                 await run_in_threadpool(table_claims.take, ns, table_claims.claim_store(settings), location, t_id, t_segments)
             except location_claims.LocationHeldError as held:
-                raise InvalidTableStateError(f"cannot undrop table {t_id}: its location is now held by table {held.claim.table!r}") from None
+                log.warning("undrop_refused_held_location", extra={"table": t_id, "location": held.claim.location, "holder": held.claim.table})
+                raise InvalidTableStateError(f"cannot undrop table {t_id}: its location is now held by another table") from None
             try:
                 await run_in_threadpool(native.call, ns, "register_table", body)
             except TableAlreadyExistsError:
