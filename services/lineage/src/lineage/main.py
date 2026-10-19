@@ -17,6 +17,7 @@ from fastapi import FastAPI, Request
 from lineage.api.dapr import register_dapr
 from lineage.api.v1.router import api_router
 from lineage.core.config import get_settings
+from lineage.services.feed_watch import FeedWatch
 from lineage.services.provenance import ProvenanceStore
 from service_kit.bus_watchdog import start_bus_watchdog
 from service_kit.draining import arm_drain_on_sigterm
@@ -38,6 +39,9 @@ configure_app_logging()  # INFO audit/lifecycle logs reach OTLP (obs audit 2026-
 #: rollout that rolls both, and one that waits for ever never reports what it is waiting for.
 _ENSURE_DEADLINE_SECONDS: Final = 120.0
 _ENSURE_RETRY_SECONDS: Final = 2.0
+#: How often readiness's feed watch reads the feed through the catalog, and how long one read may take (LIN-8).
+FEED_WATCH_INTERVAL_SECONDS: Final = 5.0
+FEED_WATCH_BUDGET_SECONDS: Final = 5.0
 
 
 def _no_disarm() -> None:
@@ -89,10 +93,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     # outage (`service_kit.bus_watchdog`); None where the chart names this pod no bus.
     bus_watchdog = await start_bus_watchdog()
     _disarm_drain: Callable[[], None] = _no_disarm
+    feed_watch: FeedWatch | None = None
     try:
         store = ProvenanceStore.from_settings(settings)
         await _ensure_tables(store)
         app.state.provenance = store
+        # Readiness reads this watch's verdict, never the feed itself: the read costs what the catalog takes to open the
+        # feed, which a one-second probe cannot wait for (`lineage.services.feed_watch`).
+        feed_watch = FeedWatch(store.ready, interval=FEED_WATCH_INTERVAL_SECONDS, budget=FEED_WATCH_BUDGET_SECONDS)
+        feed_watch.start()
+        app.state.feed_watch = feed_watch
         # Auth is opt-in; when enabled, converge on the CATALOG's store — provision is idempotent by store
         # NAME ("lance-catalog"), so both services resolve the same store + model without the id being
         # pinned ahead of boot. (The catalog writes the grants on create; lineage reads them — one shared
@@ -123,6 +133,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     finally:
         _disarm_drain()
         app.state.shutting_down = True
+        if feed_watch is not None:
+            await feed_watch.stop()
         if bus_watchdog is not None:
             await bus_watchdog.stop()
         # Isolate each close so a failure in one still runs the others (parity with the other services).
@@ -144,16 +156,10 @@ async def _feed_ready(request: Request) -> Readiness:
 
     A pod whose catalog cannot be reached would otherwise report Ready, get rotated in, and answer every
     delivery with a retry: the bus redelivers, so nothing is lost, but the pod should be out of rotation
-    while it cannot record anything.
+    while it cannot record anything. The answer is the feed watch's latest verdict, so the probe never waits on the read.
     """
-    store: ProvenanceStore | None = getattr(request.app.state, "provenance", None)
-    if store is None:
-        return Readiness(status=ReadinessStatus.degraded, components={"catalog": "unavailable"})
-    try:
-        async with asyncio.timeout(2):
-            await store.ready()
-    except Exception:
-        log.warning("readyz_catalog_unavailable")
+    watch: FeedWatch | None = getattr(request.app.state, "feed_watch", None)
+    if watch is None or not watch.ready:
         return Readiness(status=ReadinessStatus.degraded, components={"catalog": "unavailable"})
     return Readiness(status=ReadinessStatus.ready, components={"catalog": "healthy"})
 
