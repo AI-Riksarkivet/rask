@@ -121,11 +121,7 @@ helm repo update >/dev/null && helm dependency build ./chart >/dev/null
 # Dapr's took 90 s instead of 13 s). Scaled to zero, the render schedules no pod for it, so the side-loaded set below
 # asks for no flows image; install_from_empty keeps it, since it proves every workload starts. NOTIFICATIONS STAYS ON:
 # criterion 4's module reads the inboxes the shared scenario fills (tests/e2e-py/test_events_are_correct.py).
-#
-# A VENDED CREDENTIAL NAMES THE ADDRESS THE RUNNER REACHES THE STORE AT, the port-forward below: the scenario's stock
-# client writes from this runner to the endpoint the catalog vends, and the catalog's own `rask-rustfs:9000` resolves
-# only in the cluster (`vending.endpoint`, LH-489). Every other suite here brings its own storage options.
-HELM_SET+=(--set services.flows.replicas=0 --set-string vending.endpoint=http://localhost:9900)
+HELM_SET+=(--set services.flows.replicas=0)
 
 # EVERY SIDE-LOADED IMAGE THE CHART SCHEDULES, derived from the render rather than a list kept here.
 # `image.localImages=true` means a bare `<component>:dev` resolves on the NODE, so an image this
@@ -232,6 +228,15 @@ done <<<"$SIDE_LOADED"
 rm -rf "$IMAGE_DIR"
 # The object store runs the upstream RustFS image its fixture pins by digest, which the node pulls itself.
 "$(dirname "$0")/fixtures.sh" rustfs
+# A VENDED CREDENTIAL NAMES AN ADDRESS BOTH SIDES REACH THE STORE AT: the node's own address and the store's NodePort, as
+# on the estate. The scenario's stock client writes from this runner, and the annotator, an in-cluster client of the
+# catalog (ADR 0171), reads from its pod, where a port-forward on the runner answers nothing. The catalog's own
+# `rask-rustfs:9000` resolves only in the cluster (`vending.endpoint`, LH-489). Every other suite here brings its own
+# storage options, through the port-forward below.
+NODE_IP="$(kubectl get node -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')"
+STORE_PORT="$(kubectl get svc "$RELEASE-rustfs" -o jsonpath='{.spec.ports[?(@.name=="s3")].nodePort}')"
+[ -n "$NODE_IP" ] && [ -n "$STORE_PORT" ] || { echo "!! no node address ($NODE_IP) or store NodePort ($STORE_PORT) to vend" >&2; exit 2; }
+HELM_SET+=(--set-string vending.endpoint="http://$NODE_IP:$STORE_PORT")
 
 step "4/9 deploy the governed stack (auth ON, #3-A/#3-B/#4 flags ON, maintenance ON, telemetry and zones OFF)"
 # HISTORY: `--wait` used to DEADLOCK on a fresh cluster, which is why this job never once passed in CI.
