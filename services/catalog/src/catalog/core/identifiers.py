@@ -42,13 +42,15 @@ from lance_namespace import InvalidInputError
 MAX_NAMESPACE_DEPTH = 8
 
 
-#: Characters a namespace/table segment may never carry, because they are IAM wildcard metacharacters.
-#: `*` and `?` are wildcards inside BOTH a Resource ARN and an ``s3:prefix`` StringLike condition, so a
-#: segment holding one flows verbatim from the table's derived object-store prefix into the STS session
-#: policy that vends per-table credentials (``core.vending.build_session_policy``) and WIDENS the grant to
-#: siblings — a ``foo*`` prefix authorises ``bucket/foo*/*``, which matches ``foobar``. IAM offers no way to
-#: escape these inside a resource, so they are refused at the create door rather than neutralised downstream.
-_SEGMENT_WILDCARD_METACHARS = ("*", "?")
+#: The IAM wildcard metacharacters. `*` and `?` are wildcards inside BOTH a Resource ARN and an ``s3:prefix``
+#: StringLike condition, with no escape, so a value holding one that reaches the STS session policy a vend is scoped
+#: by (``core.vending.build_session_policy``) WIDENS the grant to siblings — a ``foo*`` prefix authorises
+#: ``bucket/foo*/*``, which matches ``foobar``. ONE tuple for every door that lets a value into that policy: a
+#: segment is refused at the create door (:func:`require_safe_segments`) and a location at the register door
+#: (``table_bases.require_registrable_location``), so no table prefix holds one, and the policy builder drops a
+#: declared base holding one, since the table's writer chose it ([[LH-437]]). A second copy is a second thing that can
+#: fall out of step with what IAM treats as a wildcard.
+IAM_WILDCARD_METACHARS = ("*", "?")
 
 
 def require_safe_segments(segments: list[str], *, delimiter: str) -> None:
@@ -72,7 +74,7 @@ def require_safe_segments(segments: list[str], *, delimiter: str) -> None:
                 f"identifier segment {seg!r} contains the namespace delimiter {delimiter!r}: an id is its segments joined "
                 f"by the delimiter, so {segments!r} would land at an id naming other segments. Choose a name without it."
             )
-        hit = [c for c in _SEGMENT_WILDCARD_METACHARS if c in seg]
+        hit = [c for c in IAM_WILDCARD_METACHARS if c in seg]
         if hit:
             raise InvalidInputError(
                 f"identifier {delimiter.join(segments)!r} has a segment {seg!r} containing the reserved "

@@ -1,7 +1,7 @@
 """A manifest-declared base is granted READ, and nothing confined that grant to the caller's tenancy.
 
-`build_session_policy` appends a READ statement for every base the table's manifest declares. The two
-guards already on that loop check the base's SHAPE — `_reject_iam_metacharacters` refuses `*`/`?`,
+`build_session_policy` appends a READ statement for every base the table's manifest declares. The
+checks already on that loop are of the base's SHAPE — a base holding an IAM wildcard is dropped,
 `_reject_a_base_that_is_not_a_location` refuses a bucket root and a `..` segment — and neither says
 anything about WHERE a well-formed base points.
 
@@ -20,7 +20,8 @@ So a base is granted when it is inside the table's own vended scope — which is
 branch is, and measured 2026-09-13 is the shape live tables actually declare (`<table-root>/tree/work`)
 — or when the operator has sanctioned it. Anything else is dropped.
 
-DROPPED, NEVER RAISED, and that is the difference from the two sibling guards on the same loop: a
+DROPPED, NEVER RAISED, as a base holding a wildcard is ([[LH-437]],
+`test_a_base_holding_an_iam_wildcard_never_fails_the_vend.py`), and unlike the bucket-root check: a
 poisoned manifest must not make a table permanently un-vendable. The caller keeps the credential it was
 entitled to and loses only the grant it was not.
 """

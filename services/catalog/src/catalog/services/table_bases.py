@@ -26,6 +26,7 @@ from pydantic import BaseModel, Field
 
 from catalog.core.base_judge import BaseJudge, GovernedStorage
 from catalog.core.config import shared_lance_session
+from catalog.core.identifiers import IAM_WILDCARD_METACHARS
 from catalog.core.namespace import registered_dataset_facts
 from catalog.services import native, table_claims
 from service_kit.lakehouse import base_registry, blobs, location_claims
@@ -116,7 +117,9 @@ def require_registrable_location(location: str | None, *, root: str, control_roo
     - its spelling must name the location the store opens, by the rule the base judge applies
       (:func:`~service_kit.lakehouse.base_refs.names_a_location`): each segment, percent-decoded once, is
       not empty, ``.`` or ``..`` (which also refuses the namespace root itself), holds no ASCII control
-      character and no ``/`` or ``\\`` the decode added. Measured over moto on pylance 12.0.0 (lh279 r4
+      character, no ``?`` and no ``/`` or ``\\`` the decode added. The store keeps a ``?`` under a re-encoded name
+      that holds no table, so an id registered there finds no table on query or count (measured on pylance 13.0.0
+      over the dir backend, [[LH-435]]). Measured over moto on pylance 12.0.0 (lh279 r4
       register_probe): the backend refuses ``\\t..`` and ``..\\t`` but accepts ``.\\t.``, ``.\\n.`` and
       ``.\\r.``, and pylance drops the control character and resolves the ``..`` left behind, so
       ``x/.\\t./<victim>`` opens the victim; any other control character leaves a location the store will not
@@ -125,8 +128,10 @@ def require_registrable_location(location: str | None, *, root: str, control_roo
       literally (lh279 r5 register_probe: ``<victim>%20`` is described as ``<victim>%2520`` and reads
       nothing of the victim). Every check below compares spellings, and a comparison of spellings answers
       only for one that names its location;
-    - no segment may hold a ``?`` once decoded: the store keeps one under a re-encoded name that holds no table, so
-      an id registered there finds no table on query or count (measured on pylance 13.0.0 over the dir backend);
+    - no segment may hold an IAM wildcard once decoded (``*``; a ``?`` names no location): the location is the
+      table's object-store prefix, which every vended session policy names unescaped, so a wildcard there would widen
+      the credential to sibling objects — the reason a table's name may not hold one either
+      (:data:`catalog.core.identifiers.IAM_WILDCARD_METACHARS`, [[LH-437]]);
     - no segment may begin with ``_`` once decoded: every control-root prefix does (``_bases``,
       ``_protection``, ``_trash``, ``__manifest`` …), and a glob keeps a prefix the next feature adds out of
       every vend without anyone remembering to list it. Judged decoded, so a ``%5F`` is refused on this
@@ -152,11 +157,14 @@ def require_registrable_location(location: str | None, *, root: str, control_roo
     if decoded is None:
         raise InvalidInputError(
             f"register location {stated!r} must name one directory beneath the namespace root: no segment may decode to nothing, '.' "
-            "or '..', or hold a control character or a separator its escapes add, because such a spelling does not name the location "
+            "or '..', or hold a control character, a '?' or a separator its escapes add, because such a spelling does not name the location "
             "the store would open"
         )
-    if any("?" in segment for segment in decoded):
-        raise InvalidInputError(f"register location {stated!r} holds '?', which the store keeps under a re-encoded name that holds no table")
+    if hit := [char for char in IAM_WILDCARD_METACHARS if any(char in segment for segment in decoded)]:
+        raise InvalidInputError(
+            f"register location {stated!r} holds the reserved character(s) {hit}: '*' and '?' are IAM wildcards in the vended storage "
+            "policy and would widen credentials to sibling objects"
+        )
     if any(segment.startswith("_") for segment in decoded):
         raise InvalidInputError(f"register location {stated!r} has a segment beginning with '_', which is reserved for the catalog's own records")
     absolute = f"{root.rstrip('/')}/{relative}"

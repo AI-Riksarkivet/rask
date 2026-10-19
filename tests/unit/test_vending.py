@@ -109,12 +109,3 @@ def test_a_declared_base_is_granted_READ_even_at_the_maintain_tier() -> None:
 
     assert "s3:PutObject" in table["Action"], "the table's own prefix keeps its maintain tier"
     assert base["Action"] == ["s3:GetObject"], f"a base must be readable and never writable: {base['Action']}"
-
-
-def test_a_base_carrying_an_IAM_METACHARACTER_is_refused_like_a_prefix() -> None:
-    """The prefix guard exists because `*`/`?` cannot be escaped inside a Resource ARN or an `s3:prefix`
-    condition. A base path arrives off a MANIFEST rather than through the create doors'
-    `require_safe_segments`, so it is the less trusted of the two and needs the guard more."""
-    for hostile in ("s3://bkt/shared/*", "s3://bkt/sh?red/src.lance"):
-        with pytest.raises(ValueError, match="wildcard metacharacter"):
-            build_session_policy("bkt", "tables/db1$users", "read", bases=(hostile,))

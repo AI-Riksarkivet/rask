@@ -351,9 +351,12 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   and a nested path are all accepted) and keeps no location exclusive. BEFORE anything is attached,
   `require_registrable_location` refuses an absolute location; one whose spelling is not the place the
   store opens, by the base judge's own rule (`base_refs.names_a_location`, each segment percent-decoded
-  once: one that decodes to empty, `.` or `..`, holds a control character, or gains a `/` or `\` from the
-  decode — pylance drops the tab from `x/.\t./<victim>` and opens the victim); a segment beginning with
-  `_` once decoded; one equal to or containing the control root; and one overlapping a configured base.
+  once: one that decodes to empty, `.` or `..`, holds a control character or a `?`, or gains a `/` or `\`
+  from the decode — pylance drops the tab from `x/.\t./<victim>` and opens the victim, and the store keeps a
+  `?` under a re-encoded name, [[LH-435]]; every judge asks the same rule, [[LH-510]]); a segment holding
+  `*` once decoded, an IAM wildcard in every policy a credential for the table is scoped by ([[LH-437]]);
+  a segment beginning with `_` once decoded; one equal to or containing the control root; and one
+  overlapping a configured base.
   Any other `%` is a name: the catalog percent-encodes a table's name into its location
   (`räksmörgås` -> `r%C3%A4ksm%C3%B6rg%C3%A5s`), so a rule refusing every `%` would strand those tables.
   AFTER the register and before the seed, `judge_registered_table` opens the dataset at

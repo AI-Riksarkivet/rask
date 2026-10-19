@@ -277,6 +277,17 @@ def test_the_vend_and_read_doors_refuse_the_planting_table(estate: _Estate, plan
     _refused(estate.client.post("/v1/table/db$escape/describe", params={"vend_credentials": "true"}), _INVALID_TABLE_STATE)
     _refused(estate.client.post("/v1/table/db$escape/query", json=_QUERY), _INVALID_TABLE_STATE)
 
+    # A `?` names no location: the store keeps a `?` spelling under a re-encoded name (measured on pylance 13.0.0, [[LH-435]]),
+    # so comparing the spelling cannot say where the base opens. Inside db$marked's own root as spelled, it is refused 409
+    # at each door, by the same rule as the escape above ([[LH-510]]).
+    marked = estate.create("db$marked", rows=_MINE)
+    estate.open(marked).add_bases([lance.DatasetBasePath(f"{marked}/sub?x", name="pin", is_dataset_root=False)])
+    declared = [ref.path for ref in manifest_base_path_refs(estate.open(marked))]
+    assert any(path.rstrip("/").endswith(("sub?x", "sub%3Fx")) for path in declared), f"precondition: the base must be declared, got {declared}"
+    _refused(estate.client.post("/management/v1/table/db$marked/credentials"), _INVALID_TABLE_STATE)
+    _refused(estate.client.post("/v1/table/db$marked/describe", params={"vend_credentials": "true"}), _INVALID_TABLE_STATE)
+    _refused(estate.client.post("/v1/table/db$marked/query", json=_QUERY), _INVALID_TABLE_STATE)
+
     # A store failing under the record the judge must read: a typed, retryable 503, and the pass stops as a failure.
     real_client = storage.s3_client
     monkeypatch.setattr(storage, "s3_client", lambda *args, **kwargs: _ThrottledRecords(real_client(*args, **kwargs)))
@@ -446,8 +457,10 @@ def test_a_table_location_is_exclusive(estate: _Estate) -> None:
     as ``_bases``. A location over the model registry is refused too ([[LH-204]]): it is opened by explicit
     URI and never registered, so a table there would be vended every model's history.
 
-    A ``?``, or its encoded ``%3F``, is refused too: the store keeps it under a re-encoded name that holds no table, so
-    an id registered there is not found by query or count (measured on pylance 13.0.0, dir backend).
+    A ``?``, or its encoded ``%3F``, names no location either, by the spelling rule every judge asks: the store keeps it
+    under a re-encoded name that holds no table, so an id registered there is not found by query or count (measured on
+    pylance 13.0.0, dir backend). A ``*``, or its encoded ``%2A``, is refused because a location is the prefix every
+    credential for its table is scoped by, where ``*`` is an IAM wildcard, as a table's name may not hold one ([[LH-437]]).
 
     Nor may a location equal, contain or sit under another registered table's ([[LH-504]]): a destructive drop
     of the outer table would delete the inner one's bytes. Only the namespace's object index answers it, so the
@@ -467,15 +480,19 @@ def test_a_table_location_is_exclusive(estate: _Estate) -> None:
     pinned at its door by `test_a_warehouse_cascade_revokes_a_grant_only_once_its_object_is_gone.py`.
     """
     victim = estate.victim.removeprefix(f"{estate.root}/")
-    for location in (".", "_bases", "%5Fbases", f"x/.\t./{victim}", f"x/.\n./{victim}", f"x/%2e%2e/{victim}", "medallion/models/m"):
+    spellings = (".", "_bases", "%5Fbases", f"x/.\t./{victim}", f"x/.\n./{victim}", f"x/%2e%2e/{victim}", f"{victim}?x", f"{victim}%3Fx", "medallion/models/m")
+    for location in spellings:
         resp = estate.client.post("/v1/table/db$squatter/register", json={"location": location})
         _refused(resp, _INVALID_INPUT)
         assert estate.client.post("/v1/table/db$squatter/exists").status_code == 404, f"{location!r}: a refused registration must be detached"
         assert estate.client.post("/v1/table/db$squatter/query", json=_QUERY).status_code == 404, f"{location!r}: the victim reads through the refused id"
-    for location in (f"{victim}?x", f"{victim}%3Fx"):
+    for location in (f"{victim}*x", f"{victim}%2Ax"):
         resp = estate.client.post("/v1/table/db$squatter/register", json={"location": location})
         _refused(resp, _INVALID_INPUT)
-        detail = f"register location {location!r} holds '?', which the store keeps under a re-encoded name that holds no table"
+        detail = (
+            f"register location {location!r} holds the reserved character(s) ['*']: '*' and '?' are IAM wildcards in the vended storage "
+            "policy and would widen credentials to sibling objects"
+        )
         assert resp.json()["detail"] == detail, resp.text
         assert estate.client.post("/v1/table/db$squatter/exists").status_code == 404, f"{location!r}: a refused registration must be detached"
         assert estate.client.post("/v1/table/db$squatter/query", json=_QUERY).status_code == 404, f"{location!r}: the victim reads through the refused id"

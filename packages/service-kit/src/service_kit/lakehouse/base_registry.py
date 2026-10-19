@@ -112,7 +112,7 @@ class RecordedBase(BaseModel):
         if value is None:
             return None
         if not names_a_location(value):
-            raise ValueError(f"{value!r} does not name one location: a segment decodes to nothing, '.', '..', a control character or a new separator")
+            raise ValueError(f"{value!r} does not name one location: a segment decodes to nothing, '.', '..', a control character, a '?' or a new separator")
         return normalise(value)
 
     @property
@@ -138,7 +138,7 @@ class BaseRecord(BaseModel):
     @classmethod
     def _a_location(cls, value: str) -> str:
         if not names_a_location(value):
-            raise ValueError(f"{value!r} does not name one location: a segment decodes to nothing, '.', '..', a control character or a new separator")
+            raise ValueError(f"{value!r} does not name one location: a segment decodes to nothing, '.', '..', a control character, a '?' or a new separator")
         return normalise(value)
 
 

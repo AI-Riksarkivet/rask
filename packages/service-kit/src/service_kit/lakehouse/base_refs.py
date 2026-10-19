@@ -270,6 +270,13 @@ _NON_LOCATION_SEGMENTS = frozenset({"", ".", ".."})
 #: (lh279 r5 escape: ``x/..%5C..%5Cvictim`` reads nothing), so refusing it is the conservative half.
 _SEPARATORS = ("/", "\\")
 
+#: A URI's query delimiter. The store does not keep a segment holding one under the name it decodes to: measured on
+#: pylance 13.0.0 over the dir backend ([[LH-435]]), a register at ``x?y`` or ``x%3Fy`` keeps the location re-encoded,
+#: and the id finds no table on query or count. So a spelling holding one names no location, for every judge alike
+#: ([[LH-510]]). A table's name may not hold one (``identifiers.require_safe_segments``), so no location the catalog
+#: mints does.
+_QUERY_DELIMITER = "?"
+
 
 def _decoded_once(segment: str) -> str | None:
     """``segment`` percent-decoded once, as pylance decodes it; ``None`` when the bytes are not UTF-8.
@@ -291,7 +298,7 @@ def decoded_segments(uri: str) -> list[str] | None:
     segments: list[str] = []
     for spelled in path.split("/"):
         segment = _decoded_once(spelled)
-        if segment is None or segment in _NON_LOCATION_SEGMENTS:
+        if segment is None or segment in _NON_LOCATION_SEGMENTS or _QUERY_DELIMITER in segment:
             return None
         if any(ord(char) < 0x20 or ord(char) == 0x7F for char in segment):
             return None
@@ -326,7 +333,7 @@ def names_a_location(uri: str) -> bool:
     that leaves, and drops a tab, line feed or carriage return (measured over moto and a local root, lh279
     r3 a_escape). So each ``/``-separated segment is judged as it reads after one decode, and the spelling
     names no location when any decoded segment is empty, ``.`` or ``..``, holds an ASCII control
-    character, is not UTF-8, or holds a ``/`` or ``\\`` the decode added. That refuses
+    character, is not UTF-8, holds a ``?`` (:data:`_QUERY_DELIMITER`), or holds a ``/`` or ``\\`` the decode added. That refuses
     ``<own>/%2e%2e/<victim>``, ``<own>/.%2e/<victim>``, ``<own>/.\\t./<victim>`` and a configured
     ``<models>/%2e%2e/<victim>``, each spelled inside a sanctioned prefix while opening another table.
 
