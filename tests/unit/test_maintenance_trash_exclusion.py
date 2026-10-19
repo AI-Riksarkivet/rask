@@ -79,22 +79,28 @@ def _run(
 
 
 def test_a_trashed_dataset_is_not_expired_and_says_so(tmp_path: Path, settings: MaintenanceSettings, monkeypatch: pytest.MonkeyPatch) -> None:
-    """THE ACCEPTANCE CRITERION. The dropped dataset is left alone, and the tick reports why."""
+    """THE ACCEPTANCE CRITERION. The dropped dataset is left alone, and the tick reports why.
+
+    So is each of its branches ([[LH-449]]): discovery lists a branch at ``<table>/tree/<branch>``, and the record
+    names only the table, so an exclusion that compared whole locations would expire a recoverable table's branches.
+    """
     live = _dataset(tmp_path / "live.lance")
     dropped = _dataset(tmp_path / "dropped.lance")
+    branch = _dataset(tmp_path / "dropped.lance" / "tree" / "backfill")
 
     # Exactly what the catalog's recoverable drop writes: the bytes stay where they are, and a record
     # under the control root points at them.
     record = trash.make_record("silver$htr_lines_2019", kind="table", location=dropped, dropped_by="user:karin", grace_days=7)
     trash.put(str(settings.resolved_control_root), {}, record)
 
-    results, expired = _run(monkeypatch, settings, [live, dropped])
+    results, expired = _run(monkeypatch, settings, [live, dropped, branch])
 
     assert dropped not in expired, "the sweep reclaimed versions of a dataset the grace window promises is frozen"
+    assert branch not in expired, "the sweep reclaimed versions of a trashed table's branch"
     assert live in expired, "the exclusion caught a LIVE dataset — the path comparison is too broad"
 
     excluded = [r for r in results if r.trashed]
-    assert [r.uri for r in excluded] == [dropped]
+    assert [r.uri for r in excluded] == [dropped, branch]
     # The reason names the record AND its deadline: an exclusion that has outlived its deadline is a
     # record the purge keeps refusing, i.e. a PERMANENT exclusion, and that must be readable from the
     # summary rather than inferred.

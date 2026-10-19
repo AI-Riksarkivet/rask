@@ -241,7 +241,7 @@ async def on_reconcile_cron(settings: SettingsDep, client: FgaClientDep, control
         payload["floor_raise"] = floors.model_dump(mode="json")
         # WARNING and NAMED, like the purge line below, because this writes a version to a GOVERNED
         # table. Which tables is the entire audit trail; a count answers nobody's question about it.
-        if floors.raised or floors.refused:
+        if floors.raised or floors.refused or floors.error:
             log.warning(
                 "floor_raise_result",
                 extra={
@@ -251,6 +251,7 @@ async def on_reconcile_cron(settings: SettingsDep, client: FgaClientDep, control
                     ],
                     "refused": [{"dataset": r.dataset, "reason": r.refused} for r in floors.refused],
                     "capped": floors.capped,
+                    "error": floors.error,
                 },
             )
         purged = await purge_expired_trash(

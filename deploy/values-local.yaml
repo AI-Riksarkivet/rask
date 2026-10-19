@@ -78,6 +78,12 @@ maintenance:
   tombstoneSweep: true
   tombstoneSweepDryRun: true
 
+  # [[LH-094]]'s listing-floor raise, armed on local but DRY-RUN (owner, 2026-10-19, [[LH-449]]): a dry run makes
+  # the real selection, the trash gate included, and writes no version, so this estate reads what the pass would
+  # touch. `floorRaiseDryRun: false` is the separate act that lets it commit.
+  floorRaise: true
+  floorRaiseDryRun: true
+
 # The compute fixture (deploy/fixtures/compute) is its own release; the catalog's decision door answers its account by name.
 auth:
   externalDeciders: ["default:rask-sa-compute"]

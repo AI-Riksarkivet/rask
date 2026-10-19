@@ -139,6 +139,18 @@ def trashed_locations(trash_records: list[dict[str, Any]]) -> dict[str, str]:
     }
 
 
+def why_in_trash(uri: str, trashed_by_path: dict[str, str]) -> str | None:
+    """Why a trash record freezes ``uri``: the reason of the record naming its location or one holding it, else ``None``.
+
+    CONTAINMENT, NOT EQUALITY: discovery lists each branch of a dataset at ``<dataset>/tree/<branch>``, so a record
+    naming a table covers every dataset under it. A wrong refusal costs disk; a wrong permit writes to bytes an owner
+    was told are frozen. One lookup per path segment, the nearest record first, so a whole-estate pass costs the same
+    however many records the trash holds.
+    """
+    segments = base_refs.normalise(uri).split("/")
+    return next((why for end in range(len(segments), 0, -1) if (why := trashed_by_path.get("/".join(segments[:end]))) is not None), None)
+
+
 def base_record_reader(settings: MaintenanceSettings, options: dict[str, str]) -> Callable[[str], base_registry.BaseRecord | None]:
     """How this service reads the catalog's base record for a table root ([[LH-279]]).
 
@@ -187,16 +199,18 @@ def _report_base_refs(protected: base_refs.BaseRefs) -> None:
 def _exclude_trashed(uris: list[str], trashed_by_path: dict[str, str]) -> tuple[list[str], list[DatasetResult]]:
     """Split the discovered URIs into the ones this tick may touch and a result per excluded dataset (F6(d)).
 
-    A recoverable drop deregisters the table and moves no byte, so discovery still finds it. AFTER
-    :func:`_protected_roots`: a trashed shallow clone's base_paths are the only evidence protecting its LIVE source.
-    COUNTED, never silently dropped, and each result names the record and its deadline.
+    A recoverable drop deregisters the table and moves no byte, so discovery still finds it, and each of its branches
+    under it (:func:`why_in_trash`). AFTER :func:`_protected_roots`: a trashed shallow clone's base_paths are the only
+    evidence protecting its LIVE source. COUNTED, never silently dropped, and each result names the record and its
+    deadline.
     """
-    skipped = [(uri, trashed_by_path[base_refs.normalise(uri)]) for uri in uris if base_refs.normalise(uri) in trashed_by_path]
+    skipped = [(uri, why) for uri in uris if (why := why_in_trash(uri, trashed_by_path)) is not None]
     record_trashed_skipped(len(skipped))
     if not skipped:
         return uris, []
     log.info("maintenance_trashed_excluded", extra={"count": len(skipped), "datasets": [uri for uri, _ in skipped][:20]})
-    kept = [uri for uri in uris if base_refs.normalise(uri) not in trashed_by_path]
+    frozen = {uri for uri, _ in skipped}
+    kept = [uri for uri in uris if uri not in frozen]
     return kept, [DatasetResult(uri=uri, trashed=reason) for uri, reason in skipped]
 
 

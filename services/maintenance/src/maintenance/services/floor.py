@@ -65,6 +65,8 @@ from pydantic import BaseModel, Field
 from maintenance.core.config import shared_lance_session
 from maintenance.services.credentials import MaintenanceDenied, TableNotGoverned, VendUndecided, write_options_for
 from maintenance.services.orphans import OrphanFile
+from maintenance.services.sweep import trashed_locations, why_in_trash
+from service_kit.lakehouse import trash
 from service_kit.lancekit.versions import committed_at
 
 
@@ -104,6 +106,8 @@ class FloorReport(BaseModel):
     #: Datasets eligible beyond `max_per_tick`. Named because a truncated pass that logged nothing would
     #: look like a complete one, and the next tick's smaller number would read as progress nobody made.
     capped: int = 0
+    #: Why the pass wrote and planned nothing this tick: the trash index it must read first could not be read.
+    error: str | None = None
 
 
 def _eligible(orphans: list[OrphanFile]) -> dict[str, list[OrphanFile]]:
@@ -129,6 +133,28 @@ def _eligible(orphans: list[OrphanFile]) -> dict[str, list[OrphanFile]]:
         if stranded and all(o.reclaimable_by_lance is not None for o in found):
             eligible[uri] = stranded
     return eligible
+
+
+def _set_aside_trashed(eligible: dict[str, list[OrphanFile]], trashed_by_path: dict[str, str]) -> tuple[dict[str, list[OrphanFile]], list[FloorRaise]]:
+    """The eligible datasets this pass may raise, and a refusal naming the record for each one a trash record covers."""
+    candidates: dict[str, list[OrphanFile]] = {}
+    trashed: list[FloorRaise] = []
+    for uri, found in sorted(eligible.items()):
+        if (frozen := why_in_trash(uri, trashed_by_path)) is None:
+            candidates[uri] = found
+        else:
+            trashed.append(_outcome(uri, found).model_copy(update={"refused": frozen}))
+    return candidates, trashed
+
+
+def _outcome(uri: str, found: list[OrphanFile]) -> FloorRaise:
+    """The raise ``found`` would earn ``uri``, measured against its orphans' own mtimes until the floor is read."""
+    return FloorRaise(
+        dataset=uri,
+        orphan_files=len(found),
+        orphan_bytes=sum(o.size_bytes for o in found),
+        floor_before=min((o.mtime_epoch for o in found), default=0.0),
+    )
 
 
 def _current_floor(uri: str, storage_options: dict[str, str]) -> float | None:
@@ -177,19 +203,29 @@ def raise_listing_floors(settings: MaintenanceSettings, *, orphans: list[OrphanF
     beneath the new commit, so on a dataset the sweep may not maintain this pass writes a version per
     tick forever and reclaims nothing. One raise per dataset: if the floor has not moved by the next
     tick, the blocker is downstream and another commit is not the answer to it.
+
+    A DATASET A TRASH RECORD COVERS IS REFUSED FIRST, before the cap and before any open, vend or commit
+    ([[LH-449]]). A recoverable drop freezes its bytes until undrop or purge, and a Lance commit is a
+    put-if-not-exists on the store (`lance_docs/file_format.md` § Commit Protocol), so the freeze holds only where
+    each writer reads the trash record itself, whatever signs its commit. The orphan scan reads every discovered
+    dataset, trashed ones included, because the drift report and the purge gate need them. Before the cap, because a
+    refusal repeated every tick would spend a slot every tick. The index is read once per call, as the sweep reads
+    it, and an index that cannot be read writes and plans nothing: no dataset can then be shown to be outside it.
     """
     report = FloorReport(enabled=settings.floor_raise_enabled, dry_run=settings.floor_raise_dry_run)
     if not settings.floor_raise_enabled:
         return report
-    candidates = _eligible(orphans)
+    try:
+        trashed_by_path = trashed_locations(trash.list_all(settings.resolved_control_root, storage_options))
+    except Exception as exc:  # noqa: BLE001 — an unread trash index stops this pass for the tick, never the reconcile tick
+        log.error("floor_raise_trash_index_unreadable", extra={"error": str(exc)})
+        report.error = f"the trash index could not be read, so no dataset can be shown to be outside it: {exc}"
+        return report
+    candidates, trashed = _set_aside_trashed(_eligible(orphans), trashed_by_path)
+    report.refused.extend(trashed)
     for uri in sorted(candidates)[: settings.floor_raise_max_per_tick]:
         found = candidates[uri]
-        outcome = FloorRaise(
-            dataset=uri,
-            orphan_files=len(found),
-            orphan_bytes=sum(o.size_bytes for o in found),
-            floor_before=min((o.mtime_epoch for o in found), default=0.0),
-        )
+        outcome = _outcome(uri, found)
         floor = _current_floor(uri, storage_options)
         if floor is None:
             report.refused.append(outcome.model_copy(update={"refused": "floor unreadable"}))
