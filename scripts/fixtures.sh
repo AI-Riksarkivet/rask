@@ -94,7 +94,31 @@ for name in "$@"; do
   REPARENTED=()
   RENDER="$(mktemp)"
   trap 'rm -f "$RENDER"' EXIT
-  "$HELM" template "$RELEASE" "${SOURCE[@]}" --namespace "$NAMESPACE" --include-crds "${VALUES[@]}" "${EXTRA[@]}" >"$RENDER"
+  # The install renders against the capabilities the cluster serves, so the handover render is given the same ones, or a
+  # chart that guards on an API (the annotator's CloudNativePG Cluster) lists other objects here than its install creates.
+  # Helm counts every served group/version and each kind at each of them (`kubectl api-resources` names a kind at its
+  # group's preferred version only), and a group whose discovery fails still counts as served. Read per fixture: an
+  # earlier one in the same run can install the CRDs a later one guards on.
+  capabilities="$(python3 -c '
+import json, subprocess
+from concurrent.futures import ThreadPoolExecutor
+
+def kubectl(*args):
+    return subprocess.run(["kubectl", *args], check=True, stdout=subprocess.PIPE, text=True).stdout
+
+def kinds(version):
+    found = subprocess.run(["kubectl", "get", "--raw", "/api/v1" if version == "v1" else "/apis/" + version],
+                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    return {version + "/" + r["kind"] for r in json.loads(found.stdout)["resources"]} if found.returncode == 0 else set()
+
+versions = kubectl("api-versions").split()
+print("--kube-version=" + json.loads(kubectl("version", "-o", "json"))["serverVersion"]["gitVersion"])
+with ThreadPoolExecutor(8) as pool:
+    for api in sorted(set(versions).union(*pool.map(kinds, versions))):
+        print("--api-versions=" + api)
+')"
+  mapfile -t CAPABILITIES <<<"$capabilities"
+  "$HELM" template "$RELEASE" "${SOURCE[@]}" --namespace "$NAMESPACE" --include-crds "${CAPABILITIES[@]}" "${VALUES[@]}" "${EXTRA[@]}" >"$RENDER"
   held="$( { kubectl get --namespace "$NAMESPACE" --ignore-not-found -o json -f "$RENDER" 2>/dev/null || true; } \
     | python3 -c '
 import json, sys
