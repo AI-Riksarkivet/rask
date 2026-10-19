@@ -75,16 +75,16 @@ class Drive(BaseModel):
     #: The annotating person's answer for the project before and after the admin granted them a role on it.
     refused: int
     admitted: int
-    #: The corpus's annotations table, read back as the person, and what its newest commit carries.
+    #: The corpus's annotations table, read back as the person, and who the catalog announced each write to it as.
     annotations: list[dict[str, Any]]
-    annotations_commit: dict[str, Any]
+    annotation_authors: list[str]
     #: The version of the corpus's row table the person selected the item from.
     selected: int
     #: The published table, read back as the admin, and what its commit carries.
     published_table: str
     published: list[dict[str, Any]]
     published_commit: dict[str, Any]
-    #: The admin's inbox rows naming the published table as theirs.
+    #: The admin's inbox rows since the drive began, as (reason, object).
     told: list[tuple[str, str]]
 
 
@@ -131,11 +131,16 @@ def _answer(response: requests.Response, expected: int = 200) -> dict[str, Any]:
 
 
 def _commit(identity: Identity, table_id: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """A table's rows and the `rask.*` properties of its newest commit, read through the catalog by ``identity``."""
+    """A table's rows and the `rask.*` properties of its newest commit that names a run, read through the catalog by
+    ``identity``. The newest that names one, not the newest: the create door stamps a table's properties in a commit of
+    their own after the data's."""
     dataset = lance.dataset(namespace_client=identity.namespace(), table_id=table_id.split("$"))
-    transaction = dataset.read_transaction(dataset.version)
-    assert transaction is not None, f"{table_id} version {dataset.version} has no transaction to read"
-    return dataset.to_table().to_pylist(), rask_properties(transaction.transaction_properties or {})
+    for version in range(dataset.version, 0, -1):
+        transaction = dataset.read_transaction(version)
+        named = rask_properties((transaction.transaction_properties if transaction else None) or {})
+        if "rask.run_id" in named:
+            return dataset.to_table().to_pylist(), named
+    return dataset.to_table().to_pylist(), {}
 
 
 def _published(admin: requests.Session, project_id: str) -> dict[str, Any]:
@@ -150,14 +155,31 @@ def _published(admin: requests.Session, project_id: str) -> dict[str, Any]:
 
 
 def _told(admin: Identity, table_id: str, *, since: datetime) -> list[tuple[str, str]]:
-    """The admin's inbox rows naming ``table_id``, read until one arrives or the settle window is spent."""
+    """The admin's inbox rows since ``since``, read until one names ``table_id`` or the settle window is spent."""
     reader = byo_scenario.Identity(admin.bearer)
     deadline = time.monotonic() + SETTLE_SECONDS
     while True:
-        rows = [(str(row["reason"]), str(row["object_id"])) for row in reader.inbox(since=since) if row["object_id"] == f"table:{table_id}"]
-        if rows or time.monotonic() >= deadline:
+        rows = [(str(row["reason"]), str(row["object_id"])) for row in reader.inbox(since=since)]
+        if any(object_id == table_id for _, object_id in rows) or time.monotonic() >= deadline:
             return rows
         time.sleep(3)
+
+
+def _authors(reader: byo_scenario.Identity, table_id: str, *, since: int, after: int) -> list[str]:
+    """Who the catalog announced each write to ``table_id`` past version ``after`` as, read off lineage's feed from row
+    ``since``. By version, since the feed lags the commit: the table's own create can arrive after ``since`` was read.
+
+    A write that names no run carries no `rask.*` transaction property, so its commit announcement is where the catalog
+    records who made it: the verified caller, as the author facet.
+    """
+
+    def past(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [row for row in rows if int(byo_scenario.lance_facet(row).get("version") or 0) > after]
+
+    rows, _ = byo_scenario.follow(reader, since=since, table=table_id, until=lambda rows: bool(past(rows)))
+    # The author rides the run's facets on a RunEvent and the dataset's on a DatasetEvent.
+    carriers = [row["event"].get("run") if "run" in row["event"] else row["event"].get("dataset") for row in past(rows)]
+    return [str(((carrier or {}).get("facets") or {}).get("author", {}).get("sub")) for carrier in carriers]
 
 
 @pytest.fixture(scope="module")
@@ -186,6 +208,9 @@ def drive(tenant: Tenant) -> Iterator[Drive]:
     # The person annotates the corpus itself: the annotator resolves the dataset through the catalog and writes the
     # annotations table on the person's own token.
     unit = f"{ANNOTATOR}/api/annotations/{UNIT[0]}/{UNIT[1]}/{UNIT[2]}"
+    reader = byo_scenario.Identity(admin.bearer)
+    feed = byo_scenario.feed_start(reader)
+    before = lance.dataset(namespace_client=person.namespace(), table_id=[tenant.bronze, "annotations"]).version
     loaded = as_person.get(unit, params={"dataset": tenant.bronze}, timeout=60)
     assert loaded.status_code == 200, f"GET {unit} -> {loaded.status_code}: {loaded.text[:300]}"
     save = {"inserts": [{"id": "a1", "shape_type": "rectangle", "x": 10, "y": 10, "width": 20, "height": 20, "label": LABEL}]}
@@ -211,14 +236,14 @@ def drive(tenant: Tenant) -> Iterator[Drive]:
     published_table = str(project["published"]["table_id"])
     tenant.tables.append(published_table)
 
-    annotations, annotations_commit = _commit(person, f"{tenant.bronze}$annotations")
+    annotations, _ = _commit(person, f"{tenant.bronze}$annotations")
     published, published_commit = _commit(admin, published_table)
     yield Drive(
         project_id=project_id,
         refused=refused,
         admitted=admitted,
         annotations=annotations,
-        annotations_commit=annotations_commit,
+        annotation_authors=_authors(reader, f"{tenant.bronze}$annotations", since=feed, after=before),
         selected=selected,
         published_table=published_table,
         published=published,
@@ -233,16 +258,16 @@ def test_the_annotator_works_the_lakehouse_through_its_public_doors(drive: Drive
 
     The annotator decides its own project roles: a person of no tenant is refused the project until the admin grants them
     a role on it. It holds no store credential: the person's annotation is written through the catalog on their own
-    token, so the catalog records them as its author. Its publish is its own account's commit in the tenant's silver,
+    token, so the catalog announces the write as theirs. Its publish is its own account's commit in the tenant's silver,
     the row names who annotated and who reviewed from the task's own record, and the admin who published is told it is
     theirs.
     """
     assert (drive.refused, drive.admitted) == (403, 200)
     assert [(row["id"], row["label"], row["reviewer"]) for row in drive.annotations] == [("a1", LABEL, tenant.job.principal)]
-    assert drive.annotations_commit.get("rask.author") == tenant.job.principal
+    assert drive.annotation_authors and set(drive.annotation_authors) == {tenant.job.principal}, drive.annotation_authors
     rows = [(row["project_id"], row["label"], row["annotated_by"], row["reviewed_by"]) for row in drive.published]
     assert rows == [(drive.project_id, LABEL, tenant.job.principal, tenant.admin.principal)]
     assert drive.published_table.startswith(f"{tenant.project}-silver$")
     assert drive.published_commit.get("rask.author") == ANNOTATOR_ACCOUNT
     assert drive.published_commit.get("rask.inputs") == [{"table": [tenant.bronze, "chunks"], "version": drive.selected}]
-    assert ("originator", f"table:{drive.published_table}") in drive.told, f"the admin was not told the publish was theirs: {drive.told}"
+    assert ("originator", drive.published_table) in drive.told, f"the admin was not told the publish was theirs: {drive.told}"
