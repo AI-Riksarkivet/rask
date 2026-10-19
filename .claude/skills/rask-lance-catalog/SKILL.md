@@ -219,8 +219,8 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   identically with or without it. Test both delete doors for force-without-authz.
 - **Recoverable drops are OPT-IN (#75).** With `LANCE_TRASH_GRACE_DAYS` > 0 (default 0/OFF, because a
   grace period changes what `drop_table` means for every caller) a drop DEREGISTERS and files a
-  `_trash/` record; `POST /v1/table/{id}/undrop` re-registers from it; `GET /v1/table/{id}/tasks`
-  shows the pending deadline (§2.4 per-object task visibility). `purge=true` is the explicit
+  `_trash/` record; `POST /management/v1/table/{id}/undrop` re-registers from it;
+  `GET /management/v1/table/{id}/tasks` shows the pending deadline (§2.4 per-object task visibility). `purge=true` is the explicit
   opt-out — a caller who means "destroy the bytes now" says so. A recoverable drop **does not revoke
   the table's FGA tuples**: the owner is the one person who needs to undrop it, and revoking made
   undrop unreachable for exactly that caller (found by driving the deployed catalog — the unit tests
@@ -233,10 +233,10 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   issues the destructive native call — a trash record pointing at bytes that call deleted would be
   a lie — and instead DETACHES the subtree (every table deregistered, namespaces emptied
   deepest-first then dropped, one `kind`-tagged record each, shared drop-time `expires_at`; tuples
-  KEPT, the same #75 rule). `POST /v1/namespace/{id}/undrop` is the PLURAL undrop: rebuilds every
-  trashed namespace under the id shallowest-first, re-registers every trashed table
+  KEPT, the same #75 rule). `POST /management/v1/namespace/{id}/undrop` is the PLURAL undrop: rebuilds
+  every trashed namespace under the id shallowest-first, re-registers every trashed table
   (relative-location form), resumable (`exist_ok` creates; already-registered = recovered);
-  `GET /v1/namespace/{id}/tasks` shows the subtree's deadline; `purge=true` is the same explicit
+  `GET /management/v1/namespace/{id}/tasks` shows the subtree's deadline; `purge=true` is the same explicit
   opt-out. A RESTRICT drop stays unrecorded on purpose — it only ever removes an empty manifest
   row. Declared-only tables (no recorded location) are skipped by undrop with a warning: no bytes
   were lost.
@@ -604,6 +604,13 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   was still restorable. The latest version, row count, `published` tag and undrop all survived, so
   cleanup was working correctly — the sweep was right to decline and the operator was wrong to
   override it. Tags are not the check; the trash record is.
+  **Every maintenance writer reads the record itself, and one rule answers it** ([[LH-449]]):
+  `sweep.why_in_trash` holds a record to cover its table and every dataset under it, so a branch
+  discovery lists at `<table>/tree/<branch>` is frozen with its table. The sweep's exclusion asks it,
+  and so does the listing-floor pass, before its per-tick cap and before any open, vend or commit; an
+  unreadable trash index stops the floor pass for the tick. The vend door's describe is not this gate:
+  a Lance commit is a put-if-not-exists on the store, so a writer holding any credential could commit.
+  The arrival lane acts only on a table root, which the record names exactly.
 - **A governed tier's maintenance run is emitted only when expiry does MATERIAL work.**
   `sweep.py::_did_material_work` gates the `expire_versions` emit on `old_versions_removed`, so a
   correctly-idle estate records nothing — deliberately, since every write and every backstop tick would
