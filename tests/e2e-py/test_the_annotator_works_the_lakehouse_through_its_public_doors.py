@@ -131,16 +131,11 @@ def _answer(response: requests.Response, expected: int = 200) -> dict[str, Any]:
 
 
 def _commit(identity: Identity, table_id: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """A table's rows and the `rask.*` properties of its newest commit that names a run, read through the catalog by
-    ``identity``. The newest that names one, not the newest: the create door stamps a table's properties in a commit of
-    their own after the data's."""
+    """A table's rows and the `rask.*` properties of its newest commit, read through the catalog by ``identity``."""
     dataset = lance.dataset(namespace_client=identity.namespace(), table_id=table_id.split("$"))
-    for version in range(dataset.version, 0, -1):
-        transaction = dataset.read_transaction(version)
-        named = rask_properties((transaction.transaction_properties if transaction else None) or {})
-        if "rask.run_id" in named:
-            return dataset.to_table().to_pylist(), named
-    return dataset.to_table().to_pylist(), {}
+    transaction = dataset.read_transaction(dataset.version)
+    assert transaction is not None, f"{table_id} version {dataset.version} has no transaction to read"
+    return dataset.to_table().to_pylist(), rask_properties(transaction.transaction_properties or {})
 
 
 def _published(admin: requests.Session, project_id: str) -> dict[str, Any]:

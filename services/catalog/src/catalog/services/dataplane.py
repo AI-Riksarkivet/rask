@@ -651,6 +651,14 @@ def _write_blob_into(
                 registry, entries, holder, segments, is_gone=lambda held: table_claims.data_directory_holder_is_gone(ns, _claim_store(registry), held)
             )
             claim = base_registry.claim_bases(registry, location, entries)
+        # STAMPED ON THE TABLE, not only on the manifest row and the reply. The spec's "properties at create" was true of
+        # `declare_table` and of the response echo and false of the Lance file, so a client that created with
+        # `{"owner": …}` and then asked the TABLE got nothing back and no error saying why. Written as the table's schema
+        # metadata IN THE DATA'S COMMIT, the one that carries the writer's run and author ([[LH-503]]): a commit of
+        # their own after it would be a version naming neither. MERGED over the payload's own metadata, the property
+        # winning, as `update_schema_metadata` merges.
+        if properties:
+            table = table.replace_schema_metadata({**(table.schema.metadata or {}), **{key.encode(): value.encode() for key, value in properties.items()}})
         dataset = _write_blob(
             table,
             location,
@@ -674,21 +682,6 @@ def _write_blob_into(
             except Exception as release_exc:  # noqa: BLE001 — the write error is what the caller is told
                 log.error("create_base_record_release_failed", extra={"location": location, "error": str(release_exc)[:300]})
         raise
-    if properties:
-        # STAMPED ON THE TABLE, not only on the manifest row and the reply. The spec's "properties at
-        # create" was true of `declare_table` and of the response echo and false of the Lance file, so
-        # a client that created with `{"owner": …}` and then asked the TABLE got nothing back and no
-        # error saying why — the one shape a test on the response body can never catch.
-        #
-        # MERGE, never `replace=True`, for the reason `update_schema_metadata` records: a replace drops
-        # the internal `lineage.*` coordinates that make the file self-describing. Nothing here can
-        # have written them yet, but the rule is the seam's, not this call site's, and the next edit
-        # that reorders the create would inherit it.
-        # `dict(...)`, not the mapping itself: `dict` is invariant in its value type, so a
-        # `dict[str, str]` is not a `dict[str, str | None]` — and that signature is the seam's
-        # null-DELETE dialect, which this call never uses.
-        widened: dict[str, str | None] = dict(properties)
-        dataset.update_schema_metadata(widened)
     return CreateTableResponse(location=location, version=dataset.version, properties=properties)
 
 

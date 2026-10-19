@@ -13,6 +13,7 @@ was never the broken part.
 
 from __future__ import annotations
 
+import lance
 import pyarrow as pa
 import pytest
 from lance_namespace import LanceNamespace, connect
@@ -48,13 +49,25 @@ def _table() -> pa.Table:
 
 
 def test_a_property_set_at_create_is_readable_off_the_table(real_ns: LanceNamespace) -> None:
-    """The whole row: create with properties, then ask the TABLE what it carries."""
-    dataplane.create_table(real_ns, {}, ["props_at_create"], _table(), properties={"owner": "team-a", "tier": "gold"}, registry=None)
+    """The whole row: create with properties, then ask the TABLE what it carries, and every version it holds who made
+    it ([[LH-503]]): the properties ride the commit that carries the writer's run, so no version of a governed create
+    names neither its run nor its author."""
+    run = {"rask.run_id": "run-7", "rask.author": "dex~ana"}
+    created = dataplane.create_table(
+        real_ns, {}, ["props_at_create"], _table(), properties={"owner": "team-a", "tier": "gold"}, registry=None, transaction_properties=run
+    )
 
     stored = dataplane.read_schema_metadata(real_ns, {}, ["props_at_create"])
 
     assert stored.get("owner") == "team-a", f"the property never reached the dataset: {stored}"
     assert stored.get("tier") == "gold", f"the property never reached the dataset: {stored}"
+    dataset = lance.dataset(str(created.location))
+    carried = [
+        (version, dict(transaction.transaction_properties or {}) if (transaction := dataset.read_transaction(version)) else {})
+        for version in range(1, dataset.version + 1)
+    ]
+    unnamed = [version for version, properties in carried if not run.items() <= properties.items()]
+    assert not unnamed, f"versions {unnamed} of the create name no run or author: {carried}"
 
 
 def test_creating_without_properties_writes_no_metadata(real_ns: LanceNamespace) -> None:
