@@ -16,6 +16,16 @@ table location. Lakekeeper answers the same question inside its create transacti
 refused); this estate has no relational store, so the object store's conditional write is the
 transaction.
 
+A RELEASE IS A REPLACE UNDER THE ETAG IT READ, NEVER A DELETE ([[LH-458]]). Once a location's record exists,
+every write to it is conditional on the record its writer judged: a release replaces its table's claim with
+the same claim stamped ``released_at``, which :func:`holder` and :func:`take` read as a free location. A
+hand-over landing between a release's read and its write fails the release's replace, and the release,
+judging the claim it then reads, leaves the new holder's claim in place and answers that it released
+nothing. The two conditional writes :mod:`service_kit.lakehouse.records` makes (create-if-absent and
+replace-if-the-ETag-matches) are all the estate requires of its object store, and a conditional delete is
+not one of them; an unconditional delete removes whatever claim was written after the read. So nothing
+removes a released record, and a released location keeps one small one.
+
 Who takes and releases: the catalog's register, undrop and rename doors take a claim, a recoverable drop
 keeps it for the trashed id, and a destructive drop, a deregister and the maintenance purge release it.
 A table made by ``create`` holds no claim — its location is a fresh ``<hash>_<object_id>`` directory —
@@ -42,7 +52,6 @@ from pydantic import BaseModel, Field
 from service_kit.lakehouse import records
 from service_kit.lakehouse.base_refs import decoded_path
 from service_kit.lakehouse.objectfs import StorageOptions
-from service_kit.lakehouse.record_store import delete_record
 
 
 _PREFIX = "_locations"
@@ -52,8 +61,9 @@ _PREFIX = "_locations"
 #: never overtaken, and short enough that a crashed one frees its location the same day.
 LEASE = timedelta(minutes=15)
 
-#: Rounds :func:`take` spends when its create and a concurrent release interleave. Each step is
-#: arbitrated by the store; the bound turns a livelock into an error rather than a hang.
+#: Rounds :func:`take` spends when the record disappears between its create and its read. No function here
+#: deletes one, so only a delete from outside them does that; each step is arbitrated by the store, and the
+#: bound turns a livelock into an error rather than a hang.
 _TAKE_ATTEMPTS = 3
 
 
@@ -65,7 +75,7 @@ class ClaimStore(BaseModel):
 
 
 class LocationClaim(BaseModel):
-    """One location's holder."""
+    """One location's holder, or its last holder once released."""
 
     #: The decoded path the key is derived from.
     location: str
@@ -76,6 +86,8 @@ class LocationClaim(BaseModel):
     claimed_at: datetime
     #: The request that took it, when the taker named one: only that request's retry is a retry.
     token: str | None = None
+    #: When ``table`` released it. A released claim holds nothing: the location is free.
+    released_at: datetime | None = None
 
     def within_lease(self, now: datetime) -> bool:
         return now - self.claimed_at < LEASE
@@ -94,13 +106,16 @@ def claim_key(location: str) -> str:
 
 
 def holder(store: ClaimStore, location: str) -> LocationClaim | None:
-    """The claim on ``location``, or ``None`` when nobody holds it.
+    """The claim on ``location``, or ``None`` when nobody holds it: no record, or a released claim.
 
     Raises:
         ValueError: The stored record is not a claim (pydantic's ``ValidationError`` is one).
     """
     found = records.read_json(store.control_root, store.storage_options, claim_key(location))
-    return None if found is None else LocationClaim.model_validate(found[0])
+    if found is None:
+        return None
+    claim = LocationClaim.model_validate(found[0])
+    return None if claim.released_at is not None else claim
 
 
 def take(
@@ -115,8 +130,8 @@ def take(
 ) -> None:
     """Make ``table`` the holder of ``location``.
 
-    Succeeds when the location is unclaimed, already held by ``table`` (a retry: with a ``token``, only a
-    claim stamped with that same token is one), held by ``previous``
+    Succeeds when the location is unclaimed (no record, or a released claim), already held by ``table``
+    (a retry: with a ``token``, only a claim stamped with that same token is one), held by ``previous``
     (a hand-over: the rename of ``previous`` to ``table``), or held past :data:`LEASE` by a holder
     ``is_gone`` says no longer resolves to the location. Every other holder refuses, so of two takers with
     the same ``previous`` exactly one wins: the second reads the first's claim. A rename passes a token
@@ -137,6 +152,8 @@ def take(
     def _hand_over(raw: dict[str, object]) -> dict[str, object]:
         # Re-judged on every round: `mutate_json` re-applies this to a claim another taker just wrote.
         current = LocationClaim.model_validate(raw)
+        if current.released_at is not None:
+            return _wanted()
         if current.table == table and (token is None or current.token == token):
             return raw
         if current.table != previous and (current.within_lease(datetime.now(UTC)) or not is_gone(current)):
@@ -153,18 +170,36 @@ def take(
         try:
             records.mutate_json(store.control_root, store.storage_options, key, _hand_over)
         except records.RecordMissingError:
-            continue  # released between the create and the read; create again
+            continue  # removed between the create and the read; create again
         return
     raise records.RecordChangedError(f"the claim on {decoded_path(location)!r} kept appearing and disappearing across {_TAKE_ATTEMPTS} attempts")
 
 
+class _NotHeld(Exception):
+    """The claim a release read is not its table's to release."""
+
+
 def release(store: ClaimStore, location: str, table: str) -> bool:
-    """Remove ``table``'s claim on ``location``; ``False`` when it held none.
+    """Release ``table``'s claim on ``location``; ``False`` when it held none.
 
     A claim held by another table is left alone: the release is the holder's, and a drop of an id that
-    never held the location must not free it for a third.
+    never held the location must not free it for a third. The claim is replaced by its released form
+    only under the ETag it was read with, so a claim another taker wrote after that read is judged
+    afresh, and left.
+
+    Raises:
+        records.RecordChangedError: The claim kept changing under the release.
     """
-    current = holder(store, location)
-    if current is None or current.table != table:
+
+    def _released(raw: dict[str, object]) -> dict[str, object]:
+        # Re-judged on every round, as the hand-over is: `mutate_json` re-applies this to a claim written since the read.
+        current = LocationClaim.model_validate(raw)
+        if current.released_at is not None or current.table != table:
+            raise _NotHeld
+        return current.model_copy(update={"released_at": datetime.now(UTC)}).model_dump(mode="json")
+
+    try:
+        records.mutate_json(store.control_root, store.storage_options, claim_key(location), _released)
+    except (records.RecordMissingError, _NotHeld):
         return False
-    return delete_record(store.control_root, store.storage_options, claim_key(location))
+    return True

@@ -48,9 +48,13 @@ Two contracts stack here, and confusing them is how bugs happen:
   retire or destination register hands it back (unless the destination already resolves to the location:
   then the winner's state stands). A destructive drop or cascade refuses 409 while the claim names another
   live holder. Register and both undrops take a claim, a recoverable drop
-  keeps it for the trashed id, and destructive drops, deregister and the purge release it. A holder that no
+  keeps it for the trashed id, and destructive drops, deregister and the purge release it. A release replaces
+  the claim it read with the same claim stamped `released_at`, under that claim's ETag, and never deletes the
+  record ([[LH-458]], ADR 0172): a hand-over landing between its read and its write survives, and `holder` and
+  `take` read a released claim as a free location. A holder that no
   longer resolves to its location is taken over only after `LEASE` (15 min). Pinned by
-  `tests/integration/test_concurrent_renames_leave_one_id_per_location.py`. The spec's *minimum* is 8 metadata ops; we carry the whole list
+  `tests/integration/test_concurrent_renames_leave_one_id_per_location.py` and
+  `packages/service-kit/tests/test_a_release_frees_only_the_claim_it_read.py`. The spec's *minimum* is 8 metadata ops; we carry the whole list
   including versioning, tags, branches, indices and transactions.
 - **Route grammar:** `POST /v1/<object>/{id}/<action>` — everything a reverse proxy needs (authN/Z,
   routing) is in the PATH, never only in the body. Path/body id conflict → 400. List ops are GET with
