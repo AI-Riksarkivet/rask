@@ -124,7 +124,6 @@ class _Publisher:
         self.tables: dict[str, int] = {}
         self.creates = 0
         self.pin: tuple[str, int | None] | None = None
-        self.tags: list[tuple[str, str]] = []
         self.fail_on = fail_on
 
     async def create_table(
@@ -146,13 +145,9 @@ class _Publisher:
         self.rows = list(plan.rows)
         self.properties = properties
         self.run_id = run_id
+        if self.fail_on == "after-create":
+            raise RuntimeError("the create committed and its answer was lost")
         return self.tables[table_id]
-
-    async def tag_version(self, table_id: str, version: int, tag: str) -> None:
-        if self.fail_on == "tag":
-            raise RuntimeError("tag service unreachable")
-        if (table_id, tag) not in self.tags:
-            self.tags.append((table_id, tag))
 
 
 def _wire(tasks: dict[str, _Task], project: _Project) -> Any:
@@ -176,7 +171,7 @@ async def _run(project: _Project, tasks: dict[str, _Task], publisher: _Publisher
 
 
 @pytest.mark.asyncio
-async def test_a_publish_creates_one_table_tags_it_and_records_it() -> None:
+async def test_a_publish_creates_one_table_and_records_it() -> None:
     project, publisher = _Project(), _Publisher()
     tasks = {"t0": _Task("t0", TaskState.ACCEPTED, 2), "t1": _Task("t1", TaskState.SKIPPED, 0)}
 
@@ -184,7 +179,6 @@ async def test_a_publish_creates_one_table_tags_it_and_records_it() -> None:
 
     assert out.shapes == 2 and out.rows == 3  # 2 shapes + 1 skip sentinel
     assert publisher.creates == 1
-    assert publisher.tags == [(out.table_id, f"publish-{PUBLISH_TOKEN}")]
     assert project.fired == ["publish_succeeded"]
     assert project.doc["published"]["publish_id"] == PUBLISH_TOKEN
 
@@ -201,8 +195,7 @@ async def test_the_saga_narrates_its_steps_so_a_publish_is_not_just_a_spinner() 
     assert project.progress_steps[0] == "reading tasks"
     assert project.progress_steps[1] == "building plan"
     assert project.progress_steps[2].startswith("creating table silver$vasa_")
-    assert project.progress_steps[3].startswith("tagging version")
-    assert project.progress_steps[4] == "recording publish"
+    assert project.progress_steps[3] == "recording publish"
 
 
 @pytest.mark.asyncio
@@ -245,7 +238,7 @@ async def test_the_table_id_is_derived_from_the_token_not_the_slug_alone() -> No
 async def test_a_crash_after_create_retries_onto_the_same_table() -> None:
     """The saga's only non-idempotent step, made idempotent by key. A second attempt must NOT create
     a second table — that is the whole reason the token is minted before the work, not after."""
-    project, publisher = _Project(), _Publisher(fail_on="tag")
+    project, publisher = _Project(), _Publisher(fail_on="after-create")
     tasks = {"t0": _Task("t0", TaskState.ACCEPTED, 1)}
 
     with pytest.raises(RuntimeError):
@@ -373,7 +366,6 @@ async def test_a_crash_between_record_and_succeeded_does_not_strand_the_project(
         "table_id": "silver$vasa_0123456789ab",
         "namespace": "silver",
         "version": 7,
-        "tag": f"publish-{PUBLISH_TOKEN}",
         "publish_id": PUBLISH_TOKEN,
         "published_at": MINTED_AT.isoformat(),
         "published_by": "henry",

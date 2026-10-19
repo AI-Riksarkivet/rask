@@ -115,8 +115,8 @@ class Forgeries(BaseModel):
 
 
 def _kept_by_the_catalog(admin: Identity, *, forged: str, marker: str) -> list[str]:
-    """The forged control event's rows in the catalog's control feed, read once the feed holds the creation of
-    ``marker``, a namespace made after the forgery was published.
+    """The forged control event's rows in the catalog's control feed, read once the feed holds the binding of
+    ``marker``, a namespace the warehouse door made after the forgery was published (`warehouse_bound`, naming it).
 
     The catalog's broadcast consumer is ephemeral, so no durable says it has acknowledged the forgery; the stream
     reaches it in order, so a feed holding an event published after the forgery has judged the forgery too. The marker
@@ -125,9 +125,9 @@ def _kept_by_the_catalog(admin: Identity, *, forged: str, marker: str) -> list[s
     deadline = time.monotonic() + scenario.SETTLE_SECONDS
     while True:
         events = scenario.ok(admin.http.get(f"{scenario.CATALOG}/management/v1/events", params={"since": 0}, timeout=30))["events"]
-        if any(event.get("object_id") == f"namespace:{marker}" for event in events):
+        if any(event.get("action") == "warehouse_bound" and (event.get("extra") or {}).get("namespace") == marker for event in events):
             return [str(event["event_id"]) for event in events if event.get("event_id") == forged]
-        assert time.monotonic() < deadline, f"the catalog's control feed never showed {marker}'s creation within {scenario.SETTLE_SECONDS:.0f} s"
+        assert time.monotonic() < deadline, f"the catalog's control feed never showed {marker}'s binding within {scenario.SETTLE_SECONDS:.0f} s"
         time.sleep(2)
 
 

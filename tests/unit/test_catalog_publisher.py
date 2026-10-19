@@ -1,14 +1,12 @@
 """The concrete CatalogPublisher — the transport half of the publish saga.
 
 `Publisher` is a Protocol precisely so the saga's orchestration tests need no catalog; these are the
-tests for the OTHER side of that seam. Driven against structural fakes of the lance-ns SDK's
-`DataApi`/`TagApi` (the estate's Ray-client pattern), so what is pinned here is the CONTRACT this
-class holds up to the saga:
+tests for the OTHER side of that seam. Driven against a structural fake of the create transport
+(the estate's Ray-client pattern), so what is pinned here is the CONTRACT this class holds up to the
+saga:
 
 - create posts `mode=exist_ok` with the plan's rows as an Arrow-IPC stream typed by the published
   schema, the properties JSON-encoded, and the run facet on `X-Lance-Run-Facets`.
-- a duplicate tag CONVERGES when it already points at our version, and fails LOUDLY when a
-  different publish owns the name.
 - every call presents the annotator's own projected ServiceAccount token, read again for that call
   because the kubelet replaces it before it expires, and names the person the publish is for on
   `x-lance-originator`: the service authors every event the publish produces, so the header is the
@@ -83,36 +81,8 @@ class _Create:
         return _Resp()
 
 
-class _Tags:
-    """Tag store fake with the real catalog's sharp edge: a duplicate tag ERRORS."""
-
-    def __init__(self) -> None:
-        self.tags: dict[tuple[str, str], int] = {}
-        self.creates = 0
-        #: The headers the last create carried.
-        self.headers: dict[str, str] = {}
-
-    def create_table_tag(self, table_id: str, request: Any, **kwargs: Any) -> None:
-        self.creates += 1
-        self.headers = dict(kwargs.get("_headers") or {})
-        key = (table_id, request.tag)
-        if key in self.tags:
-            raise RuntimeError("tag already exists")
-        self.tags[key] = request.version
-
-    def get_table_tag_version(self, table_id: str, request: Any, **kwargs: Any) -> Any:
-        key = (table_id, request.tag)
-        if key not in self.tags:
-            raise RuntimeError("tag not found")
-
-        class _Resp:
-            version = self.tags[key]
-
-        return _Resp()
-
-
-def _publisher(create: _Create | None = None, tags: _Tags | None = None, **kw: Any) -> CatalogPublisher:
-    return CatalogPublisher("http://catalog:2333", data_api=create or _Create(), tag_api=tags or _Tags(), **kw)
+def _publisher(create: _Create | None = None, **kw: Any) -> CatalogPublisher:
+    return CatalogPublisher("http://catalog:2333", data_api=create or _Create(), **kw)
 
 
 def _token(path: Path, value: str) -> Path:
@@ -147,39 +117,6 @@ async def test_create_posts_exist_ok_with_schema_typed_rows_and_its_run(tmp_path
     table = pa.ipc.open_stream(call["body"]).read_all()
     assert table.schema.names == list(PUBLISHED_LABELS_SCHEMA.names)
     assert table.num_rows == 2
-
-
-@pytest.mark.asyncio
-async def test_a_duplicate_tag_at_our_version_converges() -> None:
-    """The catalog has no exist-ok tag; convergence is THIS class's job. A crashed attempt that
-    already tagged must read as success on retry, or the saga can never finish."""
-    tags = _Tags()
-    tags.tags[("silver$t_1", "publish-abc")] = 7
-    publisher = _publisher(tags=tags)
-
-    await publisher.tag_version("silver$t_1", 7, "publish-abc")  # must not raise
-
-
-@pytest.mark.asyncio
-async def test_a_duplicate_tag_at_a_different_version_fails_loudly() -> None:
-    """A tag pointing elsewhere means a DIFFERENT publish owns the name. Adopting it would record
-    our provenance against someone else's dataset version."""
-    tags = _Tags()
-    tags.tags[("silver$t_1", "publish-abc")] = 3
-    publisher = _publisher(tags=tags)
-
-    with pytest.raises(RuntimeError, match="currently points at 3"):
-        await publisher.tag_version("silver$t_1", 7, "publish-abc")
-
-
-@pytest.mark.asyncio
-async def test_a_fresh_tag_is_created() -> None:
-    tags = _Tags()
-    publisher = _publisher(tags=tags)
-
-    await publisher.tag_version("silver$t_1", 7, "publish-abc")
-
-    assert tags.tags == {("silver$t_1", "publish-abc"): 7}
 
 
 @pytest.mark.asyncio
@@ -250,20 +187,18 @@ def test_the_http_create_api_raises_the_sdk_exception_on_http_errors(monkeypatch
 
 @pytest.mark.asyncio
 async def test_every_publish_call_presents_the_annotators_own_token_read_again_and_names_the_person(tmp_path: Path) -> None:
-    """Both transports, and the token as it is when each call is made.
+    """The token as it is when each call is made, and the person the publish is for.
 
-    The publish is two calls on two stacks (a direct-HTTP create, an SDK tag), and wiring one leaves the other
-    anonymous. Between them the kubelet replaces the projected token, as it does before each one expires: a token
-    read once at construction would present an expired credential to every call after the first.
+    The kubelet replaces the projected token before each one expires, so a token read once at construction would present
+    an expired credential to every call after the first.
     """
-    create, tags = _Create(version=4), _Tags()
+    create = _Create(version=4)
     token = _token(tmp_path / "token", "token-1")
-    publisher = _publisher(create, tags, token_file=token, originator="dex~gina")
+    publisher = _publisher(create, token_file=token, originator="dex~gina")
 
     await publisher.create_table("acme-silver$labels_p1", _plan(), properties={}, run_id="pub-1")
     _token(token, "token-2")
-    await publisher.tag_version("acme-silver$labels_p1", 4, "published")
+    await publisher.create_table("acme-silver$labels_p1", _plan(), properties={}, run_id="pub-1")
 
-    created, tagged = create.calls[0]["_headers"], tags.headers
-    assert (created["Authorization"], created["x-lance-originator"]) == ("Bearer token-1", "dex~gina")
-    assert (tagged["Authorization"], tagged["x-lance-originator"]) == ("Bearer token-2", "dex~gina")
+    presented = [(call["_headers"]["Authorization"], call["_headers"]["x-lance-originator"]) for call in create.calls]
+    assert presented == [("Bearer token-1", "dex~gina"), ("Bearer token-2", "dex~gina")]

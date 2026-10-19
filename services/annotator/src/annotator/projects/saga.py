@@ -19,7 +19,6 @@ Every step therefore has a defined answer to "what if this runs twice":
 | read project + tasks | pure read |
 | build the plan | pure; a replay is byte-identical (`build_plan` sorts everything derived) |
 | create the table | same id ⇒ already-exists, treated as success, NOT an error |
-| tag the version | same tag name ⇒ already-exists, treated as success |
 | record the publish | actor is set-once; the second call returns the first record |
 | fire `publish_succeeded` | already `published` ⇒ `IllegalTransition`, swallowed as converged |
 
@@ -74,10 +73,6 @@ class Publisher(Protocol):
         catalog Context's run and input."""
         ...
 
-    async def tag_version(self, table_id: str, version: int, tag: str) -> None:
-        """Tag the version. MUST treat an existing identical tag as success."""
-        ...
-
 
 class ProjectHandle(Protocol):
     """The project actor's surface, narrowed to what the saga uses."""
@@ -105,7 +100,6 @@ class PublishOutcome(BaseModel):
     publish_id: str
     table_id: str
     version: int
-    tag: str
     rows: int
     shapes: int
     already_published: bool = False
@@ -202,7 +196,6 @@ async def run_publish(
             publish_id=record.publish_id,
             table_id=record.table_id,
             version=record.version,
-            tag=record.tag or "",
             rows=0,
             shapes=0,
             already_published=True,
@@ -238,7 +231,6 @@ async def run_publish(
         await _note(project_handle, "building plan")
         plan = build_plan(project, pairs, publish_id=publish_id, published_at=published_at)
         table_id = table_id_for(project, publish_id, namespace)
-        tag = f"publish-{publish_id}"
 
         await _note(project_handle, f"creating table {table_id}")
         pin = source_pin(plan)
@@ -253,16 +245,12 @@ async def run_publish(
             # The publish token names the run: minted once per publish, so a retried create names the same one.
             run_id=publish_id,
         )
-        await _note(project_handle, f"tagging version {version}")
-        await publisher.tag_version(table_id, version, tag)
-
         await _note(project_handle, "recording publish")
         record = await project_handle.record_publish(
             {
                 "table_id": table_id,
                 "namespace": namespace,
                 "version": version,
-                "tag": tag,
                 "publish_id": publish_id,
                 "published_at": published_at.isoformat(),
                 "published_by": subject,
@@ -274,7 +262,6 @@ async def run_publish(
             publish_id=publish_id,
             table_id=str(record["table_id"]),
             version=int(record["version"]),
-            tag=str(record.get("tag") or tag),
             rows=len(plan.rows),
             shapes=plan.shape_count,
         )

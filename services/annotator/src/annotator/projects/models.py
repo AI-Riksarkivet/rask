@@ -228,7 +228,6 @@ class PublishRecord(BaseModel):
     table_id: str
     namespace: str
     version: int
-    tag: str | None = None
     publish_id: str
     published_at: datetime
     published_by: str

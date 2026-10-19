@@ -2,22 +2,20 @@
 
 Posts through the catalog's REST API over the same ``lance_namespace_urllib3_client`` stack the
 media plane's merge transport uses (`service_kit.lancekit.writer.RestCatalogWriteTransport`) — **the
-annotator never writes Lance directly** (§7.1): the catalog is what seeds FGA ownership on the new
-table and emits the ``CREATE`` RunEvent.
+annotator never writes Lance directly** (§7.1): the catalog is what places the new table in its
+namespace's authorization graph and emits the ``CREATE`` RunEvent.
 
-Retry safety maps onto the catalog's own contract:
+Retry safety maps onto the catalog's own contract: ``create`` posts ``mode=exist_ok``. Fresh id ⇒ the
+catalog creates and emits the event. Replayed id ⇒ the catalog KEEPS the existing table and returns its
+version — exactly the "existing table with this id is success" the saga relies on.
 
-- ``create`` posts ``mode=exist_ok``. Fresh id ⇒ the catalog creates, seeds ownership, emits the
-  event. Replayed id ⇒ the catalog KEEPS the existing table, returns its version, and deliberately
-  skips re-seeding — exactly the "existing table with this id is success" the saga relies on.
-- ``tag`` has no exist-ok on the catalog side (pylance ``tags.create`` errors on a duplicate), so
-  convergence lives HERE: on failure, read the tag back — pointing at our version means a previous
-  attempt already tagged it (success); pointing elsewhere means a different publish owns the name
-  (loud failure, never silently adopted).
+The publish tags nothing. A tag in the lakehouse is a publication pointer, created and moved by an owner
+or a publisher (`can_create_tag`), and the annotator's account is neither: a service is never made the
+owner of what it creates, and its grant is writer on the target. The version the create returns, which
+the project records and whose commit names the publish as its run, is the publish's reference; blessing
+it is the tenant's act at the catalog's publish door.
 
-The transport itself is TWO stacks that agree about failure: the tag calls go through the generated
-client (`Configuration(retries=...)`), and the S4 ``create``, the half that WRITES, goes over
-:func:`publish_client`, one pooled client per publisher with the same retry budget, released by
+The create goes over :func:`publish_client`, one pooled, retrying client per publisher, released by
 :meth:`CatalogPublisher.close`.
 
 **The saga publishes as the annotator's own ServiceAccount** (ADR 0171): its projected token, which the
@@ -57,10 +55,7 @@ logger = logging.getLogger(__name__)
 RUN_ID_HEADER = "x-rask-run-id"
 INPUTS_HEADER = "x-rask-inputs"
 
-#: Connect-failure retries for the publish transport's DIRECT-HTTP half, kept equal to the retry
-#: budget the generated client is built with below (`Configuration(retries=...)`).
-#:
-#: The two halves must agree: a transient reset on the write half that the client did not retry fires
+#: Connect-failure retries for the publish transport. A transient reset that is not retried fires
 #: `publish_failed` and leaves the project waiting for a watchdog tick. Retrying `create` is safe by
 #: construction, not by hope: it posts `mode=exist_ok`, which is the same property the whole
 #: retry-safety argument in this module's docstring rests on.
@@ -152,8 +147,8 @@ class _HttpCreateApi:
 class CatalogPublisher:
     """`saga.Publisher` over the catalog's REST API.
 
-    The SDK client is synchronous (urllib3), so every call runs in a worker thread. ``data_api`` /
-    ``tag_api`` are injectable for tests — the structural-fake pattern the estate uses for Ray."""
+    The create is synchronous (a pooled httpx client), so it runs in a worker thread. ``data_api`` is
+    injectable for tests — the structural-fake pattern the estate uses for Ray."""
 
     def __init__(
         self,
@@ -164,21 +159,13 @@ class CatalogPublisher:
         originator: str | None = None,
         timeout: float = 60.0,
         data_api: Any | None = None,
-        tag_api: Any | None = None,
     ) -> None:
         self._delimiter = delimiter
         self._timeout = timeout
         self._token_file = token_file
         self._originator = originator
-        if data_api is not None and tag_api is not None:
-            self._data, self._tags = data_api, tag_api
-            return
-        from lance_namespace_urllib3_client import ApiClient, Configuration  # noqa: PLC0415 - optional dep
-        from lance_namespace_urllib3_client.api.tag_api import TagApi  # noqa: PLC0415
-
         # Create goes over direct HTTP on the pooled, retrying client, posting the Arrow stream body itself.
-        self._data = _HttpCreateApi(base_url)
-        self._tags = TagApi(ApiClient(Configuration(host=base_url, retries=CATALOG_TRANSPORT_RETRIES)))
+        self._data = data_api if data_api is not None else _HttpCreateApi(base_url)
 
     def _headers(self) -> dict[str, str]:
         """This call's headers: the annotator's own token read now, and the person the publish is for.
@@ -186,7 +173,7 @@ class CatalogPublisher:
         WHO this publish is for. The token is the service's credential and the catalog authors every resulting event
         as that service, so the originator is the only place the human survives. It authorizes nothing — the
         notifications plane re-derives visibility per recipient at delivery — which is why it may ride beside a
-        service bearer. Sent on every call, the tag calls included: a half-attributed publish names nobody.
+        service bearer.
         """
         headers = identity_bearer(self._token_file) if self._token_file is not None else {}
         if self._originator:
@@ -194,19 +181,18 @@ class CatalogPublisher:
         return headers
 
     def close(self) -> None:
-        """Release both transports' connections.
+        """Release the transport's connections.
 
-        Only what THIS publisher opened: an injected `data_api`/`tag_api` belongs to its injector,
-        and closing it here would be ownership this object does not have (the same reasoning the
-        annotator's lifespan applies to `AppState`'s slots).
+        Only what THIS publisher opened: an injected `data_api` belongs to its injector, and closing it
+        here would be ownership this object does not have (the same reasoning the annotator's lifespan
+        applies to `AppState`'s slots).
         """
-        for api in (self._data, self._tags):
-            closer = getattr(api, "close", None)
-            if closer is not None:
-                try:
-                    closer()
-                except Exception:  # noqa: BLE001 - a shutdown that raises hides whatever came after it
-                    logger.warning("error closing the publish transport %s", type(api).__name__)
+        if not isinstance(self._data, _HttpCreateApi):
+            return
+        try:
+            self._data.close()
+        except Exception:  # noqa: BLE001 - a shutdown that raises hides whatever came after it
+            logger.warning("error closing the publish transport")
 
     async def create_table(
         self,
@@ -240,48 +226,6 @@ class CatalogPublisher:
 
         response = await asyncio.to_thread(_call)
         return int(getattr(response, "version", None) or 1)
-
-    async def tag_version(self, table_id: str, version: int, tag: str) -> None:
-        """Tag the version, treating "already tagged at this exact version" as success."""
-        from lance_namespace_urllib3_client import CreateTableTagRequest  # noqa: PLC0415 - optional dep
-
-        def _create() -> None:
-            self._tags.create_table_tag(
-                table_id,
-                CreateTableTagRequest(tag=tag, version=version),
-                delimiter=self._delimiter,
-                _headers=self._headers() or None,
-                _request_timeout=self._timeout,
-            )
-
-        try:
-            await asyncio.to_thread(_create)
-        except Exception as exc:
-            existing = await self._tag_points_at(table_id, tag)
-            if existing == version:
-                logger.info("tag %s already at version %d — converged", tag, version)
-                return
-            raise RuntimeError(f"could not tag {table_id}@{version} as {tag!r}: {exc} (tag currently points at {existing})") from exc
-
-    async def _tag_points_at(self, table_id: str, tag: str) -> int | None:
-        """Where the tag currently points, or None if it does not exist / cannot be read."""
-        from lance_namespace_urllib3_client import GetTableTagVersionRequest  # noqa: PLC0415 - optional dep
-
-        def _get() -> Any:
-            return self._tags.get_table_tag_version(
-                table_id,
-                GetTableTagVersionRequest(tag=tag),
-                delimiter=self._delimiter,
-                _headers=self._headers() or None,
-                _request_timeout=self._timeout,
-            )
-
-        try:
-            response = await asyncio.to_thread(_get)
-        except Exception:
-            return None
-        version = getattr(response, "version", None)
-        return int(version) if version is not None else None
 
 
 # --------------------------------------------------------------------------------------------------
