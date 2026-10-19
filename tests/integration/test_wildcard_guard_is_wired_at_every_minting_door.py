@@ -13,13 +13,19 @@ policy and widens the credential to siblings (`bucket/foo*/*` matches `foobar`).
 
 Each test creates the parent namespace first so the wildcard guard is the ONLY refusal in play —
 without it the door genuinely succeeds (200), never hides behind a parent-missing 404.
+
+The rename door takes its segments from the body, so it also refuses one carrying the namespace
+delimiter, which a path split on the delimiter never yields.
 """
 
 from __future__ import annotations
 
+from typing import Any
+
 import httpx
 import pyarrow as pa
 import pyarrow.ipc as ipc
+import pytest
 from fastapi.testclient import TestClient
 
 
@@ -68,18 +74,36 @@ def test_the_NAMESPACE_CREATE_door_refuses_a_wildcard_segment(real_ns_client: Te
     _assert_wildcard_refusal(refused)
 
 
-def test_the_RENAME_door_refuses_a_wildcard_DESTINATION(real_ns_client: TestClient) -> None:
+@pytest.mark.parametrize(
+    ("destination", "named"),
+    [
+        pytest.param({"new_table_name": "evil*"}, "reserved character(s) ['*']", id="wildcard-in-the-name"),
+        pytest.param({"new_table_name": "a$b"}, "namespace delimiter '$'", id="delimiter-in-the-name"),
+        pytest.param({"new_namespace_id": ["wc$a"], "new_table_name": "b"}, "namespace delimiter '$'", id="delimiter-in-a-namespace-segment"),
+    ],
+)
+def test_the_rename_door_refuses_a_destination_segment_an_id_cannot_carry(real_ns_client: TestClient, destination: dict[str, Any], named: str) -> None:
     """THE FOURTH DOOR (re-audit of cb1c6b11). A rename mints a new location from `new_table_name`
     exactly as declare does from `{id}` — unguarded, it relocated real bytes to `wc/evil*` and the
-    next credential vend for that table widened to every `evil…` sibling."""
+    next credential vend for that table widened to every `evil…` sibling.
+
+    Its segments come from the body, so they can also carry the delimiter, which no split path can
+    ([[LH-508]]). Without the guard, `{"new_table_name": "a$b"}` answers 200 and the table answers at
+    `wc$a$b` as table `b` of namespace `wc$a`, a path the rename never decided on. `wc$a` exists here,
+    so without the guard the door genuinely succeeds."""
     _make_namespace(real_ns_client, "wc")
+    _make_namespace(real_ns_client, "wc$a")
     rows = pa.table({"id": pa.array([1, 2], pa.int64())})
     created = real_ns_client.post("/v1/table/wc$src/create", content=_ipc(rows), headers=ARROW)
     assert created.status_code == 200, created.text
 
-    refused = real_ns_client.post("/v1/table/wc$src/rename", json={"new_table_name": "evil*"})
+    refused = real_ns_client.post("/v1/table/wc$src/rename", json=destination)
 
-    _assert_wildcard_refusal(refused)
-    # A refused rename is a no-op: the source is untouched and no wildcard-located table exists.
+    assert refused.status_code == 400, f"expected the segment guard's 400, got {refused.status_code}: {refused.text}"
+    assert refused.headers["content-type"] == "application/problem+json"
+    assert refused.json()["code"] == 13, refused.text
+    assert named in refused.json()["detail"], refused.text
+    # A refused rename is a no-op: the source is untouched and nothing answers at the joined destination.
+    joined = "$".join([*destination.get("new_namespace_id", ["wc"]), destination["new_table_name"]])
     assert real_ns_client.post("/v1/table/wc$src/describe", json={}).status_code == 200, "the refused rename lost the source"
-    assert real_ns_client.post("/v1/table/wc$evil*/describe", json={}).status_code == 404, "the refused rename minted the wildcard table anyway"
+    assert real_ns_client.post(f"/v1/table/{joined}/describe", json={}).status_code == 404, f"the refused rename landed the table at {joined}"

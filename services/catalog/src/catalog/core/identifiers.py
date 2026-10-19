@@ -52,15 +52,26 @@ _SEGMENT_WILDCARD_METACHARS = ("*", "?")
 
 
 def require_safe_segments(segments: list[str], *, delimiter: str) -> None:
-    """Refuse a create whose id carries an IAM wildcard metachar (``*``/``?``) in any segment — a 400.
+    """Refuse an id whose segment carries the namespace delimiter or an IAM wildcard metachar (``*``/``?``) — a 400.
+
+    The string identifier is the segments joined by the delimiter (``lance_docs/ns_catalog/spec.yaml``,
+    ``delimiter``), so a segment carrying it cannot round-trip: the object would land at an id that splits
+    into other segments than the ones its door decided on ([[LH-508]]). Only a door taking segments from a
+    body can be handed one (the rename's ``new_table_name`` and ``new_namespace_id``); a path id is split on
+    the delimiter before any door sees it.
 
     A segment name becomes the table's object-store prefix, and that prefix is interpolated UNESCAPED
     into the inline STS session policy that scopes vended per-table credentials. ``*`` and ``?`` are IAM
     wildcards there with no escape, so a ``foo*`` table would be handed credentials scoped to every sibling
     object under ``foo*``. Rung at SHAPE (identity -> shape -> parent exists -> authz -> conflict -> write),
-    before any native write: a wildcard id is malformed, not a permission problem.
+    before any native write: a malformed id is not a permission problem.
     """
     for seg in segments:
+        if delimiter in seg:
+            raise InvalidInputError(
+                f"identifier segment {seg!r} contains the namespace delimiter {delimiter!r}: an id is its segments joined "
+                f"by the delimiter, so {segments!r} would land at an id naming other segments. Choose a name without it."
+            )
         hit = [c for c in _SEGMENT_WILDCARD_METACHARS if c in seg]
         if hit:
             raise InvalidInputError(
