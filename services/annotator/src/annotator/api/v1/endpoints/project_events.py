@@ -37,7 +37,7 @@ from starlette.concurrency import run_in_threadpool
 
 from annotator.api.security import Checker, CheckerDep, CurrentSubject, RawBearerToken
 from annotator.api.v1.responses import DropReceipt, SendReceipt, TaskListing
-from annotator.corpus import unknown_sources
+from annotator.corpus import input_tables
 from annotator.projects.machines import (
     FROZEN_PROJECT_STATES,
     PROJECT_EDGES,
@@ -334,8 +334,8 @@ async def drop_task(
     return DropReceipt.model_validate(result)
 
 
-def _refuse_unknown_datasets(state: AppState, payload: SendItemsRequest, caller_token: str | None) -> None:
-    """Refuse the WHOLE send if any item names a media dataset that does not resolve.
+def _refuse_unknown_datasets(state: AppState, payload: SendItemsRequest, caller_token: str | None) -> dict[str, str | None]:
+    """Refuse the WHOLE send if any item names a media dataset that does not resolve; else each source's input table.
 
     Removal (`DELETE .../tasks/{id}`) is the escape hatch; this is the thing that stops the trap
     being set. An item naming a dataset that was renamed or removed cannot be opened on the canvas,
@@ -343,8 +343,10 @@ def _refuse_unknown_datasets(state: AppState, payload: SendItemsRequest, caller_
     task terminal, so one of them wedges the project. Creating it is the mistake; refusing at send
     is where it costs nothing.
 
-    With a live catalog the catalog is asked, as the sender (`annotator.corpus.unknown_sources`): a dataset or
-    table the sender cannot see is one their items could never open. Without one, the local registry is.
+    With a live catalog the catalog is asked, as the sender (`annotator.corpus.input_tables`): a dataset or
+    table the sender cannot see is one their items could never open, and each one it shows names the governed table
+    its captured version is of, which the send stamps on the item (`ItemSource.table`). Without one, the local
+    registry is asked, and no table is named.
 
     The whole send, not the offending items: a partial send produces exactly the half-populated
     project this is meant to prevent, and it costs ZERO seeded task actors to refuse here — the same
@@ -357,12 +359,14 @@ def _refuse_unknown_datasets(state: AppState, payload: SendItemsRequest, caller_
     """
     names = sorted({item.source.where for item in payload.items if item.source.where})
     if not names:
-        return  # every item takes the backend default, which resolves by construction
+        return {}  # every item takes the backend default, which resolves by construction
     if state.settings.rest_catalog_mode:
-        unseen = unknown_sources(state.settings, names, caller_token)
-        if unseen:
+        found = input_tables(state, names, caller_token)
+        if found is None:
+            return {}
+        if unseen := [name for name in names if name not in found]:
             raise ConflictError(f"dataset(s) {unseen} do not exist or cannot be read — an item naming one could never be opened, claimed or completed")
-        return
+        return found
     unknown: list[str] = []
     for name in names:
         try:
@@ -371,16 +375,17 @@ def _refuse_unknown_datasets(state: AppState, payload: SendItemsRequest, caller_
             unknown.append(name)
         except Exception:  # noqa: BLE001 - see docstring: unverifiable is not the same as wrong
             logger.warning("send could not consult the dataset registry; not refusing on a check that did not run")
-            return
-    if unknown:
-        try:
-            # `dataset_handle` above populated the registry slot on first use, but the slot is
-            # Optional by declaration — narrow rather than assume; an empty `known` degrades fine.
-            known = sorted(state.registry.list_ids()) if state.registry is not None else []
-        except Exception:  # noqa: BLE001 - naming the alternatives is a nicety, never the refusal
-            known = []
-        detail = f"dataset(s) {unknown} do not exist — an item naming one could never be opened, claimed or completed"
-        raise ConflictError(f"{detail}; known datasets are {known}" if known else detail)
+            return {}
+    if not unknown:
+        return {}
+    try:
+        # `dataset_handle` above populated the registry slot on first use, but the slot is
+        # Optional by declaration — narrow rather than assume; an empty `known` degrades fine.
+        known = sorted(state.registry.list_ids()) if state.registry is not None else []
+    except Exception:  # noqa: BLE001 - naming the alternatives is a nicety, never the refusal
+        known = []
+    detail = f"dataset(s) {unknown} do not exist — an item naming one could never be opened, claimed or completed"
+    raise ConflictError(f"{detail}; known datasets are {known}" if known else detail)
 
 
 #: What `send` stamps onto a pre-annotation's `source`. The `import` precedent (§ `projects.imports`
@@ -469,7 +474,7 @@ async def send_items(
     # makes it something an unauthorised caller must not be able to enumerate. Off the loop: the
     # body asks the catalog or the registry (blocking) per named dataset — inline it froze every
     # in-flight request on a cold miss (docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit" ANN-01).
-    await run_in_threadpool(_refuse_unknown_datasets, state, payload, caller_token)
+    tables = await run_in_threadpool(_refuse_unknown_datasets, state, payload, caller_token)
 
     # Consensus v1: N>1 seeds N independent replica items per source item, deterministic sibling
     # ids (`{gid}-r{k}`) — determinism is what lets the one-replica-per-annotator guard find them.
@@ -491,6 +496,8 @@ async def send_items(
         # Every provenance and state field takes its model default, so a sender cannot pre-set
         # `state=accepted` or name someone else as the annotator.
         group_id = item.task_id or new_id()
+        # The input table is the server's to name, whatever the sender put there.
+        source = item.source.model_copy(update={"table": tables.get(item.source.where or "")})
         capture: dict[str, Any] = {
             "review_required": bool(project.get("review_required", True)),
             "lease_seconds": int(project.get("lease_seconds") or 1800),
@@ -506,14 +513,14 @@ async def send_items(
             "prediction": predictions[index],
         }
         replicas = (
-            [Task(task_id=group_id, project_id=project_id, source=item.source, media=item.media, **capture)]
+            [Task(task_id=group_id, project_id=project_id, source=source, media=item.media, **capture)]
             if consensus_n == 1
             else [
                 Task(
                     task_id=f"{group_id}-r{k}",
                     project_id=project_id,
                     replica_of=group_id,
-                    source=item.source,
+                    source=source,
                     media=item.media,
                     **capture,
                 )

@@ -313,9 +313,10 @@ def build_plan(
             if task.task_id not in group:
                 group.append(task.task_id)
                 group.sort()
-        # Version capture per dataset, from the SEND capture — one truth for the facet + the pin.
-        if task.source.where:
-            versions = plan.dataset_versions.setdefault(task.source.where, [])
+        # Version capture per source, from the SEND capture — one truth for the facet + the pin. The table the server
+        # named at send when there is one (a dataset is a namespace, which no input can be), else the dataset.
+        if source := task.source.table or task.source.where:
+            versions = plan.dataset_versions.setdefault(source, [])
             if task.source.dataset_version not in versions:
                 versions.append(task.source.dataset_version)
                 versions.sort(key=lambda v: (v is not None, v if v is not None else 0))
@@ -378,7 +379,9 @@ def source_pin(plan: PublishPlan, *, delimiter: str = CATALOG_DELIMITER) -> tupl
     failed for the sake of a provenance nicety. Observed live, 2026-08-03.
 
     An unregistered corpus simply has no lineage edge to draw: there is no catalog node at the other
-    end. Refusing to name one is the same discipline as refusing to fabricate a version."""
+    end. Refusing to name one is the same discipline as refusing to fabricate a version. With a live
+    catalog a dataset is a namespace, so the plan reads the table the server named at send
+    (`ItemSource.table`, the dataset's row table) and that table is what pins."""
     if plan.sources_uncaptured or len(plan.dataset_versions) != 1:
         return None
     dataset, versions = next(iter(plan.dataset_versions.items()))

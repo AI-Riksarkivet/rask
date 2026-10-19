@@ -78,6 +78,8 @@ class Drive(BaseModel):
     #: The corpus's annotations table, read back as the person, and what its newest commit carries.
     annotations: list[dict[str, Any]]
     annotations_commit: dict[str, Any]
+    #: The version of the corpus's row table the person selected the item from.
+    selected: int
     #: The published table, read back as the admin, and what its commit carries.
     published_table: str
     published: list[dict[str, Any]]
@@ -190,8 +192,11 @@ def drive(tenant: Tenant) -> Iterator[Drive]:
     save["base_version"] = int(loaded.headers["X-Annotations-Version"])
     _answer(as_person.post(unit, params={"dataset": tenant.bronze}, json=save, timeout=60))
 
-    # The task plane: send, assign, draft, submit, accept, freeze, publish.
-    item = {"source": {"kind": "chunks", "keys": ["/".join(map(str, UNIT))], "where": tenant.bronze}, "media": {"kind": "image"}}
+    # The task plane: send, assign, draft, submit, accept, freeze, publish. The item carries the version of the corpus's
+    # row table the person selected from, as the zone captures it, which the publish names as its input.
+    selected = lance.dataset(namespace_client=person.namespace(), table_id=[tenant.bronze, "chunks"]).version
+    source = {"kind": "chunks", "keys": ["/".join(map(str, UNIT))], "where": tenant.bronze, "dataset_version": selected}
+    item = {"source": source, "media": {"kind": "image"}}
     [task_id] = _answer(as_admin.post(f"{ANNOTATOR}/projects/{project_id}/items", json={"items": [item]}, timeout=60), 201)["task_ids"]
     _answer(as_admin.post(f"{ANNOTATOR}/projects/{project_id}/events", json={"event": "open"}, timeout=30))
     _answer(as_admin.post(f"{ANNOTATOR}/tasks/{task_id}/events", json={"event": "assign", "assignee": person.principal}, timeout=30))
@@ -214,6 +219,7 @@ def drive(tenant: Tenant) -> Iterator[Drive]:
         admitted=admitted,
         annotations=annotations,
         annotations_commit=annotations_commit,
+        selected=selected,
         published_table=published_table,
         published=published,
         published_commit=published_commit,
@@ -238,4 +244,5 @@ def test_the_annotator_works_the_lakehouse_through_its_public_doors(drive: Drive
     assert rows == [(drive.project_id, LABEL, tenant.job.principal, tenant.admin.principal)]
     assert drive.published_table.startswith(f"{tenant.project}-silver$")
     assert drive.published_commit.get("rask.author") == ANNOTATOR_ACCOUNT
+    assert drive.published_commit.get("rask.inputs") == [{"table": [tenant.bronze, "chunks"], "version": drive.selected}]
     assert ("originator", f"table:{drive.published_table}") in drive.told, f"the admin was not told the publish was theirs: {drive.told}"

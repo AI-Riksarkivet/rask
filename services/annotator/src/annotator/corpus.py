@@ -107,24 +107,36 @@ def resolve(state: AppState, dataset_id: str | None, caller_token: str | None) -
     return Corpus(id=dataset, declared=declared)
 
 
-def unknown_sources(settings: MediaSettings, names: list[str], caller_token: str | None) -> list[str] | None:
-    """Which of ``names`` the catalog does not show the caller, or None when it could not be asked.
+def input_tables(state: AppState, names: list[str], caller_token: str | None) -> dict[str, str | None] | None:
+    """For each of ``names`` the catalog shows the caller, the governed table an item's captured version is a version of.
 
-    A name carrying the delimiter is a table, any other a dataset (a namespace). A source the caller may not read is
-    as unknown to them as one that does not exist: neither could be opened on the canvas.
+    A name carrying the delimiter is a table, its own input. Any other is a dataset, whose items are rows of its default
+    search's row table: the table whose version a sender captures (the zone's `rowTableVersion`), so that table at that
+    version is what a publish of the items names as its input, which a write to a derived tier must. None for a dataset
+    that declares no search. A name missing from the answer is one the caller cannot open on the canvas: absent,
+    refused, or a dataset with no valid descriptor. None when the catalog could not be asked.
     """
+    settings = state.settings
     client = catalog_client(settings, caller_token)
-    unknown: list[str] = []
+    found: dict[str, str | None] = {}
     for name in names:
         identifier = name.split(settings.catalog_delimiter)
         try:
             if len(identifier) > 1:
                 client.table_exists(lance_namespace.TableExistsRequest(id=identifier))
+                found[name] = name
             else:
-                client.namespace_exists(lance_namespace.NamespaceExistsRequest(id=identifier))
-        except (lance_namespace.TableNotFoundError, lance_namespace.NamespaceNotFoundError, lance_namespace.PermissionDeniedError):
-            unknown.append(name)
-        except lance_namespace.LanceNamespaceError:
+                search = resolve(state, name, caller_token).declared.search
+                found[name] = settings.catalog_delimiter.join(settings.catalog_table_id(name, search.row_table)) if search else None
+        except (
+            lance_namespace.TableNotFoundError,
+            lance_namespace.NamespaceNotFoundError,
+            lance_namespace.PermissionDeniedError,
+            NotFoundError,
+            ForbiddenError,
+        ):
+            continue
+        except (lance_namespace.LanceNamespaceError, ServiceUnavailableError):
             logger.warning("send could not ask the catalog about %s; not refusing on a check that did not run", name)
             return None
-    return unknown
+    return found

@@ -94,6 +94,11 @@ class ItemSource(BaseModel):
     #: RunEvent gains its READ edge; anything mixed or uncaptured pins nothing — a fabricated pin
     #: is a lie (§7.2).
     dataset_version: int | None = None
+    #: The governed table `dataset_version` is a version of, written by the server at send and never taken from the
+    #: sender: the source itself when it names a table, else its dataset's default row table as the catalog showed the
+    #: sender (`annotator.corpus.input_tables`). The publish pins this table. None on a local stack, where the pin reads
+    #: `where`.
+    table: str | None = None
 
 
 class Transition(BaseModel):
