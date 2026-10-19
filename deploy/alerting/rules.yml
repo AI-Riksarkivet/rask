@@ -208,8 +208,8 @@ groups:
             Runbook: docs/runbooks/RUNBOOK-oncall.md#lineage-refusing-a-signers-events
 
       # [[XC-078]] A bus door's refusal is ACKED, so its counter is the only trace. Every reason pages, unlike lineage's door:
-      # every bus publisher signs and the annotator's exempt actions are never verified, so any refusal is a forgery or a
-      # signer that broke. Runbook: docs/runbooks/RUNBOOK-oncall.md#a-bus-door-refusing-events
+      # every bus publisher signs, so any refusal is a forgery or a signer that broke.
+      # Runbook: docs/runbooks/RUNBOOK-oncall.md#a-bus-door-refusing-events
       - alert: NotificationsDoorRefusingEvents
         expr: sum by (lance_notifications_door, lance_notifications_reason) (rate(notifications_signature_refused_total[5m])) > 0
         for: 2m
@@ -235,6 +235,20 @@ groups:
             A write event no listed signer's key verifies was ACKED and planned nothing, so only this alert and the
             `maintenance_signature_refused` log line record it; the sweep still compacts the table on its next pass. Forged
             events are reaching the bus, or a signer broke.
+            Runbook: docs/runbooks/RUNBOOK-oncall.md#a-bus-door-refusing-events
+      # [[CTL-32]] The catalog's own subscription to its control lane.
+      - alert: CatalogControlLaneRefusingEvents
+        expr: sum by (lance_catalog_reason) (rate(catalog_signature_refused_total[5m])) > 0
+        for: 2m
+        labels:
+          severity: critical
+          service: catalog
+        annotations:
+          summary: "The catalog is REFUSING control events ({{ $labels.lance_catalog_reason }}) — its feed and binding cache skip them"
+          description: >-
+            A control event its role's signature does not verify was ACKED, reached no change-event feed and evicted no
+            binding, so only this alert and the `catalog_signature_refused` log line record it. Forged events are reaching
+            the bus, or a signer broke and each replica keeps a binding the event would have evicted.
             Runbook: docs/runbooks/RUNBOOK-oncall.md#a-bus-door-refusing-events
 
   - name: lance-catalog

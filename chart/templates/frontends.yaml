@@ -132,18 +132,12 @@ spec:
             {{- if and $root.Values.explorer.enabled (or (eq .name "explorer") (eq .name "annotator")) }}
             - name: VIEWER_API
               value: {{ printf "http://%s-viewer:%v" (include "rask.fullname" $root) $root.Values.explorer.services.viewer.port | quote }}
-            - name: ANNOTATOR_API
-              value: {{ printf "http://%s-annotator:%v" (include "rask.fullname" $root) $root.Values.explorer.services.annotator.port | quote }}
             - name: SEARCH_API
               value: {{ printf "http://%s-search:%v" (include "rask.fullname" $root) $root.Values.explorer.services.search.port | quote }}
-            {{- if and (eq .name "annotator") $root.Values.runners.enabled }}
-            - name: MEDIA_ASSIST_URL
-              value: {{ printf "http://%s-assist:%v/v1/assist" (include "rask.fullname" $root) $root.Values.runners.assist.port | quote }}
-            {{- if $root.Values.runners.jobsUrl }}
-            - name: MEDIA_JOBS_URL
-              value: {{ $root.Values.runners.jobsUrl | quote }}
             {{- end }}
-            {{- end }}
+            {{- if and (eq .name "annotator") $fe.annotatorUrl }}
+            - name: ANNOTATOR_API
+              value: {{ $fe.annotatorUrl | quote }}
             {{- end }}
           ports:
             - name: http

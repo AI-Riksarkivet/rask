@@ -1,7 +1,6 @@
 """Descriptor-identity key primitives — validation + key predicates.
 
-The shared kernel half of the doc-key contract: every group (viewer, search,
-annotator) validates route keys against the descriptor's whitelist pattern and
+The shared kernel half of the doc-key contract: every media service and client validates route keys against the descriptor's whitelist pattern and
 renders identity predicates through here, so a future service split never
 imports a sibling group for dataset access (LANCE_MEDIA_MERGE §4.4).
 """

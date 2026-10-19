@@ -96,12 +96,6 @@ ControlAction = Literal[
     "promotion_held",
     "promotion_rejected",
     "promotion_expired",
-    # ANNOTATION WORK, and the first control actions a service other than the catalog/maintenance pair
-    # publishes. They belong in this vocabulary rather than a stream of their own for the reason the
-    # grant actions do: both NAME a person and hand them (or take from them) something they must act on,
-    # which is exactly what the notifications plane's `NAMED_ACTIONS` targets. `task_unassigned` is the
-    # sharper half — an annotator holding a draft against a task that is no longer theirs discovers it by
-    # losing the work, the same way a revoked grant is discovered by a 403 mid-task.
     # THE REF PLANE ([[LH-056]]), and UNTARGETED for the reason the rule states: a control event is
     # targeted when it changes what a specific person may do or must do, not when it changes an object.
     # Creating or deleting a branch, and creating, moving or deleting a tag, change an OBJECT -- nobody's
@@ -113,31 +107,6 @@ ControlAction = Literal[
     "table_tag_created",
     "table_tag_updated",
     "table_tag_deleted",
-    "task_assigned",
-    "task_unassigned",
-    # THE OTHER DEPARTURE EDGES. `TASK_EDGES` has twelve transitions that take a task out of somebody's
-    # hands; `release` was simply the first one wired, not a special case. These two cover the rest of
-    # the HTTP-reachable ones, and each is a DISTINCT action rather than a reused `task_unassigned`
-    # because the notifications panel RENDERS the reason as the row's label — telling somebody their
-    # reviewed work was "unassigned" is a worse answer than the silence it replaces.
-    #
-    # `task_changes_requested` carries both review-side returns (`request_changes` from a reviewer,
-    # `reopen` from a manager): from the submitter's side they are the same fact — work they had
-    # finished is theirs again. `task_dropped` is the sharpest of all, because the item is DISCARDED:
-    # the task actor keeps their draft, the index entry `saga.collect` enumerates is gone, and nothing
-    # will ever look for that work again.
-    "task_changes_requested",
-    "task_dropped",
-    # THE ONE NO PERSON CAUSES. A self-claimed task carries a lease (30 min by default, renewed on
-    # every save); when it lapses the task returns to the pool and the holder is left with a draft
-    # against work that is no longer theirs. An ASSIGNED task never expires, so this only ever names
-    # somebody who took the work off the pool themselves — exactly the person with no reason to
-    # suspect they lost it.
-    #
-    # It is fired by the task actor's own reminder, so its `actor` is `system:annotator` rather than a
-    # principal. That is honest rather than limiting: the lane targets on `extra.subject` and never
-    # reads `actor` at all.
-    "task_lease_expired",
     # An erasure's residual is pinned by a tag or a branch, and its release is scheduled (ADR 0138, [[LH-178]]).
     # TARGETED: one event per person it costs, the requester and each table owner in `extra.subject`, because the
     # release deletes the tags and recreates the branches at the deadline in `extra.due_at`, and a branch's own
@@ -147,11 +116,9 @@ ControlAction = Literal[
 
 #: The kind of governed object the action targets — drives which console view invalidates. `project` is the
 #: top of rask's hierarchy (project > warehouse > namespace > table) and became a first-class control object
-#: when tenants got their own registry record (`open_hierarchy_lifecycle.md` Decision 1).
-#: `annotation_task` is deliberately NOT `table`: a task is a unit of work inside an annotation project,
-#: not a governed lakehouse object, and conflating them would send the console to invalidate a table view
-#: for an assignment that changed no data.
-ControlObjectType = Literal["project", "grant", "warehouse", "policy", "namespace", "table", "annotation_task", "gate"]
+#: when tenants got their own registry record (`open_hierarchy_lifecycle.md` Decision 1). Every member is a lakehouse
+#: object: a tool that works on the lakehouse keeps its own objects and its own channel for them (ADR 0171).
+ControlObjectType = Literal["project", "grant", "warehouse", "policy", "namespace", "table", "gate"]
 
 #: The caps on the two cascade CLAIMS a publication echoes onto `table_published`'s `extra`: the batch
 #: id and the person the batch is for. The catalog's publish door enforces them, and a door that takes
@@ -190,15 +157,13 @@ class CatalogControlEvent(BaseModel):
 
 
 #: A service whose own signing identity signs the control actions it emits ([[XC-078]]), and so a key of
-#: `RASK_CONTROL_SIGNER_ROLES`, which the chart renders as each role's signing identities.
+#: `RASK_CONTROL_SIGNER_ROLES`, which the chart renders as each role's signing identities. Every action has one: the
+#: lane carries only the lakehouse's own signed events (ADR 0171).
 type ControlSigner = Literal["catalog", "maintenance"]
 
-#: Whose signature an action needs before a door acts on it: a `ControlSigner`, or "exempt" for none.
-type ControlSignerRole = ControlSigner | Literal["exempt"]
 
-
-def control_signer_role(action: ControlAction, object_id: str) -> ControlSignerRole:
-    """The role whose signature ``action`` on ``object_id`` needs before a door acts on it, or "exempt" when it needs none.
+def control_signer_role(action: ControlAction) -> ControlSigner:
+    """The role whose signature ``action`` needs before a door acts on it.
 
     The role is the service whose code emits the action, so a door verifies against that role's identities in
     `RASK_CONTROL_SIGNER_ROLES` and never against every signer the estate lists: a valid signature from another
@@ -206,11 +171,6 @@ def control_signer_role(action: ControlAction, object_id: str) -> ControlSignerR
     here fails the `assert_never`.
     """
     match action:
-        case "grant_added" | "grant_revoked" if object_id.startswith("annotation_project:"):
-            # EXEMPT by owner ruling R5 (2026-10-04): the annotator's member door emits the grant pair for its own
-            # projects and holds no signing identity. Decided on the object, so a grant on any catalog object still
-            # needs the catalog's signature. The residual is R3's: any identity the bus lets publish here can forge one.
-            return "exempt"
         case (
             "grant_added"
             | "grant_revoked"
@@ -255,9 +215,5 @@ def control_signer_role(action: ControlAction, object_id: str) -> ControlSignerR
         case "table_purged" | "namespace_purged":
             # The expiry purge: maintenance's sweep emits both under `maintenance.controlEmit`.
             return "maintenance"
-        case "task_assigned" | "task_unassigned" | "task_changes_requested" | "task_dropped" | "task_lease_expired":
-            # EXEMPT by owner ruling R3 (2026-10-04): the annotator emits these and has no signing identity, so a door
-            # acts on them unverified. The residual is named: any identity the bus lets publish here can forge them.
-            return "exempt"
         case _:
             assert_never(action)

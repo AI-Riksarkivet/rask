@@ -126,6 +126,9 @@ spec:
             - { name: LANCE_CONTROL_OUTBOX_URI, value: "s3://{{ .Values.objectStore.bucket }}/_control_outbox" }
             - { name: LANCE_CONTROL_RELAY_BINDING_NAME, value: {{ .Values.catalog.controlOutbox.bindingName | quote }} }
             {{- end }}
+            {{- if .Values.catalog.controlEmit }}
+            {{- with include "lance.doorEnv" (list $root true (list "catalog" "maintenance")) }}{{ . | nindent 12 }}{{- end }}
+            {{- end }}
             - { name: LANCE_ERASURE_DEADLINE_DAYS, value: {{ required "catalog.erasure.deadlineDays is required" .Values.catalog.erasure.deadlineDays | quote }} }
             - { name: LANCE_ERASURE_RELEASE_GRACE_DAYS, value: {{ required "catalog.erasure.releaseGraceDays is required" .Values.catalog.erasure.releaseGraceDays | quote }} }
             - { name: LANCE_ERASURE_CLEANUP_WINDOW_DAYS, value: {{ required "maintenance.olderThanDays is required" .Values.maintenance.olderThanDays | quote }} }

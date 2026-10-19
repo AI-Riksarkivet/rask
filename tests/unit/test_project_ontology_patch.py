@@ -20,7 +20,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from annotator.api.security import current_subject, get_checker, get_fga_client
+from annotator.api.security import current_subject, get_checker
 from annotator.api.v1.endpoints import projects as projects_ep
 from annotator.api.v1.endpoints.projects import router
 from service_kit.exceptions import register_handlers
@@ -63,7 +63,6 @@ def _app(actor: _FakeProjectActor, monkeypatch: pytest.MonkeyPatch, *, allow: bo
     register_handlers(app)
     app.dependency_overrides[get_checker] = lambda: checker
     app.dependency_overrides[current_subject] = lambda: "gina"
-    app.dependency_overrides[get_fga_client] = lambda: None
     return app
 
 

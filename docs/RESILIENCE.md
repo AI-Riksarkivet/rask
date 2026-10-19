@@ -52,8 +52,7 @@ acknowledged nothing for the sixteen minutes that followed and both outboxes kep
 list stayed correct, because the lineage relay records the outbox without the bus.
 
 The fix is upstream (components-contrib#4563; #4564, `MaxReconnects(-1)`, unmerged). Until a Dapr release ships it, the
-catalog, lineage, maintenance and notifications each run `service_kit.bus_watchdog` over their own sidecar. The
-annotator's control publisher runs none, because the explorer is outside Phase 1. The watchdog probes every
+catalog, lineage, maintenance and notifications each run `service_kit.bus_watchdog` over their own sidecar. The watchdog probes every
 `pubsub.jetstream` component every 30 s on `probe.<app-id>`, a subject no stream captures. When a probe answers that the
 connection is closed, the watchdog waits until the bus greets a new connection, then asks the sidecar to shut down, and
 the kubelet restarts it. A shorter outage needs none of this: a client still reconnecting buffers its publishes and

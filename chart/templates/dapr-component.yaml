@@ -43,9 +43,6 @@ scopes:
 {{- if and .Values.maintenance.enabled .Values.maintenance.controlEmit }}
 {{- include "lance.publishPubsub" (list . (printf "%s-%s" (.Values.pubsub.controlName | default "catalog-control-pubsub") .Values.maintenance.daprAppId) .Values.maintenance.daprAppId) }}
 {{- end }}
-{{- if and .Values.explorer.enabled .Values.explorer.controlEmit }}
-{{- include "lance.publishPubsub" (list . (printf "%s-%s" (.Values.pubsub.controlName | default "catalog-control-pubsub") .Values.explorer.services.annotator.daprAppId) .Values.explorer.services.annotator.daprAppId) }}
-{{- end }}
 
 {{- if and .Values.dapr.enabled .Values.services.notifications }}
 ---

@@ -28,7 +28,6 @@ DatasetParam = Annotated[str | None, Query(description="Dataset id (default DB w
 
 # `get_author` / `AuthorDep` (the trusted `X-User` header) lived here and are DELETED. The
 # docstring's own promise — "at merge, lance-ns's auth swaps this for the VERIFIED token subject" —
-# is the change that removed them: the annotator's write routes now take `CurrentSubject`
-# (annotator/api/security.py), which is `anon` with OIDC off and the verified `sub` with it on,
-# with deliberately no header fallback. No service reads `x-user`, so the header means nothing
+# is the change that removed them: a media service's write routes take `CurrentSubject`, which is
+# `anon` with OIDC off and the verified `sub` with it on, with deliberately no header fallback. No service reads `x-user`, so the header means nothing
 # anywhere.

@@ -59,7 +59,7 @@ def _is_control_lane(pointer: InboxPointer) -> bool:
     the 30-day TTL, which is verbatim the failure the exemption above exists to end.
 
     The lanes stay distinguishable without a stored field (`extra="forbid"` rightly forbids one): the
-    control lane stamps a CANONICAL id carrying its type (`table:db1$t`, `annotation_task:…`) while a
+    control lane stamps a CANONICAL id carrying its type (`table:db1$t`, `project:acme`) while a
     lineage run stamps a bare dataset name. That is the same discriminator `visibility._as_object`
     already relies on, and its docstring records why a dataset name cannot collide — the estate's are
     `<namespace>$<table>`, delimiter-joined and colon-free.
@@ -106,9 +106,9 @@ async def get_inbox(
     # argument applied one step later. That lane delivers WITHOUT a visibility check on purpose —
     # being NAMED is the targeting, and after a `grant_revoked` the subject cannot see the object at
     # all, so a check would drop the one event they most need. Re-imposing it here re-created exactly
-    # what delivery had refused: measured live, two `task_assigned` rows naming `annotation_task:…`
-    # objects the subject held no grant on gave `unread: 16` beside 14 rows, the two in NEITHER page —
-    # a badge that cannot be cleared by reading, because what it counts is never shown.
+    # what delivery had refused: measured live, two control-lane rows naming objects the subject held no
+    # grant on gave `unread: 16` beside 14 rows, the two in NEITHER page — a badge that cannot be cleared
+    # by reading, because what it counts is never shown.
     #
     # It discloses nothing further. `InboxRow` carries `object_id` and no other fact about the object
     # (`source_run_id`/`event_seq` are None for a control event), and that id is the one the subject

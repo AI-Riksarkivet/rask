@@ -6,7 +6,7 @@ code via the registered handler — one place to change the response shape.
 Until this gate the estate carried **two** copies of this module: this one (bound into
 ``make_service_app``, and never actually raised from
 anywhere) and the media pair ``media.exceptions`` + ``media.handlers`` (raised
-throughout viewer/search/annotator/lancekit). The ``_problem`` builder and both handler
+throughout the media services and lancekit). The ``_problem`` builder and both handler
 bodies were identical; only the member set and the base class differed. They are now one
 module — the unification ``service_kit.media.__init__`` flagged as "a later gate".
 

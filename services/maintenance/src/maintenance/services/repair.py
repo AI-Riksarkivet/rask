@@ -13,16 +13,6 @@ names — so revoking them removes nobody's access to anything: there is no door
 behind it. Measured live 2026-09-20, `ghost_tables` alone stands at 1,033, residue of the warehouse
 cascade [[LH-148]] fixed at source — a producer already closed, leaving a backlog nothing could clear.
 
-`orphaned_annotation_tasks` IS NOT A FOURTH GHOST, and the distinction is what this module turns on.
-There the annotation project still EXISTS; only its `tenant` edge names a project that does not.
-`revoke_object_tuples` is all-or-nothing by OBJECT, so using it would destroy a live object's whole
-authorization to clear one stale edge. So it gets the other seam: an EXACT-TUPLE delete, planned and
-reported separately, because "removed all authz on a dead object" and "cut one stale edge on a live
-one" are different acts and an operator must be able to tell them apart in the audit stream. The
-finding carries both ends (`annotation_project` and `tenant`), so the tuple is fully determined and
-needs no lookup — which is also why this cannot widen: it can only ever delete the one edge the report
-found dangling.
-
 WHAT IT REFUSES, BY NAME RATHER THAN BY OMISSION. `ungoverned_tables` is the INVERSE shape and the
 reason this module has a refusal list at all: a real table, real bytes, no tuples. A pass that
 "repaired drift" by acting on it would delete live data to close an authorization gap — the single
@@ -80,11 +70,6 @@ log = logging.getLogger(__name__)
 #: which is what keeps a NEW drift category from defaulting into being deletable.
 _REVOCABLE: tuple[str, ...] = ("ghost_projects", "ghost_warehouses", "ghost_tables")
 
-#: Categories repaired by deleting ONE exact tuple instead of revoking an object — the object is alive
-#: and keeps every other grant it holds. Its own list rather than a flag on `_REVOCABLE` because the
-#: two acts differ in blast radius, and a reader must not have to infer which one a category gets.
-_EDGE_ONLY: tuple[str, ...] = ("orphaned_annotation_tasks",)
-
 #: The SOURCE each repairable category's "it is gone" inference is subtracted from, keyed by category.
 #:
 #: A revoke is justified by an ABSENCE — a tuple whose id appears in no registry record — and an
@@ -106,9 +91,6 @@ _SUBTRACTED_FROM: dict[str, str] = {
     "ghost_projects": "registry:projects",
     "ghost_warehouses": "registry:warehouses",
     "ghost_tables": "catalog:tables",
-    # The edge cut reads the SAME projects registry: a skipped record makes a live tenant look retired,
-    # and the cut would strip the `tenant` edge off an annotation project whose owner still exists.
-    "orphaned_annotation_tasks": "registry:projects",
 }
 
 
@@ -138,22 +120,10 @@ class RevokedObject(BaseModel):
     justified_by: str
 
 
-class CutEdge(BaseModel):
-    """One exact tuple this pass would delete, or deleted — a dead edge on a LIVE object."""
-
-    user: str
-    relation: str
-    object: str
-    justified_by: str
-
-
 class RepairReport(BaseModel):
     enabled: bool = False
     dry_run: bool = True
     revoked: list[RevokedObject] = Field(default_factory=list)
-    #: Exact tuples cut from objects that are still alive. Separate from `revoked` on purpose: the two
-    #: differ in blast radius, and a single list would let a reader mistake one for the other.
-    edges_cut: list[CutEdge] = Field(default_factory=list)
     #: Categories the report found and this pass declined, with why. Present even when empty-handed:
     #: "considered and refused" and "never looked" are different facts about a cleaner.
     refused: dict[str, str] = Field(default_factory=dict)
@@ -173,25 +143,6 @@ def _partial(report: ReconcileReport, category: str) -> str | None:
         return None
     hit = [scan for scan in report.incomplete or [] if scan.source.startswith(prefix)]
     return None if not hit else ", ".join(f"{scan.source} ({scan.reason})" for scan in hit)
-
-
-def plan_repair_edges(report: ReconcileReport) -> tuple[list[RevokedObject], list[CutEdge], dict[str, str]]:
-    """The full plan: whole-object revokes, exact-edge cuts, and the categories refused with reasons."""
-    planned, refused = plan_repair(report)
-    edges: list[CutEdge] = []
-    if (why := _partial(report, "orphaned_annotation_tasks")) is not None:
-        refused["orphaned_annotation_tasks"] = f"the registry this tenant check subtracts from was read only in part — {why}"
-    else:
-        edges = [
-            CutEdge(
-                user=f"project:{finding.tenant}",
-                relation="tenant",
-                object=f"annotation_project:{finding.annotation_project}",
-                justified_by="orphaned_annotation_tasks",
-            )
-            for finding in report.orphaned_annotation_tasks or []
-        ]
-    return planned, edges, refused
 
 
 def plan_repair(report: ReconcileReport) -> tuple[list[RevokedObject], dict[str, str]]:
@@ -215,8 +166,7 @@ def plan_repair(report: ReconcileReport) -> tuple[list[RevokedObject], dict[str,
             refused[category] = f"the listing this absence was measured against was read only in part — {why}"
             continue
         for finding in findings:
-            obj = getattr(finding, "fga_object", None) or f"annotation_project:{finding.annotation_project}"
-            planned.append(RevokedObject(fga_object=obj, tuples=getattr(finding, "tuples", 0), justified_by=category))
+            planned.append(RevokedObject(fga_object=finding.fga_object, tuples=finding.tuples, justified_by=category))
     return planned, refused
 
 
@@ -230,15 +180,12 @@ async def repair_drift(settings: MaintenanceSettings, *, report: ReconcileReport
     """
     if not settings.drift_repair_enabled or fga_client is None:
         return RepairReport(enabled=settings.drift_repair_enabled, dry_run=settings.drift_repair_dry_run)
-    planned, edges, refused = plan_repair_edges(report)
+    planned, refused = plan_repair(report)
     out = RepairReport(enabled=True, dry_run=settings.drift_repair_dry_run, refused=refused)
-    # CAPPED ON THE REVOKES ONLY. An edge cut removes exactly one tuple from a live object, so a
-    # handful of them cannot be the unreviewable batch the cap exists to prevent — and counting them
-    # against it would let a backlog of ghosts starve the smaller, safer repair indefinitely.
     out.capped = max(0, len(planned) - settings.drift_repair_max_per_tick)
     planned = planned[: settings.drift_repair_max_per_tick]
     if out.dry_run:
-        out.revoked, out.edges_cut = planned, edges
+        out.revoked = planned
         return out
     done: list[RevokedObject] = []
     for target in planned:
@@ -250,19 +197,4 @@ async def repair_drift(settings: MaintenanceSettings, *, report: ReconcileReport
             continue
         done.append(target)
     out.revoked = done
-    cut: list[CutEdge] = []
-    for edge in edges:
-        try:
-            await fga.delete_tuples(  # noqa: TID251
-                fga_client,
-                [fga.ClientTuple(user=edge.user, relation=edge.relation, object=edge.object)],
-                actor=settings.catalog_service_identity,
-                origin="drift_repair",
-            )
-        except Exception as exc:  # noqa: BLE001 — same contract as the revokes above
-            log.warning("drift_repair_edge_failed", extra={"object": edge.object, "error": str(exc)})
-            out.error = str(exc)
-            continue
-        cut.append(edge)
-    out.edges_cut = cut
     return out

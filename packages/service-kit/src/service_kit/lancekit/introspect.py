@@ -73,10 +73,14 @@ def _index_type(type_url: str) -> str:
 
 def table_info(uri: str | Path, storage_options: dict[str, str] | None = None, *, session: lance.Session | None = None) -> TableInfo:
     """Introspect one Lance table (schema, vector dims, blob columns, indexes)."""
-    ds = lance.dataset(str(uri), storage_options=storage_options, session=session)
+    return dataset_info(lance.dataset(str(uri), storage_options=storage_options, session=session), Path(uri).stem)
+
+
+def dataset_info(ds: lance.LanceDataset, name: str) -> TableInfo:
+    """Introspect one already-opened Lance table, however it was opened (a URI, or a namespace on a vended credential)."""
     indexes = [IndexInfo(name=ix.name, index_type=_index_type(ix.type_url), columns=list(ix.field_names)) for ix in ds.describe_indices()]
     return TableInfo(
-        name=Path(uri).stem,
+        name=name,
         row_count=ds.count_rows(),
         version=ds.version,
         columns=[_column_info(f) for f in ds.schema],

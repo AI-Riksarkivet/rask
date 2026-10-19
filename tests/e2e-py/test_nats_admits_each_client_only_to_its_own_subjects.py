@@ -68,7 +68,7 @@ RIG = "rask-test-rig"
 #: Who may publish each data subject; every other table user must be refused on it.
 #:
 #: lineage: catalog/core/lineage_emit.py, lineage/services/staged.py (recovered signed bytes), maintenance/core/
-#: lineage_emit.py. control: catalog's control_emit and control_relay.py, plus the flagged announcers below. maintenance
+#: lineage_emit.py. control: catalog's control_emit and control_relay.py, plus the flagged announcer below. maintenance
 #: work: catalog/endpoints/maintenance.py and maintenance/services/work_queue.py; index: catalog only. dlq.<app>: the
 #: `deadLetterTopic` of that app's subscriptions. probe.<app>: service_kit/bus_watchdog.py, which each service runs over its
 #: own sidecar's connections.
@@ -77,15 +77,12 @@ def _values() -> Path:
 
 
 def _control_emitters(values: Path) -> frozenset[str]:
-    """Maintenance and the annotator announce on catalog.control.v1 only while the flag that renders their control
-    component is on (maintenance.controlEmit, explorer.controlEmit; both false in the chart's values)."""
+    """Maintenance announces on catalog.control.v1 only while the flag that renders its control component is on
+    (maintenance.controlEmit, false in the chart's values)."""
     chart = yaml.safe_load((REPO / "chart" / "values.yaml").read_text()) or {}
     given = yaml.safe_load(values.read_text()) or {}
-
-    def on(section: str) -> bool:
-        return bool((given.get(section) or {}).get("controlEmit", (chart.get(section) or {}).get("controlEmit")))
-
-    return frozenset(app for app, section in (("maintenance", "maintenance"), ("annotator", "explorer")) if on(section))
+    on = (given.get("maintenance") or {}).get("controlEmit", (chart.get("maintenance") or {}).get("controlEmit"))
+    return frozenset({"maintenance"}) if on else frozenset()
 
 
 PUBLISHERS: dict[str, frozenset[str]] = {

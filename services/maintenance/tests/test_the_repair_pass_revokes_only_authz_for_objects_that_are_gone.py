@@ -4,12 +4,10 @@
 reconcile: a repair pass over the drift report, dry-run by DEFAULT with deletion opt-in, alongside the
 additive `rebuild.py`. The additive half shipped then; this is the half that can DELETE.
 
-WHAT IT MAY TOUCH, and why the line is exactly there. Four of the report's categories are the same
+WHAT IT MAY TOUCH, and why the line is exactly there. Three of the report's categories are the same
 fact — an FGA object carrying tuples that no registry record names — and revoking those tuples cannot
-remove anyone's access to anything, because the object they grant on is gone. `ghost_projects`,
-`ghost_warehouses` and `ghost_tables` are `GhostObject`; `orphaned_annotation_tasks` is an edge naming
-a retired tenant, which `reconcile.py` already describes as "not dangerous, it is UNREACHABLE".
-Measured live 2026-09-20: `ghost_tables` alone stands at 1,033, residue of the warehouse cascade
+remove anyone's access to anything, because the object they grant on is gone: `ghost_projects`,
+`ghost_warehouses` and `ghost_tables`, each a `GhostObject`. Measured live 2026-09-20: `ghost_tables` alone stands at 1,033, residue of the warehouse cascade
 [[LH-148]] fixed at source.
 
 WHAT IT MUST NEVER TOUCH IS THE POINT OF THIS SUITE. `ungoverned_tables` is the inverse shape — a
@@ -34,7 +32,6 @@ from maintenance.services import repair
 from maintenance.services.reconcile import (
     GhostObject,
     OrphanBucket,
-    OrphanedAnnotationTask,
     OrphanedTrash,
     ReconcileReport,
     UnboundNamespace,
@@ -51,7 +48,6 @@ def _report() -> ReconcileReport:
         ghost_projects=[GhostObject(kind="project", id="gone-p", fga_object="project:gone-p", tuples=3)],
         ghost_warehouses=[GhostObject(kind="warehouse", id="gone-w", fga_object="warehouse:gone-w", tuples=2)],
         ghost_tables=[GhostObject(kind="table", id="ns$gone-t", fga_object="table:ns$gone-t", tuples=4)],
-        orphaned_annotation_tasks=[OrphanedAnnotationTask(annotation_project="anno-1", tenant="gone-p")],
         ungoverned_tables=[UngovernedTable(table="ns$live", root="s3://wh")],
         unbound_namespaces=[UnboundNamespace(namespace="legacy", root="s3://shared")],
         unreferenced_projects=[UnreferencedProject(id="stranded-p")],
@@ -69,33 +65,27 @@ def _settings(**over: object) -> MaintenanceSettings:
 
 
 class _Store:
-    """The two OpenFGA writes `repair_drift` makes, recorded instead of sent.
+    """The OpenFGA write `repair_drift` makes, recorded instead of sent.
 
     Installed on `service_kit.governed.fga` — the module `repair.fga` names — so the production
-    coroutine runs unmodified and only the store behind it is absent. Each stand-in takes the keyword
+    coroutine runs unmodified and only the store behind it is absent. The stand-in takes the keyword
     arguments the real function requires, so a call that stopped passing `actor` or `origin` fails here
     the way it would fail live.
     """
 
     def __init__(self) -> None:
         self.revoked: list[str] = []
-        self.cut: list[tuple[str, str, str]] = []
 
     async def revoke_object_tuples(self, client: object, obj: str, *, actor: str, origin: str) -> list[object]:
         del client, actor, origin
         self.revoked.append(obj)
         return []
 
-    async def delete_tuples(self, client: object, tuples: list[repair.fga.ClientTuple], *, actor: str, origin: str) -> None:
-        del client, actor, origin
-        self.cut.extend((t.user, t.relation, t.object) for t in tuples)
-
 
 @pytest.fixture
 def store(monkeypatch: pytest.MonkeyPatch) -> _Store:
     fake = _Store()
     monkeypatch.setattr(repair.fga, "revoke_object_tuples", fake.revoke_object_tuples)
-    monkeypatch.setattr(repair.fga, "delete_tuples", fake.delete_tuples)
     return fake
 
 
@@ -179,27 +169,8 @@ def test_EVERY_drift_category_is_either_revocable_or_refused_BY_NAME() -> None:
     """
     from maintenance.services.reconcile import CATEGORIES
 
-    revocable, edges, refused = set(repair._REVOCABLE), set(repair._EDGE_ONLY), set(repair._REFUSED)
-    unclassified = sorted(set(CATEGORIES) - (revocable | edges | refused))
+    revocable, refused = set(repair._REVOCABLE), set(repair._REFUSED)
+    unclassified = sorted(set(CATEGORIES) - (revocable | refused))
 
-    assert unclassified == [], f"{unclassified} are drift categories this pass neither revokes, cuts nor refuses by name — classify them in `repair.py`"
-    assert not (revocable & edges), "a category cannot be both a whole-object revoke and an exact-edge cut"
-    assert not (revocable & refused) and not (edges & refused), "a category cannot be both handled and refused"
-
-
-# --------------------------------------------------------------------------- #
-# The EDGE half: a live object with one dead edge ([[LH-061]])
-# --------------------------------------------------------------------------- #
-
-
-def test_an_orphaned_annotation_task_plans_an_EDGE_cut_not_an_object_revoke() -> None:
-    """The distinction this module turns on, now with a seam for the other side of it.
-
-    `orphaned_annotation_tasks` was refused because the annotation project still EXISTS — only its
-    `tenant` edge names a project that does not — and `revoke_object_tuples` is all-or-nothing by
-    object, so using it would destroy a live object's whole authorization to clear one stale edge.
-    The finding carries BOTH ends, so the exact tuple is fully determined and needs no lookup.
-    """
-    _planned, edges, _refused = repair.plan_repair_edges(_report())
-
-    assert [(e.user, e.relation, e.object) for e in edges] == [("project:gone-p", "tenant", "annotation_project:anno-1")]
+    assert unclassified == [], f"{unclassified} are drift categories this pass neither revokes nor refuses by name — classify them in `repair.py`"
+    assert not (revocable & refused), "a category cannot be both handled and refused"

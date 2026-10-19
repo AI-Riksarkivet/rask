@@ -578,21 +578,22 @@ _EXTERNAL_RAY = "https://ray.example.com:8265"
 
 
 @pytest.mark.parametrize(
-    ("overlay", "address"),
+    "overlay",
     [
-        pytest.param(("--set", "image.localImages=true"), None, id="default-names-no-ray"),
-        pytest.param(chart_render.PROD_ARGS, None, id="prod-names-no-ray"),
-        pytest.param((*chart_render.PROD_ARGS, "--set-string", f"ray.dashboardUrl={_EXTERNAL_RAY}"), _EXTERNAL_RAY, id="prod-external-ray"),
-        pytest.param(_LOCAL_INPUTS, "http://rask-ray-head-svc:8265", id="local-fixture-head"),
+        pytest.param(("--set", "image.localImages=true"), id="default-names-no-ray"),
+        pytest.param(chart_render.PROD_ARGS, id="prod-names-no-ray"),
+        pytest.param((*chart_render.PROD_ARGS, "--set-string", f"ray.dashboardUrl={_EXTERNAL_RAY}"), id="prod-external-ray"),
+        pytest.param(_LOCAL_INPUTS, id="local-fixture-head"),
     ],
 )
-def test_every_ray_consumer_names_one_cluster_or_the_render_refuses(overlay: tuple[str, ...], address: str | None) -> None:
+def test_every_ray_consumer_names_one_cluster_or_the_render_refuses(overlay: tuple[str, ...]) -> None:
     """[[CP-041]]: every Ray consumer names the one cluster the estate names, and rask installs none of it.
 
     A second key naming the Ray plane once split it: compute pruned job history on one head while other pods
     submitted to a head Service nothing rendered, and a head grown to 81,155 jobs OOMKilled compute that way.
-    Every consumer in the chart renders `rask.rayDashboardUrl` (the annotator's Serve discovery; compute is its
-    own release and is given the address as a value), and a render that names no Ray hands no consumer an address.
+    Every consumer in the chart renders `rask.rayDashboardUrl` (the zones' Serve origin; compute and the annotator are
+    their own releases and are given the address as a value), so no pod names a Ray address under a key of its own,
+    whether the estate names a Ray or not.
 
     The address reaches its readers alone (CP-056): a shared ConfigMap would hand a Ray address to every fleet pod that
     loads it, the lakehouse's controlplane and notifications among them, which never call Ray.
@@ -611,8 +612,7 @@ def test_every_ray_consumer_names_one_cluster_or_the_render_refuses(overlay: tup
             if name in ("RAY_DASHBOARD_URL", "MEDIA_SERVE_DISCOVERY_URL") or "RAY_ADDRESS" in name:
                 named.setdefault(f"{workload} {name}", set()).add(value)
 
-    expected = {} if address is None else {"Deployment/rask-annotator MEDIA_SERVE_DISCOVERY_URL": {address}}
-    assert named == expected
+    assert named == {}, f"a pod names a Ray address under a key of its own: {named}"
     engine = sorted(
         f"{doc['kind']}/{doc['metadata']['name']}"
         for doc in docs
@@ -923,7 +923,6 @@ _DOCS_ENV_BY_WORKLOAD: dict[str, str] = {
     "maintenance": "MAINTENANCE_DOCS",
     "viewer": "MEDIA_DOCS",
     "search": "MEDIA_DOCS",
-    "annotator": "MEDIA_DOCS",
 }
 
 
@@ -962,8 +961,8 @@ def test_the_chart_TURNS_DOCS_OFF_by_default_and_ON_when_asked() -> None:
     state this finding describes.
     """
     # `explorer.enabled` is false by default (a fresh cluster must come up with no node
-    # preparation), so viewer/search/annotator render only when asked for. Enable it here or the
-    # gate silently covers four of the seven apps.
+    # preparation), so viewer/search render only when asked for. Enable it here or the gate
+    # silently covers three of the five apps.
     _ON = "explorer.enabled=true"
     off = _app_containers(_rendered_docs(_ON))
     missing = sorted(set(_DOCS_ENV_BY_WORKLOAD) - set(off))

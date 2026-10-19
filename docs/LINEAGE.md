@@ -157,8 +157,8 @@ or refuse an event and cannot forge one (`packages/lineage-kit/src/lineage_kit/s
   service acting for itself, signed with no delegation. The emitting service signs at emit, before the event is staged
   (`service_kit.control_emit`, its signer injected). Who signs which action is
   `service_kit.control_events.control_signer_role`: the catalog signs every action it emits, for the person it
-  authenticated; maintenance signs `table_purged` and `namespace_purged` as itself. The annotator's task actions and its grants on an `annotation_project:` object travel
-  unsigned (owner rulings R3 and R5), so any identity the bus lets publish on the topic can forge them. A signer whose key
+  authenticated; maintenance signs `table_purged` and `namespace_purged` as itself. No action is exempt: the lane carries only the
+  lakehouse's own signed events, and a client tool publishes nothing on it (ADR 0171). A signer whose key
   is unresolved publishes and stages nothing unsigned: it withholds the event, counts it under
   `<service>_control_emit_failed_total{lance_<service>_reason="unsigned"}` and reports itself not ready, so a control
   event emitted in that window is lost, not delayed. The catalog's control relay signs nothing: it republishes a staged
@@ -181,7 +181,8 @@ or refuse an event and cannot forge one (`packages/lineage-kit/src/lineage_kit/s
   claimed identity and the reason. A key list that cannot be read is an outage, not a verdict, and the delivery is
   retried. What each reason means and what to do:
   [RUNBOOK-oncall.md](runbooks/RUNBOOK-oncall.md#lineage-refusing-a-signers-events).
-- **The doors that act on the bus.** Notifications (`/lineage-events`, `/control-events`) and maintenance's
+- **The doors that act on the bus.** Notifications (`/lineage-events`, `/control-events`), the catalog's own
+  `/control-events` (which feeds `GET /management/v1/events` and the warehouse-binding cache) and maintenance's
   `/maintenance-arrival` verify the same signatures before they act, in the mode `RASK_SIGNATURE_DOORS` names (chart
   `signing.doors`: off, observe or enforce). A lineage event verifies against `RASK_EVENT_SIGNERS` and
   `RASK_EVENT_DELEGATORS`, lineage's own sets. A control

@@ -615,7 +615,7 @@ securityContext:
 {{- define "lance.openfgaAudience" -}}rask-openfga{{- end -}}
 
 {{- define "lance.fgaWriters" -}}
-catalog maintenance annotator
+catalog maintenance
 {{- end -}}
 
 {{- define "lance.isFgaWriter" -}}
@@ -628,7 +628,6 @@ catalog maintenance annotator
 {{- if $v.auth.enabled -}}
 {{- range list "catalog" "jobs" "hooks" }}{{ $out = append $out (printf "%s%s" $sa .) }}{{ end -}}
 {{- if $v.maintenance.enabled }}{{ $out = append $out (printf "%smaintenance" $sa) }}{{ end -}}
-{{- if and $v.explorer.enabled (hasKey $v.explorer.services "annotator") }}{{ $out = append $out (printf "%sannotator" $sa) }}{{ end -}}
 {{- end -}}
 {{- $out | uniq | sortAlpha | join "," -}}
 {{- end -}}
@@ -713,7 +712,7 @@ secret_key
 
 {{- define "lance.mediaIdentity" -}}
 {{- if and .Values.explorer.enabled .Values.explorer.corpusS3Root -}}
-{{- required "objectStore.mediaAccessKey names annotator's and search's read-only identity on explorer.corpusS3Root; they never present the store's root (ADR 0168)" .Values.objectStore.mediaAccessKey -}}
+{{- required "objectStore.mediaAccessKey names search's read-only identity on explorer.corpusS3Root; it never presents the store's root (ADR 0168)" .Values.objectStore.mediaAccessKey -}}
 {{- end -}}
 {{- end -}}
 
@@ -761,7 +760,7 @@ scoped_secret() {
 {{- $own := dict -}}
 {{- range (include "lance.signers" . | fromJsonArray) }}{{- $_ := set $own .app (concat (get $own .app | default list) (list (printf "signing-key-%s" .key) (printf "signing-public-%s" .key))) }}{{- end -}}
 {{- $apps := list
-  (dict "app" $v.services.catalog.daprAppId "sa" "catalog" "api" (concat (list "dapr-app-token") (values ($v.catalog.multibase.baseCredentialRefs | default dict))) "bus" true)
+  (dict "app" $v.services.catalog.daprAppId "sa" "catalog" "api" (concat (list "dapr-app-token") (values ($v.catalog.multibase.baseCredentialRefs | default dict)) (ternary $everySigner list (and $v.auth.enabled $doors $v.catalog.controlEmit))) "bus" true)
   (dict "app" $v.services.lineage.daprAppId "sa" "lineage" "api" (concat (list "lineage-s3" "dapr-app-token") (compact (list $v.services.lineage.forward.authSecret.name)) (ternary $everySigner list (and $v.auth.enabled ($v.signing).enforce))) "bus" true) -}}
 {{- if $v.maintenance.enabled -}}
 {{- $apps = append $apps (dict "app" $v.maintenance.daprAppId "sa" "maintenance" "api" (concat (list "maintenance-s3" "dapr-app-token") (ternary $everySigner list (and $v.auth.enabled $doors $v.maintenance.arrivalEnabled))) "bus" (or $v.maintenance.arrivalEnabled $v.maintenance.lineageEmit (and $v.catalog.controlEmit $v.maintenance.controlEmit))) -}}
@@ -771,8 +770,7 @@ scoped_secret() {
 {{- $api := list -}}
 {{- if and (eq $name "viewer") $v.storage.stores }}{{- range $v.storage.stores }}{{- $api = append $api .secret }}{{- end }}{{- end -}}
 {{- if $v.explorer.corpusS3Root }}{{- $api = append $api (ternary "viewer-s3" "media-s3" (eq $name "viewer")) }}{{- end -}}
-{{- if eq $name "annotator" }}{{- $api = append $api "dapr-app-token" }}{{- if and $v.auth.enabled $v.dex.enabled }}{{- $api = concat $api (list "publisher-oidc" "oidc-client") }}{{- end }}{{- end -}}
-{{- $apps = append $apps (dict "app" ($svc.daprAppId | default $name) "sa" $name "api" $api "bus" (and (eq $name "annotator") $v.catalog.controlEmit $v.explorer.controlEmit)) -}}
+{{- $apps = append $apps (dict "app" ($svc.daprAppId | default $name) "sa" $name "api" $api "bus" false) -}}
 {{- end -}}
 {{- end -}}
 {{- range $name, $svc := $v.services -}}
@@ -1032,7 +1030,6 @@ keys_shaped() { case "$1" in *,) return 1 ;; *,*) pub_shaped "${1%%,*}" && pub_s
 {{- if .Values.explorer.enabled -}}
 {{- $media := .Values.explorer.services -}}
 {{- $rows = append $rows (dict "prefix" "/api/explorer/search" "component" "search" "service" (printf "%s-search" (include "lance.fullname" $root)) "port" $media.search.port "rewrite" "/api/search") -}}
-{{- $rows = append $rows (dict "prefix" "/api/explorer/annotations" "component" "annotator" "service" (printf "%s-annotator" (include "lance.fullname" $root)) "port" $media.annotator.port "rewrite" "/api/annotations") -}}
 {{- $rows = append $rows (dict "prefix" "/api/explorer" "component" "viewer" "service" (printf "%s-viewer" (include "lance.fullname" $root)) "port" $media.viewer.port "rewrite" "/api") -}}
 {{- end -}}
 {{- $rows = append $rows (dict "prefix" "/api/catalog" "component" "catalog" "service" (printf "%s-catalog" (include "lance.fullname" $root)) "port" .Values.services.catalog.port "rewrite" "/") -}}

@@ -33,7 +33,6 @@ def _settings_builders() -> list[tuple[str, Any, str]]:
         ("catalog", CatalogSettings, "dapr_secret_store"),
         ("maintenance", MaintenanceSettings, "dapr_secret_store"),
         ("media.s3", MediaSettings, "s3_secret_store"),
-        ("media.publish", MediaSettings, "publish_secret_store"),
         ("viewer", ViewerSettings, "secret_store"),
     ]
 

@@ -1,7 +1,7 @@
 """The media plane's S3 SECRET comes from the Dapr secret store, fail-closed — never the env chain.
 
-The estate's rule (2026-08-07 ruling: NO secret in env anywhere) and the in-file precedent
-(`MEDIA_PUBLISH_*`: coordinates are config, the password is not). Before this, `storage_options`
+The estate's rule (2026-08-07 ruling: NO secret in env anywhere): coordinates are config, the secret is not. Before
+this, `storage_options`
 silently fell back to the AWS env chain — an env-borne secret with a configured look.
 
 `storage_options` IS A METHOD, NOT A PROPERTY (docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit", 2026-08-28). It

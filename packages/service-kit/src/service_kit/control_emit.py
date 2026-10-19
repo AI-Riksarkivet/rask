@@ -2,14 +2,11 @@
 
 The publish half of :mod:`service_kit.control_events`, which owns the wire model. Every producer of a
 governance mutation notice uses THIS module — the catalog (grants, warehouses, policies, namespaces,
-tables), maintenance (the expired-trash purge destroys bytes and revokes grants), and the annotator
-(a task is assigned to a named person).
+tables) and maintenance (the expired-trash purge destroys bytes and revokes grants).
 
-**One implementation, and the history is the argument for it.** This began as a catalog module and was
-copy-pasted into maintenance, whose docstring recorded the reason: *maintenance may not import the
-catalog* (declaring it would drag the catalog's whole closure into that image). That justified not
-importing the CATALOG; it never justified a second implementation. ``service_kit`` is importable by
-every service by construction, so the third producer made the shared home obvious.
+**One implementation.** Maintenance may not import the catalog (declaring it would drag the catalog's whole
+closure into that image), and ``service_kit`` is importable by every service by construction, so the publish
+half lives here once.
 
 **Publish is inline-awaited and best-effort.** A mutation endpoint awaits it AFTER the backend/FGA
 change and its audit succeed — so a change that did not happen is never announced — but every error is
@@ -26,9 +23,9 @@ Nothing unsigned leaves a signer, and a signer stages nothing unsigned: an event
 or the event without a canonical form, is WITHHELD (neither staged nor published) and counted, as the catalog
 withholds a lineage event it cannot sign, while the signer reports itself not ready. Staged bytes are authenticated
 by nothing but the signature they carry, so nothing may sign them later: a relay that signed what it found staged
-would sign whatever any other writer of the prefix put there. A service with no signing identity passes
-``sign=None`` and publishes unsigned, which a door accepts only for an action
-:func:`service_kit.control_events.control_signer_role` exempts.
+would sign whatever any other writer of the prefix put there. A service run with no signing identity (a stack with
+no secret store) passes ``sign=None`` and publishes unsigned, which only a door verifying nothing acts on: every
+action has a signer (:func:`service_kit.control_events.control_signer_role`).
 
 **No broker client in app code.** Publishing goes through the local Dapr sidecar
 (:func:`service_kit.dapr_publish.publish_event`), which owns retry, backoff and DLQ as component
@@ -216,8 +213,8 @@ def make_control_emitter(
     the no-op (dev/off, like lineage). Built once in the service's lifespan onto
     ``app.state.control_emitter``.
 
-    ``sign`` has no default, so every producer states whether it signs: None publishes unsigned, which a
-    door accepts only for an action ``control_signer_role`` exempts."""
+    ``sign`` has no default, so every producer states whether it signs: None publishes unsigned, which only a
+    door verifying nothing acts on."""
     if enabled and dapr is not None:
         return DaprControlEmitter(
             dapr,
@@ -271,36 +268,3 @@ async def emit_control(
         )
         return
     await emitter.emit(event)
-
-
-# ─────────────────────────────────────────────────────────────────────────────────────────────────
-# The PROCESS-level emitter — for code with no request to resolve a dependency from
-# ─────────────────────────────────────────────────────────────────────────────────────────────────
-#
-# Every HTTP producer reaches its emitter through a FastAPI dependency over `app.state`, which is the
-# right shape: one emitter per process, resolved per request, overridable in a test.
-#
-# A DAPR ACTOR has no request. The annotator's lease reminder fires from `receive_reminder` on a timer
-# — no principal, no `Request`, no dependency graph — and it is the edge whose audience most needs
-# telling, because the person's hold on the task is being taken away while they are not looking. Its
-# only options were a module-global or nothing.
-#
-# So: a process-scoped holder, set by the same lifespan that builds `app.state.control_emitter`, and
-# defaulting to the NO-OP. The default matters — a service that never sets it (or one whose emit is
-# disabled) gets silence rather than an AttributeError inside an actor turn, which is the same
-# fail-open posture `emit_control` already has.
-#
-# NOT a replacement for the dependency. A request-path producer that reached for this would lose the
-# per-test override that makes the emit assertable, and would couple itself to import order.
-_PROCESS_EMITTER: ControlEmitter = NoopControlEmitter()
-
-
-def set_process_control_emitter(emitter: ControlEmitter) -> None:
-    """Publish the process's emitter for non-request callers. Called once, from the lifespan."""
-    global _PROCESS_EMITTER  # one process-wide handle is the point
-    _PROCESS_EMITTER = emitter
-
-
-def process_control_emitter() -> ControlEmitter:
-    """The process's emitter, or the no-op when the lifespan never set one."""
-    return _PROCESS_EMITTER

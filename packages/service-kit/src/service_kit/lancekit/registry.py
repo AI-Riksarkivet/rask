@@ -59,7 +59,7 @@ class DatasetHandle(BaseModel):
         cached :class:`TableInfo` doesn't know (a write bumped it) or a table the
         descriptor has never seen (created after first ``get()``). Re-introspects
         ONLY that table — a full descriptor reload would rescan every table after
-        every annotations save.
+        every write.
 
         The tables dict is rebound copy-on-write (never mutated in place) so
         concurrent readers iterating it can't hit ``RuntimeError``. An identity

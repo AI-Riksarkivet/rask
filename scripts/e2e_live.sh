@@ -71,6 +71,8 @@ FGA="$(svc "$RELEASE-openfga")"      || true
 GREPTIME="$(svc greptimedb observability)" || true
 MAINT="$(svc "$RELEASE-maintenance")" || true
 NOTIFICATIONS="$(svc "$RELEASE-notifications")" || true
+# The annotator's own release beside rask (deploy/fixtures/annotator), when it is installed.
+ANNOTATOR="$(svc "$RELEASE-annotator")" || true
 # The notifications service mounts its routers under the fleet's API prefix, read from the release's own config.
 API_PREFIX="$(kubectl get cm "$RELEASE-config" -o jsonpath='{.data.RASK_API_PREFIX}' 2>/dev/null || true)"
 # THE BUS THE RELEASE'S PUB/SUB COMPONENTS DIAL (`nats.url`), read off one of them and resolved to that Service's
@@ -134,6 +136,7 @@ url LANCE_E2E_FGA             "$FGA"
 url LANCE_E2E_GREPTIME_URL    "$GREPTIME"
 url LANCE_E2E_MAINTENANCE_URL "$MAINT"
 url LANCE_E2E_NOTIFICATIONS_URL "$NOTIFICATIONS" "$API_PREFIX"
+url LANCE_E2E_ANNOTATOR_URL   "$ANNOTATOR"
 if [ -n "$NATS" ]; then export LANCE_E2E_NATS_URL="nats://$NATS"; else _missing="$_missing LANCE_E2E_NATS_URL"; fi
 [ -z "$_missing" ] || printf '   NOT DISCOVERED (their suites will skip):%s\n' "$_missing"
 export LANCE_E2E_TOKEN="$ALICE"

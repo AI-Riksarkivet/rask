@@ -15,13 +15,13 @@ from fastapi import APIRouter, Query, Response
 from annotator.annotations.schema import ANNOTATIONS_TABLE, EMPTY_SCHEMA
 from annotator.annotations.versions import VERSION_SOURCE_HEADER, checkout
 from annotator.api.security import RawBearerToken
+from annotator.corpus import resolve
 from service_kit.exceptions import NotFoundError
 from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from service_kit.lancekit.keys import chunk_key_filter, validate_doc_key
 from service_kit.lancekit.reader import open_catalog_reader, open_reader
 from service_kit.lancekit.registry import table_dataset
 from service_kit.media.deps import DatasetParam, StateDep
-from service_kit.media.state import dataset_handle
 
 
 if TYPE_CHECKING:
@@ -46,30 +46,30 @@ def annotations(
     The keys map positionally onto the descriptor's identity fields (same shape as
     the chunk / chunk-frame routes). ``version`` reads a HISTORICAL snapshot (Lance
     time-travel) for the compare-versions view; omitted ⇒ the latest."""
-    handle = dataset_handle(state, dataset)
-    declared = handle.descriptor.declared
+    corpus = resolve(state, dataset, caller_token)
+    declared = corpus.declared
     doc_id = validate_doc_key(declared, doc_id)
     settings = state.settings
     # In full catalog mode the catalog table is the truth — the local replica is
     # not opened at all (a catalog-only deployment must not 404 on a missing local
     # directory). Any other configuration keeps today's local resolution.
     ds = None
-    if not settings.rest_catalog_mode:
+    if corpus.local is not None:
         try:
-            ds = table_dataset(handle, ANNOTATIONS_TABLE)
+            ds = table_dataset(corpus.local, ANNOTATIONS_TABLE)
         except NotFoundError:
             # No annotations table yet — serve an empty stream so the client renders 0.
             return _empty_stream_response()
     where = chunk_key_filter(declared, doc_id, (speech_id, chunk_id))
     if version is not None:
-        if settings.rest_catalog_mode:
+        if corpus.local is None:
             # Catalog-mode time-travel: the version pin on the catalog's /query —
             # the SAME number-space the current-read header reports, so the panel
             # can feed a listed version straight back here. A bad/reclaimed
             # version (or a table the catalog doesn't know) is the catalog's 404,
             # translated to ours — never a silent empty local fallback.
             reader = open_catalog_reader(
-                table_id=settings.catalog_table_id(handle.id, ANNOTATIONS_TABLE),
+                table_id=settings.catalog_table_id(corpus.id, ANNOTATIONS_TABLE),
                 settings=settings,
                 caller_token=caller_token,
             )
@@ -88,7 +88,7 @@ def annotations(
     # — the fail-safe direction of the optimistic-concurrency contract.
     reader = open_reader(
         dataset=ds,
-        table_id=settings.catalog_table_id(handle.id, ANNOTATIONS_TABLE),
+        table_id=settings.catalog_table_id(corpus.id, ANNOTATIONS_TABLE),
         settings=settings,
         caller_token=caller_token,
     )

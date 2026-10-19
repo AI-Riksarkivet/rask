@@ -101,7 +101,7 @@ def build_settings() -> Settings:
 
 
 # NO DAPR CLIENT IS BUILT HERE. Every service that publishes constructs its own client in its own
-# lifespan (catalog, lineage, maintenance, annotator, notifications), and the `make_service_app`
+# lifespan (catalog, lineage, maintenance, notifications), and the `make_service_app`
 # services never touch `app.state.dapr`. A client wired into the app factory would be a shared seam no
 # caller wants, and one that looks available is the one the next service reaches for.
 

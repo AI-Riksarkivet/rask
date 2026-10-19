@@ -13,7 +13,8 @@ flowchart TD
         subgraph services["services/ · runnable code"]
             lake["lakehouse: catalog · lineage · maintenance · notifications"]
             fleet["flows · compute"]
-            media["media: viewer · search · annotator"]
+            media["media: viewer · search"]
+            annot["annotator (a client, own release)"]
         end
         subgraph packages["packages/ · reusable libraries (no entrypoints)"]
             psk["service-kit"]
@@ -33,6 +34,7 @@ flowchart TD
     lake --> psk
     lake --> plk
     fleet --> psk
+    annot --> psk
     mf --> fpk
 ```
 
@@ -45,7 +47,7 @@ plane, and language purity is what lets both workspaces glob their members.
 | Package | Language | Purpose |
 |---|---|---|
 | `packages/service-kit` | Python | Platform library: `make_service_app` app factory, `Settings`/config, exceptions, middleware, `get_settings`, injectable lifespan, plus the governed (`service_kit.governed`) and lakehouse (`service_kit.lakehouse`) seams. Dependency-light (no lancedb/ray/sqlmodel). |
-| `packages/lineage-kit` | Python | The OpenLineage emission kernel and the Ed25519 signing and verifying seam for lineage events, used by catalog, lineage, maintenance, notifications and annotator. |
+| `packages/lineage-kit` | Python | The OpenLineage emission kernel and the Ed25519 signing and verifying seam for lineage events, used by catalog, lineage, maintenance and notifications. |
 | [`packages/storage`](../packages/storage.md) | Python | The S3 client seam (`s3_client`, `configured_endpoint`, STS, the `StorageError` family) plus `FSSource/Sink`, `S3Source/Sink`, `iter_keys` and `build_source`/`build_sink`. |
 | `packages/ray-kit` | Python | Ray Job SDK + dashboard wrapper (schemas, `build_client`, `RAY_TRANSIENT_ERRORS`, dashboard service). Used by the `compute` service only; the lakehouse may not import it. |
 | `packages/validate` | Python | Pre-upload image validation over bytes or paths. |
@@ -61,7 +63,8 @@ plane, and language purity is what lets both workspaces glob their members.
 | Path | Type | Purpose |
 |---|---|---|
 | `services/{catalog,lineage,maintenance,notifications}` | FastAPI | The lakehouse: the governed Lance Namespace catalog with tier governance, OpenLineage intake, the durable `GET /events` feed and edge list (Lance tables the catalog governs) and the forwarder to a graph backend, maintenance (expiry, purge, orphan scan, reconcile), and the targeted inbox. |
-| `services/{viewer,search,annotator}` | FastAPI | The media plane (`:8101`–`:8103`, public `/api/explorer/*`). The viewer also serves the S3 object browser. |
+| `services/{viewer,search}` | FastAPI | The media plane (`:8101`–`:8102`, public `/api/explorer/*`). The viewer also serves the S3 object browser. |
+| `services/annotator` | FastAPI | The labeling tool (`:8103`, public `/api/explorer/annotations`), a client of the lakehouse that reads and writes only through the catalog's doors; deployed by its own chart, `deploy/fixtures/annotator`, not the product chart (ADR 0171). |
 | `services/flows` | FastAPI | The studio flow-builder's server half (`/api/flows`). |
 | `services/compute` | FastAPI | Ray dashboard introspection + `/api/serve/*` proxy on `:8804`, the companion of a bring-your-own Ray engine; deployed by its own chart, `deploy/fixtures/compute`, not the product chart. |
 | `frontend/microfrontends/home` | SvelteKit 2 + Svelte 5 (SSR) | The catch-all zone (`:5273`) on `svelte-adapter-bun`; owns `/` and the OIDC BFF. |
@@ -86,10 +89,10 @@ Consequences that follow from the seal, all deliberate:
 
 ## Deployables — workspace members with a dockerfile
 
-There is **no `projects/` layer**. `compute`, `flows` and `notifications`
+There is **no `projects/` layer**. `annotator`, `compute`, `flows` and `notifications`
 each build their own `.docker/<name>.dockerfile` via `uv sync --frozen --package <name>`
 against the **root** `uv.lock`; one image, `.docker/rest-catalog.dockerfile`, serves `catalog`, `lineage`,
-`maintenance`, `viewer`, `search` and `annotator`. The seven zones build from `.docker/frontend.dockerfile`.
+`maintenance`, `viewer` and `search`. The seven zones build from `.docker/frontend.dockerfile`.
 
 ## Workspace membership is globbed
 

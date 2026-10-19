@@ -381,10 +381,7 @@ async def delete_project(
     # `team` edge. Tuples where the project is the USER are a different set, and the one that would matter
     # is `warehouse:X#project@project:<id>`: none can survive here, because the emptiness refusal above
     # proves no warehouse record claims this project, and a warehouse's delete revokes its own tuples (that
-    # edge among them) before its record goes. The annotator plane's `annotation_project:X#tenant@project:
-    # <id>` edge is NOT covered by that check — it lives outside the warehouse registry. It confers nothing
-    # once the project itself holds no admin/member tuples (there is no principal left to cascade from), and
-    # a dangling cross-store edge is precisely the drift Decision 4's reconciler reports rather than guesses at.
+    # edge among them) before its record goes.
     await run_in_threadpool(project_registry.delete_project_record, settings.registry_root, so, project_id)
 
     actor = f"user:{token.subject}" if token else None

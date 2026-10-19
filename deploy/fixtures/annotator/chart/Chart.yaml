@@ -1,0 +1,8 @@
+apiVersion: v2
+name: annotator
+description: >-
+  NOT FOR PRODUCTION as shipped. rask's annotator beside a rask release: a labeling tool that reaches the lakehouse
+  through its public doors only, with its own state store, roles and Dapr app token. rask's product chart renders none of it.
+type: application
+version: 0.1.0
+appVersion: "0.3.0"

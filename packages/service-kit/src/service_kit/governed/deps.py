@@ -1,9 +1,8 @@
 """Authn/authz FastAPI dependencies, built once for any governed service.
 
-`services/annotator/api/security.py` grew the first copy of this. A second service needing the same
-three things — verify the bearer, name the subject, check one relation — is the moment to put it
-somewhere shared rather than write it twice: the lakehouse policy forms had exactly one duplicated
-builder, and when the contract widened both copies broke identically.
+Every governed service needs the same three things — verify the bearer, name the subject, check one
+relation — so they live here once rather than in each service: the lakehouse policy forms had exactly one
+duplicated builder, and when the contract widened both copies broke identically.
 
 A FACTORY, not module-level dependencies, because each service types its own settings object. Call
 it once at module scope in the service's own security module and export the results.
@@ -53,7 +52,6 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 # not a fault report, so the honest fix is to widen `_UNREDACTED_5XX`; until that is decided, keeping
 # the message beats matching the sibling module.
 from lance_namespace import UnauthenticatedError
-from openfga_sdk import OpenFgaClient
 
 from service_kit.exceptions import ServiceUnavailableError
 from service_kit.governed.audit import FAILURE, SUCCESS, audit
@@ -90,7 +88,6 @@ class FgaChecker(Protocol):
 type _Authenticate = Callable[..., PersonPrincipal | None]
 type _NamesSubject = Callable[..., str]
 type _ResolvesChecker = Callable[..., FgaChecker]
-type _ResolvesClient = Callable[..., OpenFgaClient | None]
 type _ResolvesDecider = Callable[..., AccessDecider | None]
 
 
@@ -103,7 +100,6 @@ class AuthDeps:
         current_subject: _NamesSubject,
         get_checker: _ResolvesChecker,
         get_decider: _ResolvesDecider,
-        get_fga_client: _ResolvesClient,
         #: NOT `| None`. The name means the SUBJECT may be anonymous — the dependency itself always
         #: exists, and `build_auth_deps` below is the only construction site and always passes it.
         #: Declaring it optional propagated `None` into every consumer's type: a caller writing
@@ -118,9 +114,6 @@ class AuthDeps:
         #: The decider, for the filtered LIST the one-relation checker cannot express: `authz.md` says to prefer a
         #: batch there, one round trip for every object a page shows.
         self.get_decider = get_decider
-        #: The RAW client, for a service that writes tuples (the annotator). A check-only service has none
-        #: ([[LH-442]]): its `app.state.fga` is unset and this answers 503 with FGA on.
-        self.get_fga_client = get_fga_client
 
 
 def make_auth_deps(settings_dep: Any) -> AuthDeps:
@@ -249,28 +242,12 @@ def make_auth_deps(settings_dep: Any) -> AuthDeps:
             return None
         return _require_decider(request)
 
-    def get_fga_client(request: Request, settings: settings_dep) -> OpenFgaClient | None:
-        """The raw client, with the SAME fail-closed posture as the checker.
-
-        FGA off → `None`, matching `get_checker`'s permissive branch: a caller batching against a
-        disabled store has nothing to ask. FGA on but unwired → 503, never a permissive fallback, for
-        the reason the checker states — a broken authz layer must not degrade into an open one.
-        """
-        if not settings.fga_enabled:
-            return None
-        client = getattr(request.app.state, "fga", None)
-        if client is None:
-            audit("authz", FAILURE, reason="client_unavailable")
-            raise ServiceUnavailableError("Authorization is enabled but unavailable")
-        return client
-
     return AuthDeps(
         authenticate=authenticate,
         current_subject=current_subject,
         optional_subject=optional_subject,
         get_checker=get_checker,
         get_decider=get_decider,
-        get_fga_client=get_fga_client,
     )
 
 

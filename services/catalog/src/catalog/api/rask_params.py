@@ -7,9 +7,8 @@ an extension from a version skew it should support.
 
 `include_in_schema=False` is therefore the whole mechanism, and it is deliberately the weakest one
 available: it changes what is advertised and nothing about what is accepted, so every existing caller
-keeps working. rask's own callers build these requests by hand rather than from the generated client
-(`annotator/projects/lakehouse.py` assembles `params` for httpx), which is why hiding them costs
-nothing at the call sites.
+keeps working. A caller that sends one builds the request by hand rather than from the generated client,
+which is why hiding them costs nothing at the call sites.
 
 These aliases exist so the reasoning is written once instead of at nine parameter declarations, and so
 a tenth extension is spelled the same way by construction. Pinned by

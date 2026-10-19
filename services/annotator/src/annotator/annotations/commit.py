@@ -11,9 +11,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from annotator.annotations.lineage import emit_save
 from annotator.annotations.schema import ANNOTATIONS_TABLE, SaveResult
+from annotator.core.config import AnnotatorSettings
 from service_kit.exceptions import ConflictError
-from service_kit.lancekit.lineage_emit import emit_save
 from service_kit.lancekit.predicate import isin
 from service_kit.lancekit.reader import open_reader
 from service_kit.lancekit.registry import table_dataset
@@ -22,7 +23,7 @@ from service_kit.lancekit.registry import table_dataset
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from service_kit.lancekit.registry import DatasetHandle
+    from annotator.corpus import Corpus
     from service_kit.lancekit.writer import TableWriter
     from service_kit.media.config import Settings
 
@@ -72,7 +73,7 @@ def delete_by_ids(writer: TableWriter, ids: Sequence[str]) -> None:
 
 
 def finalize_commit(
-    handle: DatasetHandle,
+    corpus: Corpus,
     settings: Settings,
     *,
     touched: int,
@@ -80,18 +81,19 @@ def finalize_commit(
     caller_token: str | None = None,
 ) -> SaveResult:
     """Close out a write: report the post-write version FROM THE READER SEAM and
-    emit the pre-merge OpenLineage RunEvent. In full catalog mode no local table is
+    emit the local-mode OpenLineage RunEvent. In full catalog mode no local table is
     touched — the version comes from the catalog and the catalog emits the RunEvent
     for the same write (``effective_lineage_sink`` is ``none`` there)."""
-    table_id = settings.catalog_table_id(handle.id, ANNOTATIONS_TABLE)
-    fresh = None if settings.rest_catalog_mode else table_dataset(handle, ANNOTATIONS_TABLE)
+    table_id = settings.catalog_table_id(corpus.id, ANNOTATIONS_TABLE)
+    fresh = None if corpus.local is None else table_dataset(corpus.local, ANNOTATIONS_TABLE)
     reader = open_reader(dataset=fresh, table_id=table_id, settings=settings, caller_token=caller_token)
     version = reader.table_version()
-    sink = settings.effective_lineage_sink
-    if touched and sink != "none" and fresh is not None:
+    # The sink is the annotator's own setting; media settings that carry none (a bare test state's) emit nothing.
+    sink = settings.effective_lineage_sink if isinstance(settings, AnnotatorSettings) else "none"
+    if touched and sink != "none" and fresh is not None and corpus.local is not None:
         emit_save(
             ds=fresh,
-            table_uri=handle.table_uri(ANNOTATIONS_TABLE),
+            table_uri=corpus.local.table_uri(ANNOTATIONS_TABLE),
             table_name=ANNOTATIONS_TABLE,
             unit_key=unit_key,
             sink=sink,

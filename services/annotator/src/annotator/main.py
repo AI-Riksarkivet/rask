@@ -4,9 +4,12 @@ Module-level ``app``; ALL construction in the lifespan onto ``app.state`` (impor
 zero I/O). The lifespan and the assembly are both SHARED — ``service_kit.media.lifespan`` and
 ``service_kit.media.app`` — because viewer, search and annotator are three deployments of one shape
 and used to hand-write it three times (docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit" DUP-16 / X12 / DUP-20). What is genuinely
-this service's own — the control emitter and the actor plane — arrives through the shared lifespan's
-``setup``/``teardown`` hooks, which run before readiness is announced and before anything shared is
-disposed.
+this service's own — the actor plane and the client its checker asks the catalog with — arrives through the
+shared lifespan's ``setup``/``teardown`` hooks, which run before readiness is announced and before anything
+shared is disposed.
+
+The annotator is a client of the lakehouse with its own release (ADR 0171): it publishes nothing on the
+lakehouse's bus, and tells a person about their work on its own surface.
 """
 
 from __future__ import annotations
@@ -14,7 +17,7 @@ from __future__ import annotations
 import logging
 from contextlib import suppress
 
-from dapr.aio.clients import DaprClient
+import httpx
 from dapr.ext.fastapi import DaprActor
 from fastapi import FastAPI, Request
 
@@ -24,7 +27,6 @@ from annotator.projects.actor import AnnotationTaskActor
 from annotator.projects.project_actor import AnnotationProjectActor
 from annotator.projects.tenant_actor import TenantProjectsActor
 from service_kit import setup_logging
-from service_kit.control_emit import make_control_emitter, set_process_control_emitter
 from service_kit.governed.actor_state_store import probe_actor_state_store
 from service_kit.governed.actor_warmup import warm_actor_proxy_factory
 from service_kit.governed.dapr_auth import guard_actor_routes
@@ -38,7 +40,7 @@ from service_kit.schemas.health import Readiness, ReadinessStatus
 
 logger = logging.getLogger(__name__)
 
-configure_app_logging()  # INFO audit/lifecycle logs reach OTLP (lance-ns obs contract)
+configure_app_logging(packages=("annotator",))  # INFO audit/lifecycle logs reach OTLP (lance-ns obs contract)
 
 
 async def _start_task_plane(app: FastAPI, _state: AppState) -> None:
@@ -47,13 +49,8 @@ async def _start_task_plane(app: FastAPI, _state: AppState) -> None:
     Ordering is the whole reason this is a hook and not code after the shared lifespan: a pod that
     reports ready while its task actors are unregistered answers 503 to every task route.
 
-    **Control-plane change events.** Built here so the emit path is a pure in-process call on the
-    request path: the Dapr client targets the local sidecar, so construction needs no broker
-    reachability. A build failure leaves the no-op emitter in place rather than the attribute unset —
-    unlike auth, a missing notification must never 503 a task transition. It is ALSO published
-    process-wide, for the one producer that has no request to resolve a dependency from: the task
-    actor's lease reminder. Without that line a lapsed lease emits through the no-op and the
-    annotator who lost their hold is told nothing — the same silence by a subtler door.
+    **The catalog client** the checker asks the person's standing with (`annotator.api.security.get_checker`):
+    one pooled client for the process, not one per request.
 
     **Actor registration** happens here, not at import, because it mutates process-global runtime
     state (`ActorRuntime._actor_managers`, and the entity list `/dapr/config` advertises) — a side
@@ -70,25 +67,7 @@ async def _start_task_plane(app: FastAPI, _state: AppState) -> None:
     `tasks.require_actor_plane` gates every task route on the flag (503, with the reason), and
     `/readyz` reports it as a component.
     """
-    settings = get_annotator_settings()
-    control_dapr: DaprClient | None = None
-    if settings.control_emit_enabled:
-        try:
-            control_dapr = DaprClient()
-        except Exception:
-            logger.exception("annotator: Dapr client failed to build — task assignments will not notify")
-    app.state.control_dapr = control_dapr
-    app.state.control_emitter = make_control_emitter(
-        enabled=settings.control_emit_enabled,
-        dapr=control_dapr,
-        pubsub=settings.control_pubsub,
-        timeout_seconds=settings.control_emit_timeout_seconds,
-        service="annotator",
-        # UNSIGNED: the annotator holds no signing identity, and the doors exempt every action it emits
-        # (`control_signer_role`: the task actions by owner ruling R3, an annotation project's grants by R5).
-        sign=None,
-    )
-    set_process_control_emitter(app.state.control_emitter)
+    app.state.catalog_http = httpx.AsyncClient()
 
     if actor_ext is None:
         return
@@ -113,13 +92,11 @@ async def _start_task_plane(app: FastAPI, _state: AppState) -> None:
 
 
 async def _stop_task_plane(app: FastAPI) -> None:
-    """Close the control emitter's Dapr channel — a `grpc.aio` channel built in startup and, before
-    this hook existed, closed nowhere, so a rolling restart leaked one per replica alongside the FGA
-    session. Suppressed like every other close: a shutdown that raises hides whatever came after it."""
-    control_dapr = getattr(app.state, "control_dapr", None)
-    if control_dapr is not None:
+    """Close the catalog client. Suppressed like every other close: a shutdown that raises hides whatever came after it."""
+    catalog_http = getattr(app.state, "catalog_http", None)
+    if catalog_http is not None:
         with suppress(Exception):
-            await control_dapr.close()
+            await catalog_http.aclose()
 
 
 # Application logging, before the app exists — every module here uses getLogger(__name__), and

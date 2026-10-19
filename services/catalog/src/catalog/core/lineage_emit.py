@@ -646,7 +646,7 @@ class _BaseLineageEmitter:
         **fields: Unpack[EmitFields],
     ) -> None:
         # The whole optional bundle rides through verbatim: a create can DERIVE FROM a version-pinned
-        # source (an annotation publish, a Ray job's first write) and carry producer run facets, the
+        # source (a client's publish, a job's first write) and carry producer run facets, the
         # same metadata merge_insert has always accepted. `project`/`originator` were declared and
         # silently dropped here until 2026-08-18 — the kwarg existing per-copy is what hid it, and the
         # shared bundle is what stops it recurring.

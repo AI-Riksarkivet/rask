@@ -1,4 +1,4 @@
-.PHONY: fga-store-check fga-estate-migrate sbom zone-sbom registry-gc dagger-gc dev-gc help install build test test-slow lint lint-imports fmt clean storybook typecheck knip comment-gate check coverage fga-test ci dev-micro dev-frontends dev-frontends-k3s dev-zone home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-fixtures k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap dev-registry e2e frontend-images prod-render-check chart-docs chart-docs-check alert-rules-check alert-rules-drill notifications-lanes notifications-rig audit smoke-rustfs rustfs-lifecycle rustfs-provisioning auth-chain governance-chain nats-auth go-fmt scan-config scan-secrets scan-image scan-zone-image seed-corpus e2e-isolation e2e-container-deletes e2e-fga-model
+.PHONY: k3s-annotator fga-store-check fga-estate-migrate sbom zone-sbom registry-gc dagger-gc dev-gc help install build test test-slow lint lint-imports fmt clean storybook typecheck knip comment-gate check coverage fga-test ci dev-micro dev-frontends dev-frontends-k3s dev-zone home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-fixtures k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap dev-registry e2e frontend-images prod-render-check chart-docs chart-docs-check alert-rules-check alert-rules-drill notifications-lanes notifications-rig audit smoke-rustfs rustfs-lifecycle rustfs-provisioning auth-chain governance-chain nats-auth go-fmt scan-config scan-secrets scan-image scan-zone-image seed-corpus e2e-isolation e2e-container-deletes e2e-fga-model
 
 help:
 	@echo "Targets:"
@@ -182,27 +182,24 @@ prod-render-check: ## Render values-prod.yaml and assert its HA + security switc
 # message leave the estate per (event, subject, channel) when the broker redelivers? Mailpit shows
 # every message it received; the slack sink COUNTS them, so a duplicate is visible rather than
 # inferred. Point the Dapr bindings at localhost:1025 / http://localhost:9099 while it is up.
-# The notification-lane drives. Five tracked, documented .mjs files proving claims no unit test can
+# The notification-lane drives. Two tracked, documented .mjs files proving claims no unit test can
 # make — that a run whose AUTHOR is not you still reaches you because you are named as the human the
 # work is for — and until 2026-08-22 they were referenced by NOTHING: one grep hit each, their own
 # declaration. They also sit outside playwright's `testDir: './tests'`, so `make e2e` skipped them too.
 #
 # A drive nobody can name is a drive nobody runs, and these are the only proof the estate has for the
-# ORIGINATOR and TASK targeting sources end to end. They need a DEPLOYED estate (a live Dapr actor
+# ORIGINATOR targeting source end to end. They need a DEPLOYED estate (a live Dapr actor
 # plane), which is why they are a named target rather than part of an offline gate.
 #
 # Pinned by tests/unit/test_e2e_collection_gate.py, which now requires every tests/e2e/verify_*.mjs to
-# have an invocation site — so a sixth drive cannot land unreferenced.
-notifications-lanes: ## The five notification-lane drives vs a deployed estate (ORIGIN=http://…)
+# have an invocation site — so a new drive cannot land unreferenced.
+notifications-lanes: ## The notification-lane drives vs a deployed estate (ORIGIN=http://…)
 	@test -n "$(ORIGIN)" || { echo "set ORIGIN, e.g. make notifications-lanes ORIGIN=http://localhost:8080"; exit 1; }
 	@# OpenFGA admits only a projected rask-openfga token (XC-077): one TokenRequest for the bootstrap Job account.
 	@FGA_TOKEN_FILE="$$(mktemp)"; trap 'rm -f "$$FGA_TOKEN_FILE"' EXIT; \
 	kubectl create token "$${RELEASE:-rask}-sa-jobs" --audience rask-openfga --duration 1h > "$$FGA_TOKEN_FILE" || exit 1; \
 	export FGA_TOKEN_FILE; \
 	for drive in tests/e2e/verify_originator_lane.mjs \
-	              tests/e2e/verify_task_assignment_lane.mjs \
-	              tests/e2e/verify_task_departure_lanes.mjs \
-	              tests/e2e/verify_lease_lapse_lane.mjs \
 	              tests/e2e/verify_notifications_two_users.mjs; do \
 		echo "== $$drive"; ORIGIN=$(ORIGIN) node "$$drive" || exit 1; \
 	done
@@ -660,7 +657,8 @@ nats-auth: ## NATS auth e2e — each bus client admitted only to its own subject
 # (`flows` is STILL absent and has been since it landed: `.docker/flows.dockerfile` and a `rask-flows`
 # Deployment both exist, so an in-cluster flows is unverifiable today for the identical reason. Named
 # rather than fixed here — it is another plane's diff.)
-COMPOSE_IMAGES = compute notifications flows
+# `annotator` is a client with its own release (deploy/fixtures/annotator, ADR 0171) and its own image.
+COMPOSE_IMAGES = compute notifications flows annotator
 # SvelteKit SSR microfrontend zone images — one web-<zone> image per $(ZONES) entry,
 # all built from the one parametrized .docker/frontend.dockerfile via --build-arg
 # APP=<name>. (R22: the web- prefix keeps the zone image namespace disjoint from the
@@ -678,7 +676,7 @@ RELEASE_NAMESPACE ?= default
 HELM ?= KUBECONFIG=$(KUBECONFIG) HELM_NAMESPACE=$(RELEASE_NAMESPACE) ./scripts/helm.sh
 KUBECTL ?= KUBECONFIG=$(KUBECONFIG) kubectl --namespace $(RELEASE_NAMESPACE)
 # lance-rest-catalog is the ONE lakehouse image (catalog + lineage + maintenance +
-# media trio — chart `image.catalog`); the default render runs 8 containers from it, so the
+# the media viewer and search — chart `image.catalog`); the default render runs its containers from it, so the
 # build/import set must carry it or kind/k3s deploys ImagePullBackOff on every lakehouse pod.
 # The object store fixture runs the upstream RustFS image by digest, which the node pulls; nothing here builds it.
 K3S_IMAGES = $(COMPOSE_IMAGES) $(ZONES:%=web-%) ray-cluster lance-rest-catalog
@@ -783,14 +781,18 @@ DROP_CREDENTIAL_VALUES := --set dapr.appToken=null --set frontend.oidc.sessionSe
 # given the issuer and origin rask is given; rustfs and openbao are the dev object and secret stores, which start once
 # rask is installed: the object store's root credential and the secret store's seed scripts are rask's. The Ray engine is
 # two of them, the operator first, and compute (the Ray dashboard and Serve companion) follows it, starting once rask's
-# app token and Dapr Configuration exist; observability is the store, dashboards and alerting rask's Collector
-# exports to. A GPU node with no device plugin yet adds nvidia-device-plugin.
+# app token and Dapr Configuration exist; observability is the store, dashboards and alerting rask's Collector exports
+# to. A GPU node with no device plugin yet adds nvidia-device-plugin. The annotator is not a prerequisite: it is a client
+# of the lakehouse with its own release (ADR 0171), which `k3s-up` installs after rask (`k3s-annotator`).
 FIXTURES ?= external-secrets dapr nats cloudnative-pg dex rustfs openbao kuberay-operator ray-cluster compute observability marquez
 
 k3s-fixtures: ## Install the development fixtures (FIXTURES) as their own releases, before the rask chart
 	$(if $(filter-out dex compute,$(FIXTURES)),KUBECONFIG=$(KUBECONFIG) ./scripts/fixtures.sh $(filter-out dex compute,$(FIXTURES)))
 	$(if $(filter dex,$(FIXTURES)),KUBECONFIG=$(KUBECONFIG) ./scripts/fixtures.sh dex -- --set-string issuer=$(DEV_ISSUER) --set-string publicOrigin=$(DEV_ORIGIN))
 	$(if $(filter compute,$(FIXTURES)),KUBECONFIG=$(KUBECONFIG) ./scripts/fixtures.sh compute -- --set-string auth.oidc.issuer=$(DEV_ISSUER))
+
+k3s-annotator: ## Install the annotator's own release beside rask, after it: a client reaching the lakehouse by reference (ADR 0171), its Postgres served by the cloudnative-pg fixture
+	KUBECONFIG=$(KUBECONFIG) ./scripts/fixtures.sh annotator -- --set-string auth.oidc.issuer=$(DEV_ISSUER)
 
 k3s-crds: ## Apply the vendored CRDs no release owns (see chart/.helmignore), before the cloudnative-pg fixture
 	@# Server-side apply: the CNPG CRD set exceeds kubectl's client-side annotation limit.
@@ -851,6 +853,7 @@ k3s-up: k3s-crds k3s-fixtures k3s-deps k3s-stem-check ## Apply CRDs, install fix
 	  $$HFARGS \
 	  $${AWS_ACCESS_KEY_ID:+--set-string objectStore.accessKey=$$AWS_ACCESS_KEY_ID}
 	$(KUBECTL) rollout status deploy/rask-catalog --timeout=300s
+	@$(MAKE) --no-print-directory k3s-annotator
 	@echo "UI → http://<node-ip>/   (host-less routes on Traefik's Gateway; over VS Code/ssh -L forward port 80 → http://localhost:<port>/)"
 	@echo "API → http://<node-ip>/api/catalog/livez"
 
@@ -1076,12 +1079,15 @@ e2e-container-deletes: ## Warehouse/project delete, cascade and the gate-before-
 # not a CI lane. `make e2e-ci` remains the governed-kind-stack entry point, and wiring the
 # security-shaped ones (edge, cas) into CI is the follow-up — it needs an edit to
 # `.github/workflows/ci.yml`, which a concurrent session is holding.
-E2E_SUITES = byo-branch byo-erasure byo-pipeline cas chaos compaction edge media-catalog observability phase1 soak track-a user-state
+E2E_SUITES = annotator byo-branch byo-erasure byo-pipeline cas chaos compaction edge media-catalog observability phase1 soak track-a user-state
 .PHONY: $(addprefix e2e-,$(E2E_SUITES))   # declared HERE, not up with the other .PHONY: make
                                           # expands a rule's prerequisites AS IT READS the line,
                                           # so referencing E2E_SUITES before this assignment
                                           # expands to nothing and silently declares no target.
 
+e2e-annotator:      ## XC-167 live proof: the annotator, from its own release, works a scratch tenant through the lakehouse's public doors as the person and publishes as its own account (`bash scripts/e2e_live.sh -m annotator --require-live` discovers its addresses)
+	@test -n "$(LANCE_E2E_ANNOTATOR_URL)" || { echo "  !! e2e-annotator needs LANCE_E2E_ANNOTATOR_URL, LANCE_E2E_CATALOG_URL, LANCE_E2E_DEX, LANCE_E2E_NOTIFICATIONS_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	uv run pytest tests/e2e-py -m annotator --require-live -v
 e2e-byo-branch:     ## LH-490 live proof: a branch the owner creates through CreateTableBranch takes a writer's stock append, delete and update through version/create on the table's vended credential, main is unchanged, a refused branch commit answers a typed error, and the store refuses the credential a final manifest and a ref (needs LANCE_E2E_CATALOG_URL, LANCE_E2E_DEX; `bash scripts/e2e_live.sh tests/e2e-py/test_a_stock_client_commits_on_a_branch.py` discovers them)
 	@test -n "$(LANCE_E2E_CATALOG_URL)" || { echo "  !! e2e-byo-branch needs LANCE_E2E_CATALOG_URL, LANCE_E2E_DEX — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
 	@test -n "$(LANCE_E2E_DEX)" || { echo "  !! e2e-byo-branch needs LANCE_E2E_CATALOG_URL, LANCE_E2E_DEX — a live drive with no live target is a failed invocation, not a pass"; exit 1; }

@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.11
 # Assist runner — the annotator's interactive AI-assist model server (runners/assist), CPU-only.
 # Real GroundingDINO-tiny (text-prompted detection) + SAM-ViT-base (box/point segmentation) behind
-# the MEDIA_ASSIST_URL contract. Weights are BAKED at build (HF cache layout → /opt/models) and the
+# the ANNOTATOR_ASSIST_URL contract. Weights are BAKED at build (HF cache layout → /opt/models) and the
 # runtime is HF_HUB_OFFLINE, so pods never reach the internet — the same reproducibility stance as
 # the pinned uv.lock. Build context = repo root (RA/rask convention):
 #   docker build -f .docker/assist-runner.dockerfile -t assist-runner:dev .
@@ -44,7 +44,7 @@ ARG BUILD_DATE
 ARG VCS_REF
 ARG VERSION
 LABEL org.opencontainers.image.title="assist-runner" \
-      org.opencontainers.image.description="Interactive assist model server (GroundingDINO-tiny + SAM-ViT-base, CPU) for the annotator's MEDIA_ASSIST_URL seam" \
+      org.opencontainers.image.description="Interactive assist model server (GroundingDINO-tiny + SAM-ViT-base, CPU) for the annotator's ANNOTATOR_ASSIST_URL seam" \
       org.opencontainers.image.source="https://github.com/Borg93/lance-ns" \
       org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.revision="${VCS_REF}" \

@@ -468,7 +468,7 @@ class PolicyRequest(BaseModel):
     #
     # Sizing is a real tradeoff, not a knob to leave alone: manifest work scales with fragment COUNT,
     # while conflict detection is PER-FRAGMENT — so a tier under many concurrent updates/deletes/
-    # merge_inserts (the annotator's write pattern) wants MORE, smaller fragments, and a scan-heavy
+    # merge_inserts wants MORE, smaller fragments, and a scan-heavy
     # tier wants fewer, larger ones. Per-tier is the point: bronze page images are ~1.8 MB rows,
     # silver/gold features are not, and one value cannot be right for both.
     target_rows_per_fragment: int | None = Field(default=None, ge=1024, le=10_000_000)

@@ -1,7 +1,6 @@
 """OpenLineage facet primitives — the spec-2-0-2 RunEvent contract, kernel-owned.
 
-The shared half of lineage emission, used by the annotation write path
-(``service_kit.lancekit.lineage_emit``): ``WriteResult``, the schema/columnLineage facets,
+The shared half of lineage emission, for a media client's own write path: ``WriteResult``, the schema/columnLineage facets,
 and the standalone ``build_run_event`` mirror. The spec constants (``SCHEMA_URL``, the facet
 ``_schemaURL``s, ``run_id_for``) and the columnLineage BUILDER are IMPORTED from
 ``service_kit.openlineage``, not re-declared — one definition, so two emitters cannot describe

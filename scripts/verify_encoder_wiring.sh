@@ -9,10 +9,10 @@
 #
 # What this proves, in order:
 #   1. render, unset  — no encoder env is emitted anywhere (the honest "no encoder deployed" state);
-#   2. render, set    — BOTH search and viewer carry both URLs, and the annotator carries neither.
+#   2. render, set    — BOTH search and viewer carry both URLs.
 #                       search CALLS them; the viewer PROBES them for /api/health, which is what
 #                       drives the media zone's mode gating — if the two disagreed the UI would
-#                       disable a mode search can actually serve. The annotator does neither.
+#                       disable a mode search can actually serve.
 #   3. live, before   — `mode=semantic` through the ingress on :8090 is 503;
 #   4. live, after    — with the values pointed at a server that speaks the encoder wire protocol,
 #                       the SAME url returns 200 with rows, and `rerank=true` returns 200;
@@ -25,7 +25,7 @@
 # ranking needs the real Qwen3-VL-Embedding-2B on vLLM, which needs a GPU this kind cluster cannot
 # schedule (no device plugin, no nvidia runtime in the node's containerd, no nvidia.com/gpu in
 # capacity) — which is exactly why `encoders.*` is a URL to an external fleet, not an in-chart
-# Deployment, the same call as the existing `runners.jobsUrl`.
+# Deployment.
 #
 # Run from the repo root against the kind `lance` cluster: `bash scripts/verify_encoder_wiring.sh`.
 set -euo pipefail
@@ -93,7 +93,7 @@ for var in MEDIA_EMBED_URL MEDIA_RERANK_URL; do
 done
 echo "no MEDIA_EMBED_URL / MEDIA_RERANK_URL rendered (honest off)"
 
-step "2/5 render with encoders set — both URLs on search + viewer, neither on annotator"
+step "2/5 render with encoders set — both URLs on search + viewer"
 helm template "$RELEASE" "$CHART" --set explorer.enabled=true \
   --set encoders.embedUrl=http://enc.test:8001 \
   --set encoders.rerankUrl=http://enc.test:8002 >"$WORK/on.yaml"
@@ -105,10 +105,6 @@ for comp in search viewer; do
     fail "$comp does not render MEDIA_RERANK_URL from encoders.rerankUrl — the value is not wired to this workload"
   echo "$comp: MEDIA_EMBED_URL + MEDIA_RERANK_URL rendered from values"
 done
-deployment "$WORK/on.yaml" "$RELEASE-annotator" >"$WORK/annotator.yaml"
-grep -q "MEDIA_EMBED_URL\|MEDIA_RERANK_URL" "$WORK/annotator.yaml" &&
-  fail "the annotator must not carry encoder env — it neither calls nor probes them"
-echo "annotator: no encoder env (correct — it neither calls nor probes them)"
 
 # 2b. `encoders` is a new TOP-LEVEL key, and `helm upgrade --reuse-values` merges the STORED values
 # over the chart defaults — a release upgraded that way has no `encoders` key at all. A bare

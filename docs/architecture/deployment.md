@@ -59,17 +59,16 @@ unprovisioned secret is a fail-closed outage at first use, not a fallback. Each 
   the catalog's policy, and the catalog exchanges its projected token for sessions through STS
   `AssumeRoleWithWebIdentity`. A platform store's owner provisions that trust; on AWS it is an IAM OIDC provider and
   the role `vending.assumeRoleArn` names, whose trust policy names the subject.
-- `viewer-s3` (the viewer), `media-s3` (annotator and search, read-only on `explorer.corpusS3Root`, when explorer serves
+- `viewer-s3` (the viewer), `media-s3` (search, read-only on `explorer.corpusS3Root`, when explorer serves
   a corpus) and `backup-s3` (ESO, for the backups, when one is on), fields `access_key`, `secret_key`.
 - `dapr-app-token` (fields `token` and, during a rotation, `previous`; docs/OPERATORS.md § 8): the app-API token, read by
-  the apps with a Dapr door (catalog, lineage, maintenance, notifications, annotator) and by ESO, which writes it into the
+  the apps with a Dapr door (catalog, lineage, maintenance, notifications) and by ESO, which writes it into the
   `<release>-dapr-app-token` Secret daprd stamps the header from.
 - `dapr-state` (field `connection-string`): the Dapr state store's DSN, read by the logins of the apps the state store
   is scoped to.
 - `postgres` (field `password`), read by ESO for the AGE server, OpenFGA and the Collector; `frontend-session` (field
   `secret`, the zones' cookie sealing key), read by ESO; `oidc-client` (field `client-secret`, the IdP client secret),
-  read by the annotator and by ESO for the zones; `publisher-oidc` (field `password`), read by the annotator;
-  `ray-auth-token` (field `token`), read by ESO when `ray.auth` is on.
+  read by ESO for the zones; `ray-auth-token` (field `token`), read by ESO when `ray.auth` is on.
 - For every identity in `lance.signingIdentities`, `signing-public-<identity>` (field `keys`, read by that signer and
   every verifier) and then `signing-key-<identity>` (field `seed`, read by that signer alone), described in values.yaml
   `signing:`; the render refuses the platform's store until its operator created them and `signing.provisioned` says so.
@@ -83,9 +82,8 @@ No secret holds a store root: rask presents none in production, and on the dev s
 `object-store-root`, which only ESO reads, for the store and its provisioning hook (ADR 0168). The dev seed
 (`chart/templates/openbao-seed.yaml`) writes the same list into the dev store; keep the two in step.
 
-SEVERAL CONSUMERS, ONE KEY (2026-08-09). `oidc-client` serves the annotator's publish client
-(`explorer.yaml`) and the zones' OIDC client (the frontend-session ExternalSecret in `external-secrets.yaml`): there is
-one IdP client (`auth.oidc.clientId`), so there is one secret. Do NOT seed a second copy under another name: a rotation
+ONE IdP CLIENT, ONE KEY (2026-08-09). `oidc-client` serves the zones' OIDC client (the frontend-session ExternalSecret
+in `external-secrets.yaml`): there is one IdP client (`auth.oidc.clientId`), so there is one secret. Do NOT seed a second copy under another name: a rotation
 that updates one copy and not the other breaks a sign-in on a path nothing tests. The object store holds no copy at
 all: verifying a web-identity token needs only the client id, and RustFS reads an OIDC client secret from env alone
 (no `_FILE` variant, `.claude/skills/rask-rustfs/references/security.md` § Web identity), so a store given one would
@@ -165,8 +163,8 @@ credentials; `openbao.externalAddr`).
 Development runs stand-ins from `deploy/fixtures` (ADR 0153), and the chart renders none of them:
 
 - **Dex** (`deploy/fixtures/dex`, release `dex`, Service `rask-dex`): the OIDC issuer with the demo users and rask's
-  static client. `dex.enabled` says the estate uses it: the cluster route serves it at `/dex`, the publisher's password is
-  seeded into the dev store, and a real deployment's render refuses it.
+  static client. `dex.enabled` says the estate uses it: the cluster route serves it at `/dex`, and a real
+  deployment's render refuses it.
 - **RustFS** (`deploy/fixtures/rustfs`, release `rustfs`, StatefulSet and Service `rask-rustfs`, ADR 0168): the S3
   store, one replica on the claim `data-rask-rustfs-0`, S3 on 9000 and the dev NodePort 30900, the upstream
   `rustfs/rustfs` image pinned by digest. `objectStore.enabled` says the estate uses it: rask's dev store issues its
@@ -205,8 +203,9 @@ make k3s-down         # uninstall   |   make k3s-purge  # + delete PVCs
 ```
 
 `k3s-build` builds every image through `scripts/dagger-image.sh --out`, as an OCI tarball in `build/k3s-images/`:
-`compute`, `notifications` and `flows`, the seven zone images (`web-<zone>`), `lance-rest-catalog` (the
-lakehouse image that serves catalog, lineage, maintenance and the media trio) and the `ray-cluster` image the
+`compute`, `notifications` and `flows`, the seven zone images (`web-<zone>`), `annotator` (the client
+the annotator fixture runs), `lance-rest-catalog` (the lakehouse image that serves catalog, lineage, maintenance, the
+viewer and search) and the `ray-cluster` image the
 development engine fixture runs. `k3s-import` loads each tarball into k3s containerd as `<image>:dev` with
 `sudo k3s ctr images import`; neither step runs docker. The release installs into `RELEASE_NAMESPACE` (default
 `default`, the fixtures' namespace), and `values-live-pins.yaml` files are per-host state from `make k3s-pins`, never
@@ -221,8 +220,8 @@ locally and in CI.
 
 | Image | Dockerfile | Notes |
 |---|---|---|
-| `lance-rest-catalog` | `rest-catalog.dockerfile` | One image, several deployments: `catalog`, `lineage`, `maintenance`, `viewer`, `search` and `annotator`. |
-| `flows`, `notifications`, `compute` | `<name>.dockerfile` | One per service, `uv sync --frozen --package <name>` against the root `uv.lock`. `compute` ships in its own chart (`deploy/fixtures/compute`). |
+| `lance-rest-catalog` | `rest-catalog.dockerfile` | One image, several deployments: `catalog`, `lineage`, `maintenance`, `viewer` and `search`. |
+| `flows`, `notifications`, `compute`, `annotator` | `<name>.dockerfile` | One per service, `uv sync --frozen --package <name>` against the root `uv.lock`. `compute` and `annotator` each ship in their own chart (`deploy/fixtures/compute`, `deploy/fixtures/annotator`). |
 | `web-<zone>` (7 images) | `frontend.dockerfile` | One parametrized dockerfile, `--build-arg APP=<zone>`. SSR via `svelte-adapter-bun`; `home` is the catch-all (owns `/`), the six domain zones (lakehouse, explorer, annotator, compute, models, studio) each pin a bare base `/<zone>`, and the cluster route (`<release>-web`) sends each base there as a `PathPrefix` match with no rewrite. Probes are TCP, because a zone's `/` 404s under its own base. tini as PID 1, non-root UID 10001. |
 | `ray-cluster`, `ray-<runner>` | `ray-cluster.dockerfile`, `ray-runner.dockerfile` | The development engine's head image and one image per sealed runner (`--runner <runner>`); neither is part of the product chart. |
 
@@ -250,7 +249,8 @@ catalog's decision door, which answers its service account only when the product
 it ([[LH-442]]). The fixture chart publishes `/api/ray` and `/api/serve`
 with its own HTTPRoute on the same Gateway (`deploy/fixtures/compute/chart/templates/route.yaml`), and a NetworkPolicy
 admitting its app port. The address of the engine's dashboard is `ray.dashboardUrl`
-(`rask.rayDashboardUrl`), shared by the annotator's Serve discovery and the zones' Serve origin.
+(`rask.rayDashboardUrl`), the zones' Serve origin; the annotator fixture names the same head for its Serve discovery
+(its `serve.discoveryUrl`).
 
 In development `make k3s-up` installs the `kuberay-operator`, `ray-cluster` and `compute` fixtures
 (`deploy/fixtures`, not for production); the head Service is `rask-ray-head-svc`, and `deploy/values-local.yaml`
@@ -264,8 +264,9 @@ with `--address ray://…:10001`.
 `make k3s-up` runs `helm upgrade --install rask ./chart --wait`. The chart deploys:
 
 - **flows** and **notifications** — the studio flow-builder's server half and the per-subject inbox.
-- **the lakehouse** — catalog, lineage and maintenance, plus the media trio (viewer/search/annotator; the viewer
-  carries the S3 object browser).
+- **the lakehouse** — catalog, lineage and maintenance, plus the viewer and search (the viewer carries the S3 object
+  browser). The annotator is a client with its own release, `deploy/fixtures/annotator` (ADR 0171): the chart renders
+  only its zone, which reaches that release's Service at `frontend.annotatorUrl`.
 - **frontend zones** — SvelteKit SSR apps on `:3000` each.
 - **The cluster route** (`templates/route.yaml`) — two Gateway API HTTPRoutes on the platform's Gateway
   (`route.parentRefs`): `<release>-api` sends each public `/api/*` prefix to its service, with a `URLRewrite`

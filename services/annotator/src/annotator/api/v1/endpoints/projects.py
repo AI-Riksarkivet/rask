@@ -1,13 +1,12 @@
 """Annotation-project endpoints — slice S4, the create pin.
 
 Create is a **create-on-parent** operation: at authorization time the child does not exist, so the
-door is the TENANT (`can_create_annotation_project` on `project:<tenant>`), never the child. Checking
-the child would be checking an object with no tuples — which fails open or fails meaningless
-depending on the model, and is the mistake `design-create-on-parent` exists to prevent.
+door is the TENANT (`member` of `project:<tenant>`, which the catalog answers on the person's own token),
+never the child. Checking the child would be checking an object nobody holds a role on yet.
 
-The FGA client is injected rather than reached for, so the authorization contract is testable without
-a running OpenFGA. Authorization decides *whether*; the state machine in `annotator.projects.machines`
-decides *what* — they are deliberately separate.
+The checker is injected rather than reached for, so the authorization contract is testable without a
+catalog. Authorization decides *whether*; the state machine in `annotator.projects.machines` decides
+*what* — they are deliberately separate.
 """
 
 from __future__ import annotations
@@ -15,37 +14,30 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Annotated, Any, Final, cast
+from typing import Annotated, Any, Final
 
 from fastapi import APIRouter, Path, Query, status
 from pydantic import BaseModel, Field
 
-from annotator.api.security import CheckerDep, CurrentSubject, FgaClientDep
+from annotator.api.security import CheckerDep, CurrentSubject
 from annotator.api.v1.responses import LegalEvent, ProjectDetail, ProjectListing
 from annotator.projects.machines import legal_project_events
 from annotator.projects.models import AnnotationProject, ProjectState
 from annotator.projects.ontology import LabelOntology
 from service_kit.exceptions import ConflictError, ForbiddenError, NotFoundError
-from service_kit.governed import fga
 from service_kit.governed.audit import FAILURE, SUCCESS, audit
-
-
-if TYPE_CHECKING:
-    from openfga_sdk import OpenFgaClient
 
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/projects", tags=["annotation-projects"])
 
-#: The relation guarding creation, on the tenant. Named once so the endpoint and its tests cannot
-#: drift from the model (`service_kit.governed.auth.model.fga`, type `project`).
-CREATE_RELATION = "can_create_annotation_project"
+#: The relation guarding creation, on the tenant: labeling is ordinary tenant work, and the creator becomes the new
+#: project's owner.
+CREATE_RELATION = "member"
 
-#: The relation guarding the tenant's project LIST, on the tenant. `member` is the rung
-#: `can_create_annotation_project` already keys on, and `viewer: … or member from tenant` makes a
-#: member a viewer of every project below — so member-gates-the-list and can_view-gates-the-item
-#: agree by construction.
+#: The relation guarding the tenant's project LIST, on the tenant. A tenant member views every project below it
+#: (`annotator.api.authorization`), so member-gates-the-list and can_view-gates-the-item agree by construction.
 LIST_RELATION = "member"
 
 #: How many project-actor reads the landing keeps in flight at once. One actor id PER project, so
@@ -78,7 +70,7 @@ class CreateProjectRequest(BaseModel):
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
-async def create_annotation_project(payload: CreateProjectRequest, checker: CheckerDep, subject: CurrentSubject, fga_client: FgaClientDep) -> AnnotationProject:
+async def create_annotation_project(payload: CreateProjectRequest, checker: CheckerDep, subject: CurrentSubject) -> AnnotationProject:
     """Create a project in `draft`. 403 when the caller is not a member of the target tenant.
 
     `subject` is the **verified** OIDC principal (`annotator.api.security`), not a header the caller
@@ -110,70 +102,38 @@ async def create_annotation_project(payload: CreateProjectRequest, checker: Chec
         updated_at=now,
         created_by=subject,
     )
-    # PERSIST it. Until 2026-07-28 this endpoint built the model, audited, and returned it — so the
-    # single entry point into the whole plane was a no-op that reported 201, and the very next call
-    # (`POST /projects/<id>/items`) answered 409 "annotation project does not exist".
+    # PERSIST it, the creator its first owner in the same actor turn (`AnnotationProjectActor.create`), so a
+    # project never exists that nobody may manage. Until 2026-07-28 this endpoint built the model, audited, and
+    # returned it — so the single entry point into the whole plane was a no-op that reported 201, and the very next
+    # call (`POST /projects/<id>/items`) answered 409 "annotation project does not exist".
     stored = await _create_actor(project.project_id).create(project.model_dump(mode="json"))
 
-    # THE OTHER TWO WRITES, COMPENSATED. Create is three writes in sequence and it used to protect
-    # none of them, on the stated grounds that "a failure here is answered by retrying the create,
-    # not by a repair job". That was false in the way that matters: `project_id` is minted per
-    # attempt (`default_factory=new_id`), so a retry creates a SECOND project and ORPHANS the first
-    # — as a document nothing lists and nobody may open, or (once the register landed) as a row on
-    # the landing page that denies every check for everyone, creator included.
-    #
-    # So a failure past this point undoes what it wrote, in reverse, and then fails. The
-    # compensations are idempotent and `discard` refuses anything but an empty draft, which is what
-    # keeps this a create saga rather than a delete door (docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit" ANN-10).
-    registered = False
+    # THE SECOND WRITE, COMPENSATED. `project_id` is minted per attempt (`default_factory=new_id`), so a retry
+    # creates a SECOND project and ORPHANS the first as a document nothing lists. So a failure past this point
+    # undoes what it wrote and then fails. The compensation is idempotent and `discard` refuses anything but an
+    # empty draft, which is what keeps this a create saga rather than a delete door (docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit" ANN-10).
     try:
         # REGISTER it in the tenant index — the actor `GET /projects` lists through. Synchronous and
         # NOT best-effort: an unregistered project is invisible to the landing forever.
         await _tenant_actor(payload.tenant).register({"project_id": project.project_id})
-        registered = True
-
-        # SEED OWNERSHIP. Two tuples, and both are load-bearing: `owner@user:<subject>` so the creator
-        # can manage what they made, and the `tenant` edge to `project:<tenant>` so `owner: … or admin
-        # from tenant` and `viewer: … or member from tenant` resolve. Without them every rung on this
-        # object is unreachable — including door 1 of the publish crossing, which would deny for
-        # everyone forever, creator included. The relation is `tenant`, NOT `parent`: this type spells
-        # its parent edge differently from every governed type, and writing `parent` yields a tuple no
-        # rule reads.
-        if fga_client is not None:
-            await fga.grant_on_create(  # noqa: TID251
-                cast("OpenFgaClient", fga_client),
-                user_sub=subject,
-                resource="annotation_project",
-                obj_id=project.project_id,
-                actor=subject,
-                origin="annotator",
-                parent_object=f"project:{payload.tenant}",
-                parent_relation="tenant",
-            )
     except Exception:
-        await _undo_create(project.project_id, payload.tenant, registered=registered)
+        await _undo_create(project.project_id)
         # `reason`, not `relation`: the create was AUTHORIZED — a later write in the sequence
         # failed. Stamping the door here would read as a denial that never happened.
-        audit("annotation_project.create", FAILURE, subject=subject, resource=project.fga_object, reason="compensated")
+        audit("annotation_project.create", FAILURE, subject=subject, resource=project.authz_object, reason="compensated")
         raise
 
-    audit("annotation_project.create", SUCCESS, subject=subject, resource=project.fga_object)
+    audit("annotation_project.create", SUCCESS, subject=subject, resource=project.authz_object)
     return AnnotationProject.model_validate(stored)
 
 
-async def _undo_create(project_id: str, tenant: str, *, registered: bool) -> None:
-    """Roll the create's writes back, in reverse, leaving nothing behind.
+async def _undo_create(project_id: str) -> None:
+    """Roll the create's document back, leaving nothing behind.
 
-    Every step is best-effort and logged: this runs because something already failed, and the
-    ORIGINAL failure is the one the caller must see — a compensation that raises would replace the
-    real reason with a second-order one. What a failed compensation leaves is exactly the orphan
-    that existed before, now with a log line naming it.
+    Best-effort and logged: this runs because something already failed, and the ORIGINAL failure is the one the
+    caller must see — a compensation that raises would replace the real reason with a second-order one. What a
+    failed compensation leaves is exactly the orphan that existed before, now with a log line naming it.
     """
-    if registered:
-        try:
-            await _tenant_actor(tenant).unregister({"project_id": project_id})
-        except Exception:
-            logger.exception("could not un-register project %s from tenant %s after a failed create — it will list without owner tuples", project_id, tenant)
     try:
         await _create_actor(project_id).discard({})
     except Exception:

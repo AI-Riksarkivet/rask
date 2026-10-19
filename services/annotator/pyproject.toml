@@ -1,11 +1,11 @@
 [project]
 name = "annotator"
 version = "0.1.0"
-description = "Media-plane annotator API — annotation save/commit/versioning and tags over Lance tables."
+description = "The annotator: a labeling tool that works on the lakehouse through its public doors, with its own release, state and roles."
 requires-python = ">=3.13"
 license = "Apache-2.0"
 dependencies = [
-    "service-kit[lancekit]",
+    "service-kit[lancekit,governed]",
     "fastapi>=0.115",
     "pydantic>=2.7",
     "uvicorn[standard]>=0.30",
@@ -18,11 +18,6 @@ dependencies = [
     # `uv sync --all-packages`, which is what a dev venv does; `uv sync --frozen --package annotator`,
     # which is what .docker builds, would not have installed it.
     "dapr-ext-fastapi>=1.18.1",
-    # The publish path emits an OpenLineage run event naming who annotated and who reviewed, and
-    # authors its custom facet with `lineage_kit.schemas.custom_facet` so the `_producer` /
-    # `_schemaURL` envelope stays in step with every other emitter in the estate. Inlining that
-    # envelope instead would be the drift this dependency exists to prevent.
-    "lineage-kit",
     "shapely>=2.0",
 ]
 
@@ -35,4 +30,3 @@ packages = ["src/annotator"]
 
 [tool.uv.sources]
 service-kit = { workspace = true }
-lineage-kit = { workspace = true }

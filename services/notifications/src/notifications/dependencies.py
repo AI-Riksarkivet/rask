@@ -24,10 +24,9 @@ def require_actor_plane(request: Request) -> None:
     """Refuse the inbox when this process could not register its actor types.
 
     `app.state.actors_registered` is set False at import and only flipped by the lifespan, and THIS is
-    what reads it. The annotator carries the same flag with a comment promising the task endpoints
-    surface it as a 503, and nothing consults it — so a registration failure there degrades into
-    per-request errors from the sidecar instead of one honest refusal. An inbox route with no actor
-    plane cannot answer at all, so it says so.
+    what reads it. A flag nothing consults lets a registration failure degrade into per-request errors from
+    the sidecar instead of one honest refusal. An inbox route with no actor plane cannot answer at all, so
+    it says so.
 
     What the flag proves is LOCAL and must not be read as more: `register_actor` builds type info and
     stores a manager in a dict, and daprd learns the entity list afterwards by polling `/dapr/config`.

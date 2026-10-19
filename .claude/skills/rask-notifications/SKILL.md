@@ -1,6 +1,6 @@
 ---
 name: rask-notifications
-description: How a feature gets a person told — the targeted inbox behind the estate's bell. The six targeting sources (AUTHOR/ORIGINATOR/WATCH/GRANT_ADDED/GRANT_REVOKED/TASK_ASSIGNED+TASK_UNASSIGNED), the producer contract for the lineage and control lanes, and the five silent-drop traps (an emitted event that reaches nobody, or reaches the bell and not lineage's feed). Use when adding a feature whose outcome a person should hear about; when a notification "should have fired" and did not; when adding a `ControlAction` or a `NotificationReason`; when emitting an OpenLineage run event from any service; or when wiring a new service into `lineage.events.v1` / `catalog.control.v1`.
+description: How a feature gets a person told — the targeted inbox behind the estate's bell. The targeting sources (AUTHOR/ORIGINATOR/WATCH/GRANT_ADDED/GRANT_REVOKED/ERASURE_RELEASE_SCHEDULED), the producer contract for the lineage and control lanes, and the five silent-drop traps (an emitted event that reaches nobody, or reaches the bell and not lineage's feed). Use when adding a feature whose outcome a person should hear about; when a notification "should have fired" and did not; when adding a `ControlAction` or a `NotificationReason`; when emitting an OpenLineage run event from any service; or when wiring a new service into `lineage.events.v1` / `catalog.control.v1`.
 ---
 
 # rask notifications — how a feature gets a person told
@@ -29,7 +29,7 @@ something adjacent.
 | **Q3** | Should people *other than the actor* know, because it is the project's work? | `WATCH` | the same event **plus** `lance.project` |
 | **Q4** | Does it give a specific person access? | `GRANT_ADDED` | `CatalogControlEvent`, `extra.subject` = the principal |
 | **Q5** | Does it take access away from a specific person? | `GRANT_REVOKED` | the same envelope, `action="grant_revoked"` |
-| **Q6** | Does it hand a person work, or take work away from them? | `TASK_ASSIGNED` / `TASK_UNASSIGNED` / `TASK_CHANGES_REQUESTED` / `TASK_DROPPED` / `TASK_LEASE_EXPIRED` | the same envelope; `extra.subject` is the WORKER, never the manager who clicked |
+| **Q6** | Does a tool hand a person work, or take it away (an annotation task, a review)? | none | nothing on the lakehouse's lanes: a tool's work queue is the tool's, announced on its own channel (ADR 0171) |
 | **Q7** | Will a scheduled act take something from a person unless they act first? | `ERASURE_RELEASE_SCHEDULED` | the same envelope, one per person (the erasure obligation's requester and each table owner), when a verification settles the obligation; `extra.due_at` is the deadline (ADR 0138, ADR 0163) |
 
 **Q2 is the one people miss, and it exists because Q1 is unreachable for most long work.** Expensive
@@ -70,30 +70,6 @@ never implies it**, so no audience widens by default. **A watch covers what happ
 `occurred_at`, never at delivery. Every run arrives twice, on the bus and again on the reconciler's tick, so an
 audience read at delivery would hand a watch begun between the two the work from before it (measured on the
 e2e-stack lane, [[XC-094]]); keyed on the run's time, both lanes name the same people.
-
-**Q6 needs ONE ACTION PER EDGE, not a generic one.** The panel renders the reason as each row's
-user-visible label, so a distinct verb is not decoration — telling somebody their reviewed work was
-"unassigned" is a worse answer than the silence it replaces. The annotator's audience always comes off
-the task's **pre-turn snapshot**, never the post-transition document: the actor nulls `assignee` inside
-the very turn these edges fire, so by the time `fire()` returns there is nobody left to name.
-`submitted_by` is the safer field — written once and cleared by no edge — which is why it carries the
-review side.
-
-**`lease_expired` is covered, and how it got there is the reusable part.** It was recorded as
-structurally impossible — "no principal, no request, no emitter in scope" — and two thirds of that was
-a misreading. No principal is true and IRRELEVANT: the lane targets on `extra.subject` and never reads
-`actor` (its envelope carries `system:annotator`). What was actually missing was a handle: a Dapr actor
-has no `Request`, so it cannot resolve `ControlEmitterDep`. `service_kit.control_emit`'s
-`set_process_control_emitter` / `process_control_emitter` pair closes that — set once in the lifespan
-beside `app.state.control_emitter`, read by any non-request producer, defaulting to the NO-OP so a
-service that never sets it is silent rather than broken. **Before filing an emit site as impossible,
-separate "no audience" from "no handle" — only the first is structural.**
-
-Two details that path forces, and both are general: read the audience BEFORE the transition (the actor
-nulls `assignee` in the same turn, so the post-turn document names nobody), and read the object id off
-the RECORD rather than `self.id.id` — identical in production, but the actor-runtime attribute does not
-exist under a test double, so an emit that used it silently swallowed an `AttributeError` and asserted
-nothing.
 
 Q4 is the sharpest and is why the control lane exists at all: *losing access silently is how someone
 discovers it by hitting a 403 in the middle of work*. That lane deliberately runs **no visibility
@@ -176,8 +152,8 @@ escapes.
 **The emitter signs, and `make_control_emitter(sign=...)` has no default** ([[XC-078]]). A producer passes
 `attach_control_signature` over its own `SigningKeyHolder` (the catalog's, `catalog/core/control_signing.py`,
 declares the `user:` actor it authenticated; maintenance signs as itself), or `None` when it holds no signing
-identity, which the doors accept only for an action `control_signer_role` exempts (the task actions, R3; an
-annotation project's grants, R5). A signer whose key is unresolved publishes and stages nothing: the event is withheld
+identity, which only a door verifying nothing acts on: every action has a signer role in `control_signer_role`
+(the catalog or maintenance). A signer whose key is unresolved publishes and stages nothing: the event is withheld
 and counted under `reason="unsigned"`, outbox or not, and the signer reports itself not ready. The catalog therefore
 refuses every write it would announce while its key is unresolved, 503 code 17 before the commit
 (`catalog/api/signing_gate.py`, [[XC-095]]), so none of its announcements is lost to a missing key; a producer with no such
@@ -186,12 +162,11 @@ republishes a staged event verbatim only when it verifies as signed by the catal
 else as poison, so a staged forgery never becomes a catalog-signed event.
 
 **Under `RASK_SIGNATURE_DOORS=enforce` a named action reaches nobody unless the role that emits it signed it.**
-`service_kit.control_events.control_signer_role(action, object_id)` names that role, and the `/control-events` door
+`service_kit.control_events.control_signer_role(action)` names that role, and the `/control-events` door
 verifies the envelope's top-level `rask_signature` against the role's identities in `RASK_CONTROL_SIGNER_ROLES`, so a
 valid signature from another service is refused. A person actor (`user:<sub>`) verifies only under a delegation from a
-delegator, `onBehalfOf` equal to the whole actor. The annotator's task actions and its grants on an
-`annotation_project:` object are exempt (owner rulings R3 and R5): it holds no signing identity, so any identity the
-bus lets publish can forge those. A refusal is acked and counted in
+delegator, `onBehalfOf` equal to the whole actor. No action is exempt, so the lane carries only the lakehouse's own
+signed events (ADR 0171). A refusal is acked and counted in
 `notifications_signature_refused_total{lance_notifications_door,lance_notifications_reason}`.
 
 **A new named action is a THREE-file change, and all three are load-bearing:**
@@ -339,8 +314,9 @@ notify somebody.
    `services/compute` (`RayJob` has no author field). See `docs/adr/0042-the-compute-service-gets-no-emitter-yet-and-the-blocker-is.md` — an emitter without an identity
    produces events the plane is *designed* to discard, which reads as coverage and is not.
 2. **No principal at all.** Some transitions are caused by a TIMER, not a person. The audience usually
-   exists (the annotator's `lease_expired` targets the task's holder) but the emit site must be given a
-   handle to an emitter; see the `lease_expired` paragraph above for how that one was closed.
+   exists, but a timer's emit site has no `Request` to resolve `ControlEmitterDep` from, so it must be
+   given a handle to an emitter. Before filing such an emit site as impossible, separate "no audience"
+   from "no handle": only the first is structural.
 3. **A fact that only exists while somebody is looking.** Several failures are composed at read time
    inside an HTTP handler and never persisted or published — flows' unparsable result. Nothing can notify what was never recorded.
 4. **An audience that is real but unmodelled.** `services/flows` has no project and no lakehouse

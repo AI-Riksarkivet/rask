@@ -68,12 +68,15 @@ def _lineage_env(docs: tuple[dict, ...]) -> dict[str, str]:
 
 
 #: The apps that host a signature door, and whether one of their doors takes control events: notifications' /lineage-events
-#: and /control-events, and maintenance's /maintenance-arrival, which `register_arrival_route` registers while
-#: MAINTENANCE_ARRIVAL_ENABLED is true.
-_DOOR_APPS = {"notifications:app": True, "maintenance.service:app": False}
+#: and /control-events, maintenance's /maintenance-arrival, which `register_arrival_route` registers while
+#: MAINTENANCE_ARRIVAL_ENABLED is true, and the catalog's own /control-events, its subscription to the broadcast it
+#: publishes, while LANCE_CONTROL_EMIT_ENABLED is true ([[CTL-32]]).
+_DOOR_APPS = {"notifications:app": True, "maintenance.service:app": False, "catalog.main:app": True}
+#: The env switch a door's registration waits on, for the apps whose door is conditional.
+_DOOR_SWITCH = {"maintenance.service:app": "MAINTENANCE_ARRIVAL_ENABLED", "catalog.main:app": "LANCE_CONTROL_EMIT_ENABLED"}
 _DOOR_ENV = ("RASK_SIGNATURE_DOORS", "RASK_EVENT_SIGNERS", "RASK_EVENT_DELEGATORS", "RASK_CONTROL_SIGNER_ROLES")
 #: The door hosts each case names, so a values change that stops rendering one fails the case rather than shrinking it.
-_CONTROL_HOSTS = frozenset({"Deployment/rask-notifications"})
+_CONTROL_HOSTS = frozenset({"Deployment/rask-notifications", "Deployment/rask-catalog"})
 _ALL_HOSTS = _CONTROL_HOSTS | {"Deployment/rask-maintenance"}
 
 
@@ -87,7 +90,7 @@ def _door_hosts(docs: tuple[dict, ...]) -> dict[str, str]:
         workload: _app(container)
         for workload, _, container in chart_render.containers(docs)
         if _app(container) in _DOOR_APPS
-        and (_app(container) != "maintenance.service:app" or chart_render.env_of(container).get("MAINTENANCE_ARRIVAL_ENABLED") == "true")
+        and (_app(container) not in _DOOR_SWITCH or chart_render.env_of(container).get(_DOOR_SWITCH[_app(container)]) == "true")
     }
 
 

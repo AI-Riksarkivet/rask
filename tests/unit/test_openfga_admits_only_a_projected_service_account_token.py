@@ -42,9 +42,9 @@ def test_openfga_runs_oidc_against_the_mirrored_cluster_issuer_with_no_playgroun
     assert server.get("OPENFGA_HTTP_CORS_ALLOWED_ORIGINS", "*") != "*"
 
 
-#: The accounts that write tuples ([[LH-442]]): the catalog, maintenance, and with the explorer on the annotator, plus the
-#: jobs that publish the model and seed the estate's grants. Every other governed service decides through the catalog.
-_WRITERS = {"default": {"catalog", "maintenance", "jobs", "hooks"}, "every-client": {"catalog", "maintenance", "annotator", "jobs", "hooks"}}
+#: The accounts that write tuples ([[LH-442]]): the catalog and maintenance, plus the jobs that publish the model and seed the
+#: estate's grants, whatever else the release runs. Every other governed service decides through the catalog.
+_WRITERS = {"default": {"catalog", "maintenance", "jobs", "hooks"}, "every-client": {"catalog", "maintenance", "jobs", "hooks"}}
 
 
 def _projected(pod: dict, container: dict, path: str) -> set[tuple[str | None, str]]:
@@ -111,4 +111,4 @@ def test_only_a_tuple_writer_holds_an_openfga_token_and_every_other_governed_ser
     )
     assert len(deciders) >= 3 and set(deciders) == set(seeded), f"deciders {sorted(deciders)} vs the roles bootstrap seeds {sorted(seeded)}"
     assert all("decider" in roles for roles in seeded.values()), seeded
-    assert reachers == {"catalog", "maintenance", "annotator", "bootstrap-admin", "openfga-model"}, f"OpenFGA's API is reachable from {sorted(reachers)}"
+    assert reachers == {"catalog", "maintenance", "bootstrap-admin", "openfga-model"}, f"OpenFGA's API is reachable from {sorted(reachers)}"

@@ -11,10 +11,9 @@ exactly as delivered: a model dump grows the fields a schema defaults, and the p
 * `/lineage-events`: an event `notifiable()` would deliver, against the estate's signer sets (`RASK_EVENT_SIGNERS`,
   `RASK_EVENT_DELEGATORS`), as lineage verifies it.
 * `/control-events`: an event whose action is in `NAMED_ACTIONS`, against the identities of the role
-  `control_signer_role` names for its action and object (`RASK_CONTROL_SIGNER_ROLES`), so a valid signature from
-  another service is no authority over the action. A role the chart did not render verifies against no identity, and
-  its events are refused as `signer`. The annotator's task actions and the grants on its own projects need no
-  signature (owner rulings R3 and R5); the policy states the residual.
+  `control_signer_role` names for its action (`RASK_CONTROL_SIGNER_ROLES`), so a valid signature from another service
+  is no authority over the action. A role the chart did not render verifies against no identity, and its events are
+  refused as `signer`. Every action needs a signature: the lane carries only the lakehouse's own signed events.
 
 An event the route acknowledges and ignores is not verified, so it costs no key read and moves no counter.
 
@@ -134,10 +133,7 @@ async def screen_control_event(arrived: object, request: Request, settings: Ingr
         return None
     if event.action not in NAMED_ACTIONS:
         return None
-    role = control_signer_role(event.action, event.object_id)
-    if role == "exempt":
-        return None
-    signers = settings.control_signer_roles.get(role, frozenset())
+    signers = settings.control_signer_roles.get(control_signer_role(event.action), frozenset())
     claim = control_signature_of(arrived)
     source = _published_keys(request, settings).for_event(claim.kid if claim else None)
     return await _answer(

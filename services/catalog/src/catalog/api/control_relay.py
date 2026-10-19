@@ -75,7 +75,8 @@ log = logging.getLogger(__name__)
 #: cannot be read. Blocking, since a key read is a call to the sidecar.
 type StagedVerifier = Callable[[Mapping[str, Any]], VerifiedSignature]
 
-#: Bounds what a staged object's own text puts on a log line: its key and its action are whatever its writer chose.
+#: Bounds what an event's own text puts on a log line: a staged object's key and action, or a delivered event's claimed
+#: identity and id, are whatever its writer chose.
 _MAX_LOGGED_CHARS: Final = 300
 
 #: How many staged events one tick drains. The lineage drain learned this the hard way (docs/adr/0004-p1-2-bounded-oldest-first-outbox-drain.md
@@ -133,8 +134,12 @@ def get_control_publisher(request: Request) -> object | None:
 ControlPublisherDep = Annotated[object | None, Depends(get_control_publisher)]
 
 
-def _published_keys(request: Request, settings: Settings) -> PublishedKeys:
-    """This app's key reader, built on first use and kept on the app so its cache outlives one tick, as the doors keep theirs."""
+def published_keys(request: Request, settings: Settings) -> PublishedKeys:
+    """This app's one key reader, built on first use and kept on the app so its cache outlives one delivery or tick.
+
+    Shared by the relay and the control lane's subscription (`api/dapr.py`): one reader per app, so both read the keys
+    through one cache.
+    """
     state = request.app.state
     keys: PublishedKeys | None = getattr(state, "published_keys", None)
     if keys is None:
@@ -155,7 +160,7 @@ async def get_staged_verifier(request: Request, settings: SettingsDep) -> Staged
     holder: SigningKeyHolder[SigningKey] | None = getattr(request.app.state, SIGNING_STATE, None)
     if holder is None:
         return None
-    keys = _published_keys(request, settings)
+    keys = published_keys(request, settings)
     own = frozenset({holder.identity})
 
     def verify(envelope: Mapping[str, Any]) -> VerifiedSignature:
@@ -168,7 +173,8 @@ async def get_staged_verifier(request: Request, settings: SettingsDep) -> Staged
 StagedVerifierDep = Annotated[StagedVerifier | None, Depends(get_staged_verifier)]
 
 
-def _bounded(text: str) -> str:
+def bounded(text: str) -> str:
+    """``text`` cut to what one log line carries of a writer's own words."""
     return text if len(text) <= _MAX_LOGGED_CHARS else f"{text[:_MAX_LOGGED_CHARS]}..."
 
 
@@ -184,7 +190,7 @@ def _action_of(event_json: str) -> str | None:
     except (ValueError, RecursionError):
         return None
     action = parsed.get("action") if isinstance(parsed, dict) else None
-    return _bounded(action) if isinstance(action, str) and action else None
+    return bounded(action) if isinstance(action, str) and action else None
 
 
 async def _republish(publisher: object, settings: Settings, event_json: str) -> None:
@@ -254,7 +260,7 @@ async def _drain(settings: Settings, publisher: object | None, verify: StagedVer
         except KeySourceUnavailableError as exc:
             # No verdict on any signature: nothing may go out and nothing may be retired. Stop the pass like
             # a bus still down, and every object stays staged for the next tick to retry from the oldest.
-            log.warning("control_relay_keys_unavailable", extra={"key": _bounded(key), "depth": depth, "error": _bounded(str(exc))})
+            log.warning("control_relay_keys_unavailable", extra={"key": bounded(key), "depth": depth, "error": bounded(str(exc))})
             report.keys_unavailable = True
             break
         except (ValidationError, SignatureError) as exc:
@@ -262,7 +268,7 @@ async def _drain(settings: Settings, publisher: object | None, verify: StagedVer
             # poison. A broad `except` here would retire a staged event on any transient failure, i.e. destroy
             # the one durable copy this module exists to deliver.
             reason = exc.reason if isinstance(exc, SignatureError) else "invalid"
-            log.warning("control_outbox_unverifiable", extra={"key": _bounded(key), "action": _action_of(event_json), "reason": reason})
+            log.warning("control_outbox_unverifiable", extra={"key": bounded(key), "action": _action_of(event_json), "reason": reason})
             outbox_metrics.record_poison_dropped()
             await run_in_threadpool(outbox.drop_event, settings.control_outbox_uri, options, key)
             report.poison_dropped += 1

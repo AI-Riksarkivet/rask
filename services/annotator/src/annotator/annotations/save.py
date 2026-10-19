@@ -24,12 +24,12 @@ from annotator.annotations.schema import (
     identity_values,
 )
 from annotator.api.security import CurrentSubject, RawBearerToken
+from annotator.corpus import resolve
 from service_kit.lancekit.keys import chunk_key_filter, validate_doc_key
 from service_kit.lancekit.reader import open_reader
 from service_kit.lancekit.registry import table_dataset
 from service_kit.lancekit.writer import open_writer
 from service_kit.media.deps import DatasetParam, StateDep
-from service_kit.media.state import dataset_handle
 
 
 logger = logging.getLogger(__name__)
@@ -68,17 +68,17 @@ def save_annotations(
     dataset: DatasetParam = None,
 ) -> SaveResult:
     """Flush a review delta to Lance as ONE atomic version (see module docstring)."""
-    handle = dataset_handle(state, dataset)
-    declared = handle.descriptor.declared
+    corpus = resolve(state, dataset, caller_token)
+    declared = corpus.declared
     doc_id = validate_doc_key(declared, doc_id)
     # Full catalog mode never opens the local replica (the catalog 404s absent
     # tables through the error translation); any other config keeps local resolution.
-    ds = None if state.settings.rest_catalog_mode else table_dataset(handle, ANNOTATIONS_TABLE)
+    ds = None if corpus.local is None else table_dataset(corpus.local, ANNOTATIONS_TABLE)
     # The version check AND the carry-forward read both go through the reader seam:
     # in catalog mode the catalog table is the truth (patching against a stale local
     # copy would resurrect old fields), and the 409 compares the version the client
     # loaded against the same source the wire GET served it from.
-    table_id = state.settings.catalog_table_id(handle.id, ANNOTATIONS_TABLE)
+    table_id = state.settings.catalog_table_id(corpus.id, ANNOTATIONS_TABLE)
     reader = open_reader(dataset=ds, table_id=table_id, settings=state.settings, caller_token=caller_token)
     # REQUIRED here (#50): this path commits a merge_upsert, which UPDATES matched rows, so a save
     # that does not state what it was built from can overwrite another annotator's fields. The tag
@@ -130,7 +130,7 @@ def save_annotations(
         touched += len(body.deletes)
 
     result = finalize_commit(
-        handle,
+        corpus,
         state.settings,
         touched=touched,
         unit_key=f"{doc_id}/{speech_id}/{chunk_id}",

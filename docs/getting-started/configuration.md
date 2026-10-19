@@ -40,7 +40,7 @@ authenticates every request itself. The route table:
 | Public prefix | Service | Path at the service |
 |---|---|---|
 | `/api/explorer/search` | search | `/api/search…` |
-| `/api/explorer/annotations` | annotator | `/api/annotations…` |
+| `/api/explorer/annotations` | annotator (the annotator fixture chart's own HTTPRoute) | `/api/annotations…` |
 | `/api/explorer` | viewer (incl. the objects browser) | `/api…` |
 | `/api/catalog` | catalog | `/…` |
 | `/api/lineage` | lineage | `/…` |

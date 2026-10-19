@@ -31,7 +31,7 @@ declarative and REPLACES — "removes all applications not listed in the new con
 writer owns the Serve config: under KubeRay that is the RayService CR's serveConfigV2, and
 ad-hoc ``serve deploy`` PUTs against a cluster carrying /transcribe + /htrflow would DELETE
 them unless the full application list rides along. Same single-writer rule as the Helm
-release; discovery only ever READS. The env registry (``MEDIA_ASSIST_BACKENDS``) stays as the OPERATOR OVERRIDE:
+release; discovery only ever READS. The env registry (``ANNOTATOR_ASSIST_BACKENDS``) stays as the OPERATOR OVERRIDE:
 an env entry with the same producer name wins over discovery, because config is intent and
 discovery is observation. Discovery failing (cluster down, dashboard unreachable) degrades to
 the env registry + mock — the same fail-honest posture as everything else in this plane.
@@ -45,7 +45,7 @@ from typing import Any
 
 import httpx
 
-from service_kit.media.config import AssistBackend
+from annotator.core.config import AssistBackend
 
 
 logger = logging.getLogger(__name__)

@@ -14,9 +14,8 @@ carry their `subject` as a SECOND lock: a record whose owner disagrees with the 
 not *absent* (`InboxUnreadable`), because reporting it as absent would invite the caller to overwrite
 somebody else's rows.
 
-**Authorization is NOT performed here.** The HTTP layer checks FGA before it invokes, exactly as
-`services/annotator/src/annotator/projects/actor.py` pins for the task plane. Keeping the split means
-this file is testable with no OpenFGA, and the op→privilege map has one home.
+**Authorization is NOT performed here.** The HTTP layer checks FGA before it invokes. Keeping the split
+means this file is testable with no OpenFGA, and the op→privilege map has one home.
 
 **Two stores, one actor, no transaction between them.** Reminders do not live in the actor state
 store: this estate deploys `dapr-scheduler-server` at 3 replicas on its own etcd PVC, so a
@@ -70,9 +69,8 @@ logger = logging.getLogger(__name__)
 #: the proxy one place to read it from (`tests/test_inbox_actor.py` pins the two together).
 INBOX_ACTOR_TYPE = "InboxActor"
 
-#: The two state partitions — "small and read every call" vs "large and read rarely", the split
-#: `annotator.projects.actor` already uses for a task and its draft. The badge is by far the most
-#: frequent read in this plane and it never touches the rows.
+#: The two state partitions — "small and read every call" vs "large and read rarely". The badge is by far
+#: the most frequent read in this plane and it never touches the rows.
 META_KEY = "inbox-meta"
 ROWS_KEY = "inbox-rows"
 #: The THIRD partition: this subject's watch list. Read only by the settings surface and by a fan-out
@@ -115,8 +113,7 @@ _DROP_THE_TICK: Final = ActorReminderFailurePolicy.drop_policy()
 #: refusing, so exhausting these retries (or the Scheduler losing the one-shot outright) is no longer
 #: silent and permanent.
 #:
-#: Same shape and reasoning as the annotator's `_RETRY_THE_ONE_SHOT` for its lease expiry, and bounded
-#: for the same reason: a permanently poisoned tick still has to give up rather than pin the actor.
+#: Bounded because a permanently poisoned tick still has to give up rather than pin the actor.
 _RETRY_THE_ONE_SHOT: Final = ActorReminderFailurePolicy.constant_policy(interval=timedelta(seconds=10), max_retries=6)
 
 #: How far past its `due_at` a pending digest window may run before the ARM path treats it as
@@ -558,7 +555,6 @@ class InboxActor(Actor, InboxActorInterface, Remindable):
         # unregistered on drain, and that disarm could be refused — silently, into
         # `inbox_digest_disarm_failed` — after which it fired on an already-drained window once per
         # period, forever. A window that closes itself needs no second call to have been correct.
-        # (The annotator's lease reminder documents the same primitive: "`period=0` = fire once".)
         await self.register_reminder(DIGEST_REMINDER, b"", timedelta(seconds=seconds), timedelta(0), failure_policy=_RETRY_THE_ONE_SHOT)
         # `due_at` is what makes an orphan DETECTABLE. The reminder lives in the Scheduler's etcd and
         # this record in Postgres, with no transaction between them — the same split the compaction

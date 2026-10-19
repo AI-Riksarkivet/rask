@@ -85,12 +85,13 @@ def test_an_x_user_header_can_no_longer_choose_the_subject() -> None:
     assert got["subject"] != "attacker"
 
 
-def test_with_oidc_on_the_subject_is_the_verified_principal() -> None:
-    class _Verifier:
-        def verify(self, token: str) -> PersonPrincipal:
-            assert token == "good-token"
-            return PersonPrincipal(principal=Principal(idp_id="dex", subject="gina"), claims=IDToken(iss="i", sub="gina", aud="lance", exp=1, iat=1))
+class _Verifier:
+    def verify(self, token: str) -> PersonPrincipal:
+        assert token == "good-token"
+        return PersonPrincipal(principal=Principal(idp_id="dex", subject="gina"), claims=IDToken(iss="i", sub="gina", aud="lance", exp=1, iat=1))
 
+
+def test_with_oidc_on_the_subject_is_the_verified_principal() -> None:
     client = TestClient(_app(_settings(oidc_enabled=True, fga_enabled=False), oidc=_Verifier()))
     r = client.get("/whoami", headers={"Authorization": "Bearer good-token"})
     assert r.status_code == 200
@@ -102,10 +103,14 @@ def test_with_oidc_on_the_subject_is_the_verified_principal() -> None:
 # --------------------------------------------------------------------------------------------------
 
 
-def test_fga_enabled_but_no_client_is_503_not_permissive() -> None:
-    """The dangerous one: a broken authz layer must not silently become an open one."""
-    client = TestClient(_app(_settings(oidc_enabled=False, fga_enabled=True)))  # no `fga` on state
-    assert client.get("/guarded").status_code == 503
+def test_authentication_on_but_no_catalog_to_ask_is_503_not_permissive() -> None:
+    """The dangerous one: a broken authz layer must not silently become an open one.
+
+    With authentication on, every decision is the catalog's answer for the caller (`annotator.api.authorization`),
+    so a process that cannot ask it (no client on the app, here) refuses rather than allowing.
+    """
+    client = TestClient(_app(_settings(oidc_enabled=True, fga_enabled=False, catalog_uri="http://catalog.test"), oidc=_Verifier()))
+    assert client.get("/guarded", headers={"Authorization": "Bearer good-token"}).status_code == 503
 
 
 # --------------------------------------------------------------------------------------------------

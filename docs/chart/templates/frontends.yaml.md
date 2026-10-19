@@ -14,11 +14,12 @@ route sends /<zone> -> this Service (route.yaml, `<release>-web`) and each /api/
 straight to its service (`<release>-api`); no backend serves the SPA shell.
 
 NAMING — the live collision class of the lance-ns merge: every frontend object is
-`<fullname>-web-<zone>`, NOT the bare zone name. The merged estate has an `annotator`
-ZONE and an `annotator` BACKEND service (media.yaml) under ONE release: bare names
-would render two Deployments/Services called `rask-annotator` (an undeployable
-release), and a shared `app.kubernetes.io/component: annotator` selector would
-cross-wire the backend Service onto the SvelteKit pods. The `web-` prefix keeps the
+`<fullname>-web-<zone>`, NOT the bare zone name. The estate runs an `annotator`
+ZONE from this chart and an `annotator` service from its own release in the same namespace
+(deploy/fixtures/annotator, ADR 0171): bare names would render a second Deployment and
+Service called `rask-annotator`, which the other release owns, and a shared
+`app.kubernetes.io/component: annotator` selector would cross-wire the backend Service
+onto the SvelteKit pods. The `web-` prefix keeps the
 frontend tier disjoint from every backend component. Since R22 the IMAGE name is
 `web-<zone>:<tag>` too (the Makefile builds `web-home:dev`, …): the fleet's Ray-plane
 service image took the bare `compute` name, which the compute ZONE image previously
@@ -29,8 +30,9 @@ ha.yaml (zone PDBs) and network-policy.yaml (the front-door rule) already select
 Every zone shares ONE env block (the "auth/secret similar in every MFE" seam):
 the backend URLs the zones' BFF proxies target, the edge URL the SSR /api fetches
 use, and — auth on — the service-cred read fallback + the OIDC config, so a login on
-any zone is a login on every zone (one origin, one sealed cookie). The media/annotator
-zones additionally get the media plane's upstreams, scoped per zone.
+any zone is a login on every zone (one origin, one sealed cookie). The explorer and
+annotator zones additionally get the media plane's upstreams, and the annotator zone the
+annotator's, scoped per zone.
 
 ## `{{- $edge := required "route.edgeUrl must name the Gateway's in-cluster address: the zones' server sid...`
 
@@ -232,9 +234,8 @@ purpose, because Ray's dashboard can PUT a deployment) lives with STUDIO_SERVE_U
 --- the media plane's upstreams for these two zones' BFF proxy routes -------
 (/<zone>/api/* -> the media Services). Scoped PER ZONE, not handed to every
 zone: one should not hold a service URL it never routes to. explorer searches
-and reads the viewer, and reaches the annotator only for the workflow's tag
-write + batch-job submit; the annotator reads the viewer for the media it
-draws on the canvas.
+and reads the viewer; the annotator reads the viewer for the media it draws on
+the canvas.
 
 SEARCH_API used to sit behind an `eq .name "explorer"` guard, on the claim that
 "the annotator never searches". That stopped being true when /annotator/browse
@@ -244,13 +245,12 @@ answered by the viewer. Without this the zone's `findSimilar` remote falls back
 to its localhost dev default and every neighbour lookup fails in-cluster, with
 nothing in the browser to say the URL was never injected.
 
-## `- name: MEDIA_ASSIST_URL`
+## `{{- if and (eq .name "annotator") $fe.annotatorUrl }}`
 
-Mirror of the annotator SERVICE's runner seams (media.yaml) onto the zone's
-web pod: its /api/config endpoint reads these to render the honest
-"mocked — needs runner" chip, so the chip's truth tracks the same values
-switch as the service env (found live 2026-07-24: runner deployed, service
-wired, chip still claiming mock).
+The annotator is a client of the lakehouse with its own release (ADR 0171), so the annotator
+zone's upstream is a value naming that release's Service (`frontend.annotatorUrl`), not a
+Service this chart renders. Empty renders no ANNOTATOR_API, and the zone's annotator
+surfaces have no upstream.
 
 ## `{{- include "lance.tcpProbes" "http" | nindent 10 }}`
 

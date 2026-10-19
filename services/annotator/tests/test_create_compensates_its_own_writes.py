@@ -1,13 +1,8 @@
-"""ANN-10 — `POST /projects` performs three writes in a row and, until now, protected none of them.
+"""ANN-10 — `POST /projects` performs two writes in a row: seed the project actor, its creator the first owner in
+the same turn, then register the id in the tenant index.
 
-The sequence is: seed the project actor, register the id in the tenant index, seed the FGA owner
-tuples. A failure after the first leaves a project that EXISTS and cannot be used, in one of two
-shapes:
-
-* register failed → the document is in the state store, absent from the tenant index, and holds no
-  tuples. Nothing lists it and nobody can open it. It is unreachable, permanently.
-* the grant failed → it is listed on the landing page and every `can_view` / `can_manage` check
-  against it denies, for everyone, creator included. Worse than invisible: visible and dead.
+A failure in the second leaves a project that EXISTS and that nothing lists: the document is in the state store and
+absent from the tenant index, so nobody can find it. It is unreachable, permanently.
 
 The endpoint's own docstring said a failure "is answered by retrying the create, not by a repair
 job", and that was false in the way that matters: `AnnotationProject.project_id` is a
@@ -28,7 +23,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from annotator.api.security import current_subject, get_checker, get_fga_client
+from annotator.api.security import current_subject, get_checker
 from annotator.api.v1.endpoints import projects as projects_ep
 from annotator.projects.machines import IllegalTransition
 from annotator.projects.models import AnnotationProject, Task, TaskState
@@ -78,15 +73,9 @@ class _FakeTenantActor:
         return {"project_id": payload["project_id"], "removed": removed, "total": len(self.ids)}
 
 
-def _wire(monkeypatch: pytest.MonkeyPatch, project: _FakeProjectActor, tenant: _FakeTenantActor, *, grant_fails: bool) -> TestClient:
+def _wire(monkeypatch: pytest.MonkeyPatch, project: _FakeProjectActor, tenant: _FakeTenantActor) -> TestClient:
     monkeypatch.setattr(projects_ep, "_create_actor", lambda _pid: project)
     monkeypatch.setattr(projects_ep, "_tenant_actor", lambda _t: tenant)
-
-    async def grant_on_create(*_args: Any, **_kwargs: Any) -> None:
-        if grant_fails:
-            raise RuntimeError("OpenFGA refused the write")
-
-    monkeypatch.setattr(projects_ep.fga, "grant_on_create", grant_on_create)
 
     async def checker(*, user: str, relation: str, obj: str) -> bool:
         return True
@@ -96,7 +85,6 @@ def _wire(monkeypatch: pytest.MonkeyPatch, project: _FakeProjectActor, tenant: _
     register_handlers(app)
     app.dependency_overrides[get_checker] = lambda: checker
     app.dependency_overrides[current_subject] = lambda: "gina"
-    app.dependency_overrides[get_fga_client] = lambda: object()
     return TestClient(app, raise_server_exceptions=False)
 
 
@@ -106,27 +94,17 @@ def _create(client: TestClient) -> Any:
 
 def test_a_failed_index_registration_leaves_no_project_behind(monkeypatch: pytest.MonkeyPatch) -> None:
     project, tenant = _FakeProjectActor(), _FakeTenantActor(register_fails=True)
-    client = _wire(monkeypatch, project, tenant, grant_fails=False)
+    client = _wire(monkeypatch, project, tenant)
 
     assert _create(client).status_code >= 500
     assert project.doc is None, "the project document survived a create that failed — unlisted, ungranted and unreachable forever"
     assert project.discards == 1
 
 
-def test_a_failed_ownership_grant_unregisters_and_discards(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The worse of the two: listed on the landing page and denying every check, for everyone."""
-    project, tenant = _FakeProjectActor(), _FakeTenantActor()
-    client = _wire(monkeypatch, project, tenant, grant_fails=True)
-
-    assert _create(client).status_code >= 500
-    assert tenant.ids == [], "the project stayed in the tenant index with no owner tuples — visible and permanently 403"
-    assert project.doc is None
-
-
 def test_a_create_that_succeeds_compensates_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
     """The failure mode that would hide the fix: compensating unconditionally also passes above."""
     project, tenant = _FakeProjectActor(), _FakeTenantActor()
-    client = _wire(monkeypatch, project, tenant, grant_fails=False)
+    client = _wire(monkeypatch, project, tenant)
 
     response = _create(client)
     assert response.status_code == 201, response.text

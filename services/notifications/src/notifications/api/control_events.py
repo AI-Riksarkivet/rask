@@ -36,22 +36,11 @@ log = logging.getLogger(__name__)
 #: The control actions that name a party. `grant_revoked` matters MORE than `grant_added`: losing
 #: access silently is how someone discovers it by hitting a 403 in the middle of work.
 #:
-#: The task pair is the same shape one rung down — being handed work, and having it taken away — and the
-#: annotator is the third producer on this topic. Adding a member here is only ONE THIRD of the change:
-#: `ControlAction` must carry it (or the envelope will not validate) and `NotificationReason` must too,
-#: because `as_delivery` builds `NotificationReason(event.action)` and would raise on every delivery.
-NAMED_ACTIONS: frozenset[str] = frozenset(
-    {
-        "grant_added",
-        "grant_revoked",
-        "task_assigned",
-        "task_unassigned",
-        "task_changes_requested",
-        "task_dropped",
-        "task_lease_expired",
-        "erasure_release_scheduled",
-    }
-)
+#: Every one is a change to the lakehouse's own state: a tool's work queue is the tool's to announce, on its own
+#: channel (ADR 0171). Adding a member here is only ONE THIRD of the change: `ControlAction` must carry it (or the
+#: envelope will not validate) and `NotificationReason` must too, because `as_delivery` builds
+#: `NotificationReason(event.action)` and would raise on every delivery.
+NAMED_ACTIONS: frozenset[str] = frozenset({"grant_added", "grant_revoked", "erasure_release_scheduled"})
 
 #: How a USERSET (`role:reviewers#assignee`, `team:eng#member`) resolves to the people in it.
 #:

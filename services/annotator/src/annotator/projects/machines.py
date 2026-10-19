@@ -6,8 +6,8 @@ branches, so "everything not in the table is illegal" is structural. Each edge a
 layer ask the model rather than hardcode a ladder.
 
 Authorization is NOT performed here: this module says *which* permission an event requires, and the
-caller checks it against OpenFGA. That split is what lets the domain core be tested without a store,
-a sidecar, or a running OpenFGA.
+caller checks it (`annotator.api.authorization`). That split is what lets the domain core be tested without a
+store, a sidecar, or a catalog.
 """
 
 from __future__ import annotations
@@ -298,9 +298,9 @@ def identity_violation(
     implementations would drift, and the one that drifted would be the one that decided.
 
     `subject_can_manage` is a VERIFIED INPUT, not a check performed here. `release` is "lease holder
-    OR can_manage", and `can_manage` is an OpenFGA fact: the caller resolves it and states it, which
+    OR can_manage", and `can_manage` is the checker's answer: the caller resolves it and states it, which
     is what keeps this module — and the actor that imports it — testable with no store, no sidecar
-    and no running OpenFGA.
+    and no catalog.
 
     Returns the reason the transition is refused, or `None` when nothing here objects.
     """

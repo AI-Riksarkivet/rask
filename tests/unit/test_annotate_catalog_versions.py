@@ -7,7 +7,9 @@ the catalog's ``version/list`` + version-pinned counts (it used to silently retu
 catalog's time-travel ``/query`` (it used to 404-or-empty off the local table). The
 ``X-Annotations-Version-Source`` header names the number-space in BOTH modes. The
 REST transport is mocked at the :class:`CatalogTransport` seam — everything from the
-route down through ``open_catalog_reader``/``CatalogTableReader`` is real.
+route down through ``open_catalog_reader``/``CatalogTableReader`` is real. The corpus the
+routes resolve (its declared row identity) stands in for the catalog's answer, which
+`annotator.corpus` reads with pylance's own namespace client.
 """
 
 from __future__ import annotations
@@ -18,15 +20,19 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 import lance
+import lancedb
 import pyarrow as pa
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from annotator.annotations import versions, wire
 from annotator.annotations.router import router as annotations_router
+from annotator.corpus import Corpus
 from service_kit.exceptions import NotFoundError, register_handlers
-from service_kit.lancekit.descriptor import Declared
+from service_kit.lancekit.descriptor import DatasetDescriptor, Declared
 from service_kit.lancekit.reader import CatalogVersion
+from service_kit.lancekit.registry import DatasetHandle
 from service_kit.media.config import Settings
 from service_kit.media.state import AppState
 
@@ -110,6 +116,9 @@ def catalog_harness(monkeypatch: pytest.MonkeyPatch) -> tuple[TestClient, _FakeT
     """The annotations routes in FULL catalog mode, REST transport mocked at the seam."""
     transport = _FakeTransport()
     monkeypatch.setattr("service_kit.lancekit.reader.RestCatalogTransport", lambda *a, **k: transport)
+    corpus = Corpus(id="ds1", declared=_DECLARED)
+    for module in (versions, wire):
+        monkeypatch.setattr(module, "resolve", lambda *_a, **_k: corpus)
     settings = Settings(
         MEDIA_READ_BACKEND="catalog",
         MEDIA_WRITE_BACKEND="catalog",
@@ -209,20 +218,11 @@ def test_catalog_mode_current_read_still_catalog_sourced(catalog_harness) -> Non
     assert response.headers["X-Annotations-Version-Source"] == "catalog"
 
 
-class _LocalHandle:
-    """The slice of ``DatasetHandle`` the local routes touch, over a tmp dataset root."""
-
-    def __init__(self, root: Path) -> None:
-        self.id = "ds1"
-        self.path = root
-        self.storage_options = None
-        self.descriptor = SimpleNamespace(declared=_DECLARED)
-
-    def table_uri(self, table: str) -> str:
-        return str(self.path / f"{table}.lance")
-
-    def sync_table_info(self, table: str, observed_version: int) -> None:
-        pass  # descriptor drift-sync is the registry's concern, not this test's
+def _local_handle(root: Path) -> DatasetHandle:
+    """The registry's handle on a dataset root in ``root``, declaring the unit's row identity."""
+    root.mkdir(parents=True, exist_ok=True)
+    descriptor = DatasetDescriptor(id="ds1", tables={}, declared=_DECLARED)
+    return DatasetHandle(id="ds1", path=root, uri=str(root), db=lancedb.connect(root), descriptor=descriptor)
 
 
 def _seed_local(root: Path) -> None:
@@ -241,7 +241,7 @@ def test_local_mode_listing_unchanged_and_header_says_local(tmp_path: Path) -> N
     # Local (non-catalog) mode keeps the ds.versions()/checkout listing — and now names
     # its number-space explicitly.
     _seed_local(tmp_path)
-    client = _make_client(Settings(), _LocalHandle(tmp_path))
+    client = _make_client(Settings(), _local_handle(tmp_path))
     response = client.get(f"/api/annotations/{DOC}/0/19/versions")
     assert response.status_code == 200, response.text
     assert response.headers["X-Annotations-Version-Source"] == "local"
@@ -250,7 +250,7 @@ def test_local_mode_listing_unchanged_and_header_says_local(tmp_path: Path) -> N
 
 def test_local_mode_time_travel_read_unchanged(tmp_path: Path) -> None:
     _seed_local(tmp_path)
-    client = _make_client(Settings(), _LocalHandle(tmp_path))
+    client = _make_client(Settings(), _local_handle(tmp_path))
     response = client.get(f"/api/annotations/{DOC}/0/19?version=1")
     assert response.status_code == 200, response.text
     table = pa.ipc.open_stream(response.content).read_all()
@@ -258,12 +258,12 @@ def test_local_mode_time_travel_read_unchanged(tmp_path: Path) -> None:
     assert response.headers["X-Annotations-Version-Source"] == "local"
 
 
-def test_mixed_config_keeps_the_local_path() -> None:
+def test_mixed_config_keeps_the_local_path(tmp_path: Path) -> None:
     # catalog backends WITHOUT a URI (the in-process fallback) is NOT full catalog mode:
     # the version surface must stay local (pre-merge safety — same gate as wire/save).
     settings = Settings(MEDIA_READ_BACKEND="catalog", MEDIA_WRITE_BACKEND="catalog")
     assert not settings.rest_catalog_mode
-    client = _make_client(settings, _LocalHandle(Path("/nonexistent")))
+    client = _make_client(settings, _local_handle(tmp_path / "absent"))
     response = client.get(f"/api/annotations/{DOC}/0/19/versions")
     assert response.status_code == 200
     assert response.json() == []  # missing local table degrades exactly as before

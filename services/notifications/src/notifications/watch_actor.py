@@ -18,8 +18,8 @@ double-list, and a failure must fail the request loudly rather than leave a watc
 page shows and the fan-out never reads. An unlisted-but-believed watch is worse than a refused one.
 
 **Authorization is NOT performed here.** The HTTP layer checks FGA first and the actor stays testable
-without OpenFGA — the same doctrine the annotator's actors carry and the same reason: an actor that
-authorizes is an actor that cannot be unit-tested, and a second place for the rule to drift.
+without OpenFGA: an actor that authorizes is an actor that cannot be unit-tested, and a second place for the
+rule to drift.
 
 **A watch begins when it is registered, and covers only what happens after.** The fan-out asks who was
 watching when a run HAPPENED, never who watches when it is DELIVERED. Every run reaches this service twice,

@@ -18,7 +18,7 @@ from pydantic import AliasChoices, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from service_kit.governed.principal import PrincipalKey
-from service_kit.governed.settings import GovernedAuthSettings
+from service_kit.governed.settings import GovernedAuthSettings, SignatureDoorSettings
 from service_kit.governed.store_credential import S3KeyPair
 from service_kit.governed.store_session import WebIdentity, held_session
 from service_kit.lakehouse.endpoint_scheme import allow_http_for
@@ -436,6 +436,7 @@ class CatalogAuthzSettings(BaseSettings):
 
 class Settings(
     GovernedAuthSettings,
+    SignatureDoorSettings,
     LanceSessionCaps,
     CatalogStorageSettings,
     CatalogReadBounds,
@@ -452,7 +453,9 @@ class Settings(
 
     The OIDC/FGA knobs are NOT declared here. They are the estate's shared vocabulary and arrive from
     `GovernedAuthSettings` under `RASK_OIDC_*` / `RASK_FGA_*`; this class once carried a byte-identical
-    twin of them, which is precisely how the copies drifted."""
+    twin of them, which is precisely how the copies drifted. So do the control door's mode and signer sets, from
+    `SignatureDoorSettings` (`RASK_SIGNATURE_DOORS`, `RASK_CONTROL_SIGNER_ROLES`): the subscription in
+    `api/dapr.py` verifies each event against them before it acts ([[CTL-32]])."""
 
     # `populate_by_name` also teaches the env source the bare FIELD NAME as a second lookup, so
     # every alias below silently gained an un-namespaced twin (MedallionSettings.ray_address

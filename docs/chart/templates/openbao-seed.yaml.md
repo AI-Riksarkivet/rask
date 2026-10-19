@@ -125,8 +125,8 @@ secret by.
 
 ## `bao kv put secret/media-s3 access_key={{ . }} secret_key=@"$HOME/seed/scoped-{{ . }}" >/dev/null`
 
-THE MEDIA CORPUS READERS' IDENTITY (values.yaml `objectStore.mediaAccessKey`), seeded when explorer serves a corpus
-(`lance.mediaIdentity`). Annotator and search read it from their sidecar as `MEDIA_S3_SECRET_KEY=media-s3`
+THE MEDIA CORPUS READER'S IDENTITY (values.yaml `objectStore.mediaAccessKey`), seeded when explorer serves a corpus
+(`lance.mediaIdentity`). Search reads it from its sidecar as `MEDIA_S3_SECRET_KEY=media-s3`
 (explorer.yaml), with the `access_key`/`secret_key` fields the viewer's `viewer-s3` carries, and no other app's
 Configuration or policy names it. Its secret is derived from the root in `derive()` by `lance.scopedSecretFn`, the function
 the scoped-users hook runs, so the store's user and this field agree without either handing the other a key.

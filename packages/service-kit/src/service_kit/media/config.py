@@ -15,7 +15,7 @@ from enum import StrEnum
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from service_kit.lakehouse.endpoint_scheme import allow_http_for
@@ -37,42 +37,8 @@ class TableBackend(StrEnum):
     catalog = "catalog"
 
 
-class LineageSink(StrEnum):
-    """Where the annotation write path emits its OpenLineage RunEvent.
-
-    ``stdout`` WAS a third member and is deliberately gone. `setup_logging()` already sends the root
-    logger to stdout, so the option only distinguished itself by writing past the logging system —
-    losing the request-id correlation filter, the level gate and the OTLP copy for the one record
-    that describes a governed write. Nothing in the estate selected it (no chart value, no env in
-    any manifest or script), and a value that must not be chosen is better removed than documented.
-    """
-
-    log = "log"
-    none = "none"
-
-
-class AssistBackend(BaseModel):
-    """One registered assist producer: its endpoint plus its DECLARED contract.
-
-    ``returns``/``inputs`` are what the backend itself claims (shape types out, prompt kinds
-    in) — the registry surface, the panel's contract line and task compatibility all derive
-    from these declarations rather than from a hardcoded family map in code. Empty means
-    undeclared, and every surface must keep saying "unknown" rather than guess.
-    A bare URL string is accepted for back-compat: ``{"sam": "http://sam:9000"}``.
-    """
-
-    url: str
-    returns: list[str] = Field(default_factory=list)
-    inputs: list[str] = Field(default_factory=list)
-
-    @model_validator(mode="before")
-    @classmethod
-    def _from_bare_url(cls, value: object) -> object:
-        return {"url": value} if isinstance(value, str) else value
-
-
 class MediaSettings(BaseSettings):
-    """The MEDIA plane's settings (``MEDIA_*``) — the viewer/search/annotator trio's config.
+    """The MEDIA plane's settings (``MEDIA_*``) — the config of the services built on the media library.
 
     NAMED `MediaSettings`, and it used to be a second class called `Settings`. One distribution held
     two of them: this one on `MEDIA_*` aliases, and `service_kit.config.Settings` on `RASK_*` with an
@@ -119,7 +85,7 @@ class MediaSettings(BaseSettings):
     #: ~100 MB per Arrow payload that is 1.2 GB resident in a one-replica pod. `0` disables the byte
     #: bound only, exactly as above — the two must not diverge on the meaning of their settings.
     points_cache_bytes: int = Field(default=256 * 1024 * 1024, ge=0, alias="MEDIA_POINTS_CACHE_BYTES")
-    #: The request-body ceiling for the media apps (viewer / search / annotator).
+    #: The request-body ceiling for the media apps.
     #:
     #: These are the apps that accept MULTIPART UPLOADS, and they were the ones with no cap: they
     #: build through `service_kit.media.middleware`, not the fleet factory that grew one. A file part
@@ -134,9 +100,8 @@ class MediaSettings(BaseSettings):
 
     #: Whether this app serves `/docs`, `/redoc` and `/openapi.json`. OFF by default.
     #:
-    #: viewer, search and annotator constructed `FastAPI(...)` with none of the three set, so FastAPI's
-    #: defaults stood and all three were served — while four sibling services at least carried a flag.
-    #: See `service_kit.config.Settings.docs_enabled` for why the default is closed.
+    #: A media app built with none of the three set would serve all three, FastAPI's defaults. See
+    #: `service_kit.config.Settings.docs_enabled` for why the default is closed.
     docs_enabled: bool = Field(default=False, alias="MEDIA_DOCS")
 
     # Optional S3 object-store backing (RASK_LANDING §4). Set MEDIA_S3_ENDPOINT to
@@ -146,10 +111,9 @@ class MediaSettings(BaseSettings):
     s3_endpoint: str | None = Field(default=None, alias="MEDIA_S3_ENDPOINT")
     s3_access_key_id: str | None = Field(default=None, alias="MEDIA_S3_ACCESS_KEY_ID")
     s3_secret_access_key: str | None = Field(default=None, alias="MEDIA_S3_SECRET_ACCESS_KEY")
-    # The SECRET half comes from the Dapr secret store, fail-closed — the MEDIA_PUBLISH_* precedent
-    # below: coordinates are config, the secret is not. The corpus readers' scoped identity is the secret
-    # `media-s3` (`objectStore.mediaAccessKey`), the viewer's `viewer-s3`, each denied to every other app; the
-    # store's root never reaches a reader (ADR 0168). MEDIA_S3_SECRET_ACCESS_KEY exists for tests and
+    # The SECRET half comes from the Dapr secret store, fail-closed: coordinates are config, the secret is
+    # not. The corpus readers' scoped identity is the secret `media-s3` (`objectStore.mediaAccessKey`), the
+    # viewer's `viewer-s3`, each denied to every other app; the store's root never reaches a reader (ADR 0168). MEDIA_S3_SECRET_ACCESS_KEY exists for tests and
     # sidecar-less dev only; the chart never sets it.
     #: THE ONE STORE, NAMED ONCE (DUP-17). The estate runs a single Dapr secret-store component and
     #: seven env vars named it, each defaulting to the same literal and none of them set by the chart —
@@ -172,69 +136,8 @@ class MediaSettings(BaseSettings):
     write_backend: TableBackend = Field(default=TableBackend.direct, alias="MEDIA_WRITE_BACKEND")
     catalog_uri: str | None = Field(default=None, alias="MEDIA_CATALOG_URI")
     catalog_delimiter: str = Field(default=CATALOG_DELIMITER, alias="MEDIA_CATALOG_DELIMITER")
-    # The publish saga's own OIDC identity (the catalog accepts only IdP bearers, and the saga
-    # outlives any user request). A token is minted FRESH per publish via the password grant with a
-    # dedicated service account — nothing long-lived is stored anywhere, so nothing can go stale
-    # (the failure mode a hand-pinned MEDIA_CATALOG_TOKEN just demonstrated live). Coordinates are
-    # config; the PASSWORD is not — it comes from the Dapr secret store, fail-closed, per the
-    # estate's secrets rule. A set MEDIA_CATALOG_TOKEN still wins (prod may pin a token minted by
-    # its own machinery).
-    publish_token_url: str | None = Field(default=None, alias="MEDIA_PUBLISH_TOKEN_URL")
-    publish_client_id: str | None = Field(default=None, alias="MEDIA_PUBLISH_CLIENT_ID")
-    publish_username: str | None = Field(default=None, alias="MEDIA_PUBLISH_USERNAME")
-    publish_secret_store: str = Field(
-        default="lance-secrets", validation_alias=AliasChoices("MEDIA_PUBLISH_SECRET_STORE", "RASK_SECRET_STORE")
-    )  # the one store; see s3_secret_store
-    #: The publish identity's password (field `password`), readable by the annotator alone ([[XC-165]]).
-    publish_secret_key: str = Field(default="publisher-oidc", alias="MEDIA_PUBLISH_SECRET_KEY")
-    #: The IdP client's secret (field `client-secret`): one client, so one secret, which the zones' session also reads.
-    publish_client_secret_key: str = Field(default="oidc-client", alias="MEDIA_PUBLISH_CLIENT_SECRET_KEY")
-    # The catalog namespace annotation tables live under; unset → the dataset id.
+    # The catalog namespace a dataset's tables live under; unset → the dataset id.
     catalog_namespace: str | None = Field(default=None, alias="MEDIA_CATALOG_NAMESPACE")
-
-    # OpenLineage emission on annotation writes that do not route through the catalog.
-    # "stdout"/"log" write a spec-2-0-2 RunEvent per save; "none" disables.
-    lineage_sink: LineageSink = Field(default=LineageSink.log, alias="MEDIA_LINEAGE_SINK")
-
-    # Interactive AI-assist model endpoint — a Ray Serve deployment (GroundingDINO/SAM),
-    # per the merge runtime stack (models = Ray Serve). Unset ⇒ a deterministic mock so
-    # the draw/prompt→shapes round-trip is testable in-repo (drop-in for the Ray Serve
-    # HTTP endpoint, like the catalog transport).
-    assist_url: str | None = Field(default=None, alias="MEDIA_ASSIST_URL")
-    # The producer REGISTRY (the CVAT-Nuclio-shaped seam): producer name/prefix → backend, as a
-    # JSON object. Routing is longest-prefix, so `"sam": …` covers `sam-click`/`sam-box`;
-    # `assist_url` stays the fallback for anything unmapped. One flat env var, because a registry
-    # that needs a config FILE would be a second deployment surface for what is one map.
-    #
-    # An entry is either a bare URL string (back-compat) or a STRUCTURED declaration:
-    #   {"sam": "http://sam:9000",
-    #    "vlm": {"url": "http://vllm:8000", "returns": ["bbox"], "inputs": ["prompt"]}}
-    # `returns`/`inputs` are the backend's DECLARED contract — without them a registered producer
-    # rendered "returns unknown" forever (the shape map in code only knows the built-in families)
-    # and task compatibility could never compute. Declared here, the registry entry really is the
-    # whole of adding a model.
-    assist_backends: dict[str, AssistBackend] = Field(default_factory=dict, alias="MEDIA_ASSIST_BACKENDS")
-    # Producer DISCOVERY from the Ray Serve control plane (the primary registry source —
-    # model endpoints in this estate are Ray Serve deployments, and a deployment that carries
-    # a `labeling` block in its user_config IS registered by being deployed; per the KubeRay
-    # RayService guide, user_config edits are IN-PLACE reconfigurations, no new cluster).
-    # The discovery URL is the Ray dashboard base (:8265); the proxy URL is the Serve HTTP
-    # ingress the discovered route_prefixes hang under (:8000). Under KubeRay set BOTH
-    # explicitly to the CR's stable Services — discovery at `<rayservice>-head-svc:8265`,
-    # proxy at `<rayservice>-serve-svc:8000` — because the serve-svc load-balances across
-    # every worker holding Serve replicas, while the derived fallback (dashboard host +
-    # Serve's http_options port) reaches only the HEAD's proxy. Both svc names are stable
-    # across zero-downtime upgrades (KubeRay repoints their selectors). Env entries above
-    # stay the operator OVERRIDE on name conflicts. Unset discovery ⇒ config + mock only.
-    serve_discovery_url: str | None = Field(default=None, alias="MEDIA_SERVE_DISCOVERY_URL")
-    serve_proxy_url: str | None = Field(default=None, alias="MEDIA_SERVE_PROXY_URL")
-
-    # Batch labeling job runner — a lance-ns RayJob submit endpoint (the silver-deriver
-    # enqueue for bulk/auto-labeling over a read-plane selection). Unset ⇒ a deterministic
-    # in-repo mock so the submit/poll round-trip is wired + testable (drop-in for the real
-    # submitter, like the assist + catalog transports). We only enqueue — the deriver is the
-    # caller's own job, never this process.
-    jobs_url: str | None = Field(default=None, alias="MEDIA_JOBS_URL")
 
     def catalog_table_id(self, dataset_id: str, table: str) -> list[str]:
         """The catalog identifier for a dataset's table — settings-derived, never
@@ -253,22 +156,10 @@ class MediaSettings(BaseSettings):
 
     @property
     def rest_catalog_mode(self) -> bool:
-        """True when the annotations plane fully routes through a LIVE catalog —
+        """True when the media plane's tables fully route through a LIVE catalog —
         both backends flipped AND a URI set. Mixed configurations keep the local
-        table in the loop (pre-merge safety), so paths gate on this, not on the
-        individual flags."""
+        table in the loop, so paths gate on this, not on the individual flags."""
         return bool(self.catalog_uri) and self.read_backend is TableBackend.catalog and self.write_backend is TableBackend.catalog
-
-    @property
-    def effective_lineage_sink(self) -> LineageSink:
-        """The sink the annotator's own emit uses: forced to ``none`` only when a
-        LIVE catalog sits behind the writes (``catalog_uri`` set) — that catalog
-        inline-emits a RunEvent for the same merge, so emitting here too would
-        double-count the run. The in-process catalog fallback emits nothing, so
-        our own sink stays active there."""
-        if self.write_backend is TableBackend.catalog and self.catalog_uri:
-            return LineageSink.none
-        return self.lineage_sink
 
     @property
     def default_dataset_id(self) -> str:
@@ -306,8 +197,7 @@ class MediaSettings(BaseSettings):
         # Credential resolution, per the estate's secrets rule (store only, fail-closed):
         #   1. BOTH static fields set — tests and sidecar-less dev. The chart never sets the secret.
         #   2. Otherwise the secret comes from the Dapr secret store (cached), the access-key id from
-        #      config — the exact MEDIA_PUBLISH_* split (client_id is config, the password is not).
-        #      A missing bundle or field RAISES rather than falling back to the AWS env chain: an
+        #      config: the id is config, the secret is not. A missing bundle or field RAISES rather than falling back to the AWS env chain: an
         #      env-borne secret is the shape the rule forbids, and a silent chain fallback would
         #      re-admit it while looking configured.
         if self.s3_access_key_id and self.s3_secret_access_key:
@@ -363,9 +253,7 @@ def get_media_settings() -> MediaSettings:
     return MediaSettings()
 
 
-#: BACK-COMPAT ALIASES. `services/viewer`, `services/search` and `services/annotator` import these
-#: names (and subclass `Settings` in their own `core/config.py`), so renaming the definitions without
-#: them would be a contract change across three services. They are aliases, not second definitions:
-#: `Settings is MediaSettings` and `get_settings is get_media_settings`.
+#: ALIASES. The media services import these names (and subclass `Settings` in their own `core/config.py`).
+#: They are aliases, not second definitions: `Settings is MediaSettings` and `get_settings is get_media_settings`.
 Settings = MediaSettings
 get_settings = get_media_settings

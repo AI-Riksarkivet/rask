@@ -1,11 +1,8 @@
 """S4 — the create pin: creating an annotation project is authorized on the PARENT tenant.
 
-Proves the door at the HTTP tier, complementing the model-tier proof in
-`packages/service-kit/src/service_kit/governed/auth/model.fga.yaml` ("creating an annotation project
-is authorized on the PARENT tenant, not the child"). Both are needed: the model says the ladder is
-right, this says the endpoint actually consults it.
-
-The FGA checker is injected, so this needs no OpenFGA, no store and no network.
+The door is `member` of `project:<tenant>`, which the annotator's checker asks the catalog on the person's own
+token (`annotator.api.authorization`): the child does not exist yet, so nobody holds a role on it. The checker is
+injected, so this needs no catalog, no store and no network.
 """
 
 from __future__ import annotations
@@ -16,7 +13,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from annotator.api.security import current_subject, get_checker, get_fga_client
+from annotator.api.security import current_subject, get_checker
 from annotator.api.v1.endpoints import projects as projects_ep
 from annotator.api.v1.endpoints.projects import CREATE_RELATION, router
 from service_kit.exceptions import register_handlers
@@ -66,8 +63,6 @@ def _app(*, allow: bool, record: list[dict[str, Any]] | None = None) -> FastAPI:
     # The VERIFIED subject. Overriding current_subject (not a header) is the point: with OIDC on
     # there is no header path to this value at all.
     app.dependency_overrides[current_subject] = lambda: "gina"
-    # FGA off by default here: seeding is exercised by its own test below.
-    app.dependency_overrides[get_fga_client] = lambda: None
     return app
 
 
@@ -100,42 +95,6 @@ def test_tenant_and_slug_are_required_so_the_door_can_never_be_inferred(missing:
     payload = {k: v for k, v in PAYLOAD.items() if k != missing}
     client = TestClient(_app(allow=True))
     assert client.post("/projects", json=payload).status_code == 422
-
-
-# --------------------------------------------------------------------------------------------------
-# Create must PERSIST and must SEED — 201 is a claim about both
-# --------------------------------------------------------------------------------------------------
-
-
-def test_create_seeds_owner_and_the_TENANT_edge(_actor: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Both tuples are load-bearing. Without `owner` the creator cannot manage what they made;
-    without the `tenant` edge, `owner: … or admin from tenant` and `viewer: … or member from tenant`
-    never resolve, so every rung on the object — including publish door 1 — denies for everyone,
-    permanently, creator included.
-
-    The relation is `tenant`, NOT `parent`. `annotation_project` spells its parent edge differently
-    from every governed type, and writing `parent` produces a tuple OpenFGA accepts and no rule
-    reads — a silent no-op that looks like a successful seed.
-    """
-    seeded: list[dict[str, Any]] = []
-
-    async def _grant(client: Any, **kw: Any) -> None:
-        seeded.append(kw)
-
-    monkeypatch.setattr(projects_ep.fga, "grant_on_create", _grant)
-    app = _app(allow=True)
-    app.dependency_overrides[get_fga_client] = lambda: object()  # FGA "enabled"
-
-    r = TestClient(app).post("/projects", json=PAYLOAD)
-
-    assert r.status_code == 201, r.text
-    assert len(seeded) == 1, "the project was created without seeding ownership"
-    grant = seeded[0]
-    assert grant["user_sub"] == "gina", "ownership was seeded for someone other than the creator"
-    assert grant["resource"] == "annotation_project"
-    assert grant["obj_id"] == r.json()["project_id"]
-    assert grant["parent_object"] == "project:acme"
-    assert grant["parent_relation"] == "tenant", "the parent edge was written under the wrong relation"
 
 
 # --------------------------------------------------------------------------------------------------

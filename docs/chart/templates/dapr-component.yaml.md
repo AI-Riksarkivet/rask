@@ -28,8 +28,8 @@ governance events into a fresh in-memory buffer — the buffer is a live-refresh
 
 ## `{{- if and .Values.maintenance.enabled .Values.maintenance.controlEmit }}`
 
-The control topic's other publishers, each on its own component and so as its own NATS user: maintenance's #79 purge
-announcements and the annotator's assignments. A publisher a component does not scope is refused by its sidecar, silently.
+The control topic's other publisher, on its own component and so as its own NATS user: maintenance's #79 purge
+announcements. A publisher a component does not scope is refused by its sidecar, silently.
 
 ## `{{- if .Values.dapr.resiliency.enabled }}`
 

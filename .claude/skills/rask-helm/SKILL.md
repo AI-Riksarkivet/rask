@@ -108,7 +108,12 @@ second case. Kueue's upstream docs only ever install it as its own release in `k
   ([[XC-125]]) and its companion `compute` service (a local chart, release `compute` in rask's namespace, `WAIT=false`:
   it reads rask's Dapr token, Dex, catalog and Collector by reference, and asks the catalog's decision door, which
   answers its account only through `auth.externalDeciders`), the telemetry chain the Collector exports to ([[XC-127]]), and the OpenLineage graph backend
-  `rask-marquez` lineage's forwarder sends to (ADR 0158); a GPU node with no device plugin yet adds `nvidia-device-plugin`). A fixture's `SET_FILES` passes an
+  `rask-marquez` lineage's forwarder sends to (ADR 0158); a GPU node with no device plugin yet adds `nvidia-device-plugin`).
+  The annotator is no prerequisite: it is a client of the lakehouse with its own release (ADR 0171; local chart, release
+  `annotator` in rask's namespace, `WAIT=false`), which `make k3s-up` installs AFTER rask (`make k3s-annotator`), as the
+  e2e-stack lane does: its own Dapr state store on a CloudNativePG `Cluster` it renders, its own app token and route, and
+  rask's catalog and Dex by reference, with no OpenFGA or store credential; the product chart renders only its zone,
+  pointed at it by `frontend.annotatorUrl`. A fixture's `SET_FILES` passes an
   artefact from outside its chart with `--set-file` (the alert rules), and a local fixture chart with upstream
   `dependencies:` is vendored from its own `Chart.lock` (`scripts/fixtures.sh --vendor`, run by `make k3s-deps`, so a
   test can render it through `chart_render.render_fixture`). The e2e lanes install ESO, Dapr and NATS through the same

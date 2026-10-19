@@ -1,7 +1,7 @@
 # rask
 
-**rask** is an agnostic, multimodal lakehouse: Lance tables governed by a catalog, with lineage, authorization,
-events and annotation across them. Any modality (text, image, audio, video, embeddings) is a first-class citizen:
+**rask** is an agnostic, multimodal lakehouse: Lance tables governed by a catalog, with lineage, authorization
+and events across them. Any modality (text, image, audio, video, embeddings) is a first-class citizen:
 bytes in, a governed table out, lineage emitted. The lakehouse runs no compute and no workflow engine of its own;
 every write, from whatever engine the user brings, comes in through the catalog's Lance Namespace doors.
 
@@ -33,8 +33,8 @@ flowchart LR
    durable `GET /events` feed a pipeline polls and forwards it to a graph backend of the operator's choice, and
    **notifications** tells the right person.
 3. **Maintenance** expires versions, purges trash, scans for orphans and reconciles stores.
-4. The **SvelteKit** zones read the catalog, lineage and the media services (viewer, search, annotator) through the
-   cluster route: the platform's Gateway serves the chart's HTTPRoutes, one per public `/api/*` prefix.
+4. The **SvelteKit** zones read the catalog, lineage, the media services (viewer, search) and the annotator, a client
+   with its own release, through the cluster route: the platform's Gateway serves the chart's HTTPRoutes (and the annotator release's own), one per public `/api/*` prefix.
 
 ## Where to go next
 

@@ -1,7 +1,7 @@
 # Architecture Overview
 
-rask is a data-type-agnostic, multimodal lakehouse: Lance tables governed by a catalog, with lineage, authorization,
-events and annotation across them. This section describes the system as it runs today.
+rask is a data-type-agnostic, multimodal lakehouse: Lance tables governed by a catalog, with lineage, authorization
+and events across them. This section describes the system as it runs today.
 
 ## One-paragraph summary
 
@@ -30,7 +30,9 @@ flowchart TB
     gw --> cat["catalog<br/><sub>tier governance</sub>"]
     gw --> lin["lineage<br/><sub>GET /events · provenance tables</sub>"]
     gw --> notif["notifications"]
-    gw --> media["media<br/>viewer · search · annotator"]
+    gw --> media["media<br/>viewer · search"]
+    gw --> annot["annotator<br/><sub>a client, its own release</sub>"]
+    annot -->|"namespace doors"| cat
     cat --> fga[("OpenFGA")]
     cat --> s3[("S3 · Lance tables")]
     cat -->|"lineage.events.v1"| lin

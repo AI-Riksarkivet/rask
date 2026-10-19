@@ -24,19 +24,6 @@ from uuid import uuid4
 from pydantic import BaseModel, Field
 
 from annotator.projects.ontology import LabelOntology
-from service_kit.governed.principal import Principal
-
-
-def notified_user(party: str) -> str:
-    """The `extra.subject` a task event stamps for the party it tells: the OpenFGA user a principal is ([[LH-063]]).
-
-    A party that is not a principal (the auth-off `anon`) is stamped as written, `user:` and itself, and the
-    notifications plane, which delivers only to a person, tells nobody.
-    """
-    try:
-        return Principal.parse(party).fga_user
-    except ValueError:
-        return f"user:{party}"
 
 
 def new_id() -> str:
@@ -327,8 +314,8 @@ class Task(BaseModel):
 
 
 class AnnotationProject(BaseModel):
-    """§4.1. `tenant` is the authz parent — the FGA object is `annotation_project:<project_id>`,
-    and creating one is checked on `project:<tenant>` (`can_create_annotation_project`)."""
+    """§4.1. `tenant` is the authz parent — the object a role is checked on is `annotation_project:<project_id>`,
+    and creating one is checked as membership of `project:<tenant>` (`annotator.api.authorization`)."""
 
     project_id: str = Field(default_factory=new_id)
     tenant: str
@@ -394,11 +381,11 @@ class AnnotationProject(BaseModel):
     publish_progress: str | None = None
 
     @property
-    def fga_object(self) -> str:
-        """The FGA object id this project authorizes against."""
+    def authz_object(self) -> str:
+        """The object this project's roles are checked on."""
         return f"annotation_project:{self.project_id}"
 
     @property
-    def fga_parent(self) -> str:
+    def tenant_object(self) -> str:
         """The create-on-parent door: the tenant, checked before the child exists."""
         return f"project:{self.tenant}"

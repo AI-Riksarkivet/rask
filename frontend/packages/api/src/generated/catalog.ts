@@ -1045,15 +1045,15 @@ export interface paths {
          *
          *     GATED ON `member`, A BASE RUNG, and that is a deliberate departure worth reading. Every other
          *     surface here gates on a `can_*` action, but the `project` type defines NO reader-tier action — its
-         *     whole action surface is `can_administer` / `can_create_warehouse` / `can_create_annotation_project`
-         *     / `can_grant_*` / `can_read_assignments`, all admin or member tier. `can_get_metadata`, the
-         *     analogy with table and namespace, does not exist on this type, and OpenFGA rejects an undefined
-         *     relation with a 400 that fails closed to a 503 for every caller, so gating on it would make this
-         *     endpoint permanently unavailable.
+         *     whole action surface is `can_administer` / `can_create_warehouse` / `can_grant_*` /
+         *     `can_read_assignments`, all admin tier. `can_get_metadata`, the analogy with table and namespace,
+         *     does not exist on this type, and OpenFGA rejects an undefined relation with a 400 that fails closed
+         *     to a 503 for every caller, so gating on it would make this endpoint permanently unavailable.
          *
-         *     `member` is the reader-equivalent for this type: it is the tier ordinary tenant work already sits
-         *     at (`can_create_annotation_project: member`), and a caller with no relationship to the project
-         *     still gets a 403 rather than learning the tenant exists. The alternative — adding
+         *     `member` is the reader-equivalent for this type: it is the tier ordinary tenant work sits at, and a
+         *     caller with no relationship to the project still gets a 403 rather than learning the tenant exists.
+         *     So a 200 here is how any client learns, on a person's own token, that the person is a member of the
+         *     tenant, and `can_administer` that they administer it (ADR 0171). The alternative — adding
          *     `can_get_metadata: member` to the model for symmetry — is a MODEL change with `.fga.yaml` updates
          *     and a migration story behind it, which is not something a UI-gating endpoint should drag in.
          */
@@ -5042,7 +5042,7 @@ export interface components {
              * Action
              * @enum {string}
              */
-            action: "grant_added" | "grant_revoked" | "project_created" | "project_deleted" | "warehouse_created" | "warehouse_activated" | "warehouse_deactivated" | "warehouse_bound" | "warehouse_unbound" | "warehouse_deleted" | "policy_set" | "policy_deleted" | "gate_set" | "gate_deleted" | "namespace_created" | "namespace_dropped" | "table_created" | "table_dropped" | "table_renamed" | "table_registered" | "table_deregistered" | "table_declared" | "table_protected" | "table_unprotected" | "namespace_protected" | "namespace_unprotected" | "table_undropped" | "namespace_undropped" | "table_purged" | "namespace_purged" | "table_published" | "promotion_held" | "promotion_rejected" | "promotion_expired" | "table_branch_created" | "table_branch_deleted" | "table_tag_created" | "table_tag_updated" | "table_tag_deleted" | "task_assigned" | "task_unassigned" | "task_changes_requested" | "task_dropped" | "task_lease_expired" | "erasure_release_scheduled";
+            action: "grant_added" | "grant_revoked" | "project_created" | "project_deleted" | "warehouse_created" | "warehouse_activated" | "warehouse_deactivated" | "warehouse_bound" | "warehouse_unbound" | "warehouse_deleted" | "policy_set" | "policy_deleted" | "gate_set" | "gate_deleted" | "namespace_created" | "namespace_dropped" | "table_created" | "table_dropped" | "table_renamed" | "table_registered" | "table_deregistered" | "table_declared" | "table_protected" | "table_unprotected" | "namespace_protected" | "namespace_unprotected" | "table_undropped" | "namespace_undropped" | "table_purged" | "namespace_purged" | "table_published" | "promotion_held" | "promotion_rejected" | "promotion_expired" | "table_branch_created" | "table_branch_deleted" | "table_tag_created" | "table_tag_updated" | "table_tag_deleted" | "erasure_release_scheduled";
             /** Actor */
             actor?: string | null;
             /** Event Id */
@@ -5057,7 +5057,7 @@ export interface components {
              * Object Type
              * @enum {string}
              */
-            object_type: "project" | "grant" | "warehouse" | "policy" | "namespace" | "table" | "annotation_task" | "gate";
+            object_type: "project" | "grant" | "warehouse" | "policy" | "namespace" | "table" | "gate";
             /**
              * Occurred At
              * Format: date-time

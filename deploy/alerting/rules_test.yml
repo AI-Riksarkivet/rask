@@ -111,6 +111,8 @@ tests:
         values: "0x4 1x10"
       - series: 'maintenance_signature_refused_total{door="maintenance-arrival", reason="kid"}'
         values: "0x4 1x10"
+      - series: 'catalog_signature_refused_total{lance_catalog_reason="unsigned"}'
+        values: "0x4 1x10"
     alert_rule_test:
       - eval_time: 8m
         alertname: NotificationsDoorRefusingEvents
@@ -134,6 +136,16 @@ tests:
             exp_annotations:
               summary: "Maintenance is REFUSING write events (maintenance-arrival, kid) — their writes wait for the sweep"
               description: "A write event no listed signer's key verifies was ACKED and planned nothing, so only this alert and the `maintenance_signature_refused` log line record it; the sweep still compacts the table on its next pass. Forged events are reaching the bus, or a signer broke. Runbook: docs/runbooks/RUNBOOK-oncall.md#a-bus-door-refusing-events"
+      - eval_time: 8m
+        alertname: CatalogControlLaneRefusingEvents
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: catalog
+              lance_catalog_reason: unsigned
+            exp_annotations:
+              summary: "The catalog is REFUSING control events (unsigned) — its feed and binding cache skip them"
+              description: "A control event its role's signature does not verify was ACKED, reached no change-event feed and evicted no binding, so only this alert and the `catalog_signature_refused` log line record it. Forged events are reaching the bus, or a signer broke and each replica keeps a binding the event would have evicted. Runbook: docs/runbooks/RUNBOOK-oncall.md#a-bus-door-refusing-events"
 
   # 2. Outbox healthy (depth 0) → NO alert. A gauge that falls back must not page forever.
   - interval: 1m

@@ -11,7 +11,6 @@ from typing import Any, cast
 import pytest
 
 from notifications.api.control_events import as_delivery, ingest_control_event, named_subjects
-from notifications.models import NotificationReason
 from service_kit.control_events import CatalogControlEvent
 
 
@@ -154,42 +153,6 @@ class TestIngest:
         plane = _Plane(broken={"dex~alice"})
 
         assert await ingest_control_event(_event().model_dump(mode="json"), open_inbox=plane.open) == {"status": "RETRY"}
-
-
-class TestTaskAssignment:
-    """v3 targeting extended to ANNOTATION WORK, which is the same question the grant lane answers.
-
-    "You were given access to a table" and "you were given a task to label" are both governance acts that
-    NAME a person, and neither is expressible as a run: there is no terminal lineage event, no output
-    dataset, and the actor is the MANAGER rather than the audience. Before this the annotator emitted
-    nothing at all, so an assignee learned about their work by looking for it.
-    """
-
-    def _assignment(self, *, action: str = "task_assigned", subject: str | None = "user:dex~bob") -> CatalogControlEvent:
-        extra: dict[str, Any] = {"project": "acme"}
-        if subject is not None:
-            extra["subject"] = subject
-        return CatalogControlEvent(
-            event_id="evt-task-1",
-            occurred_at=datetime(2026, 8, 16, 12, 0, tzinfo=UTC),
-            action=cast(Any, action),
-            object_type=cast(Any, "annotation_task"),
-            object_id="task:t-77",
-            actor="user:dex~alice",
-            extra=extra,
-        )
-
-    @pytest.mark.asyncio
-    async def test_the_assignee_gets_a_row_and_the_reason_survives(self) -> None:
-        """Delivered end to end through the real ingress, and the REASON is asserted because it is
-        stored rather than inferred: a delivery re-check keys on it, and `as_delivery` constructs
-        `NotificationReason(event.action)` — so an action added without its matching reason member
-        raises on every delivery instead of failing at import."""
-        plane = _Plane()
-        result = await ingest_control_event(self._assignment().model_dump(mode="json"), open_inbox=plane.open)
-        assert result == {"status": "SUCCESS"}
-        assert list(plane.boxes) == ["dex~bob"], "the manager must not be told about their own assignment"
-        assert plane.boxes["dex~bob"][0]["reason"] == NotificationReason.TASK_ASSIGNED
 
 
 class TestUsersetGrants:

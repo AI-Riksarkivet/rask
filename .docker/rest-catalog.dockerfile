@@ -4,7 +4,8 @@
 # The chart runs every lakehouse container from this image with a different command
 # (see chart/templates/{services,maintenance,explorer}.yaml → include "lance.catalogImage"):
 #   catalog.main:app (:2333) · lineage.main:app (:8000) · maintenance.service:app (:8000) ·
-#   viewer.main:app (:8101) · search.main:app (:8102) · annotator.main:app (:8103)
+#   viewer.main:app (:8101) · search.main:app (:8102)
+# The annotator is a client with its own image (.docker/annotator.dockerfile, ADR 0171).
 # — optionally wrapped in `opentelemetry-instrument` (shipped via lineage's opentelemetry-distro).
 # Build context = repo root:  docker build -f .docker/rest-catalog.dockerfile .
 
@@ -43,7 +44,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=services,target=services \
     uv sync --frozen --no-dev --no-install-workspace --no-editable \
         --package catalog --package lineage --package maintenance \
-        --package viewer --package search --package annotator
+        --package viewer --package search
 
 # Step 2: COPY real sources and install the workspace members as wheels (--no-editable →
 # they land in site-packages; the final stage needs only the venv).
@@ -53,7 +54,7 @@ COPY services services
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev --no-editable \
         --package catalog --package lineage --package maintenance \
-        --package viewer --package search --package annotator
+        --package viewer --package search
 
 # Strip residual setuid/setgid bits before the venv leaves the builder.
 RUN find / -xdev -perm /6000 -type f -exec chmod a-s {} + 2>/dev/null || true
@@ -65,7 +66,7 @@ ARG BUILD_DATE
 ARG VCS_REF
 ARG VERSION
 LABEL org.opencontainers.image.title="lance-rest-catalog" \
-      org.opencontainers.image.description="Lance lakehouse fleet image — REST catalog + lineage + maintenance + media trio (viewer/search/annotator); one image, per-container uvicorn commands" \
+      org.opencontainers.image.description="Lance lakehouse fleet image — REST catalog + lineage + maintenance + the media viewer and search; one image, per-container uvicorn commands" \
       org.opencontainers.image.source="https://github.com/AI-Riksarkivet/rask" \
       org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.revision="${VCS_REF}" \
@@ -110,7 +111,7 @@ COPY --link scripts/rustfs_admin.py /srv/rustfs_admin.py
 # DECLARED dependency is invisible to the workspace venv (a sibling member resolves it) and can
 # only be seen here, where the deployable's own closure is the only one present. See the script.
 COPY .docker/import-gate.py /tmp/import-gate.py
-RUN --network=none /opt/venv/bin/python /tmp/import-gate.py catalog lineage maintenance viewer search annotator && rm /tmp/import-gate.py
+RUN --network=none /opt/venv/bin/python /tmp/import-gate.py catalog lineage maintenance viewer search && rm /tmp/import-gate.py
 
 # Strip setuid/setgid bits from the whole shipped filesystem (base account tools passwd/chsh/... +
 # anything in the venv) — no use in a container, residual privesc surface. Own RUN so its `|| true`
@@ -121,8 +122,8 @@ RUN find / -xdev -perm /6000 -type f -exec chmod a-s {} + || true
 # admission when the image user is numeric; a name ("app") makes the kubelet reject the pod
 # (CreateContainerConfigError). The chart's lance.securityContext relies on this.
 USER 10001
-# 2333 catalog · 8000 lineage/maintenance · 8101/8102/8103 viewer/search/annotator.
-EXPOSE 2333 8000 8101 8102 8103
+# 2333 catalog · 8000 lineage/maintenance · 8101/8102 viewer/search.
+EXPOSE 2333 8000 8101 8102
 
 # Cheap socket-connect probe against the default CMD's port (avoids urllib's ssl/http.client
 # cold-import cost). k8s owns real readiness via /readyz; this HEALTHCHECK is for the compose demo.

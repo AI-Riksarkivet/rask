@@ -266,9 +266,9 @@ def test_a_control_row_survives_the_render_filter_that_hides_lineage_rows(
     client.app.state.decider = OpenFgaDecider(cast("OpenFgaClient", object()))
     client.app.state.notifications_settings = get_notifications_settings().model_copy(update={"fga_enabled": True})
     control = InboxPointer(
-        notification_id="evt-9@TASK_ASSIGNED",
-        reason=NotificationReason.TASK_ASSIGNED,
-        object_id="annotation_task:t-9",
+        notification_id="evt-9@GRANT_REVOKED",
+        reason=NotificationReason.GRANT_REVOKED,
+        object_id="table:acme$gold",
         occurred_at=NOW,
     )
     inbox.rows = [_pointer(1), control]
@@ -276,5 +276,5 @@ def test_a_control_row_survives_the_render_filter_that_hides_lineage_rows(
     body = client.get("/notifications/inbox").json()
 
     ids = [row["notification_id"] for row in body["notifications"]]
-    assert ids == ["evt-9@TASK_ASSIGNED"], "the control row must survive; the lineage row must not"
+    assert ids == ["evt-9@GRANT_REVOKED"], "the control row must survive; the lineage row must not"
     assert body["unread"] == 2, "the badge still counts the whole inbox — it is not derived from the page"

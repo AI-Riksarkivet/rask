@@ -37,7 +37,6 @@ publishes is always a port the policy admits. Gateway API matches the longest pr
 | Public prefix | Service | Path at the service |
 | --- | --- | --- |
 | `/api/explorer/search` | `<fullname>-search` | `/api/search…` |
-| `/api/explorer/annotations` | `<fullname>-annotator` | `/api/annotations…` |
 | `/api/explorer` | `<fullname>-viewer` | `/api…` |
 | `/api/catalog` | `<fullname>-catalog` | `/…` |
 | `/api/lineage` | `<fullname>-lineage` | `/…` |
@@ -70,8 +69,10 @@ public→internal mapping and the services, their tests and their in-cluster cal
 `/<zone>`; the catch-all `home` zone owns `/`. A zone's path comes from its `path` in
 `.Values.frontend.apps` and MUST equal the `paths.base` pinned in that zone's `svelte.config.js`, or
 SvelteKit serves assets from a prefix the edge never routes. Frontend object names are
-`<fullname>-web-<zone>` (the `annotator` ZONE and the `annotator` BACKEND share one release, so the
-frontend tier carries a `web-` prefix).
+`<fullname>-web-<zone>` (the `annotator` ZONE renders here and the annotator's own release, deploy/fixtures/annotator,
+renders `<fullname>-annotator` in the same namespace, so the frontend tier carries a `web-` prefix). That release publishes
+`/api/explorer/annotations` on the same Gateway with its own HTTPRoute, which Gateway API's longest-prefix rule puts ahead
+of `/api/explorer`.
 
 ## `- path: { type: PathPrefix, value: /dex }`
 

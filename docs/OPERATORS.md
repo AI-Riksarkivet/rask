@@ -65,7 +65,7 @@ dependency for crash-recovery semantics we already get from idempotency keys.
 > the token is ever re-minted.
 >
 > **What the estate DOES now use that this section predates: actors.** The annotator registers
-> `AnnotationTaskActor` and `AnnotationProjectActor`. That makes Dapr **placement** load-bearing (the
+> `AnnotationTaskActor` and `AnnotationProjectActor`, on its own state store in its own release (ADR 0171). That makes Dapr **placement** load-bearing (the
 > single-activation guarantee is the claim lock) and **scheduler** load-bearing (reminders are how
 > task leases expire). Actors were never covered by the workflow ruling and are not affected by it,
 > but `chart/values.yaml` asserted "no actors" until the same date — corrected there.

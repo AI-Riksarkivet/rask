@@ -6,7 +6,7 @@ as `status="prediction"`, `source="model:<name>"` rows the annotator renders opt
 and the reviewer accepts/rejects like any prediction. So interactive assist and batch
 auto-label share the SAME provenance + review path.
 
-Routes to a model server (``MEDIA_ASSIST_URL``) when set; else a deterministic MOCK so
+Routes to a model server (``ANNOTATOR_ASSIST_URL``) when set; else a deterministic MOCK so
 the round-trip is wired + testable in-repo (drop-in for a real server, exactly like the
 catalog transport). Shapes are in IMAGE coordinates — the annotator's own space.
 """
@@ -19,8 +19,10 @@ from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field, ValidationError
 from starlette.concurrency import run_in_threadpool
 
-from annotator.api.security import CheckerDep, CurrentSubject
+from annotator.api.security import CheckerDep, CurrentSubject, RawBearerToken
 from annotator.api.v1.endpoints.serve_discovery import discovered_backends
+from annotator.core.config import AssistBackend
+from annotator.corpus import Corpus, resolve
 from annotator.projects.generation_schema import generation_schema
 from annotator.projects.machines import UnreadableOntology, refuse_unreadable_ontology
 from annotator.projects.ontology import LabelOntology
@@ -28,9 +30,8 @@ from service_kit.exceptions import ForbiddenError, ServiceUnavailableError
 from service_kit.governed.audit import FAILURE, audit
 from service_kit.lancekit.keys import validate_doc_key
 from service_kit.media.authz import corpus_object
-from service_kit.media.config import AssistBackend
-from service_kit.media.deps import DatasetParam, StateDep
-from service_kit.media.state import AppState, dataset_handle
+from service_kit.media.deps import StateDep
+from service_kit.media.state import AppState
 
 
 logger = logging.getLogger(__name__)
@@ -43,7 +44,7 @@ logger = logging.getLogger(__name__)
 WRITE_DATA = "can_write_data"
 
 
-async def require_assist(request: Request, state: StateDep, subject: CurrentSubject, checker: CheckerDep) -> None:
+async def require_assist(request: Request, state: StateDep, subject: CurrentSubject, checker: CheckerDep, caller_token: RawBearerToken = None) -> None:
     """The door for the whole assist plane.
 
     AT THE ROUTER, not on each handler — the reference's own rule for a group where every route needs
@@ -58,12 +59,13 @@ async def require_assist(request: Request, state: StateDep, subject: CurrentSubj
     which is the same corpus their answers describe. That keeps one door for the group instead of a
     per-route rung, which is what made this router easy to add a fourth ungated route to.
 
-    Blocking Lance/S3 IO goes to the threadpool: `dataset_handle` opens under a `threading.Lock`, and
-    awaiting it inline would freeze the loop for every other request during a cold S3 open. The handler
-    resolves the same handle again from cache.
+    The dataset is resolved through the catalog as the caller on a live catalog (`annotator.corpus`), and the
+    write rung on its documents table is the catalog's answer for the caller. Blocking, so it goes to the
+    threadpool, and the handler reads the resolved dataset off the request rather than resolving it again.
     """
-    handle = await run_in_threadpool(dataset_handle, state, request.query_params.get("dataset"))
-    binding = handle.descriptor.declared.document
+    handle = await run_in_threadpool(resolve, state, request.query_params.get("dataset"), caller_token)
+    request.state.corpus = handle
+    binding = handle.declared.document
     if binding is None:
         # FAIL CLOSED. With no document binding there is no table to authorize against, and answering
         # anyway would make a malformed descriptor an authorization bypass.
@@ -202,7 +204,7 @@ class ProducerListing(BaseModel):
     """The registry plus the fallback, so a surface can explain WHY a producer is mocked."""
 
     producers: list[ProducerInfo]
-    #: True when `MEDIA_ASSIST_URL` is set: unregistered producer names reach a real backend.
+    #: True when `ANNOTATOR_ASSIST_URL` is set: unregistered producer names reach a real backend.
     default_configured: bool
     #: Endpoints are never returned. Any authenticated annotator can call this, and an internal
     #: model-server URL is not theirs to have; presence is the whole of what a surface needs.
@@ -344,19 +346,20 @@ async def generation_contract(task_id: str) -> GenerationContract:
 
 @router.post("/assist/{doc_id}/{speech_id}/{chunk_id}")
 async def assist(
+    request: Request,
     state: StateDep,
     doc_id: str,
     speech_id: int,
     chunk_id: int,
     body: AssistRequest,
-    dataset: DatasetParam = None,
 ) -> AssistResult:
     """Run an interactive producer over one media unit and return predicted shapes."""
     # Off the loop: dataset resolution is blocking Lance/S3 under a threading.Lock — inline it
     # froze the whole loop for the duration of a cold S3 open (docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit" ANN-01); the
     # sibling `def` routes get the threadpool for free.
-    handle = await run_in_threadpool(dataset_handle, state, dataset)
-    doc_id = validate_doc_key(handle.descriptor.declared, doc_id)
+    # The router's gate resolved this dataset for this request (`require_assist`).
+    corpus: Corpus = request.state.corpus
+    doc_id = validate_doc_key(corpus.declared, doc_id)
     source = f"model:{body.producer}"
     url = backend_for(state.settings, body.producer, await _discovered(state))
     # ONE task read serves both halves of the contract: the schema a constrained decoder
@@ -450,15 +453,10 @@ async def _task_ontology(task_id: str) -> LabelOntology | None:
 async def _discovered(state: AppState) -> dict[str, AssistBackend]:
     """What Ray Serve is serving right now, TTL-cached — fetched off the event loop (sync
     httpx), and empty when discovery is unconfigured or the control plane is unreachable."""
-    settings = state.settings
-    if not getattr(settings, "serve_discovery_url", None):
+    discovery_url = getattr(state.settings, "serve_discovery_url", None)
+    if not discovery_url:
         return {}
-    return await run_in_threadpool(
-        discovered_backends,
-        state.http,
-        settings.serve_discovery_url,
-        getattr(settings, "serve_proxy_url", None),
-    )
+    return await run_in_threadpool(discovered_backends, state.http, discovery_url, getattr(state.settings, "serve_proxy_url", None))
 
 
 def merged_registry(settings: Any, discovered: dict[str, AssistBackend] | None) -> dict[str, AssistBackend]:

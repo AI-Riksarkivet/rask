@@ -9,11 +9,16 @@ class holds up to the saga:
   schema, the properties JSON-encoded, and the run facet on `X-Lance-Run-Facets`.
 - a duplicate tag CONVERGES when it already points at our version, and fails LOUDLY when a
   different publish owns the name.
+- every call presents the annotator's own projected ServiceAccount token, read again for that call
+  because the kubelet replaces it before it expires, and names the person the publish is for on
+  `x-lance-originator`: the service authors every event the publish produces, so the header is the
+  only place the human survives (ADR 0171).
 """
 
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 import pyarrow as pa
@@ -84,9 +89,12 @@ class _Tags:
     def __init__(self) -> None:
         self.tags: dict[tuple[str, str], int] = {}
         self.creates = 0
+        #: The headers the last create carried.
+        self.headers: dict[str, str] = {}
 
     def create_table_tag(self, table_id: str, request: Any, **kwargs: Any) -> None:
         self.creates += 1
+        self.headers = dict(kwargs.get("_headers") or {})
         key = (table_id, request.tag)
         if key in self.tags:
             raise RuntimeError("tag already exists")
@@ -107,10 +115,15 @@ def _publisher(create: _Create | None = None, tags: _Tags | None = None, **kw: A
     return CatalogPublisher("http://catalog:2333", data_api=create or _Create(), tag_api=tags or _Tags(), **kw)
 
 
+def _token(path: Path, value: str) -> Path:
+    path.write_text(value)
+    return path
+
+
 @pytest.mark.asyncio
-async def test_create_posts_exist_ok_with_schema_typed_rows_and_its_run() -> None:
+async def test_create_posts_exist_ok_with_schema_typed_rows_and_its_run(tmp_path: Path) -> None:
     create = _Create(version=9)
-    publisher = _publisher(create, token="svc-token", originator="alice")
+    publisher = _publisher(create, token_file=_token(tmp_path / "token", "svc-token"), originator="alice")
 
     version = await publisher.create_table(
         "silver$vasa_0123456789ab",
@@ -235,80 +248,22 @@ def test_the_http_create_api_raises_the_sdk_exception_on_http_errors(monkeypatch
     assert err.value.status == 502
 
 
-# --------------------------------------------------------------------------------------------------
-# publish_token — the saga's catalog identity (minted fresh per publish; secrets from the store)
-# --------------------------------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_every_publish_call_presents_the_annotators_own_token_read_again_and_names_the_person(tmp_path: Path) -> None:
+    """Both transports, and the token as it is when each call is made.
 
+    The publish is two calls on two stacks (a direct-HTTP create, an SDK tag), and wiring one leaves the other
+    anonymous. Between them the kubelet replaces the projected token, as it does before each one expires: a token
+    read once at construction would present an expired credential to every call after the first.
+    """
+    create, tags = _Create(version=4), _Tags()
+    token = _token(tmp_path / "token", "token-1")
+    publisher = _publisher(create, tags, token_file=token, originator="dex~gina")
 
-def _token_settings() -> Any:
-    """The annotator's real settings, so the publish path reads the fields production builds: a field the settings drop
-    or a secret name they gain reaches this test, where a hand-made double would keep its own."""
-    from annotator.core.config import AnnotatorSettings
+    await publisher.create_table("acme-silver$labels_p1", _plan(), properties={}, run_id="pub-1")
+    _token(token, "token-2")
+    await publisher.tag_version("acme-silver$labels_p1", 4, "published")
 
-    return AnnotatorSettings()
-
-
-# `test_a_pinned_catalog_token_wins_and_touches_nothing_else` lived here and is DELETED, not adapted.
-# It asserted that a pinned `MEDIA_CATALOG_TOKEN` beats the mint — the precedence removed when the
-# confused-deputy finding deleted that field ("open_reader/open_writer fall back to the estate's
-# catalog service credential"). Two independent reasons it should not come back: a pinned estate-wide
-# credential as a publish IDENTITY makes every published row carry the platform's name instead of the
-# publisher's; and `publish_token`'s own docstring records that a hand-pinned token EXPIRED in
-# production, which is why the mint is per-publish. The behaviour it pinned is unreachable — the field
-# does not exist on the real settings class.
-
-
-def test_minting_reads_the_store_and_posts_the_password_grant(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The password comes from the Dapr secret store (fail-closed, sole source) and the grant carries
-    the service account — a FRESH token per publish, so nothing stored can ever go stale."""
-    from annotator.projects import lakehouse
-    from service_kit.governed import secrets as sk_secrets
-
-    settings = _token_settings()
-    settings.publish_token_url = "http://dex:5556/dex/token"
-    settings.publish_client_id = "lance-catalog"
-    settings.publish_username = "publisher@rask.internal"
-
-    fetched: list[tuple[str, str, str]] = []
-
-    def fake_fetch(store: str, key: str, *, require: str) -> dict[str, str]:
-        fetched.append((store, key, require))
-        return {"password": "s3cret"} if require == "password" else {"client-secret": "the-idp-client-secret"}
-
-    def optional_read(store: str, key: str) -> dict[str, str]:
-        raise AssertionError(f"{store}/{key} was read as optional, so a store that holds nothing falls through to a fallback")
-
-    posted: dict[str, Any] = {}
-
-    def fake_post(url: str, *, data: dict[str, str], auth: Any) -> Any:
-        posted.update(url=url, data=data, auth=auth)
-        return _Resp(200, {"id_token": "minted-token"})
-
-    monkeypatch.setattr(sk_secrets, "fetch_required_secrets", fake_fetch)
-    monkeypatch.setattr(sk_secrets, "fetch_dapr_secret", optional_read)
-    monkeypatch.setattr(lakehouse, "publish_client", lambda _timeout: _StubClient(fake_post))
-
-    assert lakehouse.publish_token(settings) == "minted-token"
-    assert fetched == [("lance-secrets", "publisher-oidc", "password"), ("lance-secrets", "oidc-client", "client-secret")]
-    assert posted["url"] == "http://dex:5556/dex/token"
-    assert posted["data"]["grant_type"] == "password"
-    assert posted["data"]["username"] == "publisher@rask.internal"
-    assert posted["data"]["password"] == "s3cret"
-    assert posted["auth"] == ("lance-catalog", "the-idp-client-secret")
-
-
-def test_an_idp_refusal_raises_with_the_reason(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A wrong password or sealed store is an OPERATOR's problem — it must surface as publish_failed
-    with the IdP's words, never a stranded `publishing`."""
-    from annotator.projects import lakehouse
-    from service_kit.governed import secrets as sk_secrets
-
-    settings = _token_settings()
-    settings.publish_token_url = "http://dex:5556/dex/token"
-    settings.publish_username = "publisher@rask.internal"
-
-    monkeypatch.setattr(sk_secrets, "fetch_required_secrets", lambda *a, **k: {"password": "wrong"})
-    monkeypatch.setattr(lakehouse, "publish_client", lambda _timeout: _StubClient(lambda url, **kw: _Resp(401, text="invalid credentials")))
-
-    with pytest.raises(RuntimeError, match="401"):
-        lakehouse.publish_token(settings)
+    created, tagged = create.calls[0]["_headers"], tags.headers
+    assert (created["Authorization"], created["x-lance-originator"]) == ("Bearer token-1", "dex~gina")
+    assert (tagged["Authorization"], tagged["x-lance-originator"]) == ("Bearer token-2", "dex~gina")

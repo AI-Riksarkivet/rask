@@ -32,13 +32,12 @@ spec:
 ---
 {{- end }}
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
-# lance-media plane (merged from the lance-audio checkout per docs/LANCE_NS_HANDOFF.md): the viewer,
-# search, and annotator services. All three share the catalog image (services/ tree is COPY'd whole),
-# mount the CORPUS read-only from the volume explorer.corpus.mode selects (emptyDir by default — a fresh
-# cluster must come up with no node preparation; `pvc` for prod; `hostPath` opt-in for a node-staged
-# corpus, see the volume block below), and run CATALOG-mode reads/writes: only the annotations table
-# lives in the catalog (MEDIA_READ/WRITE_BACKEND=catalog, MEDIA_CATALOG_URI → the in-release catalog
-# Service).
+# lance-media plane (merged from the lance-audio checkout per docs/LANCE_NS_HANDOFF.md): the viewer and
+# search services. Both share the catalog image (services/ tree is COPY'd whole), mount the CORPUS
+# read-only from the volume explorer.corpus.mode selects (emptyDir by default — a fresh cluster must come
+# up with no node preparation; `pvc` for prod; `hostPath` opt-in for a node-staged corpus, see the volume
+# block below), and run CATALOG-mode reads (MEDIA_READ/WRITE_BACKEND=catalog, MEDIA_CATALOG_URI → the
+# in-release catalog Service).
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
 {{- range $name, $svc := .Values.explorer.services }}
 apiVersion: apps/v1
@@ -99,75 +98,23 @@ spec:
             - { name: MEDIA_DB_ROOT, value: {{ $root.Values.explorer.corpusMountPath | quote }} }
             - { name: MEDIA_DB, value: "{{ $root.Values.explorer.corpusMountPath }}/transcripts_v2.lance" }
             - { name: MEDIA_DESCRIPTOR_DIR, value: "{{ $root.Values.explorer.corpusMountPath }}/descriptors" }
-            # Catalog mode (the merge's env flip): annotations live in the catalog, nowhere else.
             # The storage registry, when a deployment declares one. Each store may name its own endpoint,
             # TLS posture and secret: raw lives on an EXTERNAL store while the governed tiers live on the
             # warehouse, and one process env holds only one credential pair.
             {{- with $root.Values.storage }}{{- if .stores }}
             - { name: RASK_STORES, value: {{ toJson .stores | quote }} }
             {{- end }}{{- end }}
-            {{- if and (eq $name "annotator") $root.Values.explorer.controlEmit }}
-            # The annotator publishes `catalog.control.v1` on its own component, as its own NATS user.
-            - { name: ANNOTATOR_CONTROL_EMIT_ENABLED, value: "true" }
-            - { name: ANNOTATOR_CONTROL_PUBSUB, value: {{ printf "%s-%s" ($root.Values.pubsub.controlName | default "catalog-control-pubsub") $svc.daprAppId | quote }} }
-            {{- end }}
-            {{- if eq $name "annotator" }}
-            # THE APP-API TOKEN, FROM THE STORE — never from env, which is the estate's rule and the
-            # reason this row exists at all. The annotator guards `/api/jobs/apply` and the whole
-            # `DaprActor` callback surface with `require_dapr_token`, and daprd stamps the header
-            # (`dapr.io/app-token-secret`, above) — but nothing ever told the APP what to compare
-            # against. Measured 2026-09-15 on the running pod: no `APP_API_TOKEN`, and `/dapr/config`
-            # answered 200 to a caller presenting no token.
-            #
-            # The eleven siblings close that hole with a `secretKeyRef` env row; this one does not,
-            # because a `secretKeyRef` IS a secret through the environment. `lance-secrets` is already
-            # scoped to `annotator` (verified against the live Component), so the sanctioned path was
-            # in the pod the whole time and only the accessor was missing.
-            #
-            # NOT a policy flag with a secret in it: the VALUE stays in OpenBao. What is rendered here
-            # is which source to read, which is configuration.
-            - { name: RASK_APP_TOKEN_FROM_STORE, value: "true" }
-            {{- end }}
             - { name: MEDIA_READ_BACKEND, value: {{ $root.Values.explorer.readBackend | quote }} }
             - { name: MEDIA_WRITE_BACKEND, value: {{ $root.Values.explorer.writeBackend | quote }} }
             - { name: MEDIA_CATALOG_URI, value: {{ $root.Values.explorer.catalogUri | default (printf "http://%s-catalog:%v" (include "lance.fullname" $root) $root.Values.services.catalog.port) | quote }} }
             {{- if $root.Values.auth.enabled }}
-            # Authn/authz for EVERY explorer service, not just the annotator (#90).
-            #
-            # This block was `if and (eq $name "annotator") auth.enabled`, and that scoping was the
-            # deployment half of a real hole: the viewer serves page IMAGE BYTES and an S3 object
-            # browser, its code has the same `CurrentSubject`/checker plumbing the annotator has, and
-            # with these env vars unset the checker is deliberately permissive for dev parity. So on
-            # an auth-enabled estate the catalog shipped real doors while the service that streams
-            # the actual page images ran wide open — and it looked correct, because the gate existed
-            # in code.
-            #
-            # Setting them estate-wide is safe by construction: they change behaviour ONLY where a
-            # route declares an auth dependency. A service with no such route is unaffected, so this
-            # cannot quietly 401 a surface nobody gated.
-            #
-            # The annotation TASK plane is FGA-gated too (can_claim/can_review/can_publish on
-            # annotation_project:<id>, §6). Mirrors the catalog's block in services.yaml.
+            # Authn/authz for EVERY explorer service (#90): the viewer serves page IMAGE BYTES and an S3
+            # object browser, and with these env vars unset its checker is deliberately permissive for dev
+            # parity. Setting them on every service is safe by construction: they change behaviour ONLY
+            # where a route declares an auth dependency, so this cannot quietly 401 a surface nobody gated.
+            # Mirrors the catalog's block in services.yaml.
             {{- include "lance.governedOidcEnv" $root | nindent 12 }}
             {{- include "lance.governedFgaEnv" (list $root $name) | nindent 12 }}
-            {{- if eq $name "annotator" }}
-            # ANNOTATOR ONLY, and it stays that way: the publish saga's identity coordinates. This is
-            # a service credential for writing back annotations, which no other explorer service does.
-            # Deliberately NO password here — it is seeded into OpenBao and fetched via the Dapr
-            # secret store, fail-closed (the estate's secrets rule).
-            #
-            # This used to add "a pinned media.catalogToken (above) still wins when set". That knob is
-            # GONE (2026-08-26): `open_reader`/`open_writer` fell back to it whenever a request had no
-            # bearer, which re-issued an ANONYMOUS caller under the estate's own identity. The saga
-            # below was the cited justification and never used it — it mints its own token here.
-            {{- if $root.Values.dex.enabled }}
-            - { name: MEDIA_PUBLISH_TOKEN_URL, value: "http://{{ include "lance.dexHost" $root }}:{{ $root.Values.dex.port }}/dex/token" }
-            - { name: MEDIA_PUBLISH_CLIENT_ID, value: {{ $root.Values.auth.oidc.clientId | quote }} }
-            # The client secret is the store's `oidc-client`, the IdP client's one secret, which the zones'
-            # session reads too; the publisher password is the store's `publisher-oidc`.
-            - { name: MEDIA_PUBLISH_USERNAME, value: {{ $root.Values.dex.publisher.username | quote }} }
-            {{- end }}
-            {{- end }}
             {{- end }}
             {{- if eq $name "viewer" }}
             # The S3 object browser (ported from the retired volumes-api, R6/R20). NO CREDENTIAL ENV:
@@ -180,9 +127,9 @@ spec:
             - { name: RASK_S3_ENDPOINT_URL, value: {{ include "lance.s3Endpoint" $root | quote }} }
             {{- end }}
             {{- if $root.Values.explorer.corpusS3Root }}
-            # #142: ALL THREE readers serve the corpus from the governed bucket. NO secret env: each reads the SECRET
+            # #142: both readers serve the corpus from the governed bucket. NO secret env: each reads the SECRET
             # half of its own scoped identity from the Dapr secret store, fetched fail-closed by `storage_options` —
-            # the viewer's from `viewer-s3`, annotator's and search's from `media-s3` (read-only on this root) — and
+            # the viewer's from `viewer-s3`, search's from `media-s3` (read-only on this root) — and
             # never the store's root. Only the ENDPOINT, ROOT and the ACCESS-KEY ID (an identifier) are config.
             - { name: MEDIA_S3_ENDPOINT, value: {{ include "lance.s3Endpoint" $root | quote }} }
             - { name: MEDIA_S3_DB_ROOT, value: {{ $root.Values.explorer.corpusS3Root | quote }} }
@@ -208,23 +155,6 @@ spec:
             {{- end }}
             {{- with $enc.rerankUrl }}
             - { name: MEDIA_RERANK_URL, value: {{ . | quote }} }
-            {{- end }}
-            {{- end }}
-            {{- if eq $name "annotator" }}
-
-            {{- with include "rask.rayDashboardUrl" $root }}
-            - { name: MEDIA_SERVE_DISCOVERY_URL, value: {{ . | quote }} }
-            - { name: MEDIA_SERVE_PROXY_URL, value: {{ include "rask.rayServeOrigin" $root | quote }} }
-            {{- end }}
-            {{- end }}
-            {{- if and (eq $name "annotator") $root.Values.runners.enabled }}
-            # The assist runner (runners.yaml): flips the annotator's in-repo assist mock to REAL
-            # GroundingDINO+SAM predictions — same request/response wire shape, zero code change.
-            - { name: MEDIA_ASSIST_URL, value: "http://{{ include "lance.fullname" $root }}-assist:{{ $root.Values.runners.assist.port }}/v1/assist" }
-            {{- if $root.Values.runners.jobsUrl }}
-            # Batch-labeling submit seam — only rendered when an actual RayJob endpoint exists;
-            # unset keeps the annotator's honest submit/poll mock (no fake deriver).
-            - { name: MEDIA_JOBS_URL, value: {{ $root.Values.runners.jobsUrl | quote }} }
             {{- end }}
             {{- end }}
           {{- include "lance.appProbes" $root | nindent 10 }}

@@ -23,7 +23,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from annotator.api.security import current_subject, get_checker, get_fga_client
+from annotator.api.security import current_subject, get_checker
 from annotator.api.v1.endpoints import projects as projects_ep
 from annotator.projects.models import AnnotationProject
 from service_kit.exceptions import register_handlers
@@ -92,7 +92,6 @@ def _client(
     register_handlers(app)
     app.dependency_overrides[get_checker] = lambda: checker
     app.dependency_overrides[current_subject] = lambda: "gina"
-    app.dependency_overrides[get_fga_client] = lambda: None
     # The listing's failure answer is the assertion, not the traceback — `raise_server_exceptions`
     # would hand back the exception instead of the response the caller actually receives.
     return TestClient(app, raise_server_exceptions=False)

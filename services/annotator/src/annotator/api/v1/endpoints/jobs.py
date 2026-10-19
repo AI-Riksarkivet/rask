@@ -6,7 +6,7 @@ scope / corpus formed in the read plane) as a SILVER DERIVER — async, corpus-s
 replace-protects-humans. That deriver is the caller's own job; OUR job is the thin SEAM that
 submits it and reports status.
 
-Routes to a job runner (``MEDIA_JOBS_URL`` — a lance-ns RayJob submit endpoint) when set,
+Routes to a job runner (``ANNOTATOR_JOBS_URL`` — a lance-ns RayJob submit endpoint) when set,
 else a deterministic in-repo MOCK so the submit/poll round-trip is wired + testable
 (drop-in for the real submitter, exactly like the assist + catalog transports). No job
 runs in-repo — the mock only proves submission + status polling.
@@ -20,6 +20,7 @@ import httpx
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
+from annotator.api.security import SettingsDep
 from service_kit.exceptions import ServiceUnavailableError
 from service_kit.governed.dapr_auth import require_dapr_token
 from service_kit.media.deps import StateDep
@@ -32,18 +33,18 @@ logger = logging.getLogger(__name__)
 # no auth dependency at all, while every sibling task/project route on this app carries
 # `CheckerDep`/`CurrentSubject` — an omission, since nothing marked it deliberate.
 #
-# The gate is `require_dapr_token` rather than the neighbours' FGA pair, and the REQUEST SHAPE is what
+# The gate is `require_dapr_token` rather than the neighbours' checker pair, and the REQUEST SHAPE is what
 # decides that: `JobRequest` names a producer, an op, a scope and an optional `dataset` — there is no
 # project id to check a per-project relation against, and `scope.level="corpus"` is estate-wide by
 # construction. Inventing a door for an object the request never identifies is a worse answer than
 # naming the boundary this seam actually sits behind.
 #
-# And it genuinely sits behind one: the cluster route publishes only `/api/explorer/annotations` →
-# `/api/annotations` (`rask.apiRoutes`, chart/templates/_helpers.tpl), so `/api/jobs` has NO public rule and is
+# And it genuinely sits behind one: the annotator release's route publishes only `/api/explorer/annotations` →
+# `/api/annotations` (deploy/fixtures/annotator/chart/templates/route.yaml), so `/api/jobs` has NO public rule and is
 # reachable in-cluster only. `require_dapr_token` proves "arrived via Dapr", never "trusted caller"
 # (`dapr_auth.py:33-45`) — which is exactly the claim being made: a service-to-service seam until a
-# runner exists that can carry a user's identity, at which point this becomes an FGA check against the
-# project the job targets.
+# runner exists that can carry a user's identity, at which point this becomes a role check on the project the
+# job targets.
 router = APIRouter(prefix="/api/jobs", tags=["jobs"], dependencies=[Depends(require_dapr_token)])
 
 
@@ -96,7 +97,7 @@ def job_id_for(body: JobRequest) -> str:
 
 
 @router.post("/apply")
-def apply(state: StateDep, body: JobRequest) -> JobResult:
+def apply(state: StateDep, settings: SettingsDep, body: JobRequest) -> JobResult:
     """Submit a batch labeling deriver over a read-plane selection."""
     n = scope_size(body.scope)
     logger.info(
@@ -107,17 +108,17 @@ def apply(state: StateDep, body: JobRequest) -> JobResult:
         n,
         len(body.exemplars),
     )
-    url = state.settings.jobs_url
+    url = settings.jobs_url
     if url:
         return _remote(state, url, body)
     return JobResult(job_id=job_id_for(body), status="queued", backend="mock")
 
 
 @router.get("/{job_id}")
-def status(state: StateDep, job_id: str) -> JobResult:
+def status(state: StateDep, settings: SettingsDep, job_id: str) -> JobResult:
     """Poll a submitted job. The mock reports 'queued' deterministically; a real runner
-    (``MEDIA_JOBS_URL``) reflects the deriver's live state."""
-    url = state.settings.jobs_url
+    (``ANNOTATOR_JOBS_URL``) reflects the deriver's live state."""
+    url = settings.jobs_url
     if url:
         return _remote_status(state, url, job_id)
     return JobResult(job_id=job_id, status="queued", backend="mock")

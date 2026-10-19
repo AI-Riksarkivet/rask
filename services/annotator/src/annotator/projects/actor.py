@@ -11,15 +11,15 @@ silently protect nothing the moment that happens.
 **Do not add a distributed-lock component for this.** Needing one would mean the actor boundary is
 drawn in the wrong place.
 
-Leases are **reminders**, not a cron sweep. `register_reminder` persists in `lance-statestore`, so it
+Leases are **reminders**, not a cron sweep. `register_reminder` persists in the actor state store, so it
 survives pod restart, rescheduling and node drain, and costs O(expiries) rather than O(tasks) — a
 sweeper would rescan every task to find the few that expired. The domain core predicted this before
 the mechanism existed: `TASK_EDGES[(CLAIMED, "lease_expired")]` is the only task edge whose
 permission is `None`, because no principal fires it.
 
 **Authorization is NOT performed here.** `annotator.projects.machines` says which `can_*` an event
-requires and the HTTP layer checks it against OpenFGA before invoking. Keeping the split means the
-actor stays testable without OpenFGA, and the op→privilege map has exactly one home.
+requires and the HTTP layer checks it (`annotator.api.authorization`) before invoking. Keeping the split
+means the actor stays testable without a checker, and the op→privilege map has exactly one home.
 
 **The identity-bound STATE predicates are a different thing, and they DO live here** (§5.2: is this
 subject still the lease holder, is this subject the author of the submission being reviewed, is the
@@ -28,7 +28,7 @@ answer 403 without spending a turn — but a snapshot is not a precondition: bet
 this turn the lease can move, the reviewer can become the author, and the transition would then
 apply with its precondition already false. Re-evaluated inside the turn the rows cannot move under
 the check. Facts this actor cannot compute (`can_manage`, the project's own state) are carried in as
-VERIFIED INPUTS the caller states — never as an FGA call from here.
+VERIFIED INPUTS the caller states — never as a check made from here.
 """
 
 from __future__ import annotations
@@ -60,7 +60,6 @@ from annotator.projects.models import (
     Task,
     TaskState,
     Transition,
-    notified_user,
 )
 from annotator.projects.ontology import LinkLike, ShapeLike, validate_against_ontology
 from annotator.projects.project_actor import AnnotationProjectActorInterface
@@ -473,44 +472,4 @@ class AnnotationTaskActor(Actor, AnnotationTaskActorInterface, Remindable):
         if task is None or task.state is not TaskState.CLAIMED:
             await self._disarm_lease()  # stale reminder for a task that already moved on
             return
-        # READ THE HOLDER BEFORE THE TRANSITION TAKES IT. `fire()` nulls `assignee` in this same turn
-        # (`elif event in {"release", "lease_expired", "skip"}`), so the document it returns can no
-        # longer name anybody — this line is the only moment the audience exists.
-        holder = task.assignee or ""
         await self.fire({"event": "lease_expired", "actor": None})
-        await self._announce_lease_lapse(task.task_id, holder)
-
-    async def _announce_lease_lapse(self, task_id: str, holder: str) -> None:
-        """Tell the annotator whose hold just lapsed — the one departure edge no person causes.
-
-        Only a SELF-CLAIMED task can arrive here: `assign` pins `lease_expires_at = None` and never
-        expires, and `save_draft` renews the lease. So this names exactly the person who took the work
-        off the pool and then went quiet — who has no reason to suspect the task is no longer theirs,
-        and whose draft is still sitting against it.
-
-        The emitter comes from the PROCESS holder rather than a dependency: a reminder has no request
-        to resolve `ControlEmitterDep` from. `actor` is `system:annotator` because no principal fired
-        this; the lane targets on `extra.subject` and never reads `actor`, so that is honesty rather
-        than a limitation.
-
-        Best-effort, and that is load-bearing here in a way it is not on the HTTP edges: this runs
-        AFTER the transition committed, so an emit that raised would fail the actor turn for a task
-        that has already returned to the pool — leaving a lapsed lease reported as an error and,
-        worse, retried. Telling somebody must never be able to stop the work being freed.
-        """
-        if not holder:
-            return
-        from service_kit.control_emit import emit_control, process_control_emitter
-
-        with suppress(Exception):
-            await emit_control(
-                process_control_emitter(),
-                action="task_lease_expired",
-                object_type="annotation_task",
-                # The TASK's own id, not `self.id.id`. They are the same value in production (Dapr routes
-                # `AnnotationTaskActor/<task_id>`), but reading it off the record keeps this emit
-                # independent of the actor runtime — which is what makes it assertable at all.
-                object_id=f"annotation_task:{task_id}",
-                actor="system:annotator",
-                extra={"subject": notified_user(holder), "event": "lease_expired"},
-            )

@@ -31,8 +31,7 @@ from pydantic import BaseModel, Field
 from pydantic import ValidationError as PydanticValidationError
 from starlette.concurrency import run_in_threadpool
 
-from annotator.api.dependencies import ControlEmitterDep
-from annotator.api.security import CheckerDep, CurrentSubject, FgaChecker, SettingsDep
+from annotator.api.security import Checker, CheckerDep, CurrentSubject, SettingsDep
 from annotator.api.v1.responses import DraftImport
 from annotator.projects.actor import AnnotationTaskActorInterface
 from annotator.projects.imports import shapes_from_ipc
@@ -45,10 +44,8 @@ from annotator.projects.machines import (
     refuse_unreadable_ontology,
     task_transition,
 )
-from annotator.projects.models import Draft, Link, ProjectState, Shape, Task, TaskState, notified_user
+from annotator.projects.models import Draft, Link, ProjectState, Shape, Task, TaskState
 from annotator.projects.ontology import LabelOntology
-from service_kit.control_emit import emit_control
-from service_kit.control_events import ControlAction
 from service_kit.exceptions import ConflictError, ForbiddenError, NotFoundError, ServiceUnavailableError, ValidationError
 from service_kit.governed.audit import FAILURE, SUCCESS, audit
 from service_kit.governed.principal import is_principal
@@ -141,15 +138,12 @@ def _proxy(task_id: str) -> AnnotationTaskActorInterface:
     return cast(AnnotationTaskActorInterface, typed_proxy("AnnotationTaskActor", task_id, AnnotationTaskActorInterface))
 
 
-async def _authorize(checker: FgaChecker, subject: str, permission: str, project_id: str, what: str) -> None:
+async def _authorize(checker: Checker, subject: str, permission: str, project_id: str, what: str) -> None:
     """Check one relation on the ANNOTATION PROJECT, fail closed, and audit either way.
 
-    The object is `annotation_project:<project_id>`, because that is the type on which
-    `service_kit.governed.auth.model.fga` defines `can_claim` / `can_annotate` / `can_review` /
-    `can_manage`. Checking them on `project:<tenant>` — as this did until 2026-07-28 — asks OpenFGA
-    for a relation that type does not define, which fails closed and makes the entire task plane
-    return 403 the moment FGA is switched on. Only `can_create_annotation_project` lives on the
-    tenant, because at create time the child does not exist yet.
+    The object is `annotation_project:<project_id>`, the project whose roles grant `can_claim` / `can_annotate` /
+    `can_review` / `can_manage` (`annotator.projects.roles`). Only creation is asked of the tenant, because at create
+    time the child does not exist yet.
 
     The project id comes from the TASK's own record, never from the request, so a caller cannot
     choose which object its permission is evaluated against.
@@ -207,33 +201,8 @@ async def _refuse_second_replica(task_id: str, current: dict[str, Any], recipien
             raise ConflictError(f"one replica per annotator per group: {recipient} already holds or worked replica {sibling_id} of group {group}")
 
 
-#: The task edges that HAND WORK TO or TAKE WORK FROM a named person: edge -> (action, audience field).
-#:
-#: The audience field names the key on the task's PRE-TURN snapshot that holds the person, or `None`
-#: when the request itself names them (`assign`). Reading the snapshot is load-bearing rather than
-#: incidental: the actor nulls `assignee` inside the very turn these edges fire, so the document
-#: `fire()` returns can no longer name anybody.
-#:
-#: `submitted_by` is the review side's audience and is the safer of the two — it is written once
-#: (`actor.py`, on submit) and cleared by no edge at all, so it is readable at every return-to-the-pool
-#: transition.
-#:
-#: STILL UNCOVERED, and both for structural reasons rather than oversight: `lease_expired` fires from
-#: the actor's own reminder with no principal, no request and no emitter in scope (it is refused on
-#: HTTP as a SYSTEM_ONLY_EVENT), and `skip`/`submit`/`claim` are the holder's OWN actions, whose
-#: outcome the caller already has synchronously.
-_NOTIFIED_EDGES: Final[dict[str, tuple[ControlAction, str | None]]] = {
-    "assign": ("task_assigned", None),
-    "release": ("task_unassigned", "assignee"),
-    "request_changes": ("task_changes_requested", "submitted_by"),
-    "reopen": ("task_changes_requested", "submitted_by"),
-}
-
-
 @router.post("/{task_id}/events", status_code=status.HTTP_200_OK)
-async def fire_task_event(
-    task_id: TaskId, payload: FireRequest, checker: CheckerDep, subject: CurrentSubject, control: ControlEmitterDep, settings: SettingsDep
-) -> dict[str, Any]:
+async def fire_task_event(task_id: TaskId, payload: FireRequest, checker: CheckerDep, subject: CurrentSubject, settings: SettingsDep) -> dict[str, Any]:
     """Drive one task transition.
 
     The permission comes from the transition table, so adding an edge to `TASK_EDGES` automatically
@@ -315,35 +284,6 @@ async def fire_task_event(
         raise ConflictError(str(exc)) from exc
 
     audit(f"task.{payload.event}", SUCCESS, subject=subject, resource=task_id)
-
-    # TELL THE ASSIGNEE. Emitted AFTER the transition and its audit both succeed, so work that was
-    # never handed over is never announced — and best-effort, so a bus outage cannot fail an assignment
-    # that already committed.
-    #
-    # `extra.subject` is the ASSIGNEE, never `subject` (the manager who fired the edge). That distinction
-    # is the whole point: the notifications plane targets on the named party, and keying it on the actor
-    # would tell managers about their own clicks while the person who has to do the work hears nothing.
-    # The same conflation already made `assign` behave as a self-claim once — see the `actor`/`assignee`
-    # comment on the `actor.fire` payload above.
-    #
-    # `task_unassigned` rides the RELEASE edges, and is the sharper half: an annotator holding a draft
-    # against a task that is no longer theirs otherwise discovers it by losing the work.
-    if (notified := _NOTIFIED_EDGES.get(payload.event)) is not None:
-        action, audience_field = notified
-        told = payload.assignee if audience_field is None else current.get(audience_field)
-        # NEVER the actor's own action. A manager may assign a task to themselves, and a holder may
-        # release their own; in both cases the person is looking at the response that says so, and an
-        # inbox row would be a second copy of something they just did. Same rule as the plane's standing
-        # exclusion for synchronous failures the caller already sees.
-        if told and told != subject:
-            await emit_control(
-                control,
-                action=action,
-                object_type="annotation_task",
-                object_id=f"annotation_task:{task_id}",
-                actor=f"user:{subject}",
-                extra={"subject": notified_user(told), "project": project_id, "event": payload.event},
-            )
     # NOT `Task.model_validate(updated)`. The actor returns a PARTIAL document — it carries the
     # transition it just made, not `source`/`media`, which live on the task record the actor does not
     # reload. ANN-07 changed this to validate and left three integration tests RED; typing the return

@@ -176,7 +176,7 @@ def test_checkout_translates_bad_version_to_notfound(tmp_path: Path) -> None:
 
 
 def test_save_emits_spec_2_0_2_openlineage(tmp_path: Path) -> None:
-    from service_kit.lancekit.lineage_emit import build_save_event
+    from annotator.annotations.lineage import build_save_event
 
     uri = str(tmp_path / "annotations.lance")
     lance.write_dataset(

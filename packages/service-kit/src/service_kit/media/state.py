@@ -119,7 +119,7 @@ def dataset_handle(state: AppState, dataset_id: str | None = None) -> DatasetHan
     handler renders a clean 404.
 
     The return type is DECLARED, and it is the reason this annotation matters more than most: every
-    media and annotator route funnels through here, and an unannotated entry point makes each of
+    media route funnels through here, and an unannotated entry point makes each of
     them `Any` from its first line — so `handle.dbb` type-checks, and a renamed attribute on
     `DatasetHandle` reddens nothing anywhere in the fleet.
     """

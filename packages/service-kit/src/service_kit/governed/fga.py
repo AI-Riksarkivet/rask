@@ -2,11 +2,11 @@
 
 The authorization model (``service_kit/governed/auth/model.fga`` / ``model.json``) defines TEN types —
 ``user``, ``team`` (with ``team#member`` as a group subject), ``role`` (``role#assignee``), ``project``,
-``warehouse`` (the S3-bucket root), a self-nesting ``namespace``, ``table``, ``materialized_view`` and
-``transaction`` (both hanging off namespace/warehouse and inheriting the same rungs via ``parent``), and
-``annotation_project`` (the annotator's own rung, tenanted by ``project``). This said "nine" and listed
-nine while the model declared ten — the count is worth keeping honest because it is the first thing a
-reader checks this docstring against.
+``estate`` (the estate root), ``warehouse`` (the S3-bucket root), a self-nesting ``namespace``, ``table``,
+``materialized_view`` and ``transaction`` (both hanging off namespace/warehouse and inheriting the same rungs
+via ``parent``). Every one is a lakehouse object or a subject of one: a tool that works on the lakehouse
+authorizes its own objects itself (ADR 0171). The count is worth keeping honest because it is the first thing
+a reader checks this docstring against.
 Privileges are concentric (``owner`` ⊇ ``writer`` ⊇ ``reader``, plus a separate ``validator`` rung gating
 ``can_promote``) and cascade DOWN the hierarchy via ``parent`` (team → project → warehouse → namespace →
 nested namespace → table / materialized_view / transaction). Every API operation is checked against a
@@ -142,14 +142,13 @@ _MAX_REVOKE_PAGES = 100
 
 # Parent types that declare a `child` relation in the model, and therefore take the inverse edge
 # `grant_on_create` writes for upward visibility. Deliberately a whitelist keyed on the PARENT's
-# type: `project` is absent because `annotation_project` hangs off it by `tenant` and the model
-# gives `project` no `child`, and a `child` tuple on a type that does not define it is accepted by
-# OpenFGA and read by no rule — a silent no-op, the same failure mode as writing `parent` where the
-# model says `tenant`. Adding a `child` relation to a type in `model.fga` means adding it here too.
+# type: the model gives `project` no `child`, and a `child` tuple on a type that does not define it is
+# accepted by OpenFGA and read by no rule — a silent no-op. Adding a `child` relation to a type in
+# `model.fga` means adding it here too.
 _CHILD_EDGE_PARENT_TYPES = frozenset({"warehouse", "namespace"})
 
 
-def hierarchy_edge_tuples(*, child_object: str, parent_object: str, parent_relation: str = "parent") -> list[ClientTuple]:
+def hierarchy_edge_tuples(*, child_object: str, parent_object: str) -> list[ClientTuple]:
     """BOTH directions of one parent→child link, so a caller cannot write half of it.
 
     OpenFGA cannot walk a tuple backwards, so `can_get_metadata: reader or can_get_metadata from
@@ -164,14 +163,13 @@ def hierarchy_edge_tuples(*, child_object: str, parent_object: str, parent_relat
     `grant_on_create` below, where the catalog's create-door seed lands, is its one caller.
 
     The inverse is written only when the PARENT's type declares `child` (:data:`_CHILD_EDGE_PARENT_TYPES`):
-    a `child` tuple on a type that does not is accepted by the API and read by no rule, which is the
-    same silent no-op as writing `parent` where the model says `tenant`.
+    a `child` tuple on a type that does not is accepted by the API and read by no rule.
 
     Idempotent by construction — `write_tuples` swallows a duplicate — so it is safe over an estate
     that already has some of these, and `revoke_object_tuples` already reconstructs and removes the
     inverse on drop, so nothing is orphaned by adding them.
     """
-    tuples = [ClientTuple(user=parent_object, relation=parent_relation, object=child_object)]
+    tuples = [ClientTuple(user=parent_object, relation="parent", object=child_object)]
     if parent_object.split(":", 1)[0] in _CHILD_EDGE_PARENT_TYPES:
         tuples.append(ClientTuple(user=child_object, relation="child", object=parent_object))
     return tuples
@@ -1954,7 +1952,6 @@ TupleOrigin = Literal[
     "rename",
     "lifecycle_delete",
     "train",
-    "annotator",
 ]
 
 
@@ -2037,7 +2034,6 @@ async def grant_on_create(
     origin: TupleOrigin,
     grant_owner: bool = True,
     parent_object: str | None = None,
-    parent_relation: str = "parent",
     carried: Sequence[ClientTuple] = (),
     retry_attempts: int = DEFAULT_RETRY_ATTEMPTS,
     retry_backoff_seconds: float = DEFAULT_RETRY_BACKOFF_SECONDS,
@@ -2053,10 +2049,6 @@ async def grant_on_create(
     their parent edge, which is what makes a catalog- or layer-level grant cascade
     (the medallion case). A root-level table (no namespace parent) gets the owner
     grant only.
-
-    ``parent_relation`` names the edge on the CHILD that points at the parent — ``parent`` for every
-    governed type, ``tenant`` for ``annotation_project``. Get it wrong and the write succeeds while
-    the inheritance it was meant to establish silently does not exist.
 
     ``obj_id`` must be the canonical, delimited id (see ``canonical_object_id``)
     so this grant and the later authorization ``check`` agree byte-for-byte.
@@ -2077,14 +2069,10 @@ async def grant_on_create(
     # dropping the edge look identical at the call site and are opposite in effect.
     tuples = [ClientTuple(user=user_object(user_sub), relation="owner", object=obj)] if grant_owner else []
     if parent_object:
-        # The edge's RELATION NAME is a property of the model, not a constant. Every governed type
-        # spells it `parent`, but `annotation_project` spells it `tenant` — writing `parent` there
-        # produces a tuple OpenFGA accepts and no rule ever reads, so `admin from tenant` and
-        # `member from tenant` never resolve and the object looks unowned by everyone.
-        # …and the INVERSE edge with it, in the SAME batch, so the two directions cannot drift.
-        # `hierarchy_edge_tuples` owns that pairing for every writer — see its docstring for what
+        # The `parent` edge and the INVERSE edge with it, in the SAME batch, so the two directions cannot
+        # drift. `hierarchy_edge_tuples` owns that pairing for every writer — see its docstring for what
         # happens to an object that gets only the forward half.
-        tuples.extend(hierarchy_edge_tuples(child_object=obj, parent_object=parent_object, parent_relation=parent_relation))
+        tuples.extend(hierarchy_edge_tuples(child_object=obj, parent_object=parent_object))
     batch = _distinct_tuples([*tuples, *carried])
     if not batch:
         # Nothing to write: no owner grant asked for and no parent to link. A root-level object created

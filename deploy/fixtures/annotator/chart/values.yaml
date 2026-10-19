@@ -1,0 +1,137 @@
+# The rask release this annotator sits beside. Every rask name below derives from it: the Deployment, Service and
+# ServiceAccount `<rask>-annotator` / `<rask>-sa-annotator` (the principal a project admin grants writer on a publish
+# target), and the rask objects this pod reaches by reference: `<rask>-catalog` and `<rask>-dex`.
+rask:
+  release: rask
+
+image:
+  # A bare name is a side-loaded image on the node (make k3s-import); a registry path is pulled.
+  repository: annotator
+  tag: dev
+  pullPolicy: IfNotPresent
+
+# One replica: the Dapr actors place each project and task on one host, and a second replica is a second host the
+# placement service shards across, not a second copy of the state.
+replicas: 1
+port: 8103
+
+# The Gateway route publishing /api/explorer/annotations on the Gateway rask's own routes attach to (rask's `route.*`):
+# the product chart renders no part of this service (ADR 0171), so it publishes itself.
+route:
+  enabled: true
+  # The public prefix, rewritten to the service's own `/api/annotations` mount.
+  prefix: /api/explorer/annotations
+  # rask's `route.parentRefs`. Required while `enabled`.
+  parentRefs: []
+  # rask's `route.hostnames`.
+  hostnames: []
+
+# rask's `networkPolicy.enabled`: on, rask renders a default-deny that selects every pod in the namespace, so this
+# release admits the Gateway's traffic on `port` alone. Off, it renders no policy.
+networkPolicy:
+  enabled: false
+  # rask's `networkPolicy.apiServerEgress`: the egress rules reaching the Kubernetes API server, which the state
+  # Cluster's instance managers watch it through. Required while `enabled`.
+  apiServerEgress: []
+# Interactive API docs (MEDIA_DOCS).
+docs: false
+# Peers whose x-forwarded-* headers uvicorn trusts (rask's `forwardedAllowIps`); `*` is refused.
+forwardedAllowIps: 127.0.0.1
+
+# The lakehouse, by reference. The annotator reads and writes governed tables through the catalog's doors only, as the
+# person on their own token (the corpus on the credential the catalog vends them) and, for a publish, as its own
+# ServiceAccount with a token projected for `audience`, which the catalog verifies like any service's.
+catalog:
+  # Empty derives `http://<rask>-catalog:2333`.
+  url: ""
+  # The audience the catalog's door verifies a service token for (rask's `lance.identityTokens` audience `rask-catalog`).
+  audience: rask-catalog
+
+# The annotator's own state: its projects, tasks, drafts, leases and roles are Dapr actors on a state store scoped to it
+# alone, on a CloudNativePG Postgres this release renders (the CloudNativePG operator is a prerequisite: in development
+# the `cloudnative-pg` fixture). The connection credential is the Cluster's generated `<cluster>-app` Secret, which only
+# this release's ServiceAccount may read, through a Kubernetes secret store scoped to this app, and the sidecar verifies
+# the server against the Cluster's own CA.
+state:
+  instances: 1
+  storage: 2Gi
+  # The Postgres image the Cluster runs; empty takes the operator's default for its version.
+  imageName: ""
+  # The CloudNativePG operator's namespace, admitted to each instance's status port while `networkPolicy.enabled`.
+  operatorNamespace: cnpg-system
+
+dapr:
+  # The sidecar the actors and the state store need. Rendered only on a cluster that serves dapr.io/v1alpha1.
+  enabled: true
+  appId: annotator
+  logLevel: info
+  maxBodySize: 32Mi
+  sidecarResources:
+    cpuRequest: 50m
+    cpuLimit: 300m
+    memoryRequest: 64Mi
+    memoryLimit: 256Mi
+
+# rask's `lifecycle`: the pod's grace period, the preStop drain, the lifespan teardown after uvicorn's drain, and how
+# long the sidecar outlives the app.
+lifecycle:
+  terminationGracePeriodSeconds: 40
+  preStopSeconds: 5
+  teardownSeconds: 10
+  sidecarBlockShutdownSeconds: 20
+
+# Telemetry to an OTLP/HTTP endpoint; empty `endpoint` derives rask's Collector (`<rask>-otel-collector:4318`). Off sends
+# nothing. `environment` is rask's `observability.environment`.
+otel:
+  enabled: true
+  endpoint: ""
+  environment: rask
+  # The sidecar's trace sampling (rask's `observability.samplingRate`).
+  samplingRate: "1"
+
+# The person: every request names a verified subject, and the person's own bearer is what the annotator asks the
+# catalog with. Off, it answers anonymously and says so (RASK_INSECURE_ALLOW_UNAUTHENTICATED).
+auth:
+  enabled: true
+  # Emit the authn/authz audit stream (RASK_AUDIT_ENABLED).
+  audit: true
+  oidc:
+    # rask's `auth.oidc.issuer`, exactly: a token is accepted only when its `iss` equals it. Required; `make k3s-fixtures`
+    # passes the DEV_ISSUER it gives Dex and rask.
+    issuer: ""
+    # Where discovery is fetched; empty derives `http://<rask>-dex:5556/dex`.
+    discoveryUrl: ""
+    # rask's `auth.oidc.clientId`: the zones' session carries a token for it.
+    audience: lance-catalog
+    # rask's `auth.oidc.connectors` as its doors render it, exactly: the idp id each Dex connector's users are principals
+    # of. The development Dex's password database `local` is `dex`.
+    connectors:
+      local: dex
+
+# Assist producer discovery from a Ray Serve control plane (ANNOTATOR_SERVE_DISCOVERY_URL / _PROXY_URL); empty renders
+# none, and assist answers from its registry and its mock.
+serve:
+  discoveryUrl: ""
+  proxyUrl: ""
+
+# The assist runner: the annotator's interactive model server (GroundingDINO-tiny + SAM-ViT-base, CPU, runners/assist).
+# Off, assist answers with its deterministic mock.
+assist:
+  enabled: false
+  image:
+    repository: assist-runner
+    tag: dev
+  port: 8110
+  # The origin the runner fetches frames from (the viewer). Empty derives `http://<rask>-viewer:8101`.
+  frameBase: ""
+  # Two warm torch models: the request-pod default would OOM-kill the runner at load.
+  resources:
+    requests: { cpu: "1", memory: 2Gi }
+    limits: { cpu: "8", memory: 6Gi }
+
+# A RayJob submit endpoint for batch labeling (ANNOTATOR_JOBS_URL); empty keeps the annotator's submit/poll mock.
+jobsUrl: ""
+
+resources:
+  requests: { cpu: 100m, memory: 512Mi }
+  limits: { cpu: "1", memory: 1536Mi }

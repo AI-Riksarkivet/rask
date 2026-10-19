@@ -15,11 +15,17 @@ Retry safety maps onto the catalog's own contract:
   attempt already tagged it (success); pointing elsewhere means a different publish owns the name
   (loud failure, never silently adopted).
 
-The transport itself is TWO stacks, and they used to disagree about failure: the tag calls go
-through the generated client (`Configuration(retries=...)`), while the token mint and the S4
-``create`` were bare ``httpx.post`` calls — a fresh client and connection each, with no retries at
-all, on the half that WRITES. Both now share :func:`publish_client`, one pooled retrying client per
-publisher, released by :meth:`CatalogPublisher.close`.
+The transport itself is TWO stacks that agree about failure: the tag calls go through the generated
+client (`Configuration(retries=...)`), and the S4 ``create``, the half that WRITES, goes over
+:func:`publish_client`, one pooled client per publisher with the same retry budget, released by
+:meth:`CatalogPublisher.close`.
+
+**The saga publishes as the annotator's own ServiceAccount** (ADR 0171): its projected token, which the
+catalog verifies like any service's, read again on every call because the kubelet replaces it before it
+expires. A project admin grants that principal writer on the target namespace and read on its inputs
+through the catalog's grant door, and ``x-lance-originator`` names the person the publish is for, so the
+catalog tells them their run committed. The saga outlives the person's request, so it cannot use their
+token.
 
 `spawn_publish` is the seam the project actor's watchdog reminder calls: it schedules
 :func:`run_publish_for` on the event loop OUTSIDE the actor's turn, because the saga drives the
@@ -31,6 +37,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel
@@ -38,6 +45,7 @@ from pydantic import BaseModel
 from annotator.core.config import get_annotator_settings
 from annotator.projects.publish import PUBLISHED_LABELS_SCHEMA, PublishPlan
 from annotator.projects.saga import PublishOutcome, run_publish
+from service_kit.governed.machine_identity import identity_bearer
 from service_kit.lakehouse.naming import CATALOG_DELIMITER
 from service_kit.lakehouse.warehouse_registry import namespace_for
 from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE
@@ -52,9 +60,7 @@ INPUTS_HEADER = "x-rask-inputs"
 #: Connect-failure retries for the publish transport's DIRECT-HTTP half, kept equal to the retry
 #: budget the generated client is built with below (`Configuration(retries=...)`).
 #:
-#: The two halves used to disagree: the tag calls went through the SDK and survived a dropped
-#: connection, while the token mint and the `create` — the call that WRITES — were bare
-#: `httpx.post(...)` at httpx's default of 0. A transient reset on the write half fires
+#: The two halves must agree: a transient reset on the write half that the client did not retry fires
 #: `publish_failed` and leaves the project waiting for a watchdog tick. Retrying `create` is safe by
 #: construction, not by hope: it posts `mode=exist_ok`, which is the same property the whole
 #: retry-safety argument in this module's docstring rests on.
@@ -81,59 +87,6 @@ def _arrow_stream_bytes(plan: PublishPlan) -> bytes:
     from service_kit.lancekit.arrow_ipc import encode_arrow_stream  # noqa: PLC0415 - keeps pyarrow off module import
 
     return encode_arrow_stream(pa.Table.from_pylist(plan.rows, schema=PUBLISHED_LABELS_SCHEMA))
-
-
-def publish_token(settings: Any) -> str | None:
-    """The saga's catalog identity, resolved at publish time.
-
-    Precedence, and the reasoning behind it:
-
-    1. ``MEDIA_PUBLISH_TOKEN_URL`` + ``MEDIA_PUBLISH_USERNAME`` set → mint a FRESH token from the
-       IdP via the password grant with the dedicated service account. The password comes from the
-       Dapr secret store (``lance-secrets``/``lance``), fail-closed — the estate's secrets rule:
-       the store is the SOLE source and no plaintext credential rides pod env. Minted per publish,
-       so nothing stored can expire — the exact failure a hand-pinned token produced live.
-    2. Otherwise → ``None`` (an auth-off stack publishes anonymously, as before).
-
-    ``MEDIA_CATALOG_TOKEN`` USED TO BE STEP 1 AND IS GONE. The field was deleted with the
-    confused-deputy finding ("open_reader/open_writer fall back to the estate's catalog service
-    credential") whose closing note wrongly claimed the credential had no other consumer — this was
-    it, and the branch raised AttributeError on every publish until an adversarial re-audit found it.
-    Restoring the field is not the fix: a pinned estate-wide credential as a publish IDENTITY means
-    every published row carries the platform's name instead of the publisher's, which is exactly what
-    that finding refused. Minting per publish is also what stops a hand-pinned token expiring, the
-    failure this path already had live.
-
-    Sync and blocking (the secret fetch + token POST); the caller runs it in a thread.
-    """
-    if not (settings.publish_token_url and settings.publish_username):
-        return None
-
-    from service_kit.governed.secrets import fetch_required_secrets  # noqa: PLC0415 - publish path only
-
-    password = fetch_required_secrets(settings.publish_secret_store, settings.publish_secret_key, require="password")["password"]
-    data = {
-        "grant_type": "password",
-        "username": settings.publish_username,
-        "password": password,
-        # `federated:id` puts the connector and the upstream user id in the token: the publisher's principal ([[LH-063]]).
-        "scope": "openid profile email federated:id",
-    }
-    # A confidential client authenticates with the IdP client's own secret, which the zones' session reads too: one
-    # client, one secret, from the store alone and failing closed like the password.
-    auth = None
-    if settings.publish_client_id:
-        bundle = fetch_required_secrets(settings.publish_secret_store, settings.publish_client_secret_key, require="client-secret")
-        auth = (settings.publish_client_id, bundle["client-secret"])
-    with publish_client(15.0) as client:
-        response = client.post(settings.publish_token_url, data=data, auth=auth)
-    if response.status_code >= 400:
-        raise RuntimeError(f"the IdP refused the publish identity: HTTP {response.status_code} {response.text[:200]}")
-    payload = response.json()
-    token = payload.get("id_token") or payload.get("access_token")
-    if not token:
-        raise RuntimeError("the IdP's token response carries neither id_token nor access_token")
-    return str(token)
 
 
 class CreateTableResult(BaseModel):
@@ -207,7 +160,7 @@ class CatalogPublisher:
         base_url: str,
         *,
         delimiter: str = CATALOG_DELIMITER,
-        token: str | None = None,
+        token_file: Path | None = None,
         originator: str | None = None,
         timeout: float = 60.0,
         data_api: Any | None = None,
@@ -215,29 +168,30 @@ class CatalogPublisher:
     ) -> None:
         self._delimiter = delimiter
         self._timeout = timeout
-        self._headers: dict[str, str] = {"Authorization": f"Bearer {token}"} if token else {}
-        # WHO this publish is for. The token above is the service's credential and the catalog's
-        # `enforce_author` will author every resulting event as that service, so this header is the
-        # only place the human survives. It authorizes nothing — the notifications plane re-derives
-        # visibility per recipient at delivery — which is why it may ride beside a service bearer.
-        if originator:
-            self._headers["x-lance-originator"] = originator
+        self._token_file = token_file
+        self._originator = originator
         if data_api is not None and tag_api is not None:
             self._data, self._tags = data_api, tag_api
             return
         from lance_namespace_urllib3_client import ApiClient, Configuration  # noqa: PLC0415 - optional dep
         from lance_namespace_urllib3_client.api.tag_api import TagApi  # noqa: PLC0415
 
-        client = ApiClient(Configuration(host=base_url, retries=CATALOG_TRANSPORT_RETRIES))
-        if token:
-            client.set_default_header("Authorization", f"Bearer {token}")
-        # The tag call goes through the generated client, which does not read `self._headers` — wiring
-        # only the create would leave the publish half-attributed.
-        if originator:
-            client.set_default_header("x-lance-originator", originator)
         # Create goes over direct HTTP on the pooled, retrying client, posting the Arrow stream body itself.
         self._data = _HttpCreateApi(base_url)
-        self._tags = TagApi(client)
+        self._tags = TagApi(ApiClient(Configuration(host=base_url, retries=CATALOG_TRANSPORT_RETRIES)))
+
+    def _headers(self) -> dict[str, str]:
+        """This call's headers: the annotator's own token read now, and the person the publish is for.
+
+        WHO this publish is for. The token is the service's credential and the catalog authors every resulting event
+        as that service, so the originator is the only place the human survives. It authorizes nothing — the
+        notifications plane re-derives visibility per recipient at delivery — which is why it may ride beside a
+        service bearer. Sent on every call, the tag calls included: a half-attributed publish names nobody.
+        """
+        headers = identity_bearer(self._token_file) if self._token_file is not None else {}
+        if self._originator:
+            headers["x-lance-originator"] = self._originator
+        return headers
 
     def close(self) -> None:
         """Release both transports' connections.
@@ -268,7 +222,7 @@ class CatalogPublisher:
         from service_kit.lancekit.reader import translate_catalog_errors  # noqa: PLC0415 - keeps import-time light
 
         body = _arrow_stream_bytes(plan)
-        headers = {**self._headers, RUN_ID_HEADER: run_id}
+        headers = {**self._headers(), RUN_ID_HEADER: run_id}
         if source is not None and source_version is not None:
             headers[INPUTS_HEADER] = json.dumps([{"table": source.split(self._delimiter), "version": source_version}])
 
@@ -296,7 +250,7 @@ class CatalogPublisher:
                 table_id,
                 CreateTableTagRequest(tag=tag, version=version),
                 delimiter=self._delimiter,
-                _headers=self._headers or None,
+                _headers=self._headers() or None,
                 _request_timeout=self._timeout,
             )
 
@@ -318,7 +272,7 @@ class CatalogPublisher:
                 table_id,
                 GetTableTagVersionRequest(tag=tag),
                 delimiter=self._delimiter,
-                _headers=self._headers or None,
+                _headers=self._headers() or None,
                 _request_timeout=self._timeout,
             )
 
@@ -426,24 +380,12 @@ async def run_publish_for(project_id: str) -> PublishOutcome | None:
             logger.exception("could not record the missing-catalog failure for project %s", project_id)
         return None
 
-    # The saga's identity: a pinned token when configured, else minted FRESH from the IdP for this
-    # run. Minting failures surface as publish_failed with the IdP's reason — not a stranded
-    # `publishing` — because a wrong password or a sealed secret store is an operator's problem to
-    # SEE, and the retry edge re-mints.
-    try:
-        token = await asyncio.to_thread(publish_token, settings)
-    except Exception as exc:
-        logger.exception("could not obtain a publish identity for project %s", project_id)
-        try:
-            await project_handle.fire({"event": "publish_failed", "actor": subject, "error": f"publish identity unavailable: {exc}"})
-        except Exception:
-            logger.exception("could not record the identity failure for project %s", project_id)
-        return None
-
+    # The saga's identity is this pod's own ServiceAccount token, read on each call. One that cannot be read fails the
+    # call it was for, which surfaces as publish_failed with the reason, and the watchdog's next tick reads it again.
     publisher = CatalogPublisher(
         settings.catalog_uri,
         delimiter=settings.catalog_delimiter,
-        token=token,
+        token_file=settings.catalog_token_file,
         originator=subject,
     )
     try:
@@ -457,5 +399,5 @@ async def run_publish_for(project_id: str) -> PublishOutcome | None:
     finally:
         # The publisher holds pooled connections to the catalog (and the SDK's own client). One
         # publisher is built per saga run, so leaving them to the collector leaks a connection per
-        # publish — the same shape as the FGA session the lifespan closes.
+        # publish.
         publisher.close()

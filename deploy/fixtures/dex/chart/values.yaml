@@ -23,8 +23,8 @@ users:
   - { email: dave@example.com, username: dave, userID: a7d3182d-0d75-4ce6-930f-dcb5c0d9f8ad }
   - { email: erin@example.com, username: erin, userID: bbca9aad-6c7c-4bcd-a88e-f74abbae1185 }
 passwordHash: "$2b$10$TsVVN0.5g.XntmJAGNuXF.gyhwQZgmgjmkevKxTa48M7k06J./53G"
-# The publish saga's service account: Dex has no client-credentials grant, so the annotator mints a token per publish
-# with this password-grant user. rask seeds its plain password (`dex.publisher.password`) into its store.
+# A user bound to no team and granted nothing: the live lanes' job identity and their outsider (tests/e2e-py
+# scratch_tenant.py, byo_scenario.py, topology.py), who sign in with the static users' password.
 publisher:
   username: publisher@rask.internal
   userID: 7f2a9c41-5b8e-4d16-a3f7-9e0c1d2b3a45

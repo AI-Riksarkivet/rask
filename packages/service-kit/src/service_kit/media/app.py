@@ -1,4 +1,4 @@
-"""THE media-service app factory — one assembly for viewer, search and annotator, prod AND test.
+"""THE media-service app factory — one assembly for every service built on the media library, prod AND test.
 
 ``service_kit.make_service_app`` is the FLEET factory: it mounts routers under ``RASK_API_PREFIX``,
 registers the fleet middleware stack and reads ``service_kit.config.Settings``. The media trio is a
@@ -58,7 +58,7 @@ def build_media_app(
     * The media middleware stack (CORS with the Range headers exposed, the body ceiling, one request
       id) — see ``service_kit.media.middleware``.
     * The probes at the ROOT: a kubelet does not know a service's prefix. ``ready_check`` is the
-      optional half, for a service with a dependency worth reporting (the annotator's actor plane).
+      optional half, for a service with a dependency worth reporting (an actor plane).
 
     ``lifespan`` is optional so the test/composition seam can build the SAME app around state it
     opened itself, rather than a second, thinner app that maps fewer errors.

@@ -137,14 +137,8 @@ tuples:
   - { user: user:root_admin, relation: owner, object: estate:rask }
 
 
-  # ---- annotation projects (B3/S2) -------------------------------------------------------------
-  # gina is a PLAIN project member (not via team:eng, so not an admin) — the subject that proves
-  # "tenant member is a viewer but NOT an annotator". frank belongs to a different tenant entirely.
+  # gina is a PLAIN project member (not via team:eng, so not an admin). frank belongs to a different tenant entirely.
   - { user: user:gina, relation: member, object: project:acme }
-  - { user: project:acme, relation: tenant, object: annotation_project:labels_2026 }
-  - { user: user:dave, relation: annotator, object: annotation_project:labels_2026 }
-  - { user: user:carol, relation: reviewer, object: annotation_project:labels_2026 }
-  - { user: user:henry, relation: manager, object: annotation_project:labels_2026 }
 
   # MUTATION-DETECTING FIXTURES (openfga skill: references/test-check-assertions.md distinguishes a
   # NEGATIVE case — a subject who holds access and must not hold THIS one — from a BOUNDARY case, a
@@ -153,7 +147,6 @@ tuples:
   # here holds the rung IMMEDIATELY BELOW the action's required rung, so a slip flips them.
   - { user: user:olive, relation: reader, object: warehouse:lance_catalog }
   - { user: user:peter, relation: writer, object: table:acme_gold_catalog }
-  - { user: user:quincy, relation: viewer, object: annotation_project:labels_2026 }
   # rita: a DIRECT project member. Every other member in this file arrives via `member from team`, and
   # `admin` includes that edge — so alice and bob are admins, and no subject existed at the plain-member
   # rung at all. Without one, `can_administer: admin` could be widened to `member` unnoticed.
@@ -437,14 +430,6 @@ tests:
           member: true                        # the tuple is live
           can_administer: false               # admin-tier: a plain member never administers
           can_create_warehouse: false
-      - user: user:quincy
-        object: annotation_project:labels_2026
-        assertions:
-          viewer: true              # the tuple is live
-          can_send_items: false     # annotator-only: slips to true if the rung drops to viewer
-          can_annotate: false       # the sibling action on the same rung, same reasoning
-          can_claim: false          # annotator-tier, found unpinned by the 2026-08-22 sweep
-          can_manage: false         # manager-tier, same
   - name: team-owned project admins get full warehouse access (and a team owns MANY projects)
     check:
       - user: user:alice
@@ -776,46 +761,6 @@ tests:
         assertions:
           can_refresh: [materialized_view:acme_silver$daily_agg]
 
-  - name: an annotation project's rungs are concentric, and tenant membership only reaches viewer
-    check:
-      # A tenant member sees the project but cannot label in it — labeling is an explicit grant.
-      - user: user:gina
-        object: annotation_project:labels_2026
-        assertions: { can_view: true, can_annotate: false, can_review: false, can_publish: false }
-      # An explicit annotator may annotate/claim/send, but reviewing is a rung above.
-      - user: user:dave
-        object: annotation_project:labels_2026
-        assertions: { can_view: true, can_claim: true, can_annotate: true, can_review: false, can_publish: false }
-      # reviewer > annotator ON PURPOSE: a reviewer must be able to fix_and_accept, which IS annotating.
-      - user: user:carol
-        object: annotation_project:labels_2026
-        assertions: { can_annotate: true, can_review: true, can_publish: false }
-      # can_publish is the manager rung — no separate publisher rung exists.
-      - user: user:henry
-        object: annotation_project:labels_2026
-        assertions: { can_review: true, can_manage: true, can_publish: true }
-      # A tenant ADMIN owns the annotation project by cascade (admin from tenant).
-      - user: user:alice
-        object: annotation_project:labels_2026
-        assertions: { can_publish: true, can_manage: true }
-      # Another tenant's admin gets nothing — project isolation holds for annotation projects too.
-      - user: user:frank
-        object: annotation_project:labels_2026
-        assertions: { can_view: false, can_annotate: false, can_publish: false }
-
-  - name: creating an annotation project is authorized on the PARENT tenant, not the child
-    check:
-      # Ordinary tenant membership is the door — labeling is normal tenant work.
-      - user: user:gina
-        object: project:acme
-        assertions: { can_create_annotation_project: true }
-      - user: user:alice
-        object: project:acme
-        assertions: { can_create_annotation_project: true }
-      # A member of a DIFFERENT tenant cannot create one here.
-      - user: user:frank
-        object: project:acme
-        assertions: { can_create_annotation_project: false }
   # ---- time-boxed grants (the `non_expired_grant` condition) ------------------------------------
   #
   # The point of the condition is that access ENDS without anyone revoking it, so both sides of the

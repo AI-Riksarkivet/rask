@@ -89,35 +89,6 @@ class _Request:
         self.app = _App(cache)
 
 
-def test_the_dapr_handler_evicts_on_a_delivered_event(monkeypatch: Any) -> None:
-    """End-to-end through `on_control_event` — the exact route the sidecar POSTs, with the exact
-    CloudEvent envelope shape (`body["data"]` carries the CatalogControlEvent)."""
-    from catalog.core.config import get_settings
-
-    # The handler reads the delimiter off the process settings; stub the required creds the way the
-    # live catalog boot does and drop the lru_cache so THIS env is what gets read. Cleared again in
-    # the finally so the stub-built Settings cannot leak into a later test's get_settings().
-    monkeypatch.setenv("LANCE_S3_ACCESS_KEY_ID", "x")
-    monkeypatch.setenv("LANCE_S3_SECRET_ACCESS_KEY", "x")
-    get_settings.cache_clear()
-    try:
-        cache = _cache()
-        body = {
-            "data": {
-                "action": "warehouse_deleted",
-                "object_type": "warehouse",
-                "object_id": "warehouse:wh-acme",
-                "extra": {"namespaces_dropped": ["acme"], "project": "acme", "bucket": "acme-bucket"},
-            }
-        }
-        request: Any = _Request(cache)  # structural stand-in, same pattern as the door tests
-        result = asyncio.run(on_control_event(body, request, _settings(), None))
-        assert result == {"status": "SUCCESS"}
-        assert set(cache) == {"beta"}, "the handler did not evict — replica 2 still routes at the deleted bucket"
-    finally:
-        get_settings.cache_clear()
-
-
 def test_a_malformed_event_is_dropped_and_evicts_nothing() -> None:
     cache = _cache()
     request: Any = _Request(cache)

@@ -103,26 +103,24 @@ def test_grant_on_create_writes_no_edges_for_a_root_object() -> None:
 
 
 def test_grant_on_create_skips_the_inverse_when_the_parent_type_declares_no_child() -> None:
-    """``annotation_project`` hangs off ``project`` by ``tenant``, and ``project`` declares no ``child``.
-    A ``child`` tuple there is accepted by OpenFGA and read by no rule — a silent no-op, the same
-    failure mode as writing ``parent`` where the model says ``tenant``. Whitelisted on the PARENT's
-    type for exactly that reason."""
+    """A ``classification`` hangs off the ``estate``, and ``estate`` declares no ``child``. A ``child`` tuple
+    there is accepted by OpenFGA and read by no rule — a silent no-op. Whitelisted on the PARENT's type for
+    exactly that reason."""
     fake = _WriteClient()
     asyncio.run(
         fga.grant_on_create(
             _client(fake),
             user_sub="dex~alice",
-            resource="annotation_project",
-            obj_id="labels",
+            resource="classification",
+            obj_id="pii",
             actor="dex~alice",
             origin="create",
-            parent_object="project:acme",
-            parent_relation="tenant",
+            parent_object="estate:rask",
         )
     )
     assert _keys(fake.written) == {
-        ("user:dex~alice", "owner", "annotation_project:labels"),
-        ("project:acme", "tenant", "annotation_project:labels"),
+        ("user:dex~alice", "owner", "classification:pii"),
+        ("estate:rask", "parent", "classification:pii"),
     }
 
 
@@ -149,9 +147,9 @@ def test_revoke_removes_the_inverse_child_edge_a_read_by_object_cannot_see() -> 
 
 
 def test_revoke_skips_the_inverse_edge_for_a_parent_type_that_declares_no_child() -> None:
-    """The revoke side of the ``tenant`` case above. The two must agree, or a create/drop pair leaves
+    """The revoke side of the ``estate`` case above. The two must agree, or a create/drop pair leaves
     residue in one direction."""
-    fake = _ReadDeleteClient([_tuple("project:acme", "tenant", "annotation_project:labels")])
-    removed = asyncio.run(fga.revoke_object_tuples(_client(fake), "annotation_project:labels", actor="test", origin="create"))
+    fake = _ReadDeleteClient([_tuple("estate:rask", "parent", "classification:pii")])
+    removed = asyncio.run(fga.revoke_object_tuples(_client(fake), "classification:pii", actor="test", origin="create"))
     assert len(removed) == 1
-    assert _keys(fake.deleted) == {("project:acme", "tenant", "annotation_project:labels")}
+    assert _keys(fake.deleted) == {("estate:rask", "parent", "classification:pii")}

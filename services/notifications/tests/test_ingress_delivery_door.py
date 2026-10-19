@@ -14,11 +14,11 @@ Two refusals, and they answer different questions:
 * **the signature** ([[XC-078]]) proves who WROTE the event, which the check above cannot: it
   authenticates the sidecar that delivered it, and every pod the bus lets publish reaches that sidecar.
   Under `RASK_SIGNATURE_DOORS=enforce` a run event reaches an inbox only when a signer the estate lists
-  signed it, and a control event only when the role its action names signed it; the annotator's task
-  actions and the grants on its own projects need no signature (owner rulings R3 and R5). A refusal is
-  acknowledged and counted, keys the sidecar cannot serve are retried, and `observe` delivers what
-  `enforce` would refuse and counts it. Every door and reason series of the refusal counter exists at 0 from
-  the moment the doors are registered, so the alert's `rate()` sees the first refusal as an increase. The
+  signed it, and a control event only when the role its action names signed it, whatever its object
+  (ADR 0171: every control event is the lakehouse's own). A refusal is acknowledged and counted, keys the
+  sidecar cannot serve are retried, and `observe` delivers what `enforce` would refuse and counts it. Every door
+  and reason series of the refusal counter exists at 0 from the moment the doors are registered, so the alert's
+  `rate()` sees the first refusal as an increase. The
   public keys are read through the sidecar's secret API, stood in for by respx; the signatures are built by
   the root conftest's `EventSigner` from the wire format alone.
 """
@@ -67,8 +67,7 @@ RUN_EVENT: dict[str, Any] = {
     "outputs": [{"namespace": "bronze", "name": "bronze$pages"}],
 }
 
-#: The control envelopes as their producers publish them: the catalog's grant on a table for the person it
-#: authenticated, and the annotator's task assignment and grant on one of its own projects.
+#: The control envelope as its producer publishes it: the catalog's grant on a table for the person it authenticated.
 GRANT: dict[str, Any] = {
     "event_id": "evt-grant",
     "occurred_at": "2026-10-04T12:00:00+00:00",
@@ -77,22 +76,6 @@ GRANT: dict[str, Any] = {
     "object_id": "table:acme$gold",
     "actor": "user:dex~admin",
     "extra": {"relation": "reader", "subject": "user:dex~alice"},
-}
-TASK: dict[str, Any] = {
-    "event_id": "evt-task",
-    "occurred_at": "2026-10-04T12:00:00+00:00",
-    "action": "task_assigned",
-    "object_type": "annotation_task",
-    "object_id": "annotation_task:proj-1/task-1",
-    "actor": "user:dex~manager",
-    "extra": {"subject": "user:dex~bob"},
-}
-ANNOTATION_GRANT: dict[str, Any] = {
-    **GRANT,
-    "event_id": "evt-annotation-grant",
-    "object_id": "annotation_project:proj-1",
-    "actor": "user:dex~manager",
-    "extra": {"relation": "annotator", "subject": "user:dex~carol"},
 }
 
 
@@ -151,10 +134,6 @@ def _control_event(case: str, *, catalog: Any, maintenance: Any) -> dict[str, An
             return signed
         case "catalog-grant":
             return catalog.sign_control(GRANT, on_behalf_of="user:dex~admin")
-        case "unsigned-task":
-            return TASK
-        case "unsigned-annotation-grant":
-            return ANNOTATION_GRANT
         case "unsigned-unnamed-action":
             return {**GRANT, "action": "warehouse_bound", "object_type": "warehouse", "object_id": "warehouse:acme", "extra": {"namespace": "acme"}}
     raise AssertionError(f"no control event for case {case!r}")
@@ -314,8 +293,6 @@ def test_a_delivery_carrying_the_sidecars_token_reaches_an_inbox_only_when_a_lis
         pytest.param("enforce", "grant-signed-by-another-role", {}, ("notifications.signature.refused", "signer"), id="enforce-a-grant-maintenance-signed"),
         pytest.param("enforce", "tampered-grant", {}, ("notifications.signature.refused", "signature"), id="enforce-a-grant-changed-after-it-was-signed"),
         pytest.param("enforce", "catalog-grant", {"dex~alice": 1}, None, id="enforce-a-grant-the-catalog-signed-for-its-actor"),
-        pytest.param("enforce", "unsigned-task", {"dex~bob": 1}, None, id="enforce-an-unsigned-task-is-exempt-r3"),
-        pytest.param("enforce", "unsigned-annotation-grant", {"dex~carol": 1}, None, id="enforce-an-unsigned-annotation-project-grant-is-exempt-r5"),
         pytest.param("enforce", "unsigned-unnamed-action", {}, None, id="enforce-an-action-the-route-ignores-is-not-checked"),
         pytest.param(
             "observe", "unsigned-catalog-grant", {"dex~alice": 1}, ("notifications.signature.would_refuse", "unsigned"), id="observe-an-unsigned-grant"

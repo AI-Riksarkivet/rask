@@ -1,0 +1,193 @@
+{{- $r := .Values.rask.release -}}
+{{- $name := include "annotator.name" . -}}
+{{- $dapr := and .Values.dapr.enabled (.Capabilities.APIVersions.Has "dapr.io/v1alpha1") -}}
+{{- $l := .Values.lifecycle -}}
+{{- $drain := sub $l.terminationGracePeriodSeconds (add $l.preStopSeconds $l.teardownSeconds) -}}
+{{- if le (int $drain) 0 }}{{ fail "lifecycle: need teardownSeconds < terminationGracePeriodSeconds - preStopSeconds" }}{{ end -}}
+{{- if eq (toString .Values.forwardedAllowIps) "*" }}{{ fail "forwardedAllowIps must not be '*': any client could forge its own source IP" }}{{ end -}}
+{{- if not $dapr }}{{ fail "the annotator keeps its projects, tasks and roles in Dapr actors: dapr.enabled must be on, on a cluster that serves dapr.io/v1alpha1" }}{{ end -}}
+{{- $selector := include "annotator.selector" . | fromYaml -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $r }}-sa-annotator
+  labels:
+    {{- toYaml $selector | nindent 4 }}
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- toYaml $selector | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: {{ .Values.port }}
+      targetPort: http
+  selector:
+    {{- toYaml $selector | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- toYaml $selector | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicas }}
+  selector:
+    matchLabels:
+      {{- toYaml $selector | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        dapr.io/enabled: "true"
+        dapr.io/app-id: {{ .Values.dapr.appId | quote }}
+        dapr.io/app-port: {{ .Values.port | quote }}
+        dapr.io/log-level: {{ .Values.dapr.logLevel | quote }}
+        dapr.io/log-as-json: "true"
+        dapr.io/max-body-size: {{ .Values.dapr.maxBodySize | quote }}
+        dapr.io/app-token-secret: {{ $name }}-dapr-app-token
+        dapr.io/block-shutdown-duration: {{ printf "%ds" (int $l.sidecarBlockShutdownSeconds) | quote }}
+        dapr.io/sidecar-cpu-request: {{ .Values.dapr.sidecarResources.cpuRequest | quote }}
+        dapr.io/sidecar-cpu-limit: {{ .Values.dapr.sidecarResources.cpuLimit | quote }}
+        dapr.io/sidecar-memory-request: {{ .Values.dapr.sidecarResources.memoryRequest | quote }}
+        dapr.io/sidecar-memory-limit: {{ .Values.dapr.sidecarResources.memoryLimit | quote }}
+        dapr.io/disable-builtin-k8s-secret-store: "true"
+        dapr.io/config: {{ include "annotator.daprConfigName" . }}
+        # The sidecar alone reads the state store's credential, as this release's ServiceAccount (`state.yaml`), and
+        # verifies the Postgres it dials against the Cluster's own CA. The app container mounts neither.
+        dapr.io/volume-mounts: "kube-api:/var/run/secrets/kubernetes.io/serviceaccount,state-ca:/var/run/secrets/annotator/state-ca"
+        dapr.io/env: "PGSSLMODE=verify-full,PGSSLROOTCERT=/var/run/secrets/annotator/state-ca/ca.crt"
+      labels:
+        {{- toYaml $selector | nindent 8 }}
+        dapr.io/enabled: "true"
+        lance.dev/logs: otlp
+    spec:
+      terminationGracePeriodSeconds: {{ $l.terminationGracePeriodSeconds }}
+      serviceAccountName: {{ $r }}-sa-annotator
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: annotator
+          image: "{{ .Values.image.repository }}:{{ required "image.tag must be set" .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - "uvicorn"
+            - "annotator.main:app"
+            - "--host=0.0.0.0"
+            - "--port={{ .Values.port }}"
+            - "--timeout-graceful-shutdown={{ $drain }}"
+            - "--proxy-headers"
+            - "--forwarded-allow-ips={{ .Values.forwardedAllowIps }}"
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "sleep {{ $l.preStopSeconds }}"]
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+            - { name: app-token, mountPath: /var/run/secrets/annotator/app-token, readOnly: true }
+            - { name: identity-rask-catalog, mountPath: /var/run/secrets/rask/identity/rask-catalog, readOnly: true }
+          ports:
+            - name: http
+              containerPort: {{ .Values.port }}
+          env:
+            - { name: MEDIA_HOST, value: "0.0.0.0" }
+            - { name: MEDIA_DOCS, value: {{ .Values.docs | quote }} }
+            # The corpus and the annotations live in the lakehouse and are reached through the catalog's doors only.
+            - { name: MEDIA_READ_BACKEND, value: "catalog" }
+            - { name: MEDIA_WRITE_BACKEND, value: "catalog" }
+            - { name: MEDIA_CATALOG_URI, value: {{ .Values.catalog.url | default (printf "http://%s-catalog:2333" $r) | quote }} }
+            # The publish saga's identity: this pod's own ServiceAccount token, projected for the catalog.
+            - { name: ANNOTATOR_CATALOG_TOKEN_FILE, value: /var/run/secrets/rask/identity/rask-catalog/token }
+            # The token the sidecar presents to the actor callbacks, mounted from the Secret this release generates.
+            - { name: RASK_APP_TOKEN_FILE, value: /var/run/secrets/annotator/app-token/token }
+            {{- with .Values.serve.discoveryUrl }}
+            - { name: ANNOTATOR_SERVE_DISCOVERY_URL, value: {{ . | quote }} }
+            - { name: ANNOTATOR_SERVE_PROXY_URL, value: {{ $.Values.serve.proxyUrl | default . | quote }} }
+            {{- end }}
+            {{- if .Values.assist.enabled }}
+            - { name: ANNOTATOR_ASSIST_URL, value: {{ printf "http://%s-assist:%v/v1/assist" $r .Values.assist.port | quote }} }
+            {{- end }}
+            {{- with .Values.jobsUrl }}
+            - { name: ANNOTATOR_JOBS_URL, value: {{ . | quote }} }
+            {{- end }}
+            {{- if .Values.otel.enabled }}
+            - { name: RASK_OTEL_ENABLED, value: "true" }
+            - { name: OTEL_EXPORTER_OTLP_ENDPOINT, value: {{ include "annotator.otlpEndpoint" . | quote }} }
+            - { name: OTEL_EXPORTER_OTLP_PROTOCOL, value: "http/protobuf" }
+            - { name: OTEL_METRIC_EXPORT_INTERVAL, value: "5000" }
+            - { name: OTEL_PYTHON_FASTAPI_EXCLUDED_URLS, value: "/livez,/readyz,/healthz,/api/health,/metrics" }
+            - { name: OTEL_SERVICE_NAME, value: "annotator" }
+            - { name: OTEL_RESOURCE_ATTRIBUTES, value: "service.namespace=rask,deployment.environment.name={{ .Values.otel.environment }},service.version={{ .Chart.AppVersion }}" }
+            {{- end }}
+            {{- if .Values.auth.enabled }}
+            {{- $issuer := required "auth.oidc.issuer is rask's auth.oidc.issuer; the annotator accepts a token only when its iss equals it" .Values.auth.oidc.issuer }}
+            - { name: RASK_AUDIT_ENABLED, value: {{ .Values.auth.audit | quote }} }
+            - { name: RASK_OIDC_ENABLED, value: "true" }
+            - { name: RASK_OIDC_ISSUER, value: {{ $issuer | quote }} }
+            - { name: RASK_OIDC_DISCOVERY_URL, value: {{ .Values.auth.oidc.discoveryUrl | default (printf "http://%s-dex:5556/dex" $r) | quote }} }
+            - { name: RASK_OIDC_AUDIENCE, value: {{ .Values.auth.oidc.audience | quote }} }
+            - { name: RASK_OIDC_ALLOW_INSECURE, value: {{ ternary "false" "true" (hasPrefix "https://" $issuer) | quote }} }
+            {{- $connectors := required "auth.oidc.connectors is rask's: the idp id of each Dex connector" .Values.auth.oidc.connectors }}
+            {{- range $connector, $idp := $connectors }}
+            {{- if or (not $connector) (not (kindIs "string" $idp)) (eq $idp "kubernetes") (not (regexMatch "^[a-z0-9-]+$" $idp)) }}
+            {{- fail (printf "auth.oidc.connectors.%s=%v is not an idp id: lower-case letters, digits and '-', never kubernetes, as rask's auth.oidc.connectors" $connector $idp) }}
+            {{- end }}
+            {{- end }}
+            - { name: RASK_OIDC_CONNECTORS, value: {{ $connectors | toJson | quote }} }
+            {{- else }}
+            - { name: RASK_INSECURE_ALLOW_UNAUTHENTICATED, value: "true" }
+            {{- end }}
+          startupProbe:
+            httpGet: { path: /livez, port: http }
+            periodSeconds: 10
+            failureThreshold: 30
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet: { path: /livez, port: http }
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 5
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - { name: tmp, emptyDir: { sizeLimit: "2Gi" } }
+        - name: app-token
+          secret:
+            secretName: {{ $name }}-dapr-app-token
+            items: [{ key: token, path: token }]
+        - name: identity-rask-catalog
+          projected:
+            sources:
+              - serviceAccountToken: { path: token, audience: {{ .Values.catalog.audience | quote }}, expirationSeconds: 600 }
+        # The sidecar's Kubernetes API identity, the one its secret store reads the state credential with.
+        - name: kube-api
+          projected:
+            sources:
+              - serviceAccountToken: { path: token, expirationSeconds: 600 }
+              - configMap: { name: kube-root-ca.crt, items: [{ key: ca.crt, path: ca.crt }] }
+              - downwardAPI: { items: [{ path: namespace, fieldRef: { fieldPath: metadata.namespace } }] }
+        # The Cluster's CA certificate alone, never its key.
+        - name: state-ca
+          secret:
+            secretName: {{ include "annotator.stateCluster" . }}-ca
+            items: [{ key: ca.crt, path: ca.crt }]

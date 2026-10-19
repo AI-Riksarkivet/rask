@@ -4,8 +4,8 @@ This lived in `viewer/api/security.py`, whose own docstring already stated why i
 "Kept here beside `corpus_object` so both naming rules live in one file: the way this goes wrong is a
 second module deriving an object string that agrees until it does not."
 
-The annotator needs the same object for its assist plane, so the rule moved here rather than gaining a
-second author. Both services' settings extend `service_kit.media.config.Settings`, which is where
+A second service needs the same object, so the rule lives here rather than gaining a second author.
+Every media service's settings extend `service_kit.media.config.Settings`, which is where
 `catalog_table_id` and `catalog_delimiter` live — so the shared type was always the right home; the
 function was simply written in the first service that needed it.
 """
@@ -22,8 +22,8 @@ if TYPE_CHECKING:
 def corpus_object(settings: Settings, dataset_id: str, table: str) -> str:
     """The FGA object for one corpus table: ``table:<namespace><delimiter><table>``.
 
-    Built through `catalog_table_id` so the object a service checks is the SAME identifier the
-    annotator writes through and the catalog authorizes on. Deriving it any other way creates a second
+    Built through `catalog_table_id` so the object a service checks is the SAME identifier a client
+    writes through and the catalog authorizes on. Deriving it any other way creates a second
     naming scheme that agrees until someone sets `MEDIA_CATALOG_NAMESPACE`.
     """
     segments = settings.catalog_table_id(dataset_id, table)

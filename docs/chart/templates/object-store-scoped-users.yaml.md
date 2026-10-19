@@ -230,9 +230,8 @@ would buy little and reintroduce the least debuggable failure this plane has.
 
 ## `cat >/tmp/policies/rask-media.json <<'POLICY'`
 
-THE MEDIA CORPUS READERS, annotator and search (`lance.mediaIdentity`): READ ONE ROOT, write nothing. Both list and
-open the corpus under `explorer.corpusS3Root` and write their annotations through the catalog
-(`explorer.writeBackend`), so the grant is `GetBucketLocation` and `ListBucket` on the corpus bucket, the list held
+THE MEDIA CORPUS READER, search (`lance.mediaIdentity`): READ ONE ROOT, write nothing. It lists and opens the corpus
+under `explorer.corpusS3Root` and writes nothing there, so the grant is `GetBucketLocation` and `ListBucket` on the corpus bucket, the list held
 to the root's prefix by an `s3:prefix` condition on both `<p>` and `<p>/*`, and `GetObject` under that prefix. With
 no prefix in the root the grant is the whole corpus bucket, and still read-only. The narrowing is possible here
 because the corpus root is a render-time value, unlike the warehouse buckets the maintenance and catalog policies

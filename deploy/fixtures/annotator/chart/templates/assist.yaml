@@ -1,0 +1,94 @@
+{{- if .Values.assist.enabled }}
+{{- $r := .Values.rask.release -}}
+{{- $name := printf "%s-assist" $r -}}
+{{- $l := .Values.lifecycle -}}
+{{- $selector := dict "app.kubernetes.io/name" "rask" "app.kubernetes.io/instance" $r "app.kubernetes.io/component" "assist" -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $r }}-sa-assist
+  labels:
+    {{- toYaml $selector | nindent 4 }}
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- toYaml $selector | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: {{ .Values.assist.port }}
+      targetPort: http
+  selector:
+    {{- toYaml $selector | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- toYaml $selector | nindent 4 }}
+spec:
+  # One warm model pair: interactive bursts serialize behind the server's inference lock.
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- toYaml $selector | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- toYaml $selector | nindent 8 }}
+    spec:
+      terminationGracePeriodSeconds: {{ $l.terminationGracePeriodSeconds }}
+      serviceAccountName: {{ $r }}-sa-assist
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: assist
+          image: "{{ .Values.assist.image.repository }}:{{ required "assist.image.tag must be set" .Values.assist.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "sleep {{ $l.preStopSeconds }}"]
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          ports:
+            - name: http
+              containerPort: {{ .Values.assist.port }}
+          env:
+            # The payload's image_url is relative; this base is the runner's only allowed origin.
+            - { name: ASSIST_FRAME_BASE, value: {{ .Values.assist.frameBase | default (printf "http://%s-viewer:8101" $r) | quote }} }
+          startupProbe:
+            httpGet: { path: /livez, port: http }
+            periodSeconds: 10
+            failureThreshold: 30
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /livez, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.assist.resources | nindent 12 }}
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - { name: tmp, emptyDir: { sizeLimit: "2Gi" } }
+{{- end }}

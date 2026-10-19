@@ -84,8 +84,8 @@ secrets:
 # OFF, and the reason it is one knob rather than a per-service choice is the defect it closes. Four
 # services already had a `docs_enabled` setting; all four defaulted it to True and NO manifest
 # anywhere set it, so the flag documented a decision nobody was making and the schemas shipped openly.
-# Three more (viewer, search, annotator) had no flag at all, and `templates/route.yaml` publishes each
-# of them at the edge, so an open schema is one unauthenticated GET away.
+# The viewer and search had no flag at all, and `templates/route.yaml` publishes each of them at the
+# edge, so an open schema is one unauthenticated GET away.
 #
 # Turn it on for a dev cluster (deploy/values-local.yaml does). Leave it off anywhere reachable.
 docs:
@@ -420,12 +420,6 @@ resources:
   otel-collector:
     requests: { cpu: 300m, memory: 512Mi }
     limits: { cpu: "1", memory: 512Mi }
-  # The assist model runner holds two warm torch models (~1.1 GB weights) and burns real CPU per
-  # inference (multi-threaded GEMMs) — the request-pod default would OOM-kill it at load.
-  # -- CPU/memory requests and limits for the assist model runner (two warm torch models).
-  assist:
-    requests: { cpu: "1", memory: 2Gi }
-    limits: { cpu: "8", memory: 6Gi }
   # The viewer is not a request pod: it holds an in-process lance-graph CypherEngine over the KG and a
   # cache of Arrow-IPC atlas point clouds, both sized by the corpus. On the default 512Mi tier a SINGLE
   # `GET /api/graph/status` (what the media zone's /graph page calls on mount) OOM-killed it — measured
@@ -486,8 +480,7 @@ resources:
 # after SIGTERM, and the process ended at 3.9s when uvicorn was not PID 1), and a SIGKILL sent from
 # inside the pod never reaches a PID 1.
 # `teardownSeconds` is a budget, not a measurement of any lifespan. `rask.shutdownArg` renders the
-# bound into every uvicorn whose command line the chart sets (the assist runner keeps its image's CMD) and
-# refuses to render a bound that is not positive or a negative teardownSeconds, whose bound would end
+# bound into every uvicorn whose command line the chart sets and refuses to render a bound that is not positive or a negative teardownSeconds, whose bound would end
 # after the SIGKILL. Pinned by tests/unit/test_uvicorn_drains_inside_its_pods_grace_period.py.
 lifecycle:
   # -- Seconds every pod sleeps in preStop before SIGTERM, so endpoint removal propagates first.
@@ -602,6 +595,10 @@ frontend:
   # BFF's own 25 MB inference guard so that guard is what a user actually reads.
   # -- Request-body ceiling of each zone's Bun server (BODY_SIZE_LIMIT), kept above the BFF's 25 MB inference guard.
   bodySizeLimit: 32M
+  # The annotator's Service the annotator zone's server side proxies to (ANNOTATOR_API). The annotator is a client of
+  # the lakehouse with its own release (ADR 0171), so this chart names it and renders none of it.
+  # -- The annotator release's Service URL the annotator zone proxies to (ANNOTATOR_API), e.g. `http://rask-annotator:8103` from deploy/fixtures/annotator. Empty renders none.
+  annotatorUrl: ""
   # Ray Serve's HTTP ingress origin, for the zones that run inference (studio's flow builder, the
   # annotator's producer calls). Empty => the dashboard every Ray consumer names (`rask.rayServeOrigin`;
   # an external dashboard host serves the apps too), so the builder cannot list an app it is unable to call.
@@ -685,8 +682,8 @@ frontend:
     # with none of the independent-deploy payoff. One zone, four areas under /lakehouse/<area>.
     - {name: lakehouse, path: /lakehouse}
     # The lance-media zones: full BFF zones like the rest — SSR on, the shared session handle, and
-    # same-origin /<zone>/api/* proxy routes to the media Services (VIEWER_API/SEARCH_API/
-    # ANNOTATOR_API env, rendered when explorer.enabled). Deploy together with explorer.enabled=true.
+    # same-origin /<zone>/api/* proxy routes to the media Services (VIEWER_API/SEARCH_API env, rendered
+    # when explorer.enabled) and to the annotator's own release (ANNOTATOR_API, `frontend.annotatorUrl`).
     - {name: explorer, path: /explorer}
     - {name: annotator, path: /annotator}
   # Per-user OIDC login (opt-in), shared across ALL zones — one origin, one sealed cookie, so a login on
@@ -786,7 +783,7 @@ auth:
   # the stream even with auth on.
   # -- Emit the structured authn/authz/credential-vending audit stream (LANCE_AUDIT_ENABLED and siblings); takes effect only with auth on. false silences it.
   audit: true
-  # -- The platform's OpenFGA HTTP API (e.g. `https://fga.internal:8080`), which the tuple writers (the catalog, maintenance, the annotator), the openfga-model hook and the bootstrap-admin Job dial when `openfga.enabled` is false; the render refuses it empty then. It must admit rask's projected `rask-openfga` tokens from exactly the subjects `lance.openfgaSubjects` lists: OIDC against the cluster's ServiceAccount issuer.
+  # -- The platform's OpenFGA HTTP API (e.g. `https://fga.internal:8080`), which the tuple writers (the catalog, maintenance), the openfga-model hook and the bootstrap-admin Job dial when `openfga.enabled` is false; the render refuses it empty then. It must admit rask's projected `rask-openfga` tokens from exactly the subjects `lance.openfgaSubjects` lists: OIDC against the cluster's ServiceAccount issuer.
   fgaApiUrl: ""
   # -- NetworkPolicy egress rules ({to, ports}) admitting the pods that dial `fgaApiUrl` (the tuple writers, the openfga-model hook, the bootstrap-admin Job) to it, at the port a policy sees. Required under networkPolicy.enabled while `openfga.enabled` is false.
   fgaEgress: []
@@ -1377,26 +1374,26 @@ maintenance:
   controlEmit: false
 
 # === lance-media plane ============================================================================
-# The viewer/search/annotator services from the lance-audio checkout. All three share the catalog image
-# and read the corpus from a node-local hostPath (NO data move — only the annotations table lives in the
-# catalog; MEDIA_READ/WRITE_BACKEND=catalog is the merge's env flip, "direct" restores standalone dev).
+# The viewer and search services from the lance-audio checkout. Both share the catalog image and read
+# the corpus from the volume `corpus.mode` selects (MEDIA_READ/WRITE_BACKEND=catalog is the merge's env
+# flip, "direct" restores standalone dev). The annotator is a client of the lakehouse with its own
+# release (deploy/fixtures/annotator, ADR 0171); this chart renders none of it.
 explorer:
-  # -- Deploy the explorer trio (viewer, search, annotator services) and their rows on the cluster route.
+  # -- Deploy the explorer pair (viewer and search services) and their rows on the cluster route.
   enabled: false
-  # Where the pods mount the corpus (read-only, all three services).
   # #142: set to a warehouse bucket (e.g. "s3://bind86-wh") to serve the media corpus from the
-  # GOVERNED object store instead of the mounted volume. VIEWER ONLY so far — search/annotator
-  # still need creds + an object-store NetworkPolicy row before they can follow. "" = the disk, unchanged.
+  # GOVERNED object store instead of the mounted volume: the viewer reads it as `viewer-s3`, search
+  # as `media-s3`. "" = the disk, unchanged.
   # -- S3 root (e.g. a warehouse bucket) the viewer serves the media corpus from (MEDIA_S3_DB_ROOT). Empty = the mounted corpus volume.
   corpusS3Root: ""
-  # -- Path the corpus volume is mounted at, read-only, in all three explorer services.
+  # -- Path the corpus volume is mounted at, read-only, in both explorer services.
   corpusMountPath: /media-corpus
   # HOW the corpus volume is provided. This used to be an unconditional `hostPath` with
   # `type: Directory` pointed at /var/media-corpus — which means explorer.enabled=true on a cluster where
   # nobody had pre-created that directory wedged all three pods in ContainerCreating, with a kubelet
   # event as the only diagnostic (live-proof 2026-07-28, defect 5; the plan already said no hostPath
   # ships). Modes:
-  #   * emptyDir (DEFAULT) — the trio starts on ANY cluster with zero node preparation. The corpus
+  #   * emptyDir (DEFAULT) — the pair starts on ANY cluster with zero node preparation. The corpus
   #     datasets are then loaded into the pod, or read through the catalog (MEDIA_READ_BACKEND=catalog).
   #     With no dataset present the viewer's /api/health degrades honestly (db: null) instead of 404ing
   #     — see services/viewer/api/v1/endpoints/system.py.
@@ -1412,8 +1409,8 @@ explorer:
     claimName: ""             # mode=pvc: an existing PVC; empty => the chart creates one
     # -- Requested size of the chart-created corpus PVC.
     size: 50Gi                # chart-created PVC only
-    # -- Access mode of the chart-created corpus PVC; ReadWriteMany because three services read it concurrently.
-    accessMode: ReadWriteMany # chart-created PVC only — three services read it concurrently
+    # -- Access mode of the chart-created corpus PVC; ReadWriteMany because both services read it concurrently.
+    accessMode: ReadWriteMany # chart-created PVC only — both services read it concurrently
     # -- StorageClass of the chart-created corpus PVC. Empty = the cluster's default StorageClass.
     storageClass: ""          # chart-created PVC only; "" => the cluster's DEFAULT StorageClass
     # -- Node directory mounted as the corpus when mode is `hostPath`.
@@ -1425,30 +1422,11 @@ explorer:
   # Default: the in-release catalog Service (rendered in media.yaml); set to override.
   # -- Catalog URL the explorer services use (MEDIA_CATALOG_URI). Empty = the in-release catalog Service.
   catalogUri: ""
-  # REMOVED 2026-08-26 — `catalogToken` was the media services' catalog bearer, and nothing read it
-  # except a fallback that should not have existed: `open_reader`/`open_writer` did
-  # `caller_token or settings.catalog_token`, so a request arriving with NO bearer was re-issued to
-  # the catalog under this identity — which the values comment itself told operators to grant the
-  # writer rung on the annotations table. The catalog checks one relation on one `table:` object and
-  # injects no row predicate, so that answers 200 for a caller with no grant at all.
-  #
-  # The cited justification ("callers with no request context, the publish saga") does not use it:
-  # the saga mints its own token from Dex via MEDIA_PUBLISH_TOKEN_URL.
-  # The annotator PUBLISHES control events (`task_assigned` / `task_unassigned`) so the notifications
-  # plane can put assigned work in the assignee's inbox instead of making them go looking for it.
-  # Off by default like every other transport in this estate — a half-configured emitter must never
-  # pretend to publish. Turning it on ALSO scopes the annotator's app-id on the control pubsub
-  # component (dapr-component.yaml); without that the sidecar rejects every publish, silently,
-  # because the emit is best-effort by design.
-  # -- Annotator publishes `task_assigned`/`task_unassigned` control events for the notifications inbox, and is scoped on the control pubsub component.
-  controlEmit: false
   services:
     # -- Explorer viewer service: `port` (its HTTP port) and `daprAppId` (its Dapr app-id).
     viewer: { port: 8101, daprAppId: viewer }
     # -- Explorer search service: `port` (its HTTP port) and `daprAppId` (its Dapr app-id).
     search: { port: 8102, daprAppId: search }
-    # -- Explorer annotator service: `port` and `daprAppId`; the app-id is scoped on the control pubsub when `explorer.controlEmit` is on.
-    annotator: { port: 8103, daprAppId: annotator }
 
 # === Query encoders — the vector/rerank half of media search =====================================
 # The search + viewer services are CLIENTS of two OpenAI-shaped HTTP endpoints
@@ -1472,28 +1450,9 @@ encoders:
   # -- Base URL of the OpenAI-shaped reranker server (MEDIA_RERANK_URL). Empty = the rerank leg reports unavailable.
   rerankUrl: "" # e.g. http://encoders.internal:8002 — enables the rerank leg on any mode
 
-# === Model runners (runners/ — the lance-audio fold) ==============================================
-# Only the CPU-viable subset ships: `assist` (GroundingDINO-tiny + SAM-ViT-base, CPU wheels, weights
-# baked into the image). The CUDA-pinned runners (asr/diarize/voiceprint) and the LLM-dependent batch
-# runners (topics/kg) have no honest deployment on a GPU-less estate. When enabled (and explorer.enabled),
-# the annotator's MEDIA_ASSIST_URL points at the assist Service, flipping its in-repo mock to real
-# predictions. NOTE: runners/htr is the rask HTR runner — a sealed project, not deployed from here.
-runners:
-  # -- Deploy the `assist` model runner and point the annotator's MEDIA_ASSIST_URL at it instead of its in-repo mock.
-  enabled: false
-  assist:
-    # -- Assist runner image: `repository` and `tag`; the tag is required when runners are enabled.
-    image: { repository: assist-runner, tag: dev }
-    # -- HTTP port of the assist runner Service.
-    port: 8110
-  # A RayJob submit endpoint for the annotator's batch-labeling seam (MEDIA_JOBS_URL).
-  # No such deriver exists yet — leave empty and the annotator keeps its honest submit/poll mock.
-  # -- RayJob submit endpoint for the annotator's batch-labeling seam (MEDIA_JOBS_URL). Empty = the annotator keeps its submit/poll mock.
-  jobsUrl: ""
-
 # === Dapr state store — operational state (NOT analytical data) ===================================
-# Backed by the already-deployed AGE Postgres, in its own database. This is what annotation task state
-# (#122), the notification inbox (#125) and Dapr workflow instances persist to; Lance keeps the
+# Backed by the already-deployed AGE Postgres, in its own database. This is what the notification inbox
+# (#125), each person's saved UI state and Dapr workflow instances persist to; Lance keeps the
 # published, versioned, analytical data and nothing operational. See chart/templates/dapr-statestore.yaml
 # for why Postgres rather than Redis.
 stateStore:
@@ -1515,12 +1474,8 @@ stateStore:
   # every app-id in the namespace, which would let any service write another's state.
   # -- App-ids allowed to load the state store; the secret-store scope is derived from this list too. Adding one needs a restart of scoped pods.
   scopes:
-    - annotator # #122 task/project state, plus the per-task and per-project actors and their reminders
-    # The catalog is scoped for the publish saga's own state. NOTE: the saga does NOT run on a
-    # workflow engine — it is token-keyed idempotent (docs/OPERATORS.md §4), driven by the annotator's
-    # project actor off `pending_publish_id`. This scope predates that decision; it stays because the
-    # catalog is the service that creates the published table, but nothing here provisions workflow
-    # instances and none are expected.
+    # The catalog keeps each person's saved views and graph layouts here (`/management/v1/user-state`,
+    # LANCE_USER_STATE_STORE). It provisions no workflow instance.
     - catalog
     # ── `flows` is here for STATE, and it is the one entry that genuinely provisions workflows. ──────
     # The studio flow-builder's durable lane IS Dapr Workflow (`flows/workflow.py`), which stores its
@@ -1726,11 +1681,10 @@ objectStore:
   # one. The widest credential in the estate, reached by the one path the goal forbids.
   # -- Access key of the object browser's scoped identity (list and get only); secret derives in-cluster.
   viewerAccessKey: rask-viewer
-  # THE MEDIA CORPUS READERS: annotator and search list and open the corpus under `explorer.corpusS3Root` and write
-  # nothing there (their annotations go through the catalog, `explorer.writeBackend`), so this identity reads that
-  # root and nothing else. It reaches the two services from the Dapr secret `media-s3`, which only their Configurations
-  # allow and only their store logins read; a platform store holds that secret for them in production.
-  # -- Access key of annotator's and search's read-only identity on the media corpus (`explorer.corpusS3Root`); secret derives in-cluster.
+  # THE MEDIA CORPUS READER: search lists and opens the corpus under `explorer.corpusS3Root` and writes nothing there,
+  # so this identity reads that root and nothing else. It reaches search from the Dapr secret `media-s3`, which only its
+  # Configuration allows and only its store login reads; a platform store holds that secret for it in production.
+  # -- Access key of search's read-only identity on the media corpus (`explorer.corpusS3Root`); secret derives in-cluster.
   mediaAccessKey: rask-media
   # THE BACKUPS: the control-root backup reads the registry prefixes it copies, and both backups write and prune under
   # `_backups/` in `objectStore.bucket`, so this identity holds that and never the root, which on RustFS signs every
@@ -1772,8 +1726,8 @@ ray:
   # -- rask talks to a Ray engine: the NetworkPolicy admits the pods KubeRay marks `ray.io/is-ray-node`, and the Collector scrapes them.
   enabled: true
   # THE ONE RAY PLANE ([[CP-041]]): every Ray consumer renders its address from `rask.rayDashboardUrl`
-  # — the annotator's Serve discovery and the zones' Serve origin. The compute fixture (deploy/fixtures/compute) is
-  # given the same address as its own value.
+  # — the zones' Serve origin. The compute and annotator fixtures (deploy/fixtures/compute, deploy/fixtures/annotator)
+  # are given the same address as their own values.
   # -- Address of the engine's Ray dashboard, used verbatim by every Ray consumer; the ray-cluster fixture serves http://rask-ray-head-svc:8265.
   dashboardUrl: ""
   # Ray token auth (RAY_AUTH_MODE=token). The token is the store's `ray-auth-token`, written by ESO into
@@ -1850,11 +1804,11 @@ nats:
   #     catalog's ephemeral broadcast) acknowledges on $JS.ACK.S.>;
   #   - a sidecar parks a dead letter through the component the delivery came on, so a subscriber publishes its own dlq.<app>;
   #   - each service probes its own sidecar's connections on probe.<app-id> (service_kit.bus_watchdog), which no stream
-  #     captures, so a probe stores nothing; the annotator runs no watchdog and holds no probe subject;
+  #     captures, so a probe stores nothing;
   #   - only admin (the stream Job's own command set, measured) creates a stream or deletes
   #     a consumer, no app holds $JS.API.>, and monitor reads stream and consumer state but no message and publishes nothing.
-  # catalog.control.v1 is published by the catalog, by maintenance under maintenance.controlEmit, and by the annotator under
-  # explorer.controlEmit. A grant that only a flag's component uses sits under
+  # catalog.control.v1 is published by the catalog and by maintenance under maintenance.controlEmit. A grant that only a
+  # flag's component uses sits under
   # `flagged`, keyed by that flag's value path, and is issued only while the flag is on (lance.natsTable), so with every flag
   # at its default no user holds a grant no call site uses (the broker lane fails a table broader than its call sites). A
   # user's publish and subscribe lists must not be empty: nsc issues an empty list as unrestricted. A missing allowance fails closed and silently (a refused subscribe retries forever while the pod stays
@@ -1862,7 +1816,7 @@ nats:
   # names_a_secret_something_can_resolve.py fails a render whose components or configured topics a user does not cover.
   #
   # EACH COMPONENT IS ONE APP'S CONNECTION. A component two apps shared gave both the same credential, so the publish-only
-  # half of each is its own component: maintenance and the annotator announce on `<pubsub.controlName>-<app>`, and
+  # half of each is its own component: maintenance announces on `<pubsub.controlName>-maintenance`, and
   # maintenance publishes its lineage on `lineage-pubsub-maintenance` even with the write-event lane off.
   #
   # THE DEV MINT (openbao-seed.yaml; owner ruling R1: the NATS fixture and the dev OpenBao are dev stand-ins, and their
@@ -1908,10 +1862,6 @@ nats:
             - $JS.API.CONSUMER.INFO.LINEAGE.maintenance-durable
             - $JS.API.CONSUMER.CREATE.LINEAGE.maintenance-durable.>
             - $JS.ACK.LINEAGE.maintenance-durable.>
-      explorer.controlEmit:
-        annotator:
-          publish: [catalog.control.v1]
-          subscribe: [_INBOX.>]
     # -- The bus user table, one user per Dapr app-id plus admin and monitor, each with publish and subscribe subject lists (never empty).
     users:
       admin:
@@ -2348,21 +2298,12 @@ age:
 
 # === Dex — the development OIDC issuer, a fixture (deploy/fixtures/dex) ===========================
 dex:
-  # -- This estate uses the development Dex (deploy/fixtures/dex, Service `<release>-dex`): the ingress serves it at /dex, its publisher password is seeded into the dev store, and a real deployment refuses it. The chart renders no Dex.
+  # -- This estate uses the development Dex (deploy/fixtures/dex, Service `<release>-dex`): the ingress serves it at /dex, and a real deployment refuses it. The chart renders no Dex.
   enabled: true
   # -- Port of the development Dex's Service.
   port: 5556
   # -- The development Dex's static client secret (demo value); seeded into OpenBao as `oidc-client` (field `client-secret`).
   clientSecret: lance-catalog-secret
-  # The publish saga's SERVICE ACCOUNT (dex has no client-credentials grant, so machine identity is
-  # a dedicated password-grant user). The annotator mints a FRESH token per publish with it — the
-  # password never rides pod env: it is seeded into OpenBao and fetched through the Dapr secret
-  # store, fail-closed. The fixture holds its bcrypt hash.
-  publisher:
-    # -- Login email of the publish saga's service account; the annotator mints a fresh token with it per publish.
-    username: publisher@rask.internal
-    # -- Plain password of the publish saga's service account, seeded into OpenBao; must match the hash the development Dex holds (demo default `password`).
-    password: password
 
 # === The secret store the Dapr secret store and ESO read: the platform's, or the dev OpenBao fixture =====
 # The chart renders no secret store ([[XC-149]], ADR 0153). Production names the platform's Vault or OpenBao; development
@@ -2461,14 +2402,13 @@ signing:
   # Wherever the store and auth are on (where lineage can verify), each door's Deployment carries RASK_SIGNATURE_DOORS and
   # the two sets lineage verifies with, from the same helpers (one narrower set, below): RASK_EVENT_SIGNERS
   # (lance.signingIdentities) and RASK_EVENT_DELEGATORS (lance.delegatorIdentities), so a door and lineage cannot disagree
-  # about who signs. The app
-  # whose doors take control events (notifications) also carries RASK_CONTROL_SIGNER_ROLES, a JSON object
+  # about who signs. The apps
+  # whose doors take control events (notifications, and the catalog under catalog.controlEmit) also carry RASK_CONTROL_SIGNER_ROLES, a JSON object
   # from each service that emits control events to the identities it signs as (lance.signers' `role`): catalog -> the
   # catalog, maintenance -> maintenance (its purge, under maintenance.controlEmit). The keys are
   # exactly service_kit.control_events.ControlSigner, which the services type, so a key they do not know fails their boot;
   # every key is present, and a role whose service is not deployed is an empty list. A door's per-action policy
-  # (control_signer_role) resolves an action's allowed signers from it; task_* actions and grants on an annotation project
-  # are exempt there, since the annotator signs nothing. Without the store or auth nothing is rendered and the doors
+  # (control_signer_role) resolves every action's allowed signers from it. Without the store or auth nothing is rendered and the doors
   # verify nothing, as lineage does.
   #
   # Notifications and maintenance keep lineage's full sets: every signer's events reach them.

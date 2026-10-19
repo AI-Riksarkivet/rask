@@ -26,11 +26,12 @@ import functools
 import logging
 import secrets
 from collections.abc import Awaitable, Callable
-from typing import Annotated, Final
+from pathlib import Path
+from typing import Annotated, Final, Self
 
 from fastapi import FastAPI, Header, Request
 from lance_namespace import PermissionDeniedError, ServiceUnavailableError
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from starlette.responses import Response
 
@@ -75,7 +76,7 @@ class DaprDoorSettings(BaseSettings):
     #: the flag buys over an implicit skip is that the decision is made by a person and is greppable —
     #: an estate-wide search finds every deployment running open, which an absent variable cannot be.
     #:
-    #: Measured 2026-09-15, which is why it is opt-IN rather than opt-out: `rask-annotator` carried no
+    #: Measured 2026-09-15, which is why it is opt-IN rather than opt-out: an actor host carried no
     #: `APP_API_TOKEN` and its sidecar-only `/dapr/config` answered 200 to a caller presenting none.
     #: Nothing in the render, the chart or a probe distinguished that from a configured door.
     allow_unauthenticated_dapr: bool = Field(default=False, alias="RASK_ALLOW_UNAUTHENTICATED_DAPR")
@@ -103,6 +104,19 @@ class DaprDoorSettings(BaseSettings):
     #: on its own interval, so a sidecar keeps presenting the old token until its pod restarts, and a pod that
     #: restarts before ESO synced still starts with it. Absent or empty outside a rotation.
     app_token_previous_field: str = Field(default="previous", alias="RASK_APP_TOKEN_PREVIOUS_FIELD")
+
+    #: Read the expected token from this FILE: the Secret named by `dapr.io/app-token-secret`, mounted into the app,
+    #: for a client of the estate that generates its own token and reads nothing from the estate's secret store
+    #: (ADR 0171). The third MODE beside env and the store, never a fallback for either: setting it with
+    #: `RASK_APP_TOKEN_FROM_STORE` is a boot error. Read on every request, so a token the kubelet re-projects is the
+    #: one accepted.
+    app_token_file: Path | None = Field(default=None, alias="RASK_APP_TOKEN_FILE")
+
+    @model_validator(mode="after")
+    def _one_source(self) -> Self:
+        if self.app_token_from_store and self.app_token_file is not None:
+            raise ValueError("RASK_APP_TOKEN_FROM_STORE and RASK_APP_TOKEN_FILE name two sources for one token: set one")
+        return self
 
 
 class _NoCurrentToken(LookupError):
@@ -146,6 +160,9 @@ def expected_app_tokens() -> tuple[str, ...]:
         SecretStoreUnreadable: The store did not answer.
     """
     door = DaprDoorSettings()
+    if door.app_token_file is not None:
+        token = _read_token_file(door.app_token_file)
+        return (token,) if token else ()
     if not door.app_token_from_store:
         return (door.app_api_token,) if door.app_api_token else ()
     read = StoreRead(store=door.secret_store, secret=door.secret_key, fields=(door.app_token_field, door.app_token_previous_field))
@@ -166,9 +183,23 @@ def missing_app_token_knob() -> str:
     worth pinning if the knob named is the real one.
     """
     door = DaprDoorSettings()
+    if door.app_token_file is not None:
+        return f"the app token file {door.app_token_file} holds no token"
     if door.app_token_from_store:
         return f"{door.app_token_field!r} is absent from the Dapr secret store {door.secret_store}/{door.secret_key}"
     return "APP_API_TOKEN is unset"
+
+
+def _read_token_file(path: Path) -> str:
+    """The token the mounted file holds, or empty when it holds none.
+
+    Raises:
+        SecretStoreUnreadable: The file could not be read: a mount that is not there is an outage, not an empty token.
+    """
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        raise SecretStoreUnreadable(f"the app token file {path} is unreadable: {exc}") from exc
 
 
 def refuse_unconfigured_door(*, caller: str | None = None) -> None:
@@ -188,7 +219,12 @@ def refuse_unconfigured_door(*, caller: str | None = None) -> None:
     """
     door = DaprDoorSettings()
     if not door.allow_unauthenticated_dapr:
-        remedy = "seed that field" if door.app_token_from_store else "wire dapr.io/app-token-secret + APP_API_TOKEN"
+        if door.app_token_from_store:
+            remedy = "seed that field"
+        elif door.app_token_file is not None:
+            remedy = "mount the token there"
+        else:
+            remedy = "wire dapr.io/app-token-secret + APP_API_TOKEN"
         raise PermissionDeniedError(
             f"this Dapr door is not configured: {missing_app_token_knob()}, so no caller can be authenticated. "
             f"Either {remedy}, or set RASK_ALLOW_UNAUTHENTICATED_DAPR to accept an unauthenticated door deliberately."
@@ -263,6 +299,10 @@ def assert_app_token_configured(*, dapr_enabled: bool) -> None:
     if not dapr_enabled:
         return
     door = DaprDoorSettings()
+    if door.app_token_file is not None:
+        if not _read_token_file(door.app_token_file):
+            raise RuntimeError(f"the app token file {door.app_token_file} holds no token: the delivery route would otherwise be unauthenticated")
+        return
     if door.app_token_from_store:
         from service_kit.governed.secrets import fetch_required_secrets  # imported here, not at module scope: keeps this module import-light
 

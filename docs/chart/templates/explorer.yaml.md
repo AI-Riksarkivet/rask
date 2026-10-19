@@ -19,7 +19,7 @@ corpus — the same class of silent-wrong as the hostPath wedge this replaced, o
 
 ## `{{- include "rask.daprAnnotations" (list $root $svc.daprAppId $svc.port) | nindent 8 }}`
 
-Shared annotation surface (app-id = $svc.daprAppId — viewer/search/annotator, the exact
+Shared annotation surface (app-id = $svc.daprAppId — viewer/search, the exact
 ids the sidecar registers them under); the helper owns the full set so it never drifts.
 
 ## `{{- if $root.Values.explorer.corpusS3Root }}`
@@ -28,9 +28,9 @@ EACH CORPUS READER PRESENTS ITS OWN SCOPED IDENTITY, never the store's root, whi
 token (ADR 0168). The pod carries the access key id as config and names the Dapr secret that holds its other half:
 `MEDIA_S3_SECRET_KEY` is the secret's name and `MEDIA_S3_SECRET_FIELD=secret_key` its field, which
 `service_kit.media` fetches fail-closed through the sidecar. The viewer reads `viewer-s3` (`objectStore.viewerAccessKey`,
-the object browser's list-and-get identity); annotator and search read `media-s3` (`lance.mediaIdentity`, the
-`rask-media` policy: GetObject and a prefix-held list on `explorer.corpusS3Root`, nothing else), since neither writes
-to the corpus. No other app's Configuration allows either secret and no other app's store login reads it
+the object browser's list-and-get identity); search reads `media-s3` (`lance.mediaIdentity`, the
+`rask-media` policy: GetObject and a prefix-held list on `explorer.corpusS3Root`, nothing else), since it writes
+nothing to the corpus. No other app's Configuration allows either secret and no other app's store login reads it
 (`lance.storeReads`), so the identity a pod reads is the one its own row names. Both are set on every reader, though `service_kit.media` defaults to `media-s3` and
 `secret_key`, so the render names the identity each pod reads. A blank `objectStore.viewerAccessKey` or
 `objectStore.mediaAccessKey` fails the render rather than falling back to a wider credential.
@@ -41,19 +41,6 @@ to the corpus. No other app's Configuration allows either secret and no other ap
 `helm upgrade --reuse-values` the stored values carry no `encoders` at all and
 `.Values.encoders.embedUrl` aborts the entire render with "nil pointer evaluating
 interface {}.embedUrl". Gated by scripts/verify_encoder_wiring.sh step 2b.
-
-## `{{- with include "rask.rayDashboardUrl" $root }}`
-
-Serve-native producer DISCOVERY: the assist registry's primary source is the ray
-cluster itself — a Serve app whose deployment carries a `labeling` block in its
-user_config IS a registered producer (serve_discovery.py). Discovery reads the
-DASHBOARD every Ray consumer names (`rask.rayDashboardUrl`; none ⇒ the env is
-absent and discovery is off). Producer CALLS go to Serve's HTTP ingress, the
-origin studio takes too (`rask.rayServeOrigin`): the external dashboard host serves
-the apps (verified live 2026-08-06), in-cluster it is the load-balanced
-`-ray-serve-svc:8000` — never the head's own :8000, which reaches one proxy.
-MEDIA_ASSIST_BACKENDS and the runner's MEDIA_ASSIST_URL below stay the operator
-override: config is intent, discovery is observation.
 
 ## `{{- include "lance.corpusVolume" $root | nindent 8 }}`
 
@@ -72,18 +59,10 @@ emptyDir — green probes on both sides, an empty product, for three days.
 
 ## `{{- include "rask.proxyHeaderArgs" $root | nindent 12 }}`
 
-The media trio sit behind the Gateway's data plane (the cluster route's `/api/explorer*` rows), so they
+The media pair sit behind the Gateway's data plane (the cluster route's `/api/explorer*` rows), so they
 trust its `X-Forwarded-For` from `forwardedAllowIps` alone, exactly as catalog, lineage and the fleet do:
 without it every anonymous request carries the data plane's address and the rate limiter keys the whole
 public estate as one client.
-
-## `{{- if $root.Values.dex.enabled }}`
-
-The publish saga's identity is a password-grant user of the development Dex (Dex has no
-client-credentials grant), so its token URL, client and user render only with `dex.enabled`. Without
-Dex (every real deployment) the saga mints no token and publishes with no bearer, which a governed
-catalog refuses: it fails closed rather than posting the publisher's password and the client secret
-over http to whatever answers `rask-dex` ([[XC-148]]).
 
 ## `args:`
 

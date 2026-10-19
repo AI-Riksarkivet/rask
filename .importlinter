@@ -45,6 +45,22 @@ forbidden_modules =
     compute
 allow_indirect_imports = True
 
+# The lakehouse knows no annotation tool (ADR 0171): rask's annotator, like Label Studio, is a client that reaches the
+# lakehouse through its public doors. A client may import the shared library; the lakehouse may not import a client.
+[importlinter:contract:the-lakehouse-knows-no-annotation-tool]
+name = XC-167: no lakehouse service and no shared kit imports the annotator
+type = forbidden
+source_modules =
+    catalog
+    lineage
+    maintenance
+    notifications
+    service_kit
+    lineage_kit
+forbidden_modules =
+    annotator
+allow_indirect_imports = True
+
 [importlinter:contract:the-lakehouse-is-not-built-on-a-workflow-engine]
 name = Phase 1 (3): no lakehouse service imports a workflow engine
 type = forbidden

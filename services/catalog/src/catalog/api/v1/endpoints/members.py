@@ -15,11 +15,8 @@ correct as a guard and wrong as the only path.
 Deliberately NOT a generalization of ``access.py``. That surface is keyed on the data-plane rungs and
 should stay that way; this one writes ``admin``/``member`` on exactly one project object.
 
-**Shape copied from ``services/annotator/.../members.py``**, which is the same API one level down
-(``annotation_project`` hangs off ``project``) and has been shipping. Same three routes, same
-idempotent grant, same never-empty-admin refusal, same "revoking what is not there is a no-op, not a
-404". Copying it rather than designing a new one is the point: the estate already decided how this
-looks.
+Three routes: an idempotent grant, a revoke that refuses to remove the last admin, and "revoking what is
+not there is a no-op, not a 404".
 """
 
 from __future__ import annotations

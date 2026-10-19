@@ -47,33 +47,30 @@ STORE_POD: Final = "Deployment/rask-openbao"
 #: The KV v2 data path a policy grants a secret by.
 _DATA_PATH: Final = re.compile(r"^secret/data/([^/*]+)$")
 
-_DOORS: Final = frozenset({"catalog", "lineage", "maintenance", "notifications", "annotator"})
-_SIDECARS: Final = frozenset(
-    f"Deployment/rask-{app}" for app in ("catalog", "lineage", "maintenance", "notifications", "annotator", "search", "viewer", "flows")
-)
+_DOORS: Final = frozenset({"catalog", "lineage", "maintenance", "notifications"})
+_SIDECARS: Final = frozenset(f"Deployment/rask-{app}" for app in ("catalog", "lineage", "maintenance", "notifications", "search", "viewer", "flows"))
 _ZONES: Final = frozenset(f"Deployment/rask-web-{zone}" for zone in ("home", "lakehouse", "explorer", "annotator", "compute", "models", "studio"))
 _POSTGRES_CLIENTS: Final = frozenset(
     {"StatefulSet/rask-age", "Deployment/rask-openfga", "Job/rask-openfga-migrate-r1", "Deployment/rask-otel-collector", "CronJob/rask-pg-backup"}
 )
 _CATALOG_VERIFIERS: Final = frozenset({"catalog", "lineage", "maintenance", "notifications"})
-_MAINTENANCE_VERIFIERS: Final = frozenset({"lineage", "maintenance", "notifications"})
+_MAINTENANCE_VERIFIERS: Final = frozenset({"catalog", "lineage", "maintenance", "notifications"})
 
 #: secret -> {"store": identities whose login reads it, "dapr": apps whose sidecar API serves it, "pods": workloads given it by ESO}.
 EXPECTED: Final[dict[str, dict[str, frozenset[str]]]] = {
     "lineage-s3": {"store": frozenset({"lineage"}), "dapr": frozenset({"lineage"})},
     "maintenance-s3": {"store": frozenset({"maintenance"}), "dapr": frozenset({"maintenance"})},
     "viewer-s3": {"store": frozenset({"viewer"}), "dapr": frozenset({"viewer"})},
-    "media-s3": {"store": frozenset({"annotator", "search"}), "dapr": frozenset({"annotator", "search"})},
+    "media-s3": {"store": frozenset({"search"}), "dapr": frozenset({"search"})},
     # values-local.yaml's multibase data base names this credential reference.
     "lh067-second-store": {"store": frozenset({"catalog"}), "dapr": frozenset({"catalog"})},
-    "publisher-oidc": {"store": frozenset({"annotator"}), "dapr": frozenset({"annotator"})},
-    "oidc-client": {"store": frozenset({"annotator", "eso"}), "dapr": frozenset({"annotator"}), "pods": _ZONES},
+    "oidc-client": {"store": frozenset({"eso"}), "pods": _ZONES},
     "dapr-app-token": {"store": _DOORS | {"eso"}, "dapr": _DOORS, "pods": _SIDECARS},
     "signing-key-rask-sa-catalog": {"store": frozenset({"catalog"}), "dapr": frozenset({"catalog"})},
     "signing-key-rask-sa-maintenance": {"store": frozenset({"maintenance"}), "dapr": frozenset({"maintenance"})},
     "signing-public-rask-sa-catalog": {"store": _CATALOG_VERIFIERS, "dapr": _CATALOG_VERIFIERS},
     "signing-public-rask-sa-maintenance": {"store": _MAINTENANCE_VERIFIERS, "dapr": _MAINTENANCE_VERIFIERS},
-    "dapr-state": {"store": frozenset({"annotator", "catalog", "flows", "notifications"})},
+    "dapr-state": {"store": frozenset({"catalog", "flows", "notifications"})},
     "nats-user-catalog": {"store": frozenset({"catalog"})},
     "nats-user-lineage": {"store": frozenset({"lineage"})},
     "nats-user-maintenance": {"store": frozenset({"maintenance"})},

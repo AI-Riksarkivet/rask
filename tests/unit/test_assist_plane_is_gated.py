@@ -37,32 +37,19 @@ from fastapi.testclient import TestClient
 from annotator.api.security import current_subject, get_checker
 from annotator.api.v1.endpoints import assist as assist_ep
 from annotator.api.v1.endpoints.assist import router
+from annotator.corpus import Corpus
 from service_kit.exceptions import register_handlers
+from service_kit.lancekit.descriptor import Declared
 from service_kit.media.config import Settings
 from service_kit.media.deps import get_state
 
 
-class _Binding:
-    table = "documents"
+class _State:
+    """The app state `require_assist` reads: its settings, which name the corpus table's catalog object.
 
-
-class _Declared:
-    document = _Binding()
-
-
-class _Descriptor:
-    declared = _Declared()
-
-
-class _Handle:
-    """The minimum `require_assist` reads: an id, a settings object and a document binding.
-
-    A fake rather than a real dataset because the gate must be provable without a corpus on disk —
-    the whole point is that the check happens BEFORE any unit is read.
+    The gate must be provable without a corpus on disk — the whole point is that the check happens BEFORE any unit
+    is read.
     """
-
-    id = "corpus-1"
-    descriptor = _Descriptor()
 
     def __init__(self) -> None:
         self.settings = Settings()
@@ -76,7 +63,7 @@ def _app(*, allow: bool, record: list[dict[str, Any]] | None = None, subject: st
             record.append({"user": user, "relation": relation, "obj": obj})
         return allow
 
-    handle = _Handle()
+    state = _State()
 
     app = FastAPI()
     app.include_router(router)
@@ -85,14 +72,23 @@ def _app(*, allow: bool, record: list[dict[str, Any]] | None = None, subject: st
     # The VERIFIED subject. Overriding `current_subject` (not a header) is the point: with OIDC on
     # there is no header path to this value at all.
     app.dependency_overrides[current_subject] = lambda: subject
-    app.dependency_overrides[get_state] = lambda: handle
+    app.dependency_overrides[get_state] = lambda: state
     return app
 
 
+#: The corpus the gate resolves: its documents binding names the table the write rung is asked on.
+CORPUS = Corpus(
+    id="corpus-1",
+    declared=Declared.model_validate(
+        {"identity": {"key_fields": ["doc_id", "speech_id", "chunk_id"]}, "document": {"table": "documents", "media_blob": "image"}}
+    ),
+)
+
+
 @pytest.fixture(autouse=True)
-def _resolve_handle(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`dataset_handle` opens Lance under a lock; the gate must be testable with no corpus present."""
-    monkeypatch.setattr(assist_ep, "dataset_handle", lambda state, dataset=None: state)
+def _resolve_corpus(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Resolving a corpus asks the catalog; the gate must be testable with no catalog and no corpus present."""
+    monkeypatch.setattr(assist_ep, "resolve", lambda *_a, **_k: CORPUS)
 
 
 BODY = {"producer": "sam", "prompt": "a line of text"}

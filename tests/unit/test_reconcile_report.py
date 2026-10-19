@@ -42,7 +42,6 @@ _FGA_DERIVED_CATEGORIES = {
     "ghost_warehouses",
     "ghost_tables",
     "unreferenced_projects",
-    "orphaned_annotation_tasks",
     "ungoverned_tables",
 }
 
@@ -337,7 +336,7 @@ def test_an_openfga_outage_degrades_only_the_categories_that_needed_it(tmp_path:
 #: The categories whose answer is derived from BOTH the FGA tuple scan and the project registry. MAINT-10:
 #: one outage, one explanation. `_first` returns the first NON-EMPTY reason in argument order, so the order
 #: each category lists the pair in decides which store it blames when both are down.
-_TUPLES_AND_PROJECTS = {"ghost_projects", "unreferenced_projects", "orphaned_annotation_tasks"}
+_TUPLES_AND_PROJECTS = {"ghost_projects", "unreferenced_projects"}
 
 
 def test_categories_over_the_same_two_sources_report_the_same_reason() -> None:
@@ -577,20 +576,20 @@ def test_one_unreadable_warehouse_root_does_not_blind_the_whole_scan(tmp_path: P
     assert any(i.source == "catalog:namespaces:s3://bkt-gone" for i in report.incomplete), f"the unreadable root was not reported: {report.incomplete}"
 
 
-def test_the_two_DOORLESS_categories_are_reported_but_do_not_gate_the_purge(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """T8. `unbound_namespaces` and `orphaned_annotation_tasks` counted into `total`, and
-    `report_is_clean` refuses on any non-zero total — but NO endpoint in the product clears either.
+def test_the_DOORLESS_category_is_reported_but_does_not_gate_the_purge(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """T8. `unbound_namespaces` counted into `total`, and `report_is_clean` refuses on any non-zero
+    total — but NO endpoint in the product clears it.
 
-    So the gate was not strict, it was unsatisfiable. MEASURED on the live estate 2026-08-16: those two
-    sat at 5 and 3 with every other category at zero, meaning `report_is_clean` could never return None
-    by any action an operator could take, and the #79 purge could not be reached at all.
+    So the gate was not strict, it was unsatisfiable. MEASURED on the live estate 2026-08-16: the
+    doorless categories sat at 5 and 3 with every other category at zero, meaning `report_is_clean`
+    could never return None by any action an operator could take, and the #79 purge could not be
+    reached at all.
 
     The gate's job is to prove the STORAGE state is understood before deleting expired trash bytes.
-    Neither category is a storage fact: an orphaned annotation task is an FGA edge in the annotator
-    plane naming a retired tenant (unreachable, not dangerous), and an unbound namespace is a missing
-    routing record. Neither can change which bytes the purge touches.
+    An unbound namespace is not a storage fact: it is a missing routing record, and cannot change
+    which bytes the purge touches.
 
-    Both halves are asserted, and the second is the one that matters: the categories must still be
+    Both halves are asserted, and the second is the one that matters: the category must still be
     COUNTED and NAMED. Excluding them from the report rather than from the gate would trade an
     unreachable purge for invisible drift.
     """
@@ -607,9 +606,7 @@ def test_the_two_DOORLESS_categories_are_reported_but_do_not_gate_the_purge(tmp_
     # `maintenance.orphanScan` values key turns it on, and the live estate has it on). What must no
     # longer appear in the blocker is either doorless category — that was the unsatisfiable part.
     blocker = report_is_clean(report) or ""
-    assert "unbound_namespaces" not in blocker and "orphaned_annotation_tasks" not in blocker, (
-        f"a doorless category is still named as a purge blocker: {blocker}"
-    )
+    assert "unbound_namespaces" not in blocker, f"a doorless category is still named as a purge blocker: {blocker}"
     assert "NOT clean" not in blocker, f"findings still gate on a report whose only drift is doorless: {blocker}"
 
 

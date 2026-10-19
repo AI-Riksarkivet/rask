@@ -4,7 +4,7 @@
 plane exists to end is a badge that counts other people's work, and "everyone in the project is told
 about everything in it" is that failure with a different justification. So watching is an explicit
 act, gated on `project#member` against the PROJECT — the object that exists at authorization time
-(create-on-parent doctrine, the same shape the annotator's project-create door uses).
+(the create-on-parent doctrine).
 
 **The permission is re-checked at DELIVERY**, not only here. Membership can be revoked between the
 watch and the run, and a registry row is not an authorization. This door writes a preference; the

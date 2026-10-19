@@ -244,8 +244,8 @@ spec:
 {{- if .Values.openfga.enabled }}
 ---
 # (3b') openfga:8080/8081 — the authorization store, which authorizes none of its callers ([[LH-442]]): any token it
-# admits may write any tuple. Only the tuple writers reach its API (the catalog, maintenance, the annotator and the
-# jobs that publish the model and seed the estate's grants, `lance.fgaWriters`); every other service asks the catalog's
+# admits may write any tuple. Only the tuple writers reach its API (the catalog, maintenance and the jobs that publish
+# the model and seed the estate's grants, `lance.fgaWriters`); every other service asks the catalog's
 # decision door. The Collector reaches the metrics port alone.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -355,10 +355,11 @@ spec:
                   # `app.kubernetes.io/component: viewer`. (core-api/search-api/volumes-api died
                   # with the wave; the orchestrator died at P7a.)
                   - viewer
-                  # #142: search + annotator read the media corpus from the governed bucket too —
-                  # absent from this list they are SILENTLY dropped (green pods, empty corpus).
+                  # #142: search reads the media corpus from the governed bucket too — absent from this
+                  # list it is SILENTLY dropped (green pod, empty corpus). A client reading a governed table
+                  # on the credential the catalog vends it (the annotator's release, a user's pipeline) is
+                  # admitted by `networkPolicy.objectStoreExtraFrom`.
                   - search
-                  - annotator
         {{- if .Values.ray.enabled }}
         # The HTR runner executes inside the KubeRay-managed RayService pods (PageLoader reads the
         # image cache, AltoWriter writes ALTO — s3://images-batch*). The chart's head template stamps

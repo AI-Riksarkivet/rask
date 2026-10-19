@@ -103,7 +103,6 @@ CATEGORIES: tuple[str, ...] = (
     "orphaned_trash",
     "ghost_tables",
     "dangling_bindings",
-    "orphaned_annotation_tasks",
     "ungoverned_tables",
     "unregistered_datasets",
     "absent_datasets",
@@ -114,26 +113,17 @@ CATEGORIES: tuple[str, ...] = (
 #: report, and excluded from `total`.
 #:
 #: THE GATE'S JOB IS TO PROVE THE STORAGE STATE IS UNDERSTOOD before the purge deletes expired trash
-#: bytes. Neither of these is a storage fact, and neither can change which bytes the purge touches:
+#: bytes. None of these is a storage fact, and none can change which bytes the purge touches:
 #:
-#:   * `orphaned_annotation_tasks` — an FGA edge in the ANNOTATOR plane naming a retired tenant.
-#:     Annotation tasks deliberately do not block a project delete, so retiring a tenant legitimately
-#:     leaves the edge behind; the task is not dangerous, it is UNREACHABLE (see
-#:     :class:`OrphanedAnnotationTask`). No bytes are implicated.
 #:   * `unbound_namespaces` — a top-level namespace with no warehouse BINDING record. It is a registry
-#:     gap about routing, not about what exists on disk.
-#:
-#: And neither has a door. No endpoint in the product clears an orphaned annotation task or binds a
-#: legacy namespace, so gating on them did not make the purge safer — it made the gate permanently
-#: unsatisfiable. MEASURED 2026-08-16: the estate sat at 3 and 5 respectively with every other category
-#: at zero, so `report_is_clean` could never return None by any action an operator could take. An
-#: unreachable gate is not a safety property; it is a feature that cannot be switched on, and it hides
-#: the categories that DO matter behind a total that never falls.
-#:
-#: Adding a door for either is still worthwhile and is the strictly better fix — the drift is real. The
-#: two halves differ in risk and should not be built together: revoking an orphaned annotation task
-#: DELETES unreachable tuples, while binding a legacy namespace WRITES a registry record for live data.
-#:   * `ungoverned_tables` — a catalog table carrying NO authorization tuples. Same test as the two
+#:     gap about routing, not about what exists on disk. No endpoint in the product binds a legacy
+#:     namespace, so gating on it did not make the purge safer — it made the gate permanently
+#:     unsatisfiable. MEASURED 2026-08-16: the estate sat at 5 with every gating category at zero, so
+#:     `report_is_clean` could never return None by any action an operator could take. An unreachable
+#:     gate is not a safety property; it is a feature that cannot be switched on, and it hides the
+#:     categories that DO matter behind a total that never falls. Adding a door is still the strictly
+#:     better fix — the drift is real — and it WRITES a registry record for live data.
+#:   * `ungoverned_tables` — a catalog table carrying NO authorization tuples. Same test as the one
 #:     above and the same answer: it is an AUTHZ fact rather than a storage one (the bytes are intact
 #:     and the purge cannot touch them differently for it), and no endpoint clears it directly. Gating
 #:     on it would make the gate unsatisfiable again, which this comment already argues is not a safety
@@ -143,7 +133,6 @@ CATEGORIES: tuple[str, ...] = (
 #:     bytes, which are not the bytes a live record fails to find.
 NON_GATING_CATEGORIES: frozenset[str] = frozenset(
     {
-        "orphaned_annotation_tasks",
         "unbound_namespaces",
         "ungoverned_tables",
         "orphaned_trash",
@@ -276,21 +265,6 @@ class DanglingBinding(BaseModel):
     warehouse_id: str
 
 
-class OrphanedAnnotationTask(BaseModel):
-    """An annotation task whose ``tenant`` edge names a catalog project that no longer exists.
-
-    Annotation tasks are NOT warehouses: one catalog project holds many, they live in the annotator
-    plane, and they deliberately do not block a project delete. So retiring a tenant legitimately
-    leaves this edge behind — the annotator's ``owner``/``viewer`` rungs derive from
-    ``admin``/``member from tenant``, and with the tenant's tuples revoked there is no principal left
-    to cascade from. The task is not dangerous, it is UNREACHABLE, and nothing else would ever say so.
-    """
-
-    annotation_project: str
-    #: The tenant it still points at — gone from the project registry.
-    tenant: str
-
-
 class CategoryUnavailable(BaseModel):
     """A category that could NOT be checked because a store it needs was unreachable."""
 
@@ -349,7 +323,6 @@ class ReconcileReport(BaseModel):
     #: Trash naming a root nothing maintains. Reported, never gating — see `NON_GATING_CATEGORIES`.
     orphaned_trash: list[OrphanedTrash] = Field(default_factory=list)
     dangling_bindings: list[DanglingBinding] = Field(default_factory=list)
-    orphaned_annotation_tasks: list[OrphanedAnnotationTask] = Field(default_factory=list)
     #: Files under a dataset prefix that no LIVE version references (the reclamation gap).
     unregistered_datasets: list[UnregisteredDataset] = Field(default_factory=list)
     #: The INVERSE of `unregistered_datasets`: a catalog record whose location holds no bytes
@@ -604,8 +577,6 @@ class TupleScan(BaseModel):
 
     #: ``{object_type: {object_id: tuple_count}}``
     counts_by_type: dict[str, dict[str, int]] = Field(default_factory=dict)
-    #: ``(annotation_project_id, tenant_project_id)`` for each ``annotation_project#tenant`` edge.
-    annotation_tenants: list[tuple[str, str]] = Field(default_factory=list)
 
 
 async def _scan_tuples(client: Any) -> tuple[TupleScan, str | None]:
@@ -640,10 +611,6 @@ async def _scan_tuples(client: Any) -> tuple[TupleScan, str | None]:
                 continue
             bucket = scan.counts_by_type.setdefault(obj_type, {})
             bucket[obj_id] = bucket.get(obj_id, 0) + 1
-            if obj_type == "annotation_project" and item.relation == "tenant":
-                tenant_type, _, tenant_id = str(item.user).partition(":")
-                if tenant_type == "project" and tenant_id:
-                    scan.annotation_tenants.append((obj_id, tenant_id))
         if not token:
             return scan, None
     return scan, f"the tuple scan hit its {_MAX_TUPLE_PAGES}-page ceiling with a cursor outstanding"
@@ -666,16 +633,6 @@ def _ghosts(kind: str, tuple_counts: Mapping[str, int], *, record_ids: set[str],
 def _unreferenced_projects(record_ids: set[str], tuple_counts: Mapping[str, int]) -> list[UnreferencedProject]:
     """Project records with no tuples at all — an undeletable tenant is drift too."""
     return [UnreferencedProject(id=project_id) for project_id in sorted(record_ids) if not tuple_counts.get(project_id)]
-
-
-def _orphaned_annotation_tasks(edges: Iterable[tuple[str, str]], project_ids: set[str]) -> list[OrphanedAnnotationTask]:
-    """Annotation tasks whose tenant edge names a project the registry no longer has.
-
-    The expected residue of a project delete, which refuses on warehouses but NOT on annotation tasks
-    (one tenant holds many, and they are not a rung of project > warehouse > namespace > table). This
-    is the category that exists precisely because the delete door was right to let it happen.
-    """
-    return [OrphanedAnnotationTask(annotation_project=task_id, tenant=tenant_id) for task_id, tenant_id in sorted(set(edges)) if tenant_id not in project_ids]
 
 
 def _unregistered_datasets(*, discovered: Iterable[str], registered: set[str], trashed: set[str]) -> list[UnregisteredDataset]:
@@ -1028,7 +985,7 @@ def _first(*reasons: str | None) -> str | None:
     which outage the report names, so two categories reading the SAME pair of sources must list that
     pair in the SAME order or the report explains one outage two different ways depending on which
     line the reader looks at (MAINT-10 — it did: `unreferenced_projects` listed the registry first
-    while `ghost_projects` and `orphaned_annotation_tasks` listed the tuple scan first). The shared
+    while `ghost_projects` listed the tuple scan first). The shared
     orders now live in the named tuples below rather than being retyped per category.
     """
     return next((reason for reason in reasons if reason), None)
@@ -1154,12 +1111,6 @@ def build_report(
         "dangling_bindings",
         inputs=bindings_and_warehouses,
         detect=lambda: _dangling_bindings(sources.bindings or [], warehouse_ids),
-    )
-    report.orphaned_annotation_tasks = _run_category(
-        report,
-        "orphaned_annotation_tasks",
-        inputs=tuples_and_projects,
-        detect=lambda: _orphaned_annotation_tasks(sources.tuples.annotation_tenants if sources.tuples else [], project_ids),
     )
 
     # `total` is the PURGE GATE, not the drift count — every category stays in `counts` and is still

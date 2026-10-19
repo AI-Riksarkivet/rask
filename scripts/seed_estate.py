@@ -36,11 +36,10 @@ reaches gold only through a role, a tenant member who is not an admin). Two deli
   id; a table created through the real door is identified by ``<namespace>$<name>``, so the seeded
   object is ``table:acme-silver$features``. There is no door that produces the flat form.
 
-Three fixture tuples are deliberately NOT seeded, each for the ghost reason this script exists for:
-``transaction:standalone_txn`` (a transaction is minted by a write op, not by a seed), the
-``annotation_project:labels_2026`` grants (that object's existence lives in the annotator service's own
-registry, not the catalog's), and ``user:root_admin owner warehouse:lance_catalog`` (the estate root is
-the bootstrap job's to grant, not a demo seed's).
+Two fixture tuples are deliberately NOT seeded, each for the ghost reason this script exists for:
+``transaction:standalone_txn`` (a transaction is minted by a write op, not by a seed) and
+``user:root_admin owner warehouse:lance_catalog`` (the estate root is the bootstrap job's to grant, not a
+demo seed's).
 
 THE SUBJECT MAPPING follows ``fga_seed_demo.py``: the fixtures say ``user:alice``, and a grant names a principal,
 ``<idp-id>~<user id>`` ([[LH-063]]), so the catalog refuses the literal. The development Dex's identities are rewritten

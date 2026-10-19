@@ -1,0 +1,35 @@
+{{- if not (.Capabilities.APIVersions.Has "generators.external-secrets.io/v1alpha1/Password") }}
+{{- fail "the annotator generates its Dapr app token with the External Secrets Operator's Password generator, and this cluster does not serve generators.external-secrets.io/v1alpha1. Install ESO first (development: deploy/fixtures/external-secrets). A cluster-less render names it: --api-versions generators.external-secrets.io/v1alpha1/Password" }}
+{{- end }}
+{{- $secret := printf "%s-dapr-app-token" (include "annotator.name" .) -}}
+apiVersion: generators.external-secrets.io/v1alpha1
+kind: Password
+metadata:
+  name: {{ $secret }}
+  labels:
+    {{- include "annotator.selector" . | nindent 4 }}
+spec:
+  length: 40
+  digits: 10
+  symbols: 0
+  noUpper: false
+  allowRepeat: true
+  secretKeys: [token]
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: {{ $secret }}
+  labels:
+    {{- include "annotator.selector" . | nindent 4 }}
+spec:
+  refreshPolicy: CreatedOnce
+  target:
+    name: {{ $secret }}
+    creationPolicy: Owner
+  dataFrom:
+    - sourceRef:
+        generatorRef:
+          apiVersion: generators.external-secrets.io/v1alpha1
+          kind: Password
+          name: {{ $secret }}

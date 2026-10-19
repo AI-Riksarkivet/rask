@@ -199,7 +199,6 @@ data:
     bao kv put secret/ray-auth-token token=@"$G/ray-auth-token" >/dev/null
     bao kv put secret/frontend-session secret=@"$G/frontend-session-secret" >/dev/null
     bao kv put secret/oidc-client client-secret={{ .Values.dex.clientSecret }} >/dev/null
-    bao kv put secret/publisher-oidc password={{ .Values.dex.publisher.password }} >/dev/null
     {{- range $plane, $id := dict "maintenance" .Values.objectStore.maintenanceAccessKey "lineage" .Values.objectStore.lineageAccessKey }}
     {{- if $id }}
     bao kv put secret/{{ $plane }}-s3 access_key={{ $id }} secret_key=@"$HOME/seed/scoped-{{ $id }}" >/dev/null

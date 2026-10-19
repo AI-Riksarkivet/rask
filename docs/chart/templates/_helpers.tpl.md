@@ -50,7 +50,7 @@ only readers, since on RustFS the root secret signs every STS session token (ADR
 
 Dapr sidecar pod annotations (no-op unless dapr.enabled) — the ONE annotation surface for the whole
 estate: the rask fleet AND the lance planes (services.yaml catalog/lineage,
-maintenance.yaml, explorer.yaml viewer/search/annotator) all render
+maintenance.yaml, explorer.yaml viewer/search) all render
 THIS helper, so the sidecar contract can never drift between planes (DAPRIFY 2026-07-27). Carries the full union of what the two planes shipped:
   - enabled / app-id / app-port / log-level (the original rask surface)
   - max-body-size (when dapr.maxBodySize is set — Dapr's 4Mi default rejects multi-image batch uploads)
@@ -227,7 +227,7 @@ lance-ns — grafted verbatim from lance-ns main@083b49a chart/templates/_helper
 
 Every one of these is referenced by a grafted lance template (services.yaml, maintenance.yaml,
 explorer.yaml, fleet.yaml, object-store-scoped-users.yaml, openbao-seed.yaml, age-postgres.yaml,
-otel-collector.yaml, network-policy.yaml, ha.yaml, runners.yaml, …). None of them
+otel-collector.yaml, network-policy.yaml, ha.yaml, …). None of them
 was renamed: no lance name collided with a rask name.
 
 VALUES THEY REQUIRE (the values.yaml merge must land these or the render breaks):
@@ -897,12 +897,12 @@ leave the catalog no identity at the store, and there is no key pair to fall bac
 
 ## `{{- define "lance.mediaIdentity" -}}`
 
-The corpus readers' access key, `objectStore.mediaAccessKey`, when explorer serves a corpus
+The corpus reader's access key, `objectStore.mediaAccessKey`, when explorer serves a corpus
 (`explorer.enabled` and `explorer.corpusS3Root`), else empty. Every consumer branches on this one value: the
-scoped-users hook's `rask-media` user and policy, the seed's `secret/media-s3`, and annotator's and search's
+scoped-users hook's `rask-media` user and policy, the seed's `secret/media-s3`, and search's
 `MEDIA_S3_ACCESS_KEY_ID` (explorer.yaml), so the user the store holds, the secret the store's seed writes and the
-key a pod presents cannot disagree. `required` while a corpus is served: a blank key would leave the two readers with
-no identity, and they never fall back to the root (ADR 0168).
+key a pod presents cannot disagree. `required` while a corpus is served: a blank key would leave the reader with
+no identity, and it never falls back to the root (ADR 0168).
 
 ## `{{- define "lance.backupIdentity" -}}`
 
@@ -1268,8 +1268,8 @@ list is how the first one drifted.
 
 ## `{{- define "rask.rayDashboardUrl" -}}`
 
-THE ONE RAY PLANE ([[CP-041]]): the dashboard every consumer names (the annotator's Serve discovery and
-the zones' Serve origin; the compute fixture is given the same address as its own value). `ray.dashboardUrl`
+THE ONE RAY PLANE ([[CP-041]]): the dashboard every consumer names (the zones' Serve origin;
+the compute and annotator fixtures are given the same address as their own values). `ray.dashboardUrl`
 when set, else empty.
 
 ## `{{- define "rask.rayServeOrigin" -}}`

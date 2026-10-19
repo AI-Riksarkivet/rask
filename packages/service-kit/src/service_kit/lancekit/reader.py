@@ -336,7 +336,7 @@ def translate_catalog_errors() -> Generator[None]:
     except _api_exc.ConflictException as exc:
         raise ConflictError(f"catalog write conflict: {exc.body}") from exc
     except _api_exc.UnauthorizedException as exc:
-        # 401 is NOT 403, and collapsing them cost real debugging time: the annotator sent no
+        # 401 is NOT 403, and collapsing them cost real debugging time: a media client sent no
         # bearer, the catalog answered 401, and the browser was told 403 — which reads as "you lack
         # a grant" and sends you looking for a missing FGA tuple that was never the problem. A
         # missing/invalid credential must stay 401 so the next reader can tell authn from authz.
@@ -479,7 +479,7 @@ def open_reader(
     THERE IS NO FALLBACK, and this docstring used to promise one — "the settings token remains the
     fallback for callers with no request context (the publish saga, which outlives any request)".
     That saga does not exist in the tree. Every call site of this function is a request-scoped
-    annotator route, so `caller_token or settings.catalog_token` fired only for the case it must not
+    route, so `caller_token or settings.catalog_token` fired only for the case it must not
     serve: an ANONYMOUS request, re-issued to the catalog under MEDIA_CATALOG_TOKEN. Absent now means
     absent; the catalog decides what an unauthenticated read is worth.
 

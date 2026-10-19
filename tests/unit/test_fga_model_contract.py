@@ -356,7 +356,7 @@ _OBJECT_AS_USER_SHAPES: dict[tuple[str, str, str], str] = {
     ("namespace", "child", "table"): "inverse child edge, reconstructed on revoke",
     ("namespace", "child", "materialized_view"): "inverse child edge, reconstructed on revoke",
     ("warehouse", "child", "namespace"): "inverse child edge, reconstructed on revoke",
-    # The forward `parent`/`tenant` edges live ON the dropped object, so a read-by-object sees them.
+    # The forward `parent` edges live ON the dropped object, so a read-by-object sees them.
     ("namespace", "parent", "namespace"): "tuple's object IS the dropped object",
     ("namespace", "parent", "warehouse"): "tuple's object IS the dropped object",
     ("table", "parent", "namespace"): "tuple's object IS the dropped object",
@@ -374,10 +374,6 @@ _OBJECT_AS_USER_SHAPES: dict[tuple[str, str, str], str] = {
     # A project cannot be deleted while a warehouse claims it — `projects.py`'s emptiness refusal
     # 409s naming every held warehouse, and a warehouse's own delete revokes this edge with it.
     ("warehouse", "project", "project"): "unreachable: project delete refuses while warehouses exist",
-    # THE ONE THAT GENUINELY SURVIVES. Deleting a project leaves `annotation_project:X#tenant@project:Y`
-    # pointing at a project that is gone. Known, and reported by the reconciler as drift rather than
-    # repaired — the annotator owns that object and the catalog's revoke does not reach across.
-    ("annotation_project", "tenant", "project"): "KNOWN RESIDUAL: reconciler-reported drift",
     # A role scoped to a deleted project keeps pointing at it, and that is the SAFE direction rather
     # than a leak: the grant door reads this edge to refuse a cross-tenant grant, so a role whose
     # tenant is gone stops being grantable anywhere instead of becoming estate-wide. Repairing it

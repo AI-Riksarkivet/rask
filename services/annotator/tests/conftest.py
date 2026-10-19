@@ -7,8 +7,7 @@ because the project actor is briefly unreachable"), so a test that reaches one d
 WAITS, the exception is swallowed, and the only symptom is time.
 
 MEASURED 2026-09-23. With `DAPR_HTTP_PORT` pointed at a dead port — which is what CI has —
-`test_task_history_is_bounded.py` runs past 300s and is killed, and a publish-token mint through
-`lakehouse.publish_token` times out too. On a developer box both complete, because something answers
+`test_task_history_is_bounded.py` runs past 300s and is killed. On a developer box it completes, because something answers
 on 127.0.0.1:3500; on this host that was a `fake_sidecar.py` left running for 57 days. A suite whose
 result depends on a stray local process is not measuring what it claims to, and `ms-test` had been red
 on exactly that difference.
@@ -41,26 +40,3 @@ def refuse_sidecar_channels(monkeypatch: pytest.MonkeyPatch) -> None:
         )
 
     monkeypatch.setattr(proxies, "typed_proxy", _refuse)
-
-
-@pytest.fixture(autouse=True)
-def refuse_sidecar_secret_reads(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The OTHER sidecar door, and the one that actually hung the second file.
-
-    `lakehouse.publish_token` calls `fetch_required_secrets` before it ever reaches the IdP URL, and
-    that goes to the Dapr secret store over the same 127.0.0.1:3500. Measured 2026-09-23: a
-    publish-token mint timed out there, not on `https://idp.example`, and an assertion that "any failure
-    proves the branch was entered" is satisfied by that connect timeout, which hides which door was
-    being knocked on.
-
-    Refusing makes that failure immediate and NAMED.
-
-    A test that genuinely exercises the transport stubs this itself; a test-level `monkeypatch.setattr`
-    runs after an autouse fixture, so its stub wins and nothing here has to know its name.
-    """
-    from service_kit.governed import secrets as sk_secrets
-
-    def _refuse(store: str, key: str, **_k: object) -> dict[str, str]:
-        raise AssertionError(f"an offline test read secret {key!r} from store {store!r} — stub `fetch_required_secrets`")
-
-    monkeypatch.setattr(sk_secrets, "fetch_required_secrets", _refuse)

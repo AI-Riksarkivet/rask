@@ -76,21 +76,6 @@ class NotificationReason(StrEnum):
     #: the service really did run it, and overwriting attribution to fix
     #: targeting would trade one wrong answer for another.
     ORIGINATOR = "originator"
-    #: v4 — annotation work. Same targeting rule as the grant pair (the event NAMES its subject), one
-    #: rung down: the audience is the ASSIGNEE, never the manager whose click produced the event.
-    TASK_ASSIGNED = "task_assigned"
-    TASK_UNASSIGNED = "task_unassigned"
-    #: v6 — the rest of the departure edges. DISTINCT members rather than a reuse of TASK_UNASSIGNED
-    #: because the panel renders the reason as each row's user-visible label: "unassigned" is simply
-    #: the wrong sentence for reviewed work coming back, or for an item being discarded outright.
-    #: `task_changes_requested` covers both review-side returns (a reviewer's `request_changes` and a
-    #: manager's `reopen`) — from the submitter's side those are one fact.
-    TASK_CHANGES_REQUESTED = "task_changes_requested"
-    TASK_DROPPED = "task_dropped"
-    #: v7 — a self-claimed task whose lease lapsed. The only reason in this family that no person
-    #: caused: it is fired by the annotator's own timer, which is exactly why the holder cannot be
-    #: expected to notice it.
-    TASK_LEASE_EXPIRED = "task_lease_expired"
     #: v8 — an erasure's residual is pinned by a tag or a branch this person requested or owns, and the
     #: release that deletes them is scheduled (ADR 0138). Named, like the grant pair: the row is the
     #: person's only notice before a branch's own commits are lost.

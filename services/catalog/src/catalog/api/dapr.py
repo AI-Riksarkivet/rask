@@ -13,25 +13,93 @@ subscription itself is registered **only** when control eventing is enabled (``c
 matching the emitter gate in ``main.py``), so an HTTP-only / control-off deployment carries no always-live
 ingest route. The thin ``main`` builds ``app`` first, then calls :func:`register_control_dapr` so the
 subscription is wired after ``app`` exists (the same import-order constraint as lineage's split).
+
+**It acts only on what a control signer signed** ([[CTL-32]], ADR 0171). The ``dapr-api-token`` proves that this
+app's sidecar delivered an event, and every app the bus lets publish reaches that sidecar, so the actor an event
+names is a claim until its ``rask_signature`` proves it. The event is verified with the control doors' own rule,
+against the identities of the role ``control_signer_role`` names for its action (``RASK_CONTROL_SIGNER_ROLES``),
+under ``RASK_SIGNATURE_DOORS``: ``enforce`` acknowledges a refusal and buffers and evicts nothing for it, ``observe``
+acts as ``off`` and counts what it would refuse, and keys the sidecar cannot serve are a retry, since they say nothing
+about the signature. A refusal is counted in ``catalog.signature.refused``.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Annotated, Any
+from typing import Annotated, Any, Final, get_args
 
 from dapr.ext.fastapi import DaprApp
 from fastapi import Depends, FastAPI, Request
+from fastapi.concurrency import run_in_threadpool
+from opentelemetry import metrics
 from pydantic import ValidationError
 
+from catalog.api.control_relay import bounded, published_keys
 from catalog.api.dependencies import SettingsDep
-from catalog.core.config import get_settings
+from catalog.core.config import Settings, get_settings
 from catalog.services import warehouses
-from service_kit.control_events import CONTROL_TOPIC, CatalogControlEvent
+from lineage_kit.door import DoorMode, judge
+from lineage_kit.signing import RefusalReason, control_signature_of, verify_control_signature
+from service_kit.control_events import CONTROL_TOPIC, CatalogControlEvent, control_signer_role
 from service_kit.governed.dapr_auth import require_dapr_token
 
 
 log = logging.getLogger(__name__)
+
+_SUCCESS: Final = {"status": "SUCCESS"}
+_RETRY: Final = {"status": "RETRY"}
+
+_meter = metrics.get_meter("lance.catalog")
+_signature_refused = _meter.create_counter(
+    "catalog.signature.refused",
+    unit="{event}",
+    description="Control events the catalog's enforcing subscription refused, by reason: acknowledged, buffered nowhere and evicting nothing.",
+)
+_signature_would_refuse = _meter.create_counter(
+    "catalog.signature.would_refuse",
+    unit="{event}",
+    description="Control events the catalog's observing subscription acted on that enforce would refuse, by reason (keys_unavailable: the keys could not be read).",
+)
+
+
+def create_signature_refused_series() -> None:
+    """Create every reason series of `catalog.signature.refused` at 0.
+
+    The alert over this counter is `rate(...) > 0`, and a cumulative counter exports nothing for a series before its first
+    add: a series born at 1 has no 0 before it, so `rate()` sees no increase and the first refusal never pages. The catalog
+    runs under `opentelemetry-instrument`, whose MeterProvider is installed before this module is imported.
+    """
+    for reason in get_args(RefusalReason.__value__):
+        _signature_refused.add(0, {"lance.catalog.reason": reason})
+
+
+async def _screen(arrived: dict[str, Any], event: CatalogControlEvent, request: Request, settings: Settings) -> dict[str, str] | None:
+    """None when the subscription may act on ``event``; otherwise what the sidecar is answered instead.
+
+    The signature is checked over ``arrived``, the CloudEvent's data exactly as delivered: a model dump grows the fields
+    a schema defaults, and the signer signed what it wrote.
+    """
+    mode = DoorMode(settings.signature_doors)
+    if mode is DoorMode.OFF:
+        return None
+    signers = settings.control_signer_roles.get(control_signer_role(event.action), frozenset())
+    claim = control_signature_of(arrived)
+    source = published_keys(request, settings).for_event(claim.kid if claim else None)
+    verdict = await run_in_threadpool(
+        judge, lambda: verify_control_signature(arrived, source=source, signers=signers, delegators=settings.event_delegators), mode
+    )
+    logged = {"identity": bounded(claim.identity) if claim else None, "event_id": bounded(event.event_id), "action": event.action}
+    if verdict.observed is not None:
+        _signature_would_refuse.add(1, {"lance.catalog.reason": verdict.observed})
+        log.warning("catalog_signature_would_refuse", extra={**logged, "reason": verdict.observed})
+    if verdict.act:
+        return None
+    if verdict.refused is None:
+        log.warning("catalog_signature_keys_unavailable", extra=logged)
+        return _RETRY
+    _signature_refused.add(1, {"lance.catalog.reason": verdict.refused})
+    log.warning("catalog_signature_refused", extra={**logged, "reason": verdict.refused})
+    return _SUCCESS
 
 
 async def on_control_event(
@@ -63,7 +131,10 @@ async def on_control_event(
         event = CatalogControlEvent.model_validate(data)
     except (ValidationError, TypeError, ValueError) as exc:
         log.warning("control_event_invalid", extra={"error": str(exc)})
-        return {"status": "SUCCESS"}
+        return _SUCCESS
+    # Screened whatever its shape: an envelope that is not a mapping carries no signature, so it is judged unsigned.
+    if (answer := await _screen(data if isinstance(data, dict) else {}, event, request, settings)) is not None:
+        return answer
     buffer = getattr(request.app.state, "control_buffer", None)
     if buffer is not None:
         buffer.append(event)
@@ -72,7 +143,7 @@ async def on_control_event(
         evicted = warehouses.evict_stale_bindings(cache, action=event.action, object_id=event.object_id, extra=event.extra, delimiter=settings.delimiter)
         if evicted:
             log.info("binding_cache_evicted", extra={"action": event.action, "object_id": event.object_id, "evicted": evicted})
-    return {"status": "SUCCESS"}
+    return _SUCCESS
 
 
 def register_control_dapr(app: FastAPI) -> None:
@@ -93,3 +164,4 @@ def register_control_dapr(app: FastAPI) -> None:
     dapr_app = DaprApp(app)
     if settings.control_emit_enabled:
         dapr_app.subscribe(pubsub=settings.control_pubsub, topic=CONTROL_TOPIC, route="/control-events")(on_control_event)
+        create_signature_refused_series()

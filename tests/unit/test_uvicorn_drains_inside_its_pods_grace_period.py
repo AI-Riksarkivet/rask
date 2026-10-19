@@ -33,7 +33,6 @@ _FLAG = "--timeout-graceful-shutdown="
 #: THIS uvicorn. A floor: a detection that stopped finding uvicorn must not pass by finding nothing.
 _DRAIN_ARMED = frozenset(
     {
-        "Deployment/rask-annotator",
         "Deployment/rask-lineage",
         "Deployment/rask-maintenance",
         "Deployment/rask-notifications",

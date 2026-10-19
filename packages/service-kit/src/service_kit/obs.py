@@ -20,9 +20,9 @@ import logging
 
 #: The top-level app packages whose module loggers (``logging.getLogger(__name__)``) must emit INFO. Their
 #: effective level inherits from these package loggers, so raising the package raises the whole tree.
-#: ``viewer``/``search``/``annotator`` are the folded lance-media services. A sealed runner is NOT
-#: listed and must not be: it runs in its own image with its own environment, configures its own
-#: logging, and naming one here would put a workload's name in a shared seam.
+#: ``viewer``/``search`` are the folded lance-media services. A client of the lakehouse names its own packages
+#: when it calls :func:`configure_app_logging`, and a sealed runner configures its own logging: naming either
+#: here would put a tool's or a workload's name in a shared seam.
 _APP_LOGGERS = (
     "catalog",
     "lineage",
@@ -36,11 +36,10 @@ _APP_LOGGERS = (
     "service_kit",
     "viewer",
     "search",
-    "annotator",
 )
 
 
-def configure_app_logging(level: int = logging.INFO) -> None:
-    """Raise the app package loggers to ``level`` (default INFO) so their records reach the OTLP handler."""
-    for name in _APP_LOGGERS:
+def configure_app_logging(level: int = logging.INFO, *, packages: tuple[str, ...] = ()) -> None:
+    """Raise the app package loggers, and the caller's own ``packages``, to ``level`` so their records reach the OTLP handler."""
+    for name in (*_APP_LOGGERS, *packages):
         logging.getLogger(name).setLevel(level)

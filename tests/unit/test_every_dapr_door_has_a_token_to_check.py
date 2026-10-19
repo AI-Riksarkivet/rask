@@ -28,7 +28,7 @@ from tests.unit.test_invariants import _helm_template
 
 
 #: The service packages that mount a route guarded by `require_dapr_token`.
-_GUARDS_A_DAPR_DOOR = frozenset({"annotator", "catalog", "lineage", "maintenance", "notifications"})
+_GUARDS_A_DAPR_DOOR = frozenset({"catalog", "lineage", "maintenance", "notifications"})
 
 #: Any ONE of these gives the app an answer to "what token should I expect?". The third is a refusal to
 #: answer that was made deliberately — it still counts, because the point of the gate is that the choice

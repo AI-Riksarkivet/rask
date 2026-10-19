@@ -24,6 +24,7 @@ from annotator.annotations.schema import (
     identity_values,
 )
 from annotator.api.security import CurrentSubject, RawBearerToken
+from annotator.corpus import resolve
 from service_kit.exceptions import ValidationError
 from service_kit.lancekit.descriptor import Declared
 from service_kit.lancekit.keys import validate_doc_key
@@ -31,7 +32,6 @@ from service_kit.lancekit.reader import open_reader
 from service_kit.lancekit.registry import table_dataset
 from service_kit.lancekit.writer import open_writer
 from service_kit.media.deps import DatasetParam, StateDep
-from service_kit.media.state import dataset_handle
 
 
 logger = logging.getLogger(__name__)
@@ -103,14 +103,14 @@ def apply_tags(
 ) -> SaveResult:
     """Apply a TagBatch: adds insert-if-absent (never clobbering a reviewer's edits to
     an existing tag row), removes DELETE by the deterministic id. Idempotent re-Save."""
-    handle = dataset_handle(state, dataset)
-    declared = handle.descriptor.declared
+    corpus = resolve(state, dataset, caller_token)
+    declared = corpus.declared
     check_keys_arity(declared, [*body.adds, *body.removes])
-    ds = None if state.settings.rest_catalog_mode else table_dataset(handle, ANNOTATIONS_TABLE)
+    ds = None if corpus.local is None else table_dataset(corpus.local, ANNOTATIONS_TABLE)
     # Optimistic concurrency degrades to table-GLOBAL for a cross-unit batch; optional +
     # last-write-wins per deterministic id is the pragmatic contract. Version + schema
     # come from the reader seam so catalog mode checks against the catalog's truth.
-    table_id = state.settings.catalog_table_id(handle.id, ANNOTATIONS_TABLE)
+    table_id = state.settings.catalog_table_id(corpus.id, ANNOTATIONS_TABLE)
     reader = open_reader(dataset=ds, table_id=table_id, settings=state.settings, caller_token=caller_token)
     check_base_version_value(reader.table_version(), body.base_version)
 
@@ -130,7 +130,7 @@ def apply_tags(
         touched += len(remove_ids)
 
     result = finalize_commit(
-        handle,
+        corpus,
         state.settings,
         touched=touched,
         unit_key=f"tags:{len(body.adds)}+{len(body.removes)}",

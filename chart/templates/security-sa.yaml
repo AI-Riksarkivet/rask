@@ -1,5 +1,5 @@
 
-{{- $components := list "catalog" "lineage" "web" "maintenance" "jobs" "viewer" "search" "annotator" "assist" "issuer-mirror" "hooks" }}
+{{- $components := list "catalog" "lineage" "web" "maintenance" "jobs" "viewer" "search" "issuer-mirror" "hooks" }}
 {{- if .Values.age.enabled }}
 {{- $components = append $components "age" }}
 {{- end }}

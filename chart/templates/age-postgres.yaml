@@ -25,8 +25,8 @@ data:
     \c "{{ .Values.age.openfgaDb }}"
     CREATE EXTENSION IF NOT EXISTS age;
   30-daprstate.sql: |
-    -- The Dapr state store's own database: operational state (annotation tasks, notification inboxes,
-    -- actor and workflow state) that Lance must not hold — a per-task state flip would be a dataset
+    -- The Dapr state store's own database: operational state (notification inboxes, each person's UI
+    -- state, actor and workflow state) that Lance must not hold — a per-item state flip would be a dataset
     -- version, so hundreds of manifests a minute and a history that is noise rather than provenance.
     --
     -- Its own database: Dapr owns this schema completely (it creates and migrates its own tables), so a Dapr

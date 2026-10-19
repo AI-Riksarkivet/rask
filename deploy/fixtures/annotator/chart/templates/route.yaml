@@ -1,0 +1,79 @@
+{{- $name := include "annotator.name" . -}}
+{{- if .Values.route.enabled }}
+{{- if not .Values.route.parentRefs }}{{ fail "route.parentRefs must name the Gateway rask's routes attach to (rask's `route.parentRefs`)" }}{{ end }}
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "annotator.selector" . | nindent 4 }}
+spec:
+  parentRefs:
+    {{- toYaml .Values.route.parentRefs | nindent 4 }}
+  {{- with .Values.route.hostnames }}
+  hostnames:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    - matches:
+        - path: { type: PathPrefix, value: {{ .Values.route.prefix | quote }} }
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            path: { type: ReplacePrefixMatch, replacePrefixMatch: /api/annotations }
+      backendRefs:
+        - name: {{ $name }}
+          port: {{ .Values.port }}
+{{- end }}
+{{- if .Values.networkPolicy.enabled }}
+{{- if .Values.route.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $name }}-edge
+  labels:
+    {{- include "annotator.selector" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "annotator.selector" . | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        - { protocol: TCP, port: {{ .Values.port }} }
+{{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "annotator.stateCluster" . }}
+  labels:
+    {{- include "annotator.selector" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: { cnpg.io/cluster: {{ include "annotator.stateCluster" . }} }
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "annotator.selector" . | nindent 14 }}
+        - podSelector:
+            matchLabels: { cnpg.io/cluster: {{ include "annotator.stateCluster" . }} }
+      ports:
+        - { protocol: TCP, port: 5432 }
+    - from:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: {{ .Values.state.operatorNamespace | quote }} }
+      ports:
+        - { protocol: TCP, port: 8000 }
+  egress:
+    - to:
+        - podSelector:
+            matchLabels: { cnpg.io/cluster: {{ include "annotator.stateCluster" . }} }
+      ports:
+        - { protocol: TCP, port: 5432 }
+    {{- if not .Values.networkPolicy.apiServerEgress }}{{ fail "networkPolicy.apiServerEgress must name the Kubernetes API server's endpoints (rask's `networkPolicy.apiServerEgress`): each instance manager watches its Cluster" }}{{ end }}
+    {{- toYaml .Values.networkPolicy.apiServerEgress | nindent 4 }}
+{{- end }}

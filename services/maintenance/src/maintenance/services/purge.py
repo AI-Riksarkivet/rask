@@ -260,13 +260,12 @@ def report_is_clean(report: ReconcileReport) -> str | None:
     """
     if report.total:
         # THE GATING CATEGORIES ONLY, matching what `report.total` counts. `NON_GATING_CATEGORIES`
-        # (`unbound_namespaces`, `orphaned_annotation_tasks`) are excluded from the total because
-        # neither is a storage fact and NEITHER HAS A DOOR — no endpoint clears an orphaned annotation
-        # task or binds a legacy namespace. Naming them here pointed an operator at work that cannot be
-        # done and would not have unblocked the purge if it could, which is the same failure the total's
-        # own exclusion exists to prevent: the categories that DO matter hidden behind ones that never
-        # fall. Measured live 2026-09-10, where 13 findings were reported "across" four categories and
-        # two of them contributed zero.
+        # (`unbound_namespaces` among them) are excluded from the total because none is a storage fact,
+        # and `unbound_namespaces` HAS NO DOOR — no endpoint binds a legacy namespace. Naming them here
+        # pointed an operator at work that cannot be done and would not have unblocked the purge if it
+        # could, which is the same failure the total's own exclusion exists to prevent: the categories that
+        # DO matter hidden behind ones that never fall. Measured live 2026-09-10, where 13 findings were
+        # reported "across" four categories and two of them contributed zero.
         # `orphan_files` is named by its BLOCKING count, not its total: the category can carry hundreds
         # of findings that the ordinary sweep will collect on its own, and naming it on those would send
         # an operator to work that time does for free while the real residue hides behind the number.

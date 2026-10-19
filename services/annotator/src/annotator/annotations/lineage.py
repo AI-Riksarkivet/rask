@@ -1,11 +1,10 @@
-"""Emit a spec-2-0-2 OpenLineage RunEvent for an annotation write (pre-merge).
+"""Emit a spec-2-0-2 OpenLineage RunEvent for an annotation write to a LOCAL table.
 
-The catalog emits lineage for a write that routes through it; an annotation write that does
-not emits it itself from the write path, using the kernel's OpenLineage
-primitives (``service_kit.lancekit.openlineage``, whose spec constants match
-``service_kit.openlineage``) so a pre-merge event and a merged event describe
-the same run identically. Configurable sink (``MEDIA_LINEAGE_SINK=log|none``)
-— no external dependency; the catalog/NATS transport is the merge step.
+The catalog emits lineage for a write that routes through it, so on a live catalog this emits nothing
+(``AnnotatorSettings.effective_lineage_sink``). A local stack's write does not route through one, so it
+logs its own, using the kernel's OpenLineage primitives (``service_kit.lancekit.openlineage``, whose spec
+constants match ``service_kit.openlineage``) so it describes the run as the catalog would. Configurable
+sink (``ANNOTATOR_LINEAGE_SINK=log|none``), with no external dependency.
 """
 
 from __future__ import annotations
@@ -77,7 +76,7 @@ def emit_save(
     """Build + emit the save's RunEvent to the configured sink; returns it (or None
     when the sink is ``none``) so callers/tests can inspect it.
 
-    ``sink`` is a :class:`service_kit.media.config.LineageSink` value, taken as ``str`` so this
+    ``sink`` is a :class:`annotator.core.config.LineageSink` value, taken as ``str`` so this
     module stays below the media settings rather than importing back up into them.
     """
     if sink == "none":

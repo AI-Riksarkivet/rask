@@ -38,8 +38,8 @@ configured with. An event with no author binds to nothing and does not verify.
 
 A CONTROL EVENT'S `actor` PLAYS THE AUTHOR'S ROLE, with one difference: a service names no author. An actor `user:<principal>` is a
 person the catalog authenticated, so only a delegator may sign for it, declaring `onBehalfOf` equal to the whole `user:<principal>`
-string. An absent actor, or one that is not a `user:` principal (`system:annotator`), is a service acting for itself, so any
-listed signer signs it with no delegation declared.
+string. An absent actor, or one that is not a `user:` principal, is a service acting for itself, so any listed signer
+signs it with no delegation declared.
 """
 
 from __future__ import annotations

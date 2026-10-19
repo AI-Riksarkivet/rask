@@ -2,7 +2,7 @@
 
 `RestCatalogTransport` and `RestCatalogWriteTransport` each built their own generated `ApiClient`
 in `__init__`, and an `ApiClient` builds a `urllib3.PoolManager`. Those ctors run once per
-`open_reader` / `open_writer` call — per REQUEST on the annotator's read and write paths — so every
+`open_reader` / `open_writer` call — per REQUEST on a media service's read and write paths — so every
 catalog call stood up a fresh pool, opened a fresh connection, and dropped it. Nothing closed them
 either: the generated `ApiClient.__exit__` is `pass`, so `with ApiClient(...)` releases nothing and
 the sockets went back only when the garbage collector got there.

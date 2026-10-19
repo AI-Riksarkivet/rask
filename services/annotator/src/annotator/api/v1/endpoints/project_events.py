@@ -8,7 +8,8 @@ cannot drift from the model.
 authz consequence.** Two checks, both of which must pass:
 
 1. `can_publish` on `annotation_project:<project_id>` — the annotator's own domain.
-2. `can_create_table` on the TARGET NAMESPACE — the governed plane's own rung.
+2. `can_create_table` on the TARGET NAMESPACE — the governed plane's own rung, which the catalog answers for the
+   person on their own token (`annotator.api.authorization`).
 
 The target's tier is not a door here: the write reaches the catalog, whose tier judge decides it under
 the tier the namespace declares (ADR 0160).
@@ -34,9 +35,9 @@ from pydantic import BaseModel, Field
 from pydantic import ValidationError as PydanticValidationError
 from starlette.concurrency import run_in_threadpool
 
-from annotator.api.dependencies import ControlEmitterDep
-from annotator.api.security import CheckerDep, CurrentSubject, FgaChecker
+from annotator.api.security import Checker, CheckerDep, CurrentSubject, RawBearerToken
 from annotator.api.v1.responses import DropReceipt, SendReceipt, TaskListing
+from annotator.corpus import unknown_sources
 from annotator.projects.machines import (
     FROZEN_PROJECT_STATES,
     PROJECT_EDGES,
@@ -45,10 +46,9 @@ from annotator.projects.machines import (
     project_transition,
     refuse_unreadable_ontology,
 )
-from annotator.projects.models import AnnotationProject, ItemSource, MediaRef, ProjectState, Shape, Task, TaskState, new_id, notified_user
+from annotator.projects.models import AnnotationProject, ItemSource, MediaRef, ProjectState, Shape, Task, TaskState, new_id
 from annotator.projects.ontology import LabelOntology, ShapeLike, membership_violation
 from annotator.projects.project_actor import AnnotationProjectActorInterface
-from service_kit.control_emit import emit_control
 from service_kit.exceptions import ConflictError, ForbiddenError, NotFoundError
 from service_kit.governed.audit import FAILURE, SUCCESS, audit
 from service_kit.lakehouse.warehouse_registry import namespace_for
@@ -73,7 +73,7 @@ ProjectId = Annotated[str, Path(min_length=1, max_length=64, pattern=r"^[A-Za-z0
 CREATE_TABLE_RELATION: Final[str] = "can_create_table"
 
 #: The TIER human labels are curated into (§6.2) — the NAME is composed per project, because a bare
-#: literal put every tenant's labels in one namespace with one FGA parent and one set of grants.
+#: literal put every tenant's labels in one namespace with one parent and one set of grants.
 #: A publish may name another target; the doors are checked wherever it points.
 DEFAULT_TARGET_TIER: Final[str] = "silver"
 
@@ -181,14 +181,14 @@ def _task_proxy(task_id: str) -> AnnotationTaskActorInterface:
     return cast(AnnotationTaskActorInterface, typed_proxy("AnnotationTaskActor", task_id, AnnotationTaskActorInterface))
 
 
-async def _check(checker: FgaChecker, subject: str, relation: str, obj: str, what: str) -> None:
+async def _check(checker: Checker, subject: str, relation: str, obj: str, what: str) -> None:
     """One relation on one object, fail-closed, audited either way."""
     if not await checker(user=subject, relation=relation, obj=obj):
         audit(what, FAILURE, subject=subject, resource=obj, relation=relation)
         raise ForbiddenError(f"{subject} lacks {relation} on {obj}")
 
 
-async def _authorize_publish(checker: FgaChecker, subject: str, project_id: str, namespace: str) -> None:
+async def _authorize_publish(checker: Checker, subject: str, project_id: str, namespace: str) -> None:
     """The two-door crossing of §6.2.
 
     Checked in order and short-circuiting, so the audit trail names the FIRST door that closed rather
@@ -227,9 +227,8 @@ async def fire_project_event(project_id: ProjectId, payload: ProjectEventRequest
     if payload.event == "publish":
         await _authorize_publish(checker, subject, project_id, target)
     elif permission is not None:
-        # `annotation_project`, not `project:<tenant>` — that is the type on which model.fga defines
-        # can_manage / can_send_items / can_publish. Checking them on the tenant asks for a relation
-        # the `project` type does not define, which fails closed and makes the plane 403 with FGA on.
+        # `annotation_project`, not `project:<tenant>`: the project's roles grant can_manage /
+        # can_send_items / can_publish, and the tenant answers only membership.
         await _check(checker, subject, permission, f"annotation_project:{project_id}", f"project.{payload.event}")
 
     try:
@@ -309,7 +308,6 @@ async def drop_task(
     task_id: Annotated[str, Path(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")],
     checker: CheckerDep,
     subject: CurrentSubject,
-    control: ControlEmitterDep,
 ) -> DropReceipt:
     """Remove one item from a project.
 
@@ -331,37 +329,12 @@ async def drop_task(
     state = ProjectState(doc["state"])
     if state not in DROPPABLE_STATES:
         raise ConflictError(f"project {project_id} is {state.value} — items can be dropped only in {sorted(s.value for s in DROPPABLE_STATES)}")
-    # WHO LOSES WORK, read BEFORE the drop. Afterwards the index entry naming this task is gone, and
-    # the task actor — which keeps their draft — is no longer reachable from the project. `assignee`
-    # first, then `submitted_by`: a task in review has no assignee (the actor nulls it on submit), so
-    # falling back is what covers exactly the tasks with the most work already in them.
-    holder = ""
-    task = await _task_proxy(task_id).get()
-    if isinstance(task, dict):
-        holder = str(task.get("assignee") or task.get("submitted_by") or "")
-
     result = await proxy.drop_task({"task_id": task_id, "actor": subject})
     audit("project.drop_task", SUCCESS, subject=subject, resource=project_id)
-
-    # The sharpest departure edge in the service: the item is DISCARDED, so their draft is not merely
-    # stopped, it is orphaned where `saga.collect` will never enumerate it again.
-    #
-    # Gated on `removed` because the route is idempotent — a retry drops nothing and must not put a
-    # second row in anyone's inbox — and on `holder != subject`, the standing exclusion for an outcome
-    # the caller already has in the response they are looking at.
-    if result.get("removed") and holder and holder != subject:
-        await emit_control(
-            control,
-            action="task_dropped",
-            object_type="annotation_task",
-            object_id=f"annotation_task:{task_id}",
-            actor=f"user:{subject}",
-            extra={"subject": notified_user(holder), "project": project_id, "event": "drop_task"},
-        )
     return DropReceipt.model_validate(result)
 
 
-def _refuse_unknown_datasets(state: AppState, payload: SendItemsRequest) -> None:
+def _refuse_unknown_datasets(state: AppState, payload: SendItemsRequest, caller_token: str | None) -> None:
     """Refuse the WHOLE send if any item names a media dataset that does not resolve.
 
     Removal (`DELETE .../tasks/{id}`) is the escape hatch; this is the thing that stops the trap
@@ -370,18 +343,26 @@ def _refuse_unknown_datasets(state: AppState, payload: SendItemsRequest) -> None
     task terminal, so one of them wedges the project. Creating it is the mistake; refusing at send
     is where it costs nothing.
 
+    With a live catalog the catalog is asked, as the sender (`annotator.corpus.unknown_sources`): a dataset or
+    table the sender cannot see is one their items could never open. Without one, the local registry is.
+
     The whole send, not the offending items: a partial send produces exactly the half-populated
     project this is meant to prevent, and it costs ZERO seeded task actors to refuse here — the same
     argument the project-state check above makes.
 
-    An UNVERIFIABLE registry lets the send through. If the dataset plane cannot be consulted at all
-    (a degraded start, a mount that is not there yet) then refusing every send would take the whole
-    labeling plane down for a check that is a guard, not a gate — the canvas still reports the real
-    404 at read, and removal still exists. Not being able to check is not evidence of a problem.
+    An UNVERIFIABLE source lets the send through. If the catalog or the registry cannot be consulted
+    at all, refusing every send would take the whole labeling plane down for a check that is a guard,
+    not a gate — the canvas still reports the real 404 at read, and removal still exists. Not being
+    able to check is not evidence of a problem.
     """
     names = sorted({item.source.where for item in payload.items if item.source.where})
     if not names:
         return  # every item takes the backend default, which resolves by construction
+    if state.settings.rest_catalog_mode:
+        unseen = unknown_sources(state.settings, names, caller_token)
+        if unseen:
+            raise ConflictError(f"dataset(s) {unseen} do not exist or cannot be read — an item naming one could never be opened, claimed or completed")
+        return
     unknown: list[str] = []
     for name in names:
         try:
@@ -450,7 +431,9 @@ def _validated_predictions(project: dict[str, Any], payload: SendItemsRequest) -
 
 
 @router.post("/{project_id}/items", status_code=status.HTTP_201_CREATED)
-async def send_items(project_id: ProjectId, payload: SendItemsRequest, state: StateDep, checker: CheckerDep, subject: CurrentSubject) -> SendReceipt:
+async def send_items(
+    project_id: ProjectId, payload: SendItemsRequest, state: StateDep, checker: CheckerDep, subject: CurrentSubject, caller_token: RawBearerToken = None
+) -> SendReceipt:
     """Send items into the project as tasks.
 
     Two phases, and the ORDER between them is the whole correctness argument: seed EVERY task actor
@@ -481,12 +464,12 @@ async def send_items(project_id: ProjectId, payload: SendItemsRequest, state: St
         raise ConflictError(f"project {project_id} is {project['state']} — items may only be sent while it is draft or labeling")
     await _check(checker, subject, "can_send_items", f"annotation_project:{project_id}", "project.send")
 
-    # REFUSE an item whose media dataset does not resolve. Deliberately after the FGA check: the
-    # refusal names the datasets that DO exist, which is what makes it actionable and also what
+    # REFUSE an item whose media dataset does not resolve. Deliberately after the role check: the
+    # refusal can name the datasets that DO exist, which is what makes it actionable and also what
     # makes it something an unauthorised caller must not be able to enumerate. Off the loop: the
-    # body loops dataset_handle (blocking Lance/S3 under a threading.Lock) per named dataset —
-    # inline it froze every in-flight request on a cold miss (docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit" ANN-01).
-    await run_in_threadpool(_refuse_unknown_datasets, state, payload)
+    # body asks the catalog or the registry (blocking) per named dataset — inline it froze every
+    # in-flight request on a cold miss (docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit" ANN-01).
+    await run_in_threadpool(_refuse_unknown_datasets, state, payload, caller_token)
 
     # Consensus v1: N>1 seeds N independent replica items per source item, deterministic sibling
     # ids (`{gid}-r{k}`) — determinism is what lets the one-replica-per-annotator guard find them.

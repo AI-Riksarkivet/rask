@@ -61,8 +61,8 @@ def translate_commit_conflict() -> Generator[None]:
 
     Untranslated it escaped as a raw ``OSError``, which no handler maps (only ``DomainError``
     and ``RequestValidationError`` are registered), so the browser got a 500. A 500 reads as
-    "the server is broken" and is not retried; the annotator's client only branches on 409
-    (``annotations-client.ts``). So the one moment the guarantee actually fires was reported
+    "the server is broken" and is not retried; a client of a write door branches on 409.
+    So the one moment the guarantee actually fires was reported
     as an outage, and the work was lost rather than merged.
 
     NOT retried here on purpose: the delta was built against the version that just lost, so

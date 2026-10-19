@@ -12,7 +12,7 @@ Services (ClusterIP):
 {{- end }}
 {{- with .Values.explorer }}
 {{- if .enabled }}
-  - media:     {{ include "rask.fullname" $root }}-{viewer,search,annotator} (the media plane, /api/explorer/*)
+  - media:     {{ include "rask.fullname" $root }}-{viewer,search} (the media plane, /api/explorer/*)
 {{- end }}
 {{- end }}
   - age:       {{ include "lance.ageConnectHost" . }}:{{ .Values.age.port }} (Apache AGE — the lineage graph{{ if .Values.age.externalHost }}; the platform's Postgres{{ end }})

@@ -151,6 +151,9 @@ if [ -z "$SIDE_LOADED" ]; then
   echo "!! the render named no side-loaded <component>:$TAG image — image.localImages or image.tag has moved" >&2
   exit 1
 fi
+# THE ANNOTATOR'S OWN IMAGE. It is a client of the lakehouse with its own release (deploy/fixtures/annotator, ADR 0171),
+# installed after rask below, so the product render names none of it.
+SIDE_LOADED="$SIDE_LOADED"$'\n'"annotator:$TAG annotator"
 
 # BUILT AS TARBALLS, IN THE BACKGROUND. No build needs the cluster, so they run while kind and the fixtures come up, and
 # `--out` hands each one over as an OCI archive the node imports directly: no image passes through a docker daemon.
@@ -198,6 +201,9 @@ export RASK_EXPECT_CONTEXT="kind-$CLUSTER"
 # ([[XC-131]]). The two stores start once rask is installed (the object store's root credential and the secret store's
 # seed scripts are rask's), so fixtures.sh does not wait for them.
 "$(dirname "$0")/fixtures.sh" external-secrets dapr nats dex openbao
+# The CloudNativePG operator the annotator's release keeps its state on, its CRDs applied first as `make k3s-crds` does.
+kubectl apply --server-side -f chart/crds-bootstrap/ >/dev/null
+"$(dirname "$0")/fixtures.sh" cloudnative-pg
 
 step "3/9 side-load the images"
 wait "$BUILD_PID" || { cat "$IMAGE_DIR/build.log"; echo "!! an image build failed (log above)" >&2; exit 1; }
@@ -304,6 +310,14 @@ sys.exit(0 if {s.get("topic") for s in (m.get("subscriptions") or [])} and (m.ge
   sleep 3
 done
 
+# THE ANNOTATOR, installed after rask as a deployment beside it would install it: it reaches rask by reference, and the
+# issuer it accepts is the one the catalog was given. This stack renders no Gateway, so its route is off. Its pod waits
+# for the Postgres its release renders, so its rollout is given the Cluster's bootstrap.
+ISSUER="$(kubectl get deploy "$RELEASE-catalog" -o jsonpath='{.spec.template.spec.containers[?(@.name=="catalog")].env[?(@.name=="RASK_OIDC_ISSUER")].value}')"
+"$(dirname "$0")/fixtures.sh" annotator -- --set-string auth.oidc.issuer="$ISSUER" --set-string image.tag="$TAG" --set route.enabled=false
+kubectl delete pods -l "app.kubernetes.io/instance=$RELEASE,app.kubernetes.io/component=annotator" --ignore-not-found >/dev/null 2>&1 || true
+kubectl rollout status deploy/"$RELEASE"-annotator --timeout=600s
+
 # Every running container of a side-loaded image must serve the archive this run built — the definitive proof the whole
 # suite tests fresh code, not a stale same-tag image (the failure mode this guard exists for). A container's `imageID`
 # names either digest depending on how containerd recorded the import, so both recorded above are accepted.
@@ -358,6 +372,7 @@ forward "$RELEASE-rustfs" 9900:9000 /tmp/pf-rfs.log
 forward "$RELEASE-dex" 5556:5556 /tmp/pf-dex.log
 forward "$RELEASE-openfga" 8081:8080 /tmp/pf-fga.log
 forward "$RELEASE-notifications" 8850:8850 /tmp/pf-not.log
+forward "$RELEASE-annotator" 8103:8103 /tmp/pf-ann.log
 # The bus `nats.url` names (stack_values.sh): criterion 4's module reads its streams and publishes on it.
 forward rask-nats 4222:4222 /tmp/pf-nats.log
 for i in $(seq 1 40); do
@@ -545,6 +560,8 @@ export LANCE_E2E_RELAY_BINDING=lineage-relay-cron
 # bus, and the release whose ServiceAccounts sign.
 export LANCE_E2E_NOTIFICATIONS_URL="http://localhost:8850$(kubectl get cm "$RELEASE-config" -o jsonpath='{.data.RASK_API_PREFIX}')"
 export LANCE_E2E_NATS_URL=nats://localhost:4222
+# The annotator's own release, which the suite drives through the lakehouse's public doors.
+export LANCE_E2E_ANNOTATOR_URL=http://localhost:8103
 export LANCE_E2E_RELEASE="$RELEASE"
 # Criterion 2's service identity: the lineage service's account, for the audience the catalog's own door checks.
 SERVICE_TOKEN_FILE="$(mktemp)"

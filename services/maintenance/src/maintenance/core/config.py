@@ -185,8 +185,8 @@ class MaintenanceSettings(SignatureDoorSettings, FgaSettings, BaseSettings):
 
     # --- OpenFGA (READ-ONLY, for the drift reconciler) -----------------------------------------------
     # The reconciler compares three stores: OpenFGA says WHO, the control-root registries say WHAT
-    # EXISTS, object storage holds the BYTES. Without a client here, FOUR of its seven categories
-    # (ghost_projects, ghost_warehouses, unreferenced_projects, orphaned_annotation_tasks) can only
+    # EXISTS, object storage holds the BYTES. Without a client here, the categories that read tuples
+    # (ghost_projects, ghost_warehouses, ghost_tables, unreferenced_projects, ungoverned_tables) can only
     # report UNAVAILABLE — including "today's seeded ghosts", which is the drift that motivated it.
     #
     # This service only ever READS tuples (`fga.read_tuples`); it holds no grant-writing path at all,

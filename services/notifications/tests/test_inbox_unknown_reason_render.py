@@ -42,7 +42,7 @@ from service_kit.governed.decider import OpenFgaDecider
 NOW = datetime(2026, 8, 25, 12, 0, tzinfo=UTC)
 
 #: A canonical id, carrying its type — what the CONTROL lane stamps.
-CONTROL_OBJECT = "annotation_task:proj-1/task-7"
+CONTROL_OBJECT = "namespace:acme-bronze"
 #: A bare dataset name — what a LINEAGE run stamps (`notifiable()` takes `outputs[0]`).
 LINEAGE_OBJECT = "silver$pages"
 
@@ -69,7 +69,7 @@ class _Inbox:
                 # `task_review_ready` stands in for an action a NEWER build added. This build has
                 # never heard of it, so the model degrades it to `unknown`.
                 _row("ctl-new", "task_review_ready", CONTROL_OBJECT),
-                _row("ctl-known", NotificationReason.TASK_ASSIGNED.value, "annotation_task:proj-1/task-8"),
+                _row("ctl-known", NotificationReason.GRANT_REVOKED.value, "table:acme$gold"),
                 _row("lin-1", NotificationReason.AUTHOR.value, LINEAGE_OBJECT),
             ],
             "has_more": False,
@@ -84,8 +84,7 @@ class _DenyingFGA:
     """Authorization is ON and the subject holds no `can_get_metadata` on anything.
 
     That is not a contrived posture — it is precisely the state the control lane exists for: a
-    `grant_revoked` or a task dropped out from under someone leaves them named on a row whose object
-    they can no longer see.
+    `grant_revoked` leaves them named on a row whose object they can no longer see.
     """
 
 

@@ -5,7 +5,8 @@ The fleet (`make dev-micro`, driven by `scripts/dev-micro.sh`) is SIX processes:
 (`PORT_OFFSET=<n>` shifts all six so a second fleet can share a host.) It starts no router: the public
 route table is the chart's HTTPRoutes, served by a Gateway (`rask-services-fleet`). In-cluster compute
 ships in its own fixture chart (`deploy/fixtures/compute`), not the product chart, and publishes
-`/api/ray` and `/api/serve` with its own HTTPRoute.
+`/api/ray` and `/api/serve` with its own HTTPRoute; the annotator likewise ships in its own client chart
+(`deploy/fixtures/annotator`, ADR 0171) and publishes `/api/explorer/annotations` with its own HTTPRoute.
 
 The zones' Vite `/api` proxies are per zone: `compute`/`studio`/`models` → `VIEWER_BACKEND` (`:8888`),
 `home`/`lakehouse` → `LANCE_BACKEND` (`:8001`, which this fleet does NOT start), and `explorer`/`annotator`

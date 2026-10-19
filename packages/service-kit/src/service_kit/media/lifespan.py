@@ -1,22 +1,21 @@
-"""THE media-service lifespan — one implementation for viewer, search and annotator.
+"""THE media-service lifespan — one implementation for every service built on the media library.
 
-The three are one shape wearing three names: a Lance media service over ``service_kit.media``. Each
+They are one shape wearing several names: a Lance media service over ``service_kit.media``. Each
 one hand-wrote the same startup and the same teardown, and docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit" DUP-16 is that copy.
 The copies had already drifted in the way copies do — not in what they did, but in the ORDER they did
 it:
 
 * viewer disposed the OpenFGA client, THEN disarmed the SIGTERM drain;
-* search disarmed the drain, THEN disposed;
-* annotator disposed, closed a Dapr channel the other two do not have, THEN disarmed.
+* search disarmed the drain, THEN disposed.
 
-None of those orders is wrong on its own, and that is exactly why three copies could hold three of
-them: nothing compared them. One implementation makes the order a decision instead of an accident.
+Neither order is wrong on its own, and that is exactly why the copies could hold different ones:
+nothing compared them. One implementation makes the order a decision instead of an accident.
 
 WHAT IS GENUINELY PER-SERVICE stays per-service, and is passed in rather than branched on here:
 which resources this service opened and must therefore close (``closes``), and any extra startup a
-service needs before it announces readiness (``setup``) with its matching teardown. The annotator's
-actor plane is the only user of that hook, and it must run BEFORE ``startup_complete`` — a pod that
-reports ready while its task actors are unregistered is a pod answering 503 to every task route.
+service needs before it announces readiness (``setup``) with its matching teardown. An actor plane is
+the case that hook serves, and it must run BEFORE ``startup_complete`` — a pod that reports ready while
+its actors are unregistered is a pod answering 503 to every route that needs them.
 """
 
 from __future__ import annotations
@@ -108,8 +107,8 @@ async def media_lifespan(
         log.exception("%s: default dataset failed to open — serving degraded", service)
     # CAST, not a widened parameter: `attach_auth` wants the structural `_GovernedSettings` (issuer,
     # audience, the FGA coordinates), and every settings object that reaches here is a `MediaSettings`
-    # ALSO mixing in `GovernedAuthSettings` — `ViewerSettings`, `SearchSettings`, `AnnotatorSettings`
-    # all do. Python has no intersection type to say that, and typing the parameter as the protocol
+    # ALSO mixing in `GovernedAuthSettings` — `ViewerSettings` and `SearchSettings` do, and so must a
+    # client's. Python has no intersection type to say that, and typing the parameter as the protocol
     # instead would lose the `MediaSettings` that `AppState` requires. Only those class definitions
     # hold the invariant, so a new governed media service's settings must mix it in as well.
     await attach_auth(app, cast(_GovernedSettings, settings), service=service)

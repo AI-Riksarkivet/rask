@@ -93,7 +93,7 @@
                     "type": "array"
                 },
                 "fgaApiUrl": {
-                    "description": "The platform's OpenFGA HTTP API (e.g. `https://fga.internal:8080`), which the tuple writers (the catalog, maintenance, the annotator), the openfga-model hook and the bootstrap-admin Job dial when `openfga.enabled` is false; the render refuses it empty then. It must admit rask's projected `rask-openfga` tokens from exactly the subjects `lance.openfgaSubjects` lists: OIDC against the cluster's ServiceAccount issuer.",
+                    "description": "The platform's OpenFGA HTTP API (e.g. `https://fga.internal:8080`), which the tuple writers (the catalog, maintenance), the openfga-model hook and the bootstrap-admin Job dial when `openfga.enabled` is false; the render refuses it empty then. It must admit rask's projected `rask-openfga` tokens from exactly the subjects `lance.openfgaSubjects` lists: OIDC against the cluster's ServiceAccount issuer.",
                     "type": "string"
                 },
                 "fgaEgress": {
@@ -444,25 +444,12 @@
                     "type": "string"
                 },
                 "enabled": {
-                    "description": "This estate uses the development Dex (deploy/fixtures/dex, Service `\u003crelease\u003e-dex`): the ingress serves it at /dex, its publisher password is seeded into the dev store, and a real deployment refuses it. The chart renders no Dex.",
+                    "description": "This estate uses the development Dex (deploy/fixtures/dex, Service `\u003crelease\u003e-dex`): the ingress serves it at /dex, and a real deployment refuses it. The chart renders no Dex.",
                     "type": "boolean"
                 },
                 "port": {
                     "description": "Port of the development Dex's Service.",
                     "type": "integer"
-                },
-                "publisher": {
-                    "type": "object",
-                    "properties": {
-                        "password": {
-                            "description": "Plain password of the publish saga's service account, seeded into OpenBao; must match the hash the development Dex holds (demo default `password`).",
-                            "type": "string"
-                        },
-                        "username": {
-                            "description": "Login email of the publish saga's service account; the annotator mints a fresh token with it per publish.",
-                            "type": "string"
-                        }
-                    }
                 }
             }
         },
@@ -499,15 +486,11 @@
                     "description": "Catalog URL the explorer services use (MEDIA_CATALOG_URI). Empty = the in-release catalog Service.",
                     "type": "string"
                 },
-                "controlEmit": {
-                    "description": "Annotator publishes `task_assigned`/`task_unassigned` control events for the notifications inbox, and is scoped on the control pubsub component.",
-                    "type": "boolean"
-                },
                 "corpus": {
                     "type": "object",
                     "properties": {
                         "accessMode": {
-                            "description": "Access mode of the chart-created corpus PVC; ReadWriteMany because three services read it concurrently.",
+                            "description": "Access mode of the chart-created corpus PVC; ReadWriteMany because both services read it concurrently.",
                             "type": "string"
                         },
                         "claimName": {
@@ -533,7 +516,7 @@
                     }
                 },
                 "corpusMountPath": {
-                    "description": "Path the corpus volume is mounted at, read-only, in all three explorer services.",
+                    "description": "Path the corpus volume is mounted at, read-only, in both explorer services.",
                     "type": "string"
                 },
                 "corpusS3Root": {
@@ -541,7 +524,7 @@
                     "type": "string"
                 },
                 "enabled": {
-                    "description": "Deploy the explorer trio (viewer, search, annotator services) and their rows on the cluster route.",
+                    "description": "Deploy the explorer pair (viewer and search services) and their rows on the cluster route.",
                     "type": "boolean"
                 },
                 "readBackend": {
@@ -551,18 +534,6 @@
                 "services": {
                     "type": "object",
                     "properties": {
-                        "annotator": {
-                            "description": "Explorer annotator service: `port` and `daprAppId`; the app-id is scoped on the control pubsub when `explorer.controlEmit` is on.",
-                            "type": "object",
-                            "properties": {
-                                "daprAppId": {
-                                    "type": "string"
-                                },
-                                "port": {
-                                    "type": "integer"
-                                }
-                            }
-                        },
                         "search": {
                             "description": "Explorer search service: `port` (its HTTP port) and `daprAppId` (its Dapr app-id).",
                             "type": "object",
@@ -635,6 +606,10 @@
         "frontend": {
             "type": "object",
             "properties": {
+                "annotatorUrl": {
+                    "description": "The annotator release's Service URL the annotator zone proxies to (ANNOTATOR_API), e.g. `http://rask-annotator:8103` from deploy/fixtures/annotator. Empty renders none.",
+                    "type": "string"
+                },
                 "apps": {
                     "description": "The zones to deploy: `name` (image `web-\u003cname\u003e`), `path` (/\u003cname\u003e) or `catchAll` for home at /, and an optional per-zone image `tag`.",
                     "type": "array",
@@ -1024,28 +999,6 @@
                             "description": "Extra user grants keyed by a values flag path, merged into `nats.auth.users` only while that flag is true (lance.natsTable).",
                             "type": "object",
                             "properties": {
-                                "explorer.controlEmit": {
-                                    "type": "object",
-                                    "properties": {
-                                        "annotator": {
-                                            "type": "object",
-                                            "properties": {
-                                                "publish": {
-                                                    "type": "array",
-                                                    "items": {
-                                                        "type": "string"
-                                                    }
-                                                },
-                                                "subscribe": {
-                                                    "type": "array",
-                                                    "items": {
-                                                        "type": "string"
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                },
                                 "maintenance.arrivalEnabled": {
                                     "type": "object",
                                     "properties": {
@@ -1282,7 +1235,7 @@
                     "type": "string"
                 },
                 "mediaAccessKey": {
-                    "description": "Access key of annotator's and search's read-only identity on the media corpus (`explorer.corpusS3Root`); secret derives in-cluster.",
+                    "description": "Access key of search's read-only identity on the media corpus (`explorer.corpusS3Root`); secret derives in-cluster.",
                     "type": "string"
                 },
                 "port": {
@@ -1683,34 +1636,6 @@
                         }
                     }
                 },
-                "assist": {
-                    "description": "CPU/memory requests and limits for the assist model runner (two warm torch models).",
-                    "type": "object",
-                    "properties": {
-                        "limits": {
-                            "type": "object",
-                            "properties": {
-                                "cpu": {
-                                    "type": "string"
-                                },
-                                "memory": {
-                                    "type": "string"
-                                }
-                            }
-                        },
-                        "requests": {
-                            "type": "object",
-                            "properties": {
-                                "cpu": {
-                                    "type": "string"
-                                },
-                                "memory": {
-                                    "type": "string"
-                                }
-                            }
-                        }
-                    }
-                },
                 "catalog": {
                     "description": "CPU/memory requests and limits for the catalog; requests sized so the HPA CPU target is meaningful.",
                     "type": "object",
@@ -1903,40 +1828,6 @@
                 "parentRefs": {
                     "description": "Gateways the routes attach to, as Gateway API parentRefs ([{name, namespace, sectionName}]). Required while `enabled`.",
                     "type": "array"
-                }
-            }
-        },
-        "runners": {
-            "type": "object",
-            "properties": {
-                "assist": {
-                    "type": "object",
-                    "properties": {
-                        "image": {
-                            "description": "Assist runner image: `repository` and `tag`; the tag is required when runners are enabled.",
-                            "type": "object",
-                            "properties": {
-                                "repository": {
-                                    "type": "string"
-                                },
-                                "tag": {
-                                    "type": "string"
-                                }
-                            }
-                        },
-                        "port": {
-                            "description": "HTTP port of the assist runner Service.",
-                            "type": "integer"
-                        }
-                    }
-                },
-                "enabled": {
-                    "description": "Deploy the `assist` model runner and point the annotator's MEDIA_ASSIST_URL at it instead of its in-repo mock.",
-                    "type": "boolean"
-                },
-                "jobsUrl": {
-                    "description": "RayJob submit endpoint for the annotator's batch-labeling seam (MEDIA_JOBS_URL). Empty = the annotator keeps its submit/poll mock.",
-                    "type": "string"
                 }
             }
         },

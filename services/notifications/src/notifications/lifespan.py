@@ -50,8 +50,8 @@ def build_actor_host(app: FastAPI) -> DaprActor | None:
     except Exception:
         log.exception("notifications: could not mount the actor routes — the inbox will 503")
         return None
-    # One implementation, in service_kit: the annotator mounts DaprActor the same way and had the
-    # same exposure, and two copies of an auth guard is how they drift.
+    # One implementation, in service_kit: every actor host mounts DaprActor the same way, and two copies of
+    # an auth guard is how they drift.
     guard_actor_routes(app)
     return actor
 

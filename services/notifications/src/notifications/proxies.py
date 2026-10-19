@@ -2,10 +2,10 @@
 
 `ActorProxy.__getattr__` dispatches from a map keyed by the `@actormethod(name=...)` WIRE name
 (`MarkSeen`), not the Python attribute (`mark_seen`) — so `proxy.mark_seen()` raises `AttributeError`
-against a real sidecar while unit tests, whose fakes implement the Python names, stay green. The
-annotator's first live drive of its projects plane found exactly that, invisibly, and the fix is this
-adapter: it reads the interface's own `@actormethod` metadata, so call sites keep the Python names and
-the wire names stay the fixed routing ids the interface promises. One translation, sourced from the
+against a real sidecar while unit tests, whose fakes implement the Python names, stay green. A live drive
+found exactly that, invisibly, and the fix is this adapter: it reads the interface's own `@actormethod`
+metadata, so call sites keep the Python names and the wire names stay the fixed routing ids the interface
+promises. One translation, sourced from the
 single place the mapping is declared, so it cannot drift.
 
 Every call into an inbox goes through :func:`inbox_for`, and every inbox id through

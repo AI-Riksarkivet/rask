@@ -1,0 +1,45 @@
+{{- $name := include "annotator.name" . -}}
+{{- $appId := .Values.dapr.appId -}}
+apiVersion: dapr.io/v1alpha1
+kind: Configuration
+metadata:
+  name: {{ include "annotator.daprConfigName" . }}
+  labels:
+    {{- include "annotator.selector" . | nindent 4 }}
+spec:
+  {{- include "annotator.daprSpec" . | nindent 2 }}
+---
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: {{ include "annotator.secretStore" . }}
+  labels:
+    {{- include "annotator.selector" . | nindent 4 }}
+spec:
+  type: secretstores.kubernetes
+  version: v1
+  metadata: []
+scopes:
+  - {{ $appId }}
+---
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: {{ $name }}-statestore
+  labels:
+    {{- include "annotator.selector" . | nindent 4 }}
+spec:
+  type: state.postgresql
+  version: v1
+  metadata:
+    - name: connectionString
+      secretKeyRef:
+        name: {{ include "annotator.stateCluster" . }}-app
+        key: uri
+    - { name: actorStateStore, value: "true" }
+    - { name: tableName, value: state }
+    - { name: metadataTableName, value: dapr_metadata }
+auth:
+  secretStore: {{ include "annotator.secretStore" . }}
+scopes:
+  - {{ $appId }}

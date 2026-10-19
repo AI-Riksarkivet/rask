@@ -11,7 +11,9 @@ lineage's feed serves it, and holds them to six claims:
    project is the tenant, and the catalog signed it on their behalf;
 3. each reached exactly the people it names (`rask-notifications`);
 4. each is recorded once, and a redelivery of the very bytes the bus stored adds no feed row and no inbox row;
-5. a forged copy with its signature dropped, on either lane, is recorded by nobody and told to nobody;
+5. a forged copy with its signature dropped, on either lane, is recorded by nobody and told to nobody, and the catalog,
+   which subscribes to its own control lane, keeps the forged control event out of the feed it serves
+   (`GET /management/v1/events`, [[CTL-32]]);
 6. nothing the scenario caused, nor the redelivery and forgeries above, parked on the DLQ stream or stayed staged in
    the outbox.
 
@@ -104,11 +106,29 @@ class Redelivery(BaseModel):
 
 
 class Forgeries(BaseModel):
-    """Where the two forgeries went: the feed rows recorded for the forged run, and the pipeline's inbox rows for
-    either forgery."""
+    """Where the two forgeries went: the feed rows recorded for the forged run, the pipeline's inbox rows for either
+    forgery, and the catalog's own control feed rows for the forged control event."""
 
     recorded: list[int]
     told: list[str]
+    kept: list[str]
+
+
+def _kept_by_the_catalog(admin: Identity, *, forged: str, marker: str) -> list[str]:
+    """The forged control event's rows in the catalog's control feed, read once the feed holds the creation of
+    ``marker``, a namespace made after the forgery was published.
+
+    The catalog's broadcast consumer is ephemeral, so no durable says it has acknowledged the forgery; the stream
+    reaches it in order, so a feed holding an event published after the forgery has judged the forgery too. The marker
+    is also the feed's own control: a subscription refusing every event would hold neither.
+    """
+    deadline = time.monotonic() + scenario.SETTLE_SECONDS
+    while True:
+        events = scenario.ok(admin.http.get(f"{scenario.CATALOG}/management/v1/events", params={"since": 0}, timeout=30))["events"]
+        if any(event.get("object_id") == f"namespace:{marker}" for event in events):
+            return [str(event["event_id"]) for event in events if event.get("event_id") == forged]
+        assert time.monotonic() < deadline, f"the catalog's control feed never showed {marker}'s creation within {scenario.SETTLE_SECONDS:.0f} s"
+        time.sleep(2)
 
 
 def _facets(event: dict[str, Any]) -> dict[str, Any]:
@@ -220,12 +240,18 @@ def forgeries(captured: Captured, byo_tenant: Tenant, byo_run: ScenarioRun) -> F
     control_seq = bus.publish(CONTROL_TOPIC, control_envelope, msg_id=control_id)
     bus.wait_until_acked("LINEAGE", LINEAGE_DURABLES, lineage_seq, within=scenario.SETTLE_SECONDS)
     bus.wait_until_acked("CATALOG_CONTROL", CONTROL_DURABLES, control_seq, within=scenario.SETTLE_SECONDS)
+    # A namespace no inbox reads and the tenant's teardown removes with its warehouse.
+    marker = f"{byo_tenant.project}-marker"
+    body = {"namespace": marker, "properties": {"rask.tier": "bronze"}}
+    scenario.ok(byo_tenant.admin.http.post(f"{scenario.CATALOG}/management/v1/warehouses/{byo_tenant.project}/namespaces", json=body))
+    kept = _kept_by_the_catalog(byo_tenant.admin, forged=forged_grant, marker=marker)
     named = {f"{forged_run}@COMPLETE", f"{forged_grant}@GRANT_ADDED"}
     return Forgeries(
         recorded=[
             int(row["seq"]) for row in scenario.read_forward(pipeline, since=cursor, table=byo_run.silver_table) if event_identity(row["event"]) == forged_run
         ],
         told=[row["notification_id"] for row in pipeline.inbox(since=byo_tenant.created_at) if row["notification_id"] in named],
+        kept=kept,
     )
 
 
@@ -326,7 +352,7 @@ def test_each_event_is_recorded_once_and_a_redelivery_of_its_bytes_adds_nothing(
 
 
 def test_a_forged_copy_with_its_signature_dropped_is_recorded_and_told_to_nobody(forgeries: Forgeries) -> None:
-    assert (forgeries.recorded, forgeries.told) == ([], [])
+    assert (forgeries.recorded, forgeries.told, forgeries.kept) == ([], [], [])
 
 
 @pytest.mark.usefixtures("byo_run", "redelivery", "forgeries")
