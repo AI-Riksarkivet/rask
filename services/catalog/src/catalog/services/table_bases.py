@@ -125,6 +125,8 @@ def require_registrable_location(location: str | None, *, root: str, control_roo
       literally (lh279 r5 register_probe: ``<victim>%20`` is described as ``<victim>%2520`` and reads
       nothing of the victim). Every check below compares spellings, and a comparison of spellings answers
       only for one that names its location;
+    - no segment may hold a ``?`` once decoded: the store keeps one under a re-encoded name that holds no table, so
+      an id registered there finds no table on query or count (measured on pylance 13.0.0 over the dir backend);
     - no segment may begin with ``_`` once decoded: every control-root prefix does (``_bases``,
       ``_protection``, ``_trash``, ``__manifest`` …), and a glob keeps a prefix the next feature adds out of
       every vend without anyone remembering to list it. Judged decoded, so a ``%5F`` is refused on this
@@ -153,6 +155,8 @@ def require_registrable_location(location: str | None, *, root: str, control_roo
             "or '..', or hold a control character or a separator its escapes add, because such a spelling does not name the location "
             "the store would open"
         )
+    if any("?" in segment for segment in decoded):
+        raise InvalidInputError(f"register location {stated!r} holds '?', which the store keeps under a re-encoded name that holds no table")
     if any(segment.startswith("_") for segment in decoded):
         raise InvalidInputError(f"register location {stated!r} has a segment beginning with '_', which is reserved for the catalog's own records")
     absolute = f"{root.rstrip('/')}/{relative}"

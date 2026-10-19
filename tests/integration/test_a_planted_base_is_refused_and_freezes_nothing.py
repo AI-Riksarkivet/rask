@@ -446,6 +446,9 @@ def test_a_table_location_is_exclusive(estate: _Estate) -> None:
     as ``_bases``. A location over the model registry is refused too ([[LH-204]]): it is opened by explicit
     URI and never registered, so a table there would be vended every model's history.
 
+    A ``?``, or its encoded ``%3F``, is refused too: the store keeps it under a re-encoded name that holds no table, so
+    an id registered there is not found by query or count (measured on pylance 13.0.0, dir backend).
+
     Nor may a location equal, contain or sit under another registered table's ([[LH-504]]): a destructive drop
     of the outer table would delete the inner one's bytes. Only the namespace's object index answers it, so the
     door asks once the backend has recorded the registration and detaches the later of the two. The victim
@@ -466,7 +469,14 @@ def test_a_table_location_is_exclusive(estate: _Estate) -> None:
     victim = estate.victim.removeprefix(f"{estate.root}/")
     for location in (".", "_bases", "%5Fbases", f"x/.\t./{victim}", f"x/.\n./{victim}", f"x/%2e%2e/{victim}", "medallion/models/m"):
         resp = estate.client.post("/v1/table/db$squatter/register", json={"location": location})
-        assert resp.status_code == 400, f"{location!r}: {resp.status_code} {resp.text}"
+        _refused(resp, _INVALID_INPUT)
+        assert estate.client.post("/v1/table/db$squatter/exists").status_code == 404, f"{location!r}: a refused registration must be detached"
+        assert estate.client.post("/v1/table/db$squatter/query", json=_QUERY).status_code == 404, f"{location!r}: the victim reads through the refused id"
+    for location in (f"{victim}?x", f"{victim}%3Fx"):
+        resp = estate.client.post("/v1/table/db$squatter/register", json={"location": location})
+        _refused(resp, _INVALID_INPUT)
+        detail = f"register location {location!r} holds '?', which the store keeps under a re-encoded name that holds no table"
+        assert resp.json()["detail"] == detail, resp.text
         assert estate.client.post("/v1/table/db$squatter/exists").status_code == 404, f"{location!r}: a refused registration must be detached"
         assert estate.client.post("/v1/table/db$squatter/query", json=_QUERY).status_code == 404, f"{location!r}: the victim reads through the refused id"
     lance.write_dataset(_MINE, f"{estate.root}/outer/inner", storage_options=estate.key, data_storage_version="2.2", enable_stable_row_ids=True)
