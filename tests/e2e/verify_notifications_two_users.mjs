@@ -297,7 +297,7 @@ async function emitRun({ runId, state, token, outputName = OUTPUT, project }) {
 			eventTime: new Date().toISOString(),
 			producer: 'rask://verify_notifications_two_users',
 			job: { namespace: 'rask-drive', name: `drive_${runId}` },
-			// The TENANT rides the `lance` run facet — the same bag `run_id` uses, and what
+			// The TENANT rides the `lance` run facet — the same bag `runId` uses, and what
 			// `project_id()` reads to find a run's watchers. Omitted entirely for the authorship
 			// cases, so those keep proving v1's behaviour rather than quietly exercising v2.
 			run: project ? { runId, facets: { lance: { project } } } : { runId },

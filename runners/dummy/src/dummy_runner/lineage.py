@@ -91,7 +91,7 @@ def build_run_event(
     if event_type not in TERMINAL_STATES:
         raise ValueError(f"{event_type!r} is not terminal; this lane emits only {sorted(TERMINAL_STATES)} (a START notifies nobody)")
 
-    lance: dict[str, Any] = {"operation": "transform", "run_id": run_id, "rows": rows}
+    lance: dict[str, Any] = {"operation": "transform", "runId": run_id, "rows": rows}
     # Both are TARGETING hints and authorize nothing — the notifications plane re-derives every
     # recipient's visibility at delivery.
     if originator and originator not in _NOT_A_PERSON:

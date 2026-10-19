@@ -148,11 +148,15 @@ def test_a_long_error_is_bounded() -> None:
 # --- the run id ------------------------------------------------------------------------------------ #
 
 
-def test_the_run_id_is_a_spec_legal_uuid() -> None:
-    """The official serializer enforces it; the lane's readable seed is kept as the job name instead."""
+def test_the_run_id_is_a_spec_legal_uuid_and_the_lanes_own_rides_lance_runId() -> None:
+    """The official serializer enforces it; the lane's readable seed is kept as the job name instead,
+    and as `lance.runId`, the key notifications reads a producer's own run from ([[CTL-33]])."""
     import uuid
 
-    uuid.UUID(_event()["run"]["runId"])
+    event = _event()
+
+    uuid.UUID(event["run"]["runId"])
+    assert event["run"]["facets"]["lance"]["runId"] == "htr-run-1"
 
 
 def test_the_same_work_converges_on_the_same_run() -> None:

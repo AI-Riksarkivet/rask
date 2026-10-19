@@ -113,7 +113,7 @@ event = {
             "author": {"name": token.subject, "sub": token.subject},
             "lance": {
                 "operation": "promote",
-                "run_id": producer_run_id,  # what YOUR detail door answers to
+                "runId": producer_run_id,  # what YOUR detail door answers to; the catalog and lineage spell it so
                 "project": project_id,  # (3) WATCH's key. Omit -> zero watchers.
             },
             "errorMessage": {"message": reason},

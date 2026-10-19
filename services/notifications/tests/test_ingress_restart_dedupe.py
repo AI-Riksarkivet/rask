@@ -38,7 +38,7 @@ OPEN = Visibility(decider=None, enabled=False)
 RUN_EVENT: dict[str, Any] = {
     "eventType": "FAIL",
     "eventTime": "2026-08-09T12:00:00+00:00",
-    "run": {"runId": "run-77", "facets": {"author": {"name": "alice", "sub": "alice"}, "lance": {"run_id": "ingest-77"}}},
+    "run": {"runId": "run-77", "facets": {"author": {"name": "alice", "sub": "alice"}, "lance": {"runId": "ingest-77"}}},
     "outputs": [{"namespace": "bronze", "name": "bronze$pages"}],
 }
 

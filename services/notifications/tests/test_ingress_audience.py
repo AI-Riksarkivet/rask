@@ -40,7 +40,7 @@ OPEN = Visibility(decider=None, enabled=False)
 def _event(*, author: str = "alice", outputs: list[str] | None = None, project: str | None = None, at: datetime | None = None) -> dict[str, Any]:
     facets: dict[str, Any] = {"author": {"name": author, "sub": author}}
     if project is not None:
-        # The same `lance` facet `run_id` rides — the producer stamps the tenant there.
+        # The same `lance` facet `runId` rides — the producer stamps the tenant there.
         facets["lance"] = {"project": project}
     return {
         "eventType": "FAIL",

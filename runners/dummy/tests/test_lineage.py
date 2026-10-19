@@ -68,8 +68,12 @@ def test_the_human_rides_lance_originator_and_NEVER_author() -> None:
     assert "author" not in facets, "a producer-supplied author is overwritten by the ingest; use originator"
 
 
-def test_lance_project_is_carried_because_omitting_it_costs_every_watcher() -> None:
-    assert _event()["run"]["facets"]["lance"]["project"] == "acme"
+def test_lance_carries_the_project_and_the_runs_own_id_its_consumers_read() -> None:
+    """Omitting the project costs every watcher, and the lane's own run rides `lance.runId`, the key
+    notifications reads a producer's own run from ([[CTL-33]])."""
+    lance = _event()["run"]["facets"]["lance"]
+
+    assert (lance["project"], lance["runId"]) == ("acme", "e2e-1")
 
 
 def test_the_output_is_named_EXACTLY_as_the_FGA_object() -> None:

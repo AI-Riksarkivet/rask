@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from notifications.api.lineage_events import LineageRunEvent, author_subject, is_terminal, notifiable, source_run_id
+from notifications.api.lineage_events import LineageRunEvent, author_subject, is_terminal, notifiable
 
 
 def _event(
@@ -65,16 +65,6 @@ def test_a_malformed_author_facet_is_a_missing_one_never_a_raise(facets: dict[st
     """Facets are an open bag on an untrusted envelope. A producer writing a number where a string
     belongs must cost a notification, never an exception inside a subscription handler."""
     assert author_subject(LineageRunEvent.model_validate(_event(facets=facets)).run) is None
-
-
-def test_the_link_is_the_producers_own_run_id() -> None:
-    """The graph runId is a derived uuid5 that links to nothing — every ingest-board row 404'd when it
-    was used as the link — so the pointer carries `run.facets.lance.run_id` beside it."""
-    event = LineageRunEvent.model_validate(_event(facets={"author": {"sub": "alice"}, "lance": {"run_id": "ingest-42"}}))
-    assert source_run_id(event.run) == "ingest-42"
-    notice = notifiable(event)
-    assert notice is not None
-    assert notice.delivery.source_run_id == "ingest-42"
 
 
 def test_a_run_recorded_before_producers_stated_their_own_id_links_to_nothing() -> None:

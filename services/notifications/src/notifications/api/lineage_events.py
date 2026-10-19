@@ -208,12 +208,16 @@ def source_run_id(run: LineageRun) -> str | None:
     The graph `runId` is a derived uuid5 and links to nothing: every ingest-board row 404'd when it
     was used as the link. `None` for runs recorded before producers stated it, which a consumer must
     render unlinked rather than guess at.
+
+    Read as `lance.runId`, the one spelling the estate's producers stamp: the catalog writes it and
+    lineage's edge list reads it, so a second spelling here would name no run for every catalog write
+    ([[CTL-33]]).
     """
-    return _facet_field(run.facets, LANCE_FACET, "run_id")
+    return _facet_field(run.facets, LANCE_FACET, "runId")
 
 
 def project_id(run: LineageRun) -> str | None:
-    """The TENANT this run belongs to — v2 targeting's key, from the same `lance` facet as `run_id`.
+    """The TENANT this run belongs to — v2 targeting's key, from the same `lance` facet as `runId`.
 
     `None` for a producer that stamps no project, which is not an error: v1 authorship targeting needs
     no tenant, so a project-less run still reaches its author and simply reaches no watchers. Silence

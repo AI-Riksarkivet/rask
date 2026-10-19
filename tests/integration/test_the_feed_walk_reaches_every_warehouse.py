@@ -67,7 +67,7 @@ TENANT_RUN = {
         "runId": "run-tenant",
         "facets": {
             "author": {"name": "dex~alice", "sub": "dex~alice"},
-            "lance": {"operation": "insert", "project": "acme", "run_id": "ingest-7"},
+            "lance": {"operation": "insert", "project": "acme", "runId": "ingest-7"},
             "errorMessage": {"message": "row 12: value out of range", "programmingLanguage": "python"},
         },
     },
@@ -209,7 +209,7 @@ async def test_the_walk_reaches_a_tenant_warehouse_run_and_is_sent_only_what_tar
         "producer": "https://rask.invalid/ingest",
         "run": {
             "runId": "run-tenant",
-            "facets": {"author": {"name": "dex~alice", "sub": "dex~alice"}, "lance": {"operation": "insert", "project": "acme", "run_id": "ingest-7"}},
+            "facets": {"author": {"name": "dex~alice", "sub": "dex~alice"}, "lance": {"operation": "insert", "project": "acme", "runId": "ingest-7"}},
         },
         "outputs": [{"namespace": "acme-gold", "name": "acme-gold$catalog"}],
     }

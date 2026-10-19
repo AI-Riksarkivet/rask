@@ -94,7 +94,7 @@ def build_run_event(
     ``rows`` rides an `outputStatistics` facet on COMPLETE only — a FAIL wrote nothing, and a count
     there would make a failed run look like it produced data.
     """
-    lance: dict[str, Any] = {"operation": "transform", "run_id": run_id, "pipeline": pipeline}
+    lance: dict[str, Any] = {"operation": "transform", "runId": run_id, "pipeline": pipeline}
     # Both are TARGETING hints and authorize nothing — the notifications plane re-derives every
     # recipient's visibility at delivery.
     if originator and originator not in _NOT_A_PERSON:
