@@ -317,7 +317,8 @@ class ReconcileReport(BaseModel):
     unreferenced_projects: list[UnreferencedProject] = Field(default_factory=list)
     unbound_namespaces: list[UnboundNamespace] = Field(default_factory=list)
     ungoverned_tables: list[UngovernedTable] = Field(default_factory=list)
-    #: The INVERSE of `ungoverned_tables`: tuples with no table. Reported, never gating.
+    #: The INVERSE of `ungoverned_tables`: tuples on a table neither the catalog nor the trash names.
+    #: Reported, never gating.
     ghost_tables: list[GhostObject] = Field(default_factory=list)
     orphan_buckets: list[OrphanBucket] = Field(default_factory=list)
     #: Trash naming a root nothing maintains. Reported, never gating — see `NON_GATING_CATEGORIES`.
@@ -628,6 +629,16 @@ def _ghosts(kind: str, tuple_counts: Mapping[str, int], *, record_ids: set[str],
         for obj_id, count in sorted(tuple_counts.items())
         if obj_id not in record_ids and obj_id not in exclude
     ]
+
+
+def _trashed_tables(records: Iterable[Mapping[str, Any]]) -> set[str]:
+    """The table ids the trash names ([[LH-516]]).
+
+    A recoverable drop deregisters its table and keeps the table's grants for its owner's undrop (#75), so a table in
+    the trash is in no catalog listing while its record still names it, until a purge or an expiry ends the record and
+    the grants together. A record with no ``kind`` is a table's, as `trash.put` keys it.
+    """
+    return {str(record["id"]) for record in records if str(record.get("kind") or "table") == "table"}
 
 
 def _unreferenced_projects(record_ids: set[str], tuple_counts: Mapping[str, int]) -> list[UnreferencedProject]:
@@ -1082,8 +1093,15 @@ def build_report(
         "ghost_tables",
         # THE SAME TWO INPUTS as its inverse, and for the same reason: without the tuple scan every
         # table reads as ghostly, turning an OpenFGA outage into a report naming the whole estate.
-        inputs=(sources.tables_error, sources.tuples_error),
-        detect=lambda: _ghosts("table", _by_type(sources, "table"), record_ids={table for table, _root in sources.tables or []}, exclude=set()),
+        # The trash index joins them ([[LH-516]]): without it every table in the trash reads as a ghost,
+        # and drift repair revokes the grants its owner's undrop needs.
+        inputs=(sources.tables_error, sources.tuples_error, sources.trash_error),
+        detect=lambda: _ghosts(
+            "table",
+            _by_type(sources, "table"),
+            record_ids={table for table, _root in sources.tables or []},
+            exclude=_trashed_tables(sources.trash or []),
+        ),
     )
     report.ungoverned_tables = _run_category(
         report,

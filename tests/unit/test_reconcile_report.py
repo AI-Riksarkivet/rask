@@ -373,6 +373,21 @@ def test_a_dead_bucket_listing_degrades_only_orphan_buckets(tmp_path: Path, monk
     assert set(report.counts) == set(mod.CATEGORIES) - {"orphan_buckets", "orphan_files", "unregistered_datasets", "absent_datasets"}
 
 
+def test_an_unreadable_trash_index_degrades_only_the_categories_that_read_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A table in the trash is in no catalog listing and keeps its grants for its undrop, so only the trash index tells
+    it apart from a ghost ([[LH-516]]). With the index unreadable, `ghost_tables` reports UNAVAILABLE beside
+    `orphaned_trash` rather than naming the trash as ghosts for drift repair to revoke."""
+    estate = _Estate(tmp_path)
+    estate.fga.tuples["table:team_ns$dropped"] = [("user:alice", "owner")]
+    Path(estate.control_root.removeprefix("file://"), "_trash").write_text("a file where the trash index belongs")
+
+    report = estate.run(monkeypatch)
+
+    assert {u.category for u in report.unavailable} == {"ghost_tables", "orphaned_trash"}
+    assert all("registry:trash" in u.reason for u in report.unavailable)
+    assert (report.ghost_tables, "ghost_tables" in report.counts) == ([], False)
+
+
 def test_no_scan_is_capped_silently(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A truncated scan that reads as "all clear" is worse than no scan. A tuple cursor that never
     ends, a paginated bucket listing, and an unreadable registry record each land in `incomplete` —

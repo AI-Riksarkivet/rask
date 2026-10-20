@@ -80,8 +80,13 @@ class TupleStore:
         return CheckResponse(allowed=True)
 
     async def read(self, body: ReadRequestTupleKey, options: Options = None) -> ReadResponse:
+        """The tuples on ``body.object``, or every tuple held when the read names no object, as OpenFGA reads a whole store."""
         del options
-        held = [Tuple(key=TupleKey(user=u, relation=r, object=o), timestamp=datetime.now(UTC)) for u, r, o in sorted(self.tuples) if o == body.object]
+        held = [
+            Tuple(key=TupleKey(user=u, relation=r, object=o), timestamp=datetime.now(UTC))
+            for u, r, o in sorted(self.tuples)
+            if body.object is None or o == body.object
+        ]
         return ReadResponse(tuples=held, continuation_token="")
 
     async def write(self, body: ClientWriteRequest, options: Options = None) -> None:

@@ -49,17 +49,25 @@ def _report(*incomplete: IncompleteScan) -> ReconcileReport:
     )
 
 
-def test_an_unreadable_TABLE_root_does_not_make_its_tables_ghosts() -> None:
-    """The live path: `catalog:tables:<root>` is an IncompleteScan, never an error, so `ghost_tables`
-    runs against a record set missing every table under that root."""
-    planned, refused = repair.plan_repair(_report(IncompleteScan(source="catalog:tables:s3://acme-wh", reason="manifest unreadable: 503")))
+@pytest.mark.parametrize(
+    "partial",
+    [
+        pytest.param(IncompleteScan(source="catalog:tables:s3://acme-wh", reason="manifest unreadable: 503"), id="a-table-root"),
+        pytest.param(IncompleteScan(source="registry:trash", reason="s3://ctl/_trash/table-0a1b.json is unreadable (OSError: 503)"), id="a-trash-record"),
+    ],
+)
+def test_an_unreadable_TABLE_root_or_trash_record_does_not_make_its_tables_ghosts(partial: IncompleteScan) -> None:
+    """The live path: `catalog:tables:<root>` and `registry:trash` are IncompleteScans, never errors, so `ghost_tables`
+    runs against a record set missing every table under that root, or the table in the trash whose record was skipped
+    ([[LH-516]]: a recoverable drop keeps its table's grants for the undrop, and only the record names it)."""
+    planned, refused = repair.plan_repair(_report(partial))
 
     assert "table:ns$t1" not in {p.fga_object for p in planned}, (
-        "a table under a root the scan could not read was planned for revoke — a transient manifest "
-        "failure would strip authorization from every table in that warehouse"
+        "a table whose record the scan could not read was planned for revoke — one transient read failure would strip "
+        "authorization from every table under a warehouse root, or from a table its owner can still undrop"
     )
     assert "ghost_tables" in refused, f"the refusal is not reported, so the tick reads as clean: {refused}"
-    assert "s3://acme-wh" in refused["ghost_tables"], f"the refusal does not name the partial source: {refused['ghost_tables']}"
+    assert partial.source in refused["ghost_tables"], f"the refusal does not name the partial source: {refused['ghost_tables']}"
 
 
 def test_an_UNRELATED_partial_read_refuses_nothing() -> None:

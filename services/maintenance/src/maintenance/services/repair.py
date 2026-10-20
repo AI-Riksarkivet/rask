@@ -31,9 +31,9 @@ the listing it was measured against was COMPLETE. `_run_category` refuses a cate
 reported an error, so an outage produces no findings; a partial read travels on a different channel
 and does not (`_tables_across` returns unreadable roots beside the rows it did get, filed as
 `IncompleteScan`, with `tables_error` still None). One transient manifest failure on one warehouse
-root would therefore classify every table under it as a ghost. `_SUBTRACTED_FROM` names the source
+root would therefore classify every table under it as a ghost. `_SUBTRACTED_FROM` names the sources
 behind each category and the pass refuses that category — by name, with the partial source in the
-reason — when it was read in part. The check is PER CATEGORY: this estate carries a storage-tier
+reason — when any of them was read in part. The check is PER CATEGORY: this estate carries a storage-tier
 `IncompleteScan` on most ticks, and none of those feed a revoke.
 
 THE TOMBSTONE SWEEP NEEDS NO SUCH GUARD, and the contrast is the reason this one does. That pass
@@ -87,10 +87,14 @@ _REVOCABLE: tuple[str, ...] = ("ghost_projects", "ghost_warehouses", "ghost_tabl
 #: `fga:tuples` is deliberately absent. A truncated tuple scan finds FEWER objects carrying tuples,
 #: so it under-reports ghosts — the safe direction, and guarding it would refuse work for a partial
 #: read that cannot produce a false positive.
-_SUBTRACTED_FROM: dict[str, str] = {
-    "ghost_projects": "registry:projects",
-    "ghost_warehouses": "registry:warehouses",
-    "ghost_tables": "catalog:tables",
+#:
+#: `ghost_tables` is subtracted from the trash index as well as the catalog's listing ([[LH-516]]): a table in the
+#: trash keeps its grants for its owner's undrop and only its trash record names it, so a record the scan skipped
+#: makes that table read as a ghost.
+_SUBTRACTED_FROM: dict[str, tuple[str, ...]] = {
+    "ghost_projects": ("registry:projects",),
+    "ghost_warehouses": ("registry:warehouses",),
+    "ghost_tables": ("catalog:tables", "registry:trash"),
 }
 
 
@@ -138,10 +142,10 @@ def _partial(report: ReconcileReport, category: str) -> str | None:
     Returns the SOURCE that was read partially rather than a boolean, because the refusal has to name
     it: a tick that revoked nothing must be distinguishable from an estate with nothing to revoke.
     """
-    prefix = _SUBTRACTED_FROM.get(category)
-    if prefix is None:
+    prefixes = _SUBTRACTED_FROM.get(category)
+    if prefixes is None:
         return None
-    hit = [scan for scan in report.incomplete or [] if scan.source.startswith(prefix)]
+    hit = [scan for scan in report.incomplete or [] if scan.source.startswith(prefixes)]
     return None if not hit else ", ".join(f"{scan.source} ({scan.reason})" for scan in hit)
 
 
