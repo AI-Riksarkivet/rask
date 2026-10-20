@@ -249,10 +249,10 @@ def normalise(uri: str) -> str:
     return without_scheme.strip("/")
 
 
-#: PUBLIC as of the F6(d) trash exclusion — the sweep must compare a trash record's `location` against
-#: a discovered dataset URI. It drops the scheme and the edge slashes and decodes nothing, so two
-#: spellings of one path that differ in percent-encoding compare equal only as :func:`decoded_path`,
-#: the form every base-reference verdict here compares and keys in.
+#: PUBLIC because the catalog and maintenance compare spellings of one store's paths with it. It drops
+#: the scheme and the edge slashes and decodes nothing, so two spellings of one path that differ in
+#: percent-encoding compare equal only as :func:`decoded_path`, the form every base-reference verdict
+#: here and the sweep's trash exclusion compare and key in ([[LH-318]]).
 #: Re-implementing the compare at the call site is how a guard silently never matches, which this
 #: function's own docstring names as the failure mode indistinguishable from having no guard at all.
 #: The private alias stays so the in-module call sites read unchanged.

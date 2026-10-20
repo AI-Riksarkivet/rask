@@ -107,7 +107,7 @@ def _discover_all(fs: pafs.FileSystem, buckets: list[str], *, max_depth: int) ->
 
 
 def _trash_exclusions(settings: MaintenanceSettings, options: dict[str, str]) -> dict[str, str]:
-    """``{normalised path: why}`` for every dataset in the trash — the datasets this tick may NOT touch.
+    """``{decoded path: why}`` for every dataset in the trash — the datasets this tick may NOT touch.
 
     #75 trash expiry is REPORT ONLY in the sweep; #79's purge lives on the reconcile tick, whose drift report gates it.
 
@@ -127,13 +127,19 @@ def _trash_exclusions(settings: MaintenanceSettings, options: dict[str, str]) ->
 
 
 def trashed_locations(trash_records: list[dict[str, Any]]) -> dict[str, str]:
-    """``{normalised path: why}`` for every trash record naming bytes.
+    """``{decoded path: why}`` for every trash record naming bytes, each keyed as :func:`base_refs.decoded_path` reads it.
 
-    A trashed NAMESPACE record and a declared-only table both carry `location=""`, and `normalise("")` is a prefix of
+    ONE LOCATION, TWO SPELLINGS ([[LH-318]]). A record holds the location `describe_table` answered, which
+    percent-encodes the table's name (``…$r%C3%A4ksm%C3%B6rg%C3%A5s``, ``…$growth%25``), while the store keeps, and
+    discovery lists, the directory that spelling opens (``…$räksmörgås``, ``…$growth%``); measured on pylance 13.0.0,
+    `dir` backend, over moto and a local root. Keyed as spelled, a recoverably dropped table with such a name would
+    match no discovered dataset, and the sweep would expire the versions an undrop restores.
+
+    A trashed NAMESPACE record and a declared-only table both carry `location=""`, and the empty path is a prefix of
     everything, so a record naming no location excludes nothing.
     """
     return {
-        base_refs.normalise(str(record["location"])): f"in trash as {record.get('id') or '?'} (expires_at={record.get('expires_at') or '?'})"
+        base_refs.decoded_path(str(record["location"])): f"in trash as {record.get('id') or '?'} (expires_at={record.get('expires_at') or '?'})"
         for record in trash_records
         if record.get("location")
     }
@@ -146,8 +152,12 @@ def why_in_trash(uri: str, trashed_by_path: dict[str, str]) -> str | None:
     naming a table covers every dataset under it. A wrong refusal costs disk; a wrong permit writes to bytes an owner
     was told are frozen. One lookup per path segment, the nearest record first, so a whole-estate pass costs the same
     however many records the trash holds.
+
+    ``uri`` is compared as the path it decodes to, the key :func:`trashed_locations` files a record under, so either
+    spelling of a location answers alike: the decoded directory discovery lists, or the catalog's encoded one an
+    event names.
     """
-    segments = base_refs.normalise(uri).split("/")
+    segments = base_refs.decoded_path(uri).split("/")
     return next((why for end in range(len(segments), 0, -1) if (why := trashed_by_path.get("/".join(segments[:end]))) is not None), None)
 
 

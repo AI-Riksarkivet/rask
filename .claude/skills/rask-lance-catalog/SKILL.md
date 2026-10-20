@@ -616,7 +616,10 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   and so does the listing-floor pass, before its per-tick cap and before any open, vend or commit; an
   unreadable trash index stops the floor pass for the tick. The vend door's describe is not this gate:
   a Lance commit is a put-if-not-exists on the store, so a writer holding any credential could commit.
-  The arrival lane acts only on a table root, which the record names exactly.
+  The arrival lane asks it too. The rule compares every location as the path it decodes to
+  (`base_refs.decoded_path`, [[LH-318]]): a record holds the location `describe_table` answered, which
+  percent-encodes the table's name (`…$r%C3%A4ksm%C3%B6rg%C3%A5s`), while discovery lists the decoded
+  directory the store keeps (`…$räksmörgås`) and an event names the encoded one.
 - **A governed tier's maintenance run is emitted only when expiry does MATERIAL work.**
   `sweep.py::_did_material_work` gates the `expire_versions` emit on `old_versions_removed`, so a
   correctly-idle estate records nothing — deliberately, since every write and every backstop tick would

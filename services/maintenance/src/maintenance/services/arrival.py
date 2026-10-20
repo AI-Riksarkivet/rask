@@ -26,9 +26,8 @@ from maintenance.core.config import MaintenanceSettings
 from maintenance.services.due import TableIds, refresh_due, table_ids
 from maintenance.services.expiry import DatasetResult, DueVerdict
 from maintenance.services.plan import PlanContext, buckets_to_sweep, load_policies, resolve_plan
-from maintenance.services.sweep import SweepPlan, expire_dataset, trashed_locations
+from maintenance.services.sweep import SweepPlan, expire_dataset, trashed_locations, why_in_trash
 from service_kit.lakehouse import trash
-from service_kit.lakehouse.base_refs import normalise
 from service_kit.lakehouse.maintenance_due import CloneList, read_clone_list
 
 
@@ -216,13 +215,17 @@ def _is_fresh(clones: CloneList, settings: MaintenanceSettings, *, now: datetime
 
 
 def _in_trash(location: str, settings: MaintenanceSettings) -> bool:
-    """Whether a trash record names ``location``; an unreadable trash index answers yes (fail toward not deleting)."""
+    """Whether a trash record covers ``location``; an unreadable trash index answers yes (fail toward not deleting).
+
+    The sweep's own rule (:func:`why_in_trash`) answers it: the event names the location the catalog opened, spelled
+    as the catalog encodes it, and the rule compares either spelling as the path it decodes to ([[LH-318]]).
+    """
     try:
         records = trash.list_all(settings.resolved_control_root, settings.storage_options())
     except Exception as exc:  # noqa: BLE001 — an unread trash index decides nothing; the sweep re-reads it
         log.warning("maintenance_event_trash_unreadable", extra={"uri": location, "error": f"{type(exc).__name__}: {exc}"})
         return True
-    return normalise(location) in trashed_locations(records)
+    return why_in_trash(location, trashed_locations(records)) is not None
 
 
 def expire_written_table(written: WrittenTable, settings: MaintenanceSettings) -> DatasetResult | None:

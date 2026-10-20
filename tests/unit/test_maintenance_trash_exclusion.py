@@ -83,14 +83,19 @@ def test_a_trashed_dataset_is_not_expired_and_says_so(tmp_path: Path, settings: 
 
     So is each of its branches ([[LH-449]]): discovery lists a branch at ``<table>/tree/<branch>``, and the record
     names only the table, so an exclusion that compared whole locations would expire a recoverable table's branches.
+
+    The table's name is one the catalog percent-encodes ([[LH-318]]): the record holds the location `describe_table`
+    answers, ``…/r%C3%A4ksm%C3%B6rg%C3%A5s%25`` for ``räksmörgås%``, while the store keeps, and discovery lists, the
+    directory that spelling opens (measured on pylance 13.0.0, `dir` backend, over moto and a local root).
     """
     live = _dataset(tmp_path / "live.lance")
-    dropped = _dataset(tmp_path / "dropped.lance")
-    branch = _dataset(tmp_path / "dropped.lance" / "tree" / "backfill")
+    dropped = _dataset(tmp_path / "räksmörgås%.lance")
+    branch = _dataset(tmp_path / "räksmörgås%.lance" / "tree" / "backfill")
 
     # Exactly what the catalog's recoverable drop writes: the bytes stay where they are, and a record
-    # under the control root points at them.
-    record = trash.make_record("silver$htr_lines_2019", kind="table", location=dropped, dropped_by="user:karin", grace_days=7)
+    # under the control root points at them by the URL the catalog describes the table at.
+    location = f"file://{tmp_path}/r%C3%A4ksm%C3%B6rg%C3%A5s%25.lance"
+    record = trash.make_record("silver$räksmörgås%", kind="table", location=location, dropped_by="user:karin", grace_days=7)
     trash.put(str(settings.resolved_control_root), {}, record)
 
     results, expired = _run(monkeypatch, settings, [live, dropped, branch])
@@ -104,7 +109,7 @@ def test_a_trashed_dataset_is_not_expired_and_says_so(tmp_path: Path, settings: 
     # The reason names the record AND its deadline: an exclusion that has outlived its deadline is a
     # record the purge keeps refusing, i.e. a PERMANENT exclusion, and that must be readable from the
     # summary rather than inferred.
-    assert "silver$htr_lines_2019" in (excluded[0].trashed or "")
+    assert "silver$räksmörgås%" in (excluded[0].trashed or "")
     assert "expires_at=" in (excluded[0].trashed or "")
 
 
