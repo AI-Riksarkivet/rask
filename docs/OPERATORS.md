@@ -20,7 +20,7 @@ installs each from `deploy/fixtures`, its own Helm release, before rask's (`make
 
 The lakehouse runs no compute and submits no job ([ADR 0155](adr/0155-the-medallion-is-tier-governance-in-the-catalog.md)):
 KubeRay, Kueue, GPU operators and whatever orchestrates a pipeline belong to the user who runs that pipeline, and no
-lakehouse service imports `ray` or `ray_kit` (the import contract `the-lakehouse-knows-no-engine`). The development
+lakehouse service imports `ray` or `ray_kit` (the import contract `the-lakehouse-knows-no-client`). The development
 estate runs a Ray engine from the `kuberay-operator`, `ray-cluster` and `compute` fixtures, outside the product chart.
 
 ## 2 · What we never build: a custom lakehouse operator

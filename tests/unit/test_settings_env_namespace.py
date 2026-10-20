@@ -43,25 +43,14 @@ _ROOT = Path(__file__).resolve().parents[2]
 #: skip, and a skipping gate measures nothing.
 _SETTINGS: list[tuple[str, str, str]] = [
     ("packages/service-kit", "service_kit.config", "Settings"),
-    # `MediaSettings`, renamed from a second class called `Settings` (SK-10) — one distribution held
-    # two of that name, on `RASK_*` and `MEDIA_*` respectively. `service_kit.media.config.Settings`
-    # survives as an alias for the three services that import it, so this roster names the DEFINITION.
-    ("packages/service-kit", "service_kit.media.config", "MediaSettings"),
     ("packages/lineage-kit", "lineage_kit.config", "LineageSettings"),
     ("services/lineage", "lineage.core.config", "LineageSettings"),
     ("services/notifications", "notifications.api.settings", "IngressSettings"),
     ("services/catalog", "catalog.core.config", "Settings"),
     ("services/maintenance", "maintenance.core.config", "MaintenanceSettings"),
-    # These two reach `populate_by_name` by declaring it next to a GovernedAuthSettings mixin, which
-    # is why grepping for the flag on a `class X(BaseSettings)` line misses them.
+    # This one reaches `populate_by_name` by declaring it next to a GovernedAuthSettings mixin, which
+    # is why grepping for the flag on a `class X(BaseSettings)` line misses it.
     ("services/notifications", "notifications.config", "NotificationsSettings"),
-    ("services/flows", "flows.config", "FlowsSettings"),
-    # The FRONT DOOR, which had no settings class at all until FLEET-ENV-SCATTER: sixteen raw
-    # `os.environ.get` reads, several of them per request. Neither `populate_by_name` nor
-    # `env_prefix` — every field carries the deployed variable's full name as an explicit alias.
-    # Subclasses of service_kit.media.config.Settings. None declares `populate_by_name`, and
-    # GovernedAuthSettings is a plain mixin rather than a BaseSettings, so none inherited it.
-    ("services/search", "search.core.config", "SearchSettings"),
 ]
 
 _IDS = [f"{m.split('.')[0]}.{c}" for _, m, c in _SETTINGS]
@@ -70,8 +59,6 @@ _IDS = [f"{m.split('.')[0]}.{c}" for _, m, c in _SETTINGS]
 _REQUIRED: dict[str, str] = {
     "LANCE_S3_ACCESS_KEY_ID": "x",
     "LANCE_S3_SECRET_ACCESS_KEY": "x",
-    "MEDIA_S3_ACCESS_KEY_ID": "x",
-    "MEDIA_S3_SECRET_ACCESS_KEY": "x",
 }
 
 _SENTINEL = "sentinel-value-no-field-would-default-to"

@@ -25,15 +25,11 @@ def _settings_builders() -> list[tuple[str, Any, str]]:
     from catalog.core.config import Settings as CatalogSettings
     from lineage.core.config import LineageSettings
     from maintenance.core.config import MaintenanceSettings
-    from service_kit.media.config import Settings as MediaSettings
-    from viewer.core.config import ViewerSettings
 
     return [
         ("lineage", LineageSettings, "dapr_secret_store"),
         ("catalog", CatalogSettings, "dapr_secret_store"),
         ("maintenance", MaintenanceSettings, "dapr_secret_store"),
-        ("media.s3", MediaSettings, "s3_secret_store"),
-        ("viewer", ViewerSettings, "secret_store"),
     ]
 
 
@@ -51,15 +47,13 @@ def test_one_env_var_repoints_every_consumer_of_the_one_secret_store(label: str,
     assert getattr(factory(), attribute) == "prod-secrets"
 
 
-@pytest.mark.parametrize("label", ["lineage", "catalog", "maintenance", "media.s3", "viewer"])
+@pytest.mark.parametrize("label", ["lineage", "catalog", "maintenance"])
 def test_the_per_service_alias_still_overrides_the_estate_wide_name(label: str, monkeypatch: pytest.MonkeyPatch) -> None:
     """The collapse must not REMOVE the per-service lever — a single service may still be repointed."""
     per_service = {
         "lineage": "LINEAGE_DAPR_SECRET_STORE",
         "catalog": "LANCE_DAPR_SECRET_STORE",
         "maintenance": "MAINTENANCE_DAPR_SECRET_STORE",
-        "media.s3": "MEDIA_S3_SECRET_STORE",
-        "viewer": "RASK_SECRET_STORE",
     }[label]
     monkeypatch.setenv("LANCE_S3_ACCESS_KEY_ID", "x")
     monkeypatch.setenv("RASK_SECRET_STORE", "estate-wide")

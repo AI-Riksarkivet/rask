@@ -35,9 +35,11 @@ from service_kit.lancekit.reader import open_reader, translate_catalog_errors
 
 
 class _Settings:
-    """The minimum shape `open_reader` reads — catalog mode, with a configurable service token."""
+    """The `TablePathSettings` shape in full catalog mode, with a configurable service token."""
 
     read_backend = "catalog"
+    write_backend = "catalog"
+    rest_catalog_mode = True
     catalog_uri = "http://catalog.invalid:2333"
     catalog_delimiter = "$"
 
@@ -85,7 +87,7 @@ def test_the_reader_sends_the_callers_bearer_and_NEVER_substitutes_a_service_tok
     reader = open_reader(
         dataset=None,
         table_id=["transcripts_v2", "annotations"],
-        settings=_Settings(service_token),  # ty: ignore[invalid-argument-type]
+        settings=_Settings(service_token),
         caller_token=caller_token,
     )
     assert _token_of(reader) == expected

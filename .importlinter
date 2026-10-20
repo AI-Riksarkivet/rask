@@ -2,7 +2,9 @@
 # not import another; lint-imports walks the whole import graph, function-local (lazy) imports included,
 # and names the offending chain. `dapr` is a root package because import-linter cannot forbid an external
 # SUBPACKAGE (`dapr.ext.workflow`) otherwise, and include_external_packages lets the other third-party
-# names (ray, durabletask, fastapi, starlette, dotenv) be forbidden directly.
+# names (ray, durabletask, fastapi, starlette, dotenv) be forbidden directly. Every first-party package the
+# lakehouse imports is a root package too (`storage`): an external package's own imports are not in the
+# graph, so a client imported through one would pass every contract.
 
 [importlinter]
 root_packages =
@@ -11,8 +13,12 @@ root_packages =
     maintenance
     notifications
     annotator
+    flows
+    search
+    viewer
     service_kit
     lineage_kit
+    storage
     ray_kit
     compute
     dapr
@@ -27,10 +33,11 @@ forbidden_modules =
     service_kit.exceptions
 allow_indirect_imports = True
 
-# The lakehouse knows no engine (ADR 0155): moving data between tiers is the user's pipeline on their own compute, so no
-# lakehouse service and no shared kit imports an engine, an engine's kit, or the compute app.
-[importlinter:contract:the-lakehouse-knows-no-engine]
-name = Phase 1 (3): no lakehouse service and no service-kit module imports an engine or an engine adapter
+# The lakehouse knows no client (XC-175): flows, search, the viewer, the annotator (ADR 0171), compute and the engine it
+# fronts (ADR 0155) reach the lakehouse only through its public doors, so deleting every client changes nothing in the
+# lakehouse. A client may import the shared kits; no lakehouse service and no kit it runs imports a client, by any chain.
+[importlinter:contract:the-lakehouse-knows-no-client]
+name = Phase 1 (3), XC-176: no lakehouse service and no shared kit imports a client, an engine or an engine's kit
 type = forbidden
 source_modules =
     catalog
@@ -40,15 +47,40 @@ source_modules =
     service_kit
     lineage_kit
 forbidden_modules =
+    flows
+    search
+    viewer
+    annotator
+    compute
     ray
     ray_kit
-    compute
-allow_indirect_imports = True
 
-# The lakehouse knows no annotation tool (ADR 0171): rask's annotator, like Label Studio, is a client that reaches the
-# lakehouse through its public doors. A client may import the shared library; the lakehouse may not import a client.
-[importlinter:contract:the-lakehouse-knows-no-annotation-tool]
-name = XC-167: no lakehouse service and no shared kit imports the annotator
+# service-kit still carries code only clients run: the media plane, and the lancekit modules whose only importers are the
+# media services and the annotator. No lakehouse service and no lineage-kit module reaches that code by any chain, a
+# type-only import included, so it can leave the kit without a lakehouse change.
+[importlinter:contract:the-lakehouse-reaches-no-client-code-in-the-kit]
+name = XC-176: no lakehouse service and no lineage-kit module reaches the media plane or a client-only lancekit module
+type = forbidden
+source_modules =
+    catalog
+    lineage
+    maintenance
+    notifications
+    lineage_kit
+forbidden_modules =
+    service_kit.media
+    service_kit.lancekit.alignments
+    service_kit.lancekit.descriptor
+    service_kit.lancekit.introspect
+    service_kit.lancekit.keys
+    service_kit.lancekit.openlineage
+    service_kit.lancekit.predicate
+    service_kit.lancekit.registry
+    service_kit.lancekit.store
+    service_kit.lancekit.topics_meta
+
+[importlinter:contract:the-lakehouse-is-not-built-on-a-workflow-engine]
+name = Phase 1 (3): no lakehouse service and no shared kit imports a workflow engine
 type = forbidden
 source_modules =
     catalog
@@ -57,18 +89,6 @@ source_modules =
     notifications
     service_kit
     lineage_kit
-forbidden_modules =
-    annotator
-allow_indirect_imports = True
-
-[importlinter:contract:the-lakehouse-is-not-built-on-a-workflow-engine]
-name = Phase 1 (3): no lakehouse service imports a workflow engine
-type = forbidden
-source_modules =
-    catalog
-    lineage
-    maintenance
-    service_kit
 forbidden_modules =
     dapr.ext.workflow
     durabletask

@@ -12,8 +12,8 @@ medallion is **governance over those tiers, applied in the catalog's write path*
 through the catalog's Lance Namespace doors (`CreateTable`, `InsertIntoTable`, `MergeInsertIntoTable`,
 `DeclareTable` + vended credentials, `RegisterTable`; `lance_docs/ns_catalog/spec.yaml`), exactly as any client does.
 The lakehouse runs no stage, no training and no engine, and it imports none: the import contract
-`the-lakehouse-knows-no-engine` (`.importlinter`) forbids its services and kits from importing `ray`, `ray_kit` or
-`compute`.
+`the-lakehouse-knows-no-client` (`.importlinter`) forbids its services and kits from importing `ray`, `ray_kit`,
+`compute` or any other client.
 
 Data enters bronze the same way ([ADR 0154](adr/0154-the-lakehouse-runs-no-ingest-and-no-workflow-engine.md)). Until
 the bring-your-own ingest runner (CP-061) exists, a client seeds bronze through those doors itself, as the live lane

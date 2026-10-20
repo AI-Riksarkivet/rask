@@ -36,7 +36,7 @@ from service_kit.lancekit.reader import translate_catalog_errors
 if TYPE_CHECKING:
     import pyarrow as pa
 
-    from service_kit.media.config import Settings
+    from service_kit.lancekit.reader import TablePathSettings
 
 
 @runtime_checkable
@@ -240,7 +240,7 @@ def open_writer(
     *,
     dataset: lance.LanceDataset | None,
     table_id: list[str],
-    settings: Settings,
+    settings: TablePathSettings,
     caller_token: str | None = None,
 ) -> TableWriter:
     """Select the write path from settings — the single host-agnostic seam.

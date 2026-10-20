@@ -62,8 +62,6 @@ log = logging.getLogger(__name__)
 if TYPE_CHECKING:
     from lance_namespace_urllib3_client import QueryTableRequest
 
-    from service_kit.media.config import Settings
-
 
 @runtime_checkable
 class TableReader(Protocol):
@@ -455,11 +453,35 @@ class RestCatalogTransport:
         return [CatalogVersion(version=int(v.version), timestamp_millis=v.timestamp_millis) for v in response.versions or []]
 
 
+class TablePathSettings(Protocol):
+    """What the path-selecting seams read: which path a table's reads and writes take, and the catalog that path
+    goes through.
+
+    A Protocol, so this kit depends on no service's settings class: a caller passes its own settings, and they fit by
+    shape. Read-only members, so a settings field typed with a ``str`` subclass (a ``StrEnum`` backend) fits too.
+    """
+
+    @property
+    def read_backend(self) -> str: ...
+
+    @property
+    def write_backend(self) -> str: ...
+
+    @property
+    def rest_catalog_mode(self) -> bool: ...
+
+    @property
+    def catalog_uri(self) -> str | None: ...
+
+    @property
+    def catalog_delimiter(self) -> str: ...
+
+
 def open_reader(
     *,
     dataset: lance.LanceDataset | None,
     table_id: list[str],
-    settings: Settings,
+    settings: TablePathSettings,
     caller_token: str | None = None,
 ) -> TableReader:
     """Select the read path from settings — the single host-agnostic seam.
@@ -502,7 +524,7 @@ def open_reader(
     return CatalogTableReader(transport, list(table_id))
 
 
-def open_catalog_reader(*, table_id: list[str], settings: Settings, caller_token: str | None = None) -> CatalogTableReader:
+def open_catalog_reader(*, table_id: list[str], settings: TablePathSettings, caller_token: str | None = None) -> CatalogTableReader:
     """The catalog-native reader, for surfaces only the catalog exposes (version
     listing + time-travel) — the seam behind paths gated on
     ``settings.rest_catalog_mode``, where the LIVE catalog owns the version

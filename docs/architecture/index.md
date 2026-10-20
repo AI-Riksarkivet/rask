@@ -51,7 +51,7 @@ flowchart TB
   route, which sends each prefix straight to its service; no process at the edge holds a token, so every 401 and
   403 comes from the service (SSR `load` uses the Gateway's in-cluster address, `RASK_EDGE_URL`, server-side).
 - **Compute is bring-your-own.** The lakehouse imports no `ray`, `ray_kit` or `compute` (the import contract
-  `the-lakehouse-knows-no-engine`). The `compute` service (Ray dashboard introspection and the Serve proxy) is the
+  `the-lakehouse-knows-no-client`, which forbids every client). The `compute` service (Ray dashboard introspection and the Serve proxy) is the
   companion of a bring-your-own Ray engine and ships in its own chart, which publishes `/api/ray` and `/api/serve` with its own
   HTTPRoute. A workload's model environment is a sealed `runners/<workload>` project.
 - **State** is the Lance tables on S3 (RustFS in development), lineage's among them, plus Postgres for OpenFGA and the
