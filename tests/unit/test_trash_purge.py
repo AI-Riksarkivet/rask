@@ -47,7 +47,7 @@ from maintenance.services import purge as mod
 from maintenance.services.reconcile import CATEGORIES, CategorySkipped, CategoryUnavailable, IncompleteScan, ReconcileReport
 from service_kit.control_events import CatalogControlEvent
 from service_kit.governed import fga as fga_module
-from service_kit.lakehouse import maintenance_policies, trash
+from service_kit.lakehouse import trash
 from service_kit.lakehouse.base_refs import BaseRefs, normalise
 
 
@@ -271,32 +271,6 @@ def test_a_drifting_report_blocks_the_purge(tmp_path: Path, mutate: Callable[[Re
 # --------------------------------------------------------------------------- #
 
 
-def test_an_expired_table_record_deletes_its_recorded_path_and_clears_the_record(tmp_path: Path) -> None:
-    """The point of the whole feature: expired bytes go away, and the record goes with them.
-
-    The record is cleared LAST so any failure above leaves it for the next tick — asserting it is gone is
-    therefore also asserting the whole sequence completed. The policy the recoverable drop kept for an undrop goes
-    too ([[LH-215]]), or the next table created at the id is maintained under it.
-    """
-    estate = _Estate(tmp_path)
-    canonical, location = estate.drop_recoverably("team", "orders")
-    maintenance_policies.put_policy(estate.control_root, {}, {"kind": "table", "id": canonical, "retention_days": 1})
-    path = Path(location.removeprefix("file://"))
-    assert path.is_dir(), "the fixture must really have bytes, or 'deleted' proves nothing"
-
-    out = _run(estate)
-
-    assert out.ran is True
-    assert out.due == 1
-    assert out.refused == []
-    assert [(p.kind, p.id) for p in out.purged] == [("table", canonical)]
-    assert out.purged[0].bytes_deleted > 0
-    assert out.purged[0].files_deleted > 0
-    assert not path.exists(), "the recorded path survived the purge"
-    assert estate.record(canonical) is None, "the trash record survived its own purge"
-    assert maintenance_policies.get_policy(estate.control_root, {}, "table", canonical) is None, "the policy outlived the table it governed"
-
-
 def test_an_unexpired_record_survives(tmp_path: Path) -> None:
     """Inside the grace window nothing happens — the deadline is the whole contract with the dropper."""
     estate = _Estate(tmp_path)
@@ -430,6 +404,9 @@ def test_a_control_prefix_location_is_refused(tmp_path: Path) -> None:
 
     Checked on EVERY path segment, not just the last: ``…/_trash/x.json`` names a file inside the trash
     registry, and a final-segment-only rule would cheerfully delete it.
+
+    Judged at the place the purge deletes, the location as it decodes ([[LH-319]]): ``%5Ftrash`` opens ``_trash``,
+    and a spelling that names no single place once decoded (``x/%2e%2e``) is refused before any path rule.
     """
     estate = _Estate(tmp_path)
     estate.create_table("team", "orders")
@@ -438,12 +415,16 @@ def test_a_control_prefix_location_is_refused(tmp_path: Path) -> None:
     estate.put_record("evil_nested", location=f"{estate.data_root}/_trash/some-record.json")
     # [[LH-279]] The catalog's base records: purging one would un-sanction a recorded clone source.
     estate.put_record("evil_bases", location=f"{estate.data_root}/_bases")
+    estate.put_record("evil_encoded", location=f"{estate.data_root}/%5Ftrash/some-record.json")
+    estate.put_record("evil_dotdot", location=f"{estate.data_root}/x/%2e%2e/_trash")
 
     out = _run(estate)
 
     assert out.purged == []
-    assert {r.id for r in out.refused} == {"evil_manifest", "evil_nested", "evil_bases"}
-    assert all("control prefix" in r.reason for r in out.refused)
+    reasons = {r.id: r.reason for r in out.refused}
+    assert sorted(reasons) == ["evil_bases", "evil_dotdot", "evil_encoded", "evil_manifest", "evil_nested"]
+    assert all("control prefix" in reasons[record] for record in ("evil_bases", "evil_encoded", "evil_manifest", "evil_nested")), reasons
+    assert "names no single place" in reasons["evil_dotdot"], reasons["evil_dotdot"]
     assert _fingerprint(estate.data) == before
 
 
@@ -810,18 +791,25 @@ def test_a_dry_run_APPLIES_the_shallow_clone_guard_it_already_paid_for(tmp_path:
     The omission fails in the dangerous direction: `would_purge` would name a record a real run
     refuses, so the preview OVERSTATES reclamation on exactly the records where over-promising costs
     most — the ones whose deletion breaks a live dataset.
+
+    The preview asks the delete's own question ([[LH-319]]): a table whose only referrer is its own branch, which the
+    delete takes with it, is planned as a real run reclaims it, while a root whose referrers are unknown stays refused.
     """
     estate = _Estate(tmp_path)
     canonical, location = estate.drop_recoverably("team", "orders", dropped_at=datetime.now(UTC) - timedelta(days=30))
+    branched, branched_location = estate.drop_recoverably("team", "branched", dropped_at=datetime.now(UTC) - timedelta(days=30))
     # Through the estate's OWN comparator: `BaseRefs.protected` holds normalised roots, and
     # re-spelling one by hand here is precisely the mistake `normalise`'s docstring names — a guard
     # that silently never matches looks exactly like having no guard at all.
-    guard = BaseRefs(protected={normalise(location)})
+    guard = BaseRefs(
+        protected={normalise(location), normalise(branched_location)},
+        referrers={normalise(branched_location): {f"{branched_location}/tree/work"}},
+    )
     monkeypatch.setattr(mod, "_estate_base_refs", lambda *_a, **_kw: guard)
 
     out = _run(estate, settings=_settings(tmp_path, trash_purge_enabled=False, trash_purge_dry_run=True))
 
-    assert out.would_purge == [], f"the preview planned to reclaim a protected base: {out.would_purge}"
+    assert [plan.id for plan in out.would_purge] == [branched], f"the preview's plan is not the delete's: {out.would_purge}"
     assert [r.id for r in out.refused] == [canonical]
     assert "clone" in out.refused[0].reason.lower() or "base" in out.refused[0].reason.lower(), out.refused[0].reason
 

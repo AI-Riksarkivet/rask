@@ -47,14 +47,24 @@ def _vends(location: str | None) -> object:
     return _vend
 
 
-def test_a_branch_under_the_table_root_is_covered(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The case equality would break: the sweep holds a branch, the catalog answers with the root."""
-    root = "s3://tracka-wh/425bbde2_tracka$rd2_28877454"
-    monkeypatch.setattr(credentials, "_vend", _vends(root))
+@pytest.mark.parametrize(
+    ("answered", "held"),
+    [
+        # The case equality would break: the sweep holds a branch, the catalog answers with the root.
+        pytest.param("s3://tracka-wh/425bbde2_tracka$rd2_28877454", "s3://tracka-wh/425bbde2_tracka$rd2_28877454/tree/dev", id="a-branch-under-the-root"),
+        # The catalog answers the URL `describe_table` does, percent-encoding the name; the sweep holds the directory
+        # the store keeps ([[LH-319]]).
+        pytest.param(
+            "s3://tracka-wh/425bbde2_tracka$r%C3%A4ksm%C3%B6rg%C3%A5s", "s3://tracka-wh/425bbde2_tracka$räksmörgås", id="the-root-as-the-catalog-spells-it"
+        ),
+    ],
+)
+def test_a_dataset_under_the_table_root_is_covered(monkeypatch: pytest.MonkeyPatch, answered: str, held: str) -> None:
+    monkeypatch.setattr(credentials, "_vend", _vends(answered))
 
-    options = credentials.write_options_for(f"{root}/tree/dev", _settings(), fallback=AMBIENT, declared_table_id="tracka$rd2_28877454")
+    options = credentials.write_options_for(held, _settings(), fallback=AMBIENT, declared_table_id="tracka$rd2_28877454")
 
-    assert options == SCOPED, "a branch dataset was refused a credential vended for its own table root"
+    assert options == SCOPED, f"{held} was refused a credential vended for its own table root {answered}"
 
 
 def test_a_vend_that_names_no_location_proceeds_and_says_so(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:

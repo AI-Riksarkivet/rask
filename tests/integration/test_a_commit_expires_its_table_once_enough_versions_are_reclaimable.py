@@ -5,6 +5,10 @@ namespace's `__manifest`, under a policy keeping one version, with a fresh clone
 threshold is set through the environment, and each side of it is one case: one reclaimable version short reclaims
 nothing; at the threshold every reclaimable version goes. A clone list past its age reclaims nothing at the threshold
 either: it is the only evidence of which tables a clone reads through, so the lane leaves the table to the sweep.
+
+The table's name is one the catalog percent-encodes ([[LH-319]]): the event names the URL the catalog opened,
+``…$r%C3%A4ksm%C3%B6rg%C3%A5s`` as ``describe_table`` answers it, and the policy carries that spelling as the catalog's
+policy door records it, while the ``__manifest`` row and the store hold ``…$räksmörgås``.
 """
 
 from __future__ import annotations
@@ -20,7 +24,7 @@ import pyarrow as pa
 import pytest
 from fastapi.testclient import TestClient
 from lance_namespace import connect
-from lance_namespace_urllib3_client.models import CreateNamespaceRequest, RegisterTableRequest
+from lance_namespace_urllib3_client.models import CreateNamespaceRequest, DescribeTableRequest, RegisterTableRequest
 from moto.server import ThreadedMotoServer
 
 from service_kit.lakehouse import maintenance_policies
@@ -28,7 +32,8 @@ from service_kit.lakehouse.maintenance_due import CloneList, write_clone_list
 from service_kit.lakehouse.objectfs import lance_storage_options
 
 
-LOCATION = "c0ffee00_db$t"
+TABLE = "db$räksmörgås"
+LOCATION = f"c0ffee00_{TABLE}"
 THRESHOLD = 3
 
 
@@ -55,18 +60,21 @@ def store(moto_url: str) -> dict[str, str]:
 
 
 def _table_with(versions: int, *, bucket: str, options: dict[str, str], clone_list_age: timedelta) -> str:
-    """`db$t` at ``versions`` versions, registered, under a policy keeping one, beside a clone list ``clone_list_age`` old."""
+    """The table at ``versions`` versions, registered, under a policy keeping one, beside a clone list ``clone_list_age``
+    old; the location the catalog describes it at."""
     root = f"s3://{bucket}"
-    uri = f"{root}/{LOCATION}"
     for i in range(versions):
         rows = pa.table({"id": pa.array([i], pa.int64())})
-        lance.write_dataset(rows, uri, mode="create" if i == 0 else "append", storage_options=options, data_storage_version="2.2", enable_stable_row_ids=True)
+        lance.write_dataset(
+            rows, f"{root}/{LOCATION}", mode="create" if i == 0 else "append", storage_options=options, data_storage_version="2.2", enable_stable_row_ids=True
+        )
     namespace = connect("dir", {"root": root, **{f"storage.{key}": value for key, value in options.items()}})
     namespace.create_namespace(CreateNamespaceRequest(id=["db"]))
-    namespace.register_table(RegisterTableRequest(id=["db", "t"], location=LOCATION))
-    maintenance_policies.put_policy(root, options, {"kind": "table", "id": "db$t", "path": f"{bucket}/{LOCATION}", "retain_versions": 1})
+    namespace.register_table(RegisterTableRequest(id=TABLE.split("$"), location=LOCATION))
+    described = str(namespace.describe_table(DescribeTableRequest(id=TABLE.split("$"))).location)
+    maintenance_policies.put_policy(root, options, {"kind": "table", "id": TABLE, "path": described.removeprefix("s3://"), "retain_versions": 1})
     write_clone_list(root, options, CloneList(taken_at=datetime.now(UTC) - clone_list_age))
-    return uri
+    return described
 
 
 @pytest.fixture
@@ -94,8 +102,8 @@ def maintenance(moto_url: str, bucket: str, monkeypatch: pytest.MonkeyPatch) -> 
 
 
 def _written(uri: str, version: int) -> dict[str, object]:
-    """The catalog's write event for `db$t` at ``version``, as the bus delivers it."""
-    output = {"name": "db$t", "facets": {"version": {"datasetVersion": str(version)}, "dataSource": {"uri": uri}}}
+    """The catalog's write event for the table at ``version``, as the bus delivers it."""
+    output = {"name": TABLE, "facets": {"version": {"datasetVersion": str(version)}, "dataSource": {"uri": uri}}}
     return {
         "id": "ce-1",
         "specversion": "1.0",

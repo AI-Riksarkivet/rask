@@ -131,7 +131,8 @@ class BaseRefs(BaseModel):
     referrers: dict[str, set[str]] = Field(default_factory=dict)
 
     def is_protected(self, location: str) -> str | None:
-        """The referencing root when ``location`` is one, or lies UNDER one; else ``None`` — the DELETE answer.
+        """The referencing root when ``location`` is one, or lies UNDER one; else ``None`` — the answer for a verb that keeps
+        every referrer, a rewrite or a reclaim. A delete asks :meth:`protects_from_deletion`.
 
         Containment, not equality: a base path may name a dataset root whose subdirectories
         (``data/``, ``_deletions/``, ``_indices/``) hold the referenced files, so deleting anything at
@@ -147,10 +148,28 @@ class BaseRefs(BaseModel):
         path it decodes to, the form every root here is held in.
         """
         target = decoded_path(location)
-        for root in (*sorted(self.protected), *sorted(self.pinned)):
-            if target == root or target.startswith(f"{root}/") or root.startswith(f"{target}/"):
+        return next((root for root in self._roots() if _overlaps(target, root)), None)
+
+    def protects_from_deletion(self, location: str) -> str | None:
+        """The root whose referrer a delete of ``location`` would break, else ``None`` — the DELETE answer.
+
+        :meth:`is_protected`, less the referrers the delete takes with it. A table's branch lives at
+        ``<table>/tree/<branch>`` and declares the table's root as its base (``file_format.md`` § Branch Dataset Layout),
+        so deleting the table deletes the branch too, and the branch protects nothing from that delete. A referrer
+        anywhere else still protects, and so does a root no referrer is recorded for: an unknown referrer may be outside.
+        """
+        target = decoded_path(location)
+        for root in self._roots():
+            if not _overlaps(target, root):
+                continue
+            referrers = self.referrers.get(root)
+            if not referrers or any(not location_within(location, referrer) for referrer in referrers):
                 return root
         return None
+
+    def _roots(self) -> tuple[str, ...]:
+        """Every referenced root, the unconditional ones first, so a verdict names the strongest protection."""
+        return (*sorted(self.protected), *sorted(self.pinned))
 
     def pin_tags(self, root: str) -> frozenset[str] | None:
         """The tags whose presence on ``root`` permits compacting it, or ``None`` when nothing does.
@@ -162,6 +181,11 @@ class BaseRefs(BaseModel):
         if root in self.protected or root not in self.pinned:
             return None
         return frozenset(self.pinned[root])
+
+
+def _overlaps(target: str, root: str) -> bool:
+    """Whether the decoded path ``target`` is ``root``, lies under it, or holds it."""
+    return target == root or target.startswith(f"{root}/") or root.startswith(f"{target}/")
 
 
 #: The directory a named branch's own files live under — `file_format.md:3690`, "Named branches store

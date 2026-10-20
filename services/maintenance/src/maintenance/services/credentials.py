@@ -37,7 +37,7 @@ from lance_namespace.errors import ErrorCode
 
 from maintenance.core.metrics import record_credential_tier
 from service_kit.governed.machine_identity import IdentityTokenUnavailableError, identity_bearer
-from service_kit.lakehouse.base_refs import normalise
+from service_kit.lakehouse.base_refs import decoded_path, normalise
 from service_kit.lakehouse.endpoint_scheme import allow_http_for
 from service_kit.lakehouse.table_locations import table_id_from_location
 
@@ -288,9 +288,12 @@ def _refuse_a_credential_that_does_not_cover(*, uri: str, table_id: str, locatio
 
     CONTAINMENT, NOT EQUALITY, and getting that backwards would refuse the healthy majority: a branch
     dataset is swept at ``<root>/tree/<branch>`` while the catalog answers with the root, and the live
-    sweep holds several. ``base_refs.normalise`` is the estate's one comparator for two spellings of one
-    path; re-implementing it here is what its own docstring names as the failure indistinguishable from
-    having no guard at all.
+    sweep holds several. The catalog answers the URL ``describe_table`` does, which percent-encodes the
+    table's name (``…$r%C3%A4ksm%C3%B6rg%C3%A5s``), so it is read as the key it decodes to
+    (``base_refs.decoded_path``), while ``uri`` is the key discovery lists and every lane holds
+    (``…$räksmörgås``): a compare of the spellings would refuse every such table on every tick ([[LH-319]]).
+    Re-implementing either reading here is what ``base_refs.normalise``'s docstring names as the failure
+    indistinguishable from having no guard at all.
 
     AN UNVERIFIABLE VEND PROCEEDS, loudly. A missing location means the catalog did not say, not that
     it disagrees, and refusing on absence would stop maintaining the estate the day the response shape
@@ -303,7 +306,7 @@ def _refuse_a_credential_that_does_not_cover(*, uri: str, table_id: str, locatio
             uri,
         )
         return
-    governed, holding = normalise(location), normalise(uri)
+    governed, holding = decoded_path(location), normalise(uri)
     if holding == governed or holding.startswith(f"{governed}/"):
         return
     raise GovernedElsewhere(

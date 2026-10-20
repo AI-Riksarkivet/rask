@@ -56,18 +56,29 @@ def test_a_real_dataset_is_deleted(tmp_path: Path) -> None:
     assert not (tmp_path / "table.lance").exists(), "the dataset directory survived the purge"
 
 
-def test_a_directory_that_is_NOT_a_dataset_is_refused(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "spelled",
+    [
+        pytest.param("not-a-dataset", id="no-versions-marker"),
+        # The location opens a dataset (`t x`), while its spelling (`t%20x`) holds an object that is not the table's
+        # reservation marker: not this table's, so neither path is deleted ([[LH-319]]).
+        pytest.param("t%20x", id="a-foreign-object-under-its-spelling"),
+    ],
+)
+def test_a_directory_that_is_NOT_a_dataset_is_refused(tmp_path: Path, spelled: str) -> None:
     """The headline: a location with no `_versions/` is not a dataset, and a recursive delete of it is
     not a purge — it is data loss with a trash record for an alibi."""
-    stray = tmp_path / "not-a-dataset"
-    stray.mkdir()
-    (stray / "someones-real-file.txt").write_bytes(b"z" * 128)
+    _dataset(tmp_path / "t x")
+    for stray in (tmp_path / "not-a-dataset", tmp_path / "t%20x"):
+        stray.mkdir()
+        (stray / "someones-real-file.txt").write_bytes(b"z" * 128)
 
     with pytest.raises(NotADatasetRootError) as caught:
-        delete_location(f"file://{stray}", {})
+        delete_location(f"file://{tmp_path}/{spelled}", {})
 
-    assert "not-a-dataset" in str(caught.value), f"the refusal does not name the location: {caught.value}"
-    assert (stray / "someones-real-file.txt").exists(), "the refusal did not actually stop the delete"
+    assert spelled in str(caught.value), f"the refusal does not name the location: {caught.value}"
+    kept = [tmp_path / "not-a-dataset" / "someones-real-file.txt", tmp_path / "t%20x" / "someones-real-file.txt", tmp_path / "t x" / "data" / "a.lance"]
+    assert all(path.exists() for path in kept), "the refusal did not actually stop the delete"
 
 
 def test_an_absent_location_is_still_idempotent_success(tmp_path: Path) -> None:

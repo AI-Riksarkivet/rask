@@ -19,8 +19,9 @@ whole record cleanly on the next tick:
    silently re-grant the old subjects on the new object. The reverse order would mean a delete that
    succeeded followed by a revoke that failed — bytes gone, grants live, and nothing left to retry
    against.
-2. **delete the recorded path.** The file listing that sums the reclaimed bytes doubles as the existence
-   probe; an already-absent path is idempotent success.
+2. **delete the recorded table's bytes**, under the key its location decodes to and the reservation marker
+   under its spelling (:func:`store_paths`). The file listings that sum the reclaimed bytes double as the
+   existence probes; an already-absent path is idempotent success.
 3. **clear the trash record LAST**, so any failure above leaves the record and the next tick retries.
 4. **announce it** on the control stream (best-effort).
 
@@ -79,7 +80,7 @@ from service_kit.control_emit import ControlEmitter, NoopControlEmitter, emit_co
 from service_kit.control_events import ControlAction, ControlObjectType
 from service_kit.governed import fga
 from service_kit.lakehouse import location_claims, object_records, trash, warehouse_records
-from service_kit.lakehouse.base_refs import BaseRefs, location_within
+from service_kit.lakehouse.base_refs import BaseRefs, decoded_path, decoded_segments, location_within, names_a_location, normalise, store_of
 from service_kit.lakehouse.base_registry import BaseRegistry, UnreadableBaseRecordError, forget_base_record
 from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base
 
@@ -429,6 +430,9 @@ def check(record: dict[str, Any], *, roots: set[str], live: Liveness | None) -> 
     others protect the estate from a malformed record, this one protects a table the catalog just
     recovered. Path checks come after, and are skipped entirely for records that name no bytes; the
     last asks whether another id now resolves to the location ([[LH-204]]).
+
+    The path checks judge the place the purge deletes, the location as it decodes ([[LH-319]], :func:`store_paths`), so a
+    spelling that names no single place is refused before any of them.
     """
     obj_id = str(record.get("id") or "")
     if not obj_id:
@@ -443,15 +447,17 @@ def check(record: dict[str, Any], *, roots: set[str], live: Liveness | None) -> 
         # A namespace is a manifest ROW and a declared-only table never had bytes: nothing to delete, so
         # nothing to path-check. Revoke + clear still apply.
         return None
+    if not names_a_location(location):
+        return f"location {location!r} names no single place once decoded — refusing to delete what its spelling cannot locate"
     root = _root_of(location, roots)
     if root is None:
         # The count, not the list: this reason repeats per refused record on a WARNING line, and
         # rendering ~100 bucket URIs made one tick's line ~36 KB (measured 2026-09-20).
         return f"location {location!r} is outside the maintained estate ({len(roots)} roots)"
-    remainder = location[len(root) :].strip("/")
+    remainder = (decoded_segments(location) or [])[len(decoded_segments(root) or []) :]
     if not remainder:
         return f"location {location!r} IS a store root — refusing to delete a whole bucket"
-    if crossed := sorted(CONTROL_PREFIXES.intersection(remainder.split("/"))):
+    if crossed := sorted(CONTROL_PREFIXES.intersection(remainder)):
         return f"location {location!r} crosses the control prefix(es) {crossed} — refusing to delete the estate's own registries"
     # After the path checks, which name a malformed record more exactly; a store root holds every live table.
     if live.resolves_into(location):
@@ -470,9 +476,15 @@ def check(record: dict[str, Any], *, roots: set[str], live: Liveness | None) -> 
 _VERSIONS_MARKER = "_versions"
 
 
+#: The marker pylance's ``dir`` namespace writes where it reserves a table's location
+#: (``lance_docs/ns_catalog/namespace/supported-catalogs/lance-dir.md`` § DeclareTable, step 3).
+_RESERVATION_MARKER = ".lance-reserved"
+
+
 class NotADatasetRootError(RuntimeError):
-    """The recorded location does not look like a Lance dataset, so a recursive delete of it is not a
-    purge — it is data loss with a trash record for an alibi.
+    """The recorded location does not look like a Lance dataset, or its spelling holds more than the
+    table's reservation marker, so a recursive delete of it is not a purge — it is data loss with a
+    trash record for an alibi.
 
     The marker is `_versions/`, which is the SAME one `discover_datasets` uses to decide a directory
     is a dataset — one definition rather than a second opinion. On the happy path a trash record's
@@ -480,6 +492,68 @@ class NotADatasetRootError(RuntimeError):
     where it does not (a corrupted or hand-edited record, a location reused after a rename, a bug
     upstream writing the wrong string), none of which the other refusals in `check` can see.
     """
+
+
+def store_paths(location: str, storage_options: StorageOptions) -> tuple[pafs.FileSystem, str, str]:
+    """``location``'s filesystem and the two paths a table recorded there holds bytes under: the one it opens and the one
+    it is spelled as.
+
+    A recorded location is the URL ``describe_table`` answered, which percent-encodes the table's name. pylance opens
+    it at each segment decoded once (:func:`base_refs.decoded_path`), and its ``dir`` namespace writes the reservation
+    marker under the location as spelled. Measured on pylance 13.0.0 through the catalog's create door over moto
+    ([[LH-319]]): ``räksmörgås`` keeps its versions, data and branches under ``…$räksmörgås/`` and the marker under
+    ``…$r%C3%A4ksm%C3%B6rg%C3%A5s/``; ``sp ace`` keeps both under ``…$sp ace/``. ``lance_docs/ns_catalog/catalog/dir``
+    keeps both in one table directory, so the split is pylance's. The two paths are equal for a name that needs no
+    escape. A ``file://`` location is a local absolute path.
+    """
+    fs, _ = fs_and_base(location, storage_options)
+    anchor = "/" if store_of(location) == "file" else ""
+    return fs, f"{anchor}{decoded_path(location)}", f"{anchor}{normalise(location)}"
+
+
+def _listed(fs: pafs.FileSystem, path: str) -> list[pafs.FileInfo]:
+    """Everything under ``path``, recursively; ``[]`` when it is absent."""
+    return fs.get_file_info(pafs.FileSelector(path, recursive=True, allow_not_found=True))
+
+
+def objects_held(location: str, storage_options: StorageOptions) -> int:
+    """How many objects the table recorded at ``location`` still holds, under both of its :func:`store_paths`.
+
+    The tombstone sweep's proof that a record's bytes are gone ([[LH-061]]): counted as spelled alone, a table whose
+    name holds a space reads as empty while every byte sits under the decoded key ([[LH-319]]).
+    """
+    fs, dataset, spelled = store_paths(location, storage_options)
+    return sum(1 for path in {dataset, spelled} for info in _listed(fs, path) if info.type == pafs.FileType.File)
+
+
+def _require_a_dataset(location: str, path: str, held: list[pafs.FileInfo]) -> None:
+    """Refuse ``path`` when it holds something with no ``_versions/`` beside it: whatever it is, it is no Lance dataset.
+
+    AN EMPTY OR ABSENT PATH PASSES, and that is the contract rather than an oversight: a crash between the delete and the
+    record clear re-runs the whole record, so a half-completed purge must be able to finish.
+    """
+    prefix = f"{path.rstrip('/')}/"
+    if held and not any(info.path.rstrip("/").removeprefix(prefix).split("/")[0] == _VERSIONS_MARKER for info in held):
+        files = sum(1 for info in held if info.type == pafs.FileType.File)
+        raise NotADatasetRootError(
+            f"refusing to delete {location}: it holds {files} file(s) but no {_VERSIONS_MARKER}/ marker, "
+            f"so it is not a Lance dataset — a recursive delete here would destroy whatever it really is"
+        )
+
+
+def _require_only_the_marker(location: str, spelled: str, stray: list[pafs.FileInfo]) -> None:
+    """Refuse when the location's spelling holds any object but the reservation marker: it is not this table's.
+
+    Every such object is NAMED, a bounded sample with the count, never skipped: a purge that deleted what it could map
+    and left the rest in silence would report a clean reclaim over bytes it never looked at.
+    """
+    marker = f"{spelled.rstrip('/')}/{_RESERVATION_MARKER}"
+    foreign = sorted(info.path for info in stray if info.type == pafs.FileType.File and info.path != marker)
+    if foreign:
+        raise NotADatasetRootError(
+            f"refusing to delete {location}: as spelled it names {spelled}, which holds {len(foreign)} object(s) beside the "
+            f"table's reservation marker ({', '.join(foreign[:3])}) — they are not this table's, so neither path is deleted"
+        )
 
 
 def _protected_base_reason(location: str, *, referrer: str) -> str:
@@ -504,46 +578,38 @@ class ProtectedBaseError(RuntimeError):
 
 
 def delete_location(location: str, storage_options: StorageOptions, *, protected: BaseRefs | None = None) -> tuple[int, int]:
-    """Delete the recorded dataset directory; return ``(bytes_deleted, files_deleted)``.
+    """Delete the recorded table's bytes, under both of its :func:`store_paths`; return ``(bytes_deleted, files_deleted)``.
 
-    The recursive listing that sums the bytes doubles as the existence probe — one round trip answers
-    both "is anything there" and "how much did we reclaim". ``delete_dir`` on an already-absent path is
-    idempotent success (a crash between the delete and the record clear re-runs the whole record); ANY
-    other ``OSError`` propagates, because ``pyarrow`` raises ``ArrowIOError`` (an ``OSError``) for a
-    RustFS/S3 5xx and swallowing that would report a purge over bytes that are still there.
+    Both paths are judged before either is touched, so a refusal deletes nothing: the one the location opens must be a
+    Lance dataset (its ``_versions/`` marker, the one ``discover_datasets`` decides a dataset by) or empty, and the one
+    it is spelled as may hold the reservation marker and nothing else. The recursive listings that sum the bytes double
+    as the existence probes. ``delete_dir`` on an already-absent path is idempotent success (a crash between the delete
+    and the record clear re-runs the whole record); ANY other ``OSError`` propagates, because ``pyarrow`` raises
+    ``ArrowIOError`` (an ``OSError``) for a RustFS/S3 5xx and swallowing that would report a purge over bytes that are
+    still there.
 
     ``protected`` is the #128d guard: the estate's foreign ``base_paths`` collected by
-    :func:`service_kit.lakehouse.base_refs.protected_roots`. When this location is one of them — or
-    sits under one — a live shallow clone resolves its data files through these bytes and deleting
-    them breaks it. Refuses with :class:`ProtectedBaseError` rather than deleting.
+    :func:`service_kit.lakehouse.base_refs.protected_roots`. When a dataset that outlives this delete resolves its
+    files through these bytes, deleting them breaks it, so this refuses with :class:`ProtectedBaseError`. A referrer
+    inside the location, the table's own branch, goes with it (:meth:`BaseRefs.protects_from_deletion`).
 
     Passing ``None`` skips the check, and that is for callers that have already run the pre-pass, not
     a default to lean on: the SOURCE of a clone carries no feature flag and no ``base_paths`` of its
     own (measured), so nothing about the dataset in front of you reveals the danger. Only the
     cross-estate pre-pass can.
     """
-    if protected is not None and (root := protected.is_protected(location)) is not None:
+    if protected is not None and (root := protected.protects_from_deletion(location)) is not None:
         raise ProtectedBaseError(_protected_base_reason(location, referrer=root))
-    fs, path = fs_and_base(location, storage_options)
-    infos = fs.get_file_info(pafs.FileSelector(path, recursive=True, allow_not_found=True))
-    files = [info for info in infos if info.type == pafs.FileType.File]
-    # IS THIS A DATASET AT ALL? The refusal ladder in `check` bounds WHERE a location may point — inside
-    # the estate, not a store root, not across a control prefix — and never asks WHAT is there. The
-    # marker is `_versions/`, the same one `discover_datasets` uses to decide a directory is a dataset,
-    # so the two cannot disagree about the definition. It costs nothing: the recursive listing above,
-    # which exists to sum the bytes, already carries it.
-    #
-    # AN EMPTY OR ABSENT PATH IS STILL SUCCESS, and that is the contract rather than an oversight: a
-    # crash between the delete and the record clear re-runs the whole record, so a half-completed purge
-    # must be able to finish. Only a location that HOLDS something unrecognisable is refused.
-    prefix = f"{path.rstrip('/')}/"
-    if infos and not any(info.path.rstrip("/").removeprefix(prefix).split("/")[0] == _VERSIONS_MARKER for info in infos):
-        raise NotADatasetRootError(
-            f"refusing to delete {location}: it holds {len(files)} file(s) but no {_VERSIONS_MARKER}/ marker, "
-            f"so it is not a Lance dataset — a recursive delete here would destroy whatever it really is"
-        )
+    fs, dataset, spelled = store_paths(location, storage_options)
+    held = _listed(fs, dataset)
+    stray = _listed(fs, spelled) if spelled != dataset else []
+    _require_a_dataset(location, dataset, held)
+    _require_only_the_marker(location, spelled, stray)
     with suppress(FileNotFoundError):
-        fs.delete_dir(path)
+        fs.delete_dir(dataset)
+    if stray:
+        fs.delete_dir(spelled)
+    files = [info for info in (*held, *stray) if info.type == pafs.FileType.File]
     return sum(int(info.size or 0) for info in files), len(files)
 
 
@@ -762,7 +828,7 @@ async def _purge_one(
         # pre-pass has already run in full on this tick and `is_protected` is a pure in-memory prefix
         # compare, so reading its answer is free — and NOT reading it made the preview overstate in the
         # one direction that costs most: naming a record whose bytes a live dataset resolves through.
-        if protected is not None and (referrer := protected.is_protected(location)) is not None:
+        if protected is not None and (referrer := protected.protects_from_deletion(location)) is not None:
             reason = _protected_base_reason(location, referrer=referrer)
             await _refuse(out, kind=kind, obj_id=obj_id, reason=reason, control_root=control_root, storage_options=storage_options, dry_run=dry_run)
             log.warning("trash_purge_refused_protected_base", extra={"kind": kind, "id": obj_id, "location": location})

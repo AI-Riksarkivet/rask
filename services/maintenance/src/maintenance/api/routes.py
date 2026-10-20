@@ -19,9 +19,9 @@ default (`MAINTENANCE_TRASH_PURGE_ENABLED`), so the shipped configuration is sti
 import asyncio
 import logging
 from collections import Counter
+from functools import partial
 from typing import Annotated, Any
 
-import pyarrow.fs as pafs
 from fastapi import APIRouter, Depends
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
@@ -30,7 +30,7 @@ from maintenance.api.dependencies import ControlEmitterDep, FgaClientDep, Lineag
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services.expiry import summarize_refusals
 from maintenance.services.floor import raise_listing_floors
-from maintenance.services.purge import purge_expired_trash, refusal_log_entry
+from maintenance.services.purge import objects_held, purge_expired_trash, refusal_log_entry
 from maintenance.services.rebuild import rebuild_tuples
 from maintenance.services.reconcile import CATEGORIES, ReconcileReport, reconcile
 from maintenance.services.reconcile import Sources as ReconcileSources
@@ -40,7 +40,6 @@ from maintenance.services.tombstones import Tombstone, sweep_tombstones
 from service_kit.governed.dapr_auth import require_dapr_token
 from service_kit.governed.signing_key import retry_until_signed
 from service_kit.lakehouse import trash
-from service_kit.lakehouse.objectfs import fs_and_base
 
 
 log = logging.getLogger(__name__)
@@ -215,14 +214,11 @@ async def on_reconcile_cron(settings: SettingsDep, client: FgaClientDep, control
         # rather than overturning it. AFTER the authz repair and BEFORE the purge, because the purge's
         # gate is the drift report as MEASURED and a record cleared here was never purgeable anyway —
         # its root is one no purge tick can reach.
-        def _objects_at(location: str) -> int:
-            fs, base = fs_and_base(location, settings.storage_options())
-            return len([i for i in fs.get_file_info(pafs.FileSelector(base, recursive=True, allow_not_found=True)) if i.type == pafs.FileType.File])
-
         def _clear(record: Tombstone) -> None:
             trash.clear(settings.resolved_control_root, settings.storage_options(), record.id, kind=record.kind)
 
-        swept = await run_in_threadpool(sweep_tombstones, settings, report=report, probe=_objects_at, delete=_clear)
+        probe = partial(objects_held, storage_options=settings.storage_options())
+        swept = await run_in_threadpool(sweep_tombstones, settings, report=report, probe=probe, delete=_clear)
         payload["tombstone_sweep"] = swept.model_dump(mode="json")
         if swept.swept or swept.refused or swept.error:
             # NAMED at WARNING like its siblings: each entry removed a recovery record, and "swept 50"

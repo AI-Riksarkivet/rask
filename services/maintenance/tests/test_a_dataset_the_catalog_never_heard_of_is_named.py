@@ -56,6 +56,15 @@ from maintenance.services.reconcile import _unregistered_datasets
         # gone by definition. Counting those would make the category loudest exactly when the estate is
         # behaving correctly.
         pytest.param(["s3://acme-wh/dead1234_gone$table"], set(), {"s3://acme-wh/dead1234_gone$table"}, [], id="trashed"),
+        # The record holds the URL `describe_table` answered, which percent-encodes the name, while discovery lists the
+        # directory the store keeps ([[LH-319]]).
+        pytest.param(
+            ["s3://acme-wh/dead1234_gone$räksmörgås"],
+            set(),
+            {"s3://acme-wh/dead1234_gone$r%C3%A4ksm%C3%B6rg%C3%A5s"},
+            [],
+            id="trashed-as-the-catalog-spells-it",
+        ),
         # `table_id_from_location` answers None for a directory that is not an identifier; reporting one as
         # an unregistered TABLE would assert a table exists where only a prefix does.
         pytest.param(["s3://acme-wh/some-directory", "s3://acme-wh/4750a5b9_$events"], set(), set(), [], id="not-a-table-identifier"),
@@ -101,15 +110,24 @@ def _category(monkeypatch: pytest.MonkeyPatch, sources: mod.Sources) -> mod.Reco
     return report
 
 
-def test_a_CATALOG_OUTAGE_reports_UNAVAILABLE_rather_than_the_whole_estate(monkeypatch: pytest.MonkeyPatch) -> None:
-    """THE GUARD. The finding is an ABSENCE from the table listing, so an unread listing makes every
-    dataset in the estate look unregistered — the loudest possible way to report nothing. UNAVAILABLE
-    leaves the category out of `counts` entirely, because a 0 there would read as "checked, none
-    found" about a store that was never read."""
-    report = _category(monkeypatch, mod.Sources(tables_error="catalog unreachable: connection refused"))
+@pytest.mark.parametrize(
+    "sources",
+    [
+        pytest.param(mod.Sources(tables_error="catalog unreachable: connection refused"), id="table-listing"),
+        # Only the trash index tells a table in the trash from an unregistered dataset: its bytes stay on disk while its
+        # table record is gone ([[LH-319]]).
+        pytest.param(mod.Sources(tables=[], trash_error="registry:trash: OSError: unreachable"), id="trash-index"),
+    ],
+)
+def test_an_unread_input_reports_UNAVAILABLE_rather_than_the_whole_estate(monkeypatch: pytest.MonkeyPatch, sources: mod.Sources) -> None:
+    """THE GUARD. The finding is an ABSENCE from the table listing and the trash, so an unread input makes
+    every dataset it would have excused look unregistered — the loudest possible way to report nothing.
+    UNAVAILABLE leaves both registration categories out of `counts` entirely, because a 0 there would read
+    as "checked, none found" about a store that was never read."""
+    report = _category(monkeypatch, sources)
 
-    assert report.unregistered_datasets == [], "a catalog outage reported live datasets as unregistered"
-    assert "unregistered_datasets" not in report.counts, "an unread category must not carry a count"
-    assert [u.reason for u in report.unavailable if u.category == "unregistered_datasets"], (
-        f"the category is silently absent rather than reported unavailable: {[(u.category, u.reason) for u in report.unavailable]}"
+    assert (report.unregistered_datasets, report.absent_datasets) == ([], []), "an unread input reported live datasets as drift"
+    assert {"unregistered_datasets", "absent_datasets"}.isdisjoint(report.counts), "an unread category must not carry a count"
+    assert {u.category for u in report.unavailable} == {"unregistered_datasets", "absent_datasets"}, (
+        f"a category is silently absent rather than reported unavailable: {[(u.category, u.reason) for u in report.unavailable]}"
     )

@@ -38,6 +38,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Final
 
+from service_kit.lakehouse.base_refs import decoded_path
 from service_kit.lakehouse.naming import CATALOG_DELIMITER
 from service_kit.lakehouse.objectfs import StorageOptions
 from service_kit.lakehouse.record_store import delete_record, get_record, list_records, put_record, record_key
@@ -133,6 +134,11 @@ def resolve_policy(
     registry misconfiguration (a possible cross-tenant claim): the tier then resolves to NO match
     with a warning — never first-encountered-wins, which would let record ordering decide whose
     retention policy destroys whose version history (audit 2026-07-23).
+
+    A table record's path is the spelling ``describe_table`` answers, which percent-encodes the table's name
+    (``…$r%C3%A4ksm%C3%B6rg%C3%A5s``), so it is read as the key it decodes to (:func:`base_refs.decoded_path`), the
+    key discovery lists and both maintenance lanes hold (``…$räksmörgås``, [[LH-319]]). Compared as spelled, a table's
+    own policy, a legal hold among them, would govern no such table.
     """
     rel = uri.removeprefix("s3://").rstrip("/") if uri.startswith("s3://") else uri.rstrip("/")
     bucket = rel.split("/", 1)[0]
@@ -145,7 +151,7 @@ def resolve_policy(
     project_hits: list[dict[str, Any]] = []
     for record in records:
         path = str(record.get("path", "")).rstrip("/")
-        if record.get("kind") == "table" and path and rel == path:
+        if record.get("kind") == "table" and path and rel == decoded_path(path):
             return record
         if record.get("kind") == "namespace":
             by_path = bool(path) and rel.startswith(path + "/")

@@ -49,6 +49,7 @@ from maintenance.core.config import MaintenanceSettings, shared_lance_session
 from maintenance.services.discovery import discover_datasets
 from maintenance.services.orphans import OrphanFile, scan_datasets
 from service_kit.governed import fga
+from service_kit.lakehouse.base_refs import decoded_path, normalise
 from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base
 from service_kit.lakehouse.table_locations import table_id_from_location
 
@@ -646,6 +647,16 @@ def _unreferenced_projects(record_ids: set[str], tuple_counts: Mapping[str, int]
     return [UnreferencedProject(id=project_id) for project_id in sorted(record_ids) if not tuple_counts.get(project_id)]
 
 
+def _trashed_keys(trashed: Iterable[str]) -> set[str]:
+    """The keys the store keeps each trashed location under ([[LH-319]]).
+
+    A record holds the URL ``describe_table`` answered, which percent-encodes the table's name
+    (``…$r%C3%A4ksm%C3%B6rg%C3%A5s``) and decodes once to the directory discovery lists and the ``__manifest`` names
+    (``…$räksmörgås``), so the record is read as the path it decodes to and the listed key is compared as listed.
+    """
+    return {decoded_path(location) for location in trashed}
+
+
 def _unregistered_datasets(*, discovered: Iterable[str], registered: set[str], trashed: set[str]) -> list[UnregisteredDataset]:
     """Discovered datasets whose recovered table id no catalog record names.
 
@@ -657,15 +668,17 @@ def _unregistered_datasets(*, discovered: Iterable[str], registered: set[str], t
 
     ``trashed`` is excluded rather than filtered downstream, because a dropped table's bytes stay on
     disk under a trash record that names them while its table record is gone BY DEFINITION. Counting
-    those would make this category loudest exactly when the estate is behaving correctly.
+    those would make this category loudest exactly when the estate is behaving correctly. Each record is
+    matched at the key it decodes to (:func:`_trashed_keys`).
 
     A location :func:`table_id_from_location` cannot answer for is skipped, never reported: it names a
     directory rather than a table, and calling it an unregistered TABLE would assert into the report
     the one thing the report is for not doing.
     """
+    in_trash = _trashed_keys(trashed)
     seen: dict[str, UnregisteredDataset] = {}
     for uri in discovered:
-        if uri.rstrip("/") in trashed:
+        if normalise(uri) in in_trash:
             continue
         table_id = table_id_from_location(uri)
         if table_id is None or table_id in registered or table_id in seen:
@@ -722,14 +735,16 @@ def _absent_datasets(*, registered: dict[str, tuple[str, str | None]], discovere
 
     ``trashed`` is excluded for the reason its mirror excludes it: a dropped table's record and bytes
     part company BY DESIGN while the purge window runs, so neither direction of the pair is a defect.
+    Each record is matched at the key it decodes to (:func:`_trashed_keys`).
     """
+    in_trash = _trashed_keys(trashed)
     findings: list[AbsentDataset] = []
     for table, (root, location) in registered.items():
         if not location:
             continue
         resolved = location if "://" in location else f"{root.rstrip('/')}/{location.lstrip('/')}"
         resolved = resolved.rstrip("/")
-        if resolved in discovered or resolved in trashed:
+        if resolved in discovered or normalise(resolved) in in_trash:
             continue
         findings.append(AbsentDataset(table=table, root=root, location=resolved))
     return sorted(findings, key=lambda finding: (finding.table, finding.location))
@@ -1188,8 +1203,9 @@ def _registration_drift(
     One function because they are the same comparison from opposite ends and must not be able to
     disagree about which datasets were discovered.
 
-    GUARDED ON THE TABLE LISTING: both findings are an ABSENCE from one of the two sets, so a catalog
-    read failure would otherwise report every dataset in the estate as unregistered.
+    GUARDED ON THE TABLE LISTING AND THE TRASH INDEX: both findings are an ABSENCE from one of the two
+    sets, so a catalog read failure would otherwise report every dataset in the estate as unregistered,
+    and an unread trash index every table in the trash ([[LH-319]]).
 
     `declared_roots` is REQUIRED rather than defaulted: a defaulted parameter makes an un-wired chain
     look clean. Measured here — removing the call site's
@@ -1199,50 +1215,45 @@ def _registration_drift(
     dataset was unknown. Measured 2026-09-22: `bronze$events` answered `describe` 200 at a location
     holding nothing, over a clean report.
     """
-    if sources.tables_error is not None:
-        report.unavailable.append(
-            CategoryUnavailable(category="unregistered_datasets", reason=f"the catalog table listing could not be read: {sources.tables_error}")
-        )
-        # The same listing read from the other side: unreadable makes both answers unknown, not one.
-        report.unavailable.append(
-            CategoryUnavailable(category="absent_datasets", reason=f"the catalog table listing could not be read: {sources.tables_error}")
-        )
-    else:
-        trashed = {str(record["location"]).rstrip("/") for record in (sources.trash or []) if record.get("location")}
-        report.unregistered_datasets = _unregistered_datasets(
-            discovered=[uri for uri, _key in datasets],
-            registered={table for table, _root in sources.tables or []},
-            # A dropped table's bytes are still on disk under the record that names them.
-            trashed=trashed,
-        )
-        report.counts["unregistered_datasets"] = len(report.unregistered_datasets)
-        # FILTERED TO THE BUCKETS ACTUALLY WALKED — which is what `discover_datasets` was POINTED at,
-        # never what it happened to find. Derived from the findings, an EMPTY bucket would drop its own
-        # absences to "unknown", making the same missing record a finding next to one live dataset and
-        # not a finding alone: emptiness is the strongest evidence of absence there is.
-        walked = {f"s3://{bucket}" for bucket in walked_buckets}
-        candidates = _absent_datasets(
-            registered=sources.table_locations or {},
-            discovered={uri.rstrip("/") for uri, _key in datasets},
-            trashed=trashed,
-        )
-        report.absent_datasets = [f for f in candidates if any(f.location.startswith(f"{prefix}/") for prefix in walked)]
-        report.counts["absent_datasets"] = len(report.absent_datasets)
-        # WHAT THE COMPARISON COULD NOT READ ([[LH-164]]). Both categories above need a table id
-        # recovered from a location, and one the recovery cannot answer for is dropped — per location
-        # correctly, per REPORT silently. Measured 2026-09-23: 163 of 564 (29%) fell through while
-        # `unregistered_datasets` answered 0.
-        report.unreadable_locations = _unreadable_locations(discovered=[uri for uri, _key in datasets], declared_roots=declared_roots)
-        # Outside every walked bucket is UNKNOWN, not clean; dropping it is how a detector reports zero
-        # for an estate it only partly saw.
-        for finding in candidates:
-            if finding not in report.absent_datasets:
-                report.incomplete.append(
-                    IncompleteScan(
-                        source="catalog:tables",
-                        reason=f"{finding.table} is registered at {finding.location}, outside every scanned bucket — its bytes were not looked for",
-                    )
+    if (unread := _first(sources.tables_error, sources.trash_error)) is not None:
+        # The same comparison read from both sides: an unread input makes both answers unknown, not one.
+        report.unavailable.extend(CategoryUnavailable(category=category, reason=unread) for category in ("unregistered_datasets", "absent_datasets"))
+        return
+    trashed = {str(record["location"]) for record in (sources.trash or []) if record.get("location")}
+    report.unregistered_datasets = _unregistered_datasets(
+        discovered=[uri for uri, _key in datasets],
+        registered={table for table, _root in sources.tables or []},
+        # A dropped table's bytes are still on disk under the record that names them.
+        trashed=trashed,
+    )
+    report.counts["unregistered_datasets"] = len(report.unregistered_datasets)
+    # FILTERED TO THE BUCKETS ACTUALLY WALKED — which is what `discover_datasets` was POINTED at,
+    # never what it happened to find. Derived from the findings, an EMPTY bucket would drop its own
+    # absences to "unknown", making the same missing record a finding next to one live dataset and
+    # not a finding alone: emptiness is the strongest evidence of absence there is.
+    walked = {f"s3://{bucket}" for bucket in walked_buckets}
+    candidates = _absent_datasets(
+        registered=sources.table_locations or {},
+        discovered={uri.rstrip("/") for uri, _key in datasets},
+        trashed=trashed,
+    )
+    report.absent_datasets = [f for f in candidates if any(f.location.startswith(f"{prefix}/") for prefix in walked)]
+    report.counts["absent_datasets"] = len(report.absent_datasets)
+    # WHAT THE COMPARISON COULD NOT READ ([[LH-164]]). Both categories above need a table id
+    # recovered from a location, and one the recovery cannot answer for is dropped — per location
+    # correctly, per REPORT silently. Measured 2026-09-23: 163 of 564 (29%) fell through while
+    # `unregistered_datasets` answered 0.
+    report.unreadable_locations = _unreadable_locations(discovered=[uri for uri, _key in datasets], declared_roots=declared_roots)
+    # Outside every walked bucket is UNKNOWN, not clean; dropping it is how a detector reports zero
+    # for an estate it only partly saw.
+    for finding in candidates:
+        if finding not in report.absent_datasets:
+            report.incomplete.append(
+                IncompleteScan(
+                    source="catalog:tables",
+                    reason=f"{finding.table} is registered at {finding.location}, outside every scanned bucket — its bytes were not looked for",
                 )
+            )
 
 
 def _orphan_category(report: ReconcileReport, settings: MaintenanceSettings, sources: Sources) -> None:

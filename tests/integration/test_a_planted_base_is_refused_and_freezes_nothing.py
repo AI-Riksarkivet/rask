@@ -353,7 +353,8 @@ def test_a_recorded_clone_source_is_still_protected(estate: _Estate) -> None:
     the tag is on bronze — reclamation keeps a tagged version's files, and silver reads through exactly that
     version (lh279 p4) — so silver must still read cold afterwards. Without the tag, reclamation is refused.
     A branch is the relation that needs no record: its base is its parent's root, in the parent's store, so
-    the parent is neither deleted nor reclaimed beside it.
+    the parent is not reclaimed beside it. A delete of the parent takes the branch with it, so the branch
+    alone refuses no delete ([[LH-319]]); the purge's liveness check is what keeps a live parent's bytes.
 
     A name the catalog percent-encodes into its location (``bronze tier`` -> ``bronze%20tier``, ``räksmörgås``
     -> ``r%C3%A4ksm%C3%B6rg%C3%A5s``, ``a b`` -> ``a%20b``) is protected exactly as ``bystander`` is. The
@@ -390,9 +391,8 @@ def test_a_recorded_clone_source_is_still_protected(estate: _Estate) -> None:
         assert _expire(estate=estate, uri=parent, older_than=timedelta(0), refs=refs).refused_by == "protected_base", (
             f"{parent} was reclaimed under its live branch"
         )
-    for location in (bronze, *parents):
-        with pytest.raises(purge.ProtectedBaseError):
-            purge.delete_location(location, estate.key, protected=refs)
+    with pytest.raises(purge.ProtectedBaseError):
+        purge.delete_location(bronze, estate.key, protected=refs)
     expired = _expire(estate=estate, uri=bronze, older_than=timedelta(0), refs=refs)
     assert expired.refused_by is None, expired.refused
     assert expired.old_versions_removed > 0, "precondition: bronze was reclaimed"

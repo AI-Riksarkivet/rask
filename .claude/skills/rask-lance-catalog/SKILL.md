@@ -620,6 +620,21 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   (`base_refs.decoded_path`, [[LH-318]]): a record holds the location `describe_table` answered, which
   percent-encodes the table's name (`…$r%C3%A4ksm%C3%B6rg%C3%A5s`), while discovery lists the decoded
   directory the store keeps (`…$räksmörgås`) and an event names the encoded one.
+  **Every other maintenance reader of a location the catalog records reads it the same way** ([[LH-319]]). A
+  location maintenance holds is a store key, compared as listed: discovery's, the `__manifest`'s, and the write-event
+  lane's, which converts its event's URL to the key it decodes to at its boundary
+  (`arrival.resolve_written_table`), so its table id, policy, cadence stamp, trash gate and vend check are the
+  sweep's own. A location the catalog recorded is a URL, read once as the key it decodes to. That covers:
+  - the purge (`purge.store_paths`), which reclaims a trashed table under the key its record decodes to and the
+    `.lance-reserved` marker pylance 13 writes under the spelling (measured over moto: `…$r%C3%A4…/.lance-reserved`
+    beside data at `…$räksmörgås/`);
+  - the reconciler's trash set, a table policy's recorded path (`maintenance_policies.resolve_policy`) and the
+    location the vend door answers (`credentials`);
+  - the tombstone probe (`purge.objects_held`), and the compaction gate's root probe.
+
+  A table's own branch protects nothing from the purge (`BaseRefs.protects_from_deletion`): the delete takes it along,
+  while expiry keeps a branch protecting its parent (`is_protected`). On a local `file://` root pyarrow decodes the
+  URL itself, so only an S3 store shows a reader that compares spellings.
 - **A governed tier's maintenance run is emitted only when expiry does MATERIAL work.**
   `sweep.py::_did_material_work` gates the `expire_versions` emit on `old_versions_removed`, so a
   correctly-idle estate records nothing — deliberately, since every write and every backstop tick would

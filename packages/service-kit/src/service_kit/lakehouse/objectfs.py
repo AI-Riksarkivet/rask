@@ -340,6 +340,23 @@ def dataset_root_probe(dataset_uri: str, storage_options: StorageOptions) -> Cal
     """
 
     def probe(stated_path: str) -> bool:
-        return is_lance_dataset_root(same_store_uri(dataset_uri, stated_path), storage_options)
+        base = same_store_uri(dataset_uri, stated_path)
+        return any(is_lance_dataset_root(spelling, storage_options) for spelling in _where_a_root_may_be(base))
 
     return probe
+
+
+def _where_a_root_may_be(uri: str) -> list[str]:
+    """``uri``, and for an ``s3://`` spelling the key it decodes to as well.
+
+    pylance opens a URL at each segment percent-decoded once, while :func:`fs_and_base` keeps an endpoint store's
+    ``s3://`` spelling literal, so a base declared in the catalog's encoded spelling (``…$r%C3%A4ksm%C3%B6rg%C3%A5s``) is
+    a dataset root at the decoded key (``…$räksmörgås``) and nothing at the spelled one ([[LH-319]]); pyarrow decodes a
+    ``file://`` URI itself. A root found at either refuses compaction, so probing both never permits more.
+    """
+    from service_kit.lakehouse.base_refs import decoded_path  # base_refs imports this module
+
+    if not uri.startswith("s3://"):
+        return [uri]
+    opened = f"s3://{decoded_path(uri)}"
+    return [uri] if opened == uri.rstrip("/") else [uri, opened]

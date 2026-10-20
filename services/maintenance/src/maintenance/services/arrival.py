@@ -28,6 +28,7 @@ from maintenance.services.expiry import DatasetResult, DueVerdict
 from maintenance.services.plan import PlanContext, buckets_to_sweep, load_policies, resolve_plan
 from maintenance.services.sweep import SweepPlan, expire_dataset, trashed_locations, why_in_trash
 from service_kit.lakehouse import trash
+from service_kit.lakehouse.base_refs import decoded_path
 from service_kit.lakehouse.maintenance_due import CloneList, read_clone_list
 
 
@@ -181,22 +182,28 @@ def resolve_written_table(location: str, settings: MaintenanceSettings) -> Writt
 
     The table's id comes from the ``__manifest`` of the bucket ``location`` is in, and only a bucket the sweep
     maintains is read: a location elsewhere names nothing this service governs.
+
+    The event names the URL the catalog opened, which percent-encodes the table's name (``…$r%C3%A4ksm%C3%B6rg%C3%A5s``),
+    and the lane holds the table where discovery does instead, at the key that URL decodes to (``…$räksmörgås``,
+    [[LH-319]]). Every reading after this one, the table's id, its policy, its cadence stamp, its trash gate and the
+    vend's cover check, is then the sweep's own for the same table.
     """
     options = settings.storage_options()
     bucket = location.removeprefix("s3://").split("/", 1)[0]
     if bucket not in buckets_to_sweep(settings, options):
         return "unnamed"
+    held = f"s3://{decoded_path(location)}"
     ids = table_ids({f"s3://{bucket}"}, options)
     if not ids.complete:
         return "failed"
-    if (table := ids.of(location)) is None:
+    if (table := ids.of(held)) is None:
         return "unnamed"
     try:
         policies = load_policies(settings, options)
     except Exception:  # noqa: BLE001 — logged by `load_policies`; an unread policy registry decides nothing
         return "failed"
     context = PlanContext(policies=policies, now=datetime.now(UTC), older_than=timedelta(days=settings.older_than_days))
-    return WrittenTable(location=location, table=table, ids=ids, context=context, clones=read_clone_list(settings.resolved_control_root, options))
+    return WrittenTable(location=held, table=table, ids=ids, context=context, clones=read_clone_list(settings.resolved_control_root, options))
 
 
 def refresh_written_table(written: WrittenTable, settings: MaintenanceSettings) -> DueVerdict:
@@ -217,8 +224,8 @@ def _is_fresh(clones: CloneList, settings: MaintenanceSettings, *, now: datetime
 def _in_trash(location: str, settings: MaintenanceSettings) -> bool:
     """Whether a trash record covers ``location``; an unreadable trash index answers yes (fail toward not deleting).
 
-    The sweep's own rule (:func:`why_in_trash`) answers it: the event names the location the catalog opened, spelled
-    as the catalog encodes it, and the rule compares either spelling as the path it decodes to ([[LH-318]]).
+    The sweep's own rule (:func:`why_in_trash`) answers it, for the table held where discovery holds it
+    (:func:`resolve_written_table`, [[LH-318]]).
     """
     try:
         records = trash.list_all(settings.resolved_control_root, settings.storage_options())

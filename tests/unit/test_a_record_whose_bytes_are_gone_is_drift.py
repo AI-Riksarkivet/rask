@@ -57,6 +57,14 @@ ROOT = "s3://lance-catalog"
         # A trashed table's record is gone by definition while its bytes remain, so neither side of the pair
         # is a defect: the same exclusion `_unregistered_datasets` makes, in the other direction.
         pytest.param({"ns$dropped": (ROOT, "s3://lance-catalog/gone")}, set(), {"s3://lance-catalog/gone"}, [], id="dropped-awaiting-the-purge"),
+        # The record holds the URL `describe_table` answered, percent-encoding the name the manifest keeps ([[LH-319]]).
+        pytest.param(
+            {"ns$dropped": (ROOT, "a1b2c3d4_ns$räksmörgås")},
+            set(),
+            {f"{ROOT}/a1b2c3d4_ns$r%C3%A4ksm%C3%B6rg%C3%A5s"},
+            [],
+            id="dropped-as-the-catalog-spells-it",
+        ),
     ],
 )
 def test_a_record_is_drift_only_when_its_resolved_location_is_absent(
