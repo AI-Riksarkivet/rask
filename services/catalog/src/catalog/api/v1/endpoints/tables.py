@@ -58,10 +58,11 @@ from catalog.api.dependencies import (
 from catalog.api.pagination import paginate
 from catalog.api.rask_params import RaskFlag
 from catalog.api.security import Caller, CurrentToken
+from catalog.core import provenance_guard
 from catalog.core.base_judge import BaseJudge, GovernedStorage
 from catalog.core.config import Settings
 from catalog.core.formats import reject_unsupported_properties
-from catalog.core.identifiers import MAX_NAMESPACE_DEPTH, parse_identifier, reconcile_body_id, require_safe_segments
+from catalog.core.identifiers import MAX_NAMESPACE_DEPTH, UUID_PROPERTY, parse_identifier, reconcile_body_id, require_safe_segments
 from catalog.core.lineage_emit import (
     DECLARE_TABLE,
     DEREGISTER_TABLE,
@@ -367,8 +368,10 @@ async def declare_table(
     """
     # LANCE-ONLY (2026-08-15 ruling). This door takes `properties` through its spec request
     # model and never checked it, so a non-Lance format could be selected here while the create
-    # door rejected it. Before anything is reserved.
+    # door rejected it. Before anything is reserved, and so is the reserved-namespace rule the create
+    # door holds its properties to: the table's uuid is the catalog's to mint ([[LH-519]]).
     reject_unsupported_properties(body.properties if body else None)
+    provenance_guard.refuse_reserved_keys((body.properties if body else None) or {}, door="declare properties")
     segments = parse_identifier(id, settings.delimiter)
     # A wildcard (`*`/`?`) in a segment would widen the vended STS policy to siblings — refused at SHAPE,
     # before the location is reserved (declare mints the table's object-store prefix from these segments).
@@ -380,9 +383,17 @@ async def declare_table(
     req = body or DeclareTableRequest()
     req.id = reconcile_body_id(segments, req.id)
     response: DeclareTableResponse = await run_in_threadpool(native.call, ns, "declare_table", req)
+    canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
+    claims = table_claims.claim_store(settings)
+    # [[LH-519]] The table's uuid is minted with its location's claim (ADR 0173 §2, §6), before anything grants or
+    # announces it; a claim that fails detaches the row.
+    if response.location:
+        await run_in_threadpool(table_claims.claim_declared, ns, claims, response.location, table=canonical, segments=segments)
 
     async def _undo_declare() -> None:
         await run_in_threadpool(native.call, ns, "drop_table", DropTableRequest(id=segments))
+        if response.location:
+            await run_in_threadpool(location_claims.release, claims, response.location, canonical)
 
     # A declared table holds NO data — the undo can never destroy bytes, so this door is the safest
     # possible place to compensate and there was never a reason for it to be the riskiest. Without it a
@@ -426,7 +437,7 @@ async def declare_table(
         control,
         action="table_declared",
         object_type="table",
-        object_id=f"table:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}",
+        object_id=f"table:{canonical}",
         actor=f"user:{token.subject}" if token is not None else None,
         extra={"location": response.location},
     )
@@ -544,6 +555,7 @@ async def describe_table(
         ns,
         so,
         segments,
+        claims=table_claims.claim_store(settings),
         with_table_uri=with_table_uri,
         load_detailed_metadata=load_detailed_metadata,
         check_declared=check_declared,
@@ -573,13 +585,19 @@ def _describe(
     so: dict[str, str],
     segments: list[str],
     *,
+    claims: location_claims.ClaimStore,
     with_table_uri: bool | None,
     load_detailed_metadata: bool | None,
     check_declared: bool | None,
     version: int | None,
     tag: str | None,
 ) -> DescribeTableResponse:
-    """The blocking half of :func:`describe_table`: resolve the pin, describe, and fill the metadata."""
+    """The blocking half of :func:`describe_table`: resolve the pin, describe, fill the metadata, and answer the table's uuid.
+
+    The uuid is the one the table's location's claim records ([[LH-519]], ADR 0173 §6, §11), answered under the
+    ``rask.uuid`` property, which no door lets a caller set. It is read, never minted here, so every describe of
+    the table answers the same one.
+    """
     if tag is not None:
         version = dataplane.get_tag_version(ns, so, GetTableTagVersionRequest(id=segments, tag=tag)).version
     if version is not None:
@@ -604,6 +622,9 @@ def _describe(
                 response.metadata = schema_meta
         except Exception:
             log.warning("describe_schema_metadata_read_failed", extra={"table": "/".join(segments)})
+    claim = location_claims.holder(claims, response.location) if response.location else None
+    if claim is not None and claim.uuid is not None:
+        response.properties = {**(response.properties or {}), UUID_PROPERTY: claim.uuid}
     return response
 
 
@@ -902,6 +923,11 @@ async def register_table(
             "catalog does not own from the table that currently points at them. Deregister the existing table "
             "first, then register the new location."
         )
+    # LANCE-ONLY (2026-08-15 ruling), as at `declare_table`, and the reserved-namespace rule the create door
+    # holds its properties to: the table's uuid is the catalog's to mint ([[LH-519]]). Shape refusals like the
+    # mode's, so before `idem.begin` for the same reason.
+    reject_unsupported_properties(body.properties)
+    provenance_guard.refuse_reserved_keys(body.properties or {}, door="register properties")
     # LOCATION-EXCLUSIVITY, THE SHAPE HALF ([[LH-279]]) — a shape refusal like the mode's, so before
     # `idem.begin` for the same reason. What the path alone decides is refused before anything is
     # attached: the namespace root, a control prefix, the control root and every configured base.
@@ -926,8 +952,6 @@ async def register_table(
     if converge.replay is not None:
         return RegisterTableResponse.model_validate(converge.replay.body)
 
-    # LANCE-ONLY (2026-08-15 ruling) — same bypass as `declare_table`; `body` is required here.
-    reject_unsupported_properties(body.properties)
     segments = parse_identifier(id, settings.delimiter)
     await fga_deps.require_parent_exists(ns, "table", segments, delimiter=settings.delimiter)
     # The id must not still belong to a trashed table (diff2 F10 item 4): a recoverable drop KEEPS
@@ -1031,10 +1055,11 @@ async def register_table(
     # against and the overlap check must see this registration's own row; BEFORE THE SEED, so a refused
     # dataset never gains an owner, a record entry, a lineage node or an event. The location's claim
     # first ([[LH-204]]): a rename holding it, or a table a recoverable drop is keeping it for, refuses
-    # this registration even when the manifest shows no other row at the location.
+    # this registration even when the manifest shows no other row at the location. The claim records the
+    # uuid minted for this table ([[LH-519]]), a new one even where an earlier table's claim was released.
     try:
         try:
-            await run_in_threadpool(table_claims.take, ns, claims, claimed_location, canonical, segments)
+            await run_in_threadpool(table_claims.claim_new_table, ns, claims, claimed_location, table=canonical, segments=segments)
         except location_claims.LocationHeldError as held:
             log.warning("register_refused_held_location", extra={"table": id, "location": held.claim.location, "holder": held.claim.table})
             raise table_bases.occupied_location_refusal(body.location) from None

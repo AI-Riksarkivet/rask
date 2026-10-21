@@ -70,11 +70,11 @@ from catalog.core.lineage_emit import OVERWRITE_TABLE, LineageEmitter, input_ref
 from catalog.core.lineage_metadata import build_lineage_metadata, stamp_lineage_metadata
 from catalog.core.modes import CreateMode
 from catalog.core.run_context import RunContext
-from catalog.services import dataplane, native, table_bases
+from catalog.services import dataplane, native, table_bases, table_claims
 from catalog.services.base_credentials import BaseCredentials
 from service_kit.control_emit import ControlEmitter, emit_control
 from service_kit.governed import fga
-from service_kit.lakehouse import base_registry, protection
+from service_kit.lakehouse import base_registry, location_claims, protection
 from service_kit.lakehouse.objectfs import StorageOptions
 
 
@@ -297,9 +297,10 @@ async def create_governed_table(
     async def _undo_create() -> None:
         await run_in_threadpool(native.call, ns, "drop_table", DropTableRequest(id=segments))
         # The bytes are gone with the table, so its base record goes too: a record that outlives the
-        # manifest it describes would vouch for bases nothing declares.
+        # manifest it describes would vouch for bases nothing declares. Its location's claim goes with it.
         if response.location:
             await run_in_threadpool(base_registry.forget_base_record, registry, response.location, table=table_id)
+            await run_in_threadpool(location_claims.release, table_claims.claim_store(settings), response.location, table_id)
 
     # The revoke-then-drop pair moved into `seed_ownership_or_compensate` (diff2 F3) because it was
     # ONE try block here: the revoke is an OpenFGA call, so on the outage this compensation exists

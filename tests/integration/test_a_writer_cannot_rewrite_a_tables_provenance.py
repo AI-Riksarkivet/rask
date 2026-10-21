@@ -8,6 +8,9 @@ its `properties` landed on the table verbatim while lineage emission was off; `d
 key (a re-type strips the key, after which a key-less `merge_insert` refuses the table); and
 `nullable=True` on the key, which Lance itself refuses, answered 500.
 
+The table's uuid is the platform's too ([[LH-519]]): measured 2026-10-21 before the declare and register doors
+held their `properties` to the same rule, a declare naming `rask.uuid` answered 200 echoing it, and so did a register.
+
 Driven through the real catalog app on a real `dir` namespace, and each case reads the table back from
 disk, because a 400 that still committed the change would be the worst answer of all.
 """
@@ -28,6 +31,7 @@ from fastapi.testclient import TestClient
 ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
 PK = {"lance-schema:unenforced-primary-key": "true"}
 DECLARED = {b"lineage.dataset_id": b"m$t"}
+FORGED_UUID = "00000000-0000-4000-8000-000000000000"
 
 #: A governed tier's shape: the key (top level and nested, so ancestors are exercised) and the three
 #: provenance columns `service_kit.lakehouse.stage_stamp` names.
@@ -81,6 +85,9 @@ CASES: dict[str, tuple[str, Any]] = {
     "lineage.* in a create payload": ("create", _rows({b"lineage.dataset_id": b"victim$payroll"})),
     "rask.* in a create payload": ("create", _rows({b"rask.blob.external_base": b"s3://other/"})),
     "lineage.* in create properties": ("create?properties=" + json.dumps({"lineage.dataset_id": "victim$payroll"}), _rows()),
+    # [[LH-519]] The catalog mints a table's uuid and answers it as `rask.uuid`; no door takes one from a caller.
+    "rask.* in declare properties": ("/v1/table/m$u/declare", {"properties": {"rask.uuid": FORGED_UUID}}),
+    "rask.* in register properties": ("/v1/table/m$u/register", {"location": "elsewhere", "properties": {"rask.uuid": FORGED_UUID}}),
     "lineage.* in an insert overwrite payload": ("/v1/table/m$t/insert?mode=overwrite", _rows({b"lineage.dataset_id": b"victim$payroll"})),
     # [[LH-242]] A create overwrite of an existing table is a new version of it, so it keeps the provenance columns.
     "a create overwrite without the primary key": ("/v1/table/m$t/create?mode=overwrite", _rows().drop_columns(["id"])),

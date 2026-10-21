@@ -52,7 +52,8 @@ def test_create_namespace_routes_with_body_and_id(client: TestClient, fake_ns: M
     assert resp.status_code == 200
     req = fake_ns.create_namespace.call_args.args[0]
     assert req.id == ["parent", "child"]
-    assert req.properties == {"team": "ml"}
+    # Beside the uuid the door mints for the namespace ([[LH-519]]).
+    assert {key: value for key, value in req.properties.items() if key != "rask.uuid"} == {"team": "ml"}
     assert resp.json() == {"properties": {"team": "ml"}}  # our serialization
 
 

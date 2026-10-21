@@ -3,7 +3,8 @@
 A lance-ns table id is its name path, and Lance keeps no table UUID (`lance_docs/ns_catalog/catalog/dir/index.md`;
 RenameTable, `lance_docs/ns_catalog/spec.yaml`), so every grant and every control-root record rask attaches to a table
 is keyed by its name. A rename retires the name: what the table held must arrive at the new one and leave nothing at
-the old, where it would govern no table, or the next one created there.
+the old, where it would govern no table, or the next one created there. The uuid the catalog minted for the table
+([[LH-519]], ADR 0173) is the table's, not the name's, so the rename keeps it.
 
 The real catalog app over a real `dir` namespace on pylance, the in-memory `TupleStore` behind the real
 `service_kit.governed.fga` seed and revoke.
@@ -58,15 +59,23 @@ def _protected(client: TestClient, table: str) -> bool:
     return bool(answer.json()["protected"])
 
 
-def test_a_forced_rename_carries_a_direct_grant_protection_and_policy_and_leaves_nothing_at_the_old_id(
+def _uuid(client: TestClient, table: str) -> str:
+    properties = _ok(client, f"/v1/table/{table}/describe", json={}).get("properties") or {}
+    assert "rask.uuid" in properties, f"{table} answers no uuid: {properties}"
+    return str(properties["rask.uuid"])
+
+
+def test_a_forced_rename_carries_a_direct_grant_protection_policy_and_uuid_and_leaves_nothing_at_the_old_id(
     real_ns_client: TestClient, governed: TupleStore
 ) -> None:
     _ok(real_ns_client, "/management/v1/table/db$src/access/grant", json={"user": "dex~bob", "relation": "reader"})
     _ok(real_ns_client, "/management/v1/table/db$src/protection", json={"protected": True})
     _ok(real_ns_client, "/management/v1/table/db$src/policy/set", json={"retention_days": 7})
+    minted = _uuid(real_ns_client, "db$src")
 
     _ok(real_ns_client, "/v1/table/db$src/rename", params={"force": "true"}, json={"new_table_name": "dst"})
 
+    assert _uuid(real_ns_client, "db$dst") == minted, "the renamed table answers another uuid"
     assert ("user:dex~bob", "reader", "table:db$dst") in governed.tuples, f"bob's reader grant did not follow the table: {sorted(governed.tuples)}"
     assert governed.naming(["table:db$src"]) == {}, "a tuple still names the old id, which no table holds"
     assert _protected(real_ns_client, "db$dst"), "the renamed table arrived unprotected"

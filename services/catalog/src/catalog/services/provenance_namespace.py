@@ -28,7 +28,7 @@ from lance_namespace import CreateNamespaceRequest, LanceNamespace, NamespaceAlr
 from openfga_sdk import OpenFgaClient
 
 from catalog.core.config import Settings
-from catalog.core.identifiers import parse_identifier
+from catalog.core.identifiers import parse_identifier, with_minted_uuid
 from catalog.services import native
 from service_kit.governed import fga
 from service_kit.lakehouse import protection
@@ -64,9 +64,10 @@ async def ensure_provenance_namespace(ns: LanceNamespace, settings: Settings, cl
     segments = parse_identifier(settings.provenance_namespace, settings.delimiter)
     canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
     # The `dir` backend refuses an existing namespace in every create mode, `exist_ok` included (measured on pylance
-    # 13.0.0, where the spec's ExistOk would keep it), so keeping one is catching that refusal.
+    # 13.0.0, where the spec's ExistOk would keep it), so keeping one is catching that refusal, and a kept namespace keeps
+    # the uuid it was created with ([[LH-519]]).
     try:
-        await run_in_threadpool(native.call, ns, "create_namespace", CreateNamespaceRequest(id=segments))
+        await run_in_threadpool(native.call, ns, "create_namespace", CreateNamespaceRequest(id=segments, properties=with_minted_uuid(None)))
         kept = False
     except NamespaceAlreadyExistsError:
         kept = True

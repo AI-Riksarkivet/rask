@@ -144,8 +144,15 @@ def test_skip_over_a_half_dropped_namespace_leaves_nothing_on_its_id(real_ns_cli
     assert announced.actions == [], "this call dropped nothing, so it may announce no drop"
 
 
-def test_overwrite_replaces_an_empty_namespace_with_fresh_ownership(real_ns_client: TestClient, governed: _TupleStore, tmp_path: Path) -> None:
-    """The old owner, a later grant and the old policy die with the old namespace; the overwriter owns the new one.
+def _properties(client: TestClient, namespace: str) -> dict[str, str]:
+    described = client.post(f"/v1/namespace/{namespace}/describe", json={}, headers=AUTH)
+    assert described.status_code == 200, described.text
+    return described.json().get("properties") or {}
+
+
+def test_overwrite_replaces_an_empty_namespace_with_fresh_ownership_and_a_new_uuid(real_ns_client: TestClient, governed: _TupleStore, tmp_path: Path) -> None:
+    """The old owner, a later grant and the old policy die with the old namespace; the overwriter owns the new one,
+    which is a new namespace under a new uuid ([[LH-519]], ADR 0173 §2).
 
     A top-level namespace bound to a warehouse: the replacement keeps the binding and hangs off the same
     warehouse, so the generic door's warehouse requirement is met rather than refused.
@@ -154,6 +161,7 @@ def test_overwrite_replaces_an_empty_namespace_with_fresh_ownership(real_ns_clie
     assert real_ns_client.post("/management/v1/namespace/ghost/policy/set", json={"retention_days": 7}, headers=AUTH).status_code == 200
     governed.tuples.add(("user:dex~carol", "reader", "namespace:ghost"))
     edges = {t for t in governed.naming("namespace:ghost") if t[1] in ("parent", "child")}
+    replaced = _properties(real_ns_client, "ghost")["rask.uuid"]
     act_as(real_ns_client, "bob")
 
     resp = real_ns_client.post("/v1/namespace/ghost/create", json={"mode": "Overwrite", "properties": {"team": "b"}}, headers=AUTH)
@@ -162,8 +170,9 @@ def test_overwrite_replaces_an_empty_namespace_with_fresh_ownership(real_ns_clie
     assert governed.naming("namespace:ghost") == {("user:dex~bob", "owner", "namespace:ghost"), *edges}
     assert maintenance_policies.get_policy(str(tmp_path), {}, "namespace", "ghost") is None
     assert (warehouses.binding_for_namespace(str(tmp_path), {}, "ghost") or {}).get("warehouse_id") == WAREHOUSE
-    described = real_ns_client.post("/v1/namespace/ghost/describe", json={}, headers=AUTH)
-    assert described.json().get("properties") == {"team": "b"}
+    properties = _properties(real_ns_client, "ghost")
+    assert properties.get("rask.uuid") not in (None, replaced), f"the replacement answers the replaced namespace's uuid: {properties}"
+    assert {key: value for key, value in properties.items() if key != "rask.uuid"} == {"team": "b"}
 
 
 def test_overwrite_refuses_a_namespace_that_holds_anything(real_ns_client: TestClient, governed: _TupleStore) -> None:

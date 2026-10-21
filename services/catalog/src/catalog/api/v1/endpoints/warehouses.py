@@ -70,7 +70,7 @@ from catalog.api.v1.endpoints import namespaces as namespaces_api
 from catalog.core import tier_policy
 from catalog.core.config import Settings
 from catalog.core.formats import reject_unsupported_properties
-from catalog.core.identifiers import parse_identifier
+from catalog.core.identifiers import parse_identifier, with_minted_uuid
 from catalog.core.lineage_emit import DEREGISTER_TABLE
 from catalog.core.store_endpoint import names_the_estate_store, require_estate_store
 from catalog.core.vending import CredentialVendor, role_session_name
@@ -627,7 +627,8 @@ async def create_warehouse_namespace(
     # at the estate's store instead would put it in a different object store from every table
     # later written to it.
     ns_conn = await namespace_for_root(request, settings, root_uri, endpoint=record.get("endpoint") or None)
-    req = CreateNamespaceRequest(id=segments, properties=body.properties)
+    # [[LH-519]] A uuid for the namespace this request creates (ADR 0173 §2, §6); an adopted namespace keeps its own.
+    req = CreateNamespaceRequest(id=segments, properties=with_minted_uuid(body.properties))
     adopted = False
     try:
         response: CreateNamespaceResponse = await run_in_threadpool(native.call, ns_conn, "create_namespace", req)

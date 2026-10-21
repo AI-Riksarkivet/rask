@@ -10,6 +10,10 @@ to prevent).
 
 Driven on a real local control root. The hand-over runs inside the release's own read of the record,
 so it lands after that read and before the release writes, on every run.
+
+A take for a table its door just brought into being records the uuid the door minted ([[LH-519]]), even over a
+claim the table's own name still holds: a release lost to a crash leaves that claim behind, and the table it named
+has ended, since the door's backend call found the name free.
 """
 
 from __future__ import annotations
@@ -25,6 +29,8 @@ from service_kit.lakehouse.objectfs import StorageOptions
 
 
 LOCATION = "s3://lance-catalog/aa11bb22_ns$x"
+ENDED = "11111111-1111-4111-8111-111111111111"
+MINTED = "22222222-2222-4222-8222-222222222222"
 
 
 def _resolves(_claim: LocationClaim) -> bool:
@@ -68,3 +74,13 @@ def test_a_release_by_the_holder_frees_the_location_for_another_table(tmp_path: 
     location_claims.take(store, LOCATION, "ns$z", ["ns", "z"], is_gone=_resolves)
     current = location_claims.holder(store, LOCATION)
     assert current is not None and current.table == "ns$z"
+
+
+def test_a_new_table_under_a_name_whose_release_was_lost_is_given_its_own_uuid(tmp_path: Path) -> None:
+    store = ClaimStore(control_root=str(tmp_path))
+    location_claims.take(store, LOCATION, "ns$x", ["ns", "x"], is_gone=_resolves, uuid=ENDED)
+
+    taken = location_claims.take(store, LOCATION, "ns$x", ["ns", "x"], is_gone=_resolves, uuid=MINTED)
+
+    held = location_claims.holder(store, LOCATION)
+    assert (taken.uuid, held.uuid if held is not None else None) == (MINTED, MINTED), "the new table took the ended table's uuid"

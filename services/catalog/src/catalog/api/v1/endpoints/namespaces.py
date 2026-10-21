@@ -49,7 +49,7 @@ from catalog.api.security import Caller, CurrentToken
 from catalog.core import tier_policy
 from catalog.core.config import Settings
 from catalog.core.formats import reject_unsupported_properties
-from catalog.core.identifiers import MAX_NAMESPACE_DEPTH, parse_identifier, reconcile_body_id, require_safe_segments
+from catalog.core.identifiers import MAX_NAMESPACE_DEPTH, parse_identifier, reconcile_body_id, require_safe_segments, with_minted_uuid
 from catalog.core.lineage_emit import DROP_TABLE, REGISTER_TABLE, LineageEmitter, emit_write_event
 
 # `MAX_NAMESPACE_DEPTH` is IMPORTED, not redeclared: the point of F10 item 10 is that two walkers
@@ -180,6 +180,9 @@ async def create_namespace(
     await fga_deps.require_no_live_trash(settings, segments, kind="namespace")
     req = body or CreateNamespaceRequest()
     req.id = reconcile_body_id(segments, req.id)
+    # [[LH-519]] A uuid for the namespace this request creates (ADR 0173 §2, §6). An ExistOk that keeps one answers
+    # the kept namespace's own, and an Overwrite's replacement is a new namespace with a new one.
+    req.properties = with_minted_uuid(req.properties)
     await _judge_tier_declaration(ns, settings, token, client, segments, declared=declared, overwrite=create_mode is CreateMode.OVERWRITE)
     # RACE-FREE BY CATCHING RATHER THAN PRE-CHECKING. An `exists?` read followed by a create leaves a
     # window in which another caller creates the namespace, and on THIS door the loser of that race

@@ -530,10 +530,15 @@ def create_table(
     catalog's word on which foreign bases the table may declare, written BEFORE the manifest and removed
     again when the write fails. Required and never defaulted — the governed door passes the control root;
     ``None`` is an explicit choice for a caller outside governance (a test building a fixture), which
-    leaves the table with no record at all.
+    leaves the table with no record at all. The table's location claim, which carries its uuid ([[LH-519]],
+    ADR 0173 §6), lives beside the record: a table this call declares is given a uuid minted now, and one an
+    earlier request declared keeps the uuid its declaration's claim records. ``holder`` is the table's
+    canonical id, required whenever ``registry`` is given.
 
     ``transaction_properties`` ride the commit that writes the data (the run a governed create names).
     """
+    if registry is not None and not holder:
+        raise ValueError("a governed create names the table that holds its location and data directories")
     allow_external = allow_external_blobs
     external_blob_bases = external_blob_bases or []
     normalized = CreateMode.parse(mode)
@@ -567,6 +572,8 @@ def create_table(
     # BEFORE the declare, so a refused create leaves no name behind ([[LH-243]]).
     primary_keys.refuse_repeats_within(table, primary_keys.declared_key(table.schema), door="create")
     if existing is not None and only_declared:  # declared, no data yet → write into it (all modes)
+        if registry is not None:
+            table_claims.take(ns, _claim_store(registry), existing, holder, segments)
         return _write_blob_into(
             ns,
             table,
@@ -586,6 +593,8 @@ def create_table(
     location = ns.declare_table(DeclareTableRequest(id=segments, properties=properties)).location
     if not location:
         raise InvalidInputError("namespace did not return a location for the declared table")
+    if registry is not None:
+        table_claims.claim_declared(ns, _claim_store(registry), location, table=holder, segments=segments)
     return _write_blob_into(
         ns,
         table,
@@ -635,10 +644,10 @@ def _write_blob_into(
 
     EACH DATA DIRECTORY IS CLAIMED FOR ``holder`` FIRST OF ALL ([[LH-252]]), put-if-not-exists, so no other
     table — a registration declaring the same directory — can be admitted to it while this one exists.
-    ``holder`` is the table's canonical id, required whenever ``registry`` is given.
+
+    The location's own claim is :func:`create_table`'s, taken before this write ([[LH-519]]); a failed write
+    releases it with the table it drops.
     """
-    if registry is not None and not holder:
-        raise ValueError("a governed create names the table that holds its data directories")
     claim: base_registry.BaseClaim | None = None
     directories: list[str] = []
     try:
@@ -679,6 +688,7 @@ def _write_blob_into(
                 if claim is not None:
                     base_registry.release_claim(registry, claim)
                 base_registry.release_data_directories(registry, directories, holder)
+                location_claims.release(_claim_store(registry), location, holder)
             except Exception as release_exc:  # noqa: BLE001 — the write error is what the caller is told
                 log.error("create_base_record_release_failed", extra={"location": location, "error": str(release_exc)[:300]})
         raise

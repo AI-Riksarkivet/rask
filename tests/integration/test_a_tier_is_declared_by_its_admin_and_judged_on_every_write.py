@@ -69,10 +69,14 @@ def _top_level(client: TestClient, name: str, properties: dict[str, str] | None 
     return client.post(f"/management/v1/warehouses/{WAREHOUSE}/namespaces", json=body, headers=AUTH).status_code
 
 
-def _tier(client: TestClient, namespace: str) -> str | None:
+def _properties(client: TestClient, namespace: str) -> dict[str, str]:
     described = client.post(f"/v1/namespace/{namespace}/describe", json={}, headers=AUTH)
     assert described.status_code == 200, described.text
-    return (described.json().get("properties") or {}).get("rask.tier")
+    return described.json().get("properties") or {}
+
+
+def _tier(client: TestClient, namespace: str) -> str | None:
+    return _properties(client, namespace).get("rask.tier")
 
 
 def _refused(resp: httpx.Response, code: int) -> None:
@@ -104,18 +108,22 @@ def test_only_the_projects_admin_declares_or_drops_a_tier(real_ns_client: TestCl
     assert _tier(client, "ledger") == "gold", "a refused Overwrite dropped the tier"
 
 
-def test_a_declaration_names_a_tier_its_ancestors_agree_with(real_ns_client: TestClient, grants: Grants) -> None:
-    """A value outside bronze/silver/gold, or a deeper namespace re-tiering its ancestor's, is InvalidInput (13);
-    an ExistOk naming a tier the kept namespace does not have is NamespaceAlreadyExists (2)."""
+def test_a_declaration_names_no_reserved_key_but_a_tier_its_ancestors_agree_with(real_ns_client: TestClient, grants: Grants) -> None:
+    """A value outside bronze/silver/gold, a deeper namespace re-tiering its ancestor's, or another reserved key, the
+    uuid the catalog mints among them ([[LH-519]]), is InvalidInput (13) on both doors; an ExistOk naming a tier the
+    kept namespace does not have is NamespaceAlreadyExists (2)."""
     client = real_ns_client
     act_as(client, "alice")
+    forged = {"rask.uuid": "00000000-0000-4000-8000-000000000000"}
     _refused(
         client.post(f"/management/v1/warehouses/{WAREHOUSE}/namespaces", json={"namespace": "sales", "properties": {"rask.tier": "platinum"}}, headers=AUTH), 13
     )
+    _refused(client.post(f"/management/v1/warehouses/{WAREHOUSE}/namespaces", json={"namespace": "sales", "properties": forged}, headers=AUTH), 13)
     assert _top_level(client, "sales", {"rask.tier": "silver"}) == 200
     grants.grant("alice", ("can_create_namespace", "namespace:sales"))
 
     _refused(client.post("/v1/namespace/sales$lane/create", json={"properties": {"rask.tier": "bronze"}}, headers=AUTH), 13)
+    _refused(client.post("/v1/namespace/sales$lane/create", json={"properties": forged}, headers=AUTH), 13)
     assert client.post("/v1/namespace/sales$lane/create", json={"properties": {"rask.tier": "silver"}}, headers=AUTH).status_code == 200
     assert _top_level(client, "plain") == 200
     grants.grant("alice", ("can_create_namespace", "namespace:plain"))
@@ -167,15 +175,17 @@ def test_a_write_is_judged_under_the_tier_its_namespace_declares(real_ns_client:
     assert judged == [("table:sales$t", "silver"), ("table:gold$t", "untiered")]
 
 
-def test_a_recoverable_drop_and_its_undrop_keep_the_declared_tier(real_ns_client: TestClient, grants: Grants) -> None:
-    """An owner who may drop and undrop is not an admin, so the round trip must bring the tier back with the namespace."""
+def test_a_recoverable_drop_and_its_undrop_keep_the_declared_tier_and_the_uuid(real_ns_client: TestClient, grants: Grants) -> None:
+    """An owner who may drop and undrop is not an admin, so the round trip must bring the tier back with the namespace,
+    and the namespace comes back as itself, under the uuid it was created with ([[LH-519]])."""
     client = real_ns_client
     act_as(client, "alice")
     assert _top_level(client, "ledger", {"rask.tier": "gold"}) == 200
     act_as(client, "bob")
     grants.grant("bob", ("can_delete", "namespace:ledger"), ("can_get_metadata", "namespace:ledger"))
+    minted = _properties(client, "ledger")["rask.uuid"]
 
     assert client.post("/v1/namespace/ledger/drop", json={"behavior": "Cascade"}, headers=AUTH).status_code == 200
     assert client.post("/management/v1/namespace/ledger/undrop", json={}, headers=AUTH).status_code == 200
 
-    assert _tier(client, "ledger") == "gold"
+    assert _properties(client, "ledger") == {"rask.tier": "gold", "rask.uuid": minted}

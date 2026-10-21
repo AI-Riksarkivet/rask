@@ -114,7 +114,7 @@ class _Namespace:
 
 
 @pytest.fixture
-def describe_client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+def describe_client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[TestClient]:
     application = FastAPI()
     install_problem_handlers(application, logging.getLogger(__name__))
     application.include_router(tables.router)
@@ -123,8 +123,14 @@ def describe_client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     monkeypatch.setattr(tables, "dataset_facts", lambda location, storage_options: VendFacts(read_version=1))
     # The catalog's OWN connection is plaintext and root-keyed, so the production `get_storage_options`
     # answers `allow_http=true` and the root pair: a door that merged it into the vend, either way round,
-    # would hand a reader the root secret or hand the https store a plaintext permit.
-    settings = Settings(LANCE_S3_ENDPOINT="http://rustfs:9000", LANCE_S3_ACCESS_KEY_ID="ROOTKEY", LANCE_S3_SECRET_ACCESS_KEY="ROOTSECRET")
+    # would hand a reader the root secret or hand the https store a plaintext permit. The control root, where
+    # the describe reads the table's location claim for its uuid, is a local directory.
+    settings = Settings(
+        LANCE_S3_ENDPOINT="http://rustfs:9000",
+        LANCE_S3_ACCESS_KEY_ID="ROOTKEY",
+        LANCE_S3_SECRET_ACCESS_KEY="ROOTSECRET",
+        LANCE_CONTROL_ROOT=str(tmp_path),
+    )
     application.dependency_overrides[get_settings] = lambda: settings
     application.dependency_overrides[get_namespace] = _Namespace
     with TestClient(application) as client:

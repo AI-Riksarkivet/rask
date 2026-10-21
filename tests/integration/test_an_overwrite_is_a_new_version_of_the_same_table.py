@@ -7,8 +7,8 @@ and the lineage event called the first a `create_table` and the second an `inser
 standard `OVERWRITE` lifecycle state.
 
 The table's earlier versions stay readable by time travel either way, so the catalog serves the
-Overwrite as a new version of the same table: its protection holds unless `force=true`, and its record
-says the table was overwritten, not created.
+Overwrite as a new version of the same table: its protection holds unless `force=true`, its record
+says the table was overwritten, not created, and it keeps the uuid the catalog minted for it ([[LH-519]]).
 
 Driven through the real catalog app on a real `dir` namespace, with the lineage event captured on the
 wire: the real `HttpLineageEmitter` builds and posts it to an `httpx.MockTransport`.
@@ -90,13 +90,24 @@ def test_a_protected_table_refuses_an_overwrite_without_force(real_ns_client: Te
     assert sorted(after.to_table()["id"].to_pylist()) == [1, 2, 3]
 
 
+def _uuid(client: TestClient) -> str:
+    described = client.post(f"/v1/table/{TABLE}/describe", json={})
+    assert described.status_code == 200, described.text
+    properties = described.json().get("properties") or {}
+    assert "rask.uuid" in properties, f"{TABLE} answers no uuid: {properties}"
+    return str(properties["rask.uuid"])
+
+
 @pytest.mark.parametrize("door", list(DOORS))
 def test_a_forced_overwrite_is_recorded_as_an_overwrite_of_the_same_table(
     real_ns_client: TestClient, protected: str, events: list[dict[str, Any]], door: str
 ) -> None:
+    minted = _uuid(real_ns_client)
+
     answer = real_ns_client.post(f"/v1/table/{TABLE}/{DOORS[door]}&force=true", content=_ipc(_rows(9)), headers=ARROW)
 
     assert answer.status_code == 200, f"{door}: force did not release the protection lock: {answer.text}"
+    assert _uuid(real_ns_client) == minted, f"{door}: the overwritten table answers another uuid"
     version = int(answer.json()["version"])
     assert sorted(lance.dataset(protected, version=1).to_table()["id"].to_pylist()) == [1, 2, 3], "the table's history did not survive"
     assert len(events) == 1, f"{door}: expected one lineage event, got {[e.get('job') or e.get('dataset') for e in events]}"

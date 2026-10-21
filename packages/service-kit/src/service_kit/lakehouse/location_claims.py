@@ -26,11 +26,15 @@ replace-if-the-ETag-matches) are all the estate requires of its object store, an
 not one of them; an unconditional delete removes whatever claim was written after the read. So nothing
 removes a released record, and a released location keeps one small one.
 
-Who takes and releases: the catalog's register, undrop and rename doors take a claim, a recoverable drop
-keeps it for the trashed id, and a destructive drop, a deregister and the maintenance purge release it.
-A table made by ``create`` holds no claim — its location is a fresh ``<hash>_<object_id>`` directory —
-and the register door's after-commit manifest check (``catalog.services.table_bases``) is what refuses a
-second id there; the first door that attaches or moves it takes one.
+Who takes and releases: the catalog's create, declare, register, undrop and rename doors take a claim, a
+recoverable drop keeps it for the trashed id, and a destructive drop, a deregister and the maintenance purge
+release it.
+
+A CLAIM CARRIES ITS TABLE'S UUID (ADR 0173 §6). The claim's life is a uuid's: a rename hands it to the new name,
+a recoverable drop keeps it for the undrop, and a destroy or a deregister releases it, so a table registered at
+the location afterwards is given a uuid of its own. The uuid lives here, outside Lance context, because
+RegisterTable keeps no properties (measured on pylance 13.0.0) and the rename and both undrops re-register. A
+data directory's claim ([[LH-252]]) names its holder and records no uuid.
 
 A CLAIM WHOSE HOLDER IS GONE (a crash between a take and the attach, or a cascade drop, which destroys
 its tables inside one native call) would wedge its location forever, so a taker may replace it once the
@@ -83,6 +87,8 @@ class LocationClaim(BaseModel):
     table: str
     #: The holder's identifier segments, so a caller can describe it without knowing the delimiter.
     segments: list[str]
+    #: The holder table's uuid, which the catalog minted when the table came into being; a data directory's claim has none.
+    uuid: str | None = None
     claimed_at: datetime
     #: The request that took it, when the taker named one: only that request's retry is a retry.
     token: str | None = None
@@ -127,8 +133,9 @@ def take(
     is_gone: Callable[[LocationClaim], bool],
     previous: str | None = None,
     token: str | None = None,
-) -> None:
-    """Make ``table`` the holder of ``location``.
+    uuid: str | None = None,
+) -> LocationClaim:
+    """Make ``table`` the holder of ``location``, and answer the claim it then holds.
 
     Succeeds when the location is unclaimed (no record, or a released claim), already held by ``table``
     (a retry: with a ``token``, only a claim stamped with that same token is one), held by ``previous``
@@ -138,40 +145,53 @@ def take(
     because two renames of one source into the SAME destination name ``table`` alike, and without it
     the second would read the first's claim as its own retry and both would proceed.
 
+    ``uuid`` is the uuid of a table this take brings into being, minted by its door after its backend call found
+    ``table``'s name free. A claim the take writes on an unclaimed location records it, and so does one replacing a
+    gone holder's or one ``table``'s own name still holds, which an ended table of that name left unreleased (a crash
+    between its detach and its release): nothing granted to an earlier table at the location reaches this one. A
+    table that already exists names none and keeps the uuid its location carries: a hand-over carries it to the new
+    name, a retry keeps the whole claim, and a gone holder's claim was kept for this same table under a name it no
+    longer has (a rename interrupted between its hand-over and its deregister).
+
     Raises:
         LocationHeldError: Another table holds the location.
         records.RecordChangedError: The claim kept changing under the hand-over.
     """
     key = claim_key(location)
 
-    def _wanted() -> dict[str, object]:
-        return LocationClaim(location=decoded_path(location), table=table, segments=list(segments), claimed_at=datetime.now(UTC), token=token).model_dump(
-            mode="json"
-        )
+    def _claim(carried: str | None) -> dict[str, object]:
+        return LocationClaim(
+            location=decoded_path(location), table=table, segments=list(segments), uuid=carried, claimed_at=datetime.now(UTC), token=token
+        ).model_dump(mode="json")
 
     def _hand_over(raw: dict[str, object]) -> dict[str, object]:
         # Re-judged on every round: `mutate_json` re-applies this to a claim another taker just wrote.
         current = LocationClaim.model_validate(raw)
         if current.released_at is not None:
-            return _wanted()
+            return _claim(uuid)
+        if current.table == table and uuid is not None:
+            return _claim(uuid)
         if current.table == table and (token is None or current.token == token):
             return raw
-        if current.table != previous and (current.within_lease(datetime.now(UTC)) or not is_gone(current)):
+        if current.table == previous:
+            return _claim(current.uuid)
+        if current.within_lease(datetime.now(UTC)) or not is_gone(current):
             raise LocationHeldError(current)
-        return _wanted()
+        return _claim(current.uuid if uuid is None else uuid)
 
     for _ in range(_TAKE_ATTEMPTS):
+        fresh = _claim(uuid)
         try:
-            records.create_json(store.control_root, store.storage_options, key, _wanted())
+            records.create_json(store.control_root, store.storage_options, key, fresh)
         except records.RecordExistsError:
             pass
         else:
-            return
+            return LocationClaim.model_validate(fresh)
         try:
-            records.mutate_json(store.control_root, store.storage_options, key, _hand_over)
+            held = records.mutate_json(store.control_root, store.storage_options, key, _hand_over)
         except records.RecordMissingError:
             continue  # removed between the create and the read; create again
-        return
+        return LocationClaim.model_validate(held)
     raise records.RecordChangedError(f"the claim on {decoded_path(location)!r} kept appearing and disappearing across {_TAKE_ATTEMPTS} attempts")
 
 

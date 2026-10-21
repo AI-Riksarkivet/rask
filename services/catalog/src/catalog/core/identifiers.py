@@ -10,12 +10,29 @@ paths cannot drift apart. The control-plane id SHAPE (``CONTROL_ID_RE``) lives i
 planes that CONSUME a project id decide with that rule too, and one the issuer owns alone is one the
 consumers copy and then diverge from. This module owns the structural shape of a Lance object
 identifier: splitting it into segments. (Parent-namespace derivation lives in
-``service_kit.governed.fga``.)
+``service_kit.governed.fga``.) It also owns the key the catalog mints for a table or namespace beside its name
+(ADR 0173): the property both are answered under, and the minting of a namespace's.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from typing import Final
+from uuid import uuid4
+
 from lance_namespace import InvalidInputError
+
+
+#: The read-only property DescribeTable and DescribeNamespace answer an object's uuid under (ADR 0173 §11). A namespace
+#: keeps its own in its `__manifest` row's properties, which only its create writes and its undrop restores; a table's
+#: lives in its location's claim (``service_kit.lakehouse.location_claims``). No door accepts a caller's ``rask.*``
+#: property, so no caller sets or changes one.
+UUID_PROPERTY: Final = "rask.uuid"
+
+
+def with_minted_uuid(properties: Mapping[str, str] | None) -> dict[str, str]:
+    """``properties`` for a namespace this request creates, holding a uuid minted now (ADR 0173 §2)."""
+    return {**(properties or {}), UUID_PROPERTY: str(uuid4())}
 
 
 #: How deep a namespace tree may nest — an EXCLUSIVE bound: this depth is the first one NOT allowed,

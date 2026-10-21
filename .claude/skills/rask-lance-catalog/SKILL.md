@@ -47,7 +47,7 @@ Two contracts stack here, and confusing them is how bugs happen:
   renames into ONE destination are not each other's retry; the losers answer 409 code 14, and a failed
   retire or destination register hands it back (unless the destination already resolves to the location:
   then the winner's state stands). A destructive drop or cascade refuses 409 while the claim names another
-  live holder. Register and both undrops take a claim, a recoverable drop
+  live holder. Create, declare, register and both undrops take a claim, a recoverable drop
   keeps it for the trashed id, and destructive drops, deregister and the purge release it. A release replaces
   the claim it read with the same claim stamped `released_at`, under that claim's ETag, and never deletes the
   record ([[LH-458]], ADR 0172): a hand-over landing between its read and its write survives, and `holder` and
@@ -56,6 +56,18 @@ Two contracts stack here, and confusing them is how bugs happen:
   `tests/integration/test_concurrent_renames_leave_one_id_per_location.py` and
   `packages/service-kit/tests/test_a_release_frees_only_the_claim_it_read.py`. The spec's *minimum* is 8 metadata ops; we carry the whole list
   including versioning, tags, branches, indices and transactions.
+- **Every table and namespace has a uuid the catalog mints** ([[LH-519]], ADR 0173). A table's lives in its location
+  claim: create, declare and register mint it (`table_claims.claim_new_table`; a create declaring the table and the
+  declare door through `claim_declared`, which detaches, never drops, a row whose claim fails), a create into a table an
+  earlier request declared keeps that declaration's, a rename hands it over, a recoverable drop and both undrops keep it,
+  and a destroy or deregister releases it, so a re-created name or a re-registered location gets a new one. A new
+  table's take replaces a claim its own name still holds: its door's backend call found the name free, so that claim is
+  an ended table's whose release was lost. A namespace's is its `rask.uuid` property in its `__manifest` row: both create doors and the provenance boot
+  mint it (`identifiers.with_minted_uuid`), an undrop restores it from the trash record, and an Overwrite mints a new
+  one. DescribeTable and DescribeNamespace answer each as `rask.uuid`, and every create, declare, register and namespace
+  door refuses a caller's `rask.*` property (only an admin's `rask.tier` on a namespace). Locations, grants, records,
+  the trash and events are still keyed by name (LH-520 to LH-525 move them). Pinned by
+  `tests/integration/test_the_door_that_makes_a_table_or_namespace_mints_its_uuid.py`.
 - **Route grammar:** `POST /v1/<object>/{id}/<action>` — everything a reverse proxy needs (authN/Z,
   routing) is in the PATH, never only in the body. Path/body id conflict → 400. List ops are GET with
   query-param pagination; data ops (create/insert/query) are **Arrow IPC**, not JSON; count/explain

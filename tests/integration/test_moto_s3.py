@@ -124,6 +124,15 @@ def _create(client: TestClient, ident: str, rows: pa.Table, query: str = "") -> 
     return client.post(f"/v1/table/{ident}/create{query}", content=_ipc(rows), headers=ARROW)
 
 
+def _uuid(client: TestClient, ident: str) -> str:
+    """The uuid the catalog minted for the table ([[LH-519]]), as DescribeTable answers it."""
+    described = client.post(f"/v1/table/{ident}/describe", json={})
+    assert described.status_code == 200, described.text
+    properties = described.json().get("properties") or {}
+    assert "rask.uuid" in properties, f"{ident} answers no uuid: {properties}"
+    return str(properties["rask.uuid"])
+
+
 # --------------------------------------------------------------------------- #
 # §4: create_table dual-write compensation — a failed owner grant must not strand the table
 # --------------------------------------------------------------------------- #
@@ -252,7 +261,7 @@ def test_namespace_create_converges_after_a_failed_grant(moto_client: TestClient
     assert moto_client.post("/v1/namespace/f3ns/create", json={}).status_code == 200
 
 
-def test_undrop_grants_the_undropper_nothing(moto_client_recoverable: TestClient) -> None:
+def test_undrop_restores_the_table_under_its_uuid_and_grants_the_undropper_nothing(moto_client_recoverable: TestClient) -> None:
     """UNDROP IS A PURE RESTORE (owner ruling, diff2 F10 item 4b).
 
     This door used to `seed_ownership_or_compensate`, making whoever pressed the button an owner. A
@@ -260,6 +269,9 @@ def test_undrop_grants_the_undropper_nothing(moto_client_recoverable: TestClient
     needs to undrop it), so the original owner's grants are already live by the time undrop runs: the
     seed restored nothing and only ADDED the caller. Anna drops a table, Bob undrops it, and the
     estate silently gained a second owner with no grant ever having been made.
+
+    The table comes back as itself, under the uuid the catalog minted for it ([[LH-519]]): the drop kept
+    its location's claim for the undrop.
 
     Asserted at the seam rather than by reading tuples, because this suite runs with FGA off — the
     question is whether the door REACHES for a grant at all, and a tuple assertion would be vacuous
@@ -270,6 +282,7 @@ def test_undrop_grants_the_undropper_nothing(moto_client_recoverable: TestClient
     rows = pa.table({"id": pa.array([1], pa.int64())})
     assert moto_client_recoverable.post("/v1/namespace/f3u/create", json={}).status_code == 200
     assert _create(moto_client_recoverable, "f3u$t", rows).status_code == 200
+    minted = _uuid(moto_client_recoverable, "f3u$t")
     assert moto_client_recoverable.post("/v1/table/f3u$t/drop", json={}).status_code == 200
 
     seeded: list[object] = []
@@ -281,6 +294,7 @@ def test_undrop_grants_the_undropper_nothing(moto_client_recoverable: TestClient
     assert recovered.status_code == 200, recovered.text
     assert seeded == [], "undrop granted ownership to the caller — it is a restore, not a claim"
     assert int(moto_client_recoverable.post("/v1/table/f3u$t/count_rows", json={}).text) == 1
+    assert _uuid(moto_client_recoverable, "f3u$t") == minted, "the undropped table answers another uuid"
 
 
 def test_undrop_converges_when_a_record_was_left_on_a_live_table(moto_client_recoverable: TestClient) -> None:
@@ -336,10 +350,12 @@ def test_register_undo_deregisters_and_never_deletes_the_bytes(moto_client: Test
     undo callbacks into one shared drop: the retry must converge AND the data must survive.
 
     The bytes are a DETACHED table's: two registrations may not share one location ([[LH-279]]'s
-    location-exclusivity), so the source is deregistered first, which keeps its bytes where they are."""
+    location-exclusivity), so the source is deregistered first, which keeps its bytes where they are.
+    The table registered over them is a new one, under a new uuid ([[LH-519]], ADR 0173 §2)."""
     rows = pa.table({"id": pa.array([1, 2, 3], pa.int64())})
     assert moto_client.post("/v1/namespace/f3r/create", json={}).status_code == 200
     assert _create(moto_client, "f3r$src", rows).status_code == 200
+    deregistered = _uuid(moto_client, "f3r$src")
     described = moto_client.post("/v1/table/f3r$src/describe", json={})
     assert described.status_code == 200, described.text
     location = str(described.json()["location"])
@@ -356,6 +372,7 @@ def test_register_undo_deregisters_and_never_deletes_the_bytes(moto_client: Test
     assert moto_client.post("/v1/table/f3r$copy/register", json={"location": relative}).status_code == 200
     # …onto bytes the undo did NOT delete: the three rows are still there.
     assert int(moto_client.post("/v1/table/f3r$copy/count_rows", json={}).text) == 3
+    assert _uuid(moto_client, "f3r$copy") != deregistered, "the registration took the deregistered table's uuid"
 
 
 # --------------------------------------------------------------------------- #
@@ -513,15 +530,18 @@ def test_declare_and_register_are_refused_on_a_trashed_id_too(moto_client_recove
     assert moto_client_recoverable.post("/v1/table/bleed2$t/register", json={"location": relative}).status_code == 409
 
 
-def test_a_destructive_drop_frees_the_id_immediately(moto_client: TestClient) -> None:
+def test_a_destructive_drop_frees_the_id_for_a_new_table_under_a_new_uuid(moto_client: TestClient) -> None:
     """The guard must not outstay its reason. A DESTRUCTIVE drop (the code default, grace=0) revokes
     the tuples with the table, so there is no bleed to prevent and no recovery to protect — the id is
     genuinely free and a create must succeed. Without this, the fix would read as 'creates sometimes
-    409 forever' to anyone who did not know the grace period was involved."""
+    409 forever' to anyone who did not know the grace period was involved. The table created there is
+    a new one, so the catalog mints it a new uuid ([[LH-519]], ADR 0173 §2)."""
     rows = pa.table({"id": pa.array([1], pa.int64())})
     assert _create(moto_client, "nobleed$t", rows).status_code == 200
+    dropped = _uuid(moto_client, "nobleed$t")
     assert moto_client.post("/v1/table/nobleed$t/drop", json={}).status_code == 200
     assert _create(moto_client, "nobleed$t", rows).status_code == 200
+    assert _uuid(moto_client, "nobleed$t") != dropped, "the re-created table answers the dropped table's uuid"
 
 
 # --------------------------------------------------------------------------- #

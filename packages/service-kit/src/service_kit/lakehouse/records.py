@@ -274,5 +274,9 @@ def _replace_json(root_uri: str, storage_options: StorageOptions, key: str, reco
             fh.seek(0)
             fh.truncate()
             fh.write(body)
+            # Flushed under the lock: a buffered write otherwise reaches the file when the `with` closes it, after
+            # the unlock, and a reader taking the shared lock in between reads the truncated, empty record (measured:
+            # JSONDecodeError in 8 of 30 runs of eight concurrent renames handing one location's claim over, [[LH-519]]).
+            fh.flush()
         finally:
             fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
