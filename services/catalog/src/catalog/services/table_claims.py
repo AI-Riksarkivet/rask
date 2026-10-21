@@ -5,6 +5,11 @@ catalog can answer about it — whether a claim's holder still resolves to the l
 shape every door calls it in. A table's uuid is recorded here when a door brings the table into being (ADR 0173
 §2): :func:`claim_new_table` for create, declare and register, :func:`take` for a table that already exists and
 keeps its uuid.
+
+A door resolves its table once (ADR 0173 §7, [[LH-521]]): :func:`resolve` reads the table's location and that
+location's claim when the request reaches the door, and a drop, deregister or rename acts on that reading and
+nothing else. A drop or deregister fences the claim it read (:func:`fence`) before its backend call and lifts the fence
+once it has acted (:func:`lift_fence`); a rename hands over the claim it read (:func:`hand_over`).
 """
 
 from __future__ import annotations
@@ -13,25 +18,130 @@ import logging
 from uuid import uuid4
 
 from lance_namespace import (
+    ConcurrentModificationError,
     DescribeTableRequest,
     InvalidTableStateError,
     LanceNamespace,
+    NamespaceNotFoundError,
     TableNotFoundError,
 )
+from pydantic import BaseModel
 
 from catalog.core.config import Settings
 from catalog.services import native
 from service_kit.lakehouse import location_claims, trash
 from service_kit.lakehouse.base_refs import decoded_path
-from service_kit.lakehouse.location_claims import ClaimStore, LocationClaim
+from service_kit.lakehouse.location_claims import ClaimRead, ClaimStore, LocationClaim
 
 
 log = logging.getLogger(__name__)
 
 
+class ResolvedTable(BaseModel):
+    """The table a request's name named when the request reached its door: the one the door acts on.
+
+    The table's uuid is its claim's (ADR 0173 §6). No location means the name named no table.
+    """
+
+    segments: list[str]
+    location: str | None = None
+    only_declared: bool = False
+    #: The location's claim as the resolution read it, with its ETag; ``None`` when the location carries no record.
+    claim: ClaimRead | None = None
+
+
+class DoorFence(BaseModel):
+    """The fence a door set on its table's claim: the location it acts on and the request token the fence carries."""
+
+    location: str
+    token: str
+
+
 def claim_store(settings: Settings) -> ClaimStore:
     """The claims live on the control root beside the trash and base records, written with its credential."""
     return ClaimStore(control_root=settings.registry_root, storage_options=settings.storage_options())
+
+
+def resolve(ns: LanceNamespace, store: ClaimStore, segments: list[str]) -> ResolvedTable:
+    """Resolve the table ``segments`` names to its location and that location's claim, once.
+
+    A declared table resolves too, flagged. A name that names no table, in a namespace that exists or one that does
+    not (the ``dir`` backend answers ``NamespaceNotFoundError`` for that, measured on pylance 13.0.0), resolves to no
+    location rather than raising, so a door answers for that itself after the checks it makes first, an idempotent
+    replay of a request that already ended the table among them.
+    """
+    if not segments:
+        return ResolvedTable(segments=[])
+    try:
+        described = native.call(ns, "describe_table", DescribeTableRequest(id=segments, check_declared=True))
+    except (TableNotFoundError, NamespaceNotFoundError):
+        return ResolvedTable(segments=segments)
+    location = described.location or None
+    return ResolvedTable(
+        segments=segments,
+        location=location,
+        only_declared=bool(described.is_only_declared),
+        claim=location_claims.read(store, location) if location else None,
+    )
+
+
+def fence(ns: LanceNamespace, store: ClaimStore, table: ResolvedTable, *, holder: str, verb: str) -> DoorFence:
+    """Fence the claim ``table`` resolved to, before a door that removes ``holder`` from ``__manifest`` acts on it.
+
+    A claim naming another table that still resolves to the location refuses too, deregister and recoverable drop
+    included: it is what the resolution reads when a rename landed between its describe and its claim read, and acting
+    on the name then would reach whatever table holds it now. Telling an alias (a second id registered at a held
+    location, which no door has formed since [[LH-204]]) from that race would mean resolving the name again.
+
+    Raises:
+        TableNotFoundError: The name named no table.
+        ConcurrentModificationError: The claim changed since the resolution read it, or another request is acting on
+            the table: the name may now name another table.
+        InvalidTableStateError: Another table holds the location and still resolves to it.
+    """
+    if table.location is None:
+        raise TableNotFoundError(f"table not found: {holder}")
+    token = uuid4().hex
+    try:
+        location_claims.fence(
+            store, table.location, table.claim, table=holder, segments=table.segments, token=token, is_gone=lambda claim: holder_is_gone(ns, store, claim)
+        )
+    except location_claims.ClaimChangedError:
+        raise ConcurrentModificationError(f"cannot {verb} {holder}: it changed while this request was being served; describe it and retry") from None
+    except location_claims.LocationHeldError as held:
+        log.warning("door_refused_held_location", extra={"table": holder, "location": held.claim.location, "holder": held.claim.table, "verb": verb})
+        raise InvalidTableStateError(f"cannot {verb} {holder}: its location is held by another table, which still resolves to it") from None
+    return DoorFence(location=table.location, token=token)
+
+
+def lift_fence(store: ClaimStore, fenced: DoorFence) -> None:
+    """Lift a door's fence once it has acted, or failed to. Logged, never raised: the fence lapses on its own after its lease."""
+    try:
+        location_claims.lift_fence(store, fenced.location, fenced.token)
+    except Exception as exc:  # noqa: BLE001 — the door's own answer stands; a fence left behind lapses after LEASE
+        log.error("location_claim_fence_not_lifted", extra={"location": fenced.location, "error": str(exc)[:300]})
+
+
+def hand_over(ns: LanceNamespace, store: ClaimStore, source: ResolvedTable, *, table: str, segments: list[str], previous: str, token: str) -> LocationClaim:
+    """Hand the claim ``source`` resolved to from ``previous`` to ``table``, judging a stale holder against this namespace.
+
+    Raises:
+        TableNotFoundError: The name named no table.
+        LocationHeldError: Another table holds the location, or another request is acting on its holder.
+        ClaimChangedError: The claim changed since the resolution read it.
+    """
+    if source.location is None:
+        raise TableNotFoundError(f"table not found: {previous}")
+    return location_claims.hand_over(
+        store,
+        source.location,
+        source.claim,
+        table=table,
+        segments=segments,
+        previous=previous,
+        token=token,
+        is_gone=lambda claim: holder_is_gone(ns, store, claim),
+    )
 
 
 def holder_is_gone(ns: LanceNamespace, store: ClaimStore, claim: LocationClaim) -> bool:
@@ -132,4 +242,4 @@ def require_no_other_holder(ns: LanceNamespace, store: ClaimStore, location: str
     if current is None or current.table == table or holder_is_gone(ns, store, current):
         return
     log.warning("drop_refused_held_location", extra={"table": table, "location": current.location, "holder": current.table})
-    raise InvalidTableStateError(f"cannot destroy table {table}: its location is held by another table, which still resolves to it; deregister {table} instead")
+    raise InvalidTableStateError(f"cannot destroy table {table}: its location is held by another table, which still resolves to it")

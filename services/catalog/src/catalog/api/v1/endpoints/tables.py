@@ -50,6 +50,7 @@ from catalog.api.dependencies import (
     LineageEmitterDep,
     NamespaceDep,
     NamespaceRootDep,
+    ResolvedTableDep,
     SettingsDep,
     StorageOptionsDep,
     VendorDep,
@@ -649,6 +650,7 @@ def table_exists(id: str, ns: NamespaceDep, settings: SettingsDep, body: TableEx
 async def drop_table(
     id: str,
     ns: NamespaceDep,
+    table: ResolvedTableDep,
     settings: SettingsDep,
     client: FgaClientDep,
     emitter: LineageEmitterDep,
@@ -677,21 +679,27 @@ async def drop_table(
     canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
     guard = await run_in_threadpool(protection.get_protection, settings.registry_root, settings.storage_options(), "table", canonical)
     fga_deps.require_not_protected(guard or {}, kind="table", obj_id=canonical, force=force)
+    # THE DOOR ACTS ON THE TABLE ITS NAME RESOLVED TO (ADR 0173 §7, [[LH-521]]): the fence holds the claim that
+    # resolution read, so a rename landing since answers this drop 409, and one landing after the fence answers 409
+    # itself, rather than the drop reaching whatever table holds the name by then. The drop deletes the LOCATION, so it
+    # also refuses while the claim names another table that still resolves to it ([[LH-204]]).
+    claims = table_claims.claim_store(settings)
+    fenced = await run_in_threadpool(partial(table_claims.fence, ns, claims, table, holder=canonical, verb="drop"))
+    location = fenced.location
     # #75 the drop→undrop path. With a grace period configured, a drop DEREGISTERS (detaches the
     # pointer; the bytes stay exactly where they are) and files a trash record naming the location and
     # the deadline. This is what makes a fat-fingered drop survivable: time-travel cannot help here,
     # because `restore_table` rewinds a LIVE table and a real drop leaves no version to rewind to.
     # `purge=true` is the explicit opt-out — a caller who means "destroy the bytes now" says so.
-    trashed = False
-    if settings.trash_grace_days > 0 and not purge:
-        described: DescribeTableResponse = await run_in_threadpool(native.call, ns, "describe_table", DescribeTableRequest(id=segments))
-        if described.location:
+    trashed = settings.trash_grace_days > 0 and not purge
+    try:
+        if trashed:
             # RECORD FIRST, DETACH SECOND (diff2 F6 leg a). This was deregister-then-record, and a
             # crash in that window produced the worst state in the plane: the manifest row was gone,
             # no trash record existed, and the bytes sat on storage unreachable by everything.
             # `undrop` 404s (no record), the purge never sees it (it enumerates records), and the
-            # obvious retry cannot converge either — `describe_table` 404s two lines up, so the door
-            # can never reach the write again. Only a hand-run `register_table` recovers it.
+            # obvious retry cannot converge either — `describe_table` 404s, so the door can never reach
+            # the write again. Only a hand-run `register_table` recovers it.
             #
             # Reversed, the crash window leaves a record on a LIVE table, which every consumer already
             # handles: the purge refuses it `STILL_REGISTERED` (`live_ids` is checked before anything
@@ -699,43 +707,38 @@ async def drop_table(
             # and `undrop` converges on it now that the register tolerates `TableAlreadyExists`. The
             # residue is bounded by one retry; the old one was permanent.
             #
-            # The `if described.location` guard is what makes this sound HERE and is why the cascade
-            # path is not reversed with it: a byte-LESS record (a declared-only table, a namespace
-            # row) skips the purge's estate test, so a record filed on a still-live object inside a
-            # DEACTIVATED warehouse would be revoked and cleared. Every record this branch writes owns
-            # bytes, so that case cannot arise.
+            # Every record this branch writes owns bytes, which is why it is sound HERE and why the cascade
+            # path is not reversed with it: a byte-LESS record (a declared-only table, a namespace row) skips
+            # the purge's estate test, so a record filed on a still-live object inside a DEACTIVATED
+            # warehouse would be revoked and cleared.
             #
             # Known interaction, deliberate: while the record stands on a live table the maintenance
             # sweep excludes that table (F6 leg d). Bounded by the same retry, and the alternative is
             # losing the data outright.
             record = trash.make_record(
                 canonical,
-                location=described.location,
+                location=location,
                 dropped_by=f"user:{token.subject}" if token is not None else None,
                 grace_days=settings.trash_grace_days,
             )
             await run_in_threadpool(trash.put, settings.registry_root, settings.storage_options(), record)
-            # [[LH-204]] The trashed id keeps its location until undrop or purge, so no other id registers
-            # over bytes someone can still restore.
-            await run_in_threadpool(table_claims.keep_for_trash, ns, table_claims.claim_store(settings), described.location, canonical, segments)
             await run_in_threadpool(native.call, ns, "deregister_table", DeregisterTableRequest(id=segments))
-            trashed = True
-    if not trashed:
-        # [[LH-204]] The drop deletes the LOCATION, so it refuses while the location's claim names another
-        # table that still resolves to it: that table's bytes are not this id's to destroy.
-        doomed: DescribeTableResponse = await run_in_threadpool(native.call, ns, "describe_table", DescribeTableRequest(id=segments))
-        if doomed.location:
-            await run_in_threadpool(table_claims.require_no_other_holder, ns, table_claims.claim_store(settings), doomed.location, canonical)
-        response: DropTableResponse = await run_in_threadpool(native.call, ns, "drop_table", DropTableRequest(id=segments))
-        # [[LH-279]] The base record goes with the bytes: left behind, it would sanction its bases for the next
-        # table registered at this location. The `dir` backend's drop answers the dropped location. The
-        # location's claim goes too ([[LH-204]]).
-        if response.location:
-            registry = base_registry.BaseRegistry(control_root=settings.registry_root, storage_options=settings.storage_options())
-            await run_in_threadpool(partial(base_registry.forget_base_record, registry, response.location, table=canonical))
-            await run_in_threadpool(location_claims.release, table_claims.claim_store(settings), response.location, canonical)
+            response = DropTableResponse()
+        else:
+            response = await run_in_threadpool(native.call, ns, "drop_table", DropTableRequest(id=segments))
+    except Exception:
+        await run_in_threadpool(table_claims.lift_fence, claims, fenced)
+        raise
+    if trashed:
+        # [[LH-204]] The trashed id keeps its location's claim until undrop or purge, so no other id registers over
+        # bytes someone can still restore.
+        await run_in_threadpool(table_claims.lift_fence, claims, fenced)
     else:
-        response = DropTableResponse()
+        # [[LH-279]] The base record goes with the bytes: left behind, it would sanction its bases for the next
+        # table registered at this location. The location's claim goes too ([[LH-204]]).
+        registry = base_registry.BaseRegistry(control_root=settings.registry_root, storage_options=settings.storage_options())
+        await run_in_threadpool(partial(base_registry.forget_base_record, registry, location, table=canonical))
+        await run_in_threadpool(location_claims.release, claims, location, canonical)
     # What the table held under its name dies with it, so a LATER table at this id inherits none of it ([[LH-215]]): the
     # sweep finds a dataset by walking storage, not the registry, so a policy left here governs whatever is created at
     # the id next. A recoverable drop keeps its maintenance policy for the undrop, as it keeps its grants, and the trash
@@ -781,6 +784,7 @@ async def drop_table(
 async def deregister_table(
     id: str,
     ns: NamespaceDep,
+    table: ResolvedTableDep,
     settings: SettingsDep,
     client: FgaClientDep,
     emitter: LineageEmitterDep,
@@ -808,10 +812,18 @@ async def deregister_table(
     canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
     guard = await run_in_threadpool(protection.get_protection, settings.registry_root, settings.storage_options(), "table", canonical)
     fga_deps.require_not_protected(guard or {}, kind="table", obj_id=canonical, force=force)
-    response: DeregisterTableResponse = await run_in_threadpool(native.call, ns, "deregister_table", DeregisterTableRequest(id=segments))
+    # The door acts on the table its name resolved to, under the fence that holds the claim it read (ADR 0173 §7,
+    # [[LH-521]]): a rename landing since answers this deregister 409, as one landing after the fence answers itself.
+    claims = table_claims.claim_store(settings)
+    fenced = await run_in_threadpool(partial(table_claims.fence, ns, claims, table, holder=canonical, verb="deregister"))
+    location = fenced.location
+    try:
+        response: DeregisterTableResponse = await run_in_threadpool(native.call, ns, "deregister_table", DeregisterTableRequest(id=segments))
+    except Exception:
+        await run_in_threadpool(table_claims.lift_fence, claims, fenced)
+        raise
     # The detached bytes are nobody's now, so the id's claim on them goes ([[LH-204]]).
-    if response.location:
-        await run_in_threadpool(location_claims.release, table_claims.claim_store(settings), response.location, canonical)
+    await run_in_threadpool(location_claims.release, claims, location, canonical)
     # The table leaves governance, so what it held under its name goes, or a table registered at this id inherits it.
     await run_in_threadpool(object_records.end_object_records, settings.registry_root, settings.storage_options(), "table", canonical)
     # Record the detach as best-effort lineage — asymmetric with drop (which deletes data), deregister
@@ -1336,6 +1348,7 @@ async def rename_table(
     id: str,
     body: RenameTableRequest,
     ns: NamespaceDep,
+    table: ResolvedTableDep,
     so: StorageOptionsDep,
     settings: SettingsDep,
     token: CurrentToken,
@@ -1405,8 +1418,7 @@ async def rename_table(
         partial(
             dataplane.rename_table,
             ns,
-            so,
-            segments,
+            table,
             body.new_table_name,
             body.new_namespace_id,
             claims=table_claims.claim_store(settings),

@@ -36,6 +36,14 @@ the location afterwards is given a uuid of its own. The uuid lives here, outside
 RegisterTable keeps no properties (measured on pylance 13.0.0) and the rename and both undrops re-register. A
 data directory's claim ([[LH-252]]) names its holder and records no uuid.
 
+A DOOR ACTS ON THE CLAIM IT READ (ADR 0173 §7, [[LH-521]]). A drop, a deregister and a rename change which table
+``__manifest`` names at a location, by name, so each reads the claim once when its request reaches it and writes
+only while that claim is unchanged, under the ETag it read (:func:`read`, :func:`fence`, :func:`hand_over`). A drop
+or a deregister FENCES the claim before its backend call: while the fence stands, no take hands the location to
+another name, so a rename landing between the door's read and its act cannot make the door act on another table.
+The door lifts its fence once it has acted (:func:`lift_fence`); a fence its request never lifted lapses after
+:data:`LEASE`.
+
 A CLAIM WHOSE HOLDER IS GONE (a crash between a take and the attach, or a cascade drop, which destroys
 its tables inside one native call) would wedge its location forever, so a taker may replace it once the
 caller's ``is_gone`` predicate says the holder no longer resolves to the location. The predicate is the
@@ -78,6 +86,14 @@ class ClaimStore(BaseModel):
     storage_options: StorageOptions = Field(default_factory=dict)
 
 
+class ClaimFence(BaseModel):
+    """A request acting on the claim's table: while it stands, no other request takes or fences the claim."""
+
+    #: The request that fenced it.
+    token: str
+    at: datetime
+
+
 class LocationClaim(BaseModel):
     """One location's holder, or its last holder once released."""
 
@@ -94,17 +110,34 @@ class LocationClaim(BaseModel):
     token: str | None = None
     #: When ``table`` released it. A released claim holds nothing: the location is free.
     released_at: datetime | None = None
+    #: The request acting on ``table`` now, when one fenced it.
+    fence: ClaimFence | None = None
 
     def within_lease(self, now: datetime) -> bool:
         return now - self.claimed_at < LEASE
 
+    def fenced_against(self, token: str | None, now: datetime) -> bool:
+        """Whether a request other than ``token`` is acting on the held table."""
+        return self.released_at is None and self.fence is not None and self.fence.token != token and now - self.fence.at < LEASE
+
+
+class ClaimRead(BaseModel):
+    """A location's claim as one read found it, released or held, with the ETag a write acting on it must still match."""
+
+    claim: LocationClaim
+    etag: str
+
 
 class LocationHeldError(Exception):
-    """The location is held by another table that still resolves to it."""
+    """The location is held by another table that still resolves to it, or another request is acting on its holder."""
 
     def __init__(self, claim: LocationClaim) -> None:
         super().__init__(f"location {claim.location!r} is held by table {claim.table!r}")
         self.claim = claim
+
+
+class ClaimChangedError(Exception):
+    """The claim is no longer the one the request read, or another request is acting on its table."""
 
 
 def claim_key(location: str) -> str:
@@ -122,6 +155,52 @@ def holder(store: ClaimStore, location: str) -> LocationClaim | None:
         return None
     claim = LocationClaim.model_validate(found[0])
     return None if claim.released_at is not None else claim
+
+
+def read(store: ClaimStore, location: str) -> ClaimRead | None:
+    """The record on ``location`` with its ETag, released or held, or ``None`` when no record exists.
+
+    Raises:
+        ValueError: The stored record is not a claim (pydantic's ``ValidationError`` is one).
+    """
+    found = records.read_json(store.control_root, store.storage_options, claim_key(location))
+    return None if found is None else ClaimRead(claim=LocationClaim.model_validate(found[0]), etag=found[1])
+
+
+def _taken(
+    current: LocationClaim,
+    location: str,
+    table: str,
+    segments: list[str],
+    *,
+    is_gone: Callable[[LocationClaim], bool],
+    previous: str | None,
+    token: str | None,
+    uuid: str | None,
+) -> LocationClaim:
+    """The claim ``table`` holds once it takes ``location`` from ``current``; :func:`take` says when a take succeeds.
+
+    Raises:
+        LocationHeldError: Another table holds the location, or another request is acting on its holder.
+    """
+    now = datetime.now(UTC)
+
+    def _claim(carried: str | None) -> LocationClaim:
+        return LocationClaim(location=decoded_path(location), table=table, segments=list(segments), uuid=carried, claimed_at=now, token=token)
+
+    if current.released_at is not None:
+        return _claim(uuid)
+    if current.fenced_against(token, now):
+        raise LocationHeldError(current)
+    if current.table == table and uuid is not None:
+        return _claim(uuid)
+    if current.table == table and (token is None or current.token == token):
+        return current
+    if current.table == previous:
+        return _claim(current.uuid)
+    if current.within_lease(now) or not is_gone(current):
+        raise LocationHeldError(current)
+    return _claim(current.uuid if uuid is None else uuid)
 
 
 def take(
@@ -143,7 +222,8 @@ def take(
     ``is_gone`` says no longer resolves to the location. Every other holder refuses, so of two takers with
     the same ``previous`` exactly one wins: the second reads the first's claim. A rename passes a token
     because two renames of one source into the SAME destination name ``table`` alike, and without it
-    the second would read the first's claim as its own retry and both would proceed.
+    the second would read the first's claim as its own retry and both would proceed. A claim another request has
+    fenced refuses every take but that request's own, until the fence lapses.
 
     ``uuid`` is the uuid of a table this take brings into being, minted by its door after its backend call found
     ``table``'s name free. A claim the take writes on an unclaimed location records it, and so does one replacing a
@@ -159,28 +239,16 @@ def take(
     """
     key = claim_key(location)
 
-    def _claim(carried: str | None) -> dict[str, object]:
-        return LocationClaim(
-            location=decoded_path(location), table=table, segments=list(segments), uuid=carried, claimed_at=datetime.now(UTC), token=token
-        ).model_dump(mode="json")
-
     def _hand_over(raw: dict[str, object]) -> dict[str, object]:
         # Re-judged on every round: `mutate_json` re-applies this to a claim another taker just wrote.
         current = LocationClaim.model_validate(raw)
-        if current.released_at is not None:
-            return _claim(uuid)
-        if current.table == table and uuid is not None:
-            return _claim(uuid)
-        if current.table == table and (token is None or current.token == token):
-            return raw
-        if current.table == previous:
-            return _claim(current.uuid)
-        if current.within_lease(datetime.now(UTC)) or not is_gone(current):
-            raise LocationHeldError(current)
-        return _claim(current.uuid if uuid is None else uuid)
+        held = _taken(current, location, table, segments, is_gone=is_gone, previous=previous, token=token, uuid=uuid)
+        return raw if held is current else held.model_dump(mode="json")
 
     for _ in range(_TAKE_ATTEMPTS):
-        fresh = _claim(uuid)
+        fresh = LocationClaim(
+            location=decoded_path(location), table=table, segments=list(segments), uuid=uuid, claimed_at=datetime.now(UTC), token=token
+        ).model_dump(mode="json")
         try:
             records.create_json(store.control_root, store.storage_options, key, fresh)
         except records.RecordExistsError:
@@ -193,6 +261,100 @@ def take(
             continue  # removed between the create and the read; create again
         return LocationClaim.model_validate(held)
     raise records.RecordChangedError(f"the claim on {decoded_path(location)!r} kept appearing and disappearing across {_TAKE_ATTEMPTS} attempts")
+
+
+def _write_over(store: ClaimStore, location: str, read_as: ClaimRead | None, claim: LocationClaim) -> None:
+    """Write ``claim`` on ``location`` only while its record is still what ``read_as`` found: absent, or that ETag.
+
+    Raises:
+        ClaimChangedError: The record changed since that read.
+    """
+    key, body = claim_key(location), claim.model_dump(mode="json")
+    try:
+        if read_as is None:
+            records.create_json(store.control_root, store.storage_options, key, body)
+        else:
+            records.replace_json(store.control_root, store.storage_options, key, body, etag=read_as.etag)
+    except (records.RecordExistsError, records.RecordChangedError):
+        raise ClaimChangedError(f"the claim on {decoded_path(location)!r} changed since it was read") from None
+
+
+def hand_over(
+    store: ClaimStore,
+    location: str,
+    read_as: ClaimRead | None,
+    *,
+    table: str,
+    segments: list[str],
+    previous: str,
+    token: str,
+    is_gone: Callable[[LocationClaim], bool],
+) -> LocationClaim:
+    """Hand ``location`` from ``previous`` to ``table`` as :func:`take` would, judged on the claim ``read_as`` found.
+
+    The rename's take: one conditional write over the record its request read, never a re-read, so of a rename and
+    any other door acting on the same claim, the one that writes second answers that the claim changed.
+
+    Raises:
+        LocationHeldError: Another table holds the location, or another request is acting on its holder.
+        ClaimChangedError: The claim changed since ``read_as``.
+    """
+    if read_as is None:
+        held = LocationClaim(location=decoded_path(location), table=table, segments=list(segments), claimed_at=datetime.now(UTC), token=token)
+    else:
+        held = _taken(read_as.claim, location, table, segments, is_gone=is_gone, previous=previous, token=token, uuid=None)
+    _write_over(store, location, read_as, held)
+    return held
+
+
+def fence(
+    store: ClaimStore, location: str, read_as: ClaimRead | None, *, table: str, segments: list[str], token: str, is_gone: Callable[[LocationClaim], bool]
+) -> None:
+    """Fence ``table``'s claim on ``location`` for request ``token``, judged on the claim ``read_as`` found.
+
+    ``table`` keeps the claim and its uuid, and the fence marks that request ``token`` is acting on it: a drop or a
+    deregister fences before its backend call, so no rename hands the location to another name until the door has
+    acted and lifts its fence. A claim the location does not yet carry (no record, or a released one) is taken for
+    ``table``, and so is one whose holder is gone, as :func:`take` would.
+
+    Raises:
+        LocationHeldError: Another table holds the location.
+        ClaimChangedError: The claim changed since ``read_as``, or another request is acting on ``table``.
+    """
+    now = datetime.now(UTC)
+    mark = ClaimFence(token=token, at=now)
+    current = read_as.claim if read_as is not None else None
+    if current is not None and current.fenced_against(token, now):
+        raise ClaimChangedError(f"another request is acting on table {current.table!r}")
+    if current is None or current.released_at is not None:
+        carried = current.uuid if current is not None and current.table == table else None
+        fenced = LocationClaim(location=decoded_path(location), table=table, segments=list(segments), uuid=carried, claimed_at=now, fence=mark)
+    elif current.table == table:
+        fenced = current.model_copy(update={"fence": mark})
+    elif current.within_lease(now) or not is_gone(current):
+        raise LocationHeldError(current)
+    else:
+        fenced = LocationClaim(location=decoded_path(location), table=table, segments=list(segments), uuid=current.uuid, claimed_at=now, fence=mark)
+    _write_over(store, location, read_as, fenced)
+
+
+def lift_fence(store: ClaimStore, location: str, token: str) -> None:
+    """Lift request ``token``'s fence from ``location``'s claim; a claim it no longer fences is left as it is.
+
+    Raises:
+        records.RecordChangedError: The claim kept changing under the lift.
+    """
+
+    def _lifted(raw: dict[str, object]) -> dict[str, object]:
+        current = LocationClaim.model_validate(raw)
+        if current.fence is None or current.fence.token != token:
+            raise _NotHeld
+        return current.model_copy(update={"fence": None}).model_dump(mode="json")
+
+    try:
+        records.mutate_json(store.control_root, store.storage_options, claim_key(location), _lifted)
+    except (records.RecordMissingError, _NotHeld):
+        return
 
 
 class _NotHeld(Exception):

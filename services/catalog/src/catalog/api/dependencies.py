@@ -25,7 +25,8 @@ from catalog.core.lineage_emit import LineageEmitter, NoopEmitter, OriginatorBou
 from catalog.core.namespace import NamespaceConnections
 from catalog.core.run_context import RunContext
 from catalog.core.vending import CredentialVendor, ModeBVendor
-from catalog.services import warehouses
+from catalog.services import table_claims, warehouses
+from catalog.services.table_claims import ResolvedTable
 from service_kit.control_emit import ControlEmitter, NoopControlEmitter
 from service_kit.governed.user_state import UserStateStore
 
@@ -268,6 +269,19 @@ async def namespace_for_top_ns(request: Request, settings: Settings, top_ns: str
 
 
 NamespaceDep = Annotated[LanceNamespace, Depends(get_namespace)]
+
+
+async def get_resolved_table(request: Request, settings: SettingsDep, ns: NamespaceDep) -> ResolvedTable:
+    """The table the request's ``{id}`` names, resolved once to its location and that location's claim (ADR 0173 §7).
+
+    FastAPI solves one dependency once per request, so every reader of this one in a request reads the same
+    resolution, and a door acting on it never resolves the name again.
+    """
+    segments = parse_identifier(request.path_params["id"], settings.delimiter)
+    return await run_in_threadpool(table_claims.resolve, ns, table_claims.claim_store(settings), segments)
+
+
+ResolvedTableDep = Annotated[ResolvedTable, Depends(get_resolved_table)]
 
 
 async def get_data_namespace(request: Request, settings: SettingsDep, ns: NamespaceDep) -> LanceNamespace:

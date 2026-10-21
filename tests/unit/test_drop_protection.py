@@ -25,6 +25,7 @@ from lance_namespace import DropTableResponse, InvalidTableStateError, Namespace
 
 from catalog.api import fga_deps
 from catalog.core.config import Settings
+from catalog.services.table_claims import ResolvedTable
 from service_kit.control_emit import NoopControlEmitter
 from service_kit.governed import fga
 from service_kit.lakehouse import protection
@@ -141,6 +142,11 @@ def test_kinds_do_not_collide(tmp_path: Any) -> None:
 # ---------------------------------------------------------------- the doors (shipped handlers)
 
 
+def _resolved(settings: Settings) -> ResolvedTable:
+    """The table the door's name resolved to, as the router's resolution hands it to the handler."""
+    return ResolvedTable(segments=["bronze", "pages"], location=f"{settings.registry_root}/bronze$pages")
+
+
 def _drop_table(settings: Settings, ns: Any, *, force: bool = False) -> Any:
     from catalog.api.v1.endpoints import tables as t_ep
 
@@ -148,6 +154,7 @@ def _drop_table(settings: Settings, ns: Any, *, force: bool = False) -> Any:
         t_ep.drop_table(
             id="bronze$pages",
             ns=ns,  # structural stand-in, recorded not mocked
+            table=_resolved(settings),
             settings=settings,
             client=None,
             emitter=_NoopLineage(),
@@ -192,6 +199,7 @@ def test_a_protected_table_refuses_deregister_too(tmp_path: Any) -> None:
             t_ep.deregister_table(
                 id="bronze$pages",
                 ns=ns,
+                table=_resolved(settings),
                 settings=settings,
                 client=None,
                 emitter=_NoopLineage(),
@@ -327,6 +335,7 @@ def test_purge_true_still_destroys_immediately(tmp_path: Any) -> None:
         __import__("catalog.api.v1.endpoints.tables", fromlist=["tables"]).drop_table(
             id="bronze$pages",
             ns=ns,
+            table=_resolved(settings),
             settings=settings,
             client=None,
             emitter=_NoopLineage(),

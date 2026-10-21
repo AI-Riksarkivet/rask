@@ -46,13 +46,22 @@ Two contracts stack here, and confusing them is how bugs happen:
   renames into ONE destination are not each other's retry; the losers answer 409 code 14, and a failed
   retire or destination register hands it back (unless the destination already resolves to the location:
   then the winner's state stands). A destructive drop or cascade refuses 409 while the claim names another
-  live holder. Create, declare, register and both undrops take a claim, a recoverable drop
+  live holder. **A door acts on the table its name resolved to** ([[LH-521]], ADR 0173 §7): the drop, deregister
+  and rename doors take `ResolvedTableDep` (`catalog.api.dependencies.get_resolved_table`, solved once per request:
+  the table's location and that location's claim with its ETag, `table_claims.resolve`) and never describe the name
+  again. A drop or deregister FENCES that claim under the ETag it read before its backend call
+  (`location_claims.fence`, lifted by `lift_fence`; a fence its request never lifted lapses after `LEASE`), and a
+  rename hands it over under that ETag (`location_claims.hand_over`): a rename landing after the door's read
+  answers the door 409 code 14, one landing after the fence answers 409 itself, and every take refuses a claim
+  another request has fenced. Each refuses 409 while the claim names another live table, deregister included.
+  Create, declare, register and both undrops take a claim, a recoverable drop
   keeps it for the trashed id, and destructive drops, deregister and the purge release it. A release replaces
   the claim it read with the same claim stamped `released_at`, under that claim's ETag, and never deletes the
   record ([[LH-458]], ADR 0172): a hand-over landing between its read and its write survives, and `holder` and
   `take` read a released claim as a free location. A holder that no
   longer resolves to its location is taken over only after `LEASE` (15 min). Pinned by
-  `tests/integration/test_concurrent_renames_leave_one_id_per_location.py` and
+  `tests/integration/test_concurrent_renames_leave_one_id_per_location.py` (with a drop, a recoverable drop and a
+  deregister racing a rename, the rival landed after the door read its claim and as it acts) and
   `packages/service-kit/tests/test_a_release_frees_only_the_claim_it_read.py`. The spec's *minimum* is 8 metadata ops; we carry the whole list
   including versioning, tags, branches, indices and transactions.
 - **Every table and namespace has a uuid the catalog mints** ([[LH-519]], ADR 0173). A table's lives in its location

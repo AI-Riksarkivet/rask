@@ -24,6 +24,7 @@ from lance_namespace import (
     connect,
 )
 
+from catalog.services import table_claims
 from catalog.services.dataplane import create_table
 from service_kit.lakehouse import blobs
 from service_kit.lakehouse.location_claims import ClaimStore
@@ -241,7 +242,14 @@ def test_rename_rejects_a_blank_name_and_keeps_the_source(tmp_path: Path) -> Non
 
     for blank in ("", "   "):
         with pytest.raises(InvalidInputError):
-            rename_table(ns, {}, ["db", "keep"], blank, None, claims=ClaimStore(control_root=str(tmp_path)), delimiter="$")
+            rename_table(
+                ns,
+                table_claims.resolve(ns, ClaimStore(control_root=str(tmp_path)), ["db", "keep"]),
+                blank,
+                None,
+                claims=ClaimStore(control_root=str(tmp_path)),
+                delimiter="$",
+            )
     assert _open(ns, ["db", "keep"]).read_blobs("payload", indices=[0])[0][1] == b"x"  # source untouched
 
 
@@ -253,7 +261,14 @@ def test_rename_onto_itself_is_rejected(tmp_path: Path) -> None:
     create_table(ns, {}, ["db", "same"], _blob_table([b"x"]), root=str(tmp_path), mode="create", registry=None)
 
     with pytest.raises(InvalidInputError):
-        rename_table(ns, {}, ["db", "same"], "same", None, claims=ClaimStore(control_root=str(tmp_path)), delimiter="$")
+        rename_table(
+            ns,
+            table_claims.resolve(ns, ClaimStore(control_root=str(tmp_path)), ["db", "same"]),
+            "same",
+            None,
+            claims=ClaimStore(control_root=str(tmp_path)),
+            delimiter="$",
+        )
     assert _open(ns, ["db", "same"]).count_rows() == 1  # not relocated onto itself / deleted
 
 
@@ -268,7 +283,14 @@ def test_rename_treats_a_declared_only_destination_as_taken(tmp_path: Path) -> N
     ns.declare_table(DeclareTableRequest(id=["media", "stub"]))  # declared-but-unwritten destination
 
     with pytest.raises(TableAlreadyExistsError):
-        rename_table(ns, {}, ["media", "src"], "stub", None, claims=ClaimStore(control_root=str(tmp_path)), delimiter="$")
+        rename_table(
+            ns,
+            table_claims.resolve(ns, ClaimStore(control_root=str(tmp_path)), ["media", "src"]),
+            "stub",
+            None,
+            claims=ClaimStore(control_root=str(tmp_path)),
+            delimiter="$",
+        )
     assert _open(ns, ["media", "src"]).read_blobs("payload", indices=[0])[0][1] == b"x"  # source intact
 
 
@@ -285,7 +307,7 @@ def test_a_failed_source_claim_leaves_the_rename_UNDONE(tmp_path: Path, monkeypa
     """
     from lance_namespace import DeregisterTableRequest
 
-    from catalog.services import dataplane
+    from catalog.services import dataplane, table_claims
 
     ns = connect("dir", {"root": str(tmp_path)})
     _declare_namespace(ns, "media")
@@ -299,7 +321,14 @@ def test_a_failed_source_claim_leaves_the_rename_UNDONE(tmp_path: Path, monkeypa
     # is an `invalid-assignment` to `ty`, and the estate's rule is to type it rather than suppress it.
     monkeypatch.setattr(ns, "deregister_table", _fails)
     with pytest.raises(OSError, match="rustfs 503"):
-        dataplane.rename_table(ns, {}, ["media", "a"], "b", None, claims=ClaimStore(control_root=str(tmp_path)), delimiter="$")
+        dataplane.rename_table(
+            ns,
+            table_claims.resolve(ns, ClaimStore(control_root=str(tmp_path)), ["media", "a"]),
+            "b",
+            None,
+            claims=ClaimStore(control_root=str(tmp_path)),
+            delimiter="$",
+        )
     monkeypatch.undo()
 
     # The source is untouched and the destination was never written.
@@ -307,4 +336,14 @@ def test_a_failed_source_claim_leaves_the_rename_UNDONE(tmp_path: Path, monkeypa
     with pytest.raises(Exception, match="(?i)not found|does not exist|no such"):
         ns.describe_table(DescribeTableRequest(id=["media", "b"]))
     assert _open(ns, ["media", "a"]).read_blobs("payload", indices=[0])[0][1] == b"x"
-    assert dataplane.rename_table(ns, {}, ["media", "a"], "c", None, claims=ClaimStore(control_root=str(tmp_path)), delimiter="$")[1] == source
+    assert (
+        dataplane.rename_table(
+            ns,
+            table_claims.resolve(ns, ClaimStore(control_root=str(tmp_path)), ["media", "a"]),
+            "c",
+            None,
+            claims=ClaimStore(control_root=str(tmp_path)),
+            delimiter="$",
+        )[1]
+        == source
+    )

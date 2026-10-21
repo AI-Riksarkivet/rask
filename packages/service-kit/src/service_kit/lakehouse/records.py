@@ -232,12 +232,26 @@ def mutate_json(
     raise RecordChangedError(f"record {key!r} under {root_uri!r} kept changing across {attempts} attempts")
 
 
+def replace_json(root_uri: str, storage_options: StorageOptions, key: str, record: dict[str, Any], *, etag: str) -> None:
+    """Overwrite ``key`` with ``record`` iff the record there is still the one read with ``etag``, once and never retried.
+
+    For a writer that judged the record at an EARLIER read and must act on that judgement or not at all (a door
+    acting on the claim it resolved when the request reached it, ADR 0173 §7): ``record`` is computed from the read
+    whose ``etag`` it names, so a write landing since that read refuses this one rather than being re-judged. A
+    writer that may re-judge the current record goes through :func:`mutate_json`.
+
+    Raises:
+        RecordChangedError: The record changed since that read.
+    """
+    _replace_json(root_uri, storage_options, key, record, etag=etag)
+
+
 def _replace_json(root_uri: str, storage_options: StorageOptions, key: str, record: dict[str, Any], *, etag: str) -> None:
     """Overwrite ``key`` iff its current ETag is ``etag``. Raises :class:`RecordChangedError` if not.
 
     Private because the read and the write must not be separable by a caller: handing out a bare
     conditional put invites the read to drift from the write, which is the F4 shape all over again.
-    Go through :func:`mutate_json`.
+    Go through :func:`mutate_json`, or :func:`replace_json` with the ETag of the read the record was computed from.
     """
     body = json.dumps(record).encode("utf-8")
 

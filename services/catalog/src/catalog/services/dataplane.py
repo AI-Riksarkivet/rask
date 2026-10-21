@@ -791,8 +791,7 @@ def _existing_location(ns: LanceNamespace, segments: list[str]) -> tuple[str | N
 
 def rename_table(
     ns: LanceNamespace,
-    so: StorageOptions,
-    segments: list[str],
+    source: table_claims.ResolvedTable,
     new_table_name: str,
     new_namespace_id: list[str] | None,
     *,
@@ -832,10 +831,12 @@ def rename_table(
     (destination taken) or ``ConcurrentModificationError`` (another rename or registration holds the
     location) so the endpoint maps 404 / 409 / 409.
 
-    THE LOCATION CLAIM IS THE ARBITRATION ([[LH-204]]). Before either backend call, the location's
-    claim is handed from the source id to the destination id under the store's put-if-not-exists and
-    ETag (:mod:`service_kit.lakehouse.location_claims`), so of N concurrent renames of one source exactly
-    one holds the location and the rest answer code 14. Nothing in the backend can do this: measured on
+    THE LOCATION CLAIM IS THE ARBITRATION ([[LH-204]]). ``source`` is the table the request's name resolved to when
+    it reached the door, its location and that location's claim as read then (ADR 0173 §7, [[LH-521]]). Before
+    either backend call the claim is handed from the source id to the destination id under the ETag that read
+    found (:mod:`service_kit.lakehouse.location_claims`), so of N concurrent renames of one source exactly one
+    holds the location and the rest answer code 14, and so does a rename of a table a drop or deregister is
+    acting on. Nothing in the backend can do this: measured on
     pylance 12.0.0 (lh204 m1), concurrent deregisters of one id all succeed and a register at an occupied
     location commits, so eight barrier-threaded renames left eight live ids on one dataset, 4 of 4 rounds.
 
@@ -843,14 +844,15 @@ def rename_table(
     no id with its claim naming the destination; a re-register of either id at the location, after the
     claim's lease, recovers it.
     """
+    segments = source.segments
     if not new_table_name.strip():
         raise InvalidInputError("new_table_name is required")
     dest_parent = list(new_namespace_id) if new_namespace_id else segments[:-1]
     new_segments = [*dest_parent, new_table_name]
     if new_segments == segments:
         raise InvalidInputError("the rename destination is identical to the source")
-    source_uri, source_only_declared = _existing_location(ns, segments)
-    if source_uri is None or source_only_declared:
+    source_uri = source.location
+    if source_uri is None or source.only_declared:
         # Missing OR declared-but-unwritten → nothing to repoint (404, symmetric with every op that
         # requires a written table).
         raise TableNotFoundError(f"table not found: {'.'.join(segments)}")
@@ -880,16 +882,17 @@ def rename_table(
     # moved. Re-adding a refusal would decline a safe operation.
     location = _relative_location(source_uri, root=root)
     # THE CLAIM IS HANDED OVER FIRST, and it is the whole of this door's race arbitration: the loser of
-    # two renames of one source reads the winner's claim and answers code 14 before touching the
-    # backend. The source is still retired before the destination is written, so a rename never shows
+    # two renames of one source finds the claim changed since it read it, or reads the winner's claim, and answers
+    # code 14 before touching the backend. The source is still retired before the destination is written, so a rename never shows
     # two ids on the dataset even for the instant between the two calls. The token makes this request's
     # claim its own: two renames into the SAME destination name one holder, and only the request that
     # stamped the claim may read it as its retry.
     source_id, dest_id = delimiter.join(segments), delimiter.join(new_segments)
     try:
-        table_claims.take(ns, claims, source_uri, dest_id, new_segments, previous=source_id, token=uuid.uuid4().hex)
-    except location_claims.LocationHeldError as held:
-        log.warning("rename_refused_held_location", extra={"source": source_id, "location": held.claim.location, "holder": held.claim.table})
+        table_claims.hand_over(ns, claims, source, table=dest_id, segments=new_segments, previous=source_id, token=uuid.uuid4().hex)
+    except (location_claims.LocationHeldError, location_claims.ClaimChangedError) as refused:
+        holder = refused.claim.table if isinstance(refused, location_claims.LocationHeldError) else None
+        log.warning("rename_refused_held_location", extra={"source": source_id, "location": source_uri, "holder": holder})
         raise ConcurrentModificationError(
             f"cannot rename {source_id}: its location is held by another table, by a concurrent rename or registration; describe it and retry"
         ) from None
