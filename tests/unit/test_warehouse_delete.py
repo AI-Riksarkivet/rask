@@ -41,6 +41,7 @@ from service_kit.governed import fga as fga_module
 from service_kit.governed.oidc import IDToken
 from service_kit.governed.person_identity import PersonPrincipal
 from service_kit.governed.principal import Principal
+from tests.unit.no_uuids import NO_OBJECT_UUIDS
 
 
 def _root(tmp_path: Any) -> str:
@@ -163,6 +164,7 @@ def _delete(
             client=client,
             control=NoopControlEmitter(),
             emitter=NoopEmitter(),
+            uuids=NO_OBJECT_UUIDS,
             cascade=cascade,
             purge_bucket=purge_bucket,
             force=force,

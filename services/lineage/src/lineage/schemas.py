@@ -17,6 +17,12 @@ class EventRecord(BaseModel):
     author: str | None = None
     inputs: list[str] = Field(default_factory=list)
     outputs: list[str] = Field(default_factory=list)
+    #: The uuids of the governed tables the event names and of their namespaces (ADR 0173 §10): a table's identity
+    #: across a rename, which its name is not.
+    table_uuids: list[str] = Field(default_factory=list)
+    namespace_uuids: list[str] = Field(default_factory=list)
+    #: The governed tables the event named that resolved to no uuid, which a scoped read matches by name.
+    unresolved_tables: list[str] = Field(default_factory=list)
     event: dict[str, Any]
 
 
@@ -59,9 +65,14 @@ class FeedProjection(BaseModel):
 
 
 class DerivedTable(BaseModel):
-    """A table derived from the source, and how many derivation hops from it: 1 for a table a run wrote from the source."""
+    """A table derived from the source, and how many derivation hops from it: 1 for a table a run wrote from the source.
+
+    ``table`` is the name the table's newest edge was recorded under, and ``uuid`` the uuid the catalog keys it by, or
+    ``None`` for a table whose events named none.
+    """
 
     table: str
+    uuid: str | None = None
     depth: int
 
 
@@ -73,6 +84,9 @@ class Derived(BaseModel):
     """
 
     table: str
+    #: The uuid ``table`` resolved to, which the walk started from; ``None`` when the name names no table the caller may
+    #: see, and the walk started from the edges recorded under the name.
+    uuid: str | None = None
     derived: list[DerivedTable]
     complete: bool
 

@@ -23,12 +23,8 @@ from uuid import uuid4
 
 from lance_namespace import InvalidInputError
 
+from service_kit.lakehouse.naming import UUID_PROPERTY
 
-#: The read-only property DescribeTable and DescribeNamespace answer an object's uuid under (ADR 0173 §11). A namespace
-#: keeps its own in its `__manifest` row's properties, which only its create writes and its undrop restores; a table's
-#: lives in its location's claim (``service_kit.lakehouse.location_claims``). No door accepts a caller's ``rask.*``
-#: property, so no caller sets or changes one.
-UUID_PROPERTY: Final = "rask.uuid"
 
 #: A uuid in its canonical 8-4-4-4-12 hex spelling, in either case: the name of the directory a table the catalog makes
 #: lives in, directly under its namespace root (ADR 0173 §5).

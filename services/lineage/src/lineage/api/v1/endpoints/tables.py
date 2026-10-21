@@ -16,7 +16,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
 
-from lineage.api.dependencies import ProvenanceDep
+from lineage.api.dependencies import BearerDep, NamesDep, ProvenanceDep
 from lineage.api.fga_deps import FilterDep, require_metadata_access
 from lineage.schemas import Derived
 from lineage.services.provenance import MAX_DERIVED_DEPTH
@@ -29,14 +29,21 @@ router = APIRouter(prefix="/tables", tags=["query"], dependencies=[Depends(requi
 async def get_derived(
     name: str,
     provenance: ProvenanceDep,
+    names: NamesDep,
+    bearer: BearerDep,
     datasets: FilterDep,
     depth: Annotated[int, Query(ge=1, le=MAX_DERIVED_DEPTH)] = MAX_DERIVED_DEPTH,
 ) -> Derived:
     """Every table derived from ``name`` the caller may see, nearest first, to ``depth`` hops.
 
-    ``complete`` is false when the walk stopped short or a derived table is hidden from the caller.
+    ``name`` resolves to the uuid of the table it names now, and the walk starts there, so it follows what the table
+    fed under every name it has had ([[LH-522]]). It starts from the name too, which an outside producer's event keys
+    the table by when its credential could not resolve it: an erasure that reaches further than the table's own
+    history is the safe direction. ``complete`` is false when the walk stopped short or a derived table is hidden from
+    the caller, which includes one renamed since its last edge, until checks key on uuids ([[LH-524]]).
     """
-    tables, walked = await provenance.derived(name, max_depth=depth)
+    resolved = (await names.table(name, bearer=bearer)).table_uuid
+    tables, walked = await provenance.derived({name} | ({resolved} if resolved else set()), max_depth=depth)
     visible = await datasets.visible([derived.table for derived in tables])
     shown = [derived for derived in tables if derived.table in visible]
-    return Derived(table=name, derived=shown, complete=walked and len(shown) == len(tables))
+    return Derived(table=name, uuid=resolved, derived=shown, complete=walked and len(shown) == len(tables))

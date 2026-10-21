@@ -21,7 +21,7 @@ from datetime import UTC, datetime
 from typing import Any, Literal, assert_never
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 #: The Dapr pub/sub topic for control-plane events. Versioned (a breaking schema change → a new `.vN`),
@@ -146,6 +146,11 @@ class CatalogControlEvent(BaseModel):
     #: The mutated object's canonical id (e.g. `warehouse:acme`, `table:db1$t`, `namespace:db1`, or the
     #: `table:<id>` a grant/policy is scoped to). What a consumer keys its invalidation off.
     object_id: str
+    #: The uuid the catalog minted for the object when it is a table or a namespace (ADR 0173 §10), or for the table or
+    #: namespace a grant or policy is scoped to: its identity across a rename, which `object_id`'s name is not.
+    object_uuid: str | None = None
+    #: The uuid of the namespace that table or namespace is in; `None` for a top-level namespace.
+    namespace_uuid: str | None = None
     #: The verified principal that made the change, `user:` and its key (`user:dex~<user id>`, [[LH-063]]), or `None`
     #: on a service/unauthenticated mutation (auth-off dev).
     actor: str | None = None
@@ -154,6 +159,15 @@ class CatalogControlEvent(BaseModel):
     #: user the change names (`fga.user_object`: the principal key percent-encoded, or a userset), which the
     #: notifications plane decodes back to the principal whose inbox it is.
     extra: dict[str, Any] = Field(default_factory=dict)
+
+
+class ControlUuids(BaseModel):
+    """A table's or namespace's own uuid and its namespace's: the pair a control event names its object by (ADR 0173 §10)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    object_uuid: str | None = None
+    namespace_uuid: str | None = None
 
 
 #: A service whose own signing identity signs the control actions it emits ([[XC-078]]), and so a key of

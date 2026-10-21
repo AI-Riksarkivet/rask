@@ -37,6 +37,7 @@ from catalog.api.dependencies import (
     LineageEmitterDep,
     NamespaceDep,
     NamespaceRootDep,
+    ObjectUuidsDep,
     RunDep,
     SettingsDep,
     StorageOptionsDep,
@@ -113,6 +114,7 @@ async def create_table(
     token: CurrentToken,
     client: FgaClientDep,
     emitter: LineageEmitterDep,
+    uuids: ObjectUuidsDep,
     control: ControlEmitterDep,
     so: StorageOptionsDep,
     run: RunDep,
@@ -179,6 +181,7 @@ async def create_table(
         token=token,
         client=client,
         emitter=emitter,
+        uuids=uuids,
         control=control,
         so=so,
         table=table,
@@ -205,6 +208,7 @@ async def insert_into_table(
     so: StorageOptionsDep,
     token: CurrentToken,
     emitter: LineageEmitterDep,
+    uuids: ObjectUuidsDep,
     run: RunDep,
     data: Annotated[bytes, Body(media_type=ARROW_STREAM_MEDIA_TYPE)],
     mode: str | None = None,
@@ -250,6 +254,7 @@ async def insert_into_table(
         token=token,
         operation=OVERWRITE_TABLE if insert_mode is InsertMode.OVERWRITE else INSERT,
         authorization=authorization,
+        uuids=uuids,
         pin_version=response.version,
         # A branch has its own version sequence; reading this write back off main pins the edge to a
         # version that never carried it.
@@ -268,6 +273,7 @@ async def merge_insert_into_table(
     so: StorageOptionsDep,
     token: CurrentToken,
     emitter: LineageEmitterDep,
+    uuids: ObjectUuidsDep,
     run: RunDep,
     data: Annotated[bytes, Body(media_type=ARROW_STREAM_MEDIA_TYPE)],
     # `on` STAYS A SINGLE KEY until the lance-namespace bump (A9 is blocked on A10). 0.12.0 makes it an
@@ -323,6 +329,7 @@ async def merge_insert_into_table(
         token=token,
         operation=MERGE_INSERT,
         authorization=authorization,
+        uuids=uuids,
         pin_version=response.version,
         # Pinned AND branched, together: the dataplane call above already takes `branch=branch`, so a
         # trailer that does not is measuring a different dataset than the one just written.
@@ -341,6 +348,7 @@ async def update_table(
     so: StorageOptionsDep,
     token: CurrentToken,
     emitter: LineageEmitterDep,
+    uuids: ObjectUuidsDep,
     authorization: Annotated[str | None, Header()] = None,
 ) -> UpdateTableResponse:
     """Update rows matching a predicate — ``update_table``; emits an UPDATE lineage event."""
@@ -360,6 +368,7 @@ async def update_table(
         token=token,
         operation=UPDATE,
         authorization=authorization,
+        uuids=uuids,
         pin_version=response.version,
         # The ref the dataplane committed to: the version above is that ref's number, and on main the
         # same number is a different snapshot.
@@ -377,6 +386,7 @@ async def delete_from_table(
     so: StorageOptionsDep,
     token: CurrentToken,
     emitter: LineageEmitterDep,
+    uuids: ObjectUuidsDep,
     authorization: Annotated[str | None, Header()] = None,
 ) -> DeleteFromTableResponse:
     """Delete rows matching a predicate — ``delete_from_table``; emits a DELETE lineage event."""
@@ -394,6 +404,7 @@ async def delete_from_table(
         token=token,
         operation=DELETE,
         authorization=authorization,
+        uuids=uuids,
         pin_version=response.version,
         # The ref the dataplane committed to: the version above is that ref's number, and on main the
         # same number is a different snapshot.

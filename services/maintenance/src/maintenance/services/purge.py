@@ -75,13 +75,15 @@ from pydantic import BaseModel, Field
 
 from maintenance.core.config import MaintenanceSettings, shared_lance_session
 from maintenance.core.metrics import record_trash_purge
+from maintenance.services.naming import manifest_uuid
 from maintenance.services.reconcile import MANIFEST_DIR, NON_GATING_CATEGORIES, ReconcileReport
 from service_kit.control_emit import ControlEmitter, NoopControlEmitter, emit_control
-from service_kit.control_events import ControlAction, ControlObjectType
+from service_kit.control_events import ControlAction, ControlObjectType, ControlUuids
 from service_kit.governed import fga
 from service_kit.lakehouse import location_claims, object_records, trash, warehouse_records
 from service_kit.lakehouse.base_refs import BaseRefs, decoded_path, decoded_segments, location_within, names_a_location, normalise, store_of
 from service_kit.lakehouse.base_registry import BaseRegistry, UnreadableBaseRecordError, forget_base_record
+from service_kit.lakehouse.naming import uuid_of
 from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base
 
 
@@ -319,9 +321,11 @@ class Liveness(BaseModel):
     ids: set[str] = Field(default_factory=set)
     #: Absolute table locations, joined onto the root that recorded them.
     locations: set[str] = Field(default_factory=set)
+    #: A live namespace's id -> the uuid its row holds: what a purge's control event names its object's namespace by.
+    namespace_uuids: dict[str, str] = Field(default_factory=dict)
 
     def __or__(self, other: Liveness) -> Liveness:
-        return Liveness(ids=self.ids | other.ids, locations=self.locations | other.locations)
+        return Liveness(ids=self.ids | other.ids, locations=self.locations | other.locations, namespace_uuids=self.namespace_uuids | other.namespace_uuids)
 
     def resolves_into(self, location: str) -> bool:
         """Whether a live table's location equals, contains or sits under ``location``."""
@@ -329,7 +333,7 @@ class Liveness(BaseModel):
 
 
 def manifest_rows(root: str, storage_options: StorageOptions) -> list[dict[str, Any]] | None:
-    """Every row of ``root``'s ``__manifest`` (``object_id``, ``object_type``, ``location``), or ``None`` when unreadable.
+    """Every row of ``root``'s ``__manifest`` (``object_id``, ``object_type``, ``location``, ``metadata``), or ``None`` when unreadable.
 
     A root with no ``_versions`` directory is a fresh estate and yields ``[]``: an absent manifest is not an unreadable
     one, and collapsing the two would let a broken manifest read as "nothing is live".
@@ -340,7 +344,7 @@ def manifest_rows(root: str, storage_options: StorageOptions) -> list[dict[str, 
             return []
         manifest_uri = f"s3://{base}/{MANIFEST_DIR}" if root.startswith("s3://") else f"{base}/{MANIFEST_DIR}"
         dataset = lance.dataset(manifest_uri, storage_options=storage_options, session=shared_lance_session())
-        return dataset.to_table(columns=["object_id", "object_type", "location"]).to_pylist()
+        return dataset.to_table(columns=["object_id", "object_type", "location", "metadata"]).to_pylist()
     except Exception:  # noqa: BLE001 — ANY failure here must read as unreadable, never as a partial set
         log.warning("trash_purge_manifest_unreadable", extra={"root": root}, exc_info=True)
         return None
@@ -381,6 +385,8 @@ def manifest_liveness(root: str, storage_options: StorageOptions) -> Liveness | 
             live.ids.add(str(row["object_id"]))
         if (location := table_location(root, row)) is not None:
             live.locations.add(location)
+        elif row.get("object_type") == "namespace" and row["object_id"] and (uuid := manifest_uuid(row)) is not None:
+            live.namespace_uuids[str(row["object_id"])] = uuid
     return live
 
 
@@ -792,6 +798,43 @@ async def _recovered_since_the_snapshot(
     return True
 
 
+def _purged_uuids(record: dict[str, Any], *, live: Liveness | None, control_root: str, storage_options: StorageOptions, delimiter: str) -> ControlUuids:
+    """The uuids of a trashed object and of its namespace, for the control event its purge announces (ADR 0173 §10).
+
+    A table's is its location's claim's, which a recoverable drop keeps for the trashed id (ADR 0172), and only while
+    that claim names it. A namespace's is the ``rask.uuid`` property its trash record keeps, since its ``__manifest``
+    row went with the drop. Its namespace's is that namespace's live row's, or its own trash record's when a cascade
+    trashed it too. Best-effort, as the event is: a uuid that cannot be read is ``None``.
+    """
+    kind = str(record.get("kind") or "table")
+    obj_id = str(record.get("id") or "")
+    location = str(record.get("location") or "").rstrip("/")
+    try:
+        object_uuid = _kept_uuid(record) if kind == "namespace" else _claimed_uuid(location, obj_id, control_root=control_root, storage_options=storage_options)
+        parent = fga.parent_namespace_id(obj_id, delimiter=delimiter)
+        namespace_uuid = None
+        if parent is not None:
+            live_uuid = live.namespace_uuids.get(parent) if live is not None else None
+            namespace_uuid = live_uuid or _kept_uuid(trash.get(control_root, storage_options, parent, kind="namespace"))
+    except Exception as exc:  # noqa: BLE001 — an unread uuid costs the announcement its uuid, never the announcement
+        log.warning("trash_purge_uuid_unread", extra={"kind": kind, "id": obj_id, "error": f"{type(exc).__name__}: {exc}"})
+        return ControlUuids()
+    return ControlUuids(object_uuid=object_uuid, namespace_uuid=namespace_uuid)
+
+
+def _claimed_uuid(location: str, table: str, *, control_root: str, storage_options: StorageOptions) -> str | None:
+    """The uuid the claim on ``location`` records while it names ``table``; ``None`` when no claim does."""
+    if not location:
+        return None
+    found = location_claims.read(location_claims.ClaimStore(control_root=control_root, storage_options=storage_options), location)
+    return found.claim.uuid if found is not None and found.claim.table == table else None
+
+
+def _kept_uuid(record: dict[str, Any] | None) -> str | None:
+    """The uuid a namespace's trash record keeps among its properties, or ``None``."""
+    return uuid_of(record.get("properties")) if record is not None else None
+
+
 async def _purge_one(
     record: dict[str, Any],
     out: TrashPurgeReport,
@@ -843,6 +886,10 @@ async def _purge_one(
 
     if await _recovered_since_the_snapshot(record, out, roots=roots, recheck_live=recheck_live, control_root=control_root, storage_options=storage_options):
         return
+    # Read while the claim still names the trashed id: the delete below releases it.
+    uuids = await run_in_threadpool(
+        partial(_purged_uuids, record, live=live, control_root=control_root, storage_options=storage_options, delimiter=settings.delimiter)
+    )
 
     try:
         revoked = await _revoke(fga_client, kind=kind, obj_id=obj_id, fga_enabled=settings.fga_enabled)
@@ -890,6 +937,8 @@ async def _purge_one(
         action=_PURGE_ACTION.get(kind, "table_purged"),
         object_type=object_type,
         object_id=f"{kind}:{obj_id}",
+        object_uuid=uuids.object_uuid,
+        namespace_uuid=uuids.namespace_uuid,
         actor=ACTOR,
         extra={
             "reason": "trash_expired",

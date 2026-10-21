@@ -34,6 +34,7 @@ from service_kit.governed.decider import OpenFgaDecider
 from service_kit.governed.oidc import IDToken
 from service_kit.governed.person_identity import PersonPrincipal
 from service_kit.governed.principal import Principal
+from tests.unit.no_uuids import NO_CATALOG_NAMES
 
 
 _ISSUER = "https://idp.example.com"
@@ -205,7 +206,7 @@ def test_get_events_filters_to_visible_datasets(monkeypatch: pytest.MonkeyPatch)
         EventRecord(seq=1, outputs=["b"], inputs=[], event={}),  # "b" not visible → dropped
     ]
     flt = fga_deps.DatasetFilter(_request(decider=OpenFgaDecider(cast(OpenFgaClient, object()))), settings, _token())
-    result = asyncio.run(get_events(cast(ProvenanceStore, repo), flt, settings))
+    result = asyncio.run(get_events(cast(ProvenanceStore, repo), flt, settings, names=NO_CATALOG_NAMES, bearer=None))
     assert [e.outputs for e in result.events] == [["a"]]  # the "b" event is filtered out
 
 
@@ -219,7 +220,7 @@ def test_get_events_hides_dataset_less_events_when_governed(monkeypatch: pytest.
     repo = _FakeStore()
     repo.events = [EventRecord(seq=1, outputs=[], inputs=[], event={"run": {"runId": "secret"}})]
     flt = fga_deps.DatasetFilter(_request(decider=OpenFgaDecider(cast(OpenFgaClient, object()))), settings, _token())
-    result = asyncio.run(get_events(cast(ProvenanceStore, repo), flt, settings))
+    result = asyncio.run(get_events(cast(ProvenanceStore, repo), flt, settings, names=NO_CATALOG_NAMES, bearer=None))
     assert result.events == []  # dataset-less event is hidden under governance
 
 
@@ -237,7 +238,7 @@ def test_get_events_pagination_never_leaks_past_governance(monkeypatch: pytest.M
         EventRecord(seq=1, outputs=["a"], inputs=[], event={}),
     ]
     flt = fga_deps.DatasetFilter(_request(decider=OpenFgaDecider(cast(OpenFgaClient, object()))), settings, _token())
-    result = asyncio.run(get_events(cast(ProvenanceStore, repo), flt, settings, limit=1))
+    result = asyncio.run(get_events(cast(ProvenanceStore, repo), flt, settings, limit=1, names=NO_CATALOG_NAMES, bearer=None))
     assert [e.seq for e in result.events] == [3]
     assert result.next_cursor == 3  # continue below the last VISIBLE row — not below the hidden one
     # auth ON keeps the wide fetch window so filtered-out rows don't starve the page
@@ -256,17 +257,17 @@ def test_get_events_cursor_and_fetch_width(monkeypatch: pytest.MonkeyPatch) -> N
         EventRecord(seq=5, outputs=["a"], inputs=[], event={}),
         EventRecord(seq=4, outputs=["a"], inputs=[], event={}),
     ]
-    page = asyncio.run(get_events(cast(ProvenanceStore, repo), flt, settings, limit=2))
+    page = asyncio.run(get_events(cast(ProvenanceStore, repo), flt, settings, limit=2, names=NO_CATALOG_NAMES, bearer=None))
     assert repo.list_events_calls[-1] == {"limit": 2, "after": None, "summary": False}
     assert [e.seq for e in page.events] == [5, 4] and page.next_cursor == 4  # full page → continue
 
     repo.events = [EventRecord(seq=3, outputs=["a"], inputs=[], event={})]
-    page = asyncio.run(get_events(cast(ProvenanceStore, repo), flt, settings, after=4, limit=2))
+    page = asyncio.run(get_events(cast(ProvenanceStore, repo), flt, settings, after=4, limit=2, names=NO_CATALOG_NAMES, bearer=None))
     assert repo.list_events_calls[-1] == {"limit": 2, "after": 4, "summary": False}
     assert [e.seq for e in page.events] == [3] and page.next_cursor is None  # short page → exhausted
 
     # summary rides through to the store's read untouched
-    asyncio.run(get_events(cast(ProvenanceStore, repo), flt, settings, summary=True))
+    asyncio.run(get_events(cast(ProvenanceStore, repo), flt, settings, summary=True, names=NO_CATALOG_NAMES, bearer=None))
     assert repo.list_events_calls[-1]["summary"] is True
 
 
@@ -275,7 +276,11 @@ def test_ingest_handler_binds_verified_author() -> None:
 
     repo = _FakeStore()
     event = _event(claimed_author="attacker")
-    asyncio.run(ingest_event(event.model_dump(by_alias=True), _request(), cast(ProvenanceStore, repo), _settings(), _token("real-user")))
+    asyncio.run(
+        ingest_event(
+            event.model_dump(by_alias=True), _request(), cast(ProvenanceStore, repo), _settings(), _token("real-user"), names=NO_CATALOG_NAMES, bearer=None
+        )
+    )
     assert repo.recorded is not None and repo.recorded.author == "dex~real-user"  # body claim overridden
 
 
@@ -284,7 +289,7 @@ def test_ingest_handler_keeps_body_author_when_oidc_off() -> None:
 
     repo = _FakeStore()
     event = _event(claimed_author="claimed")
-    asyncio.run(ingest_event(event.model_dump(by_alias=True), _request(), cast(ProvenanceStore, repo), _settings(), None))
+    asyncio.run(ingest_event(event.model_dump(by_alias=True), _request(), cast(ProvenanceStore, repo), _settings(), None, names=NO_CATALOG_NAMES, bearer=None))
     assert repo.recorded is not None and repo.recorded.author == "claimed"
 
 
@@ -422,6 +427,6 @@ def test_get_events_reports_the_feed_FLOOR_so_a_consumer_can_see_what_it_lost() 
     flt = fga_deps.DatasetFilter(_request(), settings, None)
     repo.events = [EventRecord(seq=9000, outputs=["a"], inputs=[], event={})]
 
-    page = asyncio.run(get_events(cast(ProvenanceStore, repo), flt, settings, limit=2))
+    page = asyncio.run(get_events(cast(ProvenanceStore, repo), flt, settings, limit=2, names=NO_CATALOG_NAMES, bearer=None))
 
     assert page.oldest_seq == 8999

@@ -44,6 +44,7 @@ from lineage.models import DatasetEvent, RunEvent
 from lineage.services.consumer import handle_cloud_event
 from lineage.services.provenance import ProvenanceStore
 from service_kit.lakehouse.ns_errors import install_problem_handlers
+from tests.unit.no_uuids import NO_CATALOG_NAMES
 
 
 _RUN_ID = "b1b2c3d4-0000-4000-8000-000000000001"
@@ -94,6 +95,7 @@ def unauthenticated_app(monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[FastA
     app.include_router(api_router)
     repo = _Repo()
     app.state.provenance = repo
+    app.state.names = NO_CATALOG_NAMES
     yield app, repo
     get_settings.cache_clear()
 

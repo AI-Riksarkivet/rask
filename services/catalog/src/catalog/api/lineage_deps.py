@@ -22,7 +22,7 @@ from lance_namespace import LanceNamespace
 
 from catalog.api.security import Caller
 from catalog.core.config import Settings
-from catalog.core.lineage_emit import LineageEmitter, emit_write_event, run_inputs
+from catalog.core.lineage_emit import LineageEmitter, UuidReader, emit_write_event, run_inputs
 from catalog.core.run_context import RunContext
 from catalog.services import dataplane
 from service_kit.lakehouse.objectfs import StorageOptions
@@ -40,6 +40,7 @@ async def emit_measured_write(
     authorization: str | None,
     pin_version: int | None,
     branch: str | None,
+    uuids: UuidReader,
     run: RunContext | None = None,
     commits_rows: bool = False,
 ) -> None:
@@ -62,6 +63,8 @@ async def emit_measured_write(
 
     ``commits_rows`` says the commit added rows, which makes a table's first version a write rather than a
     dataset change ([[LH-492]]).
+
+    ``uuids`` reads the table's uuid from the claim at the location the read-back opened, the table the write landed in.
     """
     # A request may spell main by name; the event records main as no ref at all, as Lance does.
     ref = dataplane.recorded_branch(branch)
@@ -75,6 +78,7 @@ async def emit_measured_write(
         version=version,
         operation=operation,
         authorization=authorization,
+        uuids=uuids,
         schema_fields=schema_fields,
         # The standard `dataSource` facet. Every write door reaches lineage through this trailer, so
         # omitting it here withheld the URI from ALL of them — the facet was plumbed end to end and

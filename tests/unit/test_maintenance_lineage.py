@@ -24,6 +24,7 @@ import pytest
 from lineage.models import RunEvent
 from maintenance.core.lineage_emit import (
     EXPIRE_VERSIONS,
+    UNRESOLVED,
     DaprMaintenanceEmitter,
     NoopEmitter,
     build_maintenance_event,
@@ -33,6 +34,7 @@ from maintenance.core.lineage_emit import (
 )
 from maintenance.services.expiry import DatasetResult
 from maintenance.services.sweep import _MAX_FAIL_EMITS_PER_TICK, emit_sweep_lineage
+from service_kit.openlineage import DatasetUuids
 
 
 # --------------------------------------------------------------------------- #
@@ -121,10 +123,10 @@ class _RecordingEmitter:
         self.calls: list[tuple[str, str]] = []
         self.failed_calls: list[tuple[str, str, str]] = []
 
-    async def emit_maintenance(self, *, table_id: str, namespace: str) -> None:
+    async def emit_maintenance(self, *, table_id: str, namespace: str, uuids: DatasetUuids = UNRESOLVED) -> None:
         self.calls.append((table_id, namespace))
 
-    async def emit_maintenance_failed(self, *, table_id: str, namespace: str, error: str) -> None:
+    async def emit_maintenance_failed(self, *, table_id: str, namespace: str, error: str, uuids: DatasetUuids = UNRESOLVED) -> None:
         self.failed_calls.append((table_id, namespace, error))
 
 
@@ -211,7 +213,7 @@ def test_emit_sweep_lineage_never_raises_even_for_a_broken_emitter() -> None:
             return None
 
     class _RaisingEmitter(_RecordingEmitter):
-        async def emit_maintenance_failed(self, *, table_id: str, namespace: str, error: str) -> None:
+        async def emit_maintenance_failed(self, *, table_id: str, namespace: str, error: str, uuids: DatasetUuids = UNRESOLVED) -> None:
             raise RuntimeError("boom from a non-best-effort emitter")
 
     results = [_named("ns$a", error="maintain: x")]
@@ -240,7 +242,7 @@ def test_emit_sweep_lineage_fail_batch_is_concurrent_not_sequential() -> None:
     # N slow publishes must take ~one publish's latency, not N of them — the ack-window bound. 20 emits
     # sleeping 0.1s each would be 2s sequential; concurrent they finish in a fraction of that.
     class _SlowEmitter(_RecordingEmitter):
-        async def emit_maintenance_failed(self, *, table_id: str, namespace: str, error: str) -> None:
+        async def emit_maintenance_failed(self, *, table_id: str, namespace: str, error: str, uuids: DatasetUuids = UNRESOLVED) -> None:
             await asyncio.sleep(0.1)
             await super().emit_maintenance_failed(table_id=table_id, namespace=namespace, error=error)
 

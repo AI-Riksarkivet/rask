@@ -24,7 +24,7 @@ from fastapi.concurrency import run_in_threadpool
 from lance_namespace import InvalidInputError, TableNotFoundError
 
 from catalog.api import fga_deps
-from catalog.api.dependencies import FgaClientDep, LineageEmitterDep, SettingsDep, StorageOptionsDep
+from catalog.api.dependencies import FgaClientDep, LineageEmitterDep, ObjectUuidsDep, SettingsDep, StorageOptionsDep
 from catalog.api.pagination import paginate
 from catalog.api.security import CurrentToken
 from catalog.core.config import Settings
@@ -126,6 +126,7 @@ async def promote_model(
     token: CurrentToken,
     client: FgaClientDep,
     emitter: LineageEmitterDep,
+    uuids: ObjectUuidsDep,
     authorization: Annotated[str | None, Header()] = None,
 ) -> PromoteResponse:
     """Move the ``blessed`` tag to model ``version`` — validator-gated, metrics-gated, lineage-emitting.
@@ -155,6 +156,7 @@ async def promote_model(
         version=blessed,
         operation=PROMOTE_MODEL,
         authorization=authorization,
+        uuids=uuids,
         source_uri=settings.model_uri(model),
     )
     log.info("model_promoted", extra={"model": model, "version": blessed, "tag": body.tag})

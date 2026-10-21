@@ -32,7 +32,7 @@ import logging
 import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Final, Protocol, runtime_checkable
 
 from dapr.aio.clients import DaprClient
 
@@ -43,8 +43,10 @@ from service_kit.lakehouse.objectfs import StorageOptions
 from service_kit.openlineage import (
     ERROR_MESSAGE_FACET_SCHEMA_URL,
     RUN_EVENT_SCHEMA_URL,
+    DatasetUuids,
     custom_facet,
     run_id_for,
+    with_dataset_uuids,
 )
 
 
@@ -65,6 +67,9 @@ _ERROR_FACET_SCHEMA_URL = ERROR_MESSAGE_FACET_SCHEMA_URL
 #: Exception strings embed full s3:// URIs and Rust backtraces — cap the facet message so a failing
 #: dataset can't turn every FAIL event into a multi-KB payload (events must stay small JSON).
 _ERROR_MESSAGE_MAX_CHARS = 1000
+
+#: The uuids of a dataset whose table and namespace were not resolved: its output names them by name alone.
+UNRESOLVED: Final = DatasetUuids()
 
 
 def classify_retryable(error: str) -> bool | None:
@@ -89,7 +94,15 @@ def classify_retryable(error: str) -> bool | None:
 
 
 def build_maintenance_fail_event(
-    *, table_id: str, namespace: str, job_namespace: str, run_id: str, event_time: str, error: str, author: str = ""
+    *,
+    table_id: str,
+    namespace: str,
+    job_namespace: str,
+    run_id: str,
+    event_time: str,
+    error: str,
+    author: str = "",
+    uuids: DatasetUuids = UNRESOLVED,
 ) -> dict[str, Any]:
     """The FAIL twin of :func:`build_maintenance_event` — a per-dataset maintenance FAILURE (§4).
 
@@ -122,6 +135,7 @@ def build_maintenance_fail_event(
         # most likely to have to chase, and the COMPLETE twin carrying a signature while the FAIL did
         # not would be the more misleading of the two states.
         author=author,
+        uuids=uuids,
     )
     event["eventType"] = "FAIL"
     event["run"]["facets"]["errorMessage"] = error_facet
@@ -136,6 +150,7 @@ def build_maintenance_event(
     run_id: str,
     event_time: str,
     author: str = "",
+    uuids: DatasetUuids = UNRESOLVED,
 ) -> dict[str, Any]:
     """Build the OpenLineage ``RunEvent`` (wire JSON) for one dataset's expiry pass.
 
@@ -153,6 +168,9 @@ def build_maintenance_event(
     rather than a placeholder: `author_sub_from_payload` exists because a producer-supplied author is
     unverified, and its rule is that anonymous beats misattributed. A fabricated subject would be worse
     than none — a later bus gate would authorize it.
+
+    ``uuids`` name the output's table and namespace in its ``lance`` facet (ADR 0173 §10): a rename keeps a table's
+    uuid and changes its name, so the feed keys the pass on the table it reclaimed, not on whatever holds the name later.
     """
     facets: dict[str, Any] = {"lance": custom_facet(_PRODUCER, operation=EXPIRE_VERSIONS)}
     if author:
@@ -167,7 +185,7 @@ def build_maintenance_event(
         # whose output set spans the whole lakehouse.
         "job": {"namespace": job_namespace, "name": f"{EXPIRE_VERSIONS}.{table_id}"},
         "inputs": [],
-        "outputs": [{"namespace": namespace, "name": table_id}],
+        "outputs": [with_dataset_uuids({"namespace": namespace, "name": table_id}, uuids, producer=_PRODUCER)],
     }
 
 
@@ -175,18 +193,18 @@ def build_maintenance_event(
 class MaintenanceEmitter(Protocol):
     """Emits expiry maintenance events (success + failure) to the lineage service (best-effort)."""
 
-    async def emit_maintenance(self, *, table_id: str, namespace: str) -> None: ...
+    async def emit_maintenance(self, *, table_id: str, namespace: str, uuids: DatasetUuids = UNRESOLVED) -> None: ...
 
-    async def emit_maintenance_failed(self, *, table_id: str, namespace: str, error: str) -> None: ...
+    async def emit_maintenance_failed(self, *, table_id: str, namespace: str, error: str, uuids: DatasetUuids = UNRESOLVED) -> None: ...
 
 
 class NoopEmitter:
     """The emitter used when lineage emission is disabled (or unwired) — does nothing."""
 
-    async def emit_maintenance(self, *, table_id: str, namespace: str) -> None:
+    async def emit_maintenance(self, *, table_id: str, namespace: str, uuids: DatasetUuids = UNRESOLVED) -> None:
         return None
 
-    async def emit_maintenance_failed(self, *, table_id: str, namespace: str, error: str) -> None:
+    async def emit_maintenance_failed(self, *, table_id: str, namespace: str, error: str, uuids: DatasetUuids = UNRESOLVED) -> None:
         return None
 
 
@@ -231,7 +249,7 @@ class DaprMaintenanceEmitter:
         #: Read at every stage, never held: the key pair in it rotates while the service runs ([[XC-082]]).
         self._storage_options = storage_options
 
-    async def emit_maintenance(self, *, table_id: str, namespace: str) -> None:
+    async def emit_maintenance(self, *, table_id: str, namespace: str, uuids: DatasetUuids = UNRESOLVED) -> None:
         # uuid4 ON PURPOSE: each tick that reclaims versions is a distinct successful run (§4 decided —
         # do NOT make COMPLETE deterministic; only the FAIL path below needs the flood guard).
         event = build_maintenance_event(
@@ -241,10 +259,11 @@ class DaprMaintenanceEmitter:
             run_id=str(uuid.uuid4()),
             event_time=datetime.now(UTC).isoformat(),
             author=self._author,
+            uuids=uuids,
         )
         await self._publish(event, table_id)
 
-    async def emit_maintenance_failed(self, *, table_id: str, namespace: str, error: str) -> None:
+    async def emit_maintenance_failed(self, *, table_id: str, namespace: str, error: str, uuids: DatasetUuids = UNRESOLVED) -> None:
         # DETERMINISTIC run id — the flood guard: the cron re-sweeps every ~2 min, so a persistently
         # failing dataset would otherwise mint a fresh run, and a fresh feed row, per tick. One id per
         # dataset → the feed's key for a terminal state (`<run_id>@FAIL`) is the same on every tick, and its
@@ -259,6 +278,7 @@ class DaprMaintenanceEmitter:
             event_time=datetime.now(UTC).isoformat(),
             error=error,
             author=self._author,
+            uuids=uuids,
         )
         await self._publish(event, table_id)
 

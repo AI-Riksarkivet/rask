@@ -30,15 +30,15 @@ import pyarrow as pa
 
 #: Schema-metadata keys; the lineage service / a consumer reads these straight off the Lance table. Only
 #: opaque coordinates — no identity/PII (the creator is resolved via the gated /creator endpoint).
-_KEY_DATASET_ID = "lineage.dataset_id"
+#: ``lineage.dataset_id`` is the table's uuid, which only the write that brings the table into being knows, so
+#: ``catalog.services.dataplane.create_table`` stamps it there (ADR 0173 §10).
 _KEY_NAMESPACE = "lineage.namespace"
 _KEY_CREATE_RUN_ID = "lineage.create_run_id"
 
 
-def build_lineage_metadata(*, table_id: str, namespace: str, run_id: str) -> dict[str, str]:
+def build_lineage_metadata(*, namespace: str, run_id: str) -> dict[str, str]:
     """The lineage coordinates to stamp into the Lance file's schema metadata at create (no PII)."""
     return {
-        _KEY_DATASET_ID: table_id,
         _KEY_NAMESPACE: namespace,
         _KEY_CREATE_RUN_ID: run_id,
     }

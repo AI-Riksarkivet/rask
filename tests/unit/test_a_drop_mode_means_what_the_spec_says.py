@@ -39,6 +39,7 @@ from lance_namespace import DropNamespaceRequest, DropNamespaceResponse, Invalid
 from catalog.api.v1.endpoints import namespaces as ns_ep
 from catalog.core.config import Settings
 from catalog.core.modes import DropMode
+from tests.unit.no_uuids import NO_OBJECT_UUIDS
 
 
 class _Settings:
@@ -105,6 +106,7 @@ async def _drop(
         control=cast(Any, None),
         emitter=cast(Any, None),
         body=DropNamespaceRequest(id=["ghost"], mode=mode, behavior=behavior),
+        uuids=NO_OBJECT_UUIDS,
     )
 
 

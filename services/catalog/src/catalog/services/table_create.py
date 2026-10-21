@@ -66,7 +66,7 @@ from catalog.core.base_judge import GovernedStorage
 from catalog.core.config import Settings
 from catalog.core.formats import reject_unsupported_properties
 from catalog.core.identifiers import parse_identifier, require_safe_segments
-from catalog.core.lineage_emit import OVERWRITE_TABLE, LineageEmitter, input_refs, run_inputs
+from catalog.core.lineage_emit import OVERWRITE_TABLE, LineageEmitter, UuidReader, input_refs, run_inputs
 from catalog.core.lineage_metadata import build_lineage_metadata, stamp_lineage_metadata
 from catalog.core.modes import CreateMode
 from catalog.core.run_context import RunContext
@@ -175,6 +175,7 @@ async def create_governed_table(
     token: Caller | None,
     client: OpenFgaClient | None,
     emitter: LineageEmitter,
+    uuids: UuidReader,
     control: ControlEmitter,
     so: StorageOptions,
     table: pa.Table,
@@ -232,7 +233,7 @@ async def create_governed_table(
     # table that shares its buffers, so no payload is too large to stamp. Gated on lineage being
     # enabled: when off we don't stamp a create_run_id the graph never receives.
     if settings.lineage_emit_enabled:
-        table = stamp_lineage_metadata(table, build_lineage_metadata(table_id=table_id, namespace=namespace, run_id=run_id))
+        table = stamp_lineage_metadata(table, build_lineage_metadata(namespace=namespace, run_id=run_id))
     # Pre-existence, computed BEFORE the write (declared-only counts — it already holds an owner grant).
     # Overwrite and ExistOk always probe, because what each did decides its lineage record, which does not
     # depend on FGA: an Overwrite of a table is not its create, and an ExistOk that kept one committed no rows
@@ -361,7 +362,9 @@ async def create_governed_table(
         _, schema_fields, _location = await run_in_threadpool(dataplane.read_version_and_schema, ns, so, segments, response.version, None)
     else:
         schema_fields = dataplane.payload_schema_fields(table.schema, segments)
-    inputs = input_refs(run_inputs(run), delimiter=settings.delimiter)
+    inputs = await input_refs(run_inputs(run), delimiter=settings.delimiter, uuids=uuids)
+    # Read through the location the write landed in, so a rename since cannot lend the event another table's uuid.
+    table_uuids = await uuids.table(segments, location=response.location)
     if overwrote_existing:
         # Not a creation: the table, its creator and its CREATED edge all predate this request.
         await emitter.emit_write(
@@ -376,6 +379,7 @@ async def create_governed_table(
             schema_fields=schema_fields,
             inputs=inputs,
             run=run,
+            uuids=table_uuids,
         )
     else:
         await emitter.emit_create(
@@ -391,6 +395,7 @@ async def create_governed_table(
             run=run,
             # The payload's rows landed at v1 only when this request wrote the table.
             commits_rows=table.num_rows > 0 and not existok_kept_existing,
+            uuids=table_uuids,
         )
     # Only a real creation emits — an ExistOk request that KEPT a pre-existing table wrote nothing and
     # created nothing (same guard that skips ownership seeding above), so a `table_created` here would be a

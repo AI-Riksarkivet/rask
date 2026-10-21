@@ -31,21 +31,24 @@ import asyncio
 import hashlib
 import json
 import logging
+import uuid
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any, Final, TypeVar
 
 import pyarrow as pa
+from pydantic import BaseModel
 
 from lineage.core.config import LineageSettings
 from lineage.models import Dataset, DatasetEvent, RunEvent, author_sub_from_payload
 from lineage.schemas import DerivedTable, EventRecord
 from service_kit.governed.machine_identity import read_identity_token
-from service_kit.lakehouse.naming import CATALOG_DELIMITER
+from service_kit.lakehouse.naming import CATALOG_DELIMITER, is_external_source_namespace
 from service_kit.lancekit.arrow_ipc import encode_arrow_stream
 from service_kit.lancekit.catalog_client import catalog_api_client, request_headers
 from service_kit.lancekit.reader import CatalogTableReader, RestCatalogTransport, translate_catalog_errors
 from service_kit.lancekit.writer import RestCatalogWriteTransport
+from service_kit.openlineage import dataset_uuids
 
 
 log = logging.getLogger(__name__)
@@ -73,6 +76,13 @@ FEED_SCHEMA: Final = pa.schema(
         pa.field("author", pa.string()),
         pa.field("inputs", pa.list_(pa.string())),
         pa.field("outputs", pa.list_(pa.string())),
+        # The uuids of every governed table the event names, and of their namespaces (ADR 0173 §10): what a scoped
+        # read keys on, so the history of a table a rename gave a new name is one history.
+        pa.field("table_uuids", pa.list_(pa.string())),
+        pa.field("namespace_uuids", pa.list_(pa.string())),
+        # The governed tables the event named that resolved to no uuid (an outside producer's names its credential
+        # could not resolve): a scoped read keys these by name.
+        pa.field("unresolved_tables", pa.list_(pa.string())),
         pa.field("event", pa.large_string()),
         # The estate's clock, never the producer's `eventTime`: retention reads it, and a skewed producer stamp
         # would strand a row for ever or delete a fresh one.
@@ -80,9 +90,10 @@ FEED_SCHEMA: Final = pa.schema(
     ]
 )
 
-#: One row per (run, input, output) a successful run asserts. `in_table` and `out_table` are the dataset's
-#: identity under `Dataset.lineage_name`: a governed table's bare catalog id, an external source qualified by its
-#: namespace, so an external input can never name a governed table's edges ([[LIN-3]]).
+#: One row per (run, input, output) a successful run asserts. `in_table` and `out_table` are the dataset's key under
+#: :func:`edge_identity`: a governed table's uuid, so a rename keeps its edges ([[LH-522]]); an external source's
+#: namespace-qualified name, so an external input can never name a governed table's edges ([[LIN-3]]). `in_name` and
+#: `out_name` are the names the event used.
 EDGE_SCHEMA: Final = pa.schema(
     [
         pa.field("edge_key", pa.string(), nullable=False, metadata=_PRIMARY_KEY),
@@ -90,9 +101,11 @@ EDGE_SCHEMA: Final = pa.schema(
         pa.field("writer_run_id", pa.string()),
         pa.field("author", pa.string()),
         pa.field("in_table", pa.string(), nullable=False),
+        pa.field("in_name", pa.string()),
         pa.field("in_version", pa.int64()),
         pa.field("in_branch", pa.string()),
         pa.field("out_table", pa.string(), nullable=False),
+        pa.field("out_name", pa.string()),
         pa.field("out_version", pa.int64()),
         pa.field("out_branch", pa.string()),
         pa.field("event_time", pa.string()),
@@ -142,8 +155,8 @@ _TABLES: Final = ((FEED, FEED_SCHEMA), (EDGES, EDGE_SCHEMA), (REFUSALS, REFUSAL_
 MAX_DERIVED_DEPTH: Final = 20
 #: Input names per edge query, so a wide frontier is read in bounded filters.
 _IN_LIST: Final = 500
-_FEED_COLUMNS: Final = ["event_type", "event_time", "job", "author", "inputs", "outputs", "event"]
-_SUMMARY_COLUMNS: Final = ["event_type", "event_time", "job", "author", "inputs", "outputs"]
+_SUMMARY_COLUMNS: Final = ["event_type", "event_time", "job", "author", "inputs", "outputs", "table_uuids", "namespace_uuids", "unresolved_tables"]
+_FEED_COLUMNS: Final = [*_SUMMARY_COLUMNS, "event"]
 
 
 def feed_key(event: RunEvent | DatasetEvent) -> str:
@@ -177,6 +190,40 @@ def _edge_key(*parts: object) -> str:
     return hashlib.sha256(json.dumps(parts, separators=(",", ":")).encode()).hexdigest()
 
 
+def edge_identity(dataset: Dataset) -> str:
+    """The key a dataset's edges are recorded under: a governed table's uuid, else its :attr:`Dataset.lineage_name`.
+
+    A governed table is keyed by the uuid the catalog minted for it, which a rename keeps, so its edges before and after
+    one are one history ([[LH-522]], ADR 0173 §10). An external source keeps its namespace-qualified name ([[LIN-3]]),
+    and a governed table whose event named no uuid (an outside producer's name the caller's credential could not
+    resolve) keeps its bare name. The three cannot collide: a uuid holds no delimiter and no ``/``, a governed name
+    always holds the delimiter, and an external one always holds a ``/``.
+    """
+    if is_external_source_namespace(dataset.namespace, dataset.name):
+        return dataset.lineage_name
+    return dataset_uuids({"facets": dataset.facets}).table_uuid or dataset.lineage_name
+
+
+class Scope(BaseModel):
+    """What a feed row is about: the uuids of the governed tables it names and of their namespaces, and the governed
+    tables it named that carry no uuid, each once, in the order named."""
+
+    table_uuids: list[str]
+    namespace_uuids: list[str]
+    unresolved_tables: list[str]
+
+
+def scope_of(datasets: list[Dataset]) -> Scope:
+    """The :class:`Scope` of an event naming ``datasets``."""
+    governed = [dataset for dataset in datasets if not is_external_source_namespace(dataset.namespace, dataset.name)]
+    named = [(dataset.name, dataset_uuids({"facets": dataset.facets})) for dataset in governed]
+    return Scope(
+        table_uuids=list(dict.fromkeys(uuids.table_uuid for _, uuids in named if uuids.table_uuid)),
+        namespace_uuids=list(dict.fromkeys(uuids.namespace_uuid for _, uuids in named if uuids.namespace_uuid)),
+        unresolved_tables=list(dict.fromkeys(name for name, uuids in named if not uuids.table_uuid)),
+    )
+
+
 def edges_of(event: RunEvent | DatasetEvent, *, received_at: datetime) -> list[dict[str, Any]]:
     """The table-level edges a successful run asserts: every input to every output it wrote, at their versions.
 
@@ -191,9 +238,9 @@ def edges_of(event: RunEvent | DatasetEvent, *, received_at: datetime) -> list[d
     writer_run = lance_facet.get("runId") if isinstance(lance_facet, dict) else None
     rows: list[dict[str, Any]] = []
     for output in event.outputs:
-        out_table, out_version = output.lineage_name, _version_of(output)
+        out_table, out_version = edge_identity(output), _version_of(output)
         for source in event.inputs:
-            in_table = source.lineage_name
+            in_table = edge_identity(source)
             if in_table == out_table:
                 continue
             in_version, in_branch = _version_of(source), _branch_of(source)
@@ -204,9 +251,11 @@ def edges_of(event: RunEvent | DatasetEvent, *, received_at: datetime) -> list[d
                     "writer_run_id": writer_run if isinstance(writer_run, str) and writer_run else None,
                     "author": event.author,
                     "in_table": in_table,
+                    "in_name": source.lineage_name,
                     "in_version": in_version,
                     "in_branch": in_branch,
                     "out_table": out_table,
+                    "out_name": output.lineage_name,
                     "out_version": out_version,
                     "out_branch": event.write_ref,
                     "event_time": event.event_time,
@@ -218,6 +267,7 @@ def edges_of(event: RunEvent | DatasetEvent, *, received_at: datetime) -> list[d
 
 def feed_row(event: RunEvent | DatasetEvent, *, received_at: datetime) -> dict[str, Any]:
     """The feed row one admitted event becomes. The payload is the event as the parsed model dumps it, the JSON its bound weighs."""
+    scope = scope_of([*event.inputs, *event.outputs]).model_dump()
     if isinstance(event, DatasetEvent):
         return {
             "event_key": feed_key(event),
@@ -228,6 +278,7 @@ def feed_row(event: RunEvent | DatasetEvent, *, received_at: datetime) -> dict[s
             "author": event.author,
             "inputs": [],
             "outputs": [event.dataset.name],
+            **scope,
             "event": event.model_dump_json(by_alias=True),
             "received_at": received_at,
         }
@@ -240,6 +291,7 @@ def feed_row(event: RunEvent | DatasetEvent, *, received_at: datetime) -> dict[s
         "author": event.author,
         "inputs": [d.name for d in event.inputs],
         "outputs": [d.name for d in event.outputs],
+        **scope,
         "event": event.model_dump_json(by_alias=True),
         "received_at": received_at,
     }
@@ -431,30 +483,35 @@ class ProvenanceStore:
         stored = json.loads(first["event"]) if first and first["event"] else None
         return stored if isinstance(stored, dict) else None
 
-    async def derived(self, table: str, *, max_depth: int = MAX_DERIVED_DEPTH) -> tuple[list[DerivedTable], bool]:
-        """Every table derived from ``table``, nearest first, and whether the walk reached the end of it.
+    async def derived(self, sources: set[str], *, max_depth: int = MAX_DERIVED_DEPTH) -> tuple[list[DerivedTable], bool]:
+        """Every table derived from the table keyed by ``sources``, nearest first, and whether the walk reached the end of it.
 
-        The tables written by the runs that read ``table``, then by the runs that read those, to ``max_depth``
-        hops, read off the edge list at one version. An edge is kept whatever version of its input the run
-        named, so a table derived from any version of ``table`` is in the answer: the direction an erasure
-        needs, since it must reach every table that may hold what it erases. The walk is ``False``-complete
-        when it stopped at ``max_depth`` with tables left to follow.
+        ``sources`` are edge keys (:func:`edge_identity`): a governed table's uuid, so the walk follows the edges the table
+        left under every name it has had, and the name an outside producer's unresolved event keyed it by. The tables written by the runs that read it, then by the runs that read those,
+        to ``max_depth`` hops, read off the edge list at one version. An edge is kept whatever version of its input the
+        run named, so a table derived from any version of ``table`` is in the answer: the direction an erasure needs,
+        since it must reach every table that may hold what it erases. The walk is ``False``-complete when it stopped at
+        ``max_depth`` with tables left to follow. Each derived table is answered by the name its newest edge used.
         """
-        return await self._run(lambda: self._derived(table, max_depth))
+        return await self._run(lambda: self._derived(sources, max_depth))
 
-    def _derived(self, table: str, max_depth: int) -> tuple[list[DerivedTable], bool]:
+    def _derived(self, sources: set[str], max_depth: int) -> tuple[list[DerivedTable], bool]:
         reader = self._reader(EDGES)
         version = reader.table_version()
         reached: dict[str, int] = {}
-        frontier = {table}
+        names: dict[str, tuple[datetime, str]] = {}
+        frontier = set(sources)
         for depth in range(1, max_depth + 1):
-            frontier = _outputs_of(reader, frontier, version) - reached.keys() - {table}
+            frontier = _outputs_of(reader, frontier, version, names) - reached.keys() - sources
             if not frontier:
                 break
             reached.update(dict.fromkeys(frontier, depth))
         else:
-            frontier = _outputs_of(reader, frontier, version) - reached.keys() - {table}
-        found = [DerivedTable(table=name, depth=depth) for name, depth in sorted(reached.items(), key=lambda item: (item[1], item[0]))]
+            frontier = _outputs_of(reader, frontier, version, names) - reached.keys() - sources
+        found = [
+            DerivedTable(table=names[key][1] if key in names else key, uuid=key if is_minted_uuid(key) else None, depth=depth)
+            for key, depth in sorted(reached.items(), key=lambda item: (item[1], names[item[0]][1] if item[0] in names else item[0]))
+        ]
         return found, not frontier
 
     async def cursor(self, follower: str) -> int:
@@ -484,14 +541,30 @@ def _cursor_row(follower: str, seq: int) -> pa.Table:
     return pa.Table.from_pylist([{"follower": follower, "seq": seq, "updated_at": datetime.now(UTC)}], schema=CURSOR_SCHEMA)
 
 
-def _outputs_of(reader: CatalogTableReader, inputs: set[str], version: int) -> set[str]:
-    """The tables the edge list records a run writing from any of ``inputs``, at ``version`` of it."""
-    names = sorted(inputs)
+def _outputs_of(reader: CatalogTableReader, inputs: set[str], version: int, names: dict[str, tuple[datetime, str]]) -> set[str]:
+    """The keys of the tables the edge list records a run writing from any of ``inputs``, at ``version`` of it.
+
+    Records in ``names`` the newest name each was written under.
+    """
+    keys = sorted(inputs)
     found: set[str] = set()
-    for start in range(0, len(names), _IN_LIST):
-        listed = ", ".join(sql_literal(name) for name in names[start : start + _IN_LIST])
-        found.update(reader.to_table(columns=["out_table"], filter=f"in_table IN ({listed})", version=version).column("out_table").to_pylist())
+    for start in range(0, len(keys), _IN_LIST):
+        listed = ", ".join(sql_literal(key) for key in keys[start : start + _IN_LIST])
+        rows = reader.to_table(columns=["out_table", "out_name", "received_at"], filter=f"in_table IN ({listed})", version=version).to_pylist()
+        for row in rows:
+            found.add(row["out_table"])
+            named = (row["received_at"], row["out_name"] or row["out_table"])
+            if row["out_table"] not in names or named[0] >= names[row["out_table"]][0]:
+                names[row["out_table"]] = named
     return found
+
+
+def is_minted_uuid(key: str) -> bool:
+    """Whether an edge key is a governed table's uuid rather than a name (:func:`edge_identity`)."""
+    try:
+        return str(uuid.UUID(key)) == key.lower()
+    except ValueError:
+        return False
 
 
 def _row_ids(table: pa.Table) -> list[int]:
@@ -508,5 +581,8 @@ def _record_of(row: dict[str, Any], *, summary: bool) -> EventRecord:
         author=row["author"],
         inputs=list(row["inputs"] or []),
         outputs=list(row["outputs"] or []),
+        table_uuids=list(row["table_uuids"] or []),
+        namespace_uuids=list(row["namespace_uuids"] or []),
+        unresolved_tables=list(row["unresolved_tables"] or []),
         event=payload if isinstance(payload, dict) else {},
     )

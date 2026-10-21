@@ -135,9 +135,10 @@ export interface paths {
          *     ``next_cursor`` is always the ``since`` to pass next; it equals the one passed when nothing new has
          *     committed. Seq order is commit order (a row's stable Lance row id, assigned when its commit lands; see
          *     ``lineage.services.provenance``), so a follower that always passes
-         *     ``next_cursor`` back reads every row it may see exactly once. ``table=`` keeps the rows whose inputs or
-         *     outputs name that table id; ``namespace=`` the rows naming a table under it. The contract a pipeline
-         *     polls is ``docs/COMMIT-EVENTS.md``.
+         *     ``next_cursor`` back reads every row it may see exactly once. ``table=`` keeps the rows naming the table that id
+         *     names now, under every name it has had ([[LH-522]]); ``namespace=`` the rows naming a table directly in that
+         *     namespace. Each resolves to its uuid as the caller sees it, and a name that resolves to none keeps the rows
+         *     naming it, or a table under it. The contract a pipeline polls is ``docs/COMMIT-EVENTS.md``.
          *
          *     **Durable** (a Lance table the catalog keeps, shared by every replica) and **governed**: when auth is
          *     on the feed is filtered like the per-dataset reads — an event is shown only if the caller
@@ -250,7 +251,11 @@ export interface paths {
          * Get Derived
          * @description Every table derived from ``name`` the caller may see, nearest first, to ``depth`` hops.
          *
-         *     ``complete`` is false when the walk stopped short or a derived table is hidden from the caller.
+         *     ``name`` resolves to the uuid of the table it names now, and the walk starts there, so it follows what the table
+         *     fed under every name it has had ([[LH-522]]). It starts from the name too, which an outside producer's event keys
+         *     the table by when its credential could not resolve it: an erasure that reaches further than the table's own
+         *     history is the safe direction. ``complete`` is false when the walk stopped short or a derived table is hidden from
+         *     the caller, which includes one renamed since its last edge, until checks key on uuids ([[LH-524]]).
          */
         get: operations["get_derived_tables__name__derived_get"];
         put?: never;
@@ -279,16 +284,23 @@ export interface components {
             derived: components["schemas"]["DerivedTable"][];
             /** Table */
             table: string;
+            /** Uuid */
+            uuid?: string | null;
         };
         /**
          * DerivedTable
          * @description A table derived from the source, and how many derivation hops from it: 1 for a table a run wrote from the source.
+         *
+         *     ``table`` is the name the table's newest edge was recorded under, and ``uuid`` the uuid the catalog keys it by, or
+         *     ``None`` for a table whose events named none.
          */
         DerivedTable: {
             /** Depth */
             depth: number;
             /** Table */
             table: string;
+            /** Uuid */
+            uuid?: string | null;
         };
         /**
          * DlqBacklog
@@ -365,10 +377,16 @@ export interface components {
             inputs?: string[];
             /** Job */
             job?: string | null;
+            /** Namespace Uuids */
+            namespace_uuids?: string[];
             /** Outputs */
             outputs?: string[];
             /** Seq */
             seq: number;
+            /** Table Uuids */
+            table_uuids?: string[];
+            /** Unresolved Tables */
+            unresolved_tables?: string[];
         };
         /**
          * Events

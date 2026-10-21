@@ -12,8 +12,10 @@ Authorization: Bearer <token>
 
 - `since` is the last cursor you stored. The answer holds the events with a larger `seq`, **oldest first**.
 - `limit` is at most 500. A page can be shorter than `limit` while more events exist: see the cursor rule.
-- `table` keeps the events whose inputs or outputs name that table id (`ns$table`). `namespace` keeps the
-  events naming a table under that namespace id (`ns`, `ns$sub`). Both may be given.
+- `table` keeps the events naming the table that id (`ns$table`) names now, under every name it has had: lineage
+  resolves the id to the table's uuid, which a rename keeps. `namespace` keeps the events naming a table directly in
+  the namespace that id names now. Each resolves as your token sees it; an id that names nothing you may see keeps the
+  events whose names match it (for `namespace`, every table id under it). Both may be given.
 - The token is a bearer token lineage verifies. Which service-account tokens it admits is LH-474 (#600).
 
 ## The cursor rule
@@ -56,11 +58,18 @@ about a table.
 | `job` | `<job namespace>/<job name>`, or `null` on a dataset change |
 | `author` | an attribution label: the `author` facet's `name`, else the first owner of an `ownership` facet |
 | `inputs`, `outputs` | the table ids the event reads and writes |
+| `table_uuids`, `namespace_uuids` | the uuids of the governed tables the event names and of their namespaces |
 | `event` | the stored OpenLineage event, omitted with `summary=true` |
 
 The `lance` facet below is rask's own: `run.facets.lance` on a run, `dataset.facets.lance` on a dataset
 change. Its `version` is the **Lance version the write committed**, an integer, and is the value to act on:
 open the table at that version, never "latest". It is absent when the catalog could not identify the commit.
+
+Every governed dataset an event names carries `tableUuid` and `namespaceUuid` in its own `lance` facet
+(`outputs[].facets.lance`, `inputs[].facets.lance`, `dataset.facets.lance`): the uuids the catalog minted for the table
+and its namespace ([ADR 0173](adr/0173-tables-and-namespaces-are-keyed-by-a-minted-uuid.md)). A table's name can be
+renamed or taken by another table; its uuid cannot, so key what you keep about a table on `tableUuid`. A uuid is
+absent when the catalog could not read it. The OpenLineage dataset `name` stays the table id.
 
 ### A write that committed rows
 
@@ -97,7 +106,10 @@ is `null`, and `event` is an OpenLineage `DatasetEvent` with no `run`: the table
 ### Events from other producers
 
 Events posted to `POST /api/lineage/api/v1/lineage` by other OpenLineage producers appear in the same feed.
-Their `author.sub` is bound to the posting token; every other facet is that producer's own claim.
+Their `author.sub` is bound to the posting token, and each governed dataset's `tableUuid` and `namespaceUuid` are the
+ones its name resolved to through the catalog with that token when lineage took the event in, whatever the producer
+claimed. A name the token cannot resolve (a service account's token is lineage's audience, which the catalog refuses)
+is recorded without a uuid. Every other facet is that producer's own claim.
 
 ## Delivery
 

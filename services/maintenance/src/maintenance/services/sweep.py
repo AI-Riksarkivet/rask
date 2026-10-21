@@ -26,7 +26,7 @@ from collections.abc import Awaitable, Callable, Iterable, Iterator
 from datetime import UTC, datetime, timedelta
 from functools import partial
 from time import perf_counter
-from typing import Any
+from typing import Any, Literal
 
 import lance
 import pyarrow.fs as pafs
@@ -52,15 +52,16 @@ from maintenance.services import credentials, purge
 from maintenance.services.discovery import discover_datasets
 from maintenance.services.due import refresh_due, table_ids
 from maintenance.services.expiry import DatasetResult, DueVerdict, ExpiryPolicy, ExpiryTarget, count_reclaimable, expire_versions, summarize_refusals
-from maintenance.services.naming import TableIds, under_a_declared_root
+from maintenance.services.naming import TableIds, read_uuids, under_a_declared_root
 from maintenance.services.plan import DatasetPlan, PlanContext, buckets_to_sweep, cadence_skip, load_policies, resolve_plan
 from service_kit.governed import fga
 from service_kit.governed.audit import SUCCESS, audit
-from service_kit.lakehouse import auto_cleanup, base_refs, base_registry, maintenance_policies, trash
+from service_kit.lakehouse import auto_cleanup, base_refs, base_registry, location_claims, maintenance_policies, trash
 from service_kit.lakehouse.features import flags_from_open_error, manifest_feature_flags, mixes_data_file_versions
 from service_kit.lakehouse.lance_session import affordable_cache_bytes
 from service_kit.lakehouse.maintenance_due import CloneList, delete_due, list_due, write_clone_list
 from service_kit.lakehouse.objectfs import s3_filesystem
+from service_kit.openlineage import DatasetUuids
 
 
 log = logging.getLogger(__name__)
@@ -372,11 +373,17 @@ def _expire(uri: str, table: str, plan: DatasetPlan, *, sweep: SweepPlan, settin
 
 
 def _expire_in_span(uri: str, table: str, plan: DatasetPlan, *, sweep: SweepPlan, settings: MaintenanceSettings) -> DatasetResult:
-    """:func:`_expire` inside its own span, timed around the work: a failure and a refusal are both on the span."""
+    """:func:`_expire` inside its own span, timed around the work: a failure and a refusal are both on the span.
+
+    A pass its lineage event will name carries the uuids of the table and its namespace, read only for such a pass.
+    """
     with tracer.start_as_current_span("maintenance.expire_versions") as span:
         span.set_attribute("lance.maintenance.dataset_uri", uri)
         started = perf_counter()
         result = _expire(uri, table, plan, sweep=sweep, settings=settings)
+        if _lane_of(result) is not None:
+            claims = location_claims.ClaimStore(control_root=settings.resolved_control_root, storage_options=settings.storage_options())
+            result.uuids = read_uuids(sweep.table_ids, table, claims=claims, delimiter=settings.delimiter)
         result.duration_seconds = round(perf_counter() - started, 3)
         span.set_attribute("lance.maintenance.duration_seconds", result.duration_seconds)
         if result.refused is not None:
@@ -636,14 +643,14 @@ def audit_material_work(result: DatasetResult, *, subject: str) -> None:
     )
 
 
-async def _emit_complete(emitter: MaintenanceEmitter, *, table_id: str, namespace: str) -> None:
+async def _emit_complete(emitter: MaintenanceEmitter, *, table_id: str, namespace: str, uuids: DatasetUuids) -> None:
     """The COMPLETE publish, a coroutine function so the attribute lookup happens INSIDE :func:`_publish_all`'s guard."""
-    await emitter.emit_maintenance(table_id=table_id, namespace=namespace)
+    await emitter.emit_maintenance(table_id=table_id, namespace=namespace, uuids=uuids)
 
 
-async def _emit_failed(emitter: MaintenanceEmitter, *, table_id: str, namespace: str, error: str) -> None:
+async def _emit_failed(emitter: MaintenanceEmitter, *, table_id: str, namespace: str, error: str, uuids: DatasetUuids) -> None:
     """The FAIL publish — same late-binding rule as :func:`_emit_complete`."""
-    await emitter.emit_maintenance_failed(table_id=table_id, namespace=namespace, error=error)
+    await emitter.emit_maintenance_failed(table_id=table_id, namespace=namespace, error=error, uuids=uuids)
 
 
 async def _publish_all(kind: str, jobs: list[tuple[str, Callable[[], Awaitable[None]]]]) -> None:
@@ -666,21 +673,43 @@ async def _publish_all(kind: str, jobs: list[tuple[str, Callable[[], Awaitable[N
             log.warning(f"maintenance_{kind}_emit_error", extra={"table": table_id, "error": str(outcome)})
 
 
-def _emit_selection(results: list[DatasetResult], *, delimiter: str) -> tuple[list[tuple[str, str]], list[tuple[str, str, str]]]:
-    """``(complete, failed)``: ``(table_id, namespace)`` per dataset that reclaimed versions, and ``(table_id, namespace,
-    error)`` per ``maintain:`` failure. An ``open:`` error, a refusal and a dataset no id names emit nothing."""
-    complete: list[tuple[str, str]] = []
-    failed: list[tuple[str, str, str]] = []
+def _lane_of(result: DatasetResult) -> Literal["complete", "fail"] | None:
+    """The lineage event a pass emits: ``fail`` for a ``maintain:`` failure, ``complete`` for reclaimed versions, and
+    none for an ``open:`` error, a refusal or a dataset no id names."""
+    error = result.error or ""
+    if result.table_id is None:
+        return None
+    if error.startswith("maintain:"):
+        return "fail"
+    if not error.startswith("open:") and _did_material_work(result):
+        return "complete"
+    return None
+
+
+class _Emit(BaseModel):
+    """One dataset's lineage event: the table it names, that table's namespace, their uuids, and a failure's error."""
+
+    table_id: str
+    namespace: str
+    uuids: DatasetUuids
+    error: str = ""
+
+
+def _emit_selection(results: list[DatasetResult], *, delimiter: str) -> tuple[list[_Emit], list[_Emit]]:
+    """``(complete, failed)``: one :class:`_Emit` per dataset that reclaimed versions, and one per ``maintain:`` failure."""
+    complete: list[_Emit] = []
+    failed: list[_Emit] = []
     for result in results:
-        table_id = result.table_id
-        if table_id is None:
+        lane = _lane_of(result)
+        if lane is None or result.table_id is None:
             continue
-        namespace = fga.parent_namespace_id(table_id, delimiter=delimiter) or ""
-        error = result.error or ""
-        if error.startswith("maintain:"):
-            failed.append((table_id, namespace, error))
-        elif not error.startswith("open:") and _did_material_work(result):
-            complete.append((table_id, namespace))
+        emit = _Emit(
+            table_id=result.table_id,
+            namespace=fga.parent_namespace_id(result.table_id, delimiter=delimiter) or "",
+            uuids=result.uuids,
+            error=result.error or "",
+        )
+        (failed if lane == "fail" else complete).append(emit)
     return complete, failed
 
 
@@ -696,8 +725,12 @@ async def emit_sweep_lineage(emitter: MaintenanceEmitter, results: list[DatasetR
         log.warning("maintenance_fail_emits_capped", extra={"failing": len(failed), "emitted": _MAX_FAIL_EMITS_PER_TICK})
         random.shuffle(failed)
         failed = failed[:_MAX_FAIL_EMITS_PER_TICK]
-    await _publish_all("complete", [(t, partial(_emit_complete, emitter, table_id=t, namespace=ns)) for t, ns in complete])
-    await _publish_all("fail", [(t, partial(_emit_failed, emitter, table_id=t, namespace=ns, error=err)) for t, ns, err in failed])
+    await _publish_all(
+        "complete", [(e.table_id, partial(_emit_complete, emitter, table_id=e.table_id, namespace=e.namespace, uuids=e.uuids)) for e in complete]
+    )
+    await _publish_all(
+        "fail", [(e.table_id, partial(_emit_failed, emitter, table_id=e.table_id, namespace=e.namespace, error=e.error, uuids=e.uuids)) for e in failed]
+    )
 
 
 def summarize(results: list[DatasetResult]) -> dict[str, Any]:

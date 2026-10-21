@@ -2738,6 +2738,17 @@
             "title": "Extra",
             "type": "object"
           },
+          "namespace_uuid": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Namespace Uuid"
+          },
           "object_id": {
             "title": "Object Id",
             "type": "string"
@@ -2754,6 +2765,17 @@
             ],
             "title": "Object Type",
             "type": "string"
+          },
+          "object_uuid": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Object Uuid"
           },
           "occurred_at": {
             "format": "date-time",

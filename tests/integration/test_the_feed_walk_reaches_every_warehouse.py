@@ -17,6 +17,9 @@ authentication-then-FGA gate, and the real ingress behind the walk. What stands 
   derivation itself, `event_reader` to `can_read_event_feed` and nothing wider, is `model.fga.yaml`'s claim,
   the one place authz is checked against the real evaluator offline;
 * the inbox actor, as a list per subject.
+
+An outside producer's run reaches the bell by the same walk, and names its table by the uuid lineage resolved when it
+took the event in ([[LH-522]]): driven through a live catalog and a live lineage, with authentication off.
 """
 
 from __future__ import annotations
@@ -46,6 +49,7 @@ from notifications.proxies import TypedActorProxy
 from service_kit.governed.decider import OpenFgaDecider
 from service_kit.governed.machine_identity import ServicePrincipal
 from service_kit.lakehouse.ns_errors import install_problem_handlers
+from tests.integration.lineage_app import live_catalog, live_lineage
 
 
 #: The reconciler's service account, whose subject (`kubernetes~system:serviceaccount:rask:rask-sa-notifications`,
@@ -222,3 +226,38 @@ async def test_the_walk_reaches_a_tenant_warehouse_run_and_is_sent_only_what_tar
         with pytest.raises(httpx.HTTPStatusError) as refused:
             await stranger.page(since=None)
     assert refused.value.response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_an_outside_producers_run_is_recorded_by_its_tables_uuid_and_rings_its_authors_bell(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    token = tmp_path / "rask-lineage-token"
+    token.write_text("sa-token\n")
+    forged = "00000000-0000-4000-8000-000000000000"
+    event = {
+        **DEFAULT_RUN,
+        "eventType": "COMPLETE",
+        "job": {"namespace": "train", "name": "nightly"},
+        "outputs": [{"namespace": "gold", "name": "gold$catalog", "facets": {"lance": {"tableUuid": forged, "namespaceUuid": forged}}}],
+    }
+    boxes: dict[str, list[dict[str, Any]]] = {}
+    with live_catalog(tmp_path / "catalog", monkeypatch) as catalog_url, live_lineage(catalog_url, monkeypatch) as lineage_url:
+        async with httpx.AsyncClient(base_url=catalog_url, timeout=60) as catalog:
+            assert (await catalog.post("/v1/namespace/gold/create", json={})).status_code == 200
+            assert (await catalog.post("/v1/table/gold$catalog/declare", json={})).status_code == 200
+            table_uuid = (await catalog.post("/v1/table/gold$catalog/describe", json={})).json()["properties"]["rask.uuid"]
+            namespace_uuid = (await catalog.post("/v1/namespace/gold/describe", json={})).json()["properties"]["rask.uuid"]
+        async with httpx.AsyncClient(timeout=60) as http:
+            assert (await http.post(f"{lineage_url}/api/v1/lineage", json=event)).status_code == 201
+            recorded = (await http.get(f"{lineage_url}/events", params={"table": "gold$catalog"})).json()["events"]
+            feed = LineageFeedClient(client=http, base_url=lineage_url, token_file=str(token), timeout_seconds=5.0, page_limit=500)
+            await reconcile(
+                client=feed,
+                store=cast(LineageCursorStore, _Cursor()),
+                visibility=Visibility(decider=None, enabled=False),
+                open_inbox=lambda subject: cast(TypedActorProxy, _Inbox(boxes, subject)),
+                max_pages=4,
+                budget_seconds=10.0,
+            )
+
+    assert [(row["table_uuids"], row["namespace_uuids"]) for row in recorded] == [([table_uuid], [namespace_uuid])], recorded
+    assert {subject: [(row["object_id"], row["object_uuid"]) for row in rows] for subject, rows in boxes.items()} == {"dex~bob": [("gold$catalog", table_uuid)]}

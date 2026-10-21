@@ -28,11 +28,12 @@ from fastapi.exceptions import RequestValidationError
 from lance_namespace import PermissionDeniedError
 from pydantic import ValidationError
 
-from lineage.api.dependencies import ProvenanceDep, SettingsDep
+from lineage.api.dependencies import BearerDep, NamesDep, ProvenanceDep, SettingsDep
 from lineage.api.fga_deps import enforce_author, enforce_output_authz
 from lineage.api.security import CurrentToken
 from lineage.core.metrics import Door, Outcome, record_ingest_duration, record_outcome
 from lineage.models import DatasetEvent, ForeignRunError, RunEvent, UnauthoredRunError, UngovernedOutputError, parse_event, without_signature_facet
+from lineage.services.names import stamp_resolved_uuids
 
 
 # Unversioned like every sibling router — the composition layer (api/v1/router.py) mounts this one
@@ -102,7 +103,13 @@ _EVENT_BODY = {
 
 @router.post("/lineage", status_code=201, openapi_extra=_EVENT_BODY)
 async def ingest_event(
-    body: Annotated[dict[str, Any], Body()], request: Request, provenance: ProvenanceDep, settings: SettingsDep, token: CurrentToken
+    body: Annotated[dict[str, Any], Body()],
+    request: Request,
+    provenance: ProvenanceDep,
+    settings: SettingsDep,
+    token: CurrentToken,
+    names: NamesDep,
+    bearer: BearerDep,
 ) -> dict[str, str | None]:
     """Ingest one OpenLineage event — a ``RunEvent``, or a ``DatasetEvent`` for a change no job performed.
 
@@ -159,6 +166,10 @@ async def ingest_event(
     except PermissionDeniedError:
         record_outcome(Outcome.REFUSED, door=Door.HTTP)
         raise
+    # A GOVERNED TABLE IS RECORDED BY ITS UUID ([[LH-522]]), which this door resolves from each name as the caller
+    # sees it and stamps over whatever the body claimed, as it clears a claimed signature: so a pipeline's runs key on
+    # the uuid the catalog's own events carry, and a rename since cannot split them.
+    await stamp_resolved_uuids(event, names, bearer=bearer)
     started = time.perf_counter()
     # The edges, then the feed row, each keyed: a failure answers an error, the producer retries, and the
     # retry lands what is missing and nothing twice (see `ProvenanceStore.record`).

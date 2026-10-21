@@ -37,7 +37,7 @@ from lance_namespace import (
 from openfga_sdk import OpenFgaClient
 
 from catalog.api import fga_deps, lineage_deps
-from catalog.api.dependencies import DataNamespaceDep, FgaClientDep, LineageEmitterDep, NamespaceDep, SettingsDep, StorageOptionsDep
+from catalog.api.dependencies import DataNamespaceDep, FgaClientDep, LineageEmitterDep, NamespaceDep, ObjectUuidsDep, SettingsDep, StorageOptionsDep
 from catalog.api.security import Caller, CurrentToken
 from catalog.core import provenance_guard
 from catalog.core.config import Settings
@@ -129,6 +129,7 @@ async def add_columns(
     so: StorageOptionsDep,
     token: CurrentToken,
     emitter: LineageEmitterDep,
+    uuids: ObjectUuidsDep,
     authorization: Annotated[str | None, Header()] = None,
 ) -> AlterTableAddColumnsResponse:
     """Add SQL-expression-computed columns to the table — wraps ``alter_table_add_columns``; emits an
@@ -145,6 +146,7 @@ async def add_columns(
         token=token,
         operation=ADD_COLUMNS,
         authorization=authorization,
+        uuids=uuids,
         pin_version=response.version,
         branch=body.branch,
     )
@@ -160,6 +162,7 @@ async def alter_columns(
     so: StorageOptionsDep,
     token: CurrentToken,
     emitter: LineageEmitterDep,
+    uuids: ObjectUuidsDep,
     authorization: Annotated[str | None, Header()] = None,
 ) -> AlterTableAlterColumnsResponse:
     """Rename, re-type, or change nullability of existing columns — wraps ``alter_table_alter_columns``;
@@ -176,6 +179,7 @@ async def alter_columns(
         token=token,
         operation=ALTER_COLUMNS,
         authorization=authorization,
+        uuids=uuids,
         pin_version=response.version,
         branch=body.branch,
     )
@@ -191,6 +195,7 @@ async def drop_columns(
     so: StorageOptionsDep,
     token: CurrentToken,
     emitter: LineageEmitterDep,
+    uuids: ObjectUuidsDep,
     authorization: Annotated[str | None, Header()] = None,
 ) -> AlterTableDropColumnsResponse:
     """Drop the named columns from the table — wraps ``alter_table_drop_columns``; emits a DROP_COLUMNS
@@ -207,6 +212,7 @@ async def drop_columns(
         token=token,
         operation=DROP_COLUMNS,
         authorization=authorization,
+        uuids=uuids,
         pin_version=response.version,
         branch=body.branch,
     )
@@ -241,6 +247,7 @@ async def update_field_metadata(
     token: CurrentToken,
     client: FgaClientDep,
     emitter: LineageEmitterDep,
+    uuids: ObjectUuidsDep,
     authorization: Annotated[str | None, Header()] = None,
 ) -> UpdateFieldMetadataResponse:
     """Merge or replace per-field metadata for the given field paths — wraps ``update_field_metadata``;
@@ -260,6 +267,7 @@ async def update_field_metadata(
         token=token,
         operation=UPDATE_FIELD_METADATA,
         authorization=authorization,
+        uuids=uuids,
         pin_version=response.version,
         branch=body.branch,
     )
@@ -275,6 +283,7 @@ async def update_table_schema_metadata(
     so: StorageOptionsDep,
     token: CurrentToken,
     emitter: LineageEmitterDep,
+    uuids: ObjectUuidsDep,
     authorization: Annotated[str | None, Header()] = None,
 ) -> JSONResponse:
     """Upsert the table's schema-level metadata map — a ``null`` value DELETES that key; emits an
@@ -354,6 +363,7 @@ async def update_table_schema_metadata(
         token=token,
         operation=UPDATE_SCHEMA_METADATA,
         authorization=authorization,
+        uuids=uuids,
         pin_version=committed,
         branch=branch,
     )

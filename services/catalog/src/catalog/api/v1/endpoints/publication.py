@@ -42,6 +42,7 @@ from catalog.api.dependencies import (
     FgaClientDep,
     LineageEmitterDep,
     NamespaceDep,
+    ObjectUuidsDep,
     SettingsDep,
     StorageOptionsDep,
 )
@@ -50,7 +51,7 @@ from catalog.api.pagination import paginate
 from catalog.api.security import Caller, CurrentToken
 from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier
-from catalog.core.lineage_emit import PUBLISH_TABLE, RESTORE_TABLE, LineageEmitter, emit_write_event, is_person_subject
+from catalog.core.lineage_emit import PUBLISH_TABLE, RESTORE_TABLE, LineageEmitter, UuidReader, emit_write_event, is_person_subject
 from catalog.core.namespace import open_dataset
 from catalog.schemas import PromotionDecision, PromotionDecisionRequest, PromotionHold, PromotionsListResponse, PublishRequest, PublishResult
 from catalog.services import dataplane, promotions, publication, warehouses
@@ -272,6 +273,7 @@ async def publish_table(
     so: StorageOptionsDep,
     control: ControlEmitterDep,
     lineage: LineageEmitterDep,
+    uuids: ObjectUuidsDep,
     fga_client: FgaClientDep,
     token: CurrentToken,
     clock: ClockDep,
@@ -385,6 +387,7 @@ async def publish_table(
     if result.advanced:
         await _announce_publication(
             lineage=lineage,
+            uuids=uuids,
             control=control,
             settings=settings,
             segments=segments,
@@ -485,6 +488,7 @@ async def _close_what_published_reached(
 async def _announce_publication(
     *,
     lineage: LineageEmitter,
+    uuids: UuidReader,
     control: ControlEmitter,
     settings: Settings,
     segments: list[str],
@@ -514,6 +518,7 @@ async def _announce_publication(
         version=to_version,
         operation=PUBLISH_TABLE,
         authorization=authorization,
+        uuids=uuids,
         source_uri=location,
     )
     await emit_control(
@@ -591,6 +596,7 @@ async def approve_promotion(
     so: StorageOptionsDep,
     control: ControlEmitterDep,
     lineage: LineageEmitterDep,
+    uuids: ObjectUuidsDep,
     token: CurrentToken,
     clock: ClockDep,
     authorization: Annotated[str | None, Header()] = None,
@@ -607,6 +613,7 @@ async def approve_promotion(
     if moved:
         await _announce_publication(
             lineage=lineage,
+            uuids=uuids,
             control=control,
             settings=settings,
             segments=segments,
@@ -631,6 +638,7 @@ async def reject_promotion(
     so: StorageOptionsDep,
     control: ControlEmitterDep,
     lineage: LineageEmitterDep,
+    uuids: ObjectUuidsDep,
     token: CurrentToken,
     clock: ClockDep,
     authorization: Annotated[str | None, Header()] = None,
@@ -660,6 +668,7 @@ async def reject_promotion(
                 token=token,
                 operation=RESTORE_TABLE,
                 authorization=authorization,
+                uuids=uuids,
                 pin_version=restored,
                 branch=None,
             )

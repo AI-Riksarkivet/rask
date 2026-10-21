@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
+from typing import Final
 
 
 #: The catalog table-id delimiter (``gold$catalog``, ``silver$features``). ONE definition for the whole
@@ -22,6 +24,20 @@ import re
 #: is no migration for it and nothing detects it — the symptom is a total, silent authorization
 #: outage on an estate whose logs report a healthy catalog.
 CATALOG_DELIMITER = "$"
+
+
+#: The read-only property DescribeTable and DescribeNamespace answer an object's uuid under (ADR 0173 §11). A namespace
+#: keeps its own in its `__manifest` row's properties, which only its create writes and its undrop restores; a table's
+#: lives in its location's claim (``service_kit.lakehouse.location_claims``). No door accepts a caller's ``rask.*``
+#: property, so no caller sets or changes one. Every service that names an object by its uuid reads it, so it is declared
+#: once.
+UUID_PROPERTY: Final = "rask.uuid"
+
+
+def uuid_of(properties: object) -> str | None:
+    """The uuid ``properties`` keeps under :data:`UUID_PROPERTY`, or ``None`` when it keeps no non-empty string there."""
+    value = properties.get(UUID_PROPERTY) if isinstance(properties, Mapping) else None
+    return value if isinstance(value, str) and value else None
 
 
 #: The shape a control-plane id (project, warehouse, bucket) must have: DNS-safe — lowercase

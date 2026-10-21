@@ -42,7 +42,7 @@ def _create(client: TestClient, table: str, *, stamp_lineage: bool = False) -> N
         # The SAME keys the create endpoint stamps when lineage emission is on (it is off by default in
         # this fixture, and turning it on would demand a live lineage service), written onto the file by
         # pylance as the platform writes them: a create payload carrying them is refused ([[LH-208]]).
-        stamp = build_lineage_metadata(table_id=f"m1${table}", namespace="m1", run_id="run-1")
+        stamp = build_lineage_metadata(namespace="m1", run_id="run-1")
         lance.dataset(str(created.json()["location"])).update_schema_metadata(dict(stamp))
 
 
@@ -99,5 +99,6 @@ def test_delete_does_not_drop_lineage_coordinates(real_ns_client: TestClient) ->
     assert resp.json() == {}  # the echo is filtered the same way the read twin is; direct map since A2
 
     on_disk = lance.dataset(_location(real_ns_client, "t3")).schema.metadata or {}
-    assert on_disk.get(b"lineage.dataset_id") == b"m1$t3", on_disk
+    table_uuid = real_ns_client.post("/v1/table/m1$t3/describe", json={}).json()["properties"]["rask.uuid"]
+    assert on_disk.get(b"lineage.dataset_id") == table_uuid.encode(), on_disk
     assert on_disk.get(b"lineage.create_run_id") == b"run-1", on_disk

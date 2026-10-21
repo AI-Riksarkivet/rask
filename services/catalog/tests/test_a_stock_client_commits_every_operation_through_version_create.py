@@ -777,7 +777,6 @@ class _Recorder:
 def test_a_catalog_write_door_commits_the_run_its_context_names(
     served: Served, door: Callable[[lance_namespace.LanceNamespace], None], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from catalog.core.lineage_emit import InputRef
     from catalog.main import app
 
     _with_source(served)
@@ -796,9 +795,9 @@ def test_a_catalog_write_door_commits_the_run_its_context_names(
     }
     assert json.loads(properties["rask.inputs"]) == [{"table": ["db", "src"], "version": 1}]
     (announced,) = recorder.writes
-    assert (announced["version"], announced["inputs"], announced["run"].run_id, announced["run"].job) == (
+    assert (announced["version"], [ref[:4] for ref in announced["inputs"]], announced["run"].run_id, announced["run"].job) == (
         2,
-        [InputRef("db", "db$src", 1, None)],
+        [("db", "db$src", 1, None)],
         "run-7",
         "nightly",
     )
@@ -863,7 +862,6 @@ def _rename_into_silver(served: Served) -> tuple[int, int, str]:
 def test_a_silver_commit_lands_only_when_it_names_its_run_and_inputs(
     served: Served, write: Callable[[Served], tuple[int, int, str]], answer: tuple[int, int], names: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from catalog.core.lineage_emit import InputRef
     from catalog.main import app
 
     stock = _with_source(served)
@@ -887,7 +885,7 @@ def test_a_silver_commit_lands_only_when_it_names_its_run_and_inputs(
     lance.write_dataset(_keyed([2], ["b"]), namespace_client=stock, table_id=_SILVER, mode="overwrite", transaction_properties=_PROVENANCE)
     landed = lance.dataset(namespace_client=stock, table_id=_SILVER)
     assert (landed.version, _committed_properties(landed, 2)) == (2, _PROVENANCE)
-    assert [(write["version"], write["inputs"]) for write in recorder.writes] == [(2, [InputRef("db", "db$src", 1, None)])]
+    assert [(write["version"], [ref[:4] for ref in write["inputs"]]) for write in recorder.writes] == [(2, [("db", "db$src", 1, None)])]
     # A restore brings back rows the table held, here a fragment the overwrite dropped, so it names no run.
     landed.checkout_version(1).restore()
     assert _rows(lance.dataset(namespace_client=stock, table_id=_SILVER)) == [(1, "a")]

@@ -29,6 +29,7 @@ from catalog.services.table_claims import ResolvedTable
 from service_kit.control_emit import NoopControlEmitter
 from service_kit.governed import fga
 from service_kit.lakehouse import protection
+from tests.unit.no_uuids import NO_OBJECT_UUIDS
 
 
 def _request_stub() -> Any:
@@ -163,6 +164,7 @@ def _drop_table(settings: Settings, ns: Any, *, force: bool = False) -> Any:
             so={},
             authorization=None,
             force=force,
+            uuids=NO_OBJECT_UUIDS,
         )
     )
 
@@ -207,6 +209,7 @@ def test_a_protected_table_refuses_deregister_too(tmp_path: Any) -> None:
                 token=None,
                 so={},
                 authorization=None,
+                uuids=NO_OBJECT_UUIDS,
             )
         )
     assert ns.calls == []
@@ -229,6 +232,7 @@ def test_a_protected_namespace_refuses_drop(tmp_path: Any) -> None:
                 control=NoopControlEmitter(),
                 emitter=cast(Any, None),
                 body=None,
+                uuids=NO_OBJECT_UUIDS,
             )
         )
     assert ns.calls == []
@@ -345,6 +349,7 @@ def test_purge_true_still_destroys_immediately(tmp_path: Any) -> None:
             authorization=None,
             force=False,
             purge=True,
+            uuids=NO_OBJECT_UUIDS,
         )
     )
     assert "drop_table" in ns.calls
@@ -359,7 +364,11 @@ def test_undrop_without_a_record_is_an_honest_404(tmp_path: Any) -> None:
     settings = _settings(tmp_path, grace_days=7)
     ns: Any = _TrashableNamespace()
     with pytest.raises(TableNotFoundError, match="no recoverable drop"):
-        asyncio.run(t_ep.undrop_table(id="bronze$gone", ns=ns, settings=settings, token=None, control=NoopControlEmitter(), emitter=_NoopLineage()))
+        asyncio.run(
+            t_ep.undrop_table(
+                id="bronze$gone", ns=ns, settings=settings, token=None, control=NoopControlEmitter(), emitter=_NoopLineage(), uuids=NO_OBJECT_UUIDS
+            )
+        )
 
 
 def test_a_recoverable_drop_KEEPS_the_owner_grants(tmp_path: Any) -> None:
@@ -412,6 +421,7 @@ def test_a_CASCADE_refuses_when_a_descendant_is_protected(tmp_path: Any) -> None
                 control=NoopControlEmitter(),
                 emitter=cast(Any, None),
                 body=DropNamespaceRequest(behavior="Cascade"),
+                uuids=NO_OBJECT_UUIDS,
             )
         )
     assert ns.calls == [], "the cascade ran despite a protected descendant"
@@ -437,6 +447,7 @@ def test_force_lets_a_cascade_through(tmp_path: Any) -> None:
             emitter=cast(Any, None),
             body=DropNamespaceRequest(behavior="Cascade"),
             force=True,
+            uuids=NO_OBJECT_UUIDS,
         )
     )
     assert "drop_namespace" in ns.calls
@@ -498,6 +509,7 @@ def _drop_namespace_cascade(settings: Settings, ns: Any, *, force: bool = False,
             body=DropNamespaceRequest(behavior="Cascade"),
             force=force,
             purge=purge,
+            uuids=NO_OBJECT_UUIDS,
         )
     )
 
@@ -560,7 +572,16 @@ def test_namespace_undrop_rebuilds_the_whole_subtree(tmp_path: Any) -> None:
     ns.calls.clear()
 
     asyncio.run(
-        n_ep.undrop_namespace(id="bronze", request=_request_stub(), ns=ns, settings=settings, token=None, control=NoopControlEmitter(), emitter=_NoopLineage())
+        n_ep.undrop_namespace(
+            id="bronze",
+            request=_request_stub(),
+            ns=ns,
+            settings=settings,
+            token=None,
+            control=NoopControlEmitter(),
+            emitter=_NoopLineage(),
+            uuids=NO_OBJECT_UUIDS,
+        )
     )
 
     creates = [c for c in ns.calls if c.startswith("create_namespace:")]
@@ -581,7 +602,14 @@ def test_namespace_undrop_without_a_record_is_an_honest_404(tmp_path: Any) -> No
     with pytest.raises(NamespaceNotFoundError, match="no recoverable drop"):
         asyncio.run(
             n_ep.undrop_namespace(
-                id="bronze", request=_request_stub(), ns=ns, settings=settings, token=None, control=NoopControlEmitter(), emitter=_NoopLineage()
+                id="bronze",
+                request=_request_stub(),
+                ns=ns,
+                settings=settings,
+                token=None,
+                control=NoopControlEmitter(),
+                emitter=_NoopLineage(),
+                uuids=NO_OBJECT_UUIDS,
             )
         )
 

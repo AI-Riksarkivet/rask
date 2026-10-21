@@ -11,6 +11,9 @@ walk from the governed table does not reach what the producer wrote.
 
 An answer that hides a derived table from the caller says it is incomplete: an erasure that cannot see every table
 built from its source must not read what it can see as all of them.
+
+A rename does not split what a table fed ([[LH-522]]): a governed table is recorded by the uuid the catalog minted for
+it, which the rename keeps, so the walk from its new name and the feed scoped to it reach what it fed under the old one.
 """
 
 from __future__ import annotations
@@ -69,11 +72,19 @@ def test_a_walk_from_a_source_reaches_every_table_built_from_it_and_nothing_an_o
         assert lineage.post("/api/v1/lineage", json=outside).status_code == 201
 
         answer = lineage.get("/tables/acme-bronze$events/derived")
+        uuid_of = {
+            name: catalog.post(f"/v1/table/{name}/describe", json={}).json()["properties"]["rask.uuid"]
+            for name in ("acme-bronze$events", "acme-silver$pages", "acme-gold$catalog")
+        }
 
     assert answer.status_code == 200, answer.text
     assert answer.json() == {
         "table": "acme-bronze$events",
-        "derived": [{"table": "acme-silver$pages", "depth": 1}, {"table": "acme-gold$catalog", "depth": 2}],
+        "uuid": uuid_of["acme-bronze$events"],
+        "derived": [
+            {"table": "acme-silver$pages", "uuid": uuid_of["acme-silver$pages"], "depth": 1},
+            {"table": "acme-gold$catalog", "uuid": uuid_of["acme-gold$catalog"], "depth": 2},
+        ],
         "complete": True,
     }
 
@@ -93,4 +104,57 @@ def test_an_answer_that_hides_a_derived_table_says_it_is_incomplete(tmp_path: Pa
         answer = lineage.get("/tables/acme-bronze$events/derived", headers={SUBJECT_HEADER: "dex~eraser"})
 
     assert answer.status_code == 200, answer.text
-    assert answer.json() == {"table": "acme-bronze$events", "derived": [{"table": "acme-silver$pages", "depth": 1}], "complete": False}
+    assert answer.json() == {
+        "table": "acme-bronze$events",
+        "uuid": None,
+        "derived": [{"table": "acme-silver$pages", "uuid": None, "depth": 1}],
+        "complete": False,
+    }
+
+
+def test_a_renamed_source_answers_what_it_fed_under_both_names(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Read through lineage's FGA gate by a caller granted on the tables' names now, as a rename leaves the grants: the
+    write recorded under the old name is answered as the table's, and so is an outside producer's run its credential
+    could not resolve, which is recorded by the name."""
+    from lineage.models import parse_event
+
+    port = free_port()
+    announced = {"LANCE_LINEAGE_EMIT_ENABLED": "true", "LANCE_LINEAGE_TRANSPORT": "http", "LANCE_LINEAGE_URL": f"http://127.0.0.1:{port}/api/v1/lineage"}
+    with live_catalog(tmp_path / "catalog", monkeypatch, **announced) as catalog_url, httpx.Client(base_url=catalog_url, timeout=60) as catalog:
+        with live_lineage(catalog_url, monkeypatch, port=port):
+            for namespace in ("acme-bronze", "acme-silver"):
+                assert catalog.post(f"/v1/namespace/{namespace}/create", json={}).status_code == 200
+            assert catalog.post("/v1/table/acme-bronze$t/create", content=_rows(), headers=_ARROW).status_code == 200
+            assert catalog.post("/v1/table/acme-silver$x/create", content=_rows(), headers=_run("x-1", "acme-bronze$t")).status_code == 200
+            assert catalog.post("/v1/table/acme-bronze$t/rename", json={"new_table_name": "u"}).status_code == 200
+            assert catalog.post("/v1/table/acme-silver$y/create", content=_rows(), headers=_run("y-1", "acme-bronze$u")).status_code == 200
+        uuid_of = {
+            name: catalog.post(f"/v1/table/{name}/describe", json={}).json()["properties"]["rask.uuid"]
+            for name in ("acme-bronze$u", "acme-silver$x", "acme-silver$y")
+        }
+        granted = {("dex~owner", "can_get_metadata", f"table:{name}") for name in ("acme-bronze$u", "acme-silver$x", "acme-silver$y", "acme-silver$z")}
+        unresolved = run_event(str(uuid.uuid4()), "COMPLETE", "2026-10-21T10:00:00+00:00", outputs=["acme-silver$z"], inputs=("acme-bronze$u",))
+        with governed_lineage(catalog_url, monkeypatch, granted) as lineage:
+            asyncio.run(lineage.app.state.provenance.record(parse_event(unresolved)))
+            derived = lineage.get("/tables/acme-bronze$u/derived", headers={SUBJECT_HEADER: "dex~owner"})
+            scoped = lineage.get("/events", params={"table": "acme-bronze$u", "since": 0}, headers={SUBJECT_HEADER: "dex~owner"})
+
+    assert derived.status_code == 200, derived.text
+    assert derived.json() == {
+        "table": "acme-bronze$u",
+        "uuid": uuid_of["acme-bronze$u"],
+        "derived": [
+            {"table": "acme-silver$x", "uuid": uuid_of["acme-silver$x"], "depth": 1},
+            {"table": "acme-silver$y", "uuid": uuid_of["acme-silver$y"], "depth": 1},
+            {"table": "acme-silver$z", "uuid": None, "depth": 1},
+        ],
+        "complete": True,
+    }
+    assert scoped.status_code == 200, scoped.text
+    silver = [row for row in scoped.json()["events"] if row["outputs"][0].startswith("acme-silver$")]
+    writes = {(tuple(row["inputs"]), tuple(row["outputs"])) for row in silver}
+    assert writes == {
+        (("acme-bronze$t",), ("acme-silver$x",)),
+        (("acme-bronze$u",), ("acme-silver$y",)),
+        (("acme-bronze$u",), ("acme-silver$z",)),
+    }, scoped.json()["events"]

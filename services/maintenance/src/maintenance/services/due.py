@@ -23,7 +23,7 @@ from pydantic import BaseModel, Field
 from maintenance.core.config import MaintenanceSettings, shared_lance_session
 from maintenance.services.expiry import DueVerdict
 from maintenance.services.index_health import due_indices
-from maintenance.services.naming import TableIds
+from maintenance.services.naming import TableIds, manifest_uuid
 from maintenance.services.purge import manifest_rows, table_location
 from service_kit.lakehouse.base_refs import normalise
 from service_kit.lakehouse.compaction_gate import compaction_refusal
@@ -35,7 +35,8 @@ log = logging.getLogger(__name__)
 
 
 def table_ids(roots: set[str], storage_options: StorageOptions) -> TableIds:
-    """Every table each root's ``__manifest`` names, by location. A root that cannot be read leaves the answer incomplete."""
+    """Every table each root's ``__manifest`` names, by location, and every namespace's uuid. A root that cannot be read
+    leaves the answer incomplete."""
     found = TableIds()
     for root in sorted(roots):
         rows = manifest_rows(root, storage_options)
@@ -46,6 +47,8 @@ def table_ids(roots: set[str], storage_options: StorageOptions) -> TableIds:
             location = table_location(root, row)
             if location is not None and row.get("object_id"):
                 found.by_location[normalise(location)] = str(row["object_id"])
+            elif row.get("object_type") == "namespace" and row.get("object_id") and (uuid := manifest_uuid(row)) is not None:
+                found.namespace_uuids[str(row["object_id"])] = uuid
     return found
 
 

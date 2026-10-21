@@ -8,7 +8,8 @@ signed the same way, with no delegation: maintenance never signs for a person.
 
 A SIGNER WITHOUT ITS KEY EMITS NOTHING and reports itself not ready, and every delivery that would make it act (a write
 arrival, the sweep's own tick) is answered before the delivery is read, so it is redelivered or retried rather than
-lost. The sweep and the purge emit after the work they describe, so a signature that
+lost. Every event names its table's and namespace's uuids beside the names (ADR 0173 §10), inside what is signed. The
+sweep and the purge emit after the work they describe, so a signature that
 cannot be made is a withheld event and never a failed pass; maintenance stages no control event, so nothing signs one
 later.
 
@@ -38,6 +39,7 @@ from maintenance.core.lineage_emit import DaprMaintenanceEmitter, NoopEmitter
 from maintenance.services.purge import ACTOR
 from service_kit.control_emit import emit_control
 from service_kit.governed.signing_key import SigningKeyHolder, attach_signing
+from service_kit.openlineage import DatasetUuids, dataset_uuids
 
 
 if TYPE_CHECKING:
@@ -49,6 +51,8 @@ IDENTITY = "kubernetes~system:serviceaccount:rask:rask-sa-maintenance"
 #: The name its key pair is stored under (`signing_key_name`): the account's name.
 KEY_NAME = "rask-sa-maintenance"
 SECRETS = "http://localhost:3500/v1.0/secrets/lance-secrets"
+#: The uuids the catalog minted for `acme$events` and for `acme`.
+UUIDS = DatasetUuids(table_uuid="0d9c6f3e-7b2a-4c1e-9f5d-2a8b3c4d5e6f", namespace_uuid="3f2e1d0c-4b5a-4968-8776-a5b4c3d2e1f0")
 
 
 class _Sidecar:
@@ -120,37 +124,47 @@ def _emit(client: TestClient, kind: str) -> None:
     if kind == "purge":
         portal.call(
             lambda: emit_control(
-                control, action="table_purged", object_type="table", object_id="table:acme$events", actor=ACTOR, extra={"reason": "trash_expired"}
+                control,
+                action="table_purged",
+                object_type="table",
+                object_id="table:acme$events",
+                object_uuid=UUIDS.table_uuid,
+                namespace_uuid=UUIDS.namespace_uuid,
+                actor=ACTOR,
+                extra={"reason": "trash_expired"},
             )
         )
     elif kind == "failure":
-        portal.call(lambda: lineage.emit_maintenance_failed(table_id="acme$events", namespace="acme", error="maintain: failed"))
+        portal.call(lambda: lineage.emit_maintenance_failed(table_id="acme$events", namespace="acme", error="maintain: failed", uuids=UUIDS))
     else:
-        portal.call(lambda: lineage.emit_maintenance(table_id="acme$events", namespace="acme"))
+        portal.call(lambda: lineage.emit_maintenance(table_id="acme$events", namespace="acme", uuids=UUIDS))
 
 
-def _signed(event: dict[str, Any], public: str) -> tuple[str, str, str] | RefusalReason:
-    """Who a verifier holding the service's published key finds signed an event, whom the event names, and what it says, or why it is refused."""
+def _signed(event: dict[str, Any], public: str) -> tuple[str, str, str, DatasetUuids] | RefusalReason:
+    """Who a verifier holding the service's published key finds signed an event, whom the event names, what it says and
+    the uuids it names, or why it is refused."""
     source = _Published(public)
     try:
         if "run" in event:
             verified = verify_signature(event, source=source, signers=frozenset({IDENTITY}), delegators=frozenset())
-            return verified.identity, event["run"]["facets"]["author"]["sub"], event["eventType"]
+            return verified.identity, event["run"]["facets"]["author"]["sub"], event["eventType"], dataset_uuids(event["outputs"][0])
         verified = verify_control_signature(event, source=source, signers=frozenset({IDENTITY}), delegators=frozenset())
     except SignatureError as exc:
         return exc.reason
-    return verified.identity, event["actor"], event["action"]
+    return verified.identity, event["actor"], event["action"], DatasetUuids(table_uuid=event["object_uuid"], namespace_uuid=event["namespace_uuid"])
 
 
 @pytest.mark.parametrize(
     ("kind", "signed"),
     [
-        pytest.param("expiry", (IDENTITY, IDENTITY, "COMPLETE"), id="an-expiry"),
-        pytest.param("failure", (IDENTITY, IDENTITY, "FAIL"), id="a-failure"),
-        pytest.param("purge", (IDENTITY, ACTOR, "table_purged"), id="a-trash-purge"),
+        pytest.param("expiry", (IDENTITY, IDENTITY, "COMPLETE", UUIDS), id="an-expiry"),
+        pytest.param("failure", (IDENTITY, IDENTITY, "FAIL", UUIDS), id="a-failure"),
+        pytest.param("purge", (IDENTITY, ACTOR, "table_purged", UUIDS), id="a-trash-purge"),
     ],
 )
-def test_every_event_the_service_emits_is_authored_and_signed_as_the_service(boot: Boot, event_signer: Any, kind: str, signed: tuple[str, str, str]) -> None:
+def test_every_event_the_service_emits_is_authored_and_signed_as_the_service(
+    boot: Boot, event_signer: Any, kind: str, signed: tuple[str, str, str, DatasetUuids]
+) -> None:
     pair = event_signer(IDENTITY)
     client = boot(httpx.Response(200, json={"seed": pair.seed}), httpx.Response(200, json={"keys": pair.public}))
 

@@ -117,6 +117,10 @@ class NotificationDelivery(BaseModel):
     #: The governed object the render and delivery checks run against — a dataset name, checked as
     #: `table:<object_id>` (the type `LINEAGE_FGA_OBJECT_TYPE` defaults to and nothing overrides).
     object_id: str = Field(min_length=1)
+    #: The uuid the catalog minted for that object (ADR 0173 §10): its identity across a rename, which `object_id`'s
+    #: name is not. `None` where the event named none. A build that does not declare this field reads a row carrying it
+    #: as unreadable (`extra="forbid"` below), so rolling back past it rebuilds the estate's inboxes.
+    object_uuid: str | None = None
     #: The producer's OWN run id (lineage's `RunStatus.source_run_id`), which is what its detail doors
     #: answer to. The graph run id is a derived uuid5 and links to nothing.
     source_run_id: str | None = None

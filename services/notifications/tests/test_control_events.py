@@ -14,6 +14,10 @@ from notifications.api.control_events import as_delivery, ingest_control_event, 
 from service_kit.control_events import CatalogControlEvent
 
 
+#: The uuid the catalog minted for `acme$gold`, which a grant on it names beside the name (ADR 0173 §10).
+TABLE_UUID = "0d9c6f3e-7b2a-4c1e-9f5d-2a8b3c4d5e6f"
+
+
 def _event(*, action: str = "grant_added", subject: str | None = "user:dex~alice", object_id: str = "table:acme$gold") -> CatalogControlEvent:
     extra: dict[str, Any] = {"relation": "reader"}
     if subject is not None:
@@ -26,6 +30,7 @@ def _event(*, action: str = "grant_added", subject: str | None = "user:dex~alice
         action=cast(Any, action),
         object_type=cast(Any, "table"),
         object_id=object_id,
+        object_uuid=TABLE_UUID,
         actor="user:dex~admin",
         extra=extra,
     )
@@ -128,7 +133,8 @@ class TestIngest:
 
         await ingest_control_event(_event(action="grant_revoked").model_dump(mode="json"), open_inbox=plane.open)
 
-        assert plane.boxes["dex~alice"][0]["reason"] == "grant_revoked"
+        delivered = plane.boxes["dex~alice"][0]
+        assert (delivered["reason"], delivered["object_id"], delivered["object_uuid"]) == ("grant_revoked", "table:acme$gold", TABLE_UUID)
 
     @pytest.mark.asyncio
     async def test_an_event_naming_nobody_is_acked_rather_than_dropped(self) -> None:

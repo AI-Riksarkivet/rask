@@ -11,12 +11,17 @@ dataset no row names is reported by its location, and is neither expired nor ven
 its bucket would reclaim its versions. A declared platform root, which the platform opens by explicit URI and registers
 nowhere ([[LH-164]]), is no unnamed dataset: it is neither refused nor expired. The catalog's vend door is a double here,
 and only the named table is asked.
+
+The lineage event for the expiry names the table's uuid, from the claim the catalog took on its location, and its
+namespace's, from the namespace's own `__manifest` row (ADR 0173 §6, §10). The sidecar it publishes to is a recording
+stand-in.
 """
 
 from __future__ import annotations
 
 import json
 from collections.abc import Iterator
+from typing import Any, ClassVar
 
 import boto3
 import httpx
@@ -29,9 +34,10 @@ from lance_namespace import connect
 from lance_namespace_urllib3_client.models import CreateNamespaceRequest, RegisterTableRequest
 from moto.server import ThreadedMotoServer
 
-from service_kit.lakehouse import maintenance_policies
+from service_kit.lakehouse import location_claims, maintenance_policies
 from service_kit.lakehouse.maintenance_due import read_due
 from service_kit.lakehouse.objectfs import lance_storage_options
+from service_kit.openlineage import DatasetUuids, dataset_uuids
 
 
 BUCKET = "lake"
@@ -40,6 +46,8 @@ ROOT = f"s3://{BUCKET}"
 LOCATION = "0d9c6f3e-7b2a-4c1e-9f5d-2a8b3c4d5e6f"
 URI = f"{ROOT}/{LOCATION}"
 TABLE = "db$t"
+#: The uuid the catalog minted for the namespace `db`, in its `__manifest` row.
+NAMESPACE_UUID = "3f2e1d0c-4b5a-4968-8776-a5b4c3d2e1f0"
 #: A second table the catalog made, with a branch, which discovery lists as a dataset of its own.
 BRANCHED = f"{ROOT}/7a1f0e2d-3c4b-4a59-8e6f-b7c8d9e0f1a2"
 BRANCH = f"{BRANCHED}/tree/work"
@@ -75,8 +83,10 @@ def estate(moto_url: str) -> dict[str, str]:
             )
     lance.dataset(BRANCHED, storage_options=options).create_branch("work")
     namespace = connect("dir", {"root": ROOT, **{f"storage.{key}": value for key, value in options.items()}})
-    namespace.create_namespace(CreateNamespaceRequest(id=["db"]))
+    namespace.create_namespace(CreateNamespaceRequest(id=["db"], properties={"rask.uuid": NAMESPACE_UUID}))
     namespace.register_table(RegisterTableRequest(id=["db", "t"], location=LOCATION))
+    claims = location_claims.ClaimStore(control_root=ROOT, storage_options=options)
+    location_claims.take(claims, URI, TABLE, ["db", "t"], is_gone=lambda _claim: False, uuid=LOCATION)
     namespace.register_table(RegisterTableRequest(id=["db", "b"], location=BRANCHED.removeprefix(f"{ROOT}/")))
     policy = {"kind": "table", "id": TABLE, "path": f"{BUCKET}/{LOCATION}", "compact_enabled": True, "retain_versions": 2, "target_rows_per_fragment": 1000}
     maintenance_policies.put_policy(ROOT, options, policy)
@@ -84,9 +94,22 @@ def estate(moto_url: str) -> dict[str, str]:
     return options
 
 
+class _Sidecar:
+    """The Dapr client the service publishes its lineage through: it keeps every event, and closes at shutdown."""
+
+    published: ClassVar[list[dict[str, Any]]] = []
+
+    async def publish_event(self, *, data: str = "", **_kwargs: object) -> None:
+        _Sidecar.published.append(json.loads(data))
+
+    async def close(self) -> None:
+        return None
+
+
 @pytest.fixture
 def maintenance(moto_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     for key, value in {
+        "MAINTENANCE_LINEAGE_EMIT_ENABLED": "true",
         "MAINTENANCE_S3_ENDPOINT": moto_url,
         "MAINTENANCE_S3_ACCESS_KEY_ID": "test",
         "MAINTENANCE_S3_SECRET_ACCESS_KEY": "test",
@@ -99,9 +122,11 @@ def maintenance(moto_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[Test
     from maintenance.core.config import get_settings
 
     get_settings.cache_clear()
-    from maintenance.service import app
+    from maintenance import service
 
-    with TestClient(app) as client:
+    monkeypatch.setattr(service, "DaprClient", _Sidecar)
+    _Sidecar.published = []
+    with TestClient(service.app) as client:
         yield client
     get_settings.cache_clear()
 
@@ -149,3 +174,5 @@ def test_a_tick_expires_versions_and_lists_the_compaction_it_does_not_run(estate
         "tasks": 1,
         "target_rows_per_fragment": 1000,
     }
+    named = [dataset_uuids(output) for event in _Sidecar.published for output in event["outputs"] if output["name"] == TABLE]
+    assert named == [DatasetUuids(table_uuid=LOCATION, namespace_uuid=NAMESPACE_UUID)], json.dumps(_Sidecar.published)

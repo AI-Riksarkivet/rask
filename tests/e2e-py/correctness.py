@@ -48,6 +48,7 @@ from byo_scenario import Commit, Identity, ScenarioRun, Tenant
 from pydantic import BaseModel, ConfigDict
 
 from service_kit.lakehouse import outbox
+from service_kit.lakehouse.naming import uuid_of
 from service_kit.openlineage import event_identity
 
 
@@ -157,18 +158,38 @@ def _sql_list(names: Iterable[str]) -> str:
     return ", ".join("'" + name.replace("'", "''") + "'" for name in names)
 
 
+def _named_by_uuid(owner: Identity, tables: Iterable[str]) -> dict[str, str]:
+    """Each of ``tables`` by the uuid the catalog answers for it (ADR 0173 §11), mapped back to its name."""
+    from lance_namespace import DescribeTableRequest
+
+    named: dict[str, str] = {}
+    for table in tables:
+        table_uuid = uuid_of(owner.namespace().describe_table(DescribeTableRequest(id=table.split("$"))).properties)
+        assert table_uuid is not None, f"the catalog answers no uuid for {table}"
+        named[table_uuid] = table
+    return named
+
+
 def recorded_edges(owner: Identity, tables: Iterable[str], *, expected: Iterable[Edge], within: float = scenario.SETTLE_SECONDS) -> list[Edge]:
     """The edge list's rows naming any of ``tables``, read by the estate's ``owner``: first once lineage has acknowledged
     every message the bus holds, then again while ``expected`` names an edge they lack and ``within`` lasts, for an
-    announcement the relay re-publishes from the catalog's outbox."""
+    announcement the relay re-publishes from the catalog's outbox.
+
+    The edge list keys a governed table by its uuid ([[LH-522]]), so the rows are selected by the tables' uuids and each
+    key is answered by the table's name, which is what ``expected`` names.
+    """
     bus.wait_until_acked("LINEAGE", (LINEAGE_DURABLE,), bus.last_seq("LINEAGE"), within=within)
-    named = _sql_list(tables)
+    names = _named_by_uuid(owner, tables)
+    keyed = _sql_list(names)
     wanted = Counter(expected)
     deadline = time.monotonic() + within
     while True:
         edge_list = lance.dataset(namespace_client=owner.namespace(), table_id=[*PROVENANCE_NAMESPACE.split("$"), "edges"])
-        rows = edge_list.to_table(columns=list(Edge.model_fields), filter=f"in_table IN ({named}) OR out_table IN ({named})").to_pylist()
-        recorded = [Edge.model_validate(row) for row in rows]
+        rows = edge_list.to_table(columns=list(Edge.model_fields), filter=f"in_table IN ({keyed}) OR out_table IN ({keyed})").to_pylist()
+        recorded = [
+            Edge.model_validate({**row, "in_table": names.get(row["in_table"], row["in_table"]), "out_table": names.get(row["out_table"], row["out_table"])})
+            for row in rows
+        ]
         if wanted <= Counter(recorded) or time.monotonic() > deadline:
             return recorded
         time.sleep(2)

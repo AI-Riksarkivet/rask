@@ -33,7 +33,7 @@ from lance_namespace import (
 )
 
 from catalog.api import fga_deps, lineage_deps
-from catalog.api.dependencies import FgaClientDep, LineageEmitterDep, NamespaceDep, SettingsDep, StorageOptionsDep
+from catalog.api.dependencies import FgaClientDep, LineageEmitterDep, NamespaceDep, ObjectUuidsDep, SettingsDep, StorageOptionsDep
 from catalog.api.pagination import paginate_versions
 from catalog.api.rask_params import RaskFlag
 from catalog.api.security import CurrentToken
@@ -199,6 +199,7 @@ async def create_table_version(
     token: CurrentToken,
     client: FgaClientDep,
     emitter: LineageEmitterDep,
+    uuids: ObjectUuidsDep,
     authorization: Annotated[str | None, Header()] = None,
 ) -> CreateTableVersionResponse:
     """Finalize a client-staged manifest as the next version of the table or of one of its branches, after judging it
@@ -259,6 +260,7 @@ async def create_table_version(
         token=token,
         operation=managed_versions.lineage_operation(staged),
         authorization=authorization,
+        uuids=uuids,
         pin_version=staged.version,
         branch=staged.branch,
         run=run,

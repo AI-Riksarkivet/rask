@@ -22,13 +22,15 @@ from notifications.api.lineage_events import LineageRunEvent, notifiable
 
 
 AUTHOR = "CiQwOGE4Njg0Yi1kYjg4LTRiNzMtOTBhOS0zY2QxNjYxZjU0NjYSBWxvY2Fs"
+#: The uuid the catalog minted for `silver$features`, which the dataset's `lance` facet names (ADR 0173 §10).
+TABLE_UUID = "0d9c6f3e-7b2a-4c1e-9f5d-2a8b3c4d5e6f"
 
 
 def _static(**facet_overrides: object) -> dict[str, object]:
     """A spec-shaped DatasetEvent for a `create_table`, as the catalog will publish it."""
     facets: dict[str, object] = {
         "author": {"sub": AUTHOR, "name": "Alice"},
-        "lance": {"operation": "create_table", "version": 1, "project": "acme"},
+        "lance": {"operation": "create_table", "version": 1, "project": "acme", "tableUuid": TABLE_UUID},
         "lifecycleStateChange": {"lifecycleStateChange": "CREATE"},
     }
     facets.update(facet_overrides)
@@ -44,7 +46,7 @@ def test_a_static_metadata_change_projects_to_a_notifiable() -> None:
     notice = notifiable(LineageRunEvent.model_validate(_static()))
     assert notice is not None
     assert notice.author == AUTHOR
-    assert notice.delivery.object_id == "silver$features"
+    assert (notice.delivery.object_id, notice.delivery.object_uuid) == ("silver$features", TABLE_UUID)
     assert notice.project == "acme"
 
 

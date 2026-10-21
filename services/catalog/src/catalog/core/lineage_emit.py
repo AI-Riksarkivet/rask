@@ -52,8 +52,10 @@ from service_kit.lakehouse.warehouse_registry import is_safe_project
 from service_kit.openlineage import (
     DATASET_EVENT_SCHEMA_URL,
     DATASOURCE_FACET_SCHEMA_URL,
+    LANCE_FACET,
     RUN_EVENT_SCHEMA_URL,
     VERSION_FACET_SCHEMA_URL,
+    DatasetUuids,
     catalog_facet,
     custom_facet,
     dataset_type_facet,
@@ -62,6 +64,7 @@ from service_kit.openlineage import (
     lifecycle_state,
     processing_engine_facet,
     schema_facet,
+    with_dataset_uuids,
 )
 
 
@@ -150,6 +153,13 @@ _VERSION_FACET_SCHEMA = VERSION_FACET_SCHEMA_URL
 _DATASOURCE_FACET_SCHEMA = DATASOURCE_FACET_SCHEMA_URL
 
 
+class UuidReader(Protocol):
+    """Reads a table's uuid and its namespace's for an event (``catalog.api.dependencies.ObjectUuids``): ``uuid`` when the
+    door resolved the table, else the claim at ``location``, else the table its name names now. Never raises."""
+
+    async def table(self, segments: list[str], *, location: str | None = None, uuid: str | None = None) -> DatasetUuids: ...
+
+
 class InputPin(BaseModel):
     """A source dataset an emitted write derives from, with the EXACT version it consumed (or ``None``).
 
@@ -163,25 +173,30 @@ class InputPin(BaseModel):
     version: int | None = None
     #: The branch the version is on, ``None`` for main: a branch numbers its versions apart from main.
     branch: str | None = None
+    #: The table's uuid when the door already resolved the name, as a rename has its source's: the name may name
+    #: nothing by the time the event is built.
+    uuid: str | None = None
 
 
 class InputRef(NamedTuple):
-    """A resolved input edge for the wire builder: canonical ``(namespace, name)``, pinned version and its branch."""
+    """A resolved input edge for the wire builder: canonical ``(namespace, name)``, pinned version, its branch and its uuids."""
 
     namespace: str
     name: str
     version: int | None
     branch: str | None = None
+    uuids: DatasetUuids = DatasetUuids()
 
 
-def input_refs(pins: list[InputPin] | None, *, delimiter: str) -> list[InputRef] | None:
-    """``pins`` resolved to the canonical ids the feed, the edge list and FGA key on, so an edge names the real table."""
+async def input_refs(pins: list[InputPin] | None, *, delimiter: str, uuids: UuidReader) -> list[InputRef] | None:
+    """``pins`` resolved to the canonical ids FGA keys on and the uuids the edge list keys on, so an edge names the real table."""
     refs = [
         InputRef(
             fga.parent_namespace_id(pin.segments, delimiter=delimiter) or "",
             fga.canonical_object_id(pin.segments, delimiter=delimiter),
             pin.version,
             pin.branch,
+            await uuids.table(pin.segments, uuid=pin.uuid),
         )
         for pin in pins or []
     ]
@@ -209,7 +224,7 @@ def _input_dataset(ref: InputRef) -> dict[str, Any]:
         }
     if ref.branch is not None:
         dataset.setdefault("facets", {})["lance"] = custom_facet(_PRODUCER, ref=ref.branch)
-    return dataset
+    return with_dataset_uuids(dataset, ref.uuids, producer=_PRODUCER)
 
 
 #: Principals that are not an address: a wildcard names everyone, a role names a job.
@@ -258,6 +273,9 @@ def _as_dataset_event(*, output: dict[str, Any], run_facets: dict[str, Any], eve
     for name in ("author", "lance"):
         if name in run_facets:
             facets[name] = run_facets[name]
+    # The dataset's own `lance` facet names the table's uuids (ADR 0173 §10); the run's joins it rather than replacing it.
+    if LANCE_FACET in run_facets and isinstance(own := (output.get("facets") or {}).get(LANCE_FACET), dict):
+        facets[LANCE_FACET] = {**own, **run_facets[LANCE_FACET]}
     return {
         "eventTime": event_time,
         "producer": _PRODUCER,
@@ -287,6 +305,7 @@ def build_write_event(
     commits_rows: bool = False,
     catalog_impl: str = "",
     warehouse_uri: str = "",
+    uuids: DatasetUuids | None = None,
 ) -> dict[str, Any]:
     """Build the OpenLineage ``RunEvent`` (wire JSON) for any catalog write to a table.
 
@@ -309,6 +328,9 @@ def build_write_event(
     ``commits_rows`` says the commit added rows ([[LH-492]]): a table's first version can, through the catalog's
     ``create`` door or a stock client's ``version/create``. Such a create is announced as a run whose output names
     the version and whose author is the caller, as an Overwrite is, because only a run's output carries a write.
+
+    ``uuids`` are the table's and its namespace's (ADR 0173 §10): the output's ``lance`` facet carries them beside its
+    name, as each input's carries its own, so lineage keys the table by what a rename keeps.
     """
     lance_fields: dict[str, Any] = {"operation": operation}
     if run is not None:
@@ -402,6 +424,7 @@ def build_write_event(
     facets["datasetType"] = dataset_type_facet(_PRODUCER, external=False)
     if facets:
         output["facets"] = facets
+    output = with_dataset_uuids(output, uuids or DatasetUuids(), producer=_PRODUCER)
     # A DDL change that DERIVED the table from another one keeps its run, and the spec is why: a
     # `DatasetEvent` has only `dataset` — no `inputs` — and the edge list builds every edge from a run's
     # inputs (`lineage.services.provenance.edges_of`). A rename passes its SOURCE precisely so the
@@ -485,6 +508,8 @@ class EmitFields(TypedDict, total=False):
     branch_identifier: str | None
     #: Whether the commit added rows, which makes a create a write (:func:`build_write_event`).
     commits_rows: bool
+    #: The table's and its namespace's uuids (ADR 0173 §10), which the output names beside its name.
+    uuids: DatasetUuids | None
 
 
 @runtime_checkable
@@ -689,6 +714,7 @@ class _BaseLineageEmitter:
             branch=fields.get("branch"),
             branch_identifier=fields.get("branch_identifier"),
             commits_rows=fields.get("commits_rows", False),
+            uuids=fields.get("uuids"),
             catalog_impl=self._catalog_impl,
             warehouse_uri=self._warehouse_uri,
         )
@@ -883,6 +909,8 @@ async def emit_write_event(
     version: int | None,
     operation: str,
     authorization: str | None,
+    uuids: UuidReader,
+    known: DatasetUuids | None = None,
     branch: str | None = None,
     branch_identifier: str | None = None,
     schema_fields: SchemaFields | None = None,
@@ -904,8 +932,14 @@ async def emit_write_event(
     rename passes its source; a pipeline's write passes the inputs its run names); ``run`` names that run's id and job.
     ``commits_rows`` says the commit added rows, which makes a create a write (:func:`build_write_event`).
     Ids come from ``fga`` so the lineage Dataset == the OpenFGA object.
+
+    ``uuids`` reads the table's uuid and its namespace's, which the event names beside the names (ADR 0173 §10), and each
+    input's. A door whose act ends the table read them before acting and passes them as ``known``. Otherwise the claim at
+    ``source_uri``, the location the door acted on, names the table, so a rename landing since cannot lend the event
+    another table's uuid; a door that names no location reads the claim of the table its name names now.
     """
-    refs = input_refs(inputs, delimiter=delimiter)
+    refs = await input_refs(inputs, delimiter=delimiter, uuids=uuids)
+    table_uuids = known if known is not None else await uuids.table(segments, location=source_uri)
     # THE TENANT, resolved from the table's TOP namespace segment — the rung the warehouse registry
     # binds. Done HERE rather than at the eight call sites because not one of them has a project in
     # scope (`endpoints/data.py` does not mention the word), and because a lookup repeated eight times
@@ -928,4 +962,5 @@ async def emit_write_event(
         branch=branch,
         branch_identifier=branch_identifier,
         commits_rows=commits_rows,
+        uuids=table_uuids,
     )

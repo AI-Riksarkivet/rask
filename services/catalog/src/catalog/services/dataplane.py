@@ -104,6 +104,7 @@ from service_kit.lakehouse.base_refs import decoded_path
 from service_kit.lakehouse.features import manifest_base_path_refs
 from service_kit.lakehouse.objectfs import StorageOptions, credential_of, s3_filesystem
 from service_kit.lakehouse.schema import SchemaFields, facet_fields
+from service_kit.lakehouse.stage_stamp import declare_dataset_id
 from service_kit.lakehouse.version_retention import MAIN_BRANCH, recorded_branch
 from service_kit.lancekit.arrow_ipc import ArrowBodyError, ArrowBodyTooLargeError, decode_arrow_stream, encode_arrow_stream
 from service_kit.lancekit.commit_verdict import CommitVerdict, classify_commit_failure
@@ -659,7 +660,7 @@ def create_table(
             table_claims.take(ns, _claim_store(registry), existing, holder, segments)
         return _write_blob_into(
             ns,
-            table,
+            _named_by_its_uuid(table, existing, registry),
             existing,
             so,
             segments,
@@ -676,7 +677,7 @@ def create_table(
     location = declare_table(ns, so, segments, root=root, claims=None if registry is None else _claim_store(registry), holder=holder)
     return _write_blob_into(
         ns,
-        table,
+        _named_by_its_uuid(table, location, registry),
         location,
         so,
         segments,
@@ -689,6 +690,20 @@ def create_table(
         holder=holder,
         transaction_properties=transaction_properties,
     )
+
+
+def _named_by_its_uuid(table: pa.Table, location: str, registry: base_registry.BaseRegistry | None) -> pa.Table:
+    """``table`` with ``lineage.dataset_id`` naming the uuid its location's claim records (ADR 0173 §10), for a table this
+    create brings into being; an Overwrite keeps the table's own (:func:`provenance_guard.keep_provenance`).
+
+    The uuid, not the name: a name can be given up and taken by another table, so a file stamped with one names whichever
+    table holds it today. A governed create claims the location before writing, so the claim is there to read; ``None``
+    for ``registry``, a caller outside governance, stamps nothing.
+    """
+    if registry is None:
+        return table
+    claim = location_claims.read(_claim_store(registry), location)
+    return declare_dataset_id(table, claim.claim.uuid if claim is not None else None)
 
 
 def _claim_store(registry: base_registry.BaseRegistry) -> location_claims.ClaimStore:

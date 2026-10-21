@@ -30,6 +30,7 @@ from service_kit.lakehouse.features import (
     unsupported_features_from_open_error,
 )
 from service_kit.lakehouse.version_retention import Retention, reclaimable_versions
+from service_kit.openlineage import DatasetUuids
 
 
 log = logging.getLogger(__name__)
@@ -74,6 +75,8 @@ class DatasetResult(BaseModel):
     auto_cleanup_disarmed: bool = False
     #: The table this dataset is, or whose branch it is, as the catalog's ``__manifest`` names it; ``None`` when none does.
     table_id: str | None = None
+    #: The uuids of that table and its namespace, read for a pass whose lineage event names them (ADR 0173 §10).
+    uuids: DatasetUuids = Field(default_factory=DatasetUuids)
     due: DueVerdict | None = None
     error: str | None = None
     #: The exception CLASS name, never the message: a stable identifier for span aggregation.

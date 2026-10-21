@@ -31,6 +31,7 @@ from catalog.core.lineage_emit import (
     make_emitter,
 )
 from lineage.models import RunEvent
+from tests.unit.no_uuids import NO_OBJECT_UUIDS
 
 
 def _parsed(event: dict):
@@ -253,6 +254,7 @@ def test_emit_write_event_resolves_the_tenant_from_the_top_namespace_segment() -
             version=1,
             operation=INSERT,
             authorization=None,
+            uuids=NO_OBJECT_UUIDS,
         )
     )
     assert em.resolved == ["alpha"]
@@ -270,6 +272,7 @@ def test_emit_write_event_maps_segments_to_canonical_ids_and_awaits_inline() -> 
             version=3,
             operation="update",
             authorization="Bearer x",
+            uuids=NO_OBJECT_UUIDS,
         )
     )
     # Awaited inline → exactly one recorded call (not deferred via BackgroundTasks, not dropped).
@@ -346,6 +349,7 @@ def test_emit_write_event_maps_input_pins_to_canonical_dataset_ids() -> None:
             operation="register_table",
             authorization=None,
             inputs=[InputPin(segments=["db1", "src"])],
+            uuids=NO_OBJECT_UUIDS,
         )
     )
     # (parent namespace, canonical id, pinned version) of the source, as a resolved InputRef.
@@ -367,6 +371,7 @@ def test_emit_write_event_carries_the_pinned_source_version_through() -> None:
             operation=MERGE_INSERT,
             authorization=None,
             inputs=[InputPin(segments=["db1", "src"], version=5)],
+            uuids=NO_OBJECT_UUIDS,
         )
     )
     assert em.writes[0]["inputs"] == [InputRef("db1", "db1$src", 5)]  # the pin survives resolution
@@ -376,15 +381,7 @@ def test_emit_write_event_root_table_has_empty_namespace() -> None:
     # Boundary: a top-level (single-segment) table has no parent namespace → "".
     em = _RecordingEmitter()
     asyncio.run(
-        emit_write_event(
-            cast(LineageEmitter, em),
-            ["t"],
-            delimiter="$",
-            author=None,
-            version=None,
-            operation=INSERT,
-            authorization=None,
-        )
+        emit_write_event(cast(LineageEmitter, em), ["t"], delimiter="$", author=None, version=None, operation=INSERT, authorization=None, uuids=NO_OBJECT_UUIDS)
     )
     assert em.writes[0]["namespace"] == ""
     assert em.writes[0]["version"] is None

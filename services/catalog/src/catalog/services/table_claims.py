@@ -49,6 +49,11 @@ class ResolvedTable(BaseModel):
     #: The location's claim as the resolution read it, with its ETag; ``None`` when the location carries no record.
     claim: ClaimRead | None = None
 
+    @property
+    def uuid(self) -> str | None:
+        """The table's uuid as its claim recorded it when the request reached the door."""
+        return self.claim.claim.uuid if self.claim is not None else None
+
 
 class DoorFence(BaseModel):
     """The fence a door set on its table's claim: the location it acts on and the request token the fence carries."""

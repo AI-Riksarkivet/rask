@@ -89,7 +89,10 @@ reports the loss. This is the estate's most expensive silent failure mode.
 3. **`lance.project`** — optional, but omitting it costs you **every** watcher.
 4. **≥1 output, named exactly as the FGA object is named.** Delivery runs `can_be_notified` and render
    re-runs `can_get_metadata` against `table:<output name>`, so an unqualified name against
-   tenant-qualified grants counts every recipient HIDDEN.
+   tenant-qualified grants counts every recipient HIDDEN. The output's own `lance` facet carries
+   `tableUuid`/`namespaceUuid` (ADR 0173 §10, [[LH-522]]), which the pointer stores as `object_uuid` beside the name:
+   the catalog and maintenance stamp them, lineage's HTTP door resolves an outside producer's names as its token, and
+   `/events/projection` keeps each output's `lance` facet for the reconciler.
 
 **One more holds before notifications is asked, and it is not `notifiable()`'s: the event is SIGNED.** Lineage verifies
 the `rask_signature` of every event on the bus and in the outbox (`signing.enforce`, on by default) and refuses what
@@ -141,6 +144,9 @@ await emit_control(  # best-effort; never raises into a committed mutation
 ```
 
 Call it **after** the backend mutation and its audit succeed, so a real change is never announced.
+The envelope's typed `object_uuid` and `namespace_uuid` name a table or namespace object (or the one a grant or policy is
+scoped to) by its uuids (ADR 0173 §10). The catalog's control emitter fills them from `object_id` after the door acts
+(`catalog.api.dependencies.UuidNamingControlEmitter`); a door whose act ends the object reads them first and passes them.
 `extra.subject` is the entire targeting, and it is the OpenFGA user the change names (`fga.user_object`: `user:` and the
 principal key percent-encoded, or a userset). `named_subjects` decodes a `user:` id back to the principal key
 (`fga.subject_of`), so a key carrying an encoded character addresses the inbox its owner's token reaches, and keeps only
@@ -198,6 +204,9 @@ contained). **`extra="forbid"` on `InboxPointer` deliberately stays** — an unk
 another subject's data, which is a containment guard (`test_inbox_leak_containment`), while an
 unknown *reason value* arrives on a declared field and carries nothing foreign. Those are two hazards
 wearing one symptom; do not "fix" the first by relaxing the second.
+
+`InboxPointer`'s fields are this class too: `object_uuid` is one, so a rollback to a build without it reads every row
+carrying it as unreadable, and the estate is rebuilt rather than rolled back past it.
 
 Still strict and still this class, unfixed because each needs its own containment argument:
 `InboxMeta`, `InboxRows`, `ChannelPrefs`. Adding a field to any of them bricks older readers of that

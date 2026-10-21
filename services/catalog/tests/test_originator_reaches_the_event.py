@@ -24,6 +24,14 @@ import pytest
 
 from catalog.core.lineage_emit import EmitFields, InputRef, OriginatorBoundEmitter, _BaseLineageEmitter, emit_write_event
 from catalog.core.run_context import RunContext
+from service_kit.openlineage import DatasetUuids
+
+
+class _NoUuids:
+    """`UuidReader`'s whole signature: a table resolves to the uuid a door passes in, else none."""
+
+    async def table(self, segments: list[str], *, location: str | None = None, uuid: str | None = None) -> DatasetUuids:
+        return DatasetUuids(table_uuid=uuid)
 
 
 class _Recording:
@@ -52,6 +60,7 @@ def _emit(bound: Any) -> None:
             version=3,
             operation="create_table",
             authorization=None,
+            uuids=_NoUuids(),
         )
     )
 

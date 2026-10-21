@@ -34,6 +34,7 @@ class InboxRow(BaseModel):
     notification_id: str
     reason: str
     object_id: str
+    object_uuid: str | None = None
     source_run_id: str | None = None
     event_seq: int | None = None
     occurred_at: datetime
@@ -46,6 +47,7 @@ class InboxRow(BaseModel):
             notification_id=pointer.notification_id,
             reason=str(pointer.reason),
             object_id=pointer.object_id,
+            object_uuid=pointer.object_uuid,
             source_run_id=pointer.source_run_id,
             event_seq=pointer.event_seq,
             occurred_at=pointer.occurred_at,

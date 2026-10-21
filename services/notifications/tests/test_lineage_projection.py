@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 
 from notifications.api.lineage_events import LineageRunEvent, author_subject, is_terminal, notifiable
+from service_kit.openlineage import DatasetUuids, with_dataset_uuids
 
 
 def _event(
@@ -93,8 +94,14 @@ def test_a_run_with_no_outputs_notifies_nobody_under_fga_on_or_off() -> None:
 def test_the_pointer_names_the_primary_output_while_the_check_covers_them_all() -> None:
     """The pointer is a claim-check: it names ONE object, which the render path re-checks, and says
     nothing about the others. The delivery check is the subset test over the whole set — a different
-    question (may you be told at all), not a weaker version of the same one."""
-    notice = notifiable(LineageRunEvent.model_validate(_event(outputs=["silver$pages", "gold$lines"])))
+    question (may you be told at all), not a weaker version of the same one. The pointer names that object by the uuid
+    its output's `lance` facet carries beside the name too (ADR 0173 §10)."""
+    event = _event(outputs=["silver$pages", "gold$lines"])
+    event["outputs"] = [
+        with_dataset_uuids(output, DatasetUuids(table_uuid=minted, namespace_uuid="ns-uuid"), producer="https://producer.test")
+        for output, minted in zip(event["outputs"], ["pages-uuid", "lines-uuid"], strict=True)
+    ]
+    notice = notifiable(LineageRunEvent.model_validate(event))
     assert notice is not None
-    assert notice.delivery.object_id == "silver$pages"
+    assert (notice.delivery.object_id, notice.delivery.object_uuid) == ("silver$pages", "pages-uuid")
     assert notice.outputs == frozenset({"silver$pages", "gold$lines"})

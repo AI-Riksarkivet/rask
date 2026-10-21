@@ -34,6 +34,7 @@ from lineage.core.config import LineageSettings
 from lineage.core.metrics import Door, Outcome
 from lineage.models import UnauthoredRunError, UngovernedOutputError
 from lineage.services.provenance import ProvenanceStore
+from tests.unit.no_uuids import NO_CATALOG_NAMES
 
 
 #: A minimal spec-valid ``RunEvent``. The HTTP door PARSES its own body now — one discriminator
@@ -91,6 +92,8 @@ async def test_the_http_door_counts_a_refusal_the_way_the_subscriber_does(error:
             provenance=cast("ProvenanceStore", object()),
             settings=cast("LineageSettings", object()),
             token=None,
+            names=NO_CATALOG_NAMES,
+            bearer=None,
         )
 
     assert recorded == [(expected, Door.HTTP)], (
@@ -121,7 +124,13 @@ async def test_a_SUCCESSFUL_ingest_still_counts_exactly_once(monkeypatch: pytest
     monkeypatch.setattr(ingest, "record_outcome", _record)
 
     answer = await ingest.ingest_event(
-        body=_RUN_BODY, request=cast("Request", object()), provenance=cast("ProvenanceStore", _Store()), settings=cast("LineageSettings", object()), token=None
+        body=_RUN_BODY,
+        request=cast("Request", object()),
+        provenance=cast("ProvenanceStore", _Store()),
+        settings=cast("LineageSettings", object()),
+        token=None,
+        names=NO_CATALOG_NAMES,
+        bearer=None,
     )
 
     assert recorded == [(Outcome.INGESTED, Door.HTTP)]

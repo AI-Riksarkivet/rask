@@ -84,9 +84,11 @@ class _Control:
 
     def __init__(self) -> None:
         self.events: list[tuple[str, dict[str, Any]]] = []
+        self.named: list[tuple[str, str | None, str | None]] = []
 
     async def emit(self, event: CatalogControlEvent) -> None:
         self.events.append((str(event.action), dict(event.extra)))
+        self.named.append((str(event.action), event.object_uuid, event.namespace_uuid))
 
 
 def _dataset(event: dict[str, Any]) -> dict[str, Any]:
@@ -258,3 +260,52 @@ def test_a_branch_lookup_that_walks_past_the_branch_point_finds_nothing_and_rais
     ns = connect("dir", {"root": str(tmp_path)})
 
     assert dataplane.committed_version(ns, {}, ["lh214", "t"], "00000000-0000-0000-0000-000000000000", branch=BRANCH) is None
+
+
+def test_every_event_names_the_table_and_its_namespace_by_their_uuids(
+    real_ns_client: TestClient, events: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A write, a rename, a write and a definition change under the new name, and a drop each announce the table and its
+    namespace by their uuids beside their names, on the lineage event and the control event; lineage's projection keeps
+    them, and the file's ``lineage.dataset_id`` is the table's uuid ([[LH-522]], ADR 0173 §10).
+
+    The drop's event is built after the table is gone, so it names what the door resolved before it acted.
+    """
+    from lineage.api.v1.endpoints.events import targeting_view
+
+    client = real_ns_client
+    control = _Control()
+    monkeypatch.setattr(client.app.state, "control_emitter", control, raising=False)
+    assert client.post("/v1/namespace/lh522/create", json={}).status_code == 200
+    assert client.post("/v1/table/lh522$t/create", content=_ipc(_rows(1)), headers=ARROW).status_code == 200
+    described = client.post("/v1/table/lh522$t/describe", json={}).json()
+    table_uuid = described["properties"]["rask.uuid"]
+    namespace_uuid = client.post("/v1/namespace/lh522/describe", json={}).json()["properties"]["rask.uuid"]
+    stamped = (lance.dataset(described["location"]).schema.metadata or {}).get(b"lineage.dataset_id")
+    for call in (
+        lambda: client.post("/v1/table/lh522$t/insert", content=_ipc(_rows(2)), headers=ARROW),
+        lambda: client.post("/v1/table/lh522$t/rename", json={"new_table_name": "u"}),
+        lambda: client.post("/v1/table/lh522$u/insert", content=_ipc(_rows(3)), headers=ARROW),
+        lambda: client.post("/v1/table/lh522$u/add_columns", json={"new_columns": [{"name": "w", "expression": "id + 1"}]}),
+        lambda: client.post("/v1/table/lh522$u/drop", json={}),
+    ):
+        assert call().status_code == 200
+
+    uuids = {"tableUuid": table_uuid, "namespaceUuid": namespace_uuid}
+
+    def _named(dataset: dict[str, Any]) -> dict[str, Any]:
+        return {key: dataset.get("facets", {}).get("lance", {}).get(key) for key in uuids}
+
+    announced = [(_lance(event)["operation"], _named(_dataset(event))) for event in events]
+    assert announced == [
+        (operation, uuids) for operation in ("create_table", "insert", "deregister_table", "register_table", "insert", "add_columns", "drop_table")
+    ], announced
+    assert [_named(source) for source in events[3]["inputs"]] == [uuids], "the rename's source is not named by the table's uuid"
+    projected = [_named(_dataset(targeting_view(event))) for event in events]
+    assert projected == [uuids] * len(events), projected
+    assert [named for named in control.named if named[0].startswith("table_")] == [
+        ("table_created", table_uuid, namespace_uuid),
+        ("table_renamed", table_uuid, namespace_uuid),
+        ("table_dropped", table_uuid, namespace_uuid),
+    ], control.named
+    assert stamped == table_uuid.encode(), stamped

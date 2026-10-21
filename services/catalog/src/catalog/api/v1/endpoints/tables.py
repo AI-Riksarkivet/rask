@@ -50,6 +50,7 @@ from catalog.api.dependencies import (
     LineageEmitterDep,
     NamespaceDep,
     NamespaceRootDep,
+    ObjectUuidsDep,
     ResolvedTableDep,
     SettingsDep,
     StorageOptionsDep,
@@ -358,6 +359,7 @@ async def declare_table(
     token: CurrentToken,
     client: FgaClientDep,
     emitter: LineageEmitterDep,
+    uuids: ObjectUuidsDep,
     control: ControlEmitterDep,
     body: DeclareTableRequest | None = None,
     authorization: Annotated[str | None, Header()] = None,
@@ -437,6 +439,7 @@ async def declare_table(
         version=None,
         operation=DECLARE_TABLE,
         authorization=authorization,
+        uuids=uuids,
         source_uri=response.location,
     )
     await emit_control(
@@ -654,6 +657,7 @@ async def drop_table(
     settings: SettingsDep,
     client: FgaClientDep,
     emitter: LineageEmitterDep,
+    uuids: ObjectUuidsDep,
     control: ControlEmitterDep,
     token: CurrentToken,
     so: StorageOptionsDep,
@@ -686,6 +690,8 @@ async def drop_table(
     claims = table_claims.claim_store(settings)
     fenced = await run_in_threadpool(partial(table_claims.fence, ns, claims, table, holder=canonical, verb="drop"))
     location = fenced.location
+    # What the drop's announcements name the table by, read while it still stands (ADR 0173 §10).
+    known = await uuids.table(segments, uuid=table.uuid)
     # #75 the drop→undrop path. With a grace period configured, a drop DEREGISTERS (detaches the
     # pointer; the bytes stay exactly where they are) and files a trash record naming the location and
     # the deadline. This is what makes a fat-fingered drop survivable: time-travel cannot help here,
@@ -760,6 +766,8 @@ async def drop_table(
         version=None,
         operation=DROP_TABLE,
         authorization=authorization,
+        uuids=uuids,
+        known=known,
     )
     # Revoke the table's FGA tuples so a later table reusing this id can't inherit stale grants — but
     # ONLY on a destructive drop. A RECOVERABLE drop (#75) leaves an object that still exists and whose
@@ -773,6 +781,8 @@ async def drop_table(
         action="table_dropped",
         object_type="table",
         object_id=f"table:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}",
+        object_uuid=known.table_uuid,
+        namespace_uuid=known.namespace_uuid,
         actor=f"user:{token.subject}" if token is not None else None,
         extra={"recoverable": trashed},
     )
@@ -788,6 +798,7 @@ async def deregister_table(
     settings: SettingsDep,
     client: FgaClientDep,
     emitter: LineageEmitterDep,
+    uuids: ObjectUuidsDep,
     control: ControlEmitterDep,
     token: CurrentToken,
     so: StorageOptionsDep,
@@ -817,6 +828,7 @@ async def deregister_table(
     claims = table_claims.claim_store(settings)
     fenced = await run_in_threadpool(partial(table_claims.fence, ns, claims, table, holder=canonical, verb="deregister"))
     location = fenced.location
+    known = await uuids.table(segments, uuid=table.uuid)
     try:
         response: DeregisterTableResponse = await run_in_threadpool(native.call, ns, "deregister_table", DeregisterTableRequest(id=segments))
     except Exception:
@@ -840,6 +852,8 @@ async def deregister_table(
         version=None,
         operation=DEREGISTER_TABLE,
         authorization=authorization,
+        uuids=uuids,
+        known=known,
     )
     await fga_deps.revoke_ownership(client, settings, resource="table", segments=segments, token=token)
     await emit_control(
@@ -847,6 +861,8 @@ async def deregister_table(
         action="table_deregistered",
         object_type="table",
         object_id=f"table:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}",
+        object_uuid=known.table_uuid,
+        namespace_uuid=known.namespace_uuid,
         actor=f"user:{token.subject}" if token is not None else None,
         extra={},
     )
@@ -909,6 +925,7 @@ async def register_table(
     so: StorageOptionsDep,
     client: FgaClientDep,
     emitter: LineageEmitterDep,
+    uuids: ObjectUuidsDep,
     control: ControlEmitterDep,
     authorization: Annotated[str | None, Header()] = None,
     idempotency_key: idem.IdempotencyKeyHeader = None,
@@ -1119,6 +1136,7 @@ async def register_table(
         version=None,
         operation=REGISTER_TABLE,
         authorization=authorization,
+        uuids=uuids,
         source_uri=location,
     )
     await emit_control(
@@ -1176,6 +1194,7 @@ async def undrop_table(
     token: CurrentToken,
     control: ControlEmitterDep,
     emitter: LineageEmitterDep,
+    uuids: ObjectUuidsDep,
     authorization: Annotated[str | None, Header()] = None,
 ) -> RegisterTableResponse:
     """Recover a dropped table from the trash (#75) — re-register its still-present bytes at its old
@@ -1265,6 +1284,7 @@ async def undrop_table(
         version=None,
         operation=REGISTER_TABLE,
         authorization=authorization,
+        uuids=uuids,
         source_uri=location,
     )
     await run_in_threadpool(trash.clear, settings.registry_root, so, canonical)
@@ -1354,6 +1374,7 @@ async def rename_table(
     token: CurrentToken,
     client: FgaClientDep,
     emitter: LineageEmitterDep,
+    uuids: ObjectUuidsDep,
     control: ControlEmitterDep,
     authorization: Annotated[str | None, Header()] = None,
     force: RaskFlag = False,
@@ -1427,6 +1448,9 @@ async def rename_table(
         )
     )
     await _carry_what_the_name_holds(settings, location, source=segments, destination=new_segments)
+    # A rename keeps the table's uuid (ADR 0173 §2): both markers and the control event name the one the door resolved.
+    source_ids = await uuids.table(segments, uuid=table.uuid)
+    destination_ids = await uuids.table(new_segments, uuid=table.uuid)
     # Emit the SOURCE's terminal marker BEFORE revoking its tuples. The default ``http`` lineage transport
     # runs ``enforce_output_authz`` (``can_write_data`` on the source); revoking first deletes the
     # parent→writer edge, so even an admin would 403 and this best-effort emit would be silently swallowed —
@@ -1445,6 +1469,8 @@ async def rename_table(
         version=None,
         operation=DEREGISTER_TABLE,
         authorization=authorization,
+        uuids=uuids,
+        known=source_ids,
     )
     # The grants follow the table ([[LH-215]]): every grant held on the old name is written on the new one in the
     # batch that seeds it, and only then is the old name revoked (`fga_deps.move_ownership`).
@@ -1460,18 +1486,22 @@ async def rename_table(
         version=None,
         operation=REGISTER_TABLE,
         authorization=authorization,
+        uuids=uuids,
+        known=destination_ids,
         source_uri=location,
         # The destination is the renamed SOURCE, so record the source table as this event's input — otherwise
         # the rename severs the provenance chain and a follower of the feed or a forwarded graph backend sees the
         # renamed table as an orphan with no history (audit 2026-07-14). The source's DROP marker above ends its
         # own line; this input stitches the destination onto it.
-        inputs=[InputPin(segments=segments)],
+        inputs=[InputPin(segments=segments, uuid=table.uuid)],
     )
     await emit_control(
         control,
         action="table_renamed",
         object_type="table",
         object_id=f"table:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}",
+        object_uuid=destination_ids.table_uuid,
+        namespace_uuid=destination_ids.namespace_uuid,
         actor=f"user:{token.subject}" if token is not None else None,
         extra={
             "from": fga.canonical_object_id(segments, delimiter=settings.delimiter),
@@ -1492,6 +1522,7 @@ async def restore_table(
     so: StorageOptionsDep,
     token: CurrentToken,
     emitter: LineageEmitterDep,
+    uuids: ObjectUuidsDep,
     authorization: Annotated[str | None, Header()] = None,
     idempotency_key: idem.IdempotencyKeyHeader = None,
 ) -> RestoreTableResponse:
@@ -1524,6 +1555,7 @@ async def restore_table(
         token=token,
         operation=RESTORE_TABLE,
         authorization=authorization,
+        uuids=uuids,
         pin_version=committed,
         branch=body.branch,
     )

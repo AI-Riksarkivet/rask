@@ -60,6 +60,7 @@ from catalog.api.dependencies import (
     ControlEmitterDep,
     FgaClientDep,
     LineageEmitterDep,
+    ObjectUuidsDep,
     SettingsDep,
     VendorDep,
     estate_namespace,
@@ -944,6 +945,7 @@ async def delete_warehouse(
     client: FgaClientDep,
     control: ControlEmitterDep,
     emitter: LineageEmitterDep,
+    uuids: ObjectUuidsDep,
     cascade: bool = False,
     purge_bucket: bool = False,
     force: bool = False,
@@ -1056,10 +1058,19 @@ async def delete_warehouse(
         if ns_conn is not None:
             for subtree in subtrees:
                 for table in subtree.tables:
+                    # What the announcement names the table by, read while it still stands (ADR 0173 §10).
+                    known = await uuids.table(table)
                     if await _detach_table(ns_conn, settings, table, purge=purge_bucket):
                         tables_removed.append(settings.delimiter.join(table))
                         await namespaces_api._announce_removed(  # noqa: SLF001 — one announcement, deliberately
-                            emitter, settings, table, operation=DEREGISTER_TABLE, token=token, authorization=authorization
+                            emitter,
+                            settings,
+                            table,
+                            operation=DEREGISTER_TABLE,
+                            token=token,
+                            authorization=authorization,
+                            uuids=uuids,
+                            known=known,
                         )
                 for namespace in subtree.namespaces:
                     try:

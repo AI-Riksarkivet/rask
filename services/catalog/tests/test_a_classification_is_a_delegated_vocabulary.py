@@ -70,6 +70,7 @@ def _call(updates: list[dict[str, Any]]) -> Any:
             token=PersonPrincipal(principal=Principal(idp_id="dex", subject="dpo"), claims=IDToken(iss="i", sub="dpo", aud="lance", exp=1, iat=1)),
             client=cast("Any", object()),
             emitter=cast("Any", object()),
+            uuids=cast("Any", object()),
             authorization=None,
         )
     )

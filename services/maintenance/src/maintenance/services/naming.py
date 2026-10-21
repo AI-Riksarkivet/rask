@@ -7,10 +7,21 @@ acts on a dataset, or reports one the catalog does not know, asks the one rule h
 
 from __future__ import annotations
 
+import json
+import logging
+from typing import Any
+
 from pydantic import BaseModel, Field
 
+from service_kit.governed import fga
+from service_kit.lakehouse import location_claims
 from service_kit.lakehouse.base_refs import normalise
 from service_kit.lakehouse.branch_layout import BRANCH_CONTAINER
+from service_kit.lakehouse.naming import uuid_of
+from service_kit.openlineage import DatasetUuids
+
+
+log = logging.getLogger(__name__)
 
 
 class TableIds(BaseModel):
@@ -18,11 +29,17 @@ class TableIds(BaseModel):
 
     #: Normalised absolute location -> the table's ``object_id``.
     by_location: dict[str, str] = Field(default_factory=dict)
+    #: A namespace's ``object_id`` -> the uuid its own ``__manifest`` row holds, read in the same pass as the tables.
+    namespace_uuids: dict[str, str] = Field(default_factory=dict)
     #: ``False`` when a root's manifest could not be read: a table missing from ``by_location`` may then still exist.
     complete: bool = True
 
     def of(self, location: str) -> str | None:
         return self.by_location.get(normalise(location))
+
+    def location_of(self, table: str) -> str | None:
+        """The normalised location the table's ``__manifest`` row names, or ``None`` when no row names the table."""
+        return next((location for location, named in self.by_location.items() if named == table), None)
 
     def table_of(self, dataset: str) -> str | None:
         """The table a discovered dataset belongs to: the one whose row names its location, or whose branch it is.
@@ -37,6 +54,38 @@ class TableIds(BaseModel):
 
     def names(self) -> set[str]:
         return set(self.by_location.values())
+
+
+def manifest_uuid(row: dict[str, Any]) -> str | None:
+    """The uuid a namespace's ``__manifest`` row holds in its JSON ``metadata`` (``catalog/dir/index.md`` § Manifest Table
+    Schema), or ``None`` when the row holds none or its metadata does not parse."""
+    try:
+        metadata = json.loads(row.get("metadata") or "{}")
+    except ValueError:
+        return None
+    return uuid_of(metadata)
+
+
+def read_uuids(names: TableIds, table: str, *, claims: location_claims.ClaimStore, delimiter: str) -> DatasetUuids:
+    """The uuids of ``table`` and of its namespace, for the events that name it (ADR 0173 §10).
+
+    The table's is its location's claim's, and only while that claim names ``table``: a claim another table holds is
+    that table's uuid. Read here, once per table an event names, rather than for every row of every manifest: the event
+    lane reads a whole bucket's ``__manifest`` per write. Best-effort, as the events are: a uuid that cannot be read is
+    ``None`` and the event still goes.
+    """
+    namespace = fga.parent_namespace_id(table, delimiter=delimiter)
+    namespace_uuid = names.namespace_uuids.get(namespace) if namespace else None
+    location = names.location_of(table)
+    if location is None:
+        return DatasetUuids(namespace_uuid=namespace_uuid)
+    try:
+        found = location_claims.read(claims, location)
+    except Exception as exc:  # noqa: BLE001 — an unread claim costs the event its uuid, never the event
+        log.warning("maintenance_table_uuid_unread", extra={"table": table, "error": f"{type(exc).__name__}: {exc}"})
+        found = None
+    claim = found.claim if found is not None else None
+    return DatasetUuids(table_uuid=claim.uuid if claim is not None and claim.table == table else None, namespace_uuid=namespace_uuid)
 
 
 def under_a_declared_root(dataset: str, declared_roots: tuple[str, ...]) -> bool:

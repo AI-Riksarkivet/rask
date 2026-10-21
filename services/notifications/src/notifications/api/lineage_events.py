@@ -21,7 +21,7 @@ from typing import Any, Final
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from notifications.models import NotificationDelivery, NotificationReason, UtcDatetime, notification_id
-from service_kit.openlineage import static_event_id
+from service_kit.openlineage import dataset_uuids, static_event_id
 
 
 #: The states a person needs to be told about. RESOLVED as a product decision, not a technical
@@ -58,6 +58,9 @@ def _as_run_event(raw: dict[str, Any]) -> dict[str, Any]:
     START, no RUNNING and nothing that could still fail. Any other value would make `is_terminal` false
     and silence a change that notifies a person today — measured on the live feed 2026-09-23, all four
     DDL events project to a deliverable pointer.
+
+    The dataset's ``lance`` facet rides its synthesised output too, since that is where an output names its table's
+    uuid (ADR 0173 §10).
     """
     dataset = raw.get("dataset")
     if not isinstance(dataset, dict):
@@ -79,7 +82,7 @@ def _as_run_event(raw: dict[str, Any]) -> dict[str, Any]:
             ),
             "facets": facets,
         },
-        "outputs": [{"name": dataset.get("name") or ""}],
+        "outputs": [{"name": dataset.get("name") or "", "facets": {LANCE_FACET: lance}} if isinstance(lance, dict) else {"name": dataset.get("name") or ""}],
     }
 
 
@@ -91,6 +94,12 @@ class LineageDataset(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     name: str = ""
+    #: Read for the ``lance`` facet alone, where the dataset names its table's uuid (:func:`object_uuid`).
+    facets: dict[str, Any] = Field(default_factory=dict)
+
+    def object_uuid(self) -> str | None:
+        """The uuid the catalog minted for this dataset's table, or ``None`` where the event names none."""
+        return dataset_uuids({"facets": self.facets}).table_uuid
 
 
 class LineageRun(BaseModel):
@@ -255,9 +264,10 @@ def notifiable(event: LineageRunEvent) -> Notifiable | None:
     author = author_subject(event.run)
     if author is None:
         return None
-    outputs = [dataset.name for dataset in event.outputs if dataset.name]
-    if not outputs:
+    named = [dataset for dataset in event.outputs if dataset.name]
+    if not named:
         return None
+    outputs = [dataset.name for dataset in named]
     state = event.event_type.upper()
     return Notifiable(
         project=project_id(event.run),
@@ -270,6 +280,7 @@ def notifiable(event: LineageRunEvent) -> Notifiable | None:
             notification_id=notification_id(event.run.run_id, state),
             reason=NotificationReason.AUTHOR,
             object_id=outputs[0],
+            object_uuid=named[0].object_uuid(),
             source_run_id=source_run_id(event.run),
             occurred_at=event.event_time,
         ),

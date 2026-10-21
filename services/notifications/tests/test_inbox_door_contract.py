@@ -250,18 +250,20 @@ def test_a_populated_feed_carries_exactly_the_fields_its_models_declare(client: 
     """Driven with every optional field populated, because a leak hides in the fields a sparse fixture
     leaves null.
 
-    The row IS the claim-check record and is returned whole — an id, a reason, one object name, a run
+    The row IS the claim-check record and is returned whole — an id, a reason, one object's name and uuid, a run
     link, a sequence and two booleans. What must never appear is anything from the storage record: the
     actor's `subject` second-lock and its `rows` count are facts about the STORE, and the only thing
     keeping them off the wire is that no response model declares them.
     """
-    populated = _pointer("alice-001@FAIL", minutes_ago=1).model_copy(update={"event_seq": 41, "seen": True})
+    populated = _pointer("alice-001@FAIL", minutes_ago=1).model_copy(update={"event_seq": 41, "seen": True, "object_uuid": "pages-uuid"})
     plane.inbox(CALLER).rows = [populated, _pointer("alice-002@FAIL", minutes_ago=2)]
 
     body = client.get("/notifications/inbox").json()
 
     assert set(body) == {"notifications", "next_cursor", "unread"}
-    assert set(body["notifications"][0]) == {"notification_id", "reason", "object_id", "source_run_id", "event_seq", "occurred_at", "seen", "dismissed"}
+    row = body["notifications"][0]
+    assert set(row) == {"notification_id", "reason", "object_id", "object_uuid", "source_run_id", "event_seq", "occurred_at", "seen", "dismissed"}
+    assert row["object_uuid"] == "pages-uuid"
     assert "subject" not in json.dumps(body)
 
 

@@ -31,6 +31,7 @@ from service_kit.governed.oidc import IDToken
 from service_kit.governed.person_identity import PersonPrincipal
 from service_kit.governed.principal import Principal
 from service_kit.lancekit.arrow_ipc import encode_arrow_stream
+from tests.unit.no_uuids import NO_OBJECT_UUIDS
 
 
 @pytest.mark.parametrize("delimiter", ["$"])
@@ -109,11 +110,10 @@ def test_create_handler_keeps_all_three_axes_identical_under_non_default_delimit
 
     real_build_meta = table_create.build_lineage_metadata
 
-    def _build_meta(*, table_id: str, namespace: str, run_id: str) -> dict[str, str]:
-        stamped["table_id"] = table_id
+    def _build_meta(*, namespace: str, run_id: str) -> dict[str, str]:
         stamped["namespace"] = namespace
         stamped["run_id"] = run_id
-        return real_build_meta(table_id=table_id, namespace=namespace, run_id=run_id)
+        return real_build_meta(namespace=namespace, run_id=run_id)
 
     def _facade_create(_ns: object, _so: object, _segments: list[str], table: pa.Table, **_kw: object) -> Any:
         # Stubs the write, not the table handed to it: this test is about the THREE-AXIS identity the
@@ -142,6 +142,7 @@ def test_create_handler_keeps_all_three_axes_identical_under_non_default_delimit
             properties=None,
             authorization="Bearer tok",
             run=None,
+            uuids=NO_OBJECT_UUIDS,
         )
     )
 
@@ -151,8 +152,7 @@ def test_create_handler_keeps_all_three_axes_identical_under_non_default_delimit
     assert emitter.create["table_id"] == canonical
     assert emitter.create["namespace"] == "alpha.bronze"
     assert emitter.create["author"] == "dex~alice"
-    # Data axis: the id stamped into the Lance file's schema metadata (#21).
-    assert stamped["table_id"] == canonical
+    # Data axis: the namespace stamped into the Lance file's schema metadata (#21).
     assert stamped["namespace"] == "alpha.bronze"
     # FGA grant axis: the grant lands on table:<same canonical id> (NOT table:alpha$bronze$images).
     grant_object = f"{granted['resource']}:{fga.canonical_object_id(granted['segments'], delimiter='.')}"
@@ -160,9 +160,9 @@ def test_create_handler_keeps_all_three_axes_identical_under_non_default_delimit
     # #21: the run id stamped into the Lance file is the SAME one the lineage event carries.
     assert stamped["run_id"] == emitter.create["run_id"]
     assert emitter.create["run_id"]  # and it's non-empty
-    # ...and all three coordinates are on the table handed to the write, not only computed.
+    # ...and both coordinates are on the table handed to the write, not only computed. `lineage.dataset_id` is the
+    # table's uuid, which the write stamps once it has claimed the location (`dataplane.create_table`).
     metadata = written["table"].schema.metadata or {}
-    assert metadata.get(b"lineage.dataset_id") == canonical.encode()
     assert metadata.get(b"lineage.namespace") == b"alpha.bronze"
     assert metadata.get(b"lineage.create_run_id") == emitter.create["run_id"].encode()
     # The WROTE edge's schema facet is read off the table written.

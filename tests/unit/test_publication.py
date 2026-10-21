@@ -37,6 +37,7 @@ from catalog.services.publication import (
     published_version,
 )
 from service_kit.lakehouse.quality import Assertion
+from tests.unit.no_uuids import NO_OBJECT_UUIDS
 
 
 SCHEMA = pa.schema([pa.field("id", pa.int64()), pa.field("payload", pa.string())])
@@ -265,12 +266,32 @@ async def test_a_PUBLICATION_announces_the_range_and_a_REJECTION_announces_nothi
 
     good = _write(ns, [1, 2, 3])
     await publish_table(
-        "db$pages", PublishRequest(version=good, key_column="id"), ns, settings, {}, _Emitter(), _Tenant(), fga_client=None, token=None, clock=get_clock()
+        "db$pages",
+        PublishRequest(version=good, key_column="id"),
+        ns,
+        settings,
+        {},
+        _Emitter(),
+        _Tenant(),
+        uuids=NO_OBJECT_UUIDS,
+        fga_client=None,
+        token=None,
+        clock=get_clock(),
     )
 
     bad = _write(ns, [4, None, 6])
     await publish_table(
-        "db$pages", PublishRequest(version=bad, key_column="id"), ns, settings, {}, _Emitter(), _Tenant(), fga_client=None, token=None, clock=get_clock()
+        "db$pages",
+        PublishRequest(version=bad, key_column="id"),
+        ns,
+        settings,
+        {},
+        _Emitter(),
+        _Tenant(),
+        uuids=NO_OBJECT_UUIDS,
+        fga_client=None,
+        token=None,
+        clock=get_clock(),
     )
 
     assert [a["action"] for a in announced] == ["table_published"], "a rejection must announce nothing"

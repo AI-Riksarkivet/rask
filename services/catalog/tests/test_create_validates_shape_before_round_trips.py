@@ -57,6 +57,7 @@ def _create(**over: Any) -> Any:
         "token": None,
         "client": None,
         "emitter": None,
+        "uuids": None,
         "control": None,
         "so": {},
         "data": encode_arrow_stream(pa.table({"id": [1]})),

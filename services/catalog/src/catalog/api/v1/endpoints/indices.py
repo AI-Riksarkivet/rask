@@ -29,7 +29,7 @@ from lance_namespace import (
 )
 
 from catalog.api import lineage_deps
-from catalog.api.dependencies import LineageEmitterDep, NamespaceDep, SettingsDep, StorageOptionsDep
+from catalog.api.dependencies import LineageEmitterDep, NamespaceDep, ObjectUuidsDep, SettingsDep, StorageOptionsDep
 from catalog.api.security import CurrentToken
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.core.lineage_emit import DROP_INDEX
@@ -139,6 +139,7 @@ async def drop_table_index(
     so: StorageOptionsDep,
     token: CurrentToken,
     emitter: LineageEmitterDep,
+    uuids: ObjectUuidsDep,
     authorization: Annotated[str | None, Header()] = None,
     body: DropTableIndexRequest | None = None,
     branch: Annotated[
@@ -178,6 +179,7 @@ async def drop_table_index(
         token=token,
         operation=DROP_INDEX,
         authorization=authorization,
+        uuids=uuids,
         pin_version=await run_in_threadpool(partial(dataplane.committed_version, ns, so, segments, response.transaction_id, branch=None)),
         # Main only: this door refuses a branch before the build.
         branch=None,

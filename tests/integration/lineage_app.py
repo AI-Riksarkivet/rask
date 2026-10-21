@@ -159,6 +159,7 @@ def governed_lineage(catalog_url: str, monkeypatch: pytest.MonkeyPatch, granted:
     from lineage.api.security import authenticate
     from lineage.api.v1.router import api_router
     from lineage.core.config import get_settings
+    from lineage.services.names import CatalogNames
     from lineage.services.provenance import ProvenanceStore
 
     monkeypatch.setenv("LINEAGE_CATALOG_URL", catalog_url)
@@ -198,6 +199,7 @@ def governed_lineage(catalog_url: str, monkeypatch: pytest.MonkeyPatch, granted:
     grants.allowed = {(user_object(subject), relation, obj) for subject, relation, obj in granted}
     app.state.decider = OpenFgaDecider(cast(OpenFgaClient, grants))
     app.state.provenance = store
+    app.state.names = CatalogNames.from_settings(settings)
     try:
         with TestClient(app) as client:
             yield client

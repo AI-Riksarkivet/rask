@@ -27,6 +27,15 @@ from typing import Any, cast
 
 import pytest
 
+from service_kit.openlineage import DatasetUuids
+
+
+class _NoUuids:
+    """`UuidReader`'s whole signature: a table resolves to the uuid a door passes in, else none."""
+
+    async def table(self, segments: list[str], *, location: str | None = None, uuid: str | None = None) -> DatasetUuids:
+        return DatasetUuids(table_uuid=uuid)
+
 
 class _Recording:
     """Structural double for `LineageEmitter` — the estate's fake-by-shape pattern."""
@@ -76,6 +85,7 @@ def test_the_measured_write_trailer_STAMPS_the_uri_it_read_back() -> None:
                 authorization=None,
                 pin_version=4,
                 branch=None,
+                uuids=_NoUuids(),
             )
         )
     finally:
@@ -112,6 +122,7 @@ def test_a_readback_that_could_not_open_the_dataset_stamps_no_uri() -> None:
                 authorization=None,
                 pin_version=4,
                 branch=None,
+                uuids=_NoUuids(),
             )
         )
     finally:

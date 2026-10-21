@@ -18,6 +18,7 @@ from lineage.api.dapr import register_dapr
 from lineage.api.v1.router import api_router
 from lineage.core.config import get_settings
 from lineage.services.feed_watch import FeedWatch
+from lineage.services.names import CatalogNames
 from lineage.services.provenance import ProvenanceStore
 from service_kit.bus_watchdog import start_bus_watchdog
 from service_kit.draining import arm_drain_on_sigterm
@@ -98,6 +99,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         store = ProvenanceStore.from_settings(settings)
         await _ensure_tables(store)
         app.state.provenance = store
+        app.state.names = CatalogNames.from_settings(settings)
         # Readiness reads this watch's verdict, never the feed itself: the read costs what the catalog takes to open the
         # feed, which a one-second probe cannot wait for (`lineage.services.feed_watch`).
         feed_watch = FeedWatch(store.ready, interval=FEED_WATCH_INTERVAL_SECONDS, budget=FEED_WATCH_BUDGET_SECONDS)

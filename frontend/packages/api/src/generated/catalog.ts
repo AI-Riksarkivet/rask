@@ -5056,6 +5056,8 @@ export interface components {
             extra?: {
                 [key: string]: unknown;
             };
+            /** Namespace Uuid */
+            namespace_uuid?: string | null;
             /** Object Id */
             object_id: string;
             /**
@@ -5063,6 +5065,8 @@ export interface components {
              * @enum {string}
              */
             object_type: "project" | "grant" | "warehouse" | "policy" | "namespace" | "table" | "gate";
+            /** Object Uuid */
+            object_uuid?: string | null;
             /**
              * Occurred At
              * Format: date-time

@@ -14,8 +14,10 @@ import asyncio
 
 import pytest
 
+from maintenance.core.lineage_emit import UNRESOLVED
 from maintenance.services.expiry import DatasetResult
 from maintenance.services.sweep import emit_sweep_lineage
+from service_kit.openlineage import DatasetUuids
 
 
 class _RecordingEmitter:
@@ -39,10 +41,10 @@ class _RecordingEmitter:
         finally:
             self.in_flight -= 1
 
-    async def emit_maintenance(self, *, table_id: str, namespace: str) -> None:
+    async def emit_maintenance(self, *, table_id: str, namespace: str, uuids: DatasetUuids = UNRESOLVED) -> None:
         await self._publish(table_id, self.completed)
 
-    async def emit_maintenance_failed(self, *, table_id: str, namespace: str, error: str) -> None:
+    async def emit_maintenance_failed(self, *, table_id: str, namespace: str, error: str, uuids: DatasetUuids = UNRESOLVED) -> None:
         await self._publish(table_id, self.failed)
 
 

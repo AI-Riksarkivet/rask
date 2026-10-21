@@ -25,10 +25,12 @@ from catalog.core.lineage_emit import LineageEmitter, NoopEmitter, OriginatorBou
 from catalog.core.namespace import NamespaceConnections
 from catalog.core.run_context import RunContext
 from catalog.core.vending import CredentialVendor, ModeBVendor
-from catalog.services import table_claims, warehouses
+from catalog.services import object_uuids, table_claims, warehouses
 from catalog.services.table_claims import ResolvedTable
 from service_kit.control_emit import ControlEmitter, NoopControlEmitter
+from service_kit.control_events import CatalogControlEvent, ControlUuids
 from service_kit.governed.user_state import UserStateStore
+from service_kit.openlineage import DatasetUuids
 
 
 log = logging.getLogger(__name__)
@@ -382,10 +384,85 @@ def get_run(request: Request) -> RunContext | None:
 RunDep = Annotated[RunContext | None, Depends(get_run)]
 
 
-def get_control_emitter(request: Request) -> ControlEmitter:
+class ObjectUuids:
+    """Reads the uuids a door's events name a table or namespace by (ADR 0173 §10), through the connection its top namespace routes to.
+
+    Per request, because the routing is: an event names inputs that may live in another warehouse than the table the
+    door wrote. Best-effort like the events it serves: what cannot be read is ``None``, and nothing raises into a door
+    whose act has already happened.
+    """
+
+    def __init__(self, request: Request, settings: Settings) -> None:
+        self._request = request
+        self._settings = settings
+
+    async def _connection(self, segments: list[str]) -> LanceNamespace | None:
+        try:
+            return await namespace_for_top_ns(self._request, self._settings, segments[0])
+        except Exception as exc:  # noqa: BLE001 — an unroutable namespace is a uuid the event goes without
+            log.info("event_uuids_unrouted", extra={"segments": segments, "error": str(exc)[:300]})
+            return None
+
+    async def table(self, segments: list[str], *, location: str | None = None, uuid: str | None = None) -> DatasetUuids:
+        """A table's uuid and its namespace's: ``uuid`` when the door resolved one, else the claim at ``location``, else the name's."""
+        ns = await self._connection(segments) if segments else None
+        if ns is None:
+            return DatasetUuids(table_uuid=uuid)
+        claims = table_claims.claim_store(self._settings)
+        return await run_in_threadpool(partial(object_uuids.of_table, ns, claims, segments, location=location, uuid=uuid))
+
+    async def namespace(self, segments: list[str]) -> ControlUuids:
+        """A namespace's uuid and its parent namespace's."""
+        ns = await self._connection(segments) if segments else None
+        return ControlUuids() if ns is None else await run_in_threadpool(object_uuids.of_namespace, ns, segments)
+
+    async def of_object(self, object_id: str) -> ControlUuids:
+        """The uuids of the table or namespace a control event's ``object_id`` (``table:<id>``, ``namespace:<id>``) names.
+
+        A grant or a policy is announced under the object it is scoped to, so it is named by that object's uuids too.
+        Any other object (a project, a warehouse, a gate) has none.
+        """
+        kind, _, name = object_id.partition(":")
+        segments = [segment for segment in name.split(self._settings.delimiter) if segment]
+        if kind == "table" and segments:
+            table = await self.table(segments)
+            return ControlUuids(object_uuid=table.table_uuid, namespace_uuid=table.namespace_uuid)
+        if kind == "namespace" and segments:
+            return await self.namespace(segments)
+        return ControlUuids()
+
+
+def get_object_uuids(request: Request, settings: SettingsDep) -> ObjectUuids:
+    """This request's :class:`ObjectUuids`."""
+    return ObjectUuids(request, settings)
+
+
+ObjectUuidsDep = Annotated[ObjectUuids, Depends(get_object_uuids)]
+
+
+class UuidNamingControlEmitter:
+    """The app's control emitter, naming each event's table or namespace by its uuids (ADR 0173 §10).
+
+    One place rather than every door: an event whose door set no uuid gets the ones its ``object_id`` names, read after
+    the door acted, which is when the object stands for every action but those that end it. A door that ends its object
+    (a drop, a deregister, a rename's source) reads the uuids before it acts and sets them, and those stand.
+    """
+
+    def __init__(self, inner: ControlEmitter, uuids: ObjectUuids) -> None:
+        self._inner = inner
+        self._uuids = uuids
+
+    async def emit(self, event: CatalogControlEvent) -> None:
+        if event.object_uuid is None and event.namespace_uuid is None:
+            named = await self._uuids.of_object(event.object_id)
+            event = event.model_copy(update={"object_uuid": named.object_uuid, "namespace_uuid": named.namespace_uuid})
+        await self._inner.emit(event)
+
+
+def get_control_emitter(request: Request, uuids: ObjectUuidsDep) -> ControlEmitter:
     """The control-plane change-event emitter built in the app lifespan — a no-op when emission is off."""
     emitter = getattr(request.app.state, "control_emitter", None)
-    return emitter if emitter is not None else NoopControlEmitter()
+    return NoopControlEmitter() if emitter is None else UuidNamingControlEmitter(emitter, uuids)
 
 
 ControlEmitterDep = Annotated[ControlEmitter, Depends(get_control_emitter)]

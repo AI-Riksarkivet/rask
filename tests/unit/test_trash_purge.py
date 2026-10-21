@@ -37,6 +37,7 @@ from lance_namespace import (
     CreateTableRequest,
     DeregisterTableRequest,
     DescribeTableRequest,
+    DropNamespaceRequest,
     ServiceUnavailableError,
     connect,
 )
@@ -47,7 +48,7 @@ from maintenance.services import purge as mod
 from maintenance.services.reconcile import CATEGORIES, CategorySkipped, CategoryUnavailable, IncompleteScan, ReconcileReport
 from service_kit.control_events import CatalogControlEvent
 from service_kit.governed import fga as fga_module
-from service_kit.lakehouse import trash
+from service_kit.lakehouse import location_claims, trash
 from service_kit.lakehouse.base_refs import BaseRefs, normalise
 
 
@@ -588,18 +589,46 @@ def test_one_control_event_per_purged_record(tmp_path: Path) -> None:
     ``extra`` stays a pointer payload (claim-check): the reason, the deadline, the size. ``reason`` is
     UNCHANGED and still says `trash_expired`, so a consumer keying on it keeps working — the verbs are
     purely additive.
+
+    Each event names its object's uuid and its namespace's (ADR 0173 §10): a table's from the claim the drop kept on its
+    location, a namespace's from the properties its trash record keeps, and the namespace's from its live row, or from
+    its own trash record when it was dropped too.
     """
     estate = _Estate(tmp_path)
-    canonical, _ = estate.drop_recoverably("team", "orders")
-    estate.put_record("archive", location="", kind="namespace")
+    estate.ns.create_namespace(CreateNamespaceRequest(id=["team"], properties={"rask.uuid": "team-uuid"}))
+    canonical, location = estate.drop_recoverably("team", "orders")
+    orphaned, orphaned_at = estate.drop_recoverably("gone", "t")
+    claims = location_claims.ClaimStore(control_root=estate.control_root)
+    for table, at, minted in ((canonical, location, "orders-uuid"), (orphaned, orphaned_at, "t-uuid")):
+        location_claims.take(claims, at, table, table.split("$"), is_gone=lambda _claim: False, uuid=minted)
+    estate.ns.drop_namespace(DropNamespaceRequest(id=["gone"]))
+    trash.put(
+        estate.control_root,
+        {},
+        trash.make_record("gone", location="", dropped_by="user:alice", grace_days=7, kind="namespace", properties={"rask.uuid": "gone-uuid"}),
+    )
+    trash.put(
+        estate.control_root,
+        {},
+        trash.make_record(
+            "archive",
+            location="",
+            dropped_by="user:alice",
+            grace_days=7,
+            now=_NOW - timedelta(days=30),
+            kind="namespace",
+            properties={"rask.uuid": "archive-uuid"},
+        ),
+    )
     control = _RecordingControl()
 
     out = _run(estate, control=control)
 
-    assert len(out.purged) == 2
-    assert {(e.action, e.object_type, e.object_id) for e in control.events} == {
-        ("table_purged", "table", f"table:{canonical}"),
-        ("namespace_purged", "namespace", "namespace:archive"),
+    assert len(out.purged) == 3
+    assert {(e.action, e.object_type, e.object_id, e.object_uuid, e.namespace_uuid) for e in control.events} == {
+        ("table_purged", "table", f"table:{canonical}", "orders-uuid", "team-uuid"),
+        ("table_purged", "table", f"table:{orphaned}", "t-uuid", "gone-uuid"),
+        ("namespace_purged", "namespace", "namespace:archive", "archive-uuid", None),
     }
     assert all(e.actor == "service:maintenance" for e in control.events)
     assert all(e.extra["reason"] == "trash_expired" for e in control.events)

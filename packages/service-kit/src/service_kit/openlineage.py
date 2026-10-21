@@ -22,6 +22,8 @@ import uuid
 from collections.abc import Iterable
 from typing import Any, Final
 
+from pydantic import BaseModel, ConfigDict
+
 
 log = logging.getLogger(__name__)
 
@@ -265,6 +267,67 @@ def catalog_facet(producer: str, *, impl: str, name: str, warehouse_uri: str = "
     if warehouse_uri:
         facet["warehouseUri"] = warehouse_uri
     return facet
+
+
+#: rask's own dataset facet: the ref an input was read on, and the uuids the catalog minted for the dataset's table and
+#: its namespace. Custom, so it points at ``BaseFacet`` (:func:`custom_facet`).
+LANCE_FACET: Final = "lance"
+_TABLE_UUID: Final = "tableUuid"
+_NAMESPACE_UUID: Final = "namespaceUuid"
+
+
+class DatasetUuids(BaseModel):
+    """The uuids the catalog minted for a dataset's table and that table's namespace (ADR 0173 §10).
+
+    A dataset's identity across a rename is its table's uuid, not its name: a name can be given up and taken by another
+    table, a uuid cannot. ``None`` where the dataset has none, an external source's always, or where it was not resolved.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    table_uuid: str | None = None
+    namespace_uuid: str | None = None
+
+
+def dataset_uuids(dataset: object) -> DatasetUuids:
+    """The uuids an OpenLineage dataset's ``lance`` facet carries, reading only the plain ``facets`` slot.
+
+    Tolerant of a payload that is not the shape it should be, since every reader holds an event it did not build: a value
+    that is not a non-empty string is no uuid.
+    """
+    facets = dataset.get("facets") if isinstance(dataset, dict) else None
+    lance = facets.get(LANCE_FACET) if isinstance(facets, dict) else None
+    lance = lance if isinstance(lance, dict) else {}
+
+    def text(key: str) -> str | None:
+        value = lance.get(key)
+        return value if isinstance(value, str) and value else None
+
+    return DatasetUuids(table_uuid=text(_TABLE_UUID), namespace_uuid=text(_NAMESPACE_UUID))
+
+
+def with_dataset_uuids(dataset: dict[str, Any], uuids: DatasetUuids, *, producer: str) -> dict[str, Any]:
+    """``dataset`` with its ``lance`` facet naming exactly ``uuids``: a uuid set where it has one, and removed where it has none.
+
+    Removed rather than kept, so a stamp is the whole answer: a dataset carrying a uuid the stamping service did not
+    resolve would keep a claim nobody checked. The ``lance`` facet's other fields (an input's ``ref``) stay. The facet is
+    left out when it would hold nothing but its ``_producer`` and ``_schemaURL``. ``dataset`` itself is not changed.
+    """
+    facets = dict(dataset.get("facets") or {})
+    lance = dict(facets.get(LANCE_FACET) or {})
+    for key, value in ((_TABLE_UUID, uuids.table_uuid), (_NAMESPACE_UUID, uuids.namespace_uuid)):
+        if value:
+            lance[key] = value
+        else:
+            lance.pop(key, None)
+    if set(lance) - {"_producer", "_schemaURL"}:
+        facets[LANCE_FACET] = {"_producer": lance.get("_producer", producer), "_schemaURL": lance.get("_schemaURL", BASE_FACET_SCHEMA_URL), **lance}
+    else:
+        facets.pop(LANCE_FACET, None)
+    stamped = {**dataset, "facets": facets}
+    if not facets:
+        stamped.pop("facets")
+    return stamped
 
 
 #: Standard ``DatasetTypeDatasetFacet`` schema URL — WHAT KIND of thing this dataset is.

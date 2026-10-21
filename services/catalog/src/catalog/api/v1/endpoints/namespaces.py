@@ -42,7 +42,7 @@ from lance_namespace import (
 from openfga_sdk import OpenFgaClient
 
 from catalog.api import fga_deps
-from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, LineageEmitterDep, NamespaceDep, SettingsDep, namespace_for_root
+from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, LineageEmitterDep, NamespaceDep, ObjectUuidsDep, SettingsDep, namespace_for_root
 from catalog.api.pagination import paginate
 from catalog.api.rask_params import RaskFlag
 from catalog.api.security import Caller, CurrentToken
@@ -50,7 +50,7 @@ from catalog.core import tier_policy
 from catalog.core.config import Settings
 from catalog.core.formats import reject_unsupported_properties
 from catalog.core.identifiers import MAX_NAMESPACE_DEPTH, parse_identifier, reconcile_body_id, require_safe_segments, with_minted_uuid
-from catalog.core.lineage_emit import DROP_TABLE, REGISTER_TABLE, LineageEmitter, emit_write_event
+from catalog.core.lineage_emit import DROP_TABLE, REGISTER_TABLE, LineageEmitter, UuidReader, emit_write_event
 
 # `MAX_NAMESPACE_DEPTH` is IMPORTED, not redeclared: the point of F10 item 10 is that two walkers
 # over the same tree disagreed about how deep it may go, and a second copy of the number would let
@@ -63,6 +63,7 @@ from catalog.services import native, table_claims, warehouses
 from service_kit.control_emit import emit_control
 from service_kit.governed import fga
 from service_kit.lakehouse import base_registry, location_claims, protection, trash
+from service_kit.openlineage import DatasetUuids
 
 
 log = logging.getLogger(__name__)
@@ -663,7 +664,15 @@ async def _destroy_subtree(
 
 
 async def _announce_removed(
-    emitter: LineageEmitter, settings: Settings, segments: list[str], *, operation: str, token: Caller | None, authorization: str | None
+    emitter: LineageEmitter,
+    settings: Settings,
+    segments: list[str],
+    *,
+    operation: str,
+    token: Caller | None,
+    authorization: str | None,
+    uuids: UuidReader,
+    known: DatasetUuids,
 ) -> None:
     """Tell lineage a table stopped existing, so its reconcile does not read it as live forever ([[LH-144]]).
 
@@ -680,6 +689,8 @@ async def _announce_removed(
             version=None,
             operation=operation,
             authorization=authorization,
+            uuids=uuids,
+            known=known,
         )
     except Exception as exc:  # noqa: BLE001 — provenance must never fail the delete it records
         log.warning("cascade_drop_lineage_emit_failed", extra={"table": segments, "error": str(exc)})
@@ -742,6 +753,7 @@ async def drop_namespace(
     client: FgaClientDep,
     control: ControlEmitterDep,
     emitter: LineageEmitterDep,
+    uuids: ObjectUuidsDep,
     body: DropNamespaceRequest | None = None,
     force: RaskFlag = False,
     purge: RaskFlag = False,
@@ -809,6 +821,9 @@ async def drop_namespace(
         # the refusal NAMES the protected descendant — "something in here is protected" is not an
         # answer anyone can act on. `force` turns this lock exactly as it does at the named rung.
         await _require_descendants_unprotected(settings, descendants, force=force)
+    # What every announcement below names the objects by, read while they still stand (ADR 0173 §10).
+    own = await uuids.namespace(segments)
+    known = {tuple(child): await uuids.table(child) for resource, child in descendants if resource == "table"}
     # #96: with a grace period, a cascade DETACHES the subtree (trash record per child) instead of
     # destroying it inside the one native call — see _trash_subtree for why the native cascade and a
     # trash record cannot coexist. `purge=true` is the explicit destroy-now, as at the table door.
@@ -823,7 +838,16 @@ async def drop_namespace(
         async for table in _destroy_subtree(
             ns, segments, descendants, registry=registry, claims=table_claims.claim_store(settings), delimiter=settings.delimiter
         ):
-            await _announce_removed(emitter, settings, table, operation=DROP_TABLE, token=token, authorization=authorization)
+            await _announce_removed(
+                emitter,
+                settings,
+                table,
+                operation=DROP_TABLE,
+                token=token,
+                authorization=authorization,
+                uuids=uuids,
+                known=known.get(tuple(table), DatasetUuids()),
+            )
         response = DropNamespaceResponse()
     else:
         try:
@@ -857,7 +881,16 @@ async def drop_namespace(
     if recoverable:
         for resource, child_segments in descendants:
             if resource == "table":
-                await _announce_removed(emitter, settings, child_segments, operation=DROP_TABLE, token=token, authorization=authorization)
+                await _announce_removed(
+                    emitter,
+                    settings,
+                    child_segments,
+                    operation=DROP_TABLE,
+                    token=token,
+                    authorization=authorization,
+                    uuids=uuids,
+                    known=known.get(tuple(child_segments), DatasetUuids()),
+                )
     # End what each removed object holds AFTER the drop commits, so a failed or Restrict-refused drop leaves all of it in
     # place: the descendants first, found by the catalog's listing and by the `child` edges a failed earlier attempt
     # left, each one's protection and maintenance policy before its grants, then the namespace's own. NOT on a
@@ -872,6 +905,8 @@ async def drop_namespace(
         action="namespace_dropped",
         object_type="namespace",
         object_id=f"namespace:{id}",
+        object_uuid=own.object_uuid,
+        namespace_uuid=own.namespace_uuid,
         actor=f"user:{token.subject}" if token else None,
         extra={"cascade": cascade, "recoverable": recoverable, "descendants_revoked": 0 if recoverable else len(descendants)},
     )
@@ -902,6 +937,7 @@ async def undrop_namespace(
     token: CurrentToken,
     control: ControlEmitterDep,
     emitter: LineageEmitterDep,
+    uuids: ObjectUuidsDep,
     authorization: Annotated[str | None, Header()] = None,
 ) -> CreateNamespaceResponse:
     """Recover a cascade-dropped SUBTREE from the trash (#96) — the plural undrop.
@@ -1031,6 +1067,7 @@ async def undrop_namespace(
                     version=None,
                     operation=REGISTER_TABLE,
                     authorization=authorization,
+                    uuids=uuids,
                     source_uri=location,
                 )
             except Exception:
