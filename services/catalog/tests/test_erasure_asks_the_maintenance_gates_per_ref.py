@@ -25,9 +25,10 @@ from fastapi.testclient import TestClient
 from catalog.api.dependencies import get_namespace, get_storage_options
 from catalog.api.v1.endpoints import erasure as door
 from catalog.core.config import Settings, get_settings
+from catalog.core.identifiers import with_minted_uuid
 from catalog.services.dataplane import create_table, read_arrow_body
 from catalog.services.erasure import ErasureReport, ref_heads, verify
-from service_kit.lakehouse import base_refs
+from service_kit.lakehouse import base_refs, base_registry
 from service_kit.lakehouse.base_refs import BaseRefs
 
 
@@ -77,7 +78,7 @@ def test_the_door_reads_the_store_the_table_lives_in_with_the_requests_options(t
     sink = pa.BufferOutputStream()
     with pa.ipc.new_stream(sink, _rows("alice").schema) as writer:
         writer.write_table(_rows("alice"))
-    ns.create_namespace(lance_namespace.CreateNamespaceRequest(id=["db"]))
+    ns.create_namespace(lance_namespace.CreateNamespaceRequest(id=["db"], properties=with_minted_uuid(None)))
     create_table(
         ns,
         {},
@@ -85,7 +86,8 @@ def test_the_door_reads_the_store_the_table_lives_in_with_the_requests_options(t
         read_arrow_body(sink.getvalue().to_pybytes(), max_bytes=_BODY_LIMIT),
         root=str(tmp_path / "data"),
         mode="create",
-        registry=None,
+        registry=base_registry.BaseRegistry(control_root=str(tmp_path / "control"), storage_options={}),
+        holder="db$subjects",
     )
     so = {"aws_region": "eu-north-1"}
     seen: dict[str, Any] = {}

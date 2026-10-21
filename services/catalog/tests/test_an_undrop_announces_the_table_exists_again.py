@@ -27,10 +27,12 @@ from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, NamespaceD
 from catalog.api.security import CurrentToken
 from catalog.api.v1.endpoints import namespaces as namespace_doors
 from catalog.api.v1.endpoints import tables as table_doors
+from catalog.core.identifiers import with_minted_uuid
 from catalog.services.dataplane import create_table
 from service_kit.governed.oidc import IDToken
 from service_kit.governed.person_identity import PersonPrincipal
 from service_kit.governed.principal import Principal
+from service_kit.lakehouse.base_registry import BaseRegistry
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
@@ -60,17 +62,19 @@ def emitted() -> list[dict[str, Any]]:
 @pytest.fixture
 def client(tmp_path: Path, emitted: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     ns = connect("dir", {"root": str(tmp_path / "data")})
-    ns.create_namespace(CreateNamespaceRequest(id=[NS]))
+    ns.create_namespace(CreateNamespaceRequest(id=[NS], properties=with_minted_uuid(None)))
+    control = tmp_path / "control"
+    registry = BaseRegistry(control_root=str(control), storage_options={})
     for table_id in TABLES:
-        create_table(ns, {}, table_id, pa.table({"id": pa.array([1, 2, 3], pa.int64())}), root=str(tmp_path / "data"), mode="create", registry=None)
+        rows = pa.table({"id": pa.array([1, 2, 3], pa.int64())})
+        create_table(ns, {}, table_id, rows, root=str(tmp_path / "data"), mode="create", registry=registry, holder="$".join(table_id))
 
     application = FastAPI()
     install_problem_handlers(application, logging.getLogger(__name__))
     for door in (namespace_doors, table_doors):
         application.include_router(door.router)
         application.include_router(door.management_router)
-    control = tmp_path / "control"
-    control.mkdir()
+    control.mkdir(exist_ok=True)
     settings = SimpleNamespace(
         delimiter="$", registry_root=str(control), storage_options=lambda **_: {}, trash_grace_days=7, fga_enabled=False, warehouses_enabled=False
     )

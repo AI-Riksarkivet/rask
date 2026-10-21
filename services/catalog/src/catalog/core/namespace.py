@@ -186,7 +186,20 @@ def open_dataset(
     Raises:
         InvalidTableStateError: The opened ref declares a base the catalog did not sanction.
     """
-    location = _table_location(ns, table_id)
+    return open_resolved_dataset(_table_location(ns, table_id), storage_options, table_id, version=version, branch=branch)
+
+
+def open_resolved_dataset(
+    location: str, storage_options: dict[str, str], table_id: list[str], *, version: int | None = None, branch: str | None = None
+) -> lance.LanceDataset:
+    """:func:`open_dataset` at the location a door already resolved ``table_id`` to (ADR 0173 §7), with the same base judge.
+
+    A door that resolved its table once (``ResolvedTableDep``) opens what that resolution read, so a rename landing
+    in between cannot pair one table's uuid with another table's bytes.
+
+    Raises:
+        InvalidTableStateError: The opened ref declares a base the catalog did not sanction.
+    """
     dataset = _open_ref(location, storage_options, table_id, version=version, branch=branch)
     require_sanctioned_bases(location, manifest_base_path_refs(dataset), judge=None)
     return dataset

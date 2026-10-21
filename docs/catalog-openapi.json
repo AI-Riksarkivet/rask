@@ -6359,6 +6359,10 @@
             "title": "Table",
             "type": "string"
           },
+          "uuid": {
+            "title": "Uuid",
+            "type": "string"
+          },
           "version": {
             "title": "Version",
             "type": "integer"
@@ -6366,6 +6370,7 @@
         },
         "required": [
           "table",
+          "uuid",
           "version",
           "evaluated_at"
         ],
@@ -6459,8 +6464,13 @@
             "description": "`open` until a verification settles it, then `released`."
           },
           "table": {
-            "description": "The table id the erasure was asked of.",
+            "description": "The table's name now, or the name the obligation kept when the table is gone.",
             "title": "Table",
+            "type": "string"
+          },
+          "table_uuid": {
+            "description": "The uuid of the table the erasure was asked of (ADR 0173 \u00a711): a rename keeps it.",
+            "title": "Table Uuid",
             "type": "string"
           },
           "verified_at": {
@@ -6480,6 +6490,7 @@
         "required": [
           "obligation_id",
           "table",
+          "table_uuid",
           "refs",
           "retain_days",
           "requested_by",
@@ -9274,10 +9285,6 @@
             "title": "Optimize Indices Enabled",
             "type": "boolean"
           },
-          "path": {
-            "title": "Path",
-            "type": "string"
-          },
           "repack_mode": {
             "anyOf": [
               {
@@ -9332,12 +9339,22 @@
               }
             ],
             "title": "Target Rows Per Fragment"
+          },
+          "uuid": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Uuid"
           }
         },
         "required": [
           "kind",
-          "id",
-          "path"
+          "id"
         ],
         "title": "PolicyResponse",
         "type": "object"
@@ -9730,6 +9747,10 @@
             "title": "Table",
             "type": "string"
           },
+          "uuid": {
+            "title": "Uuid",
+            "type": "string"
+          },
           "version": {
             "title": "Version",
             "type": "integer"
@@ -9737,6 +9758,7 @@
         },
         "required": [
           "table",
+          "uuid",
           "version",
           "published_version",
           "reasons",
@@ -13883,7 +13905,7 @@
     },
     "/management/v1/erasures": {
       "get": {
-        "description": "The erasure obligations, open and released, listed to a caller holding ``can_maintain`` on each one's table, the\nearliest deadline first: what each still owes, whether it is overdue, and the release it scheduled.",
+        "description": "The erasure obligations, open and released, listed to a caller holding ``can_maintain`` on each one's table, the\nearliest deadline first: what each still owes, whether it is overdue, and the release it scheduled. Each names its\ntable as the table is named now, which a rename since the request changed; one whose table is gone, its bytes with\nit, is listed to nobody.",
         "operationId": "list_erasure_obligations_management_v1_erasures_get",
         "parameters": [
           {
@@ -14040,7 +14062,7 @@
     },
     "/management/v1/maintenance/due": {
       "get": {
-        "description": "The tables a compaction or an index optimize is due on, in table order, listed to a caller holding\n``can_maintain`` on each: what made each due, the policy record that governed it, and how many datasets resolve\ntheir files through it.",
+        "description": "The tables a compaction or an index optimize is due on, in table order, listed to a caller holding\n``can_maintain`` on each: what made each due, the policy record that governed it, and how many datasets resolve\ntheir files through it. A record names its table as the table is named now, which a rename since the sweep changed;\none whose table is gone is listed to nobody, and the next sweep clears it.",
         "operationId": "list_due_maintenance_management_v1_maintenance_due_get",
         "parameters": [
           {
@@ -15145,7 +15167,7 @@
     },
     "/management/v1/namespace/{id}/policy/set": {
       "post": {
-        "description": "Set (or replace) a namespace-level policy \u2014 applies to every dataset under the namespace's\ndirectory prefix unless a table policy overrides it. Owner-gated by the router (``can_delete``).",
+        "description": "Set (or replace) a namespace-level policy \u2014 applies to every table under the namespace, at any depth, unless\na table policy or a nearer namespace's overrides it. Owner-gated by the router (``can_delete``).",
         "operationId": "set_namespace_policy_management_v1_namespace__id__policy_set_post",
         "parameters": [
           {
@@ -16578,7 +16600,7 @@
     },
     "/management/v1/promotions": {
       "get": {
-        "description": "The open holds the caller may see, in table order: each table's held version, what `published` names, why\nit is held and when the sweep expires it. A hold is listed to a caller holding `can_get_metadata` on its table.",
+        "description": "The open holds the caller may see, in table order: each table's held version, what `published` names, why\nit is held and when the sweep expires it. A hold names its table as the table is named now, and is listed to a\ncaller holding `can_get_metadata` on it; a hold whose table is gone is listed to nobody, and expires.",
         "operationId": "list_promotions_management_v1_promotions_get",
         "parameters": [
           {
@@ -24542,7 +24564,7 @@
     },
     "/v1/table/{id}/rename": {
       "post": {
-        "description": "Rename the table at ``id`` by moving its POINTER, then migrate its FGA ownership and emit lineage.\n\nLance has no format-level rename (table rename is a namespace-layer remap, not a data-plane commit) and\nthe ``dir`` backend's ``rename_table`` is a hard 501, which is also off-spec \u2014 the Namespace REST spec\nmakes rename a first-class Metadata op. It is served here as what the spec describes: the destination id\nis registered at the SOURCE's existing location and the source id is deregistered. **No data byte is\nread, written or deleted**, so the cost is O(1) rather than the dataset's size \u2014 see\n``dataplane.rename_table`` for the lance-ns V2 naming rule that makes this correct and for the one\nshape (a V1 root-namespace table) it refuses.\n\nThe caller must hold ``can_drop`` on the source (owner tier, gated by the router ``authorize``) AND\n``can_create_table`` on the DESTINATION parent \u2014 else a source owner could plant their table into a\nnamespace/tenant they lack create rights on. What the table holds under its name moves from the old id to the\nnew ([[LH-215]]): every grant (``fga_deps.move_ownership``), its protection and maintenance policy and its data\ndirectories' claims (``_carry_what_the_name_holds``). A\nversionless REGISTER marker records the attachment at the new id, with the source as its input, so the\ndestination's provenance continues from the source's. Source missing \u2192 404\n``TableNotFound``; destination name taken \u2192 409 ``TableAlreadyExists``; the location held by a\nconcurrent rename or registration \u2192 409 ``ConcurrentModification`` (code 14, [[LH-204]]).",
+        "description": "Rename the table at ``id`` by moving its POINTER, then migrate its FGA ownership and emit lineage.\n\nLance has no format-level rename (table rename is a namespace-layer remap, not a data-plane commit) and\nthe ``dir`` backend's ``rename_table`` is a hard 501, which is also off-spec \u2014 the Namespace REST spec\nmakes rename a first-class Metadata op. It is served here as what the spec describes: the destination id\nis registered at the SOURCE's existing location and the source id is deregistered. **No data byte is\nread, written or deleted**, so the cost is O(1) rather than the dataset's size \u2014 see\n``dataplane.rename_table`` for the lance-ns V2 naming rule that makes this correct and for the one\nshape (a V1 root-namespace table) it refuses.\n\nThe caller must hold ``can_drop`` on the source (owner tier, gated by the router ``authorize``) AND\n``can_create_table`` on the DESTINATION parent \u2014 else a source owner could plant their table into a\nnamespace/tenant they lack create rights on. The table keeps its uuid, so every record kept for it stays where it\nis ([[LH-523]]); what is still keyed by its name moves to the new one: every grant (``fga_deps.move_ownership``)\nand its data directories' claims (``_hand_over_data_directories``). A versionless REGISTER marker records the attachment at the new id, with the source as its input, so the\ndestination's provenance continues from the source's. Source missing \u2192 404\n``TableNotFound``; destination name taken \u2192 409 ``TableAlreadyExists``; the location held by a\nconcurrent rename or registration \u2192 409 ``ConcurrentModification`` (code 14, [[LH-204]]).",
         "operationId": "rename_table_v1_table__id__rename_post",
         "parameters": [
           {
@@ -25763,7 +25785,7 @@
     },
     "/v1/table/{id}/version/delete": {
       "post": {
-        "description": "Delete old versions of this table \u2014 never the current one, and never one a tag or a branch pins.\n\n``ranges`` are the spec's ``VersionRange``: start inclusive, end exclusive, ``-1`` for \"through the\nlatest\". A range that reaches the current version is refused (400), the spec's ``{0, -1}`` included:\nLance commits by put-if-not-exists on the next number, so a deleted latest manifest is minted again\nby the next write and a pinned ``(table, version)`` would name different rows. A version a tag or a\nchild branch pins is refused (409), naming the pin. Every range is judged before anything is\ndeleted, and ``branch`` scopes the delete to that ref's own history.\n\nOwner tier (``can_drop``, the rung ``maintenance/run`` clears), protection-gated like drop; ``force``\nturns the protection lock only. FastAPI runs this sync handler off the event loop.",
+        "description": "Delete old versions of this table \u2014 never the current one, and never one a tag or a branch pins.\n\n``ranges`` are the spec's ``VersionRange``: start inclusive, end exclusive, ``-1`` for \"through the\nlatest\". A range that reaches the current version is refused (400), the spec's ``{0, -1}`` included:\nLance commits by put-if-not-exists on the next number, so a deleted latest manifest is minted again\nby the next write and a pinned ``(table, version)`` would name different rows. A version a tag or a\nchild branch pins is refused (409), naming the pin. Every range is judged before anything is\ndeleted, and ``branch`` scopes the delete to that ref's own history.\n\nOwner tier (``can_drop``, the rung ``maintenance/run`` clears), protection-gated like drop; ``force``\nturns the protection lock only.",
         "operationId": "batch_delete_table_versions_v1_table__id__version_delete_post",
         "parameters": [
           {

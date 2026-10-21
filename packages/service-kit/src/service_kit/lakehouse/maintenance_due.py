@@ -1,7 +1,7 @@
 """Which tables need compacting or reindexing: maintenance's decision, a bring-your-own job's work list (ADR 0162).
 
 Maintenance decides and does not rewrite (ADR 0155, ADR 0156 C4 and C6). Each sweep tick writes, on the control root,
-one record per table a compaction or an index optimize is due on, carrying the counts that made it due, the policy
+one record per table a compaction or an index optimize is due on, keyed by the table's uuid, carrying the counts that made it due, the policy
 record that won and the datasets that resolve their files through it, and deletes the record of a table that is no
 longer due. The catalog lists them on ``GET /management/v1/maintenance/due`` to the callers that may maintain each table.
 
@@ -64,8 +64,10 @@ class DueRecord(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    #: The table's canonical id, as the catalog's ``__manifest`` names it: the FGA object's id.
+    #: The table's name as the catalog's ``__manifest`` named it when it was evaluated, for display.
     table: str
+    #: The table's uuid, which the record is keyed by (ADR 0173 §8): a rename keeps the record with the table.
+    uuid: str
     location: str
     version: int = Field(ge=1)
     compaction: CompactionDue | None = None
@@ -113,8 +115,8 @@ class CloneList(BaseModel):
         return self.referrers.get(root, []) if root is not None else []
 
 
-def due_key(table: str) -> str:
-    return record_key(DUE_PREFIX, "table", table)
+def due_key(table_uuid: str) -> str:
+    return record_key(DUE_PREFIX, "table", table_uuid)
 
 
 def _parsed(raw: dict[str, Any] | None) -> DueRecord | None:
@@ -128,15 +130,15 @@ def _parsed(raw: dict[str, Any] | None) -> DueRecord | None:
 
 
 def write_due(control_root: str, storage_options: StorageOptions, record: DueRecord) -> None:
-    put_record(control_root, storage_options, due_key(record.table), record.model_dump(mode="json"))
+    put_record(control_root, storage_options, due_key(record.uuid), record.model_dump(mode="json"))
 
 
-def read_due(control_root: str, storage_options: StorageOptions, table: str) -> DueRecord | None:
-    return _parsed(get_record(control_root, storage_options, due_key(table), event="maintenance_due"))
+def read_due(control_root: str, storage_options: StorageOptions, table_uuid: str) -> DueRecord | None:
+    return _parsed(get_record(control_root, storage_options, due_key(table_uuid), event="maintenance_due"))
 
 
-def delete_due(control_root: str, storage_options: StorageOptions, table: str) -> bool:
-    return delete_record(control_root, storage_options, due_key(table))
+def delete_due(control_root: str, storage_options: StorageOptions, table_uuid: str) -> bool:
+    return delete_record(control_root, storage_options, due_key(table_uuid))
 
 
 def list_due(control_root: str, storage_options: StorageOptions) -> list[DueRecord]:

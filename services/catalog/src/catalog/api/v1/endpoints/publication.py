@@ -33,7 +33,7 @@ from typing import TYPE_CHECKING, Annotated, Any, Literal, Protocol
 
 from fastapi import APIRouter, Header, Query
 from fastapi.concurrency import run_in_threadpool
-from lance_namespace import InvalidTableStateError, RestoreTableRequest
+from lance_namespace import InternalError, InvalidTableStateError, RestoreTableRequest
 
 from catalog.api import lineage_deps
 from catalog.api.dependencies import (
@@ -43,6 +43,7 @@ from catalog.api.dependencies import (
     LineageEmitterDep,
     NamespaceDep,
     ObjectUuidsDep,
+    ResolvedTableDep,
     SettingsDep,
     StorageOptionsDep,
 )
@@ -52,9 +53,10 @@ from catalog.api.security import Caller, CurrentToken
 from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier
 from catalog.core.lineage_emit import PUBLISH_TABLE, RESTORE_TABLE, LineageEmitter, UuidReader, emit_write_event, is_person_subject
-from catalog.core.namespace import open_dataset
+from catalog.core.namespace import open_dataset, open_resolved_dataset
 from catalog.schemas import PromotionDecision, PromotionDecisionRequest, PromotionHold, PromotionsListResponse, PublishRequest, PublishResult
-from catalog.services import dataplane, promotions, publication, warehouses
+from catalog.services import dataplane, promotions, publication, table_claims, warehouses
+from catalog.services.table_claims import ResolvedTable
 from service_kit.control_emit import ControlEmitter, emit_control
 from service_kit.governed import fga
 from service_kit.governed.machine_identity import ServicePrincipal
@@ -360,6 +362,7 @@ async def publish_table(
             ns=ns,
             so=so,
             segments=segments,
+            table_uuid=await _published_uuid(settings, result, segments),
             result=result,
             review=gate.review,
             requested_by=token.subject if token is not None else None,
@@ -367,7 +370,7 @@ async def publish_table(
             cascade_id=body.cascade_id,
             opened_at=clock(),
         )
-        hold = _view(standing)
+        hold = _view(standing, table=fga.canonical_object_id(segments, delimiter=settings.delimiter))
         await emit_control(
             control,
             action="promotion_held",
@@ -403,7 +406,7 @@ async def publish_table(
             # principal and is for the person whose bronze write started the batch.
             originator=publication_originator(body.originator, token),
         )
-        await _close_what_published_reached(settings=settings, ns=ns, so=so, segments=segments, published=result.to_version, at=clock())
+        await _close_what_published_reached(settings=settings, ns=ns, so=so, segments=segments, location=result.table, published=result.to_version, at=clock())
 
     return PublishResult(
         table=result.table,
@@ -418,14 +421,20 @@ async def publish_table(
     )
 
 
+async def _published_uuid(settings: Settings, result: publication.PublicationResult, segments: list[str]) -> str:
+    """The uuid of the table the publish acted on, read off the location it opened, so a rename since cannot pair a
+    hold with another table (ADR 0173 §7)."""
+    return await run_in_threadpool(table_claims.uuid_at, table_claims.claim_store(settings), result.table, segments)
+
+
 def _published_rows(ns: LanceNamespace, so: dict[str, str], segments: list[str]) -> int | None:
     """The row count readers of `published` read now, or `None` when nothing is published."""
     return publication.rows_at(ns, so, segments, publication.published_version(ns, so, segments))
 
 
-def _view(hold: promotions.Hold) -> PromotionHold:
-    """The hold as the wire shows it: its storage location stays inside the catalog."""
-    return PromotionHold.model_validate(hold.model_dump(exclude={"location", "originator", "cascade_id", "restore_owed"}))
+def _view(hold: promotions.Hold, *, table: str) -> PromotionHold:
+    """The hold as the wire shows it, naming its table ``table``: its storage location stays inside the catalog."""
+    return PromotionHold.model_validate({**hold.model_dump(exclude={"location", "originator", "cascade_id", "restore_owed"}), "table": table})
 
 
 async def _hold(
@@ -434,6 +443,7 @@ async def _hold(
     ns: LanceNamespace,
     so: dict[str, str],
     segments: list[str],
+    table_uuid: str,
     result: publication.PublicationResult,
     review: publication.ReviewPolicy,
     requested_by: str | None,
@@ -444,6 +454,7 @@ async def _hold(
     """Record the held version as its table's open hold and pin it; the hold that stands is returned."""
     held = promotions.Hold(
         table=fga.canonical_object_id(segments, delimiter=settings.delimiter),
+        uuid=table_uuid,
         location=result.table,
         version=result.to_version,
         published_version=result.from_version,
@@ -459,30 +470,31 @@ async def _hold(
     return standing
 
 
-async def _repin(settings: Settings, ns: LanceNamespace, so: dict[str, str], segments: list[str]) -> None:
+async def _repin(settings: Settings, ns: LanceNamespace, so: dict[str, str], segments: list[str], table_uuid: str) -> None:
     """Point the hold pin at the table's open hold as its record stands now, or remove it when none is open."""
-    current = await run_in_threadpool(
-        promotions.hold_of, settings.registry_root, settings.storage_options(), fga.canonical_object_id(segments, delimiter=settings.delimiter)
-    )
+    current = await run_in_threadpool(promotions.hold_of, settings.registry_root, settings.storage_options(), table_uuid)
     await run_in_threadpool(promotions.sync_pin, ns, so, segments, current)
 
 
 async def _close_what_published_reached(
-    *, settings: Settings, ns: LanceNamespace, so: dict[str, str], segments: list[str], published: int, at: datetime
+    *, settings: Settings, ns: LanceNamespace, so: dict[str, str], segments: list[str], location: str, published: int, at: datetime
 ) -> None:
-    """Close the table's open hold when `published` moved to or past its version: readers already read it.
+    """Close the open hold of the table at ``location`` when `published` moved to or past its version: readers already
+    read it.
 
-    Best-effort, because `published` has already moved: a control root that cannot be read here leaves a hold
-    readers have passed, which the decision doors refuse as reached and the sweep expires, and must not turn a
+    Best-effort, because `published` has already moved: a control root or a claim that cannot be read here leaves a
+    hold readers have passed, which the decision doors refuse as reached and the sweep expires, and must not turn a
     committed publication into a failed request.
     """
-    table = fga.canonical_object_id(segments, delimiter=settings.delimiter)
     try:
-        closed = await run_in_threadpool(partial(promotions.supersede, settings.registry_root, settings.storage_options(), table, published=published, at=at))
+        table_uuid = await run_in_threadpool(table_claims.uuid_at, table_claims.claim_store(settings), location, segments)
+        closed = await run_in_threadpool(
+            partial(promotions.supersede, settings.registry_root, settings.storage_options(), table_uuid, published=published, at=at)
+        )
         if closed is not None:
-            await _repin(settings, ns, so, segments)
-    except (OSError, RecordChangedError):
-        log.warning("promotion_supersede_failed", extra={"table": table, "published": published}, exc_info=True)
+            await _repin(settings, ns, so, segments, table_uuid)
+    except (OSError, ValueError, RecordChangedError, InternalError):
+        log.warning("promotion_supersede_failed", extra={"table": segments, "published": published}, exc_info=True)
 
 
 async def _announce_publication(
@@ -548,6 +560,7 @@ async def _decision(
     so: dict[str, str],
     segments: list[str],
     *,
+    table: ResolvedTable,
     version: int,
     state: Literal["approved", "rejected"],
     token: Caller | None,
@@ -562,21 +575,21 @@ async def _decision(
     Raises:
         InvalidTableStateError: No such version is held on the dataset this id opens, or `published` reached it.
     """
-    table = fga.canonical_object_id(segments, delimiter=settings.delimiter)
-    location = (await run_in_threadpool(open_dataset, ns, so, segments)).uri
+    table_uuid = table.require_uuid()
+    location = (await run_in_threadpool(open_resolved_dataset, str(table.location), so, segments)).uri
     previous = await run_in_threadpool(publication.published_version, ns, so, segments)
     if previous is not None and previous >= version:
-        standing = await run_in_threadpool(promotions.hold_of, settings.registry_root, settings.storage_options(), table)
+        standing = await run_in_threadpool(promotions.hold_of, settings.registry_root, settings.storage_options(), table_uuid)
         if standing is not None and (standing.version, standing.location, standing.state) == (version, location, state):
             return standing, False
-        await _close_what_published_reached(settings=settings, ns=ns, so=so, segments=segments, published=previous, at=at)
+        await _close_what_published_reached(settings=settings, ns=ns, so=so, segments=segments, location=location, published=previous, at=at)
         raise InvalidTableStateError(f"`published` is at version {previous}, which already carries version {version}")
     return await run_in_threadpool(
         partial(
             promotions.decide,
             settings.registry_root,
             settings.storage_options(),
-            table,
+            table_uuid,
             version=version,
             location=location,
             state=state,
@@ -592,6 +605,7 @@ async def approve_promotion(
     id: str,
     body: PromotionDecisionRequest,
     ns: NamespaceDep,
+    table: ResolvedTableDep,
     settings: SettingsDep,
     so: StorageOptionsDep,
     control: ControlEmitterDep,
@@ -608,7 +622,8 @@ async def approve_promotion(
     as decided. 409 when the table holds no such version, it was decided otherwise, or `published` reached it.
     """
     segments = parse_identifier(id, settings.delimiter)
-    decided, _ = await _decision(settings, ns, so, segments, version=body.version, state="approved", token=token, at=clock())
+    table_uuid = table.require_uuid()
+    decided, _ = await _decision(settings, ns, so, segments, table=table, version=body.version, state="approved", token=token, at=clock())
     moved, previous = await run_in_threadpool(publication.advance, ns, so, segments, decided.version)
     if moved:
         await _announce_publication(
@@ -625,8 +640,9 @@ async def approve_promotion(
             cascade_id=decided.cascade_id,
             originator=decided.originator,
         )
-    await _repin(settings, ns, so, segments)
-    return PromotionDecision(hold=_view(decided), published_version=decided.version if moved else previous)
+    await _repin(settings, ns, so, segments, table_uuid)
+    canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
+    return PromotionDecision(hold=_view(decided, table=canonical), published_version=decided.version if moved else previous)
 
 
 @table_router.post("/{id}/promotion/reject")
@@ -634,6 +650,7 @@ async def reject_promotion(
     id: str,
     body: PromotionDecisionRequest,
     ns: NamespaceDep,
+    table: ResolvedTableDep,
     settings: SettingsDep,
     so: StorageOptionsDep,
     control: ControlEmitterDep,
@@ -653,7 +670,9 @@ async def reject_promotion(
     table holds no such version, it was decided otherwise, or `published` reached it.
     """
     segments = parse_identifier(id, settings.delimiter)
-    decided, claimed = await _decision(settings, ns, so, segments, version=body.version, state="rejected", token=token, at=clock())
+    table_uuid = table.require_uuid()
+    canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
+    decided, claimed = await _decision(settings, ns, so, segments, table=table, version=body.version, state="rejected", token=token, at=clock())
     if decided.restore_owed:
         published = await run_in_threadpool(publication.published_version, ns, so, segments)
         restored: int | None = None
@@ -673,20 +692,20 @@ async def reject_promotion(
                 branch=None,
             )
         decided = await run_in_threadpool(
-            partial(promotions.record_restore, settings.registry_root, settings.storage_options(), decided.table, version=decided.version, restored=restored)
+            partial(promotions.record_restore, settings.registry_root, settings.storage_options(), table_uuid, version=decided.version, restored=restored)
         )
-    await _repin(settings, ns, so, segments)
+    await _repin(settings, ns, so, segments, table_uuid)
     published = await run_in_threadpool(publication.published_version, ns, so, segments)
     if claimed:
         await emit_control(
             control,
             action="promotion_rejected",
             object_type="table",
-            object_id=f"table:{decided.table}",
+            object_id=f"table:{canonical}",
             actor=f"user:{token.subject}" if token is not None else None,
             extra={"version": decided.version, "published_version": published, "restored_version": decided.restored_version},
         )
-    return PromotionDecision(hold=_view(decided), published_version=published, restored_version=decided.restored_version)
+    return PromotionDecision(hold=_view(decided, table=canonical), published_version=published, restored_version=decided.restored_version)
 
 
 @promotions_router.get("")
@@ -698,15 +717,19 @@ async def list_promotions(
     page_token: Annotated[str | None, Query(description="Continue after this table id (the previous page's `page_token`).")] = None,
 ) -> PromotionsListResponse:
     """The open holds the caller may see, in table order: each table's held version, what `published` names, why
-    it is held and when the sweep expires it. A hold is listed to a caller holding `can_get_metadata` on its table.
+    it is held and when the sweep expires it. A hold names its table as the table is named now, and is listed to a
+    caller holding `can_get_metadata` on it; a hold whose table is gone is listed to nobody, and expires.
     """
     holds = await run_in_threadpool(promotions.open_holds, settings.registry_root, settings.storage_options())
+    entries = [table_claims.TableRecord(location=hold.location, uuid=hold.uuid) for hold in holds]
+    names = await run_in_threadpool(table_claims.names_now, table_claims.claim_store(settings), entries)
+    named = [(name, hold) for name, hold in zip(names, holds, strict=True) if name is not None]
     if settings.fga_enabled and token is not None and client is not None:
-        visible = await fga.batch_check(client, user=token.subject, relation="can_get_metadata", objects=[f"table:{hold.table}" for hold in holds])
-        holds = [hold for hold in holds if visible.get(f"table:{hold.table}")]
-    by_table = {hold.table: hold for hold in holds}
-    page, next_token = paginate(sorted(by_table), page_token, limit)
-    return PromotionsListResponse(holds=[_view(by_table[table]) for table in page], page_token=next_token)
+        visible = await fga.batch_check(client, user=token.subject, relation="can_get_metadata", objects=[f"table:{name}" for name, _ in named])
+        named = [(name, hold) for name, hold in named if visible.get(f"table:{name}")]
+    by_key = {f"{name}|{hold.uuid}": (name, hold) for name, hold in named}
+    page, next_token = paginate(sorted(by_key), page_token, limit)
+    return PromotionsListResponse(holds=[_view(hold, table=name) for name, hold in (by_key[key] for key in page)], page_token=next_token)
 
 
 # One exported router, like `gates`: `router.py` mounts `_module.router` for every endpoint module.

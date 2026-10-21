@@ -19,9 +19,12 @@ import asyncio
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
+from uuid import NAMESPACE_URL, uuid5
 
 import pytest
 from lance_namespace import (
+    DescribeNamespaceRequest,
+    DescribeNamespaceResponse,
     InvalidInputError,
     ListNamespacesRequest,
     ListNamespacesResponse,
@@ -41,6 +44,7 @@ from service_kit.governed import fga as fga_module
 from service_kit.governed.oidc import IDToken
 from service_kit.governed.person_identity import PersonPrincipal
 from service_kit.governed.principal import Principal
+from service_kit.lakehouse.naming import UUID_PROPERTY
 from tests.unit.no_uuids import NO_OBJECT_UUIDS
 
 
@@ -82,6 +86,11 @@ class _FakeNamespace:
     def _require(self, segments: list[str] | None) -> None:
         if segments and segments[0] in self._missing:
             raise NamespaceNotFoundError(f"namespace not found: {segments}")
+
+    def describe_namespace(self, request: DescribeNamespaceRequest) -> DescribeNamespaceResponse:
+        """As the backend answers it: the namespace with the uuid its create minted (ADR 0173 §2)."""
+        self._require(request.id)
+        return DescribeNamespaceResponse(properties={UUID_PROPERTY: str(uuid5(NAMESPACE_URL, "$".join(request.id or [])))})
 
     def list_tables(self, request: ListTablesRequest) -> ListTablesResponse:
         self._require(request.id)

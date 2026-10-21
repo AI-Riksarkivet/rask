@@ -29,7 +29,7 @@ from pydantic import BaseModel
 from catalog.api.dependencies import ClockDep, ControlEmitterDep, SettingsDep, StorageOptionsDep, namespace_for_top_ns
 from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier
-from catalog.services import promotions
+from catalog.services import promotions, table_claims
 from service_kit.control_emit import emit_control
 from service_kit.governed.dapr_auth import require_dapr_token
 from service_kit.lakehouse.records import RecordChangedError
@@ -72,21 +72,39 @@ async def _on_cron(
             if closed is None:
                 continue
             expired += 1
+            table = await _named_now(settings, closed)
             await emit_control(
                 control,
                 action="promotion_expired",
                 object_type="table",
-                object_id=f"table:{closed.table}",
+                object_id=f"table:{table or closed.table}",
                 actor=None,
                 extra={"version": closed.version, "published_version": closed.published_version},
             )
-            await _unpin(request, settings, so, closed.table)
+            if table is not None:
+                await _unpin(request, settings, so, table, closed.uuid)
     log.info("promotion_expiry_tick", extra={"expired": expired})
     return PromotionExpiryTick(expired=expired)
 
 
-async def _unpin(request: Request, settings: Settings, so: dict[str, str], table: str) -> None:
-    """Sync the hold pin of an expired hold's table to its record, which an expiry leaves without one.
+async def _named_now(settings: Settings, hold: promotions.Hold) -> str | None:
+    """The expired hold's table as it is named now, which a rename since the hold changed; ``None`` when it is gone.
+
+    A claim that cannot be read is logged and read as gone: the expiry is already recorded, and its announcement must
+    not be lost to it. The pin then stays until the table is held or decided again.
+    """
+    try:
+        table = await run_in_threadpool(table_claims.current_name, table_claims.claim_store(settings), hold.location, hold.uuid)
+    except (OSError, ValueError):
+        log.warning("promotion_expired_table_unread", extra={"table": hold.table}, exc_info=True)
+        return None
+    if table is None:
+        log.info("promotion_expired_table_gone", extra={"table": hold.table})
+    return table
+
+
+async def _unpin(request: Request, settings: Settings, so: dict[str, str], table: str, table_uuid: str) -> None:
+    """Sync the hold pin of an expired hold's table, named ``table`` now, to its record, which an expiry leaves without one.
 
     A pin that cannot be removed now stays on its version until the table is held or decided again, which syncs the
     pin to the record; a table that is gone took its pins with it.
@@ -94,7 +112,7 @@ async def _unpin(request: Request, settings: Settings, so: dict[str, str], table
     segments = parse_identifier(table, settings.delimiter)
     try:
         ns = await namespace_for_top_ns(request, settings, segments[0])
-        current = await run_in_threadpool(promotions.hold_of, settings.registry_root, settings.storage_options(), table)
+        current = await run_in_threadpool(promotions.hold_of, settings.registry_root, settings.storage_options(), table_uuid)
         await run_in_threadpool(promotions.sync_pin, ns, so, segments, current)
     except (NamespaceNotFoundError, TableNotFoundError):
         log.info("promotion_expired_table_gone", extra={"table": table})

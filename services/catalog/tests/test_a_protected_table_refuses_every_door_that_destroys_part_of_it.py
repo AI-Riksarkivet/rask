@@ -48,11 +48,15 @@ from catalog.api.security import CurrentToken
 from catalog.api.v1.endpoints import branches as branch_door
 from catalog.api.v1.endpoints import tags as tag_door
 from catalog.api.v1.endpoints import versions as version_door
+from catalog.core.identifiers import with_minted_uuid
+from catalog.services import table_claims
 from catalog.services.dataplane import create_table
 from service_kit.governed.oidc import IDToken
 from service_kit.governed.person_identity import PersonPrincipal
 from service_kit.governed.principal import Principal
 from service_kit.lakehouse import protection
+from service_kit.lakehouse.base_registry import BaseRegistry
+from service_kit.lakehouse.location_claims import ClaimStore
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
@@ -84,11 +88,12 @@ def registry_root(tmp_path: Path) -> str:
 
 
 @pytest.fixture
-def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace, a runtime-only type
+def ns(tmp_path: Path, registry_root: str):  # noqa: ANN201 — LanceNamespace, a runtime-only type
     root = str(tmp_path / "data")
     namespace = connect("dir", {"root": root})
-    namespace.create_namespace(CreateNamespaceRequest(id=TABLE[:-1]))
-    created = create_table(namespace, {}, TABLE, _table(), root=root, mode="create", registry=None)
+    namespace.create_namespace(CreateNamespaceRequest(id=TABLE[:-1], properties=with_minted_uuid(None)))
+    registry = BaseRegistry(control_root=registry_root, storage_options={})
+    created = create_table(namespace, {}, TABLE, _table(), root=root, mode="create", registry=registry, holder=CANONICAL)
     # TWO MORE VERSIONS, so `version/delete` has one it may actually remove: version 1 carries the
     # `release` tag `_seed_refs` makes and the current version is never deletable, which leaves version
     # 2. Written straight to the dataset because the create door DECLARES a table and a second declare
@@ -97,6 +102,12 @@ def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace, a runtime-only type
     for start in (10, 20):
         lance.write_dataset(pa.table({"id": pa.array([start, start + 1, start + 2], pa.int64())}), str(created.location), mode="append")
     return namespace
+
+
+@pytest.fixture
+def table_uuid(ns, registry_root: str) -> str:  # noqa: ANN001
+    """The uuid the table's claim records, which its protection record is kept under (ADR 0173 §8)."""
+    return table_claims.resolve(ns, ClaimStore(control_root=registry_root), TABLE).require_uuid()
 
 
 @pytest.fixture
@@ -139,8 +150,8 @@ def app(ns, registry_root: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[Fas
     yield application
 
 
-def _protect(registry_root: str) -> None:
-    protection.set_protection(registry_root, {}, {"kind": "table", "id": CANONICAL, "protected": "true"})
+def _protect(registry_root: str, table_uuid: str) -> None:
+    protection.set_protection(registry_root, {}, {"kind": "table", "id": CANONICAL, "uuid": table_uuid, "protected": "true"})
 
 
 def _seed_refs(client: TestClient) -> None:
@@ -177,12 +188,12 @@ def test_the_door_reaches_its_target_when_the_table_is_UNPROTECTED(app: FastAPI,
 
 
 @pytest.mark.parametrize(("label", "path", "body"), DESTRUCTIVE, ids=[d[0] for d in DESTRUCTIVE])
-def test_a_PROTECTED_table_refuses_the_door(app: FastAPI, registry_root: str, label: str, path: str, body: dict[str, Any]) -> None:
+def test_a_PROTECTED_table_refuses_the_door(app: FastAPI, registry_root: str, table_uuid: str, label: str, path: str, body: dict[str, Any]) -> None:
     """The defect. A `can_drop` holder may not take a table apart one ref at a time while the
     whole-table drop refuses."""
     with TestClient(app) as client:
         _seed_refs(client)
-        _protect(registry_root)
+        _protect(registry_root, table_uuid)
         answer = client.post(f"/v1/table/{TABLE_PATH}/{path}", json=body)
 
     assert answer.status_code == 409, f"a protected table let its {label} be destroyed: {answer.status_code} {answer.text}"
@@ -192,12 +203,14 @@ def test_a_PROTECTED_table_refuses_the_door(app: FastAPI, registry_root: str, la
 
 
 @pytest.mark.parametrize(("label", "path", "body"), DESTRUCTIVE, ids=[d[0] for d in DESTRUCTIVE])
-def test_FORCE_turns_the_protection_lock_and_only_that_one(app: FastAPI, registry_root: str, label: str, path: str, body: dict[str, Any]) -> None:
+def test_FORCE_turns_the_protection_lock_and_only_that_one(
+    app: FastAPI, registry_root: str, table_uuid: str, label: str, path: str, body: dict[str, Any]
+) -> None:
     """Same override the sibling doors carry. Without it protection would be a flag no caller can get
     past without editing a record by hand, which is not how the other three destructive doors behave."""
     with TestClient(app) as client:
         _seed_refs(client)
-        _protect(registry_root)
+        _protect(registry_root, table_uuid)
         answer = client.post(f"/v1/table/{TABLE_PATH}/{path}?force=true", json=body)
 
     assert answer.status_code == 200, f"force did not release the {label} door: {answer.status_code} {answer.text}"

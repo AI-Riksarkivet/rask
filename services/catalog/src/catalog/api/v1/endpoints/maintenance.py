@@ -28,7 +28,7 @@ from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier
 from catalog.core.namespace import open_dataset
 from catalog.schemas import DueTable, GcPreview, GcRequest, GcRunResult, MaintenanceDueResponse
-from catalog.services import maintenance
+from catalog.services import maintenance, table_claims
 from service_kit.governed import fga
 from service_kit.lakehouse import maintenance_due
 
@@ -142,20 +142,26 @@ async def list_due_maintenance(
 ) -> MaintenanceDueResponse:
     """The tables a compaction or an index optimize is due on, in table order, listed to a caller holding
     ``can_maintain`` on each: what made each due, the policy record that governed it, and how many datasets resolve
-    their files through it."""
+    their files through it. A record names its table as the table is named now, which a rename since the sweep changed;
+    one whose table is gone is listed to nobody, and the next sweep clears it."""
     records = await run_in_threadpool(maintenance_due.list_due, settings.registry_root, settings.storage_options())
+    entries = [table_claims.TableRecord(location=record.location, uuid=record.uuid) for record in records]
+    names = await run_in_threadpool(table_claims.names_now, table_claims.claim_store(settings), entries)
+    named = [(name, record) for name, record in zip(names, records, strict=True) if name is not None]
     if settings.fga_enabled and token is not None and client is not None:
-        allowed = await fga.batch_check(client, user=token.subject, relation="can_maintain", objects=[f"table:{record.table}" for record in records])
-        records = [record for record in records if allowed.get(f"table:{record.table}")]
-    by_table = {record.table: record for record in records}
-    page, next_token = paginate(sorted(by_table), page_token, limit)
-    return MaintenanceDueResponse(tables=[_due_view(by_table[table]) for table in page], page_token=next_token)
+        allowed = await fga.batch_check(client, user=token.subject, relation="can_maintain", objects=[f"table:{name}" for name, _ in named])
+        named = [(name, record) for name, record in named if allowed.get(f"table:{name}")]
+    by_key = {f"{name}|{record.uuid}": (name, record) for name, record in named}
+    page, next_token = paginate(sorted(by_key), page_token, limit)
+    return MaintenanceDueResponse(tables=[_due_view(record, table=name) for name, record in (by_key[key] for key in page)], page_token=next_token)
 
 
-def _due_view(record: maintenance_due.DueRecord) -> DueTable:
-    """A record as the door shows it: the referrers' locations are other tables' storage, so only their count."""
+def _due_view(record: maintenance_due.DueRecord, *, table: str) -> DueTable:
+    """A record as the door shows it, naming its table ``table``: the referrers' locations are other tables' storage,
+    so only their count."""
     return DueTable(
-        table=record.table,
+        table=table,
+        uuid=record.uuid,
         version=record.version,
         compaction=record.compaction,
         indices=record.indices,

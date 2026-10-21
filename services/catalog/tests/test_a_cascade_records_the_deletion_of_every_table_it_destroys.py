@@ -35,10 +35,12 @@ from lance_namespace_urllib3_client.models.create_namespace_request import Creat
 from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, NamespaceDep, SettingsDep
 from catalog.api.security import CurrentToken
 from catalog.api.v1.endpoints import namespaces as door
+from catalog.core.identifiers import with_minted_uuid
 from catalog.services.dataplane import create_table
 from service_kit.governed.oidc import IDToken
 from service_kit.governed.person_identity import PersonPrincipal
 from service_kit.governed.principal import Principal
+from service_kit.lakehouse.base_registry import BaseRegistry
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
@@ -62,9 +64,10 @@ def _table() -> pa.Table:
 @pytest.fixture
 def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace, a runtime-only type
     namespace = connect("dir", {"root": str(tmp_path / "data")})
-    namespace.create_namespace(CreateNamespaceRequest(id=[NS]))
+    namespace.create_namespace(CreateNamespaceRequest(id=[NS], properties=with_minted_uuid(None)))
+    registry = BaseRegistry(control_root=str(tmp_path / "control"), storage_options={})
     for table_id in TABLES:
-        create_table(namespace, {}, table_id, _table(), root=str(tmp_path / "data"), mode="create", registry=None)
+        create_table(namespace, {}, table_id, _table(), root=str(tmp_path / "data"), mode="create", registry=registry, holder="$".join(table_id))
     return namespace
 
 
@@ -80,7 +83,7 @@ def app(ns, emitted: list[dict[str, Any]], tmp_path: Path, monkeypatch: pytest.M
     application.include_router(door.router)
 
     control = tmp_path / "control"
-    control.mkdir()
+    control.mkdir(exist_ok=True)
     settings = SimpleNamespace(
         delimiter="$",
         registry_root=str(control),

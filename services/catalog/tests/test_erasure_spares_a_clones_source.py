@@ -29,6 +29,7 @@ from lance_namespace import CreateNamespaceRequest, LanceNamespace
 from catalog.api.dependencies import get_namespace, get_storage_options
 from catalog.api.v1.endpoints import erasure as door
 from catalog.core.config import Settings, get_settings
+from catalog.core.identifiers import with_minted_uuid
 from catalog.core.namespace import open_dataset
 from catalog.services.dataplane import create_table, read_arrow_body
 from catalog.services.erasure import ErasureReport, ref_heads, verify
@@ -91,7 +92,7 @@ def namespace(tmp_path: Path) -> LanceNamespace:
     sink = pa.BufferOutputStream()
     with pa.ipc.new_stream(sink, _rows(_SUBJECT, "bob").schema) as writer:
         writer.write_table(_rows(_SUBJECT, "bob"))
-    ns.create_namespace(CreateNamespaceRequest(id=["db"]))
+    ns.create_namespace(CreateNamespaceRequest(id=["db"], properties=with_minted_uuid(None)))
     create_table(
         ns,
         {},
@@ -99,7 +100,8 @@ def namespace(tmp_path: Path) -> LanceNamespace:
         read_arrow_body(sink.getvalue().to_pybytes(), max_bytes=_BODY_LIMIT),
         root=str(tmp_path / "data"),
         mode="create",
-        registry=None,
+        registry=base_registry.BaseRegistry(control_root=str(tmp_path / "control")),
+        holder="db$subjects",
     )
     open_dataset(ns, {}, ["db", "subjects"]).insert(_rows("carol"))
     source = open_dataset(ns, {}, ["db", "subjects"])

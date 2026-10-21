@@ -6,9 +6,9 @@ readings exactly as a rewrite would be judged), and Lance's own planner has a ta
 An index optimize is due when the policy leaves it enabled and an index has unindexed rows or too many deltas
 (:func:`maintenance.services.index_health.due_indices`). Due on either writes the record; due on neither deletes it.
 
-THE TABLE ID COMES FROM THE CATALOG'S ``__manifest`` ROWS, never from the directory name: a rename moves the pointer
-and keeps the bytes (and their ``<hash>_<id>`` label) where they are, so a name read off the path names the table the
-data used to be. A dataset no manifest row names — unregistered, trashed, dropped — gets no record.
+THE TABLE COMES FROM THE CATALOG'S ``__manifest`` ROWS, never from the directory name, and its record is keyed by the
+table's uuid ([[LH-523]]): a rename keeps the record, and the name it carries is the one the table had when it was
+evaluated. A dataset no manifest row names — unregistered, trashed, dropped — gets no record.
 """
 
 from __future__ import annotations
@@ -56,8 +56,9 @@ class DueQuestion(BaseModel):
     """One table's due evaluation: where it is, what governs it, and who resolves files through it."""
 
     table: str
+    uuid: str
     location: str
-    #: The id of the winning policy record, ``None`` when none matched.
+    #: Which policy record won, as a person reads it, ``None`` when none matched.
     policy: str | None = None
     compact_enabled: bool = True
     optimize_indices_enabled: bool = True
@@ -102,6 +103,7 @@ def evaluate_due(question: DueQuestion, storage_options: StorageOptions, *, now:
         return None
     return DueRecord(
         table=question.table,
+        uuid=question.uuid,
         location=question.location,
         version=ds.version,
         compaction=compaction,
@@ -118,7 +120,7 @@ def refresh_due(question: DueQuestion, settings: MaintenanceSettings, *, now: da
     try:
         record = evaluate_due(question, options, now=now)
         if record is None:
-            delete_due(settings.resolved_control_root, options, question.table)
+            delete_due(settings.resolved_control_root, options, question.uuid)
             return "clear"
         write_due(settings.resolved_control_root, options, record)
     except Exception as exc:  # noqa: BLE001 — one table's evaluation must not cost the tick

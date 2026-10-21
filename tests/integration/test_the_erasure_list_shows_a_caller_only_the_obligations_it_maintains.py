@@ -15,8 +15,10 @@ from uuid import uuid4
 from fastapi.testclient import TestClient
 
 from catalog.core.config import Settings, get_settings
-from catalog.services import erasure_obligations
+from catalog.core.identifiers import parse_identifier
+from catalog.services import erasure_obligations, table_claims
 from catalog.services.erasure_obligations import ErasureObligation
+from service_kit.lakehouse import location_claims
 from tests.integration.openfga_grants import Grants, act_as
 
 
@@ -43,12 +45,16 @@ def test_a_caller_sees_only_the_obligations_it_maintains(real_ns_client: TestCli
     grants = Grants()
     client.app.state.fga = grants
     now = datetime.now(UTC)
-    for table in ("acme$mine", "acme$theirs"):
+    tables = ("acme$mine", "acme$theirs")
+    for table in tables:
+        table_uuid, location = str(uuid4()), f"{tmp_path}/{uuid4()}"
+        location_claims.take(table_claims.claim_store(settings), location, table, parse_identifier(table, "$"), is_gone=lambda _claim: False, uuid=table_uuid)
         obligation = ErasureObligation(
             obligation_id=uuid4().hex,
             table=table,
+            table_uuid=table_uuid,
             object_id=f"table:{table}",
-            location=f"{tmp_path}/{table}",
+            location=location,
             predicate_digest=erasure_obligations.digest("pii = 'alice'"),
             retain_days=0,
             refs={"main": 3},

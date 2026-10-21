@@ -17,6 +17,7 @@ from pydantic import BaseModel
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services.due import DueQuestion
 from maintenance.services.expiry import ExpiryPolicy
+from maintenance.services.naming import PolicyOwners
 from service_kit.lakehouse import maintenance_policies, warehouse_records
 
 
@@ -42,16 +43,25 @@ class DatasetPlan(BaseModel):
             older_than=self.older_than, retain_versions=self.retain_versions, cleanup_enabled=self.cleanup_enabled, min_reclaimable=min_reclaimable
         )
 
-    def due_question(self, *, table: str, location: str, clones: list[str]) -> DueQuestion:
+    def due_question(self, *, table: str, uuid: str, location: str, clones: list[str]) -> DueQuestion:
         return DueQuestion(
             table=table,
+            uuid=uuid,
             location=location,
-            policy=str(self.policy["id"]) if self.policy and self.policy.get("id") else None,
+            policy=self._winner(table),
             compact_enabled=self.compact_enabled,
             optimize_indices_enabled=self.optimize_indices_enabled,
             target_rows_per_fragment=self.target_rows_per_fragment,
             clones=clones,
         )
+
+    def _winner(self, table: str) -> str | None:
+        """Which record won, as a person reads it: the table's own is named as the table is named now."""
+        if self.policy is None:
+            return None
+        if self.policy.get("kind") == "table":
+            return table
+        return str(self.policy.get("id") or "") or None
 
 
 def load_policies(settings: MaintenanceSettings, options: dict[str, str]) -> list[dict[str, Any]]:
@@ -130,14 +140,14 @@ class PlanContext(BaseModel):
     older_than: timedelta
 
 
-def resolve_plan(uri: str, *, context: PlanContext, table_id: str | None, settings: MaintenanceSettings) -> DatasetPlan:
+def resolve_plan(uri: str, *, context: PlanContext, owners: PolicyOwners) -> DatasetPlan:
     """This dataset's plan, without the cadence: what the event lane asks between ticks.
 
-    ``table_id`` is the catalog's id for the dataset where the caller knows it. A policy that cannot be resolved or
-    parsed falls back to the GLOBAL defaults: the dataset is maintained, never left out.
+    ``owners`` are the uuids of the dataset's table and of its namespaces, whose records may govern it. A policy that
+    cannot be parsed falls back to the GLOBAL defaults: the dataset is maintained, never left out.
     """
     try:
-        policy = maintenance_policies.resolve_policy(context.policies, uri, logical_id=table_id, delimiter=settings.delimiter)
+        policy = maintenance_policies.resolve_policy(context.policies, uri, table_uuid=owners.table_uuid, namespace_uuids=owners.namespace_uuids)
         return plan_from_policy(policy, older_than=context.older_than)
     except Exception as exc:  # noqa: BLE001 — unreadable tuning maintains on the defaults
         log.warning("compaction_policy_ignored", extra={"uri": uri, "error": str(exc)})

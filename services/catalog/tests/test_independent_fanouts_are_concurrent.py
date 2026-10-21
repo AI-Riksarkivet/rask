@@ -24,10 +24,12 @@ import threading
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
+from uuid import uuid4
 
 import pytest
 from lance_namespace import LanceNamespace
 
+from catalog.api.fga_deps import GovernedObject
 from catalog.api.v1.endpoints import namespaces as n_ep
 from catalog.api.v1.endpoints import tables as t_ep
 from catalog.core.config import Settings
@@ -86,7 +88,7 @@ def _slow(tracker: _Tracker, result: Any = None):
 def test_the_protection_preflight_reads_every_descendant_concurrently(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     tracker = _Tracker()
     monkeypatch.setattr(n_ep.protection, "get_protection", _slow(tracker, None))
-    descendants = [("table", ["bronze", f"t{i}"]) for i in range(8)]
+    descendants = [GovernedObject(kind="table", segments=["bronze", f"t{i}"], uuid=str(uuid4())) for i in range(8)]
 
     asyncio.run(n_ep._require_descendants_unprotected(_settings(tmp_path), descendants, force=False))
 

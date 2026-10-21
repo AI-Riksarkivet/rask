@@ -23,14 +23,13 @@ from lance_namespace import (
 )
 
 from catalog.api import fga_deps
-from catalog.api.dependencies import ControlEmitterDep, NamespaceDep, SettingsDep, StorageOptionsDep
+from catalog.api.dependencies import ControlEmitterDep, NamespaceDep, ResolvedTableDep, SettingsDep, StorageOptionsDep
 from catalog.api.rask_params import RaskFlag
 from catalog.api.security import CurrentToken
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.services import dataplane
 from service_kit.control_emit import emit_control
 from service_kit.governed import fga
-from service_kit.lakehouse import protection
 
 
 #: Ceiling for the spec list ops' `limit`. The Lance Namespace spec pages these with
@@ -137,6 +136,7 @@ async def delete_table_branch(
     id: str,
     body: DeleteTableBranchRequest,
     ns: NamespaceDep,
+    table: ResolvedTableDep,
     settings: SettingsDep,
     so: StorageOptionsDep,
     control: ControlEmitterDep,
@@ -155,9 +155,7 @@ async def delete_table_branch(
     """
     segments = parse_identifier(id, settings.delimiter)
     body.id = reconcile_body_id(segments, body.id)
-    canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
-    guard = await run_in_threadpool(protection.get_protection, settings.registry_root, settings.storage_options(), "table", canonical)
-    fga_deps.require_not_protected(guard or {}, kind="table", obj_id=canonical, force=force)
+    await fga_deps.require_table_unprotected(settings, table, force=force)
     # The incarnation being deleted, read while it still exists: the name alone also names whatever branch
     # is created under it next.
     identifier = await run_in_threadpool(dataplane.branch_identifier, ns, so, segments, body.name)

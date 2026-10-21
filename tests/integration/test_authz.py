@@ -30,7 +30,7 @@ model. The contracts asserted here (owned by the fga / fga_deps / endpoint agent
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from types import SimpleNamespace
 from typing import cast
 from unittest.mock import AsyncMock, MagicMock, create_autospec
@@ -226,7 +226,9 @@ def test_rename_is_owner_tier_not_writer(client: TestClient, fake_ns: MagicMock,
     grant.assert_not_awaited()
 
 
-def test_rename_into_unauthorized_destination_namespace_is_denied(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
+def test_rename_into_unauthorized_destination_namespace_is_denied(
+    client: TestClient, fake_ns: MagicMock, monkeypatch, claim_described: Callable[[str], str]
+) -> None:
     """CONTRACT (security): renaming INTO a namespace is a create there — it requires can_create_table on the
     DEST parent. A source-table owner who lacks create rights on the destination cannot plant (relocate) their
     table into another tenant's namespace; denied BEFORE the destructive native rename, no revoke/seed."""
@@ -234,6 +236,7 @@ def test_rename_into_unauthorized_destination_namespace_is_denied(client: TestCl
     async def _check(_c: object, *, user: str, relation: str, obj: str, **_kw: object) -> bool:
         return relation == "can_drop"  # owner on the source table yes; can_create_table on dest namespace no
 
+    claim_described("staging$scratch")
     _wire(client)
     monkeypatch.setattr(fga_module, "check", _check)
     revoke, grant = AsyncMock(return_value=[_revoked_tuple() for _ in range(1)]), AsyncMock()
@@ -503,9 +506,10 @@ def test_create_top_level_namespace_links_to_catalog_root(client: TestClient, fa
 # --------------------------------------------------------------------------- #
 
 
-def test_drop_table_revokes_tuples(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
+def test_drop_table_revokes_tuples(client: TestClient, fake_ns: MagicMock, monkeypatch, claim_described: Callable[[str], str]) -> None:
     """CONTRACT: a successful drop_table revokes the table's tuples (obj ``table:db1$users``)."""
     fake_ns.drop_table.return_value = DropTableResponse()
+    claim_described("db1$users")
     _wire(client)
     monkeypatch.setattr(fga_module, "check", _fake_check([], allow=True))
     revoke = AsyncMock(return_value=[_revoked_tuple() for _ in range(1)])
@@ -518,9 +522,10 @@ def test_drop_table_revokes_tuples(client: TestClient, fake_ns: MagicMock, monke
     assert call is not None and call.args[1] == "table:db1$users"
 
 
-def test_deregister_table_revokes_tuples(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
+def test_deregister_table_revokes_tuples(client: TestClient, fake_ns: MagicMock, monkeypatch, claim_described: Callable[[str], str]) -> None:
     """CONTRACT: a successful deregister_table revokes the table's tuples."""
     fake_ns.deregister_table.return_value = DeregisterTableResponse()
+    claim_described("db1$users")
     _wire(client)
     monkeypatch.setattr(fga_module, "check", _fake_check([], allow=True))
     revoke = AsyncMock(return_value=[_revoked_tuple() for _ in range(1)])
@@ -533,7 +538,7 @@ def test_deregister_table_revokes_tuples(client: TestClient, fake_ns: MagicMock,
     assert call is not None and call.args[1] == "table:db1$users"
 
 
-def test_rename_table_seeds_destination_then_revokes_source(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
+def test_rename_table_seeds_destination_then_revokes_source(client: TestClient, fake_ns: MagicMock, monkeypatch, claim_described: Callable[[str], str]) -> None:
     """CONTRACT: rename seeds the DEST id's tuples and revokes the SOURCE — and seed fires BEFORE revoke.
 
     The order was revoke-then-seed, on the reasoning that no stale grant should outlive the old id.
@@ -551,6 +556,7 @@ def test_rename_table_seeds_destination_then_revokes_source(client: TestClient, 
     So this test asserts the ORDER, not merely the set: both orders produce the same calls, and only
     the sequence distinguishes "recoverable" from "stranded".
     """
+    claim_described("db1$users")
     # rename is now an in-process relocate (#5b); stub the dataplane seam so the FGA choreography is exercised
     # without a real dataset move (returns the resolved new segments + destination location).
     monkeypatch.setattr(
@@ -597,11 +603,14 @@ def test_rename_table_seeds_destination_then_revokes_source(client: TestClient, 
     assert order == ["read:table:db1$users", "revoke:table:db1$u2", "grant:db1$u2:user:dex~bob#reader@table:db1$u2", "revoke:table:db1$users"]
 
 
-def test_overwrite_by_owner_keeps_every_grant_and_grants_the_overwriter_no_ownership(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
+def test_overwrite_by_owner_keeps_every_grant_and_grants_the_overwriter_no_ownership(
+    client: TestClient, fake_ns: MagicMock, monkeypatch, claim_described: Callable[[str], str]
+) -> None:
     """CONTRACT ([[LH-242]]): an Overwrite of an EXISTING table writes a new version of the same table, whose
     history stays readable, so the table's grants survive it: nothing is revoked, and the overwriter (who
     cleared can_drop) is not made owner. Only the idempotent parent edge is written."""
     fake_ns.describe_table.return_value = DescribeTableResponse(location="s3://b/db1$users")  # table exists
+    claim_described("db1$users")
     _stub_create(monkeypatch, response=CreateTableResponse(location="s3://b/db1$users", version=2))
     _wire(client)
     monkeypatch.setattr(fga_module, "check", _fake_check([], allow=True))  # owner → can_drop passes
@@ -1114,9 +1123,10 @@ def test_namespace_policy_set_requires_owner_via_can_delete(client: TestClient, 
     assert captured[-1] == {"user": "dex~alice", "relation": "can_delete", "obj": "namespace:silver"}
 
 
-def test_table_policy_describe_is_reader_tier(client: TestClient, monkeypatch) -> None:
+def test_table_policy_describe_is_reader_tier(client: TestClient, monkeypatch, claim_described: Callable[[str], str]) -> None:
     """CONTRACT (#50): reading a policy is a metadata read (``can_get_metadata``) — 404 when unset is
     only reachable after the reader gate passes."""
+    claim_described("db1$users")
     _wire(client)
     captured: list[dict] = []
     monkeypatch.setattr(fga_module, "check", _fake_check(captured, allow=True))

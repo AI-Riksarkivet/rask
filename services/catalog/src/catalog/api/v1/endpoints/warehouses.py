@@ -29,7 +29,7 @@ import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
 from functools import partial
-from typing import Annotated, Final
+from typing import Annotated, Any, Final
 
 from fastapi import APIRouter, Header, Request, Response
 from fastapi.concurrency import run_in_threadpool
@@ -817,22 +817,25 @@ class _BoundSubtree(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     segments: list[str]
-    descendants: list[tuple[str, list[str]]]
+    #: The bound namespace's uuid, ``None`` when the backend no longer has it.
+    uuid: str | None
+    descendants: list[fga_deps.GovernedObject]
 
     @property
     def tables(self) -> list[list[str]]:
-        return [child for resource, child in self.descendants if resource == "table"]
+        return [item.segments for item in self.descendants if item.kind == "table"]
 
     @property
     def namespaces(self) -> list[list[str]]:
         """Every namespace in the subtree, deepest first and the bound one last, so each is empty when its own drop runs."""
-        nested = sorted((child for resource, child in self.descendants if resource == "namespace"), key=len, reverse=True)
+        nested = sorted((item.segments for item in self.descendants if item.kind == "namespace"), key=len, reverse=True)
         return [*nested, self.segments]
 
     @property
-    def objects(self) -> list[tuple[str, list[str]]]:
-        """Every object in the subtree as ``(resource, segments)``, each child before its parent."""
-        return [*(("table", child) for child in self.tables), *(("namespace", child) for child in self.namespaces)]
+    def guarded(self) -> list[fga_deps.GovernedObject]:
+        """Every object in the subtree whose protection the cascade is held to: its descendants and the bound namespace."""
+        own = [fga_deps.GovernedObject(kind="namespace", segments=self.segments, uuid=self.uuid)] if self.uuid is not None else []
+        return [*self.descendants, *own]
 
 
 async def _cascade_subtrees(ns: LanceNamespace, settings: Settings, bound: list[str], *, force: bool) -> list[_BoundSubtree]:
@@ -852,11 +855,14 @@ async def _cascade_subtrees(ns: LanceNamespace, settings: Settings, bound: list[
     for top_ns in bound:
         segments = parse_identifier(top_ns, settings.delimiter)
         try:
-            descendants = await run_in_threadpool(namespaces_api._collect_descendants, ns, segments)  # noqa: SLF001 — one walker, deliberately
+            namespace = await fga_deps.identify(ns, settings, "namespace", segments)
+            listed = await run_in_threadpool(namespaces_api._collect_descendants, ns, segments)  # noqa: SLF001 — one walker, deliberately
         except NamespaceNotFoundError:
-            descendants = []
-        subtrees.append(_BoundSubtree(segments=segments, descendants=descendants))
-    doomed = [obj for subtree in subtrees for obj in subtree.objects]
+            subtrees.append(_BoundSubtree(segments=segments, uuid=None, descendants=[]))
+            continue
+        descendants = await namespaces_api._identify(ns, settings, listed)  # noqa: SLF001 — one walker, deliberately
+        subtrees.append(_BoundSubtree(segments=segments, uuid=namespace.uuid, descendants=descendants))
+    doomed = [item for subtree in subtrees for item in subtree.guarded]
     await namespaces_api._require_descendants_unprotected(settings, doomed, force=force)  # noqa: SLF001 — one protection pre-flight, deliberately
     return subtrees
 
@@ -883,16 +889,20 @@ async def _detach_table(ns: LanceNamespace, settings: Settings, segments: list[s
     return True
 
 
-async def _forget_trashed(settings: Settings, kind: str, canonical: str, *, location: str) -> None:
+async def _forget_trashed(settings: Settings, entry: dict[str, Any]) -> None:
     """End what one trashed object kept for an undrop besides its grants: its policy, claim and base record, then its record.
 
     The record goes last, as the trash purge orders it: it is all that still names what the object holds, so a
-    failure before it is cleared leaves it for the re-issue to end.
+    failure before it is cleared leaves it for the re-issue to end. The policy is ended under the uuid the trash record
+    still leads to, read before the claim that records a table's is released.
     """
     so = settings.storage_options()
-    await run_in_threadpool(object_records.end_object_records, settings.registry_root, so, kind, canonical)
+    kind, canonical, location = str(entry.get("kind") or "table"), str(entry.get("id") or ""), str(entry.get("location") or "")
+    claims = table_claims.claim_store(settings)
+    if (uuid := await run_in_threadpool(trash.object_uuid, entry, claims)) is not None:
+        await run_in_threadpool(object_records.end_object_records, settings.registry_root, so, kind, uuid)
     if location:
-        await run_in_threadpool(location_claims.release, table_claims.claim_store(settings), location, canonical)
+        await run_in_threadpool(location_claims.release, claims, location, canonical)
         registry = base_registry.BaseRegistry(control_root=settings.registry_root, storage_options=so)
         await run_in_threadpool(partial(base_registry.forget_base_record, registry, location, table=canonical))
     await run_in_threadpool(trash.clear, settings.registry_root, so, canonical, kind=kind)
@@ -1053,7 +1063,7 @@ async def delete_warehouse(
             kind, canonical = str(entry.get("kind") or "table"), str(entry.get("id") or "")
             # Counted as the revoke lands, so a failure in the records after it still reports these tuples.
             revoked += await fga_deps.revoke_removed_object(client, settings, f"{kind}:{canonical}", token=token)
-            await _forget_trashed(settings, kind, canonical, location=str(entry.get("location") or ""))
+            await _forget_trashed(settings, entry)
             trash_ended.append(f"{kind}:{canonical}")
         if ns_conn is not None:
             for subtree in subtrees:
@@ -1080,7 +1090,9 @@ async def delete_warehouse(
                         # here would leave a binding nobody can delete, so the catalog's own records still go.
                         log.warning("warehouse_cascade_namespace_absent", extra={"warehouse": warehouse_id, "namespace": namespace})
                     namespaces_dropped.append(settings.delimiter.join(namespace))
-                async for count in fga_deps.end_removed_subtree(client, settings, root=subtree.segments, removed=subtree.descendants, token=token):
+                async for count in fga_deps.end_removed_subtree(
+                    client, settings, root=subtree.segments, root_uuid=subtree.uuid, removed=subtree.descendants, token=token
+                ):
                     revoked += count
                 top_ns = subtree.segments[0]
                 await run_in_threadpool(warehouses.unbind_namespace, settings.registry_root, so, top_ns)

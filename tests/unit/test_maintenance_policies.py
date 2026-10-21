@@ -20,19 +20,20 @@ from maintenance.core.config import MaintenanceSettings
 from maintenance.services.expiry import ExpiryPolicy, ExpiryTarget, expire_versions
 from maintenance.services.plan import cadence_skip
 from service_kit.lakehouse import maintenance_policies as mp
-from service_kit.lakehouse import object_records
 
 
-def _policy(kind: str = "table", id_: str = "db$t", path: str = "bkt/u1_db$t", **fields: Any) -> dict[str, Any]:
-    return {"kind": kind, "id": id_, "path": path, "compact_enabled": True, **fields}
+TABLE_UUID = "0b1e5c1a-0000-4000-8000-000000000001"
+
+
+def _policy(kind: str = "table", id_: str = "db$t", uuid: str = TABLE_UUID, **fields: Any) -> dict[str, Any]:
+    return {"kind": kind, "id": id_, "uuid": uuid, "compact_enabled": True, **fields}
 
 
 def _project_policy(id_: str = "acme", buckets: list[str] | None = None, **fields: Any) -> dict[str, Any]:
-    # #84 shape: no path — a project record matches by its warehouse BUCKETS (resolved at set time).
+    # #84 shape: no uuid — a project record matches by its warehouse BUCKETS (resolved at set time).
     return {
         "kind": "project",
         "id": id_,
-        "path": "",
         "buckets": buckets if buckets is not None else ["acme-wh"],
         "compact_enabled": True,
         **fields,
@@ -42,15 +43,15 @@ def _project_policy(id_: str = "acme", buckets: list[str] | None = None, **field
 def test_registry_round_trips_and_lists(tmp_path: Path) -> None:
     root = str(tmp_path)
     mp.put_policy(root, {}, _policy(retention_days=7))
-    mp.put_policy(root, {}, _policy(kind="namespace", id_="silver", path="bkt/medallion/silver"))
+    mp.put_policy(root, {}, _policy(kind="namespace", id_="silver", uuid="ns-silver"))
 
-    stored = mp.get_policy(root, {}, "table", "db$t")
+    stored = mp.get_policy(root, {}, "table", TABLE_UUID)
     assert stored is not None and stored["retention_days"] == 7
-    assert mp.get_policy(root, {}, "table", "ghost") is None
+    assert mp.get_policy(root, {}, "table", "db$t") is None, "a table's record is keyed by its uuid, never its name"
     assert len(mp.list_policies(root, {})) == 2
 
-    assert mp.delete_policy(root, {}, "table", "db$t") is True
-    assert mp.delete_policy(root, {}, "table", "db$t") is False  # idempotent
+    assert mp.delete_policy(root, {}, "table", TABLE_UUID) is True
+    assert mp.delete_policy(root, {}, "table", TABLE_UUID) is False  # idempotent
     assert len(mp.list_policies(root, {})) == 1
 
 
@@ -71,7 +72,7 @@ def test_state_stamps_are_per_dataset_not_per_policy(tmp_path: Path) -> None:
     # the first dataset in discovery order starve every sibling (stamped fresh the same tick, siblings
     # skipped forever). One stamp per (policy, dataset).
     root = str(tmp_path)
-    record = _policy(kind="namespace", id_="silver", path="bkt/medallion/silver", compact_interval_hours=6)
+    record = _policy(kind="namespace", id_="silver", uuid="ns-silver", compact_interval_hours=6)
     mp.write_state(root, {}, record, "s3://bkt/medallion/silver/a", "2026-07-16T00:00:00+00:00")
     assert mp.read_state(root, {}, record, "s3://bkt/medallion/silver/b") is None
     assert mp.read_state(root, {}, record, "s3://bkt/medallion/silver/a") is not None
@@ -83,34 +84,29 @@ def test_list_policies_skips_a_corrupt_record(tmp_path: Path) -> None:
     root = str(tmp_path)
     mp.put_policy(root, {}, _policy(retention_days=365))
     (tmp_path / "_policies" / "table-corrupt.json").write_text("{truncated")
-    (tmp_path / "_policies" / "table-nopath.json").write_text('{"kind": "table"}')
+    (tmp_path / "_policies" / "table-nouuid.json").write_text('{"kind": "table"}')
     records = mp.list_policies(root, {})
     assert len(records) == 1 and records[0]["retention_days"] == 365
 
 
 def test_resolve_precedence_table_over_namespace_over_none() -> None:
+    # The table's own record wins; else the NEAREST ancestor namespace's (ancestors outermost first); else none.
     records = [
-        _policy(kind="namespace", id_="silver", path="bkt/medallion/silver", retention_days=30),
-        _policy(kind="namespace", id_="silver$deep", path="bkt/medallion/silver/deep", retention_days=10),
-        _policy(id_="silver$features", path="bkt/medallion/silver/features", retention_days=1),
+        _policy(kind="namespace", id_="silver", uuid="ns-silver", retention_days=30),
+        _policy(kind="namespace", id_="silver$deep", uuid="ns-deep", retention_days=10),
+        _policy(id_="silver$features", uuid="t-features", retention_days=1),
     ]
-    # Exact table match wins.
-    hit = mp.resolve_policy(records, "s3://bkt/medallion/silver/features")
+    hit = mp.resolve_policy(records, "s3://bkt/t-features", table_uuid="t-features", namespace_uuids=["ns-silver", "ns-deep"])
     assert hit is not None and hit["retention_days"] == 1
-    # Longest namespace prefix wins over a shorter one.
-    hit = mp.resolve_policy(records, "s3://bkt/medallion/silver/deep/other")
+    hit = mp.resolve_policy(records, "s3://bkt/t-other", table_uuid="t-other", namespace_uuids=["ns-silver", "ns-deep"])
     assert hit is not None and hit["retention_days"] == 10
-    hit = mp.resolve_policy(records, "s3://bkt/medallion/silver/other")
+    hit = mp.resolve_policy(records, "s3://bkt/t-other", table_uuid="t-other", namespace_uuids=["ns-silver"])
     assert hit is not None and hit["retention_days"] == 30
-    # A prefix must match on a path boundary, not substring ("silverware" is not under "silver").
-    assert mp.resolve_policy(records, "s3://bkt/medallion/silverware/x") is None
-    assert mp.resolve_policy(records, "s3://bkt/elsewhere/tbl") is None
-    # Bucket-qualified: the same path in another tenant's bucket must never cross-match.
-    assert mp.resolve_policy(records, "s3://otherbkt/medallion/silver/features") is None
+    assert mp.resolve_policy(records, "s3://bkt/t-elsewhere", table_uuid="t-elsewhere", namespace_uuids=["ns-gold"]) is None
 
 
 def test_project_policy_round_trips_and_lists(tmp_path: Path) -> None:
-    # CONTRACT (#84): a PATH-LESS project record (it matches by buckets, not path) must survive the
+    # CONTRACT (#84): a UUID-LESS project record (it matches by buckets, keyed by its id) must survive the
     # registry round-trip AND list_policies' validation — the sweep only ever sees what list returns.
     root = str(tmp_path)
     mp.put_policy(root, {}, _project_policy(retention_days=90))
@@ -127,31 +123,31 @@ def test_list_policies_rejects_a_bucketless_project_record(tmp_path: Path) -> No
     # and it must not void the well-formed records next to it.
     root = str(tmp_path)
     mp.put_policy(root, {}, _project_policy())
-    mp.put_policy(root, {}, {"kind": "project", "id": "ghost", "path": "", "buckets": []})
+    mp.put_policy(root, {}, {"kind": "project", "id": "ghost", "buckets": []})
     (tmp_path / "_policies" / "project-nolist.json").write_text('{"kind": "project", "id": "x"}')
     records = mp.list_policies(root, {})
     assert len(records) == 1 and records[0]["id"] == "acme"
 
 
 def test_resolve_precedence_table_beats_namespace_beats_project_beats_none() -> None:
-    # CONTRACT (#84): resolution order is exact table -> longest namespace -> project bucket -> None
+    # CONTRACT (#84): resolution order is table -> nearest namespace -> project bucket -> None
     # (global defaults). The project tier is strictly the LAST fallback.
     records = [
-        _policy(id_="silver$features", path="acme-wh/medallion/silver/features", retention_days=1),
-        _policy(kind="namespace", id_="silver", path="acme-wh/medallion/silver", retention_days=30),
+        _policy(id_="silver$features", uuid="t-features", retention_days=1),
+        _policy(kind="namespace", id_="silver", uuid="ns-silver", retention_days=30),
         _project_policy(buckets=["acme-wh", "acme-wh2"], retention_days=90),
     ]
-    hit = mp.resolve_policy(records, "s3://acme-wh/medallion/silver/features")
+    hit = mp.resolve_policy(records, "s3://acme-wh/t-features", table_uuid="t-features", namespace_uuids=["ns-silver"])
     assert hit is not None and hit["retention_days"] == 1  # table beats namespace beats project
-    hit = mp.resolve_policy(records, "s3://acme-wh/medallion/silver/other")
+    hit = mp.resolve_policy(records, "s3://acme-wh/t-other", table_uuid="t-other", namespace_uuids=["ns-silver"])
     assert hit is not None and hit["retention_days"] == 30  # namespace beats project
-    hit = mp.resolve_policy(records, "s3://acme-wh/medallion/bronze/events")
+    hit = mp.resolve_policy(records, "s3://acme-wh/t-events", table_uuid="t-events", namespace_uuids=["ns-bronze"])
     assert hit is not None and hit["retention_days"] == 90  # project catches the rest of its buckets
-    hit = mp.resolve_policy(records, "s3://acme-wh2/u1_db$t")
+    hit = mp.resolve_policy(records, "s3://acme-wh2/t-x", table_uuid="t-x", namespace_uuids=[])
     assert hit is not None and hit["retention_days"] == 90  # every bucket in the record is covered
-    assert mp.resolve_policy(records, "s3://other-wh/u1_db$t") is None  # cross-bucket never matches
+    assert mp.resolve_policy(records, "s3://other-wh/t-x", table_uuid="t-x", namespace_uuids=[]) is None  # cross-bucket never matches
     # A bucket-NAME prefix must not match ("acme-wh2" covered explicitly above; "acme-whx" is not).
-    assert mp.resolve_policy(records, "s3://acme-whx/u1_db$t") is None
+    assert mp.resolve_policy(records, "s3://acme-whx/t-x", table_uuid="t-x", namespace_uuids=[]) is None
 
 
 def test_resolve_overlapping_project_claims_warns_and_matches_nothing(
@@ -166,34 +162,23 @@ def test_resolve_overlapping_project_claims_warns_and_matches_nothing(
         _project_policy(id_="evil", buckets=["shared-bkt", "evil-wh"], retention_days=1),
     ]
     with caplog.at_level("WARNING", logger="service_kit.lakehouse.maintenance_policies"):
-        assert mp.resolve_policy(contested, "s3://shared-bkt/u1_db$t") is None
+        assert mp.resolve_policy(contested, "s3://shared-bkt/t", table_uuid="t", namespace_uuids=["ns-db"]) is None
     assert any(r.message == "maintenance_policy_project_overlap" for r in caplog.records)
     # The uncontested bucket in the same records still resolves its (single) claimant.
-    hit = mp.resolve_policy(contested, "s3://evil-wh/u1_db$t")
+    hit = mp.resolve_policy(contested, "s3://evil-wh/t", table_uuid="t", namespace_uuids=["ns-db"])
     assert hit is not None and hit["id"] == "evil"
     # A namespace record shadows the project tier entirely — the overlap never reaches it.
-    shadowed = [_policy(kind="namespace", id_="db", path="shared-bkt/root/db", retention_days=7), *contested]
-    hit = mp.resolve_policy(shadowed, "s3://shared-bkt/root/db/t")
+    shadowed = [_policy(kind="namespace", id_="db", uuid="ns-db", retention_days=7), *contested]
+    hit = mp.resolve_policy(shadowed, "s3://shared-bkt/t", table_uuid="t", namespace_uuids=["ns-db"])
     assert hit is not None and hit["retention_days"] == 7
 
 
-def test_resolve_matches_namespace_by_logical_parent_chain() -> None:
-    # CONTRACT (audit 2026-07-16): the catalog lays tables out flat (`<uuid>_<table_id>`), never under a
-    # namespace directory — so a namespace policy must also match via the dataset's logical parent chain
-    # or it would be a dead letter for every catalog-created table.
-    records = [
-        _policy(kind="namespace", id_="db1", path="bkt/root/db1", retention_days=30),
-        _policy(kind="namespace", id_="db1$sub", path="bkt/root/db1/sub", retention_days=10),
-    ]
-    uri = "s3://bkt/root/u1_db1$users"
-    assert mp.resolve_policy(records, uri) is None  # the physical prefix alone never matches
-    hit = mp.resolve_policy(records, uri, logical_id="db1$users")
-    assert hit is not None and hit["retention_days"] == 30
-    # The deepest namespace on the chain wins, and an exact table policy wins over both.
-    hit = mp.resolve_policy(records, "s3://bkt/root/u2_db1$sub$t", logical_id="db1$sub$t")
-    assert hit is not None and hit["retention_days"] == 10
-    records.append(_policy(id_="db1$users", path="bkt/root/u1_db1$users", retention_days=1))
-    hit = mp.resolve_policy(records, uri, logical_id="db1$users")
+def test_resolve_matches_a_table_by_its_uuid_never_by_its_name() -> None:
+    # CONTRACT (ADR 0173 §8, [[LH-523]]): a record governs the object whose uuid it carries. A table created
+    # later under the name a record was set for holds none of it, and a renamed table keeps its own.
+    records = [_policy(id_="db1$users", uuid="t-old", retention_days=1)]
+    assert mp.resolve_policy(records, "s3://bkt/t-new", table_uuid="t-new", namespace_uuids=["ns-db1"]) is None
+    hit = mp.resolve_policy(records, "s3://bkt/t-old", table_uuid="t-old", namespace_uuids=["ns-elsewhere"])
     assert hit is not None and hit["retention_days"] == 1
 
 
@@ -268,38 +253,12 @@ def test_a_partial_policy_update_preserves_fields_it_did_not_mention(tmp_path: A
     from catalog.api.v1.endpoints.policies import _record
     from catalog.schemas import PolicyRequest
 
-    stored = _record("table", "bronze$pages", "bkt/pages", PolicyRequest(scan_batch_size=64, cleanup_enabled=False))
+    stored = _record("table", "bronze$pages", PolicyRequest(scan_batch_size=64, cleanup_enabled=False), None, uuid=TABLE_UUID)
     assert stored["scan_batch_size"] == 64
 
     # A later save that only flips compaction off — exactly what the form sends.
-    updated = _record("table", "bronze$pages", "bkt/pages", PolicyRequest(compact_enabled=False), stored)
+    updated = _record("table", "bronze$pages", PolicyRequest(compact_enabled=False), stored, uuid=TABLE_UUID)
 
     assert updated["compact_enabled"] is False, "the field the caller DID set must apply"
     assert updated["scan_batch_size"] == 64, "the memory bound was silently cleared"
     assert updated["cleanup_enabled"] is False, "the legal hold was silently lifted"
-
-
-# ------------------------------------------------- the record's lifecycle vs its object's
-
-
-def test_a_moved_record_is_written_under_the_new_name_before_the_old_one_goes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """New name first, old name second, so a failure part-way leaves the configuration alive ([[LH-215]]).
-
-    Of the two imperfect failure states, a record under both names (the new one correct) beats a renamed table
-    with no policy at all. Asserted by observing that the new name resolves at the moment the old one is deleted.
-    """
-    root = str(tmp_path)
-    mp.put_policy(root, {}, {"kind": "table", "id": "a$t", "retention_days": 7})
-    seen: list[str | None] = []
-    original = object_records.delete_record
-
-    def _spy(control_root: str, storage_options: dict[str, str], key: str) -> bool:
-        record = mp.get_policy(control_root, storage_options, "table", "b$t")
-        seen.append(None if record is None else record["id"])
-        return original(control_root, storage_options, key)
-
-    monkeypatch.setattr(object_records, "delete_record", _spy)
-
-    assert object_records.move_object_records(root, {}, "table", old_id="a$t", new_id="b$t") == [mp.PREFIX]
-    assert seen == ["b$t"], "the new name must be written BEFORE the old one is deleted"
-    assert mp.get_policy(root, {}, "table", "a$t") is None

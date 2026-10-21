@@ -58,6 +58,8 @@ class _Estate:
         self.root = f"s3://{bucket}"
         self.key = lance_storage_options(url, "test", "test", "us-east-1")
         self.s3: S3Client = boto3.client("s3", endpoint_url=url, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1")
+        #: The uuid each table's maintenance policy is kept under, as the policy door answered it (ADR 0173 §8).
+        self.policy_uuids: dict[str, str] = {}
         assert client.post("/v1/namespace/db/create", json={}).status_code == 200
 
     def door(self, table: str, action: str, **body: object) -> str:
@@ -77,9 +79,13 @@ class _Estate:
         return {str(entry["Key"]): int(entry["Size"]) for entry in listed if not str(entry["Key"]).startswith("_")}
 
     def dropped_with_a_branch(self, table: str, name: str) -> dict[str, int]:
-        """``table`` registered, branched and recoverably dropped through the doors; every object it holds, all under one key."""
+        """``table`` registered, branched, given a maintenance policy and recoverably dropped through the doors; every object
+        it holds, all under one key."""
         self.registered(table, name)
         self.door(table, "branches/create", name="work")
+        answer = self.client.post(f"/management/v1/table/{quote(table, safe='$')}/policy/set", json={"retention_days": 1})
+        assert answer.status_code == 200, answer.text
+        self.policy_uuids[table] = str(answer.json()["uuid"])
         self.door(table, "drop")
         held = self.objects()
         assert any(f"spelled/{name}/tree/work/" in key for key in held), f"precondition: the branch is held: {sorted(held)}"
@@ -123,7 +129,8 @@ def test_an_expired_record_reclaims_its_table_under_every_spelling_of_its_locati
     table = f"db${name}"
     held = estate.dropped_with_a_branch(table, name)
     location = estate.recorded_location(table)
-    maintenance_policies.put_policy(estate.root, estate.key, {"kind": "table", "id": table, "path": location.removeprefix("s3://"), "retention_days": 1})
+    policy_uuid = estate.policy_uuids[table]
+    assert maintenance_policies.get_policy(estate.root, estate.key, "table", policy_uuid) is not None, "precondition: the drop kept the policy for an undrop"
     trash.put(
         estate.root,
         estate.key,
@@ -154,7 +161,7 @@ def test_an_expired_record_reclaims_its_table_under_every_spelling_of_its_locati
     # pyarrow's S3 `delete_dir` keeps the emptied parent as a zero-byte `spelled/` marker, which is no byte of the table.
     assert [key for key in estate.objects() if key.startswith(f"spelled/{name}/")] == [], "the purge left bytes of the table it reclaimed"
     assert trash.get(estate.root, estate.key, table) is None, "the record outlived its purge"
-    assert maintenance_policies.get_policy(estate.root, estate.key, "table", table) is None, "the policy outlived the table it governed"
+    assert maintenance_policies.get_policy(estate.root, estate.key, "table", policy_uuid) is None, "the policy outlived the table it governed"
     registry = base_registry.BaseRegistry(control_root=estate.root, storage_options=estate.key)
     assert base_registry.read_base_record(registry, location) is None, "the table's base record outlived its bytes"
 

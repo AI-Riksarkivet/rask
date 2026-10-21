@@ -29,6 +29,7 @@ from lance_namespace import CreateNamespaceRequest, LanceNamespace, connect
 
 from catalog.api.dependencies import NamespaceDep, SettingsDep, StorageOptionsDep
 from catalog.api.v1.endpoints import versions as version_door
+from catalog.core.identifiers import with_minted_uuid
 from catalog.core.namespace import open_dataset
 from catalog.services import maintenance
 from catalog.services.dataplane import create_table
@@ -58,8 +59,9 @@ def _versions(ns: LanceNamespace, *, branch: str | None = None) -> list[int]:
 def ns(tmp_path: Path) -> LanceNamespace:
     root = str(tmp_path / "data")
     namespace = connect("dir", {"root": root})
-    namespace.create_namespace(CreateNamespaceRequest(id=TABLE[:-1]))
-    create_table(namespace, {}, TABLE, pa.table({"id": pa.array([1], pa.int64())}), root=root, mode="create", registry=None)
+    namespace.create_namespace(CreateNamespaceRequest(id=TABLE[:-1], properties=with_minted_uuid(None)))
+    registry = base_registry.BaseRegistry(control_root=str(tmp_path / "control"), storage_options={})
+    create_table(namespace, {}, TABLE, pa.table({"id": pa.array([1], pa.int64())}), root=root, mode="create", registry=registry, holder="db$alpha")
     for value in range(2, LATEST + 1):
         _append(namespace, value)
     assert _versions(namespace) == [1, 2, 3, 4]

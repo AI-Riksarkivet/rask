@@ -49,7 +49,8 @@ TABLE = "db$t"
 #: The uuid the catalog minted for the namespace `db`, in its `__manifest` row.
 NAMESPACE_UUID = "3f2e1d0c-4b5a-4968-8776-a5b4c3d2e1f0"
 #: A second table the catalog made, with a branch, which discovery lists as a dataset of its own.
-BRANCHED = f"{ROOT}/7a1f0e2d-3c4b-4a59-8e6f-b7c8d9e0f1a2"
+BRANCHED_UUID = "7a1f0e2d-3c4b-4a59-8e6f-b7c8d9e0f1a2"
+BRANCHED = f"{ROOT}/{BRANCHED_UUID}"
 BRANCH = f"{BRANCHED}/tree/work"
 #: A dataset in the catalog's layout that no `__manifest` row names.
 UNNAMED = f"{ROOT}/5e3b2a1c-9d8f-4e7a-b6c5-d4e3f2a1b0c9"
@@ -87,8 +88,9 @@ def estate(moto_url: str) -> dict[str, str]:
     namespace.register_table(RegisterTableRequest(id=["db", "t"], location=LOCATION))
     claims = location_claims.ClaimStore(control_root=ROOT, storage_options=options)
     location_claims.take(claims, URI, TABLE, ["db", "t"], is_gone=lambda _claim: False, uuid=LOCATION)
-    namespace.register_table(RegisterTableRequest(id=["db", "b"], location=BRANCHED.removeprefix(f"{ROOT}/")))
-    policy = {"kind": "table", "id": TABLE, "path": f"{BUCKET}/{LOCATION}", "compact_enabled": True, "retain_versions": 2, "target_rows_per_fragment": 1000}
+    namespace.register_table(RegisterTableRequest(id=["db", "b"], location=BRANCHED_UUID))
+    location_claims.take(claims, BRANCHED, "db$b", ["db", "b"], is_gone=lambda _claim: False, uuid=BRANCHED_UUID)
+    policy = {"kind": "table", "id": TABLE, "uuid": LOCATION, "compact_enabled": True, "retain_versions": 2, "target_rows_per_fragment": 1000}
     maintenance_policies.put_policy(ROOT, options, policy)
     maintenance_policies.put_policy(ROOT, options, {"kind": "project", "id": "acme", "buckets": [BUCKET], "retain_versions": 1})
     return options
@@ -165,9 +167,9 @@ def test_a_tick_expires_versions_and_lists_the_compaction_it_does_not_run(estate
     assert len(lance.dataset(PLATFORM, storage_options=estate).versions()) == 2, "a declared platform root was expired"
     assert len(lance.dataset(UNNAMED, storage_options=estate).versions()) == 3, "a dataset no manifest names was expired"
     assert set(asked) <= {TABLE, "db$b"} and TABLE in asked, f"the vend door was asked about {asked}"
-    record = read_due(ROOT, estate, TABLE)
+    record = read_due(ROOT, estate, LOCATION)
     assert record is not None, f"no due record for {TABLE}: {answered.json()}"
-    assert (record.table, record.location, record.version, record.policy) == (TABLE, URI, before.version, TABLE)
+    assert (record.table, record.uuid, record.location, record.version, record.policy) == (TABLE, LOCATION, URI, before.version, TABLE)
     assert record.compaction is not None and record.compaction.model_dump() == {
         "fragments": 4,
         "candidate_fragments": 4,

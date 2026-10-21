@@ -113,7 +113,9 @@ async def handle_arrival(event: dict[str, Any], settings: MaintenanceSettings, e
     ACKS a byte-free operation, an event carrying no physical URI, a debounced write and a table no manifest names:
     none of those is retryable, and the sweep re-evaluates anything this declines. RETRIES only when the evaluation
     could not decide (a manifest, the policy registry or the dataset unreadable), and stamps the debounce only after a
-    decision, so a failed refresh is not skipped by the next event.
+    decision, so a failed refresh is not skipped by the next event. The debounce is keyed by the table uuid the event
+    names ([[LH-523]]), so a table registered later at the same location starts unstamped; an event naming none is
+    evaluated every time.
 
     It checks no signature: the route calls it only for a write its door admitted, and a direct caller verifies nothing.
     """
@@ -121,7 +123,11 @@ async def handle_arrival(event: dict[str, Any], settings: MaintenanceSettings, e
     if write is None:
         return {"status": SUCCESS}
     options = settings.storage_options()
-    last = await run_in_threadpool(maintenance_policies.read_planned_version, settings.resolved_policy_root, options, write.location)
+    last = (
+        await run_in_threadpool(maintenance_policies.read_planned_version, settings.resolved_policy_root, options, write.table_uuid)
+        if write.table_uuid is not None
+        else None
+    )
     if not write.refreshes_regardless() and not should_replan(last_planned=last, event_version=write.version, min_versions=settings.event_min_versions):
         return {"status": SUCCESS}
     acted = await run_in_threadpool(act_on_write, write.location, settings)
@@ -129,8 +135,8 @@ async def handle_arrival(event: dict[str, Any], settings: MaintenanceSettings, e
         return {"status": RETRY}
     if acted.expired is not None:
         await emit_sweep_lineage(emitter, [acted.expired], delimiter=settings.delimiter)
-    if write.version is not None:
-        await run_in_threadpool(maintenance_policies.write_planned_version, settings.resolved_policy_root, options, write.location, write.version)
+    if write.version is not None and write.table_uuid is not None:
+        await run_in_threadpool(maintenance_policies.write_planned_version, settings.resolved_policy_root, options, write.table_uuid, write.version)
     return {"status": SUCCESS}
 
 

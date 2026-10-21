@@ -7,8 +7,9 @@ nothing; at the threshold every reclaimable version goes. A clone list past its 
 either: it is the only evidence of which tables a clone reads through, so the lane leaves the table to the sweep.
 
 The table's name is one the catalog percent-encodes ([[LH-319]]): the event names the URL the catalog opened,
-``…$r%C3%A4ksm%C3%B6rg%C3%A5s`` as ``describe_table`` answers it, and the policy carries that spelling as the catalog's
-policy door records it, while the ``__manifest`` row and the store hold ``…$räksmörgås``.
+``…$r%C3%A4ksm%C3%B6rg%C3%A5s`` as ``describe_table`` answers it, while the ``__manifest`` row and the store hold
+``…$räksmörgås``. The policy is keyed by the uuid the catalog's register door recorded in the location's claim, and the
+namespace carries its own in its ``__manifest`` row (ADR 0173 §8).
 """
 
 from __future__ import annotations
@@ -27,8 +28,9 @@ from lance_namespace import connect
 from lance_namespace_urllib3_client.models import CreateNamespaceRequest, DescribeTableRequest, RegisterTableRequest
 from moto.server import ThreadedMotoServer
 
-from service_kit.lakehouse import maintenance_policies
+from service_kit.lakehouse import location_claims, maintenance_policies
 from service_kit.lakehouse.maintenance_due import CloneList, write_clone_list
+from service_kit.lakehouse.naming import UUID_PROPERTY
 from service_kit.lakehouse.objectfs import lance_storage_options
 
 
@@ -69,10 +71,13 @@ def _table_with(versions: int, *, bucket: str, options: dict[str, str], clone_li
             rows, f"{root}/{LOCATION}", mode="create" if i == 0 else "append", storage_options=options, data_storage_version="2.2", enable_stable_row_ids=True
         )
     namespace = connect("dir", {"root": root, **{f"storage.{key}": value for key, value in options.items()}})
-    namespace.create_namespace(CreateNamespaceRequest(id=["db"]))
+    namespace.create_namespace(CreateNamespaceRequest(id=["db"], properties={UUID_PROPERTY: str(uuid.uuid4())}))
     namespace.register_table(RegisterTableRequest(id=TABLE.split("$"), location=LOCATION))
     described = str(namespace.describe_table(DescribeTableRequest(id=TABLE.split("$"))).location)
-    maintenance_policies.put_policy(root, options, {"kind": "table", "id": TABLE, "path": described.removeprefix("s3://"), "retain_versions": 1})
+    table_uuid = str(uuid.uuid4())
+    claims = location_claims.ClaimStore(control_root=root, storage_options=options)
+    location_claims.take(claims, described, TABLE, ["db", "räksmörgås"], is_gone=lambda _claim: False, uuid=table_uuid)
+    maintenance_policies.put_policy(root, options, {"kind": "table", "id": TABLE, "uuid": table_uuid, "retain_versions": 1})
     write_clone_list(root, options, CloneList(taken_at=datetime.now(UTC) - clone_list_age))
     return described
 

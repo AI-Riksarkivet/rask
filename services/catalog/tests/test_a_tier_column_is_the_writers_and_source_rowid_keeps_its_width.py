@@ -27,12 +27,14 @@ from lance_namespace import CreateNamespaceRequest, DescribeTableRequest, LanceN
 from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, NamespaceDep, SettingsDep, StorageOptionsDep, get_lineage_emitter
 from catalog.api.security import CurrentToken
 from catalog.api.v1.endpoints import publication as door
+from catalog.core.identifiers import with_minted_uuid
 from catalog.core.lineage_emit import NoopEmitter
 from catalog.services.dataplane import create_table
 from catalog.services.publication import published_version
 from service_kit.governed.oidc import IDToken
 from service_kit.governed.person_identity import PersonPrincipal
 from service_kit.governed.principal import Principal
+from service_kit.lakehouse.base_registry import BaseRegistry
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
@@ -91,8 +93,9 @@ def registry_root(tmp_path: Path) -> str:
 def _client_over(payload: pa.Table, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, registry_root: str) -> Iterator[tuple[TestClient, LanceNamespace]]:
     root = str(tmp_path / "data")
     namespace = connect("dir", {"root": root})
-    namespace.create_namespace(CreateNamespaceRequest(id=TABLE_ID[:-1]))
-    create_table(namespace, {}, TABLE_ID, payload, root=root, mode="create", registry=None)
+    namespace.create_namespace(CreateNamespaceRequest(id=TABLE_ID[:-1], properties=with_minted_uuid(None)))
+    registry = BaseRegistry(control_root=registry_root, storage_options={})
+    create_table(namespace, {}, TABLE_ID, payload, root=root, mode="create", registry=registry, holder="db$features")
     with TestClient(_app(namespace, monkeypatch, registry_root)) as c:
         yield c, namespace
 

@@ -19,16 +19,19 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any, cast
+from uuid import NAMESPACE_URL, uuid5
 
 import pytest
 from lance_namespace import DropTableResponse, InvalidTableStateError, NamespaceNotEmptyError, TableNotFoundError
 
 from catalog.api import fga_deps
 from catalog.core.config import Settings
+from catalog.services import table_claims
 from catalog.services.table_claims import ResolvedTable
 from service_kit.control_emit import NoopControlEmitter
 from service_kit.governed import fga
-from service_kit.lakehouse import protection
+from service_kit.lakehouse import location_claims, protection
+from service_kit.lakehouse.naming import UUID_PROPERTY
 from tests.unit.no_uuids import NO_OBJECT_UUIDS
 
 
@@ -76,15 +79,42 @@ class _NoopLineage:
         return None
 
 
+def _uuid(canonical: str) -> str:
+    """The uuid the catalog minted for the object named ``canonical`` (ADR 0173 §2).
+
+    Derived from the name only so a stand-in backend can answer it without a store; every record is keyed by it, never
+    by the name.
+    """
+    return str(uuid5(NAMESPACE_URL, canonical))
+
+
+def _location(segments: list[str]) -> str:
+    return f"s3://bkt/{'_'.join(segments)}.lance"
+
+
+def _stand(settings: Settings, *tables: str) -> None:
+    """Each table's location claim, recording its uuid, as the door that made the table took it."""
+    store = table_claims.claim_store(settings)
+    for canonical in tables:
+        segments = canonical.split("$")
+        location_claims.take(store, _location(segments), canonical, segments, is_gone=lambda _claim: False, uuid=_uuid(canonical))
+
+
 class _RecordingNamespace:
-    """Counts native calls — a refused door must never reach the backend."""
+    """Counts native calls — a refused door must never reach the backend.
+
+    It describes a namespace with the ``rask.uuid`` property and a table at its location, as the real backend answers
+    for objects the catalog's doors made.
+    """
 
     def __init__(self) -> None:
         self.calls: list[str] = []
 
     def describe_table(self, request: Any) -> Any:
-        # No location, as for a declared-only table: a destructive drop's claim check has nothing to judge.
-        return type("R", (), {"location": None, "model_fields_set": set()})()
+        return type("R", (), {"location": _location(request.id), "is_only_declared": False, "model_fields_set": set()})()
+
+    def describe_namespace(self, request: Any) -> Any:
+        return type("R", (), {"properties": {UUID_PROPERTY: _uuid("$".join(request.id))}, "model_fields_set": set()})()
 
     def drop_table(self, request: Any) -> Any:
         self.calls.append("drop_table")
@@ -110,7 +140,7 @@ def _protect(settings: Settings, kind: str, canonical: str) -> None:
     protection.set_protection(
         settings.registry_root,
         settings.storage_options(),
-        {"kind": kind, "id": canonical, "protected": "true", "set_by": "test"},
+        {"kind": kind, "id": canonical, "uuid": _uuid(canonical), "protected": "true", "set_by": "test"},
     )
 
 
@@ -120,21 +150,23 @@ def _protect(settings: Settings, kind: str, canonical: str) -> None:
 def test_protection_roundtrip_and_absence_means_unprotected(tmp_path: Any) -> None:
     settings = _settings(tmp_path)
     so = settings.storage_options()
-    assert protection.get_protection(settings.registry_root, so, "table", "bronze$pages") is None
+    pages = _uuid("bronze$pages")
+    assert protection.get_protection(settings.registry_root, so, "table", pages) is None
     _protect(settings, "table", "bronze$pages")
-    record = protection.get_protection(settings.registry_root, so, "table", "bronze$pages")
+    record = protection.get_protection(settings.registry_root, so, "table", pages)
     assert record is not None and record["protected"] == "true"
-    assert protection.clear_protection(settings.registry_root, so, "table", "bronze$pages") is True
-    assert protection.get_protection(settings.registry_root, so, "table", "bronze$pages") is None
-    assert protection.clear_protection(settings.registry_root, so, "table", "bronze$pages") is False
+    assert protection.get_protection(settings.registry_root, so, "table", "bronze$pages") is None, "a record is keyed by the uuid, never the name"
+    assert protection.clear_protection(settings.registry_root, so, "table", pages) is True
+    assert protection.get_protection(settings.registry_root, so, "table", pages) is None
+    assert protection.clear_protection(settings.registry_root, so, "table", pages) is False
 
 
 def test_kinds_do_not_collide(tmp_path: Any) -> None:
-    """A namespace and a table sharing a canonical id are separate records."""
+    """A namespace and a table sharing a key are separate records."""
     settings = _settings(tmp_path)
     so = settings.storage_options()
     _protect(settings, "table", "bronze")
-    assert protection.get_protection(settings.registry_root, so, "namespace", "bronze") is None
+    assert protection.get_protection(settings.registry_root, so, "namespace", _uuid("bronze")) is None
 
 
 # ---------------------------------------------------------------- the guard contract
@@ -145,7 +177,9 @@ def test_kinds_do_not_collide(tmp_path: Any) -> None:
 
 def _resolved(settings: Settings) -> ResolvedTable:
     """The table the door's name resolved to, as the router's resolution hands it to the handler."""
-    return ResolvedTable(segments=["bronze", "pages"], location=f"{settings.registry_root}/bronze$pages")
+    _stand(settings, "bronze$pages")
+    location = _location(["bronze", "pages"])
+    return ResolvedTable(segments=["bronze", "pages"], location=location, claim=location_claims.read(table_claims.claim_store(settings), location))
 
 
 def _drop_table(settings: Settings, ns: Any, *, force: bool = False) -> Any:
@@ -185,7 +219,7 @@ def test_force_drops_a_protected_table_and_the_record_dies_with_it(tmp_path: Any
     ns: Any = _RecordingNamespace()
     _drop_table(settings, ns, force=True)
     assert ns.calls == ["drop_table"]
-    assert protection.get_protection(settings.registry_root, so, "table", "bronze$pages") is None, "a reused id must not inherit protection nobody set on it"
+    assert protection.get_protection(settings.registry_root, so, "table", _uuid("bronze$pages")) is None, "the record must die with its table"
 
 
 def test_a_protected_table_refuses_deregister_too(tmp_path: Any) -> None:
@@ -250,24 +284,26 @@ def test_the_protection_door_sets_and_clears_the_record(tmp_path: Any) -> None:
         t_ep.set_table_protection(
             id="bronze$pages",
             body=t_ep.SetProtectionRequest(protected=True),
+            table=_resolved(settings),
             settings=settings,
             token=None,
             control=NoopControlEmitter(),
         )
     )
     assert result.protected is True
-    assert (protection.get_protection(settings.registry_root, so, "table", "bronze$pages") or {})["set_by"] == "anonymous"
+    assert (protection.get_protection(settings.registry_root, so, "table", _uuid("bronze$pages")) or {})["set_by"] == "anonymous"
     result = asyncio.run(
         t_ep.set_table_protection(
             id="bronze$pages",
             body=t_ep.SetProtectionRequest(protected=False),
+            table=_resolved(settings),
             settings=settings,
             token=None,
             control=NoopControlEmitter(),
         )
     )
     assert result.protected is False
-    assert protection.get_protection(settings.registry_root, so, "table", "bronze$pages") is None
+    assert protection.get_protection(settings.registry_root, so, "table", _uuid("bronze$pages")) is None
 
 
 def test_the_protection_suffix_is_owner_gated_not_writer(tmp_path: Any) -> None:
@@ -322,7 +358,7 @@ class _TrashableNamespace(_RecordingNamespace):
 
     def describe_table(self, request: Any) -> Any:
         self.calls.append("describe_table")
-        return type("R", (), {"location": "s3://bkt/bronze/pages.lance", "model_fields_set": set()})()
+        return super().describe_table(request)
 
     def register_table(self, request: Any) -> Any:
         self.calls.append(f"register_table:{request.location}")
@@ -408,6 +444,7 @@ def test_a_CASCADE_refuses_when_a_descendant_is_protected(tmp_path: Any) -> None
     from catalog.api.v1.endpoints import namespaces as n_ep
 
     settings = _settings(tmp_path)
+    _stand(settings, "bronze$pages")
     _protect(settings, "table", "bronze$pages")
     ns: Any = _RecordingNamespace()
     with pytest.raises(InvalidTableStateError, match="bronze\\$pages"):
@@ -434,6 +471,7 @@ def test_force_lets_a_cascade_through(tmp_path: Any) -> None:
     from catalog.api.v1.endpoints import namespaces as n_ep
 
     settings = _settings(tmp_path)
+    _stand(settings, "bronze$pages")
     _protect(settings, "table", "bronze$pages")
     ns: Any = _RecordingNamespace()
     asyncio.run(
@@ -474,14 +512,11 @@ class _CascadableNamespace(_TrashableNamespace):
 
     def describe_table(self, request: Any) -> Any:
         self.calls.append(f"describe_table:{'$'.join(request.id)}")
-        return type("R", (), {"location": f"s3://bkt/{'_'.join(request.id)}.lance", "model_fields_set": set()})()
+        return _RecordingNamespace.describe_table(self, request)
 
     def deregister_table(self, request: Any) -> Any:
         self.calls.append(f"deregister_table:{'$'.join(request.id)}")
         return type("R", (), {"model_fields_set": set()})()
-
-    def describe_namespace(self, request: Any) -> Any:
-        return type("R", (), {"properties": None, "model_fields_set": set()})()
 
     def drop_namespace(self, request: Any) -> Any:
         self.calls.append(f"drop_namespace:{'$'.join(request.id)}:{(request.behavior or 'restrict').lower()}")
@@ -497,6 +532,7 @@ def _drop_namespace_cascade(settings: Settings, ns: Any, *, force: bool = False,
 
     from catalog.api.v1.endpoints import namespaces as n_ep
 
+    _stand(settings, "bronze$pages", "bronze$inner$t2")
     return asyncio.run(
         n_ep.drop_namespace(
             id="bronze",
@@ -689,13 +725,18 @@ def test_the_protection_flag_is_READABLE_on_both_rungs(tmp_path: Any) -> None:
 
     settings = _settings(tmp_path)
     so = settings.storage_options()
-    protection.set_protection(settings.registry_root, so, {"kind": "table", "id": "db1$t", "protected": "true", "set_by": "user:alice"})
+    ns: Any = _RecordingNamespace()
+    _stand(settings, "db1$t", "db1$other")
+    store = table_claims.claim_store(settings)
+    protection.set_protection(settings.registry_root, so, {"kind": "table", "id": "db1$t", "uuid": _uuid("db1$t"), "protected": "true", "set_by": "user:alice"})
 
-    read = asyncio.run(t_ep.get_table_protection("db1$t", settings=settings))
+    read = asyncio.run(t_ep.get_table_protection("db1$t", table=table_claims.resolve(ns, store, ["db1", "t"]), settings=settings))
     assert (read.protected, read.set_by) == (True, "user:alice")
-    unarmed = asyncio.run(t_ep.get_table_protection("db1$other", settings=settings))
+    unarmed = asyncio.run(t_ep.get_table_protection("db1$other", table=table_claims.resolve(ns, store, ["db1", "other"]), settings=settings))
     assert (unarmed.protected, unarmed.set_by) == (False, None)
 
-    protection.set_protection(settings.registry_root, so, {"kind": "namespace", "id": "bronze", "protected": "true", "set_by": "user:bob"})
-    ns_read = asyncio.run(n_ep.get_namespace_protection("bronze", settings=settings))
+    protection.set_protection(
+        settings.registry_root, so, {"kind": "namespace", "id": "bronze", "uuid": _uuid("bronze"), "protected": "true", "set_by": "user:bob"}
+    )
+    ns_read = asyncio.run(n_ep.get_namespace_protection("bronze", ns=ns, settings=settings))
     assert (ns_read.protected, ns_read.set_by) == (True, "user:bob")

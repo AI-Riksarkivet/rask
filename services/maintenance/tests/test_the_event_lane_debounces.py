@@ -2,9 +2,9 @@
 
 Refreshing a table's due record reads its bucket's `__manifest`, the policy registry and the clone list and opens the
 dataset, so a table taking a burst of writes would pay that per write. The debounce is Lakekeeper's
-`min-snapshots-to-expire` in rask's own registry: record the version a dataset was last evaluated at, and do not
-evaluate again until enough versions have accumulated. It must short-circuit BEFORE the expensive work, or it saves
-nothing. A dataset with no stamp has never been evaluated by this lane, and is.
+`min-snapshots-to-expire` in rask's own registry: record the version a table was last evaluated at, under the table uuid
+the event names (ADR 0173 §8), and do not evaluate again until enough versions have accumulated. It must short-circuit
+BEFORE the expensive work, or it saves nothing. A table with no stamp has never been evaluated by this lane, and is.
 """
 
 from __future__ import annotations
@@ -12,6 +12,10 @@ from __future__ import annotations
 import pytest
 
 from maintenance.services.arrival import should_replan
+from service_kit.openlineage import DatasetUuids, with_dataset_uuids
+
+
+TABLE_UUID = "0a6f3c8e-5b1d-4e2a-9c7f-3d8b2e1a4f60"
 
 
 @pytest.mark.parametrize(
@@ -51,14 +55,20 @@ async def test_a_debounced_insert_is_never_evaluated_and_a_compaction_always_is(
         acted_on.append(location)
         return Acted(verdict="clear")
 
-    monkeypatch.setattr(route.maintenance_policies, "read_planned_version", lambda *a: 100)
+    monkeypatch.setattr(route.maintenance_policies, "read_planned_version", lambda _root, _options, table_uuid: 100 if table_uuid == TABLE_UUID else None)
     monkeypatch.setattr(route.maintenance_policies, "write_planned_version", lambda *a: None)
     monkeypatch.setattr(route, "act_on_write", act)
     settings = MaintenanceSettings.model_validate({"s3_bucket": "b", "MAINTENANCE_EVENT_MIN_VERSIONS": 10})
     event = {
         "data": {
             "run": {"facets": {"lance": {"operation": operation}}},
-            "outputs": [{"name": "db$t", "facets": {"version": {"datasetVersion": "101"}, "dataSource": {"uri": "s3://b/t.lance"}}}],
+            "outputs": [
+                with_dataset_uuids(
+                    {"name": "db$t", "facets": {"version": {"datasetVersion": "101"}, "dataSource": {"uri": "s3://b/t.lance"}}},
+                    DatasetUuids(table_uuid=TABLE_UUID),
+                    producer="test",
+                )
+            ],
         }
     }
     assert await route.handle_arrival(event, settings, NoopEmitter()) == {"status": route.SUCCESS}

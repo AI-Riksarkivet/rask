@@ -20,6 +20,7 @@ from uuid import uuid4
 from lance_namespace import (
     ConcurrentModificationError,
     DescribeTableRequest,
+    InternalError,
     InvalidTableStateError,
     LanceNamespace,
     NamespaceNotFoundError,
@@ -53,6 +54,17 @@ class ResolvedTable(BaseModel):
     def uuid(self) -> str | None:
         """The table's uuid as its claim recorded it when the request reached the door."""
         return self.claim.claim.uuid if self.claim is not None else None
+
+    def require_uuid(self) -> str:
+        """The table's uuid, for a door that reads or writes a record kept for it (ADR 0173 §8).
+
+        Raises:
+            TableNotFoundError: The name named no table.
+            InternalError: The table's location carries no claim recording a uuid, which no door leaves.
+        """
+        if self.location is None:
+            raise TableNotFoundError(f"table not found: {self.segments}")
+        return _recorded_uuid(self.claim, self.segments)
 
 
 class DoorFence(BaseModel):
@@ -88,6 +100,51 @@ def resolve(ns: LanceNamespace, store: ClaimStore, segments: list[str]) -> Resol
         only_declared=bool(described.is_only_declared),
         claim=location_claims.read(store, location) if location else None,
     )
+
+
+def uuid_at(store: ClaimStore, location: str, segments: list[str]) -> str:
+    """The uuid the claim on ``location`` records, for the table ``segments`` resolved to there.
+
+    Raises:
+        InternalError: The location carries no claim recording a uuid.
+    """
+    return _recorded_uuid(location_claims.read(store, location), segments)
+
+
+def _recorded_uuid(claim: ClaimRead | None, segments: list[str]) -> str:
+    if claim is None or claim.claim.uuid is None:
+        log.error("table_uuid_unrecorded", extra={"table": segments})
+        raise InternalError(f"table {segments} carries no uuid, so no record kept for it can be read")
+    return claim.claim.uuid
+
+
+def current_name(store: ClaimStore, location: str, uuid: str) -> str | None:
+    """The name the table ``uuid`` names holds now: the holder of its location's claim, while that claim records the
+    uuid and is not released. ``None`` when the table is gone, or another table holds the location now.
+
+    A record kept for a table names the location and the uuid; a rename hands the claim to the table's new name and
+    keeps both, so a surface listing the record names the table as its callers address it now.
+    """
+    found = location_claims.read(store, location)
+    if found is None or found.claim.uuid != uuid or found.claim.released_at is not None:
+        return None
+    return found.claim.table
+
+
+class TableRecord(BaseModel):
+    """What a record kept for a table records of it: the location and the uuid."""
+
+    location: str
+    uuid: str
+
+
+def names_now(store: ClaimStore, records: list[TableRecord]) -> list[str | None]:
+    """The name each record's table holds now (:func:`current_name`), ``None`` for a table that is gone.
+
+    A gone table's record names no table: authorised under the name it kept, it would be shown to whoever holds a
+    table created at that name since, which inherits nothing of the old one (ADR 0173 §8).
+    """
+    return [current_name(store, record.location, record.uuid) for record in records]
 
 
 def fence(ns: LanceNamespace, store: ClaimStore, table: ResolvedTable, *, holder: str, verb: str) -> DoorFence:

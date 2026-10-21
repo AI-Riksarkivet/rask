@@ -8,9 +8,10 @@ mapping — never lance's actual operations. ``real_ns_client`` runs the real ``
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from unittest.mock import MagicMock
+from uuid import uuid4
 
 import lance
 import pyarrow as pa
@@ -18,6 +19,8 @@ import pytest
 from fastapi.testclient import TestClient
 from lance_namespace import DescribeNamespaceResponse, DescribeTableResponse, LanceNamespace
 from moto.server import ThreadedMotoServer
+
+from service_kit.lakehouse.naming import UUID_PROPERTY
 
 
 @pytest.fixture(scope="module")
@@ -102,9 +105,27 @@ def client(fake_ns: MagicMock, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) 
     described = tmp_path / "described.lance"
     lance.write_dataset(pa.table({"id": pa.array([0], pa.int64())}), str(described), data_storage_version="2.2", enable_stable_row_ids=True)
     fake_ns.describe_table.return_value = DescribeTableResponse(location=str(described), table_uri=str(described))
-    # A namespace declaring no tier: every write, a write-tier vend among them, reads its tier before it is judged.
-    fake_ns.describe_namespace.return_value = DescribeNamespaceResponse(properties={})
+    # A namespace declaring no tier: every write, a write-tier vend among them, reads its tier before it is judged. It
+    # carries the uuid its create minted, as every namespace a door made does (ADR 0173 §2).
+    fake_ns.describe_namespace.return_value = DescribeNamespaceResponse(properties={UUID_PROPERTY: str(uuid4())})
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()
     get_settings.cache_clear()
+
+
+@pytest.fixture
+def claim_described(client: TestClient, fake_ns: MagicMock) -> Callable[[str], str]:
+    """Take, for a table, the claim the door that made it took on the location ``client``'s double describes, and
+    return the uuid it records (ADR 0173 §2): a door keeping a record for a table, or acting on it, reads it there."""
+    from catalog.core.config import get_settings
+    from catalog.services import table_claims
+    from service_kit.lakehouse import location_claims
+
+    def _claim(table: str) -> str:
+        minted = str(uuid4())
+        location = fake_ns.describe_table.return_value.location
+        location_claims.take(table_claims.claim_store(get_settings()), location, table, table.split("$"), is_gone=lambda _claim: False, uuid=minted)
+        return minted
+
+    return _claim

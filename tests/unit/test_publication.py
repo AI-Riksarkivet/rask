@@ -28,6 +28,7 @@ from lance_namespace import (
     connect,
 )
 
+from catalog.core.identifiers import with_minted_uuid
 from catalog.core.namespace import open_dataset
 from catalog.services.dataplane import create_table
 from catalog.services.publication import (
@@ -36,6 +37,7 @@ from catalog.services.publication import (
     publish,
     published_version,
 )
+from service_kit.lakehouse import base_registry
 from service_kit.lakehouse.quality import Assertion
 from tests.unit.no_uuids import NO_OBJECT_UUIDS
 
@@ -62,8 +64,10 @@ def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace, a runtime-only type
     own tag operations go through that same resolution, which is the whole point of testing here.
     """
     namespace = connect("dir", {"root": str(tmp_path)})
-    namespace.create_namespace(CreateNamespaceRequest(id=TABLE_ID[:-1]))
-    create_table(namespace, {}, TABLE_ID, _table([1, 2, 3]), root=str(tmp_path), mode="create", registry=None)
+    namespace.create_namespace(CreateNamespaceRequest(id=TABLE_ID[:-1], properties=with_minted_uuid(None)))
+    # With its location's claim recording the table's uuid, as the create door takes it (ADR 0173 §2).
+    registry = base_registry.BaseRegistry(control_root=str(tmp_path / "control"), storage_options={})
+    create_table(namespace, {}, TABLE_ID, _table([1, 2, 3]), root=str(tmp_path), mode="create", registry=registry, holder="db$pages")
     return namespace
 
 
@@ -224,7 +228,7 @@ def test_a_version_that_does_not_exist_is_refused(ns) -> None:  # noqa: ANN001
 
 
 @pytest.mark.asyncio
-async def test_a_PUBLICATION_announces_the_range_and_a_REJECTION_announces_nothing(ns, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: ANN001
+async def test_a_PUBLICATION_announces_the_range_and_a_REJECTION_announces_nothing(ns, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: ANN001
     """The event is the wake-up; the tag is the truth.
 
     Two properties, asserted together because each is wrong without the other:
@@ -262,6 +266,8 @@ async def test_a_PUBLICATION_announces_the_range_and_a_REJECTION_announces_nothi
     # The alias, not the field name — pydantic-settings validates on the env alias.
     monkeypatch.setenv("LANCE_S3_ACCESS_KEY_ID", "x")
     monkeypatch.setenv("LANCE_S3_SECRET_ACCESS_KEY", "y")
+    # The control root the fixture's create took the table's claim on, where the door reads the table's uuid.
+    monkeypatch.setenv("LANCE_CONTROL_ROOT", str(tmp_path / "control"))
     settings = Settings()
 
     good = _write(ns, [1, 2, 3])

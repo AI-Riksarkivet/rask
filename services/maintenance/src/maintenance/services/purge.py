@@ -83,7 +83,6 @@ from service_kit.governed import fga
 from service_kit.lakehouse import location_claims, object_records, trash, warehouse_records
 from service_kit.lakehouse.base_refs import BaseRefs, decoded_path, decoded_segments, location_within, names_a_location, normalise, store_of
 from service_kit.lakehouse.base_registry import BaseRegistry, UnreadableBaseRecordError, forget_base_record
-from service_kit.lakehouse.naming import uuid_of
 from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base
 
 
@@ -808,31 +807,19 @@ def _purged_uuids(record: dict[str, Any], *, live: Liveness | None, control_root
     """
     kind = str(record.get("kind") or "table")
     obj_id = str(record.get("id") or "")
-    location = str(record.get("location") or "").rstrip("/")
+    claims = location_claims.ClaimStore(control_root=control_root, storage_options=storage_options)
     try:
-        object_uuid = _kept_uuid(record) if kind == "namespace" else _claimed_uuid(location, obj_id, control_root=control_root, storage_options=storage_options)
+        object_uuid = trash.object_uuid(record, claims)
         parent = fga.parent_namespace_id(obj_id, delimiter=delimiter)
         namespace_uuid = None
         if parent is not None:
             live_uuid = live.namespace_uuids.get(parent) if live is not None else None
-            namespace_uuid = live_uuid or _kept_uuid(trash.get(control_root, storage_options, parent, kind="namespace"))
+            kept = trash.get(control_root, storage_options, parent, kind="namespace")
+            namespace_uuid = live_uuid or (trash.object_uuid(kept, claims) if kept is not None else None)
     except Exception as exc:  # noqa: BLE001 — an unread uuid costs the announcement its uuid, never the announcement
         log.warning("trash_purge_uuid_unread", extra={"kind": kind, "id": obj_id, "error": f"{type(exc).__name__}: {exc}"})
         return ControlUuids()
     return ControlUuids(object_uuid=object_uuid, namespace_uuid=namespace_uuid)
-
-
-def _claimed_uuid(location: str, table: str, *, control_root: str, storage_options: StorageOptions) -> str | None:
-    """The uuid the claim on ``location`` records while it names ``table``; ``None`` when no claim does."""
-    if not location:
-        return None
-    found = location_claims.read(location_claims.ClaimStore(control_root=control_root, storage_options=storage_options), location)
-    return found.claim.uuid if found is not None and found.claim.table == table else None
-
-
-def _kept_uuid(record: dict[str, Any] | None) -> str | None:
-    """The uuid a namespace's trash record keeps among its properties, or ``None``."""
-    return uuid_of(record.get("properties")) if record is not None else None
 
 
 async def _purge_one(
@@ -907,8 +894,10 @@ async def _purge_one(
     deleted_bytes, deleted_files = reclaimed
 
     try:
-        # What the drop kept for an undrop ends with the bytes ([[LH-215]]), before the trash record that names it.
-        await run_in_threadpool(object_records.end_object_records, control_root, storage_options, kind, obj_id)
+        # What the drop kept for an undrop ends with the bytes, before the trash record that names it: the records under
+        # the object's uuid ([[LH-523]]), read before the delete released the claim that records a table's.
+        if uuids.object_uuid is not None:
+            await run_in_threadpool(object_records.end_object_records, control_root, storage_options, kind, uuids.object_uuid)
         await run_in_threadpool(trash.clear, control_root, storage_options, obj_id, kind=kind)
     except Exception as exc:  # noqa: BLE001 — the bytes ARE gone; say so rather than claiming a clean purge
         reason = f"the bytes were deleted and the grants revoked, but the trash record could not be cleared ({type(exc).__name__}: {exc}) — the next tick retries idempotently"

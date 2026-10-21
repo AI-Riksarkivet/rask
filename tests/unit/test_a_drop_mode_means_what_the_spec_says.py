@@ -34,12 +34,16 @@ from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
-from lance_namespace import DropNamespaceRequest, DropNamespaceResponse, InvalidInputError, NamespaceNotFoundError
+from lance_namespace import DescribeNamespaceResponse, DropNamespaceRequest, DropNamespaceResponse, InvalidInputError, NamespaceNotFoundError
 
 from catalog.api.v1.endpoints import namespaces as ns_ep
 from catalog.core.config import Settings
 from catalog.core.modes import DropMode
+from service_kit.lakehouse.naming import UUID_PROPERTY
 from tests.unit.no_uuids import NO_OBJECT_UUIDS
+
+
+_GHOST_UUID = "5d2f8c1e-4b7a-4e9d-8c3f-0a1b2c3d4e5f"
 
 
 class _Settings:
@@ -89,6 +93,11 @@ async def _drop(
     monkeypatch.setattr(ns_ep, "_collect_descendants", _collect)
 
     def _native(_ns: Any, op: str, _req: Any) -> Any:
+        if op == "describe_namespace":
+            # As the backend answers it: absent, or the namespace with the uuid its create minted (ADR 0173 §2).
+            if not exists:
+                raise NamespaceNotFoundError("Namespace not found: ghost")
+            return DescribeNamespaceResponse(properties={UUID_PROPERTY: _GHOST_UUID})
         if op == "drop_namespace":
             if not exists:
                 raise NamespaceNotFoundError("Namespace not found: ghost")

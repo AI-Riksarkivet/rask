@@ -51,7 +51,8 @@ class ErasureObligationView(BaseModel):
     """An erasure obligation as the doors show it: its predicate's digest and its storage location stay on the record."""
 
     obligation_id: str = Field(description="The obligation's id, which the verification door names.")
-    table: str = Field(description="The table id the erasure was asked of.")
+    table: str = Field(description="The table's name now, or the name the obligation kept when the table is gone.")
+    table_uuid: str = Field(description="The uuid of the table the erasure was asked of (ADR 0173 §11): a rename keeps it.")
     refs: dict[str, int] = Field(
         description=(
             "`main` and every branch the table listed when the obligation was recorded, each with its head version then: an index "
@@ -78,9 +79,11 @@ class ErasureObligation(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     obligation_id: str
-    #: The table id the erasure was asked of, for the views and the log.
+    #: The table's name when the erasure was asked of it, for the log and a table that is gone.
     table: str
-    #: The canonical FGA object (``table:<id>``) a caller must maintain to see or verify it.
+    #: The table's uuid (ADR 0173 §8): a verification acts on this table and no other, whatever it is named.
+    table_uuid: str
+    #: The canonical FGA object (``table:<id>``) the table was when the obligation was recorded.
     object_id: str
     #: The dataset root it was recorded on: a verification acts on these bytes and on no other table's.
     location: str
@@ -98,11 +101,12 @@ class ErasureObligation(BaseModel):
     released_at: datetime | None = None
     release: PinRelease | None = None
 
-    def view(self, now: datetime) -> ErasureObligationView:
-        """The record as the doors show it at ``now``."""
+    def view(self, now: datetime, *, table: str) -> ErasureObligationView:
+        """The record as the doors show it at ``now``, naming its table ``table``."""
         return ErasureObligationView(
             obligation_id=self.obligation_id,
-            table=self.table,
+            table=table,
+            table_uuid=self.table_uuid,
             refs=self.refs,
             retain_days=self.retain_days,
             requested_by=self.requested_by,
@@ -171,14 +175,14 @@ def list_obligations(control_root: str, storage_options: StorageOptions) -> list
     return obligations
 
 
-def require_verifiable(obligation: ErasureObligation, *, location: str, predicate: str) -> None:
-    """Refuse a verification of ``obligation`` on the table at ``location`` with ``predicate``.
+def require_verifiable(obligation: ErasureObligation, *, table_uuid: str, location: str, predicate: str) -> None:
+    """Refuse a verification of ``obligation`` on the table ``table_uuid`` names, at ``location``, with ``predicate``.
 
     Raises:
         InvalidTableStateError: The obligation was recorded on another table, or it is already released.
         InvalidInputError: ``predicate`` is not the one the obligation was recorded with.
     """
-    if obligation.location != location:
+    if obligation.table_uuid != table_uuid or obligation.location != location:
         raise InvalidTableStateError(f"this table holds no erasure obligation {obligation.obligation_id}")
     if obligation.state == "released":
         raise InvalidTableStateError(f"erasure obligation {obligation.obligation_id} was released at {obligation.released_at}")

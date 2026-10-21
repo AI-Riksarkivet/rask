@@ -53,10 +53,8 @@ from catalog.core.namespace import judged_native_dataset, judged_native_version
 from catalog.core.run_context import RunContext
 from catalog.core.serialization import dump
 from catalog.schemas import TableChangesRequest
-from catalog.services import blob_serving, dataplane, native, table_create
-from service_kit.governed import fga
+from catalog.services import blob_serving, dataplane, native, table_claims, table_create
 from service_kit.governed.audit import audit_read
-from service_kit.lakehouse import protection
 from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE
 
 
@@ -230,9 +228,8 @@ async def insert_into_table(
     # Ahead of the coerce because that opens the dataset, and a shape refusal costs no round trip.
     insert_mode = InsertMode.parse(mode)
     if insert_mode is InsertMode.OVERWRITE:
-        canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
-        guard = await run_in_threadpool(protection.get_protection, settings.registry_root, settings.storage_options(), "table", canonical)
-        fga_deps.require_not_protected(guard or {}, kind="table", obj_id=canonical, force=force)
+        overwritten = await run_in_threadpool(table_claims.resolve, ns, table_claims.claim_store(settings), segments)
+        await fga_deps.require_table_unprotected(settings, overwritten, force=force)
     # Cast the incoming rows to the table's schema first, so a client that infers loose Arrow types (a
     # browser infers float64 for every JS number) can append to int64 columns — else the append 500s on
     # the mismatch. A genuinely incompatible payload becomes a clean 400 here, not a 500 downstream.

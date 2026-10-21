@@ -2,11 +2,13 @@
 
 ``POST …/policy/set`` and ``…/policy/delete`` are owner-tier (the router-level ``authorize`` maps them
 to ``can_drop``/``can_delete`` — a retention policy authorizes destroying version history), and land on
-the #41 audit trail through that same gate; ``…/policy/describe`` is a reader-tier metadata read. The
-record stores both the logical id and the physical bucket-qualified path (resolved here), so the
-compaction sweep enforces policies straight off the bucket with no catalog round-trip. Old-version
-cleanup can never remove a tag-pinned version (Lance exempts tagged versions), so ``blessed`` and every
-other promotion tag survive any policy.
+the #41 audit trail through that same gate; ``…/policy/describe`` is a reader-tier metadata read. A table
+or namespace record is keyed by the object's uuid (ADR 0173 §8, [[LH-523]]), which the door resolves from
+the name it is addressed by, so a rename keeps the policy and a table created later under the same name
+holds none of it; the maintenance sweep matches a dataset's table and ancestor namespaces by the uuids
+``__manifest`` and the location claims record, with no catalog round-trip. Old-version cleanup can never
+remove a tag-pinned version (Lance exempts tagged versions), so ``blessed`` and every other promotion tag
+survive any policy.
 
 The #84 PROJECT policy is the tenant-wide fallback below both: it matches by the project's warehouse
 BUCKETS (resolved from the warehouse registry at set time), so it covers every dataset in the project's
@@ -16,17 +18,8 @@ so — like the #17 model routes — these endpoints gate EXPLICITLY, on ``proje
 too rather than checking a phantom relation, which would 400 → fail-closed 503 for everyone).
 
 The #65 project-scoped LIST (``GET /management/v1/projects/{id}/policies``) is the tenant's VIEW of all three tiers
-at once. It scopes table/namespace records BINDING-DERIVED (logical id → top-level segment → namespace
-binding → warehouse → project) rather than by the record's stored bucket, and that is not a stylistic
-choice: ``set_namespace_policy`` below builds its ``path`` from ``settings.root`` — the DEFAULT root —
-because the handler takes no ``NamespaceDep`` and so never resolves the namespace's warehouse root the
-way ``set_table_policy`` does. Every namespace record for a warehouse-bound namespace therefore carries
-the WRONG bucket, and a bucket-only filter would both miss the owning project's records and attribute
-them to whoever owns the default bucket. That defect is deliberately NOT fixed here (it changes stored-
-record semantics for the sweep, which survives it only because ``resolve_policy`` also matches namespace
-records by logical parent chain) — the listing has to be correct despite it, and stays correct if it is
-ever fixed, because the binding half is the PRIMARY match and the bucket half only adds records whose
-physical path already lives in one of the project's own warehouse buckets.
+at once. It names a table record as its table is named now and scopes each record by that name (top-level segment →
+namespace binding → warehouse → project).
 """
 
 from __future__ import annotations
@@ -37,8 +30,8 @@ from typing import Any
 from fastapi import APIRouter
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import (
-    DescribeTableRequest,
     InvalidInputError,
+    LanceNamespace,
     LanceNamespaceError,
     NamespaceAlreadyExistsError,
     NamespaceNotFoundError,
@@ -46,15 +39,16 @@ from lance_namespace import (
 )
 
 from catalog.api import fga_deps
-from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, NamespaceDep, SettingsDep
+from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, NamespaceDep, ResolvedTableDep, SettingsDep
 from catalog.api.security import Caller, CurrentToken
 from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier
 from catalog.schemas import PolicyDeleteResponse, PolicyRequest, PolicyResponse, ProjectPoliciesResponse
-from catalog.services import native, warehouses
+from catalog.services import table_claims, warehouses
 from service_kit.control_emit import ControlEmitter, emit_control
 from service_kit.governed import fga
 from service_kit.lakehouse import maintenance_policies as policies
+from service_kit.lakehouse.location_claims import ClaimStore
 from service_kit.lakehouse.naming import CONTROL_ID_RE
 
 
@@ -83,7 +77,7 @@ def _canonical(segments: list[str], delimiter: str) -> str:
     return fga.canonical_object_id(segments, delimiter=delimiter)
 
 
-def _record(kind: str, canonical_id: str, path: str, body: PolicyRequest, existing: dict[str, object] | None = None) -> dict[str, object]:
+def _record(kind: str, canonical_id: str, body: PolicyRequest, existing: dict[str, object] | None, *, uuid: str | None) -> dict[str, object]:
     """The record to persist. A field the caller did not SET keeps whatever the stored record had.
 
     `put_policy` overwrites the whole object, so `model_dump()` alone made every set a full replace:
@@ -101,21 +95,14 @@ def _record(kind: str, canonical_id: str, path: str, body: PolicyRequest, existi
     # Defaults still apply on a FIRST write, where there is nothing to inherit from.
     for field, value in body.model_dump().items():
         merged.setdefault(field, value)
-    return {**merged, "kind": kind, "id": canonical_id, "path": path}
+    return {**merged, "kind": kind, "id": canonical_id, **({"uuid": uuid} if uuid is not None else {})}
 
 
 def _response(record: dict[str, object]) -> PolicyResponse:
     return PolicyResponse.model_validate(record)
 
 
-def _sweep_path(location: str) -> str:
-    """The sweep's match key for a storage location: bucket-qualified (``<bucket>/<path>``), so a
-    policy can never govern a same-named path in a different tenant's bucket (the sweep spans the
-    per-warehouse and multi-base buckets too)."""
-    return location.removeprefix("s3://").rstrip("/")
-
-
-async def _describe(settings: Settings, kind: str, canonical: str, missing: type[LanceNamespaceError]) -> PolicyResponse:
+async def _describe(settings: Settings, kind: str, key: str, canonical: str, missing: type[LanceNamespaceError]) -> PolicyResponse:
     """Read one policy or 404, once (catalog-api-14).
 
     The three describe handlers each carried their own copy of read-then-refuse, and the copies had
@@ -123,15 +110,16 @@ async def _describe(settings: Settings, kind: str, canonical: str, missing: type
     namespace raised ``NamespaceNotFoundError`` — three rungs, two answers, for one condition. The
     exception class is a parameter now, so the choice is stated at the route instead of re-derived.
     """
-    record = await run_in_threadpool(policies.get_policy, settings.registry_root, settings.storage_options(), kind, canonical)
+    record = await run_in_threadpool(policies.get_policy, settings.registry_root, settings.storage_options(), kind, key)
     if record is None:
         raise missing(f"no maintenance policy set for {kind} {canonical!r}")
-    return _response(record)
+    # Named as the door was addressed: the name the record kept is the one its object had when it was set.
+    return _response({**record, "id": canonical})
 
 
-async def _delete(settings: Settings, control: ControlEmitter, token: Caller | None, kind: str, canonical: str) -> PolicyDeleteResponse:
+async def _delete(settings: Settings, control: ControlEmitter, token: Caller | None, kind: str, *, key: str, canonical: str) -> PolicyDeleteResponse:
     """Remove one policy (idempotent), log it and announce it — once for all three rungs."""
-    await run_in_threadpool(policies.delete_policy, settings.registry_root, settings.storage_options(), kind, canonical)
+    await run_in_threadpool(policies.delete_policy, settings.registry_root, settings.storage_options(), kind, key)
     log.info("maintenance_policy_deleted", extra={"kind": kind, "id": canonical})
     await emit_control(
         control,
@@ -148,19 +136,17 @@ async def _delete(settings: Settings, control: ControlEmitter, token: Caller | N
 async def set_table_policy(
     id: str,
     body: PolicyRequest,
-    ns: NamespaceDep,
+    table: ResolvedTableDep,
     settings: SettingsDep,
     token: CurrentToken,
     control: ControlEmitterDep,
 ) -> PolicyResponse:
     """Set (or replace) the table's maintenance policy — owner-gated by the router (``can_drop``)."""
-    segments = parse_identifier(id, settings.delimiter)
-    described = await run_in_threadpool(native.call, ns, "describe_table", DescribeTableRequest(id=segments))
-    if described.location is None:
-        raise TableNotFoundError(f"table {id!r} has no storage location to police")
-    canonical = _canonical(segments, settings.delimiter)
-    prior = await run_in_threadpool(policies.get_policy, settings.registry_root, settings.storage_options(), "table", canonical)
-    record = _record("table", canonical, _sweep_path(described.location), body, prior)
+    canonical = _canonical(table.segments, settings.delimiter)
+    table_uuid = table.require_uuid()
+    prior = await run_in_threadpool(policies.get_policy, settings.registry_root, settings.storage_options(), "table", table_uuid)
+    # The location beside the uuid, so a listing names the table as it is named now (`table_claims.names_now`).
+    record = {**_record("table", canonical, body, prior, uuid=table_uuid), "location": str(table.location)}
     await run_in_threadpool(policies.put_policy, settings.registry_root, settings.storage_options(), record)
     log.info("maintenance_policy_set", extra={"kind": "table", "id": canonical})
     await emit_control(
@@ -169,35 +155,33 @@ async def set_table_policy(
         object_type="policy",
         object_id=f"table:{canonical}",
         actor=f"user:{token.subject}" if token else None,
-        extra={"kind": "table", "path": record["path"]},
+        extra={"kind": "table"},
     )
     return _response(record)
 
 
 @table_router.post("/{id}/policy/describe", response_model_exclude_none=True)
-async def describe_table_policy(id: str, settings: SettingsDep) -> PolicyResponse:
+async def describe_table_policy(id: str, table: ResolvedTableDep, settings: SettingsDep) -> PolicyResponse:
     """The table's maintenance policy (reader-gated); 404 when none is set."""
-    return await _describe(settings, "table", _canonical(parse_identifier(id, settings.delimiter), settings.delimiter), TableNotFoundError)
+    return await _describe(settings, "table", table.require_uuid(), _canonical(table.segments, settings.delimiter), TableNotFoundError)
 
 
 @table_router.post("/{id}/policy/delete", response_model_exclude_none=True)
-async def delete_table_policy(id: str, settings: SettingsDep, token: CurrentToken, control: ControlEmitterDep) -> PolicyDeleteResponse:
+async def delete_table_policy(id: str, table: ResolvedTableDep, settings: SettingsDep, token: CurrentToken, control: ControlEmitterDep) -> PolicyDeleteResponse:
     """Remove the table's maintenance policy (idempotent) — owner-gated by the router."""
-    return await _delete(settings, control, token, "table", _canonical(parse_identifier(id, settings.delimiter), settings.delimiter))
+    return await _delete(settings, control, token, "table", key=table.require_uuid(), canonical=_canonical(table.segments, settings.delimiter))
 
 
 @namespace_router.post("/{id}/policy/set", response_model_exclude_none=True)
-async def set_namespace_policy(id: str, body: PolicyRequest, settings: SettingsDep, token: CurrentToken, control: ControlEmitterDep) -> PolicyResponse:
-    """Set (or replace) a namespace-level policy — applies to every dataset under the namespace's
-    directory prefix unless a table policy overrides it. Owner-gated by the router (``can_delete``)."""
-    segments = parse_identifier(id, settings.delimiter)
-    if not segments:
-        raise InvalidInputError("a policy needs a concrete namespace, not the root")
-    canonical = _canonical(segments, settings.delimiter)
-    # The dir backend maps a namespace to its directory prefix under the root bucket.
-    prefix = _sweep_path(f"{settings.root.rstrip('/')}/{'/'.join(segments)}")
-    prior = await run_in_threadpool(policies.get_policy, settings.registry_root, settings.storage_options(), "namespace", canonical)
-    record = _record("namespace", canonical, prefix, body, prior)
+async def set_namespace_policy(
+    id: str, body: PolicyRequest, ns: NamespaceDep, settings: SettingsDep, token: CurrentToken, control: ControlEmitterDep
+) -> PolicyResponse:
+    """Set (or replace) a namespace-level policy — applies to every table under the namespace, at any depth, unless
+    a table policy or a nearer namespace's overrides it. Owner-gated by the router (``can_delete``)."""
+    namespace = await _namespace(id, ns, settings)
+    canonical = _canonical(namespace.segments, settings.delimiter)
+    prior = await run_in_threadpool(policies.get_policy, settings.registry_root, settings.storage_options(), "namespace", namespace.uuid)
+    record = _record("namespace", canonical, body, prior, uuid=namespace.uuid)
     await run_in_threadpool(policies.put_policy, settings.registry_root, settings.storage_options(), record)
     log.info("maintenance_policy_set", extra={"kind": "namespace", "id": canonical})
     await emit_control(
@@ -206,21 +190,31 @@ async def set_namespace_policy(id: str, body: PolicyRequest, settings: SettingsD
         object_type="policy",
         object_id=f"namespace:{canonical}",
         actor=f"user:{token.subject}" if token else None,
-        extra={"kind": "namespace", "path": record["path"]},
+        extra={"kind": "namespace"},
     )
     return _response(record)
 
 
 @namespace_router.post("/{id}/policy/describe", response_model_exclude_none=True)
-async def describe_namespace_policy(id: str, settings: SettingsDep) -> PolicyResponse:
+async def describe_namespace_policy(id: str, ns: NamespaceDep, settings: SettingsDep) -> PolicyResponse:
     """The namespace's maintenance policy (reader-gated); 404 when none is set."""
-    return await _describe(settings, "namespace", _canonical(parse_identifier(id, settings.delimiter), settings.delimiter), NamespaceNotFoundError)
+    namespace = await _namespace(id, ns, settings)
+    return await _describe(settings, "namespace", namespace.uuid, _canonical(namespace.segments, settings.delimiter), NamespaceNotFoundError)
 
 
 @namespace_router.post("/{id}/policy/delete", response_model_exclude_none=True)
-async def delete_namespace_policy(id: str, settings: SettingsDep, token: CurrentToken, control: ControlEmitterDep) -> PolicyDeleteResponse:
+async def delete_namespace_policy(id: str, ns: NamespaceDep, settings: SettingsDep, token: CurrentToken, control: ControlEmitterDep) -> PolicyDeleteResponse:
     """Remove the namespace's maintenance policy (idempotent) — owner-gated by the router."""
-    return await _delete(settings, control, token, "namespace", _canonical(parse_identifier(id, settings.delimiter), settings.delimiter))
+    namespace = await _namespace(id, ns, settings)
+    return await _delete(settings, control, token, "namespace", key=namespace.uuid, canonical=_canonical(namespace.segments, settings.delimiter))
+
+
+async def _namespace(id: str, ns: LanceNamespace, settings: Settings) -> fga_deps.GovernedObject:
+    """The namespace ``id`` names, with the uuid its policy is kept under; the root holds no policy."""
+    segments = parse_identifier(id, settings.delimiter)
+    if not segments:
+        raise InvalidInputError("a policy needs a concrete namespace, not the root")
+    return await fga_deps.identify(ns, settings, "namespace", segments)
 
 
 def _validated_project(id: str) -> str:
@@ -272,7 +266,7 @@ async def set_project_policy(
                 "records first)"
             )
     prior = await run_in_threadpool(policies.get_policy, settings.registry_root, so, "project", project)
-    record = {**_record("project", project, "", body, prior), "buckets": buckets}
+    record = {**_record("project", project, body, prior, uuid=None), "buckets": buckets}
     await run_in_threadpool(policies.put_policy, settings.registry_root, so, record)
     log.info("maintenance_policy_set", extra={"kind": "project", "id": project})
     await emit_control(
@@ -294,7 +288,7 @@ async def describe_project_policy(id: str, settings: SettingsDep, token: Current
     await fga_deps.require_relation(client, settings, token, relation="can_administer", obj=f"project:{project}")
     # `TableNotFoundError` on the PROJECT rung is what the copied body already raised — the spec code
     # is what maps to the 404, and changing it here would be a contract change, not a refactor.
-    return await _describe(settings, "project", project, TableNotFoundError)
+    return await _describe(settings, "project", project, project, TableNotFoundError)
 
 
 @project_router.post("/{id}/policy/delete", response_model_exclude_none=True)
@@ -302,20 +296,36 @@ async def delete_project_policy(id: str, settings: SettingsDep, token: CurrentTo
     """Remove the project's maintenance policy (idempotent) — admin-gated."""
     project = _validated_project(id)
     await fga_deps.require_relation(client, settings, token, relation="can_administer", obj=f"project:{project}")
-    return await _delete(settings, control, token, "project", project)
+    return await _delete(settings, control, token, "project", key=project, canonical=project)
 
 
-def _scoped_to_project(record: dict[str, Any], *, delimiter: str, namespaces: frozenset[str], buckets: frozenset[str], project: str) -> bool:
+def _named_now(settings: Settings, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Each record, a table's named as its table is named now, which a rename since the policy was set changed; a
+    table's whose table is gone governs nothing and is left out (``table_claims.names_now``)."""
+    store = table_claims.claim_store(settings)
+    named = (_with_current_name(store, record) for record in records)
+    return [record for record in named if record is not None]
+
+
+def _with_current_name(store: ClaimStore, record: dict[str, Any]) -> dict[str, Any] | None:
+    """A table record with ``id`` its table's name now (:func:`table_claims.current_name`), ``None`` when that table is
+    gone; any other record as kept. A namespace is never renamed, and a project's id is its own."""
+    if record.get("kind") != "table":
+        return record
+    location, uuid = record.get("location"), record.get("uuid")
+    name = table_claims.current_name(store, str(location), str(uuid)) if location and uuid else None
+    return None if name is None else {**record, "id": name}
+
+
+def _scoped_to_project(record: dict[str, Any], *, delimiter: str, namespaces: frozenset[str], project: str) -> bool:
     """Whether one stored policy record governs data inside ``project``.
 
     A ``project`` record matches by ID and by nothing else — matching it on buckets would surface a rival
     tenant's project record the moment two registry entries contest a bucket (the state
     ``set_project_policy`` refuses at write time, and a read must not resurrect it).
 
-    A table/namespace record matches when its logical id's TOP-LEVEL segment is a namespace bound to one
-    of the project's warehouses (the primary — see the module docstring on the default-root defect), or,
-    failing that, when the bucket of its physical ``path`` is one of the project's own warehouse buckets
-    (which is what reaches the medallion-nested datasets whose ids carry no binding).
+    A table/namespace record matches when the TOP-LEVEL segment of its object's name is a namespace bound to one
+    of the project's warehouses.
     """
     kind = record.get("kind")
     if kind == "project":
@@ -323,9 +333,7 @@ def _scoped_to_project(record: dict[str, Any], *, delimiter: str, namespaces: fr
     if kind not in ("table", "namespace"):
         return False
     segments = parse_identifier(str(record.get("id") or ""), delimiter)
-    if segments and segments[0] in namespaces:
-        return True
-    return str(record.get("path") or "").split("/", 1)[0] in buckets
+    return bool(segments) and segments[0] in namespaces
 
 
 @projects_router.get("/{id}/policies", response_model_exclude_none=True)
@@ -360,13 +368,8 @@ async def list_project_policies(id: str, settings: SettingsDep, token: CurrentTo
     bindings, skipped = await run_in_threadpool(warehouses.read_bindings, settings.registry_root, so)
     namespaces = sorted({str(b["top_ns"]) for b in bindings if b.get("top_ns") and b.get("warehouse_id") in warehouse_ids})
     records = await run_in_threadpool(policies.list_policies, settings.registry_root, so)
-    # Defense in depth (the `set_project_policy` cross-claim precedent): the platform's own buckets — the
-    # catalog root, the control/registry root, the model registry, the medallion zones — are refused at
-    # warehouse-create, so a project record claiming one means the registry is contested. Honour the
-    # reservation on the MATCH set rather than trusting it, or one bad record would hand this tenant every
-    # policy in the shared root; `buckets` still reports what the registry actually says.
-    matchable = frozenset(buckets) - settings.reserved_bucket_set
-    scoped = [r for r in records if _scoped_to_project(r, delimiter=settings.delimiter, namespaces=frozenset(namespaces), buckets=matchable, project=project)]
+    named = await run_in_threadpool(_named_now, settings, records)
+    scoped = [r for r in named if _scoped_to_project(r, delimiter=settings.delimiter, namespaces=frozenset(namespaces), project=project)]
     scoped.sort(key=lambda r: (str(r.get("kind")), str(r.get("id"))))
     log.info(
         "maintenance_policies_listed",

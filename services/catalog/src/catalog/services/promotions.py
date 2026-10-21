@@ -17,9 +17,10 @@ an ETag-guarded write that finds it still open at that version (:func:`service_k
 So an approval cannot land on a newer hold the approver never reviewed, two people deciding one hold cannot both act,
 and two replicas' sweeps expire one hold once.
 
-**THE HOLD IS ON THE TABLE AT ITS LOCATION.** A dropped table's id can name a new table, so a decision first
-checks the id still opens the dataset the hold was taken on; a hold on a table that is gone or renamed is not
-answerable and expires at its deadline.
+**THE HOLD IS ON THE TABLE ITS UUID NAMES, AT ITS LOCATION** (ADR 0173 §8, [[LH-523]]). The record is keyed by the
+table's uuid, so a rename keeps it and a table created later under the same name holds none of it; a decision also
+checks the name still opens the dataset the hold was taken on. A hold on a table that is gone is not answerable and
+expires at its deadline.
 """
 
 from __future__ import annotations
@@ -59,8 +60,10 @@ class Hold(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    #: The table's canonical id (``acme-silver$orders``), the FGA object's id.
+    #: The table's name (``acme-silver$orders``) when the version was held, for display.
     table: str
+    #: The table's uuid, which the record is keyed by.
+    uuid: str
     #: The dataset the hold was taken on, so a decision on a reused id is refused.
     location: str
     version: int = Field(ge=1)
@@ -84,8 +87,8 @@ class Hold(BaseModel):
     restored_version: int | None = None
 
 
-def hold_key(table: str) -> str:
-    return record_key(HOLDS_PREFIX, "hold", table)
+def hold_key(table_uuid: str) -> str:
+    return record_key(HOLDS_PREFIX, "hold", table_uuid)
 
 
 def _parse(raw: dict[str, Any] | None) -> Hold | None:
@@ -99,9 +102,9 @@ def _parse(raw: dict[str, Any] | None) -> Hold | None:
         return None
 
 
-def hold_of(root: str, so: StorageOptions, table: str) -> Hold | None:
-    """The table's hold record, open or decided, or ``None``."""
-    return _parse(get_record(root, so, hold_key(table), event="promotion_hold"))
+def hold_of(root: str, so: StorageOptions, table_uuid: str) -> Hold | None:
+    """The hold record of the table ``table_uuid`` names, open or decided, or ``None``."""
+    return _parse(get_record(root, so, hold_key(table_uuid), event="promotion_hold"))
 
 
 def open_holds(root: str, so: StorageOptions) -> list[Hold]:
@@ -118,7 +121,7 @@ def open_hold(root: str, so: StorageOptions, held: Hold) -> Hold:
     Raises:
         InvalidTableStateError: A newer version of the table is held.
     """
-    key = hold_key(held.table)
+    key = hold_key(held.uuid)
     record = held.model_dump(mode="json")
     try:
         create_json(root, so, key, record)
@@ -138,7 +141,7 @@ def open_hold(root: str, so: StorageOptions, held: Hold) -> Hold:
     return Hold.model_validate(mutate_json(root, so, key, _replace))
 
 
-def _transition(root: str, so: StorageOptions, table: str, step: Callable[[Hold], Hold]) -> Hold:
+def _transition(root: str, so: StorageOptions, table_uuid: str, step: Callable[[Hold], Hold]) -> Hold:
     """Rewrite the table's open hold as ``step`` answers, against the record as it is now.
 
     Raises:
@@ -148,19 +151,19 @@ def _transition(root: str, so: StorageOptions, table: str, step: Callable[[Hold]
     def _apply(current: dict[str, Any]) -> dict[str, Any]:
         standing = _parse(current)
         if standing is None or standing.state != "open":
-            raise InvalidTableStateError(f"{table} holds no version for review")
+            raise InvalidTableStateError("the table holds no version for review")
         return step(standing).model_dump(mode="json")
 
     try:
-        return Hold.model_validate(mutate_json(root, so, hold_key(table), _apply))
+        return Hold.model_validate(mutate_json(root, so, hold_key(table_uuid), _apply))
     except RecordMissingError:
-        raise InvalidTableStateError(f"{table} holds no version for review") from None
+        raise InvalidTableStateError("the table holds no version for review") from None
 
 
 def decide(
     root: str,
     so: StorageOptions,
-    table: str,
+    table_uuid: str,
     *,
     version: int,
     location: str,
@@ -185,22 +188,22 @@ def decide(
         nonlocal claimed
         standing = _parse(current)
         if standing is None or standing.version != version or standing.location != location:
-            raise InvalidTableStateError(f"{table} holds no version {version} for review")
+            raise InvalidTableStateError(f"the table holds no version {version} for review")
         claimed = False
         if standing.state == state:
             return current
         if standing.state != "open":
-            raise InvalidTableStateError(f"version {version} of {table} is {standing.state}, no longer held for review")
+            raise InvalidTableStateError(f"version {version} of the table is {standing.state}, no longer held for review")
         claimed = True
         return standing.model_copy(update={"state": state, "decided_by": by, "decided_at": at, "restore_owed": restore_owed}).model_dump(mode="json")
 
     try:
-        return Hold.model_validate(mutate_json(root, so, hold_key(table), _decide)), claimed
+        return Hold.model_validate(mutate_json(root, so, hold_key(table_uuid), _decide)), claimed
     except RecordMissingError:
-        raise InvalidTableStateError(f"{table} holds no version {version} for review") from None
+        raise InvalidTableStateError(f"the table holds no version {version} for review") from None
 
 
-def record_restore(root: str, so: StorageOptions, table: str, *, version: int, restored: int | None) -> Hold:
+def record_restore(root: str, so: StorageOptions, table_uuid: str, *, version: int, restored: int | None) -> Hold:
     """Record that the rejection of ``version`` settled what it owed main: restored as ``restored``, or ``None`` when
     there turned out to be nothing to restore. The hold as recorded is returned.
 
@@ -211,30 +214,30 @@ def record_restore(root: str, so: StorageOptions, table: str, *, version: int, r
     def _settle(current: dict[str, Any]) -> dict[str, Any]:
         standing = _parse(current)
         if standing is None or standing.version != version or standing.state != "rejected":
-            raise InvalidTableStateError(f"{table} holds no rejection of version {version}")
+            raise InvalidTableStateError(f"the table holds no rejection of version {version}")
         if not standing.restore_owed:
             return current
         return standing.model_copy(update={"restore_owed": False, "restored_version": restored}).model_dump(mode="json")
 
     try:
-        return Hold.model_validate(mutate_json(root, so, hold_key(table), _settle))
+        return Hold.model_validate(mutate_json(root, so, hold_key(table_uuid), _settle))
     except RecordMissingError:
-        raise InvalidTableStateError(f"{table} holds no rejection of version {version}") from None
+        raise InvalidTableStateError(f"the table holds no rejection of version {version}") from None
 
 
-def supersede(root: str, so: StorageOptions, table: str, *, published: int, at: datetime) -> Hold | None:
+def supersede(root: str, so: StorageOptions, table_uuid: str, *, published: int, at: datetime) -> Hold | None:
     """Close the table's open hold when ``published`` reached its version; the closed hold, else ``None``."""
-    hold = hold_of(root, so, table)
+    hold = hold_of(root, so, table_uuid)
     if hold is None or hold.state != "open" or hold.version > published:
         return None
 
     def _supersede(standing: Hold) -> Hold:
         if standing.version > published:
-            raise InvalidTableStateError(f"{table} holds version {standing.version}, past {published}")
+            raise InvalidTableStateError(f"the table holds version {standing.version}, past {published}")
         return standing.model_copy(update={"state": "superseded", "decided_at": at})
 
     try:
-        return _transition(root, so, table, _supersede)
+        return _transition(root, so, table_uuid, _supersede)
     except InvalidTableStateError:
         return None
 
@@ -253,7 +256,7 @@ def expire(root: str, so: StorageOptions, hold: Hold, *, now: datetime) -> Hold 
         return standing.model_copy(update={"state": "expired", "decided_at": now})
 
     try:
-        return _transition(root, so, hold.table, _expire)
+        return _transition(root, so, hold.uuid, _expire)
     except InvalidTableStateError:
         return None  # decided, expired by another replica, or held again since it was listed
 

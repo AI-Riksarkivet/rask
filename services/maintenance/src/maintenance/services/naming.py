@@ -31,6 +31,8 @@ class TableIds(BaseModel):
     by_location: dict[str, str] = Field(default_factory=dict)
     #: A namespace's ``object_id`` -> the uuid its own ``__manifest`` row holds, read in the same pass as the tables.
     namespace_uuids: dict[str, str] = Field(default_factory=dict)
+    #: A table's ``object_id`` -> its uuid, read from its location's claim the first time a reader asks (:func:`table_uuid`).
+    table_uuids: dict[str, str] = Field(default_factory=dict)
     #: ``False`` when a root's manifest could not be read: a table missing from ``by_location`` may then still exist.
     complete: bool = True
 
@@ -52,9 +54,6 @@ class TableIds(BaseModel):
         held = (self.by_location.get("/".join(segments[:end])) for end, segment in enumerate(segments) if segment == BRANCH_CONTAINER)
         return self.of(dataset) or next((table for table in held if table is not None), None)
 
-    def names(self) -> set[str]:
-        return set(self.by_location.values())
-
 
 def manifest_uuid(row: dict[str, Any]) -> str | None:
     """The uuid a namespace's ``__manifest`` row holds in its JSON ``metadata`` (``catalog/dir/index.md`` § Manifest Table
@@ -66,26 +65,67 @@ def manifest_uuid(row: dict[str, Any]) -> str | None:
     return uuid_of(metadata)
 
 
+class PolicyOwners(BaseModel):
+    """The objects whose maintenance policy may govern one table (ADR 0173 §8): the table, then its namespaces."""
+
+    table_uuid: str
+    #: The uuids of the table's ancestor namespaces, outermost first.
+    namespace_uuids: list[str]
+
+
+def table_uuid(names: TableIds, table: str, *, claims: location_claims.ClaimStore) -> str | None:
+    """The uuid of ``table``: its location's claim's, and only while that claim names ``table``, since a claim another
+    table holds is that table's uuid. ``None`` when no row or claim records one.
+
+    Read once per table a reader asks about and kept on ``names``, rather than for every row of every manifest: the event
+    lane reads a whole bucket's ``__manifest`` per write. A store failure raises.
+    """
+    if table in names.table_uuids:
+        return names.table_uuids[table]
+    location = names.location_of(table)
+    found = location_claims.read(claims, location) if location is not None else None
+    if found is None or found.claim.table != table or found.claim.uuid is None:
+        return None
+    names.table_uuids[table] = found.claim.uuid
+    return found.claim.uuid
+
+
 def read_uuids(names: TableIds, table: str, *, claims: location_claims.ClaimStore, delimiter: str) -> DatasetUuids:
     """The uuids of ``table`` and of its namespace, for the events that name it (ADR 0173 §10).
 
-    The table's is its location's claim's, and only while that claim names ``table``: a claim another table holds is
-    that table's uuid. Read here, once per table an event names, rather than for every row of every manifest: the event
-    lane reads a whole bucket's ``__manifest`` per write. Best-effort, as the events are: a uuid that cannot be read is
-    ``None`` and the event still goes.
+    Best-effort, as the events are: a uuid that cannot be read is ``None`` and the event still goes.
     """
     namespace = fga.parent_namespace_id(table, delimiter=delimiter)
     namespace_uuid = names.namespace_uuids.get(namespace) if namespace else None
-    location = names.location_of(table)
-    if location is None:
-        return DatasetUuids(namespace_uuid=namespace_uuid)
     try:
-        found = location_claims.read(claims, location)
+        uuid = table_uuid(names, table, claims=claims)
     except Exception as exc:  # noqa: BLE001 — an unread claim costs the event its uuid, never the event
         log.warning("maintenance_table_uuid_unread", extra={"table": table, "error": f"{type(exc).__name__}: {exc}"})
-        found = None
-    claim = found.claim if found is not None else None
-    return DatasetUuids(table_uuid=claim.uuid if claim is not None and claim.table == table else None, namespace_uuid=namespace_uuid)
+        uuid = None
+    return DatasetUuids(table_uuid=uuid, namespace_uuid=namespace_uuid)
+
+
+def policy_owners(names: TableIds, table: str, *, claims: location_claims.ClaimStore, delimiter: str) -> PolicyOwners | None:
+    """The uuids a maintenance policy for ``table`` is kept under, or ``None`` when the table's or an ancestor
+    namespace's cannot be read.
+
+    ``None`` refuses the table this pass, never maintains it under the defaults: the record it cannot find may be a
+    legal hold (``cleanup_enabled=False``), and expiring without it would reclaim history its owner kept.
+    """
+    try:
+        uuid = table_uuid(names, table, claims=claims)
+    except Exception as exc:  # noqa: BLE001 — an unread claim refuses the table, logged; the next pass reads it again
+        log.warning("maintenance_table_uuid_unread", extra={"table": table, "error": f"{type(exc).__name__}: {exc}"})
+        return None
+    if uuid is None:
+        return None
+    segments = table.split(delimiter)
+    ancestors = [delimiter.join(segments[:depth]) for depth in range(1, len(segments))]
+    unnamed = [ancestor for ancestor in ancestors if ancestor not in names.namespace_uuids]
+    if unnamed:
+        log.warning("maintenance_namespace_uuid_unread", extra={"table": table, "namespaces": unnamed})
+        return None
+    return PolicyOwners(table_uuid=uuid, namespace_uuids=[names.namespace_uuids[ancestor] for ancestor in ancestors])
 
 
 def under_a_declared_root(dataset: str, declared_roots: tuple[str, ...]) -> bool:

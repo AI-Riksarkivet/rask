@@ -49,13 +49,15 @@ from lance_namespace import (
     UnsupportedOperationError,
 )
 from openfga_sdk import OpenFgaClient
+from pydantic import BaseModel, ConfigDict
 
 from catalog.api.dependencies import FgaClientDep, SettingsDep
 from catalog.api.security import Caller, CurrentToken
 from catalog.core import run_context, tier_policy
 from catalog.core.config import Settings
 from catalog.core.identifiers import MAX_NAMESPACE_DEPTH, parse_identifier
-from catalog.services import native, warehouses
+from catalog.services import native, object_uuids, table_claims, warehouses
+from catalog.services.table_claims import ResolvedTable
 from service_kit.governed import fga
 from service_kit.governed.audit import ALLOW, DENY, FAILURE, audit
 from service_kit.governed.machine_identity import ServicePrincipal
@@ -1384,6 +1386,62 @@ def require_not_protected(record: dict[str, str], *, kind: str, obj_id: str, for
     )
 
 
+class GovernedObject(BaseModel):
+    """A table or namespace a door acts on: its name and the uuid every record kept for it is keyed by (ADR 0173 §8)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    kind: Literal["table", "namespace"]
+    segments: list[str]
+    uuid: str
+
+    def fga_object(self, delimiter: str) -> str:
+        """The FGA object its grants are written on, which is still its name until LH-524."""
+        return f"{self.kind}:{fga.canonical_object_id(self.segments, delimiter=delimiter)}"
+
+
+async def identify(ns: LanceNamespace, settings: Settings, kind: Literal["table", "namespace"], segments: list[str]) -> GovernedObject:
+    """The object ``segments`` names now, with its uuid.
+
+    Raises:
+        TableNotFoundError: No such table.
+        NamespaceNotFoundError: No such namespace.
+        InternalError: The object carries no uuid, which no door leaves.
+    """
+    if kind == "table":
+        resolved = await run_in_threadpool(table_claims.resolve, ns, table_claims.claim_store(settings), segments)
+        return GovernedObject(kind=kind, segments=segments, uuid=resolved.require_uuid())
+    return GovernedObject(kind=kind, segments=segments, uuid=await run_in_threadpool(object_uuids.require_namespace_uuid, ns, segments))
+
+
+async def require_table_unprotected(settings: Settings, table: ResolvedTable, *, force: bool) -> None:
+    """Refuse a door that destroys some of ``table`` while its protection record stands, unless ``force``.
+
+    The record is read under the uuid the door's name resolved to (ADR 0173 §8): a table that gave up the name, or
+    one that took it since, holds a record under another key.
+
+    Raises:
+        TableNotFoundError: The name named no table.
+        InvalidTableStateError: The table is protected.
+    """
+    if force:
+        return
+    guard = await run_in_threadpool(protection.get_protection, settings.registry_root, settings.storage_options(), "table", table.require_uuid())
+    require_not_protected(guard or {}, kind="table", obj_id=fga.canonical_object_id(table.segments, delimiter=settings.delimiter), force=False)
+
+
+async def require_namespace_unprotected(settings: Settings, namespace: GovernedObject, *, force: bool) -> None:
+    """Refuse a door that removes ``namespace`` while its protection record stands, unless ``force``.
+
+    Raises:
+        NamespaceNotEmptyError: The namespace is protected.
+    """
+    if force:
+        return
+    guard = await run_in_threadpool(protection.get_protection, settings.registry_root, settings.storage_options(), "namespace", namespace.uuid)
+    require_not_protected(guard or {}, kind="namespace", obj_id=fga.canonical_object_id(namespace.segments, delimiter=settings.delimiter), force=False)
+
+
 async def require_project_exists(settings: Settings, project: str) -> None:
     """Refuse an operation naming a project the registry does not know.
 
@@ -1687,25 +1745,26 @@ async def end_removed_subtree(
     settings: Settings,
     *,
     root: list[str],
-    removed: Sequence[tuple[str, list[str]]],
+    root_uuid: str | None,
+    removed: Sequence[GovernedObject],
     token: Caller | None,
 ) -> AsyncIterator[int]:
     """End what namespace ``root`` and ``removed``, which a lifecycle delete removed, still hold, children first.
 
-    Each object's protection and maintenance-policy records go, so an object created at its id inherits neither, then
-    its grants. Yields each object's revoked count as its revoke lands, so a door reporting what it revoked counts
-    every object revoked before a failure. Run ONLY ONCE EVERY OBJECT IN THE SUBTREE IS GONE ([[LH-495]]): a grant
-    revoked before its object is removed strands the object, alive and with nobody left who may read, drop or recover
-    it through a door.
+    Each object's protection and maintenance-policy records go, keyed by its uuid, then its grants. Yields each
+    object's revoked count as its revoke lands, so a door reporting what it revoked counts every object revoked before a
+    failure. Run ONLY ONCE EVERY OBJECT IN THE SUBTREE IS GONE ([[LH-495]]): a grant revoked before its object is
+    removed strands the object, alive and with nobody left who may read, drop or recover it through a door.
 
     THE GRANTS GO LAST, BECAUSE THEY ARE WHAT FINDS AN OBJECT AGAIN. Every object created under a namespace leaves a
     ``child`` edge on it (``fga.hierarchy_edge_tuples``), and only that object's own revoke removes the edge. A
     re-issue lists only what still stands, so an edge still standing is what names an object a failure stopped before
-    its end, and this walk ends its records and grants then. Each edge is followed before the object holding it is
-    revoked. ``removed`` (the catalog's own listing) covers an object created before the edges existed; with FGA off
-    nothing names an object once it is gone, and only the listed ones are ended. Every clear is idempotent, so a
-    protection record is cleared without asking whether one exists: an object a forced attempt left unfinished may be
-    re-issued without ``force``.
+    its end, and this walk revokes its grants then. Each edge is followed before the object holding it is revoked. An
+    object found only by its edge is gone, and so is what recorded its uuid: its records stay, keyed by a uuid no
+    other object holds, so they govern nothing. ``removed`` (the catalog's own listing) covers an object created before
+    the edges existed; with FGA off nothing names an object once it is gone, and only the listed ones are ended. Every
+    clear is idempotent, so a protection record is cleared without asking whether one exists: an object a forced
+    attempt left unfinished may be re-issued without ``force``.
 
     AN OBJECT IN THE TRASH KEEPS ITS RECORDS AND GRANTS. A recoverable drop keeps them for its undrop (#75), and a
     trashed table is undropped into its namespace once that namespace is created again, so they go only when its
@@ -1713,6 +1772,10 @@ async def end_removed_subtree(
     """
     so = settings.storage_options()
     seen: set[str] = set()
+    uuids = {item.fga_object(settings.delimiter): item.uuid for item in removed}
+    root_obj = f"namespace:{fga.canonical_object_id(root, delimiter=settings.delimiter)}"
+    if root_uuid is not None:
+        uuids[root_obj] = root_uuid
 
     async def trashed(obj: str) -> bool:
         kind, _, canonical = obj.partition(":")
@@ -1725,13 +1788,12 @@ async def end_removed_subtree(
                 if held.relation == "child" and held.user and held.user not in seen and not await trashed(held.user):
                     async for count in end(held.user):
                         yield count
-        kind, _, canonical = obj.partition(":")
-        await run_in_threadpool(object_records.end_object_records, settings.registry_root, so, kind, canonical)
+        if (uuid := uuids.get(obj)) is not None:
+            await run_in_threadpool(object_records.end_object_records, settings.registry_root, so, obj.partition(":")[0], uuid)
         yield await revoke_removed_object(client, settings, obj, token=token)
 
-    children_first = sorted(removed, key=lambda item: (item[0] == "namespace", -len(item[1])))
-    for resource, segments in [*children_first, ("namespace", root)]:
-        obj = f"{resource}:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}"
+    children_first = sorted(removed, key=lambda item: (item.kind == "namespace", -len(item.segments)))
+    for obj in [*(item.fga_object(settings.delimiter) for item in children_first), root_obj]:
         if obj not in seen:
             async for count in end(obj):
                 yield count
@@ -1862,6 +1924,7 @@ async def require_staged_operation(
     token: Caller | None,
     *,
     segments: list[str],
+    location: str,
     operation: str,
     creates: bool,
 ) -> None:
@@ -1883,7 +1946,8 @@ async def require_staged_operation(
         return
     canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
     if operation == "Overwrite":
-        guard = await run_in_threadpool(protection.get_protection, settings.registry_root, settings.storage_options(), "table", canonical)
+        table_uuid = await run_in_threadpool(table_claims.uuid_at, table_claims.claim_store(settings), location, segments)
+        guard = await run_in_threadpool(protection.get_protection, settings.registry_root, settings.storage_options(), "table", table_uuid)
         require_not_protected(guard or {}, kind="table", obj_id=canonical, force=False)
     if not (settings.fga_enabled and client is not None and token is not None):
         return

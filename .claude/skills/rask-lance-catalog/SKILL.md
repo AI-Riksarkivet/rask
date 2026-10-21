@@ -73,8 +73,8 @@ Two contracts stack here, and confusing them is how bugs happen:
   an ended table's whose release was lost. A namespace's is its `rask.uuid` property in its `__manifest` row: both create doors and the provenance boot
   mint it (`identifiers.with_minted_uuid`), an undrop restores it from the trash record, and an Overwrite mints a new
   one. DescribeTable and DescribeNamespace answer each as `rask.uuid`, and every create, declare, register and namespace
-  door refuses a caller's `rask.*` property (only an admin's `rask.tier` on a namespace). Grants, records, the trash and
-  events are still keyed by name (LH-522 to LH-525 move them). Pinned by
+  door refuses a caller's `rask.*` property (only an admin's `rask.tier` on a namespace). Grants and the trash are still
+  keyed by name (LH-524 and LH-525 move them). Pinned by
   `tests/integration/test_the_door_that_makes_a_table_or_namespace_mints_its_uuid.py`.
 - **A table the catalog makes lives at `<namespace root>/<table uuid>`** ([[LH-520]], ADR 0173 §5). Create and declare
   run the `dir` catalog's own DeclareTable steps with the catalog choosing the location (`dataplane.declare_table`): mint
@@ -219,8 +219,11 @@ judge, `catalog/services/maintenance.py`) must apply the same refusal and cannot
 them before changing anything the sweep, the reconciler or the orphan scan touches. The
 per-table/namespace/project POLICY that governs a sweep is
 `catalog.schemas.PolicyRequest` (retention, retain_versions, compact_enabled, interval, target rows),
-resolved **winner-takes-all** — an exact table match shadows the namespace record which shadows the
-project record, and the winner supplies EVERY field. Any surface showing an effective policy must say
+resolved **winner-takes-all** — the table's own record shadows the nearest namespace's which shadows the
+project record, and the winner supplies EVERY field. Maintenance matches a table and its ancestor namespaces by the
+uuids `__manifest` and the location claims record (`maintenance.services.naming.policy_owners`); a table whose uuid, or
+an ancestor's, cannot be read is refused (gate `unidentified`), never maintained under the defaults, since the record it
+cannot find may be a legal hold. Any surface showing an effective policy must say
 which record won; an inherited value rendered identically to a set one is how nobody can tell what is
 governing their data. The project-scoped surface is home's `/projects/<p>` § Maintenance.
 
@@ -290,12 +293,21 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   `_OWNER_SUFFIX_RELATION` or `_WRITER_SUFFIX_RELATION` (or a trailing word in
   `_META_READ_ACTIONS`/`_DATA_READ_ACTIONS`/`_MAINTENANCE_ACTIONS`) —
   `services/catalog/tests/test_an_undeclared_door_is_refused.py` walks every mounted route and fails
-  on one that has none. The record dies with the object: drop/deregister clear it so a reused id can't inherit it.
-  A rename carries it ([[LH-215]]): a table's id is its name, so the rename moves every record in
-  `service_kit.lakehouse.object_records.OBJECT_RECORD_PREFIXES` (protection, maintenance policy) to the new name,
-  hands its data directories' claims over, and writes every grant held on the old name onto the new one in the
-  seed batch before revoking the old (`fga_deps.move_ownership`). Every door that ends an object (drop, deregister,
-  a cascade, the trash purge) ends that same list through `object_records.end_object_records`.
+  on one that has none. **Every control-root record kept for a table or namespace is keyed by its uuid** ([[LH-523]],
+  ADR 0173 §8): protection and maintenance policy (`service_kit.lakehouse.object_records.OBJECT_RECORD_PREFIXES`), a
+  promotion hold, maintenance's due record, an erasure obligation and its release (each naming `uuid`/`table_uuid`),
+  and the cadence and debounce stamps. A door resolves the uuid from the name it is addressed by
+  (`ResolvedTable.require_uuid`, `fga_deps.identify`) and refuses `InternalError` for an object that records none,
+  never reading it as unprotected. A rename moves no record, only the grants (`fga_deps.move_ownership`, until LH-524)
+  and its data directories' claims; a table created later under a dropped name holds a new uuid and inherits nothing,
+  even where an ending was lost. Every door that ends an object (drop, deregister, a cascade, the trash purge) ends that
+  list through `object_records.end_object_records`, under the uuids it read before the object went. The hold, due,
+  erasure and project-policy listings name each table as it is named now (`table_claims.names_now`: its location's
+  claim's holder while the claim carries the record's uuid) and filter it under that name; a record whose table is gone
+  names no table and is listed to no one, since the name it kept may belong to a new table now. A door resolves its
+  table once and opens the location it resolved (`namespace.open_resolved_dataset`), so a uuid and a location never come
+  from two resolutions. Pinned by
+  `tests/integration/test_a_rename_carries_what_the_table_holds.py`.
   A destructive CASCADE destroys its children INSIDE one native call, so they never re-enter this
   door — `drop_namespace` therefore enumerates `_collect_descendants` whenever `behavior=cascade`
   (no longer gated on `fga_enabled`) and protection-checks EVERY enumerated id before anything

@@ -29,11 +29,13 @@ from catalog.api.dependencies import get_clock, get_namespace, get_storage_optio
 from catalog.api.security import authenticate
 from catalog.api.v1.endpoints import erasure as door
 from catalog.core.config import Settings, get_settings
+from catalog.core.identifiers import with_minted_uuid
 from catalog.core.namespace import open_dataset
 from catalog.services.dataplane import create_table, read_arrow_body
 from service_kit.governed.oidc import IDToken
 from service_kit.governed.person_identity import PersonPrincipal
 from service_kit.governed.principal import Principal
+from service_kit.lakehouse.base_registry import BaseRegistry
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
@@ -50,19 +52,29 @@ class _Clock:
         return self.now
 
 
+def _control(root: str | Path) -> Path:
+    """The control root beside the data root ``root``, which the catalog's settings name in ``_catalog``."""
+    return Path(root).parent / "control"
+
+
 def _create(ns: LanceNamespace, root: str, table_id: list[str]) -> None:
-    """``table_id`` through the catalog's create path at ``root``: the subject beside bob in one fragment, ``pii`` BTREE-indexed."""
+    """``table_id`` through the catalog's create path at ``root``: the subject beside bob in one fragment, ``pii`` BTREE-indexed.
+
+    The create takes the table's claim on the control root, which mints the uuid every record kept for it is keyed by.
+    """
     rows = pa.table({"pii": pa.array(["bob", _SUBJECT])})
     sink = pa.BufferOutputStream()
     with pa.ipc.new_stream(sink, rows.schema) as writer:
         writer.write_table(rows)
-    create_table(ns, {}, table_id, read_arrow_body(sink.getvalue().to_pybytes(), max_bytes=1 << 20), root=root, mode="create", registry=None)
+    body = read_arrow_body(sink.getvalue().to_pybytes(), max_bytes=1 << 20)
+    registry = BaseRegistry(control_root=str(_control(root)), storage_options={})
+    create_table(ns, {}, table_id, body, root=root, mode="create", registry=registry, holder="$".join(table_id))
     open_dataset(ns, {}, table_id).create_scalar_index("pii", "BTREE")
 
 
 def _subjects(root: Path) -> LanceNamespace:
     ns = lance_namespace.connect("dir", {"root": str(root)})
-    ns.create_namespace(lance_namespace.CreateNamespaceRequest(id=_TABLE_ID[:-1]))
+    ns.create_namespace(lance_namespace.CreateNamespaceRequest(id=_TABLE_ID[:-1], properties=with_minted_uuid(None)))
     _create(ns, str(root), _TABLE_ID)
     return ns
 

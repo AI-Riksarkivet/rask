@@ -57,6 +57,9 @@ RELEASE_PREFIX = "_erasure_releases"
 LEASE = timedelta(minutes=15)
 
 
+type RefAction = Literal["table_tag_deleted", "table_branch_deleted", "table_branch_created"]
+
+
 class Recreate(BaseModel):
     """Where one branch of a released subtree comes back."""
 
@@ -74,12 +77,12 @@ class ReleaseRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     release_id: str
-    #: The table id the erasure was asked of, for the log and the events.
+    #: The table's name when the erasure was asked of it, for the log.
     table: str
+    #: The table's uuid (ADR 0173 §8): the events name the table by it, and by its name when the release runs.
+    table_uuid: str
     #: The dataset root the erasure ran on: the release acts on these bytes whatever the id resolves to later.
     location: str
-    #: The canonical FGA object (``table:<id>``) the events name.
-    object_id: str
     requested_by: str | None
     notified: list[str]
     #: ``pinned_by``'s refs as the erasure named them: tags, then branches deepest first.
@@ -92,12 +95,19 @@ class ReleaseRecord(BaseModel):
     plan: list[Recreate] = Field(default_factory=list)
     last_error: str = ""
 
+    def change(self, action: RefAction, extra: dict[str, Any]) -> RefChange:
+        """The event-to-be of one ref this release changed on its table."""
+        return RefChange(action=action, table=self.table, table_uuid=self.table_uuid, location=self.location, extra=extra)
+
 
 class RefChange(BaseModel):
     """One ref the release changed, for the untargeted ref-plane event the matching door would emit."""
 
-    action: Literal["table_tag_deleted", "table_branch_deleted", "table_branch_created"]
-    object_id: str
+    action: RefAction
+    #: The release's table, as it was named when the release was scheduled; the tick names it as it is named now.
+    table: str
+    table_uuid: str
+    location: str
     extra: dict[str, Any]
 
 
@@ -118,15 +128,23 @@ def record_key(release_id: str) -> str:
 
 
 def new_release(
-    pins: Sequence[Pin], *, release_id: str, table: str, location: str, object_id: str, requested_by: str | None, notified: list[str], due_at: datetime
+    pins: Sequence[Pin],
+    *,
+    release_id: str,
+    table: str,
+    table_uuid: str,
+    location: str,
+    requested_by: str | None,
+    notified: list[str],
+    due_at: datetime,
 ) -> ReleaseRecord:
     """The release of everything ``pins`` names, under ``release_id``: the erasure obligation's own id, so a second
     verification that settles the same obligation meets the first one's record rather than scheduling it again."""
     return ReleaseRecord(
         release_id=release_id,
         table=table,
+        table_uuid=table_uuid,
         location=location,
-        object_id=object_id,
         requested_by=requested_by,
         notified=notified,
         refs=[pin.ref for pin in pins],
@@ -267,12 +285,12 @@ def _delete(dataset: _Dataset, record: ReleaseRecord) -> list[RefChange]:
     for tag in record.tags:
         if tag in listed:
             dataset.tags.delete(tag)
-            changes.append(RefChange(action="table_tag_deleted", object_id=record.object_id, extra={"tag": tag, "release_id": record.release_id}))
+            changes.append(record.change("table_tag_deleted", {"tag": tag, "release_id": record.release_id}))
     branches = dataset.branches.list() or {}
     for step in reversed(record.plan):
         if step.branch in branches:
             dataset.branches.delete(step.branch)
-            changes.append(RefChange(action="table_branch_deleted", object_id=record.object_id, extra={"branch": step.branch, "release_id": record.release_id}))
+            changes.append(record.change("table_branch_deleted", {"branch": step.branch, "release_id": record.release_id}))
     return changes
 
 
@@ -286,7 +304,7 @@ def _recreate(dataset: _Dataset, record: ReleaseRecord) -> list[RefChange]:
         dataset.create_branch(step.branch, reference=(step.parent, step.version))
         present.add(step.branch)
         extra = {"branch": step.branch, "parent_branch": step.parent, "parent_version": step.version, "release_id": record.release_id}
-        changes.append(RefChange(action="table_branch_created", object_id=record.object_id, extra=extra))
+        changes.append(record.change("table_branch_created", extra))
     return changes
 
 

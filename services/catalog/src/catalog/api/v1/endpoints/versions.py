@@ -27,13 +27,14 @@ from lance_namespace import (
     DescribeTableVersionRequest,
     DescribeTableVersionResponse,
     InvalidInputError,
+    LanceNamespace,
     ListTableVersionsRequest,
     ListTableVersionsResponse,
     UnsupportedOperationError,
 )
 
 from catalog.api import fga_deps, lineage_deps
-from catalog.api.dependencies import FgaClientDep, LineageEmitterDep, NamespaceDep, ObjectUuidsDep, SettingsDep, StorageOptionsDep
+from catalog.api.dependencies import FgaClientDep, LineageEmitterDep, NamespaceDep, ObjectUuidsDep, ResolvedTableDep, SettingsDep, StorageOptionsDep
 from catalog.api.pagination import paginate_versions
 from catalog.api.rask_params import RaskFlag
 from catalog.api.security import CurrentToken
@@ -45,7 +46,7 @@ from catalog.core.namespace import open_dataset_unchecked
 from catalog.services import dataplane, maintenance, managed_versions, native
 from service_kit.governed import fga
 from service_kit.governed.audit import SUCCESS, audit
-from service_kit.lakehouse import maintenance_due, protection
+from service_kit.lakehouse import maintenance_due
 
 
 log = logging.getLogger(__name__)
@@ -220,7 +221,9 @@ async def create_table_version(
     ref = await run_in_threadpool(managed_versions.commit_ref, described.location, so, dataplane.recorded_branch(body.branch))
     staged = await run_in_threadpool(managed_versions.stage, ref, so, body)
     try:
-        await fga_deps.require_staged_operation(client, settings, token, segments=segments, operation=staged.operation, creates=staged.creates)
+        await fga_deps.require_staged_operation(
+            client, settings, token, segments=segments, location=described.location, operation=staged.operation, creates=staged.creates
+        )
         judge = BaseJudge.from_settings(settings)
         record = await run_in_threadpool(judge.read_record, described.location)
         run = run_context.from_properties(staged.properties)
@@ -301,8 +304,14 @@ def describe_table_version(
 
 
 @router.post("/{id}/version/delete", response_model_exclude_none=True)
-def batch_delete_table_versions(
-    id: str, body: BatchDeleteTableVersionsRequest, ns: NamespaceDep, settings: SettingsDep, so: StorageOptionsDep, force: RaskFlag = False
+async def batch_delete_table_versions(
+    id: str,
+    body: BatchDeleteTableVersionsRequest,
+    ns: NamespaceDep,
+    table: ResolvedTableDep,
+    settings: SettingsDep,
+    so: StorageOptionsDep,
+    force: RaskFlag = False,
 ) -> BatchDeleteTableVersionsResponse:
     """Delete old versions of this table — never the current one, and never one a tag or a branch pins.
 
@@ -314,13 +323,17 @@ def batch_delete_table_versions(
     deleted, and ``branch`` scopes the delete to that ref's own history.
 
     Owner tier (``can_drop``, the rung ``maintenance/run`` clears), protection-gated like drop; ``force``
-    turns the protection lock only. FastAPI runs this sync handler off the event loop.
+    turns the protection lock only.
     """
     segments = parse_identifier(id, settings.delimiter)
     body.id = reconcile_body_id(segments, body.id)
-    canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
-    guard = protection.get_protection(settings.registry_root, settings.storage_options(), "table", canonical)
-    fga_deps.require_not_protected(guard or {}, kind="table", obj_id=canonical, force=force)
+    await fga_deps.require_table_unprotected(settings, table, force=force)
+    return await run_in_threadpool(_delete_versions, ns, so, settings, segments, body)
+
+
+def _delete_versions(
+    ns: LanceNamespace, so: dict[str, str], settings: Settings, segments: list[str], body: BatchDeleteTableVersionsRequest
+) -> BatchDeleteTableVersionsResponse:
     ds = open_dataset_unchecked(ns, so, segments, branch=body.branch)
     ranges = [(r.start_version, r.end_version) for r in body.ranges]
     # Judged before the sibling scan, which opens every dataset beside this one, so a refused request

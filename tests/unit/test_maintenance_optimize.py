@@ -12,6 +12,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import timedelta
 from pathlib import Path
+from uuid import uuid4
 
 import lance
 import pyarrow as pa
@@ -27,7 +28,7 @@ def _expire(uri: str, *, older_than: timedelta | None = None, retain_versions: i
 
 
 def _compaction_due(uri: str) -> CompactionDue | None:
-    return compaction_due(lance.dataset(uri), DueQuestion(table="ns$t", location=uri), {})
+    return compaction_due(lance.dataset(uri), DueQuestion(table="ns$t", uuid=str(uuid4()), location=uri), {})
 
 
 def _fragmented_indexed_dataset(root: Path) -> str:

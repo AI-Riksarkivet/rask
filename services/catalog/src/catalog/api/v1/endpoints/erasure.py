@@ -30,15 +30,15 @@ import lance
 from fastapi import APIRouter, Depends, Query
 from fastapi.concurrency import run_in_threadpool
 
-from catalog.api.dependencies import ClockDep, ControlEmitterDep, FgaClientDep, NamespaceDep, SettingsDep, StorageOptionsDep
+from catalog.api.dependencies import ClockDep, ControlEmitterDep, FgaClientDep, ResolvedTableDep, SettingsDep, StorageOptionsDep
 from catalog.api.pagination import paginate
 from catalog.api.security import CurrentToken
 from catalog.core.base_judge import BaseJudge
 from catalog.core.config import Settings, fresh_lance_session
 from catalog.core.identifiers import parse_identifier
-from catalog.core.namespace import disarm_every_ref, open_dataset
+from catalog.core.namespace import disarm_every_ref, open_resolved_dataset
 from catalog.schemas import ErasureRequest, ErasureVerifyRequest
-from catalog.services import erasure, erasure_obligations, erasure_release
+from catalog.services import erasure, erasure_obligations, erasure_release, table_claims
 from catalog.services.erasure import ErasureReport, PinRelease, SurfaceResult
 from catalog.services.erasure_obligations import ErasureObligation, ErasureObligations, ErasureObligationView, ErasureVerification
 from service_kit.control_emit import ControlEmitter, emit_control
@@ -81,7 +81,7 @@ TableOwnersDep = Annotated[TableOwners, Depends(get_table_owners)]
 async def erase_subject(
     id: str,
     body: ErasureRequest,
-    ns: NamespaceDep,
+    table: ResolvedTableDep,
     settings: SettingsDep,
     so: StorageOptionsDep,
     clock: ClockDep,
@@ -105,14 +105,17 @@ async def erase_subject(
     narrowed the obligation to one ref.
     """
     segments = parse_identifier(id, settings.delimiter)
-    dataset = await run_in_threadpool(open_dataset, ns, so, segments)
+    canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
+    table_uuid = table.require_uuid()
+    dataset = await run_in_threadpool(open_resolved_dataset, str(table.location), so, segments)
     await run_in_threadpool(erasure.plan, dataset, body.predicate)
     dataset = await run_in_threadpool(disarm_every_ref, dataset, segments)
     now = clock()
     obligation = ErasureObligation(
         obligation_id=uuid4().hex,
-        table=id,
-        object_id=f"table:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}",
+        table=canonical,
+        table_uuid=table_uuid,
+        object_id=f"table:{canonical}",
         location=str(dataset.uri),
         predicate_digest=erasure_obligations.digest(body.predicate),
         retain_days=body.retain_days,
@@ -130,7 +133,7 @@ async def erase_subject(
         obligation=obligation.obligation_id,
         deadline=obligation.deadline.isoformat(),
     )
-    return obligation.view(now)
+    return obligation.view(now, table=canonical)
 
 
 @table_router.post("/{id}/erasure/{obligation_id}/verify")
@@ -138,7 +141,7 @@ async def verify_erasure(
     id: str,
     obligation_id: str,
     body: ErasureVerifyRequest,
-    ns: NamespaceDep,
+    table: ResolvedTableDep,
     settings: SettingsDep,
     so: StorageOptionsDep,
     control: ControlEmitterDep,
@@ -167,10 +170,12 @@ async def verify_erasure(
     `delete_unverified`).
     """
     segments = parse_identifier(id, settings.delimiter)
+    canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
     control_root, control_options = settings.registry_root, settings.storage_options()
     obligation = await run_in_threadpool(erasure_obligations.read, control_root, control_options, obligation_id)
-    dataset = await run_in_threadpool(open_dataset, ns, so, segments)
-    erasure_obligations.require_verifiable(obligation, location=str(dataset.uri), predicate=body.predicate)
+    table_uuid = table.require_uuid()
+    dataset = await run_in_threadpool(open_resolved_dataset, str(table.location), so, segments)
+    erasure_obligations.require_verifiable(obligation, table_uuid=table_uuid, location=str(dataset.uri), predicate=body.predicate)
     # The #114 pre-pass `version/create` and the GC door run, for the same reason: the evidence that another dataset
     # resolves its files through this one lives only on that dataset. Same bound too, one listing of the table's parent
     # (`sibling_base_refs`), and a partial map is logged and used, as they do.
@@ -183,13 +188,15 @@ async def verify_erasure(
         reopen=partial(_open_cold, dataset.uri, so),
         storage_options=so,
         protected=protected,
-        table=id,
+        table=canonical,
         predicate=body.predicate,
         retention=timedelta(days=obligation.retain_days),
         trusted=obligation.refs,
     )
     if report.settled and report.pinned_by:
-        await _schedule_release(report, obligation, settings=settings, control=control, owners=owners, now=clock())
+        # The table's owners and the events are found under the name it holds now, which a rename since the request changed.
+        current = obligation.model_copy(update={"table": canonical, "object_id": f"table:{canonical}"})
+        await _schedule_release(report, current, settings=settings, control=control, owners=owners, now=clock())
     standing = await run_in_threadpool(erasure_obligations.settle, control_root, control_options, obligation_id, report=report, now=clock())
     audit(
         "erasure_obligation_verified",
@@ -200,7 +207,7 @@ async def verify_erasure(
         state=standing.state,
         open_surfaces=[surface.surface for surface in standing.open_surfaces],
     )
-    return ErasureVerification(obligation=standing.view(clock()), report=report)
+    return ErasureVerification(obligation=standing.view(clock(), table=canonical), report=report)
 
 
 @obligations_router.get("")
@@ -213,15 +220,21 @@ async def list_erasure_obligations(
     page_token: Annotated[str | None, Query(description="Continue after this obligation (the previous page's `page_token`).")] = None,
 ) -> ErasureObligations:
     """The erasure obligations, open and released, listed to a caller holding ``can_maintain`` on each one's table, the
-    earliest deadline first: what each still owes, whether it is overdue, and the release it scheduled."""
+    earliest deadline first: what each still owes, whether it is overdue, and the release it scheduled. Each names its
+    table as the table is named now, which a rename since the request changed; one whose table is gone, its bytes with
+    it, is listed to nobody."""
     obligations = await run_in_threadpool(erasure_obligations.list_obligations, settings.registry_root, settings.storage_options())
+    entries = [table_claims.TableRecord(location=o.location, uuid=o.table_uuid) for o in obligations]
+    names = await run_in_threadpool(table_claims.names_now, table_claims.claim_store(settings), entries)
+    named = [(name, obligation) for name, obligation in zip(names, obligations, strict=True) if name is not None]
     if settings.fga_enabled and token is not None and client is not None:
-        allowed = await fga.batch_check(client, user=token.subject, relation="can_maintain", objects=sorted({o.object_id for o in obligations}))
-        obligations = [obligation for obligation in obligations if allowed.get(obligation.object_id)]
-    by_key = {f"{obligation.deadline.isoformat()}|{obligation.obligation_id}": obligation for obligation in obligations}
+        allowed = await fga.batch_check(client, user=token.subject, relation="can_maintain", objects=sorted({f"table:{name}" for name, _ in named}))
+        named = [(name, obligation) for name, obligation in named if allowed.get(f"table:{name}")]
+    by_key = {f"{obligation.deadline.isoformat()}|{obligation.obligation_id}": (name, obligation) for name, obligation in named}
     page, next_token = paginate(sorted(by_key), page_token, limit)
     now = clock()
-    return ErasureObligations(obligations=[by_key[key].view(now) for key in page], page_token=next_token)
+    listed = [by_key[key] for key in page]
+    return ErasureObligations(obligations=[obligation.view(now, table=name) for name, obligation in listed], page_token=next_token)
 
 
 async def _schedule_release(
@@ -259,8 +272,8 @@ async def _schedule_release(
         report.pinned_by,
         release_id=obligation.obligation_id,
         table=report.table,
+        table_uuid=obligation.table_uuid,
         location=obligation.location,
-        object_id=obligation.object_id,
         requested_by=requester,
         notified=notified,
         due_at=now + timedelta(days=settings.erasure_release_grace_days),

@@ -29,7 +29,7 @@ from openfga_sdk import OpenFgaClient
 
 from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier, with_minted_uuid
-from catalog.services import native
+from catalog.services import native, object_uuids
 from service_kit.governed import fga
 from service_kit.lakehouse import protection
 
@@ -71,11 +71,12 @@ async def ensure_provenance_namespace(ns: LanceNamespace, settings: Settings, cl
         kept = False
     except NamespaceAlreadyExistsError:
         kept = True
+    namespace_uuid = await run_in_threadpool(object_uuids.require_namespace_uuid, ns, segments)
     await run_in_threadpool(
         protection.set_protection,
         settings.registry_root,
         settings.storage_options(),
-        {"kind": "namespace", "id": canonical, "protected": "true", "set_by": ACTOR},
+        {"kind": "namespace", "id": canonical, "uuid": namespace_uuid, "protected": "true", "set_by": ACTOR},
     )
     if settings.fga_enabled and client is not None:
         await fga.write_tuples(client, provenance_tuples(settings), actor=ACTOR, origin="provenance_namespace")  # noqa: TID251

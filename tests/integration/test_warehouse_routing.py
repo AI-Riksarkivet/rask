@@ -22,6 +22,7 @@ import pytest
 from fastapi.testclient import TestClient
 from lance_namespace import CreateNamespaceRequest, connect
 
+from catalog.core.identifiers import with_minted_uuid
 from catalog.services import warehouses as wh_svc
 
 
@@ -76,7 +77,7 @@ def _register_warehouse(registry: Path, warehouse_root: Path, *, wid: str = "wh-
     wh_svc.put_warehouse(control, {}, {"id": wid, "bucket": wid, "root_uri": str(warehouse_root), "project": "acme"})
     # The tenant namespace lives IN the warehouse bucket — create it there, then bind.
     wh_ns = connect("dir", {"root": str(warehouse_root)})
-    wh_ns.create_namespace(CreateNamespaceRequest(id=["tenantns"]))
+    wh_ns.create_namespace(CreateNamespaceRequest(id=["tenantns"], properties=with_minted_uuid(None)))
     wh_svc.bind_namespace(control, {}, "tenantns", wid, str(warehouse_root))
 
 

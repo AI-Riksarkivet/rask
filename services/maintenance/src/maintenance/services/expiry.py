@@ -39,7 +39,9 @@ log = logging.getLogger(__name__)
 #: failed"). The gate names which: a count that merges them is not actionable, because a clone's source stays refused
 #: forever, a manifest flag is a pylance upgrade away from being supported, and a bad branch name clears when somebody
 #: removes a directory. A closed set: it is a metric label.
-type Gate = Literal["protected_base", "manifest_flags", "invalid_ref", "nested_branch", "foreign_data_base", "governed_elsewhere", "unauthenticated", "unnamed"]
+type Gate = Literal[
+    "protected_base", "manifest_flags", "invalid_ref", "nested_branch", "foreign_data_base", "governed_elsewhere", "unauthenticated", "unnamed", "unidentified"
+]
 
 #: Whether the dataset's table needs compacting or reindexing, as this tick's due evaluation decided
 #: (:mod:`maintenance.services.due`): ``due`` wrote its record, ``clear`` deleted it, ``unnamed`` found no

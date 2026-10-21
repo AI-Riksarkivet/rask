@@ -77,17 +77,19 @@ class _Tenant:
         self.s3 = s3
         self.warehouse = warehouse
         self.monkeypatch = monkeypatch
+        #: The uuid each table's policy is kept under, as the policy door answered it (ADR 0173 §8).
+        self.policy_uuids: dict[str, str] = {}
 
     def break_policy_store_once(self) -> None:
         """Fail the next end of an object's control-root records, as a control root that does not answer once."""
         real = object_records.end_object_records
         failed: list[str] = []
 
-        def end_object_records(control_root: str, storage_options: StorageOptions, kind: str, canonical_id: str) -> list[str]:
+        def end_object_records(control_root: str, storage_options: StorageOptions, kind: str, object_uuid: str) -> list[str]:
             if not failed:
-                failed.append(canonical_id)
+                failed.append(object_uuid)
                 raise OSError("the control root did not answer")
-            return real(control_root, storage_options, kind, canonical_id)
+            return real(control_root, storage_options, kind, object_uuid)
 
         self.monkeypatch.setattr(object_records, "end_object_records", end_object_records)
 
@@ -110,6 +112,7 @@ class _Tenant:
     def set_policy(self, table: str) -> None:
         answer = self.client.post(f"/management/v1/table/{table}/policy/set", json={"retention_days": 7})
         assert answer.status_code == 200, answer.text
+        self.policy_uuids[table] = str(answer.json()["uuid"])
 
     def delete_warehouse(self) -> httpx.Response:
         return self.client.delete(f"/management/v1/warehouses/{self.warehouse}", params={"cascade": "true", "purge_bucket": "true"})
@@ -131,9 +134,10 @@ class _Tenant:
         registry = base_registry.BaseRegistry(control_root=settings.registry_root, storage_options=settings.storage_options())
         return [location for location in locations if base_registry.read_base_record(registry, location) is not None]
 
-    def has_policy(self, kind: str, name: str) -> bool:
+    def has_policy(self, table: str) -> bool:
+        """Whether the policy :meth:`set_policy` set on ``table`` still stands, read under the uuid it is kept by."""
         settings = get_settings()
-        return maintenance_policies.get_policy(settings.registry_root, settings.storage_options(), kind, name) is not None
+        return maintenance_policies.get_policy(settings.registry_root, settings.storage_options(), "table", self.policy_uuids[table]) is not None
 
     def present(self, objects: list[str]) -> list[str]:
         """Those of ``objects`` the catalog still serves, each asked through its own door."""
@@ -246,7 +250,7 @@ def test_a_cascade_removes_every_table_and_namespace_then_revokes_their_grants(t
     tables = ["bronze$a", "bronze$b", "bronze$inner$c", "bronze$trashed", "silver$s", "gold$g"]
     governed = [f"warehouse:{tenant.warehouse}", "namespace:bronze", "namespace:bronze$inner", "namespace:silver", *(f"table:{table}" for table in tables)]
     assert len(tenant.store.naming(governed)) == len(governed), "an object was seeded no tuple, so the revoke below would pass vacuously"
-    assert tenant.trashed(trash_held) == trash_held and tenant.has_policy("table", "silver$s"), "nothing kept for an undrop, so its end would pass vacuously"
+    assert tenant.trashed(trash_held) == trash_held and tenant.has_policy("silver$s"), "nothing kept for an undrop, so its end would pass vacuously"
     locations = tenant.trash_locations(["bronze$trashed", "silver$s", "gold$g"])
     assert len(tenant.base_recorded(locations)) == 3, "a trashed table kept no base record, so its end would pass vacuously"
     assert "bronze" in tenant.client.app.state.warehouse_binding_cache, "nothing routed through the binding, so its eviction below would pass vacuously"
@@ -259,7 +263,7 @@ def test_a_cascade_removes_every_table_and_namespace_then_revokes_their_grants(t
     body = answer.json()
     assert (body["namespaces_dropped"], body["bucket_purged"]) == (["bronze$inner", "bronze"], True)
     assert tenant.store.naming(governed) == {}, "a grant outlived the object it was on"
-    assert (tenant.trashed(trash_held), tenant.has_policy("table", "silver$s")) == ([], False), "the warehouse's trash outlived it"
+    assert (tenant.trashed(trash_held), tenant.has_policy("silver$s")) == ([], False), "the warehouse's trash outlived it"
     assert tenant.base_recorded(locations) == [], "a trashed table's base record outlived its warehouse"
     assert body["tuples_revoked"] == held - len(tenant.store.tuples), "the door reported a count the store did not lose"
     assert sorted(tenant.announced_drops()) == ["bronze$a", "bronze$b", "bronze$inner$c"]

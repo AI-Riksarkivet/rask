@@ -44,10 +44,12 @@ from catalog.api.dependencies import ControlEmitterDep, NamespaceDep, SettingsDe
 from catalog.api.security import CurrentToken
 from catalog.api.v1.endpoints import branches as branch_door
 from catalog.api.v1.endpoints import tags as tag_door
+from catalog.core.identifiers import with_minted_uuid
 from catalog.services.dataplane import create_table
 from service_kit.governed.oidc import IDToken
 from service_kit.governed.person_identity import PersonPrincipal
 from service_kit.governed.principal import Principal
+from service_kit.lakehouse.base_registry import BaseRegistry
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
@@ -73,8 +75,9 @@ def _table() -> pa.Table:
 def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace, a runtime-only type
     root = str(tmp_path / "data")
     namespace = connect("dir", {"root": root})
-    namespace.create_namespace(CreateNamespaceRequest(id=TABLE[:-1]))
-    create_table(namespace, {}, TABLE, _table(), root=root, mode="create", registry=None)
+    namespace.create_namespace(CreateNamespaceRequest(id=TABLE[:-1], properties=with_minted_uuid(None)))
+    registry = BaseRegistry(control_root=str(tmp_path / "control"), storage_options={})
+    create_table(namespace, {}, TABLE, _table(), root=root, mode="create", registry=registry, holder=TABLE_PATH)
     return namespace
 
 

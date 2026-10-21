@@ -36,6 +36,7 @@ from catalog.api.dependencies import get_namespace, get_storage_options
 from catalog.api.v1.endpoints import erasure as door
 from catalog.core import base_judge
 from catalog.core.config import Settings, get_settings
+from catalog.core.identifiers import with_minted_uuid
 from catalog.core.namespace import open_dataset
 from catalog.services.dataplane import create_table, read_arrow_body
 from catalog.services.erasure import ErasureReport, ref_heads, verify
@@ -556,13 +557,15 @@ def test_a_verification_that_cannot_open_the_table_still_answers_with_the_report
 
 
 def _table(root: Path, first: pa.Table, *more: pa.Table) -> LanceNamespace:
-    """``subjects`` through the catalog's own create path, one fragment per batch."""
+    """``subjects`` through the catalog's own create path, one fragment per batch, its claim on the control root."""
     ns = lance_namespace.connect("dir", {"root": str(root)})
-    ns.create_namespace(CreateNamespaceRequest(id=_TABLE_ID[:-1]))
+    ns.create_namespace(CreateNamespaceRequest(id=_TABLE_ID[:-1], properties=with_minted_uuid(None)))
     sink = pa.BufferOutputStream()
     with pa.ipc.new_stream(sink, first.schema) as writer:
         writer.write_table(first)
-    create_table(ns, {}, _TABLE_ID, read_arrow_body(sink.getvalue().to_pybytes(), max_bytes=_BODY_LIMIT), root=str(root), mode="create", registry=None)
+    body = read_arrow_body(sink.getvalue().to_pybytes(), max_bytes=_BODY_LIMIT)
+    registry = base_registry.BaseRegistry(control_root=str(_control(root)))
+    create_table(ns, {}, _TABLE_ID, body, root=str(root), mode="create", registry=registry, holder="$".join(_TABLE_ID))
     for batch in more:
         open_dataset(ns, {}, _TABLE_ID).insert(batch)
     return ns
@@ -673,7 +676,7 @@ def _created(root: Path, table: Callable[[Path], pa.Table], *, external: bool) -
     recorded on the control root the test's base judge reads ([[LH-279]], [[LH-209]]): its external blob base,
     or else its data base."""
     ns = lance_namespace.connect("dir", {"root": str(root)})
-    ns.create_namespace(CreateNamespaceRequest(id=_TABLE_ID[:-1]))
+    ns.create_namespace(CreateNamespaceRequest(id=_TABLE_ID[:-1], properties=with_minted_uuid(None)))
     base = root / "bases" / "payloads"
     base.mkdir(parents=True)
     body = table(base)

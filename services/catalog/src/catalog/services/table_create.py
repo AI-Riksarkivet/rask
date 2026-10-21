@@ -74,7 +74,7 @@ from catalog.services import dataplane, native, table_bases, table_claims
 from catalog.services.base_credentials import BaseCredentials
 from service_kit.control_emit import ControlEmitter, emit_control
 from service_kit.governed import fga
-from service_kit.lakehouse import base_registry, location_claims, protection
+from service_kit.lakehouse import base_registry, location_claims
 from service_kit.lakehouse.objectfs import StorageOptions
 
 
@@ -252,8 +252,8 @@ async def create_governed_table(
         await fga_deps.require_can_drop_table(client, settings, token, segments=segments)
         # After the authz gate, as on the drop door: a caller who may not drop the table learns nothing
         # about its protection.
-        guard = await run_in_threadpool(protection.get_protection, settings.registry_root, settings.storage_options(), "table", table_id)
-        fga_deps.require_not_protected(guard or {}, kind="table", obj_id=table_id, force=force)
+        overwritten = await run_in_threadpool(table_claims.resolve, ns, table_claims.claim_store(settings), segments)
+        await fga_deps.require_table_unprotected(settings, overwritten, force=force)
     # [[LH-279]] Where the create records the bases it registers — the catalog's control root, written
     # with the catalog's own credential and never through a vend.
     registry = base_registry.BaseRegistry(control_root=settings.registry_root, storage_options=settings.storage_options())

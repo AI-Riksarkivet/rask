@@ -29,9 +29,10 @@ from pydantic import BaseModel
 
 from catalog.api.dependencies import ClockDep, ControlEmitterDep, SettingsDep, StorageOptionsDep
 from catalog.core.config import fresh_lance_session
-from catalog.services import erasure_release
+from catalog.services import erasure_release, table_claims
 from service_kit.control_emit import emit_control
 from service_kit.governed.dapr_auth import require_dapr_token
+from service_kit.lakehouse.location_claims import ClaimStore
 
 
 log = logging.getLogger(__name__)
@@ -65,10 +66,22 @@ async def _on_cron(
         changes = await run_in_threadpool(
             erasure_release.release_due, settings.registry_root, settings.storage_options(), now=clock(), open_location=partial(_open, storage_options=so)
         )
+    claims = table_claims.claim_store(settings)
     for change in changes:
-        await emit_control(control, action=change.action, object_type="table", object_id=change.object_id, actor=None, extra=change.extra)
+        table = await run_in_threadpool(_named_now, claims, change)
+        await emit_control(control, action=change.action, object_type="table", object_id=f"table:{table}", actor=None, extra=change.extra)
     log.info("erasure_release_tick", extra={"changed": len(changes)})
     return ErasureReleaseTick(changed=len(changes))
+
+
+def _named_now(claims: ClaimStore, change: erasure_release.RefChange) -> str:
+    """The changed table as it is named now, which a rename during the grace period changed, else the name the release
+    kept: the refs have changed already, so a claim that cannot be read costs the event its new name, never the event."""
+    try:
+        return table_claims.current_name(claims, change.location, change.table_uuid) or change.table
+    except (OSError, ValueError) as exc:
+        log.warning("erasure_release_table_unread", extra={"table": change.table, "error": str(exc)[:300]})
+        return change.table
 
 
 async def _ack_binding() -> dict[str, str]:

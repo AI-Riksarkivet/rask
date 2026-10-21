@@ -31,6 +31,8 @@ import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from service_kit.lakehouse import location_claims
+from service_kit.lakehouse.naming import uuid_of
 from service_kit.lakehouse.objectfs import StorageOptions
 from service_kit.lakehouse.record_store import delete_record, get_record, list_records, put_record, record_key
 from service_kit.lakehouse.records import RecordChangedError, RecordMissingError, mutate_json
@@ -108,6 +110,20 @@ def get(control_root: str, storage_options: StorageOptions, canonical_id: str, *
 
 def clear(control_root: str, storage_options: StorageOptions, canonical_id: str, *, kind: str = "table") -> bool:
     return delete_record(control_root, storage_options, record_key(_TRASH_PREFIX, kind, canonical_id))
+
+
+def object_uuid(record: dict[str, Any], claims: location_claims.ClaimStore) -> str | None:
+    """The uuid of the object a trash record keeps, or ``None`` when nothing still records it (ADR 0173 §6).
+
+    A table's is its location's claim's, which a recoverable drop keeps for the trashed table, and only while that
+    claim names it. A namespace's is the ``rask.uuid`` among the properties its record keeps, since its ``__manifest``
+    row went with the drop.
+    """
+    if record.get("kind") == "namespace":
+        return uuid_of(record.get("properties"))
+    location = str(record.get("location") or "").rstrip("/")
+    found = location_claims.read(claims, location) if location else None
+    return found.claim.uuid if found is not None and found.claim.table == record.get("id") else None
 
 
 def note_refusal(

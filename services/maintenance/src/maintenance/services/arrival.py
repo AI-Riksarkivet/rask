@@ -26,10 +26,11 @@ from maintenance.core.config import MaintenanceSettings
 from maintenance.services.due import TableIds, refresh_due, table_ids
 from maintenance.services.expiry import DatasetResult, DueVerdict
 from maintenance.services.plan import PlanContext, buckets_to_sweep, load_policies, resolve_plan
-from maintenance.services.sweep import SweepPlan, expire_dataset, trashed_locations, why_in_trash
+from maintenance.services.sweep import NamedDataset, SweepPlan, expire_dataset, name_dataset, trashed_locations, why_in_trash
 from service_kit.lakehouse import trash
 from service_kit.lakehouse.base_refs import decoded_path
 from service_kit.lakehouse.maintenance_due import CloneList, read_clone_list
+from service_kit.openlineage import dataset_uuids
 
 
 log = logging.getLogger(__name__)
@@ -58,6 +59,8 @@ class TriggeringWrite(BaseModel):
     #: The physical Lance URI, from the standard ``dataSource`` facet. REQUIRED to act: the table's id comes from
     #: the ``__manifest`` of the bucket this location is in, never from the event.
     location: str | None = None
+    #: The table's uuid as the event names it (ADR 0173 §10), the debounce's key; ``None`` when the event names none.
+    table_uuid: str | None = None
 
 
 def triggering_write(event: dict[str, Any]) -> TriggeringWrite | None:
@@ -83,7 +86,9 @@ def triggering_write(event: dict[str, Any]) -> TriggeringWrite | None:
         table_id = output.get("name")
         if not isinstance(table_id, str) or not table_id:
             continue
-        return TriggeringWrite(table_id=table_id, operation=operation, version=_version_of(output), location=_location_of(output))
+        return TriggeringWrite(
+            table_id=table_id, operation=operation, version=_version_of(output), location=_location_of(output), table_uuid=dataset_uuids(output).table_uuid
+        )
     return None
 
 
@@ -93,6 +98,7 @@ class PlannableWrite(BaseModel):
     location: str
     operation: str
     version: int | None = None
+    table_uuid: str | None = None
 
     def refreshes_regardless(self) -> bool:
         """Whether this commit refreshes the due record whatever the debounce says (``_REFRESHING_OPERATIONS``)."""
@@ -110,7 +116,7 @@ def plannable_write(event: dict[str, Any]) -> PlannableWrite | None:
     hit = triggering_write(event)
     if hit is None or hit.location is None:
         return None
-    return PlannableWrite(location=hit.location, operation=hit.operation, version=hit.version)
+    return PlannableWrite(location=hit.location, operation=hit.operation, version=hit.version, table_uuid=hit.table_uuid)
 
 
 def _version_of(output: dict[str, Any]) -> int | None:
@@ -212,9 +218,19 @@ def refresh_written_table(written: WrittenTable, settings: MaintenanceSettings) 
     The cadence does not apply here: a record left stale until the interval elapsed would keep a compacted table on the
     due list. The clone list is the last sweep's, empty when none was written.
     """
-    plan = resolve_plan(written.location, context=written.context, table_id=written.table, settings=settings)
+    named = name_dataset(written.location, sweep=_tick(written), settings=settings)
+    if not isinstance(named, NamedDataset):
+        return "failed"
+    plan = resolve_plan(written.location, context=written.context, owners=named.owners)
     clones = written.clones.clones_of(written.location) if written.clones else []
-    return refresh_due(plan.due_question(table=written.table, location=written.location, clones=clones), settings, now=written.context.now)
+    question = plan.due_question(table=written.table, uuid=named.owners.table_uuid, location=written.location, clones=clones)
+    return refresh_due(question, settings, now=written.context.now)
+
+
+def _tick(written: WrittenTable) -> SweepPlan:
+    """A sweep plan holding the one written table, with the last sweep's clone list when there is one."""
+    clones = written.clones or CloneList(taken_at=written.context.now)
+    return SweepPlan(uris=[written.location], protected=clones.refs(), clones=clones, table_ids=written.ids, context=written.context)
 
 
 def _is_fresh(clones: CloneList, settings: MaintenanceSettings, *, now: datetime) -> bool:
@@ -249,8 +265,7 @@ def expire_written_table(written: WrittenTable, settings: MaintenanceSettings) -
         return None
     if _in_trash(written.location, settings):
         return None
-    tick = SweepPlan(uris=[written.location], protected=clones.refs(), clones=clones, table_ids=written.ids, context=written.context)
-    return expire_dataset(written.location, sweep=tick, settings=settings)
+    return expire_dataset(written.location, sweep=_tick(written), settings=settings)
 
 
 class Acted(BaseModel):

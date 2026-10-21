@@ -52,14 +52,14 @@ from maintenance.services import credentials, purge
 from maintenance.services.discovery import discover_datasets
 from maintenance.services.due import refresh_due, table_ids
 from maintenance.services.expiry import DatasetResult, DueVerdict, ExpiryPolicy, ExpiryTarget, count_reclaimable, expire_versions, summarize_refusals
-from maintenance.services.naming import TableIds, read_uuids, under_a_declared_root
+from maintenance.services.naming import PolicyOwners, TableIds, policy_owners, read_uuids, table_uuid, under_a_declared_root
 from maintenance.services.plan import DatasetPlan, PlanContext, buckets_to_sweep, cadence_skip, load_policies, resolve_plan
 from service_kit.governed import fga
 from service_kit.governed.audit import SUCCESS, audit
 from service_kit.lakehouse import auto_cleanup, base_refs, base_registry, location_claims, maintenance_policies, trash
 from service_kit.lakehouse.features import flags_from_open_error, manifest_feature_flags, mixes_data_file_versions
 from service_kit.lakehouse.lance_session import affordable_cache_bytes
-from service_kit.lakehouse.maintenance_due import CloneList, delete_due, list_due, write_clone_list
+from service_kit.lakehouse.maintenance_due import CloneList, DueRecord, delete_due, list_due, write_clone_list
 from service_kit.lakehouse.objectfs import s3_filesystem
 from service_kit.openlineage import DatasetUuids
 
@@ -382,8 +382,7 @@ def _expire_in_span(uri: str, table: str, plan: DatasetPlan, *, sweep: SweepPlan
         started = perf_counter()
         result = _expire(uri, table, plan, sweep=sweep, settings=settings)
         if _lane_of(result) is not None:
-            claims = location_claims.ClaimStore(control_root=settings.resolved_control_root, storage_options=settings.storage_options())
-            result.uuids = read_uuids(sweep.table_ids, table, claims=claims, delimiter=settings.delimiter)
+            result.uuids = read_uuids(sweep.table_ids, table, claims=_claims(settings), delimiter=settings.delimiter)
         result.duration_seconds = round(perf_counter() - started, 3)
         span.set_attribute("lance.maintenance.duration_seconds", result.duration_seconds)
         if result.refused is not None:
@@ -394,18 +393,39 @@ def _expire_in_span(uri: str, table: str, plan: DatasetPlan, *, sweep: SweepPlan
         return result
 
 
-def _evaluate_due(uri: str, plan: DatasetPlan, *, sweep: SweepPlan, settings: MaintenanceSettings) -> DueVerdict:
-    """Write or delete the due record of the table this dataset is; ``unnamed`` when no ``__manifest`` row names it."""
-    table = sweep.table_ids.of(uri)
+def _claims(settings: MaintenanceSettings) -> location_claims.ClaimStore:
+    return location_claims.ClaimStore(control_root=settings.resolved_control_root, storage_options=settings.storage_options())
+
+
+class NamedDataset(BaseModel):
+    """The table a dataset belongs to, as ``__manifest`` names it, and the uuids whose records may govern it."""
+
+    table: str
+    owners: PolicyOwners
+
+
+def name_dataset(uri: str, *, sweep: SweepPlan, settings: MaintenanceSettings) -> NamedDataset | DatasetResult:
+    """The table ``uri`` belongs to with its policy owners, or the refusal of a dataset maintenance cannot identify."""
+    table = sweep.table_ids.table_of(uri)
     if table is None:
+        return _unnamed(uri, settings=settings)
+    owners = policy_owners(sweep.table_ids, table, claims=_claims(settings), delimiter=settings.delimiter)
+    if owners is None:
+        return _unidentified(uri, table, settings=settings)
+    return NamedDataset(table=table, owners=owners)
+
+
+def _evaluate_due(uri: str, named: NamedDataset, plan: DatasetPlan, *, sweep: SweepPlan, settings: MaintenanceSettings) -> DueVerdict:
+    """Write or delete the due record of the table this dataset is; ``unnamed`` for a branch, which has none of its own."""
+    if sweep.table_ids.of(uri) is None:
         return "unnamed"
-    question = plan.due_question(table=table, location=uri, clones=sweep.clones.clones_of(uri))
+    question = plan.due_question(table=named.table, uuid=named.owners.table_uuid, location=uri, clones=sweep.clones.clones_of(uri))
     return refresh_due(question, settings, now=sweep.context.now)
 
 
-def _plan_for(uri: str, table: str, *, sweep: SweepPlan, settings: MaintenanceSettings) -> DatasetPlan:
+def _plan_for(uri: str, named: NamedDataset, *, sweep: SweepPlan, settings: MaintenanceSettings) -> DatasetPlan:
     """The dataset's plan, with the policy cadence applied."""
-    plan = resolve_plan(uri, context=sweep.context, table_id=table, settings=settings)
+    plan = resolve_plan(uri, context=sweep.context, owners=named.owners)
     if plan.policy is not None and (skipped := cadence_skip(plan.policy, settings=settings, uri=uri, now=sweep.context.now)):
         plan.skipped = skipped
     return plan
@@ -414,14 +434,14 @@ def _plan_for(uri: str, table: str, *, sweep: SweepPlan, settings: MaintenanceSe
 def maintain_dataset(uri: str, *, sweep: SweepPlan, settings: MaintenanceSettings) -> DatasetResult:
     """One dataset's sweep pass: expiry, then the due evaluation, then its cadence stamp and counters."""
     record_dataset_swept()
-    table = sweep.table_ids.table_of(uri)
-    if table is None:
-        return _unnamed(uri, settings=settings)
-    plan = _plan_for(uri, table, sweep=sweep, settings=settings)
+    named = name_dataset(uri, sweep=sweep, settings=settings)
+    if isinstance(named, DatasetResult):
+        return named
+    plan = _plan_for(uri, named, sweep=sweep, settings=settings)
     if plan.skipped is not None:
         return _skipped(uri, plan, settings=settings)
-    result = _expire_in_span(uri, table, plan, sweep=sweep, settings=settings)
-    result.due = _evaluate_due(uri, plan, sweep=sweep, settings=settings)
+    result = _expire_in_span(uri, named.table, plan, sweep=sweep, settings=settings)
+    result.due = _evaluate_due(uri, named, plan, sweep=sweep, settings=settings)
     _finish(result, plan=plan, now=sweep.context.now, settings=settings)
     return result
 
@@ -429,13 +449,13 @@ def maintain_dataset(uri: str, *, sweep: SweepPlan, settings: MaintenanceSetting
 def expire_dataset(uri: str, *, sweep: SweepPlan, settings: MaintenanceSettings) -> DatasetResult:
     """One dataset's expiry, with the cadence, stamp and counters a sweep pass carries: what the event lane runs after
     a commit, ``sweep`` holding that one table."""
-    table = sweep.table_ids.table_of(uri)
-    if table is None:
-        return _unnamed(uri, settings=settings)
-    plan = _plan_for(uri, table, sweep=sweep, settings=settings)
+    named = name_dataset(uri, sweep=sweep, settings=settings)
+    if isinstance(named, DatasetResult):
+        return named
+    plan = _plan_for(uri, named, sweep=sweep, settings=settings)
     if plan.skipped is not None:
         return _skipped(uri, plan, settings=settings)
-    result = _expire_in_span(uri, table, plan, sweep=sweep, settings=settings)
+    result = _expire_in_span(uri, named.table, plan, sweep=sweep, settings=settings)
     _finish(result, plan=plan, now=sweep.context.now, settings=settings)
     return result
 
@@ -449,6 +469,17 @@ def _unnamed(uri: str, *, settings: MaintenanceSettings) -> DatasetResult:
     """
     refused = DatasetResult(uri=uri, due="unnamed").refuse(
         f"no __manifest row names the dataset at {uri}, so maintenance neither expires nor vends it", gate="unnamed"
+    )
+    _record_dataset_metrics(refused)
+    _record_dataset_outcome(refused, subject=settings.catalog_service_identity)
+    return refused
+
+
+def _unidentified(uri: str, table: str, *, settings: MaintenanceSettings) -> DatasetResult:
+    """A table whose uuid, or an ancestor namespace's, cannot be read: refused this pass rather than maintained under the
+    defaults, since the policy kept under that uuid may be a legal hold ([[LH-523]])."""
+    refused = DatasetResult(uri=uri, due="failed").refuse(
+        f"the uuid of table {table} or of a namespace above it cannot be read, so its maintenance policy cannot be found", gate="unidentified"
     )
     _record_dataset_metrics(refused)
     _record_dataset_outcome(refused, subject=settings.catalog_service_identity)
@@ -581,20 +612,31 @@ def _bucket_of(uri: str) -> str:
 def clear_stale_due(settings: MaintenanceSettings, *, named: TableIds) -> int:
     """Delete the due record of every table no ``__manifest`` names any more; how many were deleted.
 
-    A table this tick evaluated is one a manifest names, so "evaluated nothing for it and no manifest names it" is "no
-    manifest names it". Skipped when a manifest could not be read: a table missing from an incomplete read may exist.
+    A record is a table's while a row names its location and that table holds the record's uuid: a table registered at
+    the location since holds another. Skipped when a manifest could not be read, since a table missing from an
+    incomplete read may exist; a record whose table's uuid cannot be read is kept.
     """
     if not named.complete:
         log.warning("maintenance_due_clear_skipped_incomplete_manifests")
         return 0
     options = settings.storage_options()
-    live = named.names()
-    stale = [record.table for record in list_due(settings.resolved_control_root, options) if record.table not in live]
-    for table in stale:
-        delete_due(settings.resolved_control_root, options, table)
+    stale = [record for record in list_due(settings.resolved_control_root, options) if _is_stale(record, named, settings)]
+    for record in stale:
+        delete_due(settings.resolved_control_root, options, record.uuid)
     if stale:
-        log.info("maintenance_due_cleared_unnamed", extra={"count": len(stale), "tables": stale[:20]})
+        log.info("maintenance_due_cleared_unnamed", extra={"count": len(stale), "tables": [record.table for record in stale[:20]]})
     return len(stale)
+
+
+def _is_stale(record: DueRecord, named: TableIds, settings: MaintenanceSettings) -> bool:
+    table = named.of(record.location)
+    if table is None:
+        return True
+    try:
+        return table_uuid(named, table, claims=_claims(settings)) != record.uuid
+    except Exception as exc:  # noqa: BLE001 — an unread claim keeps the record; the next tick reads it again
+        log.warning("maintenance_due_owner_unread", extra={"table": table, "error": f"{type(exc).__name__}: {exc}"})
+        return False
 
 
 def run_sweep(settings: MaintenanceSettings) -> list[DatasetResult]:

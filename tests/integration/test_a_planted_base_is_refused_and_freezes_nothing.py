@@ -57,6 +57,7 @@ from service_kit.lakehouse import base_registry
 from service_kit.lakehouse.base_refs import BaseRefs, normalise
 from service_kit.lakehouse.features import manifest_base_path_refs
 from service_kit.lakehouse.maintenance_due import CloneList
+from service_kit.lakehouse.naming import UUID_PROPERTY
 from service_kit.lakehouse.objectfs import lance_storage_options
 from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from storage import S3Client
@@ -106,6 +107,11 @@ class _Estate:
 
     def open(self, uri: str) -> lance.LanceDataset:
         return lance.dataset(uri, storage_options=self.key)
+
+    def namespace_uuid(self, namespace: str) -> str:
+        resp = self.client.post(f"/v1/namespace/{namespace}/describe", json={})
+        assert resp.status_code == 200, resp.text
+        return str(resp.json()["properties"][UUID_PROPERTY])
 
     def maintenance(self, **extra: Any) -> MaintenanceSettings:
         return MaintenanceSettings.model_validate(
@@ -224,7 +230,9 @@ def _maintained_through(client: TestClient, estate: _Estate, token_file: Path) -
     tick = sweep.SweepPlan(
         uris=[estate.attacker],
         clones=CloneList(taken_at=now),
-        table_ids=TableIds(by_location={normalise(estate.attacker): "db$attacker"}),
+        # The namespace's uuid as its `__manifest` row holds it, read here through the catalog's describe door; the
+        # table's is in the claim its create took (ADR 0173 §8).
+        table_ids=TableIds(by_location={normalise(estate.attacker): "db$attacker"}, namespace_uuids={"db": estate.namespace_uuid("db")}),
         context=PlanContext(policies=[], now=now, older_than=timedelta(0)),
     )
     with respx.mock(base_url="http://catalog.test") as catalog:

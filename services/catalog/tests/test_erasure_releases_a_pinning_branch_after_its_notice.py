@@ -36,14 +36,17 @@ from catalog.api.dependencies import get_clock, get_control_emitter, get_namespa
 from catalog.api.security import authenticate
 from catalog.api.v1.endpoints import erasure as door
 from catalog.core.config import Settings, get_settings
+from catalog.core.identifiers import with_minted_uuid
 from catalog.core.namespace import open_dataset
-from catalog.services import erasure_release
+from catalog.services import erasure_release, table_claims
 from catalog.services.dataplane import create_table, read_arrow_body
 from catalog.services.erasure import Pin
 from service_kit.control_events import CatalogControlEvent
 from service_kit.governed.oidc import IDToken
 from service_kit.governed.person_identity import PersonPrincipal
 from service_kit.governed.principal import Principal
+from service_kit.lakehouse.base_registry import BaseRegistry
+from service_kit.lakehouse.location_claims import ClaimStore
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
@@ -58,14 +61,21 @@ def _rows(*names: str) -> pa.Table:
 
 
 def _created(root: Path) -> LanceNamespace:
-    """``subjects`` at v1, alice and bob, through the catalog's create path."""
+    """``subjects`` at v1, alice and bob, through the catalog's create path, its claim on the control root beside ``root``."""
     ns = lance_namespace.connect("dir", {"root": str(root)})
     sink = pa.BufferOutputStream()
     with pa.ipc.new_stream(sink, _rows("alice", "bob").schema) as writer:
         writer.write_table(_rows("alice", "bob"))
-    ns.create_namespace(CreateNamespaceRequest(id=_TABLE_ID[:-1]))
-    create_table(ns, {}, _TABLE_ID, read_arrow_body(sink.getvalue().to_pybytes(), max_bytes=1 << 20), root=str(root), mode="create", registry=None)
+    ns.create_namespace(CreateNamespaceRequest(id=_TABLE_ID[:-1], properties=with_minted_uuid(None)))
+    body = read_arrow_body(sink.getvalue().to_pybytes(), max_bytes=1 << 20)
+    registry = BaseRegistry(control_root=str(root.parent / "control"), storage_options={})
+    create_table(ns, {}, _TABLE_ID, body, root=str(root), mode="create", registry=registry, holder="db$subjects")
     return ns
+
+
+def _table_uuid(ns: LanceNamespace, tmp_path: Path) -> str:
+    """The uuid the table's claim records, which a release names it by (ADR 0173 §8)."""
+    return table_claims.resolve(ns, ClaimStore(control_root=str(tmp_path / "control")), _TABLE_ID).require_uuid()
 
 
 def _tagged_over_a_plain_delete(root: Path) -> LanceNamespace:
@@ -202,8 +212,8 @@ def test_a_release_an_earlier_verification_scheduled_settles_the_obligation_only
             [Pin(ref=scheduled, holds="main@2")],
             release_id=obligation,
             table="db$subjects",
+            table_uuid=_table_uuid(ns, tmp_path),
             location=open_dataset(ns, {}, _TABLE_ID).uri,
-            object_id="table:db$subjects",
             requested_by="user:dex~alice",
             notified=["user:dex~alice", "user:dex~olivia"],
             due_at=clock.now + timedelta(days=7),
@@ -241,8 +251,8 @@ def test_a_release_cut_short_is_finished_at_the_reference_it_recorded(tmp_path: 
         pins,
         release_id="0" * 32,
         table="db$subjects",
+        table_uuid=_table_uuid(ns, tmp_path),
         location=open_dataset(ns, {}, _TABLE_ID).uri,
-        object_id="table:db$subjects",
         requested_by="user:dex~alice",
         notified=["user:dex~alice"],
         due_at=clock.now,

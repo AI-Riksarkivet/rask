@@ -20,14 +20,13 @@ from lance_namespace import (
 )
 
 from catalog.api import fga_deps
-from catalog.api.dependencies import ControlEmitterDep, NamespaceDep, SettingsDep, StorageOptionsDep
+from catalog.api.dependencies import ControlEmitterDep, NamespaceDep, ResolvedTableDep, SettingsDep, StorageOptionsDep
 from catalog.api.rask_params import RaskFlag
 from catalog.api.security import CurrentToken
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.services import dataplane, publication
 from service_kit.control_emit import emit_control
 from service_kit.governed import fga
-from service_kit.lakehouse import protection
 
 
 router = APIRouter(prefix="/v1/table", tags=["tag"])
@@ -149,6 +148,7 @@ async def delete_table_tag(
     id: str,
     body: DeleteTableTagRequest,
     ns: NamespaceDep,
+    table: ResolvedTableDep,
     settings: SettingsDep,
     so: StorageOptionsDep,
     control: ControlEmitterDep,
@@ -164,9 +164,7 @@ async def delete_table_tag(
     segments = parse_identifier(id, settings.delimiter)
     body.id = reconcile_body_id(segments, body.id)
     _refuse_a_catalog_tag(body.tag)
-    canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
-    guard = await run_in_threadpool(protection.get_protection, settings.registry_root, settings.storage_options(), "table", canonical)
-    fga_deps.require_not_protected(guard or {}, kind="table", obj_id=canonical, force=force)
+    await fga_deps.require_table_unprotected(settings, table, force=force)
     # The ref the tag pinned, read while the tag still exists: after the delete nothing records it.
     listed = await run_in_threadpool(dataplane.list_tags, ns, so, ListTableTagsRequest(id=segments))
     pinned = (listed.tags or {}).get(body.tag)

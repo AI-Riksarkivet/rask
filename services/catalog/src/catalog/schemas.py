@@ -403,7 +403,10 @@ class GcRunResult(BaseModel):
 class DueTable(BaseModel):
     """One table a compaction or an index optimize is due on, as the maintenance sweep measured it (ADR 0162)."""
 
+    #: The table's name now, or the name the record kept when the table is gone.
     table: str
+    #: The table's uuid (ADR 0173 §11), which the record is kept under.
+    uuid: str
     version: int
     #: What Lance's planner would rewrite under the winning policy; ``None`` when no compaction is due.
     compaction: CompactionDue | None = None
@@ -529,10 +532,12 @@ class PolicyResponse(BaseModel):
     # The policy fields must mirror PolicyRequest — model_validate ignores extras, so a request field
     # missing here would be silently dropped from every response.
     kind: str
+    #: The table's or namespace's name as the door was addressed (as the record kept it, in a listing), or the project id.
     id: str
-    path: str
-    # #84 project-level records match by bucket (their warehouse buckets, resolved at set time), not by a
-    # single path (which is "" for them). None for table/namespace records.
+    #: The uuid of the table or namespace the record is kept for (ADR 0173 §8); None for a project record.
+    uuid: str | None = None
+    # #84 project-level records match by bucket (their warehouse buckets, resolved at set time). None for
+    # table/namespace records.
     buckets: list[str] | None = None
     retention_days: int | None = None
     retain_versions: int | None = None
@@ -837,8 +842,10 @@ class PublishResult(BaseModel):
 class PromotionHold(BaseModel):
     """A version the project's quality gate holds for a `can_promote` holder, or the last decision on one."""
 
-    #: The table's id, as the catalog names it (`acme-silver$orders`).
+    #: The table's name now (`acme-silver$orders`), or the name the hold kept when the table is gone.
     table: str
+    #: The table's uuid (ADR 0173 §11), which the hold is kept under: a rename keeps it.
+    uuid: str
     version: int
     #: What `published` named when the version was held; `None` when nothing was published.
     published_version: int | None

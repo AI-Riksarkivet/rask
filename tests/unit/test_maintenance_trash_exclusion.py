@@ -25,6 +25,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import lance
 import pyarrow as pa
@@ -32,7 +33,7 @@ import pytest
 
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services.discovery import Discovery
-from service_kit.lakehouse import trash
+from service_kit.lakehouse import location_claims, trash
 from service_kit.lakehouse.base_refs import normalise
 
 
@@ -75,7 +76,12 @@ def _run(
 
     monkeypatch.setattr(sweep_mod, "_s3fs", lambda _s: None)
     monkeypatch.setattr(sweep_mod, "discover_datasets", lambda _fs, _bucket, *, max_depth: Discovery(uris=list(uris)))
-    named = TableIds(by_location={normalise(uri): f"db$t{i}" for i, uri in enumerate(uris)})
+    # Each table carries a uuid as every catalog door gives one, in its location's claim, and its namespace one in its
+    # `__manifest` row: maintenance refuses a table whose policy owners it cannot identify ([[LH-523]]).
+    claims = location_claims.ClaimStore(control_root=settings.resolved_control_root, storage_options={})
+    for i, uri in enumerate(uris):
+        location_claims.take(claims, normalise(uri), f"db$t{i}", ["db", f"t{i}"], is_gone=lambda _claim: False, uuid=str(uuid4()))
+    named = TableIds(by_location={normalise(uri): f"db$t{i}" for i, uri in enumerate(uris)}, namespace_uuids={"db": str(uuid4())})
     monkeypatch.setattr(sweep_mod, "table_ids", lambda *_a, **_k: named)
     monkeypatch.setattr(expiry, "count_reclaimable", _spy)
     return sweep_mod.run_sweep(settings), reached

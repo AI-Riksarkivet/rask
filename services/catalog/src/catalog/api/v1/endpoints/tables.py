@@ -681,8 +681,8 @@ async def drop_table(
 
     segments = parse_identifier(id, settings.delimiter)
     canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
-    guard = await run_in_threadpool(protection.get_protection, settings.registry_root, settings.storage_options(), "table", canonical)
-    fga_deps.require_not_protected(guard or {}, kind="table", obj_id=canonical, force=force)
+    await fga_deps.require_table_unprotected(settings, table, force=force)
+    table_uuid = table.require_uuid()
     # THE DOOR ACTS ON THE TABLE ITS NAME RESOLVED TO (ADR 0173 §7, [[LH-521]]): the fence holds the claim that
     # resolution read, so a rename landing since answers this drop 409, and one landing after the fence answers 409
     # itself, rather than the drop reaching whatever table holds the name by then. The drop deletes the LOCATION, so it
@@ -745,14 +745,14 @@ async def drop_table(
         registry = base_registry.BaseRegistry(control_root=settings.registry_root, storage_options=settings.storage_options())
         await run_in_threadpool(partial(base_registry.forget_base_record, registry, location, table=canonical))
         await run_in_threadpool(location_claims.release, claims, location, canonical)
-    # What the table held under its name dies with it, so a LATER table at this id inherits none of it ([[LH-215]]): the
-    # sweep finds a dataset by walking storage, not the registry, so a policy left here governs whatever is created at
-    # the id next. A recoverable drop keeps its maintenance policy for the undrop, as it keeps its grants, and the trash
-    # purge ends both. Its protection goes now, because the drop it guarded has happened.
+    # What was kept for the table under its uuid ends with it ([[LH-523]]); a table created later at this name holds
+    # another uuid, so nothing left here could govern it. A recoverable drop keeps its maintenance policy for the undrop,
+    # as it keeps its grants, and the trash purge ends both. Its protection goes now, because the drop it guarded has
+    # happened.
     if not trashed:
-        await run_in_threadpool(object_records.end_object_records, settings.registry_root, settings.storage_options(), "table", canonical)
-    elif guard:
-        await run_in_threadpool(protection.clear_protection, settings.registry_root, settings.storage_options(), "table", canonical)
+        await run_in_threadpool(object_records.end_object_records, settings.registry_root, settings.storage_options(), "table", table_uuid)
+    else:
+        await run_in_threadpool(protection.clear_protection, settings.registry_root, settings.storage_options(), "table", table_uuid)
     # Record the drop as best-effort lineage — provenance of the deletion (the dataset node persists in the
     # graph, named a `drop_table` run). Inline-awaited (NOT BackgroundTasks) → reaches the durable
     # Dapr/JetStream transport before the response; best-effort, so it never fails the drop. Emitted BEFORE
@@ -821,8 +821,8 @@ async def deregister_table(
 
     segments = reconcile_body_id(parse_identifier(id, settings.delimiter), body.id if body else None)
     canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
-    guard = await run_in_threadpool(protection.get_protection, settings.registry_root, settings.storage_options(), "table", canonical)
-    fga_deps.require_not_protected(guard or {}, kind="table", obj_id=canonical, force=force)
+    await fga_deps.require_table_unprotected(settings, table, force=force)
+    table_uuid = table.require_uuid()
     # The door acts on the table its name resolved to, under the fence that holds the claim it read (ADR 0173 §7,
     # [[LH-521]]): a rename landing since answers this deregister 409, as one landing after the fence answers itself.
     claims = table_claims.claim_store(settings)
@@ -836,8 +836,8 @@ async def deregister_table(
         raise
     # The detached bytes are nobody's now, so the id's claim on them goes ([[LH-204]]).
     await run_in_threadpool(location_claims.release, claims, location, canonical)
-    # The table leaves governance, so what it held under its name goes, or a table registered at this id inherits it.
-    await run_in_threadpool(object_records.end_object_records, settings.registry_root, settings.storage_options(), "table", canonical)
+    # The table leaves governance, so what was kept for it under its uuid goes.
+    await run_in_threadpool(object_records.end_object_records, settings.registry_root, settings.storage_options(), "table", table_uuid)
     # Record the detach as best-effort lineage — asymmetric with drop (which deletes data), deregister
     # only detaches, so without this marker the feed reads it as a still-live, never-touched table.
     # Versionless (no data was written), inline-awaited so it reaches the durable transport before the
@@ -1152,14 +1152,13 @@ async def register_table(
 
 
 @management_router.get("/{id}/protection", response_model_exclude_none=True)
-async def get_table_protection(id: str, settings: SettingsDep) -> ProtectionResponse:
+async def get_table_protection(id: str, table: ResolvedTableDep, settings: SettingsDep) -> ProtectionResponse:
     """Read the deletion-protection flag (#123). The SET door shipped a year of writes with NO read:
     an operator could not arm, disarm-check, or audit protection — they discovered it by eating a
     409. Owner-gated like the set door (the observer of a safety is whoever might trip it), and the
     record's `set_by` comes back so a refused drop can name who armed it."""
-    segments = parse_identifier(id, settings.delimiter)
-    canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
-    record = await run_in_threadpool(protection.get_protection, settings.registry_root, settings.storage_options(), "table", canonical)
+    canonical = fga.canonical_object_id(table.segments, delimiter=settings.delimiter)
+    record = await run_in_threadpool(protection.get_protection, settings.registry_root, settings.storage_options(), "table", table.require_uuid())
     return ProtectionResponse(id=canonical, protected=bool(record), set_by=(record or {}).get("set_by"))
 
 
@@ -1303,6 +1302,7 @@ async def undrop_table(
 async def set_table_protection(
     id: str,
     body: SetProtectionRequest,
+    table: ResolvedTableDep,
     settings: SettingsDep,
     token: CurrentToken,
     control: ControlEmitterDep,
@@ -1316,19 +1316,20 @@ async def set_table_protection(
     a CONTROL-ROOT record, deliberately not schema metadata — control-plane state that emits a
     control event and never creates a table version, readable even when the dataset is corrupted,
     and unreachable from the future properties write door (#78)."""
-    segments = parse_identifier(id, settings.delimiter)
-    canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
+    canonical = fga.canonical_object_id(table.segments, delimiter=settings.delimiter)
+    table_uuid = table.require_uuid()
     so = settings.storage_options()
     if body.protected:
         record = {
             "kind": "table",
             "id": canonical,
+            "uuid": table_uuid,
             "protected": "true",
             "set_by": f"user:{token.subject}" if token is not None else "anonymous",
         }
         await run_in_threadpool(protection.set_protection, settings.registry_root, so, record)
     else:
-        await run_in_threadpool(protection.clear_protection, settings.registry_root, so, "table", canonical)
+        await run_in_threadpool(protection.clear_protection, settings.registry_root, so, "table", table_uuid)
     await emit_control(
         control,
         action="table_protected" if body.protected else "table_unprotected",
@@ -1340,26 +1341,19 @@ async def set_table_protection(
     return ProtectionResponse(id=canonical, protected=body.protected)
 
 
-async def _carry_what_the_name_holds(settings: Settings, location: str, *, source: list[str], destination: list[str]) -> None:
-    """Move what a renamed table holds on the control root under its old name to its new one ([[LH-215]]).
+async def _hand_over_data_directories(settings: Settings, location: str, *, source: list[str], destination: list[str]) -> None:
+    """Hand the renamed table's claims on its data directories to its new name ([[LH-252]]).
 
-    Its protection and maintenance policy (`object_records`), and its claims on its data directories ([[LH-252]]):
-    left with the old name, a directory's holder no longer resolves and the next registration declaring it is admitted
+    Left with the old name, a directory's holder no longer resolves and the next registration declaring it is admitted
     once the claim's lease has run. Logged, never raised: the native rename has committed, and a failure here must not
-    strand the caller after it. Each carry is attempted whatever the other did, and what failed to move stays under the
-    old name, where an operator reading the log finds it.
+    strand the caller after it; what failed to move stays under the old name, where an operator reading the log finds it.
     """
     old = fga.canonical_object_id(source, delimiter=settings.delimiter)
     new = fga.canonical_object_id(destination, delimiter=settings.delimiter)
-    so = settings.storage_options()
-    try:
-        await run_in_threadpool(partial(object_records.move_object_records, settings.registry_root, so, "table", old_id=old, new_id=new))
-    except Exception as exc:  # noqa: BLE001 — the rename has committed; what did not move is logged, not raised
-        log.error("rename_records_not_carried", extra={"source": old, "destination": new, "error": str(exc)[:300]})
-    registry = base_registry.BaseRegistry(control_root=settings.registry_root, storage_options=so)
+    registry = base_registry.BaseRegistry(control_root=settings.registry_root, storage_options=settings.storage_options())
     try:
         await run_in_threadpool(partial(base_registry.hand_over_data_directories, registry, location, previous=old, table=new, segments=destination))
-    except Exception as exc:  # noqa: BLE001 — as above: logged, so the directories left with the old name are found
+    except Exception as exc:  # noqa: BLE001 — the rename has committed; what did not move is logged, not raised
         log.error("rename_data_directories_not_handed_over", extra={"source": old, "destination": new, "error": str(exc)[:300]})
 
 
@@ -1392,10 +1386,9 @@ async def rename_table(
 
     The caller must hold ``can_drop`` on the source (owner tier, gated by the router ``authorize``) AND
     ``can_create_table`` on the DESTINATION parent — else a source owner could plant their table into a
-    namespace/tenant they lack create rights on. What the table holds under its name moves from the old id to the
-    new ([[LH-215]]): every grant (``fga_deps.move_ownership``), its protection and maintenance policy and its data
-    directories' claims (``_carry_what_the_name_holds``). A
-    versionless REGISTER marker records the attachment at the new id, with the source as its input, so the
+    namespace/tenant they lack create rights on. The table keeps its uuid, so every record kept for it stays where it
+    is ([[LH-523]]); what is still keyed by its name moves to the new one: every grant (``fga_deps.move_ownership``)
+    and its data directories' claims (``_hand_over_data_directories``). A versionless REGISTER marker records the attachment at the new id, with the source as its input, so the
     destination's provenance continues from the source's. Source missing → 404
     ``TableNotFound``; destination name taken → 409 ``TableAlreadyExists``; the location held by a
     concurrent rename or registration → 409 ``ConcurrentModification`` (code 14, [[LH-204]])."""
@@ -1412,9 +1405,7 @@ async def rename_table(
     # the query string as on the sibling doors, and the protection travels with the table to its new name.
     # Checked FIRST — before the parent/create gates — so a protected source refuses identically regardless
     # of destination.
-    canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
-    guard = await run_in_threadpool(protection.get_protection, settings.registry_root, settings.storage_options(), "table", canonical)
-    fga_deps.require_not_protected(guard or {}, kind="table", obj_id=canonical, force=force)
+    await fga_deps.require_table_unprotected(settings, table, force=force)
     # Rename mints a new table identifier under ``new_namespace_id`` (defaulting to the source's parent
     # namespace, i.e. all source segments but the last) + ``new_table_name``.
     dest_parent = list(body.new_namespace_id) if body.new_namespace_id else segments[:-1]
@@ -1447,7 +1438,7 @@ async def rename_table(
             root=settings.root,
         )
     )
-    await _carry_what_the_name_holds(settings, location, source=segments, destination=new_segments)
+    await _hand_over_data_directories(settings, location, source=segments, destination=new_segments)
     # A rename keeps the table's uuid (ADR 0173 §2): both markers and the control event name the one the door resolved.
     source_ids = await uuids.table(segments, uuid=table.uuid)
     destination_ids = await uuids.table(new_segments, uuid=table.uuid)

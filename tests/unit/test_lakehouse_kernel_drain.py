@@ -33,6 +33,10 @@ from service_kit.lakehouse.maintenance_policies import get_policy, put_policy
 from service_kit.lakehouse.warehouse_registry import clear_cache, project_root
 
 
+_TABLE_UUID = "7c0e2f4a-5b1d-4e8f-9a3c-2d6b8e1f0a47"
+_NAMESPACE_UUID = "3f9d1c2e-8a4b-4c6d-b5e7-1a2b3c4d5e6f"
+
+
 # --------------------------------------------------------------------------------------------------
 # SKG-08 — one registry primitive, and the drift the four copies produced
 # --------------------------------------------------------------------------------------------------
@@ -40,27 +44,32 @@ from service_kit.lakehouse.warehouse_registry import clear_cache, project_root
 
 def test_a_malformed_policy_record_is_refused_like_its_two_siblings(tmp_path: Path) -> None:
     """`get_protection` and `trash.get` both return None on a non-dict record. `get_policy` did not."""
-    put_policy(str(tmp_path), {}, {"kind": "table", "id": "db$t", "path": "b/db$t"})
+    put_policy(str(tmp_path), {}, {"kind": "table", "id": "db$t", "uuid": _TABLE_UUID})
     key = next(p for p in (tmp_path / "_policies").iterdir() if p.suffix == ".json")
     key.write_text(json.dumps(["not", "a", "record"]))
 
-    assert get_policy(str(tmp_path), {}, "table", "db$t") is None
+    assert get_policy(str(tmp_path), {}, "table", _TABLE_UUID) is None
 
 
 def test_the_record_key_shape_is_unchanged_by_the_de_duplication() -> None:
-    """A golden key per prefix: records already on the control root must stay addressable."""
+    """A golden key per prefix: records already on the control root must stay addressable.
+
+    Protection and policy records are keyed by their object's uuid (ADR 0173 §8), the trash record by the
+    dropped object's name; the derivation from that key is the one ``record_key``.
+    """
     from service_kit.lakehouse.record_store import record_key
 
-    assert record_key("_protection", "table", "db$t") == "_protection/table-f74c29b36c7f71a511912ddc.json"
-    assert record_key("_policies", "namespace", "db") == "_policies/namespace-71a39747d8c07c7a2f42ec42.json"
+    assert record_key("_protection", "table", _TABLE_UUID) == "_protection/table-9f9a37202eeb7dc7cabba84b.json"
+    assert record_key("_policies", "namespace", _NAMESPACE_UUID) == "_policies/namespace-3c0b296fe7c2d32e9edd2812.json"
     assert record_key("_trash", "table", "db$t") == "_trash/table-f74c29b36c7f71a511912ddc.json"
 
     # The sweep's per-(policy, dataset) stamp is the same deriver under `_policies/state/`: an orphaned
     # stamp re-maintains a dataset that was maintained an hour ago, so its bytes are pinned too.
     from service_kit.lakehouse.maintenance_policies import _state_key
 
-    assert _state_key({"kind": "namespace", "id": "db"}, "s3://b/db$t") == record_key("_policies/state", "namespace", "db:s3://b/db$t")
-    assert _state_key({"kind": "namespace", "id": "db"}, "s3://b/db$t") == "_policies/state/namespace-f3f67a9f17a3a307de98bf99.json"
+    policy = {"kind": "namespace", "id": "db", "uuid": _NAMESPACE_UUID}
+    assert _state_key(policy, "s3://b/t") == record_key("_policies/state", "namespace", f"{_NAMESPACE_UUID}:s3://b/t")
+    assert _state_key(policy, "s3://b/t") == "_policies/state/namespace-6dc223bba62a3cd068a55acc.json"
 
 
 # --------------------------------------------------------------------------------------------------

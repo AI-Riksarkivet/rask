@@ -6,6 +6,7 @@ from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -17,6 +18,7 @@ from maintenance.services import sweep
 from maintenance.services.expiry import DatasetResult
 from maintenance.services.naming import TableIds
 from maintenance.services.plan import DatasetPlan, PlanContext
+from service_kit.lakehouse import location_claims
 from service_kit.lakehouse.base_refs import BaseRefs, normalise
 from service_kit.lakehouse.maintenance_due import CloneList
 
@@ -53,8 +55,10 @@ def maintain_one(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Callable[..
 
     ``protected`` stands in for the tick's whole-estate pre-pass, ``plan`` for what the policy registry resolves to, and
     ``table_id`` for the table the catalog's ``__manifest`` names the dataset as: maintenance acts on no dataset it cannot
-    name that way ([[LH-520]]). A named dataset's due record lands under a control root in ``tmp_path``, where the tick
-    would write it to the catalog's.
+    name that way ([[LH-520]]). The table carries a uuid as every catalog door gives one: its location's claim records it,
+    and each namespace above it has its own in its ``__manifest`` row, since maintenance refuses a table whose policy
+    owners it cannot identify ([[LH-523]]). A named dataset's due record lands under a control root in ``tmp_path``,
+    where the tick would write it to the catalog's.
     """
 
     def _maintain(
@@ -64,11 +68,15 @@ def maintain_one(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Callable[..
             monkeypatch.setattr(sweep, "resolve_plan", lambda *_a, **_k: plan.model_copy())
         now = datetime.now(UTC)
         settings = settings.model_copy(update={"control_root": str(tmp_path / "control")})
+        segments = table_id.split(settings.delimiter)
+        claims = location_claims.ClaimStore(control_root=settings.resolved_control_root, storage_options=settings.storage_options())
+        location_claims.take(claims, normalise(uri), table_id, segments, is_gone=lambda _claim: False, uuid=str(uuid4()))
+        namespaces = {settings.delimiter.join(segments[:depth]): str(uuid4()) for depth in range(1, len(segments))}
         tick = sweep.SweepPlan(
             uris=[uri],
             protected=protected or BaseRefs(),
             clones=CloneList(taken_at=now),
-            table_ids=TableIds(by_location={normalise(uri): table_id}),
+            table_ids=TableIds(by_location={normalise(uri): table_id}, namespace_uuids=namespaces),
             context=PlanContext(policies=[], now=now, older_than=timedelta(days=settings.older_than_days)),
         )
         return sweep.maintain_dataset(uri, sweep=tick, settings=settings)

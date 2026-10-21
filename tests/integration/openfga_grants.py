@@ -79,6 +79,17 @@ class TupleStore:
         del body, options
         return CheckResponse(allowed=True)
 
+    async def batch_check(self, body: ClientBatchCheckRequest, options: Options = None) -> ClientBatchCheckResponse:
+        del options
+        return ClientBatchCheckResponse(
+            result=[
+                ClientBatchCheckSingleResponse(
+                    allowed=True, request=ClientTuple(user=item.user, relation=item.relation, object=item.object), correlation_id=str(index)
+                )
+                for index, item in enumerate(body.checks)
+            ]
+        )
+
     async def read(self, body: ReadRequestTupleKey, options: Options = None) -> ReadResponse:
         """The tuples on ``body.object``, or every tuple held when the read names no object, as OpenFGA reads a whole store."""
         del options

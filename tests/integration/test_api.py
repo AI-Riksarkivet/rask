@@ -9,8 +9,10 @@ are exercised.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 from unittest.mock import MagicMock
+from uuid import uuid4
 
 import lance
 import pyarrow as pa
@@ -101,7 +103,7 @@ def _arrow_ipc(table: pa.Table) -> bytes:
 _ONE_ROW = _arrow_ipc(pa.table({"id": [1]}))
 
 
-def test_create_delegates_to_dataplane_create_table(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
+def test_create_delegates_to_dataplane_create_table(client: TestClient, fake_ns: MagicMock, monkeypatch, claim_described: Callable[[str], str]) -> None:
     # The endpoint stays thin: it delegates create; the write path lives in the facade.
     seen: dict[str, object] = {}
 
@@ -132,6 +134,7 @@ def test_create_delegates_to_dataplane_create_table(client: TestClient, fake_ns:
         return CreateTableResponse(location="s3://x/t", version=1)
 
     monkeypatch.setattr("catalog.services.dataplane.create_table", _stub)
+    claim_described("media$clips")  # the table the overwrite replaces, which the double describes as existing
     resp = client.post(
         "/v1/table/media$clips/create?mode=overwrite",
         content=_arrow_ipc(pa.table({"id": [1]})),
@@ -377,7 +380,7 @@ def test_create_exist_ok_reads_schema_back_instead_of_trusting_payload(real_ns_c
     assert seen["pin"] == 1  # schema read back pinned at the EXISTING (freshly-created) table's version
 
 
-def test_deregister_emits_marker_before_revoking_tuples(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
+def test_deregister_emits_marker_before_revoking_tuples(client: TestClient, fake_ns: MagicMock, monkeypatch, claim_described: Callable[[str], str]) -> None:
     # The DEREGISTER_TABLE marker must publish BEFORE revoke_ownership: on the http transport the caller's
     # bearer authorizes ingest against their write grant — revoke-first would 403 the marker (silently
     # dropped by the best-effort emitter) and the graph would keep showing the table as live.
@@ -394,6 +397,7 @@ def test_deregister_emits_marker_before_revoking_tuples(client: TestClient, fake
 
     monkeypatch.setattr("catalog.api.v1.endpoints.tables.emit_write_event", _emit)
     monkeypatch.setattr("catalog.api.fga_deps.revoke_ownership", _revoke)
+    claim_described("db$t")
 
     resp = client.post("/v1/table/db$t/deregister")
     assert resp.status_code == 200
@@ -524,14 +528,15 @@ def test_update_with_empty_updates_is_400(client: TestClient, monkeypatch) -> No
     assert resp.json()["code"] == 13  # InvalidInput
 
 
-def test_maintenance_policy_crud_round_trips(client: TestClient, fake_ns: MagicMock) -> None:
-    # CONTRACT (#50): set resolves the physical path from describe_table and persists it; describe
-    # returns the record; delete is idempotent and describe 404s afterwards.
+def test_maintenance_policy_crud_round_trips(client: TestClient, fake_ns: MagicMock, claim_described: Callable[[str], str]) -> None:
+    # CONTRACT (#50, ADR 0173 §8): set keys the record by the uuid the table's location claim records and persists it;
+    # describe returns the record; delete is idempotent and describe 404s afterwards.
     fake_ns.describe_table.return_value = DescribeTableResponse(location="s3://lance-test-root/u1_db1$users")
+    users = claim_described("db1$users")
     set_resp = client.post("/management/v1/table/db1$users/policy/set", json={"retention_days": 7, "compact_interval_hours": 12})
     assert set_resp.status_code == 200, set_resp.text
     body = set_resp.json()
-    assert body["path"] == "lance-test-root/u1_db1$users" and body["retention_days"] == 7
+    assert body["uuid"] == users and body["retention_days"] == 7
 
     desc = client.post("/management/v1/table/db1$users/policy/describe")
     assert desc.status_code == 200 and desc.json()["compact_interval_hours"] == 12
@@ -657,10 +662,13 @@ def _list_policies_for(client: TestClient, project: str) -> dict[str, Any]:
 
 
 def test_project_policies_list_scopes_to_the_projects_own_buckets(client: TestClient, tmp_path: object) -> None:
-    # CONTRACT (#65): a tenant's policy view carries the tenant's records and NOTHING else. Two
-    # warehouses, two table policies, one bucket each — the rival's record must never cross.
+    # CONTRACT (#65): a tenant's policy view carries the tenant's records and NOTHING else, each table's under the
+    # name the table holds now ([[LH-523]]). Two warehouses, each binding one namespace, two table policies — the
+    # rival's record must never cross, and acme's table, renamed since its policy was set, is listed as `db$u`.
     from catalog.core.config import get_settings
+    from catalog.services import table_claims
     from catalog.services import warehouses as wh_svc
+    from service_kit.lakehouse import location_claims
     from service_kit.lakehouse import maintenance_policies as pol_svc
 
     s = _project_policy_settings(tmp_path)
@@ -668,19 +676,22 @@ def test_project_policies_list_scopes_to_the_projects_own_buckets(client: TestCl
     so = s.storage_options()
     wh_svc.put_warehouse(s.registry_root, so, {"id": "wh-a", "bucket": "acme-wh", "project": "acme", "status": "active"})
     wh_svc.put_warehouse(s.registry_root, so, {"id": "wh-z", "bucket": "other-wh", "project": "other", "status": "active"})
-    pol_svc.put_policy(s.registry_root, so, {"kind": "table", "id": "db$t", "path": "acme-wh/u1_db$t", "retention_days": 7})
-    pol_svc.put_policy(s.registry_root, so, {"kind": "table", "id": "rival$t", "path": "other-wh/u2_rival$t", "retention_days": 1})
+    wh_svc.bind_namespace(s.registry_root, so, "db", "wh-a", "s3://acme-wh")
+    wh_svc.bind_namespace(s.registry_root, so, "rival", "wh-z", "s3://other-wh")
+    renamed, location = str(uuid4()), f"s3://acme-wh/{uuid4()}"
+    # The rename handed the table's claim, and the uuid it records, to the table's new name.
+    location_claims.take(table_claims.claim_store(s), location, "db$u", ["db", "u"], is_gone=lambda _claim: False, uuid=renamed)
+    pol_svc.put_policy(s.registry_root, so, {"kind": "table", "id": "db$t", "uuid": renamed, "location": location, "retention_days": 7})
+    pol_svc.put_policy(s.registry_root, so, {"kind": "table", "id": "rival$t", "uuid": str(uuid4()), "retention_days": 1})
 
     body = _list_policies_for(client, "acme")
-    assert [p["id"] for p in body["policies"]] == ["db$t"]
+    assert [p["id"] for p in body["policies"]] == ["db$u"]
     assert body["buckets"] == ["acme-wh"] and body["incomplete"] is False
 
 
 def test_project_policies_list_finds_a_warehouse_bound_namespace_policy(client: TestClient, tmp_path: object) -> None:
-    # THE decisive one. `set_namespace_policy` builds its path from the DEFAULT root (it takes no
-    # NamespaceDep, so it never resolves the namespace's warehouse root) — so a bound namespace's record
-    # carries `lance-catalog/gold` even though its data lives in `acme-wh`. Scoping by the record's bucket
-    # would miss it AND hand it to whoever owns the default bucket; scoping by the BINDING finds it.
+    # THE decisive one: a namespace's record names no bucket, only the namespace, so the listing finds it
+    # through the BINDING of the namespace it names.
     from catalog.core.config import get_settings
     from catalog.services import warehouses as wh_svc
     from service_kit.lakehouse import maintenance_policies as pol_svc
@@ -690,8 +701,8 @@ def test_project_policies_list_finds_a_warehouse_bound_namespace_policy(client: 
     so = s.storage_options()
     wh_svc.put_warehouse(s.registry_root, so, {"id": "wh-a", "bucket": "acme-wh", "project": "acme", "status": "active"})
     wh_svc.bind_namespace(s.registry_root, so, "gold", "wh-a", "s3://acme-wh")
-    # Byte-for-byte what set_namespace_policy writes: the id is logical, the path is the DEFAULT root.
-    pol_svc.put_policy(s.registry_root, so, {"kind": "namespace", "id": "gold", "path": "lance-catalog/gold", "retention_days": 30})
+    # What set_namespace_policy writes: keyed by the namespace's uuid, with the name it had kept under `id`.
+    pol_svc.put_policy(s.registry_root, so, {"kind": "namespace", "id": "gold", "uuid": str(uuid4()), "retention_days": 30})
 
     body = _list_policies_for(client, "acme")
     assert [p["id"] for p in body["policies"]] == ["gold"]
@@ -704,14 +715,19 @@ def test_project_policies_list_includes_a_deactivated_warehouses_bucket(client: 
     # still governing it — is still the tenant's. Narrowing here would hide the retention record an
     # operator is looking for at exactly the moment they are offboarding.
     from catalog.core.config import get_settings
+    from catalog.services import table_claims
     from catalog.services import warehouses as wh_svc
+    from service_kit.lakehouse import location_claims
     from service_kit.lakehouse import maintenance_policies as pol_svc
 
     s = _project_policy_settings(tmp_path)
     client.app.dependency_overrides[get_settings] = lambda: s
     so = s.storage_options()
     wh_svc.put_warehouse(s.registry_root, so, {"id": "wh-old", "bucket": "acme-old", "project": "acme", "status": "deactivated"})
-    pol_svc.put_policy(s.registry_root, so, {"kind": "table", "id": "arch$t", "path": "acme-old/u9_arch$t", "compact_enabled": False})
+    wh_svc.bind_namespace(s.registry_root, so, "arch", "wh-old", "s3://acme-old")
+    table_uuid, location = str(uuid4()), f"s3://acme-old/{uuid4()}"
+    location_claims.take(table_claims.claim_store(s), location, "arch$t", ["arch", "t"], is_gone=lambda _claim: False, uuid=table_uuid)
+    pol_svc.put_policy(s.registry_root, so, {"kind": "table", "id": "arch$t", "uuid": table_uuid, "location": location, "compact_enabled": False})
 
     body = _list_policies_for(client, "acme")
     assert [p["id"] for p in body["policies"]] == ["arch$t"]
@@ -730,8 +746,8 @@ def test_project_policies_list_returns_only_its_own_project_record(client: TestC
     client.app.dependency_overrides[get_settings] = lambda: s
     so = s.storage_options()
     wh_svc.put_warehouse(s.registry_root, so, {"id": "wh-a", "bucket": "acme-wh", "project": "acme", "status": "active"})
-    pol_svc.put_policy(s.registry_root, so, {"kind": "project", "id": "acme", "path": "", "buckets": ["acme-wh"], "retention_days": 90})
-    pol_svc.put_policy(s.registry_root, so, {"kind": "project", "id": "other", "path": "", "buckets": ["acme-wh"], "retention_days": 1})
+    pol_svc.put_policy(s.registry_root, so, {"kind": "project", "id": "acme", "buckets": ["acme-wh"], "retention_days": 90})
+    pol_svc.put_policy(s.registry_root, so, {"kind": "project", "id": "other", "buckets": ["acme-wh"], "retention_days": 1})
 
     body = _list_policies_for(client, "acme")
     assert [(p["kind"], p["id"]) for p in body["policies"]] == [("project", "acme")]
@@ -773,13 +789,14 @@ def test_access_list_is_unsupported_without_fga(client: TestClient) -> None:
     assert resp.status_code == 406
 
 
-def test_maintenance_policy_rejects_an_empty_policy(client: TestClient, fake_ns: MagicMock) -> None:
+def test_maintenance_policy_rejects_an_empty_policy(client: TestClient, fake_ns: MagicMock, claim_described: Callable[[str], str]) -> None:
+    fake_ns.describe_table.return_value = DescribeTableResponse(location="s3://lance-test-root/u1_db1$users")
+    claim_described("db1$users")
     resp = client.post("/management/v1/table/db1$users/policy/set", json={})
     assert resp.status_code == 422  # a body that sets nothing changes nothing — the validator refuses
-    fake_ns.describe_table.assert_not_called()
+    assert client.post("/management/v1/table/db1$users/policy/describe").status_code == 404, "a refused set wrote a policy"
     # But an EXPLICIT compact_enabled=true is meaningful (a table-level re-enable under a disabled
-    # namespace policy — the exact-table match shadows the namespace record), so it must be accepted.
-    fake_ns.describe_table.return_value = DescribeTableResponse(location="s3://lance-test-root/u1_db1$users")
+    # namespace policy — the table's own record shadows the namespace record), so it must be accepted.
     resp = client.post("/management/v1/table/db1$users/policy/set", json={"compact_enabled": True})
     assert resp.status_code == 200, resp.text
     # The client fixture's registry root is a fixed local path — delete so no record leaks across tests.

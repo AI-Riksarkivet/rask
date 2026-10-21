@@ -71,7 +71,7 @@ from maintenance.services import orphans
 from maintenance.services.expiry import DatasetResult
 from maintenance.services.reconcile import ReconcileReport, reconcile
 from maintenance.services.sweep import run_sweep, summarize
-from service_kit.lakehouse.maintenance_due import read_due
+from service_kit.lakehouse.maintenance_due import list_due
 from service_kit.lakehouse.objectfs import s3_filesystem
 
 
@@ -308,7 +308,7 @@ def test_the_sweep_lists_the_compaction_it_does_not_run_on_object_storage(estate
     seconds ago is ever eligible for reclamation. Its fragments are unchanged: maintenance rewrites nothing.
     """
     plain = next(r for r in swept if r.uri == estate.plain_uri)
-    record = read_due(settings.resolved_control_root, settings.storage_options(), "e2e$plain")
+    record = next((due for due in list_due(settings.resolved_control_root, settings.storage_options()) if due.table == "e2e$plain"), None)
     assert plain.due == "due", f"three appends should have been listed for compaction, got {plain.model_dump()}"
     assert record is not None and record.compaction is not None and record.compaction.fragments == 3, record
     assert len(lance.dataset(estate.plain_uri, storage_options=settings.storage_options()).get_fragments()) == 3, "the sweep rewrote the table"

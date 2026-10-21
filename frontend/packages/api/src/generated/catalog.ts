@@ -386,7 +386,9 @@ export interface paths {
         /**
          * List Erasure Obligations
          * @description The erasure obligations, open and released, listed to a caller holding ``can_maintain`` on each one's table, the
-         *     earliest deadline first: what each still owes, whether it is overdue, and the release it scheduled.
+         *     earliest deadline first: what each still owes, whether it is overdue, and the release it scheduled. Each names its
+         *     table as the table is named now, which a rename since the request changed; one whose table is gone, its bytes with
+         *     it, is listed to nobody.
          */
         get: operations["list_erasure_obligations_management_v1_erasures_get"];
         put?: never;
@@ -434,7 +436,8 @@ export interface paths {
          * List Due Maintenance
          * @description The tables a compaction or an index optimize is due on, in table order, listed to a caller holding
          *     ``can_maintain`` on each: what made each due, the policy record that governed it, and how many datasets resolve
-         *     their files through it.
+         *     their files through it. A record names its table as the table is named now, which a rename since the sweep changed;
+         *     one whose table is gone is listed to nobody, and the next sweep clears it.
          */
         get: operations["list_due_maintenance_management_v1_maintenance_due_get"];
         put?: never;
@@ -764,8 +767,8 @@ export interface paths {
         put?: never;
         /**
          * Set Namespace Policy
-         * @description Set (or replace) a namespace-level policy — applies to every dataset under the namespace's
-         *     directory prefix unless a table policy overrides it. Owner-gated by the router (``can_delete``).
+         * @description Set (or replace) a namespace-level policy — applies to every table under the namespace, at any depth, unless
+         *     a table policy or a nearer namespace's overrides it. Owner-gated by the router (``can_delete``).
          */
         post: operations["set_namespace_policy_management_v1_namespace__id__policy_set_post"];
         delete?: never;
@@ -1194,7 +1197,8 @@ export interface paths {
         /**
          * List Promotions
          * @description The open holds the caller may see, in table order: each table's held version, what `published` names, why
-         *     it is held and when the sweep expires it. A hold is listed to a caller holding `can_get_metadata` on its table.
+         *     it is held and when the sweep expires it. A hold names its table as the table is named now, and is listed to a
+         *     caller holding `can_get_metadata` on it; a hold whose table is gone is listed to nobody, and expires.
          */
         get: operations["list_promotions_management_v1_promotions_get"];
         put?: never;
@@ -3421,10 +3425,9 @@ export interface paths {
          *
          *     The caller must hold ``can_drop`` on the source (owner tier, gated by the router ``authorize``) AND
          *     ``can_create_table`` on the DESTINATION parent — else a source owner could plant their table into a
-         *     namespace/tenant they lack create rights on. What the table holds under its name moves from the old id to the
-         *     new ([[LH-215]]): every grant (``fga_deps.move_ownership``), its protection and maintenance policy and its data
-         *     directories' claims (``_carry_what_the_name_holds``). A
-         *     versionless REGISTER marker records the attachment at the new id, with the source as its input, so the
+         *     namespace/tenant they lack create rights on. The table keeps its uuid, so every record kept for it stays where it
+         *     is ([[LH-523]]); what is still keyed by its name moves to the new one: every grant (``fga_deps.move_ownership``)
+         *     and its data directories' claims (``_hand_over_data_directories``). A versionless REGISTER marker records the attachment at the new id, with the source as its input, so the
          *     destination's provenance continues from the source's. Source missing → 404
          *     ``TableNotFound``; destination name taken → 409 ``TableAlreadyExists``; the location held by a
          *     concurrent rename or registration → 409 ``ConcurrentModification`` (code 14, [[LH-204]]).
@@ -3728,7 +3731,7 @@ export interface paths {
          *     deleted, and ``branch`` scopes the delete to that ref's own history.
          *
          *     Owner tier (``can_drop``, the rung ``maintenance/run`` clears), protection-gated like drop; ``force``
-         *     turns the protection lock only. FastAPI runs this sync handler off the event loop.
+         *     turns the protection lock only.
          */
         post: operations["batch_delete_table_versions_v1_table__id__version_delete_post"];
         delete?: never;
@@ -6616,6 +6619,8 @@ export interface components {
             policy?: string | null;
             /** Table */
             table: string;
+            /** Uuid */
+            uuid: string;
             /** Version */
             version: number;
         };
@@ -6679,9 +6684,14 @@ export interface components {
             state: components["schemas"]["ObligationState"];
             /**
              * Table
-             * @description The table id the erasure was asked of.
+             * @description The table's name now, or the name the obligation kept when the table is gone.
              */
             table: string;
+            /**
+             * Table Uuid
+             * @description The uuid of the table the erasure was asked of (ADR 0173 §11): a rename keeps it.
+             */
+            table_uuid: string;
             /**
              * Verified At
              * @description When the last verification ran; null before the first.
@@ -7968,8 +7978,6 @@ export interface components {
              * @default true
              */
             optimize_indices_enabled?: boolean;
-            /** Path */
-            path: string;
             /** Repack Mode */
             repack_mode?: string | null;
             /** Retain Versions */
@@ -7980,6 +7988,8 @@ export interface components {
             scan_batch_size?: number | null;
             /** Target Rows Per Fragment */
             target_rows_per_fragment?: number | null;
+            /** Uuid */
+            uuid?: string | null;
         };
         /**
          * ProbeCheck
@@ -8169,6 +8179,8 @@ export interface components {
             state?: "open" | "approved" | "rejected" | "expired" | "superseded";
             /** Table */
             table: string;
+            /** Uuid */
+            uuid: string;
             /** Version */
             version: number;
         };
