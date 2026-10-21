@@ -233,6 +233,8 @@ class Scene:
         #: The matrix label: a classification label of the scene's own, its ladder held by the owner, writer and reader.
         self.label = f"c2-label-{self.suffix}"
         self.location = ""
+        #: The uuid the warehouse door minted for the matrix namespace ([[LH-519]]), which every reader's describe answers.
+        self.namespace_uuid = ""
         #: A deregistered table's location, relative to the namespace root, which a refused register names.
         self.loose = ""
         #: A commit staged on the matrix table, which a refused version/create names.
@@ -244,7 +246,8 @@ class Scene:
         """Make the matrix namespace, grant each rung, and make the standing objects every refused call shares."""
         admin, warehouse = self.tenant.admin, self.tenant.project
         body = {"namespace": self.namespace, "properties": {"rask.tier": "bronze"}}
-        scenario.ok(admin.http.post(f"{CATALOG}/management/v1/warehouses/{warehouse}/namespaces", json=body, timeout=60))
+        created = scenario.ok(admin.http.post(f"{CATALOG}/management/v1/warehouses/{warehouse}/namespaces", json=body, timeout=60))
+        self.namespace_uuid = str(created["properties"]["rask.uuid"])
         for role, relation in ((Role.OWNER, "owner"), (Role.WRITER, "writer"), (Role.READER, "reader")):
             grant = {"user": self.callers[role].principal, "relation": relation}
             scenario.ok(admin.http.post(f"{CATALOG}/management/v1/namespace/{self.namespace}/access/grant", json=grant, timeout=60))
@@ -713,7 +716,7 @@ SPEC_DOORS: tuple[Door, ...] = (
         rung=Rung.READER,
         aim=_at_namespace,
         send=lambda s, role, t: s.clients[role].describe_namespace(ln.DescribeNamespaceRequest(id=t.namespace)),
-        shows=lambda s, role, t, value, before: (value.properties, {"rask.tier": "bronze"}),
+        shows=lambda s, role, t, value, before: (value.properties, {"rask.tier": "bronze", "rask.uuid": s.namespace_uuid}),
     ),
     Door(
         operation="DropNamespace",
