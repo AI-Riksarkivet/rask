@@ -185,3 +185,4 @@ before they had a record here; each names its source document and the date of th
 | [0170](0170-the-catalogs-store-identity-is-its-serviceaccount.md) | XC-083 | The catalog's store identity is its ServiceAccount: its own IO and every vend are sessions its token is exchanged for (2026-10-18) |
 | [0171](0171-the-lakehouse-knows-no-annotation-tool.md) | XC-167 | The lakehouse knows no annotation tool: rask's annotator is a client with its own release, state and roles (2026-10-18) |
 | [0172](0172-a-location-claims-release-replaces-the-claim-it-read.md) | LH-458 | A location claim's release replaces the claim it read, and nothing deletes a `_locations/` record (2026-10-19) |
+| [0173](0173-tables-and-namespaces-are-keyed-by-a-minted-uuid.md) | LH-512 | Every table and namespace is keyed by a uuid the catalog mints; no name reaches a storage path, a credential's policy or an FGA object (2026-10-21) |

@@ -39,6 +39,34 @@ The user's bring-your-own compute and orchestrator, which runs their pipeline an
 the catalog's namespace doors like any client; the lakehouse never calls it and knows nothing of how it runs.
 _Avoid_: Ray, compute plane, cluster
 
+### Catalog
+
+**Name**:
+The path of segments a client uses to reach a table or namespace, which the Lance spec calls its `id`: `["bronze",
+"räksmörgås"]`, written `bronze$räksmörgås`. A rename changes it. Two names are the same name only when they are equal
+exactly, case included, and a name not in Unicode NFC is refused rather than rewritten.
+_Avoid_: id, object id, identifier (for the minted key)
+
+**Table uuid**:
+The key the catalog mints for a table when it is created, declared or registered, and that every grant and record about
+the table names. It never changes: a rename and an undrop keep it, while a table re-created under a dropped name gets a
+new one.
+_Avoid_: table id, object id, key
+
+**Namespace uuid**:
+The key the catalog mints for a namespace when it is created, under the same rules as a table uuid.
+_Avoid_: namespace id, object id, key
+
+**Location**:
+Where a table's bytes live. A table the catalog makes lives at `<warehouse root>/<table uuid>`, so no name is ever part
+of one; a registered table keeps the location its registrar named.
+_Avoid_: path, directory, prefix, table root
+
+**Location claim**:
+The catalog's record of which table holds a location, and of that table's uuid. One table holds a location at a time: a
+rename hands the claim to the new name, and destroying the table releases it.
+_Avoid_: lock, lease, ownership record
+
 ### Governance
 
 **Principal**:
