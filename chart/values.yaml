@@ -1155,18 +1155,10 @@ maintenance:
   # service). Enabling it also joins the pubsub scope, which dapr-component.yaml already conditions on
   # this same value, so there is no second switch to forget.
   #
-  # COVERAGE IS CATALOG-LAID-OUT TABLES ONLY, and that is a real boundary rather than a rounding error.
-  # `lineage_emit.table_id_from_uri` derives the canonical Dataset name — which must equal the OpenFGA
-  # object id — by splitting the directory on its first `_`, so `<uuid8>_<ns>$<table>` emits and anything
-  # without an underscore returns None and emits nothing. The medallion cascade's own datasets sit at
-  # `<bucket>/medallion/<tier>`, whose URI does not carry the table name at all (the tables are
-  # `bronze$events`, `silver$features`, …), so bronze/silver/gold produce NO maintenance provenance.
-  # That skip is correct, not lazy: an output name that does not match the FGA object counts every
-  # recipient as hidden, so guessing one would be worse than staying quiet. VERIFIED live by driving a
-  # real sweep over both shapes — the catalog-layout dataset landed
-  # `(:Run {operation: "compaction"})-[:WROTE]->(:Dataset {name: "silver$emitproof"})` in AGE; the
-  # `medallion/`-layout one produced nothing. Naming medallion datasets needs the emitter to be told the
-  # table, not a cleverer split.
+  # COVERAGE IS EVERY TABLE THE CATALOG'S `__manifest` NAMES, its branches included, and nothing else ([[LH-520]]): the
+  # sweep names a dataset by the row whose location it is, so the Dataset name is the catalog's table name. A dataset no
+  # row names is refused unexpired and emits nothing: an output name that does not match the catalog's table counts every
+  # recipient as hidden, so guessing one would be worse than staying quiet.
   #
   # The `runRetentionDays` note below still applies and is deliberately NOT changed here: with the
   # sweep at 0 errors there are no FAIL Run nodes to accumulate, so pruning run history is a separate
@@ -1354,10 +1346,9 @@ maintenance:
   # (`catalog/core/config.py:516-522`). So it is not unregistered — it is known and unresolvable.
   #
   # NAMED RATHER THAN INFERRED. Left empty, the reconciler reports the registry's own datasets among
-  # `unreadable_locations` every tick — the fail-loud direction, but it buries the locations nobody has
-  # accounted for. Measured 2026-09-23: 163 of 564 discovered locations carry no recoverable table id,
-  # and 16 of them are this registry.
-  # -- Platform-owned store roots the catalog cannot resolve (e.g. medallion models) that the reconciler accounts for instead of reporting as unreadable.
+  # `unregistered_datasets` every tick, since no `__manifest` row names them ([[LH-520]]) — the fail-loud
+  # direction, but it buries the datasets nobody has accounted for.
+  # -- Platform-owned store roots the catalog cannot resolve (e.g. medallion models) that the reconciler accounts for instead of reporting as unregistered.
   declaredPlatformRoots: "s3://lance-catalog/medallion/models"
 
   # LH-101: wall-clock ceiling for ONE sweep tick, checked BETWEEN datasets — never inside a compaction.

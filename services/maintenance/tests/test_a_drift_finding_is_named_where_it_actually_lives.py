@@ -33,12 +33,11 @@ DATASET = "s3://lance-catalog/6ecbe11e_transcripts_v2$annotations"
     ("category", "finding", "name"),
     [
         pytest.param("orphan_files", OrphanFile(dataset=DATASET, path="data/x.lance", kind="data"), f"{DATASET}/data/x.lance", id="orphan-file"),
-        # No root claims this table, so a table id (unique only WITHIN a root) cannot be its identity and
-        # the URI is the only answer to "where do I go and look".
+        # No `__manifest` row names this dataset, so its location is all there is to name it by ([[LH-520]]).
         pytest.param(
             "unregistered_datasets",
-            UnregisteredDataset(table_id="ns$t", location="s3://lance-catalog/aa11bb22_ns$t"),
-            "s3://lance-catalog/aa11bb22_ns$t",
+            UnregisteredDataset(location="s3://lance-catalog/0d9c6f3e-7b2a-4c1e-9f5d-2a8b3c4d5e6f"),
+            "s3://lance-catalog/0d9c6f3e-7b2a-4c1e-9f5d-2a8b3c4d5e6f",
             id="unregistered-dataset",
         ),
         # An orphaned trash record carries a `location` too and is named by its `id`: ranking `location`

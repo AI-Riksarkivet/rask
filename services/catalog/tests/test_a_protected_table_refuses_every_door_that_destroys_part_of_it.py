@@ -41,7 +41,7 @@ import pyarrow as pa
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from lance_namespace import connect
+from lance_namespace import CreateNamespaceRequest, connect
 
 from catalog.api.dependencies import ControlEmitterDep, NamespaceDep, SettingsDep, StorageOptionsDep
 from catalog.api.security import CurrentToken
@@ -65,14 +65,13 @@ _CALLER = PersonPrincipal(
     principal=Principal(idp_id="dex", subject="08a8684b-db88-4b73-90a9-3cd1661f5466"),
     claims=IDToken(iss="https://dex", sub=_SUB, aud="lance", exp=1, iat=1),
 )
-#: ROOT-LEVEL, like the ref-plane suite: a child namespace needs an existing `__manifest` dataset and
-#: this file's subject is the destructive doors, not namespace bootstrap.
-TABLE = ["alpha"]
-TABLE_PATH = "alpha"
-#: `canonical_object_id` joins the parsed segments with the delimiter, so a root-level table's
-#: canonical id is its own name. Spelled out rather than imported so a change to either side shows up
+#: In a namespace, because a table the catalog makes lives in one (ADR 0173 §5).
+TABLE = ["db", "alpha"]
+TABLE_PATH = "db$alpha"
+#: `canonical_object_id` joins the parsed segments with the delimiter, so the table's canonical id is
+#: its path parameter. Spelled out rather than imported so a change to either side shows up
 #: here as a failure instead of agreeing with itself.
-CANONICAL = "alpha"
+CANONICAL = "db$alpha"
 
 
 def _table(start: int = 1) -> pa.Table:
@@ -86,17 +85,17 @@ def registry_root(tmp_path: Path) -> str:
 
 @pytest.fixture
 def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace, a runtime-only type
-    namespace = connect("dir", {"root": str(tmp_path / "data")})
-    create_table(namespace, {}, TABLE, _table(), mode="create", registry=None)
+    root = str(tmp_path / "data")
+    namespace = connect("dir", {"root": root})
+    namespace.create_namespace(CreateNamespaceRequest(id=TABLE[:-1]))
+    created = create_table(namespace, {}, TABLE, _table(), root=root, mode="create", registry=None)
     # TWO MORE VERSIONS, so `version/delete` has one it may actually remove: version 1 carries the
     # `release` tag `_seed_refs` makes and the current version is never deletable, which leaves version
     # 2. Written straight to the dataset because the create door DECLARES a table and a second declare
     # is a conflict, not an append. Without them that door refuses for its own reasons and the control
     # leg could not tell that from a protection refusal.
     for start in (10, 20):
-        lance.write_dataset(
-            pa.table({"id": pa.array([start, start + 1, start + 2], pa.int64())}), str(tmp_path / "data" / f"{TABLE_PATH}.lance"), mode="append"
-        )
+        lance.write_dataset(pa.table({"id": pa.array([start, start + 1, start + 2], pa.int64())}), str(created.location), mode="append")
     return namespace
 
 

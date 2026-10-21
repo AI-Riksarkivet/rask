@@ -29,7 +29,7 @@ import pyarrow as pa
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from lance_namespace import connect
+from lance_namespace import CreateNamespaceRequest, connect
 
 from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, NamespaceDep, SettingsDep, StorageOptionsDep, get_lineage_emitter
 from catalog.api.security import CurrentToken
@@ -55,13 +55,12 @@ _CALLER = PersonPrincipal(
     claims=IDToken(iss="https://dex", sub=_SUB, aud="lance", exp=1, iat=1),
 )
 
-#: Root-level for the same reason `tests/unit/test_publication.py` states: a child namespace needs its
-#: own `__manifest` dataset and publication is a per-TABLE concern.
-TABLE_ID = ["pages"]
+#: In a namespace, because a table the catalog makes lives in one (ADR 0173 §5).
+TABLE_ID = ["db", "pages"]
 
 SCHEMA = pa.schema([pa.field("id", pa.int64()), pa.field("payload", pa.string())])
 
-#: The project the stubbed lineage binding resolves `pages` to — the key a declared gate is stored under.
+#: The project the stubbed lineage binding resolves `db` to — the key a declared gate is stored under.
 PROJECT = "acme"
 
 
@@ -79,8 +78,10 @@ def registry_root(tmp_path: Path) -> str:
 
 @pytest.fixture
 def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace, a runtime-only type
-    namespace = connect("dir", {"root": str(tmp_path / "data")})
-    create_table(namespace, {}, TABLE_ID, _table([1, 2, 3]), mode="create", registry=None)
+    root = str(tmp_path / "data")
+    namespace = connect("dir", {"root": root})
+    namespace.create_namespace(CreateNamespaceRequest(id=TABLE_ID[:-1]))
+    create_table(namespace, {}, TABLE_ID, _table([1, 2, 3]), root=root, mode="create", registry=None)
     return namespace
 
 
@@ -126,7 +127,7 @@ def client(app: FastAPI) -> Iterator[TestClient]:
 
 
 def _publish(client: TestClient, **body: Any) -> Any:  # noqa: ANN401 — httpx.Response
-    return client.post("/management/v1/table/pages/publish", json={"version": 1, **body})
+    return client.post("/management/v1/table/db$pages/publish", json={"version": 1, **body})
 
 
 def _assertion(payload: dict[str, Any], name: str) -> dict[str, Any] | None:

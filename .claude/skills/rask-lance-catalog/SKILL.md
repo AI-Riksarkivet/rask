@@ -35,9 +35,8 @@ Two contracts stack here, and confusing them is how bugs happen:
   **`rename_table` is NOT one of them.** It is backed in-process and answers 200; `docs/COVERAGE.md:15-17`
   carries that correction, dated 2026-08-05. It MOVES A POINTER, never bytes (2026-09-04):
   `dataplane.rename_table` retires the source pointer and re-registers the destination at the source's
-  own location, so version history, row count and the `<hash>_<object_id>` directory all survive
-  untouched — the V2 layout makes the `object_id` suffix a label, not a resolution path
-  (`lance_docs/namespace.md`).
+  own location, so version history, row count and the directory all survive untouched — every V2 reader
+  finds a table through its row's `location` (`lance_docs/ns_catalog/namespace/supported-catalogs/lance-dir.md:55`).
   THE LOCATION CLAIM IS THE DOOR'S RACE ARBITRATION ([[LH-204]]), not the call order: the `dir` backend
   arbitrates only object-id ADDs, so a register at an occupied location commits and two deregisters of one
   id both succeed (measured on pylance 12.0.0: eight barrier-threaded renames left eight live ids on one
@@ -57,17 +56,32 @@ Two contracts stack here, and confusing them is how bugs happen:
   `packages/service-kit/tests/test_a_release_frees_only_the_claim_it_read.py`. The spec's *minimum* is 8 metadata ops; we carry the whole list
   including versioning, tags, branches, indices and transactions.
 - **Every table and namespace has a uuid the catalog mints** ([[LH-519]], ADR 0173). A table's lives in its location
-  claim: create, declare and register mint it (`table_claims.claim_new_table`; a create declaring the table and the
-  declare door through `claim_declared`, which detaches, never drops, a row whose claim fails), a create into a table an
+  claim: create, declare and register mint it (`table_claims.claim_new_table`; a declaration takes its claim before any
+  backend call, and a failed one removes its marker and releases the claim, [[LH-520]]), a create into a table an
   earlier request declared keeps that declaration's, a rename hands it over, a recoverable drop and both undrops keep it,
   and a destroy or deregister releases it, so a re-created name or a re-registered location gets a new one. A new
   table's take replaces a claim its own name still holds: its door's backend call found the name free, so that claim is
   an ended table's whose release was lost. A namespace's is its `rask.uuid` property in its `__manifest` row: both create doors and the provenance boot
   mint it (`identifiers.with_minted_uuid`), an undrop restores it from the trash record, and an Overwrite mints a new
   one. DescribeTable and DescribeNamespace answer each as `rask.uuid`, and every create, declare, register and namespace
-  door refuses a caller's `rask.*` property (only an admin's `rask.tier` on a namespace). Locations, grants, records,
-  the trash and events are still keyed by name (LH-520 to LH-525 move them). Pinned by
+  door refuses a caller's `rask.*` property (only an admin's `rask.tier` on a namespace). Grants, records, the trash and
+  events are still keyed by name (LH-522 to LH-525 move them). Pinned by
   `tests/integration/test_the_door_that_makes_a_table_or_namespace_mints_its_uuid.py`.
+- **A table the catalog makes lives at `<namespace root>/<table uuid>`** ([[LH-520]], ADR 0173 §5). Create and declare
+  run the `dir` catalog's own DeclareTable steps with the catalog choosing the location (`dataplane.declare_table`): mint
+  the uuid and take the location's claim before any backend call, write `.lance-reserved` there, then record the row
+  through RegisterTable's relative location, which answers `is_only_declared` until data lands (measured on pylance
+  13.0.0). The backend's own DeclareTable refuses every location but its `<hash>_<object_id>`, so the catalog never calls
+  it; a declare naming a location is refused 400, a root-level table id 400 (`dir` resolves one by `<name>.lance`, never
+  by its row), and create and declare `properties` are kept nowhere (RegisterTable keeps none, `spec.yaml:2719-2724`;
+  create still stamps them on the schema metadata, [[LH-503]]). So no name reaches a vended prefix. A REGISTERED table
+  keeps its registrar's location, which `describe_table` answers percent-encoded; every vend
+  (`vending.split_s3_location`) and every catalog read and write of a table object (`dataplane.dataset_fs`,
+  `object_store_path`, so `version/create` too) uses the key it decodes to once. The register door refuses a location in
+  a uuid-spelled directory directly under the namespace root (`identifiers.is_spelled_as_a_uuid`): that is the catalog's
+  layout. Pinned by `tests/integration/test_warehouse_routing.py`,
+  `services/catalog/tests/test_a_stock_client_opens_on_the_vended_credential.py` and
+  `tests/integration/test_a_planted_base_is_refused_and_freezes_nothing.py`.
 - **Route grammar:** `POST /v1/<object>/{id}/<action>` — everything a reverse proxy needs (authN/Z,
   routing) is in the PATH, never only in the body. Path/body id conflict → 400. List ops are GET with
   query-param pagination; data ops (create/insert/query) are **Arrow IPC**, not JSON; count/explain
@@ -369,8 +383,9 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   `*` once decoded, an IAM wildcard in every policy a credential for the table is scoped by ([[LH-437]]);
   a segment beginning with `_` once decoded; one equal to or containing the control root; and one
   overlapping a configured base.
-  Any other `%` is a name: the catalog percent-encodes a table's name into its location
-  (`räksmörgås` -> `r%C3%A4ksm%C3%B6rg%C3%A5s`), so a rule refusing every `%` would strand those tables.
+  Any other `%` is a name: `describe_table` answers a registered location's non-ASCII characters percent-encoded
+  (`räksmörgås` -> `r%C3%A4ksm%C3%B6rg%C3%A5s`), so a rule refusing every `%` would strand those tables. A first segment
+  spelled as a uuid is refused: the catalog lays out the tables it makes there ([[LH-520]]).
   AFTER the register and before the seed, `judge_registered_table` opens the dataset at
   the location the backend RESOLVED: another registered table overlapping it, flag 256 (mixed data file
   versions, sticky; the message names the recreate remedy) or a declared base nothing sanctions is a 400
@@ -630,8 +645,8 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   a Lance commit is a put-if-not-exists on the store, so a writer holding any credential could commit.
   The arrival lane asks it too. The rule compares every location as the path it decodes to
   (`base_refs.decoded_path`, [[LH-318]]): a record holds the location `describe_table` answered, which
-  percent-encodes the table's name (`…$r%C3%A4ksm%C3%B6rg%C3%A5s`), while discovery lists the decoded
-  directory the store keeps (`…$räksmörgås`) and an event names the encoded one.
+  percent-encodes a registered location (`…/r%C3%A4ksm%C3%B6rg%C3%A5s`), while discovery lists the decoded
+  directory the store keeps (`…/räksmörgås`) and an event names the encoded one.
   **Every other maintenance reader of a location the catalog records reads it the same way** ([[LH-319]]). A
   location maintenance holds is a store key, compared as listed: discovery's, the `__manifest`'s, and the write-event
   lane's, which converts its event's URL to the key it decodes to at its boundary
@@ -654,9 +669,14 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   produce a `(:Run)-[:WROTE]->(:Dataset)` node just by being written and swept; a pass whose result is
   `versions_removed: 0` emits nothing, which is the gate behaving correctly, not a defect.
 
-  **A DERIVED TIER INHERITS ITS UPSTREAM'S `lineage.dataset_id` UNLESS THE STAMP DROPS IT.** The sweep
-  names a dataset by its PATH first and by the stamp only where the path is silent ([[LH-208]]), and
-  `lineage.dataset_id` is schema METADATA, which survives `set_column` / `append_column` /
+  **MAINTENANCE NAMES A DATASET BY `__manifest` ALONE** ([[LH-520]], `maintenance.services.naming.TableIds.table_of`):
+  the row whose location it is, or whose table it is a branch of. It parses no name out of a path and reads no
+  `lineage.dataset_id` stamp. A dataset no row names is refused `unnamed` by the sweep (reported by its location, never
+  opened, expired or vended; the model registry, opened by explicit URI, is such a dataset), refused by the floor pass,
+  and reported by the reconciler as an `UnregisteredDataset` by location (declared platform roots excepted).
+
+  **A DERIVED TIER INHERITS ITS UPSTREAM'S `lineage.dataset_id` UNLESS THE STAMP DROPS IT.** No maintenance reader
+  names a dataset by it, and `lineage.dataset_id` is schema METADATA, which survives `set_column` / `append_column` /
   `drop_columns` — so a silver table derived from bronze declares bronze's id unless something
   re-declares it (measured 2026-09-09: silver's compactions and FAIL events were filed against bronze's
   node). `service_kit.lakehouse.stage_stamp.stamp_stage(..., dataset_id=...)` re-declares the destination

@@ -62,7 +62,7 @@ def client(tmp_path: Path, emitted: list[dict[str, Any]], monkeypatch: pytest.Mo
     ns = connect("dir", {"root": str(tmp_path / "data")})
     ns.create_namespace(CreateNamespaceRequest(id=[NS]))
     for table_id in TABLES:
-        create_table(ns, {}, table_id, pa.table({"id": pa.array([1, 2, 3], pa.int64())}), mode="create", registry=None)
+        create_table(ns, {}, table_id, pa.table({"id": pa.array([1, 2, 3], pa.int64())}), root=str(tmp_path / "data"), mode="create", registry=None)
 
     application = FastAPI()
     install_problem_handlers(application, logging.getLogger(__name__))
@@ -101,6 +101,7 @@ def _registered(emitted: list[dict[str, Any]]) -> dict[str, str | None]:
 
 
 def test_a_table_undrop_announces_the_table_exists_again(client: TestClient, emitted: list[dict[str, Any]]) -> None:
+    location = client.post("/v1/table/zone$alpha/describe", json={"vend_credentials": False}).json()["location"]
     assert client.post("/v1/table/zone$alpha/drop", json={}).status_code == 200, "the recoverable drop failed"
     emitted.clear()
 
@@ -108,7 +109,7 @@ def test_a_table_undrop_announces_the_table_exists_again(client: TestClient, emi
 
     registered = _registered(emitted)
     assert list(registered) == ["zone$alpha"], f"the undrop announced {emitted}"
-    assert (registered["zone$alpha"] or "").endswith("zone$alpha"), "the marker must carry the location the bytes are at"
+    assert registered["zone$alpha"] == location, "the marker must carry the location the bytes are at"
 
 
 def test_a_namespace_undrop_announces_every_table_it_re_registers(client: TestClient, emitted: list[dict[str, Any]]) -> None:

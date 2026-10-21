@@ -36,7 +36,7 @@ import pyarrow as pa
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from lance_namespace import LanceNamespace
+from lance_namespace import CreateNamespaceRequest, LanceNamespace
 
 from catalog.api.dependencies import get_namespace, get_storage_options
 from catalog.api.v1.endpoints import maintenance as door
@@ -48,7 +48,7 @@ from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 lance = pytest.importorskip("lance")
 
-TABLE_ID = ["rows"]
+TABLE_ID = ["db", "rows"]
 BRANCH = "work"
 NESTED = "deeper"
 
@@ -61,7 +61,8 @@ def _rows(start: int) -> pa.Table:
 def namespace(tmp_path: Path) -> LanceNamespace:
     """Main at v1..v6 and ``work`` at v2..v6, with one tag and one child branch pinning each ref."""
     ns = lance_namespace.connect("dir", {"root": str(tmp_path / "data")})
-    create_table(ns, {}, TABLE_ID, _rows(0), mode="create", registry=None)
+    ns.create_namespace(CreateNamespaceRequest(id=TABLE_ID[:-1]))
+    create_table(ns, {}, TABLE_ID, _rows(0), root=str(tmp_path / "data"), mode="create", registry=None)
     open_dataset(ns, {}, TABLE_ID).insert(_rows(1))
     open_dataset(ns, {}, TABLE_ID).create_branch(BRANCH, 2)
     for i in range(2, 6):
@@ -90,7 +91,7 @@ def client(namespace: LanceNamespace) -> Iterator[TestClient]:
 
 def _call(client: TestClient, verb: str, *, branch: str | None, retain_versions: int) -> dict[str, Any]:
     suffix = f"?branch={branch}" if branch else ""
-    response = client.post(f"/management/v1/table/rows/maintenance/{verb}{suffix}", json={"retain_versions": retain_versions})
+    response = client.post(f"/management/v1/table/db$rows/maintenance/{verb}{suffix}", json={"retain_versions": retain_versions})
     assert response.status_code == 200, response.text
     return response.json()
 

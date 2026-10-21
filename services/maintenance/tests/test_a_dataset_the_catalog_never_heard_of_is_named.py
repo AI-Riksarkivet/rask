@@ -20,7 +20,8 @@ with a governance gap, and neither may ever be resolved by deleting the data —
 category is refused by name in `repair.py` rather than left to fall through a default.
 
 THE DETECTOR IS A SUBTRACTION, so it carries the same caution [[LH-061]]'s repair pass now does: a
-discovered dataset counts as unregistered only because it is ABSENT from the table listing. A trash
+discovered dataset counts as unregistered only because no `__manifest` row names its location, or the table it is a
+branch of ([[LH-520]]): a location names no table, so nothing is recovered from it. A trash
 location is excluded explicitly — a dropped table's bytes are still on disk under a trash record that
 names them, so counting those would report every ordinary drop as an unregistered dataset.
 """
@@ -34,7 +35,12 @@ from pydantic import SecretStr
 
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import reconcile as mod
+from maintenance.services.naming import TableIds
 from maintenance.services.reconcile import _unregistered_datasets
+from service_kit.lakehouse.base_refs import normalise
+
+
+_TABLE = "s3://acme-wh/0d9c6f3e-7b2a-4c1e-9f5d-2a8b3c4d5e6f"
 
 
 @pytest.mark.parametrize(
@@ -43,46 +49,47 @@ from maintenance.services.reconcile import _unregistered_datasets
         # THE DEFECT: 300 live rows that no category counted.
         pytest.param(
             ["s3://lance-catalog/m2proof_silver$m2-proof-1788537252"],
-            {"acme-bronze$events"},
+            [_TABLE],
             set(),
-            [("m2proof_silver$m2-proof-1788537252", "s3://lance-catalog/m2proof_silver$m2-proof-1788537252")],
+            ["s3://lance-catalog/m2proof_silver$m2-proof-1788537252"],
             id="no-table-record",
         ),
-        # The control. The catalog lays a table out as `<uuid8>_<ns>$<name>`, so the id has to be recovered
-        # from the location before the comparison means anything: a detector that compared raw leaves would
-        # report every table in the estate.
-        pytest.param(["s3://acme-wh/4750a5b9_acme-bronze$events"], {"acme-bronze$events"}, set(), [], id="registered"),
+        # The control: a table is registered when a `__manifest` row names its location, and its branch, which discovery
+        # lists as a dataset of its own, through the table's row ([[LH-520]]). No name is read off a location.
+        pytest.param([_TABLE, f"{_TABLE}/tree/work"], [_TABLE], set(), [], id="registered-with-its-branch"),
         # A dropped table's bytes stay on disk under a trash record that names them, and its table record is
         # gone by definition. Counting those would make the category loudest exactly when the estate is
         # behaving correctly.
-        pytest.param(["s3://acme-wh/dead1234_gone$table"], set(), {"s3://acme-wh/dead1234_gone$table"}, [], id="trashed"),
-        # The record holds the URL `describe_table` answered, which percent-encodes the name, while discovery lists the
-        # directory the store keeps ([[LH-319]]).
+        pytest.param(["s3://acme-wh/dead1234_gone$table"], [], {"s3://acme-wh/dead1234_gone$table"}, [], id="trashed"),
+        # The record holds the URL `describe_table` answered, which percent-encodes a registered location's name, while
+        # discovery lists the directory the store keeps ([[LH-319]]).
         pytest.param(
-            ["s3://acme-wh/dead1234_gone$räksmörgås"],
-            set(),
-            {"s3://acme-wh/dead1234_gone$r%C3%A4ksm%C3%B6rg%C3%A5s"},
+            ["s3://acme-wh/registered/räksmörgås"],
+            [],
+            {"s3://acme-wh/registered/r%C3%A4ksm%C3%B6rg%C3%A5s"},
             [],
             id="trashed-as-the-catalog-spells-it",
         ),
-        # `table_id_from_location` answers None for a directory that is not an identifier; reporting one as
-        # an unregistered TABLE would assert a table exists where only a prefix does.
-        pytest.param(["s3://acme-wh/some-directory", "s3://acme-wh/4750a5b9_$events"], set(), set(), [], id="not-a-table-identifier"),
+        # A store the platform owns and the catalog opens by explicit URI, never registered ([[LH-164]]): accounted for,
+        # not reported.
+        pytest.param(["s3://lance-catalog/medallion/models/m"], [], set(), [], id="a-declared-platform-root"),
         # A report an operator reads across ticks must not reshuffle, and one dataset discovered twice in a
         # walk is one finding.
         pytest.param(
-            ["s3://b/ff11aa22_zeta$t", "s3://b/aa11bb22_alpha$t", "s3://b/ff11aa22_zeta$t"],
+            ["s3://b/zeta", "s3://b/alpha", "s3://b/zeta"],
+            [],
             set(),
-            set(),
-            [("alpha$t", "s3://b/aa11bb22_alpha$t"), ("zeta$t", "s3://b/ff11aa22_zeta$t")],
+            ["s3://b/alpha", "s3://b/zeta"],
             id="ordered-and-deduplicated",
         ),
     ],
 )
-def test_a_dataset_with_no_table_record_is_named(discovered: list[str], registered: set[str], trashed: set[str], named: list[tuple[str, str]]) -> None:
-    found = _unregistered_datasets(discovered=discovered, registered=registered, trashed=trashed)
+def test_a_dataset_no_manifest_row_names_is_reported_by_its_location(discovered: list[str], registered: list[str], trashed: set[str], named: list[str]) -> None:
+    names = TableIds(by_location={normalise(location): f"db$t{index}" for index, location in enumerate(registered)})
 
-    assert [(f.table_id, f.location) for f in found] == named
+    found = _unregistered_datasets(discovered=discovered, names=names, trashed=trashed, declared_roots=("s3://lance-catalog/medallion/models",))
+
+    assert [f.location for f in found] == named
 
 
 # --------------------------------------------------------------------------- #
@@ -98,7 +105,7 @@ def _category(monkeypatch: pytest.MonkeyPatch, sources: mod.Sources) -> mod.Reco
     monkeypatch.setattr(
         mod,
         "discover_datasets",
-        lambda _fs, _bucket, max_depth=3: SimpleNamespace(uris=["s3://lance-catalog/aa11bb22_ns$live"], truncated=[]),
+        lambda _fs, _bucket, max_depth=3: SimpleNamespace(uris=["s3://lance-catalog/0d9c6f3e-7b2a-4c1e-9f5d-2a8b3c4d5e6f"], truncated=[]),
     )
     monkeypatch.setattr(
         mod, "scan_datasets", lambda _fs, _datasets, _opts: SimpleNamespace(orphans=[], incomplete=[], excluded=[], bytes_by_dataset={}, files_by_dataset={})

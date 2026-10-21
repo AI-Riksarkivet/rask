@@ -38,7 +38,7 @@ import pyarrow as pa
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from lance_namespace import connect
+from lance_namespace import CreateNamespaceRequest, connect
 
 from catalog.api.dependencies import ControlEmitterDep, NamespaceDep, SettingsDep, StorageOptionsDep
 from catalog.api.security import CurrentToken
@@ -60,10 +60,9 @@ _CALLER = PersonPrincipal(
     principal=Principal(idp_id="dex", subject="08a8684b-db88-4b73-90a9-3cd1661f5466"),
     claims=IDToken(iss="https://dex", sub=_SUB, aud="lance", exp=1, iat=1),
 )
-#: ROOT-LEVEL on purpose: a child namespace needs an existing `__manifest` dataset, and this
-#: file's subject is the ref doors, not namespace bootstrap.
-TABLE = ["alpha"]
-TABLE_PATH = "alpha"
+#: In a namespace, because a table the catalog makes lives in one (ADR 0173 §5).
+TABLE = ["db", "alpha"]
+TABLE_PATH = "db$alpha"
 
 
 def _table() -> pa.Table:
@@ -72,8 +71,10 @@ def _table() -> pa.Table:
 
 @pytest.fixture
 def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace, a runtime-only type
-    namespace = connect("dir", {"root": str(tmp_path / "data")})
-    create_table(namespace, {}, TABLE, _table(), mode="create", registry=None)
+    root = str(tmp_path / "data")
+    namespace = connect("dir", {"root": root})
+    namespace.create_namespace(CreateNamespaceRequest(id=TABLE[:-1]))
+    create_table(namespace, {}, TABLE, _table(), root=root, mode="create", registry=None)
     return namespace
 
 

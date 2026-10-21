@@ -26,13 +26,14 @@ import logging
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import lance_namespace
 import pyarrow as pa
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from lance_namespace import LanceNamespace
+from lance_namespace import CreateNamespaceRequest, LanceNamespace
 
 from catalog.api.dependencies import get_namespace, get_storage_options
 from catalog.api.v1.endpoints import maintenance as door
@@ -44,7 +45,7 @@ from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 lance = pytest.importorskip("lance")
 
-TABLE_ID = ["rows"]
+TABLE_ID = ["db", "rows"]
 BRANCH = "work"
 
 
@@ -62,7 +63,8 @@ def namespace(tmp_path: Path) -> LanceNamespace:
     branch-scoped reclaim removes 0 parent data files, a main-scoped one removes 2.
     """
     ns = lance_namespace.connect("dir", {"root": str(tmp_path / "data")})
-    create_table(ns, {}, TABLE_ID, _rows(1), mode="create", registry=None)
+    ns.create_namespace(CreateNamespaceRequest(id=TABLE_ID[:-1]))
+    create_table(ns, {}, TABLE_ID, _rows(1), root=str(tmp_path / "data"), mode="create", registry=None)
     open_dataset(ns, {}, TABLE_ID).insert(_rows(1, start=1))
     lance.write_dataset(_rows(1, start=2), str(open_dataset(ns, {}, TABLE_ID).uri), mode="overwrite")
     open_dataset(ns, {}, TABLE_ID).create_branch(BRANCH, None)
@@ -87,13 +89,13 @@ def client(namespace: LanceNamespace) -> Iterator[TestClient]:
 
 def _run(client: TestClient, *, branch: str | None) -> dict[str, Any]:
     suffix = f"?branch={branch}" if branch else ""
-    response = client.post(f"/management/v1/table/rows/maintenance/run{suffix}", json={"retain_versions": 1})
+    response = client.post(f"/management/v1/table/db$rows/maintenance/run{suffix}", json={"retain_versions": 1})
     assert response.status_code == 200, response.text
     return response.json()
 
 
 def _parent_data_files(namespace: LanceNamespace) -> list[str]:
-    root = Path(str(open_dataset(namespace, {}, TABLE_ID).uri)) / "data"
+    root = Path(urlparse(open_dataset(namespace, {}, TABLE_ID).uri).path) / "data"
     return sorted(entry.name for entry in root.iterdir())
 
 

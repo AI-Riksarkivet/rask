@@ -39,7 +39,6 @@ from maintenance.core.metrics import record_credential_tier
 from service_kit.governed.machine_identity import IdentityTokenUnavailableError, identity_bearer
 from service_kit.lakehouse.base_refs import decoded_path, normalise
 from service_kit.lakehouse.endpoint_scheme import allow_http_for
-from service_kit.lakehouse.table_locations import table_id_from_location
 
 
 if TYPE_CHECKING:
@@ -85,9 +84,9 @@ class MaintenanceUnauthenticated(MaintenanceDenied):
 class GovernedElsewhere(MaintenanceDenied):
     """The catalog vended a credential for this dataset's table id at a location that does not cover the dataset.
 
-    [[LH-141]]: a stale ``lineage.dataset_id`` stamp, or a path id left behind by a re-registration. The vend door
-    answered 200 and the table it names is healthy, so this is maintenance's own refusal of the DATASET, never counted
-    under the table's id.
+    [[LH-141]]: the ``__manifest`` the sweep read named the table at this location, and by the vend it lives elsewhere: a
+    rename or a re-registration landed between the two reads. The vend door answered 200 and the table it names is
+    healthy, so this is maintenance's own refusal of the DATASET, never counted under the table's id.
     """
 
 
@@ -199,46 +198,27 @@ class Vended:
     location: str | None
 
 
-def write_options_for(uri: str, settings: MaintenanceSettings, *, fallback: dict[str, str], declared_table_id: str | None = None) -> dict[str, str]:
+def write_options_for(uri: str, settings: MaintenanceSettings, *, table_id: str, fallback: dict[str, str]) -> dict[str, str]:
     """The storage options this dataset's REWRITE should be signed with.
 
-    Returns the vended, table-scoped options when every precondition holds, and ``fallback`` — the
-    deployment's ambient credential, which is what this always used — otherwise. The three
-    preconditions are checked in the order that makes a misconfiguration readable:
+    ``table_id`` is the table the catalog's ``__manifest`` names the dataset as, or whose branch it is: maintenance names
+    a dataset through nothing else ([[LH-520]]), and a dataset no row names is never handed here. Returns the vended,
+    table-scoped options when the deployment vends and the door answers ``direct``, and ``fallback`` (the deployment's
+    ambient credential) when a catalog URL is unset, which means this deployment has no vending door, or when the door
+    answers ``server_mediated``, a supported posture (`mode_b`) rather than a fault.
 
-    1. a catalog URL is configured. Unset means this deployment has no vending door;
-    2. a table identifier is available. ``declared_table_id`` — the id the sweep resolved — is
-       preferred over deriving one from the path, and the difference is most of the estate rather than
-       an edge case. Measured on the live warehouse: of eleven top-level roots in
-       ``s3://lance-catalog/``, :func:`table_id_from_location` answers for six, and the five it cannot
-       read include ``medallion/``, the cascade. Those five are NOT unknown to the catalog —
-       ``bronze$events`` at ``medallion/bronze`` and ``bronze$pages`` at ``bronze/pages`` both answer a
-       write-tier vend with 200 — so deriving alone would leave the highest-churn writer in the estate
-       signing with the root key while reporting no fault at all. Derivation stays as the fallback for
-       a dataset the sweep could not name;
-    3. the door answers ``direct``. ``server_mediated`` is a supported posture (`mode_b`), not a fault.
-
-    A FOURTH condition is checked on the way OUT rather than the way in, because it needs the catalog's
-    answer: the vended credential must COVER the dataset being maintained. See
+    One more condition is checked on the way OUT, because it needs the catalog's answer: the vended
+    credential must COVER the dataset being maintained. See
     :func:`_refuse_a_credential_that_does_not_cover` — a credential scoped to another table's location
     is not a weaker credential, it is a credential for a different tenant's data.
 
     Raises ``MaintenanceDenied`` (or its ``MaintenanceUnauthenticated`` or ``GovernedElsewhere``) or
     ``TableNotGoverned`` where the door answered, and ``VendUndecided`` where it answered 5xx; each stops
     the caller's dataset, which must not fall back to ``fallback``.
-
-    A DECLARED id is never repaired or second-guessed here. If a producer stamps a wrong one the vend
-    fails on a table that does exist, which is a visible 403 in the log — whereas silently falling back
-    to derivation would hide the producer's bug behind a working sweep.
     """
     if not settings.catalog_url:
-        _announce_vending_is_off(declared_table_id or uri, key_id=settings.s3_access_key_id)
+        _announce_vending_is_off(table_id, key_id=settings.s3_access_key_id)
         return fallback
-    table_id = declared_table_id or table_id_from_location(uri)
-    if table_id is None:
-        logger.debug("maintenance_vend_skipped_unresolvable_location", extra={"uri": uri})
-        return fallback
-
     vended = _vend(table_id, settings)
     if vended is None:
         # NAME THE KEY, do not rank it. "the root key" is an assertion this function cannot make:
@@ -280,18 +260,16 @@ def _at_own_store(options: dict[str, str], endpoint: str) -> dict[str, str]:
 def _refuse_a_credential_that_does_not_cover(*, uri: str, table_id: str, location: str | None) -> None:
     """Stop the dataset when the catalog's location for ``table_id`` is not the dataset being maintained.
 
-    [[LH-141]]. A stale ``lineage.dataset_id`` stamp makes the sweep hold one tenant's dataset while
-    addressing another tenant's table. Measured 2026-09-16: ``s3://bind86-wh/medallion/silver`` and
-    ``s3://lance-catalog/medallion/gold`` both stamped ``bronze$events``, a table the catalog governs at
-    ``s3://lance-catalog/medallion/bronze``. The vend door answers 200 to every one of those — correctly,
-    because it is asked about a table and not about the dataset the caller holds.
+    [[LH-141]]. The sweep names a dataset by the ``__manifest`` it read when the tick planned, and a rename or a
+    re-registration landing before the vend can leave that name on another table's location. The vend door answers
+    200 to such a request, correctly, because it is asked about a table and not about the dataset the caller holds.
 
     CONTAINMENT, NOT EQUALITY, and getting that backwards would refuse the healthy majority: a branch
     dataset is swept at ``<root>/tree/<branch>`` while the catalog answers with the root, and the live
-    sweep holds several. The catalog answers the URL ``describe_table`` does, which percent-encodes the
-    table's name (``…$r%C3%A4ksm%C3%B6rg%C3%A5s``), so it is read as the key it decodes to
+    sweep holds several. The catalog answers the URL ``describe_table`` does, which percent-encodes a registered
+    location's non-ASCII characters (``…/r%C3%A4ksm%C3%B6rg%C3%A5s``), so it is read as the key it decodes to
     (``base_refs.decoded_path``), while ``uri`` is the key discovery lists and every lane holds
-    (``…$räksmörgås``): a compare of the spellings would refuse every such table on every tick ([[LH-319]]).
+    (``…/räksmörgås``): a compare of the spellings would refuse every such table on every tick ([[LH-319]]).
     Re-implementing either reading here is what ``base_refs.normalise``'s docstring names as the failure
     indistinguishable from having no guard at all.
 
@@ -310,9 +288,9 @@ def _refuse_a_credential_that_does_not_cover(*, uri: str, table_id: str, locatio
     if holding == governed or holding.startswith(f"{governed}/"):
         return
     raise GovernedElsewhere(
-        f"the dataset at {uri} declares the table id {table_id!r}, which the catalog governs at {location} — "
-        "the two name different locations, so a pass here would be signed for one tenant's table and land in "
-        "another's. Repair the dataset's `lineage.dataset_id` stamp, or register the id the dataset really is."
+        f"the dataset at {uri} was named {table_id!r} by the catalog's __manifest, which the catalog now governs at {location} — "
+        "the two name different locations, so a pass here would be signed for one table and land in another's. The next tick "
+        "reads the manifest again."
     )
 
 

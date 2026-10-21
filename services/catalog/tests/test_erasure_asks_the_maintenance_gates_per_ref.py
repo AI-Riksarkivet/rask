@@ -77,7 +77,16 @@ def test_the_door_reads_the_store_the_table_lives_in_with_the_requests_options(t
     sink = pa.BufferOutputStream()
     with pa.ipc.new_stream(sink, _rows("alice").schema) as writer:
         writer.write_table(_rows("alice"))
-    create_table(ns, {}, ["subjects"], read_arrow_body(sink.getvalue().to_pybytes(), max_bytes=_BODY_LIMIT), mode="create", registry=None)
+    ns.create_namespace(lance_namespace.CreateNamespaceRequest(id=["db"]))
+    create_table(
+        ns,
+        {},
+        ["db", "subjects"],
+        read_arrow_body(sink.getvalue().to_pybytes(), max_bytes=_BODY_LIMIT),
+        root=str(tmp_path / "data"),
+        mode="create",
+        registry=None,
+    )
     so = {"aws_region": "eu-north-1"}
     seen: dict[str, Any] = {}
     listed: list[dict[str, str]] = []
@@ -85,7 +94,7 @@ def test_the_door_reads_the_store_the_table_lives_in_with_the_requests_options(t
 
     def _record(dataset: Any, **kwargs: Any) -> ErasureReport:
         seen.update(kwargs)
-        return ErasureReport(table="subjects", predicate=_PREDICATE)
+        return ErasureReport(table="db$subjects", predicate=_PREDICATE)
 
     def _listing(location: str, storage_options: dict[str, str], *, configured: list[str], record_of: Any) -> BaseRefs:
         listed.append(storage_options)
@@ -100,9 +109,9 @@ def test_the_door_reads_the_store_the_table_lives_in_with_the_requests_options(t
     application.dependency_overrides[get_namespace] = lambda: ns
     application.dependency_overrides[get_storage_options] = lambda: so
     with TestClient(application) as client:
-        recorded = client.post("/management/v1/table/subjects/erasure", json={"predicate": _PREDICATE})
+        recorded = client.post("/management/v1/table/db$subjects/erasure", json={"predicate": _PREDICATE})
         assert recorded.status_code == 202, recorded.text
-        response = client.post(f"/management/v1/table/subjects/erasure/{recorded.json()['obligation_id']}/verify", json={"predicate": _PREDICATE})
+        response = client.post(f"/management/v1/table/db$subjects/erasure/{recorded.json()['obligation_id']}/verify", json={"predicate": _PREDICATE})
 
     assert response.status_code == 200, response.text
     assert seen["storage_options"] == so

@@ -46,7 +46,6 @@ from lance_namespace import (
     CreateTableTagRequest,
     CreateTableTagResponse,
     CreateTableVersionRequest,
-    DeclareTableRequest,
     DeleteFromTableRequest,
     DeleteFromTableResponse,
     DeleteTableBranchRequest,
@@ -483,12 +482,91 @@ def read_arrow_body(data: bytes, *, max_bytes: int) -> pa.Table:
         raise InvalidInputError(f"the request body is not a valid Arrow IPC stream: {exc}") from exc
 
 
+#: The marker the `dir` catalog's DeclareTable writes at a table's location, so that a declared table's directory holds
+#: an object before any data lands (`lance_docs/ns_catalog/namespace/supported-catalogs/lance-dir.md:143`).
+RESERVED_MARKER: Final = ".lance-reserved"
+
+
+def declare_table(ns: LanceNamespace, so: StorageOptions, segments: list[str], *, root: str, claims: location_claims.ClaimStore | None, holder: str) -> str:
+    """Declare ``segments`` at ``<root>/<table uuid>``, where a table the catalog makes lives, and answer that location ([[LH-520]]).
+
+    The `dir` catalog's own DeclareTable steps (`lance_docs/ns_catalog/namespace/supported-catalogs/lance-dir.md:132-149`)
+    with the catalog choosing the location, as the spec leaves it to (`lance_docs/ns_catalog/spec.yaml:3823-3827`). The
+    backend's DeclareTable puts the name in the path (`<hash>_<object_id>`) and refuses any other location (measured on
+    pylance 13.0.0), so ADR 0173 §5 takes the steps here, in this order:
+
+    1. the table's uuid is minted and its location's claim taken under it, before any backend call, so the location is
+       this table's before anything resolves to it;
+    2. the `.lance-reserved` marker is written at the location;
+    3. the ``__manifest`` row is recorded through RegisterTable's relative location. Measured on pylance 13.0.0, such a
+       row answers ``is_only_declared`` until data lands, as the backend's own declaration does, and keeps no properties.
+
+    A failure after the claim removes the marker and releases the claim. ``claims`` is ``None`` for a caller outside
+    governance (a test building a fixture), which takes no claim.
+
+    Raises:
+        InvalidInputError: ``segments`` names a table outside every namespace: the `dir` backend resolves a root-level
+            table by its ``<name>.lance`` directory, never by its row (measured on pylance 13.0.0).
+        ConcurrentModificationError: Another table holds the location.
+        TableAlreadyExistsError: A table already holds the name.
+    """
+    if len(segments) < 2:
+        raise InvalidInputError(f"table {segments!r} names no namespace; a table the catalog makes lives in one")
+    table_uuid = str(uuid.uuid4())
+    location = f"{root.rstrip('/')}/{table_uuid}"
+    if claims is not None:
+        try:
+            table_claims.claim_new_table(ns, claims, location, table=holder, segments=segments, table_uuid=table_uuid)
+        except location_claims.LocationHeldError:
+            raise ConcurrentModificationError(f"the location minted for table {holder} is held by another table; retry to be given another") from None
+    try:
+        _reserve(location, so)
+        native.call(ns, "register_table", RegisterTableRequest(id=segments, location=table_uuid))
+    except Exception:
+        _unreserve(location, so, claims=claims, holder=holder)
+        raise
+    return _described_location(ns, segments, fallback=location)
+
+
+def _reserve(location: str, so: StorageOptions) -> None:
+    """Write the `.lance-reserved` marker at ``location``, as :func:`delete_table_object` deletes: no directory object beside it."""
+    if location.startswith("s3://") and so.get("endpoint"):
+        bucket, prefix = split_s3_uri(location.rstrip("/"))
+        _object_client(so).put_object(Bucket=bucket, Key=f"{prefix}/{RESERVED_MARKER}", Body=b"")
+        return
+    fs, path = dataset_fs(location, so)
+    fs.create_dir(path, recursive=True)
+    with fs.open_output_stream(f"{path}/{RESERVED_MARKER}"):
+        pass
+
+
+def _unreserve(location: str, so: StorageOptions, *, claims: location_claims.ClaimStore | None, holder: str) -> None:
+    """Undo a declaration that failed after its claim: the marker goes, then the claim. Logged, never raised over the failure."""
+    try:
+        delete_table_object(location, so, RESERVED_MARKER)
+        if claims is not None:
+            location_claims.release(claims, location, holder)
+    except Exception as exc:  # noqa: BLE001 — the declaration's own failure is what the caller is told
+        log.error("declared_location_not_released", extra={"table": holder, "location": location, "error": str(exc)[:300]})
+
+
+def _described_location(ns: LanceNamespace, segments: list[str], *, fallback: str) -> str:
+    """The location the backend describes ``segments`` at, spelled as every other door answers it; ``fallback`` when it does not answer."""
+    try:
+        described = native.call(ns, "describe_table", DescribeTableRequest(id=segments, check_declared=True))
+    except Exception as exc:  # noqa: BLE001 — the declaration committed; the caller keeps the location it was made at
+        log.warning("declared_location_unresolved", extra={"table": segments, "error": str(exc)[:300]})
+        return fallback
+    return str(described.location or fallback)
+
+
 def create_table(
     ns: LanceNamespace,
     so: StorageOptions,
     segments: list[str],
     table: pa.Table,
     *,
+    root: str,
     mode: str | CreateMode | None = None,
     properties: dict[str, str] | None = None,
     allow_external_blobs: bool = False,
@@ -522,18 +600,23 @@ def create_table(
     written (a bare ``POST /declare``, or a declare→write that crashed before the write) — has no readable
     dataset, so every mode simply lands the first data version into its already-declared location; this keeps
     the multi-step create idempotent and crash-safe, and never opens a table that isn't there (which 500'd).
-    A brand-new table is ``declare``-d to learn its canonical location, then written at
-    ``data_storage_version="2.2"`` (lance_docs/guide.md — Version Compatibility). Any failed fresh write is
-    rolled back with ``drop_table`` so the name stays retryable rather than stuck describable-but-unreadable.
+    A brand-new table is declared at ``<root>/<table uuid>`` (:func:`declare_table`, ADR 0173 §5), the namespace
+    connection's ``root``, then written at ``data_storage_version="2.2"`` (lance_docs/guide.md — Version
+    Compatibility). Any failed fresh write is rolled back with ``drop_table`` so the name stays retryable rather than
+    stuck describable-but-unreadable.
+
+    ``properties`` are stamped on the table's schema metadata in the data's commit ([[LH-503]]) and kept nowhere else:
+    the declaration is a RegisterTable, which keeps none, as the spec allows (`lance_docs/ns_catalog/spec.yaml:2719-2724`),
+    so the response names none either.
 
     ``registry`` is where a fresh write records the bases it registers ([[LH-279]]): the record is the
     catalog's word on which foreign bases the table may declare, written BEFORE the manifest and removed
     again when the write fails. Required and never defaulted — the governed door passes the control root;
     ``None`` is an explicit choice for a caller outside governance (a test building a fixture), which
     leaves the table with no record at all. The table's location claim, which carries its uuid ([[LH-519]],
-    ADR 0173 §6), lives beside the record: a table this call declares is given a uuid minted now, and one an
-    earlier request declared keeps the uuid its declaration's claim records. ``holder`` is the table's
-    canonical id, required whenever ``registry`` is given.
+    ADR 0173 §6), lives beside the record: a table this call declares is given the uuid its location is named
+    after, and one an earlier request declared keeps the uuid its declaration's claim records. ``holder`` is the
+    table's canonical id, required whenever ``registry`` is given.
 
     ``transaction_properties`` ride the commit that writes the data (the run a governed create names).
     """
@@ -563,10 +646,10 @@ def create_table(
                 base_credentials=base_credentials,
                 transaction_properties=transaction_properties,
             )
-            return CreateTableResponse(location=existing, version=dataset.version, properties=properties)
+            return CreateTableResponse(location=existing, version=dataset.version)
         if normalized is CreateMode.EXIST_OK:  # keep it untouched, just report its current version
             version = lance.dataset(existing, storage_options=so, session=shared_lance_session()).version
-            return CreateTableResponse(location=existing, version=version, properties=properties)
+            return CreateTableResponse(location=existing, version=version)
         # `create` against a written table → let declare surface the canonical TableAlreadyExists conflict.
 
     # BEFORE the declare, so a refused create leaves no name behind ([[LH-243]]).
@@ -590,11 +673,7 @@ def create_table(
             transaction_properties=transaction_properties,
         )
 
-    location = ns.declare_table(DeclareTableRequest(id=segments, properties=properties)).location
-    if not location:
-        raise InvalidInputError("namespace did not return a location for the declared table")
-    if registry is not None:
-        table_claims.claim_declared(ns, _claim_store(registry), location, table=holder, segments=segments)
+    location = declare_table(ns, so, segments, root=root, claims=None if registry is None else _claim_store(registry), holder=holder)
     return _write_blob_into(
         ns,
         table,
@@ -692,7 +771,7 @@ def _write_blob_into(
             except Exception as release_exc:  # noqa: BLE001 — the write error is what the caller is told
                 log.error("create_base_record_release_failed", extra={"location": location, "error": str(release_exc)[:300]})
         raise
-    return CreateTableResponse(location=location, version=dataset.version, properties=properties)
+    return CreateTableResponse(location=location, version=dataset.version)
 
 
 def _existing_location(ns: LanceNamespace, segments: list[str]) -> tuple[str | None, bool]:
@@ -894,9 +973,14 @@ def dataset_fs(uri: str, so: StorageOptions) -> tuple[pafs.FileSystem, str]:
     A local ``file://`` / bare-path location (the ``dir`` backend default) needs no credentials; an
     ``s3://`` location builds an ``S3FileSystem`` from the SAME storage options the datasets are opened
     with (path-style, http-ok endpoint) — mirroring the media head's filesystem so RustFS works.
+
+    The path is the key pylance opens: ``describe_table`` answers a registered location holding a non-ASCII character
+    or a ``%`` percent-encoded (``…/r%C3%A4ksm%C3%B6rg%C3%A5s``), the store keeps the key it decodes to once
+    (``base_refs.decoded_path``), and pyarrow's S3 filesystem takes a path literally ([[LH-520]]). A local URI pyarrow
+    decodes itself.
     """
     if uri.startswith("s3://") and so.get("endpoint"):
-        return s3_filesystem(so), uri[len("s3://") :]
+        return s3_filesystem(so), decoded_path(uri)
     resolved, path = pafs.FileSystem.from_uri(uri)
     return resolved, path
 
@@ -991,10 +1075,9 @@ def object_sizes(uris: Sequence[str], *, so: StorageOptions) -> list[int | None]
 
 
 def object_store_path(location: str) -> str:
-    """``location`` as Lance's object store names it: no scheme, no bucket, no leading slash."""
-    if location.startswith("s3://"):
-        return location.removeprefix("s3://").partition("/")[2].strip("/")
-    return location.removeprefix("file://").strip("/")
+    """``location`` as Lance's object store names it: no scheme, no bucket, no leading slash, decoded once as pylance opens it."""
+    decoded = decoded_path(location)
+    return decoded.partition("/")[2] if location.startswith("s3://") else decoded
 
 
 #: How many times a stamped commit plans again after another writer took the version it followed.
@@ -1063,14 +1146,18 @@ def delete_table_object(location: str, so: StorageOptions, relative: str) -> Non
     try:
         if location.startswith("s3://") and so.get("endpoint"):
             bucket, prefix = split_s3_uri(location.rstrip("/"))
-            access_key, secret_key, session_token = credential_of(so)
-            client = s3_client(so["endpoint"], access_key=access_key, secret_key=secret_key, session_token=session_token, region=so.get("region"))
-            client.delete_object(Bucket=bucket, Key=f"{prefix}/{relative}")
+            _object_client(so).delete_object(Bucket=bucket, Key=f"{prefix}/{relative}")
         else:
             fs, base = dataset_fs(location, so)
             fs.delete_file(f"{base.rstrip('/')}/{relative}")
     except Exception:
         log.warning("catalog_table_object_left", extra={"location": location, "object": relative}, exc_info=True)
+
+
+def _object_client(so: StorageOptions) -> Any:  # noqa: ANN401 — a boto3 S3 client
+    """The storage seam's S3 client on the catalog's own options, for an object no Lance write puts or deletes."""
+    access_key, secret_key, session_token = credential_of(so)
+    return s3_client(so["endpoint"], access_key=access_key, secret_key=secret_key, session_token=session_token, region=so.get("region"))
 
 
 # Scalar Arrow type names → pyarrow factory, for the alter_columns re-type path. A ``JsonArrowDataType``

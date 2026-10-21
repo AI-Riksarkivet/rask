@@ -28,14 +28,14 @@ from pathlib import Path
 
 import pyarrow as pa
 import pytest
-from lance_namespace import UpdateTableSchemaMetadataRequest, connect
+from lance_namespace import CreateNamespaceRequest, UpdateTableSchemaMetadataRequest, connect
 
 from catalog.services import dataplane, native
 
 
 lance = pytest.importorskip("lance")
 
-TABLE_ID = ["rows"]
+TABLE_ID = ["db", "rows"]
 SCHEMA = pa.schema([pa.field("id", pa.int64())])
 INTERNAL = "lineage.run_id"
 
@@ -43,7 +43,10 @@ INTERNAL = "lineage.run_id"
 @pytest.fixture
 def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace is runtime-only
     namespace = connect("dir", {"root": str(tmp_path / "data")})
-    dataplane.create_table(namespace, {}, TABLE_ID, pa.table({"id": pa.array([1], pa.int64())}, schema=SCHEMA), mode="create", registry=None)
+    namespace.create_namespace(CreateNamespaceRequest(id=TABLE_ID[:-1]))
+    dataplane.create_table(
+        namespace, {}, TABLE_ID, pa.table({"id": pa.array([1], pa.int64())}, schema=SCHEMA), root=str(tmp_path / "data"), mode="create", registry=None
+    )
     dataplane.update_schema_metadata(namespace, {}, TABLE_ID, {INTERNAL: "r-123"})
     return namespace
 

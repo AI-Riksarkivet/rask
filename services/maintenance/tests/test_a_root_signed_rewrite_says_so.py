@@ -75,7 +75,7 @@ def _fresh_notice() -> Iterator[None]:
 def test_vending_switched_OFF_is_announced_not_assumed(caplog) -> None:
     """The operator must be able to learn, from the log, that this rewrite was root-signed."""
     with caplog.at_level(logging.INFO, logger="maintenance.services.credentials"):
-        options = credentials.write_options_for("s3://lance-catalog/medallion/bronze", _settings(), fallback=_FALLBACK, declared_table_id="bronze$events")
+        options = credentials.write_options_for("s3://lance-catalog/medallion/bronze", _settings(), table_id="bronze$events", fallback=_FALLBACK)
 
     assert options == _FALLBACK, "with no catalog URL the rewrite must still run, on the ambient credential"
     said = " ".join(record.getMessage() for record in caplog.records)

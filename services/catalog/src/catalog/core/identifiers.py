@@ -16,6 +16,7 @@ identifier: splitting it into segments. (Parent-namespace derivation lives in
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from typing import Final
 from uuid import uuid4
@@ -29,10 +30,19 @@ from lance_namespace import InvalidInputError
 #: property, so no caller sets or changes one.
 UUID_PROPERTY: Final = "rask.uuid"
 
+#: A uuid in its canonical 8-4-4-4-12 hex spelling, in either case: the name of the directory a table the catalog makes
+#: lives in, directly under its namespace root (ADR 0173 §5).
+_UUID_SPELLING: Final = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.IGNORECASE)
+
 
 def with_minted_uuid(properties: Mapping[str, str] | None) -> dict[str, str]:
     """``properties`` for a namespace this request creates, holding a uuid minted now (ADR 0173 §2)."""
     return {**(properties or {}), UUID_PROPERTY: str(uuid4())}
+
+
+def is_spelled_as_a_uuid(segment: str) -> bool:
+    """Whether a path segment is spelled as a uuid, as the directory a table the catalog makes is named ([[LH-520]])."""
+    return _UUID_SPELLING.fullmatch(segment) is not None
 
 
 #: How deep a namespace tree may nest — an EXCLUSIVE bound: this depth is the first one NOT allowed,

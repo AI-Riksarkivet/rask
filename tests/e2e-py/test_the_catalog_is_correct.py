@@ -73,6 +73,7 @@ from pathlib import Path
 from typing import Any
 
 import byo_scenario as scenario
+import correctness
 import lance
 import lance.namespace
 import lance_namespace as ln
@@ -235,8 +236,10 @@ class Scene:
         self.location = ""
         #: The uuid the warehouse door minted for the matrix namespace ([[LH-519]]), which every reader's describe answers.
         self.namespace_uuid = ""
-        #: A deregistered table's location, relative to the namespace root, which a refused register names.
+        #: A dataset written outside the catalog's doors, relative to the namespace root, which a refused register names.
         self.loose = ""
+        #: A table registered at a location written outside the catalog's doors, whose claim a held-location register meets.
+        self.held = ""
         #: A commit staged on the matrix table, which a refused version/create names.
         self.staged: dict[str, Any] = {}
         #: The transaction a restore of the matrix's transaction table answered.
@@ -273,7 +276,9 @@ class Scene:
         versions = self.make_table("keep-versions")
         self.append(versions, range(3, 5))
         self.append(versions, range(5, 7))
-        self.loose = self.deregistered("loose")
+        self.loose = self.written_outside("loose")
+        self.held = self.written_outside("held")
+        self.owner.register_table(ln.RegisterTableRequest(id=[self.namespace, "held"], location=self.held))
         self.append(self.make_table("txn"), range(3, 5))
         self.transaction = str(self.owner.restore_table(ln.RestoreTableRequest(id=self.txn, version=1)).transaction_id)
         self.make_label()
@@ -444,10 +449,17 @@ class Scene:
         body = {"user": grantee, "relation": relation}
         scenario.ok(self.http(role).post(f"{CATALOG}/management/v1/classification/{self.label}/access/grant", json=body, timeout=60))
 
-    def deregistered(self, name: str) -> str:
-        """Make a table and deregister it; its location relative to the namespace root, as a register names it."""
-        location = str(self.owner.deregister_table(ln.DeregisterTableRequest(id=self.make_table(name))).location)
-        return location.rstrip("/").rsplit("/", 1)[-1]
+    def written_outside(self, name: str) -> str:
+        """A dataset a pipeline wrote outside the catalog's doors, beside the matrix's tables in their bucket; its location
+        relative to the namespace root, as a register names it. A table the catalog made is not registrable again: its
+        directory is the catalog's layout ([[LH-520]])."""
+        bucket = self.location.removeprefix("s3://").split("/", 1)[0]
+        relative = f"{self.namespace}-outside/{name}"
+        rows = scenario.rows_of(range(3))
+        lance.write_dataset(
+            rows, f"s3://{bucket}/{relative}", storage_options=correctness.store_options(), data_storage_version="2.2", enable_stable_row_ids=True
+        )
+        return relative
 
     def stage(self, table: list[str]) -> dict[str, Any]:
         """A two-row append pylance staged as the owner, and the version/create request it built for it."""
@@ -610,7 +622,7 @@ def _fresh_registration(scene: Scene, role: Role, allowed: bool) -> Target:
     """A deregistered location of its own for an allowed register; the standing loose one for a refused one."""
     if not allowed:
         return Target(table=[scene.namespace, "registered-refused"], location=scene.loose)
-    return Target(table=[scene.namespace, f"registered-{role}"], location=scene.deregistered(f"loose-{role}"))
+    return Target(table=[scene.namespace, f"registered-{role}"], location=scene.written_outside(f"loose-{role}"))
 
 
 def _fresh_versions(scene: Scene, role: Role, allowed: bool) -> Target:
@@ -1399,9 +1411,15 @@ RULES: dict[str, Rule] = {
         watch=lambda s: s.branches(s.table),
     ),
     "LH-204-a-register-at-a-held-location": Rule(
-        send=lambda s: s.owner.register_table(ln.RegisterTableRequest(id=[s.namespace, "alias"], location=s.location.rstrip("/").rsplit("/", 1)[-1])),
+        send=lambda s: s.owner.register_table(ln.RegisterTableRequest(id=[s.namespace, "alias"], location=s.held)),
         code=INVALID_INPUT,
         watch=lambda s: s.exists([s.namespace, "alias"]),
+    ),
+    # A table the catalog makes lives in a uuid directory directly under the root, which no registrar may name ([[LH-520]]).
+    "LH-520-a-register-in-the-catalogs-layout": Rule(
+        send=lambda s: s.owner.register_table(ln.RegisterTableRequest(id=[s.namespace, "layout"], location=s.location.rstrip("/").rsplit("/", 1)[-1])),
+        code=INVALID_INPUT,
+        watch=lambda s: s.exists([s.namespace, "layout"]),
     ),
     "LH-205-a-warehouse-in-another-store": Rule(
         send=lambda s: s.http(Role.TENANT_B_ADMIN).post(

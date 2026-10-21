@@ -74,10 +74,11 @@ def test_schema_has_blob_and_blob_field_names() -> None:
 
 def test_create_table_writes_blob_at_2_2_and_roundtrips(tmp_path: Path) -> None:
     ns = connect("dir", {"root": str(tmp_path)})
-    resp = create_table(ns, {}, ["clips"], _blob_table(), mode="create", registry=None)
+    _declare_namespace(ns, "db")
+    resp = create_table(ns, {}, ["db", "clips"], _blob_table(), root=str(tmp_path), mode="create", registry=None)
 
     assert resp.location
-    dataset = _open(ns, ["clips"])
+    dataset = _open(ns, ["db", "clips"])
     assert dataset.data_storage_version == "2.2"
     # #5a: the catalog's own blob create path stamps durable row identity (create-time-only), matching the
     # medallion cascade — so field/temporal lineage over catalog-created blob tables has a stable anchor.
@@ -100,9 +101,10 @@ def test_create_table_writes_plain_schema_at_2_2_with_stable_row_ids(tmp_path: P
 
     monkeypatch.setattr(lance, "write_dataset", _spy)
     ns = connect("dir", {"root": str(tmp_path)})
-    create_table(ns, {}, ["plain"], pa.table({"id": [1, 2, 3]}), mode="create", registry=None)
+    _declare_namespace(ns, "db")
+    create_table(ns, {}, ["db", "plain"], pa.table({"id": [1, 2, 3]}), root=str(tmp_path), mode="create", registry=None)
 
-    dataset = _open(ns, ["plain"])
+    dataset = _open(ns, ["db", "plain"])
     assert passed == ["2.2"], f"the create door must pin the version, not inherit pylance's default: {passed}"
     assert dataset.data_storage_version == "2.2"
     assert dataset.has_stable_row_ids  # durable row identity — the whole point of row-id lineage
@@ -111,17 +113,19 @@ def test_create_table_writes_plain_schema_at_2_2_with_stable_row_ids(tmp_path: P
 
 def test_create_mode_conflicts_when_blob_table_exists(tmp_path: Path) -> None:
     ns = connect("dir", {"root": str(tmp_path)})
-    create_table(ns, {}, ["c1"], _blob_table(), mode="create", registry=None)
+    _declare_namespace(ns, "db")
+    create_table(ns, {}, ["db", "c1"], _blob_table(), root=str(tmp_path), mode="create", registry=None)
     with pytest.raises(TableAlreadyExistsError):
-        create_table(ns, {}, ["c1"], _blob_table(), mode="create", registry=None)
+        create_table(ns, {}, ["db", "c1"], _blob_table(), root=str(tmp_path), mode="create", registry=None)
 
 
 def test_overwrite_replaces_existing_blob_table(tmp_path: Path) -> None:
     ns = connect("dir", {"root": str(tmp_path)})
-    create_table(ns, {}, ["o1"], _blob_table([b"a", b"b", b"c"]), mode="create", registry=None)
-    resp = create_table(ns, {}, ["o1"], _blob_table([b"z"]), mode="overwrite", registry=None)
+    _declare_namespace(ns, "db")
+    create_table(ns, {}, ["db", "o1"], _blob_table([b"a", b"b", b"c"]), root=str(tmp_path), mode="create", registry=None)
+    resp = create_table(ns, {}, ["db", "o1"], _blob_table([b"z"]), root=str(tmp_path), mode="overwrite", registry=None)
 
-    dataset = _open(ns, ["o1"])
+    dataset = _open(ns, ["db", "o1"])
     assert dataset.count_rows() == 1  # replaced 3 rows with 1
     assert dataset.read_blobs("payload", indices=[0])[0][1] == b"z"
     assert resp.version is not None and resp.version > 1  # overwrite committed a new version
@@ -129,12 +133,13 @@ def test_overwrite_replaces_existing_blob_table(tmp_path: Path) -> None:
 
 def test_exist_ok_keeps_existing_blob_table(tmp_path: Path) -> None:
     ns = connect("dir", {"root": str(tmp_path)})
-    create_table(ns, {}, ["e1"], _blob_table([b"a", b"b"]), mode="create", registry=None)
-    second = create_table(ns, {}, ["e1"], _blob_table([b"z"]), mode="exist_ok", registry=None)
+    _declare_namespace(ns, "db")
+    create_table(ns, {}, ["db", "e1"], _blob_table([b"a", b"b"]), root=str(tmp_path), mode="create", registry=None)
+    second = create_table(ns, {}, ["db", "e1"], _blob_table([b"z"]), root=str(tmp_path), mode="exist_ok", registry=None)
 
     # ExistOk keeps the existing table untouched — the 1-row payload is NOT written over the original 2.
     assert second.location
-    dataset = _open(ns, ["e1"])
+    dataset = _open(ns, ["db", "e1"])
     assert dataset.count_rows() == 2
     assert dataset.read_blobs("payload", indices=[0])[0][1] == b"a"
 
@@ -146,12 +151,13 @@ def test_exist_ok_on_declared_only_table_writes_instead_of_500(tmp_path: Path) -
     # A declared-but-unwritten table has NO readable dataset. Opening it to read `.version` (the pre-fix
     # ExistOk path) would raise -> 500. ExistOk must instead land the first data version into that location.
     ns = connect("dir", {"root": str(tmp_path)})
-    ns.declare_table(DeclareTableRequest(id=["d1"]))
+    _declare_namespace(ns, "db")
+    ns.declare_table(DeclareTableRequest(id=["db", "d1"]))
 
-    resp = create_table(ns, {}, ["d1"], _blob_table([b"first"]), mode="exist_ok", registry=None)
+    resp = create_table(ns, {}, ["db", "d1"], _blob_table([b"first"]), root=str(tmp_path), mode="exist_ok", registry=None)
 
     assert resp.location
-    dataset = _open(ns, ["d1"])
+    dataset = _open(ns, ["db", "d1"])
     assert dataset.data_storage_version == "2.2"
     assert dataset.count_rows() == 1
     assert dataset.read_blobs("payload", indices=[0])[0][1] == b"first"
@@ -164,6 +170,7 @@ def test_external_pointer_blob_is_gated_by_the_flag(tmp_path: Path) -> None:
     source = tmp_path / "external.bin"
     source.write_bytes(b"external-bytes-payload")
     ns = connect("dir", {"root": str(tmp_path / "root")})
+    _declare_namespace(ns, "db")
     schema = pa.schema([pa.field("id", pa.int64()), blob_field("blob")])
     pointer = pa.table(
         {"id": [1], "blob": blob_array([Blob.from_uri(source.as_uri(), position=0, size=8)])},
@@ -172,11 +179,11 @@ def test_external_pointer_blob_is_gated_by_the_flag(tmp_path: Path) -> None:
 
     # Default: an external pointer outside the dataset root is rejected as a clean client error (400).
     with pytest.raises(InvalidInputError, match="external"):
-        create_table(ns, {}, ["ext_off"], pointer, registry=None)
+        create_table(ns, {}, ["db", "ext_off"], pointer, root=str(tmp_path / "root"), registry=None)
 
     # Opted in: accepted, written at 2.2, and the referenced byte slice reads back.
-    create_table(ns, {}, ["ext_on"], pointer, allow_external_blobs=True, registry=None)
-    ds = _open(ns, ["ext_on"])
+    create_table(ns, {}, ["db", "ext_on"], pointer, allow_external_blobs=True, root=str(tmp_path / "root"), registry=None)
+    ds = _open(ns, ["db", "ext_on"])
     assert ds.data_storage_version == "2.2"
     assert ds.read_blobs("blob", indices=[0])[0][1] == b"external"  # first 8 bytes of the source
 
@@ -191,6 +198,7 @@ def test_external_blob_allowlist_accepts_in_base_rejects_out_of_base(tmp_path: P
     outside = tmp_path / "elsewhere.bin"
     outside.write_bytes(b"unapproved-payload")
     ns = connect("dir", {"root": str(tmp_path / "root")})
+    _declare_namespace(ns, "db")
     schema = pa.schema([pa.field("id", pa.int64()), blob_field("blob")])
 
     def _pointer(uri: str) -> pa.Table:
@@ -198,14 +206,14 @@ def test_external_blob_allowlist_accepts_in_base_rejects_out_of_base(tmp_path: P
 
     bases = [base.as_uri()]
     # UNDER the registered base → accepted with allow_external_blobs left False.
-    create_table(ns, {}, ["in_base"], _pointer((base / "obj.bin").as_uri()), external_blob_bases=bases, registry=None)
-    ds = _open(ns, ["in_base"])
+    create_table(ns, {}, ["db", "in_base"], _pointer((base / "obj.bin").as_uri()), external_blob_bases=bases, root=str(tmp_path / "root"), registry=None)
+    ds = _open(ns, ["db", "in_base"])
     assert ds.data_storage_version == "2.2"
     assert ds.read_blobs("blob", indices=[0])[0][1] == b"approved"  # first 8 bytes, read back
 
     # OUTSIDE every registered base → rejected (allowlist doesn't cover it, blanket flag off).
     with pytest.raises(InvalidInputError, match="external"):
-        create_table(ns, {}, ["out_base"], _pointer(outside.as_uri()), external_blob_bases=bases, registry=None)
+        create_table(ns, {}, ["db", "out_base"], _pointer(outside.as_uri()), external_blob_bases=bases, root=str(tmp_path / "root"), registry=None)
 
 
 # --- rename is a POINTER move (the dir backend's native rename is a 501) ----------------------------- #
@@ -228,23 +236,25 @@ def test_rename_rejects_a_blank_name_and_keeps_the_source(tmp_path: Path) -> Non
     from catalog.services.dataplane import rename_table
 
     ns = connect("dir", {"root": str(tmp_path)})
-    create_table(ns, {}, ["keep"], _blob_table([b"x"]), mode="create", registry=None)
+    _declare_namespace(ns, "db")
+    create_table(ns, {}, ["db", "keep"], _blob_table([b"x"]), root=str(tmp_path), mode="create", registry=None)
 
     for blank in ("", "   "):
         with pytest.raises(InvalidInputError):
-            rename_table(ns, {}, ["keep"], blank, None, claims=ClaimStore(control_root=str(tmp_path)), delimiter="$")
-    assert _open(ns, ["keep"]).read_blobs("payload", indices=[0])[0][1] == b"x"  # source untouched
+            rename_table(ns, {}, ["db", "keep"], blank, None, claims=ClaimStore(control_root=str(tmp_path)), delimiter="$")
+    assert _open(ns, ["db", "keep"]).read_blobs("payload", indices=[0])[0][1] == b"x"  # source untouched
 
 
 def test_rename_onto_itself_is_rejected(tmp_path: Path) -> None:
     from catalog.services.dataplane import rename_table
 
     ns = connect("dir", {"root": str(tmp_path)})
-    create_table(ns, {}, ["same"], _blob_table([b"x"]), mode="create", registry=None)
+    _declare_namespace(ns, "db")
+    create_table(ns, {}, ["db", "same"], _blob_table([b"x"]), root=str(tmp_path), mode="create", registry=None)
 
     with pytest.raises(InvalidInputError):
-        rename_table(ns, {}, ["same"], "same", None, claims=ClaimStore(control_root=str(tmp_path)), delimiter="$")
-    assert _open(ns, ["same"]).count_rows() == 1  # not relocated onto itself / deleted
+        rename_table(ns, {}, ["db", "same"], "same", None, claims=ClaimStore(control_root=str(tmp_path)), delimiter="$")
+    assert _open(ns, ["db", "same"]).count_rows() == 1  # not relocated onto itself / deleted
 
 
 def test_rename_treats_a_declared_only_destination_as_taken(tmp_path: Path) -> None:
@@ -254,7 +264,7 @@ def test_rename_treats_a_declared_only_destination_as_taken(tmp_path: Path) -> N
 
     ns = connect("dir", {"root": str(tmp_path)})
     _declare_namespace(ns, "media")
-    create_table(ns, {}, ["media", "src"], _blob_table([b"x"]), mode="create", registry=None)
+    create_table(ns, {}, ["media", "src"], _blob_table([b"x"]), root=str(tmp_path), mode="create", registry=None)
     ns.declare_table(DeclareTableRequest(id=["media", "stub"]))  # declared-but-unwritten destination
 
     with pytest.raises(TableAlreadyExistsError):
@@ -279,7 +289,7 @@ def test_a_failed_source_claim_leaves_the_rename_UNDONE(tmp_path: Path, monkeypa
 
     ns = connect("dir", {"root": str(tmp_path)})
     _declare_namespace(ns, "media")
-    create_table(ns, {}, ["media", "a"], _blob_table([b"x", b"y"]), mode="create", registry=None)
+    create_table(ns, {}, ["media", "a"], _blob_table([b"x", b"y"]), root=str(tmp_path), mode="create", registry=None)
     source = ns.describe_table(DescribeTableRequest(id=["media", "a"])).location
 
     def _fails(request: DeregisterTableRequest) -> None:

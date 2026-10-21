@@ -24,7 +24,7 @@ import pyarrow as pa
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from lance_namespace import LanceNamespace
+from lance_namespace import CreateNamespaceRequest, LanceNamespace
 
 from catalog.api.dependencies import get_namespace, get_storage_options
 from catalog.api.v1.endpoints import erasure as door
@@ -91,9 +91,18 @@ def namespace(tmp_path: Path) -> LanceNamespace:
     sink = pa.BufferOutputStream()
     with pa.ipc.new_stream(sink, _rows(_SUBJECT, "bob").schema) as writer:
         writer.write_table(_rows(_SUBJECT, "bob"))
-    create_table(ns, {}, ["subjects"], read_arrow_body(sink.getvalue().to_pybytes(), max_bytes=_BODY_LIMIT), mode="create", registry=None)
-    open_dataset(ns, {}, ["subjects"]).insert(_rows("carol"))
-    source = open_dataset(ns, {}, ["subjects"])
+    ns.create_namespace(CreateNamespaceRequest(id=["db"]))
+    create_table(
+        ns,
+        {},
+        ["db", "subjects"],
+        read_arrow_body(sink.getvalue().to_pybytes(), max_bytes=_BODY_LIMIT),
+        root=str(tmp_path / "data"),
+        mode="create",
+        registry=None,
+    )
+    open_dataset(ns, {}, ["db", "subjects"]).insert(_rows("carol"))
+    source = open_dataset(ns, {}, ["db", "subjects"])
     clone = str(tmp_path / "data" / "clone.lance")
     source.shallow_clone(clone, (None, None))
     # RECORDED, as the catalog records a clone it made ([[LH-279]]): an unrecorded clone's base is a claim
@@ -124,11 +133,11 @@ def client(namespace: LanceNamespace, tmp_path: Path) -> Iterator[TestClient]:
 
 
 def test_the_door_leaves_a_clones_source_readable_through_the_clone(client: TestClient, namespace: LanceNamespace, tmp_path: Path, erasure_job: Any) -> None:  # noqa: ANN401 — conftest.ErasureJob
-    recorded = client.post("/management/v1/table/subjects/erasure", json={"predicate": _PREDICATE})
+    recorded = client.post("/management/v1/table/db$subjects/erasure", json={"predicate": _PREDICATE})
     assert recorded.status_code == 202, recorded.text
-    erasure_job(open_dataset(namespace, {}, ["subjects"]).uri, _PREDICATE).run()
+    erasure_job(open_dataset(namespace, {}, ["db", "subjects"]).uri, _PREDICATE).run()
 
-    response = client.post(f"/management/v1/table/subjects/erasure/{recorded.json()['obligation_id']}/verify", json={"predicate": _PREDICATE})
+    response = client.post(f"/management/v1/table/db$subjects/erasure/{recorded.json()['obligation_id']}/verify", json={"predicate": _PREDICATE})
 
     assert response.status_code == 200, response.text
     verification = response.json()

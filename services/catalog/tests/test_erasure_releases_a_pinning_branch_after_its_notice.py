@@ -29,7 +29,7 @@ import pyarrow as pa
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from lance_namespace import LanceNamespace
+from lance_namespace import CreateNamespaceRequest, LanceNamespace
 
 from catalog.api import erasure_release as release_door
 from catalog.api.dependencies import get_clock, get_control_emitter, get_namespace, get_storage_options
@@ -48,7 +48,7 @@ from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
 _PREDICATE = "pii = 'alice'"
-_TABLE_ID = ["subjects"]
+_TABLE_ID = ["db", "subjects"]
 _BINDING = "catalog-erasure-release-cron"
 _NOTICE = "erasure_release_scheduled"
 
@@ -63,7 +63,8 @@ def _created(root: Path) -> LanceNamespace:
     sink = pa.BufferOutputStream()
     with pa.ipc.new_stream(sink, _rows("alice", "bob").schema) as writer:
         writer.write_table(_rows("alice", "bob"))
-    create_table(ns, {}, _TABLE_ID, read_arrow_body(sink.getvalue().to_pybytes(), max_bytes=1 << 20), mode="create", registry=None)
+    ns.create_namespace(CreateNamespaceRequest(id=_TABLE_ID[:-1]))
+    create_table(ns, {}, _TABLE_ID, read_arrow_body(sink.getvalue().to_pybytes(), max_bytes=1 << 20), root=str(root), mode="create", registry=None)
     return ns
 
 
@@ -117,7 +118,7 @@ def _catalog(ns: LanceNamespace, tmp_path: Path, *, grace_days: int, emitter: _R
     release_door.mount_erasure_release(application, _BINDING)
 
     async def _owners(obj: str) -> list[str]:
-        assert obj == "table:subjects"
+        assert obj == "table:db$subjects"
         return ["user:dex~olivia", "user:dex~alice%40corp"]
 
     application.dependency_overrides[get_settings] = lambda: settings
@@ -138,13 +139,13 @@ def _branches(ns: LanceNamespace) -> dict[str, tuple[str | None, int]]:
 
 
 def _record(client: TestClient) -> str:
-    response = client.post("/management/v1/table/subjects/erasure", json={"predicate": _PREDICATE, "retain_days": 0})
+    response = client.post("/management/v1/table/db$subjects/erasure", json={"predicate": _PREDICATE, "retain_days": 0})
     assert response.status_code == 202, response.text
     return str(response.json()["obligation_id"])
 
 
 def _verify(client: TestClient, obligation_id: str) -> dict[str, Any]:
-    response = client.post(f"/management/v1/table/subjects/erasure/{obligation_id}/verify", json={"predicate": _PREDICATE})
+    response = client.post(f"/management/v1/table/db$subjects/erasure/{obligation_id}/verify", json={"predicate": _PREDICATE})
     assert response.status_code == 200, response.text
     return response.json()
 
@@ -164,7 +165,7 @@ def test_a_settled_erasure_tells_each_person_then_releases_its_pin_at_the_deadli
         assert (release["refs"], release["notified"], due) == (refs, ["user:dex~alice%40corp", "user:dex~olivia"], clock.now + timedelta(days=7))
         notices = [event for event in emitter.events if event.action == _NOTICE]
         assert [(e.object_id, e.actor, e.extra["subject"], e.extra["refs"], datetime.fromisoformat(e.extra["due_at"])) for e in notices] == [
-            ("table:subjects", "user:dex~alice@corp", subject, refs, due) for subject in ("user:dex~alice%40corp", "user:dex~olivia")
+            ("table:db$subjects", "user:dex~alice@corp", subject, refs, due) for subject in ("user:dex~alice%40corp", "user:dex~olivia")
         ]
 
         clock.now = due - timedelta(seconds=1)
@@ -200,9 +201,9 @@ def test_a_release_an_earlier_verification_scheduled_settles_the_obligation_only
         earlier = erasure_release.new_release(
             [Pin(ref=scheduled, holds="main@2")],
             release_id=obligation,
-            table="subjects",
+            table="db$subjects",
             location=open_dataset(ns, {}, _TABLE_ID).uri,
-            object_id="table:subjects",
+            object_id="table:db$subjects",
             requested_by="user:dex~alice",
             notified=["user:dex~alice", "user:dex~olivia"],
             due_at=clock.now + timedelta(days=7),
@@ -239,9 +240,9 @@ def test_a_release_cut_short_is_finished_at_the_reference_it_recorded(tmp_path: 
     release = erasure_release.new_release(
         pins,
         release_id="0" * 32,
-        table="subjects",
+        table="db$subjects",
         location=open_dataset(ns, {}, _TABLE_ID).uri,
-        object_id="table:subjects",
+        object_id="table:db$subjects",
         requested_by="user:dex~alice",
         notified=["user:dex~alice"],
         due_at=clock.now,

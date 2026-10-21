@@ -36,6 +36,7 @@ from catalog.api.dependencies import (
     FgaClientDep,
     LineageEmitterDep,
     NamespaceDep,
+    NamespaceRootDep,
     RunDep,
     SettingsDep,
     StorageOptionsDep,
@@ -107,6 +108,7 @@ def _stamp(run: RunContext | None, token: Caller | None) -> dict[str, str] | Non
 async def create_table(
     id: str,
     ns: NamespaceDep,
+    root: NamespaceRootDep,
     settings: SettingsDep,
     token: CurrentToken,
     client: FgaClientDep,
@@ -172,6 +174,7 @@ async def create_table(
     response = await table_create.create_governed_table(
         id=id,
         ns=ns,
+        root=root,
         settings=settings,
         token=token,
         client=client,

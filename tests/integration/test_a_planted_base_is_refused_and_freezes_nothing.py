@@ -464,13 +464,16 @@ def test_a_table_location_is_exclusive(estate: _Estate) -> None:
 
     Nor may a location equal, contain or sit under another registered table's ([[LH-504]]): a destructive drop
     of the outer table would delete the inner one's bytes. Only the namespace's object index answers it, so the
-    door asks once the backend has recorded the registration and detaches the later of the two. The victim
-    was created, and a create takes no location claim, so its own location reaches this rule, not the claim.
-    ``outer/inner`` is held by ``db$inner``'s claim, which refuses in the same words: the answer says the
-    location is taken and never which table holds it, since the caller may hold no grant on that table ([[LH-436]]).
+    door asks once the backend has recorded the registration and detaches the later of the two. ``outer/inner``
+    is held by ``db$inner``'s claim, which refuses in the same words: the answer says the location is taken and
+    never which table holds it, since the caller may hold no grant on that table ([[LH-436]]).
 
-    A table whose NAME the catalog percent-encodes into its location (``räksmörgås`` ->
-    ``r%C3%A4ksm%C3%B6rg%C3%A5s``, ``growth%`` -> ``growth%25``) is still its own: it is created with a
+    Nor may a location be a uuid directly under the namespace root ([[LH-520]]): that is where the catalog lays out the
+    tables it makes, named after each table's uuid (ADR 0173 §5), so a registrar may not take one, even one no table
+    holds.
+
+    A table registered at a location the catalog answers percent-encoded (``räksmörgås`` ->
+    ``r%C3%A4ksm%C3%B6rg%C3%A5s``, ``growth%`` -> ``growth%25``) is still its own: it is registered with a
     readable record, and a branch of it, whose manifest declares the root spelled so, is vended.
 
     And a location belongs to the table registered there only while that table exists: a table DESTROYED
@@ -500,18 +503,29 @@ def test_a_table_location_is_exclusive(estate: _Estate) -> None:
     assert estate.client.post("/v1/table/db$inner/register", json={"location": "outer/inner"}).status_code == 200, (
         "the control: a location of its own registers"
     )
-    for location in (victim, f"{victim}/tree", "outer", "outer/inner"):
+    for location in ("outer", "outer/inner", "outer/inner/tree"):
         resp = estate.client.post("/v1/table/db$squatter/register", json={"location": location})
         _refused(resp, _INVALID_INPUT)
         assert resp.json()["detail"] == f"register location {location!r} equals, contains or sits under another table's location", resp.text
         assert estate.client.post("/v1/table/db$squatter/exists").status_code == 404, f"{location!r}: a refused registration must be detached"
         assert estate.client.post("/v1/table/db$squatter/query", json=_QUERY).status_code == 404, f"{location!r}: the victim reads through the refused id"
-    for named in ("db$räksmörgås", "db$growth%"):
-        location = estate.create(named)
+    planted = str(uuid.uuid4())
+    lance.write_dataset(_MINE, f"{estate.root}/{planted}", storage_options=estate.key, data_storage_version="2.2", enable_stable_row_ids=True)
+    resp = estate.client.post("/v1/table/db$squatter/register", json={"location": planted})
+    _refused(resp, _INVALID_INPUT)
+    assert resp.json()["detail"] == (
+        f"register location {planted!r} is in a uuid directory directly under the namespace root, where the catalog lays out the tables it makes"
+    )
+    assert estate.client.post("/v1/table/db$squatter/exists").status_code == 404, "a refused registration must attach nothing"
+    for name in ("räksmörgås", "growth%"):
+        named = f"db${name}"
+        lance.write_dataset(_ROWS, f"{estate.root}/spelled/{quote(name)}", storage_options=estate.key, data_storage_version="2.2", enable_stable_row_ids=True)
+        assert estate.client.post(f"/v1/table/{quote(named, safe='$')}/register", json={"location": f"spelled/{name}"}).status_code == 200
+        location = str(estate.client.post(f"/v1/table/{quote(named, safe='$')}/describe", json={}).json()["location"])
         estate.open(location).create_branch("work")
         vend = estate.client.post(f"/management/v1/table/{quote(named, safe='$')}/credentials", params={"branch": "work"})
         assert vend.status_code == 200, f"{named!r} at {location!r}: {vend.status_code} {vend.text}"
-        assert base_registry.read_base_record(estate.registry, location) is not None, f"{named!r}: the create door wrote no record for {location!r}"
+        assert base_registry.read_base_record(estate.registry, location) is not None, f"{named!r}: the register door wrote no record for {location!r}"
 
     dropped = _registered(estate, "db$dropped", "dropped")
     assert estate.client.post("/v1/table/db$dropped/drop", params={"purge": "true"}).status_code == 200

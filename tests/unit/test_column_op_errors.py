@@ -19,6 +19,7 @@ import pyarrow as pa
 import pytest
 from lance_namespace import (
     AlterTableDropColumnsRequest,
+    CreateNamespaceRequest,
     LanceNamespace,
     LanceNamespaceError,
     connect,
@@ -30,7 +31,8 @@ from catalog.services.dataplane import create_table, drop_columns
 @pytest.fixture
 def table(tmp_path: Path) -> LanceNamespace:
     ns = connect("dir", {"root": str(tmp_path)})
-    create_table(ns, {}, ["t"], pa.table({"id": [1, 2, 3], "v": ["a", "b", "c"]}), mode="create", registry=None)
+    ns.create_namespace(CreateNamespaceRequest(id=["db"]))
+    create_table(ns, {}, ["db", "t"], pa.table({"id": [1, 2, 3], "v": ["a", "b", "c"]}), root=str(tmp_path), mode="create", registry=None)
     return ns
 
 
@@ -47,5 +49,5 @@ def test_a_storage_failure_on_a_column_op_is_not_blamed_on_the_caller(table: Lan
 
     monkeypatch.setattr("catalog.services.dataplane.open_dataset", boom)
     with pytest.raises(OSError, match="unreachable") as caught:
-        drop_columns(table, {}, AlterTableDropColumnsRequest(id=["t"], columns=["v"]))
+        drop_columns(table, {}, AlterTableDropColumnsRequest(id=["db", "t"], columns=["v"]))
     assert not isinstance(caught.value, LanceNamespaceError), "a storage outage was minted into a domain error"

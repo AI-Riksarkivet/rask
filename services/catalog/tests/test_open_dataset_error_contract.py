@@ -19,16 +19,17 @@ one step later.
 from __future__ import annotations
 
 from pathlib import Path
+from urllib.parse import urlparse
 
 import pyarrow as pa
 import pytest
-from lance_namespace import TableNotFoundError, connect
+from lance_namespace import CreateNamespaceRequest, TableNotFoundError, connect
 
 from catalog.core.namespace import open_dataset
 from catalog.services.dataplane import create_table
 
 
-TABLE_ID = ["pages"]
+TABLE_ID = ["db", "pages"]
 
 
 def _table() -> pa.Table:
@@ -38,17 +39,18 @@ def _table() -> pa.Table:
 @pytest.fixture
 def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace, runtime-only
     namespace = connect("dir", {"root": str(tmp_path)})
-    create_table(namespace, {}, TABLE_ID, _table(), mode="create", registry=None)
+    namespace.create_namespace(CreateNamespaceRequest(id=TABLE_ID[:-1]))
+    create_table(namespace, {}, TABLE_ID, _table(), root=str(tmp_path), mode="create", registry=None)
     return namespace
 
 
 def test_a_registration_whose_bytes_are_GONE_is_a_404(ns, tmp_path: Path) -> None:  # noqa: ANN001
     """The live shape: the table is registered, the location resolves, and nothing is there."""
     uri = open_dataset(ns, {}, TABLE_ID).uri
-    versions = Path(uri) / "_versions"
+    versions = Path(urlparse(uri).path) / "_versions"
     for f in versions.iterdir():
         f.unlink()
     versions.rmdir()
 
-    with pytest.raises(TableNotFoundError, match="pages"):
+    with pytest.raises(TableNotFoundError, match=Path(urlparse(uri).path).name):
         open_dataset(ns, {}, TABLE_ID)

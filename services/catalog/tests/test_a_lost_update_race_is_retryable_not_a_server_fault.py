@@ -27,7 +27,7 @@ from pathlib import Path
 
 import pyarrow as pa
 import pytest
-from lance_namespace import connect
+from lance_namespace import CreateNamespaceRequest, connect
 
 from catalog.services.dataplane import create_table
 
@@ -39,18 +39,20 @@ from lance_namespace import DeleteFromTableRequest, UpdateTableRequest  # noqa: 
 from catalog.services.dataplane import delete_from_table, update_table  # noqa: E402
 
 
-TABLE_ID = ["rows"]
+TABLE_ID = ["db", "rows"]
 SCHEMA = pa.schema([pa.field("id", pa.int64()), pa.field("v", pa.int64())])
 
 
 @pytest.fixture
 def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace is runtime-only
     namespace = connect("dir", {"root": str(tmp_path / "data")})
+    namespace.create_namespace(CreateNamespaceRequest(id=TABLE_ID[:-1]))
     create_table(
         namespace,
         {},
         TABLE_ID,
         pa.table({"id": pa.array([1, 2, 3], pa.int64()), "v": pa.array([0, 0, 0], pa.int64())}, schema=SCHEMA),
+        root=str(tmp_path / "data"),
         mode="create",
         registry=None,
     )

@@ -22,7 +22,7 @@ import pyarrow as pa
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from lance_namespace import LanceNamespace, connect
+from lance_namespace import CreateNamespaceRequest, DescribeTableRequest, LanceNamespace, connect
 
 from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, NamespaceDep, SettingsDep, StorageOptionsDep, get_lineage_emitter
 from catalog.api.security import CurrentToken
@@ -45,7 +45,7 @@ _CALLER = PersonPrincipal(
     principal=Principal(idp_id="dex", subject="08a8684b-db88-4b73-90a9-3cd1661f5466"),
     claims=IDToken(iss="https://dex", sub=_SUB, aud="lance", exp=1, iat=1),
 )
-TABLE_ID = ["features"]
+TABLE_ID = ["db", "features"]
 
 
 def _rows(source_rowid: pa.DataType) -> pa.Table:
@@ -89,14 +89,16 @@ def registry_root(tmp_path: Path) -> str:
 
 
 def _client_over(payload: pa.Table, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, registry_root: str) -> Iterator[tuple[TestClient, LanceNamespace]]:
-    namespace = connect("dir", {"root": str(tmp_path / "data")})
-    create_table(namespace, {}, TABLE_ID, payload, mode="create", registry=None)
+    root = str(tmp_path / "data")
+    namespace = connect("dir", {"root": root})
+    namespace.create_namespace(CreateNamespaceRequest(id=TABLE_ID[:-1]))
+    create_table(namespace, {}, TABLE_ID, payload, root=root, mode="create", registry=None)
     with TestClient(_app(namespace, monkeypatch, registry_root)) as c:
         yield c, namespace
 
 
 def _publish(client: TestClient, **body: Any) -> Any:  # noqa: ANN401
-    return client.post("/management/v1/table/features/publish", json={"version": 1, **body})
+    return client.post("/management/v1/table/db$features/publish", json={"version": 1, **body})
 
 
 def test_a_tier_without_stage_or_lineage_publishes_and_keeps_its_source_rowid(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, registry_root: str) -> None:
@@ -105,7 +107,8 @@ def test_a_tier_without_stage_or_lineage_publishes_and_keeps_its_source_rowid(tm
     response = _publish(client, key_column="id")
 
     assert (response.status_code, response.json().get("published")) == (200, True), response.text
-    published = lance.dataset(str(tmp_path / "data" / "features.lance"), version=published_version(namespace, {}, TABLE_ID))
+    location = namespace.describe_table(DescribeTableRequest(id=TABLE_ID)).location
+    published = lance.dataset(location, version=published_version(namespace, {}, TABLE_ID))
     assert published.to_table(columns=["source_rowid"]).column(0).to_pylist() == [11, 12, 13]
 
 

@@ -78,21 +78,18 @@ def door(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
 def test_the_pass_is_signed_by_the_vended_credential(door: list[dict[str, Any]]) -> None:
     """[[LH-489]] At maintenance's own store address: the catalog vends the one a client off the cluster reaches."""
     settings = _settings()
-    options = credentials.write_options_for("s3://acme-bucket/4c49d010_acme-bronze$events", settings, fallback=_AMBIENT)
+    options = credentials.write_options_for("s3://acme-bucket/4c49d010_acme-bronze$events", settings, table_id="acme-bronze$events", fallback=_AMBIENT)
     assert settings.s3_endpoint.startswith("http://")
     assert options == {**_SCOPED, "endpoint": settings.s3_endpoint, "allow_http": "true"}
     assert options["aws_access_key_id"] != "rustfsadmin"
 
 
-@pytest.mark.parametrize(
-    ("uri", "catalog_url", "reason"),
-    [
-        ("s3://acme-bucket/medallion/bronze", "http://catalog:2333", "a nested layout yields no identifier — declining beats guessing"),
-        ("s3://acme-bucket/4c49d010_acme-bronze$events", "", "no catalog configured"),
-    ],
-)
-def test_an_unvendable_dataset_is_still_maintained(door: list[dict[str, Any]], uri: str, catalog_url: str, reason: str) -> None:
-    assert credentials.write_options_for(uri, _settings(catalog_url=catalog_url), fallback=_AMBIENT) == _AMBIENT, reason
+def test_a_deployment_with_no_vending_door_is_still_maintained(door: list[dict[str, Any]]) -> None:
+    options = credentials.write_options_for(
+        "s3://acme-bucket/4c49d010_acme-bronze$events", _settings(catalog_url=""), table_id="acme-bronze$events", fallback=_AMBIENT
+    )
+
+    assert options == _AMBIENT, "no catalog configured"
 
 
 @pytest.mark.parametrize(
@@ -113,7 +110,9 @@ def test_a_door_that_could_not_ANSWER_degrades_rather_than_failing_the_run(monke
     A 5xx is not among them: the door was asked and could not decide, which stops the dataset ([[LH-279]]).
     """
     monkeypatch.setattr(credentials.httpx, "post", lambda url, **kwargs: answer)
-    assert credentials.write_options_for("s3://acme-bucket/4c49d010_acme-bronze$events", _settings(), fallback=_AMBIENT) == _AMBIENT
+    assert (
+        credentials.write_options_for("s3://acme-bucket/4c49d010_acme-bronze$events", _settings(), table_id="acme-bronze$events", fallback=_AMBIENT) == _AMBIENT
+    )
 
 
 @pytest.mark.parametrize(("status", "remedy"), [(401, "service credential"), (403, "can_maintain")])
@@ -130,7 +129,7 @@ def test_a_door_that_said_NO_refuses_instead_of_reaching_for_the_ambient_key(mon
     """
     monkeypatch.setattr(credentials.httpx, "post", lambda url, **kwargs: _Response(status, {}))
     with pytest.raises(MaintenanceDenied) as caught:
-        credentials.write_options_for("s3://acme-bucket/4c49d010_acme-bronze$events", _settings(), fallback=_AMBIENT)
+        credentials.write_options_for("s3://acme-bucket/4c49d010_acme-bronze$events", _settings(), table_id="acme-bronze$events", fallback=_AMBIENT)
     assert remedy in str(caught.value), f"the refusal must name what would allow it: {caught.value}"
 
 
@@ -144,7 +143,7 @@ def test_a_door_that_found_NO_SUCH_TABLE_refuses_instead_of_reaching_for_the_amb
     answer = httpx.Response(404, json={"code": code, "detail": "absent"})
     monkeypatch.setattr(credentials.httpx, "post", lambda url, **kwargs: answer)
     with pytest.raises(TableNotGoverned) as caught:
-        credentials.write_options_for("s3://acme-bucket/4c49d010_acme-bronze$events", _settings(), fallback=_AMBIENT)
+        credentials.write_options_for("s3://acme-bucket/4c49d010_acme-bronze$events", _settings(), table_id="acme-bronze$events", fallback=_AMBIENT)
     assert name in str(caught.value) and "acme-bronze$events" in str(caught.value), str(caught.value)
 
 
@@ -153,4 +152,6 @@ def test_an_unreachable_catalog_degrades(monkeypatch: pytest.MonkeyPatch) -> Non
         raise credentials.httpx.ConnectError("no route to host")
 
     monkeypatch.setattr(credentials.httpx, "post", _boom)
-    assert credentials.write_options_for("s3://acme-bucket/4c49d010_acme-bronze$events", _settings(), fallback=_AMBIENT) == _AMBIENT
+    assert (
+        credentials.write_options_for("s3://acme-bucket/4c49d010_acme-bronze$events", _settings(), table_id="acme-bronze$events", fallback=_AMBIENT) == _AMBIENT
+    )

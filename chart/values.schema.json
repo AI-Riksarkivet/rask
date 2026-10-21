@@ -859,7 +859,7 @@
                     "type": "string"
                 },
                 "declaredPlatformRoots": {
-                    "description": "Platform-owned store roots the catalog cannot resolve (e.g. medallion models) that the reconciler accounts for instead of reporting as unreadable.",
+                    "description": "Platform-owned store roots the catalog cannot resolve (e.g. medallion models) that the reconciler accounts for instead of reporting as unregistered.",
                     "type": "string"
                 },
                 "discoveryMaxDepth": {

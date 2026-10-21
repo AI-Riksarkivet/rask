@@ -49,10 +49,10 @@ def _identity(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(credentials, "service_headers", lambda _settings: {})
 
 
-def _stamped(tmp_path: Path, *, fragments: int) -> str:
+def _written(tmp_path: Path, *, fragments: int) -> str:
     uri = str(tmp_path / "t.lance")
     for i in range(fragments):
-        rows = pa.table({"id": pa.array(range(i * 10, (i + 1) * 10), pa.int64())}).replace_schema_metadata({b"lineage.dataset_id": TABLE_ID.encode()})
+        rows = pa.table({"id": pa.array(range(i * 10, (i + 1) * 10), pa.int64())})
         lance.write_dataset(rows, uri, mode="create" if i == 0 else "append")
     return uri
 
@@ -71,13 +71,13 @@ def _execute(maintain_one: Callable[..., DatasetResult], uri: str, *, vend: Vend
     settings = MaintenanceSettings.model_validate({"s3_bucket": "lake", "catalog_url": CATALOG, "min_versions_to_expire": 1})
     with respx.mock(assert_all_called=False) as router:
         router.post(VEND_URL).mock(return_value=vend(uri))
-        return maintain_one(uri, settings, protected=protected, plan=DatasetPlan(older_than=timedelta(0), retain_versions=1))
+        return maintain_one(uri, settings, protected=protected, plan=DatasetPlan(older_than=timedelta(0), retain_versions=1), table_id=TABLE_ID)
 
 
 def test_a_vend_refusal_is_counted_under_its_table_and_its_door(
     *, tmp_path: Path, maintain_one: Callable[..., DatasetResult], parked_added: Recorded, refused_added: Recorded
 ) -> None:
-    _execute(maintain_one=maintain_one, uri=_stamped(tmp_path, fragments=3), vend=_refused(403, PERMISSION_DENIED))
+    _execute(maintain_one=maintain_one, uri=_written(tmp_path, fragments=3), vend=_refused(403, PERMISSION_DENIED))
 
     assert parked_added == [(1, {"table_id": TABLE_ID, "refused_by": "vend_denied"})], parked_added
     assert refused_added == [(1, {"refused_by": "vend_denied"})], f"the refusal reached the datasets counter unlabelled or not at all: {refused_added}"
@@ -87,7 +87,7 @@ def test_a_layout_refusal_is_not_a_table_the_catalog_refused(
     *, tmp_path: Path, maintain_one: Callable[..., DatasetResult], parked_added: Recorded, refused_added: Recorded
 ) -> None:
     """A clone's source is refused by the estate's own pre-pass, under a location that may name no table."""
-    uri = _stamped(tmp_path, fragments=3)
+    uri = _written(tmp_path, fragments=3)
 
     _execute(maintain_one=maintain_one, uri=uri, vend=_vended_at(None), protected=base_refs.BaseRefs(protected={base_refs.normalise(uri)}))
 

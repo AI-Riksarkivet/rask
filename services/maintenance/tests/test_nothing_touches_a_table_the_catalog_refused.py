@@ -70,10 +70,10 @@ def _identity(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _indexed(tmp_path: Path) -> str:
-    """Six fragments stamped with `TABLE_ID`, a BTREE index built before five of them: seven versions."""
+    """Six fragments, a BTREE index built before five of them: seven versions."""
     uri = str(tmp_path / "t.lance")
     for i in range(6):
-        rows = pa.table({"id": pa.array(range(i * 10, (i + 1) * 10), pa.int64())}).replace_schema_metadata({b"lineage.dataset_id": TABLE_ID.encode()})
+        rows = pa.table({"id": pa.array(range(i * 10, (i + 1) * 10), pa.int64())})
         if i == 0:
             lance.write_dataset(rows, uri, mode="create", data_storage_version="2.2")
             lance.dataset(uri).create_scalar_index("id", "BTREE")
@@ -95,7 +95,7 @@ def _execute(maintain_one: Callable[..., DatasetResult], uri: str, *, vend: Vend
     settings = MaintenanceSettings.model_validate({"s3_bucket": "lake", "catalog_url": CATALOG, "min_versions_to_expire": 1})
     with respx.mock(assert_all_called=False) as router:
         router.post(VEND_URL).mock(return_value=vend(uri))
-        return maintain_one(uri, settings, plan=CLEANUP_EVERYTHING)
+        return maintain_one(uri, settings, plan=CLEANUP_EVERYTHING, table_id=TABLE_ID)
 
 
 REFUSALS = [

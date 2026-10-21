@@ -44,7 +44,7 @@ from catalog.core.namespace import base_store_params_for, open_location
 from service_kit.governed import store_session
 from service_kit.governed.machine_identity import IdentityTokenUnavailableError
 from service_kit.governed.store_session import IssuedSession, WebIdentity
-from service_kit.lakehouse.base_refs import location_within
+from service_kit.lakehouse.base_refs import decoded_path, location_within
 from service_kit.lakehouse.base_registry import BaseJudgement, BaseRole, BaseStanding
 from service_kit.lakehouse.branch_layout import BRANCH_CONTAINER, BRANCH_FILE_DIRS
 from service_kit.lakehouse.features import BasePathRef
@@ -109,16 +109,20 @@ class CredentialVendor(Protocol):
 
 
 def split_s3_location(location: str) -> tuple[str, str]:
-    """Return ``(bucket, key_prefix)`` for an ``s3://bucket/key...`` location.
+    """Return ``(bucket, key_prefix)`` for an ``s3://bucket/key...`` location, the prefix as the store keeps it.
+
+    ``describe_table`` answers a registered location holding a non-ASCII character or a ``%`` percent-encoded
+    (``…/r%C3%A4ksm%C3%B6rg%C3%A5s``), and pylance opens the key it decodes to once (``base_refs.decoded_path``), so a
+    policy naming the encoded prefix reaches none of the table's bytes: measured as 403 AccessDenied on helm rev 20
+    ([[LH-517]], [[LH-520]]).
 
     Raises:
         ValueError: if ``location`` has no bucket (authority) component.
     """
-    parts = urlsplit(location)
-    bucket = parts.netloc
-    if not bucket:
+    if not urlsplit(location).netloc:
         raise ValueError(f"location has no bucket: {location!r}")
-    return bucket, parts.path.lstrip("/")
+    bucket, _, prefix = decoded_path(location).partition("/")
+    return bucket, prefix
 
 
 _READ_ACTIONS = ("s3:GetObject",)

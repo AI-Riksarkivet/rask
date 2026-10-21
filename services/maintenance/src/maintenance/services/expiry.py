@@ -16,7 +16,6 @@ import lance
 from pydantic import BaseModel, ConfigDict, Field
 
 from maintenance.core.config import shared_lance_session
-from maintenance.core.lineage_emit import declared_table_id, table_id_from_uri
 from maintenance.core.metrics import CatalogRefusal
 from service_kit.lakehouse import auto_cleanup
 from service_kit.lakehouse.base_refs import BaseRefs, location_in_store, rewrite_refusal
@@ -39,7 +38,7 @@ log = logging.getLogger(__name__)
 #: failed"). The gate names which: a count that merges them is not actionable, because a clone's source stays refused
 #: forever, a manifest flag is a pylance upgrade away from being supported, and a bad branch name clears when somebody
 #: removes a directory. A closed set: it is a metric label.
-type Gate = Literal["protected_base", "manifest_flags", "invalid_ref", "nested_branch", "foreign_data_base", "governed_elsewhere", "unauthenticated"]
+type Gate = Literal["protected_base", "manifest_flags", "invalid_ref", "nested_branch", "foreign_data_base", "governed_elsewhere", "unauthenticated", "unnamed"]
 
 #: Whether the dataset's table needs compacting or reindexing, as this tick's due evaluation decided
 #: (:mod:`maintenance.services.due`): ``due`` wrote its record, ``clear`` deleted it, ``unnamed`` found no
@@ -73,7 +72,7 @@ class DatasetResult(BaseModel):
     #: This pass found Lance's commit-path auto-cleanup armed and removed every ``lance.auto_cleanup.*`` key
     #: ([[LH-245]]).
     auto_cleanup_disarmed: bool = False
-    #: The catalog id this dataset is, as the catalog's ``__manifest`` names it, else the producer's stamp.
+    #: The table this dataset is, or whose branch it is, as the catalog's ``__manifest`` names it; ``None`` when none does.
     table_id: str | None = None
     due: DueVerdict | None = None
     error: str | None = None
@@ -372,7 +371,7 @@ def expire_versions(target: ExpiryTarget, policy: ExpiryPolicy) -> DatasetResult
     if (refused := _refusal(opened, target)) is not None:
         return disarm.onto(refused)
     result = disarm.onto(opened.result(target.uri))
-    result.table_id = target.table_id or table_id_from_uri(target.uri) or declared_table_id(opened.ds)
+    result.table_id = target.table_id
     try:
         _reclaim_versions(opened.ds, result, policy)
     except BaseException as exc:  # noqa: BLE001 — a Rust PANIC is not an Exception

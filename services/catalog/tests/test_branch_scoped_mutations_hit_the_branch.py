@@ -24,7 +24,7 @@ from pathlib import Path
 
 import pyarrow as pa
 import pytest
-from lance_namespace import connect
+from lance_namespace import CreateNamespaceRequest, connect
 
 from catalog.services.dataplane import create_table, delete_from_table, open_dataset, update_table
 
@@ -35,7 +35,7 @@ from lance_namespace_urllib3_client.models.delete_from_table_request import Dele
 from lance_namespace_urllib3_client.models.update_table_request import UpdateTableRequest  # noqa: E402
 
 
-TABLE_ID = ["rows"]
+TABLE_ID = ["db", "rows"]
 SCHEMA = pa.schema([pa.field("id", pa.int64()), pa.field("label", pa.string())])
 BRANCH = "staging"
 
@@ -46,8 +46,10 @@ def _table(ids: list[int], label: str) -> pa.Table:
 
 @pytest.fixture
 def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace is runtime-only
-    namespace = connect("dir", {"root": str(tmp_path / "data")})
-    create_table(namespace, {}, TABLE_ID, _table([1, 2, 3], "main"), mode="create", registry=None)
+    root = str(tmp_path / "data")
+    namespace = connect("dir", {"root": root})
+    namespace.create_namespace(CreateNamespaceRequest(id=TABLE_ID[:-1]))
+    create_table(namespace, {}, TABLE_ID, _table([1, 2, 3], "main"), root=root, mode="create", registry=None)
     dataset = open_dataset(namespace, {}, TABLE_ID)
     dataset.create_branch(BRANCH) if hasattr(dataset, "create_branch") else pytest.skip("pylance has no branch API here")
     return namespace

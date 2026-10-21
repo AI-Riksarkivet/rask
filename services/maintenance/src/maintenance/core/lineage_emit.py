@@ -40,12 +40,6 @@ from lineage_kit import CanonError, SigningKey, attach_signature
 from service_kit.governed.signing_key import SigningKeyHolder, SigningKeyUnavailableError
 from service_kit.lakehouse import outbox
 from service_kit.lakehouse.objectfs import StorageOptions
-
-# The key the medallion's stage stamp WRITES. Imported rather than restated: a reader and a writer
-# that each spell a metadata key for themselves agree only by luck, and this one decides whether a
-# dataset has a per-dataset maintenance-failure surface at all.
-from service_kit.lakehouse.stage_stamp import LINEAGE_DATASET_ID_KEY
-from service_kit.lakehouse.table_locations import table_id_from_location
 from service_kit.openlineage import (
     ERROR_MESSAGE_FACET_SCHEMA_URL,
     RUN_EVENT_SCHEMA_URL,
@@ -132,36 +126,6 @@ def build_maintenance_fail_event(
     event["eventType"] = "FAIL"
     event["run"]["facets"]["errorMessage"] = error_facet
     return event
-
-
-def declared_table_id(dataset: Any) -> str | None:  # noqa: ANN401 — LanceDataset, no protocol
-    """The canonical lineage name a producer stamped on the dataset, or ``None``.
-
-    Never raises: an unreadable schema must cost this dataset its provenance, not the sweep its tick.
-    """
-    try:
-        metadata = dict(getattr(dataset.schema, "metadata", None) or {})
-    except Exception:  # noqa: BLE001 — a malformed schema is a missing name, never a failed sweep
-        return None
-    for key, value in metadata.items():
-        name = key.decode() if isinstance(key, bytes) else str(key)
-        if name == LINEAGE_DATASET_ID_KEY:
-            declared = value.decode() if isinstance(value, bytes) else str(value)
-            return declared or None
-    return None
-
-
-def table_id_from_uri(uri: str) -> str | None:
-    """The catalog table id for a dataset URI — the canonical lineage ``Dataset`` name and the OpenFGA
-    object id of the maintenance event.
-
-    Delegates to the shared crossing rather than restating it. This function used to have its own
-    implementation that split the leaf on its first underscore unconditionally, so
-    ``aa3bed10_transcripts_v2$t1`` emitted as ``v2$t1`` — an id naming no table, written into
-    lineage's feed as though it did, on a namespace that exists in this estate. The credential path
-    needs the identical crossing, and two implementations of one convention is how that drift happened.
-    """
-    return table_id_from_location(uri)
 
 
 def build_maintenance_event(

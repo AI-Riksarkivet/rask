@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field
 from maintenance.core.config import MaintenanceSettings, shared_lance_session
 from maintenance.services.expiry import DueVerdict
 from maintenance.services.index_health import due_indices
+from maintenance.services.naming import TableIds
 from maintenance.services.purge import manifest_rows, table_location
 from service_kit.lakehouse.base_refs import normalise
 from service_kit.lakehouse.compaction_gate import compaction_refusal
@@ -31,21 +32,6 @@ from service_kit.lakehouse.objectfs import StorageOptions
 
 
 log = logging.getLogger(__name__)
-
-
-class TableIds(BaseModel):
-    """The catalog's table ids by location, read off every maintained root's ``__manifest``."""
-
-    #: Normalised absolute location -> the table's ``object_id``.
-    by_location: dict[str, str] = Field(default_factory=dict)
-    #: ``False`` when a root's manifest could not be read: a table missing from ``by_location`` may then still exist.
-    complete: bool = True
-
-    def of(self, location: str) -> str | None:
-        return self.by_location.get(normalise(location))
-
-    def names(self) -> set[str]:
-        return set(self.by_location.values())
 
 
 def table_ids(roots: set[str], storage_options: StorageOptions) -> TableIds:

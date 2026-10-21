@@ -3,7 +3,7 @@
 Driven through the CATALOG'S OWN APP over a real `dir` namespace (respx hands each vend request to it),
 so the 404 the sweep classifies is the door's own answer. Two ways a swept dataset names such an id:
 
-* its `lineage.dataset_id` stamp names a table nobody registered ([[LH-176]] measured such datasets live);
+* the `__manifest` row the tick named it by names a table whose namespace the catalog does not hold;
 * its table is dropped into the trash after the tick planned it. The drop deregisters and leaves the
   bytes in place, and a trashed dataset is frozen until undrop or purge: a version cleanup would destroy
   the history an undrop restores.
@@ -40,8 +40,11 @@ def _identity(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(credentials, "service_headers", lambda _settings: {})
 
 
-def _execute(catalog: TestClient, maintain_one: Callable[..., DatasetResult], uri: str) -> tuple[DatasetResult, list[tuple[int, object]]]:
-    """One dataset's pass with every vend request answered by the catalog app; returns the result and the door's answers."""
+def _execute(catalog: TestClient, maintain_one: Callable[..., DatasetResult], uri: str, **named: str) -> tuple[DatasetResult, list[tuple[int, object]]]:
+    """One dataset's pass with every vend request answered by the catalog app; returns the result and the door's answers.
+
+    ``named`` carries the ``table_id`` the catalog's ``__manifest`` named the dataset as when the tick planned it.
+    """
     answers: list[tuple[int, object]] = []
 
     def _forward(request: httpx.Request) -> httpx.Response:
@@ -52,7 +55,7 @@ def _execute(catalog: TestClient, maintain_one: Callable[..., DatasetResult], ur
     settings = MaintenanceSettings.model_validate({"s3_bucket": "lake", "catalog_url": CATALOG, "min_versions_to_expire": 1})
     with respx.mock() as router:
         router.post(url__startswith=f"{CATALOG}/management/v1/table/").mock(side_effect=_forward)
-        result = maintain_one(uri, settings, plan=CLEANUP_EVERYTHING)
+        result = maintain_one(uri, settings, plan=CLEANUP_EVERYTHING, **named)
     return result, answers
 
 
@@ -63,15 +66,14 @@ def _assert_left_alone(result: Any, uri: str, refused_added: list[tuple[int, dic
     assert len(lance.dataset(uri).versions()) == 6, "a table the catalog does not govern had its versions cleaned up"
 
 
-def test_a_stamp_naming_an_unregistered_table_is_left_alone(
+def test_a_dataset_named_as_a_table_the_catalog_does_not_hold_is_left_alone(
     *, catalog: TestClient, tmp_path: Path, maintain_one: Callable[..., DatasetResult], refused_added: list[tuple[int, dict[str, Any] | None]]
 ) -> None:
     uri = str(tmp_path / "loose" / "ghost.lance")
     for i in range(6):
-        rows = pa.table({"id": pa.array(range(i * 10, (i + 1) * 10), pa.int64())}).replace_schema_metadata({b"lineage.dataset_id": b"acme-bronze$ghost"})
-        lance.write_dataset(rows, uri, mode="create" if i == 0 else "append")
+        lance.write_dataset(pa.table({"id": pa.array(range(i * 10, (i + 1) * 10), pa.int64())}), uri, mode="create" if i == 0 else "append")
 
-    result, answers = _execute(catalog=catalog, maintain_one=maintain_one, uri=uri)
+    result, answers = _execute(catalog=catalog, maintain_one=maintain_one, uri=uri, table_id="acme-bronze$ghost")
 
     assert answers == [(404, 1)], f"the door did not answer NamespaceNotFound: {answers}"
     _assert_left_alone(result, uri, refused_added)
@@ -95,7 +97,7 @@ def test_a_table_dropped_into_the_trash_after_planning_is_left_alone(
     dropped = catalog.post(f"/v1/table/{table_id}/drop", json={})
     assert dropped.status_code == 200, dropped.text
     assert len(lance.dataset(uri).get_fragments()) == 6, "the drop deleted the bytes, so this is not the trash case"
-    result, answers = _execute(catalog=catalog, maintain_one=maintain_one, uri=uri)
+    result, answers = _execute(catalog=catalog, maintain_one=maintain_one, uri=uri, table_id=table_id)
 
     assert answers == [(404, 4)], f"the door did not answer TableNotFound: {answers}"
     _assert_left_alone(result, uri, refused_added)

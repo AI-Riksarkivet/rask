@@ -350,6 +350,7 @@ async def _vend_on_spec_door(
 async def declare_table(
     id: str,
     ns: NamespaceDep,
+    root: NamespaceRootDep,
     settings: SettingsDep,
     so: StorageOptionsDep,
     vendor: VendorDep,
@@ -360,8 +361,13 @@ async def declare_table(
     body: DeclareTableRequest | None = None,
     authorization: Annotated[str | None, Header()] = None,
 ) -> DeclareTableResponse:
-    """Declare a new (empty) table at ``id`` via ``declare_table``, then seed the caller's FGA ownership
-    and emit a versionless DECLARE_TABLE marker (the table's first provenance — who reserved it + where).
+    """Declare a new (empty) table at ``id``, at the namespace root under the uuid the catalog mints for it
+    (``dataplane.declare_table``, [[LH-520]]), then seed the caller's FGA ownership and emit a versionless
+    DECLARE_TABLE marker (the table's first provenance — who reserved it + where).
+
+    The catalog chooses a declared table's location, which the spec leaves to the implementation
+    (`lance_docs/ns_catalog/spec.yaml:3823-3827`), so a request naming one is refused. The declaration keeps no
+    ``properties``: it is recorded through RegisterTable, which keeps none (`spec.yaml:2719-2724`).
 
     The response carries the credential the declarer writes the table with, the highest tier FGA grants
     (:func:`_vend_on_spec_door`), unless the request sets ``vend_credentials`` false.
@@ -372,9 +378,11 @@ async def declare_table(
     # door holds its properties to: the table's uuid is the catalog's to mint ([[LH-519]]).
     reject_unsupported_properties(body.properties if body else None)
     provenance_guard.refuse_reserved_keys((body.properties if body else None) or {}, door="declare properties")
+    if body is not None and body.location:
+        raise InvalidInputError(
+            f"a declaration names no location: the catalog places a table it declares under the uuid it mints for it, got {body.location!r}"
+        )
     segments = parse_identifier(id, settings.delimiter)
-    # A wildcard (`*`/`?`) in a segment would widen the vended STS policy to siblings — refused at SHAPE,
-    # before the location is reserved (declare mints the table's object-store prefix from these segments).
     require_safe_segments(segments, delimiter=settings.delimiter)
     await fga_deps.require_parent_exists(ns, "table", segments, delimiter=settings.delimiter)
     # The id must not still belong to a trashed table (diff2 F10 item 4): a recoverable drop KEEPS
@@ -382,18 +390,15 @@ async def declare_table(
     await fga_deps.require_no_live_trash(settings, segments)
     req = body or DeclareTableRequest()
     req.id = reconcile_body_id(segments, req.id)
-    response: DeclareTableResponse = await run_in_threadpool(native.call, ns, "declare_table", req)
     canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
     claims = table_claims.claim_store(settings)
-    # [[LH-519]] The table's uuid is minted with its location's claim (ADR 0173 §2, §6), before anything grants or
-    # announces it; a claim that fails detaches the row.
-    if response.location:
-        await run_in_threadpool(table_claims.claim_declared, ns, claims, response.location, table=canonical, segments=segments)
+    # The table's uuid is minted with its location's claim, before anything grants or announces it (ADR 0173 §2, §5).
+    location = await run_in_threadpool(partial(dataplane.declare_table, ns, so, segments, root=root, claims=claims, holder=canonical))
+    response = DeclareTableResponse(location=location)
 
     async def _undo_declare() -> None:
         await run_in_threadpool(native.call, ns, "drop_table", DropTableRequest(id=segments))
-        if response.location:
-            await run_in_threadpool(location_claims.release, claims, response.location, canonical)
+        await run_in_threadpool(location_claims.release, claims, location, canonical)
 
     # A declared table holds NO data — the undo can never destroy bytes, so this door is the safest
     # possible place to compensate and there was never a reason for it to be the riskiest. Without it a

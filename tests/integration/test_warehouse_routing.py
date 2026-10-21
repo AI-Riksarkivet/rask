@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import io
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import lance
@@ -80,29 +80,39 @@ def _register_warehouse(registry: Path, warehouse_root: Path, *, wid: str = "wh-
     wh_svc.bind_namespace(control, {}, "tenantns", wid, str(warehouse_root))
 
 
-def test_bound_namespace_table_lands_in_warehouse_root_not_default(
-    routing: tuple[TestClient, Path, Path, Path],
+def _created(client: TestClient) -> int:
+    return client.post("/v1/table/tenantns$clips/create", content=_arrow(pa.table({"id": [1, 2, 3]})), headers=ARROW_STREAM).status_code
+
+
+def _declared(client: TestClient) -> int:
+    return client.post("/v1/table/tenantns$clips/declare", json={}).status_code
+
+
+def _directories(root: Path) -> list[str]:
+    """The directories a root holds beside its ``__manifest``: one per table the catalog laid out there."""
+    return sorted(child.name for child in root.iterdir() if child.is_dir() and not child.name.startswith("__"))
+
+
+@pytest.mark.parametrize("make", [pytest.param(_created, id="create"), pytest.param(_declared, id="declare")])
+def test_a_table_the_catalog_makes_lives_in_its_warehouse_root_under_its_uuid(
+    routing: tuple[TestClient, Path, Path, Path], make: Callable[[TestClient], int]
 ) -> None:
+    """[[LH-520]] A table the catalog creates or declares lives at ``<warehouse root>/<table uuid>`` (ADR 0173 §5).
+
+    Through the real resolver, which routes the bound namespace's tables to the warehouse's root and never to the
+    shared default root. The directory is the uuid the table's describe answers and nothing else: no part of the
+    table's name reaches the store.
+    """
     client, default_root, warehouse_root, registry = routing
     _register_warehouse(registry, warehouse_root)
+    assert make(client) == 200
 
-    # Create a table under the BOUND namespace, through the REAL resolver (no get_namespace override).
-    resp = client.post(
-        "/v1/table/tenantns$clips/create?mode=overwrite",
-        content=_arrow(pa.table({"id": [1, 2, 3]})),
-        headers=ARROW_STREAM,
-    )
-    assert resp.status_code == 200, resp.text
-    location = resp.json()["location"]
+    described = client.post("/v1/table/tenantns$clips/describe", json={})
 
-    # The routing WORKED: the dataset physically lives under the warehouse root, not the shared default root.
-    assert str(warehouse_root) in location, f"table did not route to the warehouse root: {location}"
-    assert str(default_root) not in location, f"table leaked into the default/shared root: {location}"
-    assert lance.dataset(location).count_rows() == 3  # and it is real, readable data
-
-    # And the default root physically holds no tenant table dir — true isolation, not just a different URI.
-    default_children = {p.name for p in default_root.rglob("tenantns*")}
-    assert not default_children, f"tenant data present in the default root: {default_children}"
+    assert described.status_code == 200, described.text
+    table_uuid = described.json()["properties"]["rask.uuid"]
+    assert Path(described.json()["location"].removeprefix("file://")) == warehouse_root / table_uuid, described.json()
+    assert (_directories(warehouse_root), _directories(default_root)) == ([table_uuid], [])
 
 
 def test_deactivate_quarantines_then_activate_restores(routing: tuple[TestClient, Path, Path, Path]) -> None:

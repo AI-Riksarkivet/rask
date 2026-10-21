@@ -130,6 +130,7 @@ def test_create_handler_keeps_all_three_axes_identical_under_non_default_delimit
         data.create_table(
             id="alpha.bronze.images",
             ns=cast(Any, object()),
+            root="s3://root",
             settings=_settings("."),
             token=PersonPrincipal(principal=Principal(idp_id="dex", subject="alice"), claims=IDToken(iss="i", sub="alice", aud="lance", exp=1, iat=1)),
             client=cast(Any, object()),

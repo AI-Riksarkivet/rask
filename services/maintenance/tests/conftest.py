@@ -15,8 +15,9 @@ from maintenance.core import metrics
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import sweep
 from maintenance.services.expiry import DatasetResult
+from maintenance.services.naming import TableIds
 from maintenance.services.plan import DatasetPlan, PlanContext
-from service_kit.lakehouse.base_refs import BaseRefs
+from service_kit.lakehouse.base_refs import BaseRefs, normalise
 from service_kit.lakehouse.maintenance_due import CloneList
 
 
@@ -47,21 +48,27 @@ def catalog(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestCli
 
 
 @pytest.fixture
-def maintain_one(monkeypatch: pytest.MonkeyPatch) -> Callable[..., DatasetResult]:
+def maintain_one(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Callable[..., DatasetResult]:
     """One dataset's pass through the sweep's real per-dataset path (`sweep.maintain_dataset`), outside a tick.
 
-    ``protected`` stands in for the tick's whole-estate pre-pass and ``plan`` for what the policy registry resolves to.
-    No ``__manifest`` names the dataset, so no due record is written.
+    ``protected`` stands in for the tick's whole-estate pre-pass, ``plan`` for what the policy registry resolves to, and
+    ``table_id`` for the table the catalog's ``__manifest`` names the dataset as: maintenance acts on no dataset it cannot
+    name that way ([[LH-520]]). A named dataset's due record lands under a control root in ``tmp_path``, where the tick
+    would write it to the catalog's.
     """
 
-    def _maintain(uri: str, settings: MaintenanceSettings, *, protected: BaseRefs | None = None, plan: DatasetPlan | None = None) -> DatasetResult:
+    def _maintain(
+        uri: str, settings: MaintenanceSettings, *, protected: BaseRefs | None = None, plan: DatasetPlan | None = None, table_id: str = "db$t"
+    ) -> DatasetResult:
         if plan is not None:
             monkeypatch.setattr(sweep, "resolve_plan", lambda *_a, **_k: plan.model_copy())
         now = datetime.now(UTC)
+        settings = settings.model_copy(update={"control_root": str(tmp_path / "control")})
         tick = sweep.SweepPlan(
             uris=[uri],
             protected=protected or BaseRefs(),
             clones=CloneList(taken_at=now),
+            table_ids=TableIds(by_location={normalise(uri): table_id}),
             context=PlanContext(policies=[], now=now, older_than=timedelta(days=settings.older_than_days)),
         )
         return sweep.maintain_dataset(uri, sweep=tick, settings=settings)

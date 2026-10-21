@@ -2,9 +2,9 @@
 
 :mod:`service_kit.lakehouse.location_claims` is the store-arbitrated record; this module is what only the
 catalog can answer about it — whether a claim's holder still resolves to the location — and the one
-shape every door calls it in. The catalog mints every table's uuid here, when a door brings the table into
-being (ADR 0173 §2): :func:`claim_new_table` for create, declare and register, :func:`take` for a table that
-already exists and keeps its uuid.
+shape every door calls it in. A table's uuid is recorded here when a door brings the table into being (ADR 0173
+§2): :func:`claim_new_table` for create, declare and register, :func:`take` for a table that already exists and
+keeps its uuid.
 """
 
 from __future__ import annotations
@@ -13,8 +13,6 @@ import logging
 from uuid import uuid4
 
 from lance_namespace import (
-    ConcurrentModificationError,
-    DeregisterTableRequest,
     DescribeTableRequest,
     InvalidTableStateError,
     LanceNamespace,
@@ -91,42 +89,20 @@ def take(
     return location_claims.take(store, location, table, segments, previous=previous, token=token, is_gone=lambda claim: holder_is_gone(ns, store, claim))
 
 
-def claim_new_table(ns: LanceNamespace, store: ClaimStore, location: str, *, table: str, segments: list[str]) -> LocationClaim:
-    """Make a table this request brings into being the holder of ``location``, under a uuid minted now (ADR 0173 §2).
+def claim_new_table(ns: LanceNamespace, store: ClaimStore, location: str, *, table: str, segments: list[str], table_uuid: str | None = None) -> LocationClaim:
+    """Make a table this request brings into being the holder of ``location``, under its uuid (ADR 0173 §2).
 
-    Called once the door's backend call has found ``table``'s name free, so a claim the location still holds
-    under that name is an ended table's. It is replaced, as a released claim and a gone holder's are: a table
-    attached where an earlier one was destroyed, deregistered or is gone is given a new uuid, and nothing granted
-    to the earlier table reaches it.
+    ``table_uuid`` is the uuid a declaration minted, because the location it declares is named after it
+    ([[LH-520]]); a registration's location is its registrar's, so its uuid is minted here. A claim the location
+    still holds under ``table``'s name is an ended table's, since the door brings a table of that name into being:
+    it is replaced, as a released claim and a gone holder's are. A table attached where an earlier one was
+    destroyed, deregistered or is gone is given a new uuid, and nothing granted to the earlier table reaches it.
 
     Raises:
         LocationHeldError: Another table holds the location.
     """
-    return location_claims.take(store, location, table, segments, uuid=str(uuid4()), is_gone=lambda claim: holder_is_gone(ns, store, claim))
-
-
-def claim_declared(ns: LanceNamespace, store: ClaimStore, location: str, *, table: str, segments: list[str]) -> LocationClaim:
-    """Claim the location the backend chose for a table this request declared, under a uuid minted now.
-
-    A claim that fails leaves the location unproven as this table's, so the declared row is detached, never
-    dropped: a drop deletes the location, whose bytes may be the holder's. The ``dir`` backend chooses a fresh
-    ``<hash>_<object_id>`` directory for each declaration, so a holder there is a hash collision, and a retry is
-    given another directory.
-
-    Raises:
-        ConcurrentModificationError: Another table holds the location the backend chose.
-    """
-    try:
-        return claim_new_table(ns, store, location, table=table, segments=segments)
-    except Exception as failed:
-        try:
-            native.call(ns, "deregister_table", DeregisterTableRequest(id=segments))
-        except Exception as undo:  # noqa: BLE001 — the claim's failure is what the caller is told
-            log.error("declared_table_not_detached", extra={"table": table, "location": location, "error": str(undo)[:300]})
-        if isinstance(failed, location_claims.LocationHeldError):
-            log.warning("declare_refused_held_location", extra={"table": table, "location": failed.claim.location, "holder": failed.claim.table})
-            raise ConcurrentModificationError(f"the location chosen for table {table} is held by another table; retry to be given another") from None
-        raise
+    minted = table_uuid or str(uuid4())
+    return location_claims.take(store, location, table, segments, uuid=minted, is_gone=lambda claim: holder_is_gone(ns, store, claim))
 
 
 def keep_for_trash(ns: LanceNamespace, store: ClaimStore, location: str, table: str, segments: list[str]) -> None:

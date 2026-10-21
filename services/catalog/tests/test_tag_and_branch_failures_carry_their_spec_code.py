@@ -41,6 +41,7 @@ from pathlib import Path
 import pyarrow as pa
 import pytest
 from lance_namespace import (
+    CreateNamespaceRequest,
     CreateTableTagRequest,
     DeleteTableBranchRequest,
     DeleteTableTagRequest,
@@ -72,7 +73,7 @@ lance = pytest.importorskip("lance")
 from lance_namespace_urllib3_client.models.create_table_branch_request import CreateTableBranchRequest  # noqa: E402
 
 
-TABLE_ID = ["rows"]
+TABLE_ID = ["db", "rows"]
 SCHEMA = pa.schema([pa.field("id", pa.int64())])
 
 #: A version no fixture reaches — the dataset below commits once, so anything past that is absent.
@@ -93,8 +94,10 @@ def _table(ids: list[int]) -> pa.Table:
 @pytest.fixture
 def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace is runtime-only
     """A table carrying one tag and one branch, so the missing and the colliding case are both real."""
-    namespace = connect("dir", {"root": str(tmp_path / "data")})
-    create_table(namespace, {}, TABLE_ID, _table([1, 2, 3]), mode="create", registry=None)
+    root = str(tmp_path / "data")
+    namespace = connect("dir", {"root": root})
+    namespace.create_namespace(CreateNamespaceRequest(id=TABLE_ID[:-1]))
+    create_table(namespace, {}, TABLE_ID, _table([1, 2, 3]), root=root, mode="create", registry=None)
     dataset = open_dataset(namespace, {}, TABLE_ID)
     dataset.tags.create(LIVE_TAG, 1)
     dataset.create_branch(LIVE_BRANCH, None)

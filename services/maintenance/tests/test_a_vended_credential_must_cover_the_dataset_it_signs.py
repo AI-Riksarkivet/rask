@@ -62,7 +62,7 @@ def _vends(location: str | None) -> object:
 def test_a_dataset_under_the_table_root_is_covered(monkeypatch: pytest.MonkeyPatch, answered: str, held: str) -> None:
     monkeypatch.setattr(credentials, "_vend", _vends(answered))
 
-    options = credentials.write_options_for(held, _settings(), fallback=AMBIENT, declared_table_id="tracka$rd2_28877454")
+    options = credentials.write_options_for(held, _settings(), table_id="tracka$rd2_28877454", fallback=AMBIENT)
 
     assert options == SCOPED, f"{held} was refused a credential vended for its own table root {answered}"
 
@@ -78,7 +78,7 @@ def test_a_vend_that_names_no_location_proceeds_and_says_so(monkeypatch: pytest.
     monkeypatch.setattr(credentials, "_vend", _vends(None))
 
     with caplog.at_level("WARNING"):
-        options = credentials.write_options_for("s3://bind86-wh/medallion/silver", _settings(), fallback=AMBIENT, declared_table_id="bronze$events")
+        options = credentials.write_options_for("s3://bind86-wh/medallion/silver", _settings(), table_id="bronze$events", fallback=AMBIENT)
 
     assert options == SCOPED
     assert any("location" in record.getMessage() for record in caplog.records), "an unverifiable vend passed silently"

@@ -35,7 +35,7 @@ import pyarrow as pa
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from lance_namespace import connect
+from lance_namespace import CreateNamespaceRequest, connect
 
 from catalog.api.dependencies import ControlEmitterDep, NamespaceDep, SettingsDep, StorageOptionsDep
 from catalog.api.security import CurrentToken
@@ -56,8 +56,8 @@ _CALLER = PersonPrincipal(
     principal=Principal(idp_id="dex", subject="08a8684b-db88-4b73-90a9-3cd1661f5466"),
     claims=IDToken(iss="https://dex", sub=_SUB, aud="lance", exp=1, iat=1),
 )
-TABLE = ["alpha"]
-TABLE_PATH = "alpha"
+TABLE = ["db", "alpha"]
+TABLE_PATH = "db$alpha"
 
 
 def _table(start: int) -> pa.Table:
@@ -67,11 +67,12 @@ def _table(start: int) -> pa.Table:
 @pytest.fixture
 def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace, a runtime-only type
     namespace = connect("dir", {"root": str(tmp_path / "data")})
-    create_table(namespace, {}, TABLE, _table(1), mode="create", registry=None)
+    namespace.create_namespace(CreateNamespaceRequest(id=TABLE[:-1]))
+    created = create_table(namespace, {}, TABLE, _table(1), root=str(tmp_path / "data"), mode="create", registry=None)
     # A SECOND VERSION, so "the parent is main's current version" is a number the request could not
     # have guessed and a null could not stand in for. With one version, 1 and "unset" are too close
     # to tell apart in a failure message.
-    lance.write_dataset(pa.table({"id": pa.array([4, 5, 6], pa.int64())}), str(tmp_path / "data" / f"{TABLE_PATH}.lance"), mode="append")
+    lance.write_dataset(pa.table({"id": pa.array([4, 5, 6], pa.int64())}), str(created.location), mode="append")
     return namespace
 
 

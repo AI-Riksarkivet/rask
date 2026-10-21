@@ -52,6 +52,7 @@ def _create(**over: Any) -> Any:
     kwargs: dict[str, Any] = {
         "id": "db1$t",
         "ns": cast("LanceNamespace", object()),
+        "root": "s3://root",
         "settings": _settings(),
         "token": None,
         "client": None,

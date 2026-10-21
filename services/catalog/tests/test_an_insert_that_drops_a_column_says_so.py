@@ -26,7 +26,7 @@ from pathlib import Path
 
 import pyarrow as pa
 import pytest
-from lance_namespace import connect
+from lance_namespace import CreateNamespaceRequest, connect
 
 from catalog.services.dataplane import coerce_insert_arrow, create_table
 
@@ -37,7 +37,7 @@ _BODY_LIMIT = 256 * 1024 * 1024
 
 lance = pytest.importorskip("lance")
 
-TABLE_ID = ["rows"]
+TABLE_ID = ["db", "rows"]
 SCHEMA = pa.schema([pa.field("id", pa.int64()), pa.field("s", pa.string())])
 
 
@@ -51,7 +51,16 @@ def _ipc(table: pa.Table) -> bytes:
 @pytest.fixture
 def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace is runtime-only
     namespace = connect("dir", {"root": str(tmp_path / "data")})
-    create_table(namespace, {}, TABLE_ID, pa.table({"id": pa.array([1], pa.int64()), "s": pa.array(["a"])}, schema=SCHEMA), mode="create", registry=None)
+    namespace.create_namespace(CreateNamespaceRequest(id=TABLE_ID[:-1]))
+    create_table(
+        namespace,
+        {},
+        TABLE_ID,
+        pa.table({"id": pa.array([1], pa.int64()), "s": pa.array(["a"])}, schema=SCHEMA),
+        root=str(tmp_path / "data"),
+        mode="create",
+        registry=None,
+    )
     return namespace
 
 

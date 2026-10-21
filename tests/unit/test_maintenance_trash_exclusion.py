@@ -33,6 +33,7 @@ import pytest
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services.discovery import Discovery
 from service_kit.lakehouse import trash
+from service_kit.lakehouse.base_refs import normalise
 
 
 def _dataset(path: Path) -> str:
@@ -59,7 +60,8 @@ def _run(
     settings: MaintenanceSettings,
     uris: list[str],
 ) -> tuple[list[Any], list[str]]:
-    """Run the real sweep over ``uris``; return (results, the URIs whose expiry pass reached its reclamation decision)."""
+    """Run the real sweep over ``uris``, each named its own table by the catalog's `__manifest`; return (results, the URIs
+    whose expiry pass reached its reclamation decision)."""
     from maintenance.services import expiry
     from maintenance.services import sweep as sweep_mod
     from maintenance.services.due import TableIds
@@ -73,7 +75,8 @@ def _run(
 
     monkeypatch.setattr(sweep_mod, "_s3fs", lambda _s: None)
     monkeypatch.setattr(sweep_mod, "discover_datasets", lambda _fs, _bucket, *, max_depth: Discovery(uris=list(uris)))
-    monkeypatch.setattr(sweep_mod, "table_ids", lambda *_a, **_k: TableIds())
+    named = TableIds(by_location={normalise(uri): f"db$t{i}" for i, uri in enumerate(uris)})
+    monkeypatch.setattr(sweep_mod, "table_ids", lambda *_a, **_k: named)
     monkeypatch.setattr(expiry, "count_reclaimable", _spy)
     return sweep_mod.run_sweep(settings), reached
 

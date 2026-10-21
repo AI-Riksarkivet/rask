@@ -111,6 +111,7 @@ def test_create_delegates_to_dataplane_create_table(client: TestClient, fake_ns:
         segments,
         data,
         *,
+        root,
         mode=None,
         properties=None,
         allow_external_blobs=False,
@@ -122,6 +123,7 @@ def test_create_delegates_to_dataplane_create_table(client: TestClient, fake_ns:
         transaction_properties=None,
     ) -> CreateTableResponse:
         seen["segments"] = segments
+        seen["root"] = root  # [[LH-520]] where a table this create brings into being is declared under its uuid
         seen["registry"] = registry  # [[LH-279]] the door hands the write the control root to record its bases in
         seen["mode"] = mode
         seen["allow_external_blobs"] = allow_external_blobs  # proves the endpoint forwards the setting
@@ -145,6 +147,7 @@ def test_create_delegates_to_dataplane_create_table(client: TestClient, fake_ns:
     )
     assert seen == {
         "segments": ["media", "clips"],
+        "root": get_settings().root,
         "mode": "overwrite",
         "allow_external_blobs": False,
         "external_blob_bases": [],
@@ -204,7 +207,8 @@ def test_exists_returns_200_with_no_body(client: TestClient, fake_ns: MagicMock)
 
 
 def test_domain_conflict_maps_to_409(client: TestClient, fake_ns: MagicMock) -> None:
-    fake_ns.declare_table.side_effect = TableAlreadyExistsError("exists")
+    # A declaration records its row through RegisterTable ([[LH-520]]), which answers a taken name so.
+    fake_ns.register_table.side_effect = TableAlreadyExistsError("exists")
     assert client.post("/v1/table/db$t/declare", json={}).status_code == 409
 
 
@@ -414,9 +418,8 @@ def test_register_emits_the_resolved_location_not_the_relative_one(client: TestC
 
 
 def test_declare_emits_versionless_marker(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
-    from lance_namespace import DeclareTableResponse
-
-    fake_ns.declare_table.return_value = DeclareTableResponse(location="s3://bucket/t")
+    # The declaration answers the location the backend describes once its row is recorded ([[LH-520]]).
+    fake_ns.describe_table.return_value = DescribeTableResponse(location="s3://bucket/t")
     captured = _capture_emit(monkeypatch, "tables")
 
     resp = client.post("/v1/table/db$t/declare", json={})

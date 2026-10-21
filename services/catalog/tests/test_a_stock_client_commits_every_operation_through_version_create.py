@@ -615,7 +615,8 @@ def _answer_to_the_staged_commit(served: Served, table: str, version: int, *, br
     """
     assert served.root is not None, "a staged manifest is read back from a local root"
     ref = f"tree/{branch}/" if branch is not None else ""
-    pending = list(served.root.glob(f"*_{table}/{ref}_versions/*.manifest-*"))
+    described = httpx.post(f"{served.url}/v1/table/{table}/describe", json={"vend_credentials": False}, headers=_TOKEN).json()
+    pending = list(Path(described["location"].removeprefix("file://")).glob(f"{ref}_versions/*.manifest-*"))
     assert len(pending) == 1, f"one staged manifest of {table} awaits its answer, found {pending}: none means the commit landed"
     (staged,) = pending
     request = {"version": version, "manifest_path": staged.relative_to("/").as_posix(), **({"branch": branch} if branch is not None else {})}

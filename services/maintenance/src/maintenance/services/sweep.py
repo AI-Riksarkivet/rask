@@ -35,7 +35,7 @@ from opentelemetry.trace import StatusCode
 from pydantic import BaseModel, Field
 
 from maintenance.core.config import MaintenanceSettings, get_settings, shared_lance_session
-from maintenance.core.lineage_emit import MaintenanceEmitter, declared_table_id, table_id_from_uri
+from maintenance.core.lineage_emit import MaintenanceEmitter
 from maintenance.core.metrics import (
     record_dataset_swept,
     record_failed,
@@ -50,8 +50,9 @@ from maintenance.core.metrics import (
 )
 from maintenance.services import credentials, purge
 from maintenance.services.discovery import discover_datasets
-from maintenance.services.due import TableIds, refresh_due, table_ids
+from maintenance.services.due import refresh_due, table_ids
 from maintenance.services.expiry import DatasetResult, DueVerdict, ExpiryPolicy, ExpiryTarget, count_reclaimable, expire_versions, summarize_refusals
+from maintenance.services.naming import TableIds, under_a_declared_root
 from maintenance.services.plan import DatasetPlan, PlanContext, buckets_to_sweep, cadence_skip, load_policies, resolve_plan
 from service_kit.governed import fga
 from service_kit.governed.audit import SUCCESS, audit
@@ -261,6 +262,9 @@ def plan_sweep(settings: MaintenanceSettings) -> SweepPlan:
     buckets = buckets_to_sweep(settings, options)
     uris = _discover_all(_s3fs(settings), buckets, max_depth=settings.discovery_max_depth)
     protected = _protected_roots(uris, options, settings)
+    # A declared platform root is opened by explicit URI and named by no `__manifest` row, so it is no unnamed dataset
+    # to refuse every tick; it is still read above, since a clone resolving its files there protects them.
+    uris = [uri for uri in uris if not under_a_declared_root(uri, settings.declared_platform_root_list)]
     uris, decided = _exclude_trashed(uris, trashed_by_path)
     # Discovery order is deterministic, so a pass that consistently dies at dataset N would never reach what follows.
     random.shuffle(uris)
@@ -275,17 +279,15 @@ def plan_sweep(settings: MaintenanceSettings) -> SweepPlan:
 
 
 class WriteProbe(BaseModel):
-    """What one pre-vend open of a dataset tells us: whether expiry could write, and what the dataset calls itself."""
+    """What one pre-vend open of a dataset tells us: whether expiry could write, and the manifest facts it reports."""
 
     may_write: bool
-    #: The ``lineage.dataset_id`` the producer stamped, or ``None``. Never a guess.
-    declared_table_id: str | None = None
     data_storage_version: str | None = None
     mixed_data_file_versions: bool = False
 
 
 def _probe_before_vending(uri: str, options: dict[str, str], *, policy: ExpiryPolicy) -> WriteProbe:
-    """Could expiry write anything at all on this dataset, and what does it call itself?
+    """Could expiry write anything at all on this dataset?
 
     THE COST IT REMOVES, measured 2026-09-11: the store mints one STS identity record per vend and prunes none — 280 per
     minute on this estate — and the previous store became unable to restart at 107,485 of them. Expiry writes only
@@ -302,7 +304,6 @@ def _probe_before_vending(uri: str, options: dict[str, str], *, policy: ExpiryPo
         reclaimable = policy.cleanup_enabled and count_reclaimable(ds, uri, policy) >= policy.min_reclaimable
         return WriteProbe(
             may_write=armed or reclaimable,
-            declared_table_id=declared_table_id(ds),
             data_storage_version=ds.data_storage_version,
             mixed_data_file_versions=mixes_data_file_versions(manifest_feature_flags(ds)[0]),
         )
@@ -352,33 +353,30 @@ def _stopped_by_vend(probe: WriteProbe, target: ExpiryTarget, exc: Exception) ->
     return stopped
 
 
-def _expire(uri: str, plan: DatasetPlan, *, sweep: SweepPlan, settings: MaintenanceSettings) -> DatasetResult:
-    """One dataset's expiry, signed by a table-scoped vend where expiry may write.
+def _expire(uri: str, table: str, plan: DatasetPlan, *, sweep: SweepPlan, settings: MaintenanceSettings) -> DatasetResult:
+    """One dataset's expiry, signed by a vend scoped to ``table``, the table ``__manifest`` names it as, where expiry may write.
 
-    The id the catalog's ``__manifest`` names comes first, then the one the path's layout carries; the producer's stamp
-    answers only where both are silent, because a stamp is a claim and [[LH-141]] is a catalogue of wrong ones. One
-    resolution feeds the vend and the result, so the id a credential is scoped to and the id events name cannot
+    One name feeds the vend and the result, so the table a credential is scoped to and the table events name cannot
     disagree.
     """
     options = settings.storage_options()
     policy = plan.expiry_policy(min_reclaimable=settings.min_versions_to_expire)
     probe = _probe_before_vending(uri, options, policy=policy)
-    table_id = sweep.table_ids.of(uri) or table_id_from_uri(uri) or probe.declared_table_id
-    target = ExpiryTarget(uri=uri, storage_options=options, protected=sweep.protected, table_id=table_id)
+    target = ExpiryTarget(uri=uri, storage_options=options, protected=sweep.protected, table_id=table)
     if probe.may_write:
         try:
-            target.storage_options = credentials.write_options_for(uri, settings, fallback=options, declared_table_id=table_id)
+            target.storage_options = credentials.write_options_for(uri, settings, table_id=table, fallback=options)
         except (credentials.MaintenanceDenied, credentials.TableNotGoverned, credentials.VendUndecided) as exc:
             return _stopped_by_vend(probe, target, exc)
     return expire_versions(target, policy)
 
 
-def _expire_in_span(uri: str, plan: DatasetPlan, *, sweep: SweepPlan, settings: MaintenanceSettings) -> DatasetResult:
+def _expire_in_span(uri: str, table: str, plan: DatasetPlan, *, sweep: SweepPlan, settings: MaintenanceSettings) -> DatasetResult:
     """:func:`_expire` inside its own span, timed around the work: a failure and a refusal are both on the span."""
     with tracer.start_as_current_span("maintenance.expire_versions") as span:
         span.set_attribute("lance.maintenance.dataset_uri", uri)
         started = perf_counter()
-        result = _expire(uri, plan, sweep=sweep, settings=settings)
+        result = _expire(uri, table, plan, sweep=sweep, settings=settings)
         result.duration_seconds = round(perf_counter() - started, 3)
         span.set_attribute("lance.maintenance.duration_seconds", result.duration_seconds)
         if result.refused is not None:
@@ -398,9 +396,9 @@ def _evaluate_due(uri: str, plan: DatasetPlan, *, sweep: SweepPlan, settings: Ma
     return refresh_due(question, settings, now=sweep.context.now)
 
 
-def _plan_for(uri: str, *, sweep: SweepPlan, settings: MaintenanceSettings) -> DatasetPlan:
+def _plan_for(uri: str, table: str, *, sweep: SweepPlan, settings: MaintenanceSettings) -> DatasetPlan:
     """The dataset's plan, with the policy cadence applied."""
-    plan = resolve_plan(uri, context=sweep.context, table_id=sweep.table_ids.of(uri) or table_id_from_uri(uri), settings=settings)
+    plan = resolve_plan(uri, context=sweep.context, table_id=table, settings=settings)
     if plan.policy is not None and (skipped := cadence_skip(plan.policy, settings=settings, uri=uri, now=sweep.context.now)):
         plan.skipped = skipped
     return plan
@@ -409,10 +407,13 @@ def _plan_for(uri: str, *, sweep: SweepPlan, settings: MaintenanceSettings) -> D
 def maintain_dataset(uri: str, *, sweep: SweepPlan, settings: MaintenanceSettings) -> DatasetResult:
     """One dataset's sweep pass: expiry, then the due evaluation, then its cadence stamp and counters."""
     record_dataset_swept()
-    plan = _plan_for(uri, sweep=sweep, settings=settings)
+    table = sweep.table_ids.table_of(uri)
+    if table is None:
+        return _unnamed(uri, settings=settings)
+    plan = _plan_for(uri, table, sweep=sweep, settings=settings)
     if plan.skipped is not None:
         return _skipped(uri, plan, settings=settings)
-    result = _expire_in_span(uri, plan, sweep=sweep, settings=settings)
+    result = _expire_in_span(uri, table, plan, sweep=sweep, settings=settings)
     result.due = _evaluate_due(uri, plan, sweep=sweep, settings=settings)
     _finish(result, plan=plan, now=sweep.context.now, settings=settings)
     return result
@@ -421,12 +422,30 @@ def maintain_dataset(uri: str, *, sweep: SweepPlan, settings: MaintenanceSetting
 def expire_dataset(uri: str, *, sweep: SweepPlan, settings: MaintenanceSettings) -> DatasetResult:
     """One dataset's expiry, with the cadence, stamp and counters a sweep pass carries: what the event lane runs after
     a commit, ``sweep`` holding that one table."""
-    plan = _plan_for(uri, sweep=sweep, settings=settings)
+    table = sweep.table_ids.table_of(uri)
+    if table is None:
+        return _unnamed(uri, settings=settings)
+    plan = _plan_for(uri, table, sweep=sweep, settings=settings)
     if plan.skipped is not None:
         return _skipped(uri, plan, settings=settings)
-    result = _expire_in_span(uri, plan, sweep=sweep, settings=settings)
+    result = _expire_in_span(uri, table, plan, sweep=sweep, settings=settings)
     _finish(result, plan=plan, now=sweep.context.now, settings=settings)
     return result
+
+
+def _unnamed(uri: str, *, settings: MaintenanceSettings) -> DatasetResult:
+    """A dataset no ``__manifest`` row names, reported by its location and never opened, expired or vended ([[LH-520]]).
+
+    Maintenance acts only on a table the catalog names: a dataset the catalog cannot name has no table a vend could be
+    scoped to, and its own credential would sign the pass instead. Its location is the whole report, since nothing
+    names it otherwise.
+    """
+    refused = DatasetResult(uri=uri, due="unnamed").refuse(
+        f"no __manifest row names the dataset at {uri}, so maintenance neither expires nor vends it", gate="unnamed"
+    )
+    _record_dataset_metrics(refused)
+    _record_dataset_outcome(refused, subject=settings.catalog_service_identity)
+    return refused
 
 
 def _skipped(uri: str, plan: DatasetPlan, *, settings: MaintenanceSettings) -> DatasetResult:
@@ -653,7 +672,7 @@ def _emit_selection(results: list[DatasetResult], *, delimiter: str) -> tuple[li
     complete: list[tuple[str, str]] = []
     failed: list[tuple[str, str, str]] = []
     for result in results:
-        table_id = result.table_id or table_id_from_uri(result.uri)
+        table_id = result.table_id
         if table_id is None:
             continue
         namespace = fga.parent_namespace_id(table_id, delimiter=delimiter) or ""

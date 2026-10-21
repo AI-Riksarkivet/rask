@@ -1,11 +1,10 @@
 """Unit tests for compaction → lineage emission (#7b + §4 failure visibility) — infra-free.
 
 Drives the async emit with stdlib ``asyncio.run`` (the project convention). Covers:
-* the table-id parse from the catalog's ``<uuid>_<table_id>`` layout (incl. the boundaries),
 * the OpenLineage maintenance-event shapes (COMPLETE and FAIL) **round-tripped through the lineage
   ``RunEvent`` model** — the cross-service wire contract,
 * which datasets in a sweep get which event (material work → COMPLETE; ``maintain:``-errored → FAIL;
-  ``open:``-errored / no-op / unparseable → nothing) + the parent-namespace derivation,
+  ``open:``-errored / no-op / unnamed → nothing) + the parent-namespace derivation,
 * the FAIL flood guard (deterministic per-dataset run id; COMPLETE keeps uuid4), the per-tick FAIL cap
   (logged, never silent) and the concurrent (bounded) FAIL fan-out,
 * the emitter factory (no-op when off/unwired; Dapr when wired) and the best-effort publish (a broker
@@ -31,19 +30,9 @@ from maintenance.core.lineage_emit import (
     build_maintenance_fail_event,
     classify_retryable,
     make_emitter,
-    table_id_from_uri,
 )
 from maintenance.services.expiry import DatasetResult
 from maintenance.services.sweep import _MAX_FAIL_EMITS_PER_TICK, emit_sweep_lineage
-
-
-# --------------------------------------------------------------------------- #
-# table_id parse from the catalog's <uuid>_<table_id> dataset layout
-# --------------------------------------------------------------------------- #
-
-
-def test_table_id_from_uri_tolerates_trailing_slash() -> None:
-    assert table_id_from_uri("s3://lance-catalog/aa3bed10_gold$catalog/") == "gold$catalog"
 
 
 # --------------------------------------------------------------------------- #
@@ -140,17 +129,23 @@ class _RecordingEmitter:
 
 
 def _result(uri: str, **kw: Any) -> DatasetResult:
+    """A dataset no ``__manifest`` row named, as the sweep reports one: no table id."""
     return DatasetResult(uri=uri, **kw)
+
+
+def _named(table: str, **kw: Any) -> DatasetResult:
+    """A dataset the sweep named ``table`` through ``__manifest`` ([[LH-520]])."""
+    return DatasetResult(uri=f"s3://b/{table}", table_id=table, **kw)
 
 
 def test_emit_sweep_lineage_emits_only_for_datasets_whose_versions_were_reclaimed() -> None:
     emitter = _RecordingEmitter()
     results = [
-        _result("s3://b/aa3bed11_ns$a", old_versions_removed=3),  # compacted → emit
-        _result("s3://b/aa3bed12_ns$b", old_versions_removed=2),  # GC'd → emit
-        _result("s3://b/aa3bed13_ns$c"),  # no-op tick → skip
-        _result("s3://b/aa3bed14_ns$d", old_versions_removed=1, error="open: boom"),  # transient noise → skip
-        _result("s3://b/nounderscore", old_versions_removed=1),  # unparseable id → skip
+        _named("ns$a", old_versions_removed=3),  # compacted → emit
+        _named("ns$b", old_versions_removed=2),  # GC'd → emit
+        _named("ns$c"),  # no-op tick → skip
+        _named("ns$d", old_versions_removed=1, error="open: boom"),  # transient noise → skip
+        _result("s3://b/nounderscore", old_versions_removed=1),  # no __manifest row names it → skip
     ]
     asyncio.run(emit_sweep_lineage(cast(Any, emitter), results, delimiter="$"))
     assert emitter.calls == [("ns$a", "ns"), ("ns$b", "ns")]
@@ -160,16 +155,15 @@ def test_emit_sweep_lineage_emits_only_for_datasets_whose_versions_were_reclaime
 def test_emit_sweep_lineage_fails_only_for_maintain_errors() -> None:
     # §4 selection: maintain: (escaped compact/GC — post-auto-retry terminal) → FAIL; open: (unreadable /
     # declared-only dir) → nothing; a maintain:-errored dataset that ALSO did partial material work gets
-    # the FAIL, not a COMPLETE (the pass did not complete); unparseable layout → nothing either way
-    # (the documented medallion-nested blind spot).
+    # the FAIL, not a COMPLETE (the pass did not complete); a dataset no __manifest row names → nothing either way.
     emitter = _RecordingEmitter()
     results = [
-        _result("s3://b/aa3bed11_ns$a", error="maintain: Commit conflict"),
-        _result("s3://b/aa3bed12_ns$b", old_versions_removed=2, error="maintain: cleanup blew up"),  # partial work
-        _result("s3://b/aa3bed13_ns$c", error="open: not a dataset"),
-        _result("s3://b/aa3bed14_ns$d", error="boom"),  # UNPREFIXED error → neither event (selection contract)
-        _result("s3://b/medallion", error="maintain: nope"),  # no <uuid>_<id> layout → no id → skip
-        _result("s3://b/aa3bed15_ns$e", old_versions_removed=1),  # healthy → COMPLETE as before
+        _named("ns$a", error="maintain: Commit conflict"),
+        _named("ns$b", old_versions_removed=2, error="maintain: cleanup blew up"),  # partial work
+        _named("ns$c", error="open: not a dataset"),
+        _named("ns$d", error="boom"),  # UNPREFIXED error → neither event (selection contract)
+        _result("s3://b/medallion", error="maintain: nope"),  # no __manifest row names it → skip
+        _named("ns$e", old_versions_removed=1),  # healthy → COMPLETE as before
     ]
     asyncio.run(emit_sweep_lineage(cast(Any, emitter), results, delimiter="$"))
     assert emitter.calls == [("ns$e", "ns")]
@@ -186,25 +180,25 @@ def test_emit_sweep_lineage_caps_fail_emits_and_logs_the_drop(caplog: pytest.Log
     # The capped subset is SHUFFLED, so a dataset late in listing order is not dropped on every tick of a
     # mass incident.
     emitter = _RecordingEmitter()
-    results = [_result(f"s3://b/u{i}_ns$t{i}", error="maintain: boom") for i in range(_MAX_FAIL_EMITS_PER_TICK + 5)]
+    results = [_named(f"ns$t{i}", error="maintain: boom") for i in range(_MAX_FAIL_EMITS_PER_TICK + 5)]
     random.seed(0)
     with caplog.at_level("WARNING"):
         asyncio.run(emit_sweep_lineage(cast(Any, emitter), results, delimiter="$"))
     assert len(emitter.failed_calls) == _MAX_FAIL_EMITS_PER_TICK
     assert any(r.message == "maintenance_fail_emits_capped" for r in caplog.records)
-    in_listing_order = {f"u{i}_ns$t{i}" for i in range(_MAX_FAIL_EMITS_PER_TICK)}
+    in_listing_order = {f"ns$t{i}" for i in range(_MAX_FAIL_EMITS_PER_TICK)}
     assert {table_id for table_id, _, _ in emitter.failed_calls} != in_listing_order, "the cap keeps the first datasets listed on every tick"
 
 
-def test_cap_counts_actual_emits_not_unparseable_slots(caplog: pytest.LogCaptureFixture) -> None:
-    # Review 2026-07-10: the cap must apply AFTER the layout filter — 30 unparseable maintain: failures
-    # (the medallion-nested blind spot) must not consume cap slots and starve the 5 real emits, and no
-    # cap warning fires when the actual emit count is under the cap.
+def test_cap_counts_actual_emits_not_unnamed_slots(caplog: pytest.LogCaptureFixture) -> None:
+    # Review 2026-07-10: the cap must apply AFTER the naming filter — 30 maintain: failures no __manifest row
+    # names must not consume cap slots and starve the 5 real emits, and no cap warning fires when the actual
+    # emit count is under the cap.
     emitter = _RecordingEmitter()
-    results = [_result("s3://b/medallion", error="maintain: nope")] * 30 + [_result(f"s3://b/u{i}_ns$t{i}", error="maintain: real") for i in range(5)]
+    results = [_result("s3://b/medallion", error="maintain: nope")] * 30 + [_named(f"ns$t{i}", error="maintain: real") for i in range(5)]
     with caplog.at_level("WARNING"):
         asyncio.run(emit_sweep_lineage(cast(Any, emitter), results, delimiter="$"))
-    assert len(emitter.failed_calls) == 5  # every parseable failure emitted
+    assert len(emitter.failed_calls) == 5  # every named failure emitted
     assert not any(r.message == "maintenance_fail_emits_capped" for r in caplog.records)
 
 
@@ -220,7 +214,7 @@ def test_emit_sweep_lineage_never_raises_even_for_a_broken_emitter() -> None:
         async def emit_maintenance_failed(self, *, table_id: str, namespace: str, error: str) -> None:
             raise RuntimeError("boom from a non-best-effort emitter")
 
-    results = [_result("s3://b/aa3bed11_ns$a", error="maintain: x")]
+    results = [_named("ns$a", error="maintain: x")]
     asyncio.run(emit_sweep_lineage(cast(Any, _OldProtocolEmitter()), results, delimiter="$"))  # no raise
     asyncio.run(emit_sweep_lineage(cast(Any, _RaisingEmitter()), results, delimiter="$"))  # no raise
 
@@ -234,7 +228,7 @@ def test_fail_batch_bounded_through_the_real_emitter_with_a_hung_sidecar() -> No
             await asyncio.sleep(60)
 
     emitter = DaprMaintenanceEmitter(cast(Any, _HungClient()), pubsub="p", topic="t", job_namespace="compaction", timeout_seconds=0.2)
-    results = [_result(f"s3://b/u{i}_ns$t{i}", error="maintain: hung") for i in range(30)]
+    results = [_named(f"ns$t{i}", error="maintain: hung") for i in range(30)]
     start = time.monotonic()
     asyncio.run(emit_sweep_lineage(cast(Any, emitter), results, delimiter="$"))
     elapsed = time.monotonic() - start
@@ -251,7 +245,7 @@ def test_emit_sweep_lineage_fail_batch_is_concurrent_not_sequential() -> None:
             await super().emit_maintenance_failed(table_id=table_id, namespace=namespace, error=error)
 
     emitter = _SlowEmitter()
-    results = [_result(f"s3://b/u{i}_ns$t{i}", error="maintain: slow") for i in range(20)]
+    results = [_named(f"ns$t{i}", error="maintain: slow") for i in range(20)]
     start = time.monotonic()
     asyncio.run(emit_sweep_lineage(cast(Any, emitter), results, delimiter="$"))
     elapsed = time.monotonic() - start
@@ -263,7 +257,7 @@ def test_emit_sweep_lineage_root_table_has_empty_namespace() -> None:
     # A single-segment table id has no parent namespace → "" (matching the catalog's create emit, so the
     # maintenance event never clobbers the dataset node's namespace).
     emitter = _RecordingEmitter()
-    asyncio.run(emit_sweep_lineage(cast(Any, emitter), [_result("s3://b/aa3bed10_solo", old_versions_removed=1)], delimiter="$"))
+    asyncio.run(emit_sweep_lineage(cast(Any, emitter), [_named("solo", old_versions_removed=1)], delimiter="$"))
     assert emitter.calls == [("solo", "")]
 
 
@@ -359,16 +353,15 @@ def test_the_stamp_PRESERVES_other_schema_metadata(tmp_path: Any) -> None:
     assert metadata["lineage.run_id"] == "r-1" and metadata["owner"] == "data_eng", "the stamp destroyed existing metadata"
 
 
-def test_a_pass_is_named_by_its_path_and_by_the_stamp_only_where_the_path_is_silent(tmp_path: Any) -> None:
-    """[[LH-208]]: a maintenance pass never names a table other than the one its path resolves to.
+def test_a_pass_is_named_only_by_the_table_the_sweep_named(tmp_path: Any) -> None:
+    """[[LH-208]] [[LH-520]]: a maintenance pass names the table ``__manifest`` named its dataset, and a stamp names nothing.
 
-    `lineage.dataset_id` is schema metadata, so a writer could re-point it at another table, and while
-    the stamp outranked the path this pass's RunEvents and audit records were filed against that table.
-    The stamp still answers where the path cannot: `medallion/<tier>` names more than one table, which
-    is why the cascade stamps it at all.
+    `lineage.dataset_id` is schema metadata, so a writer could re-point it at another table, and a pass named by it
+    would file its RunEvents and audit records against that table. A dataset the sweep named nothing for emits nothing,
+    whatever its stamp says.
 
-    Driven through expiry on real pylance into the sweep's own emit, because the name is resolved
-    in one and spent in the other.
+    Driven through expiry on real pylance into the sweep's own emit, because the name is carried by one and spent in
+    the other.
     """
     import lance
     import pyarrow as pa
@@ -377,18 +370,21 @@ def test_a_pass_is_named_by_its_path_and_by_the_stamp_only_where_the_path_is_sil
     from service_kit.lakehouse.stage_stamp import declare_dataset_id
 
     forged = "victim$payroll"
-    flat = str(tmp_path / "deadbeef_silver$plain")
-    composed = str(tmp_path / "medallion" / "gold")
-    for uri in (flat, composed):
+    named, unnamed = str(tmp_path / "0d9c6f3e-7b2a-4c1e-9f5d-2a8b3c4d5e6f"), str(tmp_path / "medallion" / "gold")
+    for uri in (named, unnamed):
         lance.write_dataset(declare_dataset_id(pa.table({"v": [1]}), forged), uri, mode="create")
         lance.write_dataset(pa.table({"v": [2]}), uri, mode="append")  # a second version, so the pass reclaims one
+    policy = ExpiryPolicy(older_than=None, retain_versions=1)
 
-    results = [expire_versions(ExpiryTarget(uri=uri, storage_options={}), ExpiryPolicy(older_than=None, retain_versions=1)) for uri in (flat, composed)]
+    results = [
+        expire_versions(ExpiryTarget(uri=named, storage_options={}, table_id="silver$plain"), policy),
+        expire_versions(ExpiryTarget(uri=unnamed, storage_options={}), policy),
+    ]
     assert [(r.error, r.old_versions_removed) for r in results] == [(None, 1), (None, 1)], results
 
     emitter = _RecordingEmitter()
     asyncio.run(emit_sweep_lineage(cast(Any, emitter), results, delimiter="$"))
-    assert emitter.calls == [("silver$plain", "silver"), (forged, "victim")], "a pass was named by a stamp its path contradicts"
+    assert emitter.calls == [("silver$plain", "silver")], "a pass was named by a stamp"
 
 
 def test_the_maintenance_emitter_STAGES_the_event_rather_than_publishing_it_bare(monkeypatch: pytest.MonkeyPatch) -> None:

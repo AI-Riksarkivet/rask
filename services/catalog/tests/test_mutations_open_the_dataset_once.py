@@ -28,6 +28,7 @@ import pytest
 from lance_namespace import (
     AlterTableAddColumnsRequest,
     AlterTableDropColumnsRequest,
+    CreateNamespaceRequest,
     DeleteFromTableRequest,
     LanceNamespace,
     UpdateTableRequest,
@@ -40,7 +41,8 @@ from catalog.services import dataplane
 @pytest.fixture
 def ns(tmp_path: Path) -> LanceNamespace:
     backend = connect("dir", {"root": str(tmp_path)})
-    dataplane.create_table(backend, {}, ["t"], pa.table({"id": [1, 2, 3], "v": ["a", "b", "c"]}), mode="create", registry=None)
+    backend.create_namespace(CreateNamespaceRequest(id=["db"]))
+    dataplane.create_table(backend, {}, ["db", "t"], pa.table({"id": [1, 2, 3], "v": ["a", "b", "c"]}), root=str(tmp_path), mode="create", registry=None)
     return backend
 
 
@@ -60,11 +62,13 @@ def opens(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 
 def _ops(ns: LanceNamespace) -> dict[str, Any]:
     return {
-        "delete_from_table": lambda: dataplane.delete_from_table(ns, {}, DeleteFromTableRequest(id=["t"], predicate="id = 1")),
-        "update_table": lambda: dataplane.update_table(ns, {}, UpdateTableRequest(id=["t"], updates=[["v", "'z'"]])),
-        "add_columns": lambda: dataplane.add_columns(ns, {}, AlterTableAddColumnsRequest(id=["t"], new_columns=[{"name": "doubled", "expression": "id * 2"}])),
-        "drop_columns": lambda: dataplane.drop_columns(ns, {}, AlterTableDropColumnsRequest(id=["t"], columns=["v"])),
-        "update_field_metadata": lambda: dataplane.update_field_metadata(ns, {}, ["t"], [{"path": "id", "metadata": {"unit": "px"}}]),
+        "delete_from_table": lambda: dataplane.delete_from_table(ns, {}, DeleteFromTableRequest(id=["db", "t"], predicate="id = 1")),
+        "update_table": lambda: dataplane.update_table(ns, {}, UpdateTableRequest(id=["db", "t"], updates=[["v", "'z'"]])),
+        "add_columns": lambda: dataplane.add_columns(
+            ns, {}, AlterTableAddColumnsRequest(id=["db", "t"], new_columns=[{"name": "doubled", "expression": "id * 2"}])
+        ),
+        "drop_columns": lambda: dataplane.drop_columns(ns, {}, AlterTableDropColumnsRequest(id=["db", "t"], columns=["v"])),
+        "update_field_metadata": lambda: dataplane.update_field_metadata(ns, {}, ["db", "t"], [{"path": "id", "metadata": {"unit": "px"}}]),
     }
 
 

@@ -26,7 +26,7 @@ from pydantic import BaseModel, Field
 
 from catalog.core.base_judge import BaseJudge, GovernedStorage
 from catalog.core.config import shared_lance_session
-from catalog.core.identifiers import IAM_WILDCARD_METACHARS
+from catalog.core.identifiers import IAM_WILDCARD_METACHARS, is_spelled_as_a_uuid
 from catalog.core.namespace import registered_dataset_facts
 from catalog.services import native, table_claims
 from service_kit.lakehouse import base_registry, blobs, location_claims
@@ -136,6 +136,11 @@ def require_registrable_location(location: str | None, *, root: str, control_roo
       ``_protection``, ``_trash``, ``__manifest`` …), and a glob keeps a prefix the next feature adds out of
       every vend without anyone remembering to list it. Judged decoded, so a ``%5F`` is refused on this
       door's own word rather than on the backend re-encoding it;
+    - its first segment, the directory directly under the namespace root, may not be spelled as a uuid once decoded
+      ([[LH-520]]): that is where the catalog lays out the tables it makes, each directory named after its table's uuid
+      (ADR 0173 §5). A table registered there would be read as one the catalog made, and one inside such a directory
+      would sit in a catalog-made table's bytes, which no row in the namespace's object index names once that table is
+      trashed. The catalog's own re-registers, a rename's and both undrops', do not pass this door;
     - it may not equal or contain ``control_root``. Sitting UNDER it is how every table lives when the
       control root is the namespace root (the shipped chart), and the prefix rule above already keeps
       a table off the records beneath it;
@@ -167,6 +172,10 @@ def require_registrable_location(location: str | None, *, root: str, control_roo
         )
     if any(segment.startswith("_") for segment in decoded):
         raise InvalidInputError(f"register location {stated!r} has a segment beginning with '_', which is reserved for the catalog's own records")
+    if is_spelled_as_a_uuid(decoded[0]):
+        raise InvalidInputError(
+            f"register location {stated!r} is in a uuid directory directly under the namespace root, where the catalog lays out the tables it makes"
+        )
     absolute = f"{root.rstrip('/')}/{relative}"
     if location_within(absolute, control_root):
         raise InvalidInputError(f"register location {stated!r} contains the catalog's control root")

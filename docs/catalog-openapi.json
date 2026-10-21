@@ -22600,7 +22600,7 @@
     },
     "/v1/table/{id}/declare": {
       "post": {
-        "description": "Declare a new (empty) table at ``id`` via ``declare_table``, then seed the caller's FGA ownership\nand emit a versionless DECLARE_TABLE marker (the table's first provenance \u2014 who reserved it + where).\n\nThe response carries the credential the declarer writes the table with, the highest tier FGA grants\n(:func:`_vend_on_spec_door`), unless the request sets ``vend_credentials`` false.",
+        "description": "Declare a new (empty) table at ``id``, at the namespace root under the uuid the catalog mints for it\n(``dataplane.declare_table``, [[LH-520]]), then seed the caller's FGA ownership and emit a versionless\nDECLARE_TABLE marker (the table's first provenance \u2014 who reserved it + where).\n\nThe catalog chooses a declared table's location, which the spec leaves to the implementation\n(`lance_docs/ns_catalog/spec.yaml:3823-3827`), so a request naming one is refused. The declaration keeps no\n``properties``: it is recorded through RegisterTable, which keeps none (`spec.yaml:2719-2724`).\n\nThe response carries the credential the declarer writes the table with, the highest tier FGA grants\n(:func:`_vend_on_spec_door`), unless the request sets ``vend_credentials`` false.",
         "operationId": "declare_table_v1_table__id__declare_post",
         "parameters": [
           {

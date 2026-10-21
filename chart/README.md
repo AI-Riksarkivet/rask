@@ -178,7 +178,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | maintenance.controlEmit | bool | `false` | Announce each reclamation on the catalog control topic (catalog.control.v1); needs Dapr sidecars. Off by default. |
 | maintenance.controlRoot | string | `""` | S3 root of the catalog's control registries (projects, warehouses, trash, `_bases/`). Empty uses the primary bucket; set together with the catalog's. |
 | maintenance.daprAppId | string | `"maintenance"` | Dapr app-id of the maintenance service; also names its durable consumer. |
-| maintenance.declaredPlatformRoots | string | `"s3://lance-catalog/medallion/models"` | Platform-owned store roots the catalog cannot resolve (e.g. medallion models) that the reconciler accounts for instead of reporting as unreadable. |
+| maintenance.declaredPlatformRoots | string | `"s3://lance-catalog/medallion/models"` | Platform-owned store roots the catalog cannot resolve (e.g. medallion models) that the reconciler accounts for instead of reporting as unregistered. |
 | maintenance.discoveryMaxDepth | int | `3` | How deep the bucket walk descends looking for a dataset's `_versions/`; a subtree it stops inside is an IncompleteScan that blocks the purge. |
 | maintenance.driftRepair | bool | `false` | Revoke OpenFGA tuples whose object no registry names (ghost projects/warehouses/tables); deletes tuples only. Off by default. |
 | maintenance.driftRepairDryRun | bool | `true` | Plan and report drift repair without deleting any tuple. Defaults true. |

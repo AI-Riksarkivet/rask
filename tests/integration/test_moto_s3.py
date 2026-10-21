@@ -7,15 +7,19 @@ Lance data. This is the deterministic, infra-free counterpart to the Docker e2e.
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Iterator
 from typing import Any
 
 import boto3
+import lance
 import pyarrow as pa
 import pyarrow.ipc as ipc
 import pytest
 from fastapi.testclient import TestClient
 from moto.server import ThreadedMotoServer
+
+from service_kit.lakehouse.objectfs import lance_storage_options
 
 
 ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
@@ -344,23 +348,19 @@ def test_undrop_converges_when_a_record_was_left_on_a_live_table(moto_client_rec
     assert int(moto_client_recoverable.post("/v1/table/f3c$t/count_rows", json={}).text) == 1
 
 
-def test_register_undo_deregisters_and_never_deletes_the_bytes(moto_client: TestClient) -> None:
+def test_register_undo_deregisters_and_never_deletes_the_bytes(moto_client: TestClient, moto_endpoint: str) -> None:
     """REGISTER attaches bytes that already existed and are not ours to destroy, so its undo is
     `deregister`, never `drop`. This is the test that would catch someone "simplifying" the four
     undo callbacks into one shared drop: the retry must converge AND the data must survive.
 
-    The bytes are a DETACHED table's: two registrations may not share one location ([[LH-279]]'s
-    location-exclusivity), so the source is deregistered first, which keeps its bytes where they are.
-    The table registered over them is a new one, under a new uuid ([[LH-519]], ADR 0173 §2)."""
+    The bytes are a pipeline's, written outside the catalog's doors and outside its layout: a table the catalog made
+    lives in a uuid directory, which no registration may name ([[LH-520]]). The table registered over them is a new
+    one, under a new uuid ([[LH-519]], ADR 0173 §2)."""
     rows = pa.table({"id": pa.array([1, 2, 3], pa.int64())})
     assert moto_client.post("/v1/namespace/f3r/create", json={}).status_code == 200
-    assert _create(moto_client, "f3r$src", rows).status_code == 200
-    deregistered = _uuid(moto_client, "f3r$src")
-    described = moto_client.post("/v1/table/f3r$src/describe", json={})
-    assert described.status_code == 200, described.text
-    location = str(described.json()["location"])
-    relative = location.rstrip("/").rsplit("/", 1)[-1]
-    assert moto_client.post("/v1/table/f3r$src/deregister", json={}).status_code == 200
+    relative = f"f3r-outside/{uuid.uuid4().hex[:8]}"
+    options = lance_storage_options(moto_endpoint, "test", "test", "us-east-1")
+    lance.write_dataset(rows, f"s3://{BUCKET}/{relative}", storage_options=options, data_storage_version="2.2", enable_stable_row_ids=True)
 
     with pytest.MonkeyPatch.context() as mp:
         _failing_seed_ctx(mp)
@@ -372,7 +372,6 @@ def test_register_undo_deregisters_and_never_deletes_the_bytes(moto_client: Test
     assert moto_client.post("/v1/table/f3r$copy/register", json={"location": relative}).status_code == 200
     # …onto bytes the undo did NOT delete: the three rows are still there.
     assert int(moto_client.post("/v1/table/f3r$copy/count_rows", json={}).text) == 3
-    assert _uuid(moto_client, "f3r$copy") != deregistered, "the registration took the deregistered table's uuid"
 
 
 # --------------------------------------------------------------------------- #
@@ -522,12 +521,10 @@ def test_declare_and_register_are_refused_on_a_trashed_id_too(moto_client_recove
     rows = pa.table({"id": pa.array([1], pa.int64())})
     assert moto_client_recoverable.post("/v1/namespace/bleed2/create", json={}).status_code == 200
     assert _create(moto_client_recoverable, "bleed2$t", rows).status_code == 200
-    described = moto_client_recoverable.post("/v1/table/bleed2$t/describe", json={})
-    relative = str(described.json()["location"]).rstrip("/").rsplit("/", 1)[-1]
     assert moto_client_recoverable.post("/v1/table/bleed2$t/drop", json={}).status_code == 200
 
     assert moto_client_recoverable.post("/v1/table/bleed2$t/declare", json={}).status_code == 409
-    assert moto_client_recoverable.post("/v1/table/bleed2$t/register", json={"location": relative}).status_code == 409
+    assert moto_client_recoverable.post("/v1/table/bleed2$t/register", json={"location": "bleed2-outside/t"}).status_code == 409
 
 
 def test_a_destructive_drop_frees_the_id_for_a_new_table_under_a_new_uuid(moto_client: TestClient) -> None:

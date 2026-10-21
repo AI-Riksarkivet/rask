@@ -3022,8 +3022,13 @@ export interface paths {
         put?: never;
         /**
          * Declare Table
-         * @description Declare a new (empty) table at ``id`` via ``declare_table``, then seed the caller's FGA ownership
-         *     and emit a versionless DECLARE_TABLE marker (the table's first provenance — who reserved it + where).
+         * @description Declare a new (empty) table at ``id``, at the namespace root under the uuid the catalog mints for it
+         *     (``dataplane.declare_table``, [[LH-520]]), then seed the caller's FGA ownership and emit a versionless
+         *     DECLARE_TABLE marker (the table's first provenance — who reserved it + where).
+         *
+         *     The catalog chooses a declared table's location, which the spec leaves to the implementation
+         *     (`lance_docs/ns_catalog/spec.yaml:3823-3827`), so a request naming one is refused. The declaration keeps no
+         *     ``properties``: it is recorded through RegisterTable, which keeps none (`spec.yaml:2719-2724`).
          *
          *     The response carries the credential the declarer writes the table with, the highest tier FGA grants
          *     (:func:`_vend_on_spec_door`), unless the request sets ``vend_credentials`` false.

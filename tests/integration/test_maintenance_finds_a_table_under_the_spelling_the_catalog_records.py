@@ -1,16 +1,14 @@
-"""[[LH-319]] Maintenance finds a table's bytes where pylance keeps them, under whatever spelling the catalog records.
+"""[[LH-319]] Maintenance finds a registered table's bytes where pylance keeps them, under whatever spelling the catalog records.
 
-The catalog records a table's location as the URL ``describe_table`` answers, which percent-encodes the table's name
-(``…$r%C3%A4ksm%C3%B6rg%C3%A5s`` for ``räksmörgås``, ``…$sp%20ace`` for ``sp ace``). A trash record keeps that spelling, and
-a manifest that declares the table as a base names it so. Measured on pylance 13.0.0, ``dir`` backend, through the catalog's
-create and branch doors over moto: the table's versions, data, refs and branches land under the key that URL decodes to
-(``…$räksmörgås/``), and the reservation marker the create writes lands under the location as spelled
-(``…$r%C3%A4ksm%C3%B6rg%C3%A5s/.lance-reserved``) for a non-ASCII or ``%`` name, and beside the data for a space.
-``lance_docs/ns_catalog/catalog/dir/index.md`` keeps both in one table directory, so the split is pylance's. Read as the
-one key prefix it spells, the location named nothing but the marker, or nothing at all.
+A table the catalog makes lives under the uuid it mints ([[LH-520]]), which needs no spelling. A table registered at a
+location keeps its registrar's spelling, and the catalog records that location as the URL ``describe_table`` answers,
+which percent-encodes it (``spelled/r%C3%A4ksm%C3%B6rg%C3%A5s`` for ``spelled/räksmörgås``, ``spelled/sp%20ace`` for
+``spelled/sp ace``). A trash record keeps that spelling, and a manifest that declares the table as a base names it so.
+Measured on pylance 13.0.0, ``dir`` backend, over moto: the table's versions, data, refs and branches land under the key
+that URL decodes to (``spelled/räksmörgås/``). Read as the one key prefix it spells, the location names nothing at all.
 
-One estate on moto: the real catalog app creates, branches and recoverably drops each table through its doors. Its readers
-here, each one claim:
+One estate on moto: each dataset is written beside the catalog, then registered, branched and recoverably dropped through
+its doors. Its readers here, each one claim:
 
 - the purge reclaims the trash record that drop wrote, stamped long expired, under a clean drift report. The table's own
   branch goes with it: the branch declares the table's root as its base, and a delete takes the branch along, so it
@@ -24,12 +22,14 @@ here, each one claim:
 from __future__ import annotations
 
 import asyncio
+import json
 import uuid
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from urllib.parse import quote
 
 import boto3
+import lance
 import pyarrow as pa
 import pytest
 from fastapi.testclient import TestClient
@@ -39,18 +39,13 @@ from maintenance.services.purge import objects_held, purge_expired_trash
 from maintenance.services.reconcile import CATEGORIES, CategorySkipped, ReconcileReport
 from service_kit.lakehouse import base_registry, maintenance_policies, trash
 from service_kit.lakehouse.objectfs import dataset_root_probe, lance_storage_options
-from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from storage import S3Client
 
 
 _ROWS = pa.table({"id": pa.array([1, 2, 3], pa.int64())})
 
-#: The two layouts measured: the marker under the location's spelling, and the marker beside the data. Each name maps to
-#: how many top-level directories the store then holds for the table.
-_NAMES = [
-    pytest.param("räksmörgås", 2, id="its-marker-under-the-spelling"),
-    pytest.param("sp ace", 1, id="its-marker-beside-its-data"),
-]
+#: A name the catalog answers percent-encoded as UTF-8, and one it answers with an encoded space.
+_NAMES = [pytest.param("räksmörgås", id="non-ascii"), pytest.param("sp ace", id="a-space")]
 
 
 class _Estate:
@@ -70,26 +65,25 @@ class _Estate:
         assert answer.status_code == 200, f"{action} {table!r}: {answer.text}"
         return answer.text
 
-    def create(self, table: str) -> str:
-        answer = self.client.post(
-            f"/v1/table/{quote(table, safe='$')}/create", content=encode_arrow_stream(_ROWS), headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE}
-        )
-        assert answer.status_code == 200, answer.text
-        return str(answer.json()["location"])
+    def registered(self, table: str, name: str) -> str:
+        """A dataset written at the key ``spelled/<name>``, registered as ``table`` by that raw name; the location described."""
+        lance.write_dataset(_ROWS, f"{self.root}/spelled/{quote(name)}", storage_options=self.key, data_storage_version="2.2", enable_stable_row_ids=True)
+        assert self.client.post(f"/v1/table/{quote(table, safe='$')}/register", json={"location": f"spelled/{name}"}).status_code == 200
+        return str(json.loads(self.door(table, "describe"))["location"])
 
     def objects(self) -> dict[str, int]:
         """Every table object in the bucket and its size: everything outside the catalog's own ``_`` and ``__`` prefixes."""
         listed = [entry for page in self.s3.get_paginator("list_objects_v2").paginate(Bucket=self.bucket) for entry in page.get("Contents", [])]
         return {str(entry["Key"]): int(entry["Size"]) for entry in listed if not str(entry["Key"]).startswith("_")}
 
-    def dropped_with_a_branch(self, table: str, *, directories: int) -> dict[str, int]:
-        """``table`` created, branched and recoverably dropped through the doors; every object it holds, in the measured layout."""
-        self.create(table)
+    def dropped_with_a_branch(self, table: str, name: str) -> dict[str, int]:
+        """``table`` registered, branched and recoverably dropped through the doors; every object it holds, all under one key."""
+        self.registered(table, name)
         self.door(table, "branches/create", name="work")
         self.door(table, "drop")
         held = self.objects()
-        assert len({key.split("/", 1)[0] for key in held}) == directories, f"precondition: pylance's layout for {table!r} is the measured one: {sorted(held)}"
-        assert any(key.endswith("/.lance-reserved") for key in held) and any("/tree/work/" in key for key in held), f"precondition: {sorted(held)}"
+        assert any(f"spelled/{name}/tree/work/" in key for key in held), f"precondition: the branch is held: {sorted(held)}"
+        assert all(key.startswith(f"spelled/{name}/") for key in held), f"precondition: pylance keeps the table under the decoded key: {sorted(held)}"
         return held
 
     def recorded_location(self, table: str) -> str:
@@ -124,10 +118,10 @@ def estate(moto_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[_Estate]:
     get_settings.cache_clear()
 
 
-@pytest.mark.parametrize(("name", "directories"), _NAMES)
-def test_an_expired_record_reclaims_its_table_under_every_spelling_of_its_location(estate: _Estate, name: str, directories: int) -> None:
+@pytest.mark.parametrize("name", _NAMES)
+def test_an_expired_record_reclaims_its_table_under_every_spelling_of_its_location(estate: _Estate, name: str) -> None:
     table = f"db${name}"
-    held = estate.dropped_with_a_branch(table, directories=directories)
+    held = estate.dropped_with_a_branch(table, name)
     location = estate.recorded_location(table)
     maintenance_policies.put_policy(estate.root, estate.key, {"kind": "table", "id": table, "path": location.removeprefix("s3://"), "retention_days": 1})
     trash.put(
@@ -157,17 +151,18 @@ def test_an_expired_record_reclaims_its_table_under_every_spelling_of_its_locati
 
     assert out.refused == [], out.refused
     assert [(purged.id, purged.bytes_deleted, purged.files_deleted) for purged in out.purged] == [(table, sum(held.values()), len(held))]
-    assert estate.objects() == {}, "the purge left bytes of the table it reclaimed"
+    # pyarrow's S3 `delete_dir` keeps the emptied parent as a zero-byte `spelled/` marker, which is no byte of the table.
+    assert [key for key in estate.objects() if key.startswith(f"spelled/{name}/")] == [], "the purge left bytes of the table it reclaimed"
     assert trash.get(estate.root, estate.key, table) is None, "the record outlived its purge"
     assert maintenance_policies.get_policy(estate.root, estate.key, "table", table) is None, "the policy outlived the table it governed"
     registry = base_registry.BaseRegistry(control_root=estate.root, storage_options=estate.key)
     assert base_registry.read_base_record(registry, location) is None, "the table's base record outlived its bytes"
 
 
-@pytest.mark.parametrize(("name", "directories"), _NAMES)
-def test_the_tombstone_probe_counts_every_object_a_record_still_names(estate: _Estate, name: str, directories: int) -> None:
+@pytest.mark.parametrize("name", _NAMES)
+def test_the_tombstone_probe_counts_every_object_a_record_still_names(estate: _Estate, name: str) -> None:
     table = f"db${name}"
-    held = estate.dropped_with_a_branch(table, directories=directories)
+    held = estate.dropped_with_a_branch(table, name)
 
     counted = objects_held(estate.recorded_location(table), estate.key)
 
@@ -175,7 +170,8 @@ def test_the_tombstone_probe_counts_every_object_a_record_still_names(estate: _E
 
 
 def test_the_compaction_gate_finds_a_dataset_rooted_at_a_base_in_the_catalogs_spelling(estate: _Estate) -> None:
-    location = estate.create("db$räksmörgås")
+    location = estate.registered("db$räksmörgås", "räksmörgås")
+    assert "%C3%A4" in location, f"precondition: the catalog answers the location percent-encoded: {location}"
 
     rooted = dataset_root_probe(f"{estate.root}/a1b2c3d4_db$silver", estate.key)(location)
 

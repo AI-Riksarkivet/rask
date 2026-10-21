@@ -170,6 +170,7 @@ async def create_governed_table(
     *,
     id: str,
     ns: LanceNamespace,
+    root: str,
     settings: Settings,
     token: Caller | None,
     client: OpenFgaClient | None,
@@ -185,6 +186,9 @@ async def create_governed_table(
     force: bool = False,
 ) -> CreateTableResponse:
     """Create a Lance table from an Arrow-IPC stream, governed end to end.
+
+    ``root`` is the root ``ns`` is rooted at, where a table this request brings into being is declared under its
+    uuid (``dataplane.declare_table``, ADR 0173 §5).
 
     ``mode``, ``shape`` and ``table`` arrive PARSED ONCE, by the door, which refuses a malformed one
     before its idempotency claim (``CreateMode.parse``, :func:`parse_create_shape`,
@@ -260,6 +264,7 @@ async def create_governed_table(
         so,
         segments,
         table,
+        root=root,
         mode=mode,
         properties=shape.properties,
         allow_external_blobs=settings.allow_external_blobs,

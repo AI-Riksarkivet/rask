@@ -22,14 +22,14 @@ from pathlib import Path
 import lance
 import pyarrow as pa
 import pytest
-from lance_namespace import connect
+from lance_namespace import CreateNamespaceRequest, connect
 
 from catalog.services.dataplane import create_table
 from catalog.services.publication import publish
 
 
 SCHEMA = pa.schema([pa.field("id", pa.int64()), pa.field("payload", pa.string())])
-TABLE_ID = ["pages"]
+TABLE_ID = ["db", "pages"]
 
 
 def _table(ids: list[int | None]) -> pa.Table:
@@ -42,7 +42,8 @@ def _table(ids: list[int | None]) -> pa.Table:
 @pytest.fixture
 def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace, runtime-only
     namespace = connect("dir", {"root": str(tmp_path)})
-    create_table(namespace, {}, TABLE_ID, _table([1, 2, 3]), mode="create", registry=None)
+    namespace.create_namespace(CreateNamespaceRequest(id=TABLE_ID[:-1]))
+    create_table(namespace, {}, TABLE_ID, _table([1, 2, 3]), root=str(tmp_path), mode="create", registry=None)
     return namespace
 
 

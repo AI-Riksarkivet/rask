@@ -47,11 +47,11 @@ from pydantic import BaseModel, Field
 from maintenance.core import metrics
 from maintenance.core.config import MaintenanceSettings, shared_lance_session
 from maintenance.services.discovery import discover_datasets
+from maintenance.services.naming import TableIds, under_a_declared_root
 from maintenance.services.orphans import OrphanFile, scan_datasets
 from service_kit.governed import fga
 from service_kit.lakehouse.base_refs import decoded_path, normalise
 from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base
-from service_kit.lakehouse.table_locations import table_id_from_location
 
 
 log = logging.getLogger(__name__)
@@ -208,9 +208,7 @@ class UnregisteredDataset(BaseModel):
     `ungoverned_tables`: the resolution is registration, never deletion.
     """
 
-    #: The identifier recovered from the location — what a `GET /v1/table/{id}` would be asked for.
-    table_id: str
-    #: WHERE, because the whole finding is that no record says. An id alone cannot be acted on here.
+    #: WHERE, and that is the whole finding: no `__manifest` row names the location, so no table does ([[LH-520]]).
     location: str
 
 
@@ -347,15 +345,6 @@ class ReconcileReport(BaseModel):
     #: and "we scanned everything" are different facts. Deliberately not in `incomplete`, which gates
     #: the purge.
     excluded_datasets: list[str] = Field(default_factory=list)
-    #: Discovered locations whose table id could not be RECOVERED, so neither registration category
-    #: could read them ([[LH-164]]). Measured 2026-09-23: 163 of 564, while `unregistered_datasets`
-    #: answered 0 — the count was right about what it could read and silent about the 29% it could not.
-    #:
-    #: A COVERAGE FIELD, deliberately not `incomplete`, exactly like `excluded_datasets` beside it. No
-    #: operator action clears these — they are branch prefixes, the medallion cascade's own layout and
-    #: the model registry — so gating the #79 purge on them would make the gate permanently
-    #: unsatisfiable, which `NON_GATING_CATEGORIES` argues at length is not a safety property.
-    unreadable_locations: list[str] = Field(default_factory=list)
     unavailable: list[CategoryUnavailable] = Field(default_factory=list)
     skipped: list[CategorySkipped] = Field(default_factory=list)
     incomplete: list[IncompleteScan] = Field(default_factory=list)
@@ -657,60 +646,38 @@ def _trashed_keys(trashed: Iterable[str]) -> set[str]:
     return {decoded_path(location) for location in trashed}
 
 
-def _unregistered_datasets(*, discovered: Iterable[str], registered: set[str], trashed: set[str]) -> list[UnregisteredDataset]:
-    """Discovered datasets whose recovered table id no catalog record names.
+def _unregistered_datasets(*, discovered: Iterable[str], names: TableIds, trashed: set[str], declared_roots: tuple[str, ...]) -> list[UnregisteredDataset]:
+    """Discovered datasets no ``__manifest`` row names, by their location ([[LH-520]]).
 
     THE INVERSE OF :func:`_ungoverned_tables`: there the catalog knows a table and authorization does
-    not; here storage holds a dataset and the catalog does not. The id has to be RECOVERED from the
-    location before the comparison means anything — the catalog lays a table out as
-    ``<root>/<uuid8>_<ns>$<name>``, so a detector comparing raw leaves would report every table in the
-    estate as unregistered.
+    not; here storage holds a dataset and the catalog does not. A dataset is named by the row whose location it is,
+    or whose table it is a branch of (:meth:`TableIds.table_of`), the one rule every maintenance reader asks: a table
+    the catalog makes lives under its uuid, so no name can be read off a location.
 
     ``trashed`` is excluded rather than filtered downstream, because a dropped table's bytes stay on
     disk under a trash record that names them while its table record is gone BY DEFINITION. Counting
     those would make this category loudest exactly when the estate is behaving correctly. Each record is
     matched at the key it decodes to (:func:`_trashed_keys`).
 
-    A location :func:`table_id_from_location` cannot answer for is skipped, never reported: it names a
-    directory rather than a table, and calling it an unregistered TABLE would assert into the report
-    the one thing the report is for not doing.
+    ``declared_roots`` are the stores the platform owns and opens by explicit URI (:func:`under_a_declared_root`).
     """
     in_trash = _trashed_keys(trashed)
-    seen: dict[str, UnregisteredDataset] = {}
-    for uri in discovered:
-        if normalise(uri) in in_trash:
-            continue
-        table_id = table_id_from_location(uri)
-        if table_id is None or table_id in registered or table_id in seen:
-            continue
-        seen[table_id] = UnregisteredDataset(table_id=table_id, location=uri.rstrip("/"))
-    return [seen[key] for key in sorted(seen)]
-
-
-def _unreadable_locations(*, discovered: Iterable[str], declared_roots: tuple[str, ...]) -> list[str]:
-    """Discovered dataset locations whose table id cannot be recovered, minus the declared platform ones.
-
-    THE SKIP `_unregistered_datasets` MAKES, SAID OUT LOUD. That function must recover an id before its
-    comparison means anything, and a location it cannot answer for is dropped — correctly per location,
-    silently per REPORT. Measured 2026-09-23: 163 of the estate's 564 dataset locations (29%) fall
-    through it while the category answered 0.
-
-    NOT A FINDING — an INCOMPLETE SCAN. These are not known to be ungoverned; they are not known. The
-    three shapes behind the number are the model registry, Lance branch prefixes (`tree/<b>/`, where
-    the format puts branch isolation) and the medallion cascade's own `<bucket>/<tier>/<name>` layout,
-    and telling them apart is a reader's job once the report stops hiding them.
-
-    `declared_roots` carries the stores the platform OWNS and the catalog deliberately cannot resolve —
-    the model registry is one. Matched with the trailing delimiter, because a bare prefix match would
-    declare `medallion/models-scratch` platform-owned for sharing eight characters.
-    """
-    declared = tuple(f"{root.rstrip('/')}/" for root in declared_roots)
-    found = {
+    unnamed = {
         uri.rstrip("/")
-        for raw in discovered
-        if (uri := raw.rstrip("/")) and table_id_from_location(uri) is None and not any(uri.startswith(prefix) for prefix in declared)
+        for uri in discovered
+        if normalise(uri) not in in_trash and names.table_of(uri) is None and not under_a_declared_root(uri, declared_roots)
     }
-    return sorted(found)
+    return [UnregisteredDataset(location=location) for location in sorted(unnamed)]
+
+
+def _manifest_names(registered: dict[str, tuple[str, str | None]]) -> TableIds:
+    """The tables the manifests name, by the location each row resolves to on the root that recorded it."""
+    return TableIds(by_location={normalise(_resolved(root, location)): table for table, (root, location) in registered.items() if location})
+
+
+def _resolved(root: str, location: str) -> str:
+    """A row's location made absolute: a relative one is under the root that recorded it (`lance_docs/namespace.md:968-976`)."""
+    return location if "://" in location else f"{root.rstrip('/')}/{location.lstrip('/')}"
 
 
 def _absent_datasets(*, registered: dict[str, tuple[str, str | None]], discovered: set[str], trashed: set[str]) -> list[AbsentDataset]:
@@ -742,8 +709,7 @@ def _absent_datasets(*, registered: dict[str, tuple[str, str | None]], discovere
     for table, (root, location) in registered.items():
         if not location:
             continue
-        resolved = location if "://" in location else f"{root.rstrip('/')}/{location.lstrip('/')}"
-        resolved = resolved.rstrip("/")
+        resolved = _resolved(root, location).rstrip("/")
         if resolved in discovered or normalise(resolved) in in_trash:
             continue
         findings.append(AbsentDataset(table=table, root=root, location=resolved))
@@ -1222,9 +1188,10 @@ def _registration_drift(
     trashed = {str(record["location"]) for record in (sources.trash or []) if record.get("location")}
     report.unregistered_datasets = _unregistered_datasets(
         discovered=[uri for uri, _key in datasets],
-        registered={table for table, _root in sources.tables or []},
+        names=_manifest_names(sources.table_locations or {}),
         # A dropped table's bytes are still on disk under the record that names them.
         trashed=trashed,
+        declared_roots=declared_roots,
     )
     report.counts["unregistered_datasets"] = len(report.unregistered_datasets)
     # FILTERED TO THE BUCKETS ACTUALLY WALKED — which is what `discover_datasets` was POINTED at,
@@ -1239,11 +1206,6 @@ def _registration_drift(
     )
     report.absent_datasets = [f for f in candidates if any(f.location.startswith(f"{prefix}/") for prefix in walked)]
     report.counts["absent_datasets"] = len(report.absent_datasets)
-    # WHAT THE COMPARISON COULD NOT READ ([[LH-164]]). Both categories above need a table id
-    # recovered from a location, and one the recovery cannot answer for is dropped — per location
-    # correctly, per REPORT silently. Measured 2026-09-23: 163 of 564 (29%) fell through while
-    # `unregistered_datasets` answered 0.
-    report.unreadable_locations = _unreadable_locations(discovered=[uri for uri, _key in datasets], declared_roots=declared_roots)
     # Outside every walked bucket is UNKNOWN, not clean; dropping it is how a detector reports zero
     # for an estate it only partly saw.
     for finding in candidates:

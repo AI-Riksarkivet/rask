@@ -21,6 +21,7 @@ over the client's own (measured on pylance 13.0.0), so the endpoint the catalog 
 from __future__ import annotations
 
 import http.client
+import json
 import re
 import threading
 import time
@@ -29,8 +30,9 @@ from collections.abc import Callable, Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
+import boto3
 import httpx
 import lance
 import lance_namespace
@@ -38,9 +40,11 @@ import pyarrow as pa
 import pytest
 import uvicorn
 from fastapi import FastAPI
+from moto.iam.access_control import IAMPolicy, PermissionResult
 from moto.sts.models import sts_backends
 from pydantic import BaseModel
 
+from service_kit.lakehouse.base_refs import decoded_path
 from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 
 
@@ -228,3 +232,100 @@ def test_a_stock_client_off_the_cluster_creates_and_appends_through_the_endpoint
     lance.write_dataset(pa.table({"id": pa.array([3], pa.int64())}), namespace_client=stock, table_id=[namespace, "w"], mode="append")
 
     assert lance.dataset(namespace_client=stock, table_id=[namespace, "w"]).to_table().column("id").to_pylist() == [1, 2, 3]
+    # [[LH-520]] Its first commit landed where DeclareTable placed it: the root, under the uuid the catalog minted.
+    with httpx.Client(base_url=off_cluster_catalog_url, timeout=60) as catalog:
+        described = catalog.post(f"/v1/table/{namespace}$w/describe", json={"vend_credentials": False}).json()
+    assert described["location"] == f"s3://{store.bucket}/{described['properties']['rask.uuid']}", described
+
+
+#: A key the store refuses, as an ambient key outside the governed estate is: a client holding it reads only on what is vended.
+def _refused_key(store: _Store) -> dict[str, str]:
+    return {"aws_endpoint": store.url, "aws_region": _REGION, "allow_http": "true", "aws_access_key_id": "AKIAUNKNOWN", "aws_secret_access_key": "unknown"}
+
+
+def _rows(*ids: int) -> pa.Table:
+    return pa.table({"id": pa.array(list(ids), pa.int64())})
+
+
+def _created(catalog: httpx.Client, _two_stores: Any, namespace: str, name: str) -> None:  # noqa: ANN401 — conftest.TwoStores
+    made = catalog.post(
+        f"/v1/table/{quote(f'{namespace}${name}', safe='$')}/create",
+        content=encode_arrow_stream(_rows(1, 2, 3)),
+        headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE},
+    )
+    assert made.status_code == 200, made.text
+
+
+def _registered(catalog: httpx.Client, two_stores: Any, namespace: str, name: str) -> None:  # noqa: ANN401 — conftest.TwoStores
+    """Bytes a pipeline wrote outside the catalog's doors, in a directory named after the table, then registered under that spelling."""
+    options = {"endpoint": two_stores.url, "allow_http": "true", "region": _REGION, **two_stores.estate.model_dump()}
+    written = f"s3://{two_stores.estate_bucket}/{namespace}-registered/{quote(name)}"
+    lance.write_dataset(_rows(1, 2, 3), written, storage_options=options, data_storage_version="2.2", enable_stable_row_ids=True)
+    made = catalog.post(f"/v1/table/{quote(f'{namespace}${name}', safe='$')}/register", json={"location": f"{namespace}-registered/{name}"})
+    assert made.status_code == 200, made.text
+
+
+def _keys_held(two_stores: Any, location: str) -> list[str]:  # noqa: ANN401 — conftest.TwoStores
+    """Every key the store holds under the table at ``location``: the path pylance opens, its location decoded once."""
+    bucket, _, prefix = decoded_path(location).partition("/")
+    s3 = boto3.client("s3", endpoint_url=two_stores.url, region_name=_REGION, **two_stores.estate.model_dump())  # noqa: TID251 — a test reading moto
+    return [str(item["Key"]) for item in s3.list_objects_v2(Bucket=bucket, Prefix=f"{prefix}/").get("Contents", [])]
+
+
+def _permits(policy: dict[str, Any], action: str, bucket: str, key: str) -> bool:
+    """IAM's verdict on ``action`` over ``bucket/key``, by moto's evaluator.
+
+    moto turns a Resource into a regex without escaping it, so a ``$`` in a key would read as an end anchor; it is swapped
+    for a character IAM gives no meaning, on both sides alike.
+    """
+    document = json.dumps(policy, ensure_ascii=False).replace("$", "~")
+    return IAMPolicy(document).is_action_permitted(action, f"arn:aws:s3:::{bucket}/{key.replace('$', '~')}") == PermissionResult.PERMITTED
+
+
+@pytest.mark.parametrize(
+    ("make", "name"),
+    [
+        pytest.param(_created, "räksmörgås", id="created-with-a-non-ascii-name"),
+        pytest.param(_created, "growth%", id="created-with-a-percent-name"),
+        pytest.param(_registered, "räksmörgås", id="registered-at-a-non-ascii-location"),
+    ],
+)
+def test_every_vend_reaches_the_keys_the_store_keeps_for_the_table(
+    two_stores: Any,  # noqa: ANN401 — conftest.TwoStores
+    store: _Store,
+    catalog_url: str,
+    make: Callable[[httpx.Client, Any, str, str], None],
+    name: str,
+) -> None:
+    """[[LH-520]] A stock client reads and writes a table on the vended credential, whatever its name or its registrar's spelling.
+
+    The catalog answers a location holding a non-ASCII character or a ``%`` percent-encoded (``r%C3%A4ksm%C3%B6rg%C3%A5s``,
+    ``growth%25``), and pylance opens the key it decodes to, so a session policy naming the answer's spelling reaches none of
+    the table's bytes: measured as 403 AccessDenied on helm rev 20 ([[LH-517]]). A table the catalog makes lives under its
+    uuid, which no name reaches (ADR 0173 §5); a registered table keeps its registrar's spelling, and its vend is scoped to
+    the key that spelling decodes to.
+
+    moto does not enforce a session policy, so the client's read and write go through either way: the policy each vend sent
+    with its exchange is judged by moto's IAM evaluator against the keys the store holds for the table. That RustFS enforces
+    it is the live read-back's claim.
+    """
+    namespace = f"db{uuid.uuid4().hex[:8]}"
+    path = quote(f"{namespace}${name}", safe="$")
+    with httpx.Client(base_url=catalog_url, timeout=60) as catalog:
+        assert catalog.post(f"/v1/namespace/{namespace}/create", json={}).status_code == 200
+        make(catalog, two_stores, namespace, name)
+        location = str(catalog.post(f"/v1/table/{path}/describe", json={"vend_credentials": False}).json()["location"])
+    issued = len(sts_backends[_ACCOUNT]["aws"].assumed_roles)
+
+    stock = lance_namespace.connect("rest", {"uri": catalog_url})
+    lance.write_dataset(_rows(4), namespace_client=stock, table_id=[namespace, name], mode="append", storage_options=_refused_key(store))
+    read = lance.dataset(namespace_client=stock, table_id=[namespace, name], storage_options=_refused_key(store)).to_table().column("id").to_pylist()
+
+    assert sorted(read) == [1, 2, 3, 4]
+    vended = [json.loads(role.policy) for role in sts_backends[_ACCOUNT]["aws"].assumed_roles[issued:] if role.policy and role.session_name != "catalog"]
+    assert vended, "the stock client was vended no credential"
+    keys = _keys_held(two_stores, location)
+    assert keys, f"precondition: the store holds the table's bytes under {decoded_path(location)}"
+    unreadable = sorted({key for key in keys for policy in vended if not _permits(policy, "s3:GetObject", store.bucket, key)})
+    unwritable = [key for key in keys if "/data/" in key and not any(_permits(policy, "s3:PutObject", store.bucket, key) for policy in vended)]
+    assert (unreadable, unwritable) == ([], []), f"a vend for {location} is scoped to another prefix: {vended}"

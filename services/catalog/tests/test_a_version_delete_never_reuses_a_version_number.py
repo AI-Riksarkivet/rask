@@ -25,7 +25,7 @@ import pyarrow as pa
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from lance_namespace import LanceNamespace, connect
+from lance_namespace import CreateNamespaceRequest, LanceNamespace, connect
 
 from catalog.api.dependencies import NamespaceDep, SettingsDep, StorageOptionsDep
 from catalog.api.v1.endpoints import versions as version_door
@@ -38,7 +38,7 @@ from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 lance = pytest.importorskip("lance")
 
-TABLE = ["alpha"]
+TABLE = ["db", "alpha"]
 BRANCH = "work"
 #: v1 from the create, v2..v4 appended.
 LATEST = 4
@@ -56,8 +56,10 @@ def _versions(ns: LanceNamespace, *, branch: str | None = None) -> list[int]:
 
 @pytest.fixture
 def ns(tmp_path: Path) -> LanceNamespace:
-    namespace = connect("dir", {"root": str(tmp_path / "data")})
-    create_table(namespace, {}, TABLE, pa.table({"id": pa.array([1], pa.int64())}), mode="create", registry=None)
+    root = str(tmp_path / "data")
+    namespace = connect("dir", {"root": root})
+    namespace.create_namespace(CreateNamespaceRequest(id=TABLE[:-1]))
+    create_table(namespace, {}, TABLE, pa.table({"id": pa.array([1], pa.int64())}), root=root, mode="create", registry=None)
     for value in range(2, LATEST + 1):
         _append(namespace, value)
     assert _versions(namespace) == [1, 2, 3, 4]
@@ -95,7 +97,7 @@ def _delete(client: TestClient, *ranges: tuple[int, int], branch: str | None = N
     body: dict[str, Any] = {"ranges": [{"start_version": start, "end_version": end} for start, end in ranges]}
     if branch is not None:
         body["branch"] = branch
-    return client.post("/v1/table/alpha/version/delete", json=body)
+    return client.post("/v1/table/db$alpha/version/delete", json=body)
 
 
 def test_an_old_untagged_version_is_deleted(client: TestClient, ns: LanceNamespace) -> None:
@@ -210,7 +212,8 @@ def test_a_table_another_dataset_resolves_its_files_through_is_refused(client: T
     The clone is in its base record, as the catalog records a clone it made: an unrecorded one would be
     a base nothing sanctioned, which protects nothing ([[LH-279]])."""
     source = open_dataset(ns, {}, TABLE)
-    clone = str(Path(source.uri).parent / "clone.lance")
+    # Joined as a string: the table's location is a `file://` URI, which `Path` would collapse to `file:/`.
+    clone = f"{source.uri.rsplit('/', 1)[0]}/clone.lance"
     source.shallow_clone(clone, reference=2)
     base_registry.claim_bases(
         base_registry.BaseRegistry(control_root=str(tmp_path / "control")),

@@ -45,7 +45,8 @@ deployment's ambient key: the bypass `credentials.MaintenanceDenied` exists to s
 refuses for the same reason. `write_options_for` returns a scoped credential where the door vends one, raises
 `MaintenanceDenied` on a 401/403, `TableNotGoverned` on a 404 naming no table and `VendUndecided` on a 5xx,
 and falls back to the ambient options only when vending is unconfigured or unreachable, which is the
-deployment posture it already counts.
+deployment posture it already counts. It is asked only about the table the catalog's ``__manifest`` names the dataset
+as: a dataset no row names is refused unvended and unwritten ([[LH-520]]).
 
 THE LINEAGE PLANE ALREADY ANTICIPATES THIS SHAPE. Lance records the operation as `UpdateConfig`, which
 `lineage.core.reconcile.MAINTENANCE_OPERATIONS` lists — so the sweep neither reports the version as a
@@ -64,6 +65,7 @@ from pydantic import BaseModel, Field
 
 from maintenance.core.config import shared_lance_session
 from maintenance.services.credentials import MaintenanceDenied, TableNotGoverned, VendUndecided, write_options_for
+from maintenance.services.due import TableIds
 from maintenance.services.orphans import OrphanFile
 from maintenance.services.sweep import trashed_locations, why_in_trash
 from service_kit.lakehouse import trash
@@ -147,6 +149,18 @@ def _set_aside_trashed(eligible: dict[str, list[OrphanFile]], trashed_by_path: d
     return candidates, trashed
 
 
+def _set_aside_unnamed(candidates: dict[str, list[OrphanFile]], names: TableIds) -> tuple[dict[str, tuple[str, list[OrphanFile]]], list[FloorRaise]]:
+    """The candidates a ``__manifest`` row names, with the table each is, and a refusal for each one no row names."""
+    named: dict[str, tuple[str, list[OrphanFile]]] = {}
+    unnamed: list[FloorRaise] = []
+    for uri, found in candidates.items():
+        if (table := names.table_of(uri)) is None:
+            unnamed.append(_outcome(uri, found).model_copy(update={"refused": "no __manifest row names this dataset, so it is neither vended nor written"}))
+        else:
+            named[uri] = (table, found)
+    return named, unnamed
+
+
 def _outcome(uri: str, found: list[OrphanFile]) -> FloorRaise:
     """The raise ``found`` would earn ``uri``, measured against its orphans' own mtimes until the floor is read."""
     return FloorRaise(
@@ -184,7 +198,40 @@ def _already_raised(uri: str, storage_options: dict[str, str]) -> str | None:
         return None
 
 
-def raise_listing_floors(settings: MaintenanceSettings, *, orphans: list[OrphanFile], storage_options: dict[str, str]) -> FloorReport:
+def _raise_one(uri: str, table: str, found: list[OrphanFile], *, settings: MaintenanceSettings, storage_options: dict[str, str]) -> FloorRaise:
+    """One dataset's raise, or why it was refused: the floor re-read, the stamp, the vend for ``table``, then the commit."""
+    outcome = _outcome(uri, found)
+    floor = _current_floor(uri, storage_options)
+    if floor is None:
+        return outcome.model_copy(update={"refused": "floor unreadable"})
+    outcome.floor_before = floor
+    if (stamped := _already_raised(uri, storage_options)) is not None:
+        return outcome.model_copy(update={"refused": f"already raised at {stamped} and the floor has not moved — the sweep cannot clean this dataset"})
+    if all(o.mtime_epoch <= floor for o in found):
+        # The floor already covers them: something committed to this dataset between the report and
+        # now, so the next sweep will reclaim without help and a commit here buys only a version.
+        return outcome.model_copy(update={"refused": "floor already covers these orphans"})
+    # THE CREDENTIAL IS RESOLVED BEFORE THE DRY-RUN BRANCH, so a preview reports the denial it
+    # would hit rather than a plan it could never carry out. A dry run that lists a table the
+    # catalog will refuse is the preview telling an operator the opposite of what happens.
+    try:
+        write_options = write_options_for(uri, settings, table_id=table, fallback=storage_options)
+    except (MaintenanceDenied, TableNotGoverned, VendUndecided) as exc:
+        return outcome.model_copy(update={"refused": str(exc)})
+    if settings.floor_raise_dry_run:
+        return outcome
+    try:
+        # THE SHARED SESSION, like every other dataset open in this service. This pod runs against
+        # a 512Mi limit it has already been OOMKilled against, and a store rebuild strands datasets
+        # in bulk — a per-dataset session here is the shape that turns a recovery into an eviction.
+        lance.dataset(uri, storage_options=write_options, session=shared_lance_session()).update_config({FLOOR_KEY: str(int(time.time()))})
+        outcome.version = lance.dataset(uri, storage_options=storage_options, session=shared_lance_session()).version
+    except Exception as exc:  # noqa: BLE001 — one dataset's failure must not stop the others
+        return outcome.model_copy(update={"refused": f"commit failed: {exc}"})
+    return outcome
+
+
+def raise_listing_floors(settings: MaintenanceSettings, *, orphans: list[OrphanFile], names: TableIds, storage_options: dict[str, str]) -> FloorReport:
     """Write one metadata commit per stranded dataset, so the next sweep can see its residue.
 
     OFF BY DEFAULT and DRY-RUN BY DEFAULT — two separate switches, because they answer different
@@ -211,6 +258,10 @@ def raise_listing_floors(settings: MaintenanceSettings, *, orphans: list[OrphanF
     dataset, trashed ones included, because the drift report and the purge gate need them. Before the cap, because a
     refusal repeated every tick would spend a slot every tick. The index is read once per call, as the sweep reads
     it, and an index that cannot be read writes and plans nothing: no dataset can then be shown to be outside it.
+
+    ``names`` is the catalog's ``__manifest`` read for the tick, and a dataset it names no table for is refused with the
+    trashed ones, before the cap and before any vend ([[LH-520]]). A read that missed a root plans nothing: a dataset absent
+    from it may still be a table.
     """
     report = FloorReport(enabled=settings.floor_raise_enabled, dry_run=settings.floor_raise_dry_run)
     if not settings.floor_raise_enabled:
@@ -221,46 +272,15 @@ def raise_listing_floors(settings: MaintenanceSettings, *, orphans: list[OrphanF
         log.error("floor_raise_trash_index_unreadable", extra={"error": str(exc)})
         report.error = f"the trash index could not be read, so no dataset can be shown to be outside it: {exc}"
         return report
-    candidates, trashed = _set_aside_trashed(_eligible(orphans), trashed_by_path)
-    report.refused.extend(trashed)
+    if not names.complete:
+        report.error = "a __manifest could not be read, so no dataset can be shown to be the table it names"
+        return report
+    eligible, trashed = _set_aside_trashed(_eligible(orphans), trashed_by_path)
+    candidates, unnamed = _set_aside_unnamed(eligible, names)
+    report.refused.extend([*trashed, *unnamed])
     for uri in sorted(candidates)[: settings.floor_raise_max_per_tick]:
-        found = candidates[uri]
-        outcome = _outcome(uri, found)
-        floor = _current_floor(uri, storage_options)
-        if floor is None:
-            report.refused.append(outcome.model_copy(update={"refused": "floor unreadable"}))
-            continue
-        outcome.floor_before = floor
-        if (stamped := _already_raised(uri, storage_options)) is not None:
-            report.refused.append(
-                outcome.model_copy(update={"refused": f"already raised at {stamped} and the floor has not moved — the sweep cannot clean this dataset"})
-            )
-            continue
-        if all(o.mtime_epoch <= floor for o in found):
-            # The floor already covers them: something committed to this dataset between the report and
-            # now, so the next sweep will reclaim without help and a commit here buys only a version.
-            report.refused.append(outcome.model_copy(update={"refused": "floor already covers these orphans"}))
-            continue
-        # THE CREDENTIAL IS RESOLVED BEFORE THE DRY-RUN BRANCH, so a preview reports the denial it
-        # would hit rather than a plan it could never carry out. A dry run that lists a table the
-        # catalog will refuse is the preview telling an operator the opposite of what happens.
-        try:
-            write_options = write_options_for(uri, settings, fallback=storage_options)
-        except (MaintenanceDenied, TableNotGoverned, VendUndecided) as exc:
-            report.refused.append(outcome.model_copy(update={"refused": str(exc)}))
-            continue
-        if report.dry_run:
-            report.raised.append(outcome)
-            continue
-        try:
-            # THE SHARED SESSION, like every other dataset open in this service. This pod runs against
-            # a 512Mi limit it has already been OOMKilled against, and a store rebuild strands datasets
-            # in bulk — a per-dataset session here is the shape that turns a recovery into an eviction.
-            lance.dataset(uri, storage_options=write_options, session=shared_lance_session()).update_config({FLOOR_KEY: str(int(time.time()))})
-            outcome.version = lance.dataset(uri, storage_options=storage_options, session=shared_lance_session()).version
-        except Exception as exc:  # noqa: BLE001 — one dataset's failure must not stop the others
-            report.refused.append(outcome.model_copy(update={"refused": f"commit failed: {exc}"}))
-            continue
-        report.raised.append(outcome)
+        table, found = candidates[uri]
+        outcome = _raise_one(uri, table, found, settings=settings, storage_options=storage_options)
+        (report.refused if outcome.refused is not None else report.raised).append(outcome)
     report.capped = max(0, len(candidates) - settings.floor_raise_max_per_tick)
     return report

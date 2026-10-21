@@ -20,6 +20,7 @@ import lance
 import pyarrow as pa
 import pytest
 from lance_namespace import (
+    CreateNamespaceRequest,
     InvalidInputError,
     InvalidTableStateError,
     ListTableTagsRequest,
@@ -40,10 +41,8 @@ from service_kit.lakehouse.quality import Assertion
 
 SCHEMA = pa.schema([pa.field("id", pa.int64()), pa.field("payload", pa.string())])
 
-#: Root-level, like the catalog's other dir-namespace tests. A child namespace would need its own
-#: `__manifest` dataset declared first (pylance 9 refuses a child read without one) and buys nothing
-#: here — publication is a per-TABLE concern.
-TABLE_ID = ["pages"]
+#: In a namespace, because a table the catalog makes lives in one (ADR 0173 §5).
+TABLE_ID = ["db", "pages"]
 
 
 def _table(ids: list[int | None]) -> pa.Table:
@@ -62,7 +61,8 @@ def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace, a runtime-only type
     own tag operations go through that same resolution, which is the whole point of testing here.
     """
     namespace = connect("dir", {"root": str(tmp_path)})
-    create_table(namespace, {}, TABLE_ID, _table([1, 2, 3]), mode="create", registry=None)
+    namespace.create_namespace(CreateNamespaceRequest(id=TABLE_ID[:-1]))
+    create_table(namespace, {}, TABLE_ID, _table([1, 2, 3]), root=str(tmp_path), mode="create", registry=None)
     return namespace
 
 
@@ -265,18 +265,18 @@ async def test_a_PUBLICATION_announces_the_range_and_a_REJECTION_announces_nothi
 
     good = _write(ns, [1, 2, 3])
     await publish_table(
-        "pages", PublishRequest(version=good, key_column="id"), ns, settings, {}, _Emitter(), _Tenant(), fga_client=None, token=None, clock=get_clock()
+        "db$pages", PublishRequest(version=good, key_column="id"), ns, settings, {}, _Emitter(), _Tenant(), fga_client=None, token=None, clock=get_clock()
     )
 
     bad = _write(ns, [4, None, 6])
     await publish_table(
-        "pages", PublishRequest(version=bad, key_column="id"), ns, settings, {}, _Emitter(), _Tenant(), fga_client=None, token=None, clock=get_clock()
+        "db$pages", PublishRequest(version=bad, key_column="id"), ns, settings, {}, _Emitter(), _Tenant(), fga_client=None, token=None, clock=get_clock()
     )
 
     assert [a["action"] for a in announced] == ["table_published"], "a rejection must announce nothing"
     assert (announced[0]["from_version"], announced[0]["to_version"]) == (None, good)
     # An UNBOUND namespace names no tenant — omitted rather than empty, so the medallion can tell
-    # "single-tenant" from "a tenant named ''". `pages` here has no binding.
+    # "single-tenant" from "a tenant named ''". `db` here has no binding.
     assert "project" not in announced[0]
 
 

@@ -27,7 +27,7 @@ import pyarrow as pa
 import pytest
 
 from service_kit.lakehouse import base_registry
-from service_kit.lakehouse.base_refs import containment_of, protected_roots
+from service_kit.lakehouse.base_refs import containment_of, normalise, protected_roots
 
 
 def _registry(tmp_path: Path) -> base_registry.BaseRegistry:
@@ -215,9 +215,10 @@ def test_the_clone_breaks_IN_A_FRESH_PROCESS_after_the_source_is_swept(tmp_path:
 def _sweep_results(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, uris: list[str]) -> list[Any]:
     """Drive the REAL `run_sweep` over ``uris`` and return its per-dataset results.
 
-    Only the two things that need infrastructure are stubbed — the S3 filesystem and dataset
-    discovery. Everything the refusal depends on runs for real, which is the point: the earlier tests
-    call `protected_roots` directly and would pass even if the sweep never invoked it.
+    Only the things that need infrastructure are stubbed — the S3 filesystem, dataset discovery, and
+    the catalog's `__manifest`, which names each of ``uris`` as its own table. Everything the refusal
+    depends on runs for real, which is the point: the earlier tests call `protected_roots` directly and
+    would pass even if the sweep never invoked it.
     """
     from maintenance.core.config import MaintenanceSettings
     from maintenance.services import sweep as sweep_mod
@@ -238,7 +239,8 @@ def _sweep_results(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, uris: list[s
     )
     monkeypatch.setattr(sweep_mod, "_s3fs", lambda _s: None)
     monkeypatch.setattr(sweep_mod, "discover_datasets", lambda _fs, _bucket, *, max_depth: Discovery(uris=list(uris)))
-    monkeypatch.setattr(sweep_mod, "table_ids", lambda *_a, **_k: TableIds())
+    named = TableIds(by_location={normalise(uri): f"db$t{i}" for i, uri in enumerate(uris)})
+    monkeypatch.setattr(sweep_mod, "table_ids", lambda *_a, **_k: named)
     return sweep_mod.run_sweep(settings)
 
 

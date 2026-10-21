@@ -126,11 +126,12 @@ def test_a_keyed_body_that_is_not_an_arrow_stream_lets_the_corrected_retry_run(r
 
 
 def test_string_properties_still_create(real_ns_client: TestClient) -> None:
-    """The positive half: a spec-shaped map passes the shape check and lands on the table."""
+    """The positive half: a spec-shaped map passes the shape check and lands on the table, in its schema metadata
+    ([[LH-503]]): the declaration that places the table keeps no properties ([[LH-520]])."""
     assert real_ns_client.post("/v1/namespace/db/create", json={}).status_code == 200
 
     created = real_ns_client.post(f'{CREATE}?properties={{"team":"eng"}}', content=_rows(), headers=ARROW_STREAM)
 
     assert created.status_code == 200, created.text
-    described = real_ns_client.post("/v1/table/db$t/describe", json={}).json()
-    assert (described.get("properties") or {}).get("team") == "eng", described
+    described = real_ns_client.post("/v1/table/db$t/describe", json={"load_detailed_metadata": True}).json()
+    assert (described.get("metadata") or {}).get("team") == "eng", described

@@ -233,13 +233,10 @@ def settled_outbox_depth(reader: Identity, *, within: float = scenario.SETTLE_SE
     return _settled(lambda: int(scenario.ok(reader.http.get(f"{scenario.LINEAGE}/admin/dlq", params={"limit": 1}, timeout=30))["depth"]), within)
 
 
-def settled_control_outbox_depth(*, within: float = scenario.SETTLE_SECONDS) -> int:
-    """The depth of the catalog's control outbox, once its relay has had ``within`` to drain it: the control events
-    staged and not yet confirmed published. No door reports it, so it is listed with the store's own pair."""
-    assert STORE and STORE_KEY and STORE_SECRET, (
-        "set LANCE_E2E_S3, LANCE_E2E_S3_ACCESS_KEY and LANCE_E2E_S3_SECRET_KEY: the control outbox is read from the store"
-    )
-    options = {
+def store_options() -> dict[str, str]:
+    """The store's own pair, as a client outside the catalog's doors reaches the store: the outbox reader, a pipeline."""
+    assert STORE and STORE_KEY and STORE_SECRET, "set LANCE_E2E_S3, LANCE_E2E_S3_ACCESS_KEY and LANCE_E2E_S3_SECRET_KEY: this reads or writes the store itself"
+    return {
         "endpoint": STORE,
         "access_key_id": STORE_KEY,
         "secret_access_key": STORE_SECRET,
@@ -247,4 +244,10 @@ def settled_control_outbox_depth(*, within: float = scenario.SETTLE_SECONDS) -> 
         "allow_http": str(STORE.startswith("http://")).lower(),
         "virtual_hosted_style_request": "false",
     }
+
+
+def settled_control_outbox_depth(*, within: float = scenario.SETTLE_SECONDS) -> int:
+    """The depth of the catalog's control outbox, once its relay has had ``within`` to drain it: the control events
+    staged and not yet confirmed published. No door reports it, so it is listed with the store's own pair."""
+    options = store_options()
     return _settled(lambda: outbox.backlog(CONTROL_OUTBOX_URI, options)[0], within)

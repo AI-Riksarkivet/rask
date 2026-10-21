@@ -30,7 +30,7 @@ from pathlib import Path
 
 import pyarrow as pa
 import pytest
-from lance_namespace import InsertIntoTableRequest, connect
+from lance_namespace import CreateNamespaceRequest, InsertIntoTableRequest, connect
 
 from catalog.services.dataplane import coerce_insert_arrow, create_table, insert_into_table, open_dataset
 
@@ -42,7 +42,7 @@ _BODY_LIMIT = 256 * 1024 * 1024
 lance = pytest.importorskip("lance")
 
 
-TABLE_ID = ["rows"]
+TABLE_ID = ["db", "rows"]
 MAIN_SCHEMA = pa.schema([pa.field("id", pa.int64()), pa.field("s", pa.string())])
 BRANCH = "work"
 
@@ -66,7 +66,16 @@ def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace is runtime-only
     change without touching main.
     """
     namespace = connect("dir", {"root": str(tmp_path / "data")})
-    create_table(namespace, {}, TABLE_ID, pa.table({"id": pa.array([1], pa.int64()), "s": pa.array(["a"])}, schema=MAIN_SCHEMA), mode="create", registry=None)
+    namespace.create_namespace(CreateNamespaceRequest(id=TABLE_ID[:-1]))
+    create_table(
+        namespace,
+        {},
+        TABLE_ID,
+        pa.table({"id": pa.array([1], pa.int64()), "s": pa.array(["a"])}, schema=MAIN_SCHEMA),
+        root=str(tmp_path / "data"),
+        mode="create",
+        registry=None,
+    )
     dataset = open_dataset(namespace, {}, TABLE_ID)
     dataset.create_branch(BRANCH, None)
     branch_dataset = open_dataset(namespace, {}, TABLE_ID, branch=BRANCH)

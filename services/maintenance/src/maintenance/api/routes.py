@@ -28,8 +28,11 @@ from pydantic import BaseModel
 
 from maintenance.api.dependencies import ControlEmitterDep, FgaClientDep, LineageEmitterDep, SettingsDep
 from maintenance.core.config import MaintenanceSettings
+from maintenance.services.due import table_ids
 from maintenance.services.expiry import summarize_refusals
 from maintenance.services.floor import raise_listing_floors
+from maintenance.services.naming import TableIds
+from maintenance.services.plan import buckets_to_sweep
 from maintenance.services.purge import objects_held, purge_expired_trash, refusal_log_entry
 from maintenance.services.rebuild import rebuild_tuples
 from maintenance.services.reconcile import CATEGORIES, ReconcileReport, reconcile
@@ -233,7 +236,10 @@ async def on_reconcile_cron(settings: SettingsDep, client: FgaClientDep, control
                     "error": swept.error,
                 },
             )
-        floors = await run_in_threadpool(raise_listing_floors, settings, orphans=report.orphan_files, storage_options=settings.storage_options())
+        names = await run_in_threadpool(_swept_table_ids, settings)
+        floors = await run_in_threadpool(
+            partial(raise_listing_floors, settings, orphans=report.orphan_files, names=names, storage_options=settings.storage_options())
+        )
         payload["floor_raise"] = floors.model_dump(mode="json")
         # WARNING and NAMED, like the purge line below, because this writes a version to a GOVERNED
         # table. Which tables is the entire audit trail; a count answers nobody's question about it.
@@ -290,6 +296,12 @@ async def ack_reconcile_binding() -> dict[str, str]:
 #: one WARNING must not become the report; a truncated list SAYS it was truncated, so a reader can never
 #: mistake the sample for the set.
 _DRIFT_NAMES_PER_CATEGORY = 10
+
+
+def _swept_table_ids(settings: MaintenanceSettings) -> TableIds:
+    """Every table the swept buckets' manifests name. Blocking store reads: run off the event loop."""
+    options = settings.storage_options()
+    return table_ids({f"s3://{bucket}" for bucket in buckets_to_sweep(settings, options)}, options)
 
 
 def _largest(totals: dict[str, int], limit: int = 10) -> dict[str, int]:

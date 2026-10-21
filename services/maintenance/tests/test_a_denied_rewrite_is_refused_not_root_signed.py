@@ -57,7 +57,7 @@ def test_a_401_is_told_apart_from_a_403_at_the_vend_door(*, monkeypatch: pytest.
     """A 401 is about this service's own credential and a 403 about the id; both refuse, only the second is the table's."""
     _respond(monkeypatch, status)
     with pytest.raises(MaintenanceDenied) as vend:
-        credentials.write_options_for("s3://b/t", _settings(), fallback=_FALLBACK, declared_table_id="ns$t")
+        credentials.write_options_for("s3://b/t", _settings(), table_id="ns$t", fallback=_FALLBACK)
 
     assert isinstance(vend.value, MaintenanceUnauthenticated) is unauthenticated
     assert "ns$t" in str(vend.value), "the refusal must name the table it was asked for"

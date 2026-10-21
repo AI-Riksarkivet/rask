@@ -33,7 +33,7 @@ import lance
 import pyarrow as pa
 import pyarrow.ipc as ipc
 import pytest
-from lance_namespace import InsertIntoTableRequest, InvalidInputError, connect
+from lance_namespace import CreateNamespaceRequest, InsertIntoTableRequest, InvalidInputError, connect
 
 from catalog.services.dataplane import create_table, insert_into_table, open_dataset
 
@@ -190,11 +190,14 @@ def test_the_data_plane_refuses_it_without_the_door(tmp_path: Path, branch: str 
     """`dataplane.insert_into_table` is a seam of its own, so its branch arm must not depend on the door
     having parsed first: handed the raw value, pylance's `insert` answers a bare ValueError, which is a 500."""
     ns = connect("dir", {"root": str(tmp_path / "data")})
-    create_table(ns, {}, ["t"], _id_table(), mode="create", registry=None)
+    ns.create_namespace(CreateNamespaceRequest(id=["db"]))
+    create_table(ns, {}, ["db", "t"], _id_table(), root=str(tmp_path / "data"), mode="create", registry=None)
     if branch is not None:
-        open_dataset(ns, {}, ["t"]).create_branch(branch, None)
+        open_dataset(ns, {}, ["db", "t"]).create_branch(branch, None)
 
     with pytest.raises(InvalidInputError):
-        insert_into_table(ns, {}, InsertIntoTableRequest(id=["t"], mode="Appnd", branch=branch), _rows(5), max_bytes=_BODY_LIMIT, transaction_properties=None)
+        insert_into_table(
+            ns, {}, InsertIntoTableRequest(id=["db", "t"], mode="Appnd", branch=branch), _rows(5), max_bytes=_BODY_LIMIT, transaction_properties=None
+        )
 
-    assert open_dataset(ns, {}, ["t"], branch=branch).count_rows() == 3, "a refused insert must write no rows"
+    assert open_dataset(ns, {}, ["db", "t"], branch=branch).count_rows() == 3, "a refused insert must write no rows"

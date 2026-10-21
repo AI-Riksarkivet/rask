@@ -23,6 +23,7 @@ from pathlib import Path
 import pyarrow as pa
 import pytest
 from lance_namespace import (
+    CreateNamespaceRequest,
     DeleteFromTableRequest,
     InvalidInputError,
     LanceNamespace,
@@ -37,14 +38,15 @@ from catalog.services.dataplane import create_table, delete_from_table, update_t
 def table(tmp_path: Path) -> LanceNamespace:
     """A two-column table (`id`, `v`) in a real dir namespace."""
     ns = connect("dir", {"root": str(tmp_path)})
-    create_table(ns, {}, ["t"], pa.table({"id": [1, 2, 3], "v": ["a", "b", "c"]}), mode="create", registry=None)
+    ns.create_namespace(CreateNamespaceRequest(id=["db"]))
+    create_table(ns, {}, ["db", "t"], pa.table({"id": [1, 2, 3], "v": ["a", "b", "c"]}), root=str(tmp_path), mode="create", registry=None)
     return ns
 
 
 def test_update_with_an_unknown_column_is_invalid_input(table: LanceNamespace) -> None:
     # The live shape of the bug: `Z` unquoted is a column reference, and there is no column Z.
     with pytest.raises(InvalidInputError) as caught:
-        update_table(table, {}, UpdateTableRequest(id=["t"], updates=[["v", "Z"]], predicate="id = 3"))
+        update_table(table, {}, UpdateTableRequest(id=["db", "t"], updates=[["v", "Z"]], predicate="id = 3"))
     message = str(caught.value)
     assert "invalid update expression" in message
     # Lance's own text is preserved — it names the columns that DO exist, which is the whole value of it.
@@ -60,7 +62,7 @@ def test_update_with_an_unknown_column_is_invalid_input(table: LanceNamespace) -
 
 def test_delete_with_a_bad_predicate_is_invalid_input(table: LanceNamespace) -> None:
     with pytest.raises(InvalidInputError):
-        delete_from_table(table, {}, DeleteFromTableRequest(id=["t"], predicate="nosuchcol = 3"))
+        delete_from_table(table, {}, DeleteFromTableRequest(id=["db", "t"], predicate="nosuchcol = 3"))
 
 
 def test_a_storage_failure_is_not_reclassified(table: LanceNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -80,4 +82,4 @@ def test_a_storage_failure_is_not_reclassified(table: LanceNamespace, monkeypatc
 
     monkeypatch.setattr("catalog.services.dataplane.open_dataset", boom)
     with pytest.raises(OSError, match="unreachable"):
-        update_table(table, {}, UpdateTableRequest(id=["t"], updates=[["v", "'Z'"]], predicate="id = 3"))
+        update_table(table, {}, UpdateTableRequest(id=["db", "t"], updates=[["v", "'Z'"]], predicate="id = 3"))

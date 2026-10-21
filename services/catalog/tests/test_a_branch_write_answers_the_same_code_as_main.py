@@ -32,7 +32,7 @@ from pathlib import Path
 
 import pyarrow as pa
 import pytest
-from lance_namespace import MergeInsertIntoTableRequest, connect
+from lance_namespace import CreateNamespaceRequest, MergeInsertIntoTableRequest, connect
 
 from catalog.services.dataplane import create_table, merge_insert_into_table, open_dataset
 
@@ -44,7 +44,7 @@ _BODY_LIMIT = 256 * 1024 * 1024
 lance = pytest.importorskip("lance")
 
 
-TABLE_ID = ["rows"]
+TABLE_ID = ["db", "rows"]
 SCHEMA = pa.schema([pa.field("id", pa.int64()), pa.field("s", pa.string())])
 BRANCH = "work"
 
@@ -63,7 +63,8 @@ def _base() -> pa.Table:
 @pytest.fixture
 def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace is runtime-only
     namespace = connect("dir", {"root": str(tmp_path / "data")})
-    create_table(namespace, {}, TABLE_ID, _base(), mode="create", registry=None)
+    namespace.create_namespace(CreateNamespaceRequest(id=TABLE_ID[:-1]))
+    create_table(namespace, {}, TABLE_ID, _base(), root=str(tmp_path / "data"), mode="create", registry=None)
     open_dataset(namespace, {}, TABLE_ID).create_branch(BRANCH, None)
     return namespace
 

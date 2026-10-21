@@ -28,7 +28,7 @@ from pathlib import Path
 
 import pyarrow as pa
 import pytest
-from lance_namespace import ConcurrentModificationError, connect
+from lance_namespace import ConcurrentModificationError, CreateNamespaceRequest, connect
 
 from catalog.services.dataplane import add_columns, create_table
 
@@ -39,7 +39,7 @@ from lance_namespace import AlterTableAddColumnsRequest  # noqa: E402
 from lance_namespace_urllib3_client.models.add_columns_entry import AddColumnsEntry  # noqa: E402
 
 
-TABLE_ID = ["rows"]
+TABLE_ID = ["db", "rows"]
 SCHEMA = pa.schema([pa.field("id", pa.int64())])
 
 #: Enough writers that at least one must lose. Every one of them opens at the same version and commits
@@ -50,7 +50,10 @@ WRITERS = 6
 @pytest.fixture
 def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace is runtime-only
     namespace = connect("dir", {"root": str(tmp_path / "data")})
-    create_table(namespace, {}, TABLE_ID, pa.table({"id": pa.array([1, 2, 3], pa.int64())}, schema=SCHEMA), mode="create", registry=None)
+    namespace.create_namespace(CreateNamespaceRequest(id=TABLE_ID[:-1]))
+    create_table(
+        namespace, {}, TABLE_ID, pa.table({"id": pa.array([1, 2, 3], pa.int64())}, schema=SCHEMA), root=str(tmp_path / "data"), mode="create", registry=None
+    )
     return namespace
 
 

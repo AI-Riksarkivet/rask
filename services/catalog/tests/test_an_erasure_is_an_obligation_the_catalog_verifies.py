@@ -39,7 +39,7 @@ from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 _SUBJECT = "alice"
 _PREDICATE = f"pii = '{_SUBJECT}'"
-_TABLE_ID = ["subjects"]
+_TABLE_ID = ["db", "subjects"]
 
 
 class _Clock:
@@ -50,19 +50,20 @@ class _Clock:
         return self.now
 
 
-def _create(ns: LanceNamespace, table_id: list[str]) -> None:
-    """``table_id`` through the catalog's create path: the subject beside bob in one fragment, ``pii`` BTREE-indexed."""
+def _create(ns: LanceNamespace, root: str, table_id: list[str]) -> None:
+    """``table_id`` through the catalog's create path at ``root``: the subject beside bob in one fragment, ``pii`` BTREE-indexed."""
     rows = pa.table({"pii": pa.array(["bob", _SUBJECT])})
     sink = pa.BufferOutputStream()
     with pa.ipc.new_stream(sink, rows.schema) as writer:
         writer.write_table(rows)
-    create_table(ns, {}, table_id, read_arrow_body(sink.getvalue().to_pybytes(), max_bytes=1 << 20), mode="create", registry=None)
+    create_table(ns, {}, table_id, read_arrow_body(sink.getvalue().to_pybytes(), max_bytes=1 << 20), root=root, mode="create", registry=None)
     open_dataset(ns, {}, table_id).create_scalar_index("pii", "BTREE")
 
 
 def _subjects(root: Path) -> LanceNamespace:
     ns = lance_namespace.connect("dir", {"root": str(root)})
-    _create(ns, _TABLE_ID)
+    ns.create_namespace(lance_namespace.CreateNamespaceRequest(id=_TABLE_ID[:-1]))
+    _create(ns, str(root), _TABLE_ID)
     return ns
 
 
@@ -84,14 +85,14 @@ def _catalog(ns: LanceNamespace, control: Path, clock: _Clock) -> Generator[Test
         yield client
 
 
-def _record(client: TestClient, table: str = "subjects") -> dict[str, Any]:
+def _record(client: TestClient, table: str = "db$subjects") -> dict[str, Any]:
     response = client.post(f"/management/v1/table/{table}/erasure", json={"predicate": _PREDICATE})
     assert response.status_code == 202, response.text
     return response.json()
 
 
 def _verify(client: TestClient, obligation_id: str, predicate: str = _PREDICATE) -> Any:  # noqa: ANN401 — an httpx.Response
-    return client.post(f"/management/v1/table/subjects/erasure/{obligation_id}/verify", json={"predicate": predicate})
+    return client.post(f"/management/v1/table/db$subjects/erasure/{obligation_id}/verify", json={"predicate": predicate})
 
 
 def _view(client: TestClient, obligation_id: str) -> dict[str, Any]:
@@ -155,8 +156,9 @@ def _another_predicate(client: TestClient, ns: LanceNamespace, erasure_job: Any)
 
 def _another_tables(client: TestClient, ns: LanceNamespace, erasure_job: Any) -> tuple[str, _Refused]:  # noqa: ANN401 — conftest.ErasureJob
     """An obligation is verified on the table it was recorded on, whatever table the caller may maintain."""
-    _create(ns, ["others"])
-    obligation = _record(client, "others")["obligation_id"]
+    root = open_dataset(ns, {}, _TABLE_ID).uri.rsplit("/", 1)[0]  # the root `subjects` was declared under
+    _create(ns, root, ["db", "others"])
+    obligation = _record(client, "db$others")["obligation_id"]
     return obligation, lambda: _verify(client, obligation)
 
 

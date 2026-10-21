@@ -30,7 +30,7 @@ import pyarrow as pa
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from lance_namespace import LanceNamespace
+from lance_namespace import CreateNamespaceRequest, LanceNamespace
 
 from catalog.api.dependencies import get_namespace, get_storage_options
 from catalog.api.v1.endpoints import erasure as door
@@ -49,7 +49,7 @@ _BODY_LIMIT = 256 * 1024 * 1024
 
 _SUBJECT = "alice"
 _PREDICATE = "pii = 'alice'"
-_TABLE_ID = ["subjects"]
+_TABLE_ID = ["db", "subjects"]
 
 
 def _rows(*names: str) -> pa.Table:
@@ -558,10 +558,11 @@ def test_a_verification_that_cannot_open_the_table_still_answers_with_the_report
 def _table(root: Path, first: pa.Table, *more: pa.Table) -> LanceNamespace:
     """``subjects`` through the catalog's own create path, one fragment per batch."""
     ns = lance_namespace.connect("dir", {"root": str(root)})
+    ns.create_namespace(CreateNamespaceRequest(id=_TABLE_ID[:-1]))
     sink = pa.BufferOutputStream()
     with pa.ipc.new_stream(sink, first.schema) as writer:
         writer.write_table(first)
-    create_table(ns, {}, _TABLE_ID, read_arrow_body(sink.getvalue().to_pybytes(), max_bytes=_BODY_LIMIT), mode="create", registry=None)
+    create_table(ns, {}, _TABLE_ID, read_arrow_body(sink.getvalue().to_pybytes(), max_bytes=_BODY_LIMIT), root=str(root), mode="create", registry=None)
     for batch in more:
         open_dataset(ns, {}, _TABLE_ID).insert(batch)
     return ns
@@ -608,14 +609,14 @@ def _settings(tmp_path: Path) -> Settings:
 def _recorded(namespace: LanceNamespace, settings: Settings, erasure_job: Any) -> str:  # noqa: ANN401 — conftest.ErasureJob
     """Record an obligation through the door, then run the job on the table it names; the obligation's id."""
     with _door(namespace, settings) as client:
-        recorded = client.post("/management/v1/table/subjects/erasure", json={"predicate": _PREDICATE})
+        recorded = client.post("/management/v1/table/db$subjects/erasure", json={"predicate": _PREDICATE})
     assert recorded.status_code == 202, recorded.text
     erasure_job(open_dataset(namespace, {}, _TABLE_ID).uri, _PREDICATE).run()
     return str(recorded.json()["obligation_id"])
 
 
 def _verified(client: TestClient, obligation_id: str) -> Any:  # noqa: ANN401 — an httpx.Response
-    return client.post(f"/management/v1/table/subjects/erasure/{obligation_id}/verify", json={"predicate": _PREDICATE})
+    return client.post(f"/management/v1/table/db$subjects/erasure/{obligation_id}/verify", json={"predicate": _PREDICATE})
 
 
 def test_the_door_verifies_the_location_it_resolved_without_resolving_it_again(tmp_path: Path, erasure_job: Any) -> None:  # noqa: ANN401 — conftest.ErasureJob
@@ -672,6 +673,7 @@ def _created(root: Path, table: Callable[[Path], pa.Table], *, external: bool) -
     recorded on the control root the test's base judge reads ([[LH-279]], [[LH-209]]): its external blob base,
     or else its data base."""
     ns = lance_namespace.connect("dir", {"root": str(root)})
+    ns.create_namespace(CreateNamespaceRequest(id=_TABLE_ID[:-1]))
     base = root / "bases" / "payloads"
     base.mkdir(parents=True)
     body = table(base)
@@ -685,6 +687,7 @@ def _created(root: Path, table: Callable[[Path], pa.Table], *, external: bool) -
         {},
         _TABLE_ID,
         payload,
+        root=str(root),
         mode="create",
         registry=base_registry.BaseRegistry(control_root=str(_control(root))),
         holder="$".join(_TABLE_ID),
@@ -833,14 +836,14 @@ def test_no_object_under_the_table_root_holds_the_identifier_or_the_report_names
     try:
         namespace = build(root)
         with _door(namespace, settings) as client:
-            recorded = client.post("/management/v1/table/subjects/erasure", json={"predicate": predicate})
+            recorded = client.post("/management/v1/table/db$subjects/erasure", json={"predicate": predicate})
             assert recorded.status_code == 202, recorded.text
             job = erasure_job(open_dataset(namespace, {}, _TABLE_ID).uri, predicate)
             job.delete()
             if compacts:
                 job.compact()
             job.drop_indices()
-            response = client.post(f"/management/v1/table/subjects/erasure/{recorded.json()['obligation_id']}/verify", json={"predicate": predicate})
+            response = client.post(f"/management/v1/table/db$subjects/erasure/{recorded.json()['obligation_id']}/verify", json={"predicate": predicate})
     finally:
         base_judge.install(None)
 
@@ -880,7 +883,7 @@ def test_a_predicate_lance_refuses_answers_400_and_records_nothing(tmp_path: Pat
     location = open_dataset(ns, {}, _TABLE_ID).uri
     before = _history(location)
     with _door(ns, _settings(tmp_path)) as client:
-        response = client.post("/management/v1/table/subjects/erasure", json={"predicate": predicate})
+        response = client.post("/management/v1/table/db$subjects/erasure", json={"predicate": predicate})
         listed = client.get("/management/v1/erasures").json()["obligations"]
 
     assert (response.status_code, response.json()["title"]) == (400, "InvalidInputError"), response.text

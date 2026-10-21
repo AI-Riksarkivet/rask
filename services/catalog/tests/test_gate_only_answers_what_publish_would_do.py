@@ -25,7 +25,7 @@ from pathlib import Path
 
 import pyarrow as pa
 import pytest
-from lance_namespace import connect
+from lance_namespace import CreateNamespaceRequest, connect
 from lance_namespace.errors import InvalidInputError
 from lance_namespace_urllib3_client.exceptions import ApiException  # noqa: F401  (import shape kept for parity)
 
@@ -35,7 +35,7 @@ from catalog.services.publication import gate
 
 lance = pytest.importorskip("lance")
 
-TABLE_ID = ["tier"]
+TABLE_ID = ["db", "tier"]
 
 #: `source_rowid` at a width that is not Lance's stable row id: a column that cannot trace a row to its source.
 PARTIAL = pa.schema([pa.field("id", pa.int64()), pa.field("source_rowid", pa.int64())])
@@ -51,7 +51,8 @@ CONFORMING = pa.schema(
 
 def _make(tmp_path: Path, schema: pa.Schema, **cols: object):  # noqa: ANN201
     ns = connect("dir", {"root": str(tmp_path / "d")})
-    create_table(ns, {}, TABLE_ID, pa.table(dict(cols), schema=schema), mode="create", registry=None)
+    ns.create_namespace(CreateNamespaceRequest(id=TABLE_ID[:-1]))
+    create_table(ns, {}, TABLE_ID, pa.table(dict(cols), schema=schema), root=str(tmp_path / "d"), mode="create", registry=None)
     return open_dataset(ns, {}, TABLE_ID).uri
 
 

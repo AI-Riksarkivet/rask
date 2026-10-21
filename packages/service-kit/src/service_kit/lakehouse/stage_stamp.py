@@ -42,8 +42,8 @@ SOURCE_ROWID_COLUMN: Final = "source_rowid"
 LINEAGE_COLUMN: Final = "lineage"
 
 #: The canonical catalog name of the dataset a row was written INTO — schema metadata rather than a
-#: column, because it describes the dataset and not the row. Read by
-#: `maintenance.core.lineage_emit.declared_table_id` to name the dataset a maintenance run is about.
+#: column, because it describes the dataset and not the row. Maintenance names a dataset by the catalog's
+#: `__manifest` alone and never by this stamp ([[LH-520]]): a writer can set it to any name.
 LINEAGE_DATASET_ID_KEY: Final = "lineage.dataset_id"
 
 #: Lance's reserved row-identity metacolumn. Read from, never written: the name is reserved and the
