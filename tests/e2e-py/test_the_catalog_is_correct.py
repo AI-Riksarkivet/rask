@@ -750,7 +750,9 @@ SPEC_DOORS: tuple[Door, ...] = (
         rung=Rung.READER,
         aim=_at_namespace,
         send=lambda s, role, t: s.clients[role].list_tables(ln.ListTablesRequest(id=t.namespace)),
-        shows=lambda s, role, t, value, before: (sorted(value.tables), s.tables()),
+        # The request sends the spec's default, `include_declared` true (spec.yaml:2356-2367), so it is read against the
+        # same listing.
+        shows=lambda s, role, t, value, before: (sorted(value.tables), s.tables(declared=True)),
     ),
     # Open to every signed-in caller, and filtered: each sees the tables it may read, so the matrix table is in the
     # listing exactly for the principals that hold the reader rung.
