@@ -178,6 +178,10 @@ def killed(workload: Workload, *, container: str) -> None:
     The signal is sent from inside the container, by its own uid, to the one process whose command line names uvicorn
     and is not the container's PID 1: the kernel drops a SIGKILL sent to a namespace's PID 1 from inside it, which is why
     the image's tini must be PID 1 (LH-313). The kill fails the drill unless it found exactly one such process.
+
+    The exec answers 0 or 137: the killed uvicorn takes tini and the container down, and the runtime kills the exec'd
+    `python` with it when that lands before it exits (measured on CI run 39742245075). The restart that follows is the
+    proof the kill landed, since a kill that never happened restarts nothing.
     """
     pods = workload.pods()
     assert len(pods) == 1, f"{workload.ref} runs {len(pods)} pods; the kill drill expects one"
@@ -199,7 +203,7 @@ def killed(workload: Workload, *, container: str) -> None:
         "assert len(hits) == 1, f'expected one uvicorn process, found {hits}'\n"
         "os.kill(hits[0], signal.SIGKILL)\n"
     )
-    kubectl("exec", pod, "-c", container, "--", "python", "-c", script)
+    kubectl("exec", pod, "-c", container, "--", "python", "-c", script, answers=frozenset({0, 137}))
     until(lambda: _restarts(pod, container) > restarts, f"{pod}'s {container} was not restarted after its kill")
     kubectl("wait", f"pod/{pod}", "--for=condition=Ready", f"--timeout={SETTLE_SECONDS:.0f}s")
 
