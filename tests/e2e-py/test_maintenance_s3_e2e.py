@@ -71,7 +71,10 @@ from maintenance.services import orphans
 from maintenance.services.expiry import DatasetResult
 from maintenance.services.reconcile import ReconcileReport, reconcile
 from maintenance.services.sweep import run_sweep, summarize
+from service_kit.lakehouse import location_claims
+from service_kit.lakehouse.base_refs import normalise
 from service_kit.lakehouse.maintenance_due import list_due
+from service_kit.lakehouse.naming import UUID_PROPERTY
 from service_kit.lakehouse.objectfs import s3_filesystem
 
 
@@ -184,13 +187,17 @@ def estate(s3: Any) -> Iterator[Estate]:
 
     # THREE separate appends, so Lance's compaction planner has real work to list on object storage, and the
     # table registered in the control bucket's `__manifest` so the sweep can name it. A single-fragment dataset
-    # would make the due evaluation a no-op and every assertion below vacuous.
+    # would make the due evaluation a no-op and every assertion below vacuous. The namespace and the table carry the
+    # uuids a catalog door mints (ADR 0173): the namespace's in its `__manifest` row, the table's in its location's
+    # claim, since maintenance refuses a table whose policy owners it cannot identify ([[LH-523]]).
     lance.write_dataset(_rows(), built.plain_uri, storage_options=options)
     lance.write_dataset(_rows(offset=10), built.plain_uri, mode="append", storage_options=options)
     lance.write_dataset(_rows(offset=20), built.plain_uri, mode="append", storage_options=options)
     namespace = connect("dir", {"root": f"s3://{built.ctl}", **{f"storage.{key}": value for key, value in options.items()}})
-    namespace.create_namespace(CreateNamespaceRequest(id=["e2e"]))
+    namespace.create_namespace(CreateNamespaceRequest(id=["e2e"], properties={UUID_PROPERTY: str(uuid.uuid4())}))
     namespace.register_table(RegisterTableRequest(id=["e2e", "plain"], location="plain"))
+    claims = location_claims.ClaimStore(control_root=f"s3://{built.ctl}", storage_options=options)
+    location_claims.take(claims, normalise(built.plain_uri), "e2e$plain", ["e2e", "plain"], is_gone=lambda _claim: False, uuid=str(uuid.uuid4()))
     # A TAG — `_refs/tags/blessed.json`, a live version pointer. The first live run of this pass named
     # every promotion tag in the estate as an orphan.
     lance.dataset(built.plain_uri, storage_options=options).tags.create("blessed", 1)

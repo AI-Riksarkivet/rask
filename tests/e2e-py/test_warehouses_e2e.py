@@ -116,10 +116,14 @@ def test_per_warehouse_physical_isolation(catalog: str) -> None:
         timeout=60,
     )
     assert r.status_code == 200, r.text
+    # The table lives where its create answered: `<namespace root>/<table uuid>` (ADR 0173 §5), so no name reaches a
+    # key, and the uuid directory is what each bucket is searched for.
+    bucket, _, key = r.json()["location"].removeprefix("s3://").partition("/")
+    assert bucket == wh_a, f"a table under a namespace bound to {wh_a} was located in {bucket!r}"
 
-    a_objs = _list_bucket(wh_a)
-    b_objs = _list_bucket(wh_b)
     # The table's Lance data is physically in bucket-a...
-    assert any(NS in o or "e2etbl" in o for o in a_objs), a_objs
+    a_objs = _list_bucket(wh_a)
+    assert any(o.startswith(f"{wh_a}/{key}/_versions/") for o in a_objs), a_objs
     # ...and NOT in bucket-b (physical tenant isolation).
-    assert not any("e2etbl" in o for o in b_objs), b_objs
+    b_objs = _list_bucket(wh_b)
+    assert not any(o.startswith(f"{wh_b}/{key}") for o in b_objs), b_objs
