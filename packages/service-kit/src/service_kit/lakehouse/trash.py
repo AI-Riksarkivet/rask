@@ -18,11 +18,11 @@ Two disciplines this module exists to keep:
   HAPPENS, so shortening the estate-wide grace period can never retroactively destroy something a
   user was still inside their window to recover.
 
-Same store shape as ``maintenance_policies``/``protection``: one JSON per object under its own
-prefix, hashed key (ids are user-shaped and contain ``$``). The shape itself lives in
-:mod:`service_kit.lakehouse.record_store` — this module is the trash vocabulary over it, and the
-``_key`` helper it used to carry (with its two arguments in the OPPOSITE order to protection's, while
-hashing the same string) is gone.
+Same store shape as ``maintenance_policies``/``protection``: one JSON per object under its own prefix, keyed by the
+object's uuid (ADR 0173 §8, [[LH-525]]). A name is free again the moment its object is dropped, so several trashed
+objects may share one, each under its own record: :func:`named` finds them by the name a door is addressed by, and
+:func:`get` reads one by its uuid. The shape itself lives in :mod:`service_kit.lakehouse.record_store`; this module is
+the trash vocabulary over it.
 """
 
 from __future__ import annotations
@@ -31,8 +31,6 @@ import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from service_kit.lakehouse import location_claims
-from service_kit.lakehouse.naming import uuid_of
 from service_kit.lakehouse.objectfs import StorageOptions
 from service_kit.lakehouse.record_store import delete_record, get_record, list_records, put_record, record_key
 from service_kit.lakehouse.records import RecordChangedError, RecordMissingError, mutate_json
@@ -49,6 +47,7 @@ _EVENT = "trash_record"
 def make_record(
     canonical_id: str,
     *,
+    uuid: str,
     location: str,
     dropped_by: str | None,
     grace_days: int,
@@ -56,8 +55,12 @@ def make_record(
     kind: str = "table",
     binding: dict[str, str] | None = None,
     properties: dict[str, str] | None = None,
+    namespace_uuid: str | None = None,
+    cascade: str | None = None,
 ) -> dict[str, Any]:
-    """The trash record. ``expires_at`` is stamped HERE — at drop time — so a later change to the
+    """The trash record of the object ``uuid`` names, dropped while ``canonical_id`` named it.
+
+    ``expires_at`` is stamped HERE — at drop time — so a later change to the
     estate's grace period cannot retroactively shorten a window someone is still inside.
 
     ``kind`` distinguishes tables from namespaces (#96 — a recoverable CASCADE trashes both). A
@@ -83,11 +86,17 @@ def make_record(
     properties live only in its ``__manifest`` row, which the drop removes, so this is their only copy;
     undrop recreates the namespace with them. Among them is ``rask.tier``, which only an admin may set, so
     an undrop that lost them would let the namespace's owner shed its tier.
+
+    ``namespace_uuid`` is the uuid of the namespace the object was dropped from, which its announcements name it under
+    when no live namespace holds that name any more. ``cascade`` is the uuid of the namespace a recoverable cascade
+    dropped, on every record that cascade files, its root's own included: the namespace undrop restores exactly the
+    records one cascade filed, never another object that held one of their names.
     """
     at = now or datetime.now(UTC)
     record: dict[str, Any] = {
         "kind": kind,
         "id": canonical_id,
+        "uuid": uuid,
         "location": location,
         "dropped_by": dropped_by or "anonymous",
         "dropped_at": at.isoformat(),
@@ -97,39 +106,51 @@ def make_record(
         record["binding"] = dict(binding)
     if properties:
         record["properties"] = dict(properties)
+    if namespace_uuid:
+        record["namespace_uuid"] = namespace_uuid
+    if cascade:
+        record["cascade"] = cascade
     return record
 
 
 def put(control_root: str, storage_options: StorageOptions, record: dict[str, Any]) -> None:
-    put_record(control_root, storage_options, record_key(_TRASH_PREFIX, str(record.get("kind", "table")), str(record["id"])), record)
+    put_record(control_root, storage_options, record_key(_TRASH_PREFIX, str(record.get("kind", "table")), str(record["uuid"])), record)
 
 
-def get(control_root: str, storage_options: StorageOptions, canonical_id: str, *, kind: str = "table") -> dict[str, Any] | None:
-    return get_record(control_root, storage_options, record_key(_TRASH_PREFIX, kind, canonical_id), event=_EVENT)
+def get(control_root: str, storage_options: StorageOptions, uuid: str, *, kind: str = "table") -> dict[str, Any] | None:
+    """The trash record of the ``kind`` object ``uuid`` names, or ``None``."""
+    return get_record(control_root, storage_options, record_key(_TRASH_PREFIX, kind, uuid), event=_EVENT)
 
 
-def clear(control_root: str, storage_options: StorageOptions, canonical_id: str, *, kind: str = "table") -> bool:
-    return delete_record(control_root, storage_options, record_key(_TRASH_PREFIX, kind, canonical_id))
+def named(control_root: str, storage_options: StorageOptions, canonical_id: str, *, kind: str = "table") -> list[dict[str, Any]]:
+    """Every trashed ``kind`` object that was dropped while ``canonical_id`` named it, oldest drop first.
 
+    A door is addressed by name (ADR 0173 §9), and a name is free again once its object is dropped, so a name can lead
+    to several records: the door says which one it acts on. Every caller decides something from the answer (what a
+    door restores, whether a claim's holder is gone), so a record it cannot read raises rather than being left out.
 
-def object_uuid(record: dict[str, Any], claims: location_claims.ClaimStore) -> str | None:
-    """The uuid of the object a trash record keeps, or ``None`` when nothing still records it (ADR 0173 §6).
-
-    A table's is its location's claim's, which a recoverable drop keeps for the trashed table, and only while that
-    claim names it. A namespace's is the ``rask.uuid`` among the properties its record keeps, since its ``__manifest``
-    row went with the drop.
+    Raises:
+        ValueError: A trash record is not a JSON object.
     """
-    if record.get("kind") == "namespace":
-        return uuid_of(record.get("properties"))
-    location = str(record.get("location") or "").rstrip("/")
-    found = location_claims.read(claims, location) if location else None
-    return found.claim.uuid if found is not None and found.claim.table == record.get("id") else None
+    listed = list_records(control_root, storage_options, _TRASH_PREFIX, event=_EVENT, strict=True)
+    held = [record for record in listed if record.get("kind", "table") == kind and record.get("id") == canonical_id]
+    return sorted(held, key=lambda record: str(record.get("dropped_at") or ""))
+
+
+def clear(control_root: str, storage_options: StorageOptions, uuid: str, *, kind: str = "table") -> bool:
+    return delete_record(control_root, storage_options, record_key(_TRASH_PREFIX, kind, uuid))
+
+
+def object_uuid(record: dict[str, Any]) -> str | None:
+    """The uuid of the object a trash record keeps, or ``None`` for a record that names none."""
+    value = record.get("uuid")
+    return value if isinstance(value, str) and value else None
 
 
 def note_refusal(
     control_root: str,
     storage_options: StorageOptions,
-    canonical_id: str,
+    uuid: str,
     *,
     kind: str = "table",
     reason: str,
@@ -170,9 +191,9 @@ def note_refusal(
         }
 
     try:
-        updated = mutate_json(control_root, storage_options, record_key(_TRASH_PREFIX, kind, canonical_id), _mutate)
+        updated = mutate_json(control_root, storage_options, record_key(_TRASH_PREFIX, kind, uuid), _mutate)
     except (RecordMissingError, RecordChangedError) as exc:
-        log.warning("trash_refusal_not_recorded", extra={"kind": kind, "id": canonical_id, "reason": str(exc)})
+        log.warning("trash_refusal_not_recorded", extra={"kind": kind, "uuid": uuid, "reason": str(exc)})
         return None
     count = updated.get("attempts")
     return count if isinstance(count, int) else None

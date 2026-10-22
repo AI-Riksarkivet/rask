@@ -2,7 +2,9 @@
 
 A liveness check by object id alone purges a trash record whose id is absent from ``__manifest`` even
 when another id is registered at the same location — the state a rename or a register leaves when it
-attaches a dropped table's bytes under a new id — and so deletes a live table. A destructive drop deletes
+attaches a dropped table's bytes under a new id — and so deletes a live table. The purge judges a table by
+its location ([[LH-525]]), so a live table at the recorded location is the dropped one still registered, under
+whatever name. A destructive drop deletes
 a location too, so an alias over another table's bytes must not destroy them.
 
 Driven on a real pylance ``dir`` estate: through the real purge with a real trash record on a local
@@ -15,6 +17,7 @@ import asyncio
 import io
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from uuid import uuid4
 
 import pyarrow as pa
 import pytest
@@ -40,7 +43,11 @@ def test_an_expired_record_whose_bytes_another_id_resolves_to_is_refused(tmp_pat
     location = str(ns.describe_table(DescribeTableRequest(id=["team", "orders"])).location)
     ns.deregister_table(DeregisterTableRequest(id=["team", "orders"]))
     trash.put(
-        control_root, {}, trash.make_record("team$orders", location=location, dropped_by="user:alice", grace_days=7, now=datetime.now(UTC) - timedelta(days=30))
+        control_root,
+        {},
+        trash.make_record(
+            "team$orders", uuid=str(uuid4()), location=location, dropped_by="user:alice", grace_days=7, now=datetime.now(UTC) - timedelta(days=30)
+        ),
     )
     ns.register_table(RegisterTableRequest(id=["team", "renamed"], location=location.rstrip("/").rsplit("/", 1)[-1]))
     report = ReconcileReport(
@@ -54,11 +61,9 @@ def test_an_expired_record_whose_bytes_another_id_resolves_to_is_refused(tmp_pat
     out = asyncio.run(purge_expired_trash(settings, report=report, control_root=control_root, data_roots={f"file://{data}"}))
 
     assert out.purged == [], f"the purge deleted bytes table team$renamed resolves to: {out.purged}"
-    assert [(refused.id, "another registered table resolves to these bytes" in refused.reason) for refused in out.refused] == [("team$orders", True)], (
-        out.refused
-    )
+    assert [(refused.id, "still registered" in refused.reason) for refused in out.refused] == [("team$orders", True)], out.refused
     assert Path(location.removeprefix("file://"), "_versions").is_dir()
-    assert trash.get(control_root, {}, "team$orders") is not None
+    assert [record["id"] for record in trash.named(control_root, {}, "team$orders")] == ["team$orders"]
 
 
 @pytest.mark.parametrize(

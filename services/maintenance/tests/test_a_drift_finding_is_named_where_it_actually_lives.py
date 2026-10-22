@@ -43,7 +43,12 @@ DATASET = "s3://lance-catalog/6ecbe11e_transcripts_v2$annotations"
         # An orphaned trash record carries a `location` too and is named by its `id`: ranking `location`
         # ahead of `id` would silently rename an existing category's findings in the report an operator
         # reads every tick.
-        pytest.param("orphaned_trash", OrphanedTrash(id="tr-1", kind="table", location="s3://gone/t.lance"), "tr-1", id="orphaned-trash"),
+        pytest.param(
+            "orphaned_trash",
+            OrphanedTrash(id="tr-1", uuid="5c1e8a3f-2d74-4b96-a0e5-7f9b3c6d2e81", kind="table", location="s3://gone/t.lance"),
+            "tr-1",
+            id="orphaned-trash",
+        ),
     ],
 )
 def test_a_drift_finding_is_named_by_where_it_lives(category: str, finding: BaseModel, name: str) -> None:

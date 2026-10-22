@@ -52,7 +52,7 @@ def _report() -> ReconcileReport:
         unbound_namespaces=[UnboundNamespace(namespace="legacy", root="s3://shared")],
         unreferenced_projects=[UnreferencedProject(id="stranded-p")],
         orphan_buckets=[OrphanBucket(bucket="nobodys-bucket")],
-        orphaned_trash=[OrphanedTrash(id="tr-1", kind="table", location="s3://gone/t.lance")],
+        orphaned_trash=[OrphanedTrash(id="tr-1", uuid="b47e2c9a-5f13-4d86-a2c0-8e6f1b3d5a97", kind="table", location="s3://gone/t.lance")],
     )
 
 

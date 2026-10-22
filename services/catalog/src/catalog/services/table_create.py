@@ -213,9 +213,6 @@ async def create_governed_table(
     # lives here, so the Arrow create wrote real datasets into namespaces that do not exist, with a
     # live owner grant and no parent edge.
     await fga_deps.require_parent_exists(ns, "table", parse_identifier(id, settings.delimiter), delimiter=settings.delimiter)
-    # The name must not still belong to a trashed table (diff2 F10 item 4): its undrop restores it under this
-    # name, which a table created here would hold.
-    await fga_deps.require_no_live_trash(settings, parse_identifier(id, settings.delimiter))
     # [[LH-209]] The one external blob base this create may register, judged before the write: none unless
     # the request names one, and never one that reaches governed storage.
     external_base = await run_in_threadpool(

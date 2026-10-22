@@ -56,6 +56,7 @@ from catalog.api.dependencies import (
     ResolverDep,
     SettingsDep,
     StorageOptionsDep,
+    TrashedUuidQuery,
     VendorDep,
     namespace_for_top_ns,
 )
@@ -89,7 +90,7 @@ from catalog.core.vending import (
     vend_or_refuse,
 )
 from catalog.schemas import ProtectionResponse, SetProtectionRequest, TrashEntry
-from catalog.services import dataplane, native, table_bases, table_claims, warehouses
+from catalog.services import dataplane, native, table_bases, table_claims, trash_doors, warehouses
 from service_kit.control_emit import emit_control
 from service_kit.governed import fga
 from service_kit.governed.audit import SUCCESS, audit
@@ -395,9 +396,6 @@ async def declare_table(
     segments = parse_identifier(id, settings.delimiter)
     require_safe_segments(segments, delimiter=settings.delimiter)
     await fga_deps.require_parent_exists(ns, "table", segments, delimiter=settings.delimiter)
-    # The name must not still belong to a trashed table (diff2 F10 item 4): its undrop restores it under this
-    # name, which a table created here would hold.
-    await fga_deps.require_no_live_trash(settings, segments)
     req = body or DeclareTableRequest()
     req.id = reconcile_body_id(segments, req.id)
     canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
@@ -739,9 +737,11 @@ async def drop_table(
             # losing the data outright.
             record = trash.make_record(
                 canonical,
+                uuid=table_uuid,
                 location=location,
                 dropped_by=f"user:{token.subject}" if token is not None else None,
                 grace_days=settings.trash_grace_days,
+                namespace_uuid=known.namespace_uuid,
             )
             await run_in_threadpool(trash.put, settings.registry_root, settings.storage_options(), record)
             await run_in_threadpool(native.call, ns, "deregister_table", DeregisterTableRequest(id=segments))
@@ -1007,9 +1007,6 @@ async def register_table(
 
     segments = parse_identifier(id, settings.delimiter)
     await fga_deps.require_parent_exists(ns, "table", segments, delimiter=settings.delimiter)
-    # The name must not still belong to a trashed table (diff2 F10 item 4): its undrop restores it under this
-    # name, which a table created here would hold.
-    await fga_deps.require_no_live_trash(settings, segments)
     body.id = reconcile_body_id(segments, body.id)
     try:
         response: RegisterTableResponse = await run_in_threadpool(native.call, ns, "register_table", body)
@@ -1190,6 +1187,8 @@ async def get_table_protection(id: str, table: ResolvedTableDep, settings: Setti
 async def table_tasks(
     id: str,
     settings: SettingsDep,
+    resolver: ResolverDep,
+    uuid: TrashedUuidQuery = None,
 ) -> list[TrashEntry]:
     """What is queued for THIS table (#75 brings §2.4). Today that is exactly one thing: a pending
     trash expiry. It exists the moment expiry does, because an undrop deadline the owner cannot see
@@ -1200,25 +1199,31 @@ async def table_tasks(
     5). Undrop does not check the clock — it checks whether the record is still there — so a passed
     deadline is a warning, not a verdict, and `expired` says which state you are in. Reporting it as
     finality would push an owner to give up on data that is still on storage and still recoverable.
+
+    One entry per dropped table that held the name and that the caller may see, each with its uuid, which an undrop
+    names when there are several ([[LH-525]]).
     """
-    canonical = fga.canonical_object_id(parse_identifier(id, settings.delimiter), delimiter=settings.delimiter)
-    record = await run_in_threadpool(trash.get, settings.registry_root, settings.storage_options(), canonical)
-    if record is None:
-        return []
-    fields = {k: str(record.get(k, "")) for k in ("id", "location", "dropped_by", "dropped_at", "expires_at")}
-    return [TrashEntry(**fields, expired=_is_expired(fields["expires_at"]))]
+    records = await resolver.admitted_trash("table", parse_identifier(id, settings.delimiter))
+    entries: list[TrashEntry] = []
+    for record in records:
+        fields = {k: str(record.get(k, "")) for k in ("id", "uuid", "location", "dropped_by", "dropped_at", "expires_at")}
+        entries.append(TrashEntry(**fields, expired=_is_expired(fields["expires_at"])))
+    return entries
 
 
 @management_router.post("/{id}/undrop", response_model_exclude_none=True)
 async def undrop_table(
     id: str,
     ns: NamespaceDep,
+    root: NamespaceRootDep,
     settings: SettingsDep,
     token: CurrentToken,
     control: ControlEmitterDep,
     emitter: LineageEmitterDep,
     uuids: ObjectUuidsDep,
+    resolver: ResolverDep,
     authorization: Annotated[str | None, Header()] = None,
+    uuid: TrashedUuidQuery = None,
 ) -> RegisterTableResponse:
     """Recover a dropped table from the trash (#75) — re-register its still-present bytes at its old
     id and clear the record. Owner-gated (``undrop`` maps to the drop rung: restoring an object into
@@ -1238,25 +1243,37 @@ async def undrop_table(
 
     An expired undrop IS logged: it means the purge is behind, or somebody recovered at the very
     edge of the window, and an operator should be able to see either.
+
+    THE NAME IS FREE ONCE ITS TABLE IS DROPPED ([[LH-525]], ADR 0173 §9), so the door restores exactly the trashed table
+    its caller names: the one dropped under the name, or, when several were, the one ``?uuid=`` names (409 listing each
+    one's uuid and deadline otherwise). It restores that table's uuid, and so its grants and records. While another
+    table holds the name the undrop answers 409: two tables cannot share it.
     """
     segments = parse_identifier(id, settings.delimiter)
     canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
     so = settings.storage_options()
-    record = await run_in_threadpool(trash.get, settings.registry_root, so, canonical)
-    if record is None:
+    trashed = await resolver.admitted_trash("table", segments)
+    if not trashed:
         raise TableNotFoundError(
             f"no recoverable drop for table: {canonical}. Either it was never dropped recoverably "
             "(the grace period was off), or the purge has already reclaimed its bytes."
         )
+    record = trash_doors.the_one_to_restore(trashed, kind="table", name=canonical)
+    record_uuid = trash.object_uuid(record)
+    if record_uuid is None:
+        raise InternalError(f"the trash record of {canonical} keeps no uuid, so its grants cannot be found")
     if _is_expired(str(record.get("expires_at", ""))):
-        log.warning("undrop_past_expiry", extra={"table": canonical, "expires_at": record.get("expires_at")})
-    # `register_table` REFUSES an absolute URI ("Location must be a relative path within the root
-    # directory") — found by driving the deployed catalog, where undrop 400'd on the very location
-    # `describe_table` had just reported. The `dir` backend lays table directories out FLAT under the
-    # connection root (`<uuid>_<table_id>`), so the relative form is the final path segment; the
-    # absolute URI stays on the record because that is what an operator reading the trash needs.
+        log.warning("undrop_past_expiry", extra={"table": canonical, "uuid": record_uuid, "expires_at": record.get("expires_at")})
+    standing = await resolver.table(segments, ns=ns)
+    if standing.location is not None and standing.uuid != record_uuid:
+        raise TableAlreadyExistsError(f"cannot undrop {canonical}: another table holds the name now; rename or drop it first")
+    trash_doors.require_its_own_parent(record, standing=await resolver.namespace_uuid(segments[:-1]), name=canonical)
+    # `register_table` REFUSES an absolute URI ("Location must be a relative path within the root directory"), and keeps
+    # a relative one as the literal key it is given. The record keeps the URL `describe_table` answered, which
+    # percent-encodes a registered table's name, so the table re-attaches at the key that URL decodes to, under the
+    # connection's root, where its bytes are ([[LH-517]]). The absolute URL stays on the record for an operator.
     location = str(record["location"])
-    body = RegisterTableRequest(id=segments, location=location.rstrip("/").rsplit("/", 1)[-1])
+    body = RegisterTableRequest(id=segments, location=trash_doors.relative_location(location, root=root))
     # The drop kept the location's claim for this id ([[LH-204]]), so this take is the retry of an
     # existing hold; another holder means another table now resolves to these bytes, and re-attaching
     # this id would put two live ids on one dataset.
@@ -1265,8 +1282,8 @@ async def undrop_table(
     except location_claims.LocationHeldError as held:
         log.warning("undrop_refused_held_location", extra={"table": canonical, "location": held.claim.location, "holder": held.claim.table})
         raise InvalidTableStateError(f"cannot undrop {canonical}: its location is now held by another table") from None
-    if kept.uuid is None:
-        raise InternalError(f"the claim on {canonical}'s location records no uuid, so its grants cannot be found")
+    if kept.uuid != record_uuid:
+        raise InternalError(f"the claim on {canonical}'s location records another uuid than its trash record, so its grants cannot be found")
     try:
         response: RegisterTableResponse = await run_in_threadpool(native.call, ns, "register_table", body)
     except TableAlreadyExistsError:
@@ -1312,12 +1329,12 @@ async def undrop_table(
         uuids=uuids,
         source_uri=location,
     )
-    await run_in_threadpool(trash.clear, settings.registry_root, so, canonical)
+    await run_in_threadpool(trash.clear, settings.registry_root, so, record_uuid)
     await emit_control(
         control,
         action="table_undropped",
         object_type="table",
-        object_id=fga.table_object(kept.uuid),
+        object_id=fga.table_object(record_uuid),
         object_name=canonical,
         actor=f"user:{token.subject}" if token is not None else None,
         extra={},
@@ -1447,9 +1464,6 @@ async def rename_table(
     # parentless id. Same rule, same door — checked before the native call, so a refused rename leaves
     # the source exactly where it was.
     await fga_deps.require_parent_exists(ns, "table", new_segments, delimiter=settings.delimiter)
-    # The name must not still belong to a trashed table (diff2 F10 item 4): its undrop restores it under this
-    # name, which a table created here would hold.
-    await fga_deps.require_no_live_trash(settings, new_segments)
     # Renaming INTO a namespace is a create in that namespace: authorize can_create_table on the DESTINATION
     # parent BEFORE the (destructive, relocating) rename — else a source-table owner could plant their table
     # into a namespace/tenant they have no create rights on. (authorize already gated can_drop on the source.)

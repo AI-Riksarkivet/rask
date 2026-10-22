@@ -73,8 +73,7 @@ Two contracts stack here, and confusing them is how bugs happen:
   an ended table's whose release was lost. A namespace's is its `rask.uuid` property in its `__manifest` row: both create doors and the provenance boot
   mint it (`identifiers.with_minted_uuid`), an undrop restores it from the trash record, and an Overwrite mints a new
   one. DescribeTable and DescribeNamespace answer each as `rask.uuid`, and every create, declare, register and namespace
-  door refuses a caller's `rask.*` property (only an admin's `rask.tier` on a namespace). The trash is still keyed by
-  name (LH-525 moves it). Pinned by
+  door refuses a caller's `rask.*` property (only an admin's `rask.tier` on a namespace). Pinned by
   `tests/integration/test_the_door_that_makes_a_table_or_namespace_mints_its_uuid.py`.
 - **Every grant is held by the object's uuid** ([[LH-524]], ADR 0173 §8): OpenFGA objects are `table:<uuid>` and
   `namespace:<uuid>` (`fga.table_object`, `fga.namespace_object`), the parent and child edges join uuids, and a
@@ -277,17 +276,31 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   the table's FGA tuples**: the owner is the one person who needs to undrop it, and revoking made
   undrop unreachable for exactly that caller (found by driving the deployed catalog — the unit tests
   run FGA off); the grants die with the bytes, at purge or expiry. `undrop` re-registers with a
-  **RELATIVE** location (the final path segment): `register_table` refuses the absolute URI
-  `describe_table` had just reported, and the `dir` backend lays tables out flat. The sweep REPORTS
+  **RELATIVE** location: `register_table` refuses the absolute URI `describe_table` had just reported and keeps a
+  relative one as the literal key it is given, so the undrop passes the key the recorded URL decodes to under the
+  connection's root (`catalog.services.trash_doors.relative_location`, [[LH-517]]), where a registered `räksmörgås`'s
+  bytes are. **A trash record is keyed by its object's uuid** ([[LH-525]], ADR 0173 §9): the name is free the moment
+  its object is dropped, so a table or namespace created there is another uuid and nothing blocks the create. The
+  undrop and tasks doors stay addressed by name: `trash.named` finds every record dropped under it, `?uuid=` names
+  one, and the router asks the door's rung on each candidate (`fga_deps._require_trashed`), so a door acts only on,
+  and lists only, what its caller holds a grant on. Several candidates answer the undrop 409 (code 19) listing each
+  uuid and deadline; a live object of another uuid holding the name answers 409 too. A record keeps `uuid`,
+  `namespace_uuid` (its namespace's at the drop) and, when a cascade filed it, `cascade` (the dropped namespace's
+  uuid). A new table's claim never takes a location the trash keeps for its name's dropped table
+  (`table_claims.kept_in_trash`). The purge judges a table record live by its location and a namespace record by its
+  uuid, never by its name, so it reclaims a trashed table while a table created since under the name stands. Pinned
+  by `services/catalog/tests/test_an_undrop_restores_the_trashed_table_its_caller_names.py` and
+  `tests/integration/test_maintenance_finds_a_table_under_the_spelling_the_catalog_records.py`. The sweep REPORTS
   expired trash and deletes nothing. COVERAGE.md's old "soft-delete is N/A, time-travel replaces it"
   entry was WRONG and is corrected: time-travel does not survive `drop_table`.
   **The CASCADE is recoverable too (#96)**: with a grace period, `drop_namespace(cascade)` never
   issues the destructive native call — a trash record pointing at bytes that call deleted would be
   a lie — and instead DETACHES the subtree (every table deregistered, namespaces emptied
   deepest-first then dropped, one `kind`-tagged record each, shared drop-time `expires_at`; tuples
-  KEPT, the same #75 rule). `POST /management/v1/namespace/{id}/undrop` is the PLURAL undrop: rebuilds
-  every trashed namespace under the id shallowest-first, re-registers every trashed table
-  (relative-location form), resumable (`exist_ok` creates; already-registered = recovered);
+  KEPT, the same #75 rule). `POST /management/v1/namespace/{id}/undrop` is the PLURAL undrop: it restores the
+  records one cascade filed (`cascade` equal to the chosen namespace's uuid), rebuilding every namespace
+  shallowest-first and re-registering every table (relative-location form), resumable (`exist_ok` creates;
+  already-registered = recovered);
   `GET /management/v1/namespace/{id}/tasks` shows the subtree's deadline; `purge=true` is the same explicit
   opt-out. A RESTRICT drop stays unrecorded on purpose — it only ever removes an empty manifest
   row. Declared-only tables (no recorded location) are skipped by undrop with a warning: no bytes

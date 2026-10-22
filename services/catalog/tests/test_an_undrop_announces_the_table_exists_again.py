@@ -20,10 +20,11 @@ import pyarrow as pa
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from lance_namespace import connect
+from lance_namespace import LanceNamespace, connect
 from lance_namespace_urllib3_client.models.create_namespace_request import CreateNamespaceRequest
 
-from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, NamespaceDep, SettingsDep
+from catalog.api import dependencies
+from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, NamespaceDep, NamespaceRootDep, SettingsDep
 from catalog.api.security import CurrentToken
 from catalog.api.v1.endpoints import namespaces as namespace_doors
 from catalog.api.v1.endpoints import tables as table_doors
@@ -81,6 +82,7 @@ def client(tmp_path: Path, emitted: list[dict[str, Any]], monkeypatch: pytest.Mo
     for dependency, value in (
         (SettingsDep, settings),
         (NamespaceDep, ns),
+        (NamespaceRootDep, str(tmp_path / "data")),
         (CurrentToken, _CALLER),
         (FgaClientDep, None),
         (ControlEmitterDep, None),
@@ -89,6 +91,12 @@ def client(tmp_path: Path, emitted: list[dict[str, Any]], monkeypatch: pytest.Mo
 
     async def _noop(*_a: Any, **_k: Any) -> None:
         return None
+
+    async def _estate(*_a: Any, **_k: Any) -> LanceNamespace:
+        return ns
+
+    # The request's resolver and uuid reader route each name to the estate's connection, which the lifespan would build.
+    monkeypatch.setattr(dependencies, "estate_namespace", _estate)
 
     async def _record(_emitter: Any, segments: list[str], **kwargs: Any) -> None:
         emitted.append({"segments": list(segments), **kwargs})

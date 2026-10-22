@@ -70,7 +70,7 @@ class _Estate:
 
     def in_trash(self, table: str) -> bool:
         settings = catalog_settings()
-        return trash.get(settings.registry_root, settings.storage_options(), table, kind="table") is not None
+        return bool(trash.named(settings.registry_root, settings.storage_options(), table, kind="table"))
 
 
 @pytest.fixture

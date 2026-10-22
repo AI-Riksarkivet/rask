@@ -23,6 +23,8 @@ THE REFUSAL LEGS ARE THE POINT, and both are asserted rather than assumed from t
 
 from __future__ import annotations
 
+from uuid import uuid4
+
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import tombstones
 from maintenance.services.reconcile import OrphanedTrash, ReconcileReport
@@ -31,15 +33,16 @@ from maintenance.services.reconcile import OrphanedTrash, ReconcileReport
 _GONE = "s3://dead-wh/ns$t.lance"
 _ALIVE = "s3://live-wh/ns$t.lance"
 _UNREADABLE = "s3://blip-wh/ns$t.lance"
+_GONE_UUID = "9d2b7e41-6c3a-4f58-b1e0-3a7c5d9f2e64"
 
 
 def _report() -> ReconcileReport:
     return ReconcileReport(
         checked_at="2026-09-20T00:00:00Z",
         orphaned_trash=[
-            OrphanedTrash(id="tr-gone", kind="table", location=_GONE),
-            OrphanedTrash(id="tr-alive", kind="table", location=_ALIVE),
-            OrphanedTrash(id="tr-blip", kind="table", location=_UNREADABLE),
+            OrphanedTrash(id="tr-gone", uuid=_GONE_UUID, kind="table", location=_GONE),
+            OrphanedTrash(id="tr-alive", uuid="2f8a4c6e-1d3b-4e75-9a0c-6b5d7e3f1a28", kind="table", location=_ALIVE),
+            OrphanedTrash(id="tr-blip", uuid="e6c3a1f9-7b24-4d08-8e5a-1c9f3b2d7a46", kind="table", location=_UNREADABLE),
         ],
     )
 
@@ -60,15 +63,16 @@ class _Deleter:
     """Records instead of writing to the registry — a class, not a lambda, so its type is the seam's.
 
     The seam takes the whole :class:`~maintenance.services.tombstones.Tombstone` rather than an id,
-    because `trash.clear` is keyed on (id, KIND): a namespace record and a table record can share an
-    id, and clearing the wrong kind would leave the real one behind while reporting a sweep.
+    because `trash.clear` is keyed on (uuid, KIND) ([[LH-525]]): several records can be dropped under one
+    name, so only the uuid says which one is swept, and clearing under the wrong kind would leave the real
+    one behind while reporting a sweep.
     """
 
     def __init__(self) -> None:
         self.seen: list[str] = []
 
     def __call__(self, record: tombstones.Tombstone) -> None:
-        self.seen.append(record.id)
+        self.seen.append(record.uuid)
 
 
 def test_a_record_whose_BYTES_ARE_GONE_is_planned() -> None:
@@ -104,14 +108,14 @@ def test_ARMED_deletes_exactly_the_proven_tombstones() -> None:
     deleter = _Deleter()
     out = tombstones.sweep_tombstones(_settings(MAINTENANCE_TOMBSTONE_SWEEP_DRY_RUN=False), report=_report(), probe=_probe, delete=deleter)
 
-    assert deleter.seen == ["tr-gone"], f"deleted the wrong set: {deleter.seen}"
+    assert deleter.seen == [_GONE_UUID], f"deleted the wrong set: {deleter.seen}"
     assert out.dry_run is False and len(out.swept) == 1
 
 
 def test_the_CAP_truncates_and_SAYS_it_did() -> None:
     many = ReconcileReport(
         checked_at="2026-09-20T00:00:00Z",
-        orphaned_trash=[OrphanedTrash(id=f"tr-{i}", kind="table", location=f"s3://dead-{i}/t.lance") for i in range(5)],
+        orphaned_trash=[OrphanedTrash(id=f"tr-{i}", uuid=str(uuid4()), kind="table", location=f"s3://dead-{i}/t.lance") for i in range(5)],
     )
 
     out = tombstones.sweep_tombstones(_settings(MAINTENANCE_TOMBSTONE_SWEEP_MAX_PER_TICK=2), report=many, probe=lambda _l: 0, delete=_Deleter())

@@ -118,7 +118,7 @@ def asked(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str]]:
 
 
 class _EveryNameHolds(Resolver):
-    """Every name holds an object, keyed by a uuid derived from the name; no store is read.
+    """Every name holds an object, keyed by a uuid derived from the name, and the trash holds none; no store is read.
 
     The claim here is which doors declare a rung, not how a name resolves, so every name resolves.
     """
@@ -138,6 +138,13 @@ class _EveryNameHolds(Resolver):
 
     async def object(self, kind: str, segments: list[str]) -> str | None:
         return f"{kind}:{self._uuid(kind, segments)}"
+
+    async def trashed(self, kind: str, segments: list[str]) -> list[dict[str, Any]]:
+        del kind, segments
+        return []
+
+    def admit_trashed(self, kind: str, segments: list[str], records: list[dict[str, Any]]) -> None:
+        del kind, segments, records
 
 
 def _authorize(template: str, body: dict[str, object] | None = None, query: str = "") -> None:

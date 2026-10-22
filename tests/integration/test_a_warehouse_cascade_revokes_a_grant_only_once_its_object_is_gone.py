@@ -133,15 +133,14 @@ class _Tenant:
         return self.client.delete(f"/management/v1/warehouses/{self.warehouse}", params={"cascade": "true", "purge_bucket": "true"})
 
     def trashed(self, objects: list[tuple[str, str]]) -> list[tuple[str, str]]:
-        """Those of ``(kind, id)`` the trash still holds a record for."""
+        """Those of ``(kind, id)`` the trash still holds a record dropped under that name for."""
         settings = get_settings()
-        return [(kind, name) for kind, name in objects if trash.get(settings.registry_root, settings.storage_options(), name, kind=kind) is not None]
+        return [(kind, name) for kind, name in objects if trash.named(settings.registry_root, settings.storage_options(), name, kind=kind)]
 
     def trash_locations(self, tables: list[str]) -> list[str]:
         """Where each of ``tables``' trash records says its bytes are."""
         settings = get_settings()
-        records = [trash.get(settings.registry_root, settings.storage_options(), table, kind="table") for table in tables]
-        return [str(record["location"]) for record in records if record is not None]
+        return [str(record["location"]) for table in tables for record in trash.named(settings.registry_root, settings.storage_options(), table, kind="table")]
 
     def base_recorded(self, locations: list[str]) -> list[str]:
         """Those of ``locations`` the base registry still holds a record for."""

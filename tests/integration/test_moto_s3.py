@@ -476,57 +476,14 @@ def test_the_rename_DESTINATION_must_have_a_real_namespace_too(moto_client: Test
 
 
 # --------------------------------------------------------------------------- #
-# diff2 F10 item 4 — the name of a recoverable table is not free
-#
-# A recoverable drop keeps the table's bytes, its uuid and its grants for its owner's undrop, under its
-# name. A create at that name in the grace window would hold the name the undrop restores to, so it is
-# refused rather than taken: the bytes are still on storage and the owner still holds a live claim to
-# recover them. (Its grants are held by its uuid, so the new table would inherit none either way.)
+# A dropped table's name is free again (ADR 0173 §8)
 # --------------------------------------------------------------------------- #
 
 
-def test_create_is_refused_while_the_id_is_still_recoverable(moto_client_recoverable: TestClient) -> None:
-    """The window: dropped-but-recoverable, so the name is still the trashed table's."""
-    rows = pa.table({"id": pa.array([1], pa.int64())})
-    assert moto_client_recoverable.post("/v1/namespace/bleed/create", json={}).status_code == 200
-    assert _create(moto_client_recoverable, "bleed$t", rows).status_code == 200
-    assert moto_client_recoverable.post("/v1/table/bleed$t/drop", json={}).status_code == 200
-
-    refused = _create(moto_client_recoverable, "bleed$t", rows)
-    assert refused.status_code == 409, refused.text
-    body = refused.json()
-    # The refusal has to be ACTIONABLE: "already exists" about a table the caller cannot see is a
-    # dead end. It names the deadline and both ways out.
-    assert "recoverable" in body["detail"]
-    assert "undrop" in body["detail"]
-    assert "purge" in body["detail"]
-
-    # …and the recoverable table is untouched by the refused create — the whole point of refusing
-    # rather than revoking-and-overwriting.
-    undropped = moto_client_recoverable.post("/management/v1/table/bleed$t/undrop", json={})
-    assert undropped.status_code == 200, undropped.text
-    assert int(moto_client_recoverable.post("/v1/table/bleed$t/count_rows", json={}).text) == 1
-
-
-def test_declare_and_register_are_refused_on_a_trashed_id_too(moto_client_recoverable: TestClient) -> None:
-    """All the create doors, not just the Arrow one. A guard on one door is a guard on no door —
-    `declare` reserves the same name and `register` attaches bytes to it, and either would take the name
-    the undrop restores to exactly as the Arrow create would."""
-    rows = pa.table({"id": pa.array([1], pa.int64())})
-    assert moto_client_recoverable.post("/v1/namespace/bleed2/create", json={}).status_code == 200
-    assert _create(moto_client_recoverable, "bleed2$t", rows).status_code == 200
-    assert moto_client_recoverable.post("/v1/table/bleed2$t/drop", json={}).status_code == 200
-
-    assert moto_client_recoverable.post("/v1/table/bleed2$t/declare", json={}).status_code == 409
-    assert moto_client_recoverable.post("/v1/table/bleed2$t/register", json={"location": "bleed2-outside/t"}).status_code == 409
-
-
 def test_a_destructive_drop_frees_the_id_for_a_new_table_under_a_new_uuid(moto_client: TestClient) -> None:
-    """The guard must not outstay its reason. A DESTRUCTIVE drop (the code default, grace=0) revokes
-    the tuples with the table, so there is no bleed to prevent and no recovery to protect — the id is
-    genuinely free and a create must succeed. Without this, the fix would read as 'creates sometimes
-    409 forever' to anyone who did not know the grace period was involved. The table created there is
-    a new one, so the catalog mints it a new uuid ([[LH-519]], ADR 0173 §2)."""
+    """A DESTRUCTIVE drop (the code default, grace=0) revokes the tuples with the table, and a create at
+    its name succeeds. The table created there is a new one, so the catalog mints it a new uuid
+    ([[LH-519]], ADR 0173 §2)."""
     rows = pa.table({"id": pa.array([1], pa.int64())})
     assert _create(moto_client, "nobleed$t", rows).status_code == 200
     dropped = _uuid(moto_client, "nobleed$t")
@@ -547,8 +504,8 @@ def test_a_destructive_drop_frees_the_id_for_a_new_table_under_a_new_uuid(moto_c
 # --------------------------------------------------------------------------- #
 
 
-def _expire_trash_record(moto_endpoint: str, canonical: str) -> None:
-    """Rewrite ONE table's trash deadline into the past — the state a LATE PURGE leaves behind.
+def _expire_trash_record(moto_endpoint: str, table_uuid: str) -> None:
+    """Rewrite the trash deadline of the table ``table_uuid`` names into the past — the state a LATE PURGE leaves behind.
 
     Reaches into the object store rather than a local path: the control root here is the moto bucket.
     The key comes from `record_store.record_key`, the estate's OWN deriver, rather than from listing
@@ -568,7 +525,7 @@ def _expire_trash_record(moto_endpoint: str, canonical: str) -> None:
         aws_secret_access_key="test",
         region_name="us-east-1",
     )
-    key = record_key(_TRASH_PREFIX, "table", canonical)  # already the full `_trash/<kind>-<hash>.json` path
+    key = record_key(_TRASH_PREFIX, "table", table_uuid)  # already the full `_trash/<kind>-<hash>.json` path
     record = json.loads(s3.get_object(Bucket=BUCKET, Key=key)["Body"].read())
     record["expires_at"] = "2000-01-01T00:00:00+00:00"
     s3.put_object(Bucket=BUCKET, Key=key, Body=json.dumps(record).encode())
@@ -580,9 +537,10 @@ def test_an_expired_but_unpurged_drop_still_undrops(moto_client_recoverable: Tes
     rows = pa.table({"id": pa.array([1, 2], pa.int64())})
     assert moto_client_recoverable.post("/v1/namespace/exp/create", json={}).status_code == 200
     assert _create(moto_client_recoverable, "exp$t", rows).status_code == 200
+    dropped = _uuid(moto_client_recoverable, "exp$t")
     assert moto_client_recoverable.post("/v1/table/exp$t/drop", json={}).status_code == 200
 
-    _expire_trash_record(moto_endpoint, "exp$t")
+    _expire_trash_record(moto_endpoint, dropped)
 
     # /tasks now SAYS it is expired rather than implying it is gone…
     tasks = moto_client_recoverable.get("/management/v1/table/exp$t/tasks").json()

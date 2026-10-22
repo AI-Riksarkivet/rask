@@ -254,6 +254,8 @@ class OrphanedTrash(BaseModel):
     worth a number rather than a silence."""
 
     id: str
+    #: The uuid the record is filed under ([[LH-525]]): what a sweep clears it by.
+    uuid: str
     kind: str
     location: str
 
@@ -742,8 +744,8 @@ def _orphaned_trash(records: list[dict[str, Any]], *, claimed: set[str]) -> list
         if not location.startswith("s3://"):
             continue
         bucket = location[len("s3://") :].split("/", 1)[0]
-        if bucket and bucket not in claimed:
-            out.append(OrphanedTrash(id=str(record.get("id") or ""), kind=str(record.get("kind") or "table"), location=location))
+        if bucket and bucket not in claimed and (uuid := trash.object_uuid(record)) is not None:
+            out.append(OrphanedTrash(id=str(record.get("id") or ""), uuid=uuid, kind=str(record.get("kind") or "table"), location=location))
     return sorted(out, key=lambda o: (o.location, o.id))
 
 
@@ -980,7 +982,7 @@ def _uuids_of(
         found = location_claims.read(claims, _resolved(root, location)) if location else None
         if found is not None and found.claim.uuid is not None and found.claim.released_at is None:
             live[table] = found.claim.uuid
-    trashed = {uuid for record in trash_records if (uuid := trash.object_uuid(record, claims)) is not None}
+    trashed = {uuid for record in trash_records if (uuid := trash.object_uuid(record)) is not None}
     return live, trashed
 
 

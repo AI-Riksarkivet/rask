@@ -922,7 +922,10 @@ class ProtectionResponse(BaseModel):
 class TrashEntry(BaseModel):
     """One recoverable drop — what the owner needs to decide whether to undrop before the deadline."""
 
+    #: The name the object held when it was dropped, which the undrop restores it under.
     id: str
+    #: The object's uuid: several dropped objects may have held one name, and an undrop names one by it (`?uuid=`).
+    uuid: str
     location: str
     dropped_by: str
     dropped_at: str

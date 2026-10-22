@@ -53,6 +53,8 @@ class Tombstone(BaseModel):
     """One trash record this pass would remove, or removed."""
 
     id: str
+    #: The uuid the record is filed under ([[LH-525]]): what the sweep clears it by.
+    uuid: str
     kind: str
     location: str
     #: What the probe actually found — the evidence, carried so a reader can check the claim rather
@@ -93,7 +95,7 @@ def plan_sweep(report: ReconcileReport, *, probe: Probe) -> tuple[list[Tombstone
                 "so removing it would strand them silently"
             )
             continue
-        planned.append(Tombstone(id=finding.id, kind=finding.kind, location=finding.location, probed_objects=objects))
+        planned.append(Tombstone(id=finding.id, uuid=finding.uuid, kind=finding.kind, location=finding.location, probed_objects=objects))
     return planned, refused
 
 

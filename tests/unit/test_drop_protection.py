@@ -25,6 +25,7 @@ import pytest
 from lance_namespace import DropTableResponse, InvalidTableStateError, NamespaceNotEmptyError, TableNotFoundError
 
 from catalog.api import fga_deps
+from catalog.api.dependencies import Resolver
 from catalog.core.config import Settings
 from catalog.services import table_claims
 from catalog.services.table_claims import ResolvedTable
@@ -48,6 +49,24 @@ def _request_stub() -> Any:
     from catalog.core.namespace import NamespaceConnections
 
     return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(connections=NamespaceConnections())))
+
+
+#: The root the stand-in backend lays its tables out under (:func:`_location`).
+_ROOT = "s3://bkt"
+
+
+def _resolver(settings: Settings, ns: Any, monkeypatch: pytest.MonkeyPatch) -> Resolver:
+    """The catalog's own request resolver, routing every name to the stand-in backend ``ns``, as the lifespan's estate
+    connection would."""
+    from starlette.requests import Request
+
+    from catalog.api import dependencies
+
+    async def _estate(*_a: Any, **_k: Any) -> Any:
+        return ns
+
+    monkeypatch.setattr(dependencies, "estate_namespace", _estate)
+    return Resolver(Request({"type": "http", "query_string": b"", "headers": []}), settings)
 
 
 def _settings(tmp_path: Any, *, grace_days: int = 0) -> Settings:
@@ -339,8 +358,8 @@ def test_expired_selects_only_past_deadlines_and_never_deletes(tmp_path: Any) ->
     from service_kit.lakehouse import trash
 
     now = datetime(2026, 8, 4, 12, 0, tzinfo=UTC)
-    fresh = trash.make_record("ns$fresh", location="s3://b/fresh", dropped_by="u", grace_days=7, now=now)
-    old = trash.make_record("ns$old", location="s3://b/old", dropped_by="u", grace_days=7, now=now - timedelta(days=30))
+    fresh = trash.make_record("ns$fresh", uuid=_uuid("ns$fresh"), location="s3://b/fresh", dropped_by="u", grace_days=7, now=now)
+    old = trash.make_record("ns$old", uuid=_uuid("ns$old"), location="s3://b/old", dropped_by="u", grace_days=7, now=now - timedelta(days=30))
     due = trash.expired([fresh, old], now=now)
     assert [r["id"] for r in due] == ["ns$old"]
 
@@ -389,10 +408,10 @@ def test_purge_true_still_destroys_immediately(tmp_path: Any) -> None:
         )
     )
     assert "drop_table" in ns.calls
-    assert trash.get(settings.registry_root, settings.storage_options(), "bronze$pages") is None
+    assert trash.list_all(settings.registry_root, settings.storage_options()) == []
 
 
-def test_undrop_without_a_record_is_an_honest_404(tmp_path: Any) -> None:
+def test_undrop_without_a_record_is_an_honest_404(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """An expired or never-trashed drop is genuinely unrecoverable — say so, rather than a 200 that
     recovers nothing."""
     from catalog.api.v1.endpoints import tables as t_ep
@@ -402,7 +421,15 @@ def test_undrop_without_a_record_is_an_honest_404(tmp_path: Any) -> None:
     with pytest.raises(TableNotFoundError, match="no recoverable drop"):
         asyncio.run(
             t_ep.undrop_table(
-                id="bronze$gone", ns=ns, settings=settings, token=None, control=NoopControlEmitter(), emitter=_NoopLineage(), uuids=NO_OBJECT_UUIDS
+                id="bronze$gone",
+                ns=ns,
+                root=_ROOT,
+                settings=settings,
+                token=None,
+                control=NoopControlEmitter(),
+                emitter=_NoopLineage(),
+                uuids=NO_OBJECT_UUIDS,
+                resolver=_resolver(settings, ns, monkeypatch),
             )
         )
 
@@ -570,12 +597,11 @@ def test_a_recoverable_cascade_DETACHES_the_subtree_and_files_a_record_per_child
     assert drops == ["drop_namespace:bronze$inner:restrict", "drop_namespace:bronze:restrict"]
     assert ns.calls.index("deregister_table:bronze$inner$t2") < ns.calls.index(drops[0])
 
-    so = settings.storage_options()
-    pages = trash.get(settings.registry_root, so, "bronze$pages")
-    assert pages is not None and pages["location"] == "s3://bkt/bronze_pages.lance"
-    assert trash.get(settings.registry_root, so, "bronze$inner$t2") is not None
-    assert trash.get(settings.registry_root, so, "bronze", kind="namespace") is not None
-    assert trash.get(settings.registry_root, so, "bronze$inner", kind="namespace") is not None
+    filed = {(record["kind"], record["id"]): record for record in trash.list_all(settings.registry_root, settings.storage_options())}
+    assert sorted(filed) == [("namespace", "bronze"), ("namespace", "bronze$inner"), ("table", "bronze$inner$t2"), ("table", "bronze$pages")]
+    assert filed[("table", "bronze$pages")]["location"] == "s3://bkt/bronze_pages.lance"
+    # Each record is its object's, and names the cascade that filed it by the dropped namespace's uuid.
+    assert {key: (record["uuid"], record["cascade"]) for key, record in filed.items()} == {(kind, name): (_uuid(name), _uuid("bronze")) for kind, name in filed}
 
 
 def test_cascade_purge_true_still_destroys_natively_and_files_nothing(tmp_path: Any) -> None:
@@ -596,7 +622,7 @@ def test_cascade_purge_true_still_destroys_natively_and_files_nothing(tmp_path: 
     assert trash.list_all(settings.registry_root, settings.storage_options()) == []
 
 
-def test_namespace_undrop_rebuilds_the_whole_subtree(tmp_path: Any) -> None:
+def test_namespace_undrop_rebuilds_the_whole_subtree(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """The plural undrop: namespaces shallowest-first, then every table re-registered at its old id
     from the RELATIVE location form (#75's dir-backend lesson), and the records cleared."""
     from catalog.api.v1.endpoints import namespaces as n_ep
@@ -612,11 +638,13 @@ def test_namespace_undrop_rebuilds_the_whole_subtree(tmp_path: Any) -> None:
             id="bronze",
             request=_request_stub(),
             ns=ns,
+            root=_ROOT,
             settings=settings,
             token=None,
             control=NoopControlEmitter(),
             emitter=_NoopLineage(),
             uuids=NO_OBJECT_UUIDS,
+            resolver=_resolver(settings, ns, monkeypatch),
         )
     )
 
@@ -628,7 +656,7 @@ def test_namespace_undrop_rebuilds_the_whole_subtree(tmp_path: Any) -> None:
     assert trash.list_all(settings.registry_root, settings.storage_options()) == [], "a recovered record must be cleared"
 
 
-def test_namespace_undrop_without_a_record_is_an_honest_404(tmp_path: Any) -> None:
+def test_namespace_undrop_without_a_record_is_an_honest_404(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     from lance_namespace import NamespaceNotFoundError
 
     from catalog.api.v1.endpoints import namespaces as n_ep
@@ -641,24 +669,27 @@ def test_namespace_undrop_without_a_record_is_an_honest_404(tmp_path: Any) -> No
                 id="bronze",
                 request=_request_stub(),
                 ns=ns,
+                root=_ROOT,
                 settings=settings,
                 token=None,
                 control=NoopControlEmitter(),
                 emitter=_NoopLineage(),
                 uuids=NO_OBJECT_UUIDS,
+                resolver=_resolver(settings, ns, monkeypatch),
             )
         )
 
 
-def test_namespace_tasks_reports_the_pending_expiry(tmp_path: Any) -> None:
-    """The deadline the owner is racing must be visible on the namespace rung too."""
+def test_namespace_tasks_reports_the_pending_expiry(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The deadline the owner is racing must be visible on the namespace rung too, with the uuid an undrop names it by."""
     from catalog.api.v1.endpoints import namespaces as n_ep
 
     settings = _settings(tmp_path, grace_days=7)
-    assert asyncio.run(n_ep.namespace_tasks(id="bronze", settings=settings)) == []
-    _drop_namespace_cascade(settings, _CascadableNamespace())
-    entries = asyncio.run(n_ep.namespace_tasks(id="bronze", settings=settings))
-    assert len(entries) == 1 and entries[0].expires_at, "the undrop deadline is invisible"
+    ns: Any = _CascadableNamespace()
+    assert asyncio.run(n_ep.namespace_tasks(id="bronze", settings=settings, resolver=_resolver(settings, ns, monkeypatch))) == []
+    _drop_namespace_cascade(settings, ns)
+    entries = asyncio.run(n_ep.namespace_tasks(id="bronze", settings=settings, resolver=_resolver(settings, ns, monkeypatch)))
+    assert [entry.uuid for entry in entries] == [_uuid("bronze")] and entries[0].expires_at, "the undrop deadline is invisible"
 
 
 def test_trash_kinds_do_not_collide(tmp_path: Any) -> None:
@@ -668,9 +699,9 @@ def test_trash_kinds_do_not_collide(tmp_path: Any) -> None:
 
     settings = _settings(tmp_path)
     so = settings.storage_options()
-    trash.put(settings.registry_root, so, trash.make_record("bronze", location="s3://b/t", dropped_by="u", grace_days=7))
-    assert trash.get(settings.registry_root, so, "bronze", kind="namespace") is None
-    assert trash.get(settings.registry_root, so, "bronze") is not None
+    trash.put(settings.registry_root, so, trash.make_record("bronze", uuid=_uuid("bronze"), location="s3://b/t", dropped_by="u", grace_days=7))
+    assert trash.get(settings.registry_root, so, _uuid("bronze"), kind="namespace") is None
+    assert trash.get(settings.registry_root, so, _uuid("bronze")) is not None
 
 
 def test_a_destructive_drop_of_a_top_level_namespace_removes_its_WAREHOUSE_BINDING(tmp_path: Any) -> None:
@@ -712,8 +743,7 @@ def test_a_RECOVERABLE_cascade_UNBINDS_and_records_the_binding_for_the_undrop(tm
     _drop_namespace_cascade(settings, _CascadableNamespace())
 
     assert warehouses.binding_for_namespace(settings.registry_root, so, "bronze") is None, "the binding outlived its namespace"
-    record = trash.get(settings.registry_root, so, "bronze", kind="namespace")
-    assert record is not None
+    (record,) = trash.named(settings.registry_root, so, "bronze", kind="namespace")
     assert record.get("binding") == {"warehouse_id": "wh1", "root_uri": "s3://wh1-bucket"}, "the route was lost, not moved"
 
 

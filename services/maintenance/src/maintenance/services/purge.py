@@ -100,7 +100,7 @@ ACTOR = "service:maintenance"
 CONTROL_PREFIXES = frozenset({MANIFEST_DIR, "_trash", "_projects", "_warehouses", "_policies", "_protection", "_bases", "_locations"})
 
 _STILL_REGISTERED = "still registered — recovered or re-registered since the drop, so these bytes are LIVE"
-_LOCATION_LIVE = "another registered table resolves to these bytes — a rename or a register attached them under a new id, so they are LIVE"
+_LOCATION_LIVE = "a registered table's location contains or sits inside these bytes, so they are LIVE"
 _MANIFEST_UNREADABLE = "the object manifest could not be read, so liveness cannot be re-checked — refusing to delete blind"
 _PURGE_OFF = (
     "MAINTENANCE_TRASH_PURGE_ENABLED is off — reclamation is opt-in and report-only is the shipped default "
@@ -310,11 +310,12 @@ def maintained_roots(settings: MaintenanceSettings, storage_options: StorageOpti
 
 
 class Liveness(BaseModel):
-    """What the estate's ``__manifest`` rows say is live: every object id, and every table's location.
+    """What the estate's ``__manifest`` rows say is live: every object id, every table's location, every namespace's uuid.
 
-    The ids answer "was this object recovered"; the locations answer "does any id still resolve to these
-    bytes" ([[LH-204]]). A rename or a register can attach a trashed table's bytes under ANOTHER id, and
-    an id-only check then purges a live table: the trashed id is absent while its bytes are not.
+    A table's location answers "was this table recovered" and "does any id still resolve to these bytes" ([[LH-204]]):
+    a rename or a register can attach a trashed table's bytes under ANOTHER id, while a name is free once its object
+    is dropped, so another table of the same name says nothing about this one ([[LH-525]]). A namespace's uuid answers
+    for a namespace, and the ids for a table recorded with no location.
     """
 
     ids: set[str] = Field(default_factory=set)
@@ -438,20 +439,32 @@ def check(record: dict[str, Any], *, roots: set[str], live: Liveness | None) -> 
 
     The path checks judge the place the purge deletes, the location as it decodes ([[LH-319]], :func:`store_paths`), so a
     spelling that names no single place is refused before any of them.
+
+    THE OBJECT IS ITS UUID, NOT ITS NAME ([[LH-525]]): a name is free once its object is dropped, so a live object of
+    the same name may be another one entirely, and the purge reclaims the trashed object regardless. A table is still
+    registered when a live table resolves to its location, a namespace when a live namespace of its name keeps its uuid.
+    Only a table recorded with no location is judged by its name, since nothing else tells it from another.
     """
     obj_id = str(record.get("id") or "")
     if not obj_id:
         return "the record names no object id"
+    uuid = trash.object_uuid(record)
+    if uuid is None:
+        return "the record keeps no uuid, so the object it names cannot be told from another of its name"
     if live is None:
         return _MANIFEST_UNREADABLE
-    if obj_id in live.ids:
-        return _STILL_REGISTERED
     kind = str(record.get("kind") or "table")
     location = str(record.get("location") or "").rstrip("/")
-    if kind == "namespace" or not location:
-        # A namespace is a manifest ROW and a declared-only table never had bytes: nothing to delete, so
-        # nothing to path-check. Revoke + clear still apply.
+    if kind == "namespace":
+        # A namespace is a manifest ROW: nothing to delete, so nothing to path-check. Revoke + clear still apply.
+        if obj_id in live.ids and live.namespace_uuids.get(obj_id) in (uuid, None):
+            return _STILL_REGISTERED
         return None
+    if not location:
+        # A declared-only table never had bytes: nothing to path-check.
+        return _STILL_REGISTERED if obj_id in live.ids else None
+    if any(decoded_path(held) == decoded_path(location) for held in live.locations):
+        return _STILL_REGISTERED
     if not names_a_location(location):
         return f"location {location!r} names no single place once decoded — refusing to delete what its spelling cannot locate"
     root = _root_of(location, roots)
@@ -634,14 +647,6 @@ async def _revoke(fga_client: Any, *, kind: str, uuid: str, fga_enabled: bool) -
     return len(await fga.revoke_object_tuples(fga_client, obj, actor=ACTOR, origin="lifecycle_delete"))  # noqa: TID251
 
 
-async def _refuse_unidentified(out: TrashPurgeReport, *, kind: str, obj_id: str, control_root: str, storage_options: StorageOptions, dry_run: bool) -> None:
-    """Refuse a purge whose object's uuid cannot be read: its grants are held by that uuid ([[LH-524]]), so they could not
-    be found, and grants must never outlive the bytes."""
-    reason = "the object's uuid could not be read, so its grants cannot be found — grants must never outlive the bytes, so nothing was deleted"
-    await _refuse(out, kind=kind, obj_id=obj_id, reason=reason, control_root=control_root, storage_options=storage_options, dry_run=dry_run)
-    log.error("trash_purge_uuid_unread", extra={"kind": kind, "id": obj_id})
-
-
 #: The control-plane vocabulary for a purge — its OWN verbs since diff2 F10 item 6.
 #:
 #: It reused the drop actions, for a stated reason that has now been discharged rather than overruled:
@@ -669,6 +674,7 @@ async def _refuse(
     *,
     kind: str,
     obj_id: str,
+    uuid: str | None,
     reason: str,
     control_root: str,
     storage_options: StorageOptions,
@@ -685,15 +691,16 @@ async def _refuse(
     The persist is best-effort by construction (:func:`trash.note_refusal` never raises), and the
     `except` here covers the store itself being unreachable. ``_purge_one`` promises "never raises;
     every failure is a refusal", and an annotation that could break that promise would trade a correctly
-    reported refusal for an unhandled error on the reclamation path.
+    reported refusal for an unhandled error on the reclamation path. A record that keeps no ``uuid`` is not one any
+    door files, and its refusal is reported, not remembered: there is no key to remember it under.
     """
     attempts: int | None = None
     try:
         # THE REFUSAL IS REPORTED EITHER WAY; only its MEMORY is withheld on a preview. Persisting
         # `attempts` is a write onto the very records an operator is inspecting, and it lands on the
         # stuck ones — so a preview that annotated would inflate the evidence it exists to show.
-        if not dry_run:
-            attempts = await run_in_threadpool(trash.note_refusal, control_root, storage_options, obj_id, kind=kind, reason=reason)
+        if not dry_run and uuid is not None:
+            attempts = await run_in_threadpool(trash.note_refusal, control_root, storage_options, uuid, kind=kind, reason=reason)
     except Exception as exc:  # noqa: BLE001 — bookkeeping about a refusal must never outrank the refusal
         log.warning("trash_refusal_not_recorded", extra={"kind": kind, "id": obj_id, "error": f"{type(exc).__name__}: {exc}"})
     out.refused.append(RefusedRecord(kind=kind, id=obj_id, reason=reason, attempts=attempts))
@@ -715,6 +722,7 @@ async def _delete_bytes_or_refuse(
     *,
     kind: str,
     obj_id: str,
+    uuid: str | None,
     location: str,
     control_root: str,
     storage_options: StorageOptions,
@@ -739,16 +747,16 @@ async def _delete_bytes_or_refuse(
     try:
         reclaimed = await run_in_threadpool(_delete_guarded, location, storage_options, protected)
     except NotADatasetRootError as exc:
-        await _refuse(out, kind=kind, obj_id=obj_id, reason=str(exc), control_root=control_root, storage_options=storage_options)
+        await _refuse(out, kind=kind, obj_id=obj_id, uuid=uuid, reason=str(exc), control_root=control_root, storage_options=storage_options)
         log.warning("trash_purge_refused_not_a_dataset", extra={"kind": kind, "id": obj_id, "location": location})
         return None
     except ProtectedBaseError as exc:
-        await _refuse(out, kind=kind, obj_id=obj_id, reason=str(exc), control_root=control_root, storage_options=storage_options)
+        await _refuse(out, kind=kind, obj_id=obj_id, uuid=uuid, reason=str(exc), control_root=control_root, storage_options=storage_options)
         log.warning("trash_purge_refused_protected_base", extra={"kind": kind, "id": obj_id, "location": location})
         return None
     except OSError as exc:
         reason = f"deleting {location!r} failed ({type(exc).__name__}: {exc}) — the record survives and the next tick retries"
-        await _refuse(out, kind=kind, obj_id=obj_id, reason=reason, control_root=control_root, storage_options=storage_options)
+        await _refuse(out, kind=kind, obj_id=obj_id, uuid=uuid, reason=reason, control_root=control_root, storage_options=storage_options)
         log.error("trash_purge_delete_failed", extra={"kind": kind, "id": obj_id, "location": location, "error": str(exc)})
         return None
     # [[LH-279]] The base record goes with the bytes, before the trash record is cleared: left behind, it would
@@ -764,7 +772,7 @@ async def _delete_bytes_or_refuse(
         reason = (
             f"deleting {location!r} left its base record or location claim ({type(exc).__name__}: {exc}) — the trash record survives and the next tick retries"
         )
-        await _refuse(out, kind=kind, obj_id=obj_id, reason=reason, control_root=control_root, storage_options=storage_options)
+        await _refuse(out, kind=kind, obj_id=obj_id, uuid=uuid, reason=reason, control_root=control_root, storage_options=storage_options)
         log.error("trash_purge_base_record_not_forgotten", extra={"kind": kind, "id": obj_id, "location": location, "error": str(exc)})
         return None
     return reclaimed
@@ -799,37 +807,23 @@ async def _recovered_since_the_snapshot(
     """
     kind = str(record.get("kind") or "table")
     obj_id = str(record.get("id") or "")
+    uuid = trash.object_uuid(record)
     reason = check(record, roots=roots, live=await run_in_threadpool(recheck_live))
     if reason is None:
         return False
-    await _refuse(out, kind=kind, obj_id=obj_id, reason=reason, control_root=control_root, storage_options=storage_options, dry_run=False)
+    await _refuse(out, kind=kind, obj_id=obj_id, uuid=uuid, reason=reason, control_root=control_root, storage_options=storage_options, dry_run=False)
     log.warning("trash_purge_refused_on_recheck", extra={"kind": kind, "id": obj_id, "reason": reason})
     return True
 
 
-def _purged_uuids(record: dict[str, Any], *, live: Liveness | None, control_root: str, storage_options: StorageOptions, delimiter: str) -> ControlUuids:
+def _purged_uuids(record: dict[str, Any]) -> ControlUuids:
     """The uuids of a trashed object and of its namespace, for the control event its purge announces (ADR 0173 §10).
 
-    A table's is its location's claim's, which a recoverable drop keeps for the trashed id (ADR 0172), and only while
-    that claim names it. A namespace's is the ``rask.uuid`` property its trash record keeps, since its ``__manifest``
-    row went with the drop. Its namespace's is that namespace's live row's, or its own trash record's when a cascade
-    trashed it too. Best-effort, as the event is: a uuid that cannot be read is ``None``.
+    Both are on the record, which keeps the uuid it is filed under and its namespace's at the drop: the name that
+    namespace held then may be another namespace's now.
     """
-    kind = str(record.get("kind") or "table")
-    obj_id = str(record.get("id") or "")
-    claims = location_claims.ClaimStore(control_root=control_root, storage_options=storage_options)
-    try:
-        object_uuid = trash.object_uuid(record, claims)
-        parent = fga.parent_namespace_id(obj_id, delimiter=delimiter)
-        namespace_uuid = None
-        if parent is not None:
-            live_uuid = live.namespace_uuids.get(parent) if live is not None else None
-            kept = trash.get(control_root, storage_options, parent, kind="namespace")
-            namespace_uuid = live_uuid or (trash.object_uuid(kept, claims) if kept is not None else None)
-    except Exception as exc:  # noqa: BLE001 — an unread uuid costs the announcement its uuid, never the announcement
-        log.warning("trash_purge_uuid_unread", extra={"kind": kind, "id": obj_id, "error": f"{type(exc).__name__}: {exc}"})
-        return ControlUuids()
-    return ControlUuids(object_uuid=object_uuid, namespace_uuid=namespace_uuid)
+    namespace_uuid = record.get("namespace_uuid")
+    return ControlUuids(object_uuid=trash.object_uuid(record), namespace_uuid=namespace_uuid if isinstance(namespace_uuid, str) else None)
 
 
 async def _purge_one(
@@ -856,10 +850,11 @@ async def _purge_one(
     """
     kind = str(record.get("kind") or "table")
     obj_id = str(record.get("id") or "")
+    uuid = trash.object_uuid(record)
     location = str(record.get("location") or "").rstrip("/")
 
     if (reason := check(record, roots=roots, live=live)) is not None:
-        await _refuse(out, kind=kind, obj_id=obj_id, reason=reason, control_root=control_root, storage_options=storage_options, dry_run=dry_run)
+        await _refuse(out, kind=kind, obj_id=obj_id, uuid=uuid, reason=reason, control_root=control_root, storage_options=storage_options, dry_run=dry_run)
         log.warning("trash_purge_refused", extra={"kind": kind, "id": obj_id, "reason": reason})
         return
 
@@ -870,7 +865,7 @@ async def _purge_one(
         # one direction that costs most: naming a record whose bytes a live dataset resolves through.
         if protected is not None and (referrer := protected.protects_from_deletion(location)) is not None:
             reason = _protected_base_reason(location, referrer=referrer)
-            await _refuse(out, kind=kind, obj_id=obj_id, reason=reason, control_root=control_root, storage_options=storage_options, dry_run=dry_run)
+            await _refuse(out, kind=kind, obj_id=obj_id, uuid=uuid, reason=reason, control_root=control_root, storage_options=storage_options, dry_run=dry_run)
             log.warning("trash_purge_refused_protected_base", extra={"kind": kind, "id": obj_id, "location": location})
             return
         # PAST EVERY REFUSAL THIS PASS CAN EVALUATE WITHOUT MUTATING. Nothing below runs, so no tuple is
@@ -883,24 +878,18 @@ async def _purge_one(
 
     if await _recovered_since_the_snapshot(record, out, roots=roots, recheck_live=recheck_live, control_root=control_root, storage_options=storage_options):
         return
-    # Read while the claim still names the trashed id: the delete below releases it.
-    uuids = await run_in_threadpool(
-        partial(_purged_uuids, record, live=live, control_root=control_root, storage_options=storage_options, delimiter=settings.delimiter)
-    )
+    uuids = _purged_uuids(record)
 
-    if uuids.object_uuid is None and settings.fga_enabled:
-        await _refuse_unidentified(out, kind=kind, obj_id=obj_id, control_root=control_root, storage_options=storage_options, dry_run=dry_run)
-        return
     try:
         revoked = await _revoke(fga_client, kind=kind, uuid=uuids.object_uuid or "", fga_enabled=settings.fga_enabled)
     except Exception as exc:  # noqa: BLE001 — a revoke we could not perform is a reason not to delete
         reason = f"the FGA revoke failed ({type(exc).__name__}: {exc}) — grants must never outlive the bytes, so nothing was deleted"
-        await _refuse(out, kind=kind, obj_id=obj_id, reason=reason, control_root=control_root, storage_options=storage_options, dry_run=dry_run)
+        await _refuse(out, kind=kind, obj_id=obj_id, uuid=uuid, reason=reason, control_root=control_root, storage_options=storage_options, dry_run=dry_run)
         log.error("trash_purge_revoke_failed", extra={"kind": kind, "id": obj_id, "error": str(exc)})
         return
 
     reclaimed = await _delete_bytes_or_refuse(
-        out, kind=kind, obj_id=obj_id, location=location, control_root=control_root, storage_options=storage_options, protected=protected
+        out, kind=kind, obj_id=obj_id, uuid=uuid, location=location, control_root=control_root, storage_options=storage_options, protected=protected
     )
     if reclaimed is None:
         return
@@ -909,12 +898,12 @@ async def _purge_one(
     try:
         # What the drop kept for an undrop ends with the bytes, before the trash record that names it: the records under
         # the object's uuid ([[LH-523]]), read before the delete released the claim that records a table's.
-        if uuids.object_uuid is not None:
-            await run_in_threadpool(object_records.end_object_records, control_root, storage_options, kind, uuids.object_uuid)
-        await run_in_threadpool(trash.clear, control_root, storage_options, obj_id, kind=kind)
+        if uuid is not None:
+            await run_in_threadpool(object_records.end_object_records, control_root, storage_options, kind, uuid)
+            await run_in_threadpool(trash.clear, control_root, storage_options, uuid, kind=kind)
     except Exception as exc:  # noqa: BLE001 — the bytes ARE gone; say so rather than claiming a clean purge
         reason = f"the bytes were deleted and the grants revoked, but the trash record could not be cleared ({type(exc).__name__}: {exc}) — the next tick retries idempotently"
-        await _refuse(out, kind=kind, obj_id=obj_id, reason=reason, control_root=control_root, storage_options=storage_options, dry_run=dry_run)
+        await _refuse(out, kind=kind, obj_id=obj_id, uuid=uuid, reason=reason, control_root=control_root, storage_options=storage_options, dry_run=dry_run)
         log.error("trash_purge_record_not_cleared", extra={"kind": kind, "id": obj_id, "error": str(exc)})
         return
 

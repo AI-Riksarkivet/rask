@@ -29,6 +29,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
+from uuid import uuid4
 
 import pyarrow as pa
 import pytest
@@ -38,6 +39,7 @@ from lance_namespace import (
     DeregisterTableRequest,
     DescribeTableRequest,
     DropNamespaceRequest,
+    RegisterTableRequest,
     ServiceUnavailableError,
     connect,
 )
@@ -53,6 +55,11 @@ from service_kit.lakehouse.base_refs import BaseRefs, normalise
 
 
 _NOW = datetime(2026, 8, 5, 12, 0, tzinfo=UTC)
+_ORDERS_UUID = "0b6f7c1e-5a2d-4c8e-9f31-6d2a4e7b9c10"
+_TEAM_UUID = "7e3a9d42-1b6c-4f05-8a27-c94d0e5b3f68"
+_T_UUID = "c2d81f5a-93e4-4b7d-a610-5f8e2b4c7d93"
+_GONE_UUID = "4a9c6e13-d72b-4f80-b5e1-28c7a3f0d6e4"
+_ARCHIVE_UUID = "e815b3d7-6f2a-4c94-9d08-b1a7c5e2f3a6"
 
 
 # --------------------------------------------------------------------------- #
@@ -108,46 +115,64 @@ class _Estate:
         self.ns.create_table(CreateTableRequest(id=list(segments)), sink.getvalue())
         return str(self.ns.describe_table(DescribeTableRequest(id=list(segments))).location)
 
-    def drop_recoverably(self, *segments: str, grace_days: int = 7, dropped_at: datetime | None = None, uuid: str | None = None) -> tuple[str, str]:
+    def drop_recoverably(
+        self,
+        *segments: str,
+        grace_days: int = 7,
+        dropped_at: datetime | None = None,
+        uuid: str | None = None,
+        namespace_uuid: str | None = None,
+    ) -> tuple[str, str]:
         """The catalog's recoverable drop, for real: deregister (bytes stay) + file a trash record.
 
         Returns ``(canonical_id, location)``. ``dropped_at`` in the past is how a record becomes EXPIRED. ``uuid`` is the
-        table's, kept in its location's claim as the catalog's drop keeps it (ADR 0173 §6); without one, the claim holds
-        no uuid to read.
+        table's, which the record is filed under and its location's claim keeps, as the catalog's drop keeps both (ADR 0173
+        §6, §8); a fresh one when none is named, and an empty one files a record that keeps no uuid to read.
         """
         location = self.create_table(*segments)
         self.ns.deregister_table(DeregisterTableRequest(id=list(segments)))
         canonical = "$".join(segments)
-        if uuid is not None:
-            claims = location_claims.ClaimStore(control_root=self.control_root)
-            location_claims.take(claims, location, canonical, list(segments), is_gone=lambda _claim: False, uuid=uuid)
-        self.put_record(canonical, location=location, grace_days=grace_days, dropped_at=dropped_at)
+        minted = str(uuid4()) if uuid is None else uuid
+        claims = location_claims.ClaimStore(control_root=self.control_root)
+        location_claims.take(claims, location, canonical, list(segments), is_gone=lambda _claim: False, uuid=minted or None)
+        self.put_record(canonical, uuid=minted, location=location, grace_days=grace_days, dropped_at=dropped_at, namespace_uuid=namespace_uuid)
         return canonical, location
+
+    def reregister(self, *segments: str, location: str) -> None:
+        """The undrop's re-register, for real: the dropped table's own bytes back under its name, at its location."""
+        self.ns.register_table(RegisterTableRequest(id=list(segments), location=location.rstrip("/").rsplit("/", 1)[-1]))
 
     def put_record(
         self,
         canonical: str,
         *,
         location: str,
+        uuid: str | None = None,
         grace_days: int = 7,
         dropped_at: datetime | None = None,
         kind: str = "table",
         properties: dict[str, str] | None = None,
+        namespace_uuid: str | None = None,
     ) -> dict[str, Any]:
         record = trash.make_record(
             canonical,
+            uuid=str(uuid4()) if uuid is None else uuid,
             location=location,
             dropped_by="user:alice",
             grace_days=grace_days,
             now=dropped_at or (_NOW - timedelta(days=30)),
             kind=kind,
             properties=properties,
+            namespace_uuid=namespace_uuid,
         )
         trash.put(self.control_root, {}, record)
         return record
 
     def record(self, canonical: str, *, kind: str = "table") -> dict[str, Any] | None:
-        return trash.get(self.control_root, {}, canonical, kind=kind)
+        """The one trash record dropped under ``canonical``, or ``None``: each test drops a name once."""
+        held = trash.named(self.control_root, {}, canonical, kind=kind)
+        assert len(held) <= 1, held
+        return held[0] if held else None
 
 
 class _Revoker:
@@ -304,7 +329,7 @@ def test_a_namespace_record_clears_and_revokes_but_deletes_nothing(tmp_path: Pat
     estate.create_table("team", "orders")  # a live sibling, so "nothing deleted" is a real claim
     revoker = _Revoker()
     revoker.install(monkeypatch)
-    estate.put_record("archive", location="", kind="namespace", properties={"rask.uuid": "archive-uuid"})
+    estate.put_record("archive", uuid=_ARCHIVE_UUID, location="", kind="namespace", properties={"rask.uuid": _ARCHIVE_UUID})
     before = _fingerprint(estate.data)
 
     out = _run(estate, settings=_settings(tmp_path, fga_enabled=True), fga_client=object())
@@ -313,7 +338,7 @@ def test_a_namespace_record_clears_and_revokes_but_deletes_nothing(tmp_path: Pat
     assert out.purged[0].bytes_deleted == 0
     assert _fingerprint(estate.data) == before, "a namespace purge touched the data root"
     assert estate.record("archive", kind="namespace") is None
-    assert revoker.calls == [("namespace:archive-uuid", "service:maintenance", "lifecycle_delete")]
+    assert revoker.calls == [(f"namespace:{_ARCHIVE_UUID}", "service:maintenance", "lifecycle_delete")]
 
 
 # --------------------------------------------------------------------------- #
@@ -326,14 +351,14 @@ def test_a_recovered_id_is_REFUSED(tmp_path: Path) -> None:
 
     ``undrop`` re-registers the table and THEN clears the trash record. A crash in between — or anyone
     running ``register_table`` at the same location — leaves a LIVE table with a stale record pointing at
-    its bytes. Purging that record deletes a live table. Here the id is genuinely back in ``__manifest``
-    (created through the real backend), so the purge must refuse and leave both the bytes and the record.
+    its bytes. Purging that record deletes a live table. Here the dropped table's own location is genuinely back
+    in ``__manifest`` (registered through the real backend), so the purge must refuse and leave both the bytes and
+    the record.
     """
     estate = _Estate(tmp_path)
     canonical, location = estate.drop_recoverably("team", "orders")
-    recovered = estate.create_table("team", "orders")  # the undrop half that DID land
-    path = Path(recovered.removeprefix("file://"))
-    assert path.is_dir()
+    estate.reregister("team", "orders", location=location)  # the undrop half that DID land
+    path = Path(location.removeprefix("file://"))
 
     out = _run(estate)
 
@@ -342,7 +367,6 @@ def test_a_recovered_id_is_REFUSED(tmp_path: Path) -> None:
     assert "still registered" in out.refused[0].reason
     assert path.is_dir(), "the purge deleted a LIVE table's bytes"
     assert estate.record(canonical) is not None
-    assert Path(location.removeprefix("file://")).exists() or path.is_dir()
 
 
 def test_an_unreadable_manifest_refuses_every_record(tmp_path: Path) -> None:
@@ -477,12 +501,12 @@ def test_a_deactivated_warehouses_bucket_is_outside_the_maintained_estate(tmp_pa
 @pytest.mark.parametrize(
     ("uuid", "needle"),
     [
-        pytest.param("orders-uuid", "revoke failed", id="openfga-refuses-the-revoke"),
-        # Its grants are held on `table:<uuid>` ([[LH-524]]), so a record whose uuid cannot be read names no grant to revoke.
-        pytest.param(None, "uuid could not be read", id="the-objects-uuid-cannot-be-read"),
+        pytest.param(_ORDERS_UUID, "revoke failed", id="openfga-refuses-the-revoke"),
+        # Its grants are held on `table:<uuid>` ([[LH-524]]), so a record that keeps no uuid names no grant to revoke.
+        pytest.param("", "keeps no uuid", id="the-objects-uuid-cannot-be-read"),
     ],
 )
-def test_a_failed_revoke_leaves_the_bytes_and_the_record(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, uuid: str | None, needle: str) -> None:
+def test_a_failed_revoke_leaves_the_bytes_and_the_record(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, uuid: str, needle: str) -> None:
     """A revoke we could not perform is a reason NOT to delete.
 
     If the delete ran first, this test finds an empty directory: the bytes would be gone and the grants
@@ -510,14 +534,14 @@ def test_the_revoke_happens_while_the_bytes_are_still_there(tmp_path: Path, monk
     the bytes; delete-then-revoke means it does not.
     """
     estate = _Estate(tmp_path)
-    _, location = estate.drop_recoverably("team", "orders", uuid="orders-uuid")
+    _, location = estate.drop_recoverably("team", "orders", uuid=_ORDERS_UUID)
     path = Path(location.removeprefix("file://"))
     revoker = _Revoker(count=3, probe=path.is_dir)
     revoker.install(monkeypatch)
 
     out = _run(estate, settings=_settings(tmp_path, fga_enabled=True), fga_client=object())
 
-    assert revoker.calls == [("table:orders-uuid", "service:maintenance", "lifecycle_delete")]
+    assert revoker.calls == [(f"table:{_ORDERS_UUID}", "service:maintenance", "lifecycle_delete")]
     assert revoker.bytes_present_at_call == [True], "the revoke ran AFTER the delete — grants outlived the bytes"
     assert out.purged[0].tuples_revoked == 3
     assert not path.exists()
@@ -605,45 +629,23 @@ def test_one_control_event_per_purged_record(tmp_path: Path) -> None:
     UNCHANGED and still says `trash_expired`, so a consumer keying on it keeps working — the verbs are
     purely additive.
 
-    Each event names its object's uuid and its namespace's (ADR 0173 §10): a table's from the claim the drop kept on its
-    location, a namespace's from the properties its trash record keeps, and the namespace's from its live row, or from
-    its own trash record when it was dropped too.
+    Each event names its object's uuid and its namespace's (ADR 0173 §10), both as the trash record keeps them from the
+    drop: a namespace dropped since names no live row to read its uuid from.
     """
     estate = _Estate(tmp_path)
-    estate.ns.create_namespace(CreateNamespaceRequest(id=["team"], properties={"rask.uuid": "team-uuid"}))
-    canonical, location = estate.drop_recoverably("team", "orders")
-    orphaned, orphaned_at = estate.drop_recoverably("gone", "t")
-    claims = location_claims.ClaimStore(control_root=estate.control_root)
-    for table, at, minted in ((canonical, location, "orders-uuid"), (orphaned, orphaned_at, "t-uuid")):
-        location_claims.take(claims, at, table, table.split("$"), is_gone=lambda _claim: False, uuid=minted)
+    canonical, _ = estate.drop_recoverably("team", "orders", uuid=_ORDERS_UUID, namespace_uuid=_TEAM_UUID)
+    orphaned, _ = estate.drop_recoverably("gone", "t", uuid=_T_UUID, namespace_uuid=_GONE_UUID)
     estate.ns.drop_namespace(DropNamespaceRequest(id=["gone"]))
-    trash.put(
-        estate.control_root,
-        {},
-        trash.make_record("gone", location="", dropped_by="user:alice", grace_days=7, kind="namespace", properties={"rask.uuid": "gone-uuid"}),
-    )
-    trash.put(
-        estate.control_root,
-        {},
-        trash.make_record(
-            "archive",
-            location="",
-            dropped_by="user:alice",
-            grace_days=7,
-            now=_NOW - timedelta(days=30),
-            kind="namespace",
-            properties={"rask.uuid": "archive-uuid"},
-        ),
-    )
+    estate.put_record("archive", uuid=_ARCHIVE_UUID, location="", kind="namespace", properties={"rask.uuid": _ARCHIVE_UUID})
     control = _RecordingControl()
 
     out = _run(estate, control=control)
 
     assert len(out.purged) == 3
     assert {(e.action, e.object_type, e.object_id, e.object_name, e.object_uuid, e.namespace_uuid) for e in control.events} == {
-        ("table_purged", "table", "table:orders-uuid", canonical, "orders-uuid", "team-uuid"),
-        ("table_purged", "table", "table:t-uuid", orphaned, "t-uuid", "gone-uuid"),
-        ("namespace_purged", "namespace", "namespace:archive-uuid", "archive", "archive-uuid", None),
+        ("table_purged", "table", f"table:{_ORDERS_UUID}", canonical, _ORDERS_UUID, _TEAM_UUID),
+        ("table_purged", "table", f"table:{_T_UUID}", orphaned, _T_UUID, _GONE_UUID),
+        ("namespace_purged", "namespace", f"namespace:{_ARCHIVE_UUID}", "archive", _ARCHIVE_UUID, None),
     }
     assert all(e.actor == "service:maintenance" for e in control.events)
     assert all(e.extra["reason"] == "trash_expired" for e in control.events)
@@ -664,8 +666,8 @@ def test_a_SECOND_refusal_counts_up_rather_than_looking_like_the_first(tmp_path:
     between refusal causes (a protected base is dropped, and it becomes still-registered instead).
     """
     estate = _Estate(tmp_path)
-    canonical, _ = estate.drop_recoverably("team", "orders", dropped_at=datetime.now(UTC) - timedelta(days=30))
-    estate.create_table("team", "orders")
+    canonical, location = estate.drop_recoverably("team", "orders", dropped_at=datetime.now(UTC) - timedelta(days=30))
+    estate.reregister("team", "orders", location=location)
     settings = _settings(tmp_path, trash_purge_enabled=True)
 
     _run(estate, settings=settings)
@@ -691,8 +693,8 @@ def test_persisting_a_refusal_NEVER_turns_a_refusal_into_a_failure(tmp_path: Pat
 
     monkeypatch.setattr(trash, "note_refusal", _boom)
     estate = _Estate(tmp_path)
-    canonical, _ = estate.drop_recoverably("team", "orders", dropped_at=datetime.now(UTC) - timedelta(days=30))
-    estate.create_table("team", "orders")
+    canonical, location = estate.drop_recoverably("team", "orders", dropped_at=datetime.now(UTC) - timedelta(days=30))
+    estate.reregister("team", "orders", location=location)
 
     out = _run(estate, settings=_settings(tmp_path, trash_purge_enabled=True))
 
@@ -743,8 +745,8 @@ def test_a_dry_run_does_not_write_the_refusal_MEMORY_either(tmp_path: Path) -> N
     only the memory of it is withheld.
     """
     estate = _Estate(tmp_path)
-    canonical, _ = estate.drop_recoverably("team", "orders", dropped_at=datetime.now(UTC) - timedelta(days=30))
-    estate.create_table("team", "orders")  # still registered: the refusal case
+    canonical, location = estate.drop_recoverably("team", "orders", dropped_at=datetime.now(UTC) - timedelta(days=30))
+    estate.reregister("team", "orders", location=location)  # still registered: the refusal case
 
     out = _run(estate, settings=_settings(tmp_path, trash_purge_enabled=False, trash_purge_dry_run=True))
 
@@ -939,13 +941,13 @@ def test_a_table_recovered_AFTER_the_liveness_snapshot_is_still_refused(tmp_path
     here is a sleep or a thread.
     """
     estate = _Estate(tmp_path)
-    canonical, _location = estate.drop_recoverably("team", "orders")
+    canonical, location = estate.drop_recoverably("team", "orders")
 
     real_prepass = mod._estate_base_refs
 
     def _prepass_then_undrop(*args: Any, **kwargs: Any) -> Any:
         result = real_prepass(*args, **kwargs)
-        estate.create_table("team", "orders")  # the undrop lands mid-tick, after the snapshot
+        estate.reregister("team", "orders", location=location)  # the undrop lands mid-tick, after the snapshot
         return result
 
     monkeypatch.setattr(mod, "_estate_base_refs", _prepass_then_undrop)

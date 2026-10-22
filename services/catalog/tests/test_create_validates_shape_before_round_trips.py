@@ -1,15 +1,13 @@
 """catalog-api-19 — ``POST /v1/table/{id}/create`` refuses a malformed request before it dials out.
 
-The handler's first two statements were both round trips: a parent-existence describe against the
-namespace backend and a trash-registry read on the object store. Every FREE check — the multi-base
-allowlist, the ``properties`` JSON parse, the LANCE-ONLY format guard — ran after them. So the most
-common way to get a create wrong (a typo'd ``data_base``, unparseable ``properties``) cost two network
-round trips before the server said what was actually wrong, and under an outage of either dependency
-a request that is invalid on its face answered 503/404 instead of 400.
+The handler's first round trip is a parent-existence describe against the namespace backend. Every FREE
+check — the multi-base allowlist, the ``properties`` JSON parse, the LANCE-ONLY format guard — runs before
+it, so the most common way to get a create wrong (a typo'd ``data_base``, unparseable ``properties``) costs
+no network round trip before the server says what is actually wrong, and under an outage of the backend a
+request that is invalid on its face answers 400, not 503/404.
 
-Nothing about WHICH refusals exist changes; only the order. Driven through the real handler with the
-two round trips replaced by recorders, so the assertion is "they were never dialled", not a reading of
-the source.
+Driven through the real handler with the round trip replaced by a recorder, so the assertion is "it was
+never dialled", not a reading of the source.
 """
 
 from __future__ import annotations
@@ -33,18 +31,14 @@ def _settings() -> Settings:
 
 @pytest.fixture
 def no_round_trips(monkeypatch: pytest.MonkeyPatch) -> list[str]:
-    """Replace the two dial-outs with recorders that also FAIL — a create that reaches either of them
-    for a request this malformed has already lost the point of the ordering."""
+    """Replace the dial-out with a recorder — a create that reaches it for a request this malformed has
+    already lost the point of the ordering."""
     dialled: list[str] = []
 
     async def _parent(*_a: Any, **_kw: Any) -> None:
         dialled.append("require_parent_exists")
 
-    async def _trash(*_a: Any, **_kw: Any) -> None:
-        dialled.append("require_no_live_trash")
-
     monkeypatch.setattr(fga_deps, "require_parent_exists", _parent)
-    monkeypatch.setattr(fga_deps, "require_no_live_trash", _trash)
     return dialled
 
 

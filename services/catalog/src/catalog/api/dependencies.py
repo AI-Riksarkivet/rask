@@ -7,11 +7,12 @@ import time
 from collections.abc import Callable
 from datetime import UTC, datetime
 from functools import partial
-from typing import Annotated
+from typing import Annotated, Any
 
-from fastapi import Depends, Header, Request
+from fastapi import Depends, Header, Query, Request
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import (
+    InternalError,
     LanceNamespace,
     PermissionDeniedError,
     ServiceUnavailableError,
@@ -289,6 +290,8 @@ class Resolver:
         self._settings = settings
         self._tables: dict[tuple[str, ...], ResolvedTable] = {}
         self._namespaces: dict[tuple[str, ...], str | None] = {}
+        self._trashed: dict[tuple[str, tuple[str, ...]], list[dict[str, Any]]] = {}
+        self._admitted: dict[tuple[str, tuple[str, ...]], list[dict[str, Any]]] = {}
 
     async def _connection(self, segments: list[str]) -> LanceNamespace:
         return await namespace_for_top_ns(self._request, self._settings, segments[0])
@@ -328,16 +331,49 @@ class Resolver:
         uuid = await self.namespace_uuid(segments)
         return None if uuid is None else fga.namespace_object(uuid)
 
-    async def trashed_object(self, kind: str, segments: list[str]) -> str | None:
-        """The FGA object of the ``kind`` the trash holds under the name ``segments``, by the uuid its record keeps, or
-        ``None`` when the trash holds none (ADR 0173 §9)."""
-        canonical = fga.canonical_object_id(segments, delimiter=self._settings.delimiter)
-        so = self._settings.storage_options()
-        record = await run_in_threadpool(trash.get, self._settings.registry_root, so, canonical, kind=kind)
-        uuid = await run_in_threadpool(trash.object_uuid, record, table_claims.claim_store(self._settings)) if record is not None else None
-        if uuid is None:
-            return None
-        return fga.object_of(kind, uuid)
+    async def trashed(self, kind: str, segments: list[str]) -> list[dict[str, Any]]:
+        """The trash records of every ``kind`` object dropped under the name ``segments``, oldest drop first (ADR 0173 §9).
+
+        A trash door stays addressed by name, and several dropped objects may have held it: the request's ``?uuid=``
+        names one, and then only its record is among them.
+        """
+        key = (kind, tuple(segments))
+        if key not in self._trashed:
+            canonical = fga.canonical_object_id(segments, delimiter=self._settings.delimiter)
+            records = await run_in_threadpool(trash.named, self._settings.registry_root, self._settings.storage_options(), canonical, kind=kind)
+            wanted = self._request.query_params.get("uuid")
+            self._trashed[key] = [r for r in records if (uuid := trash.object_uuid(r)) is not None and wanted in (None, uuid)]
+        return self._trashed[key]
+
+    def admit_trashed(self, kind: str, segments: list[str], records: list[dict[str, Any]]) -> None:
+        """Record which of :meth:`trashed` the request's authorization let its caller act on."""
+        self._admitted[(kind, tuple(segments))] = records
+
+    async def admitted_trash(self, kind: str, segments: list[str]) -> list[dict[str, Any]]:
+        """The trashed objects under the name ``segments`` that this request's caller may act on.
+
+        Those the router's authorization admitted, or every one where authorization is off. A request authorization
+        admitted none for, with authorization on, acts on none: no door reaches this unauthorized.
+
+        Raises:
+            InternalError: Authorization is on and decided nothing about this name's trash.
+        """
+        key = (kind, tuple(segments))
+        if key in self._admitted:
+            return self._admitted[key]
+        if self._settings.fga_enabled:
+            raise InternalError(
+                f"no authorization decided which trashed {kind} under {fga.canonical_object_id(segments, delimiter=self._settings.delimiter)!r} this caller may act on"
+            )
+        return await self.trashed(kind, segments)
+
+
+#: A trash door's ``?uuid=``: which of the objects dropped under its name it acts on (ADR 0173 §9, [[LH-525]]). Declared
+#: on each trash door for its contract; :meth:`Resolver.trashed` reads it, so the router's authorization and the door
+#: judge the same candidates.
+TrashedUuidQuery = Annotated[
+    str | None, Query(description="The uuid of the dropped object to act on, when several dropped objects held this name; the answer lists them.")
+]
 
 
 def get_resolver(request: Request, settings: SettingsDep) -> Resolver:

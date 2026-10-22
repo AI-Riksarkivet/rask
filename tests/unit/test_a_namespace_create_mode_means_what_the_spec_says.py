@@ -56,17 +56,13 @@ async def _create(
     """Drive the handler with the guards and the backend faked.
 
     The guards are stubbed rather than satisfied because they answer different questions (warehouse
-    scope, depth, trash) and each has its own suite; what is under test is what the door does with
+    scope, depth) and each has its own suite; what is under test is what the door does with
     `mode` once they pass.
     """
     announced = [] if announced is None else announced
 
-    async def _ok(*_a: Any, **_k: Any) -> None:
-        return None
-
     monkeypatch.setattr(ns_ep.fga_deps, "require_warehouse_scoped", lambda *a, **k: None)
     monkeypatch.setattr(ns_ep.fga_deps, "require_namespace_depth", lambda *a, **k: None)
-    monkeypatch.setattr(ns_ep.fga_deps, "require_no_live_trash", _ok)
 
     async def _seed(
         _client: Any,

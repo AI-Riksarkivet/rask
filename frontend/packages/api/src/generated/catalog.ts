@@ -814,7 +814,8 @@ export interface paths {
          * Namespace Tasks
          * @description What is queued for THIS namespace — a pending trash expiry after a recoverable cascade (#96).
          *     Same contract as the table door: an undrop deadline the owner cannot see is not a safety
-         *     feature. Reader-gated by the router (``tasks`` is a metadata read).
+         *     feature. Reader-gated by the router (``tasks`` is a metadata read). One entry per dropped
+         *     namespace that held the name and that the caller may see, each with its uuid ([[LH-525]]).
          */
         get: operations["namespace_tasks_management_v1_namespace__id__tasks_get"];
         put?: never;
@@ -849,6 +850,12 @@ export interface paths {
          *     or never-trashed drop is genuinely unrecoverable, and saying so beats a 200 that recovers
          *     nothing. A declared-only table (empty recorded location) is skipped with a warning — there were
          *     no bytes to lose.
+         *
+         *     THE UNDROP RESTORES ONE CASCADE ([[LH-525]], ADR 0173 §9). A name is free once its namespace is dropped, so the door
+         *     restores the namespace its caller names (``?uuid=`` when several held the name, 409 listing each one's uuid and
+         *     deadline otherwise) and what the cascade that dropped it filed under it, each object under its own uuid. While
+         *     another namespace holds the name, or the parent's name is held by a namespace other than the one it was dropped
+         *     from, it answers 409.
          */
         post: operations["undrop_namespace_management_v1_namespace__id__undrop_post"];
         delete?: never;
@@ -1888,6 +1895,9 @@ export interface paths {
          *     5). Undrop does not check the clock — it checks whether the record is still there — so a passed
          *     deadline is a warning, not a verdict, and `expired` says which state you are in. Reporting it as
          *     finality would push an owner to give up on data that is still on storage and still recoverable.
+         *
+         *     One entry per dropped table that held the name and that the caller may see, each with its uuid, which an undrop
+         *     names when there are several ([[LH-525]]).
          */
         get: operations["table_tasks_management_v1_table__id__tasks_get"];
         put?: never;
@@ -1927,6 +1937,11 @@ export interface paths {
          *
          *     An expired undrop IS logged: it means the purge is behind, or somebody recovered at the very
          *     edge of the window, and an operator should be able to see either.
+         *
+         *     THE NAME IS FREE ONCE ITS TABLE IS DROPPED ([[LH-525]], ADR 0173 §9), so the door restores exactly the trashed table
+         *     its caller names: the one dropped under the name, or, when several were, the one ``?uuid=`` names (409 listing each
+         *     one's uuid and deadline otherwise). It restores that table's uuid, and so its grants and records. While another
+         *     table holds the name the undrop answers 409: two tables cannot share it.
          */
         post: operations["undrop_table_management_v1_table__id__undrop_post"];
         delete?: never;
@@ -9004,6 +9019,8 @@ export interface components {
             id: string;
             /** Location */
             location: string;
+            /** Uuid */
+            uuid: string;
         };
         /**
          * TupleCondition
@@ -10825,6 +10842,8 @@ export interface operations {
     namespace_tasks_management_v1_namespace__id__tasks_get: {
         parameters: {
             query?: {
+                /** @description The uuid of the dropped object to act on, when several dropped objects held this name; the answer lists them. */
+                uuid?: string | null;
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
@@ -10859,6 +10878,8 @@ export interface operations {
     undrop_namespace_management_v1_namespace__id__undrop_post: {
         parameters: {
             query?: {
+                /** @description The uuid of the dropped object to act on, when several dropped objects held this name; the answer lists them. */
+                uuid?: string | null;
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
@@ -12391,6 +12412,8 @@ export interface operations {
     table_tasks_management_v1_table__id__tasks_get: {
         parameters: {
             query?: {
+                /** @description The uuid of the dropped object to act on, when several dropped objects held this name; the answer lists them. */
+                uuid?: string | null;
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
@@ -12425,6 +12448,8 @@ export interface operations {
     undrop_table_management_v1_table__id__undrop_post: {
         parameters: {
             query?: {
+                /** @description The uuid of the dropped object to act on, when several dropped objects held this name; the answer lists them. */
+                uuid?: string | null;
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };

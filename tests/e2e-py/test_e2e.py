@@ -43,11 +43,10 @@ def _ipc(table: pa.Table) -> bytes:
 def _fresh(namespace: str, stem: str) -> str:
     """A table id no previous run can have claimed.
 
-    A FIXED id cannot be reused against a long-lived estate. ``LANCE_TRASH_GRACE_DAYS`` is 7 on the
-    deployed release, so a plain drop is RECOVERABLE — the id keeps a trash record and its grants stay
-    live — and ``require_no_live_trash`` refuses the next create at that id with 409 "a dropped table
-    of that name is still recoverable until <date>". ``purge=true`` frees a name the caller drops here,
-    but not one an earlier run left trashed (that needs an undrop first), so the id is fresh instead.
+    A FIXED id would collect a trash record per run on a long-lived estate. ``LANCE_TRASH_GRACE_DAYS`` is
+    7 on the deployed release, so a plain drop is RECOVERABLE: its table keeps a trash record, under its
+    uuid, for a week, and an undrop of a name several dropped tables held answers 409 asking which one
+    (ADR 0173 §9). A fresh id names one table per run.
     """
     return f"{namespace}{DELIMITER}{stem}{uuid.uuid4().hex[:8]}"
 

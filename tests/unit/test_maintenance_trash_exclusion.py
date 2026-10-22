@@ -104,7 +104,7 @@ def test_a_trashed_dataset_is_not_expired_and_says_so(tmp_path: Path, settings: 
     # Exactly what the catalog's recoverable drop writes: the bytes stay where they are, and a record
     # under the control root points at them by the URL the catalog describes the table at.
     location = f"file://{tmp_path}/r%C3%A4ksm%C3%B6rg%C3%A5s%25.lance"
-    record = trash.make_record("silver$räksmörgås%", kind="table", location=location, dropped_by="user:karin", grace_days=7)
+    record = trash.make_record("silver$räksmörgås%", kind="table", uuid=str(uuid4()), location=location, dropped_by="user:karin", grace_days=7)
     trash.put(str(settings.resolved_control_root), {}, record)
 
     results, expired = _run(monkeypatch, settings, [live, dropped, branch])
@@ -131,7 +131,7 @@ def test_an_expired_but_unpurged_record_still_freezes_its_dataset(tmp_path: Path
     back under expiry.
     """
     dropped = _dataset(tmp_path / "long_expired.lance")
-    record = trash.make_record("silver$old", kind="table", location=dropped, dropped_by="user:karin", grace_days=7)
+    record = trash.make_record("silver$old", kind="table", uuid=str(uuid4()), location=dropped, dropped_by="user:karin", grace_days=7)
     record["expires_at"] = "2020-01-01T00:00:00+00:00"
     trash.put(str(settings.resolved_control_root), {}, record)
 
@@ -162,7 +162,7 @@ def test_a_trashed_clone_still_protects_its_live_source(tmp_path: Path, settings
     trash.put(
         str(settings.resolved_control_root),
         {},
-        trash.make_record("silver$clone", kind="table", location=clone, dropped_by="user:karin", grace_days=7),
+        trash.make_record("silver$clone", kind="table", uuid=str(uuid4()), location=clone, dropped_by="user:karin", grace_days=7),
     )
 
     seen: list[list[str]] = []
@@ -215,7 +215,7 @@ def test_a_namespace_record_carrying_no_location_excludes_nothing(tmp_path: Path
     trash.put(
         str(settings.resolved_control_root),
         {},
-        trash.make_record("silver", kind="namespace", location="", dropped_by="user:karin", grace_days=7),
+        trash.make_record("silver", kind="namespace", uuid=str(uuid4()), location="", dropped_by="user:karin", grace_days=7),
     )
 
     results, expired = _run(monkeypatch, settings, [live])

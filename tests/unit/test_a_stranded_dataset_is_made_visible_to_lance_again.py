@@ -21,6 +21,7 @@ import os
 import time
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import httpx
 import lance
@@ -325,7 +326,7 @@ def test_a_trashed_dataset_is_refused_before_the_cap_and_gains_no_version(tmp_pa
     """
     trashed, trashed_orphan, _ = _stranded_dataset(tmp_path / "a")
     live, live_orphan, _ = _stranded_dataset(tmp_path / "b")
-    record = trash.make_record("acme$frozen", location=str(tmp_path / recorded), dropped_by="owner", grace_days=7)
+    record = trash.make_record("acme$frozen", uuid=str(uuid4()), location=str(tmp_path / recorded), dropped_by="owner", grace_days=7)
     trash.put(str(tmp_path), {}, record)
     before = lance.dataset(trashed).version
 

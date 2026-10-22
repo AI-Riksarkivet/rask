@@ -10,7 +10,7 @@ the names that hold no object.
 from __future__ import annotations
 
 import uuid
-from typing import override
+from typing import Any, override
 
 from lance_namespace import LanceNamespace
 
@@ -24,13 +24,14 @@ def uuid_of(kind: str, segments: list[str]) -> str:
 
 
 class NamedResolver(Resolver):
-    """Every name but ``absent`` holds an object, ``<kind>:<uuid_of(kind, segments)>``, and the trash holds the names in
-    ``trashed`` under the same uuids; no store is read. Every public method is answered here, so nothing inherited reads
-    the request or settings a real resolver is built with."""
+    """Every name but ``absent`` holds an object, ``<kind>:<uuid_of(kind, segments)>``, and the trash holds one record
+    for each name in ``in_trash``, under the same uuid; no store is read. Every public method is answered here, so
+    nothing inherited reads the request or settings a real resolver is built with."""
 
-    def __init__(self, absent: frozenset[tuple[str, ...]] = frozenset(), trashed: frozenset[tuple[str, ...]] = frozenset()) -> None:
+    def __init__(self, absent: frozenset[tuple[str, ...]] = frozenset(), in_trash: frozenset[tuple[str, ...]] = frozenset()) -> None:
         self._absent = absent
-        self._trashed = trashed
+        self._in_trash = in_trash
+        self._admitted_trash: dict[tuple[str, tuple[str, ...]], list[dict[str, Any]]] = {}
 
     @override
     async def table(self, segments: list[str], *, ns: LanceNamespace | None = None) -> ResolvedTable:
@@ -51,5 +52,15 @@ class NamedResolver(Resolver):
         return f"{kind}:{uuid_of(kind, segments)}"
 
     @override
-    async def trashed_object(self, kind: str, segments: list[str]) -> str | None:
-        return f"{kind}:{uuid_of(kind, segments)}" if tuple(segments) in self._trashed else None
+    async def trashed(self, kind: str, segments: list[str]) -> list[dict[str, Any]]:
+        if tuple(segments) not in self._in_trash:
+            return []
+        return [{"kind": kind, "id": "$".join(segments), "uuid": uuid_of(kind, segments)}]
+
+    @override
+    def admit_trashed(self, kind: str, segments: list[str], records: list[dict[str, Any]]) -> None:
+        self._admitted_trash[(kind, tuple(segments))] = records
+
+    @override
+    async def admitted_trash(self, kind: str, segments: list[str]) -> list[dict[str, Any]]:
+        return self._admitted_trash.get((kind, tuple(segments)), await self.trashed(kind, segments))

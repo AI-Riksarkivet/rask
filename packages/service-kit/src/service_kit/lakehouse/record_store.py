@@ -91,7 +91,7 @@ def delete_record(control_root: str, storage_options: StorageOptions, key: str) 
     return True
 
 
-def list_records(control_root: str, storage_options: StorageOptions, prefix: str, *, event: str) -> list[dict[str, Any]]:
+def list_records(control_root: str, storage_options: StorageOptions, prefix: str, *, event: str, strict: bool = False) -> list[dict[str, Any]]:
     """Every readable record under ``prefix`` (unordered). An absent prefix yields ``[]``.
 
     NON-RECURSIVE on purpose: registries park their own state under a child prefix
@@ -100,7 +100,11 @@ def list_records(control_root: str, storage_options: StorageOptions, prefix: str
     One unreadable or malformed record is SKIPPED with a warning rather than voiding the listing. That
     is the tolerance every caller was written for — these feed maintenance sweeps, where one bad record
     must not stop every other tenant being maintained — and it is also why a caller making a DESTRUCTIVE
-    decision must not use this: a record it cannot read is silently not in the answer.
+    decision must not use this: a record it cannot read is silently not in the answer. Such a caller passes
+    ``strict``, and then a record it cannot read raises instead, so it decides on the whole listing or none.
+
+    Raises:
+        ValueError: ``strict``, and a record is not a JSON object.
     """
     fs, base = fs_and_base(control_root, storage_options)
     records: list[dict[str, Any]] = []
@@ -113,9 +117,13 @@ def list_records(control_root: str, storage_options: StorageOptions, prefix: str
                 loaded: Any = json.loads(stream.readall().decode())
         except Exception as exc:
             log.warning(f"{event}_unreadable", extra={"path": info.path, "error": str(exc)})
+            if strict:
+                raise
             continue
         if isinstance(loaded, dict):
             records.append(loaded)
         else:
             log.warning(f"{event}_malformed", extra={"path": info.path})
+            if strict:
+                raise ValueError(f"the record at {info.path} is not a JSON object")
     return records

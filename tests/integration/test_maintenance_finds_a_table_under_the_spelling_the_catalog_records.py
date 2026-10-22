@@ -10,7 +10,11 @@ that URL decodes to (``spelled/räksmörgås/``). Read as the one key prefix it 
 One estate on moto: each dataset is written beside the catalog, then registered, branched and recoverably dropped through
 its doors. Its readers here, each one claim:
 
-- the purge reclaims the trash record that drop wrote, stamped long expired, under a clean drift report. The table's own
+- the undrop doors re-attach a recoverably dropped table at the key its recorded location decodes to, where its bytes are,
+  so its reads answer after the table undrop and after the namespace undrop of the cascade that dropped it ([[LH-517]]);
+- the purge reclaims the trash record that drop wrote, stamped long expired, under a clean drift report, and only the
+  table that record's uuid names: a table created since under the same name is another uuid and keeps its bytes
+  ([[LH-525]]). The table's own
   branch goes with it: the branch declares the table's root as its base, and a delete takes the branch along, so it
   protects nothing from the purge. What the drop kept for an undrop, its maintenance policy and its base record, ends with
   the bytes ([[LH-215]], [[LH-279]]);
@@ -31,6 +35,7 @@ from urllib.parse import quote
 import boto3
 import lance
 import pyarrow as pa
+import pyarrow.ipc as ipc
 import pytest
 from fastapi.testclient import TestClient
 
@@ -39,6 +44,7 @@ from maintenance.services.purge import objects_held, purge_expired_trash
 from maintenance.services.reconcile import CATEGORIES, CategorySkipped, ReconcileReport
 from service_kit.lakehouse import base_registry, maintenance_policies, trash
 from service_kit.lakehouse.objectfs import dataset_root_probe, lance_storage_options
+from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from storage import S3Client
 
 
@@ -67,6 +73,19 @@ class _Estate:
         assert answer.status_code == 200, f"{action} {table!r}: {answer.text}"
         return answer.text
 
+    def made(self, table: str) -> None:
+        """``table`` created through the create door, at the uuid-named location the catalog chooses."""
+        path = f"/v1/table/{quote(table, safe='$')}/create"
+        answer = self.client.post(path, content=encode_arrow_stream(_ROWS), headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE})
+        assert answer.status_code == 200, f"create {table!r}: {answer.text}"
+
+    def reads(self, table: str) -> tuple[int, int]:
+        """What ``count_rows`` and ``query`` answer for ``table``."""
+        counted = int(self.door(table, "count_rows"))
+        queried = self.client.post(f"/v1/table/{quote(table, safe='$')}/query", json={"k": 10, "vector": {}})
+        assert queried.status_code == 200, f"query {table!r}: {queried.text}"
+        return counted, ipc.open_file(pa.BufferReader(queried.content)).read_all().num_rows
+
     def registered(self, table: str, name: str) -> str:
         """A dataset written at the key ``spelled/<name>``, registered as ``table`` by that raw name; the location described."""
         lance.write_dataset(_ROWS, f"{self.root}/spelled/{quote(name)}", storage_options=self.key, data_storage_version="2.2", enable_stable_row_ids=True)
@@ -92,11 +111,15 @@ class _Estate:
         assert all(key.startswith(f"spelled/{name}/") for key in held), f"precondition: pylance keeps the table under the decoded key: {sorted(held)}"
         return held
 
+    def recorded(self, table: str) -> dict[str, object]:
+        """The trash record the drop of ``table`` wrote."""
+        dropped = trash.named(self.root, self.key, table)
+        assert len(dropped) == 1, f"precondition: the drop of {table!r} kept one trash record: {dropped}"
+        return dropped[0]
+
     def recorded_location(self, table: str) -> str:
         """The location the drop's trash record holds, as the catalog recorded it."""
-        dropped = trash.get(self.root, self.key, table)
-        assert dropped is not None, f"precondition: the drop of {table!r} kept a trash record"
-        return str(dropped["location"])
+        return str(self.recorded(table)["location"])
 
 
 @pytest.fixture
@@ -124,18 +147,38 @@ def estate(moto_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[_Estate]:
     get_settings.cache_clear()
 
 
+@pytest.mark.parametrize("door", ["table", "namespace"])
+@pytest.mark.parametrize("made", [pytest.param(True, id="catalog-made"), pytest.param(False, id="registered")])
+def test_a_dropped_table_answers_its_reads_after_its_undrop(estate: _Estate, made: bool, door: str) -> None:
+    table = "db$räksmörgås"
+    if made:
+        estate.made(table)
+    else:
+        estate.registered(table, "räksmörgås")
+    if door == "table":
+        estate.door(table, "drop")
+        undropped = estate.client.post(f"/management/v1/table/{quote(table, safe='$')}/undrop")
+    else:
+        assert estate.client.post("/v1/namespace/db/drop", json={"behavior": "Cascade"}).status_code == 200
+        undropped = estate.client.post("/management/v1/namespace/db/undrop")
+    assert undropped.status_code == 200, undropped.text
+
+    assert estate.reads(table) == (3, 3)
+
+
 @pytest.mark.parametrize("name", _NAMES)
 def test_an_expired_record_reclaims_its_table_under_every_spelling_of_its_location(estate: _Estate, name: str) -> None:
     table = f"db${name}"
     held = estate.dropped_with_a_branch(table, name)
-    location = estate.recorded_location(table)
+    dropped = estate.recorded(table)
+    location = str(dropped["location"])
     policy_uuid = estate.policy_uuids[table]
     assert maintenance_policies.get_policy(estate.root, estate.key, "table", policy_uuid) is not None, "precondition: the drop kept the policy for an undrop"
-    trash.put(
-        estate.root,
-        estate.key,
-        trash.make_record(table, location=location, dropped_by="user:alice", grace_days=1, now=datetime.now(UTC) - timedelta(days=30)),
-    )
+    trash.put(estate.root, estate.key, {**dropped, "expires_at": (datetime.now(UTC) - timedelta(days=29)).isoformat()})
+    # A table created since under the dropped table's name, which the purge of the dropped one must leave as it is.
+    estate.made(table)
+    standing = {key: size for key, size in estate.objects().items() if not key.startswith("spelled/")}
+    assert standing, "precondition: the table created since holds bytes"
     report = ReconcileReport(
         checked_at=datetime.now(UTC).isoformat(),
         counts={category: 0 for category in CATEGORIES if category != "orphan_files"},
@@ -160,7 +203,9 @@ def test_an_expired_record_reclaims_its_table_under_every_spelling_of_its_locati
     assert [(purged.id, purged.bytes_deleted, purged.files_deleted) for purged in out.purged] == [(table, sum(held.values()), len(held))]
     # pyarrow's S3 `delete_dir` keeps the emptied parent as a zero-byte `spelled/` marker, which is no byte of the table.
     assert [key for key in estate.objects() if key.startswith(f"spelled/{name}/")] == [], "the purge left bytes of the table it reclaimed"
-    assert trash.get(estate.root, estate.key, table) is None, "the record outlived its purge"
+    assert trash.named(estate.root, estate.key, table) == [], "the record outlived its purge"
+    assert estate.reads(table) == (3, 3), "the purge reached the table created since under the name"
+    assert {key: size for key, size in estate.objects().items() if not key.startswith("spelled/")} == standing
     assert maintenance_policies.get_policy(estate.root, estate.key, "table", policy_uuid) is None, "the policy outlived the table it governed"
     registry = base_registry.BaseRegistry(control_root=estate.root, storage_options=estate.key)
     assert base_registry.read_base_record(registry, location) is None, "the table's base record outlived its bytes"

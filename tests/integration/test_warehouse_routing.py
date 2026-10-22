@@ -226,9 +226,9 @@ def test_a_recoverable_cascade_unbinds_and_undrop_rebinds_the_same_warehouse(
     # NO LEAK: the binding is gone the moment the namespace is.
     assert wh_svc.binding_for_namespace(control, {}, "tenantns") is None, "the drop left the warehouse binding behind"
     # …and the root record is the only place it now lives.
-    root_record = trash.get(control, {}, "tenantns", kind="namespace")
-    assert root_record is not None, "no recoverable drop was filed for the root"
-    assert root_record.get("binding") == {"warehouse_id": "wh-a", "root_uri": str(warehouse_root)}
+    filed = trash.named(control, {}, "tenantns", kind="namespace")
+    assert len(filed) == 1, f"one recoverable drop is filed for the root: {filed}"
+    assert filed[0].get("binding") == {"warehouse_id": "wh-a", "root_uri": str(warehouse_root)}
 
     # COLD CACHE, and without this the test is vacuous. `_resolve_warehouse_root` caches bindings
     # POSITIVELY AND FOREVER (#46), so inside one process `NamespaceDep` keeps resolving `tenantns` to

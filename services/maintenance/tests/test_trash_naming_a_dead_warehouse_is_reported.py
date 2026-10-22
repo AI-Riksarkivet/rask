@@ -22,13 +22,15 @@ record — keying on the id would report a record as orphaned while it is perfec
 
 from __future__ import annotations
 
+from uuid import uuid4
+
 import pytest
 
 from maintenance.services.reconcile import _orphaned_trash
 
 
 def _record(canonical_id: str, location: str) -> dict[str, str]:
-    return {"id": canonical_id, "kind": "table", "location": location}
+    return {"id": canonical_id, "uuid": str(uuid4()), "kind": "table", "location": location}
 
 
 @pytest.mark.parametrize(

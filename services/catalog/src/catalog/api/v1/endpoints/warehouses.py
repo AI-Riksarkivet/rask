@@ -610,13 +610,6 @@ async def create_warehouse_namespace(
             "orphan its tables — choose a fresh name or migrate the tables first"
         )
 
-    # Same trash guard as the nested door, and this one matters MORE: a warehouse namespace is the ROOT
-    # of a cascade-trashed subtree, so its record is the one `undrop` walks from. Taking the name during
-    # the grace window binds a fresh namespace to this warehouse under an id whose undrop will later
-    # re-register the previous occupant's tables into it. Conflict rung, beside the two collision guards
-    # above and before the native create.
-    await fga_deps.require_no_live_trash(settings, segments, kind="namespace")
-
     # AT THE WAREHOUSE'S OWN ENDPOINT ([[LH-067]]). This door never routes through `get_namespace`,
     # so the resolver that threads the record's endpoint does not run here — creating the namespace
     # at the estate's store instead would put it in a different object store from every table
@@ -888,19 +881,21 @@ async def _forget_trashed(settings: Settings, entry: dict[str, Any]) -> None:
     """End what one trashed object kept for an undrop besides its grants: its policy, claim and base record, then its record.
 
     The record goes last, as the trash purge orders it: it is all that still names what the object holds, so a
-    failure before it is cleared leaves it for the re-issue to end. The policy is ended under the uuid the trash record
-    still leads to, read before the claim that records a table's is released.
+    failure before it is cleared leaves it for the re-issue to end. Its records are ended, and it is cleared, under the
+    uuid it keeps.
     """
     so = settings.storage_options()
     kind, canonical, location = str(entry.get("kind") or "table"), str(entry.get("id") or ""), str(entry.get("location") or "")
     claims = table_claims.claim_store(settings)
-    if (uuid := await run_in_threadpool(trash.object_uuid, entry, claims)) is not None:
+    uuid = trash.object_uuid(entry)
+    if uuid is not None:
         await run_in_threadpool(object_records.end_object_records, settings.registry_root, so, kind, uuid)
     if location:
         await run_in_threadpool(location_claims.release, claims, location, canonical)
         registry = base_registry.BaseRegistry(control_root=settings.registry_root, storage_options=so)
         await run_in_threadpool(partial(base_registry.forget_base_record, registry, location, table=canonical))
-    await run_in_threadpool(trash.clear, settings.registry_root, so, canonical, kind=kind)
+    if uuid is not None:
+        await run_in_threadpool(trash.clear, settings.registry_root, so, uuid, kind=kind)
 
 
 def _require_bucket_purgeable(settings: Settings, records: list[dict[str, str]], record: dict[str, str], warehouse_id: str) -> None:
@@ -1054,12 +1049,11 @@ async def delete_warehouse(
     trash_ended: list[str] = []
     revoked = 0
     try:
-        claims = table_claims.claim_store(settings)
         for entry in trashed:
             kind, canonical = str(entry.get("kind") or "table"), str(entry.get("id") or "")
-            # A trashed object's grants are held by the uuid its record keeps ([[LH-524]]), read before its claim goes.
-            # Counted as the revoke lands, so a failure in the records after it still reports these tuples.
-            trashed_uuid = await run_in_threadpool(trash.object_uuid, entry, claims)
+            # A trashed object's grants are held by the uuid its record keeps ([[LH-524]]). Counted as the revoke lands,
+            # so a failure in the records after it still reports these tuples.
+            trashed_uuid = trash.object_uuid(entry)
             if trashed_uuid is not None:
                 obj = fga.object_of(kind, trashed_uuid)
                 revoked += await fga_deps.revoke_removed_object(client, settings, obj, token=token)

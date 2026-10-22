@@ -11656,10 +11656,15 @@
           "location": {
             "title": "Location",
             "type": "string"
+          },
+          "uuid": {
+            "title": "Uuid",
+            "type": "string"
           }
         },
         "required": [
           "id",
+          "uuid",
           "location",
           "dropped_by",
           "dropped_at",
@@ -15450,7 +15455,7 @@
     },
     "/management/v1/namespace/{id}/tasks": {
       "get": {
-        "description": "What is queued for THIS namespace \u2014 a pending trash expiry after a recoverable cascade (#96).\nSame contract as the table door: an undrop deadline the owner cannot see is not a safety\nfeature. Reader-gated by the router (``tasks`` is a metadata read).",
+        "description": "What is queued for THIS namespace \u2014 a pending trash expiry after a recoverable cascade (#96).\nSame contract as the table door: an undrop deadline the owner cannot see is not a safety\nfeature. Reader-gated by the router (``tasks`` is a metadata read). One entry per dropped\nnamespace that held the name and that the caller may see, each with its uuid ([[LH-525]]).",
         "operationId": "namespace_tasks_management_v1_namespace__id__tasks_get",
         "parameters": [
           {
@@ -15460,6 +15465,24 @@
             "schema": {
               "title": "Id",
               "type": "string"
+            }
+          },
+          {
+            "description": "The uuid of the dropped object to act on, when several dropped objects held this name; the answer lists them.",
+            "in": "query",
+            "name": "uuid",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The uuid of the dropped object to act on, when several dropped objects held this name; the answer lists them.",
+              "title": "Uuid"
             }
           },
           {
@@ -15520,7 +15543,7 @@
     },
     "/management/v1/namespace/{id}/undrop": {
       "post": {
-        "description": "Recover a cascade-dropped SUBTREE from the trash (#96) \u2014 the plural undrop.\n\nThe unit of a cascade is the subtree, so the unit of its recovery is too: every trashed\nnamespace under (and including) ``id`` is re-created shallowest-first, then every trashed table\nis re-registered at its old id from its still-present bytes, and each record is cleared as its\nobject recovers. Owner-gated like the table door (``undrop`` maps to the delete rung).\n\nResumable, not atomic: namespace creates run ``exist_ok`` and an already-registered table is\ntreated as recovered, so a rerun after a mid-recovery failure finishes the job instead of\n409-ing on what the first attempt already rebuilt. 404 when there is no trash record: an expired\nor never-trashed drop is genuinely unrecoverable, and saying so beats a 200 that recovers\nnothing. A declared-only table (empty recorded location) is skipped with a warning \u2014 there were\nno bytes to lose.",
+        "description": "Recover a cascade-dropped SUBTREE from the trash (#96) \u2014 the plural undrop.\n\nThe unit of a cascade is the subtree, so the unit of its recovery is too: every trashed\nnamespace under (and including) ``id`` is re-created shallowest-first, then every trashed table\nis re-registered at its old id from its still-present bytes, and each record is cleared as its\nobject recovers. Owner-gated like the table door (``undrop`` maps to the delete rung).\n\nResumable, not atomic: namespace creates run ``exist_ok`` and an already-registered table is\ntreated as recovered, so a rerun after a mid-recovery failure finishes the job instead of\n409-ing on what the first attempt already rebuilt. 404 when there is no trash record: an expired\nor never-trashed drop is genuinely unrecoverable, and saying so beats a 200 that recovers\nnothing. A declared-only table (empty recorded location) is skipped with a warning \u2014 there were\nno bytes to lose.\n\nTHE UNDROP RESTORES ONE CASCADE ([[LH-525]], ADR 0173 \u00a79). A name is free once its namespace is dropped, so the door\nrestores the namespace its caller names (``?uuid=`` when several held the name, 409 listing each one's uuid and\ndeadline otherwise) and what the cascade that dropped it filed under it, each object under its own uuid. While\nanother namespace holds the name, or the parent's name is held by a namespace other than the one it was dropped\nfrom, it answers 409.",
         "operationId": "undrop_namespace_management_v1_namespace__id__undrop_post",
         "parameters": [
           {
@@ -15530,6 +15553,24 @@
             "schema": {
               "title": "Id",
               "type": "string"
+            }
+          },
+          {
+            "description": "The uuid of the dropped object to act on, when several dropped objects held this name; the answer lists them.",
+            "in": "query",
+            "name": "uuid",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The uuid of the dropped object to act on, when several dropped objects held this name; the answer lists them.",
+              "title": "Uuid"
             }
           },
           {
@@ -18794,7 +18835,7 @@
     },
     "/management/v1/table/{id}/tasks": {
       "get": {
-        "description": "What is queued for THIS table (#75 brings \u00a72.4). Today that is exactly one thing: a pending\ntrash expiry. It exists the moment expiry does, because an undrop deadline the owner cannot see\nis not a safety feature \u2014 the estate's task surfaces are otherwise all estate-global, so \"what is\nscheduled against my table\" was unanswerable. Reader-gated by the router alongside describe.\n\n`expires_at` is when the object becomes PURGE-ELIGIBLE, not when recovery stops (diff2 F10 item\n5). Undrop does not check the clock \u2014 it checks whether the record is still there \u2014 so a passed\ndeadline is a warning, not a verdict, and `expired` says which state you are in. Reporting it as\nfinality would push an owner to give up on data that is still on storage and still recoverable.",
+        "description": "What is queued for THIS table (#75 brings \u00a72.4). Today that is exactly one thing: a pending\ntrash expiry. It exists the moment expiry does, because an undrop deadline the owner cannot see\nis not a safety feature \u2014 the estate's task surfaces are otherwise all estate-global, so \"what is\nscheduled against my table\" was unanswerable. Reader-gated by the router alongside describe.\n\n`expires_at` is when the object becomes PURGE-ELIGIBLE, not when recovery stops (diff2 F10 item\n5). Undrop does not check the clock \u2014 it checks whether the record is still there \u2014 so a passed\ndeadline is a warning, not a verdict, and `expired` says which state you are in. Reporting it as\nfinality would push an owner to give up on data that is still on storage and still recoverable.\n\nOne entry per dropped table that held the name and that the caller may see, each with its uuid, which an undrop\nnames when there are several ([[LH-525]]).",
         "operationId": "table_tasks_management_v1_table__id__tasks_get",
         "parameters": [
           {
@@ -18804,6 +18845,24 @@
             "schema": {
               "title": "Id",
               "type": "string"
+            }
+          },
+          {
+            "description": "The uuid of the dropped object to act on, when several dropped objects held this name; the answer lists them.",
+            "in": "query",
+            "name": "uuid",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The uuid of the dropped object to act on, when several dropped objects held this name; the answer lists them.",
+              "title": "Uuid"
             }
           },
           {
@@ -18864,7 +18923,7 @@
     },
     "/management/v1/table/{id}/undrop": {
       "post": {
-        "description": "Recover a dropped table from the trash (#75) \u2014 re-register its still-present bytes at its old\nid and clear the record. Owner-gated (``undrop`` maps to the drop rung: restoring an object into\nthe namespace is the same authority as removing it).\n\n404 when there is no trash record \u2014 a never-trashed or already-PURGED drop is genuinely\nunrecoverable, and saying so plainly beats a 200 that recovers nothing.\n\nTHE CLOCK DOES NOT GATE THIS, deliberately (diff2 F10 item 5). A record whose `expires_at` has\npassed but which the purge has not yet collected still undrops, because the bytes are still on\nstorage and refusing would destroy recoverable data on a timestamp alone. The estate already\nreasons this way one service over \u2014 maintenance's own config says \"a record that survives is a\nrecovery that still works; a purged one is not\" \u2014 and this door simply never said so out loud.\nWhat was wrong was the DESCRIPTION: the previous docstring called an expired drop \"genuinely\nunrecoverable\" alongside a never-trashed one, and `/tasks` reported the deadline as finality.\nBoth now say purge-eligible, which is what it is.\n\nAn expired undrop IS logged: it means the purge is behind, or somebody recovered at the very\nedge of the window, and an operator should be able to see either.",
+        "description": "Recover a dropped table from the trash (#75) \u2014 re-register its still-present bytes at its old\nid and clear the record. Owner-gated (``undrop`` maps to the drop rung: restoring an object into\nthe namespace is the same authority as removing it).\n\n404 when there is no trash record \u2014 a never-trashed or already-PURGED drop is genuinely\nunrecoverable, and saying so plainly beats a 200 that recovers nothing.\n\nTHE CLOCK DOES NOT GATE THIS, deliberately (diff2 F10 item 5). A record whose `expires_at` has\npassed but which the purge has not yet collected still undrops, because the bytes are still on\nstorage and refusing would destroy recoverable data on a timestamp alone. The estate already\nreasons this way one service over \u2014 maintenance's own config says \"a record that survives is a\nrecovery that still works; a purged one is not\" \u2014 and this door simply never said so out loud.\nWhat was wrong was the DESCRIPTION: the previous docstring called an expired drop \"genuinely\nunrecoverable\" alongside a never-trashed one, and `/tasks` reported the deadline as finality.\nBoth now say purge-eligible, which is what it is.\n\nAn expired undrop IS logged: it means the purge is behind, or somebody recovered at the very\nedge of the window, and an operator should be able to see either.\n\nTHE NAME IS FREE ONCE ITS TABLE IS DROPPED ([[LH-525]], ADR 0173 \u00a79), so the door restores exactly the trashed table\nits caller names: the one dropped under the name, or, when several were, the one ``?uuid=`` names (409 listing each\none's uuid and deadline otherwise). It restores that table's uuid, and so its grants and records. While another\ntable holds the name the undrop answers 409: two tables cannot share it.",
         "operationId": "undrop_table_management_v1_table__id__undrop_post",
         "parameters": [
           {
@@ -18874,6 +18933,24 @@
             "schema": {
               "title": "Id",
               "type": "string"
+            }
+          },
+          {
+            "description": "The uuid of the dropped object to act on, when several dropped objects held this name; the answer lists them.",
+            "in": "query",
+            "name": "uuid",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The uuid of the dropped object to act on, when several dropped objects held this name; the answer lists them.",
+              "title": "Uuid"
             }
           },
           {

@@ -31,7 +31,7 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from functools import lru_cache
-from typing import Final, Literal
+from typing import Any, Final, Literal
 
 from fastapi import Request
 from fastapi.concurrency import run_in_threadpool
@@ -40,13 +40,11 @@ from lance_namespace import (
     InvalidInputError,
     InvalidTableStateError,
     LanceNamespace,
-    NamespaceAlreadyExistsError,
     NamespaceExistsRequest,
     NamespaceNotEmptyError,
     NamespaceNotFoundError,
     PermissionDeniedError,
     ServiceUnavailableError,
-    TableAlreadyExistsError,
     TableNotFoundError,
     UnauthenticatedError,
     UnsupportedOperationError,
@@ -427,12 +425,18 @@ def _label(rung: tier_policy.Rung, delimiter: str) -> str:
 
 
 async def _resolve(resolver: Resolver, rung: tier_policy.Rung) -> str | None:
-    """The FGA object ``rung`` is asked on: what its name resolves to, ``None`` when nothing has that name."""
+    """The FGA object ``rung`` is asked on: what its name resolves to, ``None`` when nothing has that name.
+
+    A trash door's name with no live object resolves to the one trashed object it names; several are asked one by one
+    (:func:`_require_trashed`).
+    """
     if isinstance(rung.on, str):
         return rung.on
     obj = await resolver.object(rung.on.kind, list(rung.on.segments))
     if obj is None and rung.on.in_trash:
-        return await resolver.trashed_object(rung.on.kind, list(rung.on.segments))
+        trashed = await resolver.trashed(rung.on.kind, list(rung.on.segments))
+        if len(trashed) == 1 and (uuid := trash.object_uuid(trashed[0])) is not None:
+            return fga.object_of(rung.on.kind, uuid)
     return obj
 
 
@@ -556,11 +560,45 @@ async def _require_rung(client: OpenFgaClient, resolver: Resolver, *, user: str,
     an object that is there.
     """
     label = _label(rung, delimiter)
+    if not isinstance(rung.on, str) and rung.on.in_trash:
+        segments = list(rung.on.segments)
+        trashed = await resolver.trashed(rung.on.kind, segments)
+        if trashed:
+            return await _require_trashed(client, resolver, user=user, relation=rung.relation, named=rung.on, label=label, trashed=trashed)
+        resolver.admit_trashed(rung.on.kind, segments, [])
     obj = await _resolve(resolver, rung)
     if obj is None:
         raise _refuse_absent(user=user, relation=rung.relation, label=label)
     await _require(client, user=user, relation=rung.relation, obj=obj, label=label)
     return obj
+
+
+async def _require_trashed(
+    client: OpenFgaClient,
+    resolver: Resolver,
+    *,
+    user: str,
+    relation: str,
+    named: tier_policy.Named,
+    label: str,
+    trashed: list[dict[str, Any]],
+) -> str:
+    """Ask ``relation`` on every trashed object ``named`` leads to, admit those the caller may act on, and refuse if none.
+
+    A trash door is addressed by a name several dropped objects may have held (ADR 0173 §9, [[LH-525]]), and each is
+    its own object with its own grants. The door then acts only on what was admitted, so its answer, the list of
+    uuids it offers when several remain, names nothing its caller holds no grant on. Each decision is audited.
+    """
+    objects = {fga.object_of(named.kind, uuid): record for record in trashed if (uuid := trash.object_uuid(record)) is not None}
+    allowed = await fga.batch_check(client, user=user, relation=relation, objects=sorted(objects))
+    for obj in sorted(objects):
+        audit(relation, ALLOW if allowed.get(obj, False) else DENY, subject=user, resource=obj)
+    admitted = {obj: record for obj, record in objects.items() if allowed.get(obj, False)}
+    resolver.admit_trashed(named.kind, list(named.segments), list(admitted.values()))
+    if not admitted:
+        log.info("access_denied", extra={"sub": user, "relation": relation, "object": label})
+        raise PermissionDeniedError(f"{relation} required on {label}")
+    return next(iter(admitted))
 
 
 async def _require_any(client: OpenFgaClient, *, user: str, doors: list[tuple[str, str]], label: str | None = None) -> None:
@@ -1357,39 +1395,6 @@ async def require_parent_exists(ns: LanceNamespace, resource: str, segments: lis
         ) from exc
 
 
-async def require_no_live_trash(settings: Settings, segments: list[str], *, kind: str = "table") -> None:
-    """Refuse a create at a name whose PREVIOUS occupant is still in the trash (diff2 F10 item 4).
-
-    The name is not free yet: the dropped object's bytes are still on storage and its owner still holds a live claim
-    to recover them, under this name. A create that quietly took the name would make that recovery impossible, and for
-    a namespace the cascade undrop would re-register the trashed tables inside a namespace someone else now owns. Its
-    grants are held by its uuid (ADR 0173 §8), so a new object at the name would inherit none of them either way. The
-    409 names the deadline and both ways out, because "already exists" on an object the caller cannot see is otherwise
-    unactionable.
-
-    Checked BEFORE the native write, like `require_parent_exists`, so a refusal leaves nothing
-    half-made. A read failure does NOT fail closed: an unreadable trash store must not make the whole
-    create path unavailable, and the window this closes is narrow and time-boxed. Logged instead.
-    """
-    canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
-    try:
-        record = await run_in_threadpool(trash.get, settings.registry_root, settings.storage_options(), canonical, kind=kind)
-    except Exception as exc:  # noqa: BLE001 — an unreadable trash store must not 500 every create
-        log.warning("trash_probe_failed", extra={"object": canonical, "kind": kind, "error": str(exc)})
-        return
-    if record is None:
-        return
-    expires = str(record.get("expires_at", "")) or "an unrecorded deadline"
-    detail = (
-        f"cannot create '{canonical}': a dropped {kind} of that name is still recoverable until {expires}, "
-        f"and creating here would make its undrop impossible. Undrop it (POST /v1/{kind}/{canonical}/undrop) to "
-        f"restore it, or purge it to free the name."
-    )
-    # The type-specific AlreadyExists error, not a generic conflict: both map to 409 (spec code 2), and
-    # a caller's error handling switches on the CODE, so a table create must fail as a table conflict.
-    raise (NamespaceAlreadyExistsError(detail) if kind == "namespace" else TableAlreadyExistsError(detail))
-
-
 def require_namespace_depth(segments: list[str], *, delimiter: str) -> None:
     """Refuse a namespace nested deeper than the estate's ceiling — a SHAPE rule, so a 400.
 
@@ -1910,10 +1915,9 @@ async def orphaned_children(client: OpenFgaClient | None, settings: Settings, co
 
 def _trashed_objects(settings: Settings) -> set[str]:
     """The FGA objects of every table and namespace in the trash, by the uuid each record keeps."""
-    claims = table_claims.claim_store(settings)
     objects: set[str] = set()
     for record in trash.list_all(settings.registry_root, settings.storage_options()):
-        if (uuid := trash.object_uuid(record, claims)) is not None:
+        if (uuid := trash.object_uuid(record)) is not None:
             objects.add(fga.object_of(str(record.get("kind") or "table"), uuid))
     return objects
 

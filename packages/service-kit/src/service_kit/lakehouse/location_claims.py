@@ -177,6 +177,7 @@ def _taken(
     previous: str | None,
     token: str | None,
     uuid: str | None,
+    is_kept: Callable[[LocationClaim], bool],
 ) -> LocationClaim:
     """The claim ``table`` holds once it takes ``location`` from ``current``; :func:`take` says when a take succeeds.
 
@@ -193,6 +194,8 @@ def _taken(
     if current.fenced_against(token, now):
         raise LocationHeldError(current)
     if current.table == table and uuid is not None:
+        if is_kept(current):
+            raise LocationHeldError(current)
         return _claim(uuid)
     if current.table == table and (token is None or current.token == token):
         return current
@@ -213,6 +216,7 @@ def take(
     previous: str | None = None,
     token: str | None = None,
     uuid: str | None = None,
+    is_kept: Callable[[LocationClaim], bool] = lambda _claim: False,
 ) -> LocationClaim:
     """Make ``table`` the holder of ``location``, and answer the claim it then holds.
 
@@ -228,7 +232,9 @@ def take(
     ``uuid`` is the uuid of a table this take brings into being, minted by its door after its backend call found
     ``table``'s name free. A claim the take writes on an unclaimed location records it, and so does one replacing a
     gone holder's or one ``table``'s own name still holds, which an ended table of that name left unreleased (a crash
-    between its detach and its release): nothing granted to an earlier table at the location reaches this one. A
+    between its detach and its release): nothing granted to an earlier table at the location reaches this one. A claim
+    ``is_kept`` says is kept for a table awaiting its undrop is no ended table's, though its name is free again
+    ([[LH-525]]), and refuses that take. A
     table that already exists names none and keeps the uuid its location carries: a hand-over carries it to the new
     name, a retry keeps the whole claim, and a gone holder's claim was kept for this same table under a name it no
     longer has (a rename interrupted between its hand-over and its deregister).
@@ -242,7 +248,7 @@ def take(
     def _hand_over(raw: dict[str, object]) -> dict[str, object]:
         # Re-judged on every round: `mutate_json` re-applies this to a claim another taker just wrote.
         current = LocationClaim.model_validate(raw)
-        held = _taken(current, location, table, segments, is_gone=is_gone, previous=previous, token=token, uuid=uuid)
+        held = _taken(current, location, table, segments, is_gone=is_gone, previous=previous, token=token, uuid=uuid, is_kept=is_kept)
         return raw if held is current else held.model_dump(mode="json")
 
     for _ in range(_TAKE_ATTEMPTS):
@@ -302,7 +308,7 @@ def hand_over(
     if read_as is None:
         held = LocationClaim(location=decoded_path(location), table=table, segments=list(segments), claimed_at=datetime.now(UTC), token=token)
     else:
-        held = _taken(read_as.claim, location, table, segments, is_gone=is_gone, previous=previous, token=token, uuid=None)
+        held = _taken(read_as.claim, location, table, segments, is_gone=is_gone, previous=previous, token=token, uuid=None, is_kept=lambda _claim: False)
     _write_over(store, location, read_as, held)
     return held
 

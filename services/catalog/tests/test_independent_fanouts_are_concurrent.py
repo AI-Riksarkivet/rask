@@ -33,6 +33,7 @@ from catalog.api.fga_deps import GovernedObject
 from catalog.api.v1.endpoints import namespaces as n_ep
 from catalog.api.v1.endpoints import tables as t_ep
 from catalog.core.config import Settings
+from service_kit.control_events import ControlUuids
 
 
 class _Tracker:
@@ -112,9 +113,10 @@ def test_the_trash_subtree_describes_every_table_concurrently(tmp_path: Path, mo
 
     monkeypatch.setattr(n_ep.native, "call", native_call)
     monkeypatch.setattr(n_ep.trash, "put", lambda *_a, **_kw: None)
-    descendants = [("table", ["bronze", f"t{i}"]) for i in range(8)]
+    descendants = [GovernedObject(kind="table", segments=["bronze", f"t{i}"], uuid=str(uuid4())) for i in range(8)]
+    own = ControlUuids(object_uuid=str(uuid4()))
 
-    asyncio.run(n_ep._trash_subtree(cast("LanceNamespace", object()), _settings(tmp_path), None, ["bronze"], descendants))
+    asyncio.run(n_ep._trash_subtree(cast("LanceNamespace", object()), _settings(tmp_path), None, ["bronze"], descendants, own=own))
 
     assert tracker.total == 8, f"only {tracker.total} describes for 8 descendant tables"
     assert tracker.peak > 1, "the recoverable cascade describes its descendants one at a time"

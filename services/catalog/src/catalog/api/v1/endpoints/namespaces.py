@@ -48,9 +48,11 @@ from catalog.api.dependencies import (
     FgaClientDep,
     LineageEmitterDep,
     NamespaceDep,
+    NamespaceRootDep,
     ObjectUuidsDep,
     ResolverDep,
     SettingsDep,
+    TrashedUuidQuery,
     namespace_for_root,
 )
 from catalog.api.pagination import paginate
@@ -69,11 +71,11 @@ from catalog.core.modes import CreateMode, DropBehavior, DropMode
 from catalog.core.namespace import warn_if_mixed_file_versions
 from catalog.core.store_endpoint import require_estate_store
 from catalog.schemas import ProtectionResponse, SetProtectionRequest, TrashEntry
-from catalog.services import native, table_claims, warehouses
+from catalog.services import native, table_claims, trash_doors, warehouses
 from service_kit.control_emit import emit_control
+from service_kit.control_events import ControlUuids
 from service_kit.governed import fga
 from service_kit.lakehouse import base_registry, location_claims, protection, trash
-from service_kit.lakehouse.naming import uuid_of
 from service_kit.openlineage import DatasetUuids
 
 
@@ -182,13 +184,6 @@ async def create_namespace(
     # Check(can_get_metadata, warehouse:X) errors instead of answering — taking browsing down for the
     # whole bucket, its owners included. Shape rung, so 400, and before the native call.
     fga_deps.require_namespace_depth(segments, delimiter=settings.delimiter)
-    # …and the id must not still belong to a namespace in the trash. F10 item 4 closed this on the TABLE
-    # doors and left both namespace doors open, though the guard already spoke `kind="namespace"`.
-    # The #96 cascade trashes a whole SUBTREE, and `undrop` rebuilds it with `mode="exist_ok"` and then
-    # re-registers the trashed TABLES underneath — so a namespace created at the name in the grace window
-    # would receive the previous owner's data, and its creator would own it through the parent edge.
-    # Conflict rung (409), after authz, before the native write.
-    await fga_deps.require_no_live_trash(settings, segments, kind="namespace")
     req = body or CreateNamespaceRequest()
     req.id = reconcile_body_id(segments, req.id)
     # [[LH-519]] A uuid for the namespace this request creates (ADR 0173 §2, §6). An ExistOk that keeps one answers
@@ -530,7 +525,9 @@ def describe_namespace(id: str, ns: NamespaceDep, settings: SettingsDep, body: D
     return native.call(ns, "describe_namespace", req)
 
 
-async def _trash_subtree(ns: LanceNamespace, settings: Settings, token: Caller | None, segments: list[str], descendants: list[tuple[str, list[str]]]) -> None:
+async def _trash_subtree(
+    ns: LanceNamespace, settings: Settings, token: Caller | None, segments: list[str], descendants: list[fga_deps.GovernedObject], *, own: ControlUuids
+) -> None:
     """DETACH the subtree instead of destroying it — the recoverable half of a cascade (#96).
 
     A trash record pointing at bytes the native cascade already deleted would be a LIE: undrop
@@ -545,12 +542,28 @@ async def _trash_subtree(ns: LanceNamespace, settings: Settings, token: Caller |
     Not atomic, deliberately: a mid-loop failure leaves every already-detached child RECOVERABLE
     (its record is filed and its parent namespace still exists), which is strictly safer than the
     all-or-nothing native destroy it replaces.
+
+    Each record is filed under its object's uuid, names its parent namespace's uuid, and carries the uuid of the
+    namespace the cascade dropped (``cascade``), so the namespace undrop restores exactly this cascade's records, never
+    another object dropped under one of their names ([[LH-525]]). ``descendants`` and ``own`` are what the door read
+    while the subtree stood.
+
+    Raises:
+        InternalError: The dropped namespace keeps no uuid, which no door leaves.
     """
     so = settings.storage_options()
     dropped_by = f"user:{token.subject}" if token is not None else None
-    tables = [child for resource, child in descendants if resource == "table"]
+    if own.object_uuid is None:
+        raise InternalError(f"namespace {fga.canonical_object_id(segments, delimiter=settings.delimiter)!r} keeps no uuid, so its trash cannot be filed")
+    cascade = own.object_uuid
+    uuid_at = {tuple(item.segments): item.uuid for item in descendants} | {tuple(segments): cascade}
+
+    def parent_of(child: list[str]) -> str | None:
+        return uuid_at.get(tuple(child[:-1]), own.namespace_uuid)
+
+    tables = [item.segments for item in descendants if item.kind == "table"]
     # Deepest-first, so every namespace is empty by the time its own drop runs.
-    child_namespaces = sorted((child for resource, child in descendants if resource == "namespace"), key=len, reverse=True)
+    child_namespaces = sorted((item.segments for item in descendants if item.kind == "namespace"), key=len, reverse=True)
     # THE DESCRIBES FIRST, CONCURRENTLY (catalog-api-11): they are independent reads whose results are
     # only collected, and a subtree of N tables paid N sequential round trips before a single record
     # was filed. The WRITE pair below stays sequential and in order per child — see the ordering note.
@@ -562,9 +575,12 @@ async def _trash_subtree(ns: LanceNamespace, settings: Settings, token: Caller |
         # warning — there were no bytes to lose, only a declaration the caller can redo.
         record = trash.make_record(
             fga.canonical_object_id(child, delimiter=settings.delimiter),
+            uuid=uuid_at[tuple(child)],
             location=described.location or "",
             dropped_by=dropped_by,
             grace_days=settings.trash_grace_days,
+            namespace_uuid=parent_of(child),
+            cascade=cascade,
         )
         # ORDER SPLIT ON WHETHER THE RECORD OWNS BYTES (diff2 F6 leg a), matching the single-table
         # door. A byte-owning record goes FIRST: a crash between the deregister and the write used to
@@ -598,10 +614,13 @@ async def _trash_subtree(ns: LanceNamespace, settings: Settings, token: Caller |
         await run_in_threadpool(native.call, ns, "drop_namespace", DropNamespaceRequest(id=child))
         record = trash.make_record(
             fga.canonical_object_id(child, delimiter=settings.delimiter),
+            uuid=uuid_at[tuple(child)],
             location="",
             dropped_by=dropped_by,
             grace_days=settings.trash_grace_days,
             kind="namespace",
+            namespace_uuid=parent_of(child),
+            cascade=cascade,
             # Only the ROOT carries it — `child is segments` is identity on the same list object, and
             # the root is the last iteration by construction.
             binding=binding if child is segments else None,
@@ -755,9 +774,8 @@ async def _skip_absent_namespace(settings: Settings, client: OpenFgaClient | Non
     idempotent, and on an id that never existed each one finds nothing. The namespace's records and grants are
     keyed by a uuid nothing here can read any more, and they govern no other namespace.
 
-    Not after a RECOVERABLE drop. A live namespace trash record means the grants and the binding are kept
-    on purpose (the owner needs them to undrop, #96), and the create door refuses the id until the trash
-    is purged, so nothing can inherit them meanwhile.
+    Not while the trash holds a namespace dropped under the name: its binding moved onto its record for the undrop (#96),
+    and its grants are held by its uuid, so a namespace created at the name meanwhile inherits nothing ([[LH-525]]).
 
     The answer is 200 with a DropNamespaceResponse body, not the 204 the mode's prose names: spec.yaml's
     DropNamespace operation declares only 200, and pylance 12.0.0's RestNamespace refuses a 204 ("Failed
@@ -765,7 +783,7 @@ async def _skip_absent_namespace(settings: Settings, client: OpenFgaClient | Non
     so nothing is announced on the control stream.
     """
     canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
-    if await run_in_threadpool(trash.get, settings.registry_root, settings.storage_options(), canonical, kind="namespace") is None:
+    if not await run_in_threadpool(trash.named, settings.registry_root, settings.storage_options(), canonical, kind="namespace"):
         await _forget_namespace(settings, client, token, segments, namespace_uuid=None, unbind=True)
     return DropNamespaceResponse()
 
@@ -861,7 +879,9 @@ async def drop_namespace(
     # trash record cannot coexist. `purge=true` is the explicit destroy-now, as at the table door.
     recoverable = cascade and settings.trash_grace_days > 0 and not purge
     if recoverable:
-        await _trash_subtree(ns, settings, token, segments, [(item.kind, item.segments) for item in descendants])
+        # The cascade's records are keyed by the uuid the door identified the namespace by, not the best-effort read its
+        # announcements name it by, which answers ``None`` on a failed describe.
+        await _trash_subtree(ns, settings, token, segments, descendants, own=ControlUuids(object_uuid=dropped.uuid, namespace_uuid=own.namespace_uuid))
         response = DropNamespaceResponse()
     elif cascade:
         # The dir backend cannot cascade (#117) — we enumerate and destroy bottom-up ourselves, announcing each table as
@@ -954,15 +974,15 @@ async def drop_namespace(
 async def namespace_tasks(
     id: str,
     settings: SettingsDep,
+    resolver: ResolverDep,
+    uuid: TrashedUuidQuery = None,
 ) -> list[TrashEntry]:
     """What is queued for THIS namespace — a pending trash expiry after a recoverable cascade (#96).
     Same contract as the table door: an undrop deadline the owner cannot see is not a safety
-    feature. Reader-gated by the router (``tasks`` is a metadata read)."""
-    canonical = fga.canonical_object_id(parse_identifier(id, settings.delimiter), delimiter=settings.delimiter)
-    record = await run_in_threadpool(trash.get, settings.registry_root, settings.storage_options(), canonical, kind="namespace")
-    if record is None:
-        return []
-    return [TrashEntry(**{k: str(record.get(k, "")) for k in ("id", "location", "dropped_by", "dropped_at", "expires_at")})]
+    feature. Reader-gated by the router (``tasks`` is a metadata read). One entry per dropped
+    namespace that held the name and that the caller may see, each with its uuid ([[LH-525]])."""
+    records = await resolver.admitted_trash("namespace", parse_identifier(id, settings.delimiter))
+    return [TrashEntry(**{k: str(record.get(k, "")) for k in ("id", "uuid", "location", "dropped_by", "dropped_at", "expires_at")}) for record in records]
 
 
 @management_router.post("/{id}/undrop", response_model_exclude_none=True)
@@ -970,12 +990,15 @@ async def undrop_namespace(
     id: str,
     request: Request,
     ns: NamespaceDep,
+    root: NamespaceRootDep,
     settings: SettingsDep,
     token: CurrentToken,
     control: ControlEmitterDep,
     emitter: LineageEmitterDep,
     uuids: ObjectUuidsDep,
+    resolver: ResolverDep,
     authorization: Annotated[str | None, Header()] = None,
+    uuid: TrashedUuidQuery = None,
 ) -> CreateNamespaceResponse:
     """Recover a cascade-dropped SUBTREE from the trash (#96) — the plural undrop.
 
@@ -989,13 +1012,28 @@ async def undrop_namespace(
     409-ing on what the first attempt already rebuilt. 404 when there is no trash record: an expired
     or never-trashed drop is genuinely unrecoverable, and saying so beats a 200 that recovers
     nothing. A declared-only table (empty recorded location) is skipped with a warning — there were
-    no bytes to lose."""
+    no bytes to lose.
+
+    THE UNDROP RESTORES ONE CASCADE ([[LH-525]], ADR 0173 §9). A name is free once its namespace is dropped, so the door
+    restores the namespace its caller names (``?uuid=`` when several held the name, 409 listing each one's uuid and
+    deadline otherwise) and what the cascade that dropped it filed under it, each object under its own uuid. While
+    another namespace holds the name, or the parent's name is held by a namespace other than the one it was dropped
+    from, it answers 409."""
     segments = parse_identifier(id, settings.delimiter)
     canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
     so = settings.storage_options()
-    record = await run_in_threadpool(trash.get, settings.registry_root, so, canonical, kind="namespace")
-    if record is None:
+    trashed = await resolver.admitted_trash("namespace", segments)
+    if not trashed:
         raise NamespaceNotFoundError(f"no recoverable drop for namespace: {canonical}. The grace period may have expired, or the drop purged its subtree.")
+    record = trash_doors.the_one_to_restore(trashed, kind="namespace", name=canonical)
+    root_uuid = trash.object_uuid(record)
+    if root_uuid is None:
+        raise InternalError(f"the trash record of namespace {canonical!r} keeps no uuid, so its grants cannot be found")
+    standing = await resolver.namespace_uuid(segments)
+    if standing is not None and standing != root_uuid:
+        raise NamespaceAlreadyExistsError(f"cannot undrop namespace {canonical!r}: another namespace holds the name now; drop it first")
+    if len(segments) > 1:
+        trash_doors.require_its_own_parent(record, standing=await resolver.namespace_uuid(segments[:-1]), name=canonical)
     # RE-BIND FIRST, and re-resolve the connection from the restored root (diff2 F6 leg c).
     #
     # The drop unbound this top-level namespace, so `NamespaceDep` — which resolves BEFORE this
@@ -1046,15 +1084,15 @@ async def undrop_namespace(
             str(bound["root_uri"]),
         )
         ns = await namespace_for_root(request, settings, str(bound["root_uri"]), endpoint=warehouse.get("endpoint") or None)
+        root = str(bound["root_uri"])
     everything = await run_in_threadpool(trash.list_all, settings.registry_root, so)
-    prefix = canonical + settings.delimiter
-    subtree = [r for r in everything if str(r.get("id")) == canonical or str(r.get("id", "")).startswith(prefix)]
+    # The records the cascade that dropped this namespace filed, at its name and under it: undropping a namespace that
+    # cascade dropped below its own root restores that branch of it, once its parent stands again.
+    cascade, prefix = record.get("cascade"), canonical + settings.delimiter
+    subtree = [r for r in everything if r.get("cascade") == cascade and (r.get("id") == canonical or str(r.get("id") or "").startswith(prefix))]
     # Shallowest first — a parent manifest row must exist before its children's create/register.
     namespace_records = sorted((r for r in subtree if r.get("kind") == "namespace"), key=lambda r: str(r["id"]).count(settings.delimiter))
     table_records = [r for r in subtree if r.get("kind") == "table"]
-    root_uuid = next((uuid_of(r.get("properties")) for r in namespace_records if str(r["id"]) == canonical), None)
-    if namespace_records and root_uuid is None:
-        raise InternalError(f"the trash record of namespace {canonical!r} keeps no uuid, so its grants cannot be found")
     response = CreateNamespaceResponse()
     for n_rec in namespace_records:
         n_id = str(n_rec["id"])
@@ -1073,23 +1111,25 @@ async def undrop_namespace(
         if n_id == canonical:
             response = created
         # Clear only AFTER the create commits — a failed rebuild must leave the subtree recoverable.
-        await run_in_threadpool(trash.clear, settings.registry_root, so, n_id, kind="namespace")
+        await run_in_threadpool(trash.clear, settings.registry_root, so, str(n_rec["uuid"]), kind="namespace")
     skipped = 0
     for t_rec in table_records:
         t_id = str(t_rec["id"])
         location = str(t_rec.get("location") or "")
         if location:
-            # The RELATIVE form register_table accepts — the same #75 lesson as the table undrop:
-            # the dir backend refuses the absolute URI the record carries for the operator's sake.
+            # The RELATIVE key register_table accepts, the one the record's URL decodes to under the root, as at the
+            # table undrop ([[LH-517]]).
             t_segments = parse_identifier(t_id, settings.delimiter)
-            body = RegisterTableRequest(id=t_segments, location=location.rstrip("/").rsplit("/", 1)[-1])
+            body = RegisterTableRequest(id=t_segments, location=trash_doors.relative_location(location, root=root))
             # The cascade kept each location's claim for its trashed id; another holder means another
             # table now resolves to these bytes, as at the table door ([[LH-204]]).
             try:
-                await run_in_threadpool(table_claims.take, ns, table_claims.claim_store(settings), location, t_id, t_segments)
+                kept = await run_in_threadpool(table_claims.take, ns, table_claims.claim_store(settings), location, t_id, t_segments)
             except location_claims.LocationHeldError as held:
                 log.warning("undrop_refused_held_location", extra={"table": t_id, "location": held.claim.location, "holder": held.claim.table})
                 raise InvalidTableStateError(f"cannot undrop table {t_id}: its location is now held by another table") from None
+            if kept.uuid != t_rec.get("uuid"):
+                raise InternalError(f"the claim on {t_id}'s location records another uuid than its trash record, so its grants cannot be found")
             try:
                 await run_in_threadpool(native.call, ns, "register_table", body)
             except TableAlreadyExistsError:
@@ -1115,7 +1155,7 @@ async def undrop_namespace(
         else:
             skipped += 1
             log.warning("undrop_skipped_declared_only_table", extra={"table": t_id})
-        await run_in_threadpool(trash.clear, settings.registry_root, so, t_id)
+        await run_in_threadpool(trash.clear, settings.registry_root, so, str(t_rec["uuid"]))
     # NO SEED — undrop is a PURE RESTORE (owner ruling, diff2 F10 item 4b), on this door for the same
     # reason as the table door.
     #
@@ -1129,19 +1169,15 @@ async def undrop_namespace(
     # `drop_namespace` would destroy the cascade the user just recovered in order to repair one tuple.
     # That was the right call given a seed had to happen at all — and with no seed, the door has no
     # uncompensatable step left.
-    # The namespace the subtree was restored into: the root's own trash record names its uuid, and a root that was
-    # never trashed (only its children were) is the one standing at the name.
-    restored = root_uuid or (await uuids.namespace(segments)).object_uuid
-    if restored is not None:
-        await emit_control(
-            control,
-            action="namespace_undropped",
-            object_type="namespace",
-            object_id=fga.namespace_object(restored),
-            object_name=canonical,
-            actor=f"user:{token.subject}" if token is not None else None,
-            extra={"namespaces": len(namespace_records), "tables": len(table_records) - skipped, "declared_only_skipped": skipped},
-        )
+    await emit_control(
+        control,
+        action="namespace_undropped",
+        object_type="namespace",
+        object_id=fga.namespace_object(root_uuid),
+        object_name=canonical,
+        actor=f"user:{token.subject}" if token is not None else None,
+        extra={"namespaces": len(namespace_records), "tables": len(table_records) - skipped, "declared_only_skipped": skipped},
+    )
     return response
 
 

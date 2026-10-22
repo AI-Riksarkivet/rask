@@ -12,6 +12,7 @@ Driven over a real local control root with the trash and binding records the doo
 from __future__ import annotations
 
 from pathlib import Path
+from uuid import uuid4
 
 from catalog.services import warehouses
 from service_kit.lakehouse import trash
@@ -19,7 +20,7 @@ from service_kit.lakehouse import trash
 
 def _trash(control: str, canonical_id: str, location: str = "", *, kind: str = "table", warehouse: str | None = None) -> None:
     binding = {"warehouse_id": warehouse, "root_uri": "s3://acme-bkt"} if warehouse else None
-    trash.put(control, {}, trash.make_record(canonical_id, location=location, dropped_by="tester", grace_days=7, kind=kind, binding=binding))
+    trash.put(control, {}, trash.make_record(canonical_id, uuid=str(uuid4()), location=location, dropped_by="tester", grace_days=7, kind=kind, binding=binding))
 
 
 def test_the_trash_a_warehouse_ends_is_its_own_and_each_child_comes_before_its_parent(tmp_path: Path) -> None:

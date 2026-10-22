@@ -218,7 +218,7 @@ async def on_reconcile_cron(settings: SettingsDep, client: FgaClientDep, control
         # gate is the drift report as MEASURED and a record cleared here was never purgeable anyway —
         # its root is one no purge tick can reach.
         def _clear(record: Tombstone) -> None:
-            trash.clear(settings.resolved_control_root, settings.storage_options(), record.id, kind=record.kind)
+            trash.clear(settings.resolved_control_root, settings.storage_options(), record.uuid, kind=record.kind)
 
         probe = partial(objects_held, storage_options=settings.storage_options())
         swept = await run_in_threadpool(sweep_tombstones, settings, report=report, probe=probe, delete=_clear)

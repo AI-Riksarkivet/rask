@@ -214,8 +214,7 @@ def holder_is_gone(ns: LanceNamespace, store: ClaimStore, claim: LocationClaim) 
     location.
     """
     try:
-        record = trash.get(store.control_root, store.storage_options, claim.table)
-        if record is not None and decoded_path(str(record.get("location") or "")) == claim.location:
+        if kept_in_trash(store, claim):
             return False
         try:
             described = native.call(ns, "describe_table", DescribeTableRequest(id=claim.segments))
@@ -231,11 +230,12 @@ def data_directory_holder_is_gone(ns: LanceNamespace, store: ClaimStore, claim: 
     """Whether a data directory's holder no longer exists ([[LH-252]]).
 
     Unlike a table location, a data directory is never the holder's described location, so the holder
-    is judged by existence alone: a table the namespace still describes, or one in the trash awaiting
-    undrop, keeps its directory. Any read that fails answers "not gone", so an outage never frees one.
+    is judged by existence alone: a table the namespace still describes, or one the trash holds under its name awaiting
+    undrop (a data directory's claim records no uuid), keeps its directory. Any read that fails answers "not gone", so
+    an outage never frees one.
     """
     try:
-        if trash.get(store.control_root, store.storage_options, claim.table) is not None:
+        if trash.named(store.control_root, store.storage_options, claim.table):
             return False
         try:
             native.call(ns, "describe_table", DescribeTableRequest(id=claim.segments))
@@ -245,6 +245,12 @@ def data_directory_holder_is_gone(ns: LanceNamespace, store: ClaimStore, claim: 
     except Exception as exc:  # noqa: BLE001 — an unreadable holder is a live one
         log.warning("data_directory_holder_unreadable", extra={"table": claim.table, "location": claim.location, "error": str(exc)[:300]})
         return False
+
+
+def kept_in_trash(store: ClaimStore, claim: LocationClaim) -> bool:
+    """Whether ``claim`` is kept for the trashed table its uuid names, which a recoverable drop left at this location."""
+    record = trash.get(store.control_root, store.storage_options, claim.uuid) if claim.uuid is not None else None
+    return record is not None and decoded_path(str(record.get("location") or "")) == claim.location
 
 
 def take(
@@ -267,14 +273,17 @@ def claim_new_table(ns: LanceNamespace, store: ClaimStore, location: str, *, tab
     ``table_uuid`` is the uuid a declaration minted, because the location it declares is named after it
     ([[LH-520]]); a registration's location is its registrar's, so its uuid is minted here. A claim the location
     still holds under ``table``'s name is an ended table's, since the door brings a table of that name into being:
-    it is replaced, as a released claim and a gone holder's are. A table attached where an earlier one was
+    it is replaced, as a released claim and a gone holder's are, unless the trash keeps it for that table's undrop: its
+    name is free again, its location is not ([[LH-525]]). A table attached where an earlier one was
     destroyed, deregistered or is gone is given a new uuid, and nothing granted to the earlier table reaches it.
 
     Raises:
         LocationHeldError: Another table holds the location.
     """
     minted = table_uuid or str(uuid4())
-    return location_claims.take(store, location, table, segments, uuid=minted, is_gone=lambda claim: holder_is_gone(ns, store, claim))
+    return location_claims.take(
+        store, location, table, segments, uuid=minted, is_gone=lambda claim: holder_is_gone(ns, store, claim), is_kept=lambda claim: kept_in_trash(store, claim)
+    )
 
 
 def keep_for_trash(ns: LanceNamespace, store: ClaimStore, location: str, table: str, segments: list[str]) -> None:
