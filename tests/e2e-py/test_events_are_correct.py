@@ -229,7 +229,7 @@ def forgeries(captured: Captured, byo_tenant: Tenant, byo_run: ScenarioRun) -> F
         for message in captured.lineage
         if _tables_of(message.event) == {byo_run.silver_table} and _facets(message.event).get("lance", {}).get("operation") == "insert"
     ]
-    grant = _grant_messages(captured, pipeline).get(f"namespace:{byo_tenant.bronze}")
+    grant = _grant_messages(captured, pipeline).get(byo_tenant.bronze)
     assert insert and grant, "the capture holds no silver insert or no grant to the pipeline to forge"
 
     forged_run = str(uuid.uuid4())
