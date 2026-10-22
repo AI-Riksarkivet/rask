@@ -13,11 +13,17 @@ excluded from the root type-check.
 from __future__ import annotations
 
 import asyncio
+import hmac
 import os
-from typing import Any
+import threading
+from typing import TYPE_CHECKING, Any
 
 import worker
 from ray import serve
+
+
+if TYPE_CHECKING:
+    from starlette.responses import JSONResponse
 
 
 # The estate's standard sizing knobs (open_ray-kernel.md move 3): the NAMES are uniform across
@@ -31,10 +37,9 @@ SERVE_GPU_FRAC = float(os.environ.get("RASK_SERVE_GPU_FRAC", "0"))
 class TopicsDeployment:
     """Build Swedish topic layers on a Lance DB's chunks (Toponymy).
 
-    The request carries the DB path (S3/local URI) + the optional LLM endpoint;
-    the deployment runs the same compute as the sealed CLI worker and returns the
-    row count. Heavy imports (toponymy) stay lazy inside :func:`worker.main` so
-    replica start-up is cheap.
+    The database and optional LLM endpoint come from deployment configuration,
+    never from the request. Heavy imports (toponymy) stay lazy inside
+    :func:`worker.main` so replica start-up is cheap.
     """
 
     def __init__(self) -> None:
@@ -42,9 +47,18 @@ class TopicsDeployment:
         # blocked event loop could not start a second request — and the build writes
         # the whole chunks table, so two of them against one DB would fight. Now that
         # the loop is free, the serialisation has to be deliberate.
-        self._building = asyncio.Lock()
+        self._building = threading.Lock()
+        self._serve_token = os.environ.get("MEDIA_TOPICS_SERVE_TOKEN", "")
+        self._db_path = os.environ.get("MEDIA_TOPICS_DB_PATH", "")
+        self._llm_url = os.environ.get("MEDIA_TOPICS_LLM_URL", "").strip() or None
 
-    async def __call__(self, request: Any) -> dict[str, int]:
+    def _is_authorized(self, authorization: str | None) -> bool:
+        if not self._serve_token or not self._serve_token.strip():
+            return False
+        parts = (authorization or "").split()
+        return len(parts) == 2 and parts[0].casefold() == "bearer" and hmac.compare_digest(self._serve_token.encode("utf-8"), parts[1].encode("utf-8"))
+
+    async def __call__(self, request: Any) -> dict[str, int] | JSONResponse:
         """Build the topic layers off the event loop.
 
         `worker.run` is the entire Toponymy build — embedding plus LLM topic-naming
@@ -54,10 +68,31 @@ class TopicsDeployment:
         That is the failure `runners/htr/scripts/deploy_htr.py` already records:
         "event loop unresponsive -> Serve killed every replica -> restart storm".
         """
-        body = await request.json()
-        async with self._building:
-            rows = await asyncio.to_thread(worker.run, db_path=body["db"], llm_url=body.get("llm_url"))
+        from starlette.responses import JSONResponse
+
+        if not self._serve_token or not self._serve_token.strip():
+            return JSONResponse({"detail": "topics Serve authentication is not configured"}, status_code=503)
+        if not self._is_authorized(request.headers.get("authorization")):
+            return JSONResponse(
+                {"detail": "bearer authentication required"},
+                status_code=401,
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        if not self._db_path or not self._db_path.strip():
+            return JSONResponse({"detail": "topics database is not configured"}, status_code=503)
+        try:
+            body = await request.json()
+        except (TypeError, ValueError):
+            return JSONResponse({"detail": "request body must be an empty JSON object"}, status_code=400)
+        if not isinstance(body, dict) or body:
+            return JSONResponse({"detail": "request body must be an empty JSON object"}, status_code=400)
+
+        rows = await asyncio.to_thread(self._run_build)
         return {"rows": rows}
+
+    def _run_build(self) -> int:
+        with self._building:
+            return worker.run(db_path=self._db_path, llm_url=self._llm_url)
 
 
 app = TopicsDeployment.bind()
