@@ -46,6 +46,8 @@ class RelationGrants(BaseModel):
 
 class AccessListResponse(BaseModel):
     object: str
+    #: The table's or namespace's name beside ``object``, which names its uuid ([[LH-524]]); ``None`` for any other object.
+    name: str | None = None
     grants: list[RelationGrants]
     #: True when ANY relation above was truncated — a roll-up so a caller can spot an incomplete review
     #: without walking the list. The per-relation flags say WHICH.
@@ -66,6 +68,8 @@ class ManagedAccessResponse(BaseModel):
     """
 
     object: str
+    #: The table's or namespace's name beside ``object``, which names its uuid ([[LH-524]]); ``None`` for any other object.
+    name: str | None = None
     managed_access: bool
 
 
@@ -82,6 +86,8 @@ class MyPermissionsResponse(BaseModel):
     """
 
     object: str
+    #: The table's or namespace's name beside ``object``, which names its uuid ([[LH-524]]); ``None`` for any other object.
+    name: str | None = None
     subject: str
     permissions: dict[str, bool]
 
@@ -97,6 +103,8 @@ class AccessCheckRequest(BaseModel):
 
 class AccessCheckResponse(BaseModel):
     object: str
+    #: The table's or namespace's name beside ``object``, which names its uuid ([[LH-524]]); ``None`` for any other object.
+    name: str | None = None
     user: str
     relation: str
     allowed: bool
@@ -114,6 +122,8 @@ class AccessGrantRequest(BaseModel):
 
 class AccessGrantResponse(BaseModel):
     object: str
+    #: The table's or namespace's name beside ``object``, which names its uuid ([[LH-524]]); ``None`` for any other object.
+    name: str | None = None
     user: str
     relation: str
     granted: bool  # True after a grant, False after a revoke — the resulting state of the tuple
@@ -362,6 +372,8 @@ class GraphEdge(BaseModel):
 
 class AccessGraphResponse(BaseModel):
     object: str
+    #: The table's or namespace's name beside ``object``, which names its uuid ([[LH-524]]); ``None`` for any other object.
+    name: str | None = None
     nodes: list[GraphNode]
     edges: list[GraphEdge]
 
@@ -651,10 +663,6 @@ class ModelsListResponse(BaseModel):
     #: which is the half that was missing: the route sliced at `limit` and said nothing, so a caller
     #: could not tell a short estate from a cut one.
     page_token: str | None = None
-    #: True when the caller's authorization listing hit OpenFGA's server cap, so this page was filtered
-    #: against an INCOMPLETE set of entitlements and may be short. A first-party model, so the flag is a
-    #: real field here; the spec-shaped listings carry the same key in their `context` map instead.
-    authorization_truncated: bool = False
 
 
 # --------------------------------------------------------------------------- #
@@ -1057,8 +1065,6 @@ class EstateBindingsResponse(BaseModel):
     bindings: dict[str, str]
     """``{namespace: warehouse_id}`` — a mapping rather than a list, because every caller so far
     wants to know WHICH warehouse a namespace lives in, and a list would make them re-derive it."""
-
-    authorization_truncated: bool = False
 
 
 class UnbindWarehouseNamespaceResponse(BaseModel):

@@ -73,9 +73,23 @@ Two contracts stack here, and confusing them is how bugs happen:
   an ended table's whose release was lost. A namespace's is its `rask.uuid` property in its `__manifest` row: both create doors and the provenance boot
   mint it (`identifiers.with_minted_uuid`), an undrop restores it from the trash record, and an Overwrite mints a new
   one. DescribeTable and DescribeNamespace answer each as `rask.uuid`, and every create, declare, register and namespace
-  door refuses a caller's `rask.*` property (only an admin's `rask.tier` on a namespace). Grants and the trash are still
-  keyed by name (LH-524 and LH-525 move them). Pinned by
+  door refuses a caller's `rask.*` property (only an admin's `rask.tier` on a namespace). The trash is still keyed by
+  name (LH-525 moves it). Pinned by
   `tests/integration/test_the_door_that_makes_a_table_or_namespace_mints_its_uuid.py`.
+- **Every grant is held by the object's uuid** ([[LH-524]], ADR 0173 §8): OpenFGA objects are `table:<uuid>` and
+  `namespace:<uuid>` (`fga.table_object`, `fga.namespace_object`), the parent and child edges join uuids, and a
+  top-level namespace's parent is its warehouse. Every door stays addressed by name and resolves it ONCE per request
+  (`catalog.api.dependencies.Resolver`, `ResolverDep`, which `authorize`, the tier judge and `ResolvedTableDep` share),
+  so a door acts on the table it authorized. An absent name is refused 403, audited and refused by the name, and only a
+  READ door converts it to 404 for a caller holding the parent's `can_get_metadata`. A rename writes no tuple, except
+  that a rename into another namespace moves the parent edge (`fga_deps.move_parent_edge`); a table created again
+  under a dropped name is another uuid and inherits nothing; a name holding a space never reaches OpenFGA. Every
+  listing batch-checks its own candidates on their uuids and fills its page (`fga_deps.authorized_page`, [[LH-223]]);
+  only `/management/v1/me` calls `list_objects`, and the estate admin's raw ListObjects explorer. Grant, review and
+  access answers carry `object` (the uuid object) and `name`; a control event's `object_id` is the uuid object with
+  `object_name` beside it. A registry model (`table:models$<name>`) is no lance-namespace table and keeps its name.
+  Pinned by `services/catalog/tests/test_a_grant_is_held_by_the_objects_uuid.py` and
+  `services/catalog/tests/test_a_listing_judges_its_own_candidates.py`.
 - **A table the catalog makes lives at `<namespace root>/<table uuid>`** ([[LH-520]], ADR 0173 §5). Create and declare
   run the `dir` catalog's own DeclareTable steps with the catalog choosing the location (`dataplane.declare_table`): mint
   the uuid and take the location's claim before any backend call, write `.lance-reserved` there, then record the row
@@ -298,8 +312,8 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   promotion hold, maintenance's due record, an erasure obligation and its release (each naming `uuid`/`table_uuid`),
   and the cadence and debounce stamps. A door resolves the uuid from the name it is addressed by
   (`ResolvedTable.require_uuid`, `fga_deps.identify`) and refuses `InternalError` for an object that records none,
-  never reading it as unprotected. A rename moves no record, only the grants (`fga_deps.move_ownership`, until LH-524)
-  and its data directories' claims; a table created later under a dropped name holds a new uuid and inherits nothing,
+  never reading it as unprotected. A rename moves no record and no grant, only its data directories' claims (and, into
+  another namespace, its parent edge); a table created later under a dropped name holds a new uuid and inherits nothing,
   even where an ending was lost. Every door that ends an object (drop, deregister, a cascade, the trash purge) ends that
   list through `object_records.end_object_records`, under the uuids it read before the object went. The hold, due,
   erasure and project-policy listings name each table as it is named now (`table_claims.names_now`: its location's

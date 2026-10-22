@@ -15,6 +15,7 @@ from datetime import UTC, datetime
 from catalog.core.lineage_emit import build_write_event
 from catalog.core.run_context import RunContext
 from notifications.api.lineage_events import LineageRunEvent, notifiable
+from service_kit.openlineage import DatasetUuids
 
 
 def test_a_catalog_writes_notification_carries_the_run_its_writer_named() -> None:
@@ -29,6 +30,9 @@ def test_a_catalog_writes_notification_carries_the_run_its_writer_named() -> Non
         job_namespace="rask",
         run=RunContext(run_id="pipeline-run-42"),
         project="lh470",
+        # Every catalog write names its table by the uuid the catalog minted (ADR 0173 §10), the object a notification
+        # is checked on ([[LH-524]]).
+        uuids=DatasetUuids(table_uuid="5b6c7d8e-9f0a-4b1c-8d2e-3f4a5b6c7d8e"),
     )
 
     notice = notifiable(LineageRunEvent.model_validate(event))

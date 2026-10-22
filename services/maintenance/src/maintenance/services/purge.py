@@ -618,8 +618,9 @@ def delete_location(location: str, storage_options: StorageOptions, *, protected
     return sum(int(info.size or 0) for info in files), len(files)
 
 
-async def _revoke(fga_client: Any, *, kind: str, obj_id: str, fga_enabled: bool) -> int:  # noqa: ANN401 — OpenFgaClient, no protocol
-    """Revoke every tuple on the object, returning the count. ``0`` when FGA is off estate-wide.
+async def _revoke(fga_client: Any, *, kind: str, uuid: str, fga_enabled: bool) -> int:  # noqa: ANN401 — OpenFgaClient, no protocol
+    """Revoke every tuple on the object its uuid names (``table:<uuid>``, ``namespace:<uuid>``, [[LH-524]]), returning
+    the count. ``0`` when FGA is off estate-wide.
 
     ``lifecycle_delete`` is the origin an audit row needs to say this was a retirement rather than an
     admin's choice. With FGA disabled there are no tuples to revoke and skipping is correct — the
@@ -627,9 +628,18 @@ async def _revoke(fga_client: Any, *, kind: str, obj_id: str, fga_enabled: bool)
     """
     if not fga_enabled:
         return 0
+    obj = fga.object_of(kind, uuid)
     # `len(...)`: the helper hands back WHICH tuples it revoked so a caller can name the affected
     # principals; this one only reports a count in its sweep summary.
-    return len(await fga.revoke_object_tuples(fga_client, f"{kind}:{obj_id}", actor=ACTOR, origin="lifecycle_delete"))  # noqa: TID251
+    return len(await fga.revoke_object_tuples(fga_client, obj, actor=ACTOR, origin="lifecycle_delete"))  # noqa: TID251
+
+
+async def _refuse_unidentified(out: TrashPurgeReport, *, kind: str, obj_id: str, control_root: str, storage_options: StorageOptions, dry_run: bool) -> None:
+    """Refuse a purge whose object's uuid cannot be read: its grants are held by that uuid ([[LH-524]]), so they could not
+    be found, and grants must never outlive the bytes."""
+    reason = "the object's uuid could not be read, so its grants cannot be found — grants must never outlive the bytes, so nothing was deleted"
+    await _refuse(out, kind=kind, obj_id=obj_id, reason=reason, control_root=control_root, storage_options=storage_options, dry_run=dry_run)
+    log.error("trash_purge_uuid_unread", extra={"kind": kind, "id": obj_id})
 
 
 #: The control-plane vocabulary for a purge — its OWN verbs since diff2 F10 item 6.
@@ -878,8 +888,11 @@ async def _purge_one(
         partial(_purged_uuids, record, live=live, control_root=control_root, storage_options=storage_options, delimiter=settings.delimiter)
     )
 
+    if uuids.object_uuid is None and settings.fga_enabled:
+        await _refuse_unidentified(out, kind=kind, obj_id=obj_id, control_root=control_root, storage_options=storage_options, dry_run=dry_run)
+        return
     try:
-        revoked = await _revoke(fga_client, kind=kind, obj_id=obj_id, fga_enabled=settings.fga_enabled)
+        revoked = await _revoke(fga_client, kind=kind, uuid=uuids.object_uuid or "", fga_enabled=settings.fga_enabled)
     except Exception as exc:  # noqa: BLE001 — a revoke we could not perform is a reason not to delete
         reason = f"the FGA revoke failed ({type(exc).__name__}: {exc}) — grants must never outlive the bytes, so nothing was deleted"
         await _refuse(out, kind=kind, obj_id=obj_id, reason=reason, control_root=control_root, storage_options=storage_options, dry_run=dry_run)
@@ -925,7 +938,8 @@ async def _purge_one(
         control,
         action=_PURGE_ACTION.get(kind, "table_purged"),
         object_type=object_type,
-        object_id=f"{kind}:{obj_id}",
+        object_id=f"{kind}:{uuids.object_uuid or obj_id}",
+        object_name=obj_id,
         object_uuid=uuids.object_uuid,
         namespace_uuid=uuids.namespace_uuid,
         actor=ACTOR,

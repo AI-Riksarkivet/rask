@@ -100,7 +100,8 @@ def render(pointer: InboxPointer) -> tuple[str, str]:
     the run id are both already in the row the subject may see.
     """
     state = pointer.notification_id.rsplit("@", 1)[-1].upper() if "@" in pointer.notification_id else ""
-    headline = f"{pointer.object_id} — {state.title()}" if state else pointer.object_id
+    shown = pointer.object_name or pointer.object_id
+    headline = f"{shown} — {state.title()}" if state else shown
     lines = [headline, ""]
     if pointer.source_run_id:
         lines.append(f"Run: {pointer.source_run_id}")

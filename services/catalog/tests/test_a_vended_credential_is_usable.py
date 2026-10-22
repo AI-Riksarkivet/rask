@@ -44,8 +44,10 @@ from catalog.api.dependencies import get_namespace, get_settings
 from catalog.api.v1.endpoints import tables
 from catalog.core.config import Settings
 from catalog.core.vending import VendFacts, WebIdentityVendor
+from catalog.services import table_claims
 from service_kit.governed.store_credential import S3KeyPair
 from service_kit.governed.store_session import IssuedSession, WebIdentity
+from service_kit.lakehouse import location_claims
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
@@ -102,11 +104,14 @@ def test_a_vend_against_aws_proper_permits_no_plaintext() -> None:
     assert opts["allow_http"] == "false", "a credential for AWS proper permits plaintext"
 
 
+_LOCATION = "s3://lakehouse/abc12345_ns$t"
+
+
 class _Namespace:
     """A backend whose `describe_table` answers an `s3://` location, the only kind a vend scopes."""
 
     def describe_table(self, request: Any) -> DescribeTableResponse:
-        return DescribeTableResponse(location="s3://lakehouse/abc12345_ns$t")
+        return DescribeTableResponse(location=_LOCATION)
 
     def describe_namespace(self, request: Any) -> DescribeNamespaceResponse:
         """The namespace declares no tier; the tier judge reads it before a write-tier vend."""
@@ -130,6 +135,10 @@ def describe_client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator
         LANCE_S3_ACCESS_KEY_ID="ROOTKEY",
         LANCE_S3_SECRET_ACCESS_KEY="ROOTSECRET",
         LANCE_CONTROL_ROOT=str(tmp_path),
+    )
+    # The table's location carries the claim the create took, recording the uuid a credential is scoped by.
+    location_claims.take(
+        table_claims.claim_store(settings), _LOCATION, "ns$t", ["ns", "t"], uuid="0b6f8a52-4c1e-4f7a-9d3e-2a1c5b7e9f01", is_gone=lambda _claim: False
     )
     application.dependency_overrides[get_settings] = lambda: settings
     application.dependency_overrides[get_namespace] = _Namespace

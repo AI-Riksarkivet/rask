@@ -71,6 +71,13 @@ def _ok(client: TestClient, path: str, **kwargs: Any) -> None:  # noqa: ANN401 โ
     assert answer.status_code == 200, f"{path}: {answer.text}"
 
 
+def _uuid(client: TestClient, kind: str, name: str) -> str:
+    """The uuid the catalog minted for the table or namespace ``name``, which its grants and records are keyed by (ADR 0173 ยง8)."""
+    answer = client.post(f"/v1/{kind}/{name}/describe", json={})
+    assert answer.status_code == 200, answer.text
+    return str(answer.json()["properties"]["rask.uuid"])
+
+
 def test_a_cascade_that_fails_part_way_leaves_no_grant_or_policy_once_a_reissue_finishes_it(real_ns_client: TestClient, governed: TupleStore) -> None:
     _ok(real_ns_client, "/v1/namespace/db/create", json={})
     tables = ["db$a", "db$b", "db$c"]
@@ -78,10 +85,12 @@ def test_a_cascade_that_fails_part_way_leaves_no_grant_or_policy_once_a_reissue_
         _ok(real_ns_client, f"/v1/table/{table}/create", content=encode_arrow_stream(_ROWS), headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE})
     for table in tables:
         _ok(real_ns_client, f"/management/v1/table/{table}/policy/set", json={"retention_days": 7})
+    uuids = {table: _uuid(real_ns_client, "table", table) for table in [*tables, "db$t"]}
+    trashed = f"table:{uuids['db$t']}"
     _ok(real_ns_client, "/v1/table/db$t/drop", json={})
-    governed_objects = ["namespace:db", *(f"table:{table}" for table in tables)]
+    governed_objects = [f"namespace:{_uuid(real_ns_client, 'namespace', 'db')}", *(f"table:{uuids[table]}" for table in tables)]
     assert len(governed.naming(governed_objects)) == len(governed_objects), "an object was seeded no tuple, so the revoke below would pass vacuously"
-    kept = {t for t in governed.tuples if t[2] == "table:db$t"}
+    kept = {t for t in governed.tuples if t[2] == trashed}
     assert kept, "the trashed table kept no grant, so the claim that it keeps them would pass vacuously"
     failing = _SecondDropUnanswered(real_ns_client.app.dependency_overrides[get_namespace]())
     real_ns_client.app.dependency_overrides[get_namespace] = lambda: failing
@@ -94,6 +103,6 @@ def test_a_cascade_that_fails_part_way_leaves_no_grant_or_policy_once_a_reissue_
     assert finished.status_code == 200, finished.text
     assert {obj: held - kept for obj, held in governed.naming(governed_objects).items() if held - kept} == {}, "a grant outlived the object it was on"
     settings = get_settings()
-    left = [table for table in tables if maintenance_policies.get_policy(settings.registry_root, settings.storage_options(), "table", table) is not None]
+    left = [table for table in tables if maintenance_policies.get_policy(settings.registry_root, settings.storage_options(), "table", uuids[table]) is not None]
     assert left == [], "a policy outlived the table it was on"
-    assert {t for t in governed.tuples if t[2] == "table:db$t"} == kept, "a trashed table lost the grants its undrop needs"
+    assert {t for t in governed.tuples if t[2] == trashed} == kept, "a trashed table lost the grants its undrop needs"

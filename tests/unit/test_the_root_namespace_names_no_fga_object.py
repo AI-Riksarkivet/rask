@@ -51,6 +51,7 @@ from catalog.api import fga_deps
 from service_kit.governed.oidc import IDToken
 from service_kit.governed.person_identity import PersonPrincipal
 from service_kit.governed.principal import Principal
+from tests.unit.named_resolver import NamedResolver, uuid_of
 
 
 _CALLER = PersonPrincipal(principal=Principal(idp_id="dex", subject="alice"), claims=IDToken(iss="i", sub="alice", aud="lance", exp=1, iat=1))
@@ -86,14 +87,14 @@ def _drive(monkeypatch: pytest.MonkeyPatch, path: str, object_id: str) -> list[s
     # CAST, the idiom `test_the_bus_door_authorizes_what_it_records` uses: the stand-ins carry exactly
     # the attributes the guard reads, and constructing a real Request/Settings/OpenFgaClient would drag
     # a whole app and a live store into a test about one composed object id. The caller is a real one.
-    asyncio.run(fga_deps.authorize(cast(Any, _Request(path, object_id)), cast(Any, _Settings()), _CALLER, cast(Any, object())))
+    asyncio.run(fga_deps.authorize(cast(Any, _Request(path, object_id)), cast(Any, _Settings()), _CALLER, cast(Any, object()), NamedResolver()))
     return asked
 
 
 def test_a_named_namespace_is_still_checked(monkeypatch: pytest.MonkeyPatch) -> None:
     """If the guard stopped checking named namespaces, the route would be open to everyone."""
     asked = _drive(monkeypatch, "/v1/namespace/acme-bronze/list", "acme-bronze")
-    assert asked == ["namespace:acme-bronze"], f"a named namespace must still be authorized, got {asked}"
+    assert asked == [f"namespace:{uuid_of('namespace', ['acme-bronze'])}"], f"a named namespace must still be authorized, got {asked}"
 
 
 def test_an_empty_id_on_a_table_is_a_typed_refusal(monkeypatch: pytest.MonkeyPatch) -> None:

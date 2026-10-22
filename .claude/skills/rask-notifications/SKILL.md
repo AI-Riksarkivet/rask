@@ -87,12 +87,12 @@ reports the loss. This is the estate's most expensive silent failure mode.
    lineage's REPAIR marker for a run whose real terminal event was lost, not an outcome anyone chose.
 2. **A VERIFIED `author.sub`** — see the trap below. This is the one that keeps biting.
 3. **`lance.project`** — optional, but omitting it costs you **every** watcher.
-4. **≥1 output, named exactly as the FGA object is named.** Delivery runs `can_be_notified` and render
-   re-runs `can_get_metadata` against `table:<output name>`, so an unqualified name against
-   tenant-qualified grants counts every recipient HIDDEN. The output's own `lance` facet carries
-   `tableUuid`/`namespaceUuid` (ADR 0173 §10, [[LH-522]]), which the pointer stores as `object_uuid` beside the name:
-   the catalog and maintenance stamp them, lineage's HTTP door resolves an outside producer's names as its token, and
-   `/events/projection` keeps each output's `lance` facet for the reconciler.
+4. **≥1 output, each naming its table's uuid.** Delivery runs `can_be_notified` and render re-runs
+   `can_get_metadata` against `table:<uuid>`, the uuid the output's own `lance` facet carries (`tableUuid`, ADR 0173
+   §10, [[LH-522]], [[LH-524]]); the pointer stores that object as `object_id`, the output's name as `object_name` and
+   the uuid as `object_uuid`. An output without a uuid names no object any grant could reach, so the run reaches
+   nobody. The catalog and maintenance stamp the uuids, lineage's HTTP door resolves an outside producer's names as its
+   token, and `/events/projection` keeps each output's `lance` facet for the reconciler.
 
 **One more holds before notifications is asked, and it is not `notifiable()`'s: the event is SIGNED.** Lineage verifies
 the `rask_signature` of every event on the bus and in the outbox (`signing.enforce`, on by default) and refuses what
@@ -144,9 +144,11 @@ await emit_control(  # best-effort; never raises into a committed mutation
 ```
 
 Call it **after** the backend mutation and its audit succeed, so a real change is never announced.
-The envelope's typed `object_uuid` and `namespace_uuid` name a table or namespace object (or the one a grant or policy is
-scoped to) by its uuids (ADR 0173 §10). The catalog's control emitter fills them from `object_id` after the door acts
-(`catalog.api.dependencies.UuidNamingControlEmitter`); a door whose act ends the object reads them first and passes them.
+A table's or namespace's `object_id` is its uuid object (`table:<uuid>`, the object its grants are held by, [[LH-524]])
+with its name in `object_name`, and the typed `object_uuid` and `namespace_uuid` name it (or the one a grant or policy is
+scoped to) by its uuids (ADR 0173 §10). The catalog's control emitter fills `object_uuid` from `object_id` and the
+namespace's uuid from `object_name` after the door acts (`catalog.api.dependencies.UuidNamingControlEmitter`); a door whose
+act ends or moves the object reads them first and passes them.
 `extra.subject` is the entire targeting, and it is the OpenFGA user the change names (`fga.user_object`: `user:` and the
 principal key percent-encoded, or a userset). `named_subjects` decodes a `user:` id back to the principal key
 (`fga.subject_of`), so a key carrying an encoded character addresses the inbox its owner's token reaches, and keeps only
@@ -277,7 +279,7 @@ time, the `author` and `lance` facets, output names), because addressing people 
 deployment that forgets the grant gets a 403 on every tick, and no retry helps — the sidecar's
 `invokeRetry` (`<release>-invocation-resiliency`, scoped to `notifications`, targeting `lineage`) retries
 `408,429,500-599` and never a 4xx, because a 403's answer will not change. Delivery needs
-`can_be_notified` and render needs `can_get_metadata` on `table:<output name>` per recipient; an FGA
+`can_be_notified` and render needs `can_get_metadata` on `table:<output uuid>` per recipient; an FGA
 outage is fail-closed (RETRY), never a delivery.
 
 So a new producer ships **one** grant: the recipients' grants on the objects its outputs name. The feed

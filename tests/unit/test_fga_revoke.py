@@ -1,7 +1,6 @@
 """Unit tests for the revoke-on-delete path (service_kit.governed.fga + catalog.fga_deps).
 
-A dropped / renamed-away object's FGA tuples must be removed, or a later object reusing the id
-inherits the old grants (stale-grant privilege bleed). These pin the read+delete contract WITHOUT
+A dropped object's FGA tuples are removed, so the store holds no grant on an object that is gone. These pin the read+delete contract WITHOUT
 the network: the paginated read returns the COMPLETE set, the delete issues exactly those tuples,
 an already-absent delete is idempotent, and an OpenFGA outage fails closed (503).
 
@@ -115,9 +114,13 @@ def _settings(*, fga_enabled: bool) -> Any:
     return cast(Any, SimpleNamespace(fga_enabled=fga_enabled, delimiter="$"))
 
 
+#: The object a dropped table's grants are held by: its uuid's (ADR 0173 §8).
+_TABLE = fga.table_object("0b6f8a52-4c1e-4f7a-9d3e-2a1c5b7e9f01")
+
+
 def test_revoke_ownership_noop_when_fga_disabled() -> None:
-    fake = _ReadDeleteClient([([_tuple("user:a", "owner", "table:db$t")], "")])
-    asyncio.run(fga_deps.revoke_ownership(_client(fake), _settings(fga_enabled=False), resource="table", segments=["db", "t"], token=None))
+    fake = _ReadDeleteClient([([_tuple("user:a", "owner", _TABLE)], "")])
+    asyncio.run(fga_deps.revoke_ownership(_client(fake), _settings(fga_enabled=False), obj=_TABLE, token=None))
     assert fake.read_calls == 0  # FGA off → never touched
 
 
@@ -132,19 +135,16 @@ def test_revoke_ownership_noop_when_client_unwired(monkeypatch: pytest.MonkeyPat
         return 0
 
     monkeypatch.setattr(fga, "revoke_object_tuples", _spy)
-    asyncio.run(fga_deps.revoke_ownership(None, _settings(fga_enabled=True), resource="table", segments=["db", "t"], token=None))
+    asyncio.run(fga_deps.revoke_ownership(None, _settings(fga_enabled=True), obj=_TABLE, token=None))
     assert called is False
 
 
 def test_revoke_ownership_deletes_every_tuple_for_the_object() -> None:
-    fake = _ReadDeleteClient([([_tuple("user:a", "owner", "table:db$t"), _tuple("user:b", "reader", "table:db$t")], "")])
-    asyncio.run(fga_deps.revoke_ownership(_client(fake), _settings(fga_enabled=True), resource="table", segments=["db", "t"], token=None))
-    assert fake.deleted is not None
-    # The id is canonicalised the same way seed_ownership writes it → table:db$t.
-    assert {t.object for t in fake.deleted} == {"table:db$t"}
+    fake = _ReadDeleteClient([([_tuple("user:a", "owner", _TABLE), _tuple("user:b", "reader", _TABLE)], "")])
+    asyncio.run(fga_deps.revoke_ownership(_client(fake), _settings(fga_enabled=True), obj=_TABLE, token=None))
     assert _keys(fake.deleted) == {
-        ("user:a", "owner", "table:db$t"),
-        ("user:b", "reader", "table:db$t"),
+        ("user:a", "owner", _TABLE),
+        ("user:b", "reader", _TABLE),
     }
 
 

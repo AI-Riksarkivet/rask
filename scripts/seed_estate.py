@@ -32,9 +32,11 @@ reaches gold only through a role, a tenant member who is not an admin). Two deli
 * **Ids are DNS-safe.** The fixtures write ``warehouse:acme_bucket``; the catalog validates warehouse,
   bucket and namespace ids against ``^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$``, so an underscore cannot be
   created through the API at all. Underscores become hyphens.
-* **A table's id is its PATH.** The fixtures name ``table:acme_silver_features`` as a flat illustrative
-  id; a table created through the real door is identified by ``<namespace>$<name>``, so the seeded
-  object is ``table:acme-silver$features``. There is no door that produces the flat form.
+* **A table or namespace is named by its PATH and granted on its uuid.** The fixtures name
+  ``table:acme_silver_features`` as a flat illustrative id; a table created through the real door is named
+  ``<namespace>$<name>``, and OpenFGA holds its grants on the uuid the catalog minted for it (``table:<uuid>``,
+  ADR 0173 §8). This file names objects by path, so git never holds a minted uuid, and each grant resolves its
+  object through DescribeTable or DescribeNamespace when it is sent.
 
 Two fixture tuples are deliberately NOT seeded, each for the ghost reason this script exists for:
 ``transaction:standalone_txn`` (a transaction is minted by a write op, not by a seed) and
@@ -493,8 +495,13 @@ def seed(http: httpx.Client, steps: Sequence[Step]) -> list[Outcome]:
             if step.key is not None:
                 blocked.add(step.key)
             continue
+        body, unresolved = _governed_body(http, step)
+        if unresolved:
+            print(f"  !! {step.label}: {unresolved}", file=sys.stderr)
+            outcomes.append(Outcome(step, "failed", unresolved))
+            continue
         try:
-            response = http.request(step.method, step.path, json=step.body)
+            response = http.request(step.method, step.path, json=body)
         except httpx.HTTPError as exc:
             note = f"{type(exc).__name__}: {exc}"
             print(f"  !! {step.label}: {note}", file=sys.stderr)
@@ -521,6 +528,35 @@ def seed(http: httpx.Client, steps: Sequence[Step]) -> list[Outcome]:
         if step.key is not None:
             blocked.add(step.key)
     return outcomes
+
+
+#: The object types whose grants OpenFGA holds by the uuid the catalog minted, never by name (ADR 0173 §8, [[LH-524]]).
+_UUID_KEYED = ("table", "namespace")
+
+
+def _governed_body(http: httpx.Client, step: Step) -> tuple[dict[str, object] | None, str]:
+    """A grant step's body with a table or namespace named by the uuid the catalog resolves its name to, or a note.
+
+    Git names every object by name, and a uuid is minted when the object is created, so the seed resolves each when
+    it grants (DescribeTable / DescribeNamespace answer ``rask.uuid``) and git never holds one. Any other step, and a
+    grant on any other object, is sent as planned.
+    """
+    obj = step.body.get("object") if step.layer == "grant" and step.body is not None else None
+    kind, _, name = obj.partition(":") if isinstance(obj, str) else ("", "", "")
+    if kind not in _UUID_KEYED or step.body is None:
+        return step.body, ""
+    payload: dict[str, object] = {"vend_credentials": False} if kind == "table" else {}
+    try:
+        response = http.post(f"/v1/{kind}/{name}/describe", json=payload)
+    except httpx.HTTPError as exc:
+        return None, f"could not resolve {obj} to its uuid: {type(exc).__name__}: {exc}"
+    if not response.is_success:
+        return None, f"could not resolve {obj} to its uuid: HTTP {response.status_code} {problem(response)}"
+    properties = _as_record(_as_record(response.json()).get("properties"))
+    uuid = properties.get("rask.uuid")
+    if not isinstance(uuid, str) or not uuid:
+        return None, f"{obj} answers no rask.uuid, so no grant can name it"
+    return {**step.body, "object": f"{kind}:{uuid}"}, ""
 
 
 def _read(http: httpx.Client, path: str) -> tuple[object | None, str]:

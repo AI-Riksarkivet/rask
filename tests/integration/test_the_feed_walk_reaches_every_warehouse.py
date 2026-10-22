@@ -60,6 +60,10 @@ RECONCILER = ServicePrincipal(service_account="system:serviceaccount:rask:rask-s
 #: `event_reader` tuple on the estate root derives for the reconciler, and nothing else.
 GRANTED = frozenset({("user:kubernetes~system%3Aserviceaccount%3Arask%3Arask-sa-notifications", "can_read_event_feed", "estate:rask")})
 
+#: The uuids the catalog minted for the two runs' outputs, which every governed dataset's `lance` facet carries (ADR 0173
+#: §10) and an inbox row names its object by ([[LH-524]]).
+TENANT_UUID, DEFAULT_UUID = "1f2e3d4c-5b6a-4798-8a7b-6c5d4e3f2a1b", "9e8d7c6b-5a4f-4e3d-8c2b-1a0f9e8d7c6b"
+
 #: A run whose output lives in a TENANT warehouse, carrying what an ingest run carries beyond targeting:
 #: an input, a column-lineage facet naming another tenant's table, and a job facet.
 TENANT_RUN = {
@@ -81,7 +85,10 @@ TENANT_RUN = {
         {
             "namespace": "acme-gold",
             "name": "acme-gold$catalog",
-            "facets": {"columnLineage": {"fields": {"title": {"inputFields": [{"namespace": "globex-gold", "name": "globex-gold$secret", "field": "title"}]}}}},
+            "facets": {
+                "lance": {"tableUuid": TENANT_UUID},
+                "columnLineage": {"fields": {"title": {"inputFields": [{"namespace": "globex-gold", "name": "globex-gold$secret", "field": "title"}]}}},
+            },
         }
     ],
 }
@@ -92,7 +99,7 @@ DEFAULT_RUN = {
     "eventTime": "2026-10-05T07:00:00+00:00",
     "producer": "https://rask.invalid/train",
     "run": {"runId": "run-default", "facets": {"author": {"name": "dex~bob", "sub": "dex~bob"}}},
-    "outputs": [{"namespace": "gold", "name": "gold$catalog"}],
+    "outputs": [{"namespace": "gold", "name": "gold$catalog", "facets": {"lance": {"tableUuid": DEFAULT_UUID}}}],
 }
 
 
@@ -204,8 +211,8 @@ async def test_the_walk_reaches_a_tenant_warehouse_run_and_is_sent_only_what_tar
 
     assert (result.scanned, result.cursor) == (2, 2)
     assert {subject: [(row["notification_id"], row["object_id"], row["source_run_id"]) for row in rows] for subject, rows in boxes.items()} == {
-        "dex~alice": [("run-tenant@COMPLETE", "acme-gold$catalog", "ingest-7")],
-        "dex~bob": [("run-default@FAIL", "gold$catalog", None)],
+        "dex~alice": [("run-tenant@COMPLETE", f"table:{TENANT_UUID}", "ingest-7")],
+        "dex~bob": [("run-default@FAIL", f"table:{DEFAULT_UUID}", None)],
     }
     assert {row["seq"]: row["event"] for page in sent for row in page["events"]}[2] == {
         "eventType": "COMPLETE",
@@ -215,7 +222,7 @@ async def test_the_walk_reaches_a_tenant_warehouse_run_and_is_sent_only_what_tar
             "runId": "run-tenant",
             "facets": {"author": {"name": "dex~alice", "sub": "dex~alice"}, "lance": {"operation": "insert", "project": "acme", "runId": "ingest-7"}},
         },
-        "outputs": [{"namespace": "acme-gold", "name": "acme-gold$catalog"}],
+        "outputs": [{"namespace": "acme-gold", "name": "acme-gold$catalog", "facets": {"lance": {"tableUuid": TENANT_UUID}}}],
     }
 
     # The rung IS the gate: an unfiltered feed of every warehouse's runs answers a verified caller that holds
@@ -260,4 +267,6 @@ async def test_an_outside_producers_run_is_recorded_by_its_tables_uuid_and_rings
             )
 
     assert [(row["table_uuids"], row["namespace_uuids"]) for row in recorded] == [([table_uuid], [namespace_uuid])], recorded
-    assert {subject: [(row["object_id"], row["object_uuid"]) for row in rows] for subject, rows in boxes.items()} == {"dex~bob": [("gold$catalog", table_uuid)]}
+    assert {subject: [(row["object_id"], row["object_name"], row["object_uuid"]) for row in rows] for subject, rows in boxes.items()} == {
+        "dex~bob": [(f"table:{table_uuid}", "gold$catalog", table_uuid)]
+    }

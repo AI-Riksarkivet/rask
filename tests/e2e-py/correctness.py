@@ -218,10 +218,15 @@ def announced(reader: Identity, run: ScenarioRun) -> list[Announcement]:
 
 def told(tenant: Tenant, run: ScenarioRun) -> dict[str, list[Told]]:
     """What each person the scenario names was told of the drive, by the part they play: their inbox rows since the tenant
-    was made about its project, its two namespaces or its two tables, sorted."""
-    about = {run.bronze_table, run.silver_table, f"namespace:{tenant.bronze}", f"namespace:{tenant.silver}", f"project:{tenant.project}"}
+    was made about its project, its two namespaces or its two tables, sorted. A row names a table or namespace by its
+    uuid (`object_id`, [[LH-524]]) and its name (`object_name`), which is what this reads; any other object by its id."""
+    about = {run.bronze_table, run.silver_table, tenant.bronze, tenant.silver, f"project:{tenant.project}"}
+
+    def named(row: dict[str, Any]) -> str:
+        return str(row.get("object_name") or row["object_id"])
+
     return {
-        part: sorted((row["notification_id"], row["reason"], row["object_id"]) for row in person.inbox(since=tenant.created_at) if row["object_id"] in about)
+        part: sorted((row["notification_id"], row["reason"], named(row)) for row in person.inbox(since=tenant.created_at) if named(row) in about)
         for part, person in tenant.people.items()
     }
 

@@ -24,15 +24,16 @@ from fastapi.concurrency import run_in_threadpool
 from lance_namespace import ServiceUnavailableError, TransactionNotFoundError, UnauthenticatedError, UnsupportedOperationError
 
 from lineage.api.dependencies import ProvenanceDep, PublisherDep, SettingsDep
-from lineage.api.fga_deps import FilterDep, enforce_bus_authz, enforce_output_authz, governed
+from lineage.api.fga_deps import FilterDep, Governed, enforce_bus_authz, enforce_output_authz, governed, governed_refs
 from lineage.api.security import CurrentToken
 from lineage.core.config import storage_options
 from lineage.models import DatasetEvent, RunEvent
 from lineage.schemas import DlqBacklog, DlqEvent, DlqReplayResponse
 from lineage.services.staged import UnparseableEventError, parse_staged, republish_staged
-from service_kit.governed import audit
+from service_kit.governed import audit, fga
 from service_kit.governed.audit import FAILURE, SUCCESS
 from service_kit.lakehouse import outbox
+from service_kit.openlineage import dataset_uuids
 
 
 log = logging.getLogger(__name__)
@@ -63,7 +64,10 @@ def _summary(run_id: str, event_json: str) -> DlqEvent:
 
 def _audited(event: RunEvent | DatasetEvent, key: str) -> str:
     """What a replay acted on, for the audit record: the run, or the table a static change names (it has no run)."""
-    return f"table:{event.dataset.name}" if isinstance(event, DatasetEvent) else f"run:{event.run_id or key}"
+    if isinstance(event, DatasetEvent):
+        uuid = dataset_uuids(event.dataset.model_dump(by_alias=True)).table_uuid
+        return fga.table_object(uuid) if uuid else f"table:{event.dataset.name}"
+    return f"run:{event.run_id or key}"
 
 
 @router.get("")
@@ -87,11 +91,20 @@ async def list_dlq(
     opts = storage_options(settings)
     depth, oldest_age = await run_in_threadpool(outbox.backlog, settings.outbox_uri, opts)
     staged = await run_in_threadpool(lambda: list(outbox.list_events(settings.outbox_uri, opts, limit=limit)))
-    events = [_summary(run_id, event_json) for run_id, event_json in staged]
+    events = [(_summary(run_id, event_json), _governs(event_json)) for run_id, event_json in staged]
     # Drop events referencing datasets the caller may not see (fail-closed). A poison event has no parseable
     # datasets, so under FGA it is filtered out (dataset-less → dropped); in dev/tests (FGA off) it shows.
-    visible = await governed(datasets, settings.fga_enabled, events, lambda e: set(e.outputs) | set(e.inputs))
-    return DlqBacklog(depth=depth, oldest_age_seconds=oldest_age, events=visible, limit=limit)
+    visible = await governed(datasets, settings.fga_enabled, events, lambda pair: pair[1])
+    return DlqBacklog(depth=depth, oldest_age_seconds=oldest_age, events=[summary for summary, _ in visible], limit=limit)
+
+
+def _governs(event_json: str) -> Governed:
+    """The tables a staged event names, by the uuids it carries; a poison object names none."""
+    try:
+        event = parse_staged(event_json)
+    except UnparseableEventError:
+        return Governed()
+    return governed_refs([*event.inputs, *event.outputs])
 
 
 @router.post("/{run_id}/replay")
@@ -141,11 +154,9 @@ async def replay_dlq(
     # Visibility gate — mirror list_dlq's governance: you may only replay an event you could have SEEN. An
     # event referencing a dataset the caller can't read is hidden as a 404, so enforce_output_authz's
     # dataset-naming 403 can never disclose a dataset the list view withheld.
-    refs = {d.name for d in [*event.outputs, *event.inputs] if d.name}
-    if settings.fga_enabled and refs:
-        visible = await datasets.visible(list(refs))
-        if refs - visible:
-            raise TransactionNotFoundError(f"no staged lineage event for run {run_id}")
+    refs = governed_refs([*event.outputs, *event.inputs])
+    if settings.fga_enabled and not refs.names_nothing and (refs.unresolved or refs.objects - await datasets.visible(refs.objects)):
+        raise TransactionNotFoundError(f"no staged lineage event for run {run_id}")
     # TWO GATES, because a replay answers two questions. The relay's own, over the STAGED BYTES: the
     # signature and what the stamped author may record — so a replay admits nothing the relay would refuse,
     # and a forged or re-targeted object stays refused however trusted the operator is. Then the ingest

@@ -125,7 +125,9 @@ async def _delete(settings: Settings, control: ControlEmitter, token: Caller | N
         control,
         action="policy_deleted",
         object_type="policy",
-        object_id=f"{kind}:{canonical}",
+        # A table's or namespace's key is its uuid, the object its grants are held by; a project's is its id.
+        object_id=f"{kind}:{key}",
+        object_name=canonical if kind in ("table", "namespace") else None,
         actor=f"user:{token.subject}" if token else None,
         extra={"kind": kind},
     )
@@ -153,7 +155,8 @@ async def set_table_policy(
         control,
         action="policy_set",
         object_type="policy",
-        object_id=f"table:{canonical}",
+        object_id=fga.table_object(table_uuid),
+        object_name=canonical,
         actor=f"user:{token.subject}" if token else None,
         extra={"kind": "table"},
     )
@@ -188,7 +191,8 @@ async def set_namespace_policy(
         control,
         action="policy_set",
         object_type="policy",
-        object_id=f"namespace:{canonical}",
+        object_id=fga.namespace_object(namespace.uuid),
+        object_name=canonical,
         actor=f"user:{token.subject}" if token else None,
         extra={"kind": "namespace"},
     )

@@ -205,9 +205,14 @@ class _FakeStore:
         self.revoked.append(obj)
         return [SimpleNamespace(user=f"user:u{i}", relation="owner", object=obj) for i in range(3)]
 
+    async def read(self, _client: object, obj: str, **_kw: object) -> list[SimpleNamespace]:
+        """The tuples held on ``obj``: what the delete reads for a namespace an earlier attempt left on the warehouse."""
+        return [SimpleNamespace(user=user, relation=relation, object=held) for user, relation, held in self.tuples if held == obj]
+
     def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(fga_module, "check", self.check)
         monkeypatch.setattr(fga_module, "revoke_object_tuples", self.revoke)
+        monkeypatch.setattr(fga_module, "read_object_tuples", self.read)
 
 
 # --------------------------------------------------------------------------- #

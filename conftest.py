@@ -724,9 +724,30 @@ class OpenFgaStore:
 
         async def _write() -> None:
             async with fga.make_client(self.url, self.store_id, self.model_id, token_file=None) as client:
-                await client.write(ClientWriteRequest(writes=[ClientTuple(user=u, relation=r, object=o) for u, r, o in tuples]))
+                # OpenFGA takes at most 100 tuples in one write (`maxTuplesPerWrite`).
+                for start in range(0, len(tuples), 100):
+                    batch = tuples[start : start + 100]
+                    await client.write(ClientWriteRequest(writes=[ClientTuple(user=u, relation=r, object=o) for u, r, o in batch]))
 
         asyncio.run(_write())
+
+    def tuples(self) -> set[tuple[str, str, str]]:
+        """Every `(user, relation, object)` the store holds, read back as an auditor reads it."""
+        import asyncio
+
+        from service_kit.governed import fga
+
+        async def _read() -> set[tuple[str, str, str]]:
+            held: set[tuple[str, str, str]] = set()
+            token: str | None = None
+            async with fga.make_client(self.url, self.store_id, self.model_id, token_file=None) as client:
+                while True:
+                    page, token = await fga.read_tuples(client, continuation_token=token)
+                    held |= {(str(t.user), str(t.relation), str(t.object)) for t in page}
+                    if not token:
+                        return held
+
+        return asyncio.run(_read())
 
 
 @pytest.fixture

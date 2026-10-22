@@ -60,11 +60,14 @@ REFUSED = "notifications.signature.refused"
 #: Every series of the refusal counter, at the 0 it is created with: both doors, every reason the kit can refuse for.
 ZERO_REFUSALS: dict[tuple[str, str], int] = {(door.value, reason): 0 for door in Door for reason in get_args(RefusalReason.__value__)}
 
+#: The uuids the catalog minted for the tables below, which its events name them by (ADR 0173 §10).
+PAGES_UUID, GOLD_PAGES_UUID, GOLD_UUID = "3f1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5b", "8c7b6a59-4d3e-4f2a-9b1c-0d9e8f7a6b5c", "0e1d2c3b-4a59-4687-9a0b-1c2d3e4f5a6b"
+
 RUN_EVENT: dict[str, Any] = {
     "eventType": "FAIL",
     "eventTime": "2026-08-09T12:00:00+00:00",
     "run": {"runId": "run-77", "facets": {"author": {"name": "alice", "sub": "dex~alice"}}},
-    "outputs": [{"namespace": "bronze", "name": "bronze$pages"}],
+    "outputs": [{"namespace": "bronze", "name": "bronze$pages", "facets": {"lance": {"tableUuid": PAGES_UUID}}}],
 }
 
 #: The control envelope as its producer publishes it: the catalog's grant on a table for the person it authenticated.
@@ -73,7 +76,8 @@ GRANT: dict[str, Any] = {
     "occurred_at": "2026-10-04T12:00:00+00:00",
     "action": "grant_added",
     "object_type": "grant",
-    "object_id": "table:acme$gold",
+    "object_id": f"table:{GOLD_UUID}",
+    "object_name": "acme$gold",
     "actor": "user:dex~admin",
     "extra": {"relation": "reader", "subject": "user:dex~alice"},
 }
@@ -111,7 +115,7 @@ def _run_event(case: str, *, catalog: Any, intruder: Any) -> dict[str, Any]:
             return intruder.sign(RUN_EVENT)
         case "tampered":
             signed = catalog.sign(RUN_EVENT, on_behalf_of="dex~alice")
-            signed["outputs"] = [{"namespace": "gold", "name": "gold$pages"}]
+            signed["outputs"] = [{"namespace": "gold", "name": "gold$pages", "facets": {"lance": {"tableUuid": GOLD_PAGES_UUID}}}]
             return signed
         case "valid" | "store-down":
             return catalog.sign(RUN_EVENT, on_behalf_of="dex~alice")

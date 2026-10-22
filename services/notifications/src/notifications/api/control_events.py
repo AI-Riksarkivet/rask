@@ -117,6 +117,7 @@ def as_delivery(event: CatalogControlEvent) -> NotificationDelivery:
         notification_id=f"{event.event_id}@{event.action.upper()}",
         reason=NotificationReason(event.action),
         object_id=event.object_id,
+        object_name=event.object_name,
         object_uuid=event.object_uuid,
         occurred_at=event.occurred_at,
     )

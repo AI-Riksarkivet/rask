@@ -44,9 +44,12 @@ from service_kit.lakehouse.ns_errors import install_problem_handlers
 NOW = datetime(2026, 8, 9, 12, 0, tzinfo=UTC)
 CALLER = "alice"
 STRANGER = "bob"
+#: The uuid the catalog minted for `silver$pages`, and the object a lineage pointer names it by ([[LH-524]]).
+PAGES_UUID = "3f1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5b"
+PAGES = f"table:{PAGES_UUID}"
 
 
-def _pointer(notification_id: str, *, minutes_ago: int, obj: str = "silver$pages", seen: bool = False, dismissed: bool = False) -> InboxPointer:
+def _pointer(notification_id: str, *, minutes_ago: int, obj: str = PAGES, seen: bool = False, dismissed: bool = False) -> InboxPointer:
     return InboxPointer(
         notification_id=notification_id,
         reason=NotificationReason.AUTHOR,
@@ -255,15 +258,28 @@ def test_a_populated_feed_carries_exactly_the_fields_its_models_declare(client: 
     actor's `subject` second-lock and its `rows` count are facts about the STORE, and the only thing
     keeping them off the wire is that no response model declares them.
     """
-    populated = _pointer("alice-001@FAIL", minutes_ago=1).model_copy(update={"event_seq": 41, "seen": True, "object_uuid": "pages-uuid"})
+    populated = _pointer("alice-001@FAIL", minutes_ago=1).model_copy(
+        update={"event_seq": 41, "seen": True, "object_name": "silver$pages", "object_uuid": PAGES_UUID}
+    )
     plane.inbox(CALLER).rows = [populated, _pointer("alice-002@FAIL", minutes_ago=2)]
 
     body = client.get("/notifications/inbox").json()
 
     assert set(body) == {"notifications", "next_cursor", "unread"}
     row = body["notifications"][0]
-    assert set(row) == {"notification_id", "reason", "object_id", "object_uuid", "source_run_id", "event_seq", "occurred_at", "seen", "dismissed"}
-    assert row["object_uuid"] == "pages-uuid"
+    assert set(row) == {
+        "notification_id",
+        "reason",
+        "object_id",
+        "object_name",
+        "object_uuid",
+        "source_run_id",
+        "event_seq",
+        "occurred_at",
+        "seen",
+        "dismissed",
+    }
+    assert (row["object_id"], row["object_name"], row["object_uuid"]) == (PAGES, "silver$pages", PAGES_UUID)
     assert "subject" not in json.dumps(body)
 
 

@@ -908,7 +908,9 @@ def _insert_door_naming(served: Served, inputs: str) -> tuple[int, str]:
 @pytest.mark.parametrize("commit", [pytest.param(_stock_append_naming, id="a-stock-commit"), pytest.param(_insert_door_naming, id="the-insert-door")])
 def test_a_commit_naming_an_input_the_caller_cannot_read_is_refused(served: Served, commit: Callable[[Served, str], tuple[int, str]]) -> None:
     stock = _with_source(served)
-    served.denied.add("can_read_data table:db$src")
+    # The input's grants are held by the uuid the catalog minted for it, which its describe answers (ADR 0173 §8).
+    source_uuid = (stock.describe_table(lance_namespace.DescribeTableRequest(id=["db", "src"])).properties or {})["rask.uuid"]
+    served.denied.add(f"can_read_data table:{source_uuid}")
 
     code, detail = commit(served, json.dumps([{"table": ["db", "src"], "version": 1}]))
 

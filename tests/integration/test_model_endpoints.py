@@ -183,14 +183,14 @@ def test_promote_rejects_an_arbitrary_tag(models_client: tuple[TestClient, str],
         lance.dataset(registry).tags.get_version("pwned")  # the arbitrary tag was never created
 
 
-def _fake_list_objects(allowed: list[str], monkeypatch: pytest.MonkeyPatch) -> list[dict]:
+def _fake_batch_check(allowed: list[str], monkeypatch: pytest.MonkeyPatch) -> list[dict]:
     captured: list[dict] = []
 
-    async def fake(_c: object, *, user: str, relation: str, object_type: str, **_kw: object) -> fga_module.ObjectListing:
-        captured.append({"user": user, "relation": relation, "object_type": object_type})
-        return fga_module.ObjectListing(objects=allowed, truncated=False)
+    async def fake(_c: object, *, user: str, relation: str, objects: list[str], **_kw: object) -> dict[str, bool]:
+        captured.append({"user": user, "relation": relation, "objects": objects})
+        return {obj: obj in allowed for obj in objects}
 
-    monkeypatch.setattr(fga_module, "list_objects", fake)
+    monkeypatch.setattr(fga_module, "batch_check", fake)
     return captured
 
 
@@ -201,29 +201,27 @@ def test_list_models_filters_to_readable_and_reports_versions(models_client: tup
     other = registry.rsplit("/", 1)[0] + "/other"
     _publish(other, {"rows_seen": 1}, "tok-other", first=True)
     lance.dataset(registry).tags.create("blessed", 1)
-    captured = _fake_list_objects(["table:models$demo"], monkeypatch)
+    captured = _fake_batch_check(["table:models$demo"], monkeypatch)
 
     resp = client.get("/management/v1/model", headers={"Authorization": "Bearer t"})
 
     assert resp.status_code == 200, resp.text
     assert resp.json() == {
         "models": [{"model": "demo", "latest_version": 2, "blessed_version": 1}],
-        # New: the caller can now tell a small estate from a truncated authorization listing.
-        "authorization_truncated": False,
-        # The listing is a PAGE now (open_fastapi-audit: it sliced at `limit` and said nothing).
-        # `None` is the answer that matters here — it means the listing is COMPLETE, which is what a
-        # caller could not previously tell from a truncated one.
+        # The listing is a page: `None` means it is complete.
         "page_token": None,
     }
-    assert captured == [{"user": "dex~alice", "relation": "can_get_metadata", "object_type": "table"}]
+    # The listing judges its own candidates, every model on storage, on the reader rung (a registry model has no uuid,
+    # so its object is its name).
+    assert captured == [{"user": "dex~alice", "relation": "can_get_metadata", "objects": ["table:models$demo", "table:models$other"]}]
 
 
 def test_list_models_is_empty_for_a_caller_with_no_grants(models_client: tuple[TestClient, str], monkeypatch: pytest.MonkeyPatch) -> None:
     client, _ = models_client
-    _fake_list_objects([], monkeypatch)
+    _fake_batch_check([], monkeypatch)
     resp = client.get("/management/v1/model", headers={"Authorization": "Bearer t"})
     assert resp.status_code == 200
-    assert resp.json() == {"models": [], "authorization_truncated": False, "page_token": None}
+    assert resp.json() == {"models": [], "page_token": None}
 
 
 def test_list_models_serializes_null_versions_for_an_unreadable_registry(models_client: tuple[TestClient, str], monkeypatch: pytest.MonkeyPatch) -> None:
@@ -234,7 +232,7 @@ def test_list_models_serializes_null_versions_for_an_unreadable_registry(models_
 
     client, registry = models_client
     pathlib.Path(registry).parent.joinpath("halfborn").mkdir()
-    _fake_list_objects(["table:models$demo", "table:models$halfborn"], monkeypatch)
+    _fake_batch_check(["table:models$demo", "table:models$halfborn"], monkeypatch)
 
     resp = client.get("/management/v1/model", headers={"Authorization": "Bearer t"})
 

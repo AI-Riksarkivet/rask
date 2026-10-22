@@ -39,6 +39,8 @@ from lance_namespace_urllib3_client.models import CreateNamespaceRequest
 from openfga_sdk.client.models import ClientCheckRequest, ClientWriteRequest
 from openfga_sdk.exceptions import ValidationException
 
+from service_kit.lakehouse.naming import UUID_PROPERTY
+
 
 #: A pipeline's own account in a namespace the release knows nothing about.
 _PIPELINE_NS, _PIPELINE_SA = "etl-team", "nightly-pipeline"
@@ -112,7 +114,9 @@ def catalog(sa_issuer: Any, dex_issuer: Any, tmp_path: Any, monkeypatch: pytest.
     }
     for key, value in env.items():
         monkeypatch.setenv(key, value)
-    connect("dir", {"root": str(tmp_path)}).create_namespace(CreateNamespaceRequest(id=["db"]))
+    # The namespace the request reads, holding the uuid the catalog mints for one: the object its grants are held by.
+    db = f"namespace:{uuid.uuid4()}"
+    connect("dir", {"root": str(tmp_path)}).create_namespace(CreateNamespaceRequest(id=["db"], properties={UUID_PROPERTY: db.removeprefix("namespace:")}))
 
     from catalog.core.config import Settings, get_settings
 
@@ -121,7 +125,7 @@ def catalog(sa_issuer: Any, dex_issuer: Any, tmp_path: Any, monkeypatch: pytest.
 
     # The namespace the request reads, granted to the pipeline's account, the person and the user id carrying `#`; and the
     # root object the access-admin door's gate checks, granted to the person.
-    openfga = _OpenFga({(_PIPELINE_USER, "namespace:db"), (_PERSON_USER, "namespace:db"), (_HASHED_USER, "namespace:db"), (_PERSON_USER, "estate:rask")})
+    openfga = _OpenFga({(_PIPELINE_USER, db), (_PERSON_USER, db), (_HASHED_USER, db), (_PERSON_USER, "estate:rask")})
     with TestClient(app, raise_server_exceptions=False) as client:
         # Authorization on for the requests, after a lifespan that built the verifiers and no OpenFGA client.
         governed = Settings.model_validate(
@@ -212,6 +216,9 @@ def test_a_person_is_the_principal_their_connector_maps_so_a_renamed_connector_k
     assert set(openfga.asked) == ({asked_about} if asked_about else set()), f"OpenFGA was asked about {sorted(set(openfga.asked))}"
 
 
+#: The object a raw tuple names: a table's uuid's (ADR 0173 §8).
+_TABLE = "table:0b6f8a52-4c1e-4f7a-9d3e-2a1c5b7e9f01"
+
 #: The door's refusal of `alice`, bare or as the stored user id `user:alice`, which names the same string.
 _NOT_A_PRINCIPAL = "'alice' is not a principal: 'alice' names no identity provider: a principal is '<idp-id>~<subject>'"
 
@@ -224,7 +231,7 @@ _NOT_A_PRINCIPAL = "'alice' is not a principal: 'alice' names no identity provid
             200,
             "application/json",
             {"user": "user:dex~alice"},
-            [("user:dex~alice", "reader", "table:db$t")],
+            [("user:dex~alice", "reader", _TABLE)],
             id="a-principal-is-the-one-user-it-is",
         ),
         pytest.param("alice", 400, "application/problem+json", {"detail": _NOT_A_PRINCIPAL}, [], id="a-bare-name-is-refused"),
@@ -240,7 +247,7 @@ def test_a_seeded_tuple_names_a_principal_and_a_bare_name_is_refused(
     admin = dex_issuer.mint(_PERSON_ID, connector="corp", audience="lance-catalog", federated=True)
 
     answered = client.post(
-        "/management/v1/access/tuples", json={"user": user, "relation": "reader", "object": "table:db$t"}, headers={"Authorization": f"Bearer {admin}"}
+        "/management/v1/access/tuples", json={"user": user, "relation": "reader", "object": _TABLE}, headers={"Authorization": f"Bearer {admin}"}
     )
 
     body = answered.json()

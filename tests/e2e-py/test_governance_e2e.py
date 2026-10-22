@@ -218,7 +218,7 @@ def _store() -> tuple[dict[str, str], str]:
 
 
 def _tuples_on(obj: str) -> list[dict[str, Any]]:
-    """Every tuple the catalog's OpenFGA store holds whose object is ``obj``: what the reconciler counts as a ghost."""
+    """Every tuple the catalog's OpenFGA store holds whose object is ``obj``."""
     headers, store = _store()
     read = requests.post(f"{FGA}/stores/{store}/read", headers=headers, json={"tuple_key": {"object": obj}}, timeout=10)
     assert read.status_code == 200, read.text
@@ -241,7 +241,9 @@ def _store_users() -> set[str]:
             return users
 
 
-def test_a_forced_rename_carries_a_direct_grant_and_protection_and_leaves_no_tuple_on_the_old_name(stack: tuple[str, str]) -> None:
+def test_a_forced_rename_keeps_a_direct_grant_and_protection_and_writes_no_tuple(stack: tuple[str, str]) -> None:
+    """A table's grants are held by its uuid (ADR 0173 §8, [[LH-524]]): a rename keeps the uuid and writes no tuple, and a
+    table created again at the old name is another uuid that holds nothing the renamed one did."""
     server, _ = stack
     alice, outsider = _token("alice@example.com"), _token(OUTSIDER)
     ah, bh = {"Authorization": f"Bearer {alice}"}, {"Authorization": f"Bearer {outsider}"}
@@ -257,20 +259,21 @@ def test_a_forced_rename_carries_a_direct_grant_and_protection_and_leaves_no_tup
         assert granted.status_code == 200, granted.text
         assert requests.post(f"{server}/v1/table/{source}/describe", headers=bh, timeout=10).status_code == 200, "precondition: the direct grant reads"
         assert requests.post(f"{server}/management/v1/table/{source}/protection", headers=ah, json={"protected": True}, timeout=10).status_code == 200
+        described = requests.post(f"{server}/v1/table/{source}/describe", headers=ah, json={}, timeout=10).json()
+        held = _tuples_on(f"table:{described['properties']['rask.uuid']}")
 
         renamed = requests.post(f"{server}/v1/table/{source}/rename", headers=ah, params={"force": "true"}, json={"new_table_name": "dst"}, timeout=30)
 
         assert renamed.status_code == 200, renamed.text
-        assert requests.post(f"{server}/v1/table/{dest}/describe", headers=bh, timeout=10).status_code == 200, (
-            "the direct reader grant did not follow the table"
-        )
+        assert _tuples_on(f"table:{described['properties']['rask.uuid']}") == held, "the rename wrote or removed a tuple"
+        assert requests.post(f"{server}/v1/table/{dest}/describe", headers=bh, timeout=10).status_code == 200, "the direct reader lost the renamed table"
         assert requests.get(f"{server}/management/v1/table/{dest}/protection", headers=ah, timeout=10).json()["protected"] is True
-        assert _tuples_on(f"table:{source}") == [], "a tuple names the old id, which the reconciler reports as a ghost table"
-        # The old id names no table now, so no door answers for it; a table created there must hold nothing the old one did.
+        # A table created at the old name holds nothing the renamed one did.
         assert requests.post(f"{server}/v1/table/{source}/create", headers={**ah, **ARROW}, data=_ipc(rows), timeout=30).status_code == 200
         assert requests.get(f"{server}/management/v1/table/{source}/protection", headers=ah, timeout=10).json()["protected"] is False, (
             "a table created at the old id was born protected"
         )
+        assert requests.post(f"{server}/v1/table/{source}/describe", headers=bh, timeout=10).status_code == 403, "a table created at the old name kept a grant"
     finally:
         # The leg runs against live estates too; what it made goes, protection and all, so its namespace can be unbound.
         for table in (source, dest):

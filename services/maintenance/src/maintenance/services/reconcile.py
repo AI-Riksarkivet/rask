@@ -50,6 +50,7 @@ from maintenance.services.discovery import discover_datasets
 from maintenance.services.naming import TableIds, under_a_declared_root
 from maintenance.services.orphans import OrphanFile, scan_datasets
 from service_kit.governed import fga
+from service_kit.lakehouse import location_claims, trash
 from service_kit.lakehouse.base_refs import decoded_path, normalise
 from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base
 
@@ -621,16 +622,6 @@ def _ghosts(kind: str, tuple_counts: Mapping[str, int], *, record_ids: set[str],
     ]
 
 
-def _trashed_tables(records: Iterable[Mapping[str, Any]]) -> set[str]:
-    """The table ids the trash names ([[LH-516]]).
-
-    A recoverable drop deregisters its table and keeps the table's grants for its owner's undrop (#75), so a table in
-    the trash is in no catalog listing while its record still names it, until a purge or an expiry ends the record and
-    the grants together. A record with no ``kind`` is a table's, as `trash.put` keys it.
-    """
-    return {str(record["id"]) for record in records if str(record.get("kind") or "table") == "table"}
-
-
 def _unreferenced_projects(record_ids: set[str], tuple_counts: Mapping[str, int]) -> list[UnreferencedProject]:
     """Project records with no tuples at all — an undeletable tenant is drift too."""
     return [UnreferencedProject(id=project_id) for project_id in sorted(record_ids) if not tuple_counts.get(project_id)]
@@ -716,16 +707,15 @@ def _absent_datasets(*, registered: dict[str, tuple[str, str | None]], discovere
     return sorted(findings, key=lambda finding: (finding.table, finding.location))
 
 
-def _ungoverned_tables(tables: Iterable[tuple[str, str]], governed: dict[str, int]) -> list[UngovernedTable]:
+def _ungoverned_tables(tables: Iterable[tuple[str, str]], uuids: Mapping[str, str], governed: Mapping[str, int]) -> list[UngovernedTable]:
     """Catalog tables carrying NO authorization tuples at all.
 
-    ``governed`` is ``{object_id: tuple_count}`` for the ``table`` type out of the single whole-store
-    scan, so a table is ungoverned exactly when its id is absent from that map or maps to zero. Both
-    spellings are checked because the scan buckets by type and an empty bucket and a missing one are
-    the same fact arriving two ways.
+    ``governed`` is ``{object_id: tuple_count}`` for the ``table`` type out of the single whole-store scan, keyed by the
+    uuid each object names ([[LH-524]]), so a table is ungoverned exactly when its uuid is absent from that map or maps
+    to zero. A table whose claim records no uuid has no object any tuple could name, so it is ungoverned too.
     """
     return sorted(
-        (UngovernedTable(table=table, root=root) for table, root in tables if not governed.get(table)),
+        (UngovernedTable(table=table, root=root) for table, root in tables if not governed.get(uuids.get(table, ""))),
         key=lambda finding: (finding.table, finding.root),
     )
 
@@ -806,6 +796,11 @@ class Sources(BaseModel):
     #: pairs rather than widening them: three call sites unpack `(table, root)`.
     table_locations: dict[str, tuple[str, str | None]] | None = None
     tables_error: str | None = None
+    #: Each table's uuid (ADR 0173 §6), read off its location's claim; a table whose claim records none is absent.
+    table_uuids: dict[str, str] | None = None
+    #: The uuids of the tables and namespaces the trash keeps, whose grants stay for their undrop (#75).
+    trashed_uuids: set[str] | None = None
+    uuids_error: str | None = None
     buckets: list[str] | None = None
     buckets_error: str | None = None
     incomplete: list[IncompleteScan] = Field(default_factory=list)
@@ -962,7 +957,31 @@ async def load_sources(
     if scanned_tables is not None:
         sources.tables, unreadable_table_roots, sources.table_locations = scanned_tables
         sources.incomplete.extend(IncompleteScan(source=f"catalog:tables:{root}", reason=reason) for root, reason in unreadable_table_roots)
+    if sources.table_locations is not None and sources.trash is not None:
+        claims = location_claims.ClaimStore(control_root=control_root, storage_options=storage_options)
+        read, sources.uuids_error = await _read_blocking("claims:uuids", _uuids_of, sources.table_locations, sources.trash, claims)
+        if read is not None:
+            sources.table_uuids, sources.trashed_uuids = read
     return sources
+
+
+def _uuids_of(
+    registered: dict[str, tuple[str, str | None]], trash_records: list[dict[str, str]], claims: location_claims.ClaimStore
+) -> tuple[dict[str, str], set[str]]:
+    """Each live table's uuid, read off its location's claim, and every trashed object's uuid ([[LH-524]]).
+
+    The objects OpenFGA holds a table's grants on are keyed by these, so they are what the store's objects are compared
+    with: a table the manifest names is its claim's uuid, and a trashed one is the uuid its record keeps.
+    """
+    live: dict[str, str] = {}
+    for table, (root, location) in registered.items():
+        # The claim's uuid, whichever name holds it: a rename landing mid-scan hands the claim to the table's new name,
+        # and the table is still the uuid's, so reading it as gone would have drift repair revoke a live table's grants.
+        found = location_claims.read(claims, _resolved(root, location)) if location else None
+        if found is not None and found.claim.uuid is not None and found.claim.released_at is None:
+            live[table] = found.claim.uuid
+    trashed = {uuid for record in trash_records if (uuid := trash.object_uuid(record, claims)) is not None}
+    return live, trashed
 
 
 def _by_type(sources: Sources, object_type: str) -> dict[str, int]:
@@ -1076,12 +1095,14 @@ def build_report(
         # table reads as ghostly, turning an OpenFGA outage into a report naming the whole estate.
         # The trash index joins them ([[LH-516]]): without it every table in the trash reads as a ghost,
         # and drift repair revokes the grants its owner's undrop needs.
-        inputs=(sources.tables_error, sources.tuples_error, sources.trash_error),
+        # The claims join them too: a table is the uuid its claim records ([[LH-524]]), and without them every table
+        # reads as a ghost.
+        inputs=(sources.tables_error, sources.tuples_error, sources.trash_error, sources.uuids_error),
         detect=lambda: _ghosts(
             "table",
             _by_type(sources, "table"),
-            record_ids={table for table, _root in sources.tables or []},
-            exclude=_trashed_tables(sources.trash or []),
+            record_ids=set((sources.table_uuids or {}).values()),
+            exclude=sources.trashed_uuids or set(),
         ),
     )
     report.ungoverned_tables = _run_category(
@@ -1089,8 +1110,8 @@ def build_report(
         "ungoverned_tables",
         # The tuple scan joins the guard: without it every table reads as ungoverned, which would turn
         # an OpenFGA outage into a report naming the whole estate as drift.
-        inputs=(sources.tables_error, sources.tuples_error),
-        detect=lambda: _ungoverned_tables(sources.tables or [], _by_type(sources, "table")),
+        inputs=(sources.tables_error, sources.tuples_error, sources.uuids_error),
+        detect=lambda: _ungoverned_tables(sources.tables or [], sources.table_uuids or {}, _by_type(sources, "table")),
     )
 
     report.orphan_buckets = _run_category(

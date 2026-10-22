@@ -12,7 +12,7 @@ version pin read latest instead.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -45,8 +45,10 @@ def _version_exists(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture
-def vendor(client: TestClient, fake_ns: MagicMock) -> Iterator[MagicMock]:
+def vendor(client: TestClient, fake_ns: MagicMock, claim_described: Callable[[str], str]) -> Iterator[MagicMock]:
+    """A vendor answering one credential, for a table whose location's claim records its uuid, as a credential is scoped by it (ADR 0173 §6)."""
     fake_ns.describe_table.return_value = DescribeTableResponse(location=_LOCATION)
+    claim_described("db$t")
     vend = MagicMock()
     vend.vend.return_value = VendedCredentials(storage_options={"aws_access_key_id": "AK"})
     client.app.dependency_overrides[get_vendor] = lambda: vend

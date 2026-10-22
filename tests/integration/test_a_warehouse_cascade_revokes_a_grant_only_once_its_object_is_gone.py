@@ -79,6 +79,18 @@ class _Tenant:
         self.monkeypatch = monkeypatch
         #: The uuid each table's policy is kept under, as the policy door answered it (ADR 0173 §8).
         self.policy_uuids: dict[str, str] = {}
+        #: The FGA object each ``<kind>:<name>`` this tenant made is governed as (ADR 0173 §8): its warehouse by id,
+        #: every table and namespace by the uuid it was minted.
+        self.objects: dict[str, str] = {f"warehouse:{warehouse}": f"warehouse:{warehouse}"}
+
+    def _minted(self, kind: str, name: str) -> None:
+        answer = self.client.post(f"/v1/{kind}/{name}/describe", json={})
+        assert answer.status_code == 200, answer.text
+        self.objects[f"{kind}:{name}"] = f"{kind}:{answer.json()['properties']['rask.uuid']}"
+
+    def fga(self, named: list[str]) -> list[str]:
+        """The FGA objects ``named`` (each ``<kind>:<name>``) are governed as."""
+        return [self.objects[name] for name in named]
 
     def break_policy_store_once(self) -> None:
         """Fail the next end of an object's control-root records, as a control root that does not answer once."""
@@ -96,14 +108,17 @@ class _Tenant:
     def bind(self, namespace: str) -> None:
         answer = self.client.post(f"/management/v1/warehouses/{self.warehouse}/namespaces", json={"namespace": namespace})
         assert answer.status_code == 200, answer.text
+        self._minted("namespace", namespace)
 
     def create_namespace(self, namespace: str) -> None:
         answer = self.client.post(f"/v1/namespace/{namespace}/create", json={})
         assert answer.status_code == 200, answer.text
+        self._minted("namespace", namespace)
 
     def create_table(self, table: str) -> None:
         answer = self.client.post(f"/v1/table/{table}/create", content=encode_arrow_stream(_ROWS), headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE})
         assert answer.status_code == 200, answer.text
+        self._minted("table", table)
 
     def drop(self, kind: str, name: str, body: dict[str, str] | None = None) -> None:
         answer = self.client.post(f"/v1/{kind}/{name}/drop", json=body or {})
@@ -145,7 +160,10 @@ class _Tenant:
         for obj in objects:
             kind, _, name = obj.partition(":")
             answer = self.client.get(f"/management/v1/warehouses/{name}") if kind == "warehouse" else self.client.post(f"/v1/{kind}/{name}/exists", json={})
-            assert answer.status_code in (200, 404), f"{obj}: {answer.status_code} {answer.text}"
+            # Every check is allowed, so a refusal means the name holds no object: an absent name is answered 404 only
+            # under a parent namespace that still holds one, whose read rung vouches for asking.
+            absent = (404,) if kind == "warehouse" else (404, 403)
+            assert answer.status_code in (200, *absent), f"{obj}: {answer.status_code} {answer.text}"
             if answer.status_code == 200:
                 served.append(obj)
         return served
@@ -249,7 +267,7 @@ def test_a_cascade_removes_every_table_and_namespace_then_revokes_their_grants(t
     trash_held = [("table", "bronze$trashed"), ("table", "silver$s"), ("namespace", "silver"), ("table", "gold$g")]
     tables = ["bronze$a", "bronze$b", "bronze$inner$c", "bronze$trashed", "silver$s", "gold$g"]
     governed = [f"warehouse:{tenant.warehouse}", "namespace:bronze", "namespace:bronze$inner", "namespace:silver", *(f"table:{table}" for table in tables)]
-    assert len(tenant.store.naming(governed)) == len(governed), "an object was seeded no tuple, so the revoke below would pass vacuously"
+    assert len(tenant.store.naming(tenant.fga(governed))) == len(governed), "an object was seeded no tuple, so the revoke below would pass vacuously"
     assert tenant.trashed(trash_held) == trash_held and tenant.has_policy("silver$s"), "nothing kept for an undrop, so its end would pass vacuously"
     locations = tenant.trash_locations(["bronze$trashed", "silver$s", "gold$g"])
     assert len(tenant.base_recorded(locations)) == 3, "a trashed table kept no base record, so its end would pass vacuously"
@@ -262,7 +280,7 @@ def test_a_cascade_removes_every_table_and_namespace_then_revokes_their_grants(t
     assert answer.status_code == 200, answer.text
     body = answer.json()
     assert (body["namespaces_dropped"], body["bucket_purged"]) == (["bronze$inner", "bronze"], True)
-    assert tenant.store.naming(governed) == {}, "a grant outlived the object it was on"
+    assert tenant.store.naming(tenant.fga(governed)) == {}, "a grant outlived the object it was on"
     assert (tenant.trashed(trash_held), tenant.has_policy("silver$s")) == ([], False), "the warehouse's trash outlived it"
     assert tenant.base_recorded(locations) == [], "a trashed table's base record outlived its warehouse"
     assert body["tuples_revoked"] == held - len(tenant.store.tuples), "the door reported a count the store did not lose"
@@ -274,8 +292,8 @@ def test_a_cascade_removes_every_table_and_namespace_then_revokes_their_grants(t
 @pytest.mark.parametrize(
     "fail",
     [
-        pytest.param(lambda tenant: tenant.store.stop_after_one("table:bronze$b"), id="openfga-stops-in-a-bound-namespace"),
-        pytest.param(lambda tenant: tenant.store.stop_after_one("table:bronze$inner$d"), id="openfga-stops-in-its-trash"),
+        pytest.param(lambda tenant: tenant.store.stop_after_one(tenant.objects["table:bronze$b"]), id="openfga-stops-in-a-bound-namespace"),
+        pytest.param(lambda tenant: tenant.store.stop_after_one(tenant.objects["table:bronze$inner$d"]), id="openfga-stops-in-its-trash"),
         pytest.param(lambda tenant: tenant.break_policy_store_once(), id="the-control-root-fails-after-a-revoke"),
     ],
 )
@@ -299,10 +317,10 @@ def test_a_cascade_that_fails_part_way_says_what_landed_keeps_the_rest_governed_
     trash_held = [("table", "bronze$inner$d"), ("namespace", "bronze$inner")]
     kept = [f"{kind}:{name}" for kind, name in trash_held]
     governed = [f"warehouse:{tenant.warehouse}", "namespace:bronze", "namespace:silver", *(f"table:{table}" for table in tables)]
-    assert tenant.trashed(trash_held) == trash_held and len(tenant.store.naming(kept)) == len(kept), (
+    assert tenant.trashed(trash_held) == trash_held and len(tenant.store.naming(tenant.fga(kept))) == len(kept), (
         "nothing kept for an undrop, so its end would pass vacuously"
     )
-    before = tenant.store.naming(governed)
+    before = tenant.store.naming(tenant.fga(governed))
     held = len(tenant.store.tuples)
     fail(tenant)
 
@@ -312,8 +330,9 @@ def test_a_cascade_that_fails_part_way_says_what_landed_keeps_the_rest_governed_
     gone = [obj for obj in governed if obj not in served]
     # The edge a removed object left on its parent goes with that object's revoke, whenever it lands: every other tuple
     # on a served object stays.
-    untouched = {obj: {t for t in before[obj] if not set(t) & set(gone)} for obj in served}
-    now = {obj: {t for t in held if not set(t) & set(gone)} for obj, held in tenant.store.naming(served).items()}
+    removed = set(tenant.fga(gone))
+    untouched = {obj: {t for t in before[obj] if not set(t) & removed} for obj in tenant.fga(served)}
+    now = {obj: {t for t in held if not set(t) & removed} for obj, held in tenant.store.naming(tenant.fga(served)).items()}
     assert now == untouched, "a grant on an object still there was revoked"
     assert (partial.status_code, partial.headers["content-type"]) == (503, "application/problem+json"), partial.text
     report = partial.json()
@@ -328,5 +347,5 @@ def test_a_cascade_that_fails_part_way_says_what_landed_keeps_the_rest_governed_
 
     assert finished.status_code == 200, finished.text
     assert tenant.trashed(trash_held) == [], "the re-issue left the warehouse's trash behind"
-    assert tenant.store.naming([*governed, *kept]) == {}, "the re-issue left a grant on an object it removed"
+    assert tenant.store.naming(tenant.fga([*governed, *kept])) == {}, "the re-issue left a grant on an object it removed"
     assert not tenant.bucket_exists()

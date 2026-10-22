@@ -123,15 +123,19 @@ def test_the_list_is_the_callers_projects(monkeypatch: pytest.MonkeyPatch, estat
         checks.append((user, relation, obj))
         return estate_observer
 
-    async def _fake_list_objects(_client: Any, *, user: str, relation: str, object_type: str, **_kw: Any) -> Any:
-        assert (user, relation, object_type) == ("dex~bob", "member", "project")
-        return SimpleNamespace(objects=["project:globex", "project:fresh", "project:ghost"])
+    members = {"project:globex", "project:fresh", "project:ghost"}
+    asked: list[list[str]] = []
+
+    async def _fake_batch_check(_client: Any, *, user: str, relation: str, objects: list[str], **_kw: Any) -> dict[str, bool]:
+        assert (user, relation) == ("dex~bob", "member")
+        asked.append(objects)
+        return {obj: obj in members for obj in objects}
 
     async def _no_admins(*_a: Any, **_k: Any) -> list[str]:
         return []
 
     monkeypatch.setattr(ep.fga, "check", _fake_check)
-    monkeypatch.setattr(ep.fga, "list_objects", _fake_list_objects)
+    monkeypatch.setattr(ep.fga, "batch_check", _fake_batch_check)
     monkeypatch.setattr(ep.fga, "list_users", _no_admins)
     result = _list(
         _settings(fga_enabled=True),
@@ -140,6 +144,8 @@ def test_the_list_is_the_callers_projects(monkeypatch: pytest.MonkeyPatch, estat
     )
     assert [p.project for p in result] == expected
     assert checks == [("dex~bob", "can_observe_events", "warehouse:lance_catalog")]
+    # A member's listing judges the registry's own candidates, never the projects FGA says the caller reaches.
+    assert asked == ([] if estate_observer else [["project:acme", "project:fresh", "project:globex"]])
 
 
 def test_one_tenants_detail_is_estate_observer_gated(monkeypatch: pytest.MonkeyPatch) -> None:

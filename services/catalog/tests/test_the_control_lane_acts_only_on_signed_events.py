@@ -43,13 +43,14 @@ FORGED_DELETE: dict[str, Any] = {
     "extra": {"namespaces_dropped": ["acme"], "project": "acme"},
 }
 
-#: What the catalog itself announced: `beta` was dropped.
+#: What the catalog itself announced: `beta` was dropped, named by its uuid and its name (ADR 0173 §8).
 GENUINE_DROP: dict[str, Any] = {
     "event_id": "genuine-drop",
     "occurred_at": "2026-10-18T12:00:01+00:00",
     "action": "namespace_dropped",
     "object_type": "namespace",
-    "object_id": "namespace:beta",
+    "object_id": "namespace:7d2e4c19-8a3b-4e6f-b1d0-5c9a2e8f3b47",
+    "object_name": "beta",
     "actor": "user:dex~alice",
     "extra": {},
 }

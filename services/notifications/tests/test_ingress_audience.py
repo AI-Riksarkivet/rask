@@ -14,6 +14,7 @@ fan-out does with the answers, which is where the rules either hold or quietly s
 """
 
 import logging
+import uuid
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, cast
 
@@ -37,6 +38,21 @@ WIRED = cast("OpenFgaClient", object())
 OPEN = Visibility(decider=None, enabled=False)
 
 
+def _uuid(name: str) -> str:
+    """The uuid the catalog minted for the table ``name``, which its events carry (ADR 0173 §10)."""
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, name))
+
+
+def _object(name: str) -> str:
+    """The object the table ``name``'s grants are held by ([[LH-524]])."""
+    return f"table:{_uuid(name)}"
+
+
+def _output(name: str) -> dict[str, Any]:
+    """An output as the catalog names it: its name, and its table's uuid in the ``lance`` facet."""
+    return {"namespace": "silver", "name": name, "facets": {"lance": {"tableUuid": _uuid(name)}}}
+
+
 def _event(*, author: str = "alice", outputs: list[str] | None = None, project: str | None = None, at: datetime | None = None) -> dict[str, Any]:
     facets: dict[str, Any] = {"author": {"name": author, "sub": author}}
     if project is not None:
@@ -46,7 +62,7 @@ def _event(*, author: str = "alice", outputs: list[str] | None = None, project: 
         "eventType": "FAIL",
         "eventTime": (at or datetime(2026, 8, 9, 12, 0, tzinfo=UTC)).isoformat(),
         "run": {"runId": "run-1", "facets": facets},
-        "outputs": [{"namespace": "silver", "name": name} for name in (outputs if outputs is not None else ["silver$pages"])],
+        "outputs": [_output(name) for name in (outputs if outputs is not None else ["silver$pages"])],
     }
 
 
@@ -195,8 +211,7 @@ async def test_the_objects_are_addressed_as_tables_and_never_as_a_container(monk
 
     assert recorder.calls[0]["relation"] == NOTIFY_RELATION
     assert recorder.calls[0]["relation"] != METADATA_RELATION, "delivery must not ask the render's question"
-    for obj in recorder.calls[0]["objects"]:
-        assert obj.startswith("table:")
+    assert sorted(recorder.calls[0]["objects"]) == sorted([_object("silver$pages"), _object("gold$lines")])
 
 
 # --- the subset rule -----------------------------------------------------------------------------
@@ -209,7 +224,7 @@ async def test_one_invisible_output_removes_that_recipient_and_nobody_else(monke
     is a decision about YOU, so it must not remove anyone who can see both."""
     view, _ = _governed(
         monkeypatch,
-        {"alice": {"table:silver$pages"}, "bob": {"table:silver$pages", "table:gold$lines"}},
+        {"alice": {_object("silver$pages")}, "bob": {_object("silver$pages"), _object("gold$lines")}},
     )
     plane = _Plane()
 
@@ -296,7 +311,7 @@ def _cascade_event(*, originator: str | None, author: str = "data_eng") -> dict[
         "eventType": "FAIL",
         "eventTime": "2026-08-16T12:00:00+00:00",
         "run": {"runId": "run-cascade-1", "facets": {"author": {"name": author, "sub": author}, "lance": lance}},
-        "outputs": [{"namespace": "silver", "name": "acme-silver$features"}],
+        "outputs": [_output("acme-silver$features")],
     }
 
 

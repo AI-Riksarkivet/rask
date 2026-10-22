@@ -25,6 +25,7 @@ import pyarrow.ipc as ipc
 import pytest
 from fastapi.testclient import TestClient
 
+from service_kit.openlineage import DatasetUuids, with_dataset_uuids
 from tests.integration.lineage_app import SUBJECT_HEADER, free_port, governed_lineage, live_catalog, live_lineage, run_event
 
 
@@ -33,7 +34,8 @@ _PIPELINE = "kubernetes~system:serviceaccount:etl:etl-runner"
 _ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
 
 #: The tables the pipeline may see. `acme-silver$hidden` and `globex-silver$orders` are someone else's.
-_GRANTED = {(_PIPELINE, "can_get_metadata", f"table:{name}") for name in ("acme-silver$pages", "acme-gold$catalog", "acme-gold$index")}
+_VISIBLE = ("acme-silver$pages", "acme-gold$catalog", "acme-gold$index")
+_TABLES = (*_VISIBLE, "acme-silver$hidden", "globex-silver$orders")
 
 
 def _rows(start: int, stop: int) -> bytes:
@@ -94,6 +96,33 @@ def test_each_catalog_commit_is_followed_forward_once_and_in_commit_order(tmp_pa
     assert (ahead["events"], ahead["next_cursor"]) == ([], seqs[-1]), "a cursor this feed never issued must be answered with its newest seq"
 
 
+def _declared(catalog_url: str, tables: tuple[str, ...]) -> dict[str, DatasetUuids]:
+    """Declare each of ``tables`` (and its namespace) in the catalog, and answer the uuids the catalog minted for each and
+    its namespace: the object its grants are held by, and what a feed row names it by ([[LH-524]])."""
+    with httpx.Client(base_url=catalog_url, timeout=60) as catalog:
+
+        def minted(kind: str, name: str) -> str:
+            return str(catalog.post(f"/v1/{kind}/{name}/describe", json={}).json()["properties"]["rask.uuid"])
+
+        namespaces = list(dict.fromkeys(table.split("$")[0] for table in tables))
+        for namespace in namespaces:
+            assert catalog.post(f"/v1/namespace/{namespace}/create", json={}).status_code == 200
+        for table in tables:
+            assert catalog.post(f"/v1/table/{table}/declare", json={}).status_code == 200
+        namespace_uuid = {namespace: minted("namespace", namespace) for namespace in namespaces}
+        return {table: DatasetUuids(table_uuid=minted("table", table), namespace_uuid=namespace_uuid[table.split("$")[0]]) for table in tables}
+
+
+def _stamped(event: dict[str, Any], uuid_of: Mapping[str, DatasetUuids]) -> dict[str, Any]:
+    """``event`` with each dataset it names carrying its table's and namespace's uuids, as the catalog's own events carry
+    them (ADR 0173 §10)."""
+
+    def stamp(datasets: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [with_dataset_uuids(d, uuid_of[d["name"]], producer="https://example.invalid/etl") for d in datasets]
+
+    return {**event, "inputs": stamp(event["inputs"]), "outputs": stamp(event["outputs"])}
+
+
 @pytest.fixture
 def governed_feed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     """Lineage's router behind its real authentication-then-FGA gate, over a feed the store wrote to the catalog."""
@@ -107,15 +136,18 @@ def governed_feed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[T
         run_event(str(uuid.uuid4()), "COMPLETE", "2026-10-15T10:00:05+00:00", outputs=["acme-gold$index"]),
         run_event(str(uuid.uuid4()), "COMPLETE", "2026-10-15T10:00:06+00:00", outputs=["acme-gold$catalog"], inputs=("acme-silver$hidden",)),
     ]
-    with live_catalog(tmp_path / "catalog", monkeypatch) as url, governed_lineage(url, monkeypatch, _GRANTED) as client:
-        store = client.app.state.provenance
+    with live_catalog(tmp_path / "catalog", monkeypatch) as url:
+        uuid_of = _declared(url, _TABLES)
+        granted = {(_PIPELINE, "can_get_metadata", f"table:{uuid_of[name].table_uuid}") for name in _VISIBLE}
+        with governed_lineage(url, monkeypatch, granted) as client:
+            store = client.app.state.provenance
 
-        async def _seed() -> None:
-            for event in feed:
-                await store.record(parse_event(event))
+            async def _seed() -> None:
+                for event in feed:
+                    await store.record(parse_event(_stamped(event, uuid_of)))
 
-        asyncio.run(_seed())
-        yield client
+            asyncio.run(_seed())
+            yield client
 
 
 def test_a_table_or_namespace_filter_narrows_the_feed_and_hidden_events_stay_hidden(governed_feed: TestClient) -> None:

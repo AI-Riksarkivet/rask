@@ -21,7 +21,7 @@ of three properties the storage and bus already have, plus two enforcement point
 |---|---|---|
 | **Storage** | **The Lance manifest IS the schema; the version IS the handshake.** Every write commits an immutable, numbered version whose manifest embeds the full schema — data is self-describing, so there is nothing separate to register or drift from. A consumer that pins `(dataset, version)` gets bit-identical data + schema forever (time travel). | Lance format itself; CAS commit (put-if-not-exists), proven per store by `tests/e2e/test_object_store_cas_e2e.py` (`make e2e-cas`), verdict in `docs/DURABILITY.md` |
 | **Bus** | **Events carry POINTERS, never data** (claim-check): a catalog write announcement names the table, its Lance version, its branch and its author; a control event names an object and an action. The OpenLineage facets' `_schemaURL`s ARE the event-shape contract — official spec URLs, pinned in code. | `catalog/core/lineage_emit.py`; facet URLs in `packages/service-kit/src/service_kit/openlineage.py` |
-| **Identity** | One string threads all planes: `table:<id>` is the catalog id, the OpenFGA object, and the name lineage's feed and edge list record — so the contract's subject is never ambiguous. | catalog + `model.fga` + `lineage/models.py` (`Dataset.lineage_name`) |
+| **Identity** | One uuid threads all planes: the catalog mints it for a table and keeps it across a rename (ADR 0173), and it is the OpenFGA object (`table:<uuid>`), the table's location (`<root>/<uuid>`) and the key lineage's edge list records; the name is how a caller addresses the table — so the contract's subject is never ambiguous, even across a rename. | catalog (`table_claims`) + `model.fga` + `lineage/services/provenance.py` |
 
 The **handshake in practice**: the catalog announces every committed write on lineage, naming the table and the
 version it produced; a user's pipeline reads the upstream at a version, writes downstream through the catalog
@@ -94,7 +94,7 @@ No — related species, different format and bigger scope on our side:
 |---|---|---|
 | What it is | Apache **Iceberg** REST catalog (Rust) | **Lance** REST catalog + lineage + governance, with the medallion as tier governance in the catalog |
 | The "contract" | the Iceberg spec: snapshots, schema evolution via column IDs, hidden partitioning — metadata JSON managed by the catalog | the Lance manifest + immutable versions (§2) — self-describing storage, catalog is a thin adapter |
-| AuthZ | OpenFGA (same choice — we studied theirs) | OpenFGA, threaded through the SAME `table:<id>` identity as lineage |
+| AuthZ | OpenFGA (same choice — we studied theirs) | OpenFGA, threaded through the SAME table uuid as lineage (`table:<uuid>`) |
 | Lineage | none | OpenLineage intake, a durable commit feed and a table-level edge list as catalog-governed Lance tables, every event forwarded to a bring-your-own graph backend |
 | Change events | CloudEvents emitted on every change | OpenLineage events on lineage's durable `GET /events` feed |
 | Change approval | a `ContractVerification` trait inside the catalog that can refuse a table change that would break a data contract or quality SLO | the same idea on the Lance write path: tier governance and the publish-time gate in the catalog (ADR 0155, ADR 0156) |

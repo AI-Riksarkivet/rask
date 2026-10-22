@@ -170,11 +170,17 @@ def _forged(message: BusMessage, event: dict[str, Any]) -> tuple[dict[str, Any],
     return {**message.envelope, "id": envelope_id, "data": event}, envelope_id
 
 
+def _named(event: dict[str, Any]) -> str:
+    """What a control event is about, by name: a table's or namespace's name (`object_name`, its `object_id` names its
+    uuid), any other object by its id (`project:<id>`)."""
+    return str(event.get("object_name") or event.get("object_id"))
+
+
 def _grant_messages(captured: Captured, person: Identity) -> dict[str, BusMessage]:
-    """The `grant_added` messages naming ``person``, by the object each grant is on."""
+    """The `grant_added` messages naming ``person``, by the name of the object each grant is on."""
     subject = user_object(person.principal)
     return {
-        str(message.event.get("object_id")): message
+        _named(message.event): message
         for message in captured.control
         if message.event.get("action") == "grant_added" and (message.event.get("extra") or {}).get("subject") == subject
     }
@@ -184,7 +190,7 @@ def _grant_messages(captured: Captured, person: Identity) -> dict[str, BusMessag
 def captured(byo_tenant: Tenant, byo_run: ScenarioRun) -> Captured:
     tables = {byo_run.bronze_table, byo_run.silver_table}
     lineage = [message for message in bus.messages_since("LINEAGE", byo_tenant.created_at) if _tables_of(message.event) & tables]
-    control = [message for message in bus.messages_since("CATALOG_CONTROL", byo_tenant.created_at) if byo_tenant.project in str(message.event.get("object_id"))]
+    control = [message for message in bus.messages_since("CATALOG_CONTROL", byo_tenant.created_at) if byo_tenant.project in _named(message.event)]
     return Captured(feed=feed_of(byo_tenant.pipeline, byo_run), lineage=lineage, control=control)
 
 
@@ -305,9 +311,9 @@ def test_each_person_the_scenario_names_is_told_exactly_their_part(captured: Cap
     (`can_be_notified`, a reader's)."""
     tenant = byo_tenant
 
-    def grant(person: Identity, object_id: str) -> tuple[str, str, str]:
-        message = _grant_messages(captured, person).get(object_id)
-        return (f"{message.event['event_id']}@GRANT_ADDED" if message else "no grant_added event names this", "grant_added", object_id)
+    def grant(person: Identity, named: str) -> tuple[str, str, str]:
+        message = _grant_messages(captured, person).get(named)
+        return (f"{message.event['event_id']}@GRANT_ADDED" if message else "no grant_added event names this", "grant_added", named)
 
     def run(row: dict[str, Any], reason: str) -> tuple[str, str, str]:
         return (f"{event_identity(row['event'])}@COMPLETE", reason, _commit(row)[0])
@@ -318,12 +324,12 @@ def test_each_person_the_scenario_names_is_told_exactly_their_part(captured: Cap
         "admin": sorted([grant(tenant.admin, f"project:{tenant.project}"), *(run(row, "watch") for row in approval)]),
         "pipeline": sorted(
             [
-                grant(tenant.pipeline, f"namespace:{tenant.bronze}"),
-                grant(tenant.pipeline, f"namespace:{tenant.silver}"),
+                grant(tenant.pipeline, tenant.bronze),
+                grant(tenant.pipeline, tenant.silver),
                 *(run(row, "author") for row in authored),
             ]
         ),
-        "validator": sorted([grant(tenant.validator, f"namespace:{tenant.silver}")]),
+        "validator": sorted([grant(tenant.validator, tenant.silver)]),
     }
 
     deadline = time.monotonic() + scenario.SETTLE_SECONDS
@@ -361,7 +367,7 @@ def test_nothing_the_scenario_caused_parked_and_the_outbox_drained(byo_tenant: T
     test depends on. The outbox depth is the estate's: the set the relay drains, each a committed write not yet
     confirmed delivered."""
     parked = [
-        (message.seq, message.subject, sorted(_tables_of(message.event)) or message.event.get("object_id"))
+        (message.seq, message.subject, sorted(_tables_of(message.event)) or _named(message.event))
         for message in bus.messages_since("DLQ", byo_tenant.created_at)
     ]
     depth = settled_outbox_depth(byo_tenant.admin)

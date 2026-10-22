@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from typing import Final
+from typing import Final, Literal
 
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import DescribeNamespaceRequest, InternalError, InvalidInputError, LanceNamespace, NamespaceNotFoundError, UnsupportedOperationError
@@ -55,22 +55,34 @@ UNSTAMPABLE_DATA_DOORS: Final = frozenset({"update", "add_columns", "register"})
 type RungCheck = Callable[["Rung"], Awaitable[None]]
 
 
+class Named(BaseModel):
+    """A table or namespace by its name: the object its grants are held by is what that name resolves to (ADR 0173 §8)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    kind: Literal["table", "namespace"]
+    segments: tuple[str, ...]
+    #: The door acts on an object the trash may hold under this name (undrop, tasks), so a name no live object holds
+    #: resolves to the trashed one's uuid.
+    in_trash: bool = False
+
+
 class Rung(BaseModel):
-    """One relation asked on one FGA object."""
+    """One relation asked on one object: a table or namespace by its name, or an object no name resolves to (a warehouse)."""
 
     model_config = ConfigDict(frozen=True)
 
     relation: str
-    obj: str
+    on: Named | str
 
 
 class Write(BaseModel):
     """What a write door is about to do, named by its route.
 
-    ``op`` is the route suffix (``insert``, ``create``, ``rename``) and ``obj`` the object written. ``rung``
-    is what the route maps declare for it, asked on the parent namespace for a create; it is ``None`` only
-    for a top-level create the deployment leaves open (``fga_lock_root_create`` off). ``table`` is the table
-    the write lands in, which for a rename is the destination.
+    ``op`` is the route suffix (``insert``, ``create``, ``rename``) and ``obj`` the object written, by its name, for the
+    audit. ``rung`` is what the route maps declare for it, asked on the parent namespace for a create; it is ``None``
+    only for a top-level create the deployment leaves open (``fga_lock_root_create`` off). ``table`` is the table the
+    write lands in, which for a rename is the destination.
     """
 
     model_config = ConfigDict(frozen=True)

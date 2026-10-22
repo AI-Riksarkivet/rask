@@ -225,7 +225,7 @@ async def read_access_tuples(
     token: CurrentToken,
     object_type: Annotated[str | None, Query(description="scan one whole type (e.g. 'table')")] = None,
     user: Annotated[str | None, Query(description="filter by subject (bare id = user:<id>)")] = None,
-    object: Annotated[str | None, Query(description="filter by one full object ('table:db1$t')")] = None,
+    object: Annotated[str | None, Query(description="filter by one full object ('table:<uuid>', as OpenFGA holds a table)")] = None,
     page_size: Annotated[int | None, Query(ge=1, le=_MAX_PAGE_SIZE)] = None,
     continuation: Annotated[str | None, Query(description="the previous page's continuation token")] = None,
 ) -> AccessTuplesPage:

@@ -18,6 +18,7 @@ failure above a delivery above a duplicate — so the ranking is driven here wit
 will produce, by widening the audience at the one seam that decides it.
 """
 
+import uuid
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, cast
 
@@ -50,6 +51,20 @@ FGA_ALL = "all"
 FGA_NONE = "none"
 
 
+def _uuid(name: str) -> str:
+    """The uuid the catalog minted for the table ``name``, which its events carry (ADR 0173 §10)."""
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, name))
+
+
+def _output(name: str) -> dict[str, Any]:
+    """An output as the catalog names it: its name, and its table's uuid in the ``lance`` facet."""
+    return {"namespace": "silver", "name": name, "facets": {"lance": {"tableUuid": _uuid(name)}}}
+
+
+#: The object `silver$pages`'s grants are held by ([[LH-524]]).
+PAGES = f"table:{_uuid('silver$pages')}"
+
+
 def _event(
     *,
     event_type: str = "FAIL",
@@ -62,7 +77,7 @@ def _event(
         "eventType": event_type,
         "eventTime": "2026-08-09T12:00:00+00:00",
         "run": {"runId": run_id, "facets": facets},
-        "outputs": [{"namespace": "silver", "name": name} for name in (outputs if outputs is not None else ["silver$pages"])],
+        "outputs": [_output(name) for name in (outputs if outputs is not None else ["silver$pages"])],
     }
 
 
@@ -151,7 +166,7 @@ def _view(kind: str, monkeypatch: pytest.MonkeyPatch) -> Visibility:
         return Visibility(decider=None, enabled=False)
     if kind == FGA_UNWIRED:
         return Visibility(decider=None, enabled=True)
-    allowed = {"table:silver$pages"} if kind == FGA_ALL else set()
+    allowed = {PAGES} if kind == FGA_ALL else set()
     monkeypatch.setattr(visibility_module.fga, "batch_check", _Checks(allowed))
     return Visibility(decider=OpenFgaDecider(WIRED), enabled=True)
 
@@ -304,7 +319,7 @@ async def test_an_event_one_recipient_may_not_see_is_still_a_delivered_event(
     an operator watches for "nobody is being told anything"."""
     plane = _Plane()
     monkeypatch.setattr(ingest_module, "audience_for", _audience("alice", "bob"))
-    monkeypatch.setattr(visibility_module.fga, "batch_check", _Checks({"table:silver$pages"}, subjects={"alice"}))
+    monkeypatch.setattr(visibility_module.fga, "batch_check", _Checks({PAGES}, subjects={"alice"}))
     seen_by_alice_only = Visibility(decider=OpenFgaDecider(WIRED), enabled=True)
 
     answer = await ingest_run_event(_event(), lane=Lane.BUS, visibility=seen_by_alice_only, open_inbox=plane.open)

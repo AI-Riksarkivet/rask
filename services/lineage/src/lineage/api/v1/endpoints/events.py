@@ -17,12 +17,13 @@ from lance_namespace import InvalidInputError
 from pydantic import BaseModel, ConfigDict
 
 from lineage.api.dependencies import BearerDep, NamesDep, ProvenanceDep, SettingsDep
-from lineage.api.fga_deps import FilterDep, governed, is_external_source, require_event_feed_reader
+from lineage.api.fga_deps import FilterDep, Governed, governed, governed_refs, output_refs, require_event_feed_reader
 from lineage.api.security import CurrentToken
 from lineage.schemas import EventRecord, Events, FeedProjection, ProjectedEvent
 from lineage.services.names import CatalogNames
+from service_kit.governed import fga
 from service_kit.lakehouse.naming import CATALOG_DELIMITER
-from service_kit.openlineage import LANCE_FACET, dataset_uuids
+from service_kit.openlineage import LANCE_FACET
 
 
 router = APIRouter(tags=["query"])
@@ -57,40 +58,33 @@ def _column_lineage_datasets(event: dict) -> set[str]:
     return out
 
 
-def _governed_datasets(record: EventRecord) -> set[str]:
-    """Which datasets a feed row must be authorized against — EXTERNAL INPUTS EXCLUDED.
+def _governed_datasets(record: EventRecord) -> Governed:
+    """What a feed row must be authorized against: the tables it names, by the uuids it recorded ([[LH-524]]) —
+    EXTERNAL INPUTS EXCLUDED.
 
-    The read-path twin of `enforce_output_authz`'s exemption, and it was missing. R23: raw is the
-    external world, never a governed tier, so an external source has no `table:` object and no tuple
-    that could ever be written for it. The write path already skips those inputs; the read path
-    authorized them anyway, so every event naming one was hidden from EVERY caller — the lakehouse
-    events board as much as the notifications reconciler.
+    The read-path twin of `enforce_output_authz`'s exemption. R23: raw is the external world, never a governed tier, so
+    an external source has no `table:` object and no tuple that could ever be written for it, and the row records no
+    uuid for it. A governed table the row recorded without a uuid (an outside producer's name its credential could not
+    resolve) is named by no object, so the row is hidden under FGA.
 
-    It could not apply the rule as written, because `consumer.py` persists `[d.name for d in
-    event.inputs]` and the NAMESPACE — the whole discriminator — is dropped. The namespace is not lost
-    though: the full payload is stored beside those columns, and `_column_lineage_datasets` already
-    reads it for the same class of question. So the exemption is recovered from the payload when it is
-    there.
-
-    When it is NOT there — `summary=true` drops the payload at the SQL layer — the bare names are all
-    that exist and governing on them is the only option. That is today's behaviour and this leaves it
-    alone: the fix applies exactly where the information survives.
+    The payload is read when it is there, because the column upstreams inside its ``columnLineage`` facets name source
+    tables beyond the top-level inputs (`_column_lineage_datasets`), and a caller who can see the output must not
+    receive input tables' column schemas they cannot read; each is the table a dataset of the event by that name is.
+    ``summary=true`` drops the payload, and the uuids the row recorded are then all there is.
 
     OUTPUTS are never exempted, on the read path as on the write path. Writing is the direction that
     mutates the estate, and an output naming an external namespace is a producer claiming to have
     written the outside world.
     """
-    outputs = set(record.outputs)
     payload = getattr(record, "event", None) or {}
-    raw_inputs = payload.get("inputs") if isinstance(payload, dict) else None
-    if not isinstance(raw_inputs, list) or not raw_inputs:
-        return set(record.inputs) | outputs | _column_lineage_datasets(record.event)
-    governed_inputs = {
-        str(d.get("name"))
-        for d in raw_inputs
-        if isinstance(d, dict) and d.get("name") and not is_external_source(str(d.get("namespace") or ""), str(d.get("name")))
-    }
-    return governed_inputs | outputs | _column_lineage_datasets(record.event)
+    payload = payload if isinstance(payload, dict) else {}
+    inputs = list(payload.get("inputs") or [])
+    outputs = [*(payload.get("outputs") or []), *([payload["dataset"]] if isinstance(payload.get("dataset"), dict) else [])]
+    if not inputs and not outputs:
+        return Governed(objects=frozenset(fga.table_object(uuid) for uuid in record.table_uuids), unresolved=frozenset(record.unresolved_tables))
+    read = governed_refs([*inputs, *outputs], column_upstreams=_column_lineage_datasets(record.event))
+    written = output_refs(outputs)
+    return Governed(objects=read.objects | written.objects, unresolved=read.unresolved | written.unresolved)
 
 
 #: The top-level fields of an OpenLineage event that targeting reads: the state, when it happened, and the
@@ -185,20 +179,6 @@ class _Scope(BaseModel):
             return True
         by_name = set(record.unresolved_tables) if self.namespace_uuid else {*record.inputs, *record.outputs}
         return self.namespace_uuid in record.namespace_uuids or any(name.startswith(f"{self.namespace}{CATALOG_DELIMITER}") for name in by_name)
-
-    def governed_as(self, datasets: set[str], record: EventRecord) -> set[str]:
-        """``datasets`` with every name the row recorded for the scope's table answered by the table's name now.
-
-        Checks key on names until they key on uuids ([[LH-524]]), and a renamed table's grants moved with it, so a row
-        recorded under its old name is governed as the table the caller named and resolved, which is the same table.
-        Read off the row's payload, the only place a name is paired with its uuid; a summary row keeps its names.
-        """
-        if self.table is None or not self.table_uuid:
-            return datasets
-        payload = record.event if isinstance(record.event, dict) else {}
-        named = [*(payload.get("inputs") or []), *(payload.get("outputs") or []), *([payload["dataset"]] if isinstance(payload.get("dataset"), dict) else [])]
-        renamed = {str(item.get("name")) for item in named if isinstance(item, dict) and dataset_uuids(item).table_uuid == self.table_uuid}
-        return (datasets - renamed) | ({self.table} if renamed & datasets else set())
 
 
 async def _scope(names: CatalogNames, bearer: str | None, *, table: str | None, namespace: str | None) -> _Scope:
@@ -332,7 +312,7 @@ async def get_events(
         datasets,
         settings.fga_enabled,
         [record for record in records if scope.names(record)],
-        lambda record: scope.governed_as(_governed_datasets(record), record),
+        _governed_datasets,
     )
     returned = visible[:limit]
     bounds = await provenance.feed_bounds()

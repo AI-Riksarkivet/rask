@@ -255,7 +255,7 @@ export interface paths {
          *     fed under every name it has had ([[LH-522]]). It starts from the name too, which an outside producer's event keys
          *     the table by when its credential could not resolve it: an erasure that reaches further than the table's own
          *     history is the safe direction. ``complete`` is false when the walk stopped short or a derived table is hidden from
-         *     the caller, which includes one renamed since its last edge, until checks key on uuids ([[LH-524]]).
+         *     the caller.
          */
         get: operations["get_derived_tables__name__derived_get"];
         put?: never;

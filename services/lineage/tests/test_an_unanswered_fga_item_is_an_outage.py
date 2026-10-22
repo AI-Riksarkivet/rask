@@ -4,10 +4,9 @@ The SDK hands an unanswered BatchCheck item back as ``allowed=False`` beside a `
 a deny, the bus door parks a delivery as a refusal (or consumes it as unrepairable, deleting the
 provenance) and the read filter hides a dataset the caller may hold a grant on.
 
-The other half: a name whose ``table:<name>`` is no object id (an external ``s3://bucket/prefix``
-source, a URI-named input) is not a question to send at all. ``fga.batch_check`` answers it False
-unasked; sent, OpenFGA v1.18.3 fails the item on the default Check engine and answers it false on the
-deployed ``weighted_graph_check`` one (both measured), and a space or tab in it fails the whole request.
+The other half: a governed dataset an event names without its table's uuid is no object any grant can name
+(``table:<uuid>``, [[LH-524]]), so it is not a question to send at all, and its name never reaches OpenFGA: a space
+or tab in a name sent as an object fails the whole request (measured on OpenFGA v1.18.3).
 
 Driven through the real ``fga.batch_check`` with a client double built from the SDK's own response
 classes; nothing here replaces ``batch_check`` itself.
@@ -17,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -35,11 +35,22 @@ from starlette.testclient import TestClient
 from lineage.api import fga_deps
 from lineage.core.config import LineageSettings
 from lineage.models import RunEvent
+from service_kit.governed import fga
 from service_kit.governed.decider import OpenFgaDecider
 from service_kit.governed.oidc import IDToken
 from service_kit.governed.person_identity import PersonPrincipal
 from service_kit.governed.principal import Principal
 from service_kit.lakehouse.ns_errors import install_problem_handlers
+from service_kit.openlineage import DatasetUuids, with_dataset_uuids
+
+
+def _uuid(name: str) -> str:
+    """The uuid the catalog minted for the governed table ``name`` (ADR 0173 §10)."""
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, name))
+
+
+#: The one output every delivery below names with its uuid, and the object its grants are held by.
+_PAGES_OBJECT = fga.table_object(_uuid("bronze$pages"))
 
 
 class _OpenFga:
@@ -67,15 +78,22 @@ class _OpenFga:
         return ReadResponse(tuples=[], continuation_token="")
 
 
-def _event(*, outputs: tuple[str, ...] = ("bronze$pages",), inputs: tuple[str, ...] = ()) -> RunEvent:
+def _dataset(name: str, *, with_uuid: bool) -> dict[str, Any]:
+    dataset = {"namespace": "bronze", "name": name}
+    return with_dataset_uuids(dataset, DatasetUuids(table_uuid=_uuid(name)), producer="rask://test") if with_uuid else dataset
+
+
+def _event(*, outputs: tuple[str, ...] = (), inputs: tuple[str, ...] = ()) -> RunEvent:
+    """A run writing ``bronze$pages`` as the catalog names it, with its uuid, beside ``outputs`` and ``inputs`` named
+    without one."""
     return RunEvent.model_validate(
         {
             "eventType": "COMPLETE",
             "eventTime": "2026-09-09T00:00:00+00:00",
             "run": {"runId": "11111111-1111-1111-1111-111111111111", "facets": {"author": {"name": "alice", "sub": "dex~alice"}}},
             "job": {"namespace": "bus", "name": "probe"},
-            "inputs": [{"namespace": "bronze", "name": name} for name in inputs],
-            "outputs": [{"namespace": "bronze", "name": name} for name in outputs],
+            "inputs": [_dataset(name, with_uuid=False) for name in inputs],
+            "outputs": [_dataset("bronze$pages", with_uuid=True), *(_dataset(name, with_uuid=False) for name in outputs)],
         }
     )
 
@@ -134,11 +152,11 @@ def test_the_bus_harness_records_a_delivery_openfga_answered(monkeypatch: pytest
 
     assert _deliver(client) == {"status": "SUCCESS"}
     assert len(repo.ingested) == 1
-    assert fga_client.asked == ["table:bronze$pages"]
+    assert fga_client.asked == [_PAGES_OBJECT]
 
 
 def test_a_bus_delivery_openfga_could_not_answer_is_retried_not_refused(monkeypatch: pytest.MonkeyPatch) -> None:
-    client, repo = _bus_door(monkeypatch, _OpenFga(unanswered={"table:bronze$pages"}))
+    client, repo = _bus_door(monkeypatch, _OpenFga(unanswered={_PAGES_OBJECT}))
 
     assert _deliver(client) == {"status": "RETRY"}, "an unanswered item was treated as a verdict on the delivery"
     assert repo.ingested == []
@@ -146,15 +164,16 @@ def test_a_bus_delivery_openfga_could_not_answer_is_retried_not_refused(monkeypa
 
 @pytest.mark.parametrize("output", ["a:b", "file//my scans"], ids=["second-colon", "space"])
 def test_an_output_that_names_no_object_is_consumed_as_ungoverned_without_asking(monkeypatch: pytest.MonkeyPatch, output: str) -> None:
-    """No grant can name such an object, so the refusal is one nothing can repair ([[LH-166]]): consumed,
-    not ingested, and not retried as an outage the next attempt cannot clear. Neither its check nor its
-    tuple read is sent: a space in it fails the whole OpenFGA request."""
+    """An output a bus delivery names without its table's uuid is no object a grant can name, and a redelivery or a
+    replay carries the same bytes, so the refusal is one nothing can repair ([[LH-166]]): consumed, not ingested, and
+    not parked or retried. Neither a check nor a tuple read is sent for it: its name is no object, and a space in it
+    fails the whole OpenFGA request."""
     fga_client = _OpenFga(unanswered=set())
     client, repo = _bus_door(monkeypatch, fga_client)
 
-    assert _deliver(client, _event(outputs=("bronze$pages", output))) == {"status": "SUCCESS"}
+    assert _deliver(client, _event(outputs=(output,))) == {"status": "SUCCESS"}
     assert repo.ingested == []
-    assert fga_client.asked == ["table:bronze$pages"]
+    assert all(obj == _PAGES_OBJECT for obj in fga_client.asked), fga_client.asked
     assert fga_client.read_asked == []
 
 
@@ -164,7 +183,7 @@ def test_an_input_that_names_no_object_is_refused_without_asking(monkeypatch: py
 
     assert _deliver(client, _event(inputs=("a#b",))) == {"status": "DROP"}
     assert repo.ingested == []
-    assert fga_client.asked == ["table:bronze$pages"]
+    assert fga_client.asked == [_PAGES_OBJECT]
 
 
 def _filter(fga_client: _OpenFga) -> fga_deps.DatasetFilter:
@@ -179,7 +198,7 @@ def _filter(fga_client: _OpenFga) -> fga_deps.DatasetFilter:
             "fga_model_id": "m",
         }
     )
-    request = cast(Request, SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(fga=cast(OpenFgaClient, fga_client)))))
+    request = cast(Request, SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(decider=OpenFgaDecider(cast(OpenFgaClient, fga_client))))))
     return fga_deps.DatasetFilter(
         request,
         settings,
@@ -191,5 +210,9 @@ def _filter(fga_client: _OpenFga) -> fga_deps.DatasetFilter:
 
 
 def test_a_dataset_openfga_could_not_answer_is_a_503_not_hidden() -> None:
+    a, b = fga.table_object(_uuid("a")), fga.table_object(_uuid("b"))
+    fga_client = _OpenFga(unanswered={b})
+
     with pytest.raises(ServiceUnavailableError):
-        asyncio.run(_filter(_OpenFga(unanswered={"table:b"})).visible(["a", "b"]))
+        asyncio.run(_filter(fga_client).visible([a, b]))
+    assert fga_client.asked == [a, b], "the 503 came from somewhere other than the unanswered item"

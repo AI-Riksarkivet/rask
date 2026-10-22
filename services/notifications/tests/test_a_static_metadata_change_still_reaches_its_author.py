@@ -46,7 +46,7 @@ def test_a_static_metadata_change_projects_to_a_notifiable() -> None:
     notice = notifiable(LineageRunEvent.model_validate(_static()))
     assert notice is not None
     assert notice.author == AUTHOR
-    assert (notice.delivery.object_id, notice.delivery.object_uuid) == ("silver$features", TABLE_UUID)
+    assert (notice.delivery.object_id, notice.delivery.object_name, notice.delivery.object_uuid) == (f"table:{TABLE_UUID}", "silver$features", TABLE_UUID)
     assert notice.project == "acme"
 
 

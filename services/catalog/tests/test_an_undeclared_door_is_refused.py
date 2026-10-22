@@ -22,6 +22,7 @@ import asyncio
 import json
 import logging
 import re
+import uuid
 from enum import Enum
 from typing import Any, Literal, cast, get_args, get_origin
 
@@ -29,16 +30,17 @@ import pytest
 from fastapi import APIRouter, Depends, FastAPI, Request
 from fastapi.routing import APIRoute, iter_route_contexts
 from fastapi.testclient import TestClient
-from lance_namespace import InternalError
+from lance_namespace import InternalError, LanceNamespace
 from openfga_sdk import OpenFgaClient
 from starlette.types import Message
 
 from catalog.api import fga_deps
-from catalog.api.dependencies import get_fga_client
+from catalog.api.dependencies import Resolver, get_fga_client
 from catalog.api.security import authenticate
 from catalog.api.v1.router import api_router
 from catalog.core import tier_policy
 from catalog.core.config import Settings, get_settings
+from catalog.services.table_claims import ResolvedTable
 from service_kit.governed.audit import AUDIT_LOGGER, FAILURE
 from service_kit.governed.oidc import IDToken
 from service_kit.governed.person_identity import PersonPrincipal
@@ -115,8 +117,31 @@ def asked(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str]]:
     return recorded
 
 
+class _EveryNameHolds(Resolver):
+    """Every name holds an object, keyed by a uuid derived from the name; no store is read.
+
+    The claim here is which doors declare a rung, not how a name resolves, so every name resolves.
+    """
+
+    def __init__(self) -> None:
+        pass
+
+    @staticmethod
+    def _uuid(kind: str, segments: list[str]) -> str:
+        return str(uuid.uuid5(uuid.NAMESPACE_URL, f"{kind}:{'$'.join(segments)}"))
+
+    async def table(self, segments: list[str], *, ns: LanceNamespace | None = None) -> ResolvedTable:
+        return ResolvedTable(segments=segments, location=f"memory://{self._uuid('table', segments)}")
+
+    async def namespace_uuid(self, segments: list[str]) -> str | None:
+        return self._uuid("namespace", segments) if segments else None
+
+    async def object(self, kind: str, segments: list[str]) -> str | None:
+        return f"{kind}:{self._uuid(kind, segments)}"
+
+
 def _authorize(template: str, body: dict[str, object] | None = None, query: str = "") -> None:
-    asyncio.run(fga_deps.authorize(_request(template, body or {}, query), _settings(), _token(), _CLIENT))
+    asyncio.run(fga_deps.authorize(_request(template, body or {}, query), _settings(), _token(), _CLIENT, _EveryNameHolds()))
 
 
 _UNDECLARED = "a_verb_nobody_declared"
@@ -272,5 +297,5 @@ def test_every_guarded_route_resolves_to_a_declared_rung_and_every_write_reaches
         return
     assert len(judged) == 1, f"{template}?{query} asks {asked} without the tier judge"
     judged.clear()
-    asyncio.run(fga_deps.authorize(_request(template, {}, query), _settings().model_copy(update={"fga_enabled": False}), None, None))
+    asyncio.run(fga_deps.authorize(_request(template, {}, query), _settings().model_copy(update={"fga_enabled": False}), None, None, _EveryNameHolds()))
     assert len(judged) == 1, f"{template}?{query} skips the tier judge with FGA off"

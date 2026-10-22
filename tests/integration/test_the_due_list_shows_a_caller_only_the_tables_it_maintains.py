@@ -58,10 +58,11 @@ def test_a_caller_sees_only_the_due_tables_it_maintains(real_ns_client: TestClie
         )
         write_due(settings.registry_root, settings.storage_options(), record)
     # `acme$gone` was dropped and `acme$mine` is a name a table holds now ([[LH-523]]): the record's table is gone, so it
-    # names no table and is shown to no one, whatever the name it kept could be granted.
+    # names no table and is shown to no one, whatever its name or its uuid could be granted. alice still holds a grant on
+    # the gone table's uuid, as one a purge has not yet revoked would be.
     location_claims.release(claims, location, "acme$gone")
     write_due(settings.registry_root, settings.storage_options(), record.model_copy(update={"table": "acme$mine"}))
-    grants.grant("alice", ("can_maintain", "table:acme$mine"))
+    grants.grant("alice", ("can_maintain", f"table:{uuids['acme$mine']}"), ("can_maintain", f"table:{uuids['acme$gone']}"))
     act_as(client, "alice")
 
     listed = client.get("/management/v1/maintenance/due", headers=AUTH)

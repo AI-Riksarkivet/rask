@@ -1,8 +1,8 @@
 """The containment rule, enforced at the door: project > warehouse > namespace > table.
 
-`model.fga` has always said `table.parent: [namespace]`. The write path did not: a single-segment
-table produced `parent_object() -> None`, the create went through, and the row got an owner grant
-with no containment edge. It was invisible to every warehouse- or namespace-level grant and
+`model.fga` says `table.parent: [namespace]`. A single-segment table has no namespace for its `parent`
+edge to name (`parent_object_of` answers `None`), so a create that went through would give the row an
+owner grant with no containment edge: invisible to every warehouse- or namespace-level grant and
 unreachable by the hierarchy the UI navigates — an orphan that nothing reported.
 
 The refusal is the spec's own InvalidInput (code 13 -> HTTP 400, RFC 9457 problem body via
@@ -13,10 +13,14 @@ is missing just moves the confusion one layer out.
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from lance_namespace import InvalidInputError
 
 from catalog.api import fga_deps
+from catalog.core.config import Settings
+from tests.unit.named_resolver import NamedResolver
 
 
 DELIM = "$"
@@ -52,15 +56,14 @@ def test_only_tables_are_gated_here(resource: str) -> None:
 
 
 def test_the_guard_agrees_with_what_the_grant_path_would_have_done() -> None:
-    """The guard and `parent_object` must not drift.
+    """The guard and `parent_object_of` must not drift.
 
-    `require_parent` refuses exactly the inputs for which `parent_object` returns None — that is the
+    `require_parent` refuses exactly the inputs for which `parent_object_of` returns None — that is the
     definition of an orphan, and the two deriving it separately is how they diverge later.
     """
-    from service_kit.governed import fga
-
+    settings = Settings.model_validate({"LANCE_S3_ACCESS_KEY_ID": "k", "LANCE_S3_SECRET_ACCESS_KEY": "s"})
     for segments in (["orphan"], ["bronze", "pages"], ["acme", "silver", "features"]):
-        would_orphan = fga.parent_object("table", segments, delimiter=DELIM, warehouse_object="warehouse:lance_catalog") is None
+        would_orphan = asyncio.run(fga_deps.parent_object_of(NamedResolver(), settings, "table", segments)) is None
         refused = False
         try:
             fga_deps.require_parent("table", segments, delimiter=DELIM)

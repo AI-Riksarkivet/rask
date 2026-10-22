@@ -17,6 +17,7 @@ TTL. So the fake vendor records every call and the test asserts the count.
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -27,6 +28,8 @@ import pyarrow as pa
 from catalog.api.v1.endpoints.credentials import vend_credentials
 from catalog.core.vending import CLASSIFICATION_KEY
 from catalog.schemas import VendedCredentials
+from catalog.services.table_claims import ResolvedTable
+from service_kit.lakehouse.location_claims import ClaimRead, LocationClaim
 
 
 class _Namespace:
@@ -82,6 +85,13 @@ def _table(tmp_path: Path, *, classify: str | None) -> str:
     return location
 
 
+def _resolved(location: str) -> ResolvedTable:
+    """The table the door resolved ``ns$t`` to: its location, whose claim records the table's uuid."""
+    uuid = "0b6f8a52-4c1e-4f7a-9d3e-2a1c5b7e9f01"
+    claim = LocationClaim(location=location, table="ns$t", segments=["ns", "t"], uuid=uuid, claimed_at=datetime.now(UTC))
+    return ResolvedTable(segments=["ns", "t"], location=location, claim=ClaimRead(claim=claim, etag="e1"))
+
+
 def _vend(location: str) -> tuple[Any, _Vendor]:
     vendor = _Vendor()
     response = asyncio.run(
@@ -91,6 +101,7 @@ def _vend(location: str) -> tuple[Any, _Vendor]:
             # fields, and standing up either for real needs a backend and an STS endpoint that take no
             # part in this defect. Every attribute the door touches IS present on these.
             ns=cast("Any", _Namespace(location)),
+            table=_resolved(location),
             settings=cast("Any", _settings()),
             token=None,
             client=None,

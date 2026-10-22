@@ -121,6 +121,14 @@ is the stored id (decoded and encoded again, so an id a reader echoes back names
 principal key. A tuple, a seed or a test that spells a user by hand is refused by the store or names the wrong one;
 spell it through `user_object`.
 
+**Every table and namespace object is its uuid, `table:<uuid>` / `namespace:<uuid>`** (ADR 0173 §8, [[LH-524]];
+`fga.table_object`, `fga.namespace_object`), the uuid the catalog minted (a table's in its location claim, a namespace's
+its `rask.uuid`; DescribeTable and DescribeNamespace answer it). No name reaches OpenFGA: a rename writes no tuple, a
+table created again under a dropped name inherits nothing, and a name OpenFGA could not hold as an id (a space) is
+fine. A catalog door resolves the name once per request (`catalog.api.dependencies.Resolver`); a test or a seed spells
+an object by resolving the name first, never by joining it into `table:<name>`. A registry model
+(`table:models$<name>`), a warehouse, a project, a classification label and a transaction keep their ids.
+
 ### Testing
 | File | Description |
 |------|-------------|

@@ -19,7 +19,7 @@ drift invisible instead of fixable.
 
 **The list is the caller's projects.** An estate observer (``can_observe_events`` on the fixed root object,
 ``settings.fga_root_object``) lists every tenant; anyone else lists the projects they are a ``member`` of
-(the model folds ``admin`` into ``member``), from OpenFGA ``list_objects`` intersected with the tenant map
+(the model folds ``admin`` into ``member``), batch-checked over the tenant map
 above, so a membership FGA holds for a project no registry knows lists nothing. Authorization scope ==
 data scope (the ``/management/v1/events`` #12 rationale): a member sees their own tenants' names,
 buckets and admins and no one else's. Create and one tenant's detail stay estate-observer gated through
@@ -240,26 +240,27 @@ async def create_project(
     return ProjectResponse(project=project_id, warehouses=[], admins=await _admins_for(client, settings, project_id))
 
 
-async def _visible_projects(client: OpenFgaClient | None, settings: Settings, token: CurrentToken) -> set[str] | None:
-    """The project ids this caller may list, or ``None`` for every tenant.
+async def _visible_projects(client: OpenFgaClient | None, settings: Settings, token: CurrentToken, candidates: list[str]) -> set[str] | None:
+    """Which of ``candidates`` (the registry's project ids) this caller may list, or ``None`` for every tenant.
 
     ``None`` for an estate observer, and when FGA is off / unwired / unauthenticated (parity with every
-    ``require_*`` gate). Fail-closed: an OpenFGA outage raises, so a caller is never shown more, or less,
-    than their memberships by accident.
+    ``require_*`` gate). Otherwise the candidates are batch-checked on ``member`` ([[LH-223]]): the listing never
+    asks OpenFGA which projects the caller reaches, an answer the server stops counting at its ceiling. Fail-closed:
+    an OpenFGA outage raises, so a caller is never shown more, or less, than their memberships by accident.
     """
     if not (settings.fga_enabled and client is not None and token is not None):
         return None
     root = settings.fga_root_object
     try:
         observer = await fga.check(client, user=token.subject, relation="can_observe_events", obj=root)
-        objects = None if observer else (await fga.list_objects(client, user=token.subject, relation="member", object_type="project")).objects
+        allowed = None if observer else await fga.batch_check(client, user=token.subject, relation="member", objects=[f"project:{p}" for p in candidates])
     except ServiceUnavailableError:
         audit("list_projects", FAILURE, subject=token.subject, resource=root, reason="authz_unavailable")
         raise
     # The estate-wide listing is the disclosure the root object guards, so its decision is audited like
     # every gate; a member's listing is scoped to their own tenants.
     audit("can_observe_events", ALLOW if observer else DENY, subject=token.subject, resource=root, reason="list_projects")
-    return None if objects is None else {o.removeprefix("project:") for o in objects}
+    return None if allowed is None else {p for p in candidates if allowed.get(f"project:{p}")}
 
 
 @router.get("")
@@ -268,8 +269,8 @@ async def list_projects(settings: SettingsDep, token: CurrentToken, client: FgaC
 
     ``admins`` degrades to ``[]`` when FGA is off or the ``list_users`` lookup is unavailable — the registry
     facts still serve; the visibility decision itself fails closed (``_visible_projects``)."""
-    visible = await _visible_projects(client, settings, token)
     grouped = await _load_grouped(settings)
+    visible = await _visible_projects(client, settings, token, sorted(grouped))
     # The per-project admins lookups run CONCURRENTLY: sequential awaits would stack N × the per-call
     # budget on a slow OpenFGA (a brownout, not an outage) and blow past the BFF's request deadline;
     # gathered, the worst case is ONE _ADMINS_TIMEOUT_SECONDS regardless of tenant count (each call

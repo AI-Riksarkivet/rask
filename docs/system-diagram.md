@@ -24,9 +24,9 @@ and vice-versa. For the prose architecture see [`ARCHITECTURE.md`](./ARCHITECTUR
 
 ## The one idea
 
-Three planes, three governance axes, **one identity**. Every table is `table:<id>` — and that
-*same* string is the OpenFGA object (who may), the Lance dataset (what/when), and the dataset a
-lineage feed row and edge name (how/who). The diagram is built around that single identity threading through all three.
+Three planes, three governance axes, **one identity**. Every table has a uuid the catalog mints and keeps across a
+rename (ADR 0173) — and that *same* uuid is the OpenFGA object `table:<uuid>` (who may), the Lance dataset's location
+(what/when), and the key a lineage feed row and edge record (how/who). Its name is how a caller addresses it. The diagram is built around that single identity threading through all three.
 
 | Plane | Question | Component in the diagram |
 |---|---|---|

@@ -143,11 +143,15 @@ class CatalogControlEvent(BaseModel):
     occurred_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     action: ControlAction
     object_type: ControlObjectType
-    #: The mutated object's canonical id (e.g. `warehouse:acme`, `table:db1$t`, `namespace:db1`, or the
-    #: `table:<id>` a grant/policy is scoped to). What a consumer keys its invalidation off.
+    #: The mutated object as OpenFGA holds it (e.g. `warehouse:acme`, `table:<uuid>`, `namespace:<uuid>`, or the
+    #: `table:<uuid>` a grant/policy is scoped to). A table's or namespace's is its uuid, never its name ([[LH-524]]),
+    #: so a consumer checking a person's access asks about this. What a consumer keys its invalidation off.
     object_id: str
+    #: The table's or namespace's name when the event was emitted (`db1$t`), beside `object_id`'s uuid: what a person
+    #: is shown, and what a consumer keyed by name (a namespace's warehouse binding) reads. `None` for any other object.
+    object_name: str | None = None
     #: The uuid the catalog minted for the object when it is a table or a namespace (ADR 0173 §10), or for the table or
-    #: namespace a grant or policy is scoped to: its identity across a rename, which `object_id`'s name is not.
+    #: namespace a grant or policy is scoped to: its identity across a rename, which a name is not.
     object_uuid: str | None = None
     #: The uuid of the namespace that table or namespace is in; `None` for a top-level namespace.
     namespace_uuid: str | None = None

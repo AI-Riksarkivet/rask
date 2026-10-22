@@ -149,8 +149,11 @@ async def list_due_maintenance(
     names = await run_in_threadpool(table_claims.names_now, table_claims.claim_store(settings), entries)
     named = [(name, record) for name, record in zip(names, records, strict=True) if name is not None]
     if settings.fga_enabled and token is not None and client is not None:
-        allowed = await fga.batch_check(client, user=token.subject, relation="can_maintain", objects=[f"table:{name}" for name, _ in named])
-        named = [(name, record) for name, record in named if allowed.get(f"table:{name}")]
+        # Checked on the uuid each record keeps ([[LH-524]]), which is the object the table's grants are held by.
+        allowed = await fga.batch_check(
+            client, user=token.subject, relation="can_maintain", objects=sorted({fga.table_object(record.uuid) for _, record in named})
+        )
+        named = [(name, record) for name, record in named if allowed.get(fga.table_object(record.uuid))]
     by_key = {f"{name}|{record.uuid}": (name, record) for name, record in named}
     page, next_token = paginate(sorted(by_key), page_token, limit)
     return MaintenanceDueResponse(tables=[_due_view(record, table=name) for name, record in (by_key[key] for key in page)], page_token=next_token)

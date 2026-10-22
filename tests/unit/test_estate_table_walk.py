@@ -23,6 +23,7 @@ from lance_namespace import LanceNamespace, ListNamespacesRequest, ListNamespace
 
 from catalog.api.v1.endpoints import tables as t_ep
 from catalog.core.config import Settings
+from tests.unit.named_resolver import NamedResolver
 
 
 class _DirLike:
@@ -86,6 +87,7 @@ def _list(
             settings=_settings(tmp_path),
             token=None,
             client=None,
+            resolver=NamedResolver(),
         )
     )
     return list(response.tables or [])

@@ -44,12 +44,6 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-#: The FGA type every notifiable object is checked as. A CONSTANT rather than a setting on purpose:
-#: it is a coordinate the estate has to agree on, and a per-service knob is exactly how two services
-#: end up authorizing against different object types while both look configured. lineage carries the
-#: same value as a default that nothing in `chart/` overrides.
-FGA_OBJECT_TYPE: Final = "table"
-
 #: What a RENDER asks: "is there anything beneath this you may see?". Permissive on containers by
 #: design (C1's `child` edge), which is right — a breadcrumb to your own data must resolve.
 METADATA_RELATION: Final = "can_get_metadata"
@@ -61,36 +55,17 @@ METADATA_RELATION: Final = "can_get_metadata"
 NOTIFY_RELATION: Final = "can_be_notified"
 
 
-def _as_object(name: str) -> str:
-    """The FGA object for one pointer's `object_id` — qualified, but never qualified TWICE.
+def _as_object(object_id: str) -> str | None:
+    """The FGA object one pointer's `object_id` names, or ``None`` when it names none.
 
-    The plane has two pointer sources and they spell this differently, which is the whole reason this
-    function exists rather than an f-string at the call site:
-
-    * a LINEAGE run stamps the BARE dataset name (`notifiable()` takes `outputs[0]`, e.g.
-      `silver$pages`), so it needs the type prefix;
-    * a GOVERNANCE event stamps the CANONICAL id, already carrying its type —
-      `CatalogControlEvent.object_id` is documented as "e.g. `warehouse:acme`, `table:db1$t`,
-      `namespace:db1`" — and `as_delivery` copies it through verbatim.
-
-    Prefixing unconditionally checked every v3 row as `table:table:db1$t`, an object that cannot
-    resolve, so every governance notification was filtered out of the feed permanently. The badge does
-    NOT go through this filter (`/inbox/unread` is answered from the actor's own partition), so the
-    result was a badge counting a row the list would never show — an unclearable badge, which is the
-    precise failure this plane exists to end.
-
-    Honouring the stamped type is better than merely un-breaking it: `can_get_metadata` is defined on
-    the container types as well, so a grant on a warehouse is now asked about the WAREHOUSE rather
-    than about a table that never existed.
-
-    A stamped prefix is honoured only when it names a type the model defines. The estate's dataset
-    names are `<namespace>$<table>`, delimiter-joined and colon-free, but an output named like a URI
-    (`s3://bucket/run1`) also carries a `:`; passed through, OpenFGA answers `type 's3' not found` per
-    item on every attempt (measured on v1.18.3), so the delivery would retry forever. Qualified as a
-    table, it is no object id, and `fga.batch_check` answers it not visible without asking.
+    A pointer's `object_id` is the object as OpenFGA holds it, from either lane: a lineage run's output as the table its
+    uuid names (`table:<uuid>`, [[LH-524]]), a governance event's own `object_id` (`warehouse:acme`,
+    `namespace:<uuid>`). A prefix is honoured only when it names a type the model defines: anything else (an output
+    named like a URI, `s3://bucket/run1`) is no object, and is not asked about, so a delivery never retries forever
+    on OpenFGA's `type 's3' not found`.
     """
-    kind, sep, _rest = name.partition(":")
-    return name if sep and kind in fga.model_types() else f"{FGA_OBJECT_TYPE}:{name}"
+    kind, sep, _rest = object_id.partition(":")
+    return object_id if sep and kind in fga.model_types() else None
 
 
 class Visibility:
@@ -121,12 +96,10 @@ class Visibility:
             # FGA on with no client is a BROKEN authorization layer, and answering it open turns that
             # into an open one, silently.
             raise ServiceUnavailableError("authorization is enabled but unavailable")
-        objects = {name: _as_object(name) for name in names}
-        allowed = await self._decider.batch_check(
-            user=subject,
-            relation=relation,
-            objects=list(objects.values()),
-        )
+        objects = {name: obj for name in names if (obj := _as_object(name)) is not None}
+        if not objects:
+            return set()
+        allowed = await self._decider.batch_check(user=subject, relation=relation, objects=list(objects.values()))
         return {name for name, obj in objects.items() if allowed.get(obj)}
 
     async def visible(self, subject: str, names: Collection[str]) -> set[str]:

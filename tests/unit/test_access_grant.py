@@ -26,6 +26,7 @@ from service_kit.governed.oidc import IDToken
 from service_kit.governed.person_identity import PersonPrincipal
 from service_kit.governed.principal import Principal
 from service_kit.lakehouse.ns_errors import status_for
+from tests.unit.named_resolver import NamedResolver, uuid_of
 
 
 def _person(name: str) -> PersonPrincipal:
@@ -70,7 +71,7 @@ def _run(
     settings = cast(Settings, SimpleNamespace(fga_enabled=True, delimiter="$"))
     token = _person("alice")
     body = access.AccessGrantRequest(user=user, relation=relation)
-    resp = asyncio.run(access._access_mutate(client, NoopControlEmitter(), settings, token, fga_type, ident, body, grant=grant))
+    resp = asyncio.run(access._access_mutate(client, NoopControlEmitter(), settings, token, NamedResolver(), fga_type, ident, body, grant=grant))
     return resp, captured
 
 
@@ -152,7 +153,7 @@ def test_check_with_an_unknown_relation_is_a_400(monkeypatch: pytest.MonkeyPatch
     settings = cast(Settings, SimpleNamespace(fga_enabled=True, delimiter="$"))
     token = _person("alice")
     with pytest.raises(InvalidInputError) as exc:
-        asyncio.run(access._access_check(client, settings, token, "table", "db1$users", body))
+        asyncio.run(access._access_check(client, settings, token, NamedResolver(), "table", "db1$users", body))
     assert status_for(int(exc.value.code)) == 400, "a client-supplied bad relation must surface as the client's error"
 
 
@@ -165,7 +166,7 @@ def test_the_auth_off_answer_stays_unsupported() -> None:
     token = _person("alice")
     body = access.AccessCheckRequest(user="dex~gina", relation="can_read_data")
     with pytest.raises(Exception) as exc:
-        asyncio.run(access._access_check(client, settings, token, "table", "db1$users", body))
+        asyncio.run(access._access_check(client, settings, token, NamedResolver(), "table", "db1$users", body))
     assert (
         status_for(int(getattr(exc.value, "code", ErrorCode.UNSUPPORTED))) == 406
     )  # 406 since Q3 (2026-09-02): the spec's UnsupportedOperationErrorResponse is 406, and Lance's own reference server maps ErrorCode::Unsupported to NOT_ACCEPTABLE.
@@ -173,11 +174,13 @@ def test_the_auth_off_answer_stays_unsupported() -> None:
 
 def test_access_graph_builds_nodes_and_edges(monkeypatch: pytest.MonkeyPatch) -> None:
     # #81: read_object_tuples → a one-hop graph. A grant tuple is an inbound edge subject→obj labelled with
-    # the rung; the parent tuple is an outbound edge obj→parent.
+    # the rung; the parent tuple is an outbound edge obj→parent. Both objects are the uuids the names resolve to.
+    table = f"table:{uuid_of('table', ['db1', 't'])}"
+    namespace = f"namespace:{uuid_of('namespace', ['db1'])}"
     tuples: list[Any] = [
-        access.fga.ClientTuple(user="user:dex~alice", relation="owner", object="table:db1$t"),
-        access.fga.ClientTuple(user="role:eng#assignee", relation="reader", object="table:db1$t"),
-        access.fga.ClientTuple(user="namespace:db1", relation="parent", object="table:db1$t"),
+        access.fga.ClientTuple(user="user:dex~alice", relation="owner", object=table),
+        access.fga.ClientTuple(user="role:eng#assignee", relation="reader", object=table),
+        access.fga.ClientTuple(user=namespace, relation="parent", object=table),
     ]
 
     async def fake_read(_client: object, _obj: str) -> list[Any]:
@@ -187,16 +190,16 @@ def test_access_graph_builds_nodes_and_edges(monkeypatch: pytest.MonkeyPatch) ->
     client = cast(OpenFgaClient, object())
     settings = cast(Settings, SimpleNamespace(fga_enabled=True, delimiter="$"))
     token = _person("alice")
-    resp = asyncio.run(access._access_graph(client, settings, token, "table", "db1$t"))
+    resp = asyncio.run(access._access_graph(client, settings, token, NamedResolver(), "table", "db1$t"))
 
-    assert resp.object == "table:db1$t"
-    assert {n.id for n in resp.nodes} == {"table:db1$t", "user:dex~alice", "role:eng#assignee", "namespace:db1"}
+    assert (resp.object, resp.name) == (table, "db1$t")
+    assert {n.id for n in resp.nodes} == {table, "user:dex~alice", "role:eng#assignee", namespace}
     # the table node is typed from its prefix
-    assert next(n for n in resp.nodes if n.id == "table:db1$t").type == "table"
+    assert next(n for n in resp.nodes if n.id == table).type == "table"
     edges = {(e.source, e.target, e.relation) for e in resp.edges}
-    assert ("user:dex~alice", "table:db1$t", "owner") in edges  # grant: subject → obj
-    assert ("role:eng#assignee", "table:db1$t", "reader") in edges
-    assert ("table:db1$t", "namespace:db1", "parent") in edges  # container: obj → parent
+    assert ("user:dex~alice", table, "owner") in edges  # grant: subject → obj
+    assert ("role:eng#assignee", table, "reader") in edges
+    assert (table, namespace, "parent") in edges  # container: obj → parent
 
 
 # --------------------------------------------------------------------------- #
@@ -234,7 +237,7 @@ def test_the_grant_audit_row_carries_full_provenance(monkeypatch: pytest.MonkeyP
     assert row["audit.subject"] == "dex~alice", "the GRANTOR is missing — this is the field the tuple cannot carry"
     assert row["audit.grantee"] == "user:dex~bob"
     assert row["audit.relation"] == "writer"
-    assert row["audit.resource"] == "table:db1$users"
+    assert row["audit.resource"] == f"table:{uuid_of('table', ['db1', 'users'])}"
     assert row["audit.outcome"] == SUCCESS
 
 

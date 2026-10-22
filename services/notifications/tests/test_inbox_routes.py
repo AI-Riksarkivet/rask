@@ -30,9 +30,11 @@ from service_kit.governed.decider import OpenFgaDecider
 
 
 NOW = datetime(2026, 8, 9, 12, 0, tzinfo=UTC)
+#: The objects two tables' grants are held by, as a lineage pointer names them, ``table:<uuid>`` ([[LH-524]]).
+PAGES, REVOKED = "table:3f1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5b", "table:6b5a4c3d-2e1f-4a0b-9c8d-7e6f5a4b3c2d"
 
 
-def _pointer(index: int, *, obj: str = "silver$pages", seen: bool = False, dismissed: bool = False) -> InboxPointer:
+def _pointer(index: int, *, obj: str = PAGES, seen: bool = False, dismissed: bool = False) -> InboxPointer:
     return InboxPointer(
         notification_id=f"run-{index:03d}@FAIL",
         reason=NotificationReason.AUTHOR,
@@ -158,12 +160,12 @@ def test_a_row_whose_object_the_reader_may_no_longer_see_degrades_out_of_the_pag
     from notifications.api import visibility as visibility_module
 
     async def _only_silver(client_: object, *, user: str, relation: str, objects: list[str], **_: Any) -> dict[str, bool]:
-        return {obj: obj == "table:silver$pages" for obj in objects}
+        return {obj: obj == PAGES for obj in objects}
 
     monkeypatch.setattr(visibility_module.fga, "batch_check", _only_silver)
     client.app.state.decider = OpenFgaDecider(cast("OpenFgaClient", object()))
     client.app.state.notifications_settings = get_notifications_settings().model_copy(update={"fga_enabled": True})
-    inbox.rows = [_pointer(1), _pointer(2, obj="gold$revoked")]
+    inbox.rows = [_pointer(1), _pointer(2, obj=REVOKED)]
 
     body = client.get("/notifications/inbox").json()
 
@@ -268,7 +270,7 @@ def test_a_control_row_survives_the_render_filter_that_hides_lineage_rows(
     control = InboxPointer(
         notification_id="evt-9@GRANT_REVOKED",
         reason=NotificationReason.GRANT_REVOKED,
-        object_id="table:acme$gold",
+        object_id="table:0e1d2c3b-4a59-4687-9a0b-1c2d3e4f5a6b",
         occurred_at=NOW,
     )
     inbox.rows = [_pointer(1), control]

@@ -114,12 +114,16 @@ class NotificationDelivery(BaseModel):
 
     notification_id: str = Field(min_length=1)
     reason: NotificationReason
-    #: The governed object the render and delivery checks run against — a dataset name, checked as
-    #: `table:<object_id>` (the type `LINEAGE_FGA_OBJECT_TYPE` defaults to and nothing overrides).
+    #: The governed object the render and delivery checks run against, as OpenFGA holds it: `table:<uuid>` for a
+    #: table, the object a governance event names (`warehouse:acme`, `namespace:<uuid>`) for the control lane
+    #: ([[LH-524]]). A build that does not read it so reads a row as unreadable (`extra="forbid"` below), so rolling
+    #: back past it rebuilds the estate's inboxes.
     object_id: str = Field(min_length=1)
-    #: The uuid the catalog minted for that object (ADR 0173 §10): its identity across a rename, which `object_id`'s
-    #: name is not. `None` where the event named none. A build that does not declare this field reads a row carrying it
-    #: as unreadable (`extra="forbid"` below), so rolling back past it rebuilds the estate's inboxes.
+    #: The table's or namespace's name when the notification was made, which is what a person is shown; `None` for
+    #: any other object.
+    object_name: str | None = None
+    #: The uuid the catalog minted for that object (ADR 0173 §10): its identity across a rename. `None` where the event
+    #: named none.
     object_uuid: str | None = None
     #: The producer's OWN run id (lineage's `RunStatus.source_run_id`), which is what its detail doors
     #: answer to. The graph run id is a derived uuid5 and links to nothing.

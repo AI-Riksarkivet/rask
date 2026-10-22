@@ -108,14 +108,19 @@ class _Estate:
         self.ns.create_table(CreateTableRequest(id=list(segments)), sink.getvalue())
         return str(self.ns.describe_table(DescribeTableRequest(id=list(segments))).location)
 
-    def drop_recoverably(self, *segments: str, grace_days: int = 7, dropped_at: datetime | None = None) -> tuple[str, str]:
+    def drop_recoverably(self, *segments: str, grace_days: int = 7, dropped_at: datetime | None = None, uuid: str | None = None) -> tuple[str, str]:
         """The catalog's recoverable drop, for real: deregister (bytes stay) + file a trash record.
 
-        Returns ``(canonical_id, location)``. ``dropped_at`` in the past is how a record becomes EXPIRED.
+        Returns ``(canonical_id, location)``. ``dropped_at`` in the past is how a record becomes EXPIRED. ``uuid`` is the
+        table's, kept in its location's claim as the catalog's drop keeps it (ADR 0173 §6); without one, the claim holds
+        no uuid to read.
         """
         location = self.create_table(*segments)
         self.ns.deregister_table(DeregisterTableRequest(id=list(segments)))
         canonical = "$".join(segments)
+        if uuid is not None:
+            claims = location_claims.ClaimStore(control_root=self.control_root)
+            location_claims.take(claims, location, canonical, list(segments), is_gone=lambda _claim: False, uuid=uuid)
         self.put_record(canonical, location=location, grace_days=grace_days, dropped_at=dropped_at)
         return canonical, location
 
@@ -127,6 +132,7 @@ class _Estate:
         grace_days: int = 7,
         dropped_at: datetime | None = None,
         kind: str = "table",
+        properties: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         record = trash.make_record(
             canonical,
@@ -135,6 +141,7 @@ class _Estate:
             grace_days=grace_days,
             now=dropped_at or (_NOW - timedelta(days=30)),
             kind=kind,
+            properties=properties,
         )
         trash.put(self.control_root, {}, record)
         return record
@@ -297,7 +304,7 @@ def test_a_namespace_record_clears_and_revokes_but_deletes_nothing(tmp_path: Pat
     estate.create_table("team", "orders")  # a live sibling, so "nothing deleted" is a real claim
     revoker = _Revoker()
     revoker.install(monkeypatch)
-    estate.put_record("archive", location="", kind="namespace")
+    estate.put_record("archive", location="", kind="namespace", properties={"rask.uuid": "archive-uuid"})
     before = _fingerprint(estate.data)
 
     out = _run(estate, settings=_settings(tmp_path, fga_enabled=True), fga_client=object())
@@ -306,7 +313,7 @@ def test_a_namespace_record_clears_and_revokes_but_deletes_nothing(tmp_path: Pat
     assert out.purged[0].bytes_deleted == 0
     assert _fingerprint(estate.data) == before, "a namespace purge touched the data root"
     assert estate.record("archive", kind="namespace") is None
-    assert revoker.calls == [("namespace:archive", "service:maintenance", "lifecycle_delete")]
+    assert revoker.calls == [("namespace:archive-uuid", "service:maintenance", "lifecycle_delete")]
 
 
 # --------------------------------------------------------------------------- #
@@ -467,7 +474,15 @@ def test_a_deactivated_warehouses_bucket_is_outside_the_maintained_estate(tmp_pa
 # --------------------------------------------------------------------------- #
 
 
-def test_a_failed_revoke_leaves_the_bytes_and_the_record(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    ("uuid", "needle"),
+    [
+        pytest.param("orders-uuid", "revoke failed", id="openfga-refuses-the-revoke"),
+        # Its grants are held on `table:<uuid>` ([[LH-524]]), so a record whose uuid cannot be read names no grant to revoke.
+        pytest.param(None, "uuid could not be read", id="the-objects-uuid-cannot-be-read"),
+    ],
+)
+def test_a_failed_revoke_leaves_the_bytes_and_the_record(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, uuid: str | None, needle: str) -> None:
     """A revoke we could not perform is a reason NOT to delete.
 
     If the delete ran first, this test finds an empty directory: the bytes would be gone and the grants
@@ -475,7 +490,7 @@ def test_a_failed_revoke_leaves_the_bytes_and_the_record(tmp_path: Path, monkeyp
     is fully recoverable — the record survives and the next tick tries the whole thing again.
     """
     estate = _Estate(tmp_path)
-    canonical, location = estate.drop_recoverably("team", "orders")
+    canonical, location = estate.drop_recoverably("team", "orders", uuid=uuid)
     path = Path(location.removeprefix("file://"))
     _Revoker(error=ServiceUnavailableError("openfga down")).install(monkeypatch)
 
@@ -483,7 +498,7 @@ def test_a_failed_revoke_leaves_the_bytes_and_the_record(tmp_path: Path, monkeyp
 
     assert out.purged == []
     assert [(r.kind, r.id) for r in out.refused] == [("table", canonical)]
-    assert "revoke failed" in out.refused[0].reason
+    assert needle in out.refused[0].reason
     assert path.is_dir(), "the bytes were deleted despite a failed revoke — grants now outlive them"
     assert estate.record(canonical) is not None
 
@@ -495,14 +510,14 @@ def test_the_revoke_happens_while_the_bytes_are_still_there(tmp_path: Path, monk
     the bytes; delete-then-revoke means it does not.
     """
     estate = _Estate(tmp_path)
-    canonical, location = estate.drop_recoverably("team", "orders")
+    _, location = estate.drop_recoverably("team", "orders", uuid="orders-uuid")
     path = Path(location.removeprefix("file://"))
     revoker = _Revoker(count=3, probe=path.is_dir)
     revoker.install(monkeypatch)
 
     out = _run(estate, settings=_settings(tmp_path, fga_enabled=True), fga_client=object())
 
-    assert revoker.calls == [(f"table:{canonical}", "service:maintenance", "lifecycle_delete")]
+    assert revoker.calls == [("table:orders-uuid", "service:maintenance", "lifecycle_delete")]
     assert revoker.bytes_present_at_call == [True], "the revoke ran AFTER the delete — grants outlived the bytes"
     assert out.purged[0].tuples_revoked == 3
     assert not path.exists()
@@ -625,10 +640,10 @@ def test_one_control_event_per_purged_record(tmp_path: Path) -> None:
     out = _run(estate, control=control)
 
     assert len(out.purged) == 3
-    assert {(e.action, e.object_type, e.object_id, e.object_uuid, e.namespace_uuid) for e in control.events} == {
-        ("table_purged", "table", f"table:{canonical}", "orders-uuid", "team-uuid"),
-        ("table_purged", "table", f"table:{orphaned}", "t-uuid", "gone-uuid"),
-        ("namespace_purged", "namespace", "namespace:archive", "archive-uuid", None),
+    assert {(e.action, e.object_type, e.object_id, e.object_name, e.object_uuid, e.namespace_uuid) for e in control.events} == {
+        ("table_purged", "table", "table:orders-uuid", canonical, "orders-uuid", "team-uuid"),
+        ("table_purged", "table", "table:t-uuid", orphaned, "t-uuid", "gone-uuid"),
+        ("namespace_purged", "namespace", "namespace:archive-uuid", "archive", "archive-uuid", None),
     }
     assert all(e.actor == "service:maintenance" for e in control.events)
     assert all(e.extra["reason"] == "trash_expired" for e in control.events)

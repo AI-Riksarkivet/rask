@@ -9,6 +9,7 @@ classes; nothing here replaces ``batch_check`` itself.
 """
 
 import logging
+import uuid
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, cast
@@ -40,6 +41,15 @@ if TYPE_CHECKING:
 
 
 CALLER = "dex~alice"
+
+
+def _uuid(name: str) -> str:
+    """The uuid the catalog minted for the table ``name``, which its events carry (ADR 0173 §10)."""
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, name))
+
+
+#: The objects two tables' grants are held by, as a lineage pointer names them ([[LH-524]]).
+PAGES, REPORTS = f"table:{_uuid('silver$pages')}", f"table:{_uuid('gold$reports')}"
 _UNANSWERED = CheckError(input_error="validation_error", message="relation not found in the pinned model")
 
 
@@ -107,19 +117,19 @@ def test_the_harness_renders_a_row_openfga_answered(door: tuple[TestClient, _Inb
     client, inbox = door
     double = _OpenFga(unanswered=set())
     client.app.state.decider = OpenFgaDecider(_client(double))
-    inbox.rows = [_pointer(1, "silver$pages")]
+    inbox.rows = [_pointer(1, PAGES)]
 
     response = client.get("/notifications/inbox")
 
     assert response.status_code == 200, response.text
     assert [row["notification_id"] for row in response.json()["notifications"]] == ["run-001@FAIL"]
-    assert double.asked == ["table:silver$pages"]
+    assert double.asked == [PAGES]
 
 
 def test_a_row_openfga_could_not_answer_is_a_503_not_a_hidden_row(door: tuple[TestClient, _Inbox]) -> None:
     client, inbox = door
-    client.app.state.decider = OpenFgaDecider(_client(_OpenFga(unanswered={"table:gold$reports"})))
-    inbox.rows = [_pointer(1, "silver$pages"), _pointer(2, "gold$reports")]
+    client.app.state.decider = OpenFgaDecider(_client(_OpenFga(unanswered={REPORTS})))
+    inbox.rows = [_pointer(1, PAGES), _pointer(2, REPORTS)]
 
     response = client.get("/notifications/inbox")
 
@@ -143,12 +153,16 @@ class _Plane:
         return cast(TypedActorProxy, _Box())
 
 
-def _run_event(output: str = "silver$pages") -> dict[str, Any]:
+def _run_event(output: str = "silver$pages", *, table_uuid: str | None = _uuid("silver$pages")) -> dict[str, Any]:
+    """A failed run of ``output``, carrying ``table_uuid`` in its ``lance`` facet as the catalog stamps it."""
+    dataset: dict[str, Any] = {"namespace": "silver", "name": output}
+    if table_uuid is not None:
+        dataset["facets"] = {"lance": {"tableUuid": table_uuid}}
     return {
         "eventType": "FAIL",
         "eventTime": "2026-08-09T12:00:00+00:00",
         "run": {"runId": "run-1", "facets": {"author": {"name": CALLER, "sub": CALLER}}},
-        "outputs": [{"namespace": "silver", "name": output}],
+        "outputs": [dataset],
     }
 
 
@@ -166,7 +180,7 @@ async def test_the_harness_delivers_a_run_openfga_answered() -> None:
 @pytest.mark.asyncio
 async def test_a_delivery_openfga_could_not_answer_is_retried_not_acked_as_hidden() -> None:
     plane = _Plane()
-    visibility = Visibility(decider=OpenFgaDecider(_client(_OpenFga(unanswered={"table:silver$pages"}))), enabled=True)
+    visibility = Visibility(decider=OpenFgaDecider(_client(_OpenFga(unanswered={PAGES}))), enabled=True)
 
     status = await ingest_run_event(_run_event(), lane=Lane.BUS, visibility=visibility, open_inbox=plane.open)
 
@@ -177,13 +191,13 @@ async def test_a_delivery_openfga_could_not_answer_is_retried_not_acked_as_hidde
 @pytest.mark.asyncio
 async def test_a_run_whose_output_is_named_like_a_uri_is_hidden_not_retried_forever() -> None:
     """`s3://images/run1` carries a `:` but names no model type; sent as an object, OpenFGA answers
-    `type 's3' not found` on every attempt. As a table name it is no object id, so nobody is told and
+    `type 's3' not found` on every attempt. It carries no table uuid, so it names no object: nobody is told and
     the delivery is acked."""
     plane = _Plane()
     double = _OpenFga(unanswered=set())
     visibility = Visibility(decider=OpenFgaDecider(_client(double)), enabled=True)
 
-    status = await ingest_run_event(_run_event("s3://images/run1"), lane=Lane.BUS, visibility=visibility, open_inbox=plane.open)
+    status = await ingest_run_event(_run_event("s3://images/run1", table_uuid=None), lane=Lane.BUS, visibility=visibility, open_inbox=plane.open)
 
     assert status is DAPR_SUCCESS
     assert plane.boxes == {}

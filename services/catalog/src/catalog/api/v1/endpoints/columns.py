@@ -37,7 +37,16 @@ from lance_namespace import (
 from openfga_sdk import OpenFgaClient
 
 from catalog.api import fga_deps, lineage_deps
-from catalog.api.dependencies import DataNamespaceDep, FgaClientDep, LineageEmitterDep, NamespaceDep, ObjectUuidsDep, SettingsDep, StorageOptionsDep
+from catalog.api.dependencies import (
+    DataNamespaceDep,
+    FgaClientDep,
+    LineageEmitterDep,
+    NamespaceDep,
+    ObjectUuidsDep,
+    ResolvedTableDep,
+    SettingsDep,
+    StorageOptionsDep,
+)
 from catalog.api.security import Caller, CurrentToken
 from catalog.core import provenance_guard
 from catalog.core.config import Settings
@@ -51,6 +60,7 @@ from catalog.core.lineage_emit import (
 )
 from catalog.core.namespace import judged_native_version, open_dataset_for_commit
 from catalog.services import dataplane, native
+from catalog.services.table_claims import ResolvedTable
 from service_kit.governed import fga
 
 
@@ -72,10 +82,10 @@ async def _require_classifier_for_governance_keys(
     settings: Settings,
     token: Caller | None,
     *,
-    segments: list[str],
+    table: ResolvedTable,
     updates: list[dict[str, Any]],
 ) -> None:
-    """Refuse a governance-key write unless the caller holds ``can_classify`` on the table.
+    """Refuse a governance-key write unless the caller holds ``can_classify`` on ``table``, the table the door resolved.
 
     BODY-AUTHORIZED, like the write-tier check inside `vend_credentials` and `_authorize_grant`: the
     router-wide guard has already cleared `can_write_data` by the time this runs, and the rung this
@@ -101,9 +111,7 @@ async def _require_classifier_for_governance_keys(
     touched = sorted({key for update in updates for key in (update.get("metadata") or {}) if key.startswith(GOVERNANCE_FIELD_PREFIX)})
     if not touched and not replaces:
         return
-    await fga_deps.require_relation(
-        client, settings, token, relation="can_classify", obj=f"table:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}"
-    )
+    await fga_deps.require_relation(client, settings, token, relation="can_classify", obj=fga.table_object(table.require_uuid()))
     # THE SECOND QUESTION ([[LH-055]]). `can_classify` is ONE BIT — whoever may label anything may
     # label everything — so the ruling's "per-tag `apply` delegation" needs the VALUE asked about too.
     # Asked second on purpose: a caller with no business on this table is already refused above,
@@ -242,6 +250,7 @@ async def update_field_metadata(
     id: str,
     body: UpdateFieldMetadataRequest,
     ns: NamespaceDep,
+    table: ResolvedTableDep,
     settings: SettingsDep,
     so: StorageOptionsDep,
     token: CurrentToken,
@@ -256,7 +265,7 @@ async def update_field_metadata(
     segments = parse_identifier(id, settings.delimiter)
     body.id = reconcile_body_id(segments, body.id)
     updates = [u.model_dump() for u in (body.updates or [])]
-    await _require_classifier_for_governance_keys(client, settings, token, segments=segments, updates=updates)
+    await _require_classifier_for_governance_keys(client, settings, token, table=table, updates=updates)
     response = await run_in_threadpool(dataplane.update_field_metadata, ns, so, segments, updates, body.branch)
     await lineage_deps.emit_measured_write(
         emitter,

@@ -22,6 +22,7 @@ from lance_namespace import (
     DropNamespaceResponse,
     DropTableRequest,
     DropTableResponse,
+    InternalError,
     InvalidInputError,
     InvalidTableStateError,
     LanceNamespace,
@@ -42,14 +43,23 @@ from lance_namespace import (
 from openfga_sdk import OpenFgaClient
 
 from catalog.api import fga_deps
-from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, LineageEmitterDep, NamespaceDep, ObjectUuidsDep, SettingsDep, namespace_for_root
+from catalog.api.dependencies import (
+    ControlEmitterDep,
+    FgaClientDep,
+    LineageEmitterDep,
+    NamespaceDep,
+    ObjectUuidsDep,
+    ResolverDep,
+    SettingsDep,
+    namespace_for_root,
+)
 from catalog.api.pagination import paginate
 from catalog.api.rask_params import RaskFlag
 from catalog.api.security import Caller, CurrentToken
 from catalog.core import tier_policy
 from catalog.core.config import Settings
 from catalog.core.formats import reject_unsupported_properties
-from catalog.core.identifiers import MAX_NAMESPACE_DEPTH, parse_identifier, reconcile_body_id, require_safe_segments, with_minted_uuid
+from catalog.core.identifiers import MAX_NAMESPACE_DEPTH, UUID_PROPERTY, parse_identifier, reconcile_body_id, require_safe_segments, with_minted_uuid
 from catalog.core.lineage_emit import DROP_TABLE, REGISTER_TABLE, LineageEmitter, UuidReader, emit_write_event
 
 # `MAX_NAMESPACE_DEPTH` is IMPORTED, not redeclared: the point of F10 item 10 is that two walkers
@@ -63,6 +73,7 @@ from catalog.services import native, table_claims, warehouses
 from service_kit.control_emit import emit_control
 from service_kit.governed import fga
 from service_kit.lakehouse import base_registry, location_claims, protection, trash
+from service_kit.lakehouse.naming import uuid_of
 from service_kit.openlineage import DatasetUuids
 
 
@@ -135,6 +146,7 @@ async def create_namespace(
     token: CurrentToken,
     client: FgaClientDep,
     control: ControlEmitterDep,
+    resolver: ResolverDep,
     body: CreateNamespaceRequest | None = None,
 ) -> CreateNamespaceResponse:
     """Create a namespace via ``create_namespace``, then seed its FGA owner + parent edge."""
@@ -172,18 +184,17 @@ async def create_namespace(
     fga_deps.require_namespace_depth(segments, delimiter=settings.delimiter)
     # …and the id must not still belong to a namespace in the trash. F10 item 4 closed this on the TABLE
     # doors and left both namespace doors open, though the guard already spoke `kind="namespace"`.
-    # A recoverable drop KEEPS the object's tuples on purpose (the owner is the one caller who needs them
-    # to undrop), so a create at the same id during the grace window wears the dead namespace's readers,
-    # writers and validators. For a namespace it is worse than the table case in a way worth naming: the
-    # #96 cascade trashes a whole SUBTREE, and `undrop` rebuilds it with `mode="exist_ok"` and then
-    # re-registers the trashed TABLES underneath — so the previous tenant's data lands inside the
-    # namespace the new owner now controls. Conflict rung (409), after authz, before the native write.
+    # The #96 cascade trashes a whole SUBTREE, and `undrop` rebuilds it with `mode="exist_ok"` and then
+    # re-registers the trashed TABLES underneath — so a namespace created at the name in the grace window
+    # would receive the previous owner's data, and its creator would own it through the parent edge.
+    # Conflict rung (409), after authz, before the native write.
     await fga_deps.require_no_live_trash(settings, segments, kind="namespace")
     req = body or CreateNamespaceRequest()
     req.id = reconcile_body_id(segments, req.id)
     # [[LH-519]] A uuid for the namespace this request creates (ADR 0173 §2, §6). An ExistOk that keeps one answers
     # the kept namespace's own, and an Overwrite's replacement is a new namespace with a new one.
     req.properties = with_minted_uuid(req.properties)
+    minted = req.properties[UUID_PROPERTY]
     await _judge_tier_declaration(ns, settings, token, client, segments, declared=declared, overwrite=create_mode is CreateMode.OVERWRITE)
     # RACE-FREE BY CATCHING RATHER THAN PRE-CHECKING. An `exists?` read followed by a create leaves a
     # window in which another caller creates the namespace, and on THIS door the loser of that race
@@ -224,10 +235,11 @@ async def create_namespace(
             client,
             settings,
             token,
+            resolver,
             resource="namespace",
             segments=segments,
+            uuid=minted,
             undo=_undo_create,
-            created=True,
             # A bound top-level namespace hangs off its warehouse, as the warehouse door seeds it.
             parent_object=f"warehouse:{binding['warehouse_id']}" if binding is not None else None,
         )
@@ -235,7 +247,8 @@ async def create_namespace(
             control,
             action="namespace_created",
             object_type="namespace",
-            object_id=f"namespace:{id}",
+            object_id=fga.namespace_object(minted),
+            object_name=fga.canonical_object_id(segments, delimiter=settings.delimiter),
             actor=f"user:{token.subject}" if token else None,
             extra={"mode": req.mode, "properties": req.properties},
         )
@@ -323,12 +336,12 @@ async def _forget_namespace(
     earlier attempt removed, which its `child` edges still name (``fga_deps.end_removed_subtree``).
 
     Each step is idempotent — an absent record or tuple is already the post-condition — so a retry over a
-    half-finished drop converges. A grant left behind is inherited by the next namespace created at the id until LH-524;
-    a record left behind governs nothing, since no other namespace holds the uuid.
+    half-finished drop converges. A grant or record left behind governs nothing, since no other namespace holds the
+    uuid it is keyed by ([[LH-524]]).
     """
     if unbind and len(segments) == 1:
         await run_in_threadpool(warehouses.unbind_namespace, settings.registry_root, settings.storage_options(), segments[0])
-    async for _ in fga_deps.end_removed_subtree(client, settings, root=segments, root_uuid=namespace_uuid, removed=[], token=token):
+    async for _ in fga_deps.end_removed_subtree(client, settings, root_uuid=namespace_uuid, removed=[], token=token):
         pass
 
 
@@ -398,8 +411,8 @@ async def _create_or_replace_empty_namespace(
     except NamespaceAlreadyExistsError:
         pass
     canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
-    await fga_deps.require_relation(client, settings, token, relation="can_delete", obj=f"namespace:{canonical}")
     replaced = await fga_deps.identify(ns, settings, "namespace", segments)
+    await fga_deps.require_relation(client, settings, token, relation="can_delete", obj=replaced.fga_object(), label=f"namespace:{canonical}")
     await fga_deps.require_namespace_unprotected(settings, replaced, force=False)
     _, tables = await _drain_tables(ns, segments, include_declared=True)
     _, children = await _drain_namespaces(ns, segments)
@@ -448,6 +461,7 @@ async def list_namespaces(
     settings: SettingsDep,
     token: CurrentToken,
     client: FgaClientDep,
+    resolver: ResolverDep,
     page_token: str | None = None,
     limit: int | None = None,
 ) -> ListNamespacesResponse:
@@ -493,10 +507,17 @@ async def list_namespaces(
         names = _merge_bound_top_namespaces(names, await _bound_top_namespaces(settings))
 
     if settings.fga_enabled and token is not None and client is not None:
-        listing = await fga.list_objects(client, user=token.subject, relation="can_get_metadata", object_type="namespace")
-        allowed = set(listing.objects)
-        names = [name for name in names if f"namespace:{fga.canonical_object_id([*segments, name], delimiter=settings.delimiter)}" in allowed]
-
+        response.namespaces, response.page_token = await fga_deps.authorized_page(
+            client,
+            resolver,
+            user=token.subject,
+            relation="can_get_metadata",
+            kind="namespace",
+            candidates=[(name, [*segments, name]) for name in names],
+            page_token=page_token,
+            limit=limit,
+        )
+        return response
     response.namespaces, response.page_token = paginate(names, page_token, limit)
     return response
 
@@ -729,10 +750,10 @@ async def _skip_absent_namespace(settings: Settings, client: OpenFgaClient | Non
     """``mode=Skip`` on a namespace that is not there: succeed, after finishing the trailer a previous drop left.
 
     Skip is the retry lever, and the retry it exists for is a drop that removed the namespace and failed
-    before its trailer ran. Answering success without the trailer would leave that drop's tuples and binding
-    on the id for the next namespace created there to inherit, so the trailer runs here: every step is
-    idempotent, and on an id that never existed each one finds nothing. The namespace's records are keyed by
-    a uuid nothing here can read any more, and they govern no other namespace.
+    before its trailer ran. Answering success without the trailer would leave that drop's binding on the id
+    for the next namespace created there to route through, so the trailer runs here: every step is
+    idempotent, and on an id that never existed each one finds nothing. The namespace's records and grants are
+    keyed by a uuid nothing here can read any more, and they govern no other namespace.
 
     Not after a RECOVERABLE drop. A live namespace trash record means the grants and the binding are kept
     on purpose (the owner needs them to undrop, #96), and the create door refuses the id until the trash
@@ -913,13 +934,14 @@ async def drop_namespace(
     # as it was and reachable by the owner, the one person who needs to undrop it. Those die with the bytes — at
     # purge, or when the sweep's expiry reclaims the trash.
     if not recoverable:
-        async for _ in fga_deps.end_removed_subtree(client, settings, root=segments, root_uuid=dropped.uuid, removed=descendants, token=token):
+        async for _ in fga_deps.end_removed_subtree(client, settings, root_uuid=dropped.uuid, removed=descendants, token=token):
             pass
     await emit_control(
         control,
         action="namespace_dropped",
         object_type="namespace",
-        object_id=f"namespace:{id}",
+        object_id=dropped.fga_object(),
+        object_name=fga.canonical_object_id(segments, delimiter=settings.delimiter),
         object_uuid=own.object_uuid,
         namespace_uuid=own.namespace_uuid,
         actor=f"user:{token.subject}" if token else None,
@@ -1030,6 +1052,9 @@ async def undrop_namespace(
     # Shallowest first — a parent manifest row must exist before its children's create/register.
     namespace_records = sorted((r for r in subtree if r.get("kind") == "namespace"), key=lambda r: str(r["id"]).count(settings.delimiter))
     table_records = [r for r in subtree if r.get("kind") == "table"]
+    root_uuid = next((uuid_of(r.get("properties")) for r in namespace_records if str(r["id"]) == canonical), None)
+    if namespace_records and root_uuid is None:
+        raise InternalError(f"the trash record of namespace {canonical!r} keeps no uuid, so its grants cannot be found")
     response = CreateNamespaceResponse()
     for n_rec in namespace_records:
         n_id = str(n_rec["id"])
@@ -1104,14 +1129,19 @@ async def undrop_namespace(
     # `drop_namespace` would destroy the cascade the user just recovered in order to repair one tuple.
     # That was the right call given a seed had to happen at all — and with no seed, the door has no
     # uncompensatable step left.
-    await emit_control(
-        control,
-        action="namespace_undropped",
-        object_type="namespace",
-        object_id=f"namespace:{canonical}",
-        actor=f"user:{token.subject}" if token is not None else None,
-        extra={"namespaces": len(namespace_records), "tables": len(table_records) - skipped, "declared_only_skipped": skipped},
-    )
+    # The namespace the subtree was restored into: the root's own trash record names its uuid, and a root that was
+    # never trashed (only its children were) is the one standing at the name.
+    restored = root_uuid or (await uuids.namespace(segments)).object_uuid
+    if restored is not None:
+        await emit_control(
+            control,
+            action="namespace_undropped",
+            object_type="namespace",
+            object_id=fga.namespace_object(restored),
+            object_name=canonical,
+            actor=f"user:{token.subject}" if token is not None else None,
+            extra={"namespaces": len(namespace_records), "tables": len(table_records) - skipped, "declared_only_skipped": skipped},
+        )
     return response
 
 
@@ -1156,7 +1186,8 @@ async def set_namespace_protection(
         control,
         action="namespace_protected" if body.protected else "namespace_unprotected",
         object_type="namespace",
-        object_id=f"namespace:{canonical}",
+        object_id=namespace.fga_object(),
+        object_name=canonical,
         actor=f"user:{token.subject}" if token is not None else None,
         extra={},
     )
@@ -1182,6 +1213,7 @@ async def list_tables(
     settings: SettingsDep,
     token: CurrentToken,
     client: FgaClientDep,
+    resolver: ResolverDep,
     page_token: str | None = None,
     limit: int | None = None,
     include_declared: bool = True,
@@ -1213,22 +1245,19 @@ async def list_tables(
     """
     segments = parse_identifier(id, settings.delimiter)
     response, names = await _drain_tables(ns, segments, include_declared=include_declared)
-    # When FGA is on and the caller is known, keep only the tables they may actually read. The object
-    # id is the table's PATH under this namespace, built with `canonical_object_id` — the same joiner
-    # the grant path uses, so a check here cannot address an id a grant never wrote.
+    # When FGA is on and the caller is known, keep only the tables they may actually read, each judged on the object its
+    # name resolves to ([[LH-223]], [[LH-524]]).
     if settings.fga_enabled and token is not None and client is not None:
-        # `.objects` + `.truncated`: past OpenFGA's 1000-object cap this listing is SHORT, and the
-        # page cursor below would be minted from the shortened list. Surfaced to the caller rather
-        # than only logged — a client cannot otherwise tell a small estate from a truncated answer.
-        listing = await fga.list_objects(client, user=token.subject, relation="can_read_data", object_type="table")
-        allowed = set(listing.objects)
-        authorization_truncated = listing.truncated
-        names = [name for name in names if f"table:{fga.canonical_object_id([*segments, name], delimiter=settings.delimiter)}" in allowed]
-        # THE SPEC'S OWN EXTENSION POINT. `ListTablesResponse` is a `lance_namespace` model with fields
-        # `context`, `tables`, `page_token`, and `context` is documented as "arbitrary context as
-        # key-value pairs ... custom to the specific implementation". So the flag rides there rather
-        # than as a new body field, which would have broken the spec conformance the catalog is built on.
-        if authorization_truncated:
-            response.context = {**(response.context or {}), "authorization_truncated": "true"}
+        response.tables, response.page_token = await fga_deps.authorized_page(
+            client,
+            resolver,
+            user=token.subject,
+            relation="can_read_data",
+            kind="table",
+            candidates=[(name, [*segments, name]) for name in names],
+            page_token=page_token,
+            limit=limit,
+        )
+        return response
     response.tables, response.page_token = paginate(names, page_token, limit)
     return response

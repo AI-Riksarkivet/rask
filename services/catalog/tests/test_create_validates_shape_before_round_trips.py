@@ -62,6 +62,8 @@ def _create(**over: Any) -> Any:
         "so": {},
         "data": encode_arrow_stream(pa.table({"id": [1]})),
         "run": None,
+        # Every refusal here lands before a name is resolved, so the resolver is never asked.
+        "resolver": None,
     }
     kwargs.update(over)
     return asyncio.run(ep.create_table(**kwargs))

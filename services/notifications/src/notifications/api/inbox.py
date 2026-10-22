@@ -58,18 +58,19 @@ def _is_control_lane(pointer: InboxPointer) -> bool:
     pointers, and answered from the actor's own partition — still counted it. An unclearable badge for
     the 30-day TTL, which is verbatim the failure the exemption above exists to end.
 
-    The lanes stay distinguishable without a stored field (`extra="forbid"` rightly forbids one): the
-    control lane stamps a CANONICAL id carrying its type (`table:db1$t`, `project:acme`) while a
-    lineage run stamps a bare dataset name. That is the same discriminator `visibility._as_object`
-    already relies on, and its docstring records why a dataset name cannot collide — the estate's are
-    `<namespace>$<table>`, delimiter-joined and colon-free.
+    The lanes stay distinguishable without a stored field (`extra="forbid"` rightly forbids one) for every object but
+    a table: a lineage run names its output as `table:<uuid>` ([[LH-524]]), and the control lane names every object
+    it governs, a table's among them. So an UNKNOWN reason on a non-table object is the control lane's, and one on a
+    table is governed, whichever lane wrote it.
 
-    Deliberately narrow: an UNKNOWN reason on a BARE id is still governed, so this cannot become a
-    way to smuggle a lineage row past the render gate.
+    Deliberately narrow: an UNKNOWN reason on a table is still governed, so this cannot become a way to smuggle a
+    lineage row past the render gate. The residue is a newer build's control action on a table the subject holds no
+    grant on, which reads as hidden here until this build learns the action.
     """
     if pointer.reason in _CONTROL_REASONS:
         return True
-    return pointer.reason is NotificationReason.UNKNOWN and ":" in pointer.object_id
+    kind, sep, _ = pointer.object_id.partition(":")
+    return pointer.reason is NotificationReason.UNKNOWN and bool(sep) and kind != "table"
 
 
 @router.get("/inbox")

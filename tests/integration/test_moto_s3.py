@@ -476,23 +476,17 @@ def test_the_rename_DESTINATION_must_have_a_real_namespace_too(moto_client: Test
 
 
 # --------------------------------------------------------------------------- #
-# diff2 F10 item 4 — the trash-window privilege bleed
+# diff2 F10 item 4 — the name of a recoverable table is not free
 #
-# A recoverable drop deliberately KEEPS the table's FGA tuples: `drop_table` revokes only
-# `if not trashed`, because the owner is the one person who needs them to undrop, and revoking made
-# undrop unreachable for exactly that caller. Correct for undrop — a hole for create. Nothing read
-# the trash on the way in, so a create at the same id during the grace window produced a brand-new
-# table silently wearing the DEAD table's grants: every reader, writer and validator it ever had, on
-# data they were never granted.
-#
-# Refusing is the honest answer rather than revoking-then-creating. The id is not free yet: the bytes
-# are still on storage and the owner still holds a live claim to recover them, so a create that
-# quietly took the name would trade a privilege bleed for silent data loss.
+# A recoverable drop keeps the table's bytes, its uuid and its grants for its owner's undrop, under its
+# name. A create at that name in the grace window would hold the name the undrop restores to, so it is
+# refused rather than taken: the bytes are still on storage and the owner still holds a live claim to
+# recover them. (Its grants are held by its uuid, so the new table would inherit none either way.)
 # --------------------------------------------------------------------------- #
 
 
 def test_create_is_refused_while_the_id_is_still_recoverable(moto_client_recoverable: TestClient) -> None:
-    """The window: dropped-but-recoverable, so the old grants are still live."""
+    """The window: dropped-but-recoverable, so the name is still the trashed table's."""
     rows = pa.table({"id": pa.array([1], pa.int64())})
     assert moto_client_recoverable.post("/v1/namespace/bleed/create", json={}).status_code == 200
     assert _create(moto_client_recoverable, "bleed$t", rows).status_code == 200
@@ -516,8 +510,8 @@ def test_create_is_refused_while_the_id_is_still_recoverable(moto_client_recover
 
 def test_declare_and_register_are_refused_on_a_trashed_id_too(moto_client_recoverable: TestClient) -> None:
     """All the create doors, not just the Arrow one. A guard on one door is a guard on no door —
-    `declare` reserves the same id and `register` attaches bytes to it, and either would inherit the
-    dead table's grants exactly as the Arrow create would."""
+    `declare` reserves the same name and `register` attaches bytes to it, and either would take the name
+    the undrop restores to exactly as the Arrow create would."""
     rows = pa.table({"id": pa.array([1], pa.int64())})
     assert moto_client_recoverable.post("/v1/namespace/bleed2/create", json={}).status_code == 200
     assert _create(moto_client_recoverable, "bleed2$t", rows).status_code == 200

@@ -46,14 +46,16 @@ def test_a_caller_sees_only_the_obligations_it_maintains(real_ns_client: TestCli
     client.app.state.fga = grants
     now = datetime.now(UTC)
     tables = ("acme$mine", "acme$theirs")
+    uuids: dict[str, str] = {}
     for table in tables:
         table_uuid, location = str(uuid4()), f"{tmp_path}/{uuid4()}"
+        uuids[table] = table_uuid
         location_claims.take(table_claims.claim_store(settings), location, table, parse_identifier(table, "$"), is_gone=lambda _claim: False, uuid=table_uuid)
         obligation = ErasureObligation(
             obligation_id=uuid4().hex,
             table=table,
             table_uuid=table_uuid,
-            object_id=f"table:{table}",
+            object_id=f"table:{table_uuid}",
             location=location,
             predicate_digest=erasure_obligations.digest("pii = 'alice'"),
             retain_days=0,
@@ -63,7 +65,7 @@ def test_a_caller_sees_only_the_obligations_it_maintains(real_ns_client: TestCli
             deadline=now + timedelta(days=30),
         )
         erasure_obligations.record(settings.registry_root, settings.storage_options(), obligation)
-    grants.grant("alice", ("can_maintain", "table:acme$mine"))
+    grants.grant("alice", ("can_maintain", f"table:{uuids['acme$mine']}"))
     act_as(client, "alice")
 
     listed = client.get("/management/v1/erasures", headers=AUTH)

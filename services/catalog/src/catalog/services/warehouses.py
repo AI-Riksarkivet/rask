@@ -497,7 +497,9 @@ def unbind_namespace(control_root: str, storage_options: StorageOptions, top_ns:
         return
 
 
-def evict_stale_bindings(cache: dict[str, dict[str, str]], *, action: str, object_id: str, extra: dict[str, Any], delimiter: str) -> list[str]:
+def evict_stale_bindings(
+    cache: dict[str, dict[str, str]], *, action: str, object_id: str, object_name: str | None, extra: dict[str, Any], delimiter: str
+) -> list[str]:
     """Evict every binding-cache entry a control event just invalidated; return the evicted keys (#46).
 
     The cache's premise — a binding is immutable, cache positives forever — is broken by exactly
@@ -517,8 +519,9 @@ def evict_stale_bindings(cache: dict[str, dict[str, str]], *, action: str, objec
       ``warehouse_deleted`` does either. Without this branch the unbind is a no-op on every replica
       already holding the entry, which is the worst shape available — the registry says unbound and the
       running estate keeps routing.
-    - ``namespace_dropped``: the cache is keyed by TOP-LEVEL namespace, so evict the id's first
-      segment (dropping a nested namespace does not move its warehouse).
+    - ``namespace_dropped``: the cache is keyed by TOP-LEVEL namespace name, so evict the first segment of the name
+      the event carries (``object_name``; ``object_id`` names its uuid, [[LH-524]]). Dropping a nested namespace
+      does not move its warehouse.
 
     Deactivation needs no entry here: warehouse STATUS is read live on every request by design.
     Mutates ``cache`` in place — it is the live ``app.state.warehouse_binding_cache`` dict; per-key
@@ -542,8 +545,8 @@ def evict_stale_bindings(cache: dict[str, dict[str, str]], *, action: str, objec
         namespace = extra.get("namespace")
         if isinstance(namespace, str) and namespace:
             _pop(namespace)
-    elif action == "namespace_dropped":
-        top_ns = object_id.removeprefix("namespace:").split(delimiter)[0]
+    elif action == "namespace_dropped" and object_name:
+        top_ns = object_name.split(delimiter)[0]
         if top_ns:
             _pop(top_ns)
     return evicted

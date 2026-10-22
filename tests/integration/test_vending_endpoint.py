@@ -8,7 +8,7 @@ answer is proven by the e2e lanes against RustFS.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from unittest.mock import MagicMock
 
 from botocore.exceptions import ClientError
@@ -33,8 +33,9 @@ def test_mode_b_returns_server_mediated(client: TestClient, fake_ns: MagicMock) 
     assert "credentials" not in body  # response_model_exclude_none drops the null
 
 
-def test_direct_creds_from_the_vendor_carry_scoped_storage_options(client: TestClient, fake_ns: MagicMock) -> None:
+def test_direct_creds_from_the_vendor_carry_scoped_storage_options(client: TestClient, fake_ns: MagicMock, claim_described: Callable[[str], str]) -> None:
     fake_ns.describe_table.return_value = _described("s3://lance-catalog/db$t")
+    claim_described("db$t")
     captured: dict[str, object] = {}
 
     class _FakeVendor:

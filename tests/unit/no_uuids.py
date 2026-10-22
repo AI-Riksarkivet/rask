@@ -24,8 +24,8 @@ class _NoObjectUuids:
     async def namespace(self, segments: list[str]) -> ControlUuids:
         return ControlUuids()
 
-    async def of_object(self, object_id: str) -> ControlUuids:
-        return ControlUuids()
+    async def namespace_of(self, name: str) -> str | None:
+        return None
 
 
 class _NoCatalogNames:

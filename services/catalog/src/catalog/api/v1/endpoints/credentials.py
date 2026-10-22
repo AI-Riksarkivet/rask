@@ -27,7 +27,7 @@ from lance_namespace import (
     TableBranchNotFoundError,
 )
 
-from catalog.api.dependencies import FgaClientDep, NamespaceDep, SettingsDep, VendorDep
+from catalog.api.dependencies import FgaClientDep, NamespaceDep, ResolvedTableDep, SettingsDep, VendorDep
 from catalog.api.security import CurrentSubject, CurrentToken
 from catalog.core.base_judge import BaseJudge
 from catalog.core.identifiers import parse_identifier
@@ -51,6 +51,7 @@ router = APIRouter(prefix="/management/v1/table", tags=["credentials"])
 async def vend_credentials(
     id: str,
     ns: NamespaceDep,
+    table: ResolvedTableDep,
     settings: SettingsDep,
     token: CurrentToken,
     subject: CurrentSubject,
@@ -150,7 +151,7 @@ async def vend_credentials(
     )
     mode = "server_mediated" if creds is None else "direct"
     if mode == "direct":  # #41 audit the actual issuance of direct object-store credentials (who, what, tier)
-        obj = f"table:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}"
+        obj = fga.table_object(table.require_uuid())
         audit(
             "vend_credentials",
             SUCCESS,

@@ -127,9 +127,11 @@ def _catalog(ns: LanceNamespace, tmp_path: Path, *, grace_days: int, emitter: _R
     application.include_router(door.router)
     release_door.mount_erasure_release(application, _BINDING)
 
+    table = f"table:{_table_uuid(ns, tmp_path)}"
+
     async def _owners(obj: str) -> list[str]:
-        assert obj == "table:db$subjects"
-        return ["user:dex~olivia", "user:dex~alice%40corp"]
+        # The owners of the table's uuid, which its grants are held by (ADR 0173 §8); any other object has none.
+        return ["user:dex~olivia", "user:dex~alice%40corp"] if obj == table else []
 
     application.dependency_overrides[get_settings] = lambda: settings
     application.dependency_overrides[get_namespace] = lambda: ns
@@ -174,8 +176,9 @@ def test_a_settled_erasure_tells_each_person_then_releases_its_pin_at_the_deadli
         due = datetime.fromisoformat(release["due_at"])
         assert (release["refs"], release["notified"], due) == (refs, ["user:dex~alice%40corp", "user:dex~olivia"], clock.now + timedelta(days=7))
         notices = [event for event in emitter.events if event.action == _NOTICE]
-        assert [(e.object_id, e.actor, e.extra["subject"], e.extra["refs"], datetime.fromisoformat(e.extra["due_at"])) for e in notices] == [
-            ("table:db$subjects", "user:dex~alice@corp", subject, refs, due) for subject in ("user:dex~alice%40corp", "user:dex~olivia")
+        table = f"table:{_table_uuid(ns, tmp_path)}"
+        assert [(e.object_id, e.object_name, e.actor, e.extra["subject"], e.extra["refs"], datetime.fromisoformat(e.extra["due_at"])) for e in notices] == [
+            (table, "db$subjects", "user:dex~alice@corp", subject, refs, due) for subject in ("user:dex~alice%40corp", "user:dex~olivia")
         ]
 
         clock.now = due - timedelta(seconds=1)

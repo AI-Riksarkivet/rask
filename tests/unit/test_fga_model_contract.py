@@ -30,11 +30,13 @@ from lance_namespace import InternalError
 from openfga_sdk import OpenFgaClient
 
 from catalog.api import fga_deps
+from catalog.core import tier_policy
 from catalog.core.config import Settings
 from service_kit.governed import fga as fga_module
 from service_kit.governed.oidc import IDToken
 from service_kit.governed.person_identity import PersonPrincipal
 from service_kit.governed.principal import Principal
+from tests.unit.named_resolver import NamedResolver, uuid_of
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -88,6 +90,11 @@ class _FakeRequest:
         return self._body
 
 
+def _rung_type(rung: tier_policy.Rung) -> str:
+    """The object type a rung is asked on: a named table's or namespace's kind, else its object's type."""
+    return rung.on.kind if isinstance(rung.on, tier_policy.Named) else _obj_type(rung.on)
+
+
 def _obj_type(obj: str) -> str:
     return obj.split(":", 1)[0]
 
@@ -96,7 +103,7 @@ def _catalog_pairs(monkeypatch: pytest.MonkeyPatch) -> set[tuple[str, str]]:
     """Every ``(object_type, relation)`` ``catalog.api.fga_deps`` can send to OpenFGA.
 
     Driven through the REAL mapping tables + resolvers, so a future edit to ``_action_relation`` /
-    ``_OWNER_SUFFIX_RELATION`` / ``_BATCH_OWNER_OPS`` / ``_create_parent_check`` /
+    ``_OWNER_SUFFIX_RELATION`` / ``_BATCH_OWNER_OPS`` / ``_create_parent_rung`` /
     ``_authorize_transaction`` is picked up here automatically instead of drifting from a copy.
     """
     pairs: set[tuple[str, str]] = set()
@@ -127,10 +134,10 @@ def _catalog_pairs(monkeypatch: pytest.MonkeyPatch) -> set[tuple[str, str]]:
     #    object (a `warehouse:`) for a TOP-LEVEL child when fga_lock_root_create is on — so each
     #    can_create_* must resolve on BOTH types.
     for resource in fga_deps._CREATE_ON_PARENT_SUFFIXES:
-        nested = fga_deps._create_parent_check(resource, ["parent_ns", "child"], settings)
+        nested = fga_deps._create_parent_rung(resource, ["parent_ns", "child"], settings)
         assert nested is not None
-        pairs.add((_obj_type(nested[0]), nested[1]))
-        top = fga_deps._create_parent_check(resource, ["top_level_child"], root_settings)
+        pairs.add((_rung_type(nested), nested.relation))
+        top = fga_deps._create_parent_rung(resource, ["top_level_child"], root_settings)
         assert top is not None, "fga_lock_root_create must gate a top-level create on the root object"
         # WHERE it is checked may change; WHICH permission it needs may not. `lockRootCreate` moves the
         # check from the parent namespace to the root object — it is not a licence to ask for a weaker
@@ -140,11 +147,11 @@ def _catalog_pairs(monkeypatch: pytest.MonkeyPatch) -> set[tuple[str, str]]:
         # `can_get_metadata` left 3,125 tests passing, and `deploy/values-prod.yaml:22` ships
         # `lockRootCreate: true` as the ONLY thing stopping any authenticated token from minting
         # top-level namespaces and tables in production.
-        assert top[1] == nested[1], (
-            f"the locked-root create for {resource!r} asks for {top[1]!r} while the nested create asks "
-            f"for {nested[1]!r} — locking the root must not downgrade the tier it demands"
+        assert top.relation == nested.relation, (
+            f"the locked-root create for {resource!r} asks for {top.relation!r} while the nested create asks "
+            f"for {nested.relation!r} — locking the root must not downgrade the tier it demands"
         )
-        pairs.add((_obj_type(top[0]), top[1]))
+        pairs.add((_rung_type(top), top.relation))
 
     # 3. Transactions (parent-scoped for a namespaced id, object-scoped for an opaque one) and the
     #    batch routes: drive the real coroutines with a recording fga.check / fga.batch_check.
@@ -165,7 +172,7 @@ def _catalog_pairs(monkeypatch: pytest.MonkeyPatch) -> set[tuple[str, str]]:
 
     for segments in (["db1", "txn1"], ["txn1"]):  # namespaced (parent-scoped) + opaque (object-scoped)
         for suffix in ("describe", "alter"):
-            asyncio.run(fga_deps._authorize_transaction(_CLIENT, settings, segments, suffix, user="dex~alice"))
+            asyncio.run(fga_deps._authorize_transaction(_CLIENT, NamedResolver(), settings, segments, suffix, user="dex~alice"))
 
     body = {
         "entries": [{"id": ["db1", "users"]}],
@@ -175,13 +182,12 @@ def _catalog_pairs(monkeypatch: pytest.MonkeyPatch) -> set[tuple[str, str]]:
             {"commit_table": {"id": ["db1", "b"]}},  # generic writer tier
         ],
     }
-    asyncio.run(fga_deps._authorize_batch(cast("Request", _FakeRequest(body)), _CLIENT, settings, user="dex~alice"))
+    asyncio.run(fga_deps._authorize_batch(cast("Request", _FakeRequest(body)), _CLIENT, NamedResolver(), settings, user="dex~alice"))
 
     # 4. The endpoint-level gates that check outside `authorize` (Overwrite / rename-into-namespace).
     token = PersonPrincipal(principal=Principal(idp_id="dex", subject="alice"), claims=IDToken(iss="i", sub="alice", aud="lance", exp=1, iat=1))
-    asyncio.run(fga_deps.require_can_drop_table(_CLIENT, settings, token, segments=["db1", "t"]))
     for resource in ("table", "namespace", "materialized_view"):
-        asyncio.run(fga_deps.require_create_on_parent(_CLIENT, settings, token, resource=resource, segments=["db1", "child"]))
+        asyncio.run(fga_deps.require_create_on_parent(_CLIENT, settings, token, NamedResolver(), resource=resource, segments=["db1", "child"]))
 
     pairs.update(checked)
     return pairs
@@ -220,10 +226,10 @@ def test_transaction_alter_checks_a_real_namespace_writer_relation(
         return True
 
     monkeypatch.setattr(fga_deps.fga, "check", rec_check)
-    asyncio.run(fga_deps._authorize_transaction(_CLIENT, _settings(lock_root=False), ["db1", "txn1"], "alter", user="dex~alice"))
+    asyncio.run(fga_deps._authorize_transaction(_CLIENT, NamedResolver(), _settings(lock_root=False), ["db1", "txn1"], "alter", user="dex~alice"))
 
     obj, relation = checked[-1]
-    assert obj == "namespace:db1"  # parent-scoped, not a per-txn object nothing seeds
+    assert obj == f"namespace:{uuid_of('namespace', ['db1'])}"  # parent-scoped, not a per-txn object nothing seeds
     assert relation in _model_relations()["namespace"], f"namespace#{relation} does not exist"
     assert relation == "can_update_properties"  # the namespace WRITER rung (can_write_data is table-only)
 
@@ -363,7 +369,9 @@ def test_grant_routes_are_intercepted_before_the_resolver(monkeypatch: pytest.Mo
     for fga_type in sorted(revoked):
         for rung in _grantable_relations(fga_type):
             request = cast("Request", _FakeRequest({"user": "dex~bob", "relation": rung}))
-            asyncio.run(fga_deps._authorize_grant(request, _CLIENT, settings, user="dex~alice", fga_type=fga_type, segments=["x"], revoking=True))
+            asyncio.run(
+                fga_deps._authorize_grant(request, _CLIENT, NamedResolver(), settings, user="dex~alice", fga_type=fga_type, segments=["x"], revoking=True)
+            )
     model = _model_relations()
     undefined = sorted(f"{t}#{r}" for t, r in checked if r not in model[t])
     assert not undefined, f"the revoke gate checks {undefined}, which the model does not define: OpenFGA refuses each, and every revoke there answers 503"

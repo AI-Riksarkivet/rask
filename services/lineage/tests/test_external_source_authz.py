@@ -28,18 +28,20 @@ test written only for the first.
 
 from __future__ import annotations
 
+import uuid
 from typing import Any, cast
 
 import pytest
 from lance_namespace import PermissionDeniedError
 
-from lineage.api.fga_deps import enforce_output_authz, is_external_source
+from lineage.api.fga_deps import Governed, enforce_output_authz, is_external_source
 from lineage.core.config import LineageSettings
 from lineage.models import Dataset, Job, Run, RunEvent
 from lineage.schemas import EventRecord
 from service_kit.governed import fga
 from service_kit.governed.decider import OpenFgaDecider
 from service_kit.governed.machine_identity import ServicePrincipal
+from service_kit.openlineage import DatasetUuids, with_dataset_uuids
 
 
 GOVERNED = "bind86-bronze$pages"
@@ -49,6 +51,25 @@ EXTERNAL_NAME = "bind86-src/run1"
 
 def _dataset(namespace: str, name: str) -> Dataset:
     return Dataset(namespace=namespace, name=name)
+
+
+def _uuid(name: str) -> str:
+    """The uuid the catalog minted for the governed table ``name``, as its events carry it (ADR 0173 §10)."""
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, name))
+
+
+def _object(name: str) -> str:
+    """The FGA object the governed table ``name``'s grants are held by."""
+    return fga.table_object(_uuid(name))
+
+
+def _table_payload(namespace: str, name: str) -> dict[str, Any]:
+    """A governed table as the catalog names it on an event: its name, and its uuid in the ``lance`` facet."""
+    return with_dataset_uuids({"namespace": namespace, "name": name}, DatasetUuids(table_uuid=_uuid(name)), producer="rask://test")
+
+
+def _table(namespace: str, name: str) -> Dataset:
+    return Dataset.model_validate(_table_payload(namespace, name))
 
 
 def _event(*, inputs: list[Dataset] | None = None, outputs: list[Dataset] | None = None) -> RunEvent:
@@ -102,7 +123,6 @@ def settings() -> LineageSettings:
         oidc_issuer="https://example.invalid/realms/rask",
         oidc_audience="rask",
         oidc_connectors={"local": "dex"},
-        fga_object_type="table",
     )
 
 
@@ -127,11 +147,12 @@ def request_with(monkeypatch):
 async def test_a_GOVERNED_input_the_caller_cannot_see_is_STILL_refused(settings, request_with) -> None:
     """The half the fix must not cost. This is the forgery the guard exists to stop: an authenticated
     reader recording `I read gold$catalog` into the feed."""
-    request, _ = request_with(set())
-    event = _event(inputs=[_dataset("gold", "gold$catalog")])
+    request, fake = request_with(set())
+    event = _event(inputs=[_table("gold", "gold$catalog")])
 
-    with pytest.raises(PermissionDeniedError, match="can_get_metadata"):
+    with pytest.raises(PermissionDeniedError, match=r"can_get_metadata required on inputs: gold\$catalog"):
         await enforce_output_authz(event, request, settings, _PIPELINE)
+    assert fake.asked == [_object("gold$catalog")], "the refusal was not the check on the table the input names"
 
 
 @pytest.mark.anyio
@@ -171,12 +192,12 @@ async def test_OUTPUTS_are_never_exempted(settings, request_with) -> None:
 @pytest.mark.anyio
 async def test_a_MIXED_event_authorizes_the_governed_input_and_skips_the_external_one(settings, request_with) -> None:
     """A run that reads a raw source AND a governed table must be judged on the governed half only."""
-    request, fake = request_with({f"table:{GOVERNED}"})
-    event = _event(inputs=[_dataset(EXTERNAL_NS, EXTERNAL_NAME), _dataset("bind86-bronze", GOVERNED)])
+    request, fake = request_with({_object(GOVERNED)})
+    event = _event(inputs=[_dataset(EXTERNAL_NS, EXTERNAL_NAME), _table("bind86-bronze", GOVERNED)])
 
     await enforce_output_authz(event, request, settings, _PIPELINE)
 
-    assert f"table:{GOVERNED}" in fake.asked, "the governed input was not authorized"
+    assert _object(GOVERNED) in fake.asked, "the governed input was not authorized"
     assert not any(EXTERNAL_NAME in o for o in fake.asked), "the external input was authorized"
 
 
@@ -232,28 +253,36 @@ def test_the_read_path_can_recover_the_namespace_the_columns_dropped() -> None:
 
     payload = _event(
         inputs=[_dataset("s3://lake/batch", "img.png")],
-        outputs=[_dataset("bronze", "bronze-media$objects")],
+        outputs=[_table("bronze", "bronze-media$objects")],
     ).model_dump(by_alias=True)
     # `inputs` is what the feed keeps: the bare NAME, namespace discarded.
     record = _record(inputs=["img.png"], outputs=["bronze-media$objects"], event=payload)
 
     governed_on = _governed_datasets(record)
 
-    assert "img.png" not in governed_on, "the external source is still being authorized, so every event naming one stays hidden"
-    assert "bronze-media$objects" in governed_on, "outputs are never exempted"
+    # Exact: the external source is in neither set (else every event naming one stays hidden), and the output is
+    # governed as the table its uuid names (outputs are never exempted).
+    assert governed_on == Governed(objects=frozenset({_object("bronze-media$objects")}))
 
 
-def test_a_summary_row_keeps_todays_behaviour() -> None:
+def test_a_summary_row_is_governed_on_the_uuids_it_recorded() -> None:
     """`summary=true` leaves the payload out of the read, so the namespace genuinely is not there.
 
-    Governing on the bare names is then the only option, and it is what happens today — so this fix
-    must not change that path, only the one where the information exists.
+    The row's recorded uuids are then all there is: each is the table it names, and a governed table the row recorded
+    without a uuid stays unresolved, so the row is hidden rather than governed on nothing.
     """
     from lineage.api.v1.endpoints.events import _governed_datasets
 
-    record = _record(inputs=["img.png"], outputs=["bronze-media$objects"], event={})
+    record = EventRecord(
+        seq=1,
+        inputs=["bronze$pages"],
+        outputs=["bronze-media$objects"],
+        table_uuids=[_uuid("bronze-media$objects")],
+        unresolved_tables=["bronze$pages"],
+        event={},
+    )
 
-    assert _governed_datasets(record) == {"img.png", "bronze-media$objects"}
+    assert _governed_datasets(record) == Governed(objects=frozenset({_object("bronze-media$objects")}), unresolved=frozenset({"bronze$pages"}))
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
@@ -286,8 +315,8 @@ def test_two_external_sources_with_the_same_name_stay_distinct_by_namespace() ->
 # with the governed name never presented to a single FGA check.
 
 
-def _event_with_column_upstream(output: Dataset, up_ns: str, up_name: str) -> RunEvent:
-    """A COMPLETE event whose only reference to `up_name` is inside the columnLineage facet."""
+def _event_with_column_upstream(output: dict[str, Any], up_ns: str, up_name: str, *, inputs: list[dict[str, Any]] | None = None) -> RunEvent:
+    """A COMPLETE event whose reference to `up_name` is inside the columnLineage facet, beside ``inputs``."""
     return RunEvent.model_validate(
         {
             "eventType": "COMPLETE",
@@ -295,12 +324,14 @@ def _event_with_column_upstream(output: Dataset, up_ns: str, up_name: str) -> Ru
             "producer": "rask://test",
             "job": {"namespace": "test", "name": "j"},
             "run": {"runId": "11111111-2222-4333-8444-555555555555"},
-            "inputs": [],
+            "inputs": inputs or [],
             "outputs": [
                 {
-                    "namespace": output.namespace,
-                    "name": output.name,
-                    "facets": {"columnLineage": {"fields": {"ssn": {"inputFields": [{"namespace": up_ns, "name": up_name, "field": "ssn"}]}}}},
+                    **output,
+                    "facets": {
+                        **output.get("facets", {}),
+                        "columnLineage": {"fields": {"ssn": {"inputFields": [{"namespace": up_ns, "name": up_name, "field": "ssn"}]}}},
+                    },
                 }
             ],
         }
@@ -311,10 +342,10 @@ def _event_with_column_upstream(output: Dataset, up_ns: str, up_name: str) -> Ru
 async def test_a_GOVERNED_column_upstream_is_AUTHORIZED_not_written_blind(settings, request_with) -> None:
     """The defect: the caller may write `mine$table` and holds nothing on `gold$catalog`, yet naming it
     as a column upstream would record and forward a derivation from it."""
-    request, _fake = request_with({"table:mine$table"})  # write on the sandbox only
-    event = _event_with_column_upstream(_dataset("mine", "mine$table"), "gold", GOVERNED)
+    request, _fake = request_with({_object("mine$table")})  # write on the sandbox only
+    event = _event_with_column_upstream(_table_payload("mine", "mine$table"), "gold", GOVERNED)
 
-    with pytest.raises(PermissionDeniedError):
+    with pytest.raises(PermissionDeniedError, match=r"can_get_metadata required on inputs: bind86-bronze\$pages"):
         await enforce_output_authz(event, request, settings, _PIPELINE)
 
 
@@ -322,12 +353,12 @@ async def test_a_GOVERNED_column_upstream_is_AUTHORIZED_not_written_blind(settin
 async def test_a_column_upstream_the_caller_CAN_see_passes(settings, request_with) -> None:
     """The mirror — the check must not refuse a legitimate cross-table derivation, which is the whole
     point of column lineage."""
-    request, fake = request_with({"table:mine$table", f"table:{GOVERNED}"})
-    event = _event_with_column_upstream(_dataset("mine", "mine$table"), "gold", GOVERNED)
+    request, fake = request_with({_object("mine$table"), _object(GOVERNED)})
+    event = _event_with_column_upstream(_table_payload("mine", "mine$table"), "gold", GOVERNED, inputs=[_table_payload("gold", GOVERNED)])
 
     await enforce_output_authz(event, request, settings, _PIPELINE)
 
-    assert f"table:{GOVERNED}" in fake.asked, "the governed column upstream was never presented to a check"
+    assert _object(GOVERNED) in fake.asked, "the governed column upstream was never presented to a check"
 
 
 @pytest.mark.anyio
@@ -335,7 +366,7 @@ async def test_an_EXTERNAL_column_upstream_stays_exempt(settings, request_with) 
     """Same rule as inputs, and for the same reason: an external source has no `table:` object, so
     authorizing it is unsatisfiable rather than strict. Its identity is namespace-qualified, so it cannot
     name a governed table either way."""
-    request, _fake = request_with({"table:mine$table"})
-    event = _event_with_column_upstream(_dataset("mine", "mine$table"), "s3://raw", "gold$catalog")
+    request, _fake = request_with({_object("mine$table")})
+    event = _event_with_column_upstream(_table_payload("mine", "mine$table"), "s3://raw", "gold$catalog")
 
     await enforce_output_authz(event, request, settings, _PIPELINE)

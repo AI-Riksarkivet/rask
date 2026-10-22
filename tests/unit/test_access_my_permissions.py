@@ -29,6 +29,7 @@ from catalog.core.config import Settings
 from service_kit.governed.oidc import IDToken
 from service_kit.governed.person_identity import PersonPrincipal
 from service_kit.governed.principal import Principal
+from tests.unit.named_resolver import NamedResolver, uuid_of
 
 
 def _run(
@@ -58,7 +59,7 @@ def _run(
     token = (
         PersonPrincipal(principal=Principal(idp_id="dex", subject=sub), claims=IDToken(iss="i", sub=sub, aud="lance", exp=1, iat=1)) if token_present else None
     )
-    resp = asyncio.run(access._my_permissions(client, settings, token, fga_type, ident))
+    resp = asyncio.run(access._my_permissions(client, settings, token, NamedResolver(), fga_type, ident))
     return resp, asked
 
 
@@ -68,6 +69,7 @@ def test_answers_every_can_relation_the_model_defines_on_the_type(monkeypatch: p
     resp, asked = _run(monkeypatch, allow={"can_get_metadata"})
     assert set(resp.permissions) == set(access._can_relations("namespace"))
     assert {r for _u, r, _o in asked} == set(access._can_relations("namespace"))
+    assert {o for _u, _r, o in asked} == {f"namespace:{uuid_of('namespace', ['gold'])}"}
 
 
 def test_reports_the_callers_own_verdicts(monkeypatch: pytest.MonkeyPatch) -> None:

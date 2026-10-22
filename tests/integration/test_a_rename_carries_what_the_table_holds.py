@@ -7,7 +7,8 @@ writes no record, and every surface that lists one names the table by its name n
 name another table gave up is given a new uuid, so nothing kept for the old table governs it, even when the drop that
 ended the old table failed to end its records.
 
-Grants are still keyed by name and follow the table through ``fga_deps.move_ownership`` until LH-524.
+Grants are keyed by the uuid too, so a rename writes no tuple; that half is pinned against a real OpenFGA by
+``services/catalog/tests/test_a_grant_is_held_by_the_objects_uuid.py``.
 
 The real catalog app over a real `dir` namespace on pylance, the in-memory `TupleStore` behind the real
 `service_kit.governed.fga` seed and revoke; maintenance's own policy resolution over the same control root.
@@ -96,7 +97,6 @@ def _listed(client: TestClient, path: str, field: str) -> list[str]:
 
 
 def test_a_rename_keeps_the_tables_protection_and_policy_and_writes_no_record(real_ns_client: TestClient, governed: TupleStore, tmp_path: Path) -> None:
-    _ok(real_ns_client, "/management/v1/table/db$src/access/grant", json={"user": "dex~bob", "relation": "reader"})
     _ok(real_ns_client, "/management/v1/table/db$src/protection", json={"protected": True})
     _ok(real_ns_client, "/management/v1/table/db$src/policy/set", json={"retention_days": 7})
     minted, location = _described(real_ns_client, "db$src")
@@ -106,8 +106,6 @@ def test_a_rename_keeps_the_tables_protection_and_policy_and_writes_no_record(re
 
     assert _record_keys(tmp_path) == records, "the rename wrote or removed a record"
     assert _described(real_ns_client, "db$dst")[0] == minted, "the renamed table answers another uuid"
-    assert ("user:dex~bob", "reader", "table:db$dst") in governed.tuples, f"bob's reader grant did not follow the table: {sorted(governed.tuples)}"
-    assert governed.naming(["table:db$src"]) == {}, "a tuple still names the old id, which no table holds"
     assert _protected(real_ns_client, "db$dst"), "the renamed table arrived unprotected"
     assert _ok(real_ns_client, "/management/v1/table/db$dst/policy/describe")["retention_days"] == 7
     settings = MaintenanceSettings.model_validate({"MAINTENANCE_POLICY_ROOT": str(tmp_path), "MAINTENANCE_CONTROL_ROOT": str(tmp_path)})
@@ -168,12 +166,13 @@ def test_a_table_created_under_a_dropped_name_inherits_none_of_the_old_tables_re
 def test_a_rename_into_another_tenant_refuses_to_carry_a_role_the_grant_door_would_refuse(
     real_ns_client: TestClient, governed: TupleStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A carried grant is a grant written on the destination, so it is held to the grant door's tenant rule ([[LH-062]]):
+    """A grant stays on the table's uuid and so follows it, so it is held to the grant door's tenant rule ([[LH-062]]):
     acme's role on a table renamed into beta's namespace is refused before anything moves."""
     tenants = {"db": "acme", "other": "beta"}
     monkeypatch.setattr(warehouses, "project_for_namespace", lambda _root, _so, top: tenants.get(top))
     _ok(real_ns_client, "/v1/namespace/other/create", json={})
-    governed.tuples |= {("project:acme", "project", "role:analyst"), ("role:analyst#assignee", "reader", "table:db$src")}
+    table = f"table:{_described(real_ns_client, 'db$src')[0]}"
+    governed.tuples |= {("project:acme", "project", "role:analyst"), ("role:analyst#assignee", "reader", table)}
 
     refused = real_ns_client.post("/v1/table/db$src/rename", json={"new_table_name": "dst", "new_namespace_id": ["other"]})
 

@@ -4,6 +4,7 @@ Pure over a parsed payload: no Dapr, no FastAPI, no OpenFGA. Every case here is 
 design rather than an implementation detail, so each test names the rule it is holding in place.
 """
 
+import uuid
 from typing import Any
 
 import pytest
@@ -25,8 +26,16 @@ def _event(
         "eventTime": event_time,
         "run": {"runId": run_id, "facets": facets if facets is not None else {"author": {"name": "alice", "sub": "alice"}}},
         "job": {"namespace": "lance-medallion", "name": "htr"},
-        "outputs": [{"namespace": "silver", "name": name} for name in (outputs if outputs is not None else ["silver$pages"])],
+        "outputs": [_output(name) for name in (outputs if outputs is not None else ["silver$pages"])],
     }
+
+
+def _output(name: str) -> dict[str, Any]:
+    """An output as the catalog names it: its name, and its table's uuid in the ``lance`` facet (ADR 0173 §10). A
+    nameless output carries none, as no producer can stamp one."""
+    if not name:
+        return {"namespace": "silver", "name": name}
+    return {"namespace": "silver", "name": name, "facets": {"lance": {"tableUuid": str(uuid.uuid5(uuid.NAMESPACE_URL, name))}}}
 
 
 @pytest.mark.parametrize("state", ["FAIL", "complete"])
@@ -94,8 +103,8 @@ def test_a_run_with_no_outputs_notifies_nobody_under_fga_on_or_off() -> None:
 def test_the_pointer_names_the_primary_output_while_the_check_covers_them_all() -> None:
     """The pointer is a claim-check: it names ONE object, which the render path re-checks, and says
     nothing about the others. The delivery check is the subset test over the whole set — a different
-    question (may you be told at all), not a weaker version of the same one. The pointer names that object by the uuid
-    its output's `lance` facet carries beside the name too (ADR 0173 §10)."""
+    question (may you be told at all), not a weaker version of the same one. Every object is the table the uuid its
+    output's `lance` facet carries names (ADR 0173 §10, [[LH-524]]), and the pointer keeps the name to show beside it."""
     event = _event(outputs=["silver$pages", "gold$lines"])
     event["outputs"] = [
         with_dataset_uuids(output, DatasetUuids(table_uuid=minted, namespace_uuid="ns-uuid"), producer="https://producer.test")
@@ -103,5 +112,5 @@ def test_the_pointer_names_the_primary_output_while_the_check_covers_them_all() 
     ]
     notice = notifiable(LineageRunEvent.model_validate(event))
     assert notice is not None
-    assert (notice.delivery.object_id, notice.delivery.object_uuid) == ("silver$pages", "pages-uuid")
-    assert notice.outputs == frozenset({"silver$pages", "gold$lines"})
+    assert (notice.delivery.object_id, notice.delivery.object_name, notice.delivery.object_uuid) == ("table:pages-uuid", "silver$pages", "pages-uuid")
+    assert notice.outputs == frozenset({"table:pages-uuid", "table:lines-uuid"})

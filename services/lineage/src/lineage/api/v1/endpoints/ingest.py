@@ -157,6 +157,11 @@ async def ingest_event(
         event: RunEvent | DatasetEvent = parse_event(without_signature_facet(body))
     except ValidationError as exc:
         raise RequestValidationError(exc.errors()) from exc
+    # A GOVERNED TABLE IS RECORDED, AND AUTHORIZED, BY ITS UUID ([[LH-522]], [[LH-524]]), which this door resolves from
+    # each name as the caller sees it and stamps over whatever the body claimed, as it clears a claimed signature:
+    # so a pipeline's runs key on the uuid the catalog's own events carry, a rename since cannot split them, and a
+    # forged uuid in the body can authorize nothing.
+    await stamp_resolved_uuids(event, names, bearer=bearer)
     try:
         enforce_author(event, token)
         await enforce_output_authz(event, request, settings, token)
@@ -166,10 +171,6 @@ async def ingest_event(
     except PermissionDeniedError:
         record_outcome(Outcome.REFUSED, door=Door.HTTP)
         raise
-    # A GOVERNED TABLE IS RECORDED BY ITS UUID ([[LH-522]]), which this door resolves from each name as the caller
-    # sees it and stamps over whatever the body claimed, as it clears a claimed signature: so a pipeline's runs key on
-    # the uuid the catalog's own events carry, and a rename since cannot split them.
-    await stamp_resolved_uuids(event, names, bearer=bearer)
     started = time.perf_counter()
     # The edges, then the feed row, each keyed: a failure answers an error, the producer retries, and the
     # retry lands what is missing and nothing twice (see `ProvenanceStore.record`).

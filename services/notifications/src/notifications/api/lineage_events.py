@@ -21,6 +21,7 @@ from typing import Any, Final
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from notifications.models import NotificationDelivery, NotificationReason, UtcDatetime, notification_id
+from service_kit.governed import fga
 from service_kit.openlineage import dataset_uuids, static_event_id
 
 
@@ -245,6 +246,9 @@ def notifiable(event: LineageRunEvent) -> Notifiable | None:
     * NOT A TERMINAL STATE. START and RUNNING notify nobody (:data:`TERMINAL_STATES`).
     * NO VERIFIED AUTHOR. v1's audience IS the author, so an event without one has no audience; see
       :func:`author_subject` for why an unverified name does not count as one.
+    * AN OUTPUT NAMING NO TABLE. Every output is checked as the table its ``lance`` facet's uuid names,
+      ``table:<uuid>`` ([[LH-524]]); an output without one is no object any grant could name, so nobody can be
+      notified about the run.
     * NO OUTPUTS. A dataset-less run is dropped by the estate's governed read path when FGA is on,
       because it would otherwise pass the visibility test vacuously and disclose run/author/error to a
       caller holding no grants. This plane refuses it under FGA on AND off, one step earlier and for a
@@ -265,9 +269,10 @@ def notifiable(event: LineageRunEvent) -> Notifiable | None:
     if author is None:
         return None
     named = [dataset for dataset in event.outputs if dataset.name]
-    if not named:
+    uuids = [dataset.object_uuid() for dataset in named]
+    if not named or None in uuids:
         return None
-    outputs = [dataset.name for dataset in named]
+    outputs = [fga.table_object(uuid) for uuid in uuids if uuid is not None]
     state = event.event_type.upper()
     return Notifiable(
         project=project_id(event.run),
@@ -280,7 +285,8 @@ def notifiable(event: LineageRunEvent) -> Notifiable | None:
             notification_id=notification_id(event.run.run_id, state),
             reason=NotificationReason.AUTHOR,
             object_id=outputs[0],
-            object_uuid=named[0].object_uuid(),
+            object_name=named[0].name,
+            object_uuid=uuids[0],
             source_run_id=source_run_id(event.run),
             occurred_at=event.event_time,
         ),

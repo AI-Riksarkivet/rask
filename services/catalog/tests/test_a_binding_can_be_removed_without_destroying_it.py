@@ -18,7 +18,9 @@ from catalog.services import warehouses
 def test_the_unbind_event_evicts_the_binding_cache() -> None:
     """Driven through the REAL evictor, because that is the half a unit test of the door cannot reach."""
     cache = {"gold": {"warehouse_id": "wh1", "root_uri": "s3://b/gold"}, "other": {"warehouse_id": "wh2", "root_uri": "s3://b/o"}}
-    evicted = warehouses.evict_stale_bindings(cache, action="warehouse_unbound", object_id="warehouse:wh1", extra={"namespace": "gold"}, delimiter="$")
+    evicted = warehouses.evict_stale_bindings(
+        cache, action="warehouse_unbound", object_id="warehouse:wh1", object_name=None, extra={"namespace": "gold"}, delimiter="$"
+    )
     assert evicted == ["gold"], f"the unbound namespace was not evicted: {evicted}"
     assert "other" in cache, "an unrelated binding was evicted"
 
@@ -27,5 +29,5 @@ def test_an_unbind_event_naming_no_namespace_evicts_nothing() -> None:
     """A malformed event must not clear the cache wholesale — a mass eviction is a thundering re-read of
     the registry on every replica at once."""
     cache = {"gold": {"warehouse_id": "wh1", "root_uri": "s3://b/gold"}}
-    assert warehouses.evict_stale_bindings(cache, action="warehouse_unbound", object_id="warehouse:wh1", extra={}, delimiter="$") == []
+    assert warehouses.evict_stale_bindings(cache, action="warehouse_unbound", object_id="warehouse:wh1", object_name=None, extra={}, delimiter="$") == []
     assert cache == {"gold": {"warehouse_id": "wh1", "root_uri": "s3://b/gold"}}

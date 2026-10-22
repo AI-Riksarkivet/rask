@@ -1,18 +1,18 @@
 """Cross-axis identity under a non-default delimiter (P0 #4) — infra-free.
 
-The lakehouse keys a table by ONE id string across three governance axes: the **OpenFGA object**
-(``table:<id>``), the **lineage Dataset** name, and the **id embedded in the Lance file** (#21). They
-MUST be byte-identical, else a grant lands on ``table:a$b`` while a check / lineage node uses ``table:a.b``
-and silently denies / splits provenance. The delimiter is configurable (``LANCE_NS_DELIMITER``), so this
+The lakehouse names a table by ONE id string on two axes: the **lineage Dataset** name and the **id
+embedded in the Lance file** (#21). They MUST be byte-identical, else a lineage node names ``a$b`` while the
+file says ``a.b`` and provenance splits. The delimiter is configurable (``LANCE_NS_DELIMITER``), so this
 identity has to hold under a *non-default* delimiter too — the audit ``w8u4rc2tg`` flagged this as latent.
+The OpenFGA object is keyed by the table's uuid, not its name (ADR 0173 §8), so no delimiter reaches it.
 
 Two layers:
 
 * the **primitive invariant** — ``parse_identifier`` ∘ ``canonical_object_id`` round-trips byte-for-byte
-  (the single source of truth both the grant and the emit derive from), and
-* the **handler wiring** — the real ``create_table`` handler derives the FGA grant object, the lineage
-  emit ``table_id``/``namespace``, and the embedded Lance metadata id from that one canonicalisation, so
-  all three agree under a ``.``-delimited deployment.
+  (the single source of truth the emit derives from), and
+* the **handler wiring** — the real ``create_table`` handler derives the lineage emit
+  ``table_id``/``namespace`` and the embedded Lance metadata id from that one canonicalisation, so both
+  agree under a ``.``-delimited deployment.
 """
 
 from __future__ import annotations
@@ -31,13 +31,14 @@ from service_kit.governed.oidc import IDToken
 from service_kit.governed.person_identity import PersonPrincipal
 from service_kit.governed.principal import Principal
 from service_kit.lancekit.arrow_ipc import encode_arrow_stream
+from tests.unit.named_resolver import NamedResolver
 from tests.unit.no_uuids import NO_OBJECT_UUIDS
 
 
 @pytest.mark.parametrize("delimiter", ["$"])
 def test_parse_then_canonicalize_round_trips_byte_for_byte(delimiter: str) -> None:
-    # The id a user submits, split into segments and re-joined into the canonical OpenFGA/lineage id, must
-    # come back identical — this is what keeps the grant path and the check/emit path from drifting apart.
+    # The id a user submits, split into segments and re-joined into the canonical lineage id, must
+    # come back identical — this is what keeps the emit path and the file's own id from drifting apart.
     identifier = delimiter.join(["alpha", "bronze", "images"])
     segments = parse_identifier(identifier, delimiter)
     assert segments == ["alpha", "bronze", "images"]
@@ -83,30 +84,27 @@ class _RecordingEmitter:
         self.create = kwargs
 
 
-def test_create_handler_keeps_all_three_axes_identical_under_non_default_delimiter(
+def test_create_handler_keeps_both_name_axes_identical_under_non_default_delimiter(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Drive the real ``create_table`` handler under a ``.``-delimited config and assert the FGA grant
-    object, the lineage Dataset name, and the embedded Lance metadata id are byte-identical.
+    """Drive the real ``create_table`` handler under a ``.``-delimited config and assert the lineage Dataset
+    name and the embedded Lance metadata id are byte-identical.
 
     Guards the regression where one axis is derived differently (e.g. a hardcoded ``$``): if the handler
-    ever stopped funnelling all three through ``canonical_object_id(segments, settings.delimiter)``, the
-    three captures below would diverge.
+    ever stopped funnelling both through ``canonical_object_id(segments, settings.delimiter)``, the
+    captures below would diverge.
     """
     from catalog.api.v1.endpoints import data
     from catalog.services import table_create
 
-    granted: dict[str, Any] = {}
     stamped: dict[str, Any] = {}
     written: dict[str, pa.Table] = {}
 
-    # `**_kw` on purpose: this fake stands in for `seed_ownership`, which the compensating seam calls
-    # with whatever keywords it grows (it forwards `parent_object` since diff2 F3). This test is about
-    # the RESOURCE and SEGMENTS axes agreeing — pinning the rest of the signature here only makes an
-    # unrelated change to the seam look like an identity regression.
-    async def _seed(_client: object, _settings: object, _token: object, *, resource: str, segments: list[str], **_kw: object) -> None:
-        granted["resource"] = resource
-        granted["segments"] = segments
+    # `**_kw` on purpose: this fake stands in for `seed_ownership`, whose grants are keyed by the uuid, not by
+    # either name axis this test compares — pinning its signature here only makes an unrelated change to the
+    # seam look like an identity regression.
+    async def _seed(*_a: object, **_kw: object) -> None:
+        return None
 
     real_build_meta = table_create.build_lineage_metadata
 
@@ -122,6 +120,8 @@ def test_create_handler_keeps_all_three_axes_identical_under_non_default_delimit
         return SimpleNamespace(version=1, location="s3://lakehouse/uuid_alpha.bronze.images")
 
     monkeypatch.setattr(table_create.fga_deps, "seed_ownership", _seed)
+    # The write is faked, so no claim records its uuid; the uuid the seed is handed is not an axis compared here.
+    monkeypatch.setattr(table_create.table_claims, "uuid_at", lambda *_a: "0b6f8a52-4c1e-4f7a-9d3e-2a1c5b7e9f01")
     monkeypatch.setattr(table_create, "build_lineage_metadata", _build_meta)
     monkeypatch.setattr(table_create.dataplane, "create_table", _facade_create)
 
@@ -143,6 +143,7 @@ def test_create_handler_keeps_all_three_axes_identical_under_non_default_delimit
             authorization="Bearer tok",
             run=None,
             uuids=NO_OBJECT_UUIDS,
+            resolver=NamedResolver(),
         )
     )
 
@@ -154,9 +155,6 @@ def test_create_handler_keeps_all_three_axes_identical_under_non_default_delimit
     assert emitter.create["author"] == "dex~alice"
     # Data axis: the namespace stamped into the Lance file's schema metadata (#21).
     assert stamped["namespace"] == "alpha.bronze"
-    # FGA grant axis: the grant lands on table:<same canonical id> (NOT table:alpha$bronze$images).
-    grant_object = f"{granted['resource']}:{fga.canonical_object_id(granted['segments'], delimiter='.')}"
-    assert grant_object == f"table:{canonical}"
     # #21: the run id stamped into the Lance file is the SAME one the lineage event carries.
     assert stamped["run_id"] == emitter.create["run_id"]
     assert emitter.create["run_id"]  # and it's non-empty

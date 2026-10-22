@@ -27,16 +27,26 @@ from lineage.api.fga_deps import relations_for_operation
 from lineage.core.config import Signing
 from lineage.models import RunEvent
 from service_kit.governed.decider import OpenFgaDecider
+from service_kit.openlineage import DatasetUuids, with_dataset_uuids
 
 
-def _event(**run_facets: Any) -> RunEvent:
+#: The uuids the catalog minted for the tables the events below name, which it stamps on every event it emits.
+_PAGES, _SOURCE = "0b5f8f6c-3d0a-4c39-9a51-8f0b6d1a2e01", "7c2e1d4b-5a6f-4b8e-8c1d-2f3a4b5c6d02"
+
+
+def _dataset(name: str, uuid: str) -> dict[str, Any]:
+    return with_dataset_uuids({"namespace": "bronze", "name": name}, DatasetUuids(table_uuid=uuid), producer="test")
+
+
+def _event(*, inputs: list[dict[str, Any]] | None = None, **run_facets: Any) -> RunEvent:
     return RunEvent.model_validate(
         {
             "eventType": "COMPLETE",
             "eventTime": "2026-09-09T00:00:00+00:00",
-            "run": {"runId": "11111111-1111-1111-1111-111111111111", "facets": run_facets},
+            "run": {"runId": "11111111-1111-1111-1111-111111111111", "facets": {**run_facets, "lance": {"operation": "insert"}}},
             "job": {"namespace": "bus", "name": "probe"},
-            "outputs": [{"namespace": "bronze", "name": "bronze$pages"}],
+            "inputs": inputs or [],
+            "outputs": [_dataset("bronze$pages", _PAGES)],
         }
     )
 
@@ -148,7 +158,6 @@ def test_the_ROUTE_itself_refuses_an_unauthorized_delivery(monkeypatch: pytest.M
 
 class _Settings:
     fga_enabled = True
-    fga_object_type = "table"
     signing = Signing(signers=frozenset(), delegators=frozenset())
 
 
@@ -228,3 +237,43 @@ def test_an_UNAUTHORED_replay_is_still_exempt_but_an_unauthored_NEW_event_is_not
     )
     with pytest.raises(PermissionDeniedError, match="author"):
         asyncio.run(fga_deps.enforce_bus_authz(unauthored, _request(_Feed(None)), cast(Any, _Settings()), {}))
+
+
+class _Grants:
+    """A decider answering from the grants it holds, ``(relation, object)``, and recording what it was asked."""
+
+    def __init__(self, grants: set[tuple[str, str]]) -> None:
+        self.grants = grants
+        self.asked: list[tuple[str, str]] = []
+
+    async def check(self, *, user: str, relation: str, obj: str) -> bool:
+        return (await self.batch_check(user=user, relation=relation, objects=[obj]))[obj]
+
+    async def batch_check(self, *, user: str, relation: str, objects: list[str]) -> dict[str, bool]:
+        del user
+        self.asked.extend((relation, obj) for obj in objects)
+        return {obj: (relation, obj) in self.grants for obj in objects}
+
+    async def list_users(self, *, relation: str, obj: str) -> list[str]:
+        raise AssertionError(f"the bus door lists no users ({relation} on {obj})")
+
+    async def governed(self, objects: list[str]) -> dict[str, bool]:
+        return {obj: any(held == obj for _, held in self.grants) for obj in objects}
+
+    async def close(self) -> None:
+        return None
+
+
+def test_a_write_naming_a_table_by_a_name_another_rename_took_is_authorized_on_the_uuid_it_carries() -> None:
+    """A rename keeps a table's uuid, and its grants with it (ADR 0173 §8, [[LH-524]]): an event the catalog emitted
+    under a name the table has since given up still carries the uuid, and the door asks about that uuid, never the name.
+    Measured on LH-522's read-back (rev 1), the door refused such an event `can_get_metadata required on inputs: <ns>$t`."""
+    from lineage.api import fga_deps
+
+    grants = _Grants({("can_write_data", f"table:{_PAGES}"), ("can_get_metadata", f"table:{_SOURCE}")})
+    event = _event(inputs=[_dataset("bronze$renamed_since", _SOURCE)], author={"name": "pipeline", "sub": "dex~pipeline"})
+    request = type("R", (), {"app": type("A", (), {"state": type("S", (), {"decider": grants, "provenance": _Feed(None)})()})()})()
+
+    asyncio.run(fga_deps.enforce_bus_authz(event, cast(Any, request), cast(Any, _Settings()), event.model_dump(by_alias=True)))
+
+    assert sorted(grants.asked) == [("can_get_metadata", f"table:{_SOURCE}"), ("can_write_data", f"table:{_PAGES}")]

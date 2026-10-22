@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import uuid
 from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
@@ -41,13 +42,20 @@ from service_kit.governed.oidc import IDToken
 from service_kit.governed.person_identity import PersonPrincipal
 from service_kit.governed.principal import Principal
 from service_kit.lakehouse import outbox, outbox_metrics
-from service_kit.openlineage import event_identity, run_id_for
+from service_kit.openlineage import DatasetUuids, event_identity, run_id_for
 
 
 _CATALOG = "service-catalog"
 _SECRETS = "http://localhost:3500/v1.0/secrets/lance-secrets"
 _AUTHOR = "dex~alice"
 _TABLE = "gov$bronze"
+
+
+def _uuids(table: str) -> DatasetUuids:
+    """The uuid the catalog minted for ``table``, which its events carry (ADR 0173 §10) and lineage checks ([[LH-524]])."""
+    return DatasetUuids(table_uuid=str(uuid.uuid5(uuid.NAMESPACE_URL, table)))
+
+
 #: Bytes `json.loads` refuses with something other than `JSONDecodeError`: a plain `ValueError` past 4300
 #: digits and a `RecursionError` past the nesting limit. Any stager holding the outbox credential can write them.
 _HOSTILE = {"bigint": '{"eventType": ' + "1" * 5000 + "}", "deep": "[" * 100_000 + "]" * 100_000}
@@ -130,6 +138,7 @@ def _create_event(catalog: Any, author: str = _AUTHOR) -> dict[str, Any]:  # noq
     """The catalog's create for `_TABLE`, from its real builder, signed as the catalog on behalf of `author`."""
     event = build_write_event(
         table_id=_TABLE,
+        uuids=_uuids(_TABLE),
         namespace="lance",
         author=author,
         version=1,
@@ -208,6 +217,7 @@ def _stage_a_run_behind(settings: LineageSettings, create_key: str) -> str:
     """A run event staged AFTER the create, so the drain meets the create first and must still reach this."""
     event = build_write_event(
         table_id="bronze$events",
+        uuids=_uuids("bronze$events"),
         namespace="bronze",
         author=_AUTHOR,
         version=2,
@@ -311,6 +321,7 @@ def test_the_relay_admits_a_delegators_drop_without_a_grant_and_nothing_else(
     author = _AUTHOR if by_the_catalog else other.identity
     event = build_write_event(
         table_id=_TABLE,
+        uuids=_uuids(_TABLE),
         namespace="lance",
         author=author,
         version=None,
@@ -374,6 +385,7 @@ def _stage_a_refusable_first(settings: LineageSettings, kind: str, catalog: Any)
         return key, _stage_a_run_behind(settings, key)
     event = build_write_event(
         table_id="bronze$events",
+        uuids=_uuids("bronze$events"),
         namespace="bronze",
         author=_AUTHOR,
         version=1,
@@ -604,6 +616,7 @@ def test_the_dlq_replay_re_publishes_a_run_event(tmp_path: Path, catalog: Any) -
     settings = _settings(tmp_path, fga_enabled=False)
     event = build_write_event(
         table_id="bronze$events",
+        uuids=_uuids("bronze$events"),
         namespace="bronze",
         author=_AUTHOR,
         version=2,

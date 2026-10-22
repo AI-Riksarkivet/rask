@@ -115,7 +115,7 @@ async def erase_subject(
         obligation_id=uuid4().hex,
         table=canonical,
         table_uuid=table_uuid,
-        object_id=f"table:{canonical}",
+        object_id=fga.table_object(table_uuid),
         location=str(dataset.uri),
         predicate_digest=erasure_obligations.digest(body.predicate),
         retain_days=body.retain_days,
@@ -194,8 +194,9 @@ async def verify_erasure(
         trusted=obligation.refs,
     )
     if report.settled and report.pinned_by:
-        # The table's owners and the events are found under the name it holds now, which a rename since the request changed.
-        current = obligation.model_copy(update={"table": canonical, "object_id": f"table:{canonical}"})
+        # The events name the table as it is named now, which a rename since the request changed; its owners are found on
+        # its uuid, which no rename changes.
+        current = obligation.model_copy(update={"table": canonical})
         await _schedule_release(report, current, settings=settings, control=control, owners=owners, now=clock())
     standing = await run_in_threadpool(erasure_obligations.settle, control_root, control_options, obligation_id, report=report, now=clock())
     audit(
@@ -228,8 +229,10 @@ async def list_erasure_obligations(
     names = await run_in_threadpool(table_claims.names_now, table_claims.claim_store(settings), entries)
     named = [(name, obligation) for name, obligation in zip(names, obligations, strict=True) if name is not None]
     if settings.fga_enabled and token is not None and client is not None:
-        allowed = await fga.batch_check(client, user=token.subject, relation="can_maintain", objects=sorted({f"table:{name}" for name, _ in named}))
-        named = [(name, obligation) for name, obligation in named if allowed.get(f"table:{name}")]
+        # Checked on the uuid each obligation records ([[LH-524]]), which is the object the table's grants are held by.
+        objects = sorted({fga.table_object(obligation.table_uuid) for _, obligation in named})
+        allowed = await fga.batch_check(client, user=token.subject, relation="can_maintain", objects=objects)
+        named = [(name, obligation) for name, obligation in named if allowed.get(fga.table_object(obligation.table_uuid))]
     by_key = {f"{obligation.deadline.isoformat()}|{obligation.obligation_id}": (name, obligation) for name, obligation in named}
     page, next_token = paginate(sorted(by_key), page_token, limit)
     now = clock()
@@ -298,6 +301,7 @@ async def _schedule_release(
             action="erasure_release_scheduled",
             object_type="table",
             object_id=obligation.object_id,
+            object_name=obligation.table,
             actor=requester,
             extra={"subject": subject, "release_id": record.release_id, "refs": record.refs, "due_at": record.due_at.isoformat()},
         )

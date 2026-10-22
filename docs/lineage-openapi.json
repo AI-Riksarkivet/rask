@@ -1126,7 +1126,7 @@
     },
     "/tables/{name}/derived": {
       "get": {
-        "description": "Every table derived from ``name`` the caller may see, nearest first, to ``depth`` hops.\n\n``name`` resolves to the uuid of the table it names now, and the walk starts there, so it follows what the table\nfed under every name it has had ([[LH-522]]). It starts from the name too, which an outside producer's event keys\nthe table by when its credential could not resolve it: an erasure that reaches further than the table's own\nhistory is the safe direction. ``complete`` is false when the walk stopped short or a derived table is hidden from\nthe caller, which includes one renamed since its last edge, until checks key on uuids ([[LH-524]]).",
+        "description": "Every table derived from ``name`` the caller may see, nearest first, to ``depth`` hops.\n\n``name`` resolves to the uuid of the table it names now, and the walk starts there, so it follows what the table\nfed under every name it has had ([[LH-522]]). It starts from the name too, which an outside producer's event keys\nthe table by when its credential could not resolve it: an erasure that reaches further than the table's own\nhistory is the safe direction. ``complete`` is false when the walk stopped short or a derived table is hidden from\nthe caller.",
         "operationId": "get_derived_tables__name__derived_get",
         "parameters": [
           {

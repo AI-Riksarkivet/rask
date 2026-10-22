@@ -17,6 +17,9 @@ against the real evaluator rather than argued from the model text.
 THE DISCRIMINATOR IS THE PRINCIPAL'S TYPE, not a name pattern. Only the service-account verifier
 builds a `ServicePrincipal` (`catalog/api/security.py`, [[LH-220]]), so the test asks how the caller was
 proved rather than what its subject is called, which would drift the moment a service is renamed.
+
+A PERSON who creates a table still owns it: pinned on a real OpenFGA by
+`services/catalog/tests/test_a_grant_is_held_by_the_objects_uuid.py::test_every_tuple_a_create_writes_names_the_objects_uuid`.
 """
 
 from __future__ import annotations
@@ -30,9 +33,7 @@ from catalog.api.security import Caller
 from catalog.core.config import Settings
 from service_kit.governed import fga
 from service_kit.governed.machine_identity import ServicePrincipal
-from service_kit.governed.oidc import IDToken
-from service_kit.governed.person_identity import PersonPrincipal
-from service_kit.governed.principal import Principal
+from tests.unit.named_resolver import NamedResolver, uuid_of
 
 
 if TYPE_CHECKING:
@@ -65,21 +66,21 @@ async def _tuples_written(token: Caller, monkeypatch: pytest.MonkeyPatch) -> lis
     async def _capture(_client: object, tuples: Any, **_kw: Any) -> None:
         written.extend((t.user, t.relation, t.object) for t in tuples)
 
-    async def _no_previous_incarnation(_client: object, _obj: str, **_kw: Any) -> list[Any]:
-        return []
-
     monkeypatch.setattr(fga, "write_tuples", _capture)
-    monkeypatch.setattr(fga, "revoke_object_tuples", _no_previous_incarnation)
     await fga_deps.seed_ownership(
         cast("OpenFgaClient", object()),  # the capture never touches the client
         _settings(),
         token,
+        NamedResolver(),
         resource="table",
         segments=["acme-silver", "features"],
-        created=True,
-        parent_object="namespace:acme-silver",
+        uuid=_TABLE_UUID,
     )
     return written
+
+
+#: The uuid the create minted for ``acme-silver$features``: the object its grants are held by (ADR 0173 §8).
+_TABLE_UUID = uuid_of("table", ["acme-silver", "features"])
 
 
 @pytest.mark.asyncio
@@ -89,14 +90,5 @@ async def test_a_SERVICE_creating_a_table_is_not_granted_owner(monkeypatch: pyte
     assert not [t for t in written if t[1] == "owner"], f"the registering service was granted ownership of its output: {written}"
     # The hierarchy edge is still written, and that is what keeps this a withdrawal rather than an
     # orphaning: ownership descends to the table from the project's admin through this link.
-    assert [t for t in written if t[1] == "parent"], f"the parent edge was dropped with the owner grant: {written}"
-
-
-@pytest.mark.asyncio
-async def test_a_HUMAN_creating_a_table_still_owns_it(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The half that must not change. A person who creates a table owns it, exactly as before —
-    this narrows machines, not people, and a fix that took the human's grant too would make every
-    interactive create unmanageable by its own author."""
-    alice = PersonPrincipal(principal=Principal(idp_id="dex", subject="alice"), claims=IDToken(sub="alice", iss="https://dex", aud="rask", iat=0, exp=1))
-    written = await _tuples_written(alice, monkeypatch)
-    assert ("user:dex~alice", "owner", "table:acme-silver$features") in written, f"a human create seeded no ownership: {written}"
+    parent = f"namespace:{uuid_of('namespace', ['acme-silver'])}"
+    assert (parent, "parent", f"table:{_TABLE_UUID}") in written, f"the parent edge was dropped with the owner grant: {written}"

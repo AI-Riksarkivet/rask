@@ -1621,10 +1621,9 @@ export interface paths {
          *     metadata about the data, and it leaks real information (predicates name values, field names name
          *     columns), so it is gated exactly like the schema is rather than being treated as public.
          *
-         *     THE RUNG IS THE ROUTER'S, and this route has to be NAMED in ``fga_deps._META_READ_ACTIONS`` to get it.
-         *     The check below is the second one a request meets, not the first: ``authorize`` is a router-wide
-         *     dependency, so an unnamed suffix is refused for every caller before this line runs and no reader ever
-         *     arrives to be metadata-checked. Pinned by
+         *     THE RUNG IS THE ROUTER'S, and this route has to be NAMED in ``fga_deps._META_READ_ACTIONS`` to get it:
+         *     ``authorize`` is a router-wide dependency, so an unnamed suffix is refused for every caller and no reader
+         *     ever arrives. Pinned by
          *     ``tests/unit/test_fga_model_contract.py::test_every_DATA_READ_door_is_gated_as_a_READ``.
          *
          *     ``limit`` bounds the per-version transaction reads — a table with 10k versions must not turn a UI page
@@ -2459,7 +2458,9 @@ export interface paths {
          * Create Materialized View
          * @description Create a materialized view via the native backend's ``create_materialized_view``.
          *
-         *     Then seeds FGA ownership on the ``materialized_view`` type so the creator keeps refresh/read rights.
+         *     Nothing is seeded: the ``dir`` backend answers 406 for every create, so no view exists to own, and the catalog
+         *     mints no uuid for one (ADR 0173 §3 keys tables and namespaces). The backend that serves views gets its seed with
+         *     its uuid.
          *
          *     No OpenLineage is emitted here (unlike the cascade): the MV's source arrives ONLY as an opaque
          *     ``source_query`` blob the namespace server stores without interpreting, so there is no structured list
@@ -3413,7 +3414,7 @@ export interface paths {
         put?: never;
         /**
          * Rename Table
-         * @description Rename the table at ``id`` by moving its POINTER, then migrate its FGA ownership and emit lineage.
+         * @description Rename the table at ``id`` by moving its POINTER, and emit lineage; its grants stay on its uuid.
          *
          *     Lance has no format-level rename (table rename is a namespace-layer remap, not a data-plane commit) and
          *     the ``dir`` backend's ``rename_table`` is a hard 501, which is also off-spec — the Namespace REST spec
@@ -3425,9 +3426,10 @@ export interface paths {
          *
          *     The caller must hold ``can_drop`` on the source (owner tier, gated by the router ``authorize``) AND
          *     ``can_create_table`` on the DESTINATION parent — else a source owner could plant their table into a
-         *     namespace/tenant they lack create rights on. The table keeps its uuid, so every record kept for it stays where it
-         *     is ([[LH-523]]); what is still keyed by its name moves to the new one: every grant (``fga_deps.move_ownership``)
-         *     and its data directories' claims (``_hand_over_data_directories``). A versionless REGISTER marker records the attachment at the new id, with the source as its input, so the
+         *     namespace/tenant they lack create rights on. The table keeps its uuid, so every record and every grant kept for it
+         *     stays where it is ([[LH-523]], [[LH-524]]): into another namespace only its parent edge moves
+         *     (``fga_deps.move_parent_edge``), and its data directories' claims move to its new name
+         *     (``_hand_over_data_directories``). A versionless REGISTER marker records the attachment at the new id, with the source as its input, so the
          *     destination's provenance continues from the source's. Source missing → 404
          *     ``TableNotFound``; destination name taken → 409 ``TableAlreadyExists``; the location held by a
          *     concurrent rename or registration → 409 ``ConcurrentModification`` (code 14, [[LH-204]]).
@@ -3876,6 +3878,8 @@ export interface components {
         AccessCheckResponse: {
             /** Allowed */
             allowed: boolean;
+            /** Name */
+            name?: string | null;
             /** Object */
             object: string;
             /** Relation */
@@ -4001,6 +4005,8 @@ export interface components {
         AccessGrantResponse: {
             /** Granted */
             granted: boolean;
+            /** Name */
+            name?: string | null;
             /** Object */
             object: string;
             /** Relation */
@@ -4012,6 +4018,8 @@ export interface components {
         AccessGraphResponse: {
             /** Edges */
             edges: components["schemas"]["GraphEdge"][];
+            /** Name */
+            name?: string | null;
             /** Nodes */
             nodes: components["schemas"]["GraphNode"][];
             /** Object */
@@ -4050,6 +4058,8 @@ export interface components {
         AccessListResponse: {
             /** Grants */
             grants: components["schemas"]["RelationGrants"][];
+            /** Name */
+            name?: string | null;
             /** Object */
             object: string;
             /**
@@ -5063,6 +5073,8 @@ export interface components {
             namespace_uuid?: string | null;
             /** Object Id */
             object_id: string;
+            /** Object Name */
+            object_name?: string | null;
             /**
              * Object Type
              * @enum {string}
@@ -6812,11 +6824,6 @@ export interface components {
          *     ``list_bindings`` already produces in a single pass.
          */
         EstateBindingsResponse: {
-            /**
-             * Authorization Truncated
-             * @default false
-             */
-            authorization_truncated?: boolean;
             /** Bindings */
             bindings: {
                 [key: string]: string;
@@ -7529,6 +7536,8 @@ export interface components {
         ManagedAccessResponse: {
             /** Managed Access */
             managed_access: boolean;
+            /** Name */
+            name?: string | null;
             /** Object */
             object: string;
         };
@@ -7774,11 +7783,6 @@ export interface components {
         };
         /** ModelsListResponse */
         ModelsListResponse: {
-            /**
-             * Authorization Truncated
-             * @default false
-             */
-            authorization_truncated?: boolean;
             /** Models */
             models: components["schemas"]["ModelSummary"][];
             /** Page Token */
@@ -7805,6 +7809,8 @@ export interface components {
          *     different name.
          */
         MyPermissionsResponse: {
+            /** Name */
+            name?: string | null;
             /** Object */
             object: string;
             /** Permissions */
@@ -9780,7 +9786,7 @@ export interface operations {
                 object_type?: string | null;
                 /** @description filter by subject (bare id = user:<id>) */
                 user?: string | null;
-                /** @description filter by one full object ('table:db1$t') */
+                /** @description filter by one full object ('table:<uuid>', as OpenFGA holds a table) */
                 object?: string | null;
                 page_size?: number | null;
                 /** @description the previous page's continuation token */

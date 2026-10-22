@@ -32,6 +32,9 @@ def test_the_category_is_declared_and_does_not_gate() -> None:
 
 def test_a_table_with_no_tuples_is_reported() -> None:
     """THE DEFECT: five of these were live and nothing in the product named them."""
-    found = reconcile._ungoverned_tables([("lakehouse$silver$features", "s3://lakehouse-wh")], governed={})
+    # The store's scan keys each `table:` object by the uuid it names ([[LH-524]]), and the table's claim records its uuid.
+    found = reconcile._ungoverned_tables(
+        [("lakehouse$silver$features", "s3://lakehouse-wh")], uuids={"lakehouse$silver$features": "4e5f6a7b-8c9d-4e0f-9a1b-2c3d4e5f6a7b"}, governed={}
+    )
 
     assert [(f.table, f.root) for f in found] == [("lakehouse$silver$features", "s3://lakehouse-wh")]

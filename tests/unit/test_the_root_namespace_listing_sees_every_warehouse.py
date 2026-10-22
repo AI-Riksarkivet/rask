@@ -35,6 +35,7 @@ from lance_namespace import ListNamespacesResponse
 
 from catalog.api.v1.endpoints import namespaces as ns_ep
 from catalog.core.config import Settings
+from tests.unit.named_resolver import NamedResolver, uuid_of
 
 
 class _Settings:
@@ -75,12 +76,13 @@ async def _list(
 
     fga_enabled = allowed is not None
     if fga_enabled:
+        visible = {f"namespace:{uuid_of('namespace', [name])}" for name in allowed or []}
 
-        async def _fake_list_objects(_client: object, *, user: str, relation: str, object_type: str) -> ns_ep.fga.ObjectListing:
-            del user, relation, object_type
-            return ns_ep.fga.ObjectListing(objects=list(allowed or []), truncated=False)
+        async def _fake_batch_check(_client: object, *, user: str, relation: str, objects: list[str]) -> dict[str, bool]:
+            del user, relation
+            return {obj: obj in visible for obj in objects}
 
-        monkeypatch.setattr(ns_ep.fga, "list_objects", _fake_list_objects)
+        monkeypatch.setattr(ns_ep.fga, "batch_check", _fake_batch_check)
 
     return await ns_ep.list_namespaces(
         id=id,
@@ -88,6 +90,7 @@ async def _list(
         settings=cast(Settings, _Settings(warehouses_enabled=warehouses_enabled, fga_enabled=fga_enabled)),
         token=(MagicMock(sub="bob") if fga_enabled else None),
         client=(MagicMock() if fga_enabled else None),
+        resolver=NamedResolver(),
     )
 
 
@@ -134,7 +137,7 @@ async def test_a_seeded_name_is_still_subject_to_the_visibility_filter(monkeypat
         id="$",
         backend=["shared"],
         bindings=_BOUND,
-        allowed=["namespace:acme", "namespace:shared"],
+        allowed=["acme", "shared"],
         monkeypatch=monkeypatch,
     )
 
@@ -158,6 +161,7 @@ async def test_an_unreadable_registry_does_not_blank_the_root_listing(monkeypatc
         settings=cast(Settings, _Settings()),
         token=None,
         client=None,
+        resolver=NamedResolver(),
     )
 
     assert response.namespaces == ["shared"]

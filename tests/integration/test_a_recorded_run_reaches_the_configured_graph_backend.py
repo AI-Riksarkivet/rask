@@ -18,6 +18,7 @@ from __future__ import annotations
 from collections.abc import Generator
 from pathlib import Path
 
+import httpx
 import pytest
 
 from tests.integration.lineage_app import RELAY, SUBJECT_HEADER, GraphBackend, governed_lineage, graph_backend, live_catalog, run_event
@@ -30,6 +31,19 @@ _ALICE = "dex~alice"
 _NOTIFICATIONS = "kubernetes~system:serviceaccount:rask:rask-sa-notifications"
 
 
+def _declared(catalog_url: str, table: str) -> str:
+    """Declare ``table`` in the catalog at ``catalog_url`` and answer the uuid it minted, the object its grants are held by.
+
+    Lineage's HTTP door resolves each name an event names to that uuid as the caller, and checks the grants on it
+    ([[LH-524]]), so the table must exist for any event naming it to be admitted.
+    """
+    namespace = table.split("$")[0]
+    with httpx.Client(base_url=catalog_url, timeout=60) as catalog:
+        assert catalog.post(f"/v1/namespace/{namespace}/create", json={}).status_code == 200
+        assert catalog.post(f"/v1/table/{table}/declare", json={}).status_code == 200
+        return str(catalog.post(f"/v1/table/{table}/describe", json={}).json()["properties"]["rask.uuid"])
+
+
 @pytest.fixture
 def backend() -> Generator[tuple[GraphBackend, str]]:
     with graph_backend() as served:
@@ -40,16 +54,17 @@ def test_a_run_reaches_the_backend_once_across_an_outage(tmp_path: Path, monkeyp
     graph, url = backend
     monkeypatch.setenv("LINEAGE_FORWARD_URL", url)
     monkeypatch.setenv("APP_API_TOKEN", _SIDECAR["dapr-api-token"])
-    granted = {(_ALICE, "can_write_data", f"table:{_TABLE}"), (_NOTIFICATIONS, "can_read_event_feed", "estate:rask")}
     run = run_event("1d3c5a07-0000-4000-8000-000000000592", "COMPLETE", "2026-10-15T10:00:00+00:00", outputs=[_TABLE])
-    with live_catalog(tmp_path / "catalog", monkeypatch) as catalog_url, governed_lineage(catalog_url, monkeypatch, granted) as lineage:
-        posted = lineage.post("/api/v1/lineage", json=run, headers={SUBJECT_HEADER: _ALICE})
-        projected = lineage.get("/events/projection", params={"since": 0}, headers={SUBJECT_HEADER: _NOTIFICATIONS}).json()
-        graph.down = True
-        while_down = lineage.post(f"/{RELAY}", headers=_SIDECAR).json()
-        graph.down = False
-        once_up = lineage.post(f"/{RELAY}", headers=_SIDECAR).json()
-        after = lineage.post(f"/{RELAY}", headers=_SIDECAR).json()
+    with live_catalog(tmp_path / "catalog", monkeypatch) as catalog_url:
+        granted = {(_ALICE, "can_write_data", f"table:{_declared(catalog_url, _TABLE)}"), (_NOTIFICATIONS, "can_read_event_feed", "estate:rask")}
+        with governed_lineage(catalog_url, monkeypatch, granted) as lineage:
+            posted = lineage.post("/api/v1/lineage", json=run, headers={SUBJECT_HEADER: _ALICE})
+            projected = lineage.get("/events/projection", params={"since": 0}, headers={SUBJECT_HEADER: _NOTIFICATIONS}).json()
+            graph.down = True
+            while_down = lineage.post(f"/{RELAY}", headers=_SIDECAR).json()
+            graph.down = False
+            once_up = lineage.post(f"/{RELAY}", headers=_SIDECAR).json()
+            after = lineage.post(f"/{RELAY}", headers=_SIDECAR).json()
 
     assert posted.status_code == 201, posted.text
     assert [(row["event"]["run"]["runId"], row["event"]["run"]["facets"]["author"]["sub"]) for row in projected["events"]] == [(run["run"]["runId"], _ALICE)]

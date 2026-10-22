@@ -34,7 +34,16 @@ from lance_namespace import (
 )
 
 from catalog.api import fga_deps, lineage_deps
-from catalog.api.dependencies import FgaClientDep, LineageEmitterDep, NamespaceDep, ObjectUuidsDep, ResolvedTableDep, SettingsDep, StorageOptionsDep
+from catalog.api.dependencies import (
+    FgaClientDep,
+    LineageEmitterDep,
+    NamespaceDep,
+    ObjectUuidsDep,
+    ResolvedTableDep,
+    ResolverDep,
+    SettingsDep,
+    StorageOptionsDep,
+)
 from catalog.api.pagination import paginate_versions
 from catalog.api.rask_params import RaskFlag
 from catalog.api.security import CurrentToken
@@ -107,17 +116,15 @@ async def table_history(
     metadata about the data, and it leaks real information (predicates name values, field names name
     columns), so it is gated exactly like the schema is rather than being treated as public.
 
-    THE RUNG IS THE ROUTER'S, and this route has to be NAMED in ``fga_deps._META_READ_ACTIONS`` to get it.
-    The check below is the second one a request meets, not the first: ``authorize`` is a router-wide
-    dependency, so an unnamed suffix is refused for every caller before this line runs and no reader ever
-    arrives to be metadata-checked. Pinned by
+    THE RUNG IS THE ROUTER'S, and this route has to be NAMED in ``fga_deps._META_READ_ACTIONS`` to get it:
+    ``authorize`` is a router-wide dependency, so an unnamed suffix is refused for every caller and no reader
+    ever arrives. Pinned by
     ``tests/unit/test_fga_model_contract.py::test_every_DATA_READ_door_is_gated_as_a_READ``.
 
     ``limit`` bounds the per-version transaction reads — a table with 10k versions must not turn a UI page
     into 10k object-store round trips.
     """
     segments = parse_identifier(id, settings.delimiter)
-    await fga_deps.require_can_get_metadata(client, settings, token, segments=segments)
     rows = await run_in_threadpool(dataplane.table_history, ns, so, segments, limit)
     return {"table": id, "versions": rows}
 
@@ -201,6 +208,7 @@ async def create_table_version(
     client: FgaClientDep,
     emitter: LineageEmitterDep,
     uuids: ObjectUuidsDep,
+    resolver: ResolverDep,
     authorization: Annotated[str | None, Header()] = None,
 ) -> CreateTableVersionResponse:
     """Finalize a client-staged manifest as the next version of the table or of one of its branches, after judging it
@@ -238,7 +246,7 @@ async def create_table_version(
             staged,
             so,
         )
-        await fga_deps.judge_staged_run(settings, token, client, ns=ns, segments=segments, run=run, adds_data=adds_data)
+        await fga_deps.judge_staged_run(settings, token, client, resolver, ns=ns, segments=segments, run=run, adds_data=adds_data)
     except BaseException:
         await run_in_threadpool(managed_versions.refuse, staged, so)
         raise

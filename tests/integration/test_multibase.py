@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import io
 from typing import Any
+from uuid import uuid4
 
 import pyarrow as pa
 import pyarrow.ipc as ipc
@@ -17,7 +18,8 @@ from fastapi.testclient import TestClient
 from lance_namespace import CreateTableResponse
 
 from catalog.core.config import Settings, get_settings
-from catalog.services import dataplane
+from catalog.services import dataplane, table_claims
+from service_kit.lakehouse import location_claims
 
 
 ARROW_STREAM = "application/vnd.apache.arrow.stream"
@@ -36,10 +38,15 @@ def _settings() -> Settings:
 
 
 def _stub_create(calls: list[dict[str, Any]]) -> Any:
-    """A dataplane.create_table stub that records its kwargs (so no real Lance write happens)."""
+    """A dataplane.create_table stub that records its kwargs (so no real Lance write happens).
+
+    It claims the location it answers with a minted uuid, as the real create does before it writes: the create door
+    seeds the table's grants on the uuid that claim records (ADR 0173 §6).
+    """
 
     def fake(*_a: Any, **k: Any) -> CreateTableResponse:
         calls.append(k)
+        location_claims.take(table_claims.claim_store(_settings()), "s3://x", "db$t", ["db", "t"], is_gone=lambda _claim: False, uuid=str(uuid4()))
         return CreateTableResponse(location="s3://x", version=1)
 
     return fake

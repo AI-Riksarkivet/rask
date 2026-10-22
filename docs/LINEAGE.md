@@ -18,7 +18,7 @@ erasure ◀── GET /tables/{name}/derived ──────┤              
 
 | Question | System |
 |---|---|
-| **who** may read/write/commit | OpenFGA (`can_*` on `table:<id>`) |
+| **who** may read/write/commit | OpenFGA (`can_*` on `table:<uuid>`, the uuid each event's `lance` facet names) |
 | **what / when** changed | Lance versions + tags (immutable, time-travel) |
 | **how / from where / by whom** | this service: the commit feed and the edge list; the full graph in the forwarded backend |
 
@@ -89,7 +89,7 @@ a derived table the caller cannot see is dropped from the answer while the walk 
 every table built from a subject's source.
 
 **Authz.** Two layers, the same the catalog applies to `describe table`: OIDC (a valid bearer verified against Dex,
-else 401) and OpenFGA (`can_get_metadata` on `table:<id>`, else 403; feed rows naming a dataset the caller cannot see
+else 401) and OpenFGA (`can_get_metadata` on `table:<uuid>`, else 403; feed rows naming a dataset the caller cannot see
 are dropped). Lineage reads the shared OpenFGA store and writes no tuple. Both layers are off in the code defaults and
 on in the chart (`RASK_OIDC_ENABLED`, `RASK_FGA_ENABLED`). The two Dapr-delivered routes verify the Dapr app token,
 which only the sidecar stamps: the cluster route publishes `/api/lineage` onto lineage's root, but a request through

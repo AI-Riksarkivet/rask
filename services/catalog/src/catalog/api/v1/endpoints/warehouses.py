@@ -31,7 +31,7 @@ from datetime import UTC, datetime
 from functools import partial
 from typing import Annotated, Any, Final
 
-from fastapi import APIRouter, Header, Request, Response
+from fastapi import APIRouter, Header, Request
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import (
     ConcurrentModificationError,
@@ -61,6 +61,7 @@ from catalog.api.dependencies import (
     FgaClientDep,
     LineageEmitterDep,
     ObjectUuidsDep,
+    ResolverDep,
     SettingsDep,
     VendorDep,
     estate_namespace,
@@ -84,7 +85,7 @@ from catalog.schemas import (
     WarehouseNamespacesResponse,
     WarehouseResponse,
 )
-from catalog.services import native, table_claims, warehouses
+from catalog.services import native, object_uuids, table_claims, warehouses
 from catalog.services.vend_probe import CAS_CHECK, CAS_RESERVE, SCOPE_CHECK, ProbeCheck, ProbeReport, summarize_probe
 from service_kit.control_emit import emit_control
 from service_kit.governed import fga
@@ -358,25 +359,16 @@ async def create_warehouse(
 
 
 @router.get("", response_model_exclude_none=True)
-async def list_warehouses(response: Response, settings: SettingsDep, token: CurrentToken, client: FgaClientDep) -> list[WarehouseResponse]:
+async def list_warehouses(settings: SettingsDep, token: CurrentToken, client: FgaClientDep) -> list[WarehouseResponse]:
     """Every warehouse the caller can read. Governed like the metadata feeds: with FGA on, filtered to the
     warehouses the caller has ``can_get_metadata`` on (never discloses another tenant's bucket names)."""
     _require_enabled(settings)
     records = await run_in_threadpool(warehouses.list_warehouses, settings.registry_root, settings.storage_options())
-    authorization_truncated = False
     if settings.fga_enabled and client is not None and token is not None:
-        # `.objects` + `.truncated`: past OpenFGA's 1000-object cap this listing is SHORT, and the
-        # page cursor below would be minted from the shortened list. Surfaced to the caller rather
-        # than only logged — a client cannot otherwise tell a small estate from a truncated answer.
-        listing = await fga.list_objects(client, user=token.subject, relation="can_get_metadata", object_type="warehouse")
-        allowed = set(listing.objects)
-        authorization_truncated = listing.truncated
-        records = [r for r in records if f"warehouse:{r['id']}" in allowed]
-        # A BARE LIST has no envelope to carry the flag, and giving this route one would be a breaking
-        # response-shape change for a diagnostic bit. A header says the same thing without moving the
-        # body, under the same key name the enveloped listings use.
-        if authorization_truncated:
-            response.headers["X-Authorization-Truncated"] = "true"
+        # The listing's own candidates, batch-checked ([[LH-223]]): never what the caller reaches across the estate,
+        # which OpenFGA stops counting at its ceiling.
+        allowed = await fga.batch_check(client, user=token.subject, relation="can_get_metadata", objects=[f"warehouse:{r['id']}" for r in records])
+        records = [r for r in records if allowed.get(f"warehouse:{r['id']}")]
     return [WarehouseResponse(**r) for r in records]
 
 
@@ -422,19 +414,12 @@ async def list_estate_bindings(
             f"{len(skipped)} namespace binding(s) could not be read (e.g. {skipped[0]}) — refusing to "
             f"report a partial estate, because a binding you cannot read is a namespace you cannot see."
         )
-    authorization_truncated = False
     if settings.fga_enabled and client is not None and token is not None:
-        # `.objects` + `.truncated`: past OpenFGA's 1000-object cap this listing is SHORT, and the
-        # page cursor below would be minted from the shortened list. Surfaced to the caller rather
-        # than only logged — a client cannot otherwise tell a small estate from a truncated answer.
-        listing = await fga.list_objects(client, user=token.subject, relation="can_get_metadata", object_type="warehouse")
-        allowed = set(listing.objects)
-        authorization_truncated = listing.truncated
-        records = [r for r in records if f"warehouse:{r.get('warehouse_id')}" in allowed]
-    return EstateBindingsResponse(
-        bindings={str(r["top_ns"]): str(r["warehouse_id"]) for r in records},
-        authorization_truncated=authorization_truncated,
-    )
+        # The listing's own candidates, batch-checked ([[LH-223]]).
+        objects = sorted({f"warehouse:{r.get('warehouse_id')}" for r in records})
+        allowed = await fga.batch_check(client, user=token.subject, relation="can_get_metadata", objects=objects)
+        records = [r for r in records if allowed.get(f"warehouse:{r.get('warehouse_id')}")]
+    return EstateBindingsResponse(bindings={str(r["top_ns"]): str(r["warehouse_id"]) for r in records})
 
 
 @router.get("/{warehouse_id}/namespaces", response_model_exclude_none=True)
@@ -443,6 +428,7 @@ async def list_warehouse_namespaces(
     settings: SettingsDep,
     token: CurrentToken,
     client: FgaClientDep,
+    resolver: ResolverDep,
 ) -> WarehouseNamespacesResponse:
     """The namespaces bound to this warehouse, read from the REGISTRY — the same source the delete
     door consults. This read exists so no surface has to INFER the answer: the lakehouse warehouse
@@ -467,9 +453,16 @@ async def list_warehouse_namespaces(
     # A namespace name discloses how a tenant organises data, which is why the answer is FILTERED
     # rather than refused — refusing would break the breadcrumb the widened relation exists to serve.
     if settings.fga_enabled and token is not None and client is not None:
-        listing = await fga.list_objects(client, user=token.subject, relation="can_get_metadata", object_type="namespace")
-        allowed = set(listing.objects)
-        bound = [name for name in bound if f"namespace:{name}" in allowed]
+        bound, _ = await fga_deps.authorized_page(
+            client,
+            resolver,
+            user=token.subject,
+            relation="can_get_metadata",
+            kind="namespace",
+            candidates=[(name, [name]) for name in sorted(bound)],
+            page_token=None,
+            limit=None,
+        )
     return WarehouseNamespacesResponse(namespaces=bound)
 
 
@@ -559,6 +552,7 @@ async def create_warehouse_namespace(
     token: CurrentToken,
     client: FgaClientDep,
     control: ControlEmitterDep,
+    resolver: ResolverDep,
     body: CreateWarehouseNamespaceRequest,
 ) -> CreateNamespaceResponse:
     """Create a top-level namespace INSIDE this warehouse's bucket and bind it, so all its tables route
@@ -681,11 +675,12 @@ async def create_warehouse_namespace(
         client,
         settings,
         token,
+        resolver,
         resource="namespace",
         segments=segments,
+        uuid=await run_in_threadpool(object_uuids.require_namespace_uuid, ns_conn, segments),
         parent_object=f"warehouse:{warehouse_id}",
         undo=None if adopted else _undo_create,
-        created=not adopted,
     )
     log.info("warehouse_namespace_created", extra={"warehouse": warehouse_id, "namespace": ns_name})
     await emit_control(
@@ -1059,10 +1054,17 @@ async def delete_warehouse(
     trash_ended: list[str] = []
     revoked = 0
     try:
+        claims = table_claims.claim_store(settings)
         for entry in trashed:
             kind, canonical = str(entry.get("kind") or "table"), str(entry.get("id") or "")
+            # A trashed object's grants are held by the uuid its record keeps ([[LH-524]]), read before its claim goes.
             # Counted as the revoke lands, so a failure in the records after it still reports these tuples.
-            revoked += await fga_deps.revoke_removed_object(client, settings, f"{kind}:{canonical}", token=token)
+            trashed_uuid = await run_in_threadpool(trash.object_uuid, entry, claims)
+            if trashed_uuid is not None:
+                obj = fga.object_of(kind, trashed_uuid)
+                revoked += await fga_deps.revoke_removed_object(client, settings, obj, token=token)
+            else:
+                log.warning("warehouse_cascade_trash_uuid_unread", extra={"warehouse": warehouse_id, "kind": kind, "id": canonical})
             await _forget_trashed(settings, entry)
             trash_ended.append(f"{kind}:{canonical}")
         if ns_conn is not None:
@@ -1090,13 +1092,17 @@ async def delete_warehouse(
                         # here would leave a binding nobody can delete, so the catalog's own records still go.
                         log.warning("warehouse_cascade_namespace_absent", extra={"warehouse": warehouse_id, "namespace": namespace})
                     namespaces_dropped.append(settings.delimiter.join(namespace))
-                async for count in fga_deps.end_removed_subtree(
-                    client, settings, root=subtree.segments, root_uuid=subtree.uuid, removed=subtree.descendants, token=token
-                ):
+                async for count in fga_deps.end_removed_subtree(client, settings, root_uuid=subtree.uuid, removed=subtree.descendants, token=token):
                     revoked += count
                 top_ns = subtree.segments[0]
                 await run_in_threadpool(warehouses.unbind_namespace, settings.registry_root, so, top_ns)
                 request.app.state.warehouse_binding_cache.pop(top_ns, None)
+        # A namespace an earlier attempt removed is named by nothing but this warehouse's `child` edge, so its subtree
+        # is ended from there before the warehouse's own grants go.
+        ended = {fga.namespace_object(subtree.uuid) for subtree in subtrees if subtree.uuid is not None}
+        for orphan in await fga_deps.orphaned_children(client, settings, f"warehouse:{warehouse_id}", ended=ended):
+            async for count in fga_deps.end_removed_subtree(client, settings, root_uuid=orphan, removed=[], token=token):
+                revoked += count
 
         revoked += await fga_deps.revoke_removed_object(client, settings, f"warehouse:{warehouse_id}", token=token)
         await run_in_threadpool(warehouses.delete_warehouse_record, settings.registry_root, so, warehouse_id)

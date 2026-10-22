@@ -6,6 +6,10 @@ reader or can_get_metadata from child``). Without the second, a grant on ONE tab
 the grantee reads the table and cannot see the namespace or warehouse holding it, so every list
 above it is empty and the breadcrumb to their own data 403s.
 
+Both edges of a table's and a namespace's create, on the uuid objects a real OpenFGA holds, are pinned by
+``services/catalog/tests/test_a_grant_is_held_by_the_objects_uuid.py::test_every_tuple_a_create_writes_names_the_objects_uuid``;
+these pin the branches no create door reaches.
+
 Deliberately in **service-kit's** own suite rather than ``tests/unit/``: these exercise
 ``service_kit.governed.fga`` alone, and the root ``tests/unit/test_fga_revoke.py`` imports
 ``catalog.api.fga_deps``, which pulls the catalog's ``lancekit`` extra (pylance + lancedb) in behind
@@ -39,6 +43,11 @@ def _keys(tuples: list[ClientTuple]) -> set[tuple[str, str, str]]:
     return {(t.user, t.relation, t.object) for t in tuples}
 
 
+#: The uuids the catalog minted for a table and its namespace (ADR 0173 §8): the objects their grants are held by.
+_TABLE = "table:0b6f8a52-4c1e-4f7a-9d3e-2a1c5b7e9f01"
+_NAMESPACE = "namespace:7d2e4c19-8a3b-4e6f-b1d0-5c9a2e8f3b47"
+
+
 def _client(c: object) -> OpenFgaClient:
     """Cast a fake to the SDK client type (it only needs the called methods)."""
     return cast(OpenFgaClient, c)
@@ -69,37 +78,15 @@ class _ReadDeleteClient:
 
 
 # --------------------------------------------------------------------------- #
-# create — both edges, one batch
+# create — the branches the catalog's create doors do not reach
 # --------------------------------------------------------------------------- #
-
-
-def test_grant_on_create_writes_the_parent_edge_and_its_inverse_in_one_batch() -> None:
-    """One write, so an object can never hold one direction without the other — which would leave it
-    either uninheritable or invisible."""
-    fake = _WriteClient()
-    asyncio.run(
-        fga.grant_on_create(
-            _client(fake),
-            user_sub="dex~alice",
-            resource="table",
-            obj_id="ns1$t",
-            actor="dex~alice",
-            origin="create",
-            parent_object="namespace:ns1",
-        )
-    )
-    assert _keys(fake.written) == {
-        ("user:dex~alice", "owner", "table:ns1$t"),
-        ("namespace:ns1", "parent", "table:ns1$t"),
-        ("table:ns1$t", "child", "namespace:ns1"),
-    }
 
 
 def test_grant_on_create_writes_no_edges_for_a_root_object() -> None:
     """No parent → no edges either way; the creator's own grant is the whole write."""
     fake = _WriteClient()
-    asyncio.run(fga.grant_on_create(_client(fake), user_sub="dex~alice", resource="table", obj_id="rootless", actor="dex~alice", origin="create"))
-    assert _keys(fake.written) == {("user:dex~alice", "owner", "table:rootless")}
+    asyncio.run(fga.grant_on_create(_client(fake), user_sub="dex~alice", obj=_TABLE, actor="dex~alice", origin="create"))
+    assert _keys(fake.written) == {("user:dex~alice", "owner", _TABLE)}
 
 
 def test_grant_on_create_skips_the_inverse_when_the_parent_type_declares_no_child() -> None:
@@ -111,8 +98,7 @@ def test_grant_on_create_skips_the_inverse_when_the_parent_type_declares_no_chil
         fga.grant_on_create(
             _client(fake),
             user_sub="dex~alice",
-            resource="classification",
-            obj_id="pii",
+            obj="classification:pii",
             actor="dex~alice",
             origin="create",
             parent_object="estate:rask",
@@ -136,13 +122,13 @@ def test_revoke_removes_the_inverse_child_edge_a_read_by_object_cannot_see() -> 
 
     The parent is recovered from the ``parent`` tuple the read DOES return: that one is
     ``<parent> parent <obj>``, so its USER is the parent object."""
-    fake = _ReadDeleteClient([_tuple("user:dex~alice", "owner", "table:ns1$t"), _tuple("namespace:ns1", "parent", "table:ns1$t")])
-    removed = asyncio.run(fga.revoke_object_tuples(_client(fake), "table:ns1$t", actor="test", origin="create"))
+    fake = _ReadDeleteClient([_tuple("user:dex~alice", "owner", _TABLE), _tuple(_NAMESPACE, "parent", _TABLE)])
+    removed = asyncio.run(fga.revoke_object_tuples(_client(fake), _TABLE, actor="test", origin="create"))
     assert len(removed) == 3  # the two read back, plus the inverse edge they imply
     assert _keys(fake.deleted) == {
-        ("user:dex~alice", "owner", "table:ns1$t"),
-        ("namespace:ns1", "parent", "table:ns1$t"),
-        ("table:ns1$t", "child", "namespace:ns1"),
+        ("user:dex~alice", "owner", _TABLE),
+        (_NAMESPACE, "parent", _TABLE),
+        (_TABLE, "child", _NAMESPACE),
     }
 
 

@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+import httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -21,6 +22,19 @@ from tests.integration.lineage_app import RELAY, SUBJECT_HEADER, governed_lineag
 
 
 _TABLE = "acme-silver$pages"
+
+
+def _declared(catalog_url: str, table: str) -> str:
+    """Declare ``table`` in the catalog at ``catalog_url`` and answer the uuid it minted, the object its grants are held by.
+
+    Lineage's HTTP door resolves each name an event names to that uuid as the caller, and checks the grants on it
+    ([[LH-524]]), so the table must exist for any event naming it to be admitted.
+    """
+    namespace = table.split("$")[0]
+    with httpx.Client(base_url=catalog_url, timeout=60) as catalog:
+        assert catalog.post(f"/v1/namespace/{namespace}/create", json={}).status_code == 200
+        assert catalog.post(f"/v1/table/{table}/declare", json={}).status_code == 200
+        return str(catalog.post(f"/v1/table/{table}/describe", json={}).json()["properties"]["rask.uuid"])
 
 
 def test_the_app_mounts_the_tick_only_when_a_binding_names_it() -> None:
@@ -49,14 +63,13 @@ def test_a_tick_without_the_sidecars_token_forwards_nothing(tmp_path: Path, monk
     run = run_event("1d3c5a07-0000-4000-8000-000000000593", "COMPLETE", "2026-10-15T10:00:00+00:00", outputs=[_TABLE])
     with graph_backend() as (graph, url):
         monkeypatch.setenv("LINEAGE_FORWARD_URL", url)
-        with (
-            live_catalog(tmp_path / "catalog", monkeypatch) as catalog_url,
-            governed_lineage(catalog_url, monkeypatch, {("dex~alice", "can_write_data", f"table:{_TABLE}")}) as lineage,
-        ):
-            assert lineage.post("/api/v1/lineage", json=run, headers={SUBJECT_HEADER: "dex~alice"}).status_code == 201
-            refused = [lineage.post(f"/{RELAY}").status_code, lineage.post(f"/{RELAY}", headers={"dapr-api-token": "wrong"}).status_code]
-            sent_while_refused = len(graph.received)
-            tick = lineage.post(f"/{RELAY}", headers={"dapr-api-token": "s3cret"})
+        with live_catalog(tmp_path / "catalog", monkeypatch) as catalog_url:
+            granted = {("dex~alice", "can_write_data", f"table:{_declared(catalog_url, _TABLE)}")}
+            with governed_lineage(catalog_url, monkeypatch, granted) as lineage:
+                assert lineage.post("/api/v1/lineage", json=run, headers={SUBJECT_HEADER: "dex~alice"}).status_code == 201
+                refused = [lineage.post(f"/{RELAY}").status_code, lineage.post(f"/{RELAY}", headers={"dapr-api-token": "wrong"}).status_code]
+                sent_while_refused = len(graph.received)
+                tick = lineage.post(f"/{RELAY}", headers={"dapr-api-token": "s3cret"})
 
     assert (refused, sent_while_refused) == ([403, 403], 0)
     assert tick.json() == {

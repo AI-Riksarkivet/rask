@@ -28,15 +28,17 @@ import pyarrow.ipc as ipc
 import pytest
 from fastapi.testclient import TestClient
 
-from catalog.api.dependencies import get_clock
+from catalog.api.dependencies import get_clock, get_namespace
 from catalog.api.promotion_expiry import mount_promotion_expiry
 from catalog.core.config import Settings, get_settings
 from catalog.core.lineage_emit import make_emitter
-from catalog.services import warehouses
+from catalog.services import object_uuids, table_claims, warehouses
 from notifications.api.ingest import ingest_run_event
 from notifications.api.metrics import Lane
 from notifications.api.visibility import Visibility
 from notifications.proxies import TypedActorProxy
+from service_kit.governed import fga
+from service_kit.lakehouse.location_claims import ClaimStore
 from tests.integration.openfga_grants import Grants, act_as
 
 
@@ -82,6 +84,15 @@ class Estate:
         response = self.client.post(f"/management/v1/table/{TABLE}/publish", json={"version": version, "key_column": "id"}, headers=AUTH)
         assert response.status_code == 200, response.text
         return response.json()
+
+    def obj(self, kind: str, name: str) -> str:
+        """The FGA object ``kind`` ``name`` is held by, the uuid the catalog minted for it ([[LH-524]]), read from the
+        namespace backend and the claim store rather than through a door the grants under test would gate."""
+        ns = self.client.app.dependency_overrides[get_namespace]()
+        segments = name.split("$")
+        if kind == "namespace":
+            return fga.namespace_object(object_uuids.require_namespace_uuid(ns, segments))
+        return fga.table_object(table_claims.resolve(ns, ClaimStore(control_root=self.root), segments).require_uuid())
 
     def location(self) -> str:
         act_as(self.client, "alice")
@@ -134,16 +145,17 @@ def estate(real_ns_client: TestClient, tmp_path: Path) -> Iterator[Estate]:
         f"/management/v1/warehouses/{WAREHOUSE}/namespaces", json={"namespace": NAMESPACE, "properties": {"rask.tier": "silver"}}, headers=AUTH
     )
     assert declared.status_code == 200, declared.text
-    grants.grant(
-        "alice",
-        ("can_create_table", f"namespace:{NAMESPACE}"),
-        *[(rung, f"table:{TABLE}") for rung in WRITER],
-        ("can_read_data", "table:acme-bronze$orders"),
-    )
     estate = Estate(client, grants, root)
+    # The run's input, which the create names and alice reads.
+    bronze = client.post(f"/management/v1/warehouses/{WAREHOUSE}/namespaces", json={"namespace": "acme-bronze"}, headers=AUTH)
+    assert bronze.status_code == 200, bronze.text
+    grants.grant("alice", ("can_create_table", estate.obj("namespace", NAMESPACE)), ("can_create_table", estate.obj("namespace", "acme-bronze")))
+    assert client.post("/v1/table/acme-bronze$orders/create?mode=create", content=_ipc(range(4)), headers=ARROW).status_code == 200
+    grants.grant("alice", ("can_read_data", estate.obj("table", "acme-bronze$orders")))
     estate.declare_gate(review=False)
     created = client.post(f"/v1/table/{TABLE}/create?mode=create", content=_ipc(range(4)), headers={**ARROW, **RUN})
     assert created.status_code == 200, created.text
+    grants.grant("alice", *[(rung, estate.obj("table", TABLE)) for rung in WRITER])
     assert estate.publish(1)["published"] is True
     estate.declare_gate(review=True)
     yield estate
@@ -225,7 +237,7 @@ def test_approval_moves_published_and_tells_the_watchers_and_rejection_restores_
     """bob, a validator, approves held version 2: `@published` reads it, and the run the catalog announces reaches
     the project's watcher. Version 3 is held next and bob rejects it: main is restored to the version `published`
     names, as version 4, `published` stays, and the restore is made once however often the rejection is repeated."""
-    estate.grants.grant("bob", ("can_promote", f"table:{TABLE}"), ("can_get_metadata", f"table:{TABLE}"))
+    estate.grants.grant("bob", ("can_promote", estate.obj("table", TABLE)), ("can_get_metadata", estate.obj("table", TABLE)))
     estate.insert(range(4, 12))
     assert estate.publish(2)["held"] is True
 
@@ -236,7 +248,8 @@ def test_approval_moves_published_and_tells_the_watchers_and_rejection_restores_
     assert (estate.rows("published"), estate.holds()) == (12, [])
     announced = [event for event in lineage if event["run"]["facets"]["lance"]["operation"] == "publish_table"]
     assert [event["outputs"][0]["facets"]["version"]["datasetVersion"] for event in announced] == ["2"]
-    assert _told(announced[-1], watchers=["dex~wendy"]) == {"dex~bob": [("author", TABLE)], "dex~wendy": [("watch", TABLE)]}
+    told = estate.obj("table", TABLE)
+    assert _told(announced[-1], watchers=["dex~wendy"]) == {"dex~bob": [("author", told)], "dex~wendy": [("watch", told)]}
 
     estate.insert(range(12, 40))
     assert estate.publish(3)["held"] is True
@@ -255,7 +268,7 @@ def test_without_can_promote_a_caller_can_neither_decide_a_hold_nor_move_publish
     """carol writes, publishes and may move or drop the table's tags, but holds no `can_promote`: approving or
     rejecting the held version is PermissionDenied (15), moving or deleting `published` on the spec's tag doors is
     InvalidInput (13), and the hold, `published` and main stay as they were."""
-    estate.grants.grant("carol", *[(rung, f"table:{TABLE}") for rung in (*WRITER, "can_drop")])
+    estate.grants.grant("carol", *[(rung, estate.obj("table", TABLE)) for rung in (*WRITER, "can_drop")])
     estate.insert(range(4, 12))
     assert estate.publish(2)["held"] is True
 

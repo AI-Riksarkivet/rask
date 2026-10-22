@@ -131,7 +131,8 @@ def test_create_delegates_to_dataplane_create_table(client: TestClient, fake_ns:
         seen["allow_external_blobs"] = allow_external_blobs  # proves the endpoint forwards the setting
         seen["external_blob_bases"] = external_blob_bases  # the allowlist is forwarded too
         seen["data_bases"] = data_bases  # #3-B: no ?data_base → None (backward-compatible)
-        return CreateTableResponse(location="s3://x/t", version=1)
+        # An overwrite writes a version into the table it replaces, at the location that table's claim records.
+        return CreateTableResponse(location=fake_ns.describe_table.return_value.location, version=1)
 
     monkeypatch.setattr("catalog.services.dataplane.create_table", _stub)
     claim_described("media$clips")  # the table the overwrite replaces, which the double describes as existing
@@ -237,7 +238,8 @@ def test_list_branches_routes_to_dataset_branches(client: TestClient, monkeypatc
     assert resp.json()["branches"]["exp"]["parentVersion"] == 2  # serialized with the spec's camelCase alias
 
 
-def test_create_branch_maps_from_version_to_int_reference(client: TestClient, monkeypatch) -> None:
+def test_create_branch_maps_from_version_to_int_reference(client: TestClient, monkeypatch, claim_described: Callable[[str], str]) -> None:
+    claim_described("db$t")  # the table a ref is made on, whose location's claim records its uuid
     dataset = MagicMock()
     monkeypatch.setattr("catalog.services.dataplane.open_dataset", lambda *a, **k: dataset)
     resp = client.post("/v1/table/db$t/branches/create", json={"name": "exp", "from_version": 3})
@@ -245,7 +247,8 @@ def test_create_branch_maps_from_version_to_int_reference(client: TestClient, mo
     dataset.create_branch.assert_called_once_with("exp", 3)  # fromVersion → int reference
 
 
-def test_create_branch_maps_from_branch_and_version_to_tuple(client: TestClient, monkeypatch) -> None:
+def test_create_branch_maps_from_branch_and_version_to_tuple(client: TestClient, monkeypatch, claim_described: Callable[[str], str]) -> None:
+    claim_described("db$t")  # the table a ref is made on, whose location's claim records its uuid
     dataset = MagicMock()
     # The double must NAME the source branch, because the door now reads the branch list to establish
     # it: pylance renders a missing source branch and a missing source version with the same
@@ -260,7 +263,8 @@ def test_create_branch_maps_from_branch_and_version_to_tuple(client: TestClient,
     dataset.create_branch.assert_called_once_with("x", ("exp", 2))  # (branch, version) reference
 
 
-def test_create_branch_from_main_uses_no_reference(client: TestClient, monkeypatch) -> None:
+def test_create_branch_from_main_uses_no_reference(client: TestClient, monkeypatch, claim_described: Callable[[str], str]) -> None:
+    claim_described("db$t")  # the table a ref is made on, whose location's claim records its uuid
     dataset = MagicMock()
     monkeypatch.setattr("catalog.services.dataplane.open_dataset", lambda *a, **k: dataset)
     resp = client.post("/v1/table/db$t/branches/create", json={"name": "exp"})
@@ -421,9 +425,11 @@ def test_register_emits_the_resolved_location_not_the_relative_one(client: TestC
     assert captured["source_uri"] == "s3://bucket/9f_db$t", "the marker must carry a URI the sweep can open"
 
 
-def test_declare_emits_versionless_marker(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
-    # The declaration answers the location the backend describes once its row is recorded ([[LH-520]]).
+def test_declare_emits_versionless_marker(client: TestClient, fake_ns: MagicMock, monkeypatch, claim_described: Callable[[str], str]) -> None:
+    # The declaration answers the location the backend describes once its row is recorded ([[LH-520]]), claimed
+    # under the uuid the declaration's grants are seeded on.
     fake_ns.describe_table.return_value = DescribeTableResponse(location="s3://bucket/t")
+    claim_described("db$t")
     captured = _capture_emit(monkeypatch, "tables")
 
     resp = client.post("/v1/table/db$t/declare", json={})
@@ -485,7 +491,8 @@ def test_update_builds_updates_dict_and_reads_real_count_key(client: TestClient,
     assert resp.json() == {"updated_rows": 2, "version": 5}
 
 
-def test_create_tag_with_branch_passes_branch_version_tuple(client: TestClient, monkeypatch) -> None:
+def test_create_tag_with_branch_passes_branch_version_tuple(client: TestClient, monkeypatch, claim_described: Callable[[str], str]) -> None:
+    claim_described("db$t")  # the table a ref is made on, whose location's claim records its uuid
     # A branch-scoped tag must pass (branch, version) — a bare int would resolve against main, tagging the
     # WRONG version. (Was silently dropping `branch`.)
     dataset = MagicMock()

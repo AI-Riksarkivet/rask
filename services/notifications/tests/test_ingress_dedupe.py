@@ -35,12 +35,15 @@ from notifications.proxies import TypedActorProxy
 LINEAGE = "http://lineage.invalid"
 OPEN = Visibility(decider=None, enabled=False)
 
+#: The uuid the catalog minted for `bronze$pages`, which its events carry in the output's `lance` facet (ADR 0173 §10).
+PAGES_UUID = "3f1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5b"
+
 RUN_EVENT: dict[str, Any] = {
     "eventType": "FAIL",
     "eventTime": "2026-08-09T12:00:00+00:00",
     "run": {"runId": "run-77", "facets": {"author": {"name": "alice", "sub": "alice"}, "lance": {"runId": "ingest-77"}}},
     "job": {"namespace": "lance-ingest", "name": "harvest"},
-    "outputs": [{"namespace": "bronze", "name": "bronze$pages"}],
+    "outputs": [{"namespace": "bronze", "name": "bronze$pages", "facets": {"lance": {"tableUuid": PAGES_UUID}}}],
 }
 
 
@@ -106,7 +109,7 @@ def test_the_handler_unwraps_the_envelope_rather_than_treating_it_as_the_event(b
     stored = plane.boxes["alice"][0]
     assert stored["notification_id"] == "run-77@FAIL"
     assert stored["source_run_id"] == "ingest-77"
-    assert stored["object_id"] == "bronze$pages"
+    assert (stored["object_id"], stored["object_name"], stored["object_uuid"]) == (f"table:{PAGES_UUID}", "bronze$pages", PAGES_UUID)
 
 
 def test_an_envelope_with_no_event_is_dropped(bus: TestClient, plane: _Plane) -> None:

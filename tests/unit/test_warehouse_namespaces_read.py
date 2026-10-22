@@ -20,6 +20,7 @@ from lance_namespace import TableNotFoundError
 
 from catalog.core.config import Settings
 from catalog.services import warehouses
+from tests.unit.named_resolver import NamedResolver
 
 
 def _settings(tmp_path: Any, *, fga_enabled: bool = False) -> Settings:
@@ -55,7 +56,7 @@ def _seed(settings: Settings, *, warehouse_id: str, bindings: tuple[str, ...] = 
 def _read(settings: Settings, warehouse_id: str) -> Any:
     from catalog.api.v1.endpoints import warehouses as wh_ep
 
-    return asyncio.run(wh_ep.list_warehouse_namespaces(warehouse_id=warehouse_id, settings=settings, token=None, client=None))
+    return asyncio.run(wh_ep.list_warehouse_namespaces(warehouse_id=warehouse_id, settings=settings, token=None, client=None, resolver=NamedResolver()))
 
 
 def test_bound_namespaces_are_returned_from_the_registry(tmp_path: Any) -> None:
@@ -117,10 +118,14 @@ def test_the_estate_read_is_FILTERED_to_what_the_caller_may_see(monkeypatch: pyt
     _seed(settings, warehouse_id="mine-wh", bindings=("mine",))
     _seed(settings, warehouse_id="theirs-wh", bindings=("theirs",))
 
-    async def _only_mine(*args: Any, **kwargs: Any) -> fga_module.ObjectListing:
-        return fga_module.ObjectListing(objects=["warehouse:mine-wh"], truncated=False)
+    asked: list[list[str]] = []
 
-    monkeypatch.setattr(fga_module, "list_objects", _only_mine)
+    async def _only_mine(_client: object, *, user: str, relation: str, objects: list[str], **_kw: Any) -> dict[str, bool]:
+        assert (user, relation) == ("dex~alice", "can_get_metadata")
+        asked.append(objects)
+        return {obj: obj == "warehouse:mine-wh" for obj in objects}
+
+    monkeypatch.setattr(fga_module, "batch_check", _only_mine)
     result = asyncio.run(
         wh_ep.list_estate_bindings(
             settings=settings,
@@ -129,6 +134,7 @@ def test_the_estate_read_is_FILTERED_to_what_the_caller_may_see(monkeypatch: pyt
         )
     )
     assert result.bindings == {"mine": "mine-wh"}, "another tenant's namespace leaked through the filter"
+    assert asked == [["warehouse:mine-wh", "warehouse:theirs-wh"]], "the listing judges its own candidates"
 
 
 def test_an_unreadable_binding_refuses_rather_than_reporting_a_partial_estate(tmp_path: Any) -> None:

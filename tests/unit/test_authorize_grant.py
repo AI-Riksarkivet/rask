@@ -24,6 +24,11 @@ from lance_namespace import PermissionDeniedError
 
 from catalog.api import fga_deps
 from catalog.core.config import Settings
+from tests.unit.named_resolver import NamedResolver, uuid_of
+
+
+#: The object the namespace ``gold`` resolves to, which its grants are held by ([[LH-524]]).
+_GOLD = f"namespace:{uuid_of('namespace', ['gold'])}"
 
 
 def _run(
@@ -50,6 +55,7 @@ def _run(
         fga_deps._authorize_grant(
             request,
             cast(Any, object()),
+            NamedResolver(),
             settings,
             user="dex~alice",
             fga_type=fga_type,
@@ -66,7 +72,7 @@ async def _as_coro(value: Any) -> Any:
 
 def test_gates_on_the_rung_in_the_body_not_a_blanket_bar(monkeypatch: pytest.MonkeyPatch) -> None:
     asked = _run(monkeypatch, {"user": "dex~bob", "relation": "reader"})
-    assert asked == [("dex~alice", "can_grant_reader", "namespace:gold")]
+    assert asked == [("dex~alice", "can_grant_reader", _GOLD)]
 
 
 def test_a_denied_check_raises(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -123,7 +129,9 @@ def test_a_rung_with_no_grant_action_is_refused_before_reaching_openfga(monkeypa
     settings = cast(Settings, SimpleNamespace(delimiter="$"))
     with pytest.raises(PermissionDeniedError):
         asyncio.run(
-            fga_deps._authorize_grant(request, cast(Any, object()), settings, user="dex~alice", fga_type="namespace", segments=["gold"], revoking=False)
+            fga_deps._authorize_grant(
+                request, cast(Any, object()), NamedResolver(), settings, user="dex~alice", fga_type="namespace", segments=["gold"], revoking=False
+            )
         )
     assert asked == [], f"{relation!r} reached OpenFGA as a phantom relation"
 
@@ -140,7 +148,7 @@ def test_revoke_is_gated_on_manage_grants_not_on_the_rung(monkeypatch: pytest.Mo
     owner issued. `can_revoke_grant` is `manage_grants` alone."""
     asked = _run(monkeypatch, {"user": "dex~carol", "relation": "reader"}, revoking=True)
 
-    assert asked == [("dex~alice", "can_revoke_grant", "namespace:gold")]
+    assert asked == [("dex~alice", "can_revoke_grant", _GOLD)]
 
 
 @pytest.mark.parametrize("rung", ["owner"])
@@ -167,7 +175,11 @@ def test_revoke_still_refuses_a_phantom_rung_before_reaching_openfga(monkeypatch
     settings = cast(Settings, SimpleNamespace(delimiter="$"))
 
     with pytest.raises(PermissionDeniedError):
-        asyncio.run(fga_deps._authorize_grant(request, cast(Any, object()), settings, user="dex~alice", fga_type="namespace", segments=["gold"], revoking=True))
+        asyncio.run(
+            fga_deps._authorize_grant(
+                request, cast(Any, object()), NamedResolver(), settings, user="dex~alice", fga_type="namespace", segments=["gold"], revoking=True
+            )
+        )
 
     assert asked == []
 
@@ -192,7 +204,11 @@ def test_a_manage_grants_holder_cannot_grant_themselves_a_rung(monkeypatch: pyte
     settings = cast(Settings, SimpleNamespace(delimiter="$"))
 
     with pytest.raises(PermissionDeniedError, match="may not raise your own access"):
-        asyncio.run(fga_deps._authorize_grant(request, cast(Any, object()), settings, user="dex~judy", fga_type="namespace", segments=["gold"], revoking=False))
+        asyncio.run(
+            fga_deps._authorize_grant(
+                request, cast(Any, object()), NamedResolver(), settings, user="dex~judy", fga_type="namespace", segments=["gold"], revoking=False
+            )
+        )
 
     assert ("owner", "user:dex~judy") in checks, "the guard must ask whether the caller ALREADY holds the rung"
 
@@ -208,7 +224,11 @@ def test_re_granting_yourself_what_you_already_hold_is_allowed(monkeypatch: pyte
     request = cast(fga_deps.Request, SimpleNamespace(json=lambda: _as_coro({"user": "dex~alice", "relation": "owner"})))
     settings = cast(Settings, SimpleNamespace(delimiter="$"))
 
-    asyncio.run(fga_deps._authorize_grant(request, cast(Any, object()), settings, user="dex~alice", fga_type="namespace", segments=["gold"], revoking=False))
+    asyncio.run(
+        fga_deps._authorize_grant(
+            request, cast(Any, object()), NamedResolver(), settings, user="dex~alice", fga_type="namespace", segments=["gold"], revoking=False
+        )
+    )
 
 
 def test_the_userset_indirection_is_closed_too(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -227,7 +247,11 @@ def test_the_userset_indirection_is_closed_too(monkeypatch: pytest.MonkeyPatch) 
     settings = cast(Settings, SimpleNamespace(delimiter="$"))
 
     with pytest.raises(PermissionDeniedError, match="may not raise your own access"):
-        asyncio.run(fga_deps._authorize_grant(request, cast(Any, object()), settings, user="dex~judy", fga_type="namespace", segments=["gold"], revoking=False))
+        asyncio.run(
+            fga_deps._authorize_grant(
+                request, cast(Any, object()), NamedResolver(), settings, user="dex~judy", fga_type="namespace", segments=["gold"], revoking=False
+            )
+        )
 
     assert ("user:dex~judy", "assignee", "role:validators") in checks, "membership of the granted userset was never checked"
 
@@ -245,7 +269,11 @@ def test_a_userset_the_caller_is_outside_is_a_normal_grant(monkeypatch: pytest.M
     request = cast(fga_deps.Request, SimpleNamespace(json=lambda: _as_coro({"user": "role:validators#assignee", "relation": "owner"})))
     settings = cast(Settings, SimpleNamespace(delimiter="$"))
 
-    asyncio.run(fga_deps._authorize_grant(request, cast(Any, object()), settings, user="dex~judy", fga_type="namespace", segments=["gold"], revoking=False))
+    asyncio.run(
+        fga_deps._authorize_grant(
+            request, cast(Any, object()), NamedResolver(), settings, user="dex~judy", fga_type="namespace", segments=["gold"], revoking=False
+        )
+    )
 
 
 def test_the_self_grant_rule_never_runs_on_revoke(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -253,4 +281,4 @@ def test_the_self_grant_rule_never_runs_on_revoke(monkeypatch: pytest.MonkeyPatc
     grant-manager dropping their own access, which is the one self-directed act that is always safe."""
     asked = _run(monkeypatch, {"user": "dex~alice", "relation": "owner"}, revoking=True)
 
-    assert asked == [("dex~alice", "can_revoke_grant", "namespace:gold")], "revoke consulted the self-grant guard"
+    assert asked == [("dex~alice", "can_revoke_grant", _GOLD)], "revoke consulted the self-grant guard"

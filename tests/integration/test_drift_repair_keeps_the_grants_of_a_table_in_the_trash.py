@@ -10,7 +10,9 @@ ONE ESTATE ON MOTO, TWO SERVICES: the real catalog app drops the table through i
 that door writes, and the real maintenance app runs its reconcile tick over the same control root with drift repair
 armed. One in-memory `TupleStore` stands behind both through the real `service_kit.governed.fga` functions. A ghost
 beside the trashed table, a grant on a table nothing names, is the control: the tick must revoke it, so a pass that
-revokes nothing cannot pass.
+revokes nothing cannot pass. A live table and a renamed one are no ghosts: a rename keeps the uuid its grants are held
+by. Every object is a table's uuid (``table:<uuid>``, [[LH-524]]), and the trashed table's is
+the one its record keeps.
 """
 
 from __future__ import annotations
@@ -55,6 +57,12 @@ class _Estate:
     def create_table(self, table: str) -> None:
         answer = self.catalog.post(f"/v1/table/{table}/create", content=encode_arrow_stream(_ROWS), headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE})
         assert answer.status_code == 200, answer.text
+
+    def uuid_of(self, table: str) -> str:
+        """The uuid the catalog minted for ``table``, which DescribeTable answers as ``rask.uuid``."""
+        answer = self.catalog.post(f"/v1/table/{table}/describe", json={})
+        assert answer.status_code == 200, answer.text
+        return str(answer.json()["properties"]["rask.uuid"])
 
     def drop_table(self, table: str) -> None:
         answer = self.catalog.post(f"/v1/table/{table}/drop", json={})
@@ -129,17 +137,21 @@ def estate(moto_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[_Estate]:
 
 def test_a_reconcile_tick_revokes_a_ghost_and_keeps_the_grants_of_a_table_in_the_trash(estate: _Estate) -> None:
     estate.bind("bronze")
-    for table in ("bronze$kept", "bronze$dropped"):
+    for table in ("bronze$kept", "bronze$dropped", "bronze$before"):
         estate.create_table(table)
+    renamed = estate.catalog.post("/v1/table/bronze$before/rename", json={"new_table_name": "after"})
+    assert renamed.status_code == 200, renamed.text
+    dropped = f"table:{estate.uuid_of('bronze$dropped')}"
     estate.drop_table("bronze$dropped")
-    estate.store.tuples.add((user_object(principal_key("alice")), "owner", "table:bronze$gone"))
-    held = estate.store.naming(["table:bronze$dropped"])
+    gone = str(uuid.uuid4())
+    estate.store.tuples.add((user_object(principal_key("alice")), "owner", f"table:{gone}"))
+    held = estate.store.naming([dropped])
     assert held and estate.in_trash("bronze$dropped"), "the drop kept nothing for an undrop, so keeping it would pass vacuously"
 
     answer = estate.maintenance.post("/maintenance-reconcile-cron")
 
     assert answer.status_code == 200, answer.text
     tick = answer.json()
-    assert tick["ghost_tables"] == [{"kind": "table", "id": "bronze$gone", "fga_object": "table:bronze$gone", "tuples": 1}]
-    assert tick["drift_repair"]["revoked"] == [{"fga_object": "table:bronze$gone", "tuples": 1, "justified_by": "ghost_tables"}]
-    assert estate.store.naming(["table:bronze$dropped", "table:bronze$gone"]) == held, "the tick revoked a grant the undrop needs, or kept the ghost's"
+    assert tick["ghost_tables"] == [{"kind": "table", "id": gone, "fga_object": f"table:{gone}", "tuples": 1}]
+    assert tick["drift_repair"]["revoked"] == [{"fga_object": f"table:{gone}", "tuples": 1, "justified_by": "ghost_tables"}]
+    assert estate.store.naming([dropped, f"table:{gone}"]) == held, "the tick revoked a grant the undrop needs, or kept the ghost's"

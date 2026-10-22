@@ -83,8 +83,9 @@ vend, and that write credentials never reach `_refs/` or a final manifest, is LH
   get a fresh scoped token per table and authenticate to the catalog with **workload identity**.
 - **Direct I/O, no proxy bottleneck.** Bytes flow client ↔ storage (not through the catalog), so
   the catalog stays a thin control plane while large **multimodal** reads/writes scale on the engine.
-- **One identity, three axes.** The same `table:<id>` gates *who-may* (OpenFGA), *which token*
-  (the vended STS creds), and *what-changed* (Lance versions + lineage).
+- **One identity, three axes.** A table's uuid, minted by the catalog and kept across a rename (ADR 0173), gates
+  *who-may* (OpenFGA `table:<uuid>`), *which token* (the vended STS creds, scoped to `<root>/<uuid>`), and
+  *what-changed* (Lance versions + lineage keyed by it). Its name is how every door is addressed.
 
 ---
 
@@ -131,9 +132,9 @@ HTTP request
   │
   ├─ 2. Authz  (services/catalog/api/fga_deps.authorize — a router-level dependency)
   │      derive (object, can_* relation) from the route, e.g.
-  │        describe table  -> check can_get_metadata on table:<id>
-  │        insert  table   -> check can_write_data   on table:<id>
-  │        drop    table   -> check can_drop         on table:<id>   (owner tier)
+  │        describe table  -> check can_get_metadata on table:<uuid>
+  │        insert  table   -> check can_write_data   on table:<uuid>
+  │        drop    table   -> check can_drop         on table:<uuid>   (owner tier)
   │        create  table   -> check can_create_table on the PARENT    (create-on-parent)
   │      OpenFGA says yes/no. No → 403. OpenFGA down → 503 (never silent allow).
   │
@@ -323,7 +324,7 @@ Config is env-driven and estate-wide — ONE name per setting, declared once in
 - **Control plane / data plane** — decide+locate (this service) vs move bytes (engines).
 - **Namespace** — a logical container (a path prefix); a medallion *tier* is a namespace.
 - **Table / dataset** — a Lance dataset; physically a `*.lance` **directory** (versioned).
-- **Tuple** — an OpenFGA fact, e.g. `user:alice owner table:db1$users`.
+- **Tuple** — an OpenFGA fact, e.g. `user:dex~alice owner table:<uuid>`: a table's or namespace's grants are held by the uuid the catalog minted for it, never by its name (ADR 0173 §8).
 - **`can_*` relation** — an action permission the app checks (model maps it to a rung).
 - **Concentric** — owner ⊇ writer ⊇ reader.
 - **Cascade** — a grant flows down the `parent` edge (catalog → namespace → table).

@@ -33,7 +33,7 @@ import functools
 import json
 import logging
 import unicodedata
-from collections.abc import Awaitable, Callable, Iterable, Sequence
+from collections.abc import Awaitable, Callable, Iterable
 from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
@@ -260,12 +260,11 @@ def load_model_dsl() -> str:
 
 
 def canonical_object_id(id_segments: list[str] | str, *, delimiter: str) -> str:
-    """Return the delimited OpenFGA object id for a resource.
+    """Return the delimited id of a name: a table's or namespace's catalog id (``a$b``), or the id of an object no uuid
+    keys (a transaction, a classification label).
 
-    The seed (grant) path and the check path MUST agree byte-for-byte on the id
-    they use, otherwise a grant lands on ``table:a$b`` while the check looks up
-    ``table:a/b`` and silently denies. Pass either the already-joined id string
-    (returned unchanged) or the list of path segments (joined with ``delimiter``).
+    A table's or namespace's FGA object is its uuid (:func:`table_object`), never this. Pass either the already-joined
+    id string (returned unchanged) or the list of path segments (joined with ``delimiter``).
     """
     if isinstance(id_segments, str):
         return id_segments
@@ -289,28 +288,24 @@ def parent_namespace_id(table_id: list[str] | str, *, delimiter: str) -> str | N
     return canonical_object_id(segments[:-1], delimiter=delimiter)
 
 
-def parent_object(resource: str, id_segments: list[str] | str, *, delimiter: str, warehouse_object: str) -> str | None:
-    """The FGA parent object a just-created child links to (its ``parent`` tuple), or ``None``.
+def table_object(uuid: str) -> str:
+    """The FGA object a table's grants are held by: ``table:<uuid>``, the uuid the catalog minted for it (ADR 0173 §8).
 
-    The whole concentric cascade (owner/writer/reader inherited via ``parent``) hangs off
-    this edge, so every created object that *has* a parent must write it:
-
-    - Nested child (``a$b``)  -> ``namespace:<a>`` (its parent namespace).
-    - Top-level **namespace** -> ``warehouse_object`` (the default warehouse, a bucket root), so
-      warehouse-level grants cascade into the medallion stages ``bronze``/``silver``/``gold``.
-    - Top-level **table**     -> ``None``: ``table.parent`` only accepts ``namespace`` in the
-      model, so a namespace-less table cannot link to the warehouse (owner grant only).
-
-    ``warehouse_object`` MUST be a ``warehouse:`` id and is ``fga_default_warehouse_object``, never
-    ``fga_root_object``: the model types ``namespace#parent`` as ``[warehouse, namespace]``, and every
-    rung the namespace inherits ``from parent`` has to be defined on the parent's type. Pointing this
-    at the estate root would be refused by the model, and — the part that does not announce itself —
-    would detach the 7 top-level namespaces whose cascade the medallion writes through.
+    No name reaches OpenFGA. A name is the spec's identifier and changes on a rename, while the uuid is the table's for
+    its life and a table created again under a dropped name is given a new one, so nothing granted on the old table
+    reaches it ([[LH-524]]).
     """
-    parent_id = parent_namespace_id(id_segments, delimiter=delimiter)
-    if parent_id is not None:
-        return f"namespace:{parent_id}"
-    return warehouse_object if resource == "namespace" else None
+    return f"table:{uuid}"
+
+
+def namespace_object(uuid: str) -> str:
+    """The FGA object a namespace's grants are held by: ``namespace:<uuid>``, its ``rask.uuid`` (ADR 0173 §8)."""
+    return f"namespace:{uuid}"
+
+
+def object_of(kind: str, uuid: str) -> str:
+    """:func:`namespace_object` for a ``namespace``, else :func:`table_object`: the object a ``kind``'s uuid is held by."""
+    return namespace_object(uuid) if kind == "namespace" else table_object(uuid)
 
 
 # --------------------------------------------------------------------------- #
@@ -1938,17 +1933,12 @@ TupleOrigin = Literal[
     # there was nothing left to destroy. It also bounds the row: a `drift_repair` revoke is only ever
     # justified by a drift finding, so it can never be evidence of an access decision.
     "drift_repair",
-    # REVOKING what a previous incarnation left on an id a create is about to seed ([[LH-480]]). A drop revokes after
-    # its irreversible native mutation, so an OpenFGA outage leaves its tuples behind, and the next object at that id
-    # would inherit them. Its own value because the row means something no other origin does: nobody decided this
-    # access was gone just now, a door found it already orphaned by an earlier drop.
-    "stale_on_create",
     # The grants the catalog writes on the namespace it keeps for provenance (ADR 0158): its parent edge and a `writer`
     # per configured provenance writer. Its own value because no person granted them; the deployment configured them.
     "provenance_namespace",
-    # The grants a rename carries from the retired name to the new one ([[LH-215]]), and its revoke of the retired name.
-    # Its own value because the renamer did not grant what it carries: the grant's author is on the earlier row naming
-    # the old object, and the rename's control event (`table_renamed`, `from` and `to`) joins the two.
+    # The parent edge a rename moves when it carries a table into another namespace ([[LH-524]]). Its own value because
+    # nobody granted it: the table's grants stay on its uuid, and the rename's control event (`table_renamed`, `from`
+    # and `to`) names the move.
     "rename",
     "lifecycle_delete",
     "train",
@@ -2028,38 +2018,26 @@ async def grant_on_create(
     client: OpenFgaClient,
     *,
     user_sub: str,
-    resource: str,
-    obj_id: str,
+    obj: str,
     actor: str,
     origin: TupleOrigin,
     grant_owner: bool = True,
     parent_object: str | None = None,
-    carried: Sequence[ClientTuple] = (),
     retry_attempts: int = DEFAULT_RETRY_ATTEMPTS,
     retry_backoff_seconds: float = DEFAULT_RETRY_BACKOFF_SECONDS,
     retry_max_backoff_seconds: float = DEFAULT_RETRY_MAX_BACKOFF_SECONDS,
 ) -> None:
     """Grant the creator ownership of a just-created object, in a single write.
 
-    Always writes ``user:<principal> owner <resource>:<obj_id>`` (:func:`user_object` of the creator) so the creator can
-    manage what they made. When ``parent_object`` is given it *also* writes
-    ``<resource>:<obj_id> parent <parent_object>`` so the object inherits
-    reader/writer/owner down the hierarchy (per the model). Compute it with
-    :func:`parent_object` — both nested tables AND nested/top-level namespaces get
-    their parent edge, which is what makes a catalog- or layer-level grant cascade
-    (the medallion case). A root-level table (no namespace parent) gets the owner
-    grant only.
-
-    ``obj_id`` must be the canonical, delimited id (see ``canonical_object_id``)
-    so this grant and the later authorization ``check`` agree byte-for-byte.
-
-    ``carried`` are grants on ``obj`` the object held under another name, written in the SAME batch as the
-    owner grant and the edges, so an object a rename moved is seeded with all of them or with none ([[LH-215]]).
+    Always writes ``user:<principal> owner <obj>`` (:func:`user_object` of the creator) so the creator can manage what
+    they made. When ``parent_object`` is given it *also* writes ``<obj> parent <parent_object>`` and its inverse, so the
+    object inherits reader/writer/owner down the hierarchy (per the model). ``obj`` and ``parent_object`` are the
+    objects the grants are held by: a table's or namespace's names its uuid (:func:`table_object`,
+    :func:`namespace_object`), a top-level namespace's parent is its warehouse.
 
     Idempotent (safe to call again on retry of a create): writing existing tuples
     is swallowed. On OpenFGA outage it fails closed with ``ServiceUnavailableError``.
     """
-    obj = f"{resource}:{obj_id}"
     # `grant_owner=False` writes the hierarchy edge ALONE — for a creator who should not own what it
     # made. The estate's case is a machine: a service principal registering its own output would
     # become that table's owner, keeping drop/deregister/restore/manage_grants on every tier of every
@@ -2073,30 +2051,19 @@ async def grant_on_create(
         # drift. `hierarchy_edge_tuples` owns that pairing for every writer — see its docstring for what
         # happens to an object that gets only the forward half.
         tuples.extend(hierarchy_edge_tuples(child_object=obj, parent_object=parent_object))
-    batch = _distinct_tuples([*tuples, *carried])
-    if not batch:
+    if not tuples:
         # Nothing to write: no owner grant asked for and no parent to link. A root-level object created
         # by a machine has no governance to seed, and an empty batch is a wasted round trip.
         return
     await write_tuples(
         client,
-        batch,
+        tuples,
         actor=actor,
         origin=origin,
         retry_attempts=retry_attempts,
         retry_backoff_seconds=retry_backoff_seconds,
         retry_max_backoff_seconds=retry_max_backoff_seconds,
     )
-
-
-def _distinct_tuples(tuples: Iterable[ClientTuple]) -> list[ClientTuple]:
-    """``tuples`` with each ``(user, relation, object)`` once, first kept, so a carried grant equal to the owner grant
-    cannot fail the batch: measured on OpenFGA v1.18.3, a write naming one tuple twice answers 400
-    ``cannot_allow_duplicate_tuples_in_one_request`` even with ``on_duplicate: ignore``."""
-    seen: dict[tuple[str | None, str | None, str | None], ClientTuple] = {}
-    for t in tuples:
-        seen.setdefault((t.user, t.relation, t.object), t)
-    return list(seen.values())
 
 
 def _delete_reported_absent(exc: ApiException) -> bool:

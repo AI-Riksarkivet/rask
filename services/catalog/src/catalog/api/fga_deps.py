@@ -6,8 +6,7 @@ authenticated caller against OpenFGA. A no-op when FGA is disabled.
 
 The op -> ``can_*`` mapping below is the ONLY policy logic in the app; the privilege math
 (which rung each ``can_*`` reduces to, and how owner/writer/reader cascade through
-``parent``) lives in the model — so it is testable in ``model.fga.yaml`` and precise for
-``list_objects``. Mapping (behaviour-identical to the previous reader/writer/owner code):
+``parent``) lives in the model — so it is testable in ``model.fga.yaml``. Mapping:
 
   read ops   -> can_get_metadata / can_read_data        (reader rung)
   mutations  -> can_write_data / can_update_properties   (writer rung)
@@ -20,10 +19,15 @@ top-level child gates on the DEFAULT WAREHOUSE only when ``fga_lock_root_create`
 else it is open self-serve. Batch routes read the (Starlette-cached) body and check each
 named table. Fail-closed twice over: an unwired client raises 503 here, and
 ``fga.check``/``fga.batch_check`` raise 503 on an OpenFGA outage rather than allowing.
+
+A table or namespace is asked about as the object its grants are held by, ``table:<uuid>`` or ``namespace:<uuid>``
+(ADR 0173 §8, [[LH-524]]): every door is addressed by name, and the name is resolved once per request
+(``catalog.api.dependencies.Resolver``), so the door acts on the object it authorized.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from functools import lru_cache
@@ -43,7 +47,6 @@ from lance_namespace import (
     PermissionDeniedError,
     ServiceUnavailableError,
     TableAlreadyExistsError,
-    TableExistsRequest,
     TableNotFoundError,
     UnauthenticatedError,
     UnsupportedOperationError,
@@ -51,7 +54,7 @@ from lance_namespace import (
 from openfga_sdk import OpenFgaClient
 from pydantic import BaseModel, ConfigDict
 
-from catalog.api.dependencies import FgaClientDep, SettingsDep
+from catalog.api.dependencies import FgaClientDep, Resolver, ResolverDep, SettingsDep
 from catalog.api.security import Caller, CurrentToken
 from catalog.core import run_context, tier_policy
 from catalog.core.config import Settings
@@ -139,9 +142,9 @@ _CREATE_ON_PARENT_SUFFIXES: dict[str, frozenset[str]] = {
 
 # Full route suffixes that are lifecycle/destructive/ref-plane on the object itself (owner rung).
 # Matched on the FULL suffix so ``index/{index_name}/drop`` does not inherit ``drop``'s owner rung.
-# ``rename`` is owner-tier: it DESTROYS the source id (revokes its tuples) and re-seeds the caller as owner
-# of the destination, so a writer-tier gate would let a non-owner rename another user's table and seize sole
-# ownership (the same escalation closed for Overwrite via require_can_drop_table). Owner-gate the source.
+# ``rename`` is owner-tier: it RETIRES the name every reader and pipeline addresses the table by, and moves the
+# table (and, into another namespace, where it inherits from), so it is the owner's act on the source. Its grants
+# stay on its uuid (ADR 0173 §8).
 # ``restore`` REWINDS the table to an older version (destructive) and ``branches/create`` FORKS history;
 # both are privileged and stay at the owner rung. ``tags/create`` / ``tags/update`` re-point the
 # ref-plane and are privileged too — above the writer rung, since a plain data writer appends and
@@ -378,8 +381,59 @@ def _suffix(path: str, resource: str, object_id: str) -> str:
 
 
 def _object(fga_type: str, id_segments: list[str] | str, delimiter: str) -> str:
-    """``<type>:<canonical-id>`` for an object (e.g. ``table:db1$users``)."""
+    """``<type>:<canonical-id>`` for an object addressed by its id.
+
+    The FGA object of a type no name is minted a uuid for (a transaction's opaque id, a classification label, a
+    materialized view), and the NAME of a table or namespace in an audit record or a refusal. A table's or namespace's
+    grants are held by its uuid (:func:`_named`), never by this.
+    """
     return f"{fga_type}:{fga.canonical_object_id(id_segments, delimiter=delimiter)}"
+
+
+#: The types whose objects are keyed by the uuid the catalog mints (ADR 0173 §8, [[LH-524]]).
+_UUID_KEYED: Final = frozenset({"table", "namespace"})
+
+
+#: The doors that act on an object the trash may hold under its name, which are addressed by that name (ADR 0173 §9).
+_TRASH_DOORS: Final = frozenset({"undrop", "tasks"})
+
+
+def _named(fga_type: str, segments: Sequence[str], *, in_trash: bool = False) -> tier_policy.Named | None:
+    """``fga_type`` ``segments`` as a name its grants' object is resolved from, or ``None`` for a type no uuid keys."""
+    if fga_type == "table":
+        return tier_policy.Named(kind="table", segments=tuple(segments), in_trash=in_trash)
+    if fga_type == "namespace":
+        return tier_policy.Named(kind="namespace", segments=tuple(segments), in_trash=in_trash)
+    return None
+
+
+def _rung(relation: str, fga_type: str, segments: Sequence[str], delimiter: str, *, suffix: str = "") -> tier_policy.Rung:
+    """``relation`` on ``fga_type`` ``segments``: on the name a table or namespace is resolved from, else on the id's object.
+
+    A trash door's name also resolves to the object the trash holds under it (:data:`_TRASH_DOORS`).
+    """
+    named = _named(fga_type, segments, in_trash=suffix in _TRASH_DOORS)
+    return tier_policy.Rung(relation=relation, on=named if named is not None else _object(fga_type, list(segments), delimiter))
+
+
+def _label(rung: tier_policy.Rung, delimiter: str) -> str:
+    """The object ``rung`` is asked on, by name: what a refusal and the audit of an absent object say.
+
+    One spelling for a table that is there and one that is not, so a refusal does not tell a caller which names exist.
+    """
+    if isinstance(rung.on, str):
+        return rung.on
+    return _object(rung.on.kind, list(rung.on.segments), delimiter)
+
+
+async def _resolve(resolver: Resolver, rung: tier_policy.Rung) -> str | None:
+    """The FGA object ``rung`` is asked on: what its name resolves to, ``None`` when nothing has that name."""
+    if isinstance(rung.on, str):
+        return rung.on
+    obj = await resolver.object(rung.on.kind, list(rung.on.segments))
+    if obj is None and rung.on.in_trash:
+        return await resolver.trashed_object(rung.on.kind, list(rung.on.segments))
+    return obj
 
 
 def _declared_relation(declared: Mapping[str, str], suffix: str) -> str | None:
@@ -445,14 +499,14 @@ def _action_relation(fga_type: str, suffix: str) -> str:
     raise _undeclared_door(fga_type, suffix)
 
 
-def _create_parent_check(resource: str, id_segments: list[str] | str, settings: Settings) -> tuple[str, str] | None:
-    """``(parent_object, can_create_* relation)`` for a create-on-parent op, or ``None`` to allow.
+def _create_parent_rung(resource: str, id_segments: list[str], settings: Settings) -> tier_policy.Rung | None:
+    """The ``can_create_*`` rung a create-on-parent op asks on the child's parent, or ``None`` to allow.
 
-    Nested child -> its parent ``namespace:<parent>``. Top-level child -> the default WAREHOUSE
-    object only when ``fga_lock_root_create`` is set; otherwise ``None`` (open self-serve
-    top-level create — preserves the default behaviour). The relation is named after the child
-    being created (``can_create_namespace`` / ``can_create_materialized_view`` / ``can_create_table``),
-    all of which reduce to the writer rung on the parent namespace.
+    Nested child -> its parent namespace, by name (its uuid is what the grants are held by). Top-level child -> the
+    default WAREHOUSE object only when ``fga_lock_root_create`` is set; otherwise ``None`` (open self-serve top-level
+    create — preserves the default behaviour). The relation is named after the child being created
+    (``can_create_namespace`` / ``can_create_materialized_view`` / ``can_create_table``), all of which reduce to the
+    writer rung on the parent namespace.
 
     ``fga_default_warehouse_object``, never ``fga_root_object`` ([[LH-055]]): the three relations above
     are defined on ``warehouse`` and on ``namespace``, and on no other type. This lock defaults ON for a
@@ -464,16 +518,19 @@ def _create_parent_check(resource: str, id_segments: list[str] | str, settings: 
         "namespace": "can_create_namespace",
         "materialized_view": "can_create_materialized_view",
     }.get(resource, "can_create_table")
-    parent_id = fga.parent_namespace_id(id_segments, delimiter=settings.delimiter)
-    if parent_id is not None:
-        return f"namespace:{parent_id}", relation
+    if len(id_segments) > 1:
+        return tier_policy.Rung(relation=relation, on=tier_policy.Named(kind="namespace", segments=tuple(id_segments[:-1])))
     if settings.fga_lock_root_create:
-        return settings.fga_default_warehouse_object, relation
+        return tier_policy.Rung(relation=relation, on=settings.fga_default_warehouse_object)
     return None
 
 
-async def _require(client: OpenFgaClient, *, user: str, relation: str, obj: str) -> None:
-    """Check one ``relation`` on ``obj``, audit the decision, and raise 403 on denial."""
+async def _require(client: OpenFgaClient, *, user: str, relation: str, obj: str, label: str | None = None) -> None:
+    """Check one ``relation`` on ``obj``, audit the decision, and raise 403 on denial.
+
+    ``label`` is what the refusal names the object as, its name for a table or namespace, so a refusal reads the same
+    whether the name holds an object or not (:func:`_require_rung`).
+    """
     try:
         allowed = await fga.check(client, user=user, relation=relation, obj=obj)
     except ServiceUnavailableError:  # authz layer down during an access attempt — audit, then fail closed
@@ -482,10 +539,31 @@ async def _require(client: OpenFgaClient, *, user: str, relation: str, obj: str)
     audit(relation, ALLOW if allowed else DENY, subject=user, resource=obj)  # #41 audit every authz decision
     if not allowed:
         log.info("access_denied", extra={"sub": user, "relation": relation, "object": obj})
-        raise PermissionDeniedError(f"{relation} required on {obj}")
+        raise PermissionDeniedError(f"{relation} required on {label or obj}")
 
 
-async def _require_any(client: OpenFgaClient, *, user: str, doors: list[tuple[str, str]]) -> None:
+def _refuse_absent(*, user: str, relation: str, label: str) -> PermissionDeniedError:
+    """The refusal of ``relation`` on a name that holds no object, audited by the name: no tuple can grant it."""
+    audit(relation, DENY, subject=user, resource=label, reason="no_such_object")
+    log.info("access_denied", extra={"sub": user, "relation": relation, "object": label})
+    return PermissionDeniedError(f"{relation} required on {label}")
+
+
+async def _require_rung(client: OpenFgaClient, resolver: Resolver, *, user: str, rung: tier_policy.Rung, delimiter: str) -> str:
+    """Ask ``rung`` on the object its name resolves to, refuse it as :func:`_require` does, and return that object.
+
+    A name that holds no object is refused alike: no tuple can name it, and the refusal names the name, as it does for
+    an object that is there.
+    """
+    label = _label(rung, delimiter)
+    obj = await _resolve(resolver, rung)
+    if obj is None:
+        raise _refuse_absent(user=user, relation=rung.relation, label=label)
+    await _require(client, user=user, relation=rung.relation, obj=obj, label=label)
+    return obj
+
+
+async def _require_any(client: OpenFgaClient, *, user: str, doors: list[tuple[str, str]], label: str | None = None) -> None:
     """Allow if ANY ``(relation, object)`` door checks out; audit the decision, and raise 403 otherwise.
 
     :func:`_require` expresses a single rung; a two-door gate (the project's own admin OR the estate admin)
@@ -507,7 +585,7 @@ async def _require_any(client: OpenFgaClient, *, user: str, doors: list[tuple[st
             return
     for relation, obj in doors:  # reaching here means every door was probed and every one denied
         audit(relation, DENY, subject=user, resource=obj)
-    wanted = " or ".join(f"{relation} on {obj}" for relation, obj in doors)
+    wanted = " or ".join(f"{relation} on {label or obj}" for relation, obj in doors)
     log.info("access_denied", extra={"sub": user, "relation": "any_of", "object": wanted})
     raise PermissionDeniedError(f"one of [{wanted}] required")
 
@@ -516,7 +594,7 @@ async def _require_any(client: OpenFgaClient, *, user: str, doors: list[tuple[st
 _TRANSACTION_SUFFIXES: Final = frozenset({"describe", "alter"})
 
 
-async def _authorize_transaction(client: OpenFgaClient, settings: Settings, segments: list[str], suffix: str, *, user: str) -> None:
+async def _authorize_transaction(client: OpenFgaClient, resolver: Resolver, settings: Settings, segments: list[str], suffix: str, *, user: str) -> None:
     """Authorize a transaction op — PARENT-SCOPED to the enclosing namespace when the id carries one.
 
     A transaction is a coordination artifact over its namespace's tables; nothing mints a per-transaction
@@ -547,14 +625,13 @@ async def _authorize_transaction(client: OpenFgaClient, settings: Settings, segm
     the resolver.
     """
     is_read = suffix == "describe"
-    parent_ns = fga.parent_namespace_id(segments, delimiter=settings.delimiter)
-    if parent_ns is not None:
-        relation = "can_get_metadata" if is_read else "can_update_properties"
-        obj = f"namespace:{parent_ns}"
+    if len(segments) > 1:
+        rung = tier_policy.Rung(
+            relation="can_get_metadata" if is_read else "can_update_properties", on=tier_policy.Named(kind="namespace", segments=tuple(segments[:-1]))
+        )
     else:
-        relation = "can_describe" if is_read else "can_set_status"
-        obj = _object("transaction", segments, settings.delimiter)
-    await _require(client, user=user, relation=relation, obj=obj)
+        rung = tier_policy.Rung(relation="can_describe" if is_read else "can_set_status", on=_object("transaction", segments, settings.delimiter))
+    await _require_rung(client, resolver, user=user, rung=rung, delimiter=settings.delimiter)
 
 
 @lru_cache
@@ -573,6 +650,7 @@ def _grant_actions(fga_type: str) -> frozenset[str]:
 async def _authorize_grant(
     request: Request,
     client: OpenFgaClient,
+    resolver: Resolver,
     settings: Settings,
     *,
     user: str,
@@ -625,19 +703,14 @@ async def _authorize_grant(
     relation = body.get("relation")
     if not isinstance(relation, str) or not relation:
         raise PermissionDeniedError("malformed access request body: 'relation' must be a string")
-    obj = _object(fga_type, segments, settings.delimiter)
-    if revoking:
-        if f"can_grant_{relation}" not in _grant_actions(fga_type):
-            # Shape-checked against the GRANT actions on purpose: the set of rungs that may be taken
-            # away is the set that may be handed out. Only the AUTHORITY differs.
-            raise PermissionDeniedError(f"{relation!r} is not a grantable rung on {fga_type}")
-        await _require(client, user=user, relation="can_revoke_grant", obj=obj)
-        return
-    action = f"can_grant_{relation}"
-    if action not in _grant_actions(fga_type):
+    action = "can_revoke_grant" if revoking else f"can_grant_{relation}"
+    # Shape-checked against the GRANT actions for a revoke too: the set of rungs that may be taken away is the set
+    # that may be handed out. Only the AUTHORITY differs.
+    if f"can_grant_{relation}" not in _grant_actions(fga_type):
         raise PermissionDeniedError(f"{relation!r} is not a grantable rung on {fga_type}")
-    await _require(client, user=user, relation=action, obj=obj)
-    await _refuse_self_elevation(client, user=user, grantee=body.get("user"), relation=relation, obj=obj)
+    obj = await _require_rung(client, resolver, user=user, rung=_rung(action, fga_type, segments, settings.delimiter), delimiter=settings.delimiter)
+    if not revoking:
+        await _refuse_self_elevation(client, user=user, grantee=body.get("user"), relation=relation, obj=obj)
 
 
 async def _refuse_self_elevation(client: OpenFgaClient, *, user: str, grantee: object, relation: str, obj: str) -> None:
@@ -716,13 +789,19 @@ def require_fga(settings: Settings, client: OpenFgaClient | None, *, feature: st
     return require_wired(client)
 
 
-async def _authorize_batch(request: Request, client: OpenFgaClient, settings: Settings, *, user: str) -> None:
+def _string_list(value: object) -> list[str] | None:
+    """``value`` when it is an identifier's segments (a list of strings), else ``None``."""
+    return [item for item in value if isinstance(item, str)] if isinstance(value, list) and all(isinstance(item, str) for item in value) else None
+
+
+async def _authorize_batch(request: Request, client: OpenFgaClient, resolver: Resolver, settings: Settings, *, user: str) -> None:
     """Authorize body-keyed batch routes (no ``{id}`` path param); tables named in the body.
 
     version/commit/delete on an existing table -> ``can_write_data`` on the table; a
     ``declare_table`` operation is create-on-parent -> ``can_create_table`` on the parent
-    namespace. Two batch_checks (different relations/types). ``request.json()`` is cached by
-    Starlette, so the downstream endpoint re-parses the same body.
+    namespace. One batch_check per relation, on the objects the body's names resolve to; a name
+    that holds no object is refused with them. ``request.json()`` is cached by Starlette, so the
+    downstream endpoint re-parses the same body.
 
     Fails CLOSED on malformed input: a non-dict body or a non-list ``entries``/``operations``
     (client-controlled JSON, validated here BEFORE Pydantic since authorize runs first) is a
@@ -738,14 +817,12 @@ async def _authorize_batch(request: Request, client: OpenFgaClient, settings: Se
     if operations is not None and not isinstance(operations, list):
         raise PermissionDeniedError("malformed batch request body: 'operations' must be a list")
     delimiter = settings.delimiter
-    table_objs: set[str] = set()
-    parent_objs: set[str] = set()
-    owner_checks: list[tuple[str, str]] = []  # (object, owner-tier can_* relation)
+    rungs: set[tier_policy.Rung] = set()
 
     for entry in entries or []:
-        segments = entry.get("id") if isinstance(entry, dict) else None
-        if isinstance(segments, list):
-            table_objs.add(_object("table", segments, delimiter))
+        segments = _string_list(entry.get("id")) if isinstance(entry, dict) else None
+        if segments is not None:
+            rungs.add(_rung("can_write_data", "table", segments, delimiter))
 
     for op in operations or []:
         if not isinstance(op, dict):
@@ -753,42 +830,30 @@ async def _authorize_batch(request: Request, client: OpenFgaClient, settings: Se
         for kind, sub in op.items():
             if not isinstance(sub, dict):
                 continue
-            segments = sub.get("id")
-            if not isinstance(segments, list):
+            segments = _string_list(sub.get("id"))
+            if segments is None:
                 continue
             if kind == "declare_table":  # creating a table -> can_create_table on its parent
-                check = _create_parent_check("table", segments, settings)
-                if check is not None:
-                    parent_objs.add(check[0])
+                if (parent := _create_parent_rung("table", segments, settings)) is not None:
+                    rungs.add(parent)
             elif kind in _BATCH_OWNER_OPS:  # destructive -> owner tier (no writer back-door)
-                owner_checks.append((_object("table", segments, delimiter), _BATCH_OWNER_OPS[kind]))
+                rungs.add(_rung(_BATCH_OWNER_OPS[kind], "table", segments, delimiter))
             else:  # version/commit/append on an existing table -> can_write_data on it
-                table_objs.add(_object("table", segments, delimiter))
+                rungs.add(_rung("can_write_data", "table", segments, delimiter))
 
     denied: list[str] = []
-    if table_objs:
-        objs = sorted(table_objs)
-        allowed = await fga.batch_check(client, user=user, relation="can_write_data", objects=objs)
-        for obj in objs:  # #41 audit every batch authz decision (allow AND deny), like the single-route gate
-            audit("can_write_data", ALLOW if allowed.get(obj) else DENY, subject=user, resource=obj)
-        denied += [o for o in objs if not allowed.get(o)]
-    if parent_objs:
-        objs = sorted(parent_objs)
-        allowed = await fga.batch_check(client, user=user, relation="can_create_table", objects=objs)
-        for obj in objs:
-            audit("can_create_table", ALLOW if allowed.get(obj) else DENY, subject=user, resource=obj)
-        denied += [o for o in objs if not allowed.get(o)]
-    # ONE round trip per DISTINCT owner relation, not per object (catalog-api-12). Grouping keeps what
-    # the per-object loop was written for — the relation stays exact per operation — while `operations`
-    # is client-supplied and unbounded, so the loop cost N sequential authorization round trips before
-    # any work was authorized. `_BATCH_OWNER_OPS` has one entry today; the loop was O(objects), not
-    # O(relations), so "rare" described the mapping table rather than the request.
-    for relation in sorted({r for _, r in owner_checks}):
-        objs = sorted({obj for obj, r in owner_checks if r == relation})
-        allowed = await fga.batch_check(client, user=user, relation=relation, objects=objs)
-        for obj in objs:
-            audit(relation, ALLOW if allowed.get(obj) else DENY, subject=user, resource=obj)
-        denied += [o for o in objs if not allowed.get(o)]
+    # ONE round trip per DISTINCT relation, not per object (catalog-api-12): `operations` is client-supplied and
+    # unbounded, so a per-object loop cost N sequential authorization round trips before any work was authorized.
+    for relation in sorted({rung.relation for rung in rungs}):
+        asked = sorted((rung for rung in rungs if rung.relation == relation), key=lambda rung: _label(rung, delimiter))
+        objects = {_label(rung, delimiter): await _resolve(resolver, rung) for rung in asked}
+        present = sorted({obj for obj in objects.values() if obj is not None})
+        allowed = await fga.batch_check(client, user=user, relation=relation, objects=present) if present else {}
+        for label, obj in objects.items():  # #41 audit every batch authz decision (allow AND deny), like the single-route gate
+            granted = obj is not None and allowed.get(obj, False)
+            audit(relation, ALLOW if granted else DENY, subject=user, resource=obj or label)
+            if not granted:
+                denied.append(label)
     if denied:
         log.info("access_denied", extra={"sub": user, "objects": sorted(denied)})
         raise PermissionDeniedError(f"permission denied on {', '.join(sorted(denied))}")
@@ -840,20 +905,23 @@ async def _write_door(request: Request, settings: Settings) -> tier_policy.Write
     segments = parse_identifier(object_id, settings.delimiter)
     if not segments or suffix in _GRANT_SUFFIXES:
         return None
-    obj = _object(_FGA_TYPE[resource], segments, settings.delimiter)
+    fga_type = _FGA_TYPE[resource]
+    obj = _object(fga_type, segments, settings.delimiter)
     run = run_context.from_headers(request.headers) if suffix in tier_policy.STAMPING_DOORS else None
-    input_rungs = input_read_rungs(run, settings.delimiter)
+    input_rungs = input_read_rungs(run)
     if suffix in _CREATE_ON_PARENT_SUFFIXES.get(resource, frozenset()):
-        check = _create_parent_check(resource, segments, settings)
-        rung = tier_policy.Rung(relation=check[1], obj=check[0]) if check is not None else None
-        return tier_policy.Write(op=suffix, obj=obj, rung=rung, table=tuple(segments), run=run, input_rungs=input_rungs)
+        return tier_policy.Write(
+            op=suffix, obj=obj, rung=_create_parent_rung(resource, segments, settings), table=tuple(segments), run=run, input_rungs=input_rungs
+        )
     if suffix == "credentials":
         # A vend is a read at its default tier and a WRITE at a writing one: the credential is how a
         # direct-to-storage writer writes, so it is judged on the rung its tier opens.
         writing = VEND_TIER_RUNGS.get(request.query_params.get("tier", "read"))
-        return tier_policy.Write(op=suffix, obj=obj, rung=tier_policy.Rung(relation=writing, obj=obj), table=tuple(segments)) if writing else None
+        if writing is None:
+            return None
+        return tier_policy.Write(op=suffix, obj=obj, rung=_rung(writing, fga_type, segments, settings.delimiter), table=tuple(segments))
     try:
-        relation = _action_relation(_FGA_TYPE[resource], suffix)
+        relation = _action_relation(fga_type, suffix)
     except InternalError:
         return None
     if relation in _READ_RELATIONS:
@@ -861,17 +929,25 @@ async def _write_door(request: Request, settings: Settings) -> tier_policy.Write
     table = await _rename_destination(request, segments) if suffix == "rename" else tuple(segments)
     moved_from = tuple(segments) if suffix == "rename" else ()
     return tier_policy.Write(
-        op=suffix, obj=obj, rung=tier_policy.Rung(relation=relation, obj=obj), table=table, run=run, input_rungs=input_rungs, moved_from=moved_from
+        op=suffix,
+        obj=obj,
+        rung=_rung(relation, fga_type, segments, settings.delimiter, suffix=suffix),
+        table=table,
+        run=run,
+        input_rungs=input_rungs,
+        moved_from=moved_from,
     )
 
 
-def input_read_rungs(run: run_context.RunContext | None, delimiter: str) -> tuple[tier_policy.Rung, ...]:
-    """The ``can_read_data`` rung on each input ``run`` names."""
-    return tuple(tier_policy.Rung(relation="can_read_data", obj=_object("table", list(entry.table), delimiter)) for entry in (run.inputs if run else ()))
+def input_read_rungs(run: run_context.RunContext | None) -> tuple[tier_policy.Rung, ...]:
+    """The ``can_read_data`` rung on each input ``run`` names, by the input's name."""
+    return tuple(
+        tier_policy.Rung(relation="can_read_data", on=tier_policy.Named(kind="table", segments=tuple(entry.table))) for entry in (run.inputs if run else ())
+    )
 
 
-def _rung_check(settings: Settings, token: Caller | None, injected: OpenFgaClient | None) -> tier_policy.RungCheck | None:
-    """The tier judge's rung check, asked through :func:`_require`; ``None`` with FGA off, when every rung allows.
+def _rung_check(settings: Settings, token: Caller | None, injected: OpenFgaClient | None, resolver: Resolver) -> tier_policy.RungCheck | None:
+    """The tier judge's rung check, asked through :func:`_require_rung`; ``None`` with FGA off, when every rung allows.
 
     Raises:
         ServiceUnavailableError: FGA is on and unwired.
@@ -885,14 +961,16 @@ def _rung_check(settings: Settings, token: Caller | None, injected: OpenFgaClien
     user = token.subject
 
     async def check(rung: tier_policy.Rung) -> None:
-        await _require(client, user=user, relation=rung.relation, obj=rung.obj)
+        await _require_rung(client, resolver, user=user, rung=rung, delimiter=settings.delimiter)
 
     return check
 
 
-async def _judge(request: Request, settings: Settings, token: Caller | None, injected: OpenFgaClient | None, write: tier_policy.Write) -> None:
-    """Hand ``write`` to the tier judge, with the rung asked through :func:`_require` when FGA is on."""
-    check = _rung_check(settings, token, injected)
+async def _judge(
+    request: Request, settings: Settings, token: Caller | None, injected: OpenFgaClient | None, resolver: Resolver, write: tier_policy.Write
+) -> None:
+    """Hand ``write`` to the tier judge, with the rung asked through :func:`_require_rung` when FGA is on."""
+    check = _rung_check(settings, token, injected, resolver)
     # Imported HERE rather than at module scope: `dependencies` imports this module for its guards.
     from catalog.api.dependencies import namespace_for_top_ns
 
@@ -906,6 +984,7 @@ async def judge_staged_run(
     settings: Settings,
     token: Caller | None,
     injected: OpenFgaClient | None,
+    resolver: Resolver,
     *,
     ns: LanceNamespace,
     segments: Sequence[str],
@@ -915,24 +994,26 @@ async def judge_staged_run(
     """Judge the run a stock client's staged commit to table ``segments`` names (ADR 0157).
 
     Only a commit that ``adds_data`` must name a run on a derived tier, whose tier is then read through ``ns``, the
-    connection the door resolved for the table; any named input is checked either way.
+    connection the door resolved for the table; any named input is checked either way, on the object its name
+    resolves to through ``resolver``.
 
     Raises:
         InvalidInputError: The table is silver or gold and the commit names no run or no input.
         PermissionDeniedError: The caller lacks ``can_read_data`` on a named input.
     """
-    check = _rung_check(settings, token, injected)
+    check = _rung_check(settings, token, injected, resolver)
     tier = await tier_policy.tier_of(ns, segments[:-1]) if adds_data and len(segments) > 1 else None
     names = f"the staged manifest's transaction properties {run_context.RUN_ID_PROPERTY} and {run_context.INPUTS_PROPERTY}"
-    await tier_policy.judge_run(tier, run, input_read_rungs(run, settings.delimiter), check=check, names=names)
+    await tier_policy.judge_run(tier, run, input_read_rungs(run), check=check, names=names)
 
 
 async def spec_vend_tier(
-    settings: Settings, token: Caller | None, injected: OpenFgaClient | None, ns: LanceNamespace, segments: Sequence[str], *, door: str
+    settings: Settings, token: Caller | None, injected: OpenFgaClient | None, ns: LanceNamespace, segments: Sequence[str], *, table_uuid: str, door: str
 ) -> Literal["read", "write"] | None:
     """The highest tier a spec door (``describe``, ``declare``) vends the caller on table ``segments`` (ADR 0156 C3).
 
-    ``can_write_data`` opens the write tier, and that is a write, so the tier judge decides it and audits the
+    ``table_uuid`` is the uuid the door resolved the name to (or minted, for a declare), whose object the grants are
+    held by. ``can_write_data`` opens the write tier, and that is a write, so the tier judge decides it and audits the
     tier it was taken under, as it does for the management vend door; ``ns`` is the connection the door already
     resolved for the table, which is the one its namespace path's tier is read through. ``can_read_data`` opens
     the read tier. Neither, no credential: the door still answers, because describing a table is a metadata
@@ -947,7 +1028,7 @@ async def spec_vend_tier(
         ServiceUnavailableError: FGA is on and unwired, or OpenFGA failed: fail closed, as every gate here does.
         UnauthenticatedError: FGA is on and nobody is signed in.
     """
-    obj = _object("table", list(segments), settings.delimiter)
+    obj = fga.table_object(table_uuid)
     writing = VEND_TIER_RUNGS["write"]
     if settings.fga_enabled:
         client = require_wired(injected)
@@ -963,16 +1044,21 @@ async def spec_vend_tier(
     async def namespace(_top_ns: str) -> LanceNamespace:
         return ns
 
-    write = tier_policy.Write(op=door, obj=obj, rung=tier_policy.Rung(relation=writing, obj=obj), table=tuple(segments))
+    write = tier_policy.Write(op=door, obj=_object("table", list(segments), settings.delimiter), rung=None, table=tuple(segments))
     await tier_policy.judge(write, caller=token.subject if token is not None else None, check=None, namespace=namespace)
     return "write"
 
 
-async def authorize(request: Request, settings: SettingsDep, token: CurrentToken, injected: FgaClientDep) -> None:
+async def authorize(request: Request, settings: SettingsDep, token: CurrentToken, injected: FgaClientDep, resolver: ResolverDep) -> None:
     """Enforce the caller's permission for this route: the tier judge decides every write door, with FGA on
-    or off, and OpenFGA every other door (a no-op when FGA is off)."""
+    or off, and OpenFGA every other door (a no-op when FGA is off).
+
+    A table or namespace is asked about as the object its name resolves to, ``table:<uuid>`` or ``namespace:<uuid>``
+    (ADR 0173 §8, [[LH-524]]), through ``resolver``, which the door then reads the same resolution from. ``resolver``
+    is the last parameter so an unauthenticated caller is refused before any name is resolved.
+    """
     if (write := await _write_door(request, settings)) is not None:
-        await _judge(request, settings, token, injected, write)
+        await _judge(request, settings, token, injected, resolver, write)
         return
     if not settings.fga_enabled:
         return
@@ -991,7 +1077,7 @@ async def authorize(request: Request, settings: SettingsDep, token: CurrentToken
     # Body-keyed batch routes have no {id} path param — authorize by reading the body.
     if object_id is None:
         if path.rstrip("/") in _BATCH_PATHS:
-            await _authorize_batch(request, client, settings, user=token.subject)
+            await _authorize_batch(request, client, resolver, settings, user=token.subject)
         # Other id-less routes (collection lists, health) need only authentication.
         return
 
@@ -1006,9 +1092,8 @@ async def authorize(request: Request, settings: SettingsDep, token: CurrentToken
 
     # Create-on-parent: child does not exist yet → authorize the parent.
     if suffix in _CREATE_ON_PARENT_SUFFIXES.get(resource, frozenset()):
-        check = _create_parent_check(resource, segments, settings)
-        if check is not None:  # None => open top-level create (authn already enforced)
-            await _require(client, user=token.subject, relation=check[1], obj=check[0])
+        if (parent := _create_parent_rung(resource, segments, settings)) is not None:  # None => open top-level create (authn already enforced)
+            await _require_rung(client, resolver, user=token.subject, rung=parent, delimiter=settings.delimiter)
         return
 
     # Transactions authorize parent-scoped (against their enclosing namespace), not on a per-txn object.
@@ -1016,7 +1101,7 @@ async def authorize(request: Request, settings: SettingsDep, token: CurrentToken
         if suffix not in _TRANSACTION_SUFFIXES:
             _record_undeclared(path, "transaction", suffix, user=token.subject, obj=_object("transaction", segments, settings.delimiter))
             raise _undeclared_door("transaction", suffix)
-        await _authorize_transaction(client, settings, segments, suffix, user=token.subject)
+        await _authorize_transaction(client, resolver, settings, segments, suffix, user=token.subject)
         return
 
     # THE ROOT NAMES NO OBJECT, and composing one is a 500 rather than a decision. lance-ns encodes
@@ -1029,8 +1114,8 @@ async def authorize(request: Request, settings: SettingsDep, token: CurrentToken
     # STOCK `lance_namespace` client at a governed catalog: `ServiceUnavailableError: Internal Server
     # Error`.
     #
-    # ONLY THE PER-ITEM READS RETURN. `list` and `table/list` filter every NAME they return through
-    # `fga.list_objects` on `can_get_metadata` — the route opens and the ITEMS are checked, because a
+    # ONLY THE PER-ITEM READS RETURN. `list` and `table/list` authorize every item they return on the object it
+    # resolves to — the route opens and the ITEMS are checked, because a
     # 403 there breaks the breadcrumb a grantee needs to reach their own table. Every other action on the
     # root is refused: exempting a cascade drop of the root lets any signed-in caller remove every
     # default-root table. Authentication was enforced above.
@@ -1047,11 +1132,12 @@ async def authorize(request: Request, settings: SettingsDep, token: CurrentToken
         raise PermissionDeniedError(f"the root namespace names no object, so {suffix!r} cannot be authorized on it")
 
     fga_type = _FGA_TYPE[resource]
-    obj = _object(fga_type, segments, settings.delimiter)
     # Grant/revoke authorize on the RUNG BEING HANDED OUT, which lives in the body — so, like the
     # batch routes above, this one cannot be answered from the path alone.
     if suffix in _GRANT_SUFFIXES:
-        await _authorize_grant(request, client, settings, user=token.subject, fga_type=fga_type, segments=segments, revoking=suffix == "access/revoke")
+        await _authorize_grant(
+            request, client, resolver, settings, user=token.subject, fga_type=fga_type, segments=segments, revoking=suffix == "access/revoke"
+        )
         return
     # A CLASSIFICATION IS A LABEL, NOT A DATASET ([[LH-055]]). Its router carries exactly three routes
     # and the two grant ones returned above, so only `access/my-permissions` reaches here. It resolves
@@ -1059,6 +1145,7 @@ async def authorize(request: Request, settings: SettingsDep, token: CurrentToken
     # and OpenFGA answers an undefined relation with a 400 that fails closed to 503 — an outage wearing a
     # permission error's clothes.
     if fga_type == "classification":
+        obj = _object(fga_type, segments, settings.delimiter)
         if suffix != "access/my-permissions":
             _record_undeclared(path, fga_type, suffix, user=token.subject, obj=obj)
             raise _undeclared_door(fga_type, suffix)
@@ -1067,23 +1154,27 @@ async def authorize(request: Request, settings: SettingsDep, token: CurrentToken
     try:
         relation = _action_relation(fga_type, suffix)
     except InternalError:
-        _record_undeclared(path, fga_type, suffix, user=token.subject, obj=obj)
+        _record_undeclared(path, fga_type, suffix, user=token.subject, obj=_object(fga_type, segments, settings.delimiter))
         raise
+    rung = _rung(relation, fga_type, segments, settings.delimiter, suffix=suffix)
     if (alternative := _ALTERNATIVE_RUNGS.get((fga_type, suffix))) is not None:
-        await _require_any(client, user=token.subject, doors=[(relation, obj), (alternative, obj)])
+        obj = await _resolve(resolver, rung)
+        if obj is None:
+            raise _refuse_absent(user=token.subject, relation=relation, label=_label(rung, settings.delimiter))
+        await _require_any(client, user=token.subject, doors=[(relation, obj), (alternative, obj)], label=_label(rung, settings.delimiter))
         return
     try:
-        await _require(client, user=token.subject, relation=relation, obj=obj)
+        await _require_rung(client, resolver, user=token.subject, rung=rung, delimiter=settings.delimiter)
     except PermissionDeniedError:
         # A READ door refusing an object that is not there answers the spec's 404 instead, but only to
         # a caller who already holds the parent's read rung. Owner ruling 2026-09-11.
-        await _absent_to_a_reader_of_the_parent(request, client, settings, token=token, fga_type=fga_type, denied=relation, segments=segments)
+        await _absent_to_a_reader_of_the_parent(client, resolver, settings, token=token, fga_type=fga_type, denied=relation, segments=segments)
         raise
 
 
 async def _absent_to_a_reader_of_the_parent(
-    request: Request,
     client: OpenFgaClient,
+    resolver: Resolver,
     settings: Settings,
     *,
     token: Caller,
@@ -1113,41 +1204,74 @@ async def _absent_to_a_reader_of_the_parent(
       keeps every one of them out of this path by construction.
     * THE CALLER MUST HOLD THE PARENT'S READ RUNG. Someone who can read the parent can already LIST
       it, so "does this child exist" is not information the 403 was protecting. Without the parent
-      rung the answer is today's 403 and no probe runs — so this cannot be used to walk the id space
-      from outside the hierarchy, and the common denial pays no extra round trip.
+      rung the answer is today's 403 — so this cannot be used to walk the id space from outside the
+      hierarchy.
     * ONLY AN ABSENCE CONVERTS. An object that EXISTS and is forbidden still answers 403. Converting
       that would tell an unauthorized caller which names are real — the oracle this estate refuses —
       and it is the property worth more than the feature.
 
-    The request never reaches the endpoint either way: this raises, and its caller re-raises. Nothing
+    Whether the name holds an object is the resolution ``authorize`` already read, so the answer is the one the door
+    would act on. The request never reaches the endpoint either way: this raises, and its caller re-raises. Nothing
     is read, and no grant is implied by the 404.
     """
-    if denied not in _READ_RELATIONS:
+    if denied not in _READ_RELATIONS or fga_type not in _UUID_KEYED:
         return
     parent = segments[:-1]
-    if not parent:
+    if not parent or await resolver.object(fga_type, segments) is not None:
         return
-    parent_obj = f"namespace:{fga.canonical_object_id(parent, delimiter=settings.delimiter)}"
+    parent_obj = await resolver.object("namespace", parent)
+    if parent_obj is None:
+        return
     try:
         if not await fga.check(client, user=token.subject, relation="can_get_metadata", obj=parent_obj):
             return
     except ServiceUnavailableError:
         return  # the authz layer is down; the 403 the caller already has is the fail-closed answer
+    ident = fga.canonical_object_id(segments, delimiter=settings.delimiter)
+    absent = TableNotFoundError if fga_type == "table" else NamespaceNotFoundError
+    raise absent(f"{fga_type} {ident!r} does not exist")
 
-    # Imported HERE rather than at module scope: `dependencies` imports this module for its guards, so
-    # a top-level import would close the cycle.
-    from catalog.api.dependencies import get_namespace
 
-    ns = await get_namespace(request, settings)
-    probe, absent = ("table_exists", TableNotFoundError) if fga_type == "table" else ("namespace_exists", NamespaceNotFoundError)
-    request_model = TableExistsRequest(id=segments) if fga_type == "table" else NamespaceExistsRequest(id=segments)
-    try:
-        await run_in_threadpool(native.call, ns, probe, request_model)
-    except (TableNotFoundError, NamespaceNotFoundError) as exc:
-        ident = fga.canonical_object_id(segments, delimiter=settings.delimiter)
-        raise absent(f"{fga_type} {ident!r} does not exist") from exc
-    except Exception:  # noqa: BLE001 — an unanswerable probe leaves the 403 exactly as it was
-        return
+#: How many candidates one batch check of a listing authorizes before the page is judged full.
+LISTING_BATCH: Final = 100
+
+
+async def authorized_page(
+    client: OpenFgaClient,
+    resolver: Resolver,
+    *,
+    user: str,
+    relation: str,
+    kind: Literal["table", "namespace"],
+    candidates: Sequence[tuple[str, Sequence[str]]],
+    page_token: str | None,
+    limit: int | None,
+) -> tuple[list[str], str | None]:
+    """The page of ``candidates`` the caller holds ``relation`` on, and the page token after it ([[LH-223]]).
+
+    Each candidate is the name the listing answers (sorted) and the segments of the object it names.
+
+    A listing authorizes its own candidates, batch by batch, on the objects their names resolve to, and fills its page
+    from them. It never asks OpenFGA which objects the caller reaches across the estate: that answer stops at the
+    server's ceiling (1,000 objects), so a caller reaching more than that elsewhere would see a small namespace listed
+    short. The cursor is the last name served, as :func:`catalog.api.pagination.paginate` keeps it; a ``None`` token
+    means every candidate was judged.
+    """
+    remaining = [(name, list(segments)) for name, segments in candidates if not page_token or name > page_token]
+    page: list[str] = []
+    for start in range(0, len(remaining), LISTING_BATCH):
+        batch = remaining[start : start + LISTING_BATCH]
+        objects = await asyncio.gather(*(resolver.object(kind, segments) for _, segments in batch))
+        present = sorted({obj for obj in objects if obj is not None})
+        allowed = await fga.batch_check(client, user=user, relation=relation, objects=present) if present else {}
+        for offset, ((name, _), obj) in enumerate(zip(batch, objects, strict=True)):
+            if obj is None or not allowed.get(obj, False):
+                continue
+            page.append(name)
+            if limit is not None and len(page) == limit:
+                more = start + offset + 1 < len(remaining)
+                return page, name if more else None
+    return page, None
 
 
 # --------------------------------------------------------------------------- #
@@ -1234,21 +1358,14 @@ async def require_parent_exists(ns: LanceNamespace, resource: str, segments: lis
 
 
 async def require_no_live_trash(settings: Settings, segments: list[str], *, kind: str = "table") -> None:
-    """Refuse a create at an id whose PREVIOUS occupant is still in the trash (diff2 F10 item 4).
+    """Refuse a create at a name whose PREVIOUS occupant is still in the trash (diff2 F10 item 4).
 
-    THE BLEED. A recoverable drop deliberately KEEPS the object's FGA tuples — `drop_table` revokes
-    only `if not trashed`, because the owner is the one person who needs them to undrop, and revoking
-    made undrop unreachable for exactly that caller. Correct for undrop; a hole for create. Nothing
-    else read the trash, so a create at the same id during the grace window produced a brand-new
-    object silently wearing the DEAD table's grants — every reader, writer and validator the old table
-    ever had, on data they have never been granted. That is the stale-grant privilege bleed
-    `revoke_object_tuples` exists to prevent, arriving through the one door that had opted out of it.
-
-    Refusing is the honest answer rather than revoking-then-creating: the id is not free yet. Its bytes
-    are still on storage and its owner still holds a live claim to recover them, so a create that
-    quietly took the name would also make that recovery impossible — trading a privilege bleed for
-    silent data loss. The 409 names the deadline and both ways out, because "already exists" on a
-    table the caller cannot see is otherwise unactionable.
+    The name is not free yet: the dropped object's bytes are still on storage and its owner still holds a live claim
+    to recover them, under this name. A create that quietly took the name would make that recovery impossible, and for
+    a namespace the cascade undrop would re-register the trashed tables inside a namespace someone else now owns. Its
+    grants are held by its uuid (ADR 0173 §8), so a new object at the name would inherit none of them either way. The
+    409 names the deadline and both ways out, because "already exists" on an object the caller cannot see is otherwise
+    unactionable.
 
     Checked BEFORE the native write, like `require_parent_exists`, so a refusal leaves nothing
     half-made. A read failure does NOT fail closed: an unreadable trash store must not make the whole
@@ -1265,8 +1382,8 @@ async def require_no_live_trash(settings: Settings, segments: list[str], *, kind
     expires = str(record.get("expires_at", "")) or "an unrecorded deadline"
     detail = (
         f"cannot create '{canonical}': a dropped {kind} of that name is still recoverable until {expires}, "
-        f"and its grants are still live — creating here would hand the new {kind} the old one's readers and "
-        f"writers. Undrop it (POST /v1/{kind}/{canonical}/undrop) to restore it, or purge it to free the name."
+        f"and creating here would make its undrop impossible. Undrop it (POST /v1/{kind}/{canonical}/undrop) to "
+        f"restore it, or purge it to free the name."
     )
     # The type-specific AlreadyExists error, not a generic conflict: both map to 409 (spec code 2), and
     # a caller's error handling switches on the CODE, so a table create must fail as a table conflict.
@@ -1395,9 +1512,9 @@ class GovernedObject(BaseModel):
     segments: list[str]
     uuid: str
 
-    def fga_object(self, delimiter: str) -> str:
-        """The FGA object its grants are written on, which is still its name until LH-524."""
-        return f"{self.kind}:{fga.canonical_object_id(self.segments, delimiter=delimiter)}"
+    def fga_object(self) -> str:
+        """The FGA object its grants are held by: ``table:<uuid>`` or ``namespace:<uuid>`` ([[LH-524]])."""
+        return fga.object_of(self.kind, self.uuid)
 
 
 async def identify(ns: LanceNamespace, settings: Settings, kind: Literal["table", "namespace"], segments: list[str]) -> GovernedObject:
@@ -1519,29 +1636,45 @@ async def seed_project_admin(
 # --------------------------------------------------------------------------- #
 
 
+def owned_object(resource: str, uuid: str) -> str:
+    """The FGA object a just-created ``resource`` with ``uuid`` is seeded on ([[LH-524]])."""
+    return fga.object_of("table" if resource == "table" else "namespace", uuid)
+
+
+async def parent_object_of(resolver: Resolver, settings: Settings, resource: str, segments: list[str]) -> str | None:
+    """The object a just-created child's ``parent`` edge names: its parent namespace's uuid object, the default warehouse
+    for a top-level namespace, or ``None`` for a top-level table (``table.parent`` accepts only a namespace).
+
+    ``fga_default_warehouse_object``, never ``fga_root_object``: the model types ``namespace#parent`` as ``[warehouse,
+    namespace]``, and every rung the namespace inherits ``from parent`` has to be defined on the parent's type.
+
+    Raises:
+        NamespaceNotFoundError: The parent namespace is gone; the create door checked it existed before its write.
+    """
+    if len(segments) > 1:
+        parent = await resolver.object("namespace", segments[:-1])
+        if parent is None:
+            raise NamespaceNotFoundError(f"namespace not found: {segments[:-1]}")
+        return parent
+    return settings.fga_default_warehouse_object if resource == "namespace" else None
+
+
 async def seed_ownership(
     client: OpenFgaClient | None,
     settings: Settings,
     token: Caller | None,
+    resolver: Resolver,
     *,
     resource: str,
     segments: list[str],
-    created: bool,
+    uuid: str,
     parent_object: str | None = None,
     may_grant_owner: bool = True,
-    carried: Sequence[fga.ClientTuple] = (),
-    origin: fga.TupleOrigin = "create",
 ) -> None:
-    """Grant the creator ``owner`` + the ``parent`` edge on a just-created object.
+    """Grant the creator ``owner`` + the ``parent`` edge on a just-created object, ``table:<uuid>`` or ``namespace:<uuid>``.
 
-    ``created`` says THIS request brought the object into being, so any tuple already on its id belongs to a
-    previous incarnation: a drop revokes after its irreversible native mutation, and an OpenFGA outage there
-    leaves the tuples behind. They are revoked before the seed, or the new object would hand the dropped one's
-    grantees its data with nobody having granted it (ADR 0146, [[LH-480]]). False when the door cannot prove
-    the id was free: an object it kept or adopted, or a table written under ExistOk or Overwrite, whose
-    tuples may be another caller's live grants. Required, not defaulted, so a new create door has to say
-    which it is. The revoke is audited per tuple with origin ``stale_on_create``; it emits no
-    ``grant_revoked``, as the drop that orphaned the tuples emits none either.
+    The object is keyed by the uuid the create minted (ADR 0173 §8, [[LH-524]]), so no tuple an earlier object at the
+    same name left can reach it: a table dropped and created again under that name is another uuid.
 
     ``may_grant_owner=False`` writes the EDGE ALONE. The caller uses it when this request did not
     create the object — an ExistOk that kept an existing table — where granting ``owner`` would seize
@@ -1550,25 +1683,14 @@ async def seed_ownership(
 
     No-op when FGA is off, the request is unauthenticated, or the client is unwired — so
     create endpoints call it unconditionally with one line. This is the ONE place the
-    post-create seed policy lives (previously copy-pasted across four endpoint modules).
-    Ids come from ``fga`` so this grant and the later :func:`authorize` check agree
-    byte-for-byte.
+    post-create seed policy lives.
 
-    ``parent_object`` overrides the derived parent for the one door whose hierarchy is not
-    positional: a warehouse-scoped namespace hangs off ``warehouse:<id>``, not off the shared
-    catalog root its segments would imply. That door open-coded its own ``grant_on_create`` for
-    exactly this reason, which also left it outside every compensation this module grew — so the
-    override exists to pull it back in rather than to make the parent generally configurable.
-
-    ``carried`` rides the same batch (:func:`move_ownership`), audited under ``origin``.
+    ``parent_object`` overrides the derived parent (:func:`parent_object_of`) for the one door whose hierarchy is not
+    positional: a warehouse-scoped namespace hangs off ``warehouse:<id>``, not off the shared catalog root its
+    segments would imply.
     """
     if not (settings.fga_enabled and token is not None and client is not None):
         return
-    if created:
-        obj = f"{resource}:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}"
-        stale = await fga.revoke_object_tuples(client, obj, actor=token.subject, origin="stale_on_create")  # noqa: TID251
-        if stale:
-            log.warning("fga_stale_tuples_revoked_on_create", extra={"object": obj, "removed": len(stale)})
     # A MACHINE DOES NOT OWN WHAT IT REGISTERS (owner ruling 2026-09-10, zero trust). A service principal
     # registering its own output would become that table's owner, keeping `can_drop`, `can_deregister`,
     # `can_restore` and `manage_grants` on every governed tier of every tenant it ever wrote to.
@@ -1586,13 +1708,10 @@ async def seed_ownership(
         client,
         grant_owner=may_grant_owner and not isinstance(token, ServicePrincipal),
         user_sub=token.subject,
-        resource=resource,
-        obj_id=fga.canonical_object_id(segments, delimiter=settings.delimiter),
+        obj=owned_object(resource, uuid),
         actor=token.subject,
-        origin=origin,
-        parent_object=parent_object
-        or fga.parent_object(resource, segments, delimiter=settings.delimiter, warehouse_object=settings.fga_default_warehouse_object),
-        carried=carried,
+        origin="create",
+        parent_object=parent_object or await parent_object_of(resolver, settings, resource, segments),
     )
 
 
@@ -1639,82 +1758,54 @@ async def refuse_a_cross_tenant_role_grant(client: OpenFgaClient, grantee: str, 
     raise InvalidInputError(f"{grantee!r} belongs to project {min(owned_by)!r} and cannot be granted on {segments[0]!r}, which belongs to project {target!r}")
 
 
-async def require_grants_may_follow(client: OpenFgaClient | None, settings: Settings, *, resource: str, source: list[str], destination: list[str]) -> None:
-    """Refuse a rename whose carried grants the grant door would refuse on ``destination`` ([[LH-215]]).
+async def require_grants_may_follow(client: OpenFgaClient | None, settings: Settings, *, obj: str, source: list[str], destination: list[str]) -> None:
+    """Refuse a rename whose grants the grant door would refuse on ``destination`` ([[LH-215]]).
 
-    :func:`move_ownership` writes every grant held on ``source`` onto ``destination``, which is a grant on the
-    destination, so each is held to the grant door's own rule (:func:`refuse_a_cross_tenant_role_grant`): a role one
-    tenant owns is not granted a rung on another tenant's object by renaming the object across. Asked BEFORE the native
-    rename, so a refusal leaves the table where it was. A destination under the same top-level namespace has the
-    source's tenant, and nothing is read.
+    A table's grants are held by its uuid (``obj``) and stay on it through a rename, so a rename into another tenant's
+    namespace takes every grant along. Each is held to the grant door's own rule (:func:`refuse_a_cross_tenant_role_grant`):
+    a role one tenant owns is not granted a rung on another tenant's object by renaming the object across. Asked BEFORE
+    the native rename, so a refusal leaves the table where it was. A destination under the same top-level namespace has
+    the source's tenant, and nothing is read.
     """
     if not (settings.fga_enabled and client is not None) or source[:1] == destination[:1]:
         return
-    for held in await fga.read_object_tuples(client, f"{resource}:{fga.canonical_object_id(source, delimiter=settings.delimiter)}"):
+    for held in await fga.read_object_tuples(client, obj):
         if held.user and held.relation != "parent":
-            await refuse_a_cross_tenant_role_grant(client, held.user, fga_type=resource, segments=destination, settings=settings)
+            await refuse_a_cross_tenant_role_grant(client, held.user, fga_type="table", segments=destination, settings=settings)
 
 
-async def move_ownership(
-    client: OpenFgaClient | None,
-    settings: Settings,
-    token: Caller | None,
-    *,
-    resource: str,
-    source: list[str],
-    destination: list[str],
-) -> None:
-    """Carry the grants a renamed object held under ``source`` to ``destination``, then revoke ``source`` ([[LH-215]]).
+async def move_parent_edge(client: OpenFgaClient | None, settings: Settings, token: Caller | None, *, obj: str, source: str, destination: str) -> None:
+    """Move ``obj``'s ``parent`` edge, and its inverse, from namespace ``source`` to ``destination``: what a rename into
+    another namespace changes in OpenFGA, and all it changes ([[LH-524]]).
 
-    A lance-ns id is the object's name and Lance keeps no table UUID, so every grant is keyed by the name and a rename
-    must move them: revoking the old name's grants without carrying them drops every reader, writer and owner someone
-    granted, silently. Each grant held directly on ``source`` is written on ``destination`` in the SAME batch as the
-    renamer's owner grant and the new parent edge (:func:`seed_ownership`), so the destination is seeded with all of
-    them or none. The old ``parent`` edge is not carried: the new one names where the object lives now. What the object
-    inherits changes with its parent, as it would for an object created there.
-
-    The source is revoked AFTER the seed, and best-effort: the native rename has committed by now, so a failed revoke
-    is logged rather than raised, leaving a grant on a name that holds no object (owner ruling 2026-08-15, diff2 F3).
-    A create at that name revokes it before seeding ([[LH-480]]).
+    Every grant stays on ``obj``, the table's uuid. Only where the table inherits from moves, as it would for a table
+    created there. The new edge is written before the old one goes, so the table is never left with no parent; a failed
+    removal leaves it reachable from both until a reconcile, which inherits more, never less, and is logged.
     """
-    if not (settings.fga_enabled and token is not None and client is not None):
+    if not (settings.fga_enabled and token is not None and client is not None) or source == destination:
         return
-    old = f"{resource}:{fga.canonical_object_id(source, delimiter=settings.delimiter)}"
-    new = f"{resource}:{fga.canonical_object_id(destination, delimiter=settings.delimiter)}"
-    held = await fga.read_object_tuples(client, old)
-    carried = [fga.ClientTuple(user=t.user, relation=t.relation, object=new, condition=t.condition) for t in held if t.relation != "parent"]
-    await seed_ownership(client, settings, token, resource=resource, segments=destination, created=True, carried=carried, origin="rename")
+    await fga.grant_on_create(client, grant_owner=False, user_sub=token.subject, obj=obj, actor=token.subject, origin="rename", parent_object=destination)  # noqa: TID251
+    stale = [fga.ClientTuple(user=source, relation="parent", object=obj), fga.ClientTuple(user=obj, relation="child", object=source)]
     try:
-        await fga.revoke_object_tuples(client, old, actor=token.subject, origin="rename")  # noqa: TID251
-    except Exception as revoke_exc:  # noqa: BLE001 — the rename has committed; a stale grant on a dead name is logged
-        log.warning("rename_source_revoke_failed", extra={"source": old, "error": str(revoke_exc)})
+        await fga.delete_tuples(client, stale, actor=token.subject, origin="rename")  # noqa: TID251
+    except Exception as exc:  # noqa: BLE001 — the rename has committed; a second parent edge inherits more, never less
+        log.warning("rename_parent_edge_not_removed", extra={"object": obj, "parent": source, "error": str(exc)})
 
 
-async def revoke_ownership(
-    client: OpenFgaClient | None,
-    settings: Settings,
-    *,
-    resource: str,
-    segments: list[str],
-    token: Caller | None,
-) -> None:
-    """Delete every FGA tuple on a just-dropped / renamed-away object (the revoke counterpart of
-    :func:`seed_ownership`).
+async def revoke_ownership(client: OpenFgaClient | None, settings: Settings, *, obj: str, token: Caller | None) -> None:
+    """Delete every FGA tuple on ``obj``, a just-dropped object (the revoke counterpart of :func:`seed_ownership`).
 
     No-op when FGA is off or the client is unwired — so lifecycle endpoints call it with one line.
-    Removes the owner grant, the ``parent`` edge, AND any later reader/writer/validator grants, so a
-    reused id can never inherit a stale grant (privilege bleed). Needs no token: the mutation was already
-    authorized by :func:`authorize` (owner tier for drop/deregister/drop_namespace; writer tier for a
-    rename — where the revoke targets the now-DEAD source id, so the tier is immaterial to safety), and the
-    cleanup deletes every subject's tuple regardless of who. Ids come from ``fga`` so the object matches
-    what :func:`seed_ownership` wrote byte-for-byte.
+    Removes the owner grant, the ``parent`` edge, AND any later reader/writer/validator grants. Needs no token: the
+    mutation was already authorized by :func:`authorize`, and the cleanup deletes every subject's tuple regardless of
+    who.
 
     Revoke runs AFTER the (irreversible) native mutation, so on an OpenFGA outage it fails closed (503)
-    with the tuples left stale until reconciled — the mutation itself already committed.
+    with the tuples left stale until reconciled — the mutation itself already committed. The object is a uuid no
+    other object will hold, so a stale tuple grants nothing on anything created later.
     """
     if not (settings.fga_enabled and client is not None):
         return
-    obj = f"{resource}:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}"
     # The actor is the caller who dropped the object. `system:catalog` is the honest fallback for an
     # auth-off stack, where there genuinely is no principal — never a stand-in for one we simply did
     # not thread through.
@@ -1744,12 +1835,11 @@ async def end_removed_subtree(
     client: OpenFgaClient | None,
     settings: Settings,
     *,
-    root: list[str],
     root_uuid: str | None,
     removed: Sequence[GovernedObject],
     token: Caller | None,
 ) -> AsyncIterator[int]:
-    """End what namespace ``root`` and ``removed``, which a lifecycle delete removed, still hold, children first.
+    """End what the namespace ``root_uuid`` and ``removed``, which a lifecycle delete removed, still hold, children first.
 
     Each object's protection and maintenance-policy records go, keyed by its uuid, then its grants. Yields each
     object's revoked count as its revoke lands, so a door reporting what it revoked counts every object revoked before a
@@ -1759,12 +1849,13 @@ async def end_removed_subtree(
     THE GRANTS GO LAST, BECAUSE THEY ARE WHAT FINDS AN OBJECT AGAIN. Every object created under a namespace leaves a
     ``child`` edge on it (``fga.hierarchy_edge_tuples``), and only that object's own revoke removes the edge. A
     re-issue lists only what still stands, so an edge still standing is what names an object a failure stopped before
-    its end, and this walk revokes its grants then. Each edge is followed before the object holding it is revoked. An
-    object found only by its edge is gone, and so is what recorded its uuid: its records stay, keyed by a uuid no
-    other object holds, so they govern nothing. ``removed`` (the catalog's own listing) covers an object created before
-    the edges existed; with FGA off nothing names an object once it is gone, and only the listed ones are ended. Every
-    clear is idempotent, so a protection record is cleared without asking whether one exists: an object a forced
-    attempt left unfinished may be re-issued without ``force``.
+    its end, and this walk ends it then. The edge names the object by its uuid ([[LH-524]]), which is the key its
+    records are kept under, so an object found only by its edge loses its records as well as its grants. Each edge is
+    followed before the object holding it is revoked. ``removed`` (the catalog's own listing) covers an object created
+    before the edges existed; with FGA off nothing names an object once it is gone, and only the listed ones are ended.
+    Every clear is idempotent, so a protection record is cleared without asking whether one exists: an object a forced
+    attempt left unfinished may be re-issued without ``force``. A root whose uuid nothing records any more
+    (``root_uuid`` is ``None``) has its children ended from ``removed`` alone.
 
     AN OBJECT IN THE TRASH KEEPS ITS RECORDS AND GRANTS. A recoverable drop keeps them for its undrop (#75), and a
     trashed table is undropped into its namespace once that namespace is created again, so they go only when its
@@ -1772,14 +1863,16 @@ async def end_removed_subtree(
     """
     so = settings.storage_options()
     seen: set[str] = set()
-    uuids = {item.fga_object(settings.delimiter): item.uuid for item in removed}
-    root_obj = f"namespace:{fga.canonical_object_id(root, delimiter=settings.delimiter)}"
-    if root_uuid is not None:
-        uuids[root_obj] = root_uuid
+    roots = [fga.namespace_object(root_uuid)] if root_uuid is not None else []
+    in_trash: set[str] | None = None
 
     async def trashed(obj: str) -> bool:
-        kind, _, canonical = obj.partition(":")
-        return await run_in_threadpool(trash.get, settings.registry_root, so, canonical, kind=kind) is not None
+        # Read once per walk, and only when an edge names an object the listing did not: a `child` edge names its
+        # object by uuid, and the trash record names its object by the uuid its claim or its properties keep.
+        nonlocal in_trash
+        if in_trash is None:
+            in_trash = await run_in_threadpool(_trashed_objects, settings)
+        return obj in in_trash
 
     async def end(obj: str) -> AsyncIterator[int]:
         seen.add(obj)
@@ -1788,26 +1881,53 @@ async def end_removed_subtree(
                 if held.relation == "child" and held.user and held.user not in seen and not await trashed(held.user):
                     async for count in end(held.user):
                         yield count
-        if (uuid := uuids.get(obj)) is not None:
-            await run_in_threadpool(object_records.end_object_records, settings.registry_root, so, obj.partition(":")[0], uuid)
+        kind, _, uuid = obj.partition(":")
+        await run_in_threadpool(object_records.end_object_records, settings.registry_root, so, kind, uuid)
         yield await revoke_removed_object(client, settings, obj, token=token)
 
     children_first = sorted(removed, key=lambda item: (item.kind == "namespace", -len(item.segments)))
-    for obj in [*(item.fga_object(settings.delimiter) for item in children_first), root_obj]:
+    for obj in [*(item.fga_object() for item in children_first), *roots]:
         if obj not in seen:
             async for count in end(obj):
                 yield count
+
+
+async def orphaned_children(client: OpenFgaClient | None, settings: Settings, container: str, *, ended: set[str]) -> list[str]:
+    """The uuids of the namespaces ``container``'s ``child`` edges name that ``ended`` does not, outside the trash.
+
+    A lifecycle delete re-issued after a failure finds a namespace an earlier attempt removed by nothing but its
+    container's edge: no listing names it and its uuid is recorded nowhere else ([[LH-524]]).
+    """
+    if not (settings.fga_enabled and client is not None):
+        return []
+    in_trash = await run_in_threadpool(_trashed_objects, settings)
+    return sorted(
+        held.user.removeprefix("namespace:")
+        for held in await fga.read_object_tuples(client, container)
+        if held.relation == "child" and held.user and held.user.startswith("namespace:") and held.user not in ended and held.user not in in_trash
+    )
+
+
+def _trashed_objects(settings: Settings) -> set[str]:
+    """The FGA objects of every table and namespace in the trash, by the uuid each record keeps."""
+    claims = table_claims.claim_store(settings)
+    objects: set[str] = set()
+    for record in trash.list_all(settings.registry_root, settings.storage_options()):
+        if (uuid := trash.object_uuid(record, claims)) is not None:
+            objects.add(fga.object_of(str(record.get("kind") or "table"), uuid))
+    return objects
 
 
 async def seed_ownership_or_compensate(
     client: OpenFgaClient | None,
     settings: Settings,
     token: Caller | None,
+    resolver: Resolver,
     *,
     resource: str,
     segments: list[str],
+    uuid: str,
     undo: Callable[[], Awaitable[None]] | None,
-    created: bool,
     parent_object: str | None = None,
     may_grant_owner: bool = True,
 ) -> None:
@@ -1820,18 +1940,14 @@ async def seed_ownership_or_compensate(
     The object is then unreachable by anything except a hand-written tuple. ``undo`` runs the native
     delete of what THIS request just created, so the retry starts from a clean slate and converges.
 
-    TWO ORDERING FACTS CARRY THIS, and the first is why the pattern moved here rather than being
-    copy-pasted a ninth time:
+    TWO ORDERING FACTS CARRY THIS:
 
-    1. The revoke and the undo are INDEPENDENT best-effort steps, not one try block. They were one
-       (`data.py`, the single door that had any compensation at all), and the revoke goes through
+    1. The revoke and the undo are INDEPENDENT best-effort steps, not one try block. The revoke goes through
        ``read_object_tuples`` — an OpenFGA call. So in the exact scenario the compensation exists for,
-       a down OpenFGA, the revoke raised and the native undo NEVER RAN. The compensation was inert
-       precisely when it was needed, which is worse than absent because the code reads as covered.
-       The undo needs no FGA, so nothing FGA-shaped may stand in front of it.
+       a down OpenFGA, a revoke that raised would stop the native undo. The undo needs no FGA, so nothing
+       FGA-shaped may stand in front of it.
     2. The revoke is attempted FIRST anyway, when it can run. A grant can commit server-side while its
-       response is lost, and a stale owner tuple on a freed id silently grants its holder the NEXT
-       object created at that id — the reused-id privilege bleed :func:`revoke_ownership` exists for.
+       response is lost, and the uuid it names then holds tuples no object does, which drift detection reports.
 
     ``undo=None`` means the caller has decided a native delete is unsafe here — an ExistOk that KEPT a
     pre-existing object, or an Overwrite that replaced one whose id still carries the prior
@@ -1844,11 +1960,11 @@ async def seed_ownership_or_compensate(
     """
     try:
         await seed_ownership(
-            client, settings, token, resource=resource, segments=segments, created=created, parent_object=parent_object, may_grant_owner=may_grant_owner
+            client, settings, token, resolver, resource=resource, segments=segments, uuid=uuid, parent_object=parent_object, may_grant_owner=may_grant_owner
         )
     except Exception:
         if undo is not None:
-            await compensate_create(client, settings, token, resource=resource, segments=segments, undo=undo, reason="grant_failed")
+            await compensate_create(client, settings, token, resource=resource, segments=segments, uuid=uuid, undo=undo, reason="grant_failed")
         raise
 
 
@@ -1859,6 +1975,7 @@ async def compensate_create(
     *,
     resource: str,
     segments: list[str],
+    uuid: str,
     undo: Callable[[], Awaitable[None]],
     reason: str,
 ) -> None:
@@ -1867,20 +1984,20 @@ async def compensate_create(
     The two steps are independent and best effort, revoke first, as :func:`seed_ownership_or_compensate` explains;
     nothing here raises, because the caller re-raises the error that made it compensate.
     """
-    obj = fga.canonical_object_id(segments, delimiter=settings.delimiter)
+    name = fga.canonical_object_id(segments, delimiter=settings.delimiter)
     try:
-        await revoke_ownership(client, settings, resource=resource, segments=segments, token=token)
+        await revoke_ownership(client, settings, obj=owned_object(resource, uuid), token=token)
     except Exception as revoke_exc:
         # Expected when OpenFGA is the thing that is down. Logged, never fatal — the undo below
         # is what actually makes the retry converge, and it must not be skipped for this.
-        log.warning("compensation_revoke_failed", extra={"object": obj, "resource": resource, "error": str(revoke_exc)})
+        log.warning("compensation_revoke_failed", extra={"object": name, "resource": resource, "error": str(revoke_exc)})
     try:
         await undo()
-        log.warning("create_compensated", extra={"object": obj, "resource": resource, "reason": reason})
+        log.warning("create_compensated", extra={"object": name, "resource": resource, "reason": reason})
     except Exception as undo_exc:
         # Both halves failed: the object is stranded and only the structural reconcile can
         # reach it. Loud on purpose — this is the state an operator has to be told about.
-        log.error("create_compensation_failed", extra={"object": obj, "resource": resource, "error": str(undo_exc)})
+        log.error("create_compensation_failed", extra={"object": name, "resource": resource, "error": str(undo_exc)})
 
 
 async def require_can_drop_table(
@@ -1888,9 +2005,9 @@ async def require_can_drop_table(
     settings: Settings,
     token: Caller | None,
     *,
-    segments: list[str],
+    table: ResolvedTable,
 ) -> None:
-    """Raise 403 unless the caller holds owner-tier ``can_drop`` on the table at ``segments``.
+    """Raise 403 unless the caller holds owner-tier ``can_drop`` on ``table``, the table its name resolved to.
 
     The gate for a destructive create ``mode=Overwrite`` against an EXISTING table: Overwrite is spec-defined
     as drop-then-recreate (spec.yaml CreateTableRequest.mode), and it replaces the tip's schema and rows, so it
@@ -1900,8 +2017,8 @@ async def require_can_drop_table(
     those elsewhere)."""
     if not (settings.fga_enabled and client is not None and token is not None):
         return
-    obj = f"table:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}"
-    await _require(client, user=token.subject, relation="can_drop", obj=obj)
+    label = _object("table", table.segments, settings.delimiter)
+    await _require(client, user=token.subject, relation="can_drop", obj=fga.table_object(table.require_uuid()), label=label)
 
 
 #: The rung a staged commit's operation needs at ``version/create`` beyond the router's ``can_write_data`` ([[LH-471]]).
@@ -1945,63 +2062,23 @@ async def require_staged_operation(
     if relation is None or (operation == "Overwrite" and creates):
         return
     canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
+    governed = settings.fga_enabled and client is not None and token is not None
+    if operation != "Overwrite" and not governed:
+        return
+    table_uuid = await run_in_threadpool(table_claims.uuid_at, table_claims.claim_store(settings), location, segments)
     if operation == "Overwrite":
-        table_uuid = await run_in_threadpool(table_claims.uuid_at, table_claims.claim_store(settings), location, segments)
         guard = await run_in_threadpool(protection.get_protection, settings.registry_root, settings.storage_options(), "table", table_uuid)
         require_not_protected(guard or {}, kind="table", obj_id=canonical, force=False)
-    if not (settings.fga_enabled and client is not None and token is not None):
+    if not governed or client is None or token is None:
         return
-    await _require(client, user=token.subject, relation=relation, obj=f"table:{canonical}")
-
-
-async def require_can_promote(
-    client: OpenFgaClient | None,
-    settings: Settings,
-    token: Caller | None,
-    *,
-    segments: list[str],
-) -> None:
-    """Raise 403 unless the caller holds the VALIDATOR-rung ``can_promote`` on the table at ``segments``.
-
-    The gate for #17 model promotion (candidate→blessed): moving the ``blessed`` tag on ``models$<model>`` is
-    a promotion, which the FGA model separates from a plain WRITER — ``can_promote`` reduces to ``validator``
-    (a writer is NOT a validator), exactly as a tier promotion is gated. The ``/management/v1/model/*``
-    routes sit under the router-level ``authorize`` (its 401/503 pre-path checks still apply) but match no
-    ``_RESOURCES`` prefix, so ``authorize`` makes no per-object decision there — the
-    promote endpoint calls this EXPLICITLY. No FGA-model change is needed: ``table.can_promote: validator``
-    already exists and the per-model ``namespace:models → table:models$<model>`` parent link makes a
-    ``validator namespace:models`` grant cascade. Fail-closed: 403 on deny, 503 on an OpenFGA
-    outage (via ``_require``/``fga.check``). No-op when FGA is off / unwired / unauthenticated."""
-    if not (settings.fga_enabled and client is not None and token is not None):
-        return
-    obj = f"table:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}"
-    await _require(client, user=token.subject, relation="can_promote", obj=obj)
-
-
-async def require_can_get_metadata(
-    client: OpenFgaClient | None,
-    settings: Settings,
-    token: Caller | None,
-    *,
-    segments: list[str],
-) -> None:
-    """Raise 403 unless the caller holds reader-tier ``can_get_metadata`` on the table at ``segments``.
-
-    The read gate for routes whose path matches no ``_RESOURCES`` prefix (so the router-level ``authorize``
-    contributes only its 401/503 pre-path checks, no per-object decision) — notably the #17 model describe
-    route (``/management/v1/model/*``): reading a model's blessed pointer + metrics is a metadata read
-    (reader rung), so a reader may see it while only a validator may promote. Fail-closed like every other
-    gate. No-op when FGA is off / unwired / unauthenticated."""
-    if not (settings.fga_enabled and client is not None and token is not None):
-        return
-    obj = f"table:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}"
-    await _require(client, user=token.subject, relation="can_get_metadata", obj=obj)
+    await _require(client, user=token.subject, relation=relation, obj=fga.table_object(table_uuid), label=f"table:{canonical}")
 
 
 async def require_create_on_parent(
     client: OpenFgaClient | None,
     settings: Settings,
     token: Caller | None,
+    resolver: Resolver,
     *,
     resource: str,
     segments: list[str],
@@ -2013,9 +2090,8 @@ async def require_create_on_parent(
     no create rights on. No-op when FGA is off / unwired / unauthenticated."""
     if not (settings.fga_enabled and client is not None and token is not None):
         return
-    check = _create_parent_check(resource, segments, settings)
-    if check is not None:  # None => open top-level create (authn already enforced)
-        await _require(client, user=token.subject, relation=check[1], obj=check[0])
+    if (parent := _create_parent_rung(resource, segments, settings)) is not None:  # None => open top-level create (authn already enforced)
+        await _require_rung(client, resolver, user=token.subject, rung=parent, delimiter=settings.delimiter)
 
 
 async def require_relation(
@@ -2025,15 +2101,17 @@ async def require_relation(
     *,
     relation: str,
     obj: str,
+    label: str | None = None,
 ) -> None:
     """Gate on one ``relation`` over an explicit FGA object id, through the audited ``_require`` core.
 
     For handlers whose object is not table/namespace-shaped (e.g. the #3-A ``warehouse:<id>`` control
     plane) — funneling here instead of a bare ``fga.check`` keeps every deny/allow/outage on the #41 audit
-    trail. No-op when FGA is off / unwired / unauthenticated (parity with the other ``require_*`` deps)."""
+    trail. ``label`` names the object in a refusal: a table's or namespace's name, never the uuid it is held by. No-op when
+    FGA is off / unwired / unauthenticated (parity with the other ``require_*`` deps)."""
     if not (settings.fga_enabled and client is not None and token is not None):
         return
-    await _require(client, user=token.subject, relation=relation, obj=obj)
+    await _require(client, user=token.subject, relation=relation, obj=obj, label=label)
 
 
 async def require_tier_authority(client: OpenFgaClient | None, settings: Settings, token: Caller | None, *, project: str | None) -> None:

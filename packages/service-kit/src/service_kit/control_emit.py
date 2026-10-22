@@ -237,6 +237,7 @@ async def emit_control(
     object_id: str,
     actor: str | None,
     extra: dict[str, Any] | None = None,
+    object_name: str | None = None,
     object_uuid: str | None = None,
     namespace_uuid: str | None = None,
 ) -> None:
@@ -245,7 +246,8 @@ async def emit_control(
     Call at a mutation endpoint AFTER the backend/FGA change and its audit succeed, so a change that did
     not happen is never announced. Endpoints obtain ``emitter`` via their ``ControlEmitterDep``; the off
     state is a ``NoopControlEmitter``, so the call is always safe and needs no ``getattr`` guard.
-    ``object_uuid`` and ``namespace_uuid`` name a table or namespace object by the uuids the catalog minted (ADR 0173 §10).
+    A table's or namespace's ``object_id`` is its uuid object (``table:<uuid>``), with its name in ``object_name``;
+    ``object_uuid`` and ``namespace_uuid`` name it by the uuids the catalog minted (ADR 0173 §10, [[LH-524]]).
     ``actor`` must be the verified caller, ``user:`` and its principal key (e.g. ``user:dex~alice``), never a request-body value.
 
     ``extra["subject"]`` is load-bearing for the notifications plane: for an action in that plane's
@@ -261,6 +263,7 @@ async def emit_control(
             action=action,
             object_type=object_type,
             object_id=object_id,
+            object_name=object_name,
             object_uuid=object_uuid,
             namespace_uuid=namespace_uuid,
             actor=actor,

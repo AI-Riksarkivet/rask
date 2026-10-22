@@ -22,6 +22,7 @@ which is what `test_only_a_classifier_may_write_a_governance_key` already pins.
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -30,9 +31,11 @@ from lance_namespace import PermissionDeniedError
 
 from catalog.api import fga_deps
 from catalog.api.v1.endpoints import columns as ep
+from catalog.services.table_claims import ResolvedTable
 from service_kit.governed.oidc import IDToken
 from service_kit.governed.person_identity import PersonPrincipal
 from service_kit.governed.principal import Principal
+from service_kit.lakehouse.location_claims import ClaimRead, LocationClaim
 
 
 @pytest.fixture
@@ -58,6 +61,19 @@ def _patched(monkeypatch: pytest.MonkeyPatch, seen: list[tuple[str, str]], reque
     monkeypatch.setattr(ep.lineage_deps, "emit_measured_write", _no_lineage)
 
 
+#: The uuid the table's location claim records, whose object its grants are held by (ADR 0173 §8).
+_UUID = "0b6f8a52-4c1e-4f7a-9d3e-2a1c5b7e9f01"
+#: The table the door resolved ``bronze$pages`` to.
+_RESOLVED = ResolvedTable(
+    segments=["bronze", "pages"],
+    location=f"s3://lakehouse/{_UUID}",
+    claim=ClaimRead(
+        claim=LocationClaim(location=f"lakehouse/{_UUID}", table="bronze$pages", segments=["bronze", "pages"], uuid=_UUID, claimed_at=datetime.now(UTC)),
+        etag="e1",
+    ),
+)
+
+
 def _call(updates: list[dict[str, Any]]) -> Any:
     body = SimpleNamespace(id=["bronze", "pages"], updates=[SimpleNamespace(model_dump=lambda u=u: u) for u in updates], branch=None)
     return asyncio.run(
@@ -65,6 +81,7 @@ def _call(updates: list[dict[str, Any]]) -> Any:
             id="bronze$pages",
             body=cast("Any", body),
             ns=cast("Any", object()),
+            table=_RESOLVED,
             settings=cast("Any", SimpleNamespace(fga_enabled=True, delimiter="$")),
             so=cast("Any", {}),
             token=PersonPrincipal(principal=Principal(idp_id="dex", subject="dpo"), claims=IDToken(iss="i", sub="dpo", aud="lance", exp=1, iat=1)),
@@ -76,7 +93,7 @@ def _call(updates: list[dict[str, Any]]) -> Any:
     )
 
 
-_TABLE = ("can_classify", "table:bronze$pages")
+_TABLE = ("can_classify", f"table:{_UUID}")
 _PII = ("can_apply", "classification:pii")
 _RESTRICTED = ("can_apply", "classification:restricted")
 

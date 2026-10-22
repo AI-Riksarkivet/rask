@@ -249,6 +249,7 @@ async def test_a_PUBLICATION_announces_the_range_and_a_REJECTION_announces_nothi
     from catalog.core.config import Settings
     from catalog.core.lineage_emit import NoopEmitter
     from catalog.schemas import PublishRequest
+    from catalog.services.table_claims import claim_store, resolve
 
     announced: list[dict[str, object]] = []
 
@@ -269,12 +270,14 @@ async def test_a_PUBLICATION_announces_the_range_and_a_REJECTION_announces_nothi
     # The control root the fixture's create took the table's claim on, where the door reads the table's uuid.
     monkeypatch.setenv("LANCE_CONTROL_ROOT", str(tmp_path / "control"))
     settings = Settings()
+    table = resolve(ns, claim_store(settings), TABLE_ID)
 
     good = _write(ns, [1, 2, 3])
     await publish_table(
         "db$pages",
         PublishRequest(version=good, key_column="id"),
         ns,
+        table,
         settings,
         {},
         _Emitter(),
@@ -290,6 +293,7 @@ async def test_a_PUBLICATION_announces_the_range_and_a_REJECTION_announces_nothi
         "db$pages",
         PublishRequest(version=bad, key_column="id"),
         ns,
+        table,
         settings,
         {},
         _Emitter(),

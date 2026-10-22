@@ -29,7 +29,9 @@ from catalog.services import object_uuids, table_claims, warehouses
 from catalog.services.table_claims import ResolvedTable
 from service_kit.control_emit import ControlEmitter, NoopControlEmitter
 from service_kit.control_events import CatalogControlEvent, ControlUuids
+from service_kit.governed import fga
 from service_kit.governed.user_state import UserStateStore
+from service_kit.lakehouse import trash
 from service_kit.openlineage import DatasetUuids
 
 
@@ -273,14 +275,86 @@ async def namespace_for_top_ns(request: Request, settings: Settings, top_ns: str
 NamespaceDep = Annotated[LanceNamespace, Depends(get_namespace)]
 
 
-async def get_resolved_table(request: Request, settings: SettingsDep, ns: NamespaceDep) -> ResolvedTable:
+class Resolver:
+    """The objects a request's names are governed as, each name resolved once per request (ADR 0173 §7, [[LH-524]]).
+
+    A door is addressed by name and its grants are held by the uuid that name resolves to, so the router's authorization,
+    the tier judge and the door itself read ONE resolution of a name: a rename or a re-create landing between two
+    resolutions would have the door act on a table other than the one it authorized. Each name is resolved through the
+    connection its top namespace routes to, the one :func:`get_namespace` builds for the request's own ``{id}``.
+    """
+
+    def __init__(self, request: Request, settings: Settings) -> None:
+        self._request = request
+        self._settings = settings
+        self._tables: dict[tuple[str, ...], ResolvedTable] = {}
+        self._namespaces: dict[tuple[str, ...], str | None] = {}
+
+    async def _connection(self, segments: list[str]) -> LanceNamespace:
+        return await namespace_for_top_ns(self._request, self._settings, segments[0])
+
+    async def table(self, segments: list[str], *, ns: LanceNamespace | None = None) -> ResolvedTable:
+        """The table ``segments`` names, resolved to its location and that location's claim (``ns``: the connection to read it through)."""
+        key = tuple(segments)
+        if not segments:
+            return ResolvedTable(segments=[])
+        if key not in self._tables:
+            connection = ns if ns is not None else await self._connection(segments)
+            self._tables[key] = await run_in_threadpool(table_claims.resolve, connection, table_claims.claim_store(self._settings), list(segments))
+        return self._tables[key]
+
+    async def namespace_uuid(self, segments: list[str]) -> str | None:
+        """The uuid of the namespace ``segments`` names, or ``None`` when no namespace has that name (or for the root).
+
+        Raises:
+            InternalError: The namespace carries no uuid, which no door leaves.
+        """
+        key = tuple(segments)
+        if key not in self._namespaces:
+            self._namespaces[key] = (
+                await run_in_threadpool(object_uuids.resolve_namespace_uuid, await self._connection(segments), list(segments)) if segments else None
+            )
+        return self._namespaces[key]
+
+    async def object(self, kind: str, segments: list[str]) -> str | None:
+        """The FGA object ``kind`` ``segments`` names (``table:<uuid>``, ``namespace:<uuid>``), or ``None`` when nothing has that name.
+
+        Raises:
+            InternalError: The object carries no uuid, which no door leaves.
+        """
+        if kind == "table":
+            resolved = await self.table(segments)
+            return None if resolved.location is None else fga.table_object(resolved.require_uuid())
+        uuid = await self.namespace_uuid(segments)
+        return None if uuid is None else fga.namespace_object(uuid)
+
+    async def trashed_object(self, kind: str, segments: list[str]) -> str | None:
+        """The FGA object of the ``kind`` the trash holds under the name ``segments``, by the uuid its record keeps, or
+        ``None`` when the trash holds none (ADR 0173 §9)."""
+        canonical = fga.canonical_object_id(segments, delimiter=self._settings.delimiter)
+        so = self._settings.storage_options()
+        record = await run_in_threadpool(trash.get, self._settings.registry_root, so, canonical, kind=kind)
+        uuid = await run_in_threadpool(trash.object_uuid, record, table_claims.claim_store(self._settings)) if record is not None else None
+        if uuid is None:
+            return None
+        return fga.object_of(kind, uuid)
+
+
+def get_resolver(request: Request, settings: SettingsDep) -> Resolver:
+    """This request's :class:`Resolver`: FastAPI solves one dependency once per request, so every reader shares it."""
+    return Resolver(request, settings)
+
+
+ResolverDep = Annotated[Resolver, Depends(get_resolver)]
+
+
+async def get_resolved_table(request: Request, settings: SettingsDep, ns: NamespaceDep, resolver: ResolverDep) -> ResolvedTable:
     """The table the request's ``{id}`` names, resolved once to its location and that location's claim (ADR 0173 §7).
 
-    FastAPI solves one dependency once per request, so every reader of this one in a request reads the same
-    resolution, and a door acting on it never resolves the name again.
+    The resolution the router's authorization read, when it read one, so a door acting on it never resolves the name
+    again.
     """
-    segments = parse_identifier(request.path_params["id"], settings.delimiter)
-    return await run_in_threadpool(table_claims.resolve, ns, table_claims.claim_store(settings), segments)
+    return await resolver.table(parse_identifier(request.path_params["id"], settings.delimiter), ns=ns)
 
 
 ResolvedTableDep = Annotated[ResolvedTable, Depends(get_resolved_table)]
@@ -416,20 +490,11 @@ class ObjectUuids:
         ns = await self._connection(segments) if segments else None
         return ControlUuids() if ns is None else await run_in_threadpool(object_uuids.of_namespace, ns, segments)
 
-    async def of_object(self, object_id: str) -> ControlUuids:
-        """The uuids of the table or namespace a control event's ``object_id`` (``table:<id>``, ``namespace:<id>``) names.
-
-        A grant or a policy is announced under the object it is scoped to, so it is named by that object's uuids too.
-        Any other object (a project, a warehouse, a gate) has none.
-        """
-        kind, _, name = object_id.partition(":")
-        segments = [segment for segment in name.split(self._settings.delimiter) if segment]
-        if kind == "table" and segments:
-            table = await self.table(segments)
-            return ControlUuids(object_uuid=table.table_uuid, namespace_uuid=table.namespace_uuid)
-        if kind == "namespace" and segments:
-            return await self.namespace(segments)
-        return ControlUuids()
+    async def namespace_of(self, name: str) -> str | None:
+        """The uuid of the namespace the table or namespace ``name`` is in; ``None`` for a top-level namespace or a failed read."""
+        segments = [segment for segment in name.split(self._settings.delimiter) if segment][:-1]
+        ns = await self._connection(segments) if segments else None
+        return None if ns is None else await run_in_threadpool(object_uuids.namespace_uuid, ns, segments)
 
 
 def get_object_uuids(request: Request, settings: SettingsDep) -> ObjectUuids:
@@ -441,11 +506,12 @@ ObjectUuidsDep = Annotated[ObjectUuids, Depends(get_object_uuids)]
 
 
 class UuidNamingControlEmitter:
-    """The app's control emitter, naming each event's table or namespace by its uuids (ADR 0173 §10).
+    """The app's control emitter, naming each event's table or namespace by its uuids (ADR 0173 §10, [[LH-524]]).
 
-    One place rather than every door: an event whose door set no uuid gets the ones its ``object_id`` names, read after
-    the door acted, which is when the object stands for every action but those that end it. A door that ends its object
-    (a drop, a deregister, a rename's source) reads the uuids before it acts and sets them, and those stand.
+    A door names a table or namespace by the uuid object it resolved (``object_id``, ``table:<uuid>``) and its name
+    (``object_name``). One place rather than every door fills what the door did not set: ``object_uuid`` from
+    ``object_id``, and the uuid of the namespace the object is in, read by name after the door acted. A door that ends
+    its object or moves it (a drop, a deregister, a rename) reads that uuid before it acts and sets it, and it stands.
     """
 
     def __init__(self, inner: ControlEmitter, uuids: ObjectUuids) -> None:
@@ -453,9 +519,14 @@ class UuidNamingControlEmitter:
         self._uuids = uuids
 
     async def emit(self, event: CatalogControlEvent) -> None:
-        if event.object_uuid is None and event.namespace_uuid is None:
-            named = await self._uuids.of_object(event.object_id)
-            event = event.model_copy(update={"object_uuid": named.object_uuid, "namespace_uuid": named.namespace_uuid})
+        kind, _, key = event.object_id.partition(":")
+        if kind in ("table", "namespace") and event.object_name is not None:
+            update: dict[str, str | None] = {}
+            if event.object_uuid is None:
+                update["object_uuid"] = key
+            if event.namespace_uuid is None:
+                update["namespace_uuid"] = await self._uuids.namespace_of(event.object_name)
+            event = event.model_copy(update=update)
         await self._inner.emit(event)
 
 

@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import uuid
 from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
@@ -51,19 +52,30 @@ def _settings(tmp: Path, **overrides: Any) -> LineageSettings:
     return LineageSettings.model_validate({"outbox_uri": str(tmp), **overrides})
 
 
+def _uuid(name: str) -> str:
+    """The uuid the catalog minted for the table ``name``, which its staged events carry (ADR 0173 §10)."""
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, name))
+
+
+def _dataset(namespace: str, name: str) -> dict[str, Any]:
+    """A governed table as the catalog names it on an event: its name, and its uuid in the ``lance`` facet."""
+    return {"namespace": namespace, "name": name, "facets": {"lance": {"tableUuid": _uuid(name)}}}
+
+
 def _event_json(
     run_id: str = "r1",
     outputs: tuple[tuple[str, str], ...] = (("bronze", "bronze$x"),),
     inputs: tuple[tuple[str, str], ...] = (),
+    author: str | None = None,
 ) -> str:
     return json.dumps(
         {
             "eventType": "COMPLETE",
             "eventTime": "2026-07-20T00:00:00Z",
-            "run": {"runId": run_id, "facets": {}},
+            "run": {"runId": run_id, "facets": {"author": {"name": author, "sub": author}} if author else {}},
             "job": {"namespace": "ray-jobs", "name": "ingest"},
-            "inputs": [{"namespace": ns, "name": n} for ns, n in inputs],
-            "outputs": [{"namespace": ns, "name": n} for ns, n in outputs],
+            "inputs": [_dataset(ns, n) for ns, n in inputs],
+            "outputs": [_dataset(ns, n) for ns, n in outputs],
         }
     )
 
@@ -143,7 +155,7 @@ def test_list_filters_events_to_visible_datasets(tmp_path: Path, monkeypatch: py
     _stage(s, "r2", _event_json("r2", outputs=(("bronze", "hidden"),)))
 
     async def only_mine(_client: object, *, objects: list[str], **_kw: object) -> dict[str, bool]:
-        return {o: o.endswith(":mine") for o in objects}
+        return {o: o == fga.table_object(_uuid("mine")) for o in objects}
 
     monkeypatch.setattr(fga, "batch_check", only_mine)
     token = _token()
@@ -224,14 +236,14 @@ def test_replay_seen_but_not_writable_is_403(tmp_path: Path, monkeypatch: pytest
     # A caller who CAN see the dataset (can_get_metadata) but can't WRITE it → 403 (enforce_output_authz);
     # the name is one they can already see, so no new disclosure. Nothing ingested/dropped.
     s = _settings(tmp_path, **_FULL_AUTH)
-    _stage(s, "r1", _event_json("r1", outputs=(("bronze", "bronze$x"),)))
+    _stage(s, "r1", _event_json("r1", outputs=(("bronze", "bronze$x"),), author="dex~alice"))
 
     async def see_not_write(_c: object, *, relation: str, objects: list[str], **_kw: object) -> dict[str, bool]:
         return dict.fromkeys(objects, relation == "can_get_metadata")
 
     monkeypatch.setattr(fga, "batch_check", see_not_write)
     repo = _Repo()
-    with pytest.raises(PermissionDeniedError):
+    with pytest.raises(PermissionDeniedError, match=r"can_write_data required on outputs: bronze\$x"):
         asyncio.run(_replay(s, "r1", repo, _token()))
     assert repo.ingested == []
     assert outbox.resolve_event(s.outbox_uri, storage_options(s), "r1") is not None

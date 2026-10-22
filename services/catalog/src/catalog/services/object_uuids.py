@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 
-from lance_namespace import DescribeNamespaceRequest, DescribeTableRequest, InternalError, LanceNamespace
+from lance_namespace import DescribeNamespaceRequest, DescribeTableRequest, InternalError, LanceNamespace, NamespaceNotFoundError
 
 from catalog.services import native
 from service_kit.control_events import ControlUuids
@@ -36,6 +36,23 @@ def namespace_uuid(ns: LanceNamespace, segments: list[str]) -> str | None:
     return uuid_of(described.properties)
 
 
+def resolve_namespace_uuid(ns: LanceNamespace, segments: list[str]) -> str | None:
+    """The uuid of the namespace ``segments`` names, or ``None`` when no namespace has that name.
+
+    Raises:
+        InternalError: The namespace carries no uuid, which no door leaves.
+    """
+    try:
+        described = native.call(ns, "describe_namespace", DescribeNamespaceRequest(id=segments))
+    except NamespaceNotFoundError:
+        return None
+    uuid = uuid_of(described.properties)
+    if uuid is None:
+        log.error("namespace_uuid_unrecorded", extra={"namespace": segments})
+        raise InternalError(f"namespace {segments} carries no uuid, so nothing kept for it can be read")
+    return uuid
+
+
 def require_namespace_uuid(ns: LanceNamespace, segments: list[str]) -> str:
     """The uuid of the namespace ``segments`` names, for a door that reads or writes a record kept for it (ADR 0173 §8).
 
@@ -43,11 +60,9 @@ def require_namespace_uuid(ns: LanceNamespace, segments: list[str]) -> str:
         NamespaceNotFoundError: No such namespace.
         InternalError: The namespace carries no uuid, which no door leaves.
     """
-    described = native.call(ns, "describe_namespace", DescribeNamespaceRequest(id=segments))
-    uuid = uuid_of(described.properties)
+    uuid = resolve_namespace_uuid(ns, segments)
     if uuid is None:
-        log.error("namespace_uuid_unrecorded", extra={"namespace": segments})
-        raise InternalError(f"namespace {segments} carries no uuid, so no record kept for it can be read")
+        raise NamespaceNotFoundError(f"namespace not found: {segments}")
     return uuid
 
 

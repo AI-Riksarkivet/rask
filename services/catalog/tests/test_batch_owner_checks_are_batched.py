@@ -18,13 +18,15 @@ is caught by the call COUNTS rather than by reading the code.
 from __future__ import annotations
 
 import asyncio
-from typing import Any, cast
+import uuid
+from typing import Any, cast, override
 
 import pytest
 from fastapi import Request
 from openfga_sdk.client import OpenFgaClient
 
 from catalog.api import fga_deps
+from catalog.api.dependencies import Resolver
 from catalog.core.config import Settings
 
 
@@ -44,6 +46,20 @@ def _settings() -> Settings:
             "s3_secret_access_key": "x",
         }
     )
+
+
+class _EveryTableHolds(Resolver):
+    """Every table name holds an object keyed by a uuid derived from the name; no store is read.
+
+    The claim is how many round trips the batch costs, not how a name resolves.
+    """
+
+    def __init__(self) -> None:
+        pass
+
+    @override
+    async def object(self, kind: str, segments: list[str]) -> str | None:
+        return f"{kind}:{uuid.uuid5(uuid.NAMESPACE_URL, '$'.join(segments))}"
 
 
 class _FakeRequest:
@@ -78,7 +94,7 @@ def _drive(body: dict[str, Any], *, allow: bool = True) -> tuple[list[str], list
     try:
         monkey.setattr(fga_deps.fga, "check", rec_check)
         monkey.setattr(fga_deps.fga, "batch_check", rec_batch)
-        asyncio.run(fga_deps._authorize_batch(cast("Request", _FakeRequest(body)), _CLIENT, _settings(), user="dex~alice"))
+        asyncio.run(fga_deps._authorize_batch(cast("Request", _FakeRequest(body)), _CLIENT, _EveryTableHolds(), _settings(), user="dex~alice"))
     finally:
         monkey.undo()
     return singles, batches
@@ -91,6 +107,7 @@ def test_twenty_owner_tier_ops_cost_one_round_trip_not_twenty() -> None:
 
 
 def test_a_denied_owner_object_is_still_refused_by_name() -> None:
+    """The refusal names each table by the name the body gave, never by the uuid its grants are held by."""
     from lance_namespace import PermissionDeniedError
 
     with pytest.raises(PermissionDeniedError) as denied:

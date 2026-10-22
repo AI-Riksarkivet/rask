@@ -36,6 +36,9 @@ LINEAGE = "http://lineage.invalid"
 OPEN = Visibility(decider=None, enabled=False)
 
 pytestmark = pytest.mark.usefixtures("lineage_identity_token")
+#: The uuid the catalog minted for `silver$pages`, which the feed's projection keeps in the output's `lance` facet
+#: (ADR 0173 §10).
+PAGES_UUID = "3f1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5b"
 
 
 def _event(seq: int, *, run_id: str | None = None, author: str = "alice", event_type: str = "FAIL") -> dict[str, Any]:
@@ -45,7 +48,7 @@ def _event(seq: int, *, run_id: str | None = None, author: str = "alice", event_
             "eventType": event_type,
             "eventTime": "2026-08-09T12:00:00+00:00",
             "run": {"runId": run_id or f"run-{seq}", "facets": {"author": {"name": author, "sub": author}}},
-            "outputs": [{"namespace": "silver", "name": "silver$pages"}],
+            "outputs": [{"namespace": "silver", "name": "silver$pages", "facets": {"lance": {"tableUuid": PAGES_UUID}}}],
         },
     }
 

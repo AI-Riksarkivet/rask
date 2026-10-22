@@ -34,7 +34,10 @@ from fastapi.testclient import TestClient
 from lance_namespace import DescribeTableResponse
 
 from catalog.core.vending import Tier, VendedCredentials
+from catalog.services import table_claims
 from service_kit.governed.machine_identity import ServicePrincipal
+from service_kit.lakehouse import location_claims
+from tests.unit.named_resolver import NamedResolver, uuid_of
 
 
 class _Vendor:
@@ -55,7 +58,7 @@ def governed(fake_ns: MagicMock, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     get_settings.cache_clear()
 
     from catalog.api import security
-    from catalog.api.dependencies import get_fga_client, get_namespace, get_storage_options, get_vendor
+    from catalog.api.dependencies import get_fga_client, get_namespace, get_resolved_table, get_resolver, get_storage_options, get_vendor
     from catalog.api.dependencies import get_settings as settings_dep
     from catalog.main import app
 
@@ -65,6 +68,12 @@ def governed(fake_ns: MagicMock, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     governed_settings = get_settings().model_copy(update={"fga_enabled": True})
 
     fake_ns.describe_table.return_value = DescribeTableResponse(location="s3://lance-catalog/db$t")
+    # Every name holds an object (``NamedResolver``): the claim here is which rung opens a tier, not how a name resolves.
+    # The door acts on the table its double describes, whose location's claim records the uuid the checks were asked on.
+    claims = table_claims.claim_store(governed_settings)
+    location_claims.take(claims, "s3://lance-catalog/db$t", "db$t", ["db", "t"], is_gone=lambda _claim: False, uuid=uuid_of("table", ["db", "t"]))
+    app.dependency_overrides[get_resolver] = lambda: NamedResolver()
+    app.dependency_overrides[get_resolved_table] = lambda: table_claims.resolve(fake_ns, claims, ["db", "t"])
     app.dependency_overrides[get_namespace] = lambda: fake_ns
     app.dependency_overrides[get_storage_options] = lambda: {}
     app.dependency_overrides[get_vendor] = lambda: _Vendor()

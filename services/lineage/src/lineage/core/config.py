@@ -88,12 +88,8 @@ class LineageSettings(GovernedAuthSettings, BaseSettings):
     forward_timeout_seconds: float = Field(default=10.0, gt=0, alias="LINEAGE_FORWARD_TIMEOUT_SECONDS")
 
     # --- OpenFGA (authz) — reuses the catalog's store READ-ONLY -------------------------
-    # The OIDC/FGA field-set itself is `GovernedAuthSettings`' (`RASK_OIDC_*` / `RASK_FGA_*`); only the
-    # knob below is lineage's own. It used to be declared here under `LINEAGE_*`, and the copy had
-    # already lost the shared HTTPS-issuer validator.
-    # The FGA object type a Lance dataset maps to. A feed row names datasets by their catalog
-    # ``table:<id>``, so a read is gated on ``can_get_metadata`` of ``table:<name>``.
-    fga_object_type: str = Field(default="table", alias="LINEAGE_FGA_OBJECT_TYPE")
+    # The OIDC/FGA field-set itself is `GovernedAuthSettings`' (`RASK_OIDC_*` / `RASK_FGA_*`). A governed dataset is
+    # asked about as the table its uuid names (`table:<uuid>`, [[LH-524]]).
     #: Who may sign what the bus and the outbox carry; see `Signing`. Built by its own env aliases
     #: (`LINEAGE_SIGNERS`, `LINEAGE_DELEGATORS`), so a settings object made by `model_validate` reads them too.
     signing: Signing = Field(default_factory=Signing)

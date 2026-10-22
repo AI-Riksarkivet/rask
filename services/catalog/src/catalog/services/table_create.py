@@ -60,6 +60,7 @@ from openfga_sdk import OpenFgaClient
 from pydantic import BaseModel
 
 from catalog.api import fga_deps
+from catalog.api.dependencies import Resolver
 from catalog.api.security import Caller
 from catalog.core import provenance_guard, run_context
 from catalog.core.base_judge import GovernedStorage
@@ -177,6 +178,7 @@ async def create_governed_table(
     emitter: LineageEmitter,
     uuids: UuidReader,
     control: ControlEmitter,
+    resolver: Resolver,
     so: StorageOptions,
     table: pa.Table,
     mode: CreateMode,
@@ -211,8 +213,8 @@ async def create_governed_table(
     # lives here, so the Arrow create wrote real datasets into namespaces that do not exist, with a
     # live owner grant and no parent edge.
     await fga_deps.require_parent_exists(ns, "table", parse_identifier(id, settings.delimiter), delimiter=settings.delimiter)
-    # The id must not still belong to a trashed table (diff2 F10 item 4): a recoverable drop KEEPS
-    # its grants, so creating here would hand the new table the dead one's readers and writers.
+    # The name must not still belong to a trashed table (diff2 F10 item 4): its undrop restores it under this
+    # name, which a table created here would hold.
     await fga_deps.require_no_live_trash(settings, parse_identifier(id, settings.delimiter))
     # [[LH-209]] The one external blob base this create may register, judged before the write: none unless
     # the request names one, and never one that reaches governed storage.
@@ -249,10 +251,10 @@ async def create_governed_table(
     overwrote_existing = pre_existed and mode is CreateMode.OVERWRITE
     existok_kept_existing = pre_existed and mode is CreateMode.EXIST_OK
     if overwrote_existing:
-        await fga_deps.require_can_drop_table(client, settings, token, segments=segments)
+        overwritten = await resolver.table(segments, ns=ns)
+        await fga_deps.require_can_drop_table(client, settings, token, table=overwritten)
         # After the authz gate, as on the drop door: a caller who may not drop the table learns nothing
         # about its protection.
-        overwritten = await run_in_threadpool(table_claims.resolve, ns, table_claims.claim_store(settings), segments)
         await fga_deps.require_table_unprotected(settings, overwritten, force=force)
     # [[LH-279]] Where the create records the bases it registers — the catalog's control root, written
     # with the catalog's own credential and never through a vend.
@@ -329,18 +331,17 @@ async def create_governed_table(
     # `undo` stays conditional. Compensation undoes what THIS request created, and an ExistOk that kept
     # an existing table created nothing to undo.
     seeding_a_new_table = not pre_existed
-    # `created` asks for PROOF that this request brought the table into being, because it licenses revoking
-    # every tuple already on the id ([[LH-480]]). Only an exclusive Create proves it: native create refuses an
-    # id that exists. `pre_existed` is probed before the write, so under ExistOk or Overwrite a table another
-    # caller created in that window is indistinguishable from a fresh one, and revoking would strip its real
-    # owner. Those modes leave tuples on the id as they found them.
+    # The table's grants are held by the uuid its location's claim records: the one this create minted, or the kept
+    # table's own under ExistOk or an Overwrite (ADR 0173 §2, [[LH-524]]).
+    table_uuid = await run_in_threadpool(table_claims.uuid_at, table_claims.claim_store(settings), response.location or "", segments)
     await fga_deps.seed_ownership_or_compensate(
         client,
         settings,
         token,
+        resolver,
         resource="table",
         segments=segments,
-        created=seeding_a_new_table and mode is CreateMode.CREATE,
+        uuid=table_uuid,
         may_grant_owner=seeding_a_new_table,
         undo=_undo_create if (seeding_a_new_table and compensation_allowed(mode, overwrote_existing)) else None,
     )
@@ -407,7 +408,8 @@ async def create_governed_table(
             control,
             action="table_created",
             object_type="table",
-            object_id=f"table:{table_id}",
+            object_id=fga.table_object(table_uuid),
+            object_name=table_id,
             actor=f"user:{token.subject}" if token is not None else None,
             extra={
                 "namespace": namespace,

@@ -35,6 +35,7 @@ from lance_namespace import CreateNamespaceRequest, CreateNamespaceResponse, Nam
 
 from catalog.api.v1.endpoints import namespaces as ns_ep
 from catalog.core.config import Settings
+from tests.unit.named_resolver import NamedResolver
 
 
 class _Settings:
@@ -71,15 +72,16 @@ async def _create(
         _client: Any,
         _settings: Any,
         _token: Any,
+        _resolver: Any,
         *,
         resource: str,
         segments: list[str],
+        uuid: str,
         undo: Any,
-        created: bool,
         parent_object: str | None = None,
         may_grant_owner: bool = True,
     ) -> None:
-        del undo, created, parent_object, may_grant_owner
+        del uuid, undo, parent_object, may_grant_owner
         seeded.append((resource, *segments))
 
     monkeypatch.setattr(ns_ep.fga_deps, "seed_ownership_or_compensate", _seed)
@@ -110,6 +112,7 @@ async def _create(
         # The emitter is never consulted — `emit_control` is stubbed above — so the cast records that
         # this argument is inert here rather than that its type is inconvenient.
         control=cast(Any, None),
+        resolver=NamedResolver(),
         body=CreateNamespaceRequest(id=["acme"], mode=mode),
     )
 

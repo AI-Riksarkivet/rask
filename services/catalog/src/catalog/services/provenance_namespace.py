@@ -46,11 +46,9 @@ def is_provenance(namespace_id: str, settings: Settings) -> bool:
     return bool(root) and (namespace_id == root or namespace_id.startswith(f"{root}{settings.delimiter}"))
 
 
-def provenance_tuples(settings: Settings) -> list[fga.ClientTuple]:
-    """The namespace's parent edge and a `writer` grant per configured writer."""
-    segments = parse_identifier(settings.provenance_namespace, settings.delimiter)
-    obj = f"namespace:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}"
-    parent = fga.parent_object("namespace", segments, delimiter=settings.delimiter, warehouse_object=settings.fga_default_warehouse_object)
+def provenance_tuples(settings: Settings, *, namespace_uuid: str, parent: str | None) -> list[fga.ClientTuple]:
+    """The namespace's parent edge and a `writer` grant per configured writer, on the namespace's uuid ([[LH-524]])."""
+    obj = fga.namespace_object(namespace_uuid)
     return [
         *([fga.ClientTuple(user=parent, relation="parent", object=obj)] if parent else []),
         *(fga.ClientTuple(user=fga.user_object(subject), relation="writer", object=obj) for subject in settings.provenance_writers),
@@ -79,6 +77,13 @@ async def ensure_provenance_namespace(ns: LanceNamespace, settings: Settings, cl
         {"kind": "namespace", "id": canonical, "uuid": namespace_uuid, "protected": "true", "set_by": ACTOR},
     )
     if settings.fga_enabled and client is not None:
-        await fga.write_tuples(client, provenance_tuples(settings), actor=ACTOR, origin="provenance_namespace")  # noqa: TID251
+        # A top-level namespace hangs off the default warehouse; a nested one off its parent namespace's uuid.
+        parent = (
+            fga.namespace_object(await run_in_threadpool(object_uuids.require_namespace_uuid, ns, segments[:-1]))
+            if len(segments) > 1
+            else settings.fga_default_warehouse_object
+        )
+        tuples = provenance_tuples(settings, namespace_uuid=namespace_uuid, parent=parent)
+        await fga.write_tuples(client, tuples, actor=ACTOR, origin="provenance_namespace")  # noqa: TID251
     log.info("provenance_namespace_ensured", extra={"namespace": canonical, "newly_created": not kept, "writers": len(settings.provenance_writers)})
     return not kept

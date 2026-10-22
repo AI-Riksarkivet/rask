@@ -16,6 +16,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
+import uuid
 from collections.abc import Callable
 from collections.abc import Set as AbstractSet
 from pathlib import Path
@@ -90,6 +91,25 @@ _REGISTRY = [
 _TABLES = {"acme-bronze": [], "acme-silver": ["features", "dummy"], "acme-gold": ["catalog"], "beta-locked": ["records"]}
 
 
+def _uuid(kind: str, name: str) -> str:
+    """The uuid the fake catalog minted for the ``kind`` named ``name``, which its describe answers as ``rask.uuid``."""
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"{kind}:{name}"))
+
+
+def _object(kind: str, name: str) -> str:
+    """The FGA object a grant on the ``kind`` named ``name`` is written on: its uuid, never its name (ADR 0173 §8)."""
+    return f"{kind}:{_uuid(kind, name)}"
+
+
+def _describe(path: str) -> tuple[str, str] | None:
+    """The ``(kind, name)`` a DescribeTable or DescribeNamespace path names, else None."""
+    for kind in ("table", "namespace"):
+        prefix = f"/v1/{kind}/"
+        if path.startswith(prefix) and path.endswith("/describe"):
+            return kind, path.removeprefix(prefix).removesuffix("/describe")
+    return None
+
+
 def _fake_catalog(recorded: list[httpx.Request], refuse: Refusal | None = None) -> httpx.MockTransport:
     """A catalog that records everything, succeeds by default, and refuses whatever ``refuse`` picks."""
 
@@ -100,6 +120,8 @@ def _fake_catalog(recorded: list[httpx.Request], refuse: Refusal | None = None) 
             return httpx.Response(status, json=body)
         if request.method == "GET" and request.url.path == "/management/v1/projects":
             return httpx.Response(200, json=_REGISTRY)
+        if request.method == "POST" and (described := _describe(request.url.path)) is not None:
+            return httpx.Response(200, json={"properties": {"rask.uuid": _uuid(*described)}})
         if request.url.path.endswith("/table/list"):
             namespace = request.url.path.removeprefix("/v1/namespace/").removesuffix("/table/list")
             return httpx.Response(200, json={"tables": _TABLES.get(namespace, [])})
@@ -125,7 +147,8 @@ def test_a_project_is_created_before_its_warehouse_before_its_namespace_before_i
     recorded: list[httpx.Request] = []
     assert _run(recorded) == 0
 
-    writes = [request for request in recorded if request.method == "POST"]
+    # A describe is a read sent as POST (the spec's route grammar), resolving a grant's object rather than writing one.
+    writes = [request for request in recorded if request.method == "POST" and _describe(request.url.path) is None]
     ranks = [_ORDER[_layer(request)] for request in writes]
     assert ranks == sorted(ranks), [(_layer(r), r.url.path) for r in writes]
     # …and the acme chain specifically, since a globally-sorted run could still mis-order one tenant.
@@ -145,10 +168,10 @@ def test_a_project_is_created_before_its_warehouse_before_its_namespace_before_i
 def test_a_grant_on_a_table_names_the_table_this_run_actually_created() -> None:
     """The one grant whose object is a TABLE, and therefore the one that depends on the delimiter.
 
-    A table's id is its PATH and the separator is per-run (``--delimiter`` / ``SEED_NS_DELIMITER``), so a
-    grant that hardcoded ``$`` would address a table nobody created the moment the two disagreed — and a
-    tuple write SUCCEEDS against an object that does not exist. That is the ghost the whole script is
-    built to stop making, re-entering through the grant layer.
+    A table is named by its PATH and the separator is per-run (``--delimiter`` / ``SEED_NS_DELIMITER``), and the grant
+    is written on the uuid DescribeTable answers for that path (ADR 0173 §8). A grant that hardcoded ``$`` would
+    resolve a table nobody created the moment the two disagreed. That is the ghost the whole script is built to stop
+    making, re-entering through the grant layer.
 
     Driven with a NON-default delimiter on purpose: under the default the hardcoded form and the correct
     form are the same string, so the bug is invisible exactly where it would be tested.
@@ -157,15 +180,17 @@ def test_a_grant_on_a_table_names_the_table_this_run_actually_created() -> None:
     assert _run(recorded, argv=["--catalog", "http://catalog", "--delimiter", "."]) == 0
 
     declared = [request.url.path for request in recorded if _layer(request) == "table"]
+    described = [described for request in recorded if (described := _describe(request.url.path)) is not None and described[0] == "table"]
     granted = [str(_body(request)["object"]) for request in recorded if _layer(request) == "grant"]
 
     assert "/v1/table/acme-gold.catalog/declare" in declared
-    assert "table:acme-gold.catalog" in granted, f"the table grant did not follow the run's delimiter: {granted}"
-    assert not [obj for obj in granted if "{delimiter}" in obj], f"the placeholder reached the wire: {granted}"
+    assert described == [("table", "acme-gold.catalog")], f"the table grant did not resolve the run's delimiter: {described}"
+    assert _object("table", "acme-gold.catalog") in granted, f"the table grant is not on the uuid its table resolved to: {granted}"
+    assert not [obj for obj in granted if "{delimiter}" in obj or "acme-gold" in obj], f"a name reached the wire: {granted}"
     # And it is still ORDERED behind the declare — resolving the object without resolving the parent
     # lookup would write the tuple first, against a table that does not exist yet.
     assert _index(recorded, lambda r: r.url.path == "/v1/table/acme-gold.catalog/declare") < _index(
-        recorded, lambda r: _layer(r) == "grant" and _body(r)["object"] == "table:acme-gold.catalog"
+        recorded, lambda r: _layer(r) == "grant" and _body(r)["object"] == _object("table", "acme-gold.catalog")
     )
 
 
@@ -227,7 +252,7 @@ def test_a_namespace_already_bound_to_another_warehouse_is_a_failure_not_converg
     assert _run(recorded, refuse) == 1
 
     grants = [_body(request) for request in recorded if request.url.path == "/management/v1/access/tuples"]
-    assert not [grant for grant in grants if grant["object"] == "namespace:acme-gold"]
+    assert not [grant for grant in grants if grant["object"] == _object("namespace", "acme-gold")]
     assert "/v1/table/acme-gold$catalog/declare" not in [request.url.path for request in recorded]
     # The sibling namespace is untouched: one refused bind must not empty the rest of the estate.
     assert "/v1/table/acme-silver$features/declare" in [request.url.path for request in recorded]
@@ -262,7 +287,7 @@ def test_a_grant_is_never_written_against_an_object_whose_create_failed() -> Non
     assert _run(recorded, refuse) == 1
 
     grants = [_body(request) for request in recorded if request.url.path == "/management/v1/access/tuples"]
-    assert not [grant for grant in grants if grant["object"] == "namespace:acme-gold"]
+    assert not [grant for grant in grants if grant["object"] == _object("namespace", "acme-gold")]
     # Everything the failure does NOT block still lands: one broken branch must not empty the estate.
     assert {"demo~dave", "demo~carol", "demo~gina"} <= {str(grant["user"]) for grant in grants}
 

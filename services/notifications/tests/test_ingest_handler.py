@@ -6,6 +6,7 @@ the wrong way round is how a subscription stops delivering anything at all. Each
 which of the two it is holding in place.
 """
 
+import uuid
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
@@ -37,8 +38,13 @@ def _event(
         "eventType": event_type,
         "eventTime": "2026-08-09T12:00:00+00:00",
         "run": {"runId": run_id, "facets": facets},
-        "outputs": [{"namespace": "silver", "name": name} for name in (outputs if outputs is not None else ["silver$pages"])],
+        "outputs": [_output(name) for name in (outputs if outputs is not None else ["silver$pages"])],
     }
+
+
+def _output(name: str) -> dict[str, Any]:
+    """An output as the catalog names it: its name, and its table's uuid in the ``lance`` facet (ADR 0173 §10)."""
+    return {"namespace": "silver", "name": name, "facets": {"lance": {"tableUuid": str(uuid.uuid5(uuid.NAMESPACE_URL, name))}}}
 
 
 class _Inbox:

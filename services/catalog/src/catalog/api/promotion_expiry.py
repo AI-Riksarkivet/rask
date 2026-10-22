@@ -31,6 +31,7 @@ from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier
 from catalog.services import promotions, table_claims
 from service_kit.control_emit import emit_control
+from service_kit.governed import fga
 from service_kit.governed.dapr_auth import require_dapr_token
 from service_kit.lakehouse.records import RecordChangedError
 
@@ -77,7 +78,8 @@ async def _on_cron(
                 control,
                 action="promotion_expired",
                 object_type="table",
-                object_id=f"table:{table or closed.table}",
+                object_id=fga.table_object(closed.uuid),
+                object_name=table or closed.table,
                 actor=None,
                 extra={"version": closed.version, "published_version": closed.published_version},
             )

@@ -40,16 +40,20 @@ def _settings() -> Any:
     return Settings.model_validate({"LANCE_REST_IMPL": "dir", "LANCE_S3_ACCESS_KEY_ID": "k", "LANCE_S3_SECRET_ACCESS_KEY": "s"})
 
 
+#: The object a dropped namespace's event names: its uuid's, which carries no name to evict by (ADR 0173 §8).
+_DROPPED = "namespace:7d2e4c19-8a3b-4e6f-b1d0-5c9a2e8f3b47"
+
+
 def test_namespace_dropped_evicts_the_TOP_segment() -> None:
-    """The cache is keyed by top-level namespace, so the id's FIRST segment is what gets evicted —
-    for a top-level drop because its binding is gone, for a nested drop as a harmless re-read (the
+    """The cache is keyed by top-level namespace, so the FIRST segment of the name the event carries is what gets
+    evicted — for a top-level drop because its binding is gone, for a nested drop as a harmless re-read (the
     binding is intact; the next resolve re-caches it). Both must map to `acme`, never `acme$inner`
-    (a whole-id pop would MISS the top-level key and leave replica 2 routing at a dead bucket)."""
+    (a whole-name pop would MISS the top-level key and leave replica 2 routing at a dead bucket)."""
     cache = _cache()
-    assert evict_stale_bindings(cache, action="namespace_dropped", object_id="namespace:acme", extra={}, delimiter="$") == ["acme"]
+    assert evict_stale_bindings(cache, action="namespace_dropped", object_id=_DROPPED, object_name="acme", extra={}, delimiter="$") == ["acme"]
     assert "acme" not in cache and "beta" in cache
     fresh = _cache()
-    assert evict_stale_bindings(fresh, action="namespace_dropped", object_id="namespace:acme$inner", extra={}, delimiter="$") == ["acme"]
+    assert evict_stale_bindings(fresh, action="namespace_dropped", object_id=_DROPPED, object_name="acme$inner", extra={}, delimiter="$") == ["acme"]
     assert "beta" in fresh
 
 
@@ -57,15 +61,16 @@ def test_warehouse_bound_evicts_the_rebound_namespace() -> None:
     """A cached entry for a namespace being BOUND can only be a pre-delete leftover this replica
     never heard the delete for — the next request must read the authoritative record."""
     cache = _cache()
-    evicted = evict_stale_bindings(cache, action="warehouse_bound", object_id="warehouse:wh-new", extra={"namespace": "acme"}, delimiter="$")
+    evicted = evict_stale_bindings(cache, action="warehouse_bound", object_id="warehouse:wh-new", object_name=None, extra={"namespace": "acme"}, delimiter="$")
     assert evicted == ["acme"]
     assert set(cache) == {"acme_gold", "beta"}
 
 
 def test_unrelated_events_evict_nothing() -> None:
     cache = _cache()
-    for action, obj in [("table_created", "table:acme$t"), ("grant_added", "table:acme$t"), ("warehouse_deactivated", "warehouse:wh-acme")]:
-        assert evict_stale_bindings(cache, action=action, object_id=obj, extra={}, delimiter="$") == []
+    table = "table:0b6f8a52-4c1e-4f7a-9d3e-2a1c5b7e9f01"
+    for action, obj, name in [("table_created", table, "acme$t"), ("grant_added", table, "acme$t"), ("warehouse_deactivated", "warehouse:wh-acme", None)]:
+        assert evict_stale_bindings(cache, action=action, object_id=obj, object_name=name, extra={}, delimiter="$") == []
     assert len(cache) == 3, "a non-binding event evicted a binding"
     # Deactivation is deliberately absent from the rules: warehouse STATUS is read live per request.
 

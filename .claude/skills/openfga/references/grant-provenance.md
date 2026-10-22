@@ -27,7 +27,7 @@ needed** — the audit row carries all four coordinates of the grant, and a revi
 | `audit.subject` | **the GRANTOR** — the verified OIDC principal that made the call |
 | `audit.grantee` | who received it (`user:bob`, or a userset like `team:x#member`) |
 | `audit.relation` | which rung (`owner` / `writer` / `reader` / …) |
-| `audit.resource` | the object (`table:db1$users`) |
+| `audit.resource` | the object as OpenFGA holds it (`table:<uuid>`: the uuid `db1$users` resolves to, its `rask.uuid` in DescribeTable — ADR 0173 §8) |
 
 So the review query is a direct filter, not a correlation:
 
@@ -36,7 +36,7 @@ So the review query is a direct filter, not a correlation:
 SELECT timestamp, "audit.subject" AS granted_by, "audit.outcome"
 FROM opentelemetry_logs
 WHERE "audit.action"   = 'access_grant'
-  AND "audit.resource" = 'table:db1$users'
+  AND "audit.resource" = 'table:<uuid of db1$users>'
   AND "audit.grantee"  = 'user:bob'
   AND "audit.relation" = 'writer'
 ORDER BY timestamp DESC;

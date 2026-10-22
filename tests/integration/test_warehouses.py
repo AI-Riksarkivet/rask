@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -25,6 +26,7 @@ from service_kit.governed import fga as fga_module
 from service_kit.governed.oidc import IDToken
 from service_kit.governed.person_identity import PersonPrincipal
 from service_kit.governed.principal import Principal
+from service_kit.lakehouse.naming import UUID_PROPERTY
 
 
 def _settings(tmp_path: Any, *, enabled: bool = True, fga: bool = False, reserved: str = "") -> Settings:
@@ -471,6 +473,9 @@ class _FakeNamespace:
     def __init__(self, existing: set[str] | None = None) -> None:
         self.existing = existing or set()
         self.calls: list[str] = []
+        #: The properties each namespace holds: what its create stored, and a minted uuid for one that already
+        #: existed, as every namespace a door made carries (ADR 0173 §6).
+        self.properties: dict[str, dict[str, str]] = {name: {UUID_PROPERTY: str(uuid4())} for name in self.existing}
 
     def create_namespace(self, req: Any) -> Any:
         from lance_namespace import CreateNamespaceResponse, NamespaceAlreadyExistsError
@@ -480,7 +485,17 @@ class _FakeNamespace:
         if name in self.existing:
             raise NamespaceAlreadyExistsError(f"exists: {name}")
         self.existing.add(name)
+        self.properties[name] = dict(req.properties or {})
         return CreateNamespaceResponse()
+
+    def describe_namespace(self, req: Any) -> Any:
+        """The namespace's properties, which carry the uuid its grants are seeded on (ADR 0173 §8)."""
+        from lance_namespace import DescribeNamespaceResponse, NamespaceNotFoundError
+
+        name = "$".join(req.id)
+        if name not in self.existing:
+            raise NamespaceNotFoundError(f"not found: {name}")
+        return DescribeNamespaceResponse(properties=self.properties[name])
 
     def drop_namespace(self, req: Any) -> Any:
         from lance_namespace import DropNamespaceResponse

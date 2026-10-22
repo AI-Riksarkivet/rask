@@ -5,9 +5,11 @@ location. These routes ARE under the router-level ``authorize`` dependency — i
 checks still run here (missing token → 401; FGA enabled but unwired → 503, fail-closed) — but ``/management/v1/model``
 matches no ``_RESOURCES`` prefix, so ``authorize`` makes no per-object decision. The per-object FGA gate is
 therefore explicit per handler: promote → the validator rung ``can_promote``; describe → the reader rung
-``can_get_metadata``; list → the same reader rung as a ``list_objects`` filter — all on
-``table:models$<model>`` (the per-model FGA object, parented to ``namespace:models`` so the rung
-cascades from it). That router-level fail-closed floor is what keeps the list filter's
+``can_get_metadata``; list → the same reader rung, batch-checked over the page's candidates — all on
+``table:models$<model>``, the per-model FGA object, granted directly: no door seeds a parent edge for a registry
+model, so no namespace grant cascades to it. A registry model is no lance-namespace table: no ``__manifest`` row names it and no location
+claim mints it a uuid (ADR 0173 §3 keys tables and namespaces), so its object keeps the model's name, which
+``_MODEL_RE`` holds to characters OpenFGA accepts. That router-level fail-closed floor is what keeps the list filter's
 ``fga_enabled and token and client`` guards from ever being a fail-open path. Promotion moves the
 ``blessed`` Lance tag after a fail-closed metrics gate; a distinct promotion RunEvent is emitted
 best-effort so the blessing lands in lineage without being mistaken for a training run.
@@ -62,6 +64,11 @@ def _segments(model: str) -> list[str]:
     return [_MODELS_NAMESPACE, model]
 
 
+def _model_object(model: str, settings: Settings) -> str:
+    """The FGA object a registry model is governed as, ``table:models$<model>``: a model has no catalog-minted uuid."""
+    return f"table:{fga.canonical_object_id(_segments(model), delimiter=settings.delimiter)}"
+
+
 def _summaries(settings: Settings, so: dict[str, str], names: list[str]) -> list[ModelSummary]:
     """Per-model list summaries, one blocking pass (callers threadpool the whole loop). A directory that is
     not a readable Lance dataset yet (interrupted first publish) reports null versions instead of failing
@@ -97,23 +104,16 @@ async def list_models(
     """
     names = await run_in_threadpool(registry.list_models, settings.models_root, so)
     names = [name for name in names if _MODEL_RE.fullmatch(name)]
-    authorization_truncated = False
+    names = sorted(set(names))
     if settings.fga_enabled and token is not None and client is not None:
-        # `.objects` + `.truncated`: past OpenFGA's 1000-object cap this listing is SHORT, and the
-        # page cursor below would be minted from the shortened list. Surfaced to the caller rather
-        # than only logged — a client cannot otherwise tell a small estate from a truncated answer.
-        listing = await fga.list_objects(client, user=token.subject, relation="can_get_metadata", object_type="table")
-        allowed = set(listing.objects)
-        authorization_truncated = listing.truncated
-        names = [name for name in names if f"table:{fga.canonical_object_id(_segments(name), delimiter=settings.delimiter)}" in allowed]
-    # Sorted before slicing: `paginate`'s cursor is only stable if the list has a total order, and
-    # the docstring's "name-sorted" promise was previously made by `registry.list_models` rather than
-    # here — a promise the caller cannot verify and this route cannot enforce.
-    page, next_token = paginate(sorted(set(names)), page_token, limit)
+        # The page's own candidates, batch-checked ([[LH-223]]): a listing never asks OpenFGA what the caller reaches
+        # across the estate, which stops at the server's ceiling.
+        allowed = await fga.batch_check(client, user=token.subject, relation="can_get_metadata", objects=[_model_object(name, settings) for name in names])
+        names = [name for name in names if allowed.get(_model_object(name, settings))]
+    page, next_token = paginate(names, page_token, limit)
     return ModelsListResponse(
         models=await run_in_threadpool(_summaries, settings, so, page),
         page_token=next_token,
-        authorization_truncated=authorization_truncated,
     )
 
 
@@ -139,7 +139,7 @@ async def promote_model(
     segments = _segments(model)
     if body.tag not in _PROMOTION_TAGS:
         raise InvalidInputError(f"tag must be one of {sorted(_PROMOTION_TAGS)}, got {body.tag!r}")
-    await fga_deps.require_can_promote(client, settings, token, segments=segments)
+    await fga_deps.require_relation(client, settings, token, relation="can_promote", obj=_model_object(model, settings))
     blessed = await run_in_threadpool(
         registry.promote,
         settings.model_uri(model),
@@ -178,8 +178,7 @@ async def describe_model(
     Reader-gated (``can_get_metadata``) — a reader may see which version is blessed and compare metrics; only
     a validator may move the pointer.
     """
-    segments = _segments(model)
-    await fga_deps.require_can_get_metadata(client, settings, token, segments=segments)
+    await fga_deps.require_relation(client, settings, token, relation="can_get_metadata", obj=_model_object(model, settings))
     summary = await run_in_threadpool(registry.describe, settings.model_uri(model), so)
     artifacts = await run_in_threadpool(registry.list_artifacts, settings.model_artifacts_uri(model), so)
     return ModelDescribeResponse(model=model, artifacts=[ModelArtifact(**a) for a in artifacts], **summary)

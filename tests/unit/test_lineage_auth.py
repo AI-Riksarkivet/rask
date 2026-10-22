@@ -14,6 +14,7 @@ Covers:
 from __future__ import annotations
 
 import asyncio
+import uuid
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -28,16 +29,43 @@ from lineage.api import fga_deps, security
 from lineage.core.config import LineageSettings
 from lineage.models import RunEvent
 from lineage.schemas import EventRecord
+from lineage.services.names import CatalogNames
 from lineage.services.provenance import ProvenanceStore
 from service_kit.governed import fga
 from service_kit.governed.decider import OpenFgaDecider
 from service_kit.governed.oidc import IDToken
 from service_kit.governed.person_identity import PersonPrincipal
 from service_kit.governed.principal import Principal
+from service_kit.openlineage import DatasetUuids
 from tests.unit.no_uuids import NO_CATALOG_NAMES
 
 
 _ISSUER = "https://idp.example.com"
+
+
+def _uuid(name: str) -> str:
+    """The uuid the catalog minted for the table ``name`` (ADR 0173 §10)."""
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, name))
+
+
+def _object(name: str) -> str:
+    """The object the table ``name``'s grants are held by, ``table:<uuid>`` ([[LH-524]])."""
+    return fga.table_object(_uuid(name))
+
+
+class _Names:
+    """``CatalogNames``' whole signature: every table name resolves to :func:`_uuid` of it, and the bearers asked
+    with are kept."""
+
+    def __init__(self) -> None:
+        self.bearers: list[str | None] = []
+
+    async def table(self, name: str, *, bearer: str | None) -> DatasetUuids:
+        self.bearers.append(bearer)
+        return DatasetUuids(table_uuid=_uuid(name))
+
+    async def namespace(self, name: str, *, bearer: str | None) -> str | None:
+        return None
 
 
 def _settings(**values: Any) -> LineageSettings:
@@ -109,17 +137,21 @@ def test_authenticate_enabled_verifies_token() -> None:
 
 def test_gate_disabled_allows() -> None:
     # FGA off → no check, no raise (dev/test default, like the catalog).
-    asyncio.run(fga_deps.require_metadata_access("a$b", _request(), _settings(), None))
+    asyncio.run(fga_deps.require_metadata_access("a$b", _request(), _settings(), None, NO_CATALOG_NAMES, None))
 
 
 def test_gate_unwired_client_fails_closed() -> None:
     with pytest.raises(ServiceUnavailableError):
-        asyncio.run(fga_deps.require_metadata_access("a$b", _request(), _settings(**_FULL_AUTH), _token()))
+        asyncio.run(fga_deps.require_metadata_access("a$b", _request(), _settings(**_FULL_AUTH), _token(), NO_CATALOG_NAMES, None))
 
 
 def test_gate_unauthenticated_raises() -> None:
     with pytest.raises(UnauthenticatedError):
-        asyncio.run(fga_deps.require_metadata_access("a$b", _request(decider=OpenFgaDecider(cast("Any", object()))), _settings(**_FULL_AUTH), None))
+        asyncio.run(
+            fga_deps.require_metadata_access(
+                "a$b", _request(decider=OpenFgaDecider(cast("Any", object()))), _settings(**_FULL_AUTH), None, NO_CATALOG_NAMES, None
+            )
+        )
 
 
 def test_gate_denies_without_permission(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -131,15 +163,27 @@ def test_gate_denies_without_permission(monkeypatch: pytest.MonkeyPatch) -> None
 
     monkeypatch.setattr(fga, "check", _deny)
     client = cast(OpenFgaClient, object())
-    with pytest.raises(PermissionDeniedError):
-        asyncio.run(fga_deps.require_metadata_access("a$b", _request(decider=OpenFgaDecider(client)), _settings(**_FULL_AUTH), _token()))
-    # The denial must be on the right user/object/relation, not just "some" denial.
-    assert captured == {"user": "dex~alice", "relation": "can_get_metadata", "obj": "table:a$b"}
+    names = _Names()
+    with pytest.raises(PermissionDeniedError, match=r"can_get_metadata required on table:a\$b"):
+        asyncio.run(
+            fga_deps.require_metadata_access(
+                "a$b", _request(decider=OpenFgaDecider(client)), _settings(**_FULL_AUTH), _token(), cast(CatalogNames, names), "tok"
+            )
+        )
+    # The denial must be on the right user/object/relation, not just "some" denial: the uuid the name resolved to as
+    # the caller, and the refusal names the table by its name.
+    assert captured == {"user": "dex~alice", "relation": "can_get_metadata", "obj": _object("a$b")}
+    assert names.bearers == ["tok"]
 
 
 # --------------------------------------------------------------------------- #
 # enforce_author (provenance forgery prevention)
 # --------------------------------------------------------------------------- #
+
+
+def _table(name: str) -> dict[str, Any]:
+    """A governed table as the catalog names it on an event: its name, and its uuid in the ``lance`` facet."""
+    return {"namespace": "silver", "name": name, "facets": {"lance": {"tableUuid": _uuid(name)}}}
 
 
 def _event(claimed_author: str = "anon", outputs: list[str] | None = None, inputs: list[str] | None = None) -> RunEvent:
@@ -149,8 +193,8 @@ def _event(claimed_author: str = "anon", outputs: list[str] | None = None, input
             "eventTime": "2026-06-24T00:00:00Z",
             "run": {"runId": "r1", "facets": {"author": {"name": claimed_author}}},
             "job": {"namespace": "jobs", "name": "promote"},
-            "inputs": [{"namespace": "silver", "name": n} for n in (inputs or [])],
-            "outputs": [{"namespace": "silver", "name": n} for n in (outputs or [])],
+            "inputs": [_table(n) for n in (inputs or [])],
+            "outputs": [_table(n) for n in (outputs or [])],
         }
     )
 
@@ -161,8 +205,8 @@ def _event(claimed_author: str = "anon", outputs: list[str] | None = None, input
 
 
 async def _batch_allow_a(_client: object, *, objects: list[str], **_kw: object) -> dict[str, bool]:
-    """Fake batch_check: only ``table:a`` is visible."""
-    return {o: o == "table:a" for o in objects}
+    """Fake batch_check: only table ``a``'s object is visible."""
+    return {o: o == _object("a") for o in objects}
 
 
 # --------------------------------------------------------------------------- #
@@ -202,8 +246,8 @@ def test_get_events_filters_to_visible_datasets(monkeypatch: pytest.MonkeyPatch)
     settings = _settings(**_FULL_AUTH)
     repo = _FakeStore()
     repo.events = [
-        EventRecord(seq=2, outputs=["a"], inputs=[], event={}),
-        EventRecord(seq=1, outputs=["b"], inputs=[], event={}),  # "b" not visible → dropped
+        EventRecord(seq=2, outputs=["a"], inputs=[], table_uuids=[_uuid("a")], event={}),
+        EventRecord(seq=1, outputs=["b"], inputs=[], table_uuids=[_uuid("b")], event={}),  # "b" not visible → dropped
     ]
     flt = fga_deps.DatasetFilter(_request(decider=OpenFgaDecider(cast(OpenFgaClient, object()))), settings, _token())
     result = asyncio.run(get_events(cast(ProvenanceStore, repo), flt, settings, names=NO_CATALOG_NAMES, bearer=None))
@@ -233,9 +277,9 @@ def test_get_events_pagination_never_leaks_past_governance(monkeypatch: pytest.M
     settings = _settings(**_FULL_AUTH)
     repo = _FakeStore()
     repo.events = [
-        EventRecord(seq=3, outputs=["a"], inputs=[], event={}),
-        EventRecord(seq=2, outputs=["b"], inputs=[], event={}),  # hidden — must never surface
-        EventRecord(seq=1, outputs=["a"], inputs=[], event={}),
+        EventRecord(seq=3, outputs=["a"], inputs=[], table_uuids=[_uuid("a")], event={}),
+        EventRecord(seq=2, outputs=["b"], inputs=[], table_uuids=[_uuid("b")], event={}),  # hidden — must never surface
+        EventRecord(seq=1, outputs=["a"], inputs=[], table_uuids=[_uuid("a")], event={}),
     ]
     flt = fga_deps.DatasetFilter(_request(decider=OpenFgaDecider(cast(OpenFgaClient, object()))), settings, _token())
     result = asyncio.run(get_events(cast(ProvenanceStore, repo), flt, settings, limit=1, names=NO_CATALOG_NAMES, bearer=None))
@@ -317,10 +361,10 @@ def test_output_authz_output_less_still_requires_auth() -> None:
 def test_output_authz_denies_non_writable_output(monkeypatch: pytest.MonkeyPatch) -> None:
     # alice may write a$b but NOT c$d → the whole ingest is denied (403).
     async def _batch(_client: object, *, user: str, relation: str, objects: list[str]) -> dict[str, bool]:
-        return {o: (o == "table:a$b") for o in objects}
+        return {o: (o == _object("a$b")) for o in objects}
 
     monkeypatch.setattr(fga, "batch_check", _batch)
-    with pytest.raises(PermissionDeniedError):
+    with pytest.raises(PermissionDeniedError, match=r"can_write_data required on outputs: c\$d"):
         asyncio.run(
             fga_deps.enforce_output_authz(
                 _event(outputs=["a$b", "c$d"]),
@@ -354,7 +398,7 @@ def test_service_principal_is_attributed_and_fga_bounded() -> None:
             "run": {"runId": "11111111-1111-5111-8111-111111111111", "facets": {}},
             "job": {"namespace": "ray-jobs", "name": "train.churn"},
             "inputs": [],
-            "outputs": [{"namespace": "models", "name": "models$churn", "facets": {}}],
+            "outputs": [{"namespace": "models", "name": "models$churn", "facets": {"lance": {"tableUuid": _uuid("models$churn")}}}],
         }
     )
     # (1) attributed — the run's author is the service's verified subject
@@ -382,7 +426,7 @@ def test_service_principal_is_attributed_and_fga_bounded() -> None:
             )
     assert checked["user"] == trainer  # the service principal, never a person's
     assert checked["relation"] == "can_write_data"
-    assert checked["objects"] == ["table:models$churn"]
+    assert checked["objects"] == [_object("models$churn")]
 
 
 def test_events_governs_on_columnlineage_source_datasets() -> None:

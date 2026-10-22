@@ -14,6 +14,7 @@ closing it turns the suite red until the marker goes with it.
 
 import asyncio
 import logging
+import uuid
 from typing import Any, cast
 
 import httpx
@@ -52,8 +53,13 @@ def _event(
         "eventType": event_type,
         "eventTime": event_time,
         "run": {"runId": run_id, "facets": bag},
-        "outputs": [{"namespace": "silver", "name": name} for name in (outputs if outputs is not None else ["silver$pages"])],
+        "outputs": [_table(name) for name in (outputs if outputs is not None else ["silver$pages"])],
     }
+
+
+def _table(name: str) -> dict[str, Any]:
+    """An output as the catalog names it: its name, and its table's uuid in the ``lance`` facet (ADR 0173 §10)."""
+    return {"namespace": "silver", "name": name, "facets": {"lance": {"tableUuid": str(uuid.uuid5(uuid.NAMESPACE_URL, name))}}}
 
 
 class _Inbox:

@@ -271,6 +271,7 @@ async def publish_table(
     id: str,
     body: PublishRequest,
     ns: NamespaceDep,
+    table: ResolvedTableDep,
     settings: SettingsDep,
     so: StorageOptionsDep,
     control: ControlEmitterDep,
@@ -306,7 +307,7 @@ async def publish_table(
             settings,
             token,
             relation="can_promote",
-            obj=f"table:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}",
+            obj=fga.table_object(table.require_uuid()),
         )
     # THE GATE THIS PUBLISH RUNS, composed before either path: the project's DECLARED record where one
     # exists, the request's own values where none does. Resolved here rather than inside `publish` so
@@ -375,7 +376,8 @@ async def publish_table(
             control,
             action="promotion_held",
             object_type="table",
-            object_id=f"table:{standing.table}",
+            object_id=fga.table_object(standing.uuid),
+            object_name=fga.canonical_object_id(segments, delimiter=settings.delimiter),
             actor=f"user:{token.subject}" if token is not None else None,
             extra={
                 "version": standing.version,
@@ -394,6 +396,7 @@ async def publish_table(
             control=control,
             settings=settings,
             segments=segments,
+            table_uuid=await _published_uuid(settings, result, segments),
             token=token,
             authorization=authorization,
             from_version=result.from_version,
@@ -504,6 +507,7 @@ async def _announce_publication(
     control: ControlEmitter,
     settings: Settings,
     segments: list[str],
+    table_uuid: str,
     token: Caller | None,
     authorization: str | None,
     from_version: int | None,
@@ -537,7 +541,8 @@ async def _announce_publication(
         control,
         action="table_published",
         object_type="table",
-        object_id=f"table:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}",
+        object_id=fga.table_object(table_uuid),
+        object_name=fga.canonical_object_id(segments, delimiter=settings.delimiter),
         actor=f"user:{token.subject}" if token is not None else None,
         # I2: the caller names {project, dataset}, the CATALOG vends the URI and the tenant.
         # Both were rebuilt downstream before this, and the tenant was rebuilt wrongly.
@@ -632,6 +637,7 @@ async def approve_promotion(
             control=control,
             settings=settings,
             segments=segments,
+            table_uuid=table_uuid,
             token=token,
             authorization=authorization,
             from_version=previous,
@@ -701,7 +707,8 @@ async def reject_promotion(
             control,
             action="promotion_rejected",
             object_type="table",
-            object_id=f"table:{canonical}",
+            object_id=fga.table_object(table_uuid),
+            object_name=canonical,
             actor=f"user:{token.subject}" if token is not None else None,
             extra={"version": decided.version, "published_version": published, "restored_version": decided.restored_version},
         )
@@ -725,8 +732,11 @@ async def list_promotions(
     names = await run_in_threadpool(table_claims.names_now, table_claims.claim_store(settings), entries)
     named = [(name, hold) for name, hold in zip(names, holds, strict=True) if name is not None]
     if settings.fga_enabled and token is not None and client is not None:
-        visible = await fga.batch_check(client, user=token.subject, relation="can_get_metadata", objects=[f"table:{name}" for name, _ in named])
-        named = [(name, hold) for name, hold in named if visible.get(f"table:{name}")]
+        # Checked on the uuid each hold records ([[LH-524]]), which is the object the table's grants are held by.
+        visible = await fga.batch_check(
+            client, user=token.subject, relation="can_get_metadata", objects=sorted({fga.table_object(hold.uuid) for _, hold in named})
+        )
+        named = [(name, hold) for name, hold in named if visible.get(fga.table_object(hold.uuid))]
     by_key = {f"{name}|{hold.uuid}": (name, hold) for name, hold in named}
     page, next_token = paginate(sorted(by_key), page_token, limit)
     return PromotionsListResponse(holds=[_view(hold, table=name) for name, hold in (by_key[key] for key in page)], page_token=next_token)

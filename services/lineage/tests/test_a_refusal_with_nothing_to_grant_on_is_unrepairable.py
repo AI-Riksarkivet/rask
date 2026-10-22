@@ -24,9 +24,11 @@ import pytest
 
 from lineage.api.fga_deps import _none_are_governed
 from service_kit.governed import fga
+from service_kit.governed.decider import OpenFgaDecider
 
 
-_NAMES = ["gone-ns$a", "gone-ns$b"]
+#: Two tables' objects, ``table:<uuid>`` ([[LH-524]]).
+_OBJECTS = ["table:7b0c1f52-3c8e-4b8a-9a7e-0f1d2c3b4a51", "table:1e2d3c4b-5a69-4788-9a1b-2c3d4e5f6a7b"]
 #: The probe reaches OpenFGA only through the patched `read_object_tuples`, so the client is never
 #: touched — naming that here beats a bare `None` that reads like an oversight.
 _NO_CLIENT = cast(Any, None)
@@ -38,9 +40,13 @@ async def test_an_UNREADABLE_store_falls_back_to_the_repairable_arm(monkeypatch:
     unreadable one deletes provenance, and only the second cannot be undone — so the doubt resolves
     toward keeping the event."""
 
-    async def boom(_client: object, _obj: str, **_kw: object) -> list[object]:
+    read: list[str] = []
+
+    async def boom(_client: object, obj: str, **_kw: object) -> list[object]:
+        read.append(obj)
         raise RuntimeError("openfga unreachable")
 
     monkeypatch.setattr(fga, "read_object_tuples", boom)
 
-    assert await _none_are_governed(_NO_CLIENT, names=_NAMES, object_type="table") is False
+    assert await _none_are_governed(OpenFgaDecider(_NO_CLIENT), objects=_OBJECTS) is False
+    assert read == _OBJECTS[:1], "the probe never reached the store, so the fallback was not the one under test"

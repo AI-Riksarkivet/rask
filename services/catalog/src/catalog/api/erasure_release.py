@@ -31,6 +31,7 @@ from catalog.api.dependencies import ClockDep, ControlEmitterDep, SettingsDep, S
 from catalog.core.config import fresh_lance_session
 from catalog.services import erasure_release, table_claims
 from service_kit.control_emit import emit_control
+from service_kit.governed import fga
 from service_kit.governed.dapr_auth import require_dapr_token
 from service_kit.lakehouse.location_claims import ClaimStore
 
@@ -69,7 +70,9 @@ async def _on_cron(
     claims = table_claims.claim_store(settings)
     for change in changes:
         table = await run_in_threadpool(_named_now, claims, change)
-        await emit_control(control, action=change.action, object_type="table", object_id=f"table:{table}", actor=None, extra=change.extra)
+        await emit_control(
+            control, action=change.action, object_type="table", object_id=fga.table_object(change.table_uuid), object_name=table, actor=None, extra=change.extra
+        )
     log.info("erasure_release_tick", extra={"changed": len(changes)})
     return ErasureReleaseTick(changed=len(changes))
 

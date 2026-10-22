@@ -17,7 +17,7 @@ decision run for real, and the vendor records the tier it was asked for.
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -25,13 +25,14 @@ from botocore.exceptions import EndpointConnectionError
 from fastapi.testclient import TestClient
 from lance_namespace import DeclareTableResponse, DescribeNamespaceResponse
 
-from catalog.api.dependencies import get_vendor
+from catalog.api.dependencies import get_resolver, get_vendor
 from catalog.core.config import Settings, get_settings
 from catalog.core.vending import VendedCredentials
 from service_kit.governed import fga as fga_module
 from service_kit.governed.oidc import IDToken
 from service_kit.governed.person_identity import PersonPrincipal
 from service_kit.governed.principal import Principal
+from tests.unit.named_resolver import NamedResolver
 
 
 def _auth_settings() -> Settings:
@@ -50,9 +51,15 @@ def _auth_settings() -> Settings:
 
 
 @pytest.fixture
-def vendor(client: TestClient, fake_ns: MagicMock) -> Iterator[MagicMock]:
-    """Alice signed in with FGA on, and a vendor that records each tier it is asked for."""
+def vendor(client: TestClient, fake_ns: MagicMock, claim_described: Callable[[str], str]) -> Iterator[MagicMock]:
+    """Alice signed in with FGA on, and a vendor that records each tier it is asked for.
+
+    Every name holds an object (``NamedResolver``): the claim is which tier a grant opens, not how a name resolves. The
+    table's location carries the claim recording its uuid, which its credential is scoped by (ADR 0173 §6).
+    """
     client.app.dependency_overrides[get_settings] = _auth_settings
+    client.app.dependency_overrides[get_resolver] = lambda: NamedResolver()
+    claim_described("db$t")
     verifier = MagicMock()
     verifier.verify.return_value = PersonPrincipal(
         principal=Principal(idp_id="dex", subject="alice"), claims=IDToken(iss="i", sub="alice", aud="lance", exp=1, iat=1)

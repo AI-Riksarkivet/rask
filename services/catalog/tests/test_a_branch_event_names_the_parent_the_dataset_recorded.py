@@ -40,10 +40,12 @@ from lance_namespace import CreateNamespaceRequest, connect
 from catalog.api.dependencies import ControlEmitterDep, NamespaceDep, SettingsDep, StorageOptionsDep
 from catalog.api.security import CurrentToken
 from catalog.api.v1.endpoints import branches as branch_door
+from catalog.core.identifiers import with_minted_uuid
 from catalog.services.dataplane import create_table
 from service_kit.governed.oidc import IDToken
 from service_kit.governed.person_identity import PersonPrincipal
 from service_kit.governed.principal import Principal
+from service_kit.lakehouse import base_registry
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
@@ -67,8 +69,11 @@ def _table(start: int) -> pa.Table:
 @pytest.fixture
 def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace, a runtime-only type
     namespace = connect("dir", {"root": str(tmp_path / "data")})
-    namespace.create_namespace(CreateNamespaceRequest(id=TABLE[:-1]))
-    created = create_table(namespace, {}, TABLE, _table(1), root=str(tmp_path / "data"), mode="create", registry=None)
+    namespace.create_namespace(CreateNamespaceRequest(id=TABLE[:-1], properties=with_minted_uuid(None)))
+    # With its location's claim recording the table's uuid on the control root, as the create door takes it: the
+    # event names the table by that uuid (ADR 0173 §8).
+    registry = base_registry.BaseRegistry(control_root=str(tmp_path / "control"), storage_options={})
+    created = create_table(namespace, {}, TABLE, _table(1), root=str(tmp_path / "data"), mode="create", registry=registry, holder=TABLE_PATH)
     # A SECOND VERSION, so "the parent is main's current version" is a number the request could not
     # have guessed and a null could not stand in for. With one version, 1 and "unset" are too close
     # to tell apart in a failure message.

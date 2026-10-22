@@ -10,10 +10,11 @@ authz + filter dependencies are re-derived here because they bind to ``LineageSe
 Three holes this closes (audit ``w8u4rc2tg``):
 
 * **Reads** leaked the entire data estate. Each is now gated on OpenFGA ``can_get_metadata`` of
-  ``table:<dataset>`` — the same permission the catalog requires to ``describe`` that table.
+  ``table:<uuid>`` — the same permission the catalog requires to ``describe`` that table, on the object its grants are
+  held by ([[LH-524]]).
 * **Transitive disclosure.** A feed or edge read also returns *related* dataset names, so
   :class:`DatasetFilter` (and :func:`governed`) batch-check each and drop the ones the caller
-  may not see — mirroring the catalog's ``list_objects``-filtered enumerations.
+  may not see — mirroring the catalog's per-item filtered enumerations.
 * **Ingest** was unauthenticated and the run ``author`` was a producer-supplied facet, so
   provenance was forgeable. The author is taken from the verified token
   (:func:`enforce_author`) — the client-claimed facet is overwritten.
@@ -25,7 +26,7 @@ Fail-closed when enabled-but-unwired (503, never silent allow).
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from typing import Annotated, Any, Final, TypeGuard
 
 from fastapi import Depends, Request
@@ -34,16 +35,27 @@ from lance_namespace import (
     ServiceUnavailableError,
     UnauthenticatedError,
 )
+from pydantic import BaseModel, ConfigDict
 
-from lineage.api.dependencies import SettingsDep
+from lineage.api.dependencies import BearerDep, NamesDep, SettingsDep
 from lineage.api.security import Caller, CurrentToken
 from lineage.core.config import LineageSettings
-from lineage.models import MAINTENANCE_OPERATIONS, DatasetEvent, ForeignRunError, RunEvent, UnauthoredRunError, UngovernedOutputError, author_sub_from_payload
+from lineage.models import (
+    MAINTENANCE_OPERATIONS,
+    Dataset,
+    DatasetEvent,
+    ForeignRunError,
+    RunEvent,
+    UnauthoredRunError,
+    UngovernedOutputError,
+    author_sub_from_payload,
+)
 from lineage.services.signature import verify_arrived_event
 from lineage_kit.signing import VerifiedSignature
+from service_kit.governed import fga
 from service_kit.governed.decider import AccessDecider
 from service_kit.governed.principal import is_principal
-from service_kit.openlineage import lifecycle_state
+from service_kit.openlineage import dataset_uuids, lifecycle_state
 
 
 log = logging.getLogger(__name__)
@@ -102,48 +114,111 @@ def relations_for_operation(operation: str | None) -> tuple[str, ...]:
     return _MAINTENANCE_RELATIONS if operation in MAINTENANCE_OPERATIONS else _WRITE_RELATIONS
 
 
-async def _denied_objects(decider: AccessDecider, *, user: str, relations: tuple[str, ...], names: list[str], object_type: str) -> list[str]:
-    """The names the subject may NOT record against — denied under EVERY acceptable relation.
+class Governed(BaseModel):
+    """What an item names in the governed estate: the objects its tables' grants are held by, ``table:<uuid>``, and the
+    governed tables it names without a uuid, which no tuple can name ([[LH-524]])."""
+
+    model_config = ConfigDict(frozen=True)
+
+    objects: frozenset[str] = frozenset()
+    unresolved: frozenset[str] = frozenset()
+
+    @property
+    def names_nothing(self) -> bool:
+        return not self.objects and not self.unresolved
+
+
+def governed_refs(datasets: Iterable[object], *, column_upstreams: Iterable[str] = ()) -> Governed:
+    """The :class:`Governed` of an event's ``datasets`` (models or payload dicts) and the column upstreams it names.
+
+    An external source is the outside world (:func:`is_external_source`) and governs nothing. A governed dataset is the
+    table its ``lance`` facet's uuid names, and one without a uuid is unresolved. A column upstream is the table a
+    dataset of the event by that name is, else unresolved.
+    """
+    objects: set[str] = set()
+    unresolved: set[str] = set()
+    by_name: dict[str, str] = {}
+    for dataset in datasets:
+        payload = dataset.model_dump(by_alias=True) if isinstance(dataset, BaseModel) else dataset
+        if not isinstance(payload, dict) or not payload.get("name"):
+            continue
+        name, namespace = str(payload["name"]), str(payload.get("namespace") or "")
+        if is_external_source(namespace, name):
+            continue
+        uuid = dataset_uuids(payload).table_uuid
+        if uuid is None:
+            unresolved.add(name)
+        else:
+            objects.add(fga.table_object(uuid))
+            by_name[name] = fga.table_object(uuid)
+    for name in column_upstreams:
+        if name in by_name:
+            objects.add(by_name[name])
+        else:
+            unresolved.add(name)
+    return Governed(objects=frozenset(objects), unresolved=frozenset(unresolved - set(by_name)))
+
+
+def output_refs(outputs: Iterable[object]) -> Governed:
+    """The :class:`Governed` of an event's outputs (models or payload dicts), none exempted: an output is the table its
+    ``lance`` facet's uuid names, and one without a uuid, an external one included, is unresolved."""
+    objects: set[str] = set()
+    unresolved: set[str] = set()
+    for dataset in outputs:
+        payload = dataset.model_dump(by_alias=True) if isinstance(dataset, BaseModel) else dataset
+        if not isinstance(payload, dict) or not payload.get("name"):
+            continue
+        name, namespace = str(payload["name"]), str(payload.get("namespace") or "")
+        uuid = None if is_external_source(namespace, name) else dataset_uuids(payload).table_uuid
+        if uuid is None:
+            unresolved.add(name)
+        else:
+            objects.add(fga.table_object(uuid))
+    return Governed(objects=frozenset(objects), unresolved=frozenset(unresolved))
+
+
+async def _denied_objects(decider: AccessDecider, *, user: str, relations: tuple[str, ...], objects: list[str]) -> list[str]:
+    """The objects the subject may NOT record against — denied under EVERY acceptable relation.
 
     Batched per relation rather than per object, and short-circuited: the common case is one relation
-    and one round trip. A name still denied after the last relation is genuinely refused, and so is one
-    whose ``<type>:<name>`` is no object id, which the decider answers False unasked.
+    and one round trip. An object still denied after the last relation is genuinely refused.
     """
-    remaining = list(names)
+    remaining = list(objects)
     for relation in relations:
         if not remaining:
             break
-        allowed = await decider.batch_check(user=user, relation=relation, objects=[f"{object_type}:{n}" for n in remaining])
-        remaining = [n for n in remaining if not allowed.get(f"{object_type}:{n}")]
+        allowed = await decider.batch_check(user=user, relation=relation, objects=remaining)
+        remaining = [obj for obj in remaining if not allowed.get(obj)]
     return sorted(remaining)
 
 
-async def _none_are_governed(decider: AccessDecider, *, names: list[str], object_type: str) -> bool:
-    """True only when EVERY denied name carries zero tuples — i.e. there is nothing to grant on.
+async def _none_are_governed(decider: AccessDecider, *, objects: list[str]) -> bool:
+    """True only when EVERY denied object carries zero tuples — i.e. there is nothing to grant on.
 
     Decides which ack a refusal earns ([[LH-166]]): a grant needs an object, so a denial naming only
     objects FGA has no record of can never be repaired, and parking it appends a dead-letter copy per
-    restart forever. One targeted read per denied name, on the refusal path only — `governed_objects`
+    restart forever. One targeted read per denied object, on the refusal path only — `governed_objects`
     pages the whole store and is a per-SWEEP cost, not a per-event one.
 
     FAIL-CLOSED TO THE REPAIRABLE ARM. An unreadable store answers False, so the caller parks: parking
     a repairable event costs a duplicate, acking an unreadable one deletes provenance, and only the
-    second cannot be undone. Short-circuits on the first governed name — one is enough to make the
+    second cannot be undone. Short-circuits on the first governed object — one is enough to make the
     refusal repairable.
     """
     try:
-        if any((await decider.governed([f"{object_type}:{name}" for name in names])).values()):
+        if any((await decider.governed(objects)).values()):
             return False
     except Exception as exc:  # noqa: BLE001 — unreadable is not evidence of absence
-        log.warning("ingest_governance_probe_unreadable", extra={"outputs": names, "error": str(exc)})
+        log.warning("ingest_governance_probe_unreadable", extra={"outputs": objects, "error": str(exc)})
         return False
     return True
 
 
-async def _require_relation(relation: str, name: str, request: Request, settings: LineageSettings, token: Caller | None) -> None:
+async def _require_relation(relation: str, obj: str | None, label: str, request: Request, settings: LineageSettings, token: Caller | None) -> None:
     """The one fail-closed authz ladder every per-``{name}`` gate shares (audit 2026-07-16: it had
     grown four near-copies). No-op when FGA is off; unwired client → 503; unauthenticated → 401;
-    deny → 403; an unanswerable decision → 503, never allow."""
+    deny → 403, also for a name that resolved to no object (``obj`` is ``None``), named by ``label`` either way;
+    an unanswerable decision → 503, never allow."""
     if not settings.fga_enabled:
         return
     decider = getattr(request.app.state, "decider", None)
@@ -151,10 +226,9 @@ async def _require_relation(relation: str, name: str, request: Request, settings
         raise ServiceUnavailableError("authorization service is not available")
     if token is None:
         raise UnauthenticatedError("authentication required")
-    obj = f"{settings.fga_object_type}:{name}"
-    if not await decider.check(user=token.subject, relation=relation, obj=obj):
-        log.info("access_denied", extra={"sub": token.subject, "relation": relation, "object": obj})
-        raise PermissionDeniedError(f"{relation} required on {obj}")
+    if obj is None or not await decider.check(user=token.subject, relation=relation, obj=obj):
+        log.info("access_denied", extra={"sub": token.subject, "relation": relation, "object": obj or label})
+        raise PermissionDeniedError(f"{relation} required on {label}")
 
 
 #: The estate rung that opens the unfiltered run feed (`model.fga`, `type estate`).
@@ -164,9 +238,8 @@ _EVENT_FEED_RELATION: Final = "can_read_event_feed"
 async def require_event_feed_reader(request: Request, settings: LineageSettings, token: Caller | None) -> None:
     """Gate the unfiltered run feed on ``can_read_event_feed`` at the configured root object ([[CTL-021]]).
 
-    The sibling of :func:`_require_relation` and deliberately not a call into it: that helper composes
-    ``<fga_object_type>:<name>``, which on this service is always ``table:``, and an estate privilege is
-    not a relation of any one table. It is checked on `settings.fga_root_object` verbatim, the object
+    The sibling of :func:`_require_relation` and deliberately not a call into it: that helper asks about one
+    table, and an estate privilege is not a relation of any one table. It is checked on `settings.fga_root_object` verbatim, the object
     every estate privilege is checked on.
 
     ITS OWN RUNG rather than ``can_observe_events``, which also mints tenants, edits the authorization
@@ -189,10 +262,14 @@ async def require_event_feed_reader(request: Request, settings: LineageSettings,
         raise PermissionDeniedError(f"{_EVENT_FEED_RELATION} required on {obj}")
 
 
-async def require_metadata_access(name: str, request: Request, settings: SettingsDep, token: CurrentToken) -> None:
-    """Gate a dataset read on OpenFGA ``can_get_metadata`` for ``<type>:<name>`` — the same metadata-read
-    permission the catalog requires to describe that table."""
-    await _require_relation("can_get_metadata", name, request, settings, token)
+async def require_metadata_access(name: str, request: Request, settings: SettingsDep, token: CurrentToken, names: NamesDep, bearer: BearerDep) -> None:
+    """Gate a dataset read on OpenFGA ``can_get_metadata`` on the table ``name`` names now — the same metadata-read
+    permission the catalog requires to describe that table, asked about the uuid the catalog resolves the name to as
+    the caller ([[LH-524]]). A name the caller may not see resolves to nothing and is refused alike."""
+    if not settings.fga_enabled:
+        return
+    uuid = (await names.table(name, bearer=bearer)).table_uuid
+    await _require_relation("can_get_metadata", fga.table_object(uuid) if uuid else None, f"table:{name}", request, settings, token)
 
 
 def enforce_author(event: RunEvent | DatasetEvent, token: Caller | None) -> None:
@@ -337,7 +414,7 @@ async def enforce_bus_authz(event: RunEvent | DatasetEvent, request: Request, se
         # A stamp that names no principal is no author: nothing could be authorized as it ([[LH-063]]).
         if not is_principal(subject):
             raise UnauthoredRunError(f"a bus-delivered run's author {subject[:128]!r} is not a principal (<idp-id>~<subject>)")
-        await enforce_output_authz(event, request, settings, _StampedAuthor(subject), relations=relations_for_operation(event.operation), verified=verified)
+        await enforce_output_authz(event, request, settings, _StampedAuthor(subject), relations=relations_for_operation(event.operation))
     except PermissionDeniedError:
         if not await _is_replay(event, payload, request):
             raise
@@ -367,25 +444,6 @@ def _is_a_delegators_drop(event: RunEvent | DatasetEvent, verified: VerifiedSign
         and verified.identity in settings.signing.delegators
         and lifecycle_state(event.operation or "") == "DROP"
     )
-
-
-def _is_a_delegators_register(event: RunEvent | DatasetEvent, verified: VerifiedSignature | None, settings: LineageSettings) -> bool:
-    """A table's register the catalog signed: its inputs are admitted on that signature, never on the author's grants
-    (owner ruling 2026-10-17, [[LH-501]]).
-
-    THE SOURCE'S GRANTS ARE GONE BY DESIGN, as a drop's are. A rename announces the destination's register with the
-    source as its input, so the edge list keeps destination←source, and between its two markers the catalog moves every
-    grant on the source to the destination (`fga_deps.move_ownership`): a delivery asks FGA about a name that holds no
-    tuple, and the rename's provenance could never be recorded. The catalog authorized `can_drop` on the source, create
-    on the destination's parent and every grant that follows before it mutated anything; its verified signature is that
-    attestation, as for a drop (`_is_a_delegators_drop`). The catalog's register names an input only for a rename's
-    source: its register and undrop doors name none.
-
-    The inputs only: the outputs keep their check, since the destination holds the grants the source had. Only a
-    signature this call verified as one of the chart's delegators; an unsigned register, or one any other identity
-    signed, keeps the full check.
-    """
-    return verified is not None and verified.identity in settings.signing.delegators and event.operation == "register_table"
 
 
 async def _is_replay(event: RunEvent | DatasetEvent, payload: dict[str, object], request: Request) -> bool:
@@ -422,7 +480,6 @@ async def enforce_output_authz(
     token: Caller | None,
     *,
     relations: tuple[str, ...] = _WRITE_RELATIONS,
-    verified: VerifiedSignature | None = None,
 ) -> None:
     """Output-scoped ingest authz: require the producer may WRITE every output dataset it claims.
 
@@ -433,8 +490,12 @@ async def enforce_output_authz(
     GOVERNED inputs are also authorized (``can_get_metadata``): you may only record READING a dataset you
     can see, so an authenticated reader can't forge READ-edge provenance for datasets outside its reach.
     External sources are exempt and :func:`is_external_source` says why — they are unauthorizable by
-    construction, and requiring a tuple for one refused every honest producer of a raw ingest. So are the
-    inputs of a register whose ``verified`` signature is a delegator's (:func:`_is_a_delegators_register`).
+    construction, and requiring a tuple for one refused every honest producer of a raw ingest.
+
+    Every governed dataset is asked about as the table its ``lance`` facet's uuid names, ``table:<uuid>`` ([[LH-524]]):
+    the catalog stamps it on every event it signs, and the HTTP door stamps what the caller's name resolves to. A
+    rename keeps the uuid, so a rename's register names its source by the uuid the destination holds, and its grants
+    with it. A governed dataset carrying no uuid names no table the producer may see, so it is refused.
     """
     if not settings.fga_enabled:
         return
@@ -445,7 +506,6 @@ async def enforce_output_authz(
         raise ServiceUnavailableError("authorization service is not available")
     if token is None:
         raise UnauthenticatedError("authentication required")
-    object_type = settings.fga_object_type
     # AN EXISTING RUN IS EXTENDED ONLY BY ITS AUTHOR ([[LIN-5]]).
     #
     # An event naming a recorded run is recorded as that run's next state, and run ids are public (every feed row
@@ -462,13 +522,20 @@ async def enforce_output_authz(
         if author is not None and author != token.subject:
             log.info("ingest_run_mutation_denied", extra={"sub": token.subject, "run_id": event.run_id, "author": author})
             raise ForeignRunError(f"run {event.run_id} was founded by another subject; only its author may extend it")
-    outputs = [d.name for d in event.outputs if d.name]
-    if outputs:
-        denied = await _denied_objects(decider, user=token.subject, relations=relations, names=outputs, object_type=object_type)
+    # OUTPUTS ARE NEVER EXEMPTED: writing is the direction that mutates the estate, so an output naming an external
+    # namespace is a producer claiming to have written the outside world, and it names no object, as an output carrying
+    # no uuid names none. No grant can name either, so the refusal is unrepairable ([[LH-166]]).
+    outputs = output_refs(event.outputs)
+    if outputs.unresolved:
+        reason = f"{' or '.join(relations)} required on outputs: {', '.join(sorted(outputs.unresolved))}"
+        log.info("ingest_denied", extra={"sub": token.subject, "relation": "|".join(relations), "outputs": sorted(outputs.unresolved)})
+        raise UngovernedOutputError(reason)
+    if outputs.objects:
+        denied = await _denied_objects(decider, user=token.subject, relations=relations, objects=sorted(outputs.objects))
         if denied:
             log.info("ingest_denied", extra={"sub": token.subject, "relation": "|".join(relations), "outputs": denied})
-            reason = f"{' or '.join(relations)} required on outputs: {', '.join(denied)}"
-            if await _none_are_governed(decider, names=denied, object_type=object_type):
+            reason = f"{' or '.join(relations)} required on outputs: {', '.join(_names_of(event.outputs, denied))}"
+            if await _none_are_governed(decider, objects=denied):
                 raise UngovernedOutputError(reason)
             raise PermissionDeniedError(reason)
     # Inputs: you may only RECORD reading a dataset you can SEE — else an authenticated reader (e.g. the
@@ -485,19 +552,23 @@ async def enforce_output_authz(
     # The column upstreams join the INPUT set rather than getting a check of their own: recording
     # "my column came from yours" is a claim to have READ your column, which is exactly what
     # `can_get_metadata` on the input side already governs. Same exemption too — an external upstream
-    # has no `table:` object, and (since `lineage_name`) cannot be recorded as a governed table either.
+    # has no `table:` object, and (since `lineage_name`) cannot be recorded as a governed table either. A column
+    # upstream is the table a dataset of the event by that name is.
     column_upstreams = {up.name for out in event.outputs for up in out.column_upstreams if not is_external_source(up.namespace, up.name)}
-    inputs = sorted({d.name for d in event.inputs if d.name and not is_external_source(d.namespace, d.name)} | column_upstreams)
-    if inputs and not _is_a_delegators_register(event, verified, settings):
-        objs = [f"{object_type}:{n}" for n in inputs]
-        seen = await decider.batch_check(user=token.subject, relation="can_get_metadata", objects=objs)
-        hidden = sorted(n for n in inputs if not seen.get(f"{object_type}:{n}"))
-        if hidden:
-            log.info(
-                "ingest_input_denied",
-                extra={"sub": token.subject, "relation": "can_get_metadata", "inputs": hidden},
-            )
-            raise PermissionDeniedError(f"can_get_metadata required on inputs: {', '.join(hidden)}")
+    read = governed_refs(event.inputs, column_upstreams=column_upstreams)
+    hidden = set(read.unresolved)
+    if read.objects:
+        seen = await decider.batch_check(user=token.subject, relation="can_get_metadata", objects=sorted(read.objects))
+        hidden |= set(_names_of(event.inputs, [obj for obj in read.objects if not seen.get(obj)]))
+    if hidden:
+        log.info("ingest_input_denied", extra={"sub": token.subject, "relation": "can_get_metadata", "inputs": sorted(hidden)})
+        raise PermissionDeniedError(f"can_get_metadata required on inputs: {', '.join(sorted(hidden))}")
+
+
+def _names_of(datasets: Iterable[Dataset], objects: Iterable[str]) -> list[str]:
+    """The names ``datasets`` give the tables ``objects`` are, for a refusal: a caller reads names, never uuids."""
+    wanted = set(objects)
+    return sorted({d.name for d in datasets if (uuid := dataset_uuids(d.model_dump(by_alias=True)).table_uuid) and fga.table_object(uuid) in wanted})
 
 
 class DatasetFilter:
@@ -505,10 +576,9 @@ class DatasetFilter:
 
     A feed row or an edge read names *related* datasets beyond the one asked about; without
     filtering, one table grant would disclose the existence of every table in its lineage
-    neighborhood. This batch-checks ``can_get_metadata`` (fail-closed: an OpenFGA outage →
-    503) and returns only the authorized names — the lineage analogue of the catalog's
-    ``list_objects``-filtered enumerations (``services/catalog/api/v1/endpoints/tables.py``). Pass-through
-    when FGA is off (dev/tests).
+    neighborhood. This batch-checks ``can_get_metadata`` on the tables' objects (``table:<uuid>``; fail-closed: an
+    OpenFGA outage → 503) and returns only the authorized ones — the lineage analogue of the catalog's per-item
+    filtered enumerations. Pass-through when FGA is off (dev/tests).
     """
 
     def __init__(self, request: Request, settings: LineageSettings, token: Caller | None) -> None:
@@ -516,27 +586,18 @@ class DatasetFilter:
         self._settings = settings
         self._token = token
 
-    async def visible(self, names: list[str]) -> set[str]:
-        """Return the subset of ``names`` the caller may read (``can_get_metadata``)."""
-        if not self._settings.fga_enabled or not names:
-            return set(names)
+    async def visible(self, objects: Iterable[str]) -> set[str]:
+        """Return the subset of ``objects`` the caller may read (``can_get_metadata``)."""
+        unique = list(dict.fromkeys(objects))
+        if not self._settings.fga_enabled or not unique:
+            return set(unique)
         decider = getattr(self._request.app.state, "decider", None)
         if decider is None:
             raise ServiceUnavailableError("authorization service is not available")
         if self._token is None:
             raise UnauthenticatedError("authentication required")
-        object_type = self._settings.fga_object_type
-        # Dedupe before the round trip: callers legitimately pass per-item dataset names, and a
-        # duplicate-laden batch payload is pure wasted checks. A
-        # name whose `<type>:<name>` is no object id (an external `s3://` source, say) is answered False
-        # by the decider without being sent; other external names are sent and answered not granted.
-        unique = list(dict.fromkeys(names))
-        allowed = await decider.batch_check(
-            user=self._token.subject,
-            relation="can_get_metadata",
-            objects=[f"{object_type}:{n}" for n in unique],
-        )
-        return {n for n in unique if allowed.get(f"{object_type}:{n}")}
+        allowed = await decider.batch_check(user=self._token.subject, relation="can_get_metadata", objects=unique)
+        return {obj for obj in unique if allowed.get(obj)}
 
 
 def get_dataset_filter(request: Request, settings: SettingsDep, token: CurrentToken) -> DatasetFilter:
@@ -551,19 +612,14 @@ async def governed[T](
     datasets: DatasetFilter,
     fga_enabled: bool,
     items: list[T],
-    refs: Callable[[T], set[str]],
+    refs: Callable[[T], Governed],
 ) -> list[T]:
-    """Drop items the caller may not see: any referencing a non-visible dataset, and — when FGA is on —
-    any dataset-less item (it would otherwise pass vacuously, leaking run/author/error to a caller with
-    no grants). Auth off → ``visible`` is pass-through, so nothing is dropped. (#22 audit)
+    """Drop items the caller may not see: any naming a table the caller may not read, or a governed table recorded
+    without a uuid (no tuple can name it), and — when FGA is on — any item naming no table at all (it would otherwise
+    pass vacuously, leaking run/author/error to a caller with no grants). Auth off → nothing is dropped. (#22 audit)
     """
-    referenced = {name for item in items for name in refs(item)}
-    visible = await datasets.visible(list(referenced))
-    kept: list[T] = []
-    for item in items:
-        names = refs(item)
-        if fga_enabled and not names:
-            continue
-        if names <= visible:
-            kept.append(item)
-    return kept
+    if not fga_enabled:
+        return list(items)
+    named = [(item, refs(item)) for item in items]
+    visible = await datasets.visible({obj for _, governs in named for obj in governs.objects})
+    return [item for item, governs in named if not governs.names_nothing and not governs.unresolved and governs.objects <= visible]

@@ -23,6 +23,7 @@ writer would not want, clear is the one they would.
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -31,9 +32,11 @@ from lance_namespace import PermissionDeniedError
 
 from catalog.api import fga_deps
 from catalog.api.v1.endpoints import columns as ep
+from catalog.services.table_claims import ResolvedTable
 from service_kit.governed.oidc import IDToken
 from service_kit.governed.person_identity import PersonPrincipal
 from service_kit.governed.principal import Principal
+from service_kit.lakehouse.location_claims import ClaimRead, LocationClaim
 
 
 @pytest.fixture
@@ -59,6 +62,20 @@ def _patched(monkeypatch: pytest.MonkeyPatch, seen: list[tuple[str, str]], reque
     monkeypatch.setattr(ep.lineage_deps, "emit_measured_write", _no_lineage)
 
 
+#: The uuid the table's location claim records, whose object its grants are held by (ADR 0173 §8).
+_UUID = "0b6f8a52-4c1e-4f7a-9d3e-2a1c5b7e9f01"
+_TABLE = f"table:{_UUID}"
+#: The table the door resolved ``bronze$pages`` to.
+_RESOLVED = ResolvedTable(
+    segments=["bronze", "pages"],
+    location=f"s3://lakehouse/{_UUID}",
+    claim=ClaimRead(
+        claim=LocationClaim(location=f"lakehouse/{_UUID}", table="bronze$pages", segments=["bronze", "pages"], uuid=_UUID, claimed_at=datetime.now(UTC)),
+        etag="e1",
+    ),
+)
+
+
 def _call(updates: list[dict[str, Any]]) -> Any:
     body = SimpleNamespace(id=["bronze", "pages"], updates=[SimpleNamespace(model_dump=lambda u=u: u) for u in updates], branch=None)
     return asyncio.run(
@@ -66,6 +83,7 @@ def _call(updates: list[dict[str, Any]]) -> Any:
             id="bronze$pages",
             body=cast("Any", body),
             ns=cast("Any", object()),
+            table=_RESOLVED,
             settings=cast("Any", SimpleNamespace(fga_enabled=True, delimiter="$")),
             so=cast("Any", {}),
             token=PersonPrincipal(principal=Principal(idp_id="dex", subject="alice"), claims=IDToken(iss="i", sub="alice", aud="lance", exp=1, iat=1)),
@@ -103,14 +121,14 @@ def test_every_spelling_of_un_labelling_takes_the_rung(label: str, updates: list
     """
     with pytest.raises(PermissionDeniedError):
         _call(updates)
-    assert ("can_classify", "table:bronze$pages") in seen, f"{label}: the door never asked for the rung: {seen}"
+    assert ("can_classify", _TABLE) in seen, f"{label}: the door never asked for the rung: {seen}"
 
 
 @pytest.mark.parametrize("_patched", [True], indirect=True)
 @pytest.mark.usefixtures("_patched")
 def test_a_classifier_may_write_it(seen: list[tuple[str, str]]) -> None:
     assert _call([{"path": "payload", "metadata": {"rask.classification": "restricted"}}]).version == 9
-    assert ("can_classify", "table:bronze$pages") in seen
+    assert ("can_classify", _TABLE) in seen
 
 
 @pytest.mark.parametrize("_patched", [False], indirect=True)

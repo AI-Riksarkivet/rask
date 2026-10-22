@@ -125,7 +125,7 @@ _AUTHN_IS_ENOUGH: dict[str, str] = {
     "/management/v1/erasures": "FGA-filtered per obligation's table (can_maintain)",
     "/management/v1/projects": "FGA-filtered to the caller's own projects (member), every tenant only for an estate observer",
     "/v1/table": "FGA-filtered per table (can_read_data)",
-    "/management/v1/warehouses": "FGA-filtered per warehouse (can_get_metadata), and reports X-Authorization-Truncated",
+    "/management/v1/warehouses": "FGA-filtered per warehouse (can_get_metadata), batch-checked over its own records",
     "/management/v1/warehouses/-/bindings": "FGA-filtered per warehouse (can_get_metadata) — a binding names another tenant's bucket",
     "/management/v1/user-state/dock-layout": "keyed on the caller's own subject",
     "/management/v1/user-state/dock-layout-library": "keyed on the caller's own subject",
