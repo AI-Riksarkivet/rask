@@ -626,3 +626,110 @@ class EventSigner:
 def event_signer() -> type[EventSigner]:
     """The signing-identity factory: `event_signer("service-catalog")` mints a fresh Ed25519 identity."""
     return EventSigner
+
+
+class OpenFgaServer:
+    """The pinned OpenFGA on loopback, in memory, so a test asserts who may do what rather than which relation was asked ([[LH-235]]).
+
+    The binary is the one `.dagger/governed.go`'s `openfgaImage` carries: `dagger call test` copies it onto PATH, and
+    `make openfga` exports it to `.localbin/openfga` from the same image. Missing, the fixture fails rather than skips, so
+    a lane without it reports the gap. Two free ports are picked here and handed to the server, and a port another xdist
+    worker took in between makes the server exit, which is retried on new ports.
+    """
+
+    def __init__(self, binary: str, log_dir: pathlib.Path) -> None:
+        import socket
+        import subprocess
+        import time
+
+        import httpx
+
+        def free_port() -> int:
+            with socket.socket() as probe:
+                probe.bind(("127.0.0.1", 0))
+                return int(probe.getsockname()[1])
+
+        failures: list[str] = []
+        for attempt in range(3):
+            http_port, grpc_port = free_port(), free_port()
+            # A file, not a pipe: nothing reads a running server's stderr, and a full pipe would block it mid-session.
+            log = log_dir / f"openfga-{attempt}.log"
+            process = subprocess.Popen(  # noqa: S603 - argv is a literal around the pinned binary the fixture resolved
+                [
+                    binary,
+                    "run",
+                    "--datastore-engine=memory",
+                    f"--http-addr=127.0.0.1:{http_port}",
+                    f"--grpc-addr=127.0.0.1:{grpc_port}",
+                    "--playground-enabled=false",
+                    "--metrics-enabled=false",
+                    "--log-level=warn",
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=log.open("wb"),
+            )
+            url = f"http://127.0.0.1:{http_port}"
+            deadline = time.monotonic() + 30
+            while process.poll() is None and time.monotonic() < deadline:
+                try:
+                    if httpx.get(f"{url}/healthz", timeout=1).status_code == 200:
+                        self._process, self.url = process, url
+                        return
+                except httpx.TransportError:
+                    pass
+                time.sleep(0.05)
+            process.kill()
+            process.wait(timeout=10)
+            failures.append(log.read_text(errors="replace")[-2000:] or f"no /healthz answer at {url} within 30 s")
+        raise RuntimeError(f"OpenFGA did not start: {failures}")
+
+    def close(self) -> None:
+        self._process.terminate()
+        self._process.wait(timeout=10)
+
+
+@pytest.fixture(scope="session")
+def openfga(tmp_path_factory: pytest.TempPathFactory) -> Iterator[OpenFgaServer]:
+    """One OpenFGA per worker; every test takes its own store on it (`openfga_store`), so session scope holds."""
+    import shutil
+
+    binary = shutil.which("openfga") or str(pathlib.Path(__file__).parent / ".localbin" / "openfga")
+    if not os.access(binary, os.X_OK):
+        pytest.fail(f"no OpenFGA server binary on PATH or at {binary}: `make openfga` exports the pinned one")
+    server = OpenFgaServer(binary, tmp_path_factory.mktemp("openfga"))
+    yield server
+    server.close()
+
+
+class OpenFgaStore:
+    """A fresh store on `openfga` holding the model the services load, provisioned as the catalog provisions its own."""
+
+    def __init__(self, url: str) -> None:
+        import asyncio
+        import uuid
+
+        from service_kit.governed import fga
+
+        self.url = url
+        # The bootstrap seam on a throwaway store, so the model a test is judged by is the one the catalog writes.
+        self.store_id, self.model_id = asyncio.run(fga.provision(url, token_file=None, store_name=f"test-{uuid.uuid4().hex}"))  # noqa: TID251
+
+    def write(self, *tuples: tuple[str, str, str]) -> None:
+        """Write `(user, relation, object)` tuples straight to the store, as the chart's bootstrap hook seeds them."""
+        import asyncio
+
+        from openfga_sdk.client.models import ClientTuple, ClientWriteRequest
+
+        from service_kit.governed import fga
+
+        async def _write() -> None:
+            async with fga.make_client(self.url, self.store_id, self.model_id, token_file=None) as client:
+                await client.write(ClientWriteRequest(writes=[ClientTuple(user=u, relation=r, object=o) for u, r, o in tuples]))
+
+        asyncio.run(_write())
+
+
+@pytest.fixture
+def openfga_store(openfga: OpenFgaServer) -> OpenFgaStore:
+    """A store of this test's own, so no test reads another's tuples."""
+    return OpenFgaStore(openfga.url)

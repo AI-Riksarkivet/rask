@@ -116,7 +116,7 @@ consequences it does not spell out.
 
 | Lane                                              | What it runs                                                                                                      |
 | ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `make test`                                       | `-m "not slow and not e2e"` at `-n 16` (`PYTEST_WORKERS=0` for one process), then every `runners/*/tests` suite with `-m "not slow"` |
+| `make test`                                       | (`make test`, `check-fast`, `test-slow` and `coverage` first export `.localbin/openfga` through Dagger, `make openfga`) `-m "not slow and not e2e"` at `-n 16` (`PYTEST_WORKERS=0` for one process), then every `runners/*/tests` suite with `-m "not slow"` |
 | `make check-fast`                                 | `tests/unit tests/integration` at `-n 16`, with no marker filter. `--dist loadfile`, because three suites are parallel-unsafe at the file level (the `lance.audit` process-global logger, `configure_audit`'s level, the registry CAS markers) |
 | `make test-slow`                                  | `-m "not e2e"`, then every runner suite unfiltered                                                                |
 | `make coverage`                                   | `-m "not e2e and not slow" --cov`, on request only                                                                |
@@ -149,6 +149,11 @@ process-global actor-proxy factory, gives the test a fresh cache of secret-store
 (`service_kit.governed.secret_cache.STORE_READS`; a test that drives the TTL replaces it with one on its
 own clock), and writes the projected service-account token files the catalog's and lineage's doors read.
 
+On request it serves the identity and authorization plane for real: `sa_issuer` and `dex_issuer` (loopback issuers
+that mint tokens), `openfga` (the pinned OpenFGA server in memory, one per xdist worker, failing the test when the
+binary is missing) and `openfga_store` (a fresh store on it holding the bundled model, with `write()` for seeding
+tuples as the chart's bootstrap hook does).
+
 ## What stands in for what
 
 | Collaborator                  | In a test                                                                                                   |
@@ -161,7 +166,7 @@ own clock), and writes the projected service-account token files the catalog's a
 | NATS JetStream                | a real broker through Dagger (`references/fixtures.md` § NATS); the `nats-auth` lane brings its own         |
 | Ray job client                | a structural fake `cast` to `JobSubmissionClient`: `packages/ray-kit/tests/test_dashboard_bounds.py`        |
 | OpenFGA, authz not the claim  | `RASK_FGA_ENABLED` / `RASK_OIDC_ENABLED` left at their default, off; with FGA off the checker allows everything. Where a route needs a named subject or a decision, override that service's `current_subject` / `get_checker` |
-| OpenFGA, authz is the claim   | the model's `.fga.yaml` suite (`make fga-test`), or a real Dex and OpenFGA via `dagger call auth-chain` / `governance-chain`, or on a deployed estate criterion 2's principal × door matrix (`tests/e2e-py/test_the_catalog_is_correct.py`). The offline suite has no OpenFGA server |
+| OpenFGA, authz is the claim   | a real OpenFGA in the offline suite: root `conftest.py::openfga_store`, a store of the test's own on the pinned server, and for the catalog `services/catalog/tests/conftest.py::governed_catalog` (`references/fixtures.md` § The catalog with authorization on). Beyond one service: the model's `.fga.yaml` suite (`make fga-test`), a real Dex and OpenFGA via `dagger call auth-chain` / `governance-chain`, or on a deployed estate criterion 2's principal × door matrix (`tests/e2e-py/test_the_catalog_is_correct.py`). Fake the client only for a transport or fail-closed leg |
 | The chart                     | `tests/unit/chart_render.py`: `references/fixtures.md` § The chart                                          |
 
 ## Skips and prose

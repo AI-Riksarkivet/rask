@@ -275,3 +275,59 @@ class ErasureJob:
 def erasure_job() -> type[ErasureJob]:
     """The job's stand-in, constructed per table: ``erasure_job(uri, predicate).run()``."""
     return ErasureJob
+
+
+class GovernedCatalog:
+    """The catalog app as deployed with authorization on: a loopback Dex verifies the caller and OpenFGA decides ([[LH-235]]).
+
+    Nothing stands in for the governance plane: the lifespan builds the deployed verifier against ``dex_issuer`` and the
+    deployed OpenFGA client against the test's own store, and every tuple a test relies on is written by the door that
+    writes it in production, or seeded straight to the store as the chart's bootstrap hook seeds it.
+    """
+
+    #: The Dex connector the lane's people sign in through, and the idp id the deployment maps it to.
+    CONNECTOR, IDP = "local", "dex"
+
+    def __init__(self, client: TestClient, store: Any, dex_issuer: Any) -> None:  # noqa: ANN401 — root conftest's OpenFgaStore and DexIssuer
+        self.client = client
+        self.store = store
+        self._dex = dex_issuer
+
+    def person(self, user_id: str) -> str:
+        """The OpenFGA user the person ``user_id`` is, the one a tuple naming them carries."""
+        return f"user:{self.IDP}~{user_id}"
+
+    def bearer(self, user_id: str) -> dict[str, str]:
+        """The headers of a request the person ``user_id`` signs in for."""
+        return {"Authorization": f"Bearer {self._dex.mint(user_id, connector=self.CONNECTOR, audience='lance-catalog')}"}
+
+
+@pytest.fixture
+def governed_catalog(openfga_store: Any, dex_issuer: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[GovernedCatalog]:  # noqa: ANN401 — root conftest's fixtures
+    """The catalog on a real ``dir`` namespace, signed-in callers only, each decision OpenFGA's on a store of this test's own."""
+    for key, value in {
+        "LANCE_REST_IMPL": "dir",
+        "LANCE_REST_ROOT": str(tmp_path),
+        "LANCE_S3_ACCESS_KEY_ID": "test",
+        "LANCE_S3_SECRET_ACCESS_KEY": "test",
+        "LANCE_CONTROL_EMIT_ENABLED": "false",
+        "RASK_OIDC_ENABLED": "true",
+        "RASK_OIDC_ISSUER": dex_issuer.issuer,
+        "RASK_OIDC_AUDIENCE": "lance-catalog",
+        "RASK_OIDC_ALLOW_INSECURE": "true",
+        "RASK_OIDC_CONNECTORS": json.dumps({GovernedCatalog.CONNECTOR: GovernedCatalog.IDP}),
+        "RASK_FGA_ENABLED": "true",
+        "RASK_FGA_API_URL": openfga_store.url,
+        "RASK_FGA_STORE_ID": openfga_store.store_id,
+        "RASK_FGA_MODEL_ID": openfga_store.model_id,
+    }.items():
+        monkeypatch.setenv(key, value)
+    from catalog.core.config import get_settings
+
+    get_settings.cache_clear()
+    from catalog.main import app
+
+    with TestClient(app) as client:
+        yield GovernedCatalog(client, openfga_store, dex_issuer)
+    app.dependency_overrides.clear()
+    get_settings.cache_clear()

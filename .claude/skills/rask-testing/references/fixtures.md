@@ -8,6 +8,7 @@ itself for the current code; this reference does not restate it. The generic mec
 ## Contents
 
 - A service app, with its lifespan
+- The catalog with authorization on
 - Real pylance on `tmp_path`
 - A moto server that pylance can reach
 - A live uvicorn socket
@@ -67,6 +68,18 @@ do the same), or the re-exported names where a service exports them (`annotator.
 **Real OTLP exporters.** `packages/service-kit/tests/conftest.py` pins required env from the ambient
 value (so a developer's own setting still wins) and caps `OTEL_EXPORTER_OTLP_TIMEOUT` (measured on that
 suite: 10.19 s, and 3.08 s with the cap). A new suite that builds real exporters needs the same cap.
+
+## The catalog with authorization on
+
+Copy `services/catalog/tests/conftest.py::governed_catalog`. The app's own lifespan builds the deployed verifier
+against the root conftest's `dex_issuer` and the deployed OpenFGA client against `openfga_store`
+(`RASK_FGA_STORE_ID`/`RASK_FGA_MODEL_ID` pinned to it), so nothing is overridden. `bearer("alice")` signs alice in
+through the `local` connector, mapped to idp `dex`, and `person("alice")` is the OpenFGA user her tuples name. Arrange
+through the doors (a create seeds the creator's tuples, `/management/v1/<type>/{id}/access/grant` grants), and seed
+only what no door writes with `store.write(...)`. Assert the outcome a caller sees, a status and the spec's `code`,
+never which relation was asked. A model edit takes effect once `model.json` is regenerated
+(`fga model transform`), since that is what `fga.provision` writes. `test_a_role_grant_stays_inside_its_tenant.py`
+and `test_an_absent_object_is_not_found_rather_than_forbidden.py` are the examples.
 
 ## Real pylance on `tmp_path`
 

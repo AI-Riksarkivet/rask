@@ -219,10 +219,9 @@ def test_catalog_errors_translate_to_domain_errors() -> None:
 
     THE NO-ORACLE PROPERTY IS NOT TESTED HERE, and must not be re-added here either: it needs two
     identities and an object that really exists, which this leg has neither of. It is pinned where it
-    can be stated exactly — `tests/integration/test_an_absent_object_is_not_found_rather_than_forbidden.py`
-    holds all three conditions, including `test_an_EXISTING_forbidden_table_is_still_403` (an object
-    that exists and is forbidden never converts) and `test_the_probe_is_skipped_when_the_caller_cannot_
-    read_the_parent` (no probe from outside the hierarchy).
+    can be stated exactly — `services/catalog/tests/test_an_absent_object_is_not_found_rather_than_forbidden.py`
+    holds all three conditions on a real OpenFGA, including `an-existing-forbidden-table-stays-forbidden` (an object
+    that exists and is forbidden never converts) and `no-parent-rung-no-answer` (no probe from outside the hierarchy).
     """
     missing = CatalogTableReader(RestCatalogTransport(CATALOG_URL, token=CATALOG_TOKEN or None), [NAMESPACE, "no_such_table"])
     with pytest.raises(NotFoundError):

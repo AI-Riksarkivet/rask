@@ -69,7 +69,20 @@ PYTEST_PARALLEL = $(if $(filter 0,$(PYTEST_WORKERS)),,-n $(PYTEST_WORKERS))
 RUNNER_SUITES := $(sort $(patsubst %/tests,%,$(wildcard runners/*/tests)))
 run-runner-suites = for runner in $(RUNNER_SUITES); do (cd $$runner && uv run --frozen pytest $(1)) || exit 1; done
 
-test:
+# The OpenFGA server the offline suite asserts authorization outcomes against (root `conftest.py::openfga`, [[LH-235]]):
+# the static binary out of the very image `.dagger/governed.go` pins and `dagger call test` copies onto PATH, so a
+# developer box and CI evaluate the model with one server. It depends on that file, so a bumped pin re-exports it.
+OPENFGA_BIN := $(CURDIR)/.localbin/openfga
+OPENFGA_IMAGE = $(shell sed -n 's/^[[:space:]]*openfgaImage[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' .dagger/governed.go)
+$(OPENFGA_BIN): .dagger/governed.go
+	@test -n "$(OPENFGA_IMAGE)" || { echo "!! no openfgaImage pin read from .dagger/governed.go"; exit 1; }
+	@mkdir -p $(dir $@)
+	dagger core container from --address=$(OPENFGA_IMAGE) file --path=/openfga export --path=$@
+	@chmod +x $@ && touch $@
+.PHONY: openfga
+openfga: $(OPENFGA_BIN) ## Export the pinned OpenFGA server binary to .localbin, for the suite's authorization tests
+
+test: $(OPENFGA_BIN)
 	uv run pytest -m "not slow and not e2e" $(PYTEST_PARALLEL)
 	$(call run-runner-suites,-m "not slow")
 
@@ -77,7 +90,7 @@ test:
 # them, so this is opt-in. The root workspace declares no `slow` mark at all: every one lives in a
 # sealed runner, so the runner loop, run with no marker filter, is what this target adds over
 # `make test`.
-test-slow:
+test-slow: $(OPENFGA_BIN)
 	uv run pytest -m "not e2e" $(PYTEST_PARALLEL)
 	$(call run-runner-suites,)
 
@@ -263,7 +276,7 @@ knip:
 # NO `fail_under` HERE ON PURPOSE. Picking the number is an owner's decision, and a threshold invented
 # by whoever fixed the plumbing is how a gate ends up ratcheted to whatever happened to be true that
 # afternoon. The report is honest now; the policy is a separate call.
-coverage: ## The coverage report, computed on request against a correct denominator
+coverage: $(OPENFGA_BIN) ## The coverage report, computed on request against a correct denominator
 	uv run pytest -m "not e2e and not slow" --cov --cov-report=term-missing:skip-covered
 
 # `go-fmt` IS IN HERE because a gate that runs nowhere is not a gate. It gated the Go plane from no
@@ -1132,7 +1145,7 @@ e2e-compaction:     ## Maintenance sweep proofs: the deployed service's sweep an
 #
 # `-n 16` rather than `auto`: `auto` takes all 64 cores and the run is IO-bound long before that —
 # measured, 16 workers already reach the wall-clock floor while leaving the machine usable.
-check-fast: ## The pre-push suite in parallel — 1m17s against 9m57s serial
+check-fast: $(OPENFGA_BIN) ## The pre-push suite in parallel — 1m17s against 9m57s serial
 	uv run pytest tests/unit tests/integration -q -n 16 --dist loadfile
 
 # REQUIRES its target, rather than skipping into a green: every test in this suite skips without

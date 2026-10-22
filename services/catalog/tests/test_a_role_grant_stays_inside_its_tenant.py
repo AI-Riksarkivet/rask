@@ -13,71 +13,55 @@ estate-wide and keeps exactly the reach it has today. Refusing every role whose 
 would have broken every existing grant on the day the edge landed — which is how a control gets
 reverted rather than adopted — so the guard refuses only where the model carries the fact to refuse
 on. Both halves are asserted here, because the fail-open half is the one that would rot silently.
+
+Each case is judged by its OUTCOME on the real model, on a store of this test's own ([[LH-235]]): alice creates
+`beta_bronze` through the door and grants the role `reader` on it, and dave, the role's one assignee, then describes it.
+A refused grant leaves dave refused; an admitted one lets him read.
 """
 
 from __future__ import annotations
 
-from typing import Any, cast
+from pathlib import Path
+from typing import Any
 
 import pytest
-from lance_namespace import InvalidInputError
-from openfga_sdk import OpenFgaClient
 
-from catalog.api import fga_deps
-from catalog.core.config import Settings
-
-
-class _Tuple:
-    def __init__(self, user: str, relation: str) -> None:
-        self.user = user
-        self.relation = relation
-
-
-class _Settings:
-    registry_root = "s3://registry"
-
-    def storage_options(self) -> dict[str, str]:
-        return {}
-
-
-async def _refuse(monkeypatch: pytest.MonkeyPatch, *, role_tuples: list[_Tuple], namespace_project: str | None, grantee: str = "role:analyst#assignee") -> None:
-    async def _read(_client: Any, _obj: str) -> list[_Tuple]:
-        return role_tuples
-
-    monkeypatch.setattr(fga_deps.fga, "read_object_tuples", _read)
-    monkeypatch.setattr(fga_deps.warehouses, "project_for_namespace", lambda *_a, **_k: namespace_project)
-    await fga_deps.refuse_a_cross_tenant_role_grant(
-        cast(OpenFgaClient, object()), grantee, fga_type="namespace", segments=["beta_bronze"], settings=cast(Settings, _Settings())
-    )
-
-
-@pytest.mark.asyncio
-async def test_a_role_owned_by_another_project_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
-    """THE DEFECT: acme's role granted on beta's namespace."""
-    with pytest.raises(InvalidInputError) as refusal:
-        await _refuse(monkeypatch, role_tuples=[_Tuple("project:acme", "project")], namespace_project="beta")
-
-    assert "acme" in str(refusal.value) and "beta" in str(refusal.value), (
-        f"the refusal does not name both tenants, so the caller cannot see what disagreed: {refusal.value}"
-    )
-
-
-@pytest.mark.asyncio
-async def test_a_role_owned_by_the_same_project_is_allowed(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The control: the guard must not refuse the ordinary in-tenant grant."""
-    await _refuse(monkeypatch, role_tuples=[_Tuple("project:beta", "project")], namespace_project="beta")
+from catalog.services import warehouses
 
 
 @pytest.mark.parametrize(
-    ("shape", "role_tuples", "namespace_project"),
+    ("role_project", "namespace_project", "granted", "dave_reads"),
     [
-        ("an estate-wide role carrying no project", [_Tuple("user:alice", "assignee")], "beta"),
-        ("a namespace whose tenant cannot be established", [_Tuple("project:acme", "project")], None),
+        pytest.param("acme", "beta", 400, 403, id="a-role-owned-by-another-project-is-refused"),
+        pytest.param("beta", "beta", 200, 200, id="a-role-owned-by-the-same-project-is-granted"),
+        pytest.param(None, "beta", 200, 200, id="an-estate-wide-role-carrying-no-project-is-granted"),
+        pytest.param("acme", None, 200, 200, id="a-namespace-whose-tenant-cannot-be-established-is-granted"),
     ],
 )
-@pytest.mark.asyncio
-async def test_the_guard_fails_open_where_it_cannot_know(
-    monkeypatch: pytest.MonkeyPatch, shape: str, role_tuples: list[_Tuple], namespace_project: str | None
+def test_a_role_is_granted_on_a_namespace_only_inside_its_own_tenant(
+    governed_catalog: Any,  # noqa: ANN401 — the catalog conftest's GovernedCatalog
+    tmp_path: Path,
+    role_project: str | None,
+    namespace_project: str | None,
+    granted: int,
+    dave_reads: int,
 ) -> None:
-    """Both are deliberate: refusing on absent knowledge breaks working grants and a registry blip."""
-    await _refuse(monkeypatch, role_tuples=role_tuples, namespace_project=namespace_project)
+    catalog, alice = governed_catalog, governed_catalog.bearer("alice")
+    if namespace_project is not None:
+        warehouses.put_warehouse(str(tmp_path), {}, {"id": "wh", "project": namespace_project, "bucket": namespace_project, "root_uri": str(tmp_path)})
+        warehouses.bind_namespace(str(tmp_path), {}, "beta_bronze", "wh", str(tmp_path))
+    assert catalog.client.post("/v1/namespace/beta_bronze/create", json={}, headers=alice).status_code == 200
+    catalog.store.write(
+        (catalog.person("dave"), "assignee", "role:analyst"),
+        *([(f"project:{role_project}", "project", "role:analyst")] if role_project is not None else []),
+    )
+
+    grant = catalog.client.post(
+        "/management/v1/namespace/beta_bronze/access/grant", json={"user": "role:analyst#assignee", "relation": "reader"}, headers=alice
+    )
+
+    assert grant.status_code == granted, grant.text
+    if granted == 400:
+        assert "acme" in grant.json()["error"] and "beta" in grant.json()["error"], f"the refusal does not name both tenants: {grant.text}"
+    read = catalog.client.post("/v1/namespace/beta_bronze/describe", json={}, headers=catalog.bearer("dave"))
+    assert read.status_code == dave_reads, read.text

@@ -143,6 +143,11 @@ func (m *Rask) Test(
 		//
 		// helm ALONE would turn thirteen skips into thirteen FAILURES: see withRenderableChart.
 		With(withRenderableChart).
+		// ── the OpenFGA server, so the authorization tests assert outcomes against the real evaluator ──
+		// root `conftest.py::openfga` spawns it in memory per worker and fails without it ([[LH-235]]); it is
+		// the static binary of the image the governed lanes run, so every lane evaluates the model with one
+		// server. `make openfga` exports the same file to `.localbin` for a developer box.
+		WithFile("/usr/local/bin/openfga", dag.Container().From(openfgaImage).File("/openfga")).
 		// ── a per-test ceiling, because a hang in HERE is undiagnosable without one ─────────────────
 		// This suite has hung in Dagger while passing on a developer box, and the container is what
 		// makes it undebuggable: Dagger buffers a WithExec's stdout until the exec COMPLETES, so a run
