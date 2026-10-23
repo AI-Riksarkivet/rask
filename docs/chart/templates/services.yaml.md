@@ -25,6 +25,12 @@ cluster route sends public traffic here through the Gateway's data plane, so wit
 `X-Forwarded-For` every anonymous request carries the data plane's address and the rate limiter keys
 the whole public estate as one client.
 
+## `- { name: LANCE_PUBLIC_PATH_PREFIX, value: {{ include "rask.catalogPublicPrefix" . | quote }} }`
+
+The prefix the cluster route publishes the catalog under, which its route forwards unrewritten and the catalog strips
+from the bytes its client sent (`catalog.api.path_reading`, [[LH-526]]). Named by the same helper as the route's row in
+`rask.apiRoutes`, so the prefix routed and the prefix stripped cannot drift; the route render test holds them equal.
+
 ## `- { name: LANCE_MAX_CONCURRENT_WRITES, value: {{ hasKey .Values.catalog "maxConcurrentWrites" | ternary .Va...`
 
 Load-shed cap on concurrent in-flight Arrow-IPC writes (each buffers up to maxBodyBytes).

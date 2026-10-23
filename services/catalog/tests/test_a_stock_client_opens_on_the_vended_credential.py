@@ -189,14 +189,16 @@ def _catalog_only(upstream: str, admits: Callable[[str], bool]) -> ThreadingHTTP
 
 @pytest.fixture
 def off_cluster_catalog_url(store: _Store, monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
-    """The real catalog reaching the store through an address only its own session passes, vending the store's own."""
+    """The real catalog reaching the store through an address only its own session passes, vending the store's own, and
+    addressed under its public prefix, as the platform's Gateway forwards an off-cluster client's request unrewritten."""
     proxy = _catalog_only(store.url, _catalogs_own(store.role_arn))
     internal = f"http://127.0.0.1:{proxy.server_address[1]}"
-    _catalog_env(store, monkeypatch, LANCE_S3_ENDPOINT=internal, LANCE_S3_VENDED_ENDPOINT=store.url)
+    _catalog_env(store, monkeypatch, LANCE_S3_ENDPOINT=internal, LANCE_S3_VENDED_ENDPOINT=store.url, LANCE_PUBLIC_PATH_PREFIX="/api/catalog")
     from catalog.core.config import get_settings
     from catalog.main import app
 
-    yield from _serve(app)
+    for served in _serve(app):
+        yield f"{served}/api/catalog"
     get_settings.cache_clear()
     proxy.shutdown()
 
@@ -223,7 +225,8 @@ def test_a_stock_client_opens_a_table_on_the_vended_credential_and_not_its_envir
 
 def test_a_stock_client_off_the_cluster_creates_and_appends_through_the_endpoint_vended_for_it(store: _Store, off_cluster_catalog_url: str) -> None:
     """The table is named `sp ace`, which pylance's Rust client sends as `sp+ace` ([[LH-526]], ADR 0173 §4): it creates,
-    appends to and reads the table the name names, the one another client finds sending the space as `%20`."""
+    appends to and reads the table the name names, the one another client finds sending the space as `%20`. Both reach
+    the catalog under its public prefix, which the catalog strips from the bytes as sent."""
     namespace = f"db{uuid.uuid4().hex[:8]}"
     with httpx.Client(base_url=off_cluster_catalog_url, timeout=60) as catalog:
         assert catalog.post(f"/v1/namespace/{namespace}/create", json={}).status_code == 200

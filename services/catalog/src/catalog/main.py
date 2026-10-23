@@ -438,6 +438,6 @@ app.add_middleware(BodySizeLimitMiddleware, max_bytes=_settings.max_body_bytes)
 # shedding relieves memory pressure rather than adding to it. Sits above body_limit so an over-cap write is rejected
 # before even the size check. (P5)
 app.add_middleware(WriteConcurrencyLimitMiddleware, max_concurrent=_settings.max_concurrent_writes)
-# Outermost (added LAST → wraps everything, runs FIRST): read the request's path as the client spelled its names, a
-# bare `+` as a space ([[LH-526]]), so every layer beneath reads one path.
+# Outermost (added LAST → wraps everything, runs FIRST): read the request's path as the client spelled its names, its
+# public prefix stripped and a bare `+` read as a space ([[LH-526]]), so every layer beneath reads one path.
 app.add_middleware(PathReadingMiddleware)

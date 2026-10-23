@@ -467,6 +467,12 @@ class Settings(
     # Catalog
     impl: str = Field(default="dir", alias="LANCE_REST_IMPL")
     root: str = Field(default="s3://lance-catalog", alias="LANCE_REST_ROOT")
+    #: The path prefix the platform's Gateway publishes the catalog under and forwards unrewritten (the chart's
+    #: `rask.catalogPublicPrefix`, `/api/catalog`), which the catalog strips itself from the bytes its client sent
+    #: (`catalog.api.path_reading`, [[LH-526]]). A route rewriting the prefix instead rebuilds the path from its decoded
+    #: form, so the `%2B` and `%2F` a name is judged by reach the catalog as `+` and `/` (measured on Traefik 3.7.8, whose
+    #: URLRewrite sets `RawPath` from `EscapedPath()`). Empty, nothing is stripped: an in-cluster caller sends no prefix.
+    public_path_prefix: str = Field(default="", pattern=r"^(/[^/]+)*$", alias="LANCE_PUBLIC_PATH_PREFIX")
     #: OFF by default. It defaulted to True and NO deployment path ever set it — `grep -rn DOCS
     #: chart/ .docker/ scripts/` matched nothing — so the flag documented a choice nobody was making
     #: and the schemas shipped openly. A security default every deployment must remember to disable is

@@ -74,8 +74,10 @@ render test.
 
 `ReplacePrefixMatch` maps a public prefix to the path the service mounts, so the route owns the
 public→internal mapping and the services, their tests and their in-cluster callers keep their own paths
-(the catalog serves `/v1/...` at its root; the media trio mount under `/api`). A row with an empty
-`rewrite` forwards the path unchanged.
+(lineage serves at its root; the media trio mount under `/api`). A row with an empty `rewrite` forwards the path
+unchanged. The catalog's row is one: a rewrite rebuilds the path from its decoded form, so the `%2B` and `%2F` the
+catalog judges a name by would arrive as `+` and `/` (measured on Traefik 3.7.8), and the catalog strips its public
+prefix itself (`rask.catalogPublicPrefix`, `LANCE_PUBLIC_PATH_PREFIX`, [[LH-526]]).
 
 ## `name: {{ include "rask.fullname" . }}-web`
 

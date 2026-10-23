@@ -1024,6 +1024,8 @@ keys_shaped() { case "$1" in *,) return 1 ;; *,*) pub_shaped "${1%%,*}" && pub_s
 {{- end -}}
 {{- end -}}
 
+{{- define "rask.catalogPublicPrefix" -}}/api/catalog{{- end -}}
+
 {{- define "rask.apiRoutes" -}}
 {{- $root := . -}}
 {{- $rows := list -}}
@@ -1032,7 +1034,7 @@ keys_shaped() { case "$1" in *,) return 1 ;; *,*) pub_shaped "${1%%,*}" && pub_s
 {{- $rows = append $rows (dict "prefix" "/api/explorer/search" "component" "search" "service" (printf "%s-search" (include "lance.fullname" $root)) "port" $media.search.port "rewrite" "/api/search") -}}
 {{- $rows = append $rows (dict "prefix" "/api/explorer" "component" "viewer" "service" (printf "%s-viewer" (include "lance.fullname" $root)) "port" $media.viewer.port "rewrite" "/api") -}}
 {{- end -}}
-{{- $rows = append $rows (dict "prefix" "/api/catalog" "component" "catalog" "service" (printf "%s-catalog" (include "lance.fullname" $root)) "port" .Values.services.catalog.port "rewrite" "/") -}}
+{{- $rows = append $rows (dict "prefix" (include "rask.catalogPublicPrefix" $root) "component" "catalog" "service" (printf "%s-catalog" (include "lance.fullname" $root)) "port" .Values.services.catalog.port "rewrite" "") -}}
 {{- $rows = append $rows (dict "prefix" "/api/lineage" "component" "lineage" "service" (printf "%s-lineage" (include "lance.fullname" $root)) "port" .Values.services.lineage.port "rewrite" "/") -}}
 {{- $prefix := .Values.config.RASK_API_PREFIX -}}
 {{- range $name := list "flows" "notifications" -}}

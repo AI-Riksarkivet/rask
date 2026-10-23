@@ -2,7 +2,9 @@
 
 The table below is the public surface the zones, SSR and stock Lance clients address: a prefix, the Service and port it
 reaches, and the internal prefix the route replaces it with (`URLRewrite` `ReplacePrefixMatch`), or `None` where the
-service serves the public path itself. Compute's rows come from the compute fixture's own route, because the product
+service serves the public path itself. The catalog serves its own: a rewrite rebuilds the path from its decoded form, so
+the `%2B` and `%2F` its doors judge a name by would arrive as `+` and `/` ([[LH-526]]), and the catalog strips the
+prefix its route forwards, named by the same template value. Compute's rows come from the compute fixture's own route, because the product
 chart renders no part of a bring-your-own engine's companion (ADR 0155), and the annotator's from its own release's
 route, because the lakehouse knows no annotation tool (ADR 0171). A render that still names a gateway object keeps a
 second router in the request path.
@@ -26,7 +28,7 @@ from tests.unit.chart_render import ANNOTATOR_FIXTURE_ARGS, DEFAULT_ARGS, PROD_A
 _PRODUCT_API = {
     "/api/explorer/search": ("rask-search", 8102, "/api/search"),
     "/api/explorer": ("rask-viewer", 8101, "/api"),
-    "/api/catalog": ("rask-catalog", 2333, "/"),
+    "/api/catalog": ("rask-catalog", 2333, None),
     "/api/lineage": ("rask-lineage", 8000, "/"),
     "/api/flows": ("rask-flows", 8840, None),
     "/api/notifications": ("rask-notifications", 8850, None),
@@ -62,6 +64,9 @@ def test_each_api_prefix_reaches_its_service_through_the_cluster_route_and_no_ga
     annotator = render_fixture("annotator", *ANNOTATOR_FIXTURE_ARGS)
 
     assert _api_rows(product) == _PRODUCT_API
+    catalog = next(d for d in product if d.get("kind") == "Deployment" and d["metadata"]["name"] == "rask-catalog")
+    env = {e["name"]: e.get("value") for e in catalog["spec"]["template"]["spec"]["containers"][0]["env"]}
+    assert env["LANCE_PUBLIC_PATH_PREFIX"] == "/api/catalog", "the catalog strips another prefix than the one its route forwards"
     assert _api_rows(compute) == _COMPUTE_API
     assert _api_rows(annotator) == _ANNOTATOR_API
     leftovers = [

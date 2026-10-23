@@ -27,7 +27,7 @@ For FastAPI app/router/lifespan idioms see `fastapi`. This skill is *only* the t
 | `/api/explorer/search` | `search` | 8102 | `/api/search` |
 | `/api/explorer/annotations` | `annotator` | 8103 | `/api/annotations`; from the annotator fixture chart's own HTTPRoute |
 | `/api/explorer` | `viewer` | 8101 | `/api` (so `/api/explorer/objects` → `/api/objects`) |
-| `/api/catalog` | `catalog` | 2333 | `/` |
+| `/api/catalog` | `catalog` | 2333 | unchanged; the catalog strips the prefix from the bytes as sent (`LANCE_PUBLIC_PATH_PREFIX`), since a rewrite would turn `%2B` and `%2F` into `+` and `/` ([[LH-526]]) |
 | `/api/lineage` | `lineage` | 8000 (dev: 8001) | `/` |
 | `{RASK_API_PREFIX}/flows` | `flows` | 8840 | unchanged |
 | `{RASK_API_PREFIX}/notifications` | `notifications` | 8850 | unchanged |

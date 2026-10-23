@@ -116,7 +116,9 @@ Two contracts stack here, and confusing them is how bugs happen:
   characters, no `$`, `+`, `/` or control character, no edge whitespace (`identifiers.require_names`, ADR 0173 §4).
   `*` and `?` are names, since no name reaches a vended policy. The catalog reads its path from `raw_path`
   (`catalog.api.path_reading`): a bare `+` is a space, as pylance's Rust `RestNamespace` sends one, a `%2B` stays a
-  `+` (so refused), and a `%2F` is refused 400 before routing.
+  `+` (so refused), and a `%2F` is refused 400 before routing. The Gateway's `/api/catalog` route forwards the path
+  unrewritten and the catalog strips the prefix itself (`LANCE_PUBLIC_PATH_PREFIX`), since Traefik's URLRewrite rebuilds
+  the path from its decoded form.
 - **Identity headers:** `api_key` → `x-api-key`, `auth_token` → `Authorization: Bearer`; arbitrary
   context maps BOTH WAYS through a `header.<name>` context KEY — `{"header.x-trace-id": "abc"}` is
   sent as `x-trace-id: abc` (prefix stripped) and every response header returns as `header.<name>`

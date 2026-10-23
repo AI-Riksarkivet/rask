@@ -1277,6 +1277,13 @@ when set, else empty.
 Ray Serve's HTTP ingress on the same plane: `frontend.serveUrl` when Serve lives elsewhere; a RayService's
 load-balanced serve Service; else the dashboard itself, whose external host serves the apps too.
 
+## `{{- define "rask.catalogPublicPrefix" -}}`
+
+The public prefix of the catalog's route, and the one value both its `rask.apiRoutes` row and the catalog's
+`LANCE_PUBLIC_PATH_PREFIX` render from. The row forwards the path unrewritten: a `URLRewrite` rebuilds the path from its
+decoded form, so the `%2B` and `%2F` the catalog judges a name by would arrive as `+` and `/` (measured on Traefik
+3.7.8, whose URLRewrite sets `RawPath` from `EscapedPath()`, [[LH-526]]). The catalog strips the prefix itself.
+
 ## `{{- define "rask.apiRoutes" -}}`
 
 THE ONE ROUTE TABLE: the public `/api/*` prefixes the cluster route publishes, as a JSON list of

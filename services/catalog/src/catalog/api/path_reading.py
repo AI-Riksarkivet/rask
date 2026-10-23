@@ -1,4 +1,5 @@
-"""How the catalog reads a request's path: a bare `+` is a space, and an escaped `/` names nothing ([[LH-526]]).
+"""How the catalog reads a request's path: as its client spelled it, a bare `+` as a space, and an escaped `/` naming
+nothing ([[LH-526]]).
 
 pylance's Rust `RestNamespace` sends a space in an identifier as a bare `+` and a `+` as `%2B` (measured, ADR 0173),
 while the server decodes only percent-escapes into the path it routes on, so a name holding a space would reach its door
@@ -10,6 +11,11 @@ generated urllib3 client does, reads the same either way.
 A `/` escaped as `%2F` is decoded before routing and splits the segment holding it, so no route can carry one, and an
 identifier holding one would answer as a route that does not exist. No name holds a `/`, so a path spelling one is
 refused here, as the spec's malformed request.
+
+Those bytes reach the catalog only where nothing between rebuilt the path. The platform's Gateway therefore publishes the
+catalog under its public prefix (`LANCE_PUBLIC_PATH_PREFIX`) without rewriting it, and the catalog strips the prefix here
+from the bytes as sent: a route rewriting the prefix rebuilds the path from its decoded form, so `%2B` and `%2F` arrive
+as `+` and `/` (measured on Traefik 3.7.8). A path without the prefix, an in-cluster caller's, is read as it is.
 
 Pure ASGI and outermost, so every layer beneath it reads the one path: the write shed, the body cap, the gates that
 classify a write by its path, routing and the doors.
@@ -25,6 +31,7 @@ from lance_namespace import InvalidInputError
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from catalog.core.config import Settings
 from service_kit.lakehouse.ns_errors import problem_detail
 from service_kit.problem import PROBLEM_JSON
 
@@ -34,7 +41,8 @@ _ESCAPED_SLASH: Final = re.compile(rb"%2f", re.IGNORECASE)
 
 
 class PathReadingMiddleware:
-    """Read a bare ``+`` in a request's path as a space, and refuse a path holding an escaped ``/`` with the spec's 400."""
+    """Read a request's path from the bytes its client sent: strip the catalog's public prefix, read a bare ``+`` as a
+    space, and refuse a path holding an escaped ``/`` with the spec's 400."""
 
     def __init__(self, app: ASGIApp) -> None:
         self._app = app
@@ -47,9 +55,25 @@ class PathReadingMiddleware:
         if _ESCAPED_SLASH.search(raw):
             await _escaped_slash_refusal()(scope, receive, send)
             return
-        if b"+" in raw:
-            scope = {**scope, "path": unquote(raw.decode("ascii").replace("+", " "))}
+        unprefixed = _without_prefix(raw, _public_prefix(scope))
+        if unprefixed != raw or b"+" in raw:
+            scope = {**scope, "raw_path": unprefixed, "path": unquote(unprefixed.decode("ascii").replace("+", " "))}
         await self._app(scope, receive, send)
+
+
+def _public_prefix(scope: Scope) -> bytes:
+    """The prefix the Gateway publishes the catalog under, as the settings the lifespan published name it; empty before
+    the lifespan has published any."""
+    app = scope.get("app")
+    settings: Settings | None = getattr(app.state, "settings", None) if app is not None else None
+    return settings.public_path_prefix.encode("ascii") if settings is not None else b""
+
+
+def _without_prefix(raw: bytes, prefix: bytes) -> bytes:
+    """``raw`` with ``prefix`` stripped where it begins the path at a segment boundary, else ``raw`` unchanged."""
+    if prefix and (raw == prefix or raw.startswith(prefix + b"/")):
+        return raw[len(prefix) :] or b"/"
+    return raw
 
 
 def _escaped_slash_refusal() -> JSONResponse:
