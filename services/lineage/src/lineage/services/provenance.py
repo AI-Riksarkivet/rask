@@ -18,6 +18,14 @@ merge on it, which the catalog runs on Lance's own enforcement: a redelivered ev
 two racing deliveries of one event land it once (``catalog.services.primary_keys``). The feed keeps one row
 per terminal state of a run, one per arrival of a non-terminal state, and one per static change.
 
+A BURST IS ONE COMMIT PER TABLE ([[LH-533]]). Every commit is a Lance version and a fragment that each later open and
+scan of the table pays for (ADR 0174), and the sidecar delivers in parallel, so the events recorded while a commit is in
+flight wait and land together in the next one: one writer per process, started by the first event of a burst and gone
+with its last, with no timer, so an idle estate waits on nothing. Measured on pylance 13.0.0 against the catalog app, 29
+concurrent deliveries recorded one commit each took 16, 16 and 13 commits on `runs`, `edges` and `events`, and the
+catalog refused some of them 429 at its concurrent-write cap; 200 recorded by group commit took 2 on each, and none was
+refused.
+
 A READ IS TWO QUERIES, pinned to one version: the keys of the rows the cursor selects, then the rows between
 the first and last of them. Lance evaluates a ``_rowid`` filter on the manifest's row-id sequences without
 reading a data file (measured on pylance 13.0.0: the plan's first read projects no column), so a follower at
@@ -31,13 +39,18 @@ import asyncio
 import hashlib
 import json
 import logging
+import threading
 import uuid
+from collections import deque
 from collections.abc import Callable, Sequence
+from concurrent.futures import Future
 from datetime import UTC, datetime, timedelta
 from typing import Any, Final, TypeVar
 
 import pyarrow as pa
-from pydantic import BaseModel
+from opentelemetry import trace
+from opentelemetry.trace import SpanContext
+from pydantic import BaseModel, ConfigDict
 
 from lineage.core.config import LineageSettings
 from lineage.models import Dataset, DatasetEvent, RunEvent, author_sub_from_payload
@@ -52,6 +65,8 @@ from service_kit.openlineage import dataset_uuids
 
 
 log = logging.getLogger(__name__)
+
+tracer = trace.get_tracer(__name__)
 
 _T = TypeVar("_T")
 
@@ -155,6 +170,14 @@ _TABLES: Final = ((FEED, FEED_SCHEMA), (EDGES, EDGE_SCHEMA), (REFUSALS, REFUSAL_
 MAX_DERIVED_DEPTH: Final = 20
 #: Input names per edge query, so a wide frontier is read in bounded filters.
 _IN_LIST: Final = 500
+#: The most bytes of rows one group commit takes, a sixteenth of the catalog's default body cap (`LANCE_MAX_BODY_BYTES`,
+#: 256 MiB), and always at least one event. A catalog configured below it refuses a larger write, which then lands in
+#: parts (`ProvenanceStore._land`).
+_BATCH_BYTES: Final = 16 * 1024 * 1024
+#: The statuses the catalog answers a write whose rows it refuses: InvalidInput, a body over its cap, a body it cannot
+#: process. Every other failure is about the catalog or the caller, not the rows: one it cannot take now (429, a 5xx, no
+#: answer) or will not take from this caller (401, 403, 404).
+_REFUSED_ROWS: Final = frozenset({400, 413, 422})
 _SUMMARY_COLUMNS: Final = ["event_type", "event_time", "job", "author", "inputs", "outputs", "table_uuids", "namespace_uuids", "unresolved_tables"]
 _FEED_COLUMNS: Final = [*_SUMMARY_COLUMNS, "event"]
 
@@ -302,13 +325,74 @@ def sql_literal(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
+class _Recording(BaseModel):
+    """One admitted event's rows, waiting for the group commit that lands them, and the delivery waiting on it."""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True)
+
+    #: The run's binding to its author, for a run event naming a run; a later event of a bound run writes none.
+    binding: pa.Table | None
+    edges: pa.Table
+    row: pa.Table
+    #: The bytes of all three, what a batch is bounded by.
+    weight: int
+    #: The span of the delivery, which the commit landing these rows links to.
+    origin: SpanContext
+    landed: Future[None]
+
+
+def _recording_of(event: RunEvent | DatasetEvent, *, received_at: datetime) -> _Recording:
+    row = feed_row(event, received_at=received_at)
+    binding = None
+    if isinstance(event, RunEvent) and event.run.run_id:
+        author = author_sub_from_payload(json.loads(row["event"]))
+        binding = pa.Table.from_pylist([{"run_id": event.run.run_id, "author": author, "received_at": received_at}], schema=RUN_SCHEMA)
+    edges = pa.Table.from_pylist(edges_of(event, received_at=received_at), schema=EDGE_SCHEMA)
+    rows = pa.Table.from_pylist([row], schema=FEED_SCHEMA)
+    return _Recording(
+        binding=binding,
+        edges=edges,
+        row=rows,
+        weight=rows.nbytes + edges.nbytes + (binding.nbytes if binding is not None else 0),
+        origin=trace.get_current_span().get_span_context(),
+        landed=Future(),
+    )
+
+
+def _first_of_each(rows: pa.Table, key: str) -> pa.Table:
+    """``rows`` keeping only the first row of each value of ``key``, in their order: the catalog refuses a write that repeats a key."""
+    order = rows.select([key]).append_column("order", pa.array(range(rows.num_rows), pa.int64()))
+    firsts = order.group_by(key).aggregate([("order", "min")]).column("order_min")
+    return rows.take(pa.array(sorted(firsts.to_pylist()), pa.int64()))
+
+
+def _refused_rows(error: Exception) -> bool:
+    """Whether the catalog answered ``error`` refusing the rows a write carried (:data:`_REFUSED_ROWS`).
+
+    The spec client's answer is the cause of every error `translate_catalog_errors` raises, carrying the HTTP status.
+    """
+    from lance_namespace_urllib3_client.exceptions import ApiException
+
+    return isinstance(error.__cause__, ApiException) and error.__cause__.status in _REFUSED_ROWS
+
+
+def _settle(recording: _Recording, error: BaseException | None) -> None:
+    """Answer the delivery waiting on ``recording`` with its outcome, unless it stopped waiting."""
+    if not recording.landed.running():
+        return
+    if error is None:
+        recording.landed.set_result(None)
+    else:
+        recording.landed.set_exception(error)
+
+
 class ProvenanceStore:
     """The feed, the edge list and the outbox refusals, read and written through the catalog's doors.
 
-    Every method is async and runs its catalog calls in a worker thread, because the spec client is blocking.
-    ``token`` answers this pod's bearer for the catalog, read on every call: the kubelet rotates a projected
-    token at about 515 s of its 600 s life. ``None`` sends none, which only a catalog with authentication off
-    accepts.
+    Every method is async and runs its catalog calls off the event loop, because the spec client is blocking: a record on
+    the writer thread of its burst, every other call in a worker thread. ``token`` answers this pod's bearer for the
+    catalog, read on every call: the kubelet rotates a projected token at about 515 s of its 600 s life. ``None`` sends
+    none, which only a catalog with authentication off accepts.
     """
 
     def __init__(self, *, catalog_url: str, namespace: Sequence[str], token: Callable[[], str | None], timeout_seconds: float = 30.0) -> None:
@@ -320,6 +404,10 @@ class ProvenanceStore:
         self._namespace = list(namespace)
         self._token = token
         self._timeout = timeout_seconds
+        self._pending: deque[_Recording] = deque()
+        self._pending_lock = threading.Lock()
+        #: Whether a writer thread is landing what is pending; set and cleared under the lock, so a burst has one.
+        self._landing = False
 
     @classmethod
     def from_settings(cls, settings: LineageSettings) -> ProvenanceStore:
@@ -383,22 +471,112 @@ class ProvenanceStore:
         follower that sees the row can read every edge it asserts. Each is its own commit on its own table, so a failure
         between them leaves the earlier ones; the caller retries the delivery, and the retry lands what is missing and
         nothing twice.
+
+        The commits are shared: the event joins the group commit the writer thread makes next, with every event
+        recorded while the one before it is in flight (:meth:`_land`), and this returns once that commit landed it.
+
+        Raises:
+            Exception: whatever kept the event's rows from landing; nothing it carries is recorded past the table that refused it.
         """
-        received = datetime.now(UTC)
-        edges = edges_of(event, received_at=received)
-        row = feed_row(event, received_at=received)
-        await self._run(lambda: self._record(event, received, edges, row))
+        recording = _recording_of(event, received_at=datetime.now(UTC))
+        with self._pending_lock:
+            self._pending.append(recording)
+            start = not self._landing
+            self._landing = True
+        if start:
+            try:
+                threading.Thread(target=self._land_pending, name="provenance-record").start()
+            except BaseException:
+                # No writer took the burst, so the next record starts one, which lands this event too.
+                with self._pending_lock:
+                    self._landing = False
+                raise
+        await asyncio.wrap_future(recording.landed)
 
-    def _record(self, event: RunEvent | DatasetEvent, received: datetime, edges: list[dict[str, Any]], row: dict[str, Any]) -> None:
-        if isinstance(event, RunEvent) and event.run.run_id and not self._bound(event.run.run_id):
-            binding = {"run_id": event.run.run_id, "author": author_sub_from_payload(json.loads(row["event"])), "received_at": received}
-            self._writer(RUNS).merge_insert_only(pa.Table.from_pylist([binding], schema=RUN_SCHEMA), on="run_id")
-        if edges:
-            self._writer(EDGES).merge_insert_only(pa.Table.from_pylist(edges, schema=EDGE_SCHEMA), on="edge_key")
-        self._writer(FEED).merge_insert_only(pa.Table.from_pylist([row], schema=FEED_SCHEMA), on="event_key")
+    def _land_pending(self) -> None:
+        """The writer thread of one burst: land what is pending, a batch per commit, until nothing is."""
+        batch: list[_Recording] = []
+        try:
+            while batch := self._next_batch():
+                self._land(batch)
+        except BaseException as exc:
+            # A panic in a native library is a BaseException, which `_land` does not take: the batch's deliveries fail
+            # with it, and the next record starts a writer for what is still pending.
+            for recording in batch:
+                _settle(recording, exc)
+            with self._pending_lock:
+                self._landing = False
+            raise
 
-    def _bound(self, run_id: str) -> bool:
-        return self._reader(RUNS).count_rows(f"run_id = {sql_literal(run_id)}") > 0
+    def _next_batch(self) -> list[_Recording]:
+        """The recordings the next commit takes, oldest first, within :data:`_BATCH_BYTES` and at least one; none ends the writer."""
+        batch: list[_Recording] = []
+        weight = 0
+        with self._pending_lock:
+            while self._pending and (not batch or weight + self._pending[0].weight <= _BATCH_BYTES):
+                recording = self._pending.popleft()
+                # A delivery that stopped waiting is landed all the same and answered by nothing: its redelivery finds it recorded.
+                recording.landed.set_running_or_notify_cancel()
+                weight += recording.weight
+                batch.append(recording)
+            if not batch:
+                self._landing = False
+        return batch
+
+    def _land(self, batch: list[_Recording]) -> None:
+        """Commit ``batch`` and answer each delivery in it with the outcome.
+
+        A FAILURE ONE EVENT CAUSES STAYS ITS OWN. A batch whose rows the catalog refuses (:data:`_REFUSED_ROWS`) lands in
+        halves, each again in halves while it is refused: the deliveries in the halves that land succeed, and only the
+        event the catalog refuses fails its delivery. Any other failure fails the batch whole, and each of its deliveries
+        retries: a split would send a catalog that cannot take a write now, its write cap's 429 among them, up to twice as
+        many.
+        """
+        try:
+            self._commit(batch)
+        except Exception as exc:
+            if len(batch) > 1 and _refused_rows(exc):
+                log.warning("provenance_batch_refused", extra={"events": len(batch), "error": str(exc)})
+                half = len(batch) // 2
+                self._land(batch[:half])
+                self._land(batch[half:])
+                return
+            log.warning("provenance_record_failed", extra={"events": len(batch), "error": str(exc)})
+            for recording in batch:
+                _settle(recording, exc)
+            return
+        for recording in batch:
+            _settle(recording, None)
+
+    def _commit(self, batch: Sequence[_Recording]) -> None:
+        """Land ``batch``'s rows in one commit per table, in :meth:`record`'s order: the run bindings, the edges, the feed rows.
+
+        A key the batch repeats is sent once, its first delivery's row: a redelivery's, which the table may hold already,
+        and the binding of a run's first event, which is its author's.
+        """
+        links = [trace.Link(recording.origin) for recording in batch if recording.origin.is_valid]
+        with tracer.start_as_current_span("lineage.record", links=links) as span:
+            span.set_attribute("lance.lineage.events", len(batch))
+            bindings = [recording.binding for recording in batch if recording.binding is not None]
+            if bindings:
+                unbound = self._unbound(_first_of_each(pa.concat_tables(bindings), "run_id"))
+                if unbound.num_rows:
+                    self._writer(RUNS).merge_insert_only(unbound, on="run_id")
+            edges = _first_of_each(pa.concat_tables([recording.edges for recording in batch]), "edge_key")
+            if edges.num_rows:
+                self._writer(EDGES).merge_insert_only(edges, on="edge_key")
+            rows = _first_of_each(pa.concat_tables([recording.row for recording in batch]), "event_key")
+            self._writer(FEED).merge_insert_only(rows, on="event_key")
+
+    def _unbound(self, bindings: pa.Table) -> pa.Table:
+        """The rows of ``bindings`` whose run the table binds to no author yet."""
+        reader = self._reader(RUNS)
+        runs = bindings.column("run_id").to_pylist()
+        bound: set[str] = set()
+        for start in range(0, len(runs), _IN_LIST):
+            listed = ", ".join(sql_literal(run) for run in runs[start : start + _IN_LIST])
+            bound.update(reader.to_table(columns=["run_id"], filter=f"run_id IN ({listed})").column("run_id").to_pylist())
+        return bindings.filter(pa.array([run not in bound for run in runs], pa.bool_()))
 
     async def record_refusal(self, *, outbox_key: str, run_id: str | None, author: str | None, reason: str, event_json: str) -> None:
         """Keep a settled governance refusal of a staged event, so the staged object can be retired ([[LH-182]]).

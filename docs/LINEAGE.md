@@ -52,6 +52,14 @@ row records an announcement, so announcing that row's own commit would record it
 it, so a redelivered event lands no second row and two racing deliveries of one event land it once. The feed's key is
 one row per terminal state of a run, one per arrival of a non-terminal state, and one per static change.
 
+**A burst is one commit per table.** Every commit is a Lance version and a fragment that each later open
+and scan pays for (ADR 0174), so the events recorded while a commit is in flight land together in the next one: one
+writer per process, started by a burst's first event, with no timer. The commit keeps `record`'s order for the whole
+batch (the run bindings, then the edges, then the feed rows) and sends a key the batch repeats once, its first
+delivery's row, so a run is bound to its first event's author. A batch whose rows the catalog refuses (400, 413, 422)
+lands in halves, so only the event it refuses fails its delivery; any other failure (a 429 at its write cap, a 5xx, no
+answer) fails the batch whole, and each delivery retries.
+
 **The feed's sequence is Lance's own.** The tables use stable row ids, which Lance assigns in commit order
 (`lance_docs/file_format.md`, "Row ID Assignment"), and `seq` is `_rowid + 1`. A follower reading `seq > since`
 therefore never misses a row that commits after it read. The contract is [`COMMIT-EVENTS.md`](COMMIT-EVENTS.md).
