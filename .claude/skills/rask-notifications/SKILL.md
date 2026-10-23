@@ -122,7 +122,10 @@ event = {
             "errorMessage": {"message": reason},
         },
     },
-    "outputs": [{"namespace": "gold", "name": f"{project_id}-gold$catalog"}],  # (4)
+    # (4) Each output carries its table's uuids (`with_dataset_uuids` stamps `facets.lance.tableUuid` and
+    #     `namespaceUuid`), as the table's and namespace's DescribeTable/DescribeNamespace answer them (`rask.uuid`).
+    #     An output without one names no object any grant reaches, so the run reaches nobody.
+    "outputs": [with_dataset_uuids({"namespace": "gold", "name": f"{project_id}-gold$catalog"}, uuids, producer=PRODUCER)],
 }
 # (5) SIGNED with this service's own key, through the service's one emit door
 #     (`maintenance/core/lineage_emit.py` is a worked service emitter). A bare dict is refused by lineage and acked.
@@ -275,7 +278,8 @@ whole run feed with no per-dataset filter, gated on the estate rung `can_read_ev
 chart's bootstrap hook grants it as `event_reader` on `estate:rask`. Not the governed `/events`: that
 shows a service only the tables its grants reach, so every tenant warehouse's runs would be invisible to
 the lane and the tick would still log success. Each row carries only the targeting view (run id, state,
-time, the `author` and `lance` facets, output names), because addressing people needs nothing more. A
+time, the `author` and `lance` facets, and each output's name with its own `lance` facet, which carries the table's
+uuids), because addressing people needs nothing more. A
 deployment that forgets the grant gets a 403 on every tick, and no retry helps — the sidecar's
 `invokeRetry` (`<release>-invocation-resiliency`, scoped to `notifications`, targeting `lineage`) retries
 `408,429,500-599` and never a 4xx, because a 403's answer will not change. Delivery needs

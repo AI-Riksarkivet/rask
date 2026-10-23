@@ -22,8 +22,9 @@ erasure ◀── GET /tables/{name}/derived ──────┤              
 | **what / when** changed | Lance versions + tags (immutable, time-travel) |
 | **how / from where / by whom** | this service: the commit feed and the edge list; the full graph in the forwarded backend |
 
-A governed table is recorded under its bare catalog id (e.g. `bronze$images`), so the same object is governed by
-OpenFGA, versioned by Lance and traced here. An external source (anything outside the governed tiers, R23) is recorded
+A governed table is recorded under the uuid the catalog minted for it, with its bare catalog id (e.g. `bronze$images`)
+beside it as the name its event used, so the same object is governed by OpenFGA (`table:<uuid>`), versioned by Lance and
+traced here, and a rename does not split its lineage (ADR 0173 §10). An external source (anything outside the governed tiers, R23) is recorded
 namespace-qualified, `<namespace>/<name>`, so an external input can never resolve onto a governed table's edges
 (`Dataset.lineage_name` in `lineage/models.py`).
 
@@ -82,8 +83,9 @@ JSON, else 422. Every door (HTTP, bus, outbox drain, DLQ replay) parses through 
 alike. This door records and triggers nothing: it publishes nothing on `lineage.events.v1`, so a write that should be
 announced goes through the catalog's data-plane doors, whose emitter announces it.
 
-**Derived tables.** `GET /tables/{name}/derived` walks the edge list transitively from `name` (a table derived from
-any version of it counts), at most `depth` hops (default and cap 20). It is gated on `can_get_metadata` on the source;
+**Derived tables.** `GET /tables/{name}/derived` resolves `name` to the uuid of the table it names now and walks the
+edge list transitively from that uuid, and from the name for an outside producer's event that carried none (a table
+derived from any version of it, under any name it has had, counts), at most `depth` hops (default and cap 20). It is gated on `can_get_metadata` on the source;
 a derived table the caller cannot see is dropped from the answer while the walk still passes through it, and
 `complete` is `false` when the walk stopped at the depth cap with tables left to follow. This is how an erasure finds
 every table built from a subject's source.

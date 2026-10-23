@@ -871,16 +871,16 @@ Content-Type: application/vnd.apache.arrow.stream`, chips:["Arrow IPC","OIDC"] }
         payload:`check {
   user:     "user:alice",
   relation: "can_create_table",
-  object:   "namespace:alpha$bronze"
+  object:   "namespace:4f9c2a61-0d3e-4b8a-9c57-2e1f6a8b3d10"
 }`, chips:["create-on-parent"] },
-      { from:"catalog", to:"store", color:"--c-vector", title:"Create dataset + record", route:"DirectoryNamespace.create_table",
-        desc:"Catalog creates the Lance dataset location and records the table. Control-plane only — the dataset starts at version 1.",
-        payload:`pylance.create_table(location="s3://lance/alpha/bronze/images.lance")`, chips:["control plane"] },
+      { from:"catalog", to:"store", color:"--c-vector", title:"Create dataset + record", route:"declare + RegisterTable",
+        desc:"Catalog mints the table's uuid, lays the dataset at <code>&lt;warehouse root&gt;/&lt;table uuid&gt;</code> and records the table under its name (ADR 0173 §5). Control-plane only — the dataset starts at version 1.",
+        payload:`declare_table(location="s3://lance/8a1d5e3b-7c24-4f6e-b9a0-15c3e7d2f468")`, chips:["control plane"] },
       { from:"catalog", to:"openfga", color:"--c-vector", title:"Seed ownership + parent", route:"write tuples",
-        desc:"<em>grant_on_create</em> seeds the owner grant + the parent edge, so the new table inherits the cascade (owner ⇒ writer ⇒ reader).",
+        desc:"<em>grant_on_create</em> seeds the owner grant + the parent edge, so the new table inherits the cascade (owner ⇒ writer ⇒ reader). Every object is the uuid the catalog minted, never a name (ADR 0173 §8): <code>alpha$bronze</code> is <code>namespace:4f9c2a61-…</code>, <code>alpha$bronze$images</code> is <code>table:8a1d5e3b-…</code> and <code>alpha$silver$features</code> is <code>table:c3e8b7a2-…</code>, so a rename moves no grant.",
         payload:`write [
-  ("user:alice", "owner",  "table:alpha$bronze$images"),
-  ("namespace:alpha$bronze", "parent", "table:alpha$bronze$images")
+  ("user:alice", "owner",  "table:8a1d5e3b-7c24-4f6e-b9a0-15c3e7d2f468"),
+  ("namespace:4f9c2a61-0d3e-4b8a-9c57-2e1f6a8b3d10", "parent", "table:8a1d5e3b-7c24-4f6e-b9a0-15c3e7d2f468")
 ]`, chips:["grant_on_create"] },
       { from:"catalog", to:"lineage", color:"--c-orch", title:"Record creator (async)", route:"POST /api/v1/lineage",
         desc:"<em>P0 #3:</em> the catalog emits OpenLineage with <em>author = the verified token sub</em> recorded on its commit feed row, so 'who created this table' is an <em>audit</em> fact (read from <code>GET /events?table=</code>) — distinct from the OpenFGA owner <em>access</em> tuple. <em>Fire-and-forget + best-effort</em> (runs after the response; a down lineage service never blocks/fails the create). Default OFF.",
@@ -912,7 +912,7 @@ Authorization: Bearer <JWT>`, chips:["describe","vend_credentials"] },
         payload:`check {
   user:     "user:dee",
   relation: "can_read_data",
-  object:   "table:alpha$silver$features"
+  object:   "table:c3e8b7a2-5f19-4d6c-8e4b-90a1d2f7e635"
 }`, chips:["reader rung","cascade"] },
       { from:"catalog", to:"openbao", color:"--c-seed", title:"Fetch scoped key", route:"KV v2 read (Dapr secret store)",
         desc:"<em>Secret-responsibility:</em> only the <em>catalog</em> (and the lineage svc) hold durable secrets in OpenBao — compute jobs never read it. <em>STS vending (built):</em> the catalog reads its base/role credential (two-tier Dapr secret store) to mint scoped creds — four pluggable modes incl. RustFS-native web_identity; <em>Mode B</em> (server-mediated) fetches nothing.",
@@ -922,10 +922,10 @@ Authorization: Bearer <JWT>`, chips:["describe","vend_credentials"] },
       { from:"catalog", to:"store", color:"--c-vector", title:"Locate (+ vend creds)", route:"describe -> location",
         desc:"The catalog returns the dataset location. <em>STS vending:</em> it also mints a short-TTL, table-scoped STS token (AssumeRole). <em>Mode B:</em> it returns only the location; data flows server-mediated.",
         payloadOffline:`# Mode B (server-mediated)
-{ "location": "s3://.../images.lance",
+{ "location": "s3://lance/c3e8b7a2-5f19-4d6c-8e4b-90a1d2f7e635",
   "storage_options": {} }      // no creds vended`,
         payloadOnline:`# STS vending
-{ "location": "s3://.../features.lance",
+{ "location": "s3://lance/c3e8b7a2-5f19-4d6c-8e4b-90a1d2f7e635",
   "storage_options": {
     "access_key_id": "...", "secret_access_key": "...",
     "session_token": "..." },
@@ -953,7 +953,7 @@ Authorization: Bearer <workload-identity token>`, chips:["pipeline job","workloa
         payload:`check {
   user:     "role:data_engineer#assignee",
   relation: "can_read_data",
-  object:   "table:alpha$bronze$images"
+  object:   "table:8a1d5e3b-7c24-4f6e-b9a0-15c3e7d2f468"
 }`, chips:["role#assignee"] },
       { from:"ray", to:"store", color:"--c-vector", title:"Read bronze (version delta)", route:"read_lance",
         desc:"Read only the new bronze versions — Lance's version range <em>is</em> the change feed.",
@@ -994,7 +994,7 @@ Authorization: Bearer <JWT>`, chips:["provenance"] },
         payload:`check {
   user:     "user:ana",
   relation: "can_get_metadata",
-  object:   "table:alpha$bronze$images"
+  object:   "table:8a1d5e3b-7c24-4f6e-b9a0-15c3e7d2f468"
 }`, chips:["reuse OpenFGA","default OFF"] },
       { from:"lineage", to:"age", color:"--c-vector", title:"Walk the edge list", route:"POST query",
         desc:"Lineage reads the edge list through the catalog's <code>query</code> door and walks it, nearest first, to at most 20 hops.",

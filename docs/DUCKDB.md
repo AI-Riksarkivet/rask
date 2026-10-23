@@ -58,12 +58,13 @@ use `PROVIDER credential_chain` to inherit the SDK chain.
 
 ## Read a dataset
 
-Catalog datasets are stored as `s3://<warehouse-bucket>/<hash>_<namespace>$<table>` — they carry
-**no `.lance` suffix**, so DuckDB's suffix-based replacement scan (`FROM 'path/to/x.lance'`) does not fire.
-Use the explicit table function **`__lance_scan(uri)`**:
+A table the catalog makes is stored at `s3://<warehouse-bucket>/<table uuid>`, the `location` its `describe` answers
+(ADR 0173 §5); a registered table keeps the location its registrar named. Either carries **no `.lance` suffix**, so
+DuckDB's suffix-based replacement scan (`FROM 'path/to/x.lance'`) does not fire. Use the explicit table function
+**`__lance_scan(uri)`**:
 
 ```sql
-SELECT count(*)              FROM __lance_scan('s3://lance-catalog/1a9b5ce0_gov1378264$silver');
+SELECT count(*)              FROM __lance_scan('s3://lance-catalog/6567e950-519f-4a3d-8945-1905a84cf8bb');
 SELECT kind, sum(score)      FROM __lance_scan('s3://mb-a/…') GROUP BY kind;
 DESCRIBE SELECT *            FROM __lance_scan('s3://…');   -- the Lance schema, in column order
 ```

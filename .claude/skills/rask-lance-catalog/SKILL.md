@@ -32,7 +32,7 @@ Two contracts stack here, and confusing them is how bugs happen:
   Spelling matters when grepping: the spec op and
   the served route are SINGULAR — `POST /v1/table/{id}/backfill_column` (`spec.yaml:1570`,
   `endpoints/columns.py:146`) — while `alter_table_backfill_columns` is the native method it wraps.
-  **`rename_table` is NOT one of them.** It is backed in-process and answers 200; `docs/COVERAGE.md:15-17`
+  **`rename_table` is NOT one of them.** It is backed in-process and answers 200; `docs/COVERAGE.md:11-15`
   carries that correction, dated 2026-08-05. It MOVES A POINTER, never bytes (2026-09-04):
   `dataplane.rename_table` retires the source pointer and re-registers the destination at the source's
   own location, so version history, row count and the directory all survive untouched — every V2 reader
@@ -55,7 +55,7 @@ Two contracts stack here, and confusing them is how bugs happen:
   answers the door 409 code 14, one landing after the fence answers 409 itself, and every take refuses a claim
   another request has fenced. Each refuses 409 while the claim names another live table, deregister included.
   Create, declare, register and both undrops take a claim, a recoverable drop
-  keeps it for the trashed id, and destructive drops, deregister and the purge release it. A release replaces
+  keeps it for the trashed table's uuid, and destructive drops, deregister and the purge release it. A release replaces
   the claim it read with the same claim stamped `released_at`, under that claim's ETag, and never deletes the
   record ([[LH-458]], ADR 0172): a hand-over landing between its read and its write survives, and `holder` and
   `take` read a released claim as a free location. A holder that no
@@ -89,7 +89,9 @@ Two contracts stack here, and confusing them is how bugs happen:
   `object_name` beside it. A registry model (`table:models$<name>`) is no lance-namespace table and keeps its name.
   Pinned by `services/catalog/tests/test_a_grant_is_held_by_the_objects_uuid.py` and
   `services/catalog/tests/test_a_listing_judges_its_own_candidates.py`.
-- **A table the catalog makes lives at `<namespace root>/<table uuid>`** ([[LH-520]], ADR 0173 §5). Create and declare
+- **A table the catalog makes lives at `<namespace root>/<table uuid>`** ([[LH-520]], ADR 0173 §5), the namespace root
+  being the root of the warehouse its top-level namespace is bound to (`NamespaceRootDep`; CONTEXT.md's
+  `<warehouse root>/<table uuid>`), else the catalog's root. Create and declare
   run the `dir` catalog's own DeclareTable steps with the catalog choosing the location (`dataplane.declare_table`): mint
   the uuid and take the location's claim before any backend call, write `.lance-reserved` there, then record the row
   through RegisterTable's relative location, which answers `is_only_declared` until data lands (measured on pylance
@@ -349,7 +351,8 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   (no longer gated on `fga_enabled`) and protection-checks EVERY enumerated id before anything
   drops, refusing 409 and NAMING the protected descendant; `force` turns the subtree lock exactly
   as at the named rung, and on the force path the descendants' protection records are cleared after
-  the drop (the same reuse rule as the named rung). Until that landed the docstring promised
+  the drop, as the named rung clears its own (each is keyed by its object's uuid, which no later object holds,
+  [[LH-523]]). Until that landed the docstring promised
   cascade coverage the code did not have. Trash records for the children landed with #96 — see the
   recoverable-drops bullet.
 - **NO EXISTENCE ORACLE on destructive doors (audit #4).** `delete_warehouse`, `delete_project` and
@@ -436,10 +439,11 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   store opens, by the base judge's own rule (`base_refs.names_a_location`, each segment percent-decoded
   once: one that decodes to empty, `.` or `..`, holds a control character or a `?`, or gains a `/` or `\`
   from the decode — pylance drops the tab from `x/.\t./<victim>` and opens the victim, and the store keeps a
-  `?` under a re-encoded name, [[LH-435]]; every judge asks the same rule, [[LH-510]]); a segment holding
-  `*` once decoded, an IAM wildcard in every policy a credential for the table is scoped by ([[LH-437]]);
-  a segment beginning with `_` once decoded; one equal to or containing the control root; and one
-  overlapping a configured base.
+  `?` under a re-encoded name, [[LH-435]]; every judge asks the same rule, [[LH-510]]); a segment holding IAM
+  policy syntax once decoded (`vending.IAM_POLICY_SYNTAX`: `*` and `?`, which IAM reads as wildcards, and `${`, a
+  policy variable, in every policy a credential for the table is scoped by, [[LH-437]], [[LH-526]]); a segment
+  beginning with `_` once decoded; one equal to or containing the control root; and one overlapping a configured
+  base or a model root ([[LH-204]]).
   Any other `%` is a name: `describe_table` answers a registered location's non-ASCII characters percent-encoded
   (`räksmörgås` -> `r%C3%A4ksm%C3%B6rg%C3%A5s`), so a rule refusing every `%` would strand those tables. A first segment
   spelled as a uuid is refused: the catalog lays out the tables it makes there ([[LH-520]]).
@@ -712,8 +716,8 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   - the purge (`purge.store_paths`), which reclaims a trashed table under the key its record decodes to and the
     `.lance-reserved` marker pylance 13 writes under the spelling (measured over moto: `…$r%C3%A4…/.lance-reserved`
     beside data at `…$räksmörgås/`);
-  - the reconciler's trash set, a table policy's recorded path (`maintenance_policies.resolve_policy`) and the
-    location the vend door answers (`credentials`);
+  - the reconciler's trash set and the location the vend door answers (`credentials`); a table's policy is found by
+    its uuid and its namespaces' uuids (`maintenance_policies.resolve_policy`, [[LH-523]]), never by a path;
   - the tombstone probe (`purge.objects_held`), and the compaction gate's root probe.
 
   A table's own branch protects nothing from the purge (`BaseRefs.protects_from_deletion`): the delete takes it along,
@@ -739,7 +743,8 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   node). `service_kit.lakehouse.stage_stamp.stamp_stage(..., dataset_id=...)` re-declares the destination
   and DROPS an inherited id when none is given, the same rule it applies to the `lineage` document. No
   lakehouse service calls it; it is the helper a pipeline writing a derived tier uses. When
-  you check a declared-id chain, ask not "is a name stamped" but "whose name, on the tier that derived it".
+  you check a declared-id chain, ask not "is an id stamped" but "whose uuid, on the tier that derived it": the catalog
+  stamps the uuid its location claim holds, never the name (`dataplane._named_by_its_uuid`, ADR 0173 §10).
 
   **EVERY TIER IS A CATALOG TABLE, and the writer is the user's pipeline** (ADR 0154, ADR 0155). Bronze,
   silver and gold are written only through the namespace doors, so each tier is a `table:` object with a

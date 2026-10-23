@@ -895,7 +895,7 @@
                     "type": "integer"
                 },
                 "lineageEmit": {
-                    "description": "Emit a lineage event per materially compacted dataset and a FAIL event per errored one; covers catalog-laid-out tables only.",
+                    "description": "Emit a lineage event per dataset whose versions the sweep reclaimed and a FAIL event per errored one; covers every table the catalog's `__manifest` names.",
                     "type": "boolean"
                 },
                 "minVersionsToExpire": {

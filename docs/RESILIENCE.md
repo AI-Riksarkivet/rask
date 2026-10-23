@@ -162,8 +162,9 @@ semantics, so it must not undercut the slowest handler. Either way the window co
    *Fix (prod):* multi-replica + `streamReplicas=3` for NATS, a real Postgres HA (Patroni/CNPG), a replicated
    object store. Tracked as infra work; **the app tier is already `replicas`-ready** (stateless, PDBs shipped).
 
-6. **Lineage lifecycle emits.** **deregister** emits a lineage marker. **rename** is unsupported on the `dir`
-   backend (501), so it emits nothing — moot, not a gap.
+6. **Lineage lifecycle emits.** **deregister** emits a lineage marker. **rename** emits a deregister marker for the
+   source name and a register marker for the destination, both naming the table's uuid, so lineage follows the table
+   across it (ADR 0173 §10).
 
 7. **Durable-consumer config drift wedges every durable subscription at upgrade — self-heals in
    ~20–25 min (observed live 2026-07-13).** JetStream durables are create-once: upgrading a

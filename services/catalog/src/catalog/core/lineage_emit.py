@@ -309,9 +309,9 @@ def build_write_event(
 ) -> dict[str, Any]:
     """Build the OpenLineage ``RunEvent`` (wire JSON) for any catalog write to a table.
 
-    ``table_id`` is the catalog's canonical id (e.g. ``alpha$bronze$images``) so the lineage
-    ``Dataset`` name matches the OpenFGA object id byte-for-byte — one identity across the three
-    governance axes. ``operation`` is the catalog op (``create_table`` / ``insert`` / ``merge_insert``
+    ``table_id`` is the catalog's canonical id (e.g. ``alpha$bronze$images``), the lineage ``Dataset`` name a caller of
+    the doors reads; the table's identity across a rename is the uuid ``uuids`` carries in the output's ``lance`` facet,
+    which its OpenFGA object (``table:<uuid>``) names (ADR 0173 §8, §10). ``operation`` is the catalog op (``create_table`` / ``insert`` / ``merge_insert``
     / ``update`` / ``delete``). ``version`` is the Lance version the write produced; when it is ``None``
     (e.g. an insert whose response carries no version) the standard version facet is omitted so the
     event records the run without asserting a version. ``run_id`` / ``event_time`` are injected
@@ -930,7 +930,7 @@ async def emit_write_event(
     ``inputs`` names the source dataset(s) this write is DERIVED FROM, each optionally version-pinned (a
     rename passes its source; a pipeline's write passes the inputs its run names); ``run`` names that run's id and job.
     ``commits_rows`` says the commit added rows, which makes a create a write (:func:`build_write_event`).
-    Ids come from ``fga`` so the lineage Dataset == the OpenFGA object.
+    Names come from ``fga.canonical_object_id``, so the lineage Dataset is named as the catalog names the table.
 
     ``uuids`` reads the table's uuid and its namespace's, which the event names beside the names (ADR 0173 §10), and each
     input's. A door whose act ends the table read them before acting and passes them as ``known``. Otherwise the claim at

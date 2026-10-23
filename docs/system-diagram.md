@@ -123,7 +123,7 @@ catalog's publish door, which runs the project's gate and moves the `published` 
 4. **Job → Catalog** — `merge_insert` silver with an `Idempotency-Key` (authorizes `can_write_data`; retry-safe).
 5. **Job → Object store** — write the new silver dataset version (immutable; old versions stay for time-travel).
 6. **Job → Lineage** — emit an OpenLineage run event: inputs=[bronze], outputs=[silver]. Ingest **binds the verified author** on the authenticated path (implemented; the open HTTP `/api/v1/lineage` guards forgery via `enforce_author`).
-7. **Lineage → Catalog** — record the event as a `provenance$events` row and its table-level edges (bronze → silver) in `provenance$edges`, through the catalog's `merge_insert` door; a governed dataset is named by its bare catalog id.
+7. **Lineage → Catalog** — record the event as a `provenance$events` row and its table-level edges (bronze → silver) in `provenance$edges`, through the catalog's `merge_insert` door; a governed dataset is keyed by the uuid the catalog minted for it, its bare catalog id beside it.
 
 ### 4. Lineage query — `GET /tables/{name}/derived`
 1. **Client → Lineage** — ask "what was built from bronze?" (how an erasure finds every derived table).

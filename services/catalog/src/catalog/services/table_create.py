@@ -341,8 +341,8 @@ async def create_governed_table(
     )
     # Record provenance authoritatively: the catalog knows the verified principal. Fire-and-forget
     # (after the response, best-effort) so the lineage service can never block/fail a create. The
-    # canonical id keeps the lineage Dataset == the OpenFGA object id == the catalog table id; the
-    # caller's bearer is forwarded so ingest accepts it when the lineage service has OIDC on; the
+    # canonical id names the lineage Dataset as the catalog names the table, and the event carries the table's uuid,
+    # which its OpenFGA object names (ADR 0173 §8, §10); the caller's bearer is forwarded so ingest accepts it when the lineage service has OIDC on; the
     # ``run_id`` is the same one stamped into the Lance file above (#21).
     # Inline-await (NOT BackgroundTasks — no retry, dies with the worker; fastapi anti-pattern) so the event
     # reaches the durable Dapr/JetStream transport before the response. emit_create is best-effort internally,

@@ -9,9 +9,10 @@ in-process `dataplane` (pylance, always 200) — see `services/catalog/services/
 **Tally: 48 / 54 backed (200), 6 spec-correct 406** — four native-backend stubs and the two multi-table commits, which the catalog does not judge as one ([[LH-206]], [[LH-471]]). `uv run pytest tests/unit tests/integration` → 568 passed (measured 2026-07-12; e2e suites skipped unless their live backends are set).
 
 > **Correction (2026-08-05):** `rename_table` was still listed as unsupported long after #5b backed it
-> in-process (`dataplane.rename_table` — copy the dataset root to the destination, repoint the namespace,
-> deregister the source; `api/v1/endpoints/tables.py` never reaches `native.call`). The doc named the
-> native stub the endpoint deliberately stopped using.
+> in-process (`dataplane.rename_table` moves the table's pointer, never its bytes: it retires the source's
+> `__manifest` row and registers the destination at the same location, so the table keeps its version history and
+> its uuid; `api/v1/endpoints/tables.py` never reaches `native.call`). The doc named the native stub the endpoint
+> deliberately stopped using.
 
 > **Correction (2026-06-30):** an earlier version of this doc reported 41/54 and listed version + branch
 > ops as "upstream-blocked / no pylance analog". That was **wrong**, and reading the Lance Namespace spec

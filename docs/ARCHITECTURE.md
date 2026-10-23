@@ -47,7 +47,7 @@ Lakekeeper, but for Lance (multimodal: vectors + blobs + columns)."
                     │                                        │
                     ▼                                        ▼
         OpenFGA (tuples)  +  OIDC IdP (Dex)          Object store (S3)
-                                                      Lance dataset dirs (*.lance)
+                                                      Lance datasets (<warehouse root>/<table uuid>)
 ```
 
 The catalog **moves no data between tiers itself** (no ETL inside the API process). It authorizes, locates, records
@@ -98,7 +98,7 @@ flowchart LR
   API -->|check can_* / write tuples| FGA[(OpenFGA)]
   FGA --> PG[(OpenFGA datastore — Postgres or SQLite)]
   API -->|pylance DirectoryNamespace| OS[(Object store — S3)]
-  OS --- L[Lance dataset dirs: bronze/…, silver/…, gold/…]
+  OS --- L[Lance datasets, each at its warehouse root under its table uuid]
 ```
 
 Code layout (where each concern lives). The catalog service is a uv workspace member, so its
@@ -141,7 +141,7 @@ HTTP request
   ├─ 2b. Overwrite gate  (create mode=Overwrite of an EXISTING table, in the create handler)
   │      Overwrite is spec-defined as drop+recreate, so it ADDITIONALLY requires owner-tier
   │      can_drop on the existing table — BEFORE the destructive write. Without it a mere
-  │      namespace writer could overwrite (destroy) and, via step 4b, seize another user's table.
+  │      namespace writer could overwrite (destroy) another user's table's rows.
   │
   ├─ 3. Handler  (services/catalog/api/v1/endpoints/*)
   │      run the pylance backend op in a threadpool (it's blocking I/O).
@@ -150,15 +150,19 @@ HTTP request
   │      write owner + parent tuples for the new object so the creator keeps access
   │      and the new object inherits the cascade. No-op when FGA is off/unauthenticated.
   │
-  └─ 4b. Revoke  (on drop/deregister/rename-source/overwrite — fga_deps.revoke_ownership)
-         delete EVERY tuple on the removed object so a reused id can't inherit stale grants
-         (privilege bleed). A Cascade namespace drop enumerates its descendants first and
-         revokes each; an Overwrite resets the replaced table's ACL (owner-gated at 2b).
+  └─ 4b. Revoke  (a destructive table drop or a deregister — fga_deps.revoke_ownership; a dropped
+         namespace and its subtree — fga_deps.end_removed_subtree)
+         delete EVERY tuple on the removed object's uuid. Every grant is held by the uuid the
+         catalog minted (ADR 0173 §8), which no later object holds, so a re-created name
+         inherits nothing either way: the revoke keeps the store from holding grants on
+         nothing. A recoverable drop revokes nothing (its owner must be able to undrop it); the
+         trash purge revokes when it reclaims the bytes, in maintenance (`purge._revoke`). A
+         rename writes no tuple but a moved parent edge, and an Overwrite keeps every grant.
 ```
 
 **Why two authz touch-points?** Step 2 is the *pre-op check* ("may you?"). Step 4 is the
 *post-create grant* ("you made it, you own it; link it into the tree"). Step 4b is the
-*revoke-on-removal* (drop/overwrite clears grants so a reused id starts clean). All live in
+*revoke-on-removal* (a destructive removal clears the grants its uuid held). All live in
 `fga_deps.py` so all request-time authz policy is in one module.
 
 ---
@@ -203,8 +207,9 @@ granted a rung on a project or a namespace, and `can_promote` / `can_update_tag`
 
 ## 6. The medallion: tier governance (bronze → silver → gold)
 
-Tiers are **namespaces**; datasets are **Lance tables** (each a `*.lance` directory). Default storage: **one bucket
-per warehouse, tiers = prefixes** (authz and physical storage are independent axes).
+Tiers are **namespaces**; datasets are **Lance tables**. Default storage: **one bucket per warehouse**, and a table
+the catalog makes lives at `<warehouse root>/<table uuid>`, so a tier is a catalog record, never a path prefix
+(ADR 0173 §5; authz and physical storage are independent axes).
 
 ```mermaid
 flowchart LR
@@ -260,7 +265,7 @@ client's `CreateTableVersion`). In a governed catalog you want a commit to be **
 | **(c) Lineage** | "Where did this data come from?" | **OpenLineage** (emit on commit) → lineage's commit feed and edge list, forwarded to a bring-your-own graph backend | ✅ built & deployed (see §9 + `docs/LINEAGE.md`) |
 
 So **commit auth already exists**: committing goes through the same `authorize` dependency that gates every write,
-checking `can_write_data` on `table:<id>`. A stock client commits through the spec's `CreateTableVersion`: the
+checking `can_write_data` on `table:<uuid>`. A stock client commits through the spec's `CreateTableVersion`: the
 catalog answers `managed_versioning=true`, judges the staged version (the operation's rung, file versions, bases,
 footers, the primary key, protected columns) and finalizes it (ADR 0157, LH-471 #597). Decided and not yet built:
 on silver and gold a commit must name its run and its inputs in the spec `Context` headers, which the catalog
@@ -322,8 +327,9 @@ Config is env-driven and estate-wide — ONE name per setting, declared once in
 ## 11. Glossary
 
 - **Control plane / data plane** — decide+locate (this service) vs move bytes (engines).
-- **Namespace** — a logical container (a path prefix); a medallion *tier* is a namespace.
-- **Table / dataset** — a Lance dataset; physically a `*.lance` **directory** (versioned).
+- **Namespace** — a logical container, a record in the catalog, never a path prefix; a medallion *tier* is a namespace.
+- **Table / dataset** — a Lance dataset (versioned); a table the catalog makes lives at `<warehouse root>/<table uuid>`,
+  a registered one where its registrar put it (ADR 0173 §5).
 - **Tuple** — an OpenFGA fact, e.g. `user:dex~alice owner table:<uuid>`: a table's or namespace's grants are held by the uuid the catalog minted for it, never by its name (ADR 0173 §8).
 - **`can_*` relation** — an action permission the app checks (model maps it to a rung).
 - **Concentric** — owner ⊇ writer ⊇ reader.

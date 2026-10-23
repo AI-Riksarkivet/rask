@@ -11,7 +11,8 @@ config (no broker client here).
 
 Self-contained: the maintenance service never imports the catalog (zero cross-service imports — the
 mergeability invariant). The only shared code is ``service_kit.governed.fga`` for the id↔namespace derivation, so the
-lineage ``Dataset`` name == the OpenFGA object id == the catalog table id across all three governance axes.
+lineage ``Dataset`` is named as the catalog names the table, and the event carries the table's uuid, which its OpenFGA
+object names (ADR 0173 §8, §10).
 
 Two deliberate choices:
 

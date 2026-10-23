@@ -42,11 +42,11 @@ Authorization: Bearer <token>
 
 ## What you can see
 
-An event is returned only if your subject has `can_get_metadata` on every governed table it names. Inputs
-from outside the lakehouse are exempt when the event payload is returned; with `summary=true` the payload is
-dropped, the bare names are all that is left, and those events are governed on every name. Hidden events
-are never returned, with any filter; the cursor still moves past them, and a seq number discloses nothing
-about a table.
+An event is returned only if your subject has `can_get_metadata` on every governed table it names, checked on
+`table:<uuid>`, the uuid the table's `lance` facet carries (ADR 0173 §10). Inputs from outside the lakehouse are exempt
+when the event payload is returned; with `summary=true` the payload is dropped, and the event is governed on the uuids
+lineage recorded for it. An event naming a governed table it recorded no uuid for is hidden. Hidden events are never
+returned, with any filter; the cursor still moves past them, and a seq number discloses nothing about a table.
 
 ## A feed row
 
@@ -77,7 +77,9 @@ absent when the catalog could not read it. The OpenLineage dataset `name` stays 
 OpenLineage `RunEvent` whose `producer` is the catalog's emitter
 (`https://github.com/AI-Riksarkivet/rask/tree/main/services/catalog/src/catalog/core/lineage_emit.py`):
 
-- `outputs[0].name`: the table id, byte-for-byte the catalog's id and the OpenFGA object id.
+- `outputs[0].name`: the table id, byte-for-byte the catalog's id, as the table was named when the event was made.
+  `outputs[0].facets.lance` carries `tableUuid` and `namespaceUuid`, which a rename keeps: the table's OpenFGA object
+  is `table:<tableUuid>`, never its name (ADR 0173 §8, §10).
 - `run.facets.lance`: `operation` (the catalog operation: `insert`, `merge_insert`, `update`, `delete`, ...;
   `create_table` when the table's first version holds rows, whether the catalog's `create` door wrote them or a
   client committed them through `version/create`),

@@ -187,7 +187,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | maintenance.floorRaise | bool | `false` | Write one metadata-only commit per stranded dataset to raise its Lance listing floor so residue becomes reclaimable. Off by default. |
 | maintenance.floorRaiseDryRun | bool | `true` | Plan and report floor raises without committing. Defaults true; set false to commit once `floorRaise` is on. |
 | maintenance.floorRaiseMaxPerTick | int | `10` | Maximum datasets the floor raise commits to per tick; the remainder is reported as capped. |
-| maintenance.lineageEmit | bool | `true` | Emit a lineage event per materially compacted dataset and a FAIL event per errored one; covers catalog-laid-out tables only. |
+| maintenance.lineageEmit | bool | `true` | Emit a lineage event per dataset whose versions the sweep reclaimed and a FAIL event per errored one; covers every table the catalog's `__manifest` names. |
 | maintenance.minVersionsToExpire | int | `20` | Expiry runs on a table only once it has at least this many reclaimable versions. |
 | maintenance.olderThanDays | int | `7` | Days of version history kept by old-version GC. |
 | maintenance.orphanScan | bool | `true` | Run the reconciler's per-dataset unreferenced-file scan; read-only, and required for `trashPurge` to certify a clean report. |

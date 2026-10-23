@@ -1163,7 +1163,7 @@ maintenance:
   # The `runRetentionDays` note below still applies and is deliberately NOT changed here: with the
   # sweep at 0 errors there are no FAIL Run nodes to accumulate, so pruning run history is a separate
   # decision to make on its own evidence rather than as a side effect of turning provenance on.
-  # -- Emit a lineage event per materially compacted dataset and a FAIL event per errored one; covers catalog-laid-out tables only.
+  # -- Emit a lineage event per dataset whose versions the sweep reclaimed and a FAIL event per errored one; covers every table the catalog's `__manifest` names.
   lineageEmit: true
   # #79 RECLAMATION. When on, the reconcile tick DELETES the bytes of every trash record past its grace
   # deadline and revokes that object's grants — gated on that same tick's drift report running clean
