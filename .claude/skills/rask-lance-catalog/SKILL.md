@@ -101,7 +101,10 @@ Two contracts stack here, and confusing them is how bugs happen:
   create still stamps them on the schema metadata, [[LH-503]]). So no name reaches a vended prefix. A REGISTERED table
   keeps its registrar's location, which `describe_table` answers percent-encoded; every vend
   (`vending.split_s3_location`) and every catalog read and write of a table object (`dataplane.dataset_fs`,
-  `object_store_path`, so `version/create` too) uses the key it decodes to once. The register door refuses a location in
+  `object_store_path`, so `version/create` too) uses the key it decodes to once, and so does a destructive drop: the
+  table door and the namespace cascade judge the bytes, remove the row with DeregisterTable and delete under the decoded
+  key and the spelling themselves (`dataplane.destroy_table`, [[LH-532]]), since the backend's own drop deletes where
+  `Path::join` percent-encodes the location. A location holding a `_versions/` tree gets a residue trash record (`trash.make_record(residue=True)`, grace 0) before the row goes, cleared once the bytes are; a delete that fails leaves it, so the claim stays held (`table_claims.kept_in_trash`), undrop refuses it and the trash purge reclaims the bytes. `_versions/` is deleted last. The control prefixes a drop, the purge and discovery refuse are one set, `service_kit.lakehouse.control_prefixes`. The register door refuses a location in
   a uuid-spelled directory directly under the namespace root (`identifiers.is_spelled_as_a_uuid`): that is the catalog's
   layout. Pinned by `tests/integration/test_warehouse_routing.py`,
   `services/catalog/tests/test_a_stock_client_opens_on_the_vended_credential.py` and

@@ -83,6 +83,7 @@ from service_kit.governed import fga
 from service_kit.lakehouse import location_claims, object_records, trash, warehouse_records
 from service_kit.lakehouse.base_refs import BaseRefs, decoded_path, decoded_segments, location_within, names_a_location, normalise, store_of
 from service_kit.lakehouse.base_registry import BaseRegistry, UnreadableBaseRecordError, forget_base_record
+from service_kit.lakehouse.control_prefixes import CONTROL_PREFIXES
 from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base
 
 
@@ -93,11 +94,6 @@ log = logging.getLogger(__name__)
 #: would be a lie about who acted.
 ACTOR = "service:maintenance"
 
-#: Prefixes on the control root that are the ESTATE'S OWN STATE, not any object's bytes. A location whose
-#: path crosses one of these is refused outright. The check covers EVERY segment, not just the last: a
-#: location of ``s3://bkt/_trash/x`` names a file inside the trash registry, and refusing only when the
-#: FINAL segment matches would delete it.
-CONTROL_PREFIXES = frozenset({MANIFEST_DIR, "_trash", "_projects", "_warehouses", "_policies", "_protection", "_bases", "_locations"})
 
 _STILL_REGISTERED = "still registered — recovered or re-registered since the drop, so these bytes are LIVE"
 _LOCATION_LIVE = "a registered table's location contains or sits inside these bytes, so they are LIVE"
@@ -475,6 +471,7 @@ def check(record: dict[str, Any], *, roots: set[str], live: Liveness | None) -> 
     remainder = (decoded_segments(location) or [])[len(decoded_segments(root) or []) :]
     if not remainder:
         return f"location {location!r} IS a store root — refusing to delete a whole bucket"
+    # Every segment, not only the last: ``s3://bkt/_trash/x`` names a file inside the trash registry.
     if crossed := sorted(CONTROL_PREFIXES.intersection(remainder)):
         return f"location {location!r} crosses the control prefix(es) {crossed} — refusing to delete the estate's own registries"
     # After the path checks, which name a malformed record more exactly; a store root holds every live table.

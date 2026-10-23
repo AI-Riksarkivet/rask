@@ -15,12 +15,23 @@ from typing import Any
 
 from lance_namespace import NamespaceNotFoundError
 
+from catalog.api.fga_deps import GovernedObject
 from service_kit.lakehouse import base_registry
 from service_kit.lakehouse.location_claims import ClaimStore
 
 
-#: A registry the cascade's record-forget may be pointed at: the double's drops name no location, so it is never read.
+#: A registry and claim store the cascade's record-forget and claim release may be pointed at; nothing is kept there.
 _NO_RECORDS = base_registry.BaseRegistry(control_root="/nonexistent/control")
+_NO_CLAIMS = ClaimStore(control_root="/nonexistent/control")
+
+
+def _governed(kind: str, segments: list[str]) -> GovernedObject:
+    """A descendant as the door identifies it, under a uuid of its own name."""
+    return GovernedObject.model_validate({"kind": kind, "segments": segments, "uuid": f"uuid-{'$'.join(segments)}"})
+
+
+def _location(segments: list[str]) -> str:
+    return f"/nonexistent/data/{'$'.join(segments)}"
 
 
 class _RecordingNs:
@@ -40,14 +51,14 @@ class _RecordingNs:
     def describe_table(self, request: Any) -> Any:
         from lance_namespace import DescribeTableResponse
 
-        # No location, as for a declared-only table: the claim check before the drops has nothing to judge.
-        return DescribeTableResponse()
+        # A location nothing is stored at: the destroy finds no byte to delete.
+        return DescribeTableResponse(location=_location(request.id))
 
-    def drop_table(self, request: Any) -> Any:
-        from lance_namespace import DropTableResponse
+    def deregister_table(self, request: Any) -> Any:
+        from lance_namespace import DeregisterTableResponse
 
-        self.calls.append(f"drop_table:{'$'.join(request.id)}")
-        return DropTableResponse(id=request.id)
+        self.calls.append(f"deregister_table:{'$'.join(request.id)}")
+        return DeregisterTableResponse(id=request.id, location=_location(request.id))
 
     def drop_namespace(self, request: Any) -> Any:
         self.calls.append(f"drop_namespace:{'$'.join(request.id)}:{(request.behavior or 'restrict').lower()}")
@@ -70,35 +81,49 @@ def test_the_cascade_destroys_BOTTOM_UP_and_never_asks_the_backend_to() -> None:
 
     ns: Any = _RecordingNs()
     descendants = [
-        ("table", ["bronze", "pages"]),
-        ("namespace", ["bronze", "inner"]),
-        ("table", ["bronze", "inner", "t2"]),
+        _governed("table", ["bronze", "pages"]),
+        _governed("namespace", ["bronze", "inner"]),
+        _governed("table", ["bronze", "inner", "t2"]),
     ]
-    asyncio.run(_drain(_destroy_subtree(ns, ["bronze"], descendants, registry=_NO_RECORDS, claims=ClaimStore(control_root="/nonexistent/control"))))
+    asyncio.run(
+        _drain(
+            _destroy_subtree(ns, ["bronze"], descendants, root_uuid="uuid-bronze", registry=_NO_RECORDS, claims=_NO_CLAIMS, storage_options={}, estate_roots=())
+        )
+    )
 
-    assert "drop_table:bronze$pages" in ns.calls
-    assert "drop_table:bronze$inner$t2" in ns.calls
+    assert "deregister_table:bronze$pages" in ns.calls
+    assert "deregister_table:bronze$inner$t2" in ns.calls
     drops = [c for c in ns.calls if c.startswith("drop_namespace:")]
     assert drops == ["drop_namespace:bronze$inner:restrict", "drop_namespace:bronze:restrict"]
     # Every table is gone before the first namespace drop — that is what makes each drop legal.
-    assert max(ns.calls.index(c) for c in ns.calls if c.startswith("drop_table:")) < ns.calls.index(drops[0])
+    assert max(ns.calls.index(c) for c in ns.calls if c.startswith("deregister_table:")) < ns.calls.index(drops[0])
     # And it NEVER hands `cascade` to a backend that cannot do it.
     assert not any(c.endswith(":cascade") for c in ns.calls), "the unimplementable native cascade was called"
 
 
 def test_an_already_absent_child_is_DRIFT_not_an_error() -> None:
-    """A half-finished earlier delete must not make the subtree undeletable forever."""
+    """A half-finished earlier delete must not make the subtree undeletable forever: a table removed before the
+    cascade's deregister reached it answers TableNotFound there and no longer describes, and that is drift, never
+    bytes reported left."""
     from catalog.api.v1.endpoints.namespaces import _destroy_subtree  # noqa: PLC2701
 
     class _Vanishing(_RecordingNs):
-        def drop_table(self, request: Any) -> Any:
+        def describe_table(self, request: Any) -> Any:
             from lance_namespace import TableNotFoundError
 
-            self.calls.append(f"drop_table:{'$'.join(request.id)}")
+            if any(call.startswith("deregister_table:") for call in self.calls):
+                raise TableNotFoundError("Table not found")
+            return super().describe_table(request)
+
+        def deregister_table(self, request: Any) -> Any:
+            from lance_namespace import TableNotFoundError
+
+            self.calls.append(f"deregister_table:{'$'.join(request.id)}")
             raise TableNotFoundError("Table not found")
 
     ns: Any = _Vanishing()
+    ghost = [_governed("table", ["bronze", "ghost"])]
     asyncio.run(
-        _drain(_destroy_subtree(ns, ["bronze"], [("table", ["bronze", "ghost"])], registry=_NO_RECORDS, claims=ClaimStore(control_root="/nonexistent/control")))
+        _drain(_destroy_subtree(ns, ["bronze"], ghost, root_uuid="uuid-bronze", registry=_NO_RECORDS, claims=_NO_CLAIMS, storage_options={}, estate_roots=()))
     )
     assert "drop_namespace:bronze:restrict" in ns.calls, "one absent child blocked the whole cascade"

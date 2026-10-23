@@ -40,6 +40,9 @@ log = logging.getLogger(__name__)
 
 _TRASH_PREFIX = "_trash"
 
+#: The field marking a record a destructive drop filed for bytes it was deleting (:func:`make_record`'s ``residue``).
+RESIDUE = "residue"
+
 #: The event stem for this registry's store warnings (`<stem>_malformed`, `<stem>_unreadable`).
 _EVENT = "trash_record"
 
@@ -57,6 +60,7 @@ def make_record(
     properties: dict[str, str] | None = None,
     namespace_uuid: str | None = None,
     cascade: str | None = None,
+    residue: bool = False,
 ) -> dict[str, Any]:
     """The trash record of the object ``uuid`` names, dropped while ``canonical_id`` named it.
 
@@ -91,6 +95,11 @@ def make_record(
     when no live namespace holds that name any more. ``cascade`` is the uuid of the namespace a recoverable cascade
     dropped, on every record that cascade files, its root's own included: the namespace undrop restores exactly the
     records one cascade filed, never another object that held one of their names.
+
+    ``residue`` marks the record a destructive drop files before it removes a table's row ([[LH-532]]): the bytes
+    were to be deleted, not kept for an undrop. It stands while the drop deletes them and is cleared once they are
+    gone; a drop whose delete failed leaves it, so the location's claim stays held for the bytes and the purge
+    reclaims them. Its grace is 0, so the purge may take it on its first tick, and undrop refuses it.
     """
     at = now or datetime.now(UTC)
     record: dict[str, Any] = {
@@ -110,7 +119,14 @@ def make_record(
         record["namespace_uuid"] = namespace_uuid
     if cascade:
         record["cascade"] = cascade
+    if residue:
+        record[RESIDUE] = True
     return record
+
+
+def is_residue(record: dict[str, Any]) -> bool:
+    """Whether ``record`` keeps the bytes a failed destructive drop left, which no undrop restores ([[LH-532]])."""
+    return record.get(RESIDUE) is True
 
 
 def put(control_root: str, storage_options: StorageOptions, record: dict[str, Any]) -> None:

@@ -49,7 +49,6 @@ from lance_namespace import (
     DescribeNamespaceResponse,
     DescribeTableResponse,
     DropNamespaceResponse,
-    DropTableResponse,
     LanceNamespace,
     ListTablesResponse,
     ServiceUnavailableError,
@@ -526,7 +525,7 @@ def test_create_top_level_namespace_links_to_catalog_root(client: TestClient, fa
 
 def test_drop_table_revokes_tuples(client: TestClient, fake_ns: MagicMock, monkeypatch, claim_described: Callable[[str], str]) -> None:
     """CONTRACT: a successful drop_table revokes the table's tuples, on the uuid its location's claim records."""
-    fake_ns.drop_table.return_value = DropTableResponse()
+    fake_ns.deregister_table.return_value = DeregisterTableResponse(location=fake_ns.describe_table.return_value.location)
     minted = claim_described("db1$users")
     _wire(client)
     monkeypatch.setattr(fga_module, "check", _fake_check([], allow=True))

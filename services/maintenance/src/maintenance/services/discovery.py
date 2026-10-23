@@ -10,6 +10,7 @@ import pyarrow.fs as pafs
 from pydantic import BaseModel
 
 from service_kit.lakehouse.branch_layout import BRANCH_CONTAINER, BRANCH_REFS_DIR, branch_name_from_ref_file
+from service_kit.lakehouse.control_prefixes import CONTROL_PREFIXES
 
 
 class Discovery(BaseModel):
@@ -50,7 +51,8 @@ class Discovery(BaseModel):
 #: backup snapshots, against 932 orphan files across 8 datasets the purge could not touch.
 #: `_bases` holds the catalog's per-table base records ([[LH-279]]) and `_maintenance_due` the sweep's own due records
 #: (ADR 0162): control-root JSON, never a dataset.
-_CONTROL_PREFIXES = ("_warehouses", "_policies", "_protection", "_trash", "_lineage_outbox", "_staging", "_backups", "_bases", "_locations", "_maintenance_due")
+#: The set is the estate's one list (:data:`service_kit.lakehouse.control_prefixes.CONTROL_PREFIXES`), which the
+#: catalog's destructive drop and the purge refuse a location crossing.
 
 
 def _may_hide_a_dataset(fs: pafs.FileSystem, path: str) -> bool:
@@ -137,7 +139,7 @@ def discover_datasets(fs: pafs.FileSystem, bucket: str, *, max_depth: int = 3) -
             if info.type != pafs.FileType.Directory:
                 continue
             name = info.path.rstrip("/").split("/")[-1]
-            if name.startswith("__") or name in _CONTROL_PREFIXES:
+            if name.startswith("__") or name in CONTROL_PREFIXES:
                 continue
             marker = fs.get_file_info(f"{info.path}/_versions")
             if marker.type == pafs.FileType.Directory:

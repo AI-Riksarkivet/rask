@@ -86,6 +86,7 @@ def app(ns, emitted: list[dict[str, Any]], tmp_path: Path, monkeypatch: pytest.M
     control.mkdir(exist_ok=True)
     settings = SimpleNamespace(
         registry_root=str(control),
+        root=str(tmp_path / "data"),
         storage_options=lambda: {},
         trash_grace_days=0,
         fga_enabled=False,

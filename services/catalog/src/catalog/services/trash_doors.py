@@ -43,3 +43,18 @@ def require_its_own_parent(record: dict[str, Any], *, standing: str | None, name
     dropped_from = record.get("namespace_uuid")
     if isinstance(dropped_from, str) and standing is not None and standing != dropped_from:
         raise InvalidTableStateError(f"cannot undrop {name!r}: the namespace it was dropped from is gone, and another namespace holds its name now")
+
+
+def require_restorable(record: dict[str, Any], *, name: str) -> None:
+    """Refuse restoring a residue record: the bytes it names were left by a destructive drop that failed part-way.
+
+    Its table was destroyed, not trashed: its row is gone and some of its objects may be too, so nothing an undrop
+    re-attaches there is the table that was dropped ([[LH-532]]).
+
+    Raises:
+        InvalidTableStateError: ``record`` is a residue record.
+    """
+    if trash.is_residue(record):
+        raise InvalidTableStateError(
+            f"cannot undrop {name!r}: its bytes were left by a destructive drop that failed part-way, not kept for an undrop; the trash purge reclaims them"
+        )

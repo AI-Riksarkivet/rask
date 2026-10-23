@@ -6,6 +6,7 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator, Iterable, Mapping
 from contextlib import suppress
+from functools import partial
 from typing import Annotated
 
 from fastapi import APIRouter, Header, Request, Response
@@ -20,7 +21,6 @@ from lance_namespace import (
     DescribeTableResponse,
     DropNamespaceRequest,
     DropNamespaceResponse,
-    DropTableRequest,
     DropTableResponse,
     InternalError,
     InvalidInputError,
@@ -646,10 +646,14 @@ async def _trash_subtree(
 async def _destroy_subtree(
     ns: LanceNamespace,
     segments: list[str],
-    descendants: list[tuple[str, list[str]]],
+    descendants: list[fga_deps.GovernedObject],
     *,
+    root_uuid: str,
     registry: base_registry.BaseRegistry,
     claims: location_claims.ClaimStore,
+    storage_options: dict[str, str],
+    estate_roots: tuple[str, ...],
+    dropped_by: str | None = None,
 ) -> AsyncIterator[list[str]]:
     """Destroy the subtree BOTTOM-UP, ourselves (#117), yielding each table as it goes.
 
@@ -661,8 +665,9 @@ async def _destroy_subtree(
     below it (the force-path protection clear, the descendant revoke, the descendant protection
     sweep) were unreachable code on that backend.
 
-    The fix is the same shape as `_trash_subtree`'s, minus the trash records: tables first (each
-    `drop_table` DELETES its bytes — this is the destructive path by definition), then namespaces
+    The fix is the same shape as `_trash_subtree`'s, minus the trash records: tables first (each one's bytes are
+    deleted at the location it is described at, by `dataplane.destroy_table`, [[LH-532]] — this is the destructive
+    path by definition), then namespaces
     deepest-first so each is empty when its own drop runs, then the cascaded root. Not atomic, and
     deliberately so: a mid-loop failure leaves a SMALLER subtree that the same call can finish on a
     retry, which is strictly better than the all-or-nothing native call it replaces (that one simply
@@ -676,9 +681,13 @@ async def _destroy_subtree(
     Each table is yielded once it is gone, or found gone already, so the caller announces it before the next one
     goes ([[LH-495]]): the retry lists only what still stands, so a table the first attempt destroyed is announced
     then or not at all.
+
+    A table's residue record, filed while its bytes are deleted, names its uuid and its parent namespace's: the root's,
+    ``root_uuid``, or the descendant namespace's it sits in.
     """
-    tables = [child for resource, child in descendants if resource == "table"]
-    child_namespaces = sorted((child for resource, child in descendants if resource == "namespace"), key=len, reverse=True)
+    uuid_at = {tuple(item.segments): item.uuid for item in descendants} | {tuple(segments): root_uuid}
+    tables = [item for item in descendants if item.kind == "table"]
+    child_namespaces = sorted((item.segments for item in descendants if item.kind == "namespace"), key=len, reverse=True)
     # SEQUENTIAL, DELIBERATELY (catalog-api-11 asked about this loop and the answer is no). Every call
     # here DESTROYS bytes, and the ordered partial progress is the property the docstring above trades
     # for: a mid-loop failure must leave a strictly SMALLER subtree that the same call finishes on a
@@ -687,14 +696,30 @@ async def _destroy_subtree(
     #
     # [[LH-204]] BEFORE ANYTHING IS DESTROYED, every table's location is checked against its claim: a
     # location another live table holds refuses the whole cascade, as a protected descendant does.
-    for child in tables:
+    for item in tables:
         with suppress(TableNotFoundError):
-            doomed: DescribeTableResponse = await run_in_threadpool(native.call, ns, "describe_table", DescribeTableRequest(id=child))
+            doomed: DescribeTableResponse = await run_in_threadpool(native.call, ns, "describe_table", DescribeTableRequest(id=item.segments))
             if doomed.location:
-                await run_in_threadpool(table_claims.require_no_other_holder, ns, claims, doomed.location, fga.canonical_object_id(child))
-    for child in tables:
+                await run_in_threadpool(table_claims.require_no_other_holder, ns, claims, doomed.location, fga.canonical_object_id(item.segments))
+    for item in tables:
+        child = item.segments
         with suppress(TableNotFoundError):
-            dropped: DropTableResponse = await run_in_threadpool(native.call, ns, "drop_table", DropTableRequest(id=child))
+            # [[LH-532]] Described again at the moment it goes, so the bytes deleted are those of the row removed.
+            doomed = await run_in_threadpool(native.call, ns, "describe_table", DescribeTableRequest(id=child))
+            dropped: DropTableResponse = await run_in_threadpool(
+                partial(
+                    dataplane.destroy_table,
+                    ns,
+                    storage_options,
+                    child,
+                    str(doomed.location or ""),
+                    estate_roots=estate_roots,
+                    table_uuid=item.uuid,
+                    namespace_uuid=uuid_at.get(tuple(child[:-1])),
+                    control=claims,
+                    dropped_by=dropped_by,
+                )
+            )
             if dropped.location:
                 await run_in_threadpool(base_registry.forget_base_record, registry, dropped.location, table=fga.canonical_object_id(child))
                 await run_in_threadpool(location_claims.release, claims, dropped.location, fga.canonical_object_id(child))
@@ -886,9 +911,13 @@ async def drop_namespace(
         async for table in _destroy_subtree(
             ns,
             segments,
-            [(item.kind, item.segments) for item in descendants],
+            descendants,
+            root_uuid=dropped.uuid,
             registry=registry,
             claims=table_claims.claim_store(settings),
+            storage_options=settings.storage_options(),
+            estate_roots=(settings.registry_root, settings.root),
+            dropped_by=f"user:{token.subject}" if token is not None else None,
         ):
             await _announce_removed(
                 emitter,
@@ -1026,6 +1055,17 @@ async def undrop_namespace(
         raise NamespaceAlreadyExistsError(f"cannot undrop namespace {canonical!r}: another namespace holds the name now; drop it first")
     if len(segments) > 1:
         trash_doors.require_its_own_parent(record, standing=await resolver.namespace_uuid(segments[:-1]), name=canonical)
+    everything = await run_in_threadpool(trash.list_all, settings.registry_root, so)
+    # The records the cascade that dropped this namespace filed, at its name and under it: undropping a namespace that
+    # cascade dropped below its own root restores that branch of it, once its parent stands again.
+    cascade, prefix = record.get("cascade"), canonical + CATALOG_DELIMITER
+    subtree = [r for r in everything if r.get("cascade") == cascade and (r.get("id") == canonical or str(r.get("id") or "").startswith(prefix))]
+    # Shallowest first — a parent manifest row must exist before its children's create/register.
+    namespace_records = sorted((r for r in subtree if r.get("kind") == "namespace"), key=lambda r: str(r["id"]).count(CATALOG_DELIMITER))
+    table_records = [r for r in subtree if r.get("kind") == "table"]
+    # Before anything is rebuilt: a residue record's table was destroyed, not trashed ([[LH-532]]).
+    for t_rec in table_records:
+        trash_doors.require_restorable(t_rec, name=str(t_rec.get("id") or ""))
     # RE-BIND FIRST, and re-resolve the connection from the restored root (diff2 F6 leg c).
     #
     # The drop unbound this top-level namespace, so `NamespaceDep` — which resolves BEFORE this
@@ -1077,14 +1117,6 @@ async def undrop_namespace(
         )
         ns = await namespace_for_root(request, settings, str(bound["root_uri"]), endpoint=warehouse.get("endpoint") or None)
         root = str(bound["root_uri"])
-    everything = await run_in_threadpool(trash.list_all, settings.registry_root, so)
-    # The records the cascade that dropped this namespace filed, at its name and under it: undropping a namespace that
-    # cascade dropped below its own root restores that branch of it, once its parent stands again.
-    cascade, prefix = record.get("cascade"), canonical + CATALOG_DELIMITER
-    subtree = [r for r in everything if r.get("cascade") == cascade and (r.get("id") == canonical or str(r.get("id") or "").startswith(prefix))]
-    # Shallowest first — a parent manifest row must exist before its children's create/register.
-    namespace_records = sorted((r for r in subtree if r.get("kind") == "namespace"), key=lambda r: str(r["id"]).count(CATALOG_DELIMITER))
-    table_records = [r for r in subtree if r.get("kind") == "table"]
     response = CreateNamespaceResponse()
     for n_rec in namespace_records:
         n_id = str(n_rec["id"])

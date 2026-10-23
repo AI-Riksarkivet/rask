@@ -8,7 +8,7 @@ Lance data. This is the deterministic, infra-free counterpart to the Docker e2e.
 from __future__ import annotations
 
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import Any
 
 import boto3
@@ -19,6 +19,7 @@ import pytest
 from fastapi.testclient import TestClient
 from moto.server import ThreadedMotoServer
 
+from service_kit.lakehouse.base_refs import decoded_path, normalise
 from service_kit.lakehouse.objectfs import lance_storage_options
 
 
@@ -490,6 +491,126 @@ def test_a_destructive_drop_frees_the_id_for_a_new_table_under_a_new_uuid(moto_c
     assert moto_client.post("/v1/table/nobleed$t/drop", json={}).status_code == 200
     assert _create(moto_client, "nobleed$t", rows).status_code == 200
     assert _uuid(moto_client, "nobleed$t") != dropped, "the re-created table answers the dropped table's uuid"
+
+
+def _objects_under(moto_endpoint: str, key: str) -> list[str]:
+    """Every object the bucket holds under ``key/``, directory markers included."""
+    s3 = boto3.client("s3", endpoint_url=moto_endpoint, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1")
+    pages = s3.get_paginator("list_objects_v2").paginate(Bucket=BUCKET, Prefix=f"{key}/")
+    return [entry["Key"] for page in pages for entry in page.get("Contents", [])]
+
+
+def _destroy_by_table_door(client: TestClient, namespace: str, table: str) -> Any:
+    return client.post(f"/v1/table/{namespace}${table}/drop?purge=true", json={})
+
+
+def _destroy_by_namespace_cascade(client: TestClient, namespace: str, _table: str) -> Any:
+    return client.post(f"/v1/namespace/{namespace}/drop?purge=true", json={"behavior": "Cascade"})
+
+
+@pytest.mark.parametrize(
+    "destroy", [pytest.param(_destroy_by_table_door, id="table-drop"), pytest.param(_destroy_by_namespace_cascade, id="namespace-cascade")]
+)
+@pytest.mark.parametrize("shape", ["nested", "non-ascii", "declared"])
+def test_a_destructive_drop_leaves_no_byte_of_the_table_at_its_location(
+    moto_client: TestClient, moto_endpoint: str, destroy: Callable[[TestClient, str, str], Any], shape: str
+) -> None:
+    """[[LH-532]] DropTable deletes the table's data (``lance_docs/ns_catalog/spec.yaml:498``), at the key its location
+    decodes to, which is where Lance keeps it. A table registered at a nested location or under a non-ASCII name keeps
+    its bytes where the ``dir`` backend's own drop does not look (``Path::join`` percent-encodes the location); a
+    declared table holds only its reservation marker. Each drop answers 200 and leaves nothing under the location, as
+    stored or as spelled."""
+    prefix = uuid.uuid4().hex[:8]
+    namespace = f"lh532{prefix}"
+    assert moto_client.post(f"/v1/namespace/{namespace}/create", json={}).status_code == 200
+    if shape == "declared":
+        made = moto_client.post(f"/v1/table/{namespace}$t/declare", json={})
+    else:
+        relative = f"{prefix}-outside/held" if shape == "nested" else f"{prefix}-räksmörgås"
+        options = lance_storage_options(moto_endpoint, "test", "test", "us-east-1")
+        rows = pa.table({"id": pa.array([1, 2, 3], pa.int64())})
+        lance.write_dataset(rows, f"s3://{BUCKET}/{relative}", storage_options=options, data_storage_version="2.2", enable_stable_row_ids=True)
+        made = moto_client.post(f"/v1/table/{namespace}$t/register", json={"location": relative})
+    assert made.status_code == 200, made.text
+    described = moto_client.post(f"/v1/table/{namespace}$t/describe", json={})
+    assert described.status_code == 200, described.text
+    location = str(described.json()["location"])
+    stored, spelled = decoded_path(location).partition("/")[2], normalise(location).partition("/")[2]
+    assert _objects_under(moto_endpoint, stored), f"nothing was written at {stored}, so the drop would prove nothing"
+
+    dropped = destroy(moto_client, namespace, "t")
+
+    assert dropped.status_code == 200, dropped.text
+    assert {path: _objects_under(moto_endpoint, path) for path in {stored, spelled}} == {path: [] for path in {stored, spelled}}, "the drop left bytes"
+    assert moto_client.post(f"/v1/table/{namespace}$t/describe", json={}).status_code == 404
+
+
+def _age_the_claim(moto_endpoint: str, location: str) -> None:
+    """Move the claim on ``location`` and its fence back past the lease, as the claim store's own clock would after it."""
+    import json
+    from datetime import UTC, datetime
+
+    from service_kit.lakehouse.location_claims import LEASE, claim_key
+
+    s3 = boto3.client("s3", endpoint_url=moto_endpoint, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1")
+    key = claim_key(location)
+    claim = json.loads(s3.get_object(Bucket=BUCKET, Key=key)["Body"].read())
+    lapsed = (datetime.now(UTC) - LEASE * 2).isoformat()
+    claim["claimed_at"] = lapsed
+    if claim.get("fence"):
+        claim["fence"]["at"] = lapsed
+    s3.put_object(Bucket=BUCKET, Key=key, Body=json.dumps(claim).encode())
+
+
+def test_a_drop_whose_delete_fails_keeps_the_bytes_held_for_the_purge(moto_client: TestClient, moto_endpoint: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """[[LH-532]] A destructive drop files a residue trash record before the row goes and deletes ``_versions/`` last.
+    When the store refuses the table's own deletes after its row is gone, the door answers 503 naming the table and
+    its location, the residue record stands, and it keeps the location's claim once the drop's fence lapses: no
+    register adopts the bytes, and no undrop restores them."""
+    import catalog.services.dataplane as dataplane_mod
+    from catalog.core.config import get_settings
+    from service_kit.lakehouse import trash
+
+    prefix = uuid.uuid4().hex[:8]
+    namespace = f"lh532r{prefix}"
+    assert moto_client.post(f"/v1/namespace/{namespace}/create", json={}).status_code == 200
+    relative = f"{prefix}-residue/held"
+    options = lance_storage_options(moto_endpoint, "test", "test", "us-east-1")
+    rows = pa.table({"id": pa.array([1, 2], pa.int64())})
+    lance.write_dataset(rows, f"s3://{BUCKET}/{relative}", storage_options=options, data_storage_version="2.2", enable_stable_row_ids=True)
+    registered = moto_client.post(f"/v1/table/{namespace}$t/register", json={"location": relative})
+    assert registered.status_code == 200, registered.text
+    table_uuid = _uuid(moto_client, f"{namespace}$t")
+    location = str(moto_client.post(f"/v1/table/{namespace}$t/describe", json={}).json()["location"])
+    stored = decoded_path(location).partition("/")[2]
+    real_delete = dataplane_mod._delete_objects
+
+    def _refuse_the_versions(so: Any, objects: Any) -> None:
+        if any(obj.startswith(f"{BUCKET}/{stored}/_versions/") for obj in objects):
+            raise OSError("the store refused the delete")
+        real_delete(so, objects)
+
+    monkeypatch.setattr(dataplane_mod, "_delete_objects", _refuse_the_versions)
+
+    dropped = moto_client.post(f"/v1/table/{namespace}$t/drop?purge=true", json={})
+
+    assert dropped.status_code == 503, dropped.text
+    assert (dropped.json()["table"], dropped.json()["location"]) == (f"{namespace}$t", location)
+    left = _objects_under(moto_endpoint, stored)
+    assert left, "the injected refusal deleted nothing less, so the residue would prove nothing"
+    assert all(key.startswith(f"{stored}/_versions/") for key in left), f"an object was left beside _versions/: {left}"
+    settings = get_settings()
+    record = trash.get(settings.registry_root, settings.storage_options(), table_uuid)
+    assert record is not None and trash.is_residue(record) and decoded_path(str(record["location"])) == decoded_path(location), record
+    held = "equals, contains or sits under another table's location"
+    fenced = moto_client.post(f"/v1/table/{namespace}$adopter/register", json={"location": relative})
+    assert fenced.status_code == 400 and held in fenced.json()["detail"], f"a register adopted the bytes under the fence: {fenced.text}"
+    _age_the_claim(moto_endpoint, location)
+    lapsed = moto_client.post(f"/v1/table/{namespace}$adopter/register", json={"location": relative})
+    assert lapsed.status_code == 400 and held in lapsed.json()["detail"], f"a register adopted the bytes once the fence lapsed: {lapsed.text}"
+    undropped = moto_client.post(f"/management/v1/table/{namespace}$t/undrop", json={})
+    assert undropped.status_code == 409, undropped.text
+    assert "left by a destructive drop that failed" in undropped.json()["detail"], undropped.text
 
 
 # --------------------------------------------------------------------------- #

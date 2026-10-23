@@ -759,7 +759,27 @@ async def drop_table(
             await run_in_threadpool(native.call, ns, "deregister_table", DeregisterTableRequest(id=segments))
             response = DropTableResponse()
         else:
-            response = await run_in_threadpool(native.call, ns, "drop_table", DropTableRequest(id=segments))
+            # [[LH-532]] The bytes go at the location this door resolved, at the key Lance opens, never where the
+            # backend's own drop looks: the backend removes only the row. RECORD FIRST here too: a residue record is filed
+            # before the row goes and cleared once the bytes are, so bytes a failed delete leaves keep their claim.
+            response = await run_in_threadpool(
+                partial(
+                    dataplane.destroy_table,
+                    ns,
+                    so,
+                    segments,
+                    location,
+                    estate_roots=(settings.registry_root, settings.root),
+                    table_uuid=table_uuid,
+                    namespace_uuid=known.namespace_uuid,
+                    control=claims,
+                    dropped_by=f"user:{token.subject}" if token is not None else None,
+                )
+            )
+    except dataplane.TableBytesLeftError:
+        # The row is gone and bytes remain: the claim stays held, kept by the residue record once the fence lapses, the
+        # grants stay, and nothing announces a drop that did not finish. The trash purge reclaims the objects.
+        raise
     except Exception:
         await run_in_threadpool(table_claims.lift_fence, claims, fenced)
         raise
@@ -1267,6 +1287,7 @@ async def undrop_table(
             "(the grace period was off), or the purge has already reclaimed its bytes."
         )
     record = trash_doors.the_one_to_restore(trashed, kind="table", name=canonical)
+    trash_doors.require_restorable(record, name=canonical)
     record_uuid = trash.object_uuid(record)
     if record_uuid is None:
         raise InternalError(f"the trash record of {canonical} keeps no uuid, so its grants cannot be found")

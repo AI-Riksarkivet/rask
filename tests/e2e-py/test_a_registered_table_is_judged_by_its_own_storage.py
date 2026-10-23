@@ -1,14 +1,17 @@
-"""[[LH-528]] A table registered at a nested location is judged by its own storage on the estate.
+"""[[LH-528]], [[LH-532]] A table registered at a nested location is judged, and destroyed, by its own storage on the estate.
 
-The `dir` backend judges whether a table holds storage by probing ``base_path.join(location)``, which object_store
-encodes as one segment, so a table registered over data at ``<namespace>-outside/held`` reads to it as only declared
-(lance-format/lance#10281). The catalog judges each table's storage itself (``dataplane.holds_a_version``), so on the
-deployed estate a stock client finds such a table among the tables that hold storage, and every door that asks keeps it:
+The `dir` backend judges whether a table holds storage by probing ``base_path.join(location)``, and its drop deletes
+there, which object_store encodes as one segment, so a table registered over data at ``<namespace>-outside/held`` reads
+to it as only declared, and a drop deletes none of its bytes (lance-format/lance#10281). The catalog judges and destroys
+each table's storage itself (``dataplane.holds_a_version``, ``dataplane.destroy_table``), so on the deployed estate a
+stock client finds such a table among the tables that hold storage, every door that asks keeps it, and a destructive
+drop deletes it:
 
 - ``ListTables`` with ``include_declared=false`` lists it;
 - ``DescribeTable`` with ``check_declared`` answers ``is_only_declared`` false;
 - ``CreateTable`` with ``mode=exist_ok`` keeps it, its version and its rows;
-- ``RenameTable`` moves the name and keeps the table at its location.
+- ``RenameTable`` moves the name and keeps the table at its location;
+- ``DropTable`` with ``purge=true`` leaves no object under its location on the estate's store.
 
 Driven as the estate's admin in a scratch tenant of its own, removed at the end with its bucket. The dataset is written
 outside the catalog's doors with the store's own pair, as a pipeline writes one. Run with
@@ -26,6 +29,7 @@ import pyarrow as pa
 import pytest
 from scratch_tenant import CATALOG, DEX, Tenant, ok, provisioned
 
+from maintenance.services.purge import objects_held
 from service_kit.lakehouse.naming import CATALOG_DELIMITER
 from service_kit.lancekit.arrow_ipc import encode_arrow_stream
 
@@ -44,7 +48,7 @@ def tenant() -> Iterator[Tenant]:
     yield from provisioned("lh528", grants=())
 
 
-def test_a_table_registered_at_a_nested_location_is_judged_by_its_own_storage(tenant: Tenant) -> None:
+def test_a_table_registered_at_a_nested_location_is_judged_and_destroyed_by_its_own_storage(tenant: Tenant) -> None:
     admin, client = tenant.admin, tenant.admin.namespace()
     held, moved = [tenant.bronze, "held"], [tenant.bronze, "moved"]
     bucket = ok(admin.http.get(f"{CATALOG}/management/v1/warehouses/{tenant.project}"))["bucket"]
@@ -74,3 +78,9 @@ def test_a_table_registered_at_a_nested_location_is_judged_by_its_own_storage(te
     assert admin.http.post(f"{CATALOG}/v1/table/{CATALOG_DELIMITER.join(held)}/describe", json={}).status_code == 404
     assert client.describe_table(ln.DescribeTableRequest(id=moved)).location == described.location
     assert sorted(lance.dataset(namespace_client=client, table_id=moved).to_table(columns=["id"]).column("id").to_pylist()) == [1, 2]
+
+    # A destructive drop deletes every object under its location, listed with the store's own pair.
+    assert objects_held(str(described.location), correctness.store_options()) > 0, "the table holds no object, so the drop would prove nothing"
+    ok(admin.http.post(f"{CATALOG}/v1/table/{CATALOG_DELIMITER.join(moved)}/drop", params={"purge": "true"}, json={}))
+    tenant.tables.remove(CATALOG_DELIMITER.join(moved))
+    assert objects_held(str(described.location), correctness.store_options()) == 0, "the destructive drop left objects under the table's location"

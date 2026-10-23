@@ -22,7 +22,7 @@ from typing import Any, cast
 from uuid import NAMESPACE_URL, uuid5
 
 import pytest
-from lance_namespace import DropTableResponse, InvalidTableStateError, NamespaceNotEmptyError, TableNotFoundError
+from lance_namespace import DeregisterTableResponse, InvalidTableStateError, NamespaceNotEmptyError, TableNotFoundError
 
 from catalog.api import fga_deps
 from catalog.api.dependencies import Resolver
@@ -52,7 +52,8 @@ def _request_stub() -> Any:
 
 
 #: The root the stand-in backend lays its tables out under (:func:`_location`).
-_ROOT = "s3://bkt"
+#: A local root nothing is stored at: a destroy finds no byte to delete, and no store is reached.
+_ROOT = "/nonexistent/bkt"
 
 
 def _resolver(settings: Settings, ns: Any, monkeypatch: pytest.MonkeyPatch) -> Resolver:
@@ -108,7 +109,7 @@ def _uuid(canonical: str) -> str:
 
 
 def _location(segments: list[str]) -> str:
-    return f"s3://bkt/{'_'.join(segments)}.lance"
+    return f"{_ROOT}/{'_'.join(segments)}.lance"
 
 
 def _stand(settings: Settings, *tables: str) -> None:
@@ -135,13 +136,9 @@ class _RecordingNamespace:
     def describe_namespace(self, request: Any) -> Any:
         return type("R", (), {"properties": {UUID_PROPERTY: _uuid("$".join(request.id))}, "model_fields_set": set()})()
 
-    def drop_table(self, request: Any) -> Any:
-        self.calls.append("drop_table")
-        return DropTableResponse()
-
     def deregister_table(self, request: Any) -> Any:
         self.calls.append("deregister_table")
-        return type("R", (), {"model_fields_set": set()})()
+        return DeregisterTableResponse(id=request.id, location=_location(request.id))
 
     def drop_namespace(self, request: Any) -> Any:
         self.calls.append("drop_namespace")
@@ -237,7 +234,7 @@ def test_force_drops_a_protected_table_and_the_record_dies_with_it(tmp_path: Any
     _protect(settings, "table", "bronze$pages")
     ns: Any = _RecordingNamespace()
     _drop_table(settings, ns, force=True)
-    assert ns.calls == ["drop_table"]
+    assert ns.calls == ["deregister_table"]
     assert protection.get_protection(settings.registry_root, so, "table", _uuid("bronze$pages")) is None, "the record must die with its table"
 
 
@@ -407,7 +404,7 @@ def test_purge_true_still_destroys_immediately(tmp_path: Any) -> None:
             uuids=NO_OBJECT_UUIDS,
         )
     )
-    assert "drop_table" in ns.calls
+    assert "deregister_table" in ns.calls
     assert trash.list_all(settings.registry_root, settings.storage_options()) == []
 
 
@@ -543,7 +540,7 @@ class _CascadableNamespace(_TrashableNamespace):
 
     def deregister_table(self, request: Any) -> Any:
         self.calls.append(f"deregister_table:{'$'.join(request.id)}")
-        return type("R", (), {"model_fields_set": set()})()
+        return DeregisterTableResponse(id=request.id, location=_location(request.id))
 
     def drop_namespace(self, request: Any) -> Any:
         self.calls.append(f"drop_namespace:{'$'.join(request.id)}:{(request.behavior or 'restrict').lower()}")
@@ -599,17 +596,17 @@ def test_a_recoverable_cascade_DETACHES_the_subtree_and_files_a_record_per_child
 
     filed = {(record["kind"], record["id"]): record for record in trash.list_all(settings.registry_root, settings.storage_options())}
     assert sorted(filed) == [("namespace", "bronze"), ("namespace", "bronze$inner"), ("table", "bronze$inner$t2"), ("table", "bronze$pages")]
-    assert filed[("table", "bronze$pages")]["location"] == "s3://bkt/bronze_pages.lance"
+    assert filed[("table", "bronze$pages")]["location"] == _location(["bronze", "pages"])
     # Each record is its object's, and names the cascade that filed it by the dropped namespace's uuid.
     assert {key: (record["uuid"], record["cascade"]) for key, record in filed.items()} == {(kind, name): (_uuid(name), _uuid("bronze")) for kind, name in filed}
 
 
-def test_cascade_purge_true_still_destroys_natively_and_files_nothing(tmp_path: Any) -> None:
-    """The explicit opt-out, same word as the table door: purge means destroy the bytes now.
+def test_cascade_purge_true_destroys_and_files_nothing(tmp_path: Any) -> None:
+    """The explicit opt-out, same word as the table door: purge means destroy the bytes now, with no trash record.
 
     It destroys BOTTOM-UP rather than forwarding `behavior=Cascade`: the `dir` backend the chart runs
-    does not implement the native cascade at all (#117), so this assertion used to pin a call that
-    answered NamespaceNotEmpty in production while the test passed against a fake that honoured it.
+    does not implement the native cascade at all (#117). Which bytes a destroy deletes is pinned over moto
+    (`tests/integration/test_moto_s3.py::test_a_destructive_drop_leaves_no_byte_of_the_table_at_its_location`).
     """
     from service_kit.lakehouse import trash
 
@@ -618,8 +615,8 @@ def test_cascade_purge_true_still_destroys_natively_and_files_nothing(tmp_path: 
     _drop_namespace_cascade(settings, ns, purge=True)
     assert "drop_namespace:bronze:restrict" in ns.calls  # the root, once every child is gone
     assert not any(c.endswith(":cascade") for c in ns.calls)
-    assert not any(c.startswith("deregister_table:") for c in ns.calls)
-    assert trash.list_all(settings.registry_root, settings.storage_options()) == []
+    # Each table's row goes by deregister, and a residue record lives only while its bytes are deleted ([[LH-532]]).
+    assert trash.list_all(settings.registry_root, settings.storage_options()) == [], "a destructive cascade left a trash record behind it"
 
 
 def test_namespace_undrop_rebuilds_the_whole_subtree(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:

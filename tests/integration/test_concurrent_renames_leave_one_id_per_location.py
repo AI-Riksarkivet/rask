@@ -110,7 +110,7 @@ class _RivalBefore:
 @pytest.mark.parametrize(
     ("door", "act", "trash_grace_days"),
     [
-        pytest.param("drop", "drop_table", "0", id="drop"),
+        pytest.param("drop", "deregister_table", "0", id="drop"),
         pytest.param("drop", "deregister_table", "7", id="recoverable-drop"),
         pytest.param("deregister", "deregister_table", "0", id="deregister"),
     ],

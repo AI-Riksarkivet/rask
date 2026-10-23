@@ -53,9 +53,11 @@ from lance_namespace import (
     DeleteTableTagRequest,
     DeleteTableTagResponse,
     DeregisterTableRequest,
+    DeregisterTableResponse,
     DescribeTableRequest,
     DescribeTransactionRequest,
     DropTableRequest,
+    DropTableResponse,
     GetTableTagVersionRequest,
     GetTableTagVersionResponse,
     InsertIntoTableRequest,
@@ -101,10 +103,12 @@ from catalog.core.namespace import disarm_commit_path_cleanup, judged_native_ver
 from catalog.services import changes, native, primary_keys, table_bases, table_claims
 from catalog.services.base_credentials import BaseCredentials
 from catalog.services.cast_size import bytes_after_cast
-from service_kit.lakehouse import auto_cleanup, base_registry, branch_layout, location_claims
-from service_kit.lakehouse.base_refs import decoded_path, decoded_segments
+from service_kit.lakehouse import auto_cleanup, base_registry, branch_layout, location_claims, trash
+from service_kit.lakehouse.base_refs import decoded_path, decoded_segments, location_in_store, normalise, store_of
+from service_kit.lakehouse.control_prefixes import CONTROL_PREFIXES
 from service_kit.lakehouse.features import manifest_base_path_refs
 from service_kit.lakehouse.naming import CATALOG_DELIMITER
+from service_kit.lakehouse.ns_errors import PartiallyApplied
 from service_kit.lakehouse.objectfs import StorageOptions, credential_of, s3_filesystem
 from service_kit.lakehouse.schema import SchemaFields, facet_fields
 from service_kit.lakehouse.stage_stamp import declare_dataset_id
@@ -1194,6 +1198,263 @@ def _object_client(so: StorageOptions) -> Any:  # noqa: ANN401 — a boto3 S3 cl
     """The storage seam's S3 client on the catalog's own options, for an object no Lance write puts or deletes."""
     access_key, secret_key, session_token = credential_of(so)
     return s3_client(so["endpoint"], access_key=access_key, secret_key=secret_key, session_token=session_token, region=so.get("region"))
+
+
+#: The Lance table-layout directory a dataset holds; a location holding objects and none under it is no dataset.
+_VERSIONS_DIR: Final = "_versions"
+
+#: How many list-and-delete passes a destroy makes before it reports what is left. A pass deletes every object it
+#: listed, so a second pass finds only what a writer put meanwhile.
+_DELETE_PASSES: Final = 3
+
+#: The most keys one S3 DeleteObjects request takes.
+_DELETE_BATCH: Final = 1000
+
+
+class TableBytesLeftError(PartiallyApplied):
+    """A destructive drop removed the table from ``__manifest`` and could not delete every object at its location."""
+
+
+def destroy_table(
+    ns: LanceNamespace,
+    so: StorageOptions,
+    segments: list[str],
+    location: str,
+    *,
+    estate_roots: Sequence[str],
+    table_uuid: str,
+    namespace_uuid: str | None,
+    control: location_claims.ClaimStore,
+    dropped_by: str | None = None,
+) -> DropTableResponse:
+    """Destroy the table ``segments`` names, whose location its door resolved to ``location`` ([[LH-532]]).
+
+    DropTable deletes the table's data (``lance_docs/ns_catalog/spec.yaml:498``), and the data is where Lance opens it:
+    at the key the location decodes to once (:func:`dataset_fs`), with the `dir` catalog's reservation marker under the
+    location as spelled (``maintenance.services.purge.store_paths`` measures the split). The backend's own drop deletes
+    ``base_path.join(location)``, which percent-encodes the location as one segment, so for a table registered at
+    ``outside/held`` or ``räksmörgås`` it removes the row and deletes nothing (on a local root it raises after the row
+    is gone; ``rust/lance-namespace-impls/src/dir/manifest.rs:3180-3211`` at lance v13.0.0). So the catalog keeps the
+    backend's order, the row first and then the data: it judges the bytes, removes the row with DeregisterTable, which
+    deletes nothing, and deletes the bytes itself with ``so``, its own session:
+
+    1. Judged before anything changes: the location must name one place below a store root, outside every control
+       prefix, and neither be nor contain an ``estate_roots`` entry; at its key it must hold nothing, a ``_versions/``
+       tree, or the reservation marker alone (a declared table); as spelled, at most the marker. A refusal leaves the
+       table registered and every byte in place.
+    2. A location holding a ``_versions/`` tree gets a residue trash record on ``control`` before the row goes
+       (:func:`trash.make_record`'s ``residue``, grace 0), so bytes a failed delete leaves keep their location's claim
+       (``table_claims.kept_in_trash``): no register adopts them, undrop refuses them, the purge reclaims them. A
+       location holding at most the marker gets none and its claim lapses as usual: nothing opens a marker alone, so a
+       register attaching it later adopts no data, and the purge refuses a location with no ``_versions/``, so a
+       record there would hold the claim forever (both measured on pylance 13.0.0 over moto).
+    3. The row goes: the commit point. A deregister that answers TableNotFound found no row, and that answer is
+       raised unchanged. Any other failure is judged by whether the table is still described: if it is, nothing was
+       removed and the failure is raised; if it is not, the row went and its answer was lost, so the drop goes on.
+    4. Every object under both paths is deleted, absent counting as deleted, until a listing finds none, with
+       ``_versions/`` last, so a delete that stops part-way leaves the marker the purge recognises a dataset by. On S3
+       the delete is DeleteObjects on the listed keys, which writes no directory marker (pyarrow's delete PUTs one,
+       :func:`delete_table_object`).
+    5. The residue record is cleared, and the drop answers the row it removed, or the judged location when the
+       deregister's answer was lost.
+
+    Raises:
+        InvalidTableStateError: The location is not one a drop may delete; nothing changed.
+        TableNotFoundError: The backend holds no such table; nothing changed.
+        TableBytesLeftError: The row is gone and objects remain at the location, or the row removed named another
+            location, whose bytes are left alone. The residue record stands.
+    """
+    stored, spelled = _table_paths(location)
+    holds_a_dataset = _require_destroyable(location, so, stored, spelled, estate_roots=estate_roots)
+    table = CATALOG_DELIMITER.join(segments)
+    residue = (
+        trash.make_record(table, uuid=table_uuid, location=location, dropped_by=dropped_by, grace_days=0, namespace_uuid=namespace_uuid, residue=True)
+        if holds_a_dataset
+        else None
+    )
+    if residue is not None:
+        trash.put(control.control_root, control.storage_options, residue)
+    removed: DeregisterTableResponse | None
+    try:
+        removed = native.call(ns, "deregister_table", DeregisterTableRequest(id=segments))
+    except TableNotFoundError:
+        _clear_residue(control, residue)
+        raise
+    except Exception as exc:
+        if _still_described(ns, segments):
+            _clear_residue(control, residue)
+            raise
+        log.warning("drop_deregister_answer_lost", extra={"table": table, "location": location, "error": str(exc)[:300]})
+        removed = None
+    try:
+        if removed is not None and decoded_path(str(removed.location or "")) != decoded_path(location):
+            raise InternalError(f"the row removed for {table} named {removed.location!r}, not the location judged")
+        _delete_everything_under(location, so, stored, spelled)
+    except Exception as exc:
+        raise _bytes_left(table, location, exc, held=residue is not None) from exc
+    _clear_residue(control, residue)
+    if removed is None:
+        return DropTableResponse(id=segments, location=location)
+    return DropTableResponse(id=removed.id, location=removed.location)
+
+
+def _clear_residue(control: location_claims.ClaimStore, residue: dict[str, Any] | None) -> None:
+    """Clear the residue record a drop filed, once it no longer stands for bytes left. Never raises.
+
+    A record that outlives its drop holds nothing up: it names a location that is empty or that a live table still
+    holds, the purge refuses the second (still registered) and finishes the first as a no-op, and the next drop of the
+    table overwrites it.
+    """
+    if residue is None:
+        return
+    try:
+        trash.clear(control.control_root, control.storage_options, str(residue["uuid"]))
+    except Exception as exc:  # noqa: BLE001 — the drop's outcome is decided; a stale record is logged, not raised
+        log.error("drop_residue_record_not_cleared", extra={"table": residue.get("id"), "location": residue.get("location"), "error": str(exc)[:300]})
+
+
+def _still_described(ns: LanceNamespace, segments: list[str]) -> bool:
+    """Whether the backend still describes ``segments``; a describe that fails otherwise answers yes, since the row's fate is unknown."""
+    try:
+        native.call(ns, "describe_table", DescribeTableRequest(id=segments))
+    except TableNotFoundError:
+        return False
+    except Exception:  # noqa: BLE001 — an unreadable table is one whose row may stand
+        return True
+    return True
+
+
+def _bytes_left(table: str, location: str, cause: Exception, *, held: bool) -> TableBytesLeftError:
+    """The answer for a drop whose row is gone while objects remain at its location, logged at ERROR with the location.
+
+    ``held`` says a residue trash record keeps the location's claim for the objects; without one the location held at
+    most the reservation marker, which nothing opens.
+    """
+    log.error("table_bytes_left_after_drop", extra={"table": table, "location": location, "error": str(cause)[:300], "residue_record": held})
+    remedy = (
+        "the table no longer resolves; a residue trash record keeps its location held, and the trash purge reclaims the objects"
+        if held
+        else "the table no longer resolves; its location held only the reservation marker, which no table opens, and its claim lapses"
+    )
+    return TableBytesLeftError(
+        f"table {table} was removed from the catalog and objects remain at {location}",
+        problem_extra={"table": table, "location": location, "removed_from_catalog": True, "bytes_left": True, "remedy": remedy},
+    )
+
+
+def _on_object_client(location: str, so: StorageOptions) -> bool:
+    return location.startswith("s3://") and bool(so.get("endpoint"))
+
+
+def _table_paths(location: str) -> tuple[str, str]:
+    """The two paths a table recorded at ``location`` keeps objects under: its decoded key and its spelling.
+
+    Each is a store path: ``bucket/key`` on S3, an absolute path on a local root (a ``file://`` location's path).
+    """
+    anchor = "/" if store_of(location) == "file" else ""
+    return f"{anchor}{decoded_path(location)}", f"{anchor}{normalise(location)}"
+
+
+def _objects_under(location: str, so: StorageOptions, path: str) -> list[str]:
+    """Every object under ``path/``, as a store path; on S3 a directory marker is one."""
+    if _on_object_client(location, so):
+        bucket, _, key = path.partition("/")
+        pages = _object_client(so).get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=f"{key.rstrip('/')}/")
+        return [f"{bucket}/{entry['Key']}" for page in pages for entry in page.get("Contents", [])]
+    fs, _ = dataset_fs(location, so)
+    listed = fs.get_file_info(pafs.FileSelector(path, recursive=True, allow_not_found=True))
+    return [info.path for info in listed if info.type == pafs.FileType.File]
+
+
+def _contents(path: str, objects: Iterable[str]) -> list[str]:
+    """``objects`` named relative to ``path``, without directory markers, which hold nothing."""
+    prefix = f"{path.rstrip('/')}/"
+    return sorted(name for name in (obj.removeprefix(prefix) for obj in objects) if name and not name.endswith("/"))
+
+
+def _require_destroyable(location: str, so: StorageOptions, stored: str, spelled: str, *, estate_roots: Sequence[str]) -> bool:
+    """Refuse a drop whose location is not one table's bytes, before anything changes (:func:`destroy_table`, step 1).
+
+    Answers whether the location holds a ``_versions/`` tree: a dataset, rather than nothing or a declaration's marker.
+
+    Raises:
+        InvalidTableStateError: The location names no single place, a store root, a control prefix or an estate root
+            (or a place holding one), or it holds objects that are not a Lance table's.
+    """
+    segments = decoded_segments(location)
+    if segments is None or (store_of(location) != "file" and len(segments) < 2):
+        raise InvalidTableStateError(f"the table's location {location!r} names no single place below a store root, so the drop deletes nothing")
+    if crossed := sorted(CONTROL_PREFIXES.intersection(segments)):
+        raise InvalidTableStateError(f"the table's location {location!r} crosses the control prefix(es) {crossed}, so the drop deletes nothing")
+    if any(root and location_in_store(location, root) for root in estate_roots):
+        raise InvalidTableStateError(f"the table's location {location!r} holds an estate root, so the drop deletes nothing")
+    held = _contents(stored, _objects_under(location, so, stored))
+    holds_versions = any(name.split("/")[0] == _VERSIONS_DIR for name in held)
+    if held and held != [RESERVED_MARKER] and not holds_versions:
+        log.warning("drop_refused_not_a_dataset", extra={"location": location, "objects": held[:5], "count": len(held)})
+        raise InvalidTableStateError(
+            f"the table's location {location!r} holds {len(held)} object(s) and no {_VERSIONS_DIR}/, so it is not a Lance table and the drop deletes nothing"
+        )
+    if spelled != stored:
+        stray = [name for name in _contents(spelled, _objects_under(location, so, spelled)) if name != RESERVED_MARKER]
+        if stray:
+            log.warning("drop_refused_foreign_objects", extra={"location": location, "objects": stray[:5], "count": len(stray)})
+            raise InvalidTableStateError(
+                f"the table's location {location!r}, as spelled, holds {len(stray)} object(s) beside its reservation marker, so the drop deletes nothing"
+            )
+    return holds_versions
+
+
+def _delete_everything_under(location: str, so: StorageOptions, stored: str, spelled: str) -> None:
+    """Delete every object under ``stored`` and ``spelled``, ``_versions/`` last, then prove none is left (:func:`destroy_table`, step 4).
+
+    The table's ``_versions/`` tree goes after every other object, so a delete that stops part-way leaves a location
+    the purge still recognises as a dataset (``maintenance.services.purge._require_a_dataset``) and can finish.
+
+    Raises:
+        OSError: An object remains after every pass, or the store refused a delete.
+    """
+    paths = sorted({stored, spelled})
+    versions = f"{stored.rstrip('/')}/{_VERSIONS_DIR}/"
+    for _ in range(_DELETE_PASSES):
+        held = [obj for path in paths for obj in _objects_under(location, so, path)]
+        if not held:
+            return
+        rest = [obj for obj in held if not obj.startswith(versions)]
+        last = [obj for obj in held if obj.startswith(versions)]
+        if _on_object_client(location, so):
+            _delete_objects(so, rest)
+            _delete_objects(so, last)
+        else:
+            fs, _ = dataset_fs(location, so)
+            for obj in rest:
+                with suppress(FileNotFoundError):
+                    fs.delete_file(obj)
+            for path in [versions.rstrip("/"), *paths]:
+                with suppress(FileNotFoundError):
+                    fs.delete_dir(path)
+    left = [obj for path in paths for obj in _objects_under(location, so, path)]
+    if left:
+        raise OSError(f"{len(left)} object(s) remain under {location} after {_DELETE_PASSES} delete passes: {left[:5]}")
+
+
+def _delete_objects(so: StorageOptions, objects: Sequence[str]) -> None:
+    """DeleteObjects on S3 store paths (``bucket/key``); a key already absent is deleted. Any other error raises.
+
+    Raises:
+        OSError: The store refused a key.
+    """
+    client = _object_client(so)
+    by_bucket: dict[str, list[str]] = {}
+    for obj in objects:
+        bucket, _, key = obj.partition("/")
+        by_bucket.setdefault(bucket, []).append(key)
+    for bucket, keys in by_bucket.items():
+        for start in range(0, len(keys), _DELETE_BATCH):
+            batch = keys[start : start + _DELETE_BATCH]
+            answered = client.delete_objects(Bucket=bucket, Delete={"Objects": [{"Key": key} for key in batch], "Quiet": True})
+            if refused := answered.get("Errors"):
+                raise OSError(f"the store refused {len(refused)} delete(s) in {bucket}: {refused[:3]}")
 
 
 # Scalar Arrow type names → pyarrow factory, for the alter_columns re-type path. A ``JsonArrowDataType``
