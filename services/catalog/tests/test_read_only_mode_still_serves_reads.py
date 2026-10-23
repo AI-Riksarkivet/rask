@@ -42,6 +42,8 @@ READS = [
 #: (LH-446), where erasure, policy, grants and the registries live.
 WRITES = [
     "/v1/table/pages/insert",
+    # A name holding `?` ([[LH-526]]): the write is classified by the path routing matched, not one cut at the `?`.
+    "/v1/namespace/describe%3F/create",
     "/management/v1/table/pages/erasure",
     "/management/v1/warehouses",
     "/management/v1/table/pages/credentials?tier=write",

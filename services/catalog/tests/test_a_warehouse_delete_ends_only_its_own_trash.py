@@ -38,7 +38,7 @@ def test_the_trash_a_warehouse_ends_is_its_own_and_each_child_comes_before_its_p
     _trash(control, "platinum$p", "s3://acme-bkt/e_platinum$p")
     _trash(control, "beta$t", "s3://beta-bkt/f_beta$t")
 
-    owned = warehouses.trash_owned_by(control, {}, "acme-work", bucket="acme-bkt", delimiter="$")
+    owned = warehouses.trash_owned_by(control, {}, "acme-work", bucket="acme-bkt")
 
     ended = [(str(record["kind"]), str(record["id"])) for record in owned]
     assert sorted(ended) == [

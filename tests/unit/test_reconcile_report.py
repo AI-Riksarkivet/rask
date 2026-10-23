@@ -685,7 +685,6 @@ def test_load_sources_reads_the_independent_stores_concurrently(monkeypatch: pyt
             namespace_root="file:///data",
             storage_options=cast(Any, {}),
             bucket_client=cast(Any, object()),
-            delimiter="/",
         )
     )
 

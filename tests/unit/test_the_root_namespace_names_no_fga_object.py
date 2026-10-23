@@ -59,7 +59,6 @@ _CALLER = PersonPrincipal(principal=Principal(idp_id="dex", subject="alice"), cl
 
 class _Settings:
     fga_enabled = True
-    delimiter = "$"
 
 
 class _Request:

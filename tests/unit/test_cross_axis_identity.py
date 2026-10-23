@@ -1,18 +1,11 @@
-"""Cross-axis identity under a non-default delimiter (P0 #4) — infra-free.
+"""Cross-axis identity (P0 #4) — infra-free.
 
 The lakehouse names a table by ONE id string on two axes: the **lineage Dataset** name and the **id
-embedded in the Lance file** (#21). They MUST be byte-identical, else a lineage node names ``a$b`` while the
-file says ``a.b`` and provenance splits. The delimiter is configurable (``LANCE_NS_DELIMITER``), so this
-identity has to hold under a *non-default* delimiter too — the audit ``w8u4rc2tg`` flagged this as latent.
-The OpenFGA object is keyed by the table's uuid, not its name (ADR 0173 §8), so no delimiter reaches it.
-
-Two layers:
-
-* the **primitive invariant** — ``parse_identifier`` ∘ ``canonical_object_id`` round-trips byte-for-byte
-  (the single source of truth the emit derives from), and
-* the **handler wiring** — the real ``create_table`` handler derives the lineage emit
-  ``table_id``/``namespace`` and the embedded Lance metadata id from that one canonicalisation, so both
-  agree under a ``.``-delimited deployment.
+embedded in the Lance file** (#21). They MUST be byte-identical, else a lineage node names one table while the
+file names another and provenance splits. The real ``create_table`` handler derives the lineage emit
+``table_id``/``namespace`` and the embedded Lance metadata from one canonicalisation of the identifier, and stamps
+the file with the run id the event carries. The OpenFGA object is keyed by the table's uuid, not its name
+(ADR 0173 §8).
 """
 
 from __future__ import annotations
@@ -24,9 +17,7 @@ from typing import Any, cast
 import pyarrow as pa
 import pytest
 
-from catalog.core.identifiers import parse_identifier
 from service_kit.control_emit import NoopControlEmitter
-from service_kit.governed import fga
 from service_kit.governed.oidc import IDToken
 from service_kit.governed.person_identity import PersonPrincipal
 from service_kit.governed.principal import Principal
@@ -35,25 +26,8 @@ from tests.unit.named_resolver import NamedResolver
 from tests.unit.no_uuids import NO_OBJECT_UUIDS
 
 
-@pytest.mark.parametrize("delimiter", ["$"])
-def test_parse_then_canonicalize_round_trips_byte_for_byte(delimiter: str) -> None:
-    # The id a user submits, split into segments and re-joined into the canonical lineage id, must
-    # come back identical — this is what keeps the emit path and the file's own id from drifting apart.
-    identifier = delimiter.join(["alpha", "bronze", "images"])
-    segments = parse_identifier(identifier, delimiter)
-    assert segments == ["alpha", "bronze", "images"]
-    assert fga.canonical_object_id(segments, delimiter=delimiter) == identifier
-
-
-@pytest.mark.parametrize("delimiter", ["$"])
-def test_root_level_table_has_no_parent_namespace(delimiter: str) -> None:
-    # A single-segment (top-level) table has no parent namespace.
-    assert fga.parent_namespace_id(parse_identifier("solo", delimiter), delimiter=delimiter) is None
-
-
-def _settings(delimiter: str) -> Any:
+def _settings() -> Any:
     return SimpleNamespace(
-        delimiter=delimiter,
         lineage_emit_enabled=True,
         allow_external_blobs=False,
         external_blob_base_list=[],
@@ -84,15 +58,11 @@ class _RecordingEmitter:
         self.create = kwargs
 
 
-def test_create_handler_keeps_both_name_axes_identical_under_non_default_delimiter(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Drive the real ``create_table`` handler under a ``.``-delimited config and assert the lineage Dataset
-    name and the embedded Lance metadata id are byte-identical.
+def test_create_handler_keeps_both_name_axes_identical(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Drive the real ``create_table`` handler and assert the lineage Dataset name and the embedded Lance metadata
+    agree byte for byte, and that the file carries the run id the event does.
 
-    Guards the regression where one axis is derived differently (e.g. a hardcoded ``$``): if the handler
-    ever stopped funnelling both through ``canonical_object_id(segments, settings.delimiter)``, the
-    captures below would diverge.
+    Guards the regression where one axis is derived differently from the other: the captures below would diverge.
     """
     from catalog.api.v1.endpoints import data
     from catalog.services import table_create
@@ -117,7 +87,7 @@ def test_create_handler_keeps_both_name_axes_identical_under_non_default_delimit
         # Stubs the write, not the table handed to it: this test is about the THREE-AXIS identity the
         # endpoint derives, and the Lance metadata axis is only real if it reaches the table written.
         written["table"] = table
-        return SimpleNamespace(version=1, location="s3://lakehouse/uuid_alpha.bronze.images")
+        return SimpleNamespace(version=1, location="s3://lakehouse/0b6f8a52-4c1e-4f7a-9d3e-2a1c5b7e9f01")
 
     monkeypatch.setattr(table_create.fga_deps, "seed_ownership", _seed)
     # The write is faked, so no claim records its uuid; the uuid the seed is handed is not an axis compared here.
@@ -128,10 +98,10 @@ def test_create_handler_keeps_both_name_axes_identical_under_non_default_delimit
     emitter = _RecordingEmitter()
     asyncio.run(
         data.create_table(
-            id="alpha.bronze.images",
+            id="alpha$bronze$images",
             ns=cast(Any, object()),
             root="s3://root",
-            settings=_settings("."),
+            settings=_settings(),
             token=PersonPrincipal(principal=Principal(idp_id="dex", subject="alice"), claims=IDToken(iss="i", sub="alice", aud="lance", exp=1, iat=1)),
             client=cast(Any, object()),
             emitter=cast(Any, emitter),
@@ -147,21 +117,21 @@ def test_create_handler_keeps_both_name_axes_identical_under_non_default_delimit
         )
     )
 
-    canonical = "alpha.bronze.images"
+    canonical = "alpha$bronze$images"
     # Lineage axis: the emitted Dataset name + parent namespace.
     assert emitter.create is not None
     assert emitter.create["table_id"] == canonical
-    assert emitter.create["namespace"] == "alpha.bronze"
+    assert emitter.create["namespace"] == "alpha$bronze"
     assert emitter.create["author"] == "dex~alice"
     # Data axis: the namespace stamped into the Lance file's schema metadata (#21).
-    assert stamped["namespace"] == "alpha.bronze"
+    assert stamped["namespace"] == "alpha$bronze"
     # #21: the run id stamped into the Lance file is the SAME one the lineage event carries.
     assert stamped["run_id"] == emitter.create["run_id"]
     assert emitter.create["run_id"]  # and it's non-empty
     # ...and both coordinates are on the table handed to the write, not only computed. `lineage.dataset_id` is the
     # table's uuid, which the write stamps once it has claimed the location (`dataplane.create_table`).
     metadata = written["table"].schema.metadata or {}
-    assert metadata.get(b"lineage.namespace") == b"alpha.bronze"
+    assert metadata.get(b"lineage.namespace") == b"alpha$bronze"
     assert metadata.get(b"lineage.create_run_id") == emitter.create["run_id"].encode()
     # The WROTE edge's schema facet is read off the table written.
     assert [field["name"] for field in emitter.create["schema_fields"]] == ["id"]

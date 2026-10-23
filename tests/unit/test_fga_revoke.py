@@ -111,7 +111,7 @@ def test_per_tuple_delete_tolerates_one_missing_without_losing_the_rest() -> Non
 
 
 def _settings(*, fga_enabled: bool) -> Any:
-    return cast(Any, SimpleNamespace(fga_enabled=fga_enabled, delimiter="$"))
+    return cast(Any, SimpleNamespace(fga_enabled=fga_enabled))
 
 
 #: The object a dropped table's grants are held by: its uuid's (ADR 0173 §8).

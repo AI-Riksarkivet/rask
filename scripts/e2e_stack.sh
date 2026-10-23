@@ -555,7 +555,6 @@ export LANCE_E2E_PROJECT="$PROJECT"
 export LANCE_E2E_WAREHOUSE="$WAREHOUSE"
 export LANCE_E2E_PROJECT_B="$TENANT_B"
 export LANCE_E2E_TENANT_B_TOKEN="$BOB"
-export LANCE_E2E_DELIM='$'
 export LANCE_E2E_BASE_A="$BASE_A"
 export LANCE_E2E_BASE_B="$BASE_B"
 export LANCE_E2E_OUTBOX_URI="s3://lance-catalog/_lineage_outbox"

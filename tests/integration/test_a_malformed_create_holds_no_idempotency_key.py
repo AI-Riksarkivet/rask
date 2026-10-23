@@ -3,7 +3,7 @@
 The create door's claim is an object-store record with a 300 s lease. A refusal raised after the claim
 leaves it in flight, and the caller who fixes the request and retries under the same key is answered
 409 `ConcurrentModification` for an attempt that never ran. So every refusal that needs nothing but the
-request runs ahead of the claim: the mode, a wildcard segment, an off-allowlist `data_base`, `properties`
+request runs ahead of the claim: the mode, an off-allowlist `data_base`, `properties`
 that are not a JSON map of strings (spec.yaml:3761-3767), a non-Lance format, a malformed run in the
 request's Context, and a body that is not a valid Arrow IPC stream, in its framing or in its buffers.
 
@@ -60,7 +60,6 @@ _OFFSETS = struct.pack("<iii", 0, 5, 10)
 @pytest.mark.parametrize(
     ("malformed", "headers", "refusal"),
     [
-        pytest.param("/v1/table/db$t*/create", {}, "reserved", id="a-wildcard-segment"),
         pytest.param(f"{CREATE}?data_base=s3://rogue", {}, "allowlist", id="an-off-allowlist-data-base"),
         pytest.param(f"{CREATE}?properties={{not-json", {}, "not valid JSON", id="properties-that-are-not-json"),
         pytest.param(f'{CREATE}?properties={{"a":{_UNPARSEABLE_INT}}}', {}, "not valid JSON", id="properties-python-cannot-parse"),

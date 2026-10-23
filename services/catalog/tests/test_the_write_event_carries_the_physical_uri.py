@@ -61,7 +61,6 @@ def test_the_measured_write_trailer_STAMPS_the_uri_it_read_back() -> None:
     opens the dataset for version and schema in ONE open, so the location comes off that same handle
     and cannot disagree with the version it is stamped beside.
     """
-    import types
 
     from catalog.api import lineage_deps
 
@@ -79,7 +78,6 @@ def test_the_measured_write_trailer_STAMPS_the_uri_it_read_back() -> None:
                 ["db", "t"],
                 ns=cast(Any, None),
                 so={},
-                settings=cast(Any, types.SimpleNamespace(delimiter="$")),
                 token=None,
                 operation="insert",
                 authorization=None,
@@ -102,7 +100,6 @@ def test_a_readback_that_could_not_open_the_dataset_stamps_no_uri() -> None:
     enrichment rather than fail the request — and a `dataSource` facet pointing at a path nobody
     confirmed would send #23 reconcile to the wrong object.
     """
-    import types
 
     from catalog.api import lineage_deps
 
@@ -116,7 +113,6 @@ def test_a_readback_that_could_not_open_the_dataset_stamps_no_uri() -> None:
                 ["db", "t"],
                 ns=cast(Any, None),
                 so={},
-                settings=cast(Any, types.SimpleNamespace(delimiter="$")),
                 token=None,
                 operation="insert",
                 authorization=None,

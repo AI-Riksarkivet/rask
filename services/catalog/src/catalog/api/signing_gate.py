@@ -26,6 +26,7 @@ from catalog.api.maintenance_mode import GATED_MOUNTS, PROBLEM_JSON, is_mutating
 from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier
 from catalog.services.provenance_namespace import is_provenance
+from service_kit.governed import fga
 from service_kit.governed.signing_key import signing_of
 from service_kit.lakehouse.ns_errors import problem_body
 
@@ -39,13 +40,12 @@ RETRY_AFTER_SECONDS = 15
 
 def announces(path: str, settings: Settings | None) -> bool:
     """Whether the write at ``path`` is one the catalog announces: every write but a lineage-only data write under the
-    provenance namespace. The parent is joined with the server's delimiter, as the emitter joins it: every door refuses
-    a request naming another (`catalog.api.delimiter`). Without the settings no write is exempt."""
+    provenance namespace. The parent is joined as the emitter joins it. Without the settings no write is exempt."""
     parts = path.strip("/").split("/")
     if settings is None or len(parts) != 4 or parts[:2] != ["v1", "table"] or parts[3] not in _LINEAGE_ONLY_DATA_ACTIONS:
         return True
-    segments = parse_identifier(parts[2], settings.delimiter)
-    return not is_provenance(settings.delimiter.join(segments[:-1]), settings)
+    segments = parse_identifier(parts[2])
+    return not is_provenance(fga.canonical_object_id(segments[:-1]), settings)
 
 
 def unsigned_response() -> JSONResponse:
@@ -68,7 +68,9 @@ def unsigned_response() -> JSONResponse:
 async def signing_gate_middleware(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
     """Refuse a write the catalog would announce while it holds no signing key."""
     holder = signing_of(request.app)
-    path = request.url.path
+    # The path routing matches, never `request.url.path`: that re-parses the decoded path as a URL, so a `?` in a name
+    # would end the path there and the action read would be a segment of the name ([[LH-526]]).
+    path: str = request.scope["path"]
     settings: Settings | None = getattr(request.app.state, "settings", None)
     if (
         holder is not None

@@ -468,8 +468,9 @@ def test_a_table_location_is_exclusive(estate: _Estate) -> None:
 
     A ``?``, or its encoded ``%3F``, names no location either, by the spelling rule every judge asks: the store keeps it
     under a re-encoded name that holds no table, so an id registered there is not found by query or count (measured on
-    pylance 13.0.0, dir backend). A ``*``, or its encoded ``%2A``, is refused because a location is the prefix every
-    credential for its table is scoped by, where ``*`` is an IAM wildcard, as a table's name may not hold one ([[LH-437]]).
+    pylance 13.0.0, dir backend). A ``*`` or a ``${``, raw or encoded (``%2A``, ``%24%7B``), is refused because a location
+    is the prefix every credential for its table is scoped by, where IAM reads ``*`` as a wildcard ([[LH-437]]) and ``${``
+    as the start of a policy variable ([[LH-526]]).
 
     Nor may a location equal, contain or sit under another registered table's ([[LH-504]]): a destructive drop
     of the outer table would delete the inner one's bytes. Only the namespace's object index answers it, so the
@@ -498,12 +499,12 @@ def test_a_table_location_is_exclusive(estate: _Estate) -> None:
         _refused(resp, _INVALID_INPUT)
         assert estate.client.post("/v1/table/db$squatter/exists").status_code == 404, f"{location!r}: a refused registration must be detached"
         assert estate.client.post("/v1/table/db$squatter/query", json=_QUERY).status_code == 404, f"{location!r}: the victim reads through the refused id"
-    for location in (f"{victim}*x", f"{victim}%2Ax"):
+    for location, held in ((f"{victim}*x", ["*"]), (f"{victim}%2Ax", ["*"]), (f"{victim}${{x}}", ["${"]), (f"{victim}%24%7Bx%7D", ["${"])):
         resp = estate.client.post("/v1/table/db$squatter/register", json={"location": location})
         _refused(resp, _INVALID_INPUT)
         detail = (
-            f"register location {location!r} holds the reserved character(s) ['*']: '*' and '?' are IAM wildcards in the vended storage "
-            "policy and would widen credentials to sibling objects"
+            f"register location {location!r} holds IAM policy syntax {held}: every credential vended for the table names its location, "
+            "where IAM reads '*' and '?' as wildcards that widen the credential to sibling objects and '${' as a policy variable"
         )
         assert resp.json()["detail"] == detail, resp.text
         assert estate.client.post("/v1/table/db$squatter/exists").status_code == 404, f"{location!r}: a refused registration must be detached"

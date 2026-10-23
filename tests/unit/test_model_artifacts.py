@@ -68,7 +68,6 @@ def test_describe_endpoint_carries_the_artifact_list(tmp_path: Path) -> None:
     artifacts_root = _tree(tmp_path / "artifacts" / "demo")
     settings: Any = SimpleNamespace(
         fga_enabled=False,
-        delimiter="$",
         model_uri=lambda m: str(tmp_path / "registry" / m),
         model_artifacts_uri=lambda m: str(tmp_path / "artifacts" / m),
     )
@@ -88,7 +87,6 @@ def test_describe_endpoint_reports_no_artifacts_as_empty(tmp_path: Path) -> None
     _publish_registry(registry_uri)
     settings: Any = SimpleNamespace(
         fga_enabled=False,
-        delimiter="$",
         model_uri=lambda m: str(tmp_path / "registry" / m),
         model_artifacts_uri=lambda m: str(tmp_path / "artifacts" / m),  # never created
     )

@@ -17,7 +17,7 @@ from service_kit.governed import fga
 from service_kit.lakehouse import location_claims
 from service_kit.lakehouse.base_refs import normalise
 from service_kit.lakehouse.branch_layout import BRANCH_CONTAINER
-from service_kit.lakehouse.naming import uuid_of
+from service_kit.lakehouse.naming import CATALOG_DELIMITER, uuid_of
 from service_kit.openlineage import DatasetUuids
 
 
@@ -90,12 +90,12 @@ def table_uuid(names: TableIds, table: str, *, claims: location_claims.ClaimStor
     return found.claim.uuid
 
 
-def read_uuids(names: TableIds, table: str, *, claims: location_claims.ClaimStore, delimiter: str) -> DatasetUuids:
+def read_uuids(names: TableIds, table: str, *, claims: location_claims.ClaimStore) -> DatasetUuids:
     """The uuids of ``table`` and of its namespace, for the events that name it (ADR 0173 §10).
 
     Best-effort, as the events are: a uuid that cannot be read is ``None`` and the event still goes.
     """
-    namespace = fga.parent_namespace_id(table, delimiter=delimiter)
+    namespace = fga.parent_namespace_id(table)
     namespace_uuid = names.namespace_uuids.get(namespace) if namespace else None
     try:
         uuid = table_uuid(names, table, claims=claims)
@@ -105,7 +105,7 @@ def read_uuids(names: TableIds, table: str, *, claims: location_claims.ClaimStor
     return DatasetUuids(table_uuid=uuid, namespace_uuid=namespace_uuid)
 
 
-def policy_owners(names: TableIds, table: str, *, claims: location_claims.ClaimStore, delimiter: str) -> PolicyOwners | None:
+def policy_owners(names: TableIds, table: str, *, claims: location_claims.ClaimStore) -> PolicyOwners | None:
     """The uuids a maintenance policy for ``table`` is kept under, or ``None`` when the table's or an ancestor
     namespace's cannot be read.
 
@@ -119,8 +119,8 @@ def policy_owners(names: TableIds, table: str, *, claims: location_claims.ClaimS
         return None
     if uuid is None:
         return None
-    segments = table.split(delimiter)
-    ancestors = [delimiter.join(segments[:depth]) for depth in range(1, len(segments))]
+    segments = table.split(CATALOG_DELIMITER)
+    ancestors = [fga.canonical_object_id(segments[:depth]) for depth in range(1, len(segments))]
     unnamed = [ancestor for ancestor in ancestors if ancestor not in names.namespace_uuids]
     if unnamed:
         log.warning("maintenance_namespace_uuid_unread", extra={"table": table, "namespaces": unnamed})

@@ -58,7 +58,6 @@ def _settings() -> SimpleNamespace:
     # already passed by the time this body runs, which is precisely the hole the row describes.
     return SimpleNamespace(
         fga_enabled=False,
-        delimiter="$",
         multibase_data_base_list=[],
         storage_options=lambda: {},
         # The base judge's two inputs ([[LH-279]]). These tables declare no base outside their own root,

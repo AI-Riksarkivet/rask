@@ -61,7 +61,6 @@ spec:
             - { name: LANCE_REST_DOCS, value: {{ $root.Values.docs.enabled | quote }} }
             - { name: LANCE_REST_IMPL, value: "dir" }
             - { name: LANCE_REST_ROOT, value: "s3://{{ .Values.objectStore.bucket }}" }
-            - { name: LANCE_NS_DELIMITER, value: "$" }
             - { name: LANCE_ALLOW_EXTERNAL_BLOBS, value: {{ .Values.vending.allowExternalBlobs | quote }} }
             - { name: LANCE_EXTERNAL_BLOB_BASES, value: {{ include "lance.externalBlobBases" . | quote }} }
             - { name: LANCE_MAX_BODY_BYTES, value: {{ .Values.catalog.maxBodyBytes | int64 | quote }} }

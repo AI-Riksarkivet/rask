@@ -76,7 +76,7 @@ async def on_cron(
         return {"status": "skipped", "reason": "overlapping sweep still running"}
     async with _sweep_lock:
         results = await run_in_threadpool(run_sweep, settings)
-        await emit_sweep_lineage(emitter, results, delimiter=settings.delimiter)
+        await emit_sweep_lineage(emitter, results)
         summary = summarize(results)
         log.info("maintenance_sweep", extra=summary)
         # ONE WARNING FOR THE WHOLE SWEEP, and only when there is something to say: measured on the deployed estate

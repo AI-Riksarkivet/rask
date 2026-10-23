@@ -76,7 +76,8 @@ Measured on pylance 13.0.0 (`dir` backend, compatibility mode, as the catalog ru
    characters holding no `$` (the delimiter), `+`, `/`, control character, or leading or trailing whitespace; `*` and `?`
    are allowed again, since no name reaches a credential's policy. The catalog reads a `+` in the `{id}` path as a space,
    as pylance's Rust client sends one, and no name can hold a literal `+`. A top-level namespace name keeps the
-   control-id rule: it is the routing key that finds the namespace's warehouse through its binding.
+   control-id rule: it is the routing key that finds the namespace's warehouse through its binding. The delimiter is
+   the spec's `$` (`spec.yaml:2314-2318`), which no setting changes, and a request naming another is refused.
 5. **Locations.** A table the catalog creates or declares lives at `<warehouse root>/<table uuid>`, a random v4 uuid with
    no suffix: declare writes the `.lance-reserved` marker there and records the row through RegisterTable's relative
    location, the `dir` catalog's own DeclareTable steps with the catalog choosing the location

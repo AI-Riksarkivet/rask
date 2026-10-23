@@ -66,7 +66,7 @@ from catalog.core import provenance_guard, run_context
 from catalog.core.base_judge import GovernedStorage
 from catalog.core.config import Settings
 from catalog.core.formats import reject_unsupported_properties
-from catalog.core.identifiers import parse_identifier, require_safe_segments
+from catalog.core.identifiers import parse_identifier
 from catalog.core.lineage_emit import OVERWRITE_TABLE, LineageEmitter, UuidReader, input_refs, run_inputs
 from catalog.core.lineage_metadata import build_lineage_metadata, stamp_lineage_metadata
 from catalog.core.modes import CreateMode
@@ -148,9 +148,6 @@ def parse_create_shape(
     parse, because a claim minted for a request refused here would hold the key for its lease and
     answer the corrected retry 409.
     """
-    # A wildcard (`*`/`?`) in a segment would flow verbatim from the table's derived prefix into the
-    # vended STS session policy and widen credentials to siblings — refused at SHAPE, before any write.
-    require_safe_segments(parse_identifier(id, settings.delimiter), delimiter=settings.delimiter)
     # #3-B governance (the security crux): validate BEFORE any write. An off-allowlist base is a client
     # error (400), never a silent write to an unapproved bucket.
     if data_base:
@@ -212,7 +209,7 @@ async def create_governed_table(
     # #118: this door had NO parent guard at all — require_parent lives in tables.py and this route
     # lives here, so the Arrow create wrote real datasets into namespaces that do not exist, with a
     # live owner grant and no parent edge.
-    await fga_deps.require_parent_exists(ns, "table", parse_identifier(id, settings.delimiter), delimiter=settings.delimiter)
+    await fga_deps.require_parent_exists(ns, "table", parse_identifier(id))
     # [[LH-209]] The one external blob base this create may register, judged before the write: none unless
     # the request names one, and never one that reaches governed storage.
     external_base = await run_in_threadpool(
@@ -222,9 +219,9 @@ async def create_governed_table(
         approved=settings.external_blob_base_list,
         governed=GovernedStorage.from_settings(settings),
     )
-    segments = parse_identifier(id, settings.delimiter)
-    table_id = fga.canonical_object_id(segments, delimiter=settings.delimiter)
-    namespace = fga.parent_namespace_id(segments, delimiter=settings.delimiter) or ""
+    segments = parse_identifier(id)
+    table_id = fga.canonical_object_id(segments)
+    namespace = fga.parent_namespace_id(segments) or ""
     created_by = token.subject if token is not None else None
     run_id = str(uuid.uuid4())
     # #21: stamp the lineage coordinates into the Lance file's schema metadata so the data is
@@ -360,7 +357,7 @@ async def create_governed_table(
         _, schema_fields, _location = await run_in_threadpool(dataplane.read_version_and_schema, ns, so, segments, response.version, None)
     else:
         schema_fields = dataplane.payload_schema_fields(table.schema, segments)
-    inputs = await input_refs(run_inputs(run), delimiter=settings.delimiter, uuids=uuids)
+    inputs = await input_refs(run_inputs(run), uuids=uuids)
     # Read through the location the write landed in, so a rename since cannot lend the event another table's uuid.
     table_uuids = await uuids.table(segments, location=response.location)
     if overwrote_existing:

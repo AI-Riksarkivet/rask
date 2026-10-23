@@ -166,31 +166,24 @@ def test_a_project_is_created_before_its_warehouse_before_its_namespace_before_i
 
 
 def test_a_grant_on_a_table_names_the_table_this_run_actually_created() -> None:
-    """The one grant whose object is a TABLE, and therefore the one that depends on the delimiter.
-
-    A table is named by its PATH and the separator is per-run (``--delimiter`` / ``SEED_NS_DELIMITER``), and the grant
-    is written on the uuid DescribeTable answers for that path (ADR 0173 §8). A grant that hardcoded ``$`` would
-    resolve a table nobody created the moment the two disagreed. That is the ghost the whole script is built to stop
-    making, re-entering through the grant layer.
-
-    Driven with a NON-default delimiter on purpose: under the default the hardcoded form and the correct
-    form are the same string, so the bug is invisible exactly where it would be tested.
+    """The one grant whose object is a TABLE: written on the uuid DescribeTable answers for the table this run
+    declared (ADR 0173 §8), and after that declare. A grant written on a name, or before its table exists, names an
+    object nobody created: the ghost the whole script is built to stop making, re-entering through the grant layer.
     """
     recorded: list[httpx.Request] = []
-    assert _run(recorded, argv=["--catalog", "http://catalog", "--delimiter", "."]) == 0
+    assert _run(recorded, argv=["--catalog", "http://catalog"]) == 0
 
     declared = [request.url.path for request in recorded if _layer(request) == "table"]
     described = [described for request in recorded if (described := _describe(request.url.path)) is not None and described[0] == "table"]
     granted = [str(_body(request)["object"]) for request in recorded if _layer(request) == "grant"]
 
-    assert "/v1/table/acme-gold.catalog/declare" in declared
-    assert described == [("table", "acme-gold.catalog")], f"the table grant did not resolve the run's delimiter: {described}"
-    assert _object("table", "acme-gold.catalog") in granted, f"the table grant is not on the uuid its table resolved to: {granted}"
-    assert not [obj for obj in granted if "{delimiter}" in obj or "acme-gold" in obj], f"a name reached the wire: {granted}"
-    # And it is still ORDERED behind the declare — resolving the object without resolving the parent
-    # lookup would write the tuple first, against a table that does not exist yet.
-    assert _index(recorded, lambda r: r.url.path == "/v1/table/acme-gold.catalog/declare") < _index(
-        recorded, lambda r: _layer(r) == "grant" and _body(r)["object"] == _object("table", "acme-gold.catalog")
+    assert "/v1/table/acme-gold$catalog/declare" in declared
+    assert described == [("table", "acme-gold$catalog")], f"the table grant did not resolve the table this run declared: {described}"
+    assert _object("table", "acme-gold$catalog") in granted, f"the table grant is not on the uuid its table resolved to: {granted}"
+    assert not [obj for obj in granted if "acme-gold" in obj], f"a name reached the wire: {granted}"
+    # And it is ORDERED behind the declare: a grant resolved before its table is declared names nothing yet.
+    assert _index(recorded, lambda r: r.url.path == "/v1/table/acme-gold$catalog/declare") < _index(
+        recorded, lambda r: _layer(r) == "grant" and _body(r)["object"] == _object("table", "acme-gold$catalog")
     )
 
 

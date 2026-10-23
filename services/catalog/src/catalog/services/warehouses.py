@@ -25,6 +25,7 @@ from lance_namespace import NamespaceAlreadyExistsError, ServiceUnavailableError
 
 from catalog.services.control_records import BindingRecord, BucketClaimRecord, WarehouseRecord, read_json, validated, validated_or_refuse, write_json
 from service_kit.lakehouse import trash
+from service_kit.lakehouse.naming import CATALOG_DELIMITER
 from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base
 from service_kit.lakehouse.records import RecordExistsError, RecordMissingError, create_json, mutate_json
 
@@ -497,9 +498,7 @@ def unbind_namespace(control_root: str, storage_options: StorageOptions, top_ns:
         return
 
 
-def evict_stale_bindings(
-    cache: dict[str, dict[str, str]], *, action: str, object_id: str, object_name: str | None, extra: dict[str, Any], delimiter: str
-) -> list[str]:
+def evict_stale_bindings(cache: dict[str, dict[str, str]], *, action: str, object_id: str, object_name: str | None, extra: dict[str, Any]) -> list[str]:
     """Evict every binding-cache entry a control event just invalidated; return the evicted keys (#46).
 
     The cache's premise — a binding is immutable, cache positives forever — is broken by exactly
@@ -546,7 +545,7 @@ def evict_stale_bindings(
         if isinstance(namespace, str) and namespace:
             _pop(namespace)
     elif action == "namespace_dropped" and object_name:
-        top_ns = object_name.split(delimiter)[0]
+        top_ns = object_name.split(CATALOG_DELIMITER)[0]
         if top_ns:
             _pop(top_ns)
     return evicted
@@ -567,7 +566,7 @@ def delete_warehouse_record(control_root: str, storage_options: StorageOptions, 
         return
 
 
-def trash_owned_by(control_root: str, storage_options: StorageOptions, warehouse_id: str, *, bucket: str, delimiter: str) -> list[dict[str, Any]]:
+def trash_owned_by(control_root: str, storage_options: StorageOptions, warehouse_id: str, *, bucket: str) -> list[dict[str, Any]]:
     """The trash records a delete of ``warehouse_id`` ends, each child's before its parent's.
 
     THE TRASH GOES WITH THE WAREHOUSE. A recoverable drop keeps a record, the object's grants, its policy and its
@@ -602,10 +601,10 @@ def trash_owned_by(control_root: str, storage_options: StorageOptions, warehouse
     in_bucket = f"s3://{bucket}/"
 
     def top(record: dict[str, Any]) -> str:
-        return str(record.get("id") or "").split(delimiter, 1)[0]
+        return str(record.get("id") or "").split(CATALOG_DELIMITER, 1)[0]
 
     owned = [r for r in records if top(r) not in elsewhere and (top(r) in here or str(r.get("location") or "").startswith(in_bucket))]
-    return sorted(owned, key=lambda r: (r.get("kind") == "namespace", -len(str(r.get("id") or "").split(delimiter))))
+    return sorted(owned, key=lambda r: (r.get("kind") == "namespace", -len(str(r.get("id") or "").split(CATALOG_DELIMITER))))
 
 
 def purge_bucket(bucket: str, storage_options: StorageOptions) -> int:

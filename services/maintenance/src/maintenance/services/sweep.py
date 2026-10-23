@@ -382,7 +382,7 @@ def _expire_in_span(uri: str, table: str, plan: DatasetPlan, *, sweep: SweepPlan
         started = perf_counter()
         result = _expire(uri, table, plan, sweep=sweep, settings=settings)
         if _lane_of(result) is not None:
-            result.uuids = read_uuids(sweep.table_ids, table, claims=_claims(settings), delimiter=settings.delimiter)
+            result.uuids = read_uuids(sweep.table_ids, table, claims=_claims(settings))
         result.duration_seconds = round(perf_counter() - started, 3)
         span.set_attribute("lance.maintenance.duration_seconds", result.duration_seconds)
         if result.refused is not None:
@@ -409,7 +409,7 @@ def name_dataset(uri: str, *, sweep: SweepPlan, settings: MaintenanceSettings) -
     table = sweep.table_ids.table_of(uri)
     if table is None:
         return _unnamed(uri, settings=settings)
-    owners = policy_owners(sweep.table_ids, table, claims=_claims(settings), delimiter=settings.delimiter)
+    owners = policy_owners(sweep.table_ids, table, claims=_claims(settings))
     if owners is None:
         return _unidentified(uri, table, settings=settings)
     return NamedDataset(table=table, owners=owners)
@@ -737,7 +737,7 @@ class _Emit(BaseModel):
     error: str = ""
 
 
-def _emit_selection(results: list[DatasetResult], *, delimiter: str) -> tuple[list[_Emit], list[_Emit]]:
+def _emit_selection(results: list[DatasetResult]) -> tuple[list[_Emit], list[_Emit]]:
     """``(complete, failed)``: one :class:`_Emit` per dataset that reclaimed versions, and one per ``maintain:`` failure."""
     complete: list[_Emit] = []
     failed: list[_Emit] = []
@@ -747,7 +747,7 @@ def _emit_selection(results: list[DatasetResult], *, delimiter: str) -> tuple[li
             continue
         emit = _Emit(
             table_id=result.table_id,
-            namespace=fga.parent_namespace_id(result.table_id, delimiter=delimiter) or "",
+            namespace=fga.parent_namespace_id(result.table_id) or "",
             uuids=result.uuids,
             error=result.error or "",
         )
@@ -755,14 +755,14 @@ def _emit_selection(results: list[DatasetResult], *, delimiter: str) -> tuple[li
     return complete, failed
 
 
-async def emit_sweep_lineage(emitter: MaintenanceEmitter, results: list[DatasetResult], *, delimiter: str) -> None:
+async def emit_sweep_lineage(emitter: MaintenanceEmitter, results: list[DatasetResult]) -> None:
     """Emit a best-effort maintenance event per swept dataset: COMPLETE for reclaimed versions, FAIL for a terminal
     per-dataset failure (#7b + §4 failure visibility). Nothing here raises into the sweep.
 
     The parent namespace is derived via :func:`service_kit.governed.fga.parent_namespace_id`, so events land on the SAME
     ``(:Dataset)`` the catalog created. Only the FAIL lane is capped at ``_MAX_FAIL_EMITS_PER_TICK``.
     """
-    complete, failed = _emit_selection(results, delimiter=delimiter)
+    complete, failed = _emit_selection(results)
     if len(failed) > _MAX_FAIL_EMITS_PER_TICK:
         log.warning("maintenance_fail_emits_capped", extra={"failing": len(failed), "emitted": _MAX_FAIL_EMITS_PER_TICK})
         random.shuffle(failed)

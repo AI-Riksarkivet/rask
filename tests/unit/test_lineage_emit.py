@@ -249,7 +249,6 @@ def test_emit_write_event_resolves_the_tenant_from_the_top_namespace_segment() -
         emit_write_event(
             cast(LineageEmitter, em),
             ["alpha", "bronze", "images"],
-            delimiter="$",
             author="alice",
             version=1,
             operation=INSERT,
@@ -267,7 +266,6 @@ def test_emit_write_event_maps_segments_to_canonical_ids_and_awaits_inline() -> 
         emit_write_event(
             cast(LineageEmitter, em),
             ["db1", "users"],
-            delimiter="$",
             author="alice",
             version=3,
             operation="update",
@@ -343,7 +341,6 @@ def test_emit_write_event_maps_input_pins_to_canonical_dataset_ids() -> None:
         emit_write_event(
             cast(LineageEmitter, em),
             ["db1", "dest"],
-            delimiter="$",
             author="alice",
             version=None,
             operation="register_table",
@@ -365,7 +362,6 @@ def test_emit_write_event_carries_the_pinned_source_version_through() -> None:
         emit_write_event(
             cast(LineageEmitter, em),
             ["db1", "dest"],
-            delimiter="$",
             author="alice",
             version=9,
             operation=MERGE_INSERT,
@@ -380,9 +376,7 @@ def test_emit_write_event_carries_the_pinned_source_version_through() -> None:
 def test_emit_write_event_root_table_has_empty_namespace() -> None:
     # Boundary: a top-level (single-segment) table has no parent namespace → "".
     em = _RecordingEmitter()
-    asyncio.run(
-        emit_write_event(cast(LineageEmitter, em), ["t"], delimiter="$", author=None, version=None, operation=INSERT, authorization=None, uuids=NO_OBJECT_UUIDS)
-    )
+    asyncio.run(emit_write_event(cast(LineageEmitter, em), ["t"], author=None, version=None, operation=INSERT, authorization=None, uuids=NO_OBJECT_UUIDS))
     assert em.writes[0]["namespace"] == ""
     assert em.writes[0]["version"] is None
 

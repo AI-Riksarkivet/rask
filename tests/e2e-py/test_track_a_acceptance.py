@@ -77,6 +77,8 @@ import pyarrow.ipc as ipc
 import pytest
 import requests
 
+from service_kit.lakehouse.naming import CATALOG_DELIMITER
+
 
 CATALOG = os.environ.get("LANCE_E2E_CATALOG_URL", "").rstrip("/")
 TOKEN = os.environ.get("LANCE_E2E_TOKEN", "")
@@ -84,7 +86,6 @@ S3_ENDPOINT = os.environ.get("LANCE_E2E_S3_ENDPOINT", "")
 S3_ACCESS_KEY = os.environ.get("LANCE_E2E_S3_ACCESS_KEY", "rustfsadmin")
 S3_SECRET_KEY = os.environ.get("LANCE_E2E_S3_SECRET_KEY", "rustfsadmin")
 S3_REGION = os.environ.get("LANCE_E2E_S3_REGION", "us-east-1")
-DELIM = os.environ.get("LANCE_E2E_DELIM", "$")
 
 ARROW_STREAM = "application/vnd.apache.arrow.stream"
 
@@ -135,7 +136,7 @@ class Estate:
         self.namespace = namespace
 
     def table_id(self, name: str) -> str:
-        return f"{self.namespace}{DELIM}{name}"
+        return f"{self.namespace}{CATALOG_DELIMITER}{name}"
 
     def create(self, name: str, table: pa.Table) -> str:
         """Create a table through the catalog's Arrow-IPC door; returns its dataset URI."""
@@ -250,7 +251,7 @@ def estate() -> Iterator[Estate]:
         listed = requests.get(f"{CATALOG}/v1/namespace/{live.namespace}/table/list", headers=_auth(), timeout=60)
         if listed.status_code == 200:
             for name in listed.json().get("tables", []):
-                requests.post(f"{CATALOG}/v1/table/{live.namespace}{DELIM}{name}/drop", json={}, headers=_auth(), timeout=120)
+                requests.post(f"{CATALOG}/v1/table/{live.namespace}{CATALOG_DELIMITER}{name}/drop", json={}, headers=_auth(), timeout=120)
         # `purge_bucket` is safe HERE and nowhere else in this file: the bucket was minted by this run's
         # own warehouse a few seconds ago and holds nothing else.
         requests.delete(

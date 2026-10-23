@@ -25,6 +25,7 @@ from catalog.api.dapr import register_control_dapr
 from catalog.api.erasure_release import mount_erasure_release
 from catalog.api.load_shed import WriteConcurrencyLimitMiddleware
 from catalog.api.maintenance_mode import maintenance_middleware
+from catalog.api.path_reading import PathReadingMiddleware
 from catalog.api.promotion_expiry import mount_promotion_expiry
 from catalog.api.signing_gate import signing_gate_middleware
 from catalog.api.v1.router import api_router
@@ -433,7 +434,10 @@ mount_promotion_expiry(app, _settings.promotion_expiry_binding_name)
 # ADDED AFTER, therefore OUTSIDE the request-id layer — where they already were, and where they belong.
 # Reject oversized request bodies with 413 before they are buffered (Arrow-IPC OOM guard). See body_limit.py.
 app.add_middleware(BodySizeLimitMiddleware, max_bytes=_settings.max_body_bytes)
-# Outermost (added LAST → wraps everything, runs FIRST): shed a bulk-write burst with 429 once the
-# concurrent-write cap is reached, BEFORE the body is buffered — so shedding relieves memory pressure rather
-# than adding to it. Sits above body_limit so an over-cap write is rejected before even the size check. (P5)
+# Shed a bulk-write burst with 429 once the concurrent-write cap is reached, BEFORE the body is buffered — so
+# shedding relieves memory pressure rather than adding to it. Sits above body_limit so an over-cap write is rejected
+# before even the size check. (P5)
 app.add_middleware(WriteConcurrencyLimitMiddleware, max_concurrent=_settings.max_concurrent_writes)
+# Outermost (added LAST → wraps everything, runs FIRST): read the request's path as the client spelled its names, a
+# bare `+` as a space ([[LH-526]]), so every layer beneath reads one path.
+app.add_middleware(PathReadingMiddleware)

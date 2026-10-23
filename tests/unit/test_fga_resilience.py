@@ -224,7 +224,7 @@ def test_a_server_too_old_for_the_conflict_option_fails_CLOSED() -> None:
     ],
 )
 def test_parent_namespace_id_root_and_nesting(table_id: str, expected: str | None) -> None:
-    assert fga.parent_namespace_id(table_id, delimiter="$") == expected
+    assert fga.parent_namespace_id(table_id) == expected
 
 
 class _CapturingList:

@@ -117,7 +117,6 @@ services:
     environment:
       LANCE_REST_IMPL: dir
       LANCE_REST_ROOT: s3://lance-catalog
-      LANCE_NS_DELIMITER: "$$"            # $$ -> literal $ in compose
       LANCE_S3_ENDPOINT: http://rustfs:9000
       # A vended credential names the address a client on the host reaches the store at.
       LANCE_S3_VENDED_ENDPOINT: http://localhost:9000

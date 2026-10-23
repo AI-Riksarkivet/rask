@@ -44,7 +44,9 @@ _Avoid_: Ray, compute plane, cluster
 **Name**:
 The path of segments a client uses to reach a table or namespace, which the Lance spec calls its `id`: `["bronze",
 "räksmörgås"]`, written `bronze$räksmörgås`. A rename changes it. Two names are the same name only when they are equal
-exactly, case included, and a name not in Unicode NFC is refused rather than rewritten.
+exactly, case included, and a name not in Unicode NFC is refused rather than rewritten. Each segment is 1 to 255
+characters holding no `$`, `+`, `/` or control character and no leading or trailing whitespace; a bare `+` in a
+request's path reads as a space.
 _Avoid_: id, object id, identifier (for the minted key)
 
 **Table uuid**:

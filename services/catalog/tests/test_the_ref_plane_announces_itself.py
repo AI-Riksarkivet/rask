@@ -96,7 +96,7 @@ def app(ns, emitted: list[dict[str, Any]], tmp_path: Path, monkeypatch: pytest.M
     # `registry_root` is not decoration: the delete doors read a protection record before they
     # destroy anything ([[LH-056]]), and a double without it fails inside the handler rather than
     # at the assertion — the shape "a double must carry the whole signature".
-    settings = SimpleNamespace(delimiter="$", storage_options=lambda: {}, fga_enabled=False, registry_root=str(tmp_path / "control"))
+    settings = SimpleNamespace(storage_options=lambda: {}, fga_enabled=False, registry_root=str(tmp_path / "control"))
     application.dependency_overrides[SettingsDep.__metadata__[0].dependency] = lambda: settings
     application.dependency_overrides[NamespaceDep.__metadata__[0].dependency] = lambda: ns
     application.dependency_overrides[StorageOptionsDep.__metadata__[0].dependency] = lambda: {}

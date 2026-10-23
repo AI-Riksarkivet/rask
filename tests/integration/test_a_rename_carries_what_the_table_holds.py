@@ -110,7 +110,7 @@ def test_a_rename_keeps_the_tables_protection_and_policy_and_writes_no_record(re
     assert _ok(real_ns_client, "/management/v1/table/db$dst/policy/describe")["retention_days"] == 7
     settings = MaintenanceSettings.model_validate({"MAINTENANCE_POLICY_ROOT": str(tmp_path), "MAINTENANCE_CONTROL_ROOT": str(tmp_path)})
     named = table_ids({str(tmp_path)}, {})
-    owners = policy_owners(named, "db$dst", claims=location_claims.ClaimStore(control_root=str(tmp_path)), delimiter="$")
+    owners = policy_owners(named, "db$dst", claims=location_claims.ClaimStore(control_root=str(tmp_path)))
     assert owners is not None, "maintenance reads no uuid for the renamed table"
     context = PlanContext(policies=load_policies(settings, {}), now=datetime.now(UTC), older_than=timedelta(days=30))
     plan = resolve_plan(location, context=context, owners=owners)

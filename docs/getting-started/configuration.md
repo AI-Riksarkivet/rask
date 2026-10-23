@@ -26,7 +26,6 @@ The catalog's own settings carry the `LANCE_` prefix (`services/catalog/src/cata
 | Variable | Purpose |
 |---|---|
 | `LANCE_REST_IMPL` / `LANCE_REST_ROOT` | The namespace implementation and the object-store root it serves. |
-| `LANCE_NS_DELIMITER` | The table-id delimiter (`$`). |
 | `LANCE_LINEAGE_EMIT_ENABLED` | Announce every committed write on lineage (off in the code default, on in the chart). |
 | `LANCE_LINEAGE_OUTBOX_URI` | Stage each lineage event in the object store before publishing it. |
 | `LANCE_CONTROL_EMIT_ENABLED` | Broadcast the catalog's control-plane mutations on `catalog.control.v1`. |

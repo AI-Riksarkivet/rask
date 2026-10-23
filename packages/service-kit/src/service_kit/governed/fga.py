@@ -86,6 +86,7 @@ from tenacity import (
 from service_kit.governed.audit import SUCCESS, audit
 from service_kit.governed.machine_identity import read_identity_token
 from service_kit.governed.principal import Principal
+from service_kit.lakehouse.naming import CATALOG_DELIMITER
 
 
 log = logging.getLogger(__name__)
@@ -259,19 +260,19 @@ def load_model_dsl() -> str:
 # --------------------------------------------------------------------------- #
 
 
-def canonical_object_id(id_segments: list[str] | str, *, delimiter: str) -> str:
+def canonical_object_id(id_segments: list[str] | str) -> str:
     """Return the delimited id of a name: a table's or namespace's catalog id (``a$b``), or the id of an object no uuid
     keys (a transaction, a classification label).
 
     A table's or namespace's FGA object is its uuid (:func:`table_object`), never this. Pass either the already-joined
-    id string (returned unchanged) or the list of path segments (joined with ``delimiter``).
+    id string (returned unchanged) or the list of path segments (joined with :data:`CATALOG_DELIMITER`).
     """
     if isinstance(id_segments, str):
         return id_segments
-    return delimiter.join(id_segments)
+    return CATALOG_DELIMITER.join(id_segments)
 
 
-def parent_namespace_id(table_id: list[str] | str, *, delimiter: str) -> str | None:
+def parent_namespace_id(table_id: list[str] | str) -> str | None:
     """Derive a table's parent namespace id from its id (all segments but the last).
 
     Returns ``None`` for a single-segment / root-level table (no parent namespace
@@ -281,11 +282,11 @@ def parent_namespace_id(table_id: list[str] | str, *, delimiter: str) -> str | N
     collapses to ``None`` and agrees with ``parse_identifier`` — keeping the grant and
     check paths byte-for-byte aligned on the root id.
     """
-    raw = table_id.split(delimiter) if isinstance(table_id, str) else table_id
+    raw = table_id.split(CATALOG_DELIMITER) if isinstance(table_id, str) else table_id
     segments = [s for s in raw if s]
     if len(segments) <= 1:
         return None
-    return canonical_object_id(segments[:-1], delimiter=delimiter)
+    return canonical_object_id(segments[:-1])
 
 
 def table_object(uuid: str) -> str:

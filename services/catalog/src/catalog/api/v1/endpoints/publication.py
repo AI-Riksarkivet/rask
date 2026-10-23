@@ -71,7 +71,7 @@ if TYPE_CHECKING:
 
 #: THE MANAGEMENT SURFACE ([[LH-021]]). These are rask's own operations, not Lance namespace ones —
 #: a spec client discovering them on `/v1/table` meets verbs the document never defines. They mount at
-#: `/management/v1` and inherit the same authn/authz and delimiter guard from `api/v1/router.py`.
+#: `/management/v1` and inherit the same three rungs from `api/v1/router.py`.
 table_router = APIRouter(prefix="/management/v1/table", tags=["publication"])
 #: The holds awaiting a decision, across tables.
 promotions_router = APIRouter(prefix="/management/v1/promotions", tags=["publication"])
@@ -290,7 +290,7 @@ async def publish_table(
     malformed one (400), a version older than the one held (409) — all raised as `lance_namespace` typed
     errors so the shared problem-body handler renders them.
     """
-    segments = parse_identifier(id, settings.delimiter)
+    segments = parse_identifier(id)
     if body.accept_assertions:
         # A SECOND door, above the router's `can_update_tag`, and the two rungs are now genuinely
         # different rather than nested. An ordinary publish needs `publisher` — move the ref that says
@@ -371,13 +371,13 @@ async def publish_table(
             cascade_id=body.cascade_id,
             opened_at=clock(),
         )
-        hold = _view(standing, table=fga.canonical_object_id(segments, delimiter=settings.delimiter))
+        hold = _view(standing, table=fga.canonical_object_id(segments))
         await emit_control(
             control,
             action="promotion_held",
             object_type="table",
             object_id=fga.table_object(standing.uuid),
-            object_name=fga.canonical_object_id(segments, delimiter=settings.delimiter),
+            object_name=fga.canonical_object_id(segments),
             actor=f"user:{token.subject}" if token is not None else None,
             extra={
                 "version": standing.version,
@@ -394,7 +394,6 @@ async def publish_table(
             lineage=lineage,
             uuids=uuids,
             control=control,
-            settings=settings,
             segments=segments,
             table_uuid=await _published_uuid(settings, result, segments),
             token=token,
@@ -456,7 +455,7 @@ async def _hold(
 ) -> promotions.Hold:
     """Record the held version as its table's open hold and pin it; the hold that stands is returned."""
     held = promotions.Hold(
-        table=fga.canonical_object_id(segments, delimiter=settings.delimiter),
+        table=fga.canonical_object_id(segments),
         uuid=table_uuid,
         location=result.table,
         version=result.to_version,
@@ -505,7 +504,6 @@ async def _announce_publication(
     lineage: LineageEmitter,
     uuids: UuidReader,
     control: ControlEmitter,
-    settings: Settings,
     segments: list[str],
     table_uuid: str,
     token: Caller | None,
@@ -529,7 +527,6 @@ async def _announce_publication(
     await emit_write_event(
         lineage,
         segments,
-        delimiter=settings.delimiter,
         author=token.subject if token is not None else None,
         version=to_version,
         operation=PUBLISH_TABLE,
@@ -542,7 +539,7 @@ async def _announce_publication(
         action="table_published",
         object_type="table",
         object_id=fga.table_object(table_uuid),
-        object_name=fga.canonical_object_id(segments, delimiter=settings.delimiter),
+        object_name=fga.canonical_object_id(segments),
         actor=f"user:{token.subject}" if token is not None else None,
         # I2: the caller names {project, dataset}, the CATALOG vends the URI and the tenant.
         # Both were rebuilt downstream before this, and the tenant was rebuilt wrongly.
@@ -626,7 +623,7 @@ async def approve_promotion(
     is recorded before the tag moves, so approving again completes one whose tag move failed and otherwise answers
     as decided. 409 when the table holds no such version, it was decided otherwise, or `published` reached it.
     """
-    segments = parse_identifier(id, settings.delimiter)
+    segments = parse_identifier(id)
     table_uuid = table.require_uuid()
     decided, _ = await _decision(settings, ns, so, segments, table=table, version=body.version, state="approved", token=token, at=clock())
     moved, previous = await run_in_threadpool(publication.advance, ns, so, segments, decided.version)
@@ -635,7 +632,6 @@ async def approve_promotion(
             lineage=lineage,
             uuids=uuids,
             control=control,
-            settings=settings,
             segments=segments,
             table_uuid=table_uuid,
             token=token,
@@ -647,7 +643,7 @@ async def approve_promotion(
             originator=decided.originator,
         )
     await _repin(settings, ns, so, segments, table_uuid)
-    canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
+    canonical = fga.canonical_object_id(segments)
     return PromotionDecision(hold=_view(decided, table=canonical), published_version=decided.version if moved else previous)
 
 
@@ -675,9 +671,9 @@ async def reject_promotion(
     the held version meanwhile, there is nothing to restore and the rejection only closes the hold. 409 when the
     table holds no such version, it was decided otherwise, or `published` reached it.
     """
-    segments = parse_identifier(id, settings.delimiter)
+    segments = parse_identifier(id)
     table_uuid = table.require_uuid()
-    canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
+    canonical = fga.canonical_object_id(segments)
     decided, claimed = await _decision(settings, ns, so, segments, table=table, version=body.version, state="rejected", token=token, at=clock())
     if decided.restore_owed:
         published = await run_in_threadpool(publication.published_version, ns, so, segments)
@@ -689,7 +685,6 @@ async def reject_promotion(
                 segments,
                 ns=ns,
                 so=so,
-                settings=settings,
                 token=token,
                 operation=RESTORE_TABLE,
                 authorization=authorization,

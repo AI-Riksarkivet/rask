@@ -11,7 +11,7 @@ from lance_namespace import (
     RefreshMaterializedViewResponse,
 )
 
-from catalog.api.dependencies import DataNamespaceDep, NamespaceDep, SettingsDep
+from catalog.api.dependencies import DataNamespaceDep, NamespaceDep
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.services import native
 
@@ -27,7 +27,6 @@ async def create_materialized_view(
     id: str,
     body: CreateMaterializedViewRequest,
     ns: NamespaceDep,
-    settings: SettingsDep,
 ) -> CreateMaterializedViewResponse:
     """Create a materialized view via the native backend's ``create_materialized_view``.
 
@@ -41,7 +40,7 @@ async def create_materialized_view(
     MV consumer needs it) — it requires either a query parser or a structured ``source_tables`` request
     field; do NOT fabricate an edge from the view's own output schema. See docs/adr/0017-38b-mv-lineage-is-wontfix-no-source-tables.md #38b.
     """
-    segments = parse_identifier(id, settings.delimiter)
+    segments = parse_identifier(id)
     body.id = reconcile_body_id(segments, body.id)
     response: CreateMaterializedViewResponse = await run_in_threadpool(native.call, ns, "create_materialized_view", body)
     return response
@@ -51,10 +50,8 @@ async def create_materialized_view(
 # (the `dir` backend stubs them), so nothing exercises the success path — which is exactly why a
 # missing `status_code` would go unnoticed until a backend arrived and silently answered 200.
 @router.post("/{id}/refresh", response_model_exclude_none=True, status_code=202)
-def refresh_materialized_view(
-    id: str, data_ns: DataNamespaceDep, settings: SettingsDep, body: RefreshMaterializedViewRequest | None = None
-) -> RefreshMaterializedViewResponse:
+def refresh_materialized_view(id: str, data_ns: DataNamespaceDep, body: RefreshMaterializedViewRequest | None = None) -> RefreshMaterializedViewResponse:
     """Rematerialize a materialized view via the native backend's ``refresh_materialized_view``."""
     req = body or RefreshMaterializedViewRequest()
-    req.id = reconcile_body_id(parse_identifier(id, settings.delimiter), req.id)
+    req.id = reconcile_body_id(parse_identifier(id), req.id)
     return native.call(data_ns, "refresh_materialized_view", req)

@@ -14,6 +14,8 @@ import pytest
 import requests
 from topology import assert_parent_exists, create_top_level
 
+from service_kit.lakehouse.naming import CATALOG_DELIMITER
+
 
 URL = os.environ.get("LANCE_REST_E2E_URL", "")
 #: The estate is AUTHENTICATED (owner ruling 2026-08-26). Every ``/v1/*`` route sits behind the v1
@@ -23,7 +25,6 @@ URL = os.environ.get("LANCE_REST_E2E_URL", "")
 TOKEN = os.environ.get("LANCE_E2E_TOKEN", "")
 AUTH = {"Authorization": f"Bearer {TOKEN}"} if TOKEN else {}
 ARROW = {**AUTH, "content-type": "application/vnd.apache.arrow.stream"}
-DELIMITER = os.environ.get("LANCE_E2E_DELIM", "$")
 
 #: A HYPHEN, not an underscore. With warehouses enabled the top-level namespace has to arrive through
 #: ``POST /management/v1/warehouses/{id}/namespaces``, which validates the name as bucket-safe
@@ -48,7 +49,7 @@ def _fresh(namespace: str, stem: str) -> str:
     uuid, for a week, and an undrop of a name several dropped tables held answers 409 asking which one
     (ADR 0173 §9). A fresh id names one table per run.
     """
-    return f"{namespace}{DELIMITER}{stem}{uuid.uuid4().hex[:8]}"
+    return f"{namespace}{CATALOG_DELIMITER}{stem}{uuid.uuid4().hex[:8]}"
 
 
 @pytest.fixture(scope="module")

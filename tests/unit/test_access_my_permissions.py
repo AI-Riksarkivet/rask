@@ -55,7 +55,7 @@ def _run(
 
     monkeypatch.setattr(access.fga, "check", fake_check)
     client = cast("OpenFgaClient", object())  # injected now (catalog-api-09); the fga.* module functions are faked below
-    settings = cast(Settings, SimpleNamespace(fga_enabled=fga_enabled, delimiter="$"))
+    settings = cast(Settings, SimpleNamespace(fga_enabled=fga_enabled))
     token = (
         PersonPrincipal(principal=Principal(idp_id="dex", subject=sub), claims=IDToken(iss="i", sub=sub, aud="lance", exp=1, iat=1)) if token_present else None
     )

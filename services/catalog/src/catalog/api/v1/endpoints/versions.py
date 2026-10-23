@@ -73,7 +73,7 @@ router = APIRouter(prefix="/v1/table", tags=["version"])
 #: THE MANAGEMENT SURFACE ([[LH-021]]). This module serves SPEC operations on `router` and rask's own
 #: on this one — split by AUDIENCE rather than by topic, because a spec client discovering a verb like
 #: `blobs` or `commit` on a spec prefix meets something the Lance namespace document never defines.
-#: Both routers inherit the same authn/authz and delimiter guard from `api/v1/router.py`.
+#: Both routers inherit the same three rungs from `api/v1/router.py`.
 management_router = APIRouter(prefix="/management/v1/table", tags=["version-management"])
 
 
@@ -81,7 +81,6 @@ management_router = APIRouter(prefix="/management/v1/table", tags=["version-mana
 async def table_history(
     id: str,
     ns: NamespaceDep,
-    settings: SettingsDep,
     so: StorageOptionsDep,
     token: CurrentToken,
     client: FgaClientDep,
@@ -124,7 +123,7 @@ async def table_history(
     ``limit`` bounds the per-version transaction reads — a table with 10k versions must not turn a UI page
     into 10k object-store round trips.
     """
-    segments = parse_identifier(id, settings.delimiter)
+    segments = parse_identifier(id)
     rows = await run_in_threadpool(dataplane.table_history, ns, so, segments, limit)
     return {"table": id, "versions": rows}
 
@@ -157,7 +156,6 @@ def batch_commit_tables(body: BatchCommitTablesRequest) -> BatchCommitTablesResp
 def list_table_versions(
     id: str,
     ns: NamespaceDep,
-    settings: SettingsDep,
     page_token: str | None = None,
     limit: Annotated[int | None, Query(ge=1, le=_MAX_LIST_LIMIT)] = None,
     descending: bool | None = None,
@@ -177,7 +175,7 @@ def list_table_versions(
     (measured: no limit gives all seven), and `_MAX_LIST_LIMIT` still bounds what leaves the door.
     """
     req = ListTableVersionsRequest(
-        id=parse_identifier(id, settings.delimiter),
+        id=parse_identifier(id),
         # Deliberately not forwarded: either one truncates or skips before this layer can page, and the
         # two cursors would then disagree about what "the next page" means.
         page_token=None,
@@ -220,12 +218,12 @@ async def create_table_version(
     put-if-not-exists. A refusal leaves the ref at its version and answers a typed spec error. A branch is created
     through ``CreateTableBranch``, and a branch this table does not list answers 404 (code 22).
     """
-    segments = parse_identifier(id, settings.delimiter)
+    segments = parse_identifier(id)
     body.id = reconcile_body_id(segments, body.id)
     described: DescribeTableResponse = await run_in_threadpool(native.call, ns, "describe_table", DescribeTableRequest(id=segments))
     if not described.location:
         raise InvalidInputError("table has no object-store location to commit a version to")
-    canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
+    canonical = fga.canonical_object_id(segments)
     ref = await run_in_threadpool(managed_versions.commit_ref, described.location, so, dataplane.recorded_branch(body.branch))
     staged = await run_in_threadpool(managed_versions.stage, ref, so, body)
     try:
@@ -267,7 +265,6 @@ async def create_table_version(
         segments,
         ns=ns,
         so=so,
-        settings=settings,
         token=token,
         operation=managed_versions.lineage_operation(staged),
         authorization=authorization,
@@ -294,7 +291,6 @@ async def _clone_evidence_for(staged: managed_versions.StagedVersion, settings: 
 def describe_table_version(
     id: str,
     ns: NamespaceDep,
-    settings: SettingsDep,
     version: int | None = None,
     body: DescribeTableVersionRequest | None = None,
 ) -> DescribeTableVersionResponse:
@@ -305,7 +301,7 @@ def describe_table_version(
     binding expects. A missing version raises the backend's ``TableVersionNotFoundError`` → 404.
     """
     req = body or DescribeTableVersionRequest()
-    req.id = reconcile_body_id(parse_identifier(id, settings.delimiter), req.id)
+    req.id = reconcile_body_id(parse_identifier(id), req.id)
     if version is not None:
         req.version = version
     return native.call(ns, "describe_table_version", req)
@@ -333,7 +329,7 @@ async def batch_delete_table_versions(
     Owner tier (``can_drop``, the rung ``maintenance/run`` clears), protection-gated like drop; ``force``
     turns the protection lock only.
     """
-    segments = parse_identifier(id, settings.delimiter)
+    segments = parse_identifier(id)
     body.id = reconcile_body_id(segments, body.id)
     await fga_deps.require_table_unprotected(settings, table, force=force)
     return await run_in_threadpool(_delete_versions, ns, so, settings, segments, body)

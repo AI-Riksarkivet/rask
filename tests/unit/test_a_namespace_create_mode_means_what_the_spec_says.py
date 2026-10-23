@@ -39,7 +39,6 @@ from tests.unit.named_resolver import NamedResolver
 
 
 class _Settings:
-    delimiter = "$"
     warehouses_enabled = False
     fga_enabled = True
 

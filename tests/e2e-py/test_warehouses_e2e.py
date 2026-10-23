@@ -21,11 +21,12 @@ import pyarrow.ipc as ipc
 import pytest
 import requests
 
+from service_kit.lakehouse.naming import CATALOG_DELIMITER
+
 
 CATALOG = os.environ.get("LANCE_E2E_CATALOG_URL", "").rstrip("/")
 TOKEN = os.environ.get("LANCE_E2E_TOKEN", "")
 PROJECT = os.environ.get("LANCE_E2E_PROJECT", "acme")
-DELIM = os.environ.get("LANCE_E2E_DELIM", "$")
 S3 = os.environ.get("LANCE_E2E_S3", "http://localhost:9900")
 S3_ACCESS_KEY = os.environ.get("LANCE_E2E_S3_ACCESS_KEY", "rustfsadmin")
 S3_SECRET_KEY = os.environ.get("LANCE_E2E_S3_SECRET_KEY", "rustfsadmin")
@@ -110,7 +111,7 @@ def test_per_warehouse_physical_isolation(catalog: str) -> None:
 
     # mode=overwrite so a re-run replaces the prior version instead of colliding on an existing table.
     r = requests.post(
-        f"{catalog}/v1/table/{NS}{DELIM}e2etbl/create?mode=overwrite",
+        f"{catalog}/v1/table/{NS}{CATALOG_DELIMITER}e2etbl/create?mode=overwrite",
         data=_arrow_ipc(),
         headers={**_auth(), "content-type": ARROW_STREAM},
         timeout=60,

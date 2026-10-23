@@ -61,8 +61,8 @@ log = logging.getLogger(__name__)
 #: THE MANAGEMENT SURFACE ([[LH-021]]). rask's authorization model is not in the Lance namespace spec
 #: at ANY point — grants, policies and managed access are entirely rask's own — so a spec client
 #: discovering `/v1/table/{id}/access/grant` meets a verb the document never defines. These mount at
-#: `/management/v1` beside the rest of the estate's governance, and inherit the same authn/authz and
-#: delimiter guard from `api/v1/router.py` as the spec routers do.
+#: `/management/v1` beside the rest of the estate's governance, and inherit the same three rungs
+#: from `api/v1/router.py` as the spec routers do.
 table_router = APIRouter(prefix="/management/v1/table", tags=["access"])
 namespace_router = APIRouter(prefix="/management/v1/namespace", tags=["access"])
 # Warehouse is NOT in fga_deps._RESOURCES, so `authorize` returns early for these paths — every route
@@ -100,7 +100,7 @@ classification_router = APIRouter(prefix="/management/v1/classification", tags=[
 _GRANTABLE_BASE: tuple[str, ...] = ("owner", "writer", "reader", "validator", "maintainer", "manage_grants", "pass_grants", "classifier", "apply")
 
 
-async def _target(resolver: Resolver, settings: Settings, fga_type: str, segments: list[str]) -> tuple[str, str | None]:
+async def _target(resolver: Resolver, fga_type: str, segments: list[str]) -> tuple[str, str | None]:
     """The FGA object the door's id names and its name: a table's or namespace's uuid object (``table:<uuid>``) beside
     the name the door was addressed by ([[LH-524]]); a classification label, a warehouse or a project by its own id.
 
@@ -108,7 +108,7 @@ async def _target(resolver: Resolver, settings: Settings, fga_type: str, segment
         TableNotFoundError: No table has the name.
         NamespaceNotFoundError: No namespace has the name.
     """
-    canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
+    canonical = fga.canonical_object_id(segments)
     if fga_type not in ("table", "namespace"):
         return f"{fga_type}:{canonical}", None
     obj = await resolver.object(fga_type, segments)
@@ -144,8 +144,8 @@ async def _access_list(
     client: OpenFgaClient | None, settings: Settings, token: Caller | None, resolver: Resolver, fga_type: str, id: str
 ) -> AccessListResponse:
     client = fga_deps.require_fga(settings, client, feature="access review")
-    segments = parse_identifier(id, settings.delimiter)
-    obj, name = await _target(resolver, settings, fga_type, segments)
+    segments = parse_identifier(id)
+    obj, name = await _target(resolver, fga_type, segments)
     relations = _can_relations(fga_type)
     subject = token.subject if token else "anonymous"
     try:
@@ -208,8 +208,8 @@ async def _access_check(
         # The CLIENT's error (400), never UnsupportedOperation (406): the deployment supports the check
         # fine, the body names a relation the model does not define — access_admin.py's parity.
         raise InvalidInputError(f"{body.relation!r} is not a can_* relation on {fga_type}")
-    segments = parse_identifier(id, settings.delimiter)
-    obj, name = await _target(resolver, settings, fga_type, segments)
+    segments = parse_identifier(id)
+    obj, name = await _target(resolver, fga_type, segments)
     subject = token.subject if token else "anonymous"
     # Resolve to a FULL subject (`fga.grantee_object`): a subject is the user it is; a qualified userset
     # (``role:…#member`` / ``team:…#member``) is passed through as-is. Then check with qualify=False so
@@ -271,8 +271,8 @@ async def _my_permissions(
     # of every Check, and "anonymous" would silently answer the wrong question.
     if token is None:
         raise UnauthenticatedError("the permission self-view needs an authenticated caller")
-    segments = parse_identifier(id, settings.delimiter)
-    obj, name = await _target(resolver, settings, fga_type, segments)
+    segments = parse_identifier(id)
+    obj, name = await _target(resolver, fga_type, segments)
     # The caller's subject is the user it is (`fga.user_object`), a service account's included.
     subject = fga.user_object(token.subject)
     relations = _can_relations(fga_type)
@@ -382,8 +382,8 @@ async def _access_mutate(
         # 400, not 406 — same rule as the check door above: a bad rung NAME is client input, and the
         # sibling estate-admin surface already answers this class of mistake with InvalidInput.
         raise InvalidInputError(f"{body.relation!r} is not a grantable rung on {fga_type} (one of {', '.join(grantable)})")
-    segments = parse_identifier(id, settings.delimiter)
-    obj, name = await _target(resolver, settings, fga_type, segments)
+    segments = parse_identifier(id)
+    obj, name = await _target(resolver, fga_type, segments)
     actor = token.subject if token else "anonymous"
     # Resolve the grantee to a FULL subject (qualify=False semantics, mirroring access/check): a subject is the
     # user it is; a qualified userset (``role:…#assignee`` / ``team:…#member``) is passed through verbatim.
@@ -503,8 +503,8 @@ async def _access_graph(
     (same disclosure bar as ``access/list``: the graph reveals principals), audited (``access_graph``), and
     fail-closed — an OpenFGA outage is a 503, never a partial graph that reads as 'nobody has access'."""
     client = fga_deps.require_fga(settings, client, feature="access graph")
-    segments = parse_identifier(id, settings.delimiter)
-    obj, name = await _target(resolver, settings, fga_type, segments)
+    segments = parse_identifier(id)
+    obj, name = await _target(resolver, fga_type, segments)
     subject = token.subject if token else "anonymous"
     try:
         tuples = await fga.read_object_tuples(client, obj)
@@ -559,10 +559,10 @@ async def _read_managed_access(client: OpenFgaClient | None, settings: Settings,
     Answers ``false`` on an auth-off stack rather than refusing: no tuples means no flag, and a page
     asking "is this managed?" wants an answer it can render.
     """
-    segments = parse_identifier(id, settings.delimiter)
+    segments = parse_identifier(id)
     if not settings.fga_enabled or client is None:
-        return ManagedAccessResponse(object=f"{fga_type}:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}", managed_access=False)
-    obj, name = await _target(resolver, settings, fga_type, segments)
+        return ManagedAccessResponse(object=f"{fga_type}:{fga.canonical_object_id(segments)}", managed_access=False)
+    obj, name = await _target(resolver, fga_type, segments)
     tuples = await fga.read_object_tuples(client, obj)
     return ManagedAccessResponse(object=obj, name=name, managed_access=any(t.object == obj and t.relation == "managed_access" for t in tuples))
 
@@ -579,8 +579,8 @@ async def get_warehouse_managed_access(
 ) -> ManagedAccessResponse:
     """The same for a warehouse. Gated EXPLICITLY — `warehouse` is not in ``_RESOURCES``, so
     ``authorize`` returns early and a route added here without this call is ungated."""
-    segments = parse_identifier(id, settings.delimiter)
-    obj = f"warehouse:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}"
+    segments = parse_identifier(id)
+    obj = f"warehouse:{fga.canonical_object_id(segments)}"
     await fga_deps.require_relation(client, settings, token, relation="can_get_metadata", obj=obj)
     return await _read_managed_access(client, settings, resolver, "warehouse", id)
 
@@ -595,8 +595,8 @@ async def _set_managed_access(
     would 400 rather than being the no-op a caller reasonably expects.
     """
     client = fga_deps.require_fga(settings, client, feature="managed access")
-    segments = parse_identifier(id, settings.delimiter)
-    obj, name = await _target(resolver, settings, fga_type, segments)
+    segments = parse_identifier(id)
+    obj, name = await _target(resolver, fga_type, segments)
     actor = token.subject if token else "system:catalog"
     tup = fga.ClientTuple(user=_MANAGED_ACCESS_SUBJECT, relation="managed_access", object=obj)
 
@@ -661,8 +661,8 @@ async def set_warehouse_managed_access(
     and ``projects.py`` call ``require_relation`` by hand). A route added here without that call would
     be authenticated and ungated.
     """
-    segments = parse_identifier(id, settings.delimiter)
-    obj = f"warehouse:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}"
+    segments = parse_identifier(id)
+    obj = f"warehouse:{fga.canonical_object_id(segments)}"
     await fga_deps.require_relation(client, settings, token, relation="can_set_managed_access", obj=obj)
     return await _set_managed_access(client, control, settings, token, resolver, "warehouse", id, body.enabled)
 

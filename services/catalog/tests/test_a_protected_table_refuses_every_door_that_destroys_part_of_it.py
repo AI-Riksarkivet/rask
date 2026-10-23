@@ -118,7 +118,6 @@ def app(ns, registry_root: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[Fas
         application.include_router(module.router)
 
     settings = SimpleNamespace(
-        delimiter="$",
         storage_options=lambda: {},
         fga_enabled=False,
         registry_root=registry_root,

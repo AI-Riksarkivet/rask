@@ -297,8 +297,8 @@ _SEPARATORS = ("/", "\\")
 #: A URI's query delimiter. The store does not keep a segment holding one under the name it decodes to: measured on
 #: pylance 13.0.0 over the dir backend ([[LH-435]]), a register at ``x?y`` or ``x%3Fy`` keeps the location re-encoded,
 #: and the id finds no table on query or count. So a spelling holding one names no location, for every judge alike
-#: ([[LH-510]]). A table's name may not hold one (``identifiers.require_safe_segments``), so no location the catalog
-#: mints does.
+#: ([[LH-510]]). A table the catalog makes lives under its uuid, which holds none (ADR 0173 §5), so no location the
+#: catalog mints does.
 _QUERY_DELIMITER = "?"
 
 

@@ -1,29 +1,28 @@
-"""Lance object identifier parsing.
+"""Lance object identifier parsing, and what a name is.
 
 The REST routes carry the ``$``-delimited string identifier in the ``{id}`` path
 segment. The root namespace is represented by the delimiter itself.
 
-Object-id *canonicalization* (joining segments into the string OpenFGA stores)
-lives in :mod:`service_kit.governed.fga` (``canonical_object_id`` / ``parent_namespace_id``),
-so the FGA object string is defined in exactly one place and the grant + check
-paths cannot drift apart. The control-plane id SHAPE (``CONTROL_ID_RE``) lives in :mod:`service_kit.lakehouse.naming` for the same reason: the
-planes that CONSUME a project id decide with that rule too, and one the issuer owns alone is one the
-consumers copy and then diverge from. This module owns the structural shape of a Lance object
-identifier: splitting it into segments. (Parent-namespace derivation lives in
-``service_kit.governed.fga``.) It also owns the key the catalog mints for a table or namespace beside its name
-(ADR 0173): the property both are answered under, and the minting of a namespace's.
+Joining segments back into the string identifier lives in :mod:`service_kit.governed.fga`
+(``canonical_object_id`` / ``parent_namespace_id``), so one spelling serves every door, record and event. The
+control-plane id SHAPE (``CONTROL_ID_RE``) lives in :mod:`service_kit.lakehouse.naming` because the planes that
+CONSUME a project id decide with that rule too, and one the issuer owns alone is one the consumers copy and then
+diverge from. This module owns the structural shape of a Lance object identifier: splitting it into segments, and the
+rule a segment must meet to be a name (ADR 0173 §4). It also owns the key the catalog mints for a table or namespace
+beside its name (ADR 0173): the property both are answered under, and the minting of a namespace's.
 """
 
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
+import unicodedata
+from collections.abc import Mapping, Sequence
 from typing import Final
 from uuid import uuid4
 
 from lance_namespace import InvalidInputError
 
-from service_kit.lakehouse.naming import UUID_PROPERTY
+from service_kit.lakehouse.naming import CATALOG_DELIMITER, UUID_PROPERTY
 
 
 #: A uuid in its canonical 8-4-4-4-12 hex spelling, in either case: the name of the directory a table the catalog makes
@@ -65,52 +64,63 @@ def is_spelled_as_a_uuid(segment: str) -> bool:
 MAX_NAMESPACE_DEPTH = 8
 
 
-#: The IAM wildcard metacharacters. `*` and `?` are wildcards inside BOTH a Resource ARN and an ``s3:prefix``
-#: StringLike condition, with no escape, so a value holding one that reaches the STS session policy a vend is scoped
-#: by (``core.vending.build_session_policy``) WIDENS the grant to siblings — a ``foo*`` prefix authorises
-#: ``bucket/foo*/*``, which matches ``foobar``. ONE tuple for every door that lets a value into that policy: a
-#: segment is refused at the create door (:func:`require_safe_segments`) and a location at the register door
-#: (``table_bases.require_registrable_location``), so no table prefix holds one, and the policy builder drops a
-#: declared base holding one, since the table's writer chose it ([[LH-437]]). A second copy is a second thing that can
-#: fall out of step with what IAM treats as a wildcard.
-IAM_WILDCARD_METACHARS = ("*", "?")
+#: The most characters a name holds (ADR 0173 §4).
+MAX_NAME_LENGTH: Final = 255
+
+#: The characters no name holds, beside a control character (ADR 0173 §4). The delimiter, because an identifier is its
+#: names joined by it (`lance_docs/ns_catalog/namespace/object-relationship.md:49-68`), so a name holding it would split
+#: into others ([[LH-508]]). `+`, because the catalog reads a `+` in a request's path as the space pylance's Rust
+#: `RestNamespace` sends (`catalog.api.path_reading`), so a name holding one could not be addressed. `/`, which no path segment
+#: carries.
+_HELD_BY_NO_NAME: Final = (CATALOG_DELIMITER, "+", "/")
 
 
-def require_safe_segments(segments: list[str], *, delimiter: str) -> None:
-    """Refuse an id whose segment carries the namespace delimiter or an IAM wildcard metachar (``*``/``?``) — a 400.
+def require_names(segments: Sequence[str]) -> None:
+    """Refuse an identifier with a segment that is not a name, 400, and never rewrite one (ADR 0173 §4, [[LH-526]]).
 
-    The string identifier is the segments joined by the delimiter (``lance_docs/ns_catalog/spec.yaml``,
-    ``delimiter``), so a segment carrying it cannot round-trip: the object would land at an id that splits
-    into other segments than the ones its door decided on ([[LH-508]]). Only a door taking segments from a
-    body can be handed one (the rename's ``new_table_name`` and ``new_namespace_id``); a path id is split on
-    the delimiter before any door sees it.
+    A name is Unicode NFC text of 1 to :data:`MAX_NAME_LENGTH` characters holding no `$`, `+`, `/` or control character,
+    and neither beginning nor ending with whitespace. Names compare exactly, case included, so one not in NFC is refused
+    rather than normalized: the catalog would otherwise answer a name its client never sent. `*`, `?`, `%`, a space
+    between two characters and every other letter are names, since no name reaches a storage key, a credential's policy
+    or an FGA object (ADR 0173 §5, §8).
 
-    A segment name becomes the table's object-store prefix, and that prefix is interpolated UNESCAPED
-    into the inline STS session policy that scopes vended per-table credentials. ``*`` and ``?`` are IAM
-    wildcards there with no escape, so a ``foo*`` table would be handed credentials scoped to every sibling
-    object under ``foo*``. Rung at SHAPE (identity -> shape -> parent exists -> authz -> conflict -> write),
-    before any native write: a malformed id is not a permission problem.
+    Raises:
+        InvalidInputError: A segment is not a name; the message says which and why.
     """
-    for seg in segments:
-        if delimiter in seg:
-            raise InvalidInputError(
-                f"identifier segment {seg!r} contains the namespace delimiter {delimiter!r}: an id is its segments joined "
-                f"by the delimiter, so {segments!r} would land at an id naming other segments. Choose a name without it."
-            )
-        hit = [c for c in IAM_WILDCARD_METACHARS if c in seg]
-        if hit:
-            raise InvalidInputError(
-                f"identifier {delimiter.join(segments)!r} has a segment {seg!r} containing the reserved "
-                f"character(s) {hit}: '*' and '?' are IAM wildcards in the vended storage policy and would "
-                f"widen credentials to sibling objects. Choose a name without them."
-            )
+    for segment in segments:
+        if (why := _why_not_a_name(segment)) is not None:
+            raise InvalidInputError(f"identifier segment {segment!r} is not a name: {why}")
 
 
-def parse_identifier(id_str: str, delimiter: str) -> list[str]:
-    """Split a delimited identifier into segments; empty or delimiter-only → root ``[]``."""
-    if not id_str or id_str == delimiter:
+def _why_not_a_name(segment: str) -> str | None:
+    """Why ``segment`` is not a name, or ``None`` when it is one."""
+    if not segment:
+        return "a name holds at least one character"
+    if len(segment) > MAX_NAME_LENGTH:
+        return f"a name holds at most {MAX_NAME_LENGTH} characters, and this one holds {len(segment)}"
+    if not unicodedata.is_normalized("NFC", segment):
+        return "a name is in Unicode NFC, and the catalog does not normalize one"
+    if held := [char for char in _HELD_BY_NO_NAME if char in segment]:
+        return f"a name holds no {' or '.join(repr(char) for char in held)}"
+    if any(unicodedata.category(char) == "Cc" for char in segment):
+        return "a name holds no control character"
+    if segment != segment.strip():
+        return "a name neither begins nor ends with whitespace"
+    return None
+
+
+def parse_identifier(id_str: str) -> list[str]:
+    """Split a string identifier into its segments on :data:`CATALOG_DELIMITER`; empty or the delimiter alone is the root, ``[]``."""
+    if not id_str or id_str == CATALOG_DELIMITER:
         return []
-    return id_str.split(delimiter)
+    return id_str.split(CATALOG_DELIMITER)
+
+
+def rename_destination(source: Sequence[str], new_namespace_id: Sequence[str] | None, new_table_name: str) -> list[str]:
+    """The identifier a rename of table ``source`` lands at: ``new_namespace_id``, or the source's own namespace when the
+    request names none ("if not specified the table stays in the same namespace", ``lance_docs/ns_catalog/spec.yaml:4641-4645``),
+    then ``new_table_name``. The one rule every reader of a rename asks, from its raw body to the backend call."""
+    return [*(new_namespace_id or source[:-1]), new_table_name]
 
 
 def reconcile_body_id(path_segments: list[str], body_id: list[str] | None) -> list[str]:

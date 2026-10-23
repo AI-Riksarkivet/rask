@@ -222,19 +222,21 @@ def test_a_stock_client_opens_a_table_on_the_vended_credential_and_not_its_envir
 
 
 def test_a_stock_client_off_the_cluster_creates_and_appends_through_the_endpoint_vended_for_it(store: _Store, off_cluster_catalog_url: str) -> None:
+    """The table is named `sp ace`, which pylance's Rust client sends as `sp+ace` ([[LH-526]], ADR 0173 §4): it creates,
+    appends to and reads the table the name names, the one another client finds sending the space as `%20`."""
     namespace = f"db{uuid.uuid4().hex[:8]}"
     with httpx.Client(base_url=off_cluster_catalog_url, timeout=60) as catalog:
         assert catalog.post(f"/v1/namespace/{namespace}/create", json={}).status_code == 200
 
     stock = lance_namespace.connect("rest", {"uri": off_cluster_catalog_url})
     rows = pa.table({"id": pa.array([1, 2], pa.int64())})
-    lance.write_dataset(rows, namespace_client=stock, table_id=[namespace, "w"], mode="create", data_storage_version="2.2", enable_stable_row_ids=True)
-    lance.write_dataset(pa.table({"id": pa.array([3], pa.int64())}), namespace_client=stock, table_id=[namespace, "w"], mode="append")
+    lance.write_dataset(rows, namespace_client=stock, table_id=[namespace, "sp ace"], mode="create", data_storage_version="2.2", enable_stable_row_ids=True)
+    lance.write_dataset(pa.table({"id": pa.array([3], pa.int64())}), namespace_client=stock, table_id=[namespace, "sp ace"], mode="append")
 
-    assert lance.dataset(namespace_client=stock, table_id=[namespace, "w"]).to_table().column("id").to_pylist() == [1, 2, 3]
+    assert lance.dataset(namespace_client=stock, table_id=[namespace, "sp ace"]).to_table().column("id").to_pylist() == [1, 2, 3]
     # [[LH-520]] Its first commit landed where DeclareTable placed it: the root, under the uuid the catalog minted.
     with httpx.Client(base_url=off_cluster_catalog_url, timeout=60) as catalog:
-        described = catalog.post(f"/v1/table/{namespace}$w/describe", json={"vend_credentials": False}).json()
+        described = catalog.post(f"/v1/table/{namespace}$sp%20ace/describe", json={"vend_credentials": False}).json()
     assert described["location"] == f"s3://{store.bucket}/{described['properties']['rask.uuid']}", described
 
 

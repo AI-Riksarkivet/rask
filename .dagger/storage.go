@@ -185,7 +185,6 @@ func (m *Rask) RustfsLifecycle(
 		WithEnvVariable("RASK_INSECURE_ALLOW_UNAUTHENTICATED", "true").
 		WithEnvVariable("LANCE_REST_IMPL", "dir").
 		WithEnvVariable("LANCE_REST_ROOT", "s3://lance-catalog").
-		WithEnvVariable("LANCE_NS_DELIMITER", "$").
 		WithEnvVariable("LANCE_S3_ENDPOINT", "http://rustfs:9000").
 		WithEnvVariable("LANCE_S3_ACCESS_KEY_ID", "rustfsadmin").
 		WithEnvVariable("LANCE_S3_SECRET_ACCESS_KEY", "rustfsadmin").

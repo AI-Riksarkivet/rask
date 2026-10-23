@@ -187,10 +187,6 @@ func (m *Rask) catalogService(src *dagger.Directory, stack *governedStack, auth 
 		WithServiceBinding("store", stack.Store).
 		WithEnvVariable("LANCE_REST_IMPL", "dir").
 		WithEnvVariable("LANCE_REST_ROOT", "s3://lance-catalog").
-		// A literal `$`. The compose files write `"$$"` because compose interpolates; nothing
-		// interpolates here, so writing `$$` would make the delimiter two characters and every
-		// `ns$table` identifier on the wire would stop resolving.
-		WithEnvVariable("LANCE_NS_DELIMITER", "$").
 		WithEnvVariable("LANCE_S3_ENDPOINT", "http://store:9000").
 		WithEnvVariable("LANCE_S3_ACCESS_KEY_ID", "rustfsadmin").
 		WithEnvVariable("LANCE_S3_SECRET_ACCESS_KEY", "rustfsadmin").

@@ -94,6 +94,7 @@ from pydantic import BaseModel
 
 from catalog.core import manifest_bytes, provenance_guard
 from catalog.core.config import shared_lance_session
+from catalog.core.identifiers import rename_destination
 from catalog.core.modes import CreateMode, InsertMode
 from catalog.core.namespace import disarm_commit_path_cleanup, judged_native_version, open_dataset, open_dataset_unchecked
 from catalog.services import changes, native, primary_keys, table_bases, table_claims
@@ -102,6 +103,7 @@ from catalog.services.cast_size import bytes_after_cast
 from service_kit.lakehouse import auto_cleanup, base_registry, branch_layout, location_claims
 from service_kit.lakehouse.base_refs import decoded_path
 from service_kit.lakehouse.features import manifest_base_path_refs
+from service_kit.lakehouse.naming import CATALOG_DELIMITER
 from service_kit.lakehouse.objectfs import StorageOptions, credential_of, s3_filesystem
 from service_kit.lakehouse.schema import SchemaFields, facet_fields
 from service_kit.lakehouse.stage_stamp import declare_dataset_id
@@ -811,7 +813,6 @@ def rename_table(
     new_namespace_id: list[str] | None,
     *,
     claims: location_claims.ClaimStore,
-    delimiter: str,
     root: str = "",
 ) -> tuple[list[str], str]:
     """Rename a table by moving its POINTER. No data byte is read, written or deleted.
@@ -862,8 +863,7 @@ def rename_table(
     segments = source.segments
     if not new_table_name.strip():
         raise InvalidInputError("new_table_name is required")
-    dest_parent = list(new_namespace_id) if new_namespace_id else segments[:-1]
-    new_segments = [*dest_parent, new_table_name]
+    new_segments = rename_destination(segments, new_namespace_id, new_table_name)
     if new_segments == segments:
         raise InvalidInputError("the rename destination is identical to the source")
     source_uri = source.location
@@ -902,7 +902,7 @@ def rename_table(
     # two ids on the dataset even for the instant between the two calls. The token makes this request's
     # claim its own: two renames into the SAME destination name one holder, and only the request that
     # stamped the claim may read it as its retry.
-    source_id, dest_id = delimiter.join(segments), delimiter.join(new_segments)
+    source_id, dest_id = CATALOG_DELIMITER.join(segments), CATALOG_DELIMITER.join(new_segments)
     try:
         table_claims.hand_over(ns, claims, source, table=dest_id, segments=new_segments, previous=source_id, token=uuid.uuid4().hex)
     except (location_claims.LocationHeldError, location_claims.ClaimChangedError) as refused:

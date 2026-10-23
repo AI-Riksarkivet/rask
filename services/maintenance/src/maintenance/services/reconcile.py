@@ -52,6 +52,7 @@ from maintenance.services.orphans import OrphanFile, scan_datasets
 from service_kit.governed import fga
 from service_kit.lakehouse import location_claims, trash
 from service_kit.lakehouse.base_refs import decoded_path, normalise
+from service_kit.lakehouse.naming import CATALOG_DELIMITER
 from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base
 
 
@@ -433,7 +434,7 @@ def _list_json_records(
     return records, skipped
 
 
-def _top_level_namespaces(root: str, storage_options: StorageOptions, *, delimiter: str) -> list[str]:
+def _top_level_namespaces(root: str, storage_options: StorageOptions) -> list[str]:
     """The top-level namespaces recorded on ``root``, sorted.
 
     Read from the namespace MANIFEST (``<root>/__manifest``, the spec's own object index), not from
@@ -462,7 +463,7 @@ def _top_level_namespaces(root: str, storage_options: StorageOptions, *, delimit
         {
             str(object_id)
             for object_id, object_type in zip(table.column("object_id").to_pylist(), table.column("object_type").to_pylist(), strict=True)
-            if object_type == _MANIFEST_NAMESPACE_TYPE and object_id and delimiter not in str(object_id)
+            if object_type == _MANIFEST_NAMESPACE_TYPE and object_id and CATALOG_DELIMITER not in str(object_id)
         }
     )
 
@@ -520,7 +521,7 @@ def _tables_across(roots: list[str], storage_options: StorageOptions) -> tuple[l
     return sorted(found), unreadable, locations
 
 
-def _top_level_namespaces_across(roots: list[str], storage_options: StorageOptions, *, delimiter: str) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+def _top_level_namespaces_across(roots: list[str], storage_options: StorageOptions) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
     """``(namespace, root)`` pairs across EVERY root, plus the roots that could not be read (F3.3).
 
     The scan read exactly ONE root — the shared default bucket — while a warehouse-enabled estate puts
@@ -546,7 +547,7 @@ def _top_level_namespaces_across(roots: list[str], storage_options: StorageOptio
         try:
             # `|=`, not `.update(...)`: the module's read-only AST guard bans any call named `update`
             # and cannot tell a set method from a store write. Augmented assignment is not a call.
-            found |= {(name, root) for name in _top_level_namespaces(root, storage_options, delimiter=delimiter)}
+            found |= {(name, root) for name in _top_level_namespaces(root, storage_options)}
         except Exception as exc:  # noqa: BLE001 — one unreachable bucket must not blind the whole scan
             unreadable.append((root, f"{type(exc).__name__}: {exc}"))
     return sorted(found), unreadable
@@ -889,7 +890,6 @@ async def load_sources(
     namespace_root: str,
     storage_options: StorageOptions,
     bucket_client: Any,
-    delimiter: str,
 ) -> Sources:
     """Read all seven sources. Nothing here raises.
 
@@ -946,9 +946,7 @@ async def load_sources(
     # `dangling_bindings` was computed from.
     warehouse_roots = sorted({str(r["root_uri"]) for r in (sources.warehouse_records or []) if r.get("root_uri")})
     namespace_roots = [namespace_root, *(r for r in warehouse_roots if r != namespace_root)]
-    scanned, sources.namespaces_error = await _read_blocking(
-        "catalog:namespaces", _top_level_namespaces_across, namespace_roots, storage_options, delimiter=delimiter
-    )
+    scanned, sources.namespaces_error = await _read_blocking("catalog:namespaces", _top_level_namespaces_across, namespace_roots, storage_options)
     if scanned is not None:
         sources.namespaces, unreadable_roots = scanned
         sources.incomplete.extend(IncompleteScan(source=f"catalog:namespaces:{root}", reason=reason) for root, reason in unreadable_roots)
@@ -1406,7 +1404,6 @@ async def reconcile(
         namespace_root=resolved_namespace_root,
         storage_options=storage_options,
         bucket_client=bucket_client,
-        delimiter=settings.delimiter,
     )
     if into_sources is not None:
         into_sources.append(sources)

@@ -52,7 +52,7 @@ def test_a_caller_sees_only_the_due_tables_it_maintains(real_ns_client: TestClie
     for table in tables:
         table_uuid, location = str(uuid4()), f"{tmp_path}/{uuid4()}"
         uuids[table] = table_uuid
-        location_claims.take(claims, location, table, parse_identifier(table, "$"), is_gone=lambda _claim: False, uuid=table_uuid)
+        location_claims.take(claims, location, table, parse_identifier(table), is_gone=lambda _claim: False, uuid=table_uuid)
         record = DueRecord(
             table=table, uuid=table_uuid, location=location, version=6, compaction=due, clones=["s3://other/clone"], evaluated_at=datetime.now(UTC)
         )

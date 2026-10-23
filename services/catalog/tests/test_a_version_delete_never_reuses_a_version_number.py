@@ -75,7 +75,6 @@ def client(ns: LanceNamespace, tmp_path: Path) -> Iterator[TestClient]:
     application.include_router(version_door.router)
     # [[LH-209]] The judge also holds a configured base against governed roots and buckets; none here.
     settings = SimpleNamespace(
-        delimiter="$",
         storage_options=dict,
         registry_root=str(tmp_path / "control"),
         external_blob_base_list=[],

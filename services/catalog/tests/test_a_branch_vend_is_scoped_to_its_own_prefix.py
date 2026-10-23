@@ -99,14 +99,16 @@ def test_a_branch_name_that_CLIMBS_OUT_is_refused_AS_A_CLIENT_ERROR() -> None:
         build_session_policy(BUCKET, PREFIX, "write", branch="../../other-table")
 
 
-def test_a_branch_name_carrying_an_IAM_METACHAR_is_refused_AS_A_CLIENT_ERROR() -> None:
-    """Same rule the prefix and the bases already carry — a `*` in a resource widens the grant.
+@pytest.mark.parametrize("branch", [pytest.param("feat*", id="a-wildcard"), pytest.param("feat${aws:username}", id="a-policy-variable")])
+def test_a_branch_name_carrying_an_IAM_METACHAR_is_refused_AS_A_CLIENT_ERROR(branch: str) -> None:
+    """Same rule the prefix and the bases already carry: a `*` in a resource widens the grant, and a `${` opens a policy
+    variable IAM substitutes ([[LH-526]]).
 
     Also caller input, so also typed: the prefix and base rejections stay `ValueError` because those
     are OPERATOR configuration, and an operator misconfiguration is not a client's 400.
     """
     with pytest.raises(InvalidInputError):
-        build_session_policy(BUCKET, PREFIX, "write", branch="feat*")
+        build_session_policy(BUCKET, PREFIX, "write", branch=branch)
 
 
 def test_a_branch_READ_needs_no_second_statement() -> None:

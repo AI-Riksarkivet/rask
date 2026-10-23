@@ -36,7 +36,7 @@ from service_kit.lakehouse import maintenance_due
 log = logging.getLogger(__name__)
 
 #: rask's own operations, not Lance namespace ones, so they mount under `/management/v1` ([[LH-021]]) and inherit the
-#: authn/authz and delimiter guard of `api/v1/router.py`.
+#: three rungs of `api/v1/router.py`.
 table_router = APIRouter(prefix="/management/v1/table", tags=["maintenance"])
 due_router = APIRouter(prefix="/management/v1/maintenance", tags=["maintenance"])
 
@@ -69,7 +69,6 @@ async def preview_maintenance(
     id: str,
     body: GcRequest,
     ns: NamespaceDep,
-    settings: SettingsDep,
     so: StorageOptionsDep,
     branch: Annotated[str | None, Query(description="The ref to preview. Omit for main; this door reads the ref it is given.")] = None,
 ) -> GcPreview:
@@ -84,7 +83,7 @@ async def preview_maintenance(
     version of it: the caller acts on the version list, so
     ``test_the_gc_preview_names_exactly_what_the_run_deletes.py`` compares the ANSWER, per ref, with
     what ``/run`` deletes on that ref rather than asserting the branch reached ``open_dataset``."""
-    segments = parse_identifier(id, settings.delimiter)
+    segments = parse_identifier(id)
     ds = await run_in_threadpool(open_dataset, ns, so, segments, branch=branch)
     result = await run_in_threadpool(
         maintenance.preview_gc,
@@ -118,7 +117,7 @@ async def run_maintenance(
     irreversible, so ``test_the_gc_run_reclaims_the_ref_the_request_names`` asserts what SURVIVED — the
     parent's data files, counted before and after — rather than that the branch reached
     ``open_dataset``."""
-    segments = parse_identifier(id, settings.delimiter)
+    segments = parse_identifier(id)
     ds = await run_in_threadpool(open_dataset, ns, so, segments, branch=branch)
     protected = await _base_refs(ds, so, settings)
     result = await run_in_threadpool(

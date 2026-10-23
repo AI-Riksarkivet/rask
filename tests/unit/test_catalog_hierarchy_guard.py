@@ -34,12 +34,12 @@ def test_the_refusal_names_the_rule_and_the_fix() -> None:
     cannot quietly disappear.
     """
     with pytest.raises(InvalidInputError) as exc:
-        fga_deps.require_parent("table", ["sales"], delimiter=DELIM)
+        fga_deps.require_parent("table", ["sales"])
     detail = str(exc.value)
     assert "sales" in detail
     assert "namespace" in detail
     assert "project > warehouse > namespace > table" in detail
-    # …and it shows the shape that WOULD work, with the delimiter this deployment uses.
+    # …and it shows the shape that WOULD work, with the spec's delimiter.
     assert f"<namespace>{DELIM}sales" in detail
 
 
@@ -52,7 +52,7 @@ def test_only_tables_are_gated_here(resource: str) -> None:
     That gap is real and tracked; encoding it as a rejection now would break every namespace create
     without giving callers a way to comply.
     """
-    fga_deps.require_parent(resource, ["anything"], delimiter=DELIM)
+    fga_deps.require_parent(resource, ["anything"])
 
 
 def test_the_guard_agrees_with_what_the_grant_path_would_have_done() -> None:
@@ -66,7 +66,7 @@ def test_the_guard_agrees_with_what_the_grant_path_would_have_done() -> None:
         would_orphan = asyncio.run(fga_deps.parent_object_of(NamedResolver(), settings, "table", segments)) is None
         refused = False
         try:
-            fga_deps.require_parent("table", segments, delimiter=DELIM)
+            fga_deps.require_parent("table", segments)
         except InvalidInputError:
             refused = True
         assert refused is would_orphan, f"guard and parent_object disagree on {segments}"
@@ -80,7 +80,7 @@ def test_the_guard_agrees_with_what_the_grant_path_would_have_done() -> None:
 def test_the_namespace_refusal_points_at_the_warehouse_route() -> None:
     """A refusal that does not say where to go instead is just an outage."""
     with pytest.raises(InvalidInputError) as exc:
-        fga_deps.require_warehouse_scoped(["bronze"], delimiter=DELIM, warehouses_enabled=True)
+        fga_deps.require_warehouse_scoped(["bronze"], warehouses_enabled=True)
     detail = str(exc.value)
     assert "bronze" in detail
     assert "/management/v1/warehouses/{warehouse_id}/namespaces" in detail
@@ -92,7 +92,7 @@ def test_the_namespace_refusal_points_at_the_warehouse_route() -> None:
 @pytest.mark.parametrize("segments", [["acme", "silver"]])
 def test_a_nested_namespace_inherits_its_parents_binding(segments: list[str]) -> None:
     """Only the TOP rung names a warehouse; everything below inherits it, so nesting stays open."""
-    fga_deps.require_warehouse_scoped(segments, delimiter=DELIM, warehouses_enabled=True)
+    fga_deps.require_warehouse_scoped(segments, warehouses_enabled=True)
 
 
 # --------------------------------------------------------------------------- #

@@ -43,7 +43,7 @@ log = logging.getLogger(__name__)
 
 #: THE MANAGEMENT SURFACE ([[LH-021]]). These are rask's own operations, not Lance namespace ones —
 #: a spec client discovering them on `/v1/table` meets verbs the document never defines. They mount at
-#: `/management/v1` and inherit the same authn/authz and delimiter guard from `api/v1/router.py`.
+#: `/management/v1` and inherit the same three rungs from `api/v1/router.py`.
 router = APIRouter(prefix="/management/v1/table", tags=["credentials"])
 
 
@@ -80,7 +80,7 @@ async def vend_credentials(
     The credential is a session the catalog's own token is exchanged for, named at the store for the verified caller
     it is vended to; the caller's own token never leaves the catalog.
     """
-    segments = parse_identifier(id, settings.delimiter)
+    segments = parse_identifier(id)
     described: DescribeTableResponse = await run_in_threadpool(native.call, ns, "describe_table", DescribeTableRequest(id=segments))
     if described.location is None:  # no object-store location to scope to → fall back to server-mediated
         return CredentialResponse(mode="server_mediated")

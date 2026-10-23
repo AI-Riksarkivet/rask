@@ -32,13 +32,14 @@ import requests
 from botocore.client import Config
 from botocore.exceptions import ClientError
 
+from service_kit.lakehouse.naming import CATALOG_DELIMITER
+
 
 CATALOG = os.environ.get("LANCE_E2E_CATALOG_URL", "").rstrip("/")
 TOKEN_A = os.environ.get("LANCE_E2E_TOKEN", "")
 TOKEN_B = os.environ.get("LANCE_E2E_TENANT_B_TOKEN", "")
 PROJECT_A = os.environ.get("LANCE_E2E_PROJECT", "acme")
 PROJECT_B = os.environ.get("LANCE_E2E_PROJECT_B", "")
-DELIM = os.environ.get("LANCE_E2E_DELIM", "$")
 S3 = os.environ.get("LANCE_E2E_S3", "http://localhost:9900")
 ARROW_STREAM = "application/vnd.apache.arrow.stream"
 
@@ -81,7 +82,7 @@ def _provision(catalog: str, token: str, project: str, warehouse: str, ns: str, 
     assert r.status_code in (200, 409), r.text
     r = requests.post(f"{catalog}/management/v1/warehouses/{warehouse}/namespaces", json={"namespace": ns}, headers=_auth(token), timeout=30)
     assert r.status_code in (200, 409), r.text
-    ident = f"{ns}{DELIM}{table}"
+    ident = f"{ns}{CATALOG_DELIMITER}{table}"
     r = requests.post(
         f"{catalog}/v1/table/{ident}/create?mode=overwrite",
         data=_arrow_ipc(),

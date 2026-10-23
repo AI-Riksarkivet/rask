@@ -7,23 +7,13 @@ from collections.abc import Mapping
 from typing import Final
 
 
-#: The catalog table-id delimiter (``gold$catalog``, ``silver$features``). ONE definition for the whole
-#: estate: every config knob defaults to it and every parse site splits on it, so the ids the catalog
-#: mints and the ids every producer / pipeline / reader parses cannot drift apart. The Lance Namespace
-#: layout and the medallion's ``<stage>$<table>`` convention both fix this at ``$``; a service's env
-#: override (``LANCE_NS_DELIMITER`` and its siblings) exists so an operator who changes it changes it
-#: from this single default — never so one plane can diverge from another.
-#:
-#: **IT IS FIXED AT BOOTSTRAP AND CANNOT BE CHANGED ON A RUNNING ESTATE.** This delimiter is not a
-#: formatting preference: it spells the OpenFGA object id, the lineage Dataset name and the id
-#: embedded in Lance metadata, and `tests/unit/test_cross_axis_identity.py` holds all three
-#: byte-identical under whatever it is set to. So changing it reformats nothing — it RENAMES every
-#: governed object. Demonstrated 2026-09-14 against the shipped functions: a tuple written as
-#: ``table:acme$bronze$events`` is looked up after the change as ``table:acme.bronze.events``, a
-#: different object holding no grants, so every check DENIES and every parent cascade misses. There
-#: is no migration for it and nothing detects it — the symptom is a total, silent authorization
-#: outage on an estate whose logs report a healthy catalog.
-CATALOG_DELIMITER = "$"
+#: The delimiter that joins a table's or namespace's names into its string identifier (``gold$catalog``). The Lance
+#: Namespace spec fixes it: a request naming no delimiter uses ``$`` (``lance_docs/ns_catalog/spec.yaml:2314-2318``), so
+#: no setting moves it ([[LH-526]]). Every parse site splits on it and every producer, pipeline and reader joins with it,
+#: so the ids the catalog answers and the ids every client sends cannot drift apart, and the catalog refuses a request
+#: naming another (``catalog.api.fga_deps.require_request_names``). No name holds it (ADR 0173 §4). It spells a table's catalog id and its lineage
+#: Dataset name; a table's and a namespace's grants and records are held by their uuids (ADR 0173 §8).
+CATALOG_DELIMITER: Final = "$"
 
 
 #: The read-only property DescribeTable and DescribeNamespace answer an object's uuid under (ADR 0173 §11). A namespace

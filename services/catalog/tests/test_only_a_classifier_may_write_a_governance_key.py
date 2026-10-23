@@ -84,7 +84,7 @@ def _call(updates: list[dict[str, Any]]) -> Any:
             body=cast("Any", body),
             ns=cast("Any", object()),
             table=_RESOLVED,
-            settings=cast("Any", SimpleNamespace(fga_enabled=True, delimiter="$")),
+            settings=cast("Any", SimpleNamespace(fga_enabled=True)),
             so=cast("Any", {}),
             token=PersonPrincipal(principal=Principal(idp_id="dex", subject="alice"), claims=IDToken(iss="i", sub="alice", aud="lance", exp=1, iat=1)),
             client=cast("Any", object()),

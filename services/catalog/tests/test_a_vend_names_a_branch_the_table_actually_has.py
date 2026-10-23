@@ -73,7 +73,6 @@ def _settings() -> SimpleNamespace:
     # refuse — a 403 from the authz arm would be indistinguishable from the refusal under test.
     return SimpleNamespace(
         fga_enabled=False,
-        delimiter="$",
         multibase_data_base_list=[],
         storage_options=lambda: {},
         # The base judge's two inputs ([[LH-279]]). These tables declare no base outside their own root,

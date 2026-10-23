@@ -91,7 +91,7 @@ router = APIRouter(prefix="/v1/table", tags=["data"])
 #: THE MANAGEMENT SURFACE ([[LH-021]]). This module serves SPEC operations on `router` and rask's own
 #: on this one — split by AUDIENCE rather than by topic, because a spec client discovering a verb like
 #: `blobs` or `commit` on a spec prefix meets something the Lance namespace document never defines.
-#: Both routers inherit the same authn/authz and delimiter guard from `api/v1/router.py`.
+#: Both routers inherit the same three rungs from `api/v1/router.py`.
 management_router = APIRouter(prefix="/management/v1/table", tags=["data-management"])
 
 
@@ -225,7 +225,7 @@ async def insert_into_table(
     table's — and it is recorded as ``overwrite_table`` with the ``OVERWRITE`` lifecycle state ([[LH-242]]).
 
     The run the request's Context names is stamped into the commit, on main only ([[LH-225]])."""
-    segments = parse_identifier(id, settings.delimiter)
+    segments = parse_identifier(id)
     # PARSED HERE, ONCE: pylance's `LanceDataset.insert` refuses a value outside Append/Overwrite with a
     # bare ValueError or OSError (500, measured on pylance 12.0.0), where the spec answers InvalidInput.
     # Ahead of the coerce because that opens the dataset, and a shape refusal costs no round trip.
@@ -250,7 +250,6 @@ async def insert_into_table(
         segments,
         ns=ns,
         so=so,
-        settings=settings,
         token=token,
         operation=OVERWRITE_TABLE if insert_mode is InsertMode.OVERWRITE else INSERT,
         authorization=authorization,
@@ -300,7 +299,7 @@ async def merge_insert_into_table(
 
     The merge builds no index: a writer builds one on the ``on`` key with its own pylance, committed through
     ``version/create``, and the maintenance sweep lists a table whose index no longer covers its rows (ADR 0162)."""
-    segments = parse_identifier(id, settings.delimiter)
+    segments = parse_identifier(id)
     req = MergeInsertIntoTableRequest(
         id=segments,
         on=on,
@@ -325,7 +324,6 @@ async def merge_insert_into_table(
         segments,
         ns=ns,
         so=so,
-        settings=settings,
         token=token,
         operation=MERGE_INSERT,
         authorization=authorization,
@@ -356,7 +354,7 @@ async def update_table(
     # made as Lance could otherwise be asked to change format afterwards, and the guard's contract is
     # that a format-selecting property is never silently ignored — on any door that accepts one.
     reject_unsupported_properties(body.properties)
-    segments = parse_identifier(id, settings.delimiter)
+    segments = parse_identifier(id)
     body.id = reconcile_body_id(segments, body.id)
     response: UpdateTableResponse = await run_in_threadpool(dataplane.update_table, ns, so, body)
     await lineage_deps.emit_measured_write(
@@ -364,7 +362,6 @@ async def update_table(
         segments,
         ns=ns,
         so=so,
-        settings=settings,
         token=token,
         operation=UPDATE,
         authorization=authorization,
@@ -390,7 +387,7 @@ async def delete_from_table(
     authorization: Annotated[str | None, Header()] = None,
 ) -> DeleteFromTableResponse:
     """Delete rows matching a predicate — ``delete_from_table``; emits a DELETE lineage event."""
-    segments = parse_identifier(id, settings.delimiter)
+    segments = parse_identifier(id)
     body.id = reconcile_body_id(segments, body.id)
     response: DeleteFromTableResponse = await run_in_threadpool(dataplane.delete_from_table, ns, so, body)
     # A row-delete doesn't change columns, but the event at this new version still carries the
@@ -400,7 +397,6 @@ async def delete_from_table(
         segments,
         ns=ns,
         so=so,
-        settings=settings,
         token=token,
         operation=DELETE,
         authorization=authorization,
@@ -462,7 +458,6 @@ def _serves(media_type: str) -> dict[int | str, dict[str, object]]:
 async def read_table_blob(
     id: str,
     ns: NamespaceDep,
-    settings: SettingsDep,
     so: StorageOptionsDep,
     column: Annotated[str, Query(min_length=1)],
     row: Annotated[int, Query(ge=0)],
@@ -495,7 +490,7 @@ async def read_table_blob(
     (same rung as ``/query``) — this endpoint serves DATA, so credential-vending tiers apply
     unchanged; it just removes the need for the credentials themselves.
     """
-    segments = parse_identifier(id, settings.delimiter)
+    segments = parse_identifier(id)
     blob = await run_in_threadpool(
         blob_serving.read_blob,
         ns,
@@ -557,7 +552,7 @@ def query_table(
     id: str, body: QueryTableRequest, ns: NamespaceDep, data_ns: DataNamespaceDep, settings: SettingsDep, so: StorageOptionsDep, token: CurrentToken = None
 ) -> Response:
     """Run a query and return matching rows as an Arrow-IPC file — wraps ``query_table``."""
-    body.id = reconcile_body_id(parse_identifier(id, settings.delimiter), body.id)
+    body.id = reconcile_body_id(parse_identifier(id), body.id)
     dataplane.refuse_a_branch_this_door_cannot_honour(body.branch, door="query_table")
     dataplane.refuse_an_unbounded_boolean_chain(body.filter, field="filter")
     # PINNED TO THE VERSION WHOSE BASES WERE JUDGED ([[LH-279]]): the native query opens the table inside
@@ -592,7 +587,7 @@ def query_table(
 # `_post` between runs, which is invalid (operationIds must be unique) and made the contract gate
 # flip-flop. Explicit ids keep the spec's POST canonical and name the GET for what it is.
 @management_router.post("/{id}/changes", responses=_serves(ARROW_FILE), response_class=ArrowFileResponse)
-def table_changes(id: str, body: TableChangesRequest, ns: NamespaceDep, settings: SettingsDep, so: StorageOptionsDep, token: CurrentToken = None) -> Response:
+def table_changes(id: str, body: TableChangesRequest, ns: NamespaceDep, so: StorageOptionsDep, token: CurrentToken = None) -> Response:
     """Rows that changed in ``(begin_version, end_version]`` — Arrow-IPC, like ``query``.
 
     Answers the change data feed `lance_docs/file_format.md:6214-6242` documents, from one snapshot at
@@ -621,7 +616,7 @@ def table_changes(id: str, body: TableChangesRequest, ns: NamespaceDep, settings
     ALLOW` beside the `read_data` record for the same call. Pinned by
     `tests/unit/test_fga_model_contract.py::test_every_DATA_READ_door_is_gated_as_a_READ`.
     """
-    segments = parse_identifier(id, settings.delimiter)
+    segments = parse_identifier(id)
     # ONE CALL FOR ALL THREE KINDS: the window is one snapshot, opened at its end, and `deleted` is
     # answered from the transaction range on that same handle rather than from a scan — learning which
     # rows a table LOST is as disclosing as learning which it gained, so it is audited identically.
@@ -650,7 +645,6 @@ def count_table_rows(
     id: str,
     ns: NamespaceDep,
     data_ns: DataNamespaceDep,
-    settings: SettingsDep,
     so: StorageOptionsDep,
     body: CountTableRowsRequest | None = None,
     token: CurrentToken = None,
@@ -662,7 +656,7 @@ def count_table_rows(
     so a branch-scoped count returned a plausible number for the wrong dataset with a 200.
     """
     req = body or CountTableRowsRequest()
-    req.id = reconcile_body_id(parse_identifier(id, settings.delimiter), req.id)
+    req.id = reconcile_body_id(parse_identifier(id), req.id)
     # A JSON INTEGER, per `components.responses.CountTableRowsResponse`: "Row count serialized
     # transparently as a bare number for the REST namespace." It answered `text/plain` and survived
     # only by accident — a bare number happens to parse as JSON — while its two siblings below, whose
@@ -675,11 +669,9 @@ def count_table_rows(
 
 
 @router.post("/{id}/explain_plan")
-def explain_table_query_plan(
-    id: str, body: ExplainTableQueryPlanRequest, ns: NamespaceDep, settings: SettingsDep, so: StorageOptionsDep, token: CurrentToken = None
-) -> Response:
+def explain_table_query_plan(id: str, body: ExplainTableQueryPlanRequest, ns: NamespaceDep, so: StorageOptionsDep, token: CurrentToken = None) -> Response:
     """Return the logical query plan — ``explain_table_query_plan``; plain text."""
-    body.id = reconcile_body_id(parse_identifier(id, settings.delimiter), body.id)
+    body.id = reconcile_body_id(parse_identifier(id), body.id)
     # BOTH CHANNELS. `ExplainTableQueryPlanRequest` nests the whole query, so a branch can arrive at
     # the top level OR inside `query` — and guarding only the outer one left the inner one serving
     # main's plan with a 200 for a branch that had never been created. A guard that covers one of two
@@ -707,7 +699,7 @@ def analyze_table_query_plan(
     id: str, body: AnalyzeTableQueryPlanRequest, ns: NamespaceDep, data_ns: DataNamespaceDep, settings: SettingsDep, so: StorageOptionsDep
 ) -> Response:
     """Return the analyzed query plan with runtime metrics — ``analyze_table_query_plan``; plain text."""
-    body.id = reconcile_body_id(parse_identifier(id, settings.delimiter), body.id)
+    body.id = reconcile_body_id(parse_identifier(id), body.id)
     dataplane.refuse_a_branch_this_door_cannot_honour(body.branch, door="analyze_table_query_plan")
     dataplane.refuse_an_unbounded_boolean_chain(body.filter, field="filter")
     # ANALYZE RUNS THE QUERY to report its metrics, so it spends what `/query` would and takes its bound.

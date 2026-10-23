@@ -73,7 +73,6 @@ def create_scalar_index(id: str, body: CreateTableIndexRequest) -> CreateTableSc
 def list_table_indices(
     id: str,
     ns: NamespaceDep,
-    settings: SettingsDep,
     body: ListTableIndicesRequest | None = None,
     page_token: str | None = None,
     limit: Annotated[int | None, Query(ge=1, le=_MAX_LIST_LIMIT)] = None,
@@ -93,7 +92,7 @@ def list_table_indices(
     told "no indices" about the wrong dataset is a worse answer than an error, because it is actionable.
     """
     sent = body.model_fields_set if body else frozenset()
-    segments = reconcile_body_id(parse_identifier(id, settings.delimiter), body.id if body else None)
+    segments = reconcile_body_id(parse_identifier(id), body.id if body else None)
     if body is not None:
         page_token = body.page_token if "page_token" in sent else page_token
         limit = body.limit if "limit" in sent else limit
@@ -108,7 +107,6 @@ def describe_table_index_stats(
     id: str,
     index_name: str,
     ns: NamespaceDep,
-    settings: SettingsDep,
     body: DescribeTableIndexStatsRequest | None = None,
     branch: Annotated[
         str | None,
@@ -122,7 +120,7 @@ def describe_table_index_stats(
     ``branch`` is declared to be refused, for the same reason as the listing beside it: an index of the
     same name can exist on both refs with different coverage, so answering from main is a plausible
     wrong number rather than a visible failure."""
-    segments = reconcile_body_id(parse_identifier(id, settings.delimiter), body.id if body else None)
+    segments = reconcile_body_id(parse_identifier(id), body.id if body else None)
     if body is not None and "branch" in body.model_fields_set:
         branch = body.branch
     req = DescribeTableIndexStatsRequest(id=segments, index_name=index_name, branch=branch, version=body.version if body else None)
@@ -163,7 +161,7 @@ async def drop_table_index(
     Refused BEFORE `native.call`, because the whole point is that the native op would otherwise
     succeed against the wrong object.
     """
-    segments = parse_identifier(id, settings.delimiter)
+    segments = parse_identifier(id)
     if body is not None and "branch" in body.model_fields_set:
         branch = body.branch
     dataplane.refuse_a_branch_this_door_cannot_honour(branch, door="drop_table_index")
@@ -175,7 +173,6 @@ async def drop_table_index(
         segments,
         ns=ns,
         so=so,
-        settings=settings,
         token=token,
         operation=DROP_INDEX,
         authorization=authorization,

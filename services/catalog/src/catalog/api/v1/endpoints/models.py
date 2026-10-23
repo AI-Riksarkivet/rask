@@ -64,9 +64,9 @@ def _segments(model: str) -> list[str]:
     return [_MODELS_NAMESPACE, model]
 
 
-def _model_object(model: str, settings: Settings) -> str:
+def _model_object(model: str) -> str:
     """The FGA object a registry model is governed as, ``table:models$<model>``: a model has no catalog-minted uuid."""
-    return f"table:{fga.canonical_object_id(_segments(model), delimiter=settings.delimiter)}"
+    return f"table:{fga.canonical_object_id(_segments(model))}"
 
 
 def _summaries(settings: Settings, so: dict[str, str], names: list[str]) -> list[ModelSummary]:
@@ -108,8 +108,8 @@ async def list_models(
     if settings.fga_enabled and token is not None and client is not None:
         # The page's own candidates, batch-checked ([[LH-223]]): a listing never asks OpenFGA what the caller reaches
         # across the estate, which stops at the server's ceiling.
-        allowed = await fga.batch_check(client, user=token.subject, relation="can_get_metadata", objects=[_model_object(name, settings) for name in names])
-        names = [name for name in names if allowed.get(_model_object(name, settings))]
+        allowed = await fga.batch_check(client, user=token.subject, relation="can_get_metadata", objects=[_model_object(name) for name in names])
+        names = [name for name in names if allowed.get(_model_object(name))]
     page, next_token = paginate(names, page_token, limit)
     return ModelsListResponse(
         models=await run_in_threadpool(_summaries, settings, so, page),
@@ -139,7 +139,7 @@ async def promote_model(
     segments = _segments(model)
     if body.tag not in _PROMOTION_TAGS:
         raise InvalidInputError(f"tag must be one of {sorted(_PROMOTION_TAGS)}, got {body.tag!r}")
-    await fga_deps.require_relation(client, settings, token, relation="can_promote", obj=_model_object(model, settings))
+    await fga_deps.require_relation(client, settings, token, relation="can_promote", obj=_model_object(model))
     blessed = await run_in_threadpool(
         registry.promote,
         settings.model_uri(model),
@@ -151,7 +151,6 @@ async def promote_model(
     await emit_write_event(
         emitter,
         segments,
-        delimiter=settings.delimiter,
         author=token.subject if token is not None else None,
         version=blessed,
         operation=PROMOTE_MODEL,
@@ -178,7 +177,7 @@ async def describe_model(
     Reader-gated (``can_get_metadata``) — a reader may see which version is blessed and compare metrics; only
     a validator may move the pointer.
     """
-    await fga_deps.require_relation(client, settings, token, relation="can_get_metadata", obj=_model_object(model, settings))
+    await fga_deps.require_relation(client, settings, token, relation="can_get_metadata", obj=_model_object(model))
     summary = await run_in_threadpool(registry.describe, settings.model_uri(model), so)
     artifacts = await run_in_threadpool(registry.list_artifacts, settings.model_artifacts_uri(model), so)
     return ModelDescribeResponse(model=model, artifacts=[ModelArtifact(**a) for a in artifacts], **summary)

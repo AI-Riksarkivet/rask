@@ -590,14 +590,8 @@ async def create_warehouse_namespace(
     if existing_binding is not None and existing_binding != root_uri:
         raise NamespaceAlreadyExistsError(f"namespace {ns_name!r} is already bound to another warehouse")
 
-    segments = parse_identifier(ns_name, settings.delimiter)
-    # Depth cap, same ceiling as the nested door. This is NOT dead code just because a warehouse
-    # namespace is "top-level": `_validate_id` permits hyphens and `LANCE_NS_DELIMITER` is
-    # operator-settable, so under a hyphen delimiter one legal 63-char name splits into ~31 segments —
-    # well past the ~13 at which `Check(can_get_metadata, warehouse:X)` stops answering and starts
-    # erroring. Under the default `$` delimiter the name cannot contain the delimiter and this is a
-    # cheap no-op; that is defence in depth, not decoration.
-    fga_deps.require_namespace_depth(segments, delimiter=settings.delimiter)
+    # One segment: the control-id rule admits no delimiter.
+    segments = [ns_name]
     # Collision guard (#3-A): a top-level namespace NAME that already exists UNBOUND in the DEFAULT root must
     # not be bound to a warehouse. Binding routes every future <name>$* op to this warehouse's bucket, so the
     # default-root namespace's tables become unreachable via the API (orphaned) — and the positive routing
@@ -841,7 +835,7 @@ async def _cascade_subtrees(ns: LanceNamespace, settings: Settings, bound: list[
     """
     subtrees: list[_BoundSubtree] = []
     for top_ns in bound:
-        segments = parse_identifier(top_ns, settings.delimiter)
+        segments = parse_identifier(top_ns)
         try:
             namespace = await fga_deps.identify(ns, settings, "namespace", segments)
             listed = await run_in_threadpool(namespaces_api._collect_descendants, ns, segments)  # noqa: SLF001 — one walker, deliberately
@@ -869,7 +863,7 @@ async def _detach_table(ns: LanceNamespace, settings: Settings, segments: list[s
     except TableNotFoundError:
         return False
     if detached.location:
-        canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
+        canonical = fga.canonical_object_id(segments)
         await run_in_threadpool(location_claims.release, table_claims.claim_store(settings), detached.location, canonical)
         if purge:
             registry = base_registry.BaseRegistry(control_root=settings.registry_root, storage_options=settings.storage_options())
@@ -1042,7 +1036,7 @@ async def delete_warehouse(
     ns_conn = await namespace_for_root(request, settings, record["root_uri"], endpoint=record.get("endpoint") or None) if bound else None
     subtrees = await _cascade_subtrees(ns_conn, settings, bound, force=force) if ns_conn is not None else []
     # The warehouse's own trash, which the bindings select: it is ended before the cascade below removes them.
-    trashed = await run_in_threadpool(partial(warehouses.trash_owned_by, settings.registry_root, so, warehouse_id, bucket=bucket, delimiter=settings.delimiter))
+    trashed = await run_in_threadpool(partial(warehouses.trash_owned_by, settings.registry_root, so, warehouse_id, bucket=bucket))
     # What landed, recorded as each step lands, so a failure part-way reports it rather than what was planned.
     namespaces_dropped: list[str] = []
     tables_removed: list[str] = []
@@ -1067,10 +1061,9 @@ async def delete_warehouse(
                     # What the announcement names the table by, read while it still stands (ADR 0173 §10).
                     known = await uuids.table(table)
                     if await _detach_table(ns_conn, settings, table, purge=purge_bucket):
-                        tables_removed.append(settings.delimiter.join(table))
+                        tables_removed.append(fga.canonical_object_id(table))
                         await namespaces_api._announce_removed(  # noqa: SLF001 — one announcement, deliberately
                             emitter,
-                            settings,
                             table,
                             operation=DEREGISTER_TABLE,
                             token=token,
@@ -1085,7 +1078,7 @@ async def delete_warehouse(
                         # Drift, or an earlier attempt's work: the binding outlived what it pointed at, and refusing
                         # here would leave a binding nobody can delete, so the catalog's own records still go.
                         log.warning("warehouse_cascade_namespace_absent", extra={"warehouse": warehouse_id, "namespace": namespace})
-                    namespaces_dropped.append(settings.delimiter.join(namespace))
+                    namespaces_dropped.append(fga.canonical_object_id(namespace))
                 async for count in fga_deps.end_removed_subtree(client, settings, root_uuid=subtree.uuid, removed=subtree.descendants, token=token):
                     revoked += count
                 top_ns = subtree.segments[0]

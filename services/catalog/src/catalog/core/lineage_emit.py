@@ -188,12 +188,12 @@ class InputRef(NamedTuple):
     uuids: DatasetUuids = DatasetUuids()
 
 
-async def input_refs(pins: list[InputPin] | None, *, delimiter: str, uuids: UuidReader) -> list[InputRef] | None:
+async def input_refs(pins: list[InputPin] | None, *, uuids: UuidReader) -> list[InputRef] | None:
     """``pins`` resolved to the canonical ids FGA keys on and the uuids the edge list keys on, so an edge names the real table."""
     refs = [
         InputRef(
-            fga.parent_namespace_id(pin.segments, delimiter=delimiter) or "",
-            fga.canonical_object_id(pin.segments, delimiter=delimiter),
+            fga.parent_namespace_id(pin.segments) or "",
+            fga.canonical_object_id(pin.segments),
             pin.version,
             pin.branch,
             await uuids.table(pin.segments, uuid=pin.uuid),
@@ -904,7 +904,6 @@ async def emit_write_event(
     emitter: LineageEmitter,
     segments: list[str],
     *,
-    delimiter: str,
     author: str | None,
     version: int | None,
     operation: str,
@@ -938,7 +937,7 @@ async def emit_write_event(
     ``source_uri``, the location the door acted on, names the table, so a rename landing since cannot lend the event
     another table's uuid; a door that names no location reads the claim of the table its name names now.
     """
-    refs = await input_refs(inputs, delimiter=delimiter, uuids=uuids)
+    refs = await input_refs(inputs, uuids=uuids)
     table_uuids = known if known is not None else await uuids.table(segments, location=source_uri)
     # THE TENANT, resolved from the table's TOP namespace segment — the rung the warehouse registry
     # binds. Done HERE rather than at the eight call sites because not one of them has a project in
@@ -947,8 +946,8 @@ async def emit_write_event(
     # failure, which degrades to exactly the previous behaviour: the author is told, the watchers are not.
     project = await emitter.project_for(segments[0] if segments else "")
     await emitter.emit_write(
-        table_id=fga.canonical_object_id(segments, delimiter=delimiter),
-        namespace=fga.parent_namespace_id(segments, delimiter=delimiter) or "",
+        table_id=fga.canonical_object_id(segments),
+        namespace=fga.parent_namespace_id(segments) or "",
         author=author,
         version=version,
         operation=operation,

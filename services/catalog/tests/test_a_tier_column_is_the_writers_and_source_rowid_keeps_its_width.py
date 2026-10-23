@@ -59,7 +59,7 @@ def _app(namespace: Any, monkeypatch: pytest.MonkeyPatch, registry_root: str) ->
     application = FastAPI()
     install_problem_handlers(application, logging.getLogger(__name__))
     application.include_router(door.router)
-    settings = SimpleNamespace(delimiter="$", registry_root=registry_root, storage_options=lambda: {})
+    settings = SimpleNamespace(registry_root=registry_root, storage_options=lambda: {})
     application.dependency_overrides[SettingsDep.__metadata__[0].dependency] = lambda: settings
     application.dependency_overrides[NamespaceDep.__metadata__[0].dependency] = lambda: namespace
     application.dependency_overrides[StorageOptionsDep.__metadata__[0].dependency] = lambda: {}

@@ -57,8 +57,8 @@ log = logging.getLogger(__name__)
 #: THE MANAGEMENT SURFACE ([[LH-021]]). rask's authorization model is not in the Lance namespace spec
 #: at ANY point — grants, policies and managed access are entirely rask's own — so a spec client
 #: discovering `/v1/table/{id}/access/grant` meets a verb the document never defines. These mount at
-#: `/management/v1` beside the rest of the estate's governance, and inherit the same authn/authz and
-#: delimiter guard from `api/v1/router.py` as the spec routers do.
+#: `/management/v1` beside the rest of the estate's governance, and inherit the same three rungs
+#: from `api/v1/router.py` as the spec routers do.
 table_router = APIRouter(prefix="/management/v1/table", tags=["policy"])
 namespace_router = APIRouter(prefix="/management/v1/namespace", tags=["policy"])
 project_router = APIRouter(prefix="/management/v1/project", tags=["policy"])
@@ -71,10 +71,6 @@ projects_router = APIRouter(prefix="/management/v1/projects", tags=["policy"])
 # become a path-traversing registry key or a phantom FGA object. SHARED, not re-declared: this was one of
 # three copies that had drifted apart on their end anchor (`catalog.core.identifiers.CONTROL_ID_RE`).
 _PROJECT_ID_RE = CONTROL_ID_RE
-
-
-def _canonical(segments: list[str], delimiter: str) -> str:
-    return fga.canonical_object_id(segments, delimiter=delimiter)
 
 
 def _record(kind: str, canonical_id: str, body: PolicyRequest, existing: dict[str, object] | None, *, uuid: str | None) -> dict[str, object]:
@@ -144,7 +140,7 @@ async def set_table_policy(
     control: ControlEmitterDep,
 ) -> PolicyResponse:
     """Set (or replace) the table's maintenance policy — owner-gated by the router (``can_drop``)."""
-    canonical = _canonical(table.segments, settings.delimiter)
+    canonical = fga.canonical_object_id(table.segments)
     table_uuid = table.require_uuid()
     prior = await run_in_threadpool(policies.get_policy, settings.registry_root, settings.storage_options(), "table", table_uuid)
     # The location beside the uuid, so a listing names the table as it is named now (`table_claims.names_now`).
@@ -166,13 +162,13 @@ async def set_table_policy(
 @table_router.post("/{id}/policy/describe", response_model_exclude_none=True)
 async def describe_table_policy(id: str, table: ResolvedTableDep, settings: SettingsDep) -> PolicyResponse:
     """The table's maintenance policy (reader-gated); 404 when none is set."""
-    return await _describe(settings, "table", table.require_uuid(), _canonical(table.segments, settings.delimiter), TableNotFoundError)
+    return await _describe(settings, "table", table.require_uuid(), fga.canonical_object_id(table.segments), TableNotFoundError)
 
 
 @table_router.post("/{id}/policy/delete", response_model_exclude_none=True)
 async def delete_table_policy(id: str, table: ResolvedTableDep, settings: SettingsDep, token: CurrentToken, control: ControlEmitterDep) -> PolicyDeleteResponse:
     """Remove the table's maintenance policy (idempotent) — owner-gated by the router."""
-    return await _delete(settings, control, token, "table", key=table.require_uuid(), canonical=_canonical(table.segments, settings.delimiter))
+    return await _delete(settings, control, token, "table", key=table.require_uuid(), canonical=fga.canonical_object_id(table.segments))
 
 
 @namespace_router.post("/{id}/policy/set", response_model_exclude_none=True)
@@ -182,7 +178,7 @@ async def set_namespace_policy(
     """Set (or replace) a namespace-level policy — applies to every table under the namespace, at any depth, unless
     a table policy or a nearer namespace's overrides it. Owner-gated by the router (``can_delete``)."""
     namespace = await _namespace(id, ns, settings)
-    canonical = _canonical(namespace.segments, settings.delimiter)
+    canonical = fga.canonical_object_id(namespace.segments)
     prior = await run_in_threadpool(policies.get_policy, settings.registry_root, settings.storage_options(), "namespace", namespace.uuid)
     record = _record("namespace", canonical, body, prior, uuid=namespace.uuid)
     await run_in_threadpool(policies.put_policy, settings.registry_root, settings.storage_options(), record)
@@ -203,19 +199,19 @@ async def set_namespace_policy(
 async def describe_namespace_policy(id: str, ns: NamespaceDep, settings: SettingsDep) -> PolicyResponse:
     """The namespace's maintenance policy (reader-gated); 404 when none is set."""
     namespace = await _namespace(id, ns, settings)
-    return await _describe(settings, "namespace", namespace.uuid, _canonical(namespace.segments, settings.delimiter), NamespaceNotFoundError)
+    return await _describe(settings, "namespace", namespace.uuid, fga.canonical_object_id(namespace.segments), NamespaceNotFoundError)
 
 
 @namespace_router.post("/{id}/policy/delete", response_model_exclude_none=True)
 async def delete_namespace_policy(id: str, ns: NamespaceDep, settings: SettingsDep, token: CurrentToken, control: ControlEmitterDep) -> PolicyDeleteResponse:
     """Remove the namespace's maintenance policy (idempotent) — owner-gated by the router."""
     namespace = await _namespace(id, ns, settings)
-    return await _delete(settings, control, token, "namespace", key=namespace.uuid, canonical=_canonical(namespace.segments, settings.delimiter))
+    return await _delete(settings, control, token, "namespace", key=namespace.uuid, canonical=fga.canonical_object_id(namespace.segments))
 
 
 async def _namespace(id: str, ns: LanceNamespace, settings: Settings) -> fga_deps.GovernedObject:
     """The namespace ``id`` names, with the uuid its policy is kept under; the root holds no policy."""
-    segments = parse_identifier(id, settings.delimiter)
+    segments = parse_identifier(id)
     if not segments:
         raise InvalidInputError("a policy needs a concrete namespace, not the root")
     return await fga_deps.identify(ns, settings, "namespace", segments)
@@ -321,7 +317,7 @@ def _with_current_name(store: ClaimStore, record: dict[str, Any]) -> dict[str, A
     return None if name is None else {**record, "id": name}
 
 
-def _scoped_to_project(record: dict[str, Any], *, delimiter: str, namespaces: frozenset[str], project: str) -> bool:
+def _scoped_to_project(record: dict[str, Any], *, namespaces: frozenset[str], project: str) -> bool:
     """Whether one stored policy record governs data inside ``project``.
 
     A ``project`` record matches by ID and by nothing else — matching it on buckets would surface a rival
@@ -336,7 +332,7 @@ def _scoped_to_project(record: dict[str, Any], *, delimiter: str, namespaces: fr
         return record.get("id") == project
     if kind not in ("table", "namespace"):
         return False
-    segments = parse_identifier(str(record.get("id") or ""), delimiter)
+    segments = parse_identifier(str(record.get("id") or ""))
     return bool(segments) and segments[0] in namespaces
 
 
@@ -373,7 +369,7 @@ async def list_project_policies(id: str, settings: SettingsDep, token: CurrentTo
     namespaces = sorted({str(b["top_ns"]) for b in bindings if b.get("top_ns") and b.get("warehouse_id") in warehouse_ids})
     records = await run_in_threadpool(policies.list_policies, settings.registry_root, so)
     named = await run_in_threadpool(_named_now, settings, records)
-    scoped = [r for r in named if _scoped_to_project(r, delimiter=settings.delimiter, namespaces=frozenset(namespaces), project=project)]
+    scoped = [r for r in named if _scoped_to_project(r, namespaces=frozenset(namespaces), project=project)]
     scoped.sort(key=lambda r: (str(r.get("kind")), str(r.get("id"))))
     log.info(
         "maintenance_policies_listed",

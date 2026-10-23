@@ -76,9 +76,7 @@ def client(tmp_path: Path, emitted: list[dict[str, Any]], monkeypatch: pytest.Mo
         application.include_router(door.router)
         application.include_router(door.management_router)
     control.mkdir(exist_ok=True)
-    settings = SimpleNamespace(
-        delimiter="$", registry_root=str(control), storage_options=lambda **_: {}, trash_grace_days=7, fga_enabled=False, warehouses_enabled=False
-    )
+    settings = SimpleNamespace(registry_root=str(control), storage_options=lambda **_: {}, trash_grace_days=7, fga_enabled=False, warehouses_enabled=False)
     for dependency, value in (
         (SettingsDep, settings),
         (NamespaceDep, ns),

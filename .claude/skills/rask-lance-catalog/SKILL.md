@@ -108,8 +108,15 @@ Two contracts stack here, and confusing them is how bugs happen:
   routing) is in the PATH, never only in the body. Path/body id conflict → 400. List ops are GET with
   query-param pagination; data ops (create/insert/query) are **Arrow IPC**, not JSON; count/explain
   return plain text.
-- **Identifier:** segments joined by the configured delimiter (`$` default) — `["a","b","t"]` ↔
-  `a$b$t`. The root namespace is the delimiter itself.
+- **Identifier:** segments joined by the delimiter `$` — `["a","b","t"]` ↔ `a$b$t`. The root namespace is the
+  delimiter itself. `$` is the spec's (`spec.yaml:2314-2318`) and no setting changes it ([[LH-526]]): the router's
+  shape rung (`fga_deps.require_request_names`, between `authenticate` and `authorize`, so 400 before 403) refuses a
+  `?delimiter` other than `$`, and refuses every segment a naming door is handed (a create, declare, register,
+  namespace or view create path id, a rename's destination, a batch's ids) that is not a name: Unicode NFC, 1 to 255
+  characters, no `$`, `+`, `/` or control character, no edge whitespace (`identifiers.require_names`, ADR 0173 §4).
+  `*` and `?` are names, since no name reaches a vended policy. The catalog reads its path from `raw_path`
+  (`catalog.api.path_reading`): a bare `+` is a space, as pylance's Rust `RestNamespace` sends one, a `%2B` stays a
+  `+` (so refused), and a `%2F` is refused 400 before routing.
 - **Identity headers:** `api_key` → `x-api-key`, `auth_token` → `Authorization: Bearer`; arbitrary
   context maps BOTH WAYS through a `header.<name>` context KEY — `{"header.x-trace-id": "abc"}` is
   sent as `x-trace-id: abc` (prefix stripped) and every response header returns as `header.<name>`

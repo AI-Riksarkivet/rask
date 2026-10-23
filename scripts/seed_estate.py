@@ -65,7 +65,6 @@ Env (argparse overrides all of them)::
 
     SEED_CATALOG_URL    default http://127.0.0.1:2333
     SEED_CATALOG_TOKEN  the OIDC bearer; empty = an auth-off local stack
-    SEED_NS_DELIMITER   default $, must match the catalog's LANCE_NS_DELIMITER
 
 Exits non-zero if any step failed OR the read-back does not SHOW every object the plan named — a seed that
 cannot show you what it made has not proved anything, and "the calls returned 2xx" is not the claim being
@@ -84,6 +83,8 @@ from types import MappingProxyType
 
 import httpx
 
+from service_kit.lakehouse.naming import CATALOG_DELIMITER
+
 
 #: The catalog's own port (``rask-catalog``), not the edge's — the seed drives the service directly so
 #: a routing problem in front of it cannot be mistaken for a guard's refusal.
@@ -91,10 +92,6 @@ CATALOG_URL = os.environ.get("SEED_CATALOG_URL", "http://127.0.0.1:2333")
 #: The catalog accepts ONLY IdP bearers when auth is on, and every door here is a governed write — so a
 #: seed against an auth-enabled estate must carry one or the first POST 401s. Empty = auth off.
 CATALOG_TOKEN = os.environ.get("SEED_CATALOG_TOKEN", "")
-#: Must agree with the catalog's ``LANCE_NS_DELIMITER``: it is what joins a namespace and a table name
-#: into the id BOTH the route and the FGA object use, so a client that disagrees grants on one id and
-#: checks another.
-DELIMITER = os.environ.get("SEED_NS_DELIMITER", "$")
 
 #: The development Dex's two static demo identities as the principals they are: `dex~` and the userID the Dex fixture
 #: declares (deploy/fixtures/dex/chart/values.yaml, `scripts/dex_principal.py`). Kept in step with
@@ -174,11 +171,9 @@ class Project:
 class Grant:
     """One raw tuple written through ``POST /management/v1/access/tuples`` after the objects exist.
 
-    ``object`` may carry the literal ``{delimiter}`` placeholder, and a grant on a TABLE must: a table's
-    id is its PATH (``<namespace>$<name>``), the separator is configurable per run (``--delimiter`` /
-    ``SEED_NS_DELIMITER``), and a grant that hardcoded ``$`` would name a table this run did not create
-    the moment the two disagreed — writing the tuple anyway, against an object that does not exist,
-    which is the ghost this whole script is built to stop making. Substituted in :func:`plan`.
+    A grant on a TABLE names it by its id, its PATH (``<namespace>$<name>``), and is written on the uuid DescribeTable
+    answers for that id (ADR 0173 §8), after the declare that makes it: a tuple written against an object that does not
+    exist is the ghost this whole script is built to stop making.
     """
 
     user: str
@@ -256,9 +251,8 @@ DEMO_ESTATE = Estate(
         # ---- UPWARD VISIBILITY (C1) --------------------------------------------------------------
         # ivan holds ONE grant, on ONE table. The containers above it become VISIBLE — the breadcrumb
         # to his own data resolves instead of 403ing — while a SIBLING stage stays invisible. This is
-        # the only persona whose object is a table, and therefore the only one that needs the
-        # delimiter placeholder.
-        Grant("user:ivan", "reader", "table:acme-gold{delimiter}catalog"),
+        # the only persona whose object is a table.
+        Grant("user:ivan", "reader", "table:acme-gold$catalog"),
         # ---- THE GRANT AXIS (C2) — administering access is not the same as holding it -------------
         # judy: grant authority on the bucket and NO data rung — the access-review persona that was
         # unexpressible while granting was welded to `owner`.
@@ -353,7 +347,7 @@ def _warehouse_body(project: Project, warehouse: Warehouse) -> dict[str, object]
     return body
 
 
-def plan(estate: Estate, principals: Mapping[str, str], *, delimiter: str = DELIMITER, adopt_existing: bool = False) -> list[Step]:
+def plan(estate: Estate, principals: Mapping[str, str], *, adopt_existing: bool = False) -> list[Step]:
     """The estate description flattened into calls, LAYER BY LAYER: projects, warehouses, namespaces,
     tables, then grants.
 
@@ -404,14 +398,14 @@ def plan(estate: Estate, principals: Mapping[str, str], *, delimiter: str = DELI
     steps.extend(
         Step(
             layer="table",
-            label=f"table {namespace.name}{delimiter}{table}",
+            label=f"table {namespace.name}{CATALOG_DELIMITER}{table}",
             method="POST",
             # `declare` and not `create`: it reserves an EMPTY table over JSON and seeds the same
             # ownership + lineage a create does, where `create` wants an Arrow stream. A seed's job is
             # that the object exists and is governed, not that it holds rows.
-            path=f"/v1/table/{namespace.name}{delimiter}{table}/declare",
+            path=f"/v1/table/{namespace.name}{CATALOG_DELIMITER}{table}/declare",
             body={"id": [namespace.name, table]},
-            key=f"table:{namespace.name}{delimiter}{table}",
+            key=f"table:{namespace.name}{CATALOG_DELIMITER}{table}",
             parent=f"namespace:{namespace.name}",
             tolerate=CONVERGED,
         )
@@ -419,22 +413,17 @@ def plan(estate: Estate, principals: Mapping[str, str], *, delimiter: str = DELI
     )
     planned = {step.key for step in steps}
     for grant in estate.grants:
-        # A table grant names its object by PATH, so it carries the delimiter this run is using rather
-        # than a hardcoded one — see Grant. Resolved here, once, so `body`, `label` and the `parent`
-        # lookup all speak of the SAME object; resolving it in only one of the three is how a grant
-        # ends up correctly addressed and wrongly ordered, or the reverse.
-        obj = grant.object.replace("{delimiter}", delimiter)
         user = remap_subject(grant.user, principals)
         steps.append(
             Step(
                 layer="grant",
-                label=f"{obj} #{grant.relation} @ {user}",
+                label=f"{grant.object} #{grant.relation} @ {user}",
                 method="POST",
                 path="/management/v1/access/tuples",
-                body={"user": user, "relation": grant.relation, "object": obj},
+                body={"user": user, "relation": grant.relation, "object": grant.object},
                 # No key: a tuple brings nothing into existence, so nothing hangs off it. The parent is
                 # the object it decorates WHEN this run is what creates that object — see Step.parent.
-                parent=obj if obj in planned else None,
+                parent=grant.object if grant.object in planned else None,
                 tolerate=FGA_OFF,
             )
         )
@@ -594,7 +583,7 @@ def _as_record(value: object) -> dict[str, object]:
     return {str(key): item for key, item in value.items()} if isinstance(value, dict) else {}
 
 
-def summarize(http: httpx.Client, estate: Estate, *, delimiter: str = DELIMITER) -> list[str]:
+def summarize(http: httpx.Client, estate: Estate) -> list[str]:
     """Print the estate as the CATALOG now sees it, COMPARED against the plan; return everything missing.
 
     Read back and checked, not merely printed. A 2xx on every write proves the calls were ACCEPTED, and the
@@ -639,11 +628,11 @@ def summarize(http: httpx.Client, estate: Estate, *, delimiter: str = DELIMITER)
         # nobody checked is indistinguishable from one that is there.
         for warehouse_spec in project.warehouses:
             for namespace in warehouse_spec.namespaces:
-                _summarize_namespace(http, namespace, delimiter=delimiter, absent=absent)
+                _summarize_namespace(http, namespace, absent=absent)
     return problems
 
 
-def _summarize_namespace(http: httpx.Client, namespace: Namespace, *, delimiter: str, absent: Callable[[str], None]) -> None:
+def _summarize_namespace(http: httpx.Client, namespace: Namespace, *, absent: Callable[[str], None]) -> None:
     """Print one namespace's tables as the catalog lists them, reporting every declared table that is not there."""
     payload, note = _read(http, f"/v1/namespace/{namespace.name}/table/list")
     if not isinstance(payload, dict):
@@ -654,7 +643,7 @@ def _summarize_namespace(http: httpx.Client, namespace: Namespace, *, delimiter:
     for table in namespace.tables:
         # `list_tables` answers with names relative to the namespace; the qualified form is accepted too
         # rather than depending on which one a given catalog build returns.
-        if table not in tables and f"{namespace.name}{delimiter}{table}" not in tables:
+        if table not in tables and f"{namespace.name}{CATALOG_DELIMITER}{table}" not in tables:
             absent(f"table {table} is absent from namespace {namespace.name}")
 
 
@@ -663,7 +652,6 @@ def main(argv: Sequence[str] | None = None, *, transport: httpx.BaseTransport | 
     parser = argparse.ArgumentParser(description="Seed the demo estate through the catalog's real APIs, in hierarchy order.")
     parser.add_argument("--catalog", default=CATALOG_URL, help=f"catalog base URL (default {CATALOG_URL})")
     parser.add_argument("--token", default=CATALOG_TOKEN, help="OIDC bearer for the governed doors (default $SEED_CATALOG_TOKEN; empty = auth off)")
-    parser.add_argument("--delimiter", default=DELIMITER, help=f"namespace/table delimiter, must match LANCE_NS_DELIMITER (default {DELIMITER!r})")
     parser.add_argument("--timeout", type=float, default=30.0, help="per-request timeout in seconds (default 30)")
     parser.add_argument("--dry-run", action="store_true", help="print the calls in order, make none of them")
     parser.add_argument(
@@ -688,7 +676,7 @@ def main(argv: Sequence[str] | None = None, *, transport: httpx.BaseTransport | 
             return 1
         principals[name] = principal
 
-    steps = plan(DEMO_ESTATE, principals, delimiter=args.delimiter, adopt_existing=args.adopt_existing)
+    steps = plan(DEMO_ESTATE, principals, adopt_existing=args.adopt_existing)
     print(f"  {len(steps)} steps against {args.catalog}")
     print(f"  identities mapped to their principal: {', '.join(sorted(principals))}")
     print(f"  bearer: {'yes' if args.token else 'NO — assuming an auth-off stack'}")
@@ -700,7 +688,7 @@ def main(argv: Sequence[str] | None = None, *, transport: httpx.BaseTransport | 
     headers = {"Authorization": f"Bearer {args.token}"} if args.token else {}
     with httpx.Client(base_url=args.catalog.rstrip("/"), timeout=args.timeout, headers=headers, transport=transport) as http:
         outcomes = seed(http, steps)
-        problems = summarize(http, DEMO_ESTATE, delimiter=args.delimiter)
+        problems = summarize(http, DEMO_ESTATE)
 
     tally: dict[str, int] = {}
     for outcome in outcomes:

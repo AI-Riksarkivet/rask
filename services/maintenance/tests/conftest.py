@@ -21,6 +21,7 @@ from maintenance.services.plan import DatasetPlan, PlanContext
 from service_kit.lakehouse import location_claims
 from service_kit.lakehouse.base_refs import BaseRefs, normalise
 from service_kit.lakehouse.maintenance_due import CloneList
+from service_kit.lakehouse.naming import CATALOG_DELIMITER
 
 
 @pytest.fixture
@@ -68,10 +69,10 @@ def maintain_one(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Callable[..
             monkeypatch.setattr(sweep, "resolve_plan", lambda *_a, **_k: plan.model_copy())
         now = datetime.now(UTC)
         settings = settings.model_copy(update={"control_root": str(tmp_path / "control")})
-        segments = table_id.split(settings.delimiter)
+        segments = table_id.split(CATALOG_DELIMITER)
         claims = location_claims.ClaimStore(control_root=settings.resolved_control_root, storage_options=settings.storage_options())
         location_claims.take(claims, normalise(uri), table_id, segments, is_gone=lambda _claim: False, uuid=str(uuid4()))
-        namespaces = {settings.delimiter.join(segments[:depth]): str(uuid4()) for depth in range(1, len(segments))}
+        namespaces = {CATALOG_DELIMITER.join(segments[:depth]): str(uuid4()) for depth in range(1, len(segments))}
         tick = sweep.SweepPlan(
             uris=[uri],
             protected=protected or BaseRefs(),

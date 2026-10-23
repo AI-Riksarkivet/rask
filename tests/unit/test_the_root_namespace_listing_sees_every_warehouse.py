@@ -39,7 +39,6 @@ from tests.unit.named_resolver import NamedResolver, uuid_of
 
 
 class _Settings:
-    delimiter = "$"
     registry_root = "s3://control/registry"
 
     def __init__(self, *, warehouses_enabled: bool = True, fga_enabled: bool = False) -> None:

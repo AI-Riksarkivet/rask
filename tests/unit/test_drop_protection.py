@@ -686,9 +686,9 @@ def test_namespace_tasks_reports_the_pending_expiry(tmp_path: Any, monkeypatch: 
 
     settings = _settings(tmp_path, grace_days=7)
     ns: Any = _CascadableNamespace()
-    assert asyncio.run(n_ep.namespace_tasks(id="bronze", settings=settings, resolver=_resolver(settings, ns, monkeypatch))) == []
+    assert asyncio.run(n_ep.namespace_tasks(id="bronze", resolver=_resolver(settings, ns, monkeypatch))) == []
     _drop_namespace_cascade(settings, ns)
-    entries = asyncio.run(n_ep.namespace_tasks(id="bronze", settings=settings, resolver=_resolver(settings, ns, monkeypatch)))
+    entries = asyncio.run(n_ep.namespace_tasks(id="bronze", resolver=_resolver(settings, ns, monkeypatch)))
     assert [entry.uuid for entry in entries] == [_uuid("bronze")] and entries[0].expires_at, "the undrop deadline is invisible"
 
 

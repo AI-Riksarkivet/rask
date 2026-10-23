@@ -50,7 +50,7 @@ def test_a_caller_sees_only_the_obligations_it_maintains(real_ns_client: TestCli
     for table in tables:
         table_uuid, location = str(uuid4()), f"{tmp_path}/{uuid4()}"
         uuids[table] = table_uuid
-        location_claims.take(table_claims.claim_store(settings), location, table, parse_identifier(table, "$"), is_gone=lambda _claim: False, uuid=table_uuid)
+        location_claims.take(table_claims.claim_store(settings), location, table, parse_identifier(table), is_gone=lambda _claim: False, uuid=table_uuid)
         obligation = ErasureObligation(
             obligation_id=uuid4().hex,
             table=table,

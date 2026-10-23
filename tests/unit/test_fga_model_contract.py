@@ -172,7 +172,7 @@ def _catalog_pairs(monkeypatch: pytest.MonkeyPatch) -> set[tuple[str, str]]:
 
     for segments in (["db1", "txn1"], ["txn1"]):  # namespaced (parent-scoped) + opaque (object-scoped)
         for suffix in ("describe", "alter"):
-            asyncio.run(fga_deps._authorize_transaction(_CLIENT, NamedResolver(), settings, segments, suffix, user="dex~alice"))
+            asyncio.run(fga_deps._authorize_transaction(_CLIENT, NamedResolver(), segments, suffix, user="dex~alice"))
 
     body = {
         "entries": [{"id": ["db1", "users"]}],
@@ -226,7 +226,7 @@ def test_transaction_alter_checks_a_real_namespace_writer_relation(
         return True
 
     monkeypatch.setattr(fga_deps.fga, "check", rec_check)
-    asyncio.run(fga_deps._authorize_transaction(_CLIENT, NamedResolver(), _settings(lock_root=False), ["db1", "txn1"], "alter", user="dex~alice"))
+    asyncio.run(fga_deps._authorize_transaction(_CLIENT, NamedResolver(), ["db1", "txn1"], "alter", user="dex~alice"))
 
     obj, relation = checked[-1]
     assert obj == f"namespace:{uuid_of('namespace', ['db1'])}"  # parent-scoped, not a per-txn object nothing seeds
@@ -365,13 +365,10 @@ def test_grant_routes_are_intercepted_before_the_resolver(monkeypatch: pytest.Mo
         return True
 
     monkeypatch.setattr(fga_deps.fga, "check", rec_check)
-    settings = _settings(lock_root=False)
     for fga_type in sorted(revoked):
         for rung in _grantable_relations(fga_type):
             request = cast("Request", _FakeRequest({"user": "dex~bob", "relation": rung}))
-            asyncio.run(
-                fga_deps._authorize_grant(request, _CLIENT, NamedResolver(), settings, user="dex~alice", fga_type=fga_type, segments=["x"], revoking=True)
-            )
+            asyncio.run(fga_deps._authorize_grant(request, _CLIENT, NamedResolver(), user="dex~alice", fga_type=fga_type, segments=["x"], revoking=True))
     model = _model_relations()
     undefined = sorted(f"{t}#{r}" for t, r in checked if r not in model[t])
     assert not undefined, f"the revoke gate checks {undefined}, which the model does not define: OpenFGA refuses each, and every revoke there answers 503"

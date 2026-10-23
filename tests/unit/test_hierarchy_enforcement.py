@@ -74,9 +74,7 @@ def test_the_cascade_destroys_BOTTOM_UP_and_never_asks_the_backend_to() -> None:
         ("namespace", ["bronze", "inner"]),
         ("table", ["bronze", "inner", "t2"]),
     ]
-    asyncio.run(
-        _drain(_destroy_subtree(ns, ["bronze"], descendants, registry=_NO_RECORDS, claims=ClaimStore(control_root="/nonexistent/control"), delimiter="$"))
-    )
+    asyncio.run(_drain(_destroy_subtree(ns, ["bronze"], descendants, registry=_NO_RECORDS, claims=ClaimStore(control_root="/nonexistent/control"))))
 
     assert "drop_table:bronze$pages" in ns.calls
     assert "drop_table:bronze$inner$t2" in ns.calls
@@ -101,10 +99,6 @@ def test_an_already_absent_child_is_DRIFT_not_an_error() -> None:
 
     ns: Any = _Vanishing()
     asyncio.run(
-        _drain(
-            _destroy_subtree(
-                ns, ["bronze"], [("table", ["bronze", "ghost"])], registry=_NO_RECORDS, claims=ClaimStore(control_root="/nonexistent/control"), delimiter="$"
-            )
-        )
+        _drain(_destroy_subtree(ns, ["bronze"], [("table", ["bronze", "ghost"])], registry=_NO_RECORDS, claims=ClaimStore(control_root="/nonexistent/control")))
     )
     assert "drop_namespace:bronze:restrict" in ns.calls, "one absent child blocked the whole cascade"

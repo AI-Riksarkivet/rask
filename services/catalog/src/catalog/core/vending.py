@@ -39,7 +39,6 @@ from lance_namespace import InvalidInputError, ServiceUnavailableError
 from pydantic import BaseModel, Field
 
 from catalog.core.base_judge import BaseJudge, require_sanctioned_bases
-from catalog.core.identifiers import IAM_WILDCARD_METACHARS
 from catalog.core.namespace import base_store_params_for, open_location
 from service_kit.governed import store_session
 from service_kit.governed.machine_identity import IdentityTokenUnavailableError
@@ -151,22 +150,32 @@ def role_session_name(subject: str) -> str:
     return _SESSION_NAME_UNSAFE.sub("-", subject)[:_SESSION_NAME_MAX].ljust(2, "-")
 
 
-def _holds_iam_wildcard(value: str) -> bool:
-    """Whether ``value`` holds an IAM wildcard (:data:`catalog.core.identifiers.IAM_WILDCARD_METACHARS`), which no statement can name without widening."""
-    return any(c in value for c in IAM_WILDCARD_METACHARS)
+#: What IAM reads as syntax inside a Resource ARN and an ``s3:prefix`` condition, not as a character of the value. ``*``
+#: and ``?`` are wildcards there, so a value holding one widens the grant to siblings: a ``foo*`` prefix authorises
+#: ``bucket/foo*/*``, which matches ``foobar``. ``${`` opens a policy variable, which IAM substitutes as it evaluates the
+#: policy, so a value holding one names whatever the variable holds rather than itself ([[LH-526]]). ONE tuple for every
+#: door that lets a value into a vended policy: the register door refuses a location holding any of them
+#: (``table_bases.require_registrable_location``), the policy builder refuses a table prefix holding one and drops a
+#: declared base holding one, since the table's writer chose it ([[LH-437]]), and a branch holding one is refused. A
+#: second copy is a second thing that can fall out of step with what IAM reads as syntax.
+IAM_POLICY_SYNTAX: Final = ("*", "?", "${")
 
 
-def _reject_iam_metacharacters(what: str, value: str) -> None:
-    """``*`` and ``?`` are wildcards inside a Resource ARN and an ``s3:prefix`` condition, with no escape.
+def held_iam_policy_syntax(value: str) -> list[str]:
+    """The :data:`IAM_POLICY_SYNTAX` ``value`` holds, which no statement can name without IAM reading it as syntax."""
+    return [token for token in IAM_POLICY_SYNTAX if token in value]
 
-    A value carrying one widens the grant to siblings. The table prefix goes through here, and raises: it comes off
-    a name the create door admitted (``identifiers.require_safe_segments``) or a location the register door admitted
-    (``table_bases.require_registrable_location``), and both refuse a wildcard, so a prefix holding one is the
-    catalog's own fault. A base path comes off the table's MANIFEST, which its writer chose, so the base loop of
-    :func:`build_session_policy` drops one holding a wildcard instead ([[LH-437]]).
+
+def _reject_iam_policy_syntax(what: str, value: str) -> None:
+    """Refuse a value holding IAM policy syntax (:data:`IAM_POLICY_SYNTAX`), which a vended policy cannot name.
+
+    The table prefix goes through here, and raises: it is a uuid the catalog minted for a table it made, or a location
+    the register door admitted (``table_bases.require_registrable_location``), which refuses the syntax, so a prefix
+    holding it is the catalog's own fault. A base path comes off the table's MANIFEST, which its writer chose, so the
+    base loop of :func:`build_session_policy` drops one holding it instead ([[LH-437]]).
     """
-    if _holds_iam_wildcard(value):
-        raise ValueError(f"{what} {value!r} contains an IAM wildcard metacharacter ('*'/'?'); it would widen the vended policy to sibling objects")
+    if held := held_iam_policy_syntax(value):
+        raise ValueError(f"{what} {value!r} holds IAM policy syntax {held}; it would widen or redirect the vended policy")
 
 
 def _reject_a_base_that_is_not_a_location(base: str, base_prefix: str) -> None:
@@ -182,7 +191,7 @@ def _reject_a_base_that_is_not_a_location(base: str, base_prefix: str) -> None:
     which covers ``_versions/`` — enough to commit a manifest client-side; the static keys the cascade's
     writers hold reach it too. So the value here is one a principal on ONE table can pick, used to widen
     the next credential vended for it.
-    The base loop already drops a base holding a wildcard (:func:`_holds_iam_wildcard`); this is the
+    The base loop already drops a base holding IAM policy syntax (:func:`held_iam_policy_syntax`); this is the
     other half of the same distrust.
 
     REFUSING A BUCKET ROOT CANNOT NARROW A REAL TABLE: the spec's base path points at a dataset root or
@@ -297,13 +306,13 @@ def _covered(table_location: str, base: str, sanctioned_bases: Sequence[str]) ->
 
     A base inside the table's own location needs no grant of its own, whatever its spelling: the table
     statement already covers it. That is every base a BRANCH handle declares — its parent's root — and
-    the vend doors judge the branch's own manifest ([[LH-279]]). A base outside it holding an IAM wildcard
-    is one no statement can name without widening, so the policy drops it, and the door answers server-mediated
+    the vend doors judge the branch's own manifest ([[LH-279]]). A base outside it holding IAM policy syntax
+    is one no statement can name without IAM reading the syntax, so the policy drops it, and the door answers server-mediated
     rather than vend a credential that misses it ([[LH-437]]).
     """
     if location_within(table_location, base):
         return True
-    if _holds_iam_wildcard(base):
+    if held_iam_policy_syntax(base):
         return False
     try:
         return _base_is_sanctioned(split_s3_location(base), split_s3_location(table_location), sanctioned_bases)
@@ -515,8 +524,8 @@ def build_session_policy(
 
     ``bases`` are the base paths the table's manifest declares, granted READ and never write, at either
     tier, and only when :func:`_base_is_sanctioned` allows it — inside the table's own vended scope, or
-    one table's directory beneath an entry of the operator's ``sanctioned_bases`` allowlist. A base holding an IAM
-    wildcard is granted nothing: no statement can name it without widening, and inside the table's own scope the
+    one table's directory beneath an entry of the operator's ``sanctioned_bases`` allowlist. A base holding IAM
+    policy syntax is granted nothing: no statement can name it without IAM reading the syntax, and inside the table's own scope the
     table's statements reach it already ([[LH-437]]). A table whose fragments carry a ``base_id``
     resolves them THROUGH those paths, so a credential that cannot read them is scoped to less than the
     table actually is — measured 2026-09-08 as 69 datasets a tick refused compaction because the
@@ -538,12 +547,12 @@ def build_session_policy(
     covers ``_versions/``, which is what the maintainer's dataset-root probe actually asks for.
 
     Raises:
-        ValueError: if ``prefix`` carries an IAM wildcard metachar (``*``/``?``) — see
-            :func:`_reject_iam_metacharacters` — or if a base names a bucket root rather than a location
+        ValueError: if ``prefix`` holds IAM policy syntax (:data:`IAM_POLICY_SYNTAX`) — see
+            :func:`_reject_iam_policy_syntax` — or if a base names a bucket root rather than a location
             inside one, which would widen the credential to that whole bucket
             (:func:`_reject_a_base_that_is_not_a_location`).
     """
-    _reject_iam_metacharacters("prefix", prefix)
+    _reject_iam_policy_syntax("prefix", prefix)
     prefix = prefix.rstrip("/")
     # A BRANCH IS A PREFIX, and the format says which one ([[LH-055]]). `file_format.md` puts a branch's
     # files at `{dataset_root}/tree/{branch_name}/` and states the name is used "as is to form the path,
@@ -559,13 +568,13 @@ def build_session_policy(
     # error and let `ns_errors.install_problem_handlers` translate it (`InvalidInput` -> 400, RFC 9457
     # problem+json, the code clients dispatch on). A bare `ValueError` reached the door as 500
     # `InternalError` — measured live 2026-09-21 — which says the catalog is broken when the caller simply
-    # sent a bad name. The prefix stays a `ValueError`: the catalog minted it from a name or a location its
-    # doors admitted, and both refuse a wildcard. A base is its table's writer's, judged by the base judge
-    # before it reaches this function (`require_vendable_bases`), and one holding a wildcard is dropped below.
+    # sent a bad name. The prefix stays a `ValueError`: the catalog minted it as a uuid or admitted it as a
+    # registered location, which refuses the syntax. A base is its table's writer's, judged by the base judge
+    # before it reaches this function (`require_vendable_bases`), and one holding the syntax is dropped below.
     branch = branch.strip("/")
     if branch:
-        if _holds_iam_wildcard(branch):
-            raise InvalidInputError(f"branch {branch!r} may not contain an IAM wildcard metacharacter")
+        if held := held_iam_policy_syntax(branch):
+            raise InvalidInputError(f"branch {branch!r} holds IAM policy syntax {held}, which a vended policy cannot name")
         if ".." in branch.split("/"):
             raise InvalidInputError(f"branch {branch!r} may not traverse out of the table's prefix")
     # READ-ONLY ON MAIN, WRITE-ONLY ON THE BRANCH — `lance_docs/lancemultibasebranchingblobv2.md` § "Building
@@ -625,11 +634,11 @@ def build_session_policy(
         )
     n = 0
     for base in bases:
-        if _holds_iam_wildcard(base):
+        if held_iam_policy_syntax(base):
             # DROPPED, as an unsanctioned base is below and for the same reason: a manifest is writer-chosen, and one
             # base must not make a table un-vendable ([[LH-437]]). Inside the table's scope the table's statements reach
             # it already; outside it, the vend doors answered server-mediated before asking (`unsanctioned_bases`).
-            log.warning("vend_base_path_wildcard", extra={"base": base, "table_bucket": bucket, "table_prefix": prefix})
+            log.warning("vend_base_path_iam_policy_syntax", extra={"base": base, "table_bucket": bucket, "table_prefix": prefix})
             continue
         base_bucket, base_prefix = split_s3_location(base)
         base_prefix = base_prefix.rstrip("/")

@@ -119,7 +119,9 @@ async def maintenance_middleware(
     """Short-circuit mutating requests on every catalog mount with 503 when read-only is on."""
     settings = getattr(request.app.state, "settings", None)
     read_only = bool(getattr(settings, "maintenance_read_only", False))
-    path = request.url.path
+    # The path routing matches, never `request.url.path`: that re-parses the decoded path as a URL, so a `?` in a name
+    # would end the path there and the action read would be a segment of the name ([[LH-526]]).
+    path: str = request.scope["path"]
     if read_only and path.startswith(GATED_MOUNTS) and is_mutating(request.method, path) and not is_read_vend(path, request):
         return maintenance_response()
     return await call_next(request)

@@ -23,7 +23,6 @@ import pytest
 from lance_namespace import PermissionDeniedError
 
 from catalog.api import fga_deps
-from catalog.core.config import Settings
 from tests.unit.named_resolver import NamedResolver, uuid_of
 
 
@@ -50,13 +49,11 @@ def _run(
 
     monkeypatch.setattr(fga_deps.fga, "check", fake_check)
     request = cast(fga_deps.Request, SimpleNamespace(json=lambda: _as_coro(body)))
-    settings = cast(Settings, SimpleNamespace(delimiter="$"))
     asyncio.run(
         fga_deps._authorize_grant(
             request,
             cast(Any, object()),
             NamedResolver(),
-            settings,
             user="dex~alice",
             fga_type=fga_type,
             segments=segments if segments is not None else ["gold"],
@@ -126,12 +123,9 @@ def test_a_rung_with_no_grant_action_is_refused_before_reaching_openfga(monkeypa
 
     monkeypatch.setattr(fga_deps.fga, "check", fake_check)
     request = cast(fga_deps.Request, SimpleNamespace(json=lambda: _as_coro({"user": "dex~bob", "relation": relation})))
-    settings = cast(Settings, SimpleNamespace(delimiter="$"))
     with pytest.raises(PermissionDeniedError):
         asyncio.run(
-            fga_deps._authorize_grant(
-                request, cast(Any, object()), NamedResolver(), settings, user="dex~alice", fga_type="namespace", segments=["gold"], revoking=False
-            )
+            fga_deps._authorize_grant(request, cast(Any, object()), NamedResolver(), user="dex~alice", fga_type="namespace", segments=["gold"], revoking=False)
         )
     assert asked == [], f"{relation!r} reached OpenFGA as a phantom relation"
 
@@ -172,13 +166,10 @@ def test_revoke_still_refuses_a_phantom_rung_before_reaching_openfga(monkeypatch
 
     monkeypatch.setattr(fga_deps.fga, "check", fake_check)
     request = cast(fga_deps.Request, SimpleNamespace(json=lambda: _as_coro({"user": "dex~bob", "relation": "parent"})))
-    settings = cast(Settings, SimpleNamespace(delimiter="$"))
 
     with pytest.raises(PermissionDeniedError):
         asyncio.run(
-            fga_deps._authorize_grant(
-                request, cast(Any, object()), NamedResolver(), settings, user="dex~alice", fga_type="namespace", segments=["gold"], revoking=True
-            )
+            fga_deps._authorize_grant(request, cast(Any, object()), NamedResolver(), user="dex~alice", fga_type="namespace", segments=["gold"], revoking=True)
         )
 
     assert asked == []
@@ -201,13 +192,10 @@ def test_a_manage_grants_holder_cannot_grant_themselves_a_rung(monkeypatch: pyte
 
     monkeypatch.setattr(fga_deps.fga, "check", fake_check)
     request = cast(fga_deps.Request, SimpleNamespace(json=lambda: _as_coro({"user": "dex~judy", "relation": "owner"})))
-    settings = cast(Settings, SimpleNamespace(delimiter="$"))
 
     with pytest.raises(PermissionDeniedError, match="may not raise your own access"):
         asyncio.run(
-            fga_deps._authorize_grant(
-                request, cast(Any, object()), NamedResolver(), settings, user="dex~judy", fga_type="namespace", segments=["gold"], revoking=False
-            )
+            fga_deps._authorize_grant(request, cast(Any, object()), NamedResolver(), user="dex~judy", fga_type="namespace", segments=["gold"], revoking=False)
         )
 
     assert ("owner", "user:dex~judy") in checks, "the guard must ask whether the caller ALREADY holds the rung"
@@ -222,12 +210,9 @@ def test_re_granting_yourself_what_you_already_hold_is_allowed(monkeypatch: pyte
 
     monkeypatch.setattr(fga_deps.fga, "check", fake_check)
     request = cast(fga_deps.Request, SimpleNamespace(json=lambda: _as_coro({"user": "dex~alice", "relation": "owner"})))
-    settings = cast(Settings, SimpleNamespace(delimiter="$"))
 
     asyncio.run(
-        fga_deps._authorize_grant(
-            request, cast(Any, object()), NamedResolver(), settings, user="dex~alice", fga_type="namespace", segments=["gold"], revoking=False
-        )
+        fga_deps._authorize_grant(request, cast(Any, object()), NamedResolver(), user="dex~alice", fga_type="namespace", segments=["gold"], revoking=False)
     )
 
 
@@ -244,13 +229,10 @@ def test_the_userset_indirection_is_closed_too(monkeypatch: pytest.MonkeyPatch) 
 
     monkeypatch.setattr(fga_deps.fga, "check", fake_check)
     request = cast(fga_deps.Request, SimpleNamespace(json=lambda: _as_coro({"user": "role:validators#assignee", "relation": "owner"})))
-    settings = cast(Settings, SimpleNamespace(delimiter="$"))
 
     with pytest.raises(PermissionDeniedError, match="may not raise your own access"):
         asyncio.run(
-            fga_deps._authorize_grant(
-                request, cast(Any, object()), NamedResolver(), settings, user="dex~judy", fga_type="namespace", segments=["gold"], revoking=False
-            )
+            fga_deps._authorize_grant(request, cast(Any, object()), NamedResolver(), user="dex~judy", fga_type="namespace", segments=["gold"], revoking=False)
         )
 
     assert ("user:dex~judy", "assignee", "role:validators") in checks, "membership of the granted userset was never checked"
@@ -267,12 +249,9 @@ def test_a_userset_the_caller_is_outside_is_a_normal_grant(monkeypatch: pytest.M
 
     monkeypatch.setattr(fga_deps.fga, "check", fake_check)
     request = cast(fga_deps.Request, SimpleNamespace(json=lambda: _as_coro({"user": "role:validators#assignee", "relation": "owner"})))
-    settings = cast(Settings, SimpleNamespace(delimiter="$"))
 
     asyncio.run(
-        fga_deps._authorize_grant(
-            request, cast(Any, object()), NamedResolver(), settings, user="dex~judy", fga_type="namespace", segments=["gold"], revoking=False
-        )
+        fga_deps._authorize_grant(request, cast(Any, object()), NamedResolver(), user="dex~judy", fga_type="namespace", segments=["gold"], revoking=False)
     )
 
 

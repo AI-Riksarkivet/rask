@@ -32,6 +32,7 @@ from catalog.core.identifiers import parse_identifier, with_minted_uuid
 from catalog.services import native, object_uuids
 from service_kit.governed import fga
 from service_kit.lakehouse import protection
+from service_kit.lakehouse.naming import CATALOG_DELIMITER
 
 
 log = logging.getLogger(__name__)
@@ -43,7 +44,7 @@ ACTOR = "system:provenance-namespace"
 def is_provenance(namespace_id: str, settings: Settings) -> bool:
     """Whether ``namespace_id`` (a table's parent namespace, delimiter-joined) is the provenance namespace or inside it."""
     root = settings.provenance_namespace
-    return bool(root) and (namespace_id == root or namespace_id.startswith(f"{root}{settings.delimiter}"))
+    return bool(root) and (namespace_id == root or namespace_id.startswith(f"{root}{CATALOG_DELIMITER}"))
 
 
 def provenance_tuples(settings: Settings, *, namespace_uuid: str, parent: str | None) -> list[fga.ClientTuple]:
@@ -59,8 +60,8 @@ async def ensure_provenance_namespace(ns: LanceNamespace, settings: Settings, cl
     """Create the provenance namespace if absent, protect it and grant its writers; ``True`` when it was created now."""
     if not settings.provenance_namespace:
         return False
-    segments = parse_identifier(settings.provenance_namespace, settings.delimiter)
-    canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
+    segments = parse_identifier(settings.provenance_namespace)
+    canonical = fga.canonical_object_id(segments)
     # The `dir` backend refuses an existing namespace in every create mode, `exist_ok` included (measured on pylance
     # 13.0.0, where the spec's ExistOk would keep it), so keeping one is catching that refusal, and a kept namespace keeps
     # the uuid it was created with ([[LH-519]]).

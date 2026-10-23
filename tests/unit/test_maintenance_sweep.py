@@ -123,7 +123,7 @@ def test_on_cron_single_flight_skips_an_overlapping_sweep(monkeypatch: Any) -> N
 
     monkeypatch.setattr(routes, "emit_sweep_lineage", _noop_emit)
     monkeypatch.setattr(routes, "summarize", lambda _results: {"status": "ok", "datasets": 0})
-    settings = cast(Any, types.SimpleNamespace(delimiter="$"))
+    settings = cast(Any, types.SimpleNamespace())
 
     async def while_a_sweep_is_running() -> dict:
         async with routes._sweep_lock:  # simulate the previous tick's sweep still holding the lock

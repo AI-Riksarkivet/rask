@@ -39,7 +39,7 @@ def _app(ns: object, monkeypatch: pytest.MonkeyPatch) -> tuple[FastAPI, list[lis
     application = FastAPI()
     install_problem_handlers(application, logging.getLogger(__name__))
     application.include_router(version_door.router)
-    settings = SimpleNamespace(delimiter="$", storage_options=dict, warehouses_enabled=False, fga_enabled=False, root="")
+    settings = SimpleNamespace(storage_options=dict, warehouses_enabled=False, fga_enabled=False, root="")
     application.dependency_overrides[SettingsDep.__metadata__[0].dependency] = lambda: settings
     application.dependency_overrides[NamespaceDep.__metadata__[0].dependency] = lambda: ns
     application.dependency_overrides[StorageOptionsDep.__metadata__[0].dependency] = lambda: {}

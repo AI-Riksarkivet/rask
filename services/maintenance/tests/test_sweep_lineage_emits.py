@@ -50,13 +50,13 @@ class _RecordingEmitter:
 
 def _material(n: int) -> list[DatasetResult]:
     """`n` datasets that each reclaimed something — the COMPLETE lane's trigger."""
-    return [DatasetResult(uri=f"s3://b/{i:04d}_ns.tbl{i}", table_id=f"ns.tbl{i}", old_versions_removed=1) for i in range(n)]
+    return [DatasetResult(uri=f"s3://b/{i:04d}_ns.tbl{i}", table_id=f"ns$tbl{i}", old_versions_removed=1) for i in range(n)]
 
 
 @pytest.mark.asyncio
 async def test_complete_emits_are_gathered_not_awaited_one_at_a_time() -> None:
     emitter = _RecordingEmitter()
-    await emit_sweep_lineage(emitter, _material(40), delimiter=".")
+    await emit_sweep_lineage(emitter, _material(40))
     assert len(emitter.completed) == 40
     assert emitter.max_in_flight > 1, f"COMPLETE publishes ran strictly serially (max in flight {emitter.max_in_flight}) — 40 x 5s of ack window"
 
@@ -64,23 +64,23 @@ async def test_complete_emits_are_gathered_not_awaited_one_at_a_time() -> None:
 @pytest.mark.asyncio
 async def test_a_raising_complete_publish_does_not_abort_the_emit_phase() -> None:
     """The FAIL lane is documented raise-proof "even for a mis-wired emitter"; the COMPLETE lane was not."""
-    results = [*_material(3), DatasetResult(uri="s3://b/9999_ns.bad", table_id="ns.bad", error="maintain: boom", error_type="RuntimeError")]
-    emitter = _RecordingEmitter(raise_on="ns.tbl1")
-    await emit_sweep_lineage(emitter, results, delimiter=".")
-    assert sorted(emitter.completed) == ["ns.tbl0", "ns.tbl2"], "a raising publish must not take its siblings down"
-    assert emitter.failed == ["ns.bad"], "the FAIL lane must still run after a COMPLETE publish raised"
+    results = [*_material(3), DatasetResult(uri="s3://b/9999_ns.bad", table_id="ns$bad", error="maintain: boom", error_type="RuntimeError")]
+    emitter = _RecordingEmitter(raise_on="ns$tbl1")
+    await emit_sweep_lineage(emitter, results)
+    assert sorted(emitter.completed) == ["ns$tbl0", "ns$tbl2"], "a raising publish must not take its siblings down"
+    assert emitter.failed == ["ns$bad"], "the FAIL lane must still run after a COMPLETE publish raised"
 
 
 @pytest.mark.parametrize(
     ("result", "lane"),
     [
         pytest.param(
-            DatasetResult(uri="s3://b/0001_ns.t", table_id="ns.t", old_versions_removed=4, error="auto_cleanup: denied", error_type="OSError"),
+            DatasetResult(uri="s3://b/0001_ns.t", table_id="ns$t", old_versions_removed=4, error="auto_cleanup: denied", error_type="OSError"),
             "complete",
             id="a-failed-disarm-beside-a-reclaim",
         ),
         pytest.param(
-            DatasetResult(uri="s3://b/0001_ns.t", table_id="ns.t", error="auto_cleanup: denied", error_type="OSError"),
+            DatasetResult(uri="s3://b/0001_ns.t", table_id="ns$t", error="auto_cleanup: denied", error_type="OSError"),
             None,
             id="a-failed-disarm-that-reclaimed-nothing",
         ),
@@ -90,7 +90,7 @@ async def test_a_raising_complete_publish_does_not_abort_the_emit_phase() -> Non
 async def test_the_lane_is_decided_by_the_work_done_unless_the_pass_failed(result: DatasetResult, lane: str | None) -> None:
     """A failed disarm leaves the commit path armed, but whatever the pass reclaimed still changed the table."""
     emitter = _RecordingEmitter()
-    await emit_sweep_lineage(emitter, [result], delimiter=".")
+    await emit_sweep_lineage(emitter, [result])
 
     reached = "complete" if emitter.completed else "fail" if emitter.failed else None
     assert reached == lane, (emitter.completed, emitter.failed)

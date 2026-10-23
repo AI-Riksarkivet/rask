@@ -142,7 +142,7 @@ async def add_columns(
 ) -> AlterTableAddColumnsResponse:
     """Add SQL-expression-computed columns to the table — wraps ``alter_table_add_columns``; emits an
     ADD_COLUMNS event carrying the NEW per-version schema, so the feed records the add at its version."""
-    segments = parse_identifier(id, settings.delimiter)
+    segments = parse_identifier(id)
     body.id = reconcile_body_id(segments, body.id)
     response = await run_in_threadpool(dataplane.add_columns, ns, so, body)
     await lineage_deps.emit_measured_write(
@@ -150,7 +150,6 @@ async def add_columns(
         segments,
         ns=ns,
         so=so,
-        settings=settings,
         token=token,
         operation=ADD_COLUMNS,
         authorization=authorization,
@@ -175,7 +174,7 @@ async def alter_columns(
 ) -> AlterTableAlterColumnsResponse:
     """Rename, re-type, or change nullability of existing columns — wraps ``alter_table_alter_columns``;
     emits an ALTER_COLUMNS event with the post-evolution schema, so renames and re-types reach the feed."""
-    segments = parse_identifier(id, settings.delimiter)
+    segments = parse_identifier(id)
     body.id = reconcile_body_id(segments, body.id)
     response = await run_in_threadpool(dataplane.alter_columns, ns, so, body)
     await lineage_deps.emit_measured_write(
@@ -183,7 +182,6 @@ async def alter_columns(
         segments,
         ns=ns,
         so=so,
-        settings=settings,
         token=token,
         operation=ALTER_COLUMNS,
         authorization=authorization,
@@ -208,7 +206,7 @@ async def drop_columns(
 ) -> AlterTableDropColumnsResponse:
     """Drop the named columns from the table — wraps ``alter_table_drop_columns``; emits a DROP_COLUMNS
     event with the reduced schema, so the feed records the version without the dropped columns."""
-    segments = parse_identifier(id, settings.delimiter)
+    segments = parse_identifier(id)
     body.id = reconcile_body_id(segments, body.id)
     response = await run_in_threadpool(dataplane.drop_columns, ns, so, body)
     await lineage_deps.emit_measured_write(
@@ -216,7 +214,6 @@ async def drop_columns(
         segments,
         ns=ns,
         so=so,
-        settings=settings,
         token=token,
         operation=DROP_COLUMNS,
         authorization=authorization,
@@ -232,7 +229,7 @@ async def drop_columns(
 # missing `status_code` would go unnoticed until a backend arrived and silently answered 200.
 @router.post("/{id}/backfill_column", response_model_exclude_none=True, status_code=202)
 def backfill_column(
-    id: str, body: AlterTableBackfillColumnsRequest, ns: NamespaceDep, data_ns: DataNamespaceDep, settings: SettingsDep, so: StorageOptionsDep
+    id: str, body: AlterTableBackfillColumnsRequest, ns: NamespaceDep, data_ns: DataNamespaceDep, so: StorageOptionsDep
 ) -> AlterTableBackfillColumnsResponse:
     """Backfill values into columns via the native driver — wraps ``alter_table_backfill_columns``.
 
@@ -240,7 +237,7 @@ def backfill_column(
     Lance version it eventually produces isn't known at request time — a synchronous emit would assert a
     version that hasn't been written. The version the job lands is not announced from here.
     """
-    body.id = reconcile_body_id(parse_identifier(id, settings.delimiter), body.id)
+    body.id = reconcile_body_id(parse_identifier(id), body.id)
     judged_native_version(ns, so, list(body.id or []), version=None)
     return native.call(data_ns, "alter_table_backfill_columns", body)
 
@@ -262,7 +259,7 @@ async def update_field_metadata(
     """Merge or replace per-field metadata for the given field paths — wraps ``update_field_metadata``;
     emits an UPDATE_FIELD_METADATA event at the new version (columns unchanged, but the event still
     carries the schema, so every version the feed records has one)."""
-    segments = parse_identifier(id, settings.delimiter)
+    segments = parse_identifier(id)
     body.id = reconcile_body_id(segments, body.id)
     updates = [u.model_dump() for u in (body.updates or [])]
     await _require_classifier_for_governance_keys(client, settings, token, table=table, updates=updates)
@@ -272,7 +269,6 @@ async def update_field_metadata(
         segments,
         ns=ns,
         so=so,
-        settings=settings,
         token=token,
         operation=UPDATE_FIELD_METADATA,
         authorization=authorization,
@@ -308,7 +304,7 @@ async def update_table_schema_metadata(
     Keys under ``lineage.*`` and ``rask.*`` are the platform's and are refused 400, set or null alike.
     """
     # REST-only: the spec sends the metadata map directly, or wrapped as {"metadata": {...}}.
-    segments = parse_identifier(id, settings.delimiter)
+    segments = parse_identifier(id)
     nested = body.get("metadata")
     if isinstance(nested, dict):
         # Spec envelope: the id (+ identity/context) sits BESIDE the map — reconcile it like every {id}
@@ -368,7 +364,6 @@ async def update_table_schema_metadata(
         segments,
         ns=ns,
         so=so,
-        settings=settings,
         token=token,
         operation=UPDATE_SCHEMA_METADATA,
         authorization=authorization,

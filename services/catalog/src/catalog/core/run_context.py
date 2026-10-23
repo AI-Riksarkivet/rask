@@ -13,7 +13,7 @@ because the catalog refuses every other value before it finalizes.
 
 The properties are the only ``rask.*`` keys a commit may carry. ``rask.inputs`` is a JSON array of
 ``{"table": [<id segment>, ...], "version": <n>, "branch": <name>}``, ``branch`` omitted for main: the table is the
-spec identifier as a list, so it reads the same whatever delimiter the catalog is configured with.
+spec identifier as a list of names, so reading it needs no delimiter.
 """
 
 from __future__ import annotations

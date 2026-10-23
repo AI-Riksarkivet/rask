@@ -265,6 +265,7 @@ def _version(root: Path, table: list[str]) -> int | None:
     ("door", "table", "answer", "version"),
     [
         pytest.param("/v1/namespace/fresh/create", ["fresh", "t"], (503, 17), None, id="a-namespace-it-would-announce"),
+        pytest.param("/v1/namespace/describe%3F/create", ["describe?", "t"], (503, 17), None, id="a-namespace-whose-name-holds-a-question-mark"),
         pytest.param("/v1/table/db$t/insert", ["db", "t"], (503, 17), 1, id="an-insert-it-would-announce"),
         pytest.param(f"/v1/table/{PROVENANCE}$feed/insert", [PROVENANCE, "feed"], (200, None), 2, id="an-insert-it-never-announces"),
     ],

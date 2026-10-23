@@ -55,7 +55,6 @@ def _emit(bound: Any) -> None:
         emit_write_event(
             bound,
             ["acme", "silver", "features"],
-            delimiter="$",
             author="service-annotator",
             version=3,
             operation="create_table",

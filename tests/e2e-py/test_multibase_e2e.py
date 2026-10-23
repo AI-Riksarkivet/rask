@@ -24,10 +24,11 @@ import pytest
 import requests
 from topology import assert_parent_exists, create_top_level
 
+from service_kit.lakehouse.naming import CATALOG_DELIMITER
+
 
 CATALOG = os.environ.get("LANCE_E2E_CATALOG_URL", "").rstrip("/")
 TOKEN = os.environ.get("LANCE_E2E_TOKEN", "")
-DELIM = os.environ.get("LANCE_E2E_DELIM", "$")
 S3 = os.environ.get("LANCE_E2E_S3", "http://localhost:9900")
 S3_ACCESS_KEY = os.environ.get("LANCE_E2E_S3_ACCESS_KEY", "rustfsadmin")
 S3_SECRET_KEY = os.environ.get("LANCE_E2E_S3_SECRET_KEY", "rustfsadmin")
@@ -109,7 +110,7 @@ def test_multibase_redirects_data_and_reads_fan_out(catalog_ns: str) -> None:
     import lance
 
     catalog = catalog_ns
-    tbl = "mbns" + DELIM + "mbtbl"
+    tbl = "mbns" + CATALOG_DELIMITER + "mbtbl"
     q = f"data_base={BASE_A}&data_base={BASE_B}"
     r = requests.post(
         # mode=overwrite for REPEATABILITY (testing.md F.I.R.S.T.) — a re-run must not collide on the

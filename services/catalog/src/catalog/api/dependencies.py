@@ -227,7 +227,7 @@ async def _route_for(request: Request, settings: Settings) -> tuple[str, str | N
     object_id = request.path_params.get("id")
     if not object_id:  # collection routes (list/health) have no id to route by
         return None
-    segments = parse_identifier(object_id, settings.delimiter)
+    segments = parse_identifier(object_id)
     if not segments:
         # THE ROOT NAMESPACE. Its id IS the delimiter (spec), so it parses to no segments — and there is
         # no warehouse above the root to route to, which makes the default namespace the right answer
@@ -339,7 +339,7 @@ class Resolver:
         """
         key = (kind, tuple(segments))
         if key not in self._trashed:
-            canonical = fga.canonical_object_id(segments, delimiter=self._settings.delimiter)
+            canonical = fga.canonical_object_id(segments)
             records = await run_in_threadpool(trash.named, self._settings.registry_root, self._settings.storage_options(), canonical, kind=kind)
             wanted = self._request.query_params.get("uuid")
             self._trashed[key] = [r for r in records if (uuid := trash.object_uuid(r)) is not None and wanted in (None, uuid)]
@@ -362,9 +362,7 @@ class Resolver:
         if key in self._admitted:
             return self._admitted[key]
         if self._settings.fga_enabled:
-            raise InternalError(
-                f"no authorization decided which trashed {kind} under {fga.canonical_object_id(segments, delimiter=self._settings.delimiter)!r} this caller may act on"
-            )
+            raise InternalError(f"no authorization decided which trashed {kind} under {fga.canonical_object_id(segments)!r} this caller may act on")
         return await self.trashed(kind, segments)
 
 
@@ -384,13 +382,13 @@ def get_resolver(request: Request, settings: SettingsDep) -> Resolver:
 ResolverDep = Annotated[Resolver, Depends(get_resolver)]
 
 
-async def get_resolved_table(request: Request, settings: SettingsDep, ns: NamespaceDep, resolver: ResolverDep) -> ResolvedTable:
+async def get_resolved_table(request: Request, ns: NamespaceDep, resolver: ResolverDep) -> ResolvedTable:
     """The table the request's ``{id}`` names, resolved once to its location and that location's claim (ADR 0173 §7).
 
     The resolution the router's authorization read, when it read one, so a door acting on it never resolves the name
     again.
     """
-    return await resolver.table(parse_identifier(request.path_params["id"], settings.delimiter), ns=ns)
+    return await resolver.table(parse_identifier(request.path_params["id"]), ns=ns)
 
 
 ResolvedTableDep = Annotated[ResolvedTable, Depends(get_resolved_table)]
@@ -528,7 +526,7 @@ class ObjectUuids:
 
     async def namespace_of(self, name: str) -> str | None:
         """The uuid of the namespace the table or namespace ``name`` is in; ``None`` for a top-level namespace or a failed read."""
-        segments = [segment for segment in name.split(self._settings.delimiter) if segment][:-1]
+        segments = [segment for segment in parse_identifier(name) if segment][:-1]
         ns = await self._connection(segments) if segments else None
         return None if ns is None else await run_in_threadpool(object_uuids.namespace_uuid, ns, segments)
 

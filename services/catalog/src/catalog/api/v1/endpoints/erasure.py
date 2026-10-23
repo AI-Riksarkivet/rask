@@ -104,8 +104,8 @@ async def erase_subject(
     suggest a per-ref erasure exists; honouring it would let a caller believe they had erased a subject when they had
     narrowed the obligation to one ref.
     """
-    segments = parse_identifier(id, settings.delimiter)
-    canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
+    segments = parse_identifier(id)
+    canonical = fga.canonical_object_id(segments)
     table_uuid = table.require_uuid()
     dataset = await run_in_threadpool(open_resolved_dataset, str(table.location), so, segments)
     await run_in_threadpool(erasure.plan, dataset, body.predicate)
@@ -169,8 +169,8 @@ async def verify_erasure(
     because Lance keeps it as possibly an in-flight write's (`lance_docs/lance_sdk.md` cleanup_old_versions
     `delete_unverified`).
     """
-    segments = parse_identifier(id, settings.delimiter)
-    canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
+    segments = parse_identifier(id)
+    canonical = fga.canonical_object_id(segments)
     control_root, control_options = settings.registry_root, settings.storage_options()
     obligation = await run_in_threadpool(erasure_obligations.read, control_root, control_options, obligation_id)
     table_uuid = table.require_uuid()

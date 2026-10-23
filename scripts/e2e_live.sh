@@ -224,7 +224,6 @@ export LANCE_E2E_OIDC_CLIENT_ID="$DEX_CLIENT"
 export LANCE_E2E_OIDC_CLIENT_SECRET="$DEX_SECRET"
 export LANCE_E2E_DEX_SECRET="$DEX_SECRET"
 export LANCE_E2E_PROJECT="${LANCE_E2E_PROJECT:-acme}"
-export LANCE_E2E_DELIM='$'
 export LANCE_E2E_RELEASE="$RELEASE"
 # The namespace the release runs in: its ServiceAccounts are the services' signing identities.
 LANCE_E2E_RELEASE_NAMESPACE="$(kubectl config view --minify -o jsonpath='{..namespace}' 2>/dev/null || true)"

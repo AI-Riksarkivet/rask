@@ -60,9 +60,9 @@ def _refuse_a_catalog_tag(tag: str) -> None:
 # flip-flop. Explicit ids keep the spec's POST canonical and name the GET for what it is.
 @router.post("/{id}/tags/list", response_model_exclude_none=True, operation_id="list_table_tags")
 @router.get("/{id}/tags/list", response_model_exclude_none=True, operation_id="list_table_tags_compat_get")
-def list_table_tags(id: str, ns: NamespaceDep, settings: SettingsDep, so: StorageOptionsDep) -> ListTableTagsResponse:
+def list_table_tags(id: str, ns: NamespaceDep, so: StorageOptionsDep) -> ListTableTagsResponse:
     """List every tag on the table — wraps lance_namespace ListTableTags."""
-    req = ListTableTagsRequest(id=parse_identifier(id, settings.delimiter))
+    req = ListTableTagsRequest(id=parse_identifier(id))
     return dataplane.list_tags(ns, so, req)
 
 
@@ -72,7 +72,6 @@ async def create_table_tag(
     body: CreateTableTagRequest,
     ns: NamespaceDep,
     table: ResolvedTableDep,
-    settings: SettingsDep,
     so: StorageOptionsDep,
     control: ControlEmitterDep,
     token: CurrentToken = None,
@@ -87,7 +86,7 @@ async def create_table_tag(
     suggests: `table_published` already announces the publication tag moving, and until now the OTHER
     ref mutations moved in silence — a console could not tell a tag was gone.
     """
-    segments = parse_identifier(id, settings.delimiter)
+    segments = parse_identifier(id)
     body.id = reconcile_body_id(segments, body.id)
     _refuse_a_catalog_tag(body.tag)
     response = dataplane.create_tag(ns, so, body)
@@ -97,7 +96,7 @@ async def create_table_tag(
         action="table_tag_created",
         object_type="table",
         object_id=fga.table_object(table.require_uuid()),
-        object_name=fga.canonical_object_id(segments, delimiter=settings.delimiter),
+        object_name=fga.canonical_object_id(segments),
         actor=f"user:{token.subject}" if token is not None else None,
         extra={"tag": body.tag, "version": body.version, **await run_in_threadpool(_ref_of, ns, so, segments, body.branch)},
     )
@@ -105,11 +104,9 @@ async def create_table_tag(
 
 
 @router.post("/{id}/tags/version", response_model_exclude_none=True)
-def get_table_tag_version(
-    id: str, body: GetTableTagVersionRequest, ns: NamespaceDep, settings: SettingsDep, so: StorageOptionsDep
-) -> GetTableTagVersionResponse:
+def get_table_tag_version(id: str, body: GetTableTagVersionRequest, ns: NamespaceDep, so: StorageOptionsDep) -> GetTableTagVersionResponse:
     """Resolve which table version a tag points to — wraps lance_namespace GetTableTagVersion."""
-    body.id = reconcile_body_id(parse_identifier(id, settings.delimiter), body.id)
+    body.id = reconcile_body_id(parse_identifier(id), body.id)
     return dataplane.get_tag_version(ns, so, body)
 
 
@@ -119,7 +116,6 @@ async def update_table_tag(
     body: UpdateTableTagRequest,
     ns: NamespaceDep,
     table: ResolvedTableDep,
-    settings: SettingsDep,
     so: StorageOptionsDep,
     control: ControlEmitterDep,
     token: CurrentToken = None,
@@ -130,7 +126,7 @@ async def update_table_tag(
     "tag -> version" has stale state with no failing read to discover it by; `version` rides in `extra`
     so it can be corrected without a re-read.
     """
-    segments = parse_identifier(id, settings.delimiter)
+    segments = parse_identifier(id)
     body.id = reconcile_body_id(segments, body.id)
     _refuse_a_catalog_tag(body.tag)
     response = dataplane.update_tag(ns, so, body)
@@ -140,7 +136,7 @@ async def update_table_tag(
         action="table_tag_updated",
         object_type="table",
         object_id=fga.table_object(table.require_uuid()),
-        object_name=fga.canonical_object_id(segments, delimiter=settings.delimiter),
+        object_name=fga.canonical_object_id(segments),
         actor=f"user:{token.subject}" if token is not None else None,
         extra={"tag": body.tag, "version": body.version, **await run_in_threadpool(_ref_of, ns, so, segments, body.branch)},
     )
@@ -165,7 +161,7 @@ async def delete_table_tag(
     refuses this on the same record its drop consults, and ``force`` turns that lock only. The catalog's own
     tags, ``published`` among them, are refused here whatever the table's protection says.
     """
-    segments = parse_identifier(id, settings.delimiter)
+    segments = parse_identifier(id)
     body.id = reconcile_body_id(segments, body.id)
     _refuse_a_catalog_tag(body.tag)
     await fga_deps.require_table_unprotected(settings, table, force=force)
@@ -179,7 +175,7 @@ async def delete_table_tag(
         action="table_tag_deleted",
         object_type="table",
         object_id=fga.table_object(table.require_uuid()),
-        object_name=fga.canonical_object_id(segments, delimiter=settings.delimiter),
+        object_name=fga.canonical_object_id(segments),
         actor=f"user:{token.subject}" if token is not None else None,
         extra={"tag": body.tag, **await run_in_threadpool(_ref_of, ns, so, segments, pinned.branch if pinned is not None else None)},
     )

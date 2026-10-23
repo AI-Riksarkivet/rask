@@ -19,7 +19,6 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from service_kit.governed.settings import FgaSettings, SignatureDoorSettings
 from service_kit.governed.store_credential import S3KeyPair, store_key_pair
-from service_kit.lakehouse.naming import CATALOG_DELIMITER
 from service_kit.lakehouse.objectfs import lance_storage_options
 
 
@@ -126,10 +125,6 @@ class MaintenanceSettings(SignatureDoorSettings, FgaSettings, BaseSettings):
     # "maintenance", the SERVICE: the namespace lands on every emitted RunEvent's job and is persisted into
     # AGE. The job NAME, `expire_versions.<table_id>`, names the operation.
     lineage_job_namespace: str = Field(default="maintenance", alias="MAINTENANCE_LINEAGE_JOB_NAMESPACE")
-    # The catalog id delimiter — to derive a dataset's parent namespace from its table id (matches the
-    # catalog's LANCE_DELIMITER default). The catalog lays tables out as <uuid>_<table_id>; table_id is the
-    # canonical lineage Dataset name == OpenFGA object id, and its parent is all-but-the-last segment.
-    delimiter: str = Field(default=CATALOG_DELIMITER, alias="MAINTENANCE_DELIMITER")
 
     # --- S3 access to the Lance lakehouse bucket ----------------------------------------------------
     s3_endpoint: str = Field(default="http://localhost:9000", alias="MAINTENANCE_S3_ENDPOINT")

@@ -49,13 +49,12 @@ router = APIRouter(prefix="/v1/table", tags=["branch"])
 def list_table_branches(
     id: str,
     ns: NamespaceDep,
-    settings: SettingsDep,
     so: StorageOptionsDep,
     page_token: str | None = None,
     limit: Annotated[int | None, Query(ge=1, le=_MAX_LIST_LIMIT)] = None,
 ) -> ListTableBranchesResponse:
     """List a table's Git-like branches (paginated) — wraps the pylance ``list_branches`` data-plane op."""
-    req = ListTableBranchesRequest(id=parse_identifier(id, settings.delimiter), page_token=page_token, limit=limit)
+    req = ListTableBranchesRequest(id=parse_identifier(id), page_token=page_token, limit=limit)
     return dataplane.list_branches(ns, so, req)
 
 
@@ -65,7 +64,6 @@ async def create_table_branch(
     body: CreateTableBranchRequest,
     ns: NamespaceDep,
     table: ResolvedTableDep,
-    settings: SettingsDep,
     so: StorageOptionsDep,
     control: ControlEmitterDep,
     token: CurrentToken = None,
@@ -78,7 +76,7 @@ async def create_table_branch(
     nobody and stays out of notifications' `NAMED_ACTIONS`. A console invalidating a branch list is
     the consumer this serves.
     """
-    segments = parse_identifier(id, settings.delimiter)
+    segments = parse_identifier(id)
     body.id = reconcile_body_id(segments, body.id)
     response = dataplane.create_branch(ns, so, body)
     # AFTER the data-plane call, never before — the rule `namespaces.py` states: a change that did not
@@ -88,7 +86,7 @@ async def create_table_branch(
         action="table_branch_created",
         object_type="table",
         object_id=fga.table_object(table.require_uuid()),
-        object_name=fga.canonical_object_id(segments, delimiter=settings.delimiter),
+        object_name=fga.canonical_object_id(segments),
         actor=f"user:{token.subject}" if token is not None else None,
         # `name`, not `branch` — that is the field `CreateTableBranchRequest` declares. "Branched from
         # what" is the question a consumer asks next, and it is answered from the DATASET rather than
@@ -155,7 +153,7 @@ async def delete_table_branch(
     same record its drop consults. ``force`` turns that lock only; the FGA gate ran before this
     handler and runs identically either way.
     """
-    segments = parse_identifier(id, settings.delimiter)
+    segments = parse_identifier(id)
     body.id = reconcile_body_id(segments, body.id)
     await fga_deps.require_table_unprotected(settings, table, force=force)
     # The incarnation being deleted, read while it still exists: the name alone also names whatever branch
@@ -167,7 +165,7 @@ async def delete_table_branch(
         action="table_branch_deleted",
         object_type="table",
         object_id=fga.table_object(table.require_uuid()),
-        object_name=fga.canonical_object_id(segments, delimiter=settings.delimiter),
+        object_name=fga.canonical_object_id(segments),
         actor=f"user:{token.subject}" if token is not None else None,
         extra={"branch": body.name, **({dataplane.BRANCH_IDENTIFIER_KEY: identifier} if identifier is not None else {})},
     )

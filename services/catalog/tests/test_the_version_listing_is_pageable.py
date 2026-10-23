@@ -30,8 +30,7 @@ from __future__ import annotations
 
 import pathlib
 import tempfile
-from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any
 
 import lance
 import lance_namespace as ln
@@ -52,8 +51,7 @@ def _table_with(version_count: int) -> tuple[Any, str]:
 
 
 def _list(ns: Any, table: str, **kwargs: Any) -> Any:
-    settings = cast(Any, SimpleNamespace(delimiter="$"))
-    return versions_ep.list_table_versions(table, ns, settings, **kwargs)
+    return versions_ep.list_table_versions(table, ns, **kwargs)
 
 
 def test_descending_pages_downward_and_its_cursor_follows() -> None:

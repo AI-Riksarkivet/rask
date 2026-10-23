@@ -65,9 +65,7 @@ def test_the_dataset_does_not_move(tmp_path: Path) -> None:
     ns = _namespace(tmp_path)
     source = _written(ns, ["ns1", "old"])
 
-    new_segments, location = dataplane.rename_table(
-        ns, table_claims.resolve(ns, _claims(tmp_path), ["ns1", "old"]), "new", None, claims=_claims(tmp_path), delimiter="$"
-    )
+    new_segments, location = dataplane.rename_table(ns, table_claims.resolve(ns, _claims(tmp_path), ["ns1", "old"]), "new", None, claims=_claims(tmp_path))
 
     assert new_segments == ["ns1", "new"]
     assert location == source, f"the rename relocated the dataset: {location} != {source}"
@@ -82,9 +80,7 @@ def test_renaming_ACROSS_namespaces_still_moves_no_bytes(tmp_path: Path) -> None
     ns.create_namespace(CreateNamespaceRequest(id=["ns2"]))
     source = _written(ns, ["ns1", "old"])
 
-    new_segments, location = dataplane.rename_table(
-        ns, table_claims.resolve(ns, _claims(tmp_path), ["ns1", "old"]), "moved", ["ns2"], claims=_claims(tmp_path), delimiter="$"
-    )
+    new_segments, location = dataplane.rename_table(ns, table_claims.resolve(ns, _claims(tmp_path), ["ns1", "old"]), "moved", ["ns2"], claims=_claims(tmp_path))
 
     assert new_segments == ["ns2", "moved"]
     assert location == source
@@ -102,7 +98,7 @@ def test_a_V1_ROOT_table_is_REFUSED_rather_than_copied(tmp_path: Path) -> None:
     _written(ns, ["roottable"])
 
     with pytest.raises(InvalidInputError, match="(?i)root"):
-        dataplane.rename_table(ns, table_claims.resolve(ns, _claims(tmp_path), ["roottable"]), "renamed", None, claims=_claims(tmp_path), delimiter="$")
+        dataplane.rename_table(ns, table_claims.resolve(ns, _claims(tmp_path), ["roottable"]), "renamed", None, claims=_claims(tmp_path))
 
 
 def test_a_FAILED_registration_puts_the_source_back(tmp_path: Path) -> None:
@@ -129,7 +125,7 @@ def test_a_FAILED_registration_puts_the_source_back(tmp_path: Path) -> None:
     ns.register_table = _explode_on_the_destination
     try:
         with pytest.raises(RuntimeError, match="register refused"):
-            dataplane.rename_table(ns, table_claims.resolve(ns, _claims(tmp_path), ["ns1", "keepme"]), "newname", None, claims=_claims(tmp_path), delimiter="$")
+            dataplane.rename_table(ns, table_claims.resolve(ns, _claims(tmp_path), ["ns1", "keepme"]), "newname", None, claims=_claims(tmp_path))
     finally:
         ns.register_table = original
 
@@ -175,7 +171,7 @@ def test_a_BRANCHED_table_renames_because_nothing_moves(tmp_path: Path) -> None:
     before = lance.dataset(source).branches.list()
 
     new_segments, location = dataplane.rename_table(
-        ns, table_claims.resolve(ns, _claims(tmp_path), ["ns1", "branched"]), "renamed", None, claims=_claims(tmp_path), delimiter="$", root=str(tmp_path)
+        ns, table_claims.resolve(ns, _claims(tmp_path), ["ns1", "branched"]), "renamed", None, claims=_claims(tmp_path), root=str(tmp_path)
     )
 
     assert location == source, "the rename relocated a branched dataset"

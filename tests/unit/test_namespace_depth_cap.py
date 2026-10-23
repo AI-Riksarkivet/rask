@@ -30,16 +30,8 @@ import pytest
 from lance_namespace import InvalidInputError
 
 from catalog.api import fga_deps
-from catalog.core.identifiers import MAX_NAMESPACE_DEPTH, parse_identifier
-from service_kit.lakehouse.naming import CONTROL_ID_RE
+from catalog.core.identifiers import MAX_NAMESPACE_DEPTH
 
-
-DELIM = "$"
-
-#: The depth at which the real evaluator stopped answering, measured as documented above. The ceiling
-#: must stay strictly below it — equality is not safe, because the failing resolution is the NEGATIVE
-#: check, whose cost depends on the branching of the tree and not only on its depth.
-MEASURED_EVALUATOR_LIMIT = 13
 
 #: `MAX_NAMESPACE_DEPTH` is an EXCLUSIVE bound — both read walkers stop at `>=` it — so the deepest
 #: tree the doors actually admit is one rung shallower than the number.
@@ -52,34 +44,6 @@ DEEPEST_LEGAL_DEPTH = MAX_NAMESPACE_DEPTH - 1
 
 
 def test_one_level_past_the_ceiling_is_refused() -> None:
-    fga_deps.require_namespace_depth([f"n{i}" for i in range(DEEPEST_LEGAL_DEPTH)], delimiter=DELIM)
+    fga_deps.require_namespace_depth([f"n{i}" for i in range(DEEPEST_LEGAL_DEPTH)])
     with pytest.raises(InvalidInputError):
-        fga_deps.require_namespace_depth([f"n{i}" for i in range(DEEPEST_LEGAL_DEPTH + 1)], delimiter=DELIM)
-
-
-# --------------------------------------------------------------------------- #
-# ONE constant (the F10 item 10 lesson)
-# --------------------------------------------------------------------------- #
-
-
-# --------------------------------------------------------------------------- #
-# both doors
-# --------------------------------------------------------------------------- #
-
-
-def test_the_warehouse_door_is_NOT_structurally_shallow() -> None:
-    """The premise of capping the warehouse door, checked rather than asserted in a comment.
-
-    A "top-level" namespace sounds like it cannot be deep. It can: the door validates the name with
-    `CONTROL_ID_RE`, which permits hyphens, and `LANCE_NS_DELIMITER` is operator-settable — so under
-    a hyphen delimiter one legal 63-character name splits into far more segments than the evaluator
-    can resolve. If `_validate_id` is ever tightened to forbid hyphens, the warehouse door's guard
-    becomes genuinely dead and this test says so, instead of a comment quietly ceasing to be true.
-    """
-    deep_but_legal = "-".join(f"n{i}" for i in range(MEASURED_EVALUATOR_LIMIT + 1))
-    assert len(deep_but_legal) <= 63, "keep the probe inside what CONTROL_ID_RE's length bound allows"
-    assert CONTROL_ID_RE.match(deep_but_legal), "a hyphenated name is a legal control id"
-    segments = parse_identifier(deep_but_legal, "-")
-    assert len(segments) > MEASURED_EVALUATOR_LIMIT, "…and under a hyphen delimiter it is a tree past the limit"
-    with pytest.raises(InvalidInputError):
-        fga_deps.require_namespace_depth(segments, delimiter="-")
+        fga_deps.require_namespace_depth([f"n{i}" for i in range(DEEPEST_LEGAL_DEPTH + 1)])

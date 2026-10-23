@@ -111,7 +111,7 @@ async def _unpin(request: Request, settings: Settings, so: dict[str, str], table
     A pin that cannot be removed now stays on its version until the table is held or decided again, which syncs the
     pin to the record; a table that is gone took its pins with it.
     """
-    segments = parse_identifier(table, settings.delimiter)
+    segments = parse_identifier(table)
     try:
         ns = await namespace_for_top_ns(request, settings, segments[0])
         current = await run_in_threadpool(promotions.hold_of, settings.registry_root, settings.storage_options(), table_uuid)

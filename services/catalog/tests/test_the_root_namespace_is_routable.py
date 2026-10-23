@@ -1,8 +1,8 @@
 """The ROOT namespace is a legitimate id, and routing 500s on it.
 
-The spec's identifier rule is that segments join with the configured delimiter and **the root namespace
-IS the delimiter itself** — so `$` is the root's id and `parse_identifier("$", "$")` correctly yields an
-empty list. `dependencies.get_namespace` then does `parse_identifier(object_id, delimiter)[0]` to find
+The spec's identifier rule is that segments join with the delimiter and **the root namespace
+IS the delimiter itself** — so `$` is the root's id and `parse_identifier("$")` correctly yields an
+empty list. `dependencies.get_namespace` then does `parse_identifier(object_id)[0]` to find
 the top segment for warehouse routing, and an empty list has no `[0]`:
 
     IndexError: list index out of range   ->   500 InternalError, code 18
@@ -30,7 +30,7 @@ import pytest
 def _settings(*, warehouses: bool) -> Any:
     import types
 
-    return types.SimpleNamespace(delimiter="$", warehouses_enabled=warehouses, root="s3://root")
+    return types.SimpleNamespace(warehouses_enabled=warehouses, root="s3://root")
 
 
 #: Stands in for the estate-rooted connection `get_namespace` falls back to.

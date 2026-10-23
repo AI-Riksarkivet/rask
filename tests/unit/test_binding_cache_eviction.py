@@ -50,10 +50,10 @@ def test_namespace_dropped_evicts_the_TOP_segment() -> None:
     binding is intact; the next resolve re-caches it). Both must map to `acme`, never `acme$inner`
     (a whole-name pop would MISS the top-level key and leave replica 2 routing at a dead bucket)."""
     cache = _cache()
-    assert evict_stale_bindings(cache, action="namespace_dropped", object_id=_DROPPED, object_name="acme", extra={}, delimiter="$") == ["acme"]
+    assert evict_stale_bindings(cache, action="namespace_dropped", object_id=_DROPPED, object_name="acme", extra={}) == ["acme"]
     assert "acme" not in cache and "beta" in cache
     fresh = _cache()
-    assert evict_stale_bindings(fresh, action="namespace_dropped", object_id=_DROPPED, object_name="acme$inner", extra={}, delimiter="$") == ["acme"]
+    assert evict_stale_bindings(fresh, action="namespace_dropped", object_id=_DROPPED, object_name="acme$inner", extra={}) == ["acme"]
     assert "beta" in fresh
 
 
@@ -61,7 +61,7 @@ def test_warehouse_bound_evicts_the_rebound_namespace() -> None:
     """A cached entry for a namespace being BOUND can only be a pre-delete leftover this replica
     never heard the delete for — the next request must read the authoritative record."""
     cache = _cache()
-    evicted = evict_stale_bindings(cache, action="warehouse_bound", object_id="warehouse:wh-new", object_name=None, extra={"namespace": "acme"}, delimiter="$")
+    evicted = evict_stale_bindings(cache, action="warehouse_bound", object_id="warehouse:wh-new", object_name=None, extra={"namespace": "acme"})
     assert evicted == ["acme"]
     assert set(cache) == {"acme_gold", "beta"}
 
@@ -70,7 +70,7 @@ def test_unrelated_events_evict_nothing() -> None:
     cache = _cache()
     table = "table:0b6f8a52-4c1e-4f7a-9d3e-2a1c5b7e9f01"
     for action, obj, name in [("table_created", table, "acme$t"), ("grant_added", table, "acme$t"), ("warehouse_deactivated", "warehouse:wh-acme", None)]:
-        assert evict_stale_bindings(cache, action=action, object_id=obj, object_name=name, extra={}, delimiter="$") == []
+        assert evict_stale_bindings(cache, action=action, object_id=obj, object_name=name, extra={}) == []
     assert len(cache) == 3, "a non-binding event evicted a binding"
     # Deactivation is deliberately absent from the rules: warehouse STATUS is read live per request.
 

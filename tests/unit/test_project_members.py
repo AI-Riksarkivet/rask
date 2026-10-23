@@ -92,7 +92,7 @@ def _control(control: _RecordingControl | None = None) -> Any:
 
 
 def _settings(*, fga_enabled: bool = True) -> Settings:
-    return cast(Settings, SimpleNamespace(fga_enabled=fga_enabled, delimiter="$"))
+    return cast(Settings, SimpleNamespace(fga_enabled=fga_enabled))
 
 
 def _token() -> PersonPrincipal:

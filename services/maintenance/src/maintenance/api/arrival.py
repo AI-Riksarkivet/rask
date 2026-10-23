@@ -134,7 +134,7 @@ async def handle_arrival(event: dict[str, Any], settings: MaintenanceSettings, e
     if acted.verdict == "failed":
         return {"status": RETRY}
     if acted.expired is not None:
-        await emit_sweep_lineage(emitter, [acted.expired], delimiter=settings.delimiter)
+        await emit_sweep_lineage(emitter, [acted.expired])
     if write.version is not None and write.table_uuid is not None:
         await run_in_threadpool(maintenance_policies.write_planned_version, settings.resolved_policy_root, options, write.table_uuid, write.version)
     return {"status": SUCCESS}

@@ -26,8 +26,9 @@ from pydantic import BaseModel, Field
 
 from catalog.core.base_judge import BaseJudge, GovernedStorage
 from catalog.core.config import shared_lance_session
-from catalog.core.identifiers import IAM_WILDCARD_METACHARS, is_spelled_as_a_uuid
+from catalog.core.identifiers import is_spelled_as_a_uuid
 from catalog.core.namespace import registered_dataset_facts
+from catalog.core.vending import IAM_POLICY_SYNTAX
 from catalog.services import native, table_claims
 from service_kit.lakehouse import base_registry, blobs, location_claims
 from service_kit.lakehouse.base_refs import decoded_segments, location_in_store, location_within, names_a_location, normalise
@@ -128,10 +129,10 @@ def require_registrable_location(location: str | None, *, root: str, control_roo
       literally (lh279 r5 register_probe: ``<victim>%20`` is described as ``<victim>%2520`` and reads
       nothing of the victim). Every check below compares spellings, and a comparison of spellings answers
       only for one that names its location;
-    - no segment may hold an IAM wildcard once decoded (``*``; a ``?`` names no location): the location is the
-      table's object-store prefix, which every vended session policy names unescaped, so a wildcard there would widen
-      the credential to sibling objects — the reason a table's name may not hold one either
-      (:data:`catalog.core.identifiers.IAM_WILDCARD_METACHARS`, [[LH-437]]);
+    - no segment may hold IAM policy syntax once decoded (``*`` or ``${``; a ``?`` names no location): the location is
+      the table's object-store prefix, which every vended session policy names, where IAM reads a wildcard as widening
+      the credential to sibling objects and ``${`` as a policy variable it substitutes
+      (:data:`catalog.core.vending.IAM_POLICY_SYNTAX`, [[LH-437]], [[LH-526]]);
     - no segment may begin with ``_`` once decoded: every control-root prefix does (``_bases``,
       ``_protection``, ``_trash``, ``__manifest`` …), and a glob keeps a prefix the next feature adds out of
       every vend without anyone remembering to list it. Judged decoded, so a ``%5F`` is refused on this
@@ -165,10 +166,10 @@ def require_registrable_location(location: str | None, *, root: str, control_roo
             "or '..', or hold a control character, a '?' or a separator its escapes add, because such a spelling does not name the location "
             "the store would open"
         )
-    if hit := [char for char in IAM_WILDCARD_METACHARS if any(char in segment for segment in decoded)]:
+    if held := [token for token in IAM_POLICY_SYNTAX if any(token in segment for segment in decoded)]:
         raise InvalidInputError(
-            f"register location {stated!r} holds the reserved character(s) {hit}: '*' and '?' are IAM wildcards in the vended storage "
-            "policy and would widen credentials to sibling objects"
+            f"register location {stated!r} holds IAM policy syntax {held}: every credential vended for the table names its location, "
+            "where IAM reads '*' and '?' as wildcards that widen the credential to sibling objects and '${' as a policy variable"
         )
     if any(segment.startswith("_") for segment in decoded):
         raise InvalidInputError(f"register location {stated!r} has a segment beginning with '_', which is reserved for the catalog's own records")
