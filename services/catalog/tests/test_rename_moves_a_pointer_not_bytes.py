@@ -66,7 +66,7 @@ def test_the_dataset_does_not_move(tmp_path: Path) -> None:
     source = _written(ns, ["ns1", "old"])
 
     new_segments, location = dataplane.rename_table(
-        ns, table_claims.resolve(ns, _claims(tmp_path), ["ns1", "old"]), "new", None, so={}, claims=_claims(tmp_path)
+        ns, table_claims.resolve(ns, _claims(tmp_path), ["ns1", "old"]), "new", None, so={}, claims=_claims(tmp_path), root=str(tmp_path)
     )
 
     assert new_segments == ["ns1", "new"]
@@ -83,7 +83,7 @@ def test_renaming_ACROSS_namespaces_still_moves_no_bytes(tmp_path: Path) -> None
     source = _written(ns, ["ns1", "old"])
 
     new_segments, location = dataplane.rename_table(
-        ns, table_claims.resolve(ns, _claims(tmp_path), ["ns1", "old"]), "moved", ["ns2"], so={}, claims=_claims(tmp_path)
+        ns, table_claims.resolve(ns, _claims(tmp_path), ["ns1", "old"]), "moved", ["ns2"], so={}, claims=_claims(tmp_path), root=str(tmp_path)
     )
 
     assert new_segments == ["ns2", "moved"]
@@ -102,7 +102,9 @@ def test_a_V1_ROOT_table_is_REFUSED_rather_than_copied(tmp_path: Path) -> None:
     _written(ns, ["roottable"])
 
     with pytest.raises(InvalidInputError, match="(?i)root"):
-        dataplane.rename_table(ns, table_claims.resolve(ns, _claims(tmp_path), ["roottable"]), "renamed", None, so={}, claims=_claims(tmp_path))
+        dataplane.rename_table(
+            ns, table_claims.resolve(ns, _claims(tmp_path), ["roottable"]), "renamed", None, so={}, claims=_claims(tmp_path), root=str(tmp_path)
+        )
 
 
 def test_a_FAILED_registration_puts_the_source_back(tmp_path: Path) -> None:
@@ -129,27 +131,13 @@ def test_a_FAILED_registration_puts_the_source_back(tmp_path: Path) -> None:
     ns.register_table = _explode_on_the_destination
     try:
         with pytest.raises(RuntimeError, match="register refused"):
-            dataplane.rename_table(ns, table_claims.resolve(ns, _claims(tmp_path), ["ns1", "keepme"]), "newname", None, so={}, claims=_claims(tmp_path))
+            dataplane.rename_table(
+                ns, table_claims.resolve(ns, _claims(tmp_path), ["ns1", "keepme"]), "newname", None, so={}, claims=_claims(tmp_path), root=str(tmp_path)
+            )
     finally:
         ns.register_table = original
 
     assert ns.describe_table(DescribeTableRequest(id=["ns1", "keepme"])).location == source, "a failed rename left the table reachable by no id at all"
-
-
-def test_a_NESTED_layout_keeps_its_path_instead_of_collapsing_to_the_leaf(tmp_path: Path) -> None:
-    """The whole reason the derivation exists. Under a backend that nests, the last segment is not the
-    relative path — registering it would point at nothing — and this is the case the dead code was
-    written for and never covered."""
-    nested = f"file://{tmp_path}/warehouse/tier/ab12_ns1$t"
-
-    assert dataplane._relative_location(nested, root=str(tmp_path)) == "warehouse/tier/ab12_ns1$t"
-
-
-def test_no_root_falls_back_to_the_leaf_and_says_so(tmp_path: Path) -> None:
-    """A caller with no root still gets an answer, because `undrop`'s flat V2 case is served correctly
-    by the leaf. What changes is that the fallback is now the stated behaviour of an absent root rather
-    than the only reachable branch."""
-    assert dataplane._relative_location(f"file://{tmp_path}/ab12_ns1$t", root="") == "ab12_ns1$t"
 
 
 def test_a_BRANCHED_table_renames_because_nothing_moves(tmp_path: Path) -> None:

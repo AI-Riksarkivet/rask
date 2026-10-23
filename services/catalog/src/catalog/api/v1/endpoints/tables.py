@@ -1281,7 +1281,7 @@ async def undrop_table(
     # percent-encodes a registered table's name, so the table re-attaches at the key that URL decodes to, under the
     # connection's root, where its bytes are ([[LH-517]]). The absolute URL stays on the record for an operator.
     location = str(record["location"])
-    body = RegisterTableRequest(id=segments, location=trash_doors.relative_location(location, root=root))
+    body = RegisterTableRequest(id=segments, location=dataplane.relative_location(location, root=root))
     # The drop kept the location's claim for this id ([[LH-204]]), so this take is the retry of an
     # existing hold; another holder means another table now resolves to these bytes, and re-attaching
     # this id would put two live ids on one dataset.
@@ -1423,6 +1423,7 @@ async def rename_table(
     uuids: ObjectUuidsDep,
     control: ControlEmitterDep,
     resolver: ResolverDep,
+    root: NamespaceRootDep,
     authorization: Annotated[str | None, Header()] = None,
     force: RaskFlag = False,
     idempotency_key: idem.IdempotencyKeyHeader = None,
@@ -1489,7 +1490,7 @@ async def rename_table(
             body.new_namespace_id,
             so=so,
             claims=table_claims.claim_store(settings),
-            root=settings.root,
+            root=root,
         )
     )
     await _hand_over_data_directories(settings, location, source=segments, destination=new_segments)

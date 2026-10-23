@@ -20,9 +20,8 @@ single-segment location, which it judges right, is what a detailed describe of t
 from __future__ import annotations
 
 import datetime as dt
-import os
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -33,14 +32,17 @@ import pyarrow as pa
 import pytest
 from fastapi.testclient import TestClient
 from lance.arrow import bfloat16_array
-from lance_namespace import DescribeTableRequest, connect
+from lance_namespace import CreateNamespaceRequest, DescribeTableRequest, connect
 from pydantic import BaseModel, ConfigDict
 
+from catalog.core.identifiers import with_minted_uuid
+from catalog.services import warehouses
 from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 
 
-#: Where the table registered at a nested location lives, relative to the namespace's root.
-_NESTED = "db-outside/held"
+#: Where the table registered at a nested location lives, relative to its warehouse's root. A non-ASCII segment, which
+#: DescribeTable answers percent-encoded and the store keeps decoded.
+_NESTED = "db-outside/räksmörgås"
 
 
 def _every_stored_type() -> pa.Table:
@@ -118,29 +120,51 @@ def _ok(client: TestClient, path: str, **kwargs: Any) -> dict[str, Any]:  # noqa
 
 
 @pytest.fixture
-def held(real_ns_client: TestClient) -> Held:
-    """``db$held`` registered over data at a nested location, ``db$twin`` over the same data at a single-segment one,
-    ``db$decl`` declared, and ``db$staged`` declared with a first commit staged and never finalized."""
-    root = Path(os.environ["LANCE_REST_ROOT"])
-    _ok(real_ns_client, "/v1/namespace/db/create", json={})
-    for location in (_NESTED, "twin"):
-        lance.write_dataset(_every_stored_type(), str(root / location), data_storage_version="2.2", enable_stable_row_ids=True)
-    _ok(real_ns_client, "/v1/table/db$held/register", json={"location": _NESTED})
-    _ok(real_ns_client, "/v1/table/db$twin/register", json={"location": "twin"})
-    _ok(real_ns_client, "/v1/table/db$decl/declare", json={})
-    staged = Path(_ok(real_ns_client, "/v1/table/db$staged/declare", json={})["location"].removeprefix("file://"))
-    # A refused stock commit leaves its manifest staged under its version and a uuid; the bytes are a manifest Lance wrote.
-    (staged / "_versions").mkdir()
-    (staged / "_versions" / f"1.manifest-{uuid.uuid4()}").write_bytes(next((root / "twin" / "_versions").glob("*.manifest")).read_bytes())
-    backend = connect("dir", {"root": str(root)})
-    twin = backend.describe_table(DescribeTableRequest(id=["db", "twin"], load_detailed_metadata=True))
-    assert twin.var_schema is not None, "precondition: the backend loads the twin's metadata"
-    nested = _ok(real_ns_client, "/v1/table/db$held/describe", json={})["location"]
-    return Held(
-        client=real_ns_client,
-        locations={"held": nested, "moved": nested, "staged": _ok(real_ns_client, "/v1/table/db$staged/describe", json={})["location"]},
-        twin_schema=twin.var_schema.model_dump(by_alias=True, exclude_none=True),
-    )
+def held(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Held]:
+    """The catalog as the estate runs it, warehouses on: ``db`` is a top-level namespace bound to a warehouse whose root is a
+    directory of its own, never the catalog's default root. In it ``db$held`` is registered over data at a nested location,
+    ``db$twin`` over the same data at a single-segment one, ``db$decl`` is declared, and ``db$staged`` is declared with a
+    first commit staged and never finalized."""
+    default_root, root, registry = tmp_path / "default", tmp_path / "warehouse", tmp_path / "registry"
+    for directory in (default_root, root, registry):
+        directory.mkdir()
+    for key, value in {
+        "LANCE_REST_IMPL": "dir",
+        "LANCE_REST_ROOT": str(default_root),
+        "LANCE_WAREHOUSES_ENABLED": "true",
+        "LANCE_CONTROL_ROOT": f"file://{registry}",
+        "LANCE_S3_ACCESS_KEY_ID": "test",
+        "LANCE_S3_SECRET_ACCESS_KEY": "test",
+    }.items():
+        monkeypatch.setenv(key, value)
+    from catalog.core.config import get_settings
+
+    get_settings.cache_clear()
+    from catalog.main import app
+
+    with TestClient(app) as client:
+        # The warehouse and its top-level namespace, as the warehouse door leaves them: the namespace lives in its root.
+        warehouses.put_warehouse(f"file://{registry}", {}, {"id": "wh", "bucket": "wh", "root_uri": str(root), "project": "acme"})
+        connect("dir", {"root": str(root)}).create_namespace(CreateNamespaceRequest(id=["db"], properties=with_minted_uuid(None)))
+        warehouses.bind_namespace(f"file://{registry}", {}, "db", "wh", str(root))
+        for location in (_NESTED, "twin"):
+            lance.write_dataset(_every_stored_type(), str(root / location), data_storage_version="2.2", enable_stable_row_ids=True)
+        _ok(client, "/v1/table/db$held/register", json={"location": _NESTED})
+        _ok(client, "/v1/table/db$twin/register", json={"location": "twin"})
+        _ok(client, "/v1/table/db$decl/declare", json={})
+        staged = Path(_ok(client, "/v1/table/db$staged/declare", json={})["location"].removeprefix("file://"))
+        # A refused stock commit leaves its manifest staged under its version and a uuid; the bytes are a manifest Lance wrote.
+        (staged / "_versions").mkdir()
+        (staged / "_versions" / f"1.manifest-{uuid.uuid4()}").write_bytes(next((root / "twin" / "_versions").glob("*.manifest")).read_bytes())
+        twin = connect("dir", {"root": str(root)}).describe_table(DescribeTableRequest(id=["db", "twin"], load_detailed_metadata=True))
+        assert twin.var_schema is not None, "precondition: the backend loads the twin's metadata"
+        nested = _ok(client, "/v1/table/db$held/describe", json={})["location"]
+        yield Held(
+            client=client,
+            locations={"held": nested, "moved": nested, "staged": _ok(client, "/v1/table/db$staged/describe", json={})["location"]},
+            twin_schema=twin.var_schema.model_dump(by_alias=True, exclude_none=True),
+        )
+    get_settings.cache_clear()
 
 
 _ROWS = encode_arrow_stream(pa.table({"id": pa.array([1], pa.int64())}))

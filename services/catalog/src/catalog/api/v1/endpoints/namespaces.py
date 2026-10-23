@@ -72,7 +72,7 @@ from catalog.core.modes import CreateMode, DropBehavior, DropMode
 from catalog.core.namespace import warn_if_mixed_file_versions
 from catalog.core.store_endpoint import require_estate_store
 from catalog.schemas import ProtectionResponse, SetProtectionRequest, TrashEntry
-from catalog.services import native, table_claims, trash_doors, warehouses
+from catalog.services import dataplane, native, table_claims, trash_doors, warehouses
 from service_kit.control_emit import emit_control
 from service_kit.control_events import ControlUuids
 from service_kit.governed import fga
@@ -1112,7 +1112,7 @@ async def undrop_namespace(
             # The RELATIVE key register_table accepts, the one the record's URL decodes to under the root, as at the
             # table undrop ([[LH-517]]).
             t_segments = parse_identifier(t_id)
-            body = RegisterTableRequest(id=t_segments, location=trash_doors.relative_location(location, root=root))
+            body = RegisterTableRequest(id=t_segments, location=dataplane.relative_location(location, root=root))
             # The cascade kept each location's claim for its trashed id; another holder means another
             # table now resolves to these bytes, as at the table door ([[LH-204]]).
             try:

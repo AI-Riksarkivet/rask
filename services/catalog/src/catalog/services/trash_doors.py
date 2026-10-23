@@ -1,4 +1,5 @@
-"""What the undrop doors share: which trashed object an undrop restores, and where it re-attaches a table.
+"""What the undrop doors share: which trashed object an undrop restores. Where it re-attaches a table is
+``dataplane.relative_location``, the rule every re-registration shares.
 
 A trash door stays addressed by name (ADR 0173 §9, [[LH-525]]). A name is free again the moment its object is
 dropped, so several trashed objects may have held one, each its own uuid with its own grants and records: an undrop
@@ -9,10 +10,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from lance_namespace import InternalError, InvalidTableStateError
+from lance_namespace import InvalidTableStateError
 
 from service_kit.lakehouse import trash
-from service_kit.lakehouse.base_refs import decoded_segments
 
 
 def the_one_to_restore(records: list[dict[str, Any]], *, kind: str, name: str) -> dict[str, Any]:
@@ -43,20 +43,3 @@ def require_its_own_parent(record: dict[str, Any], *, standing: str | None, name
     dropped_from = record.get("namespace_uuid")
     if isinstance(dropped_from, str) and standing is not None and standing != dropped_from:
         raise InvalidTableStateError(f"cannot undrop {name!r}: the namespace it was dropped from is gone, and another namespace holds its name now")
-
-
-def relative_location(location: str, *, root: str) -> str:
-    """The key ``location`` decodes to under ``root``: what RegisterTable takes to re-attach the table there.
-
-    The ``dir`` backend refuses an absolute location and keeps a relative one as the literal key it is given, while a
-    trash record keeps the location ``describe_table`` answered, which percent-encodes a registered table's name
-    (``…/r%C3%A4ksm%C3%B6rg%C3%A5s``). The store holds the table's bytes under the key that decodes to once
-    (``…/räksmörgås``), so that key, whole, is what the table re-attaches at ([[LH-517]]).
-
-    Raises:
-        InternalError: ``location`` names no place under ``root``, which no drop records.
-    """
-    under, base = decoded_segments(location), decoded_segments(root)
-    if under is None or base is None or len(under) <= len(base) or under[: len(base)] != base:
-        raise InternalError(f"the trashed location {location!r} names no place under its namespace root, so the table cannot be re-attached")
-    return "/".join(under[len(base) :])

@@ -60,6 +60,7 @@ from lance_namespace import (
     GetTableTagVersionResponse,
     InsertIntoTableRequest,
     InsertIntoTableResponse,
+    InternalError,
     InvalidInputError,
     InvalidTableStateError,
     LanceNamespace,
@@ -101,7 +102,7 @@ from catalog.services import changes, native, primary_keys, table_bases, table_c
 from catalog.services.base_credentials import BaseCredentials
 from catalog.services.cast_size import bytes_after_cast
 from service_kit.lakehouse import auto_cleanup, base_registry, branch_layout, location_claims
-from service_kit.lakehouse.base_refs import decoded_path
+from service_kit.lakehouse.base_refs import decoded_path, decoded_segments
 from service_kit.lakehouse.features import manifest_base_path_refs
 from service_kit.lakehouse.naming import CATALOG_DELIMITER
 from service_kit.lakehouse.objectfs import StorageOptions, credential_of, s3_filesystem
@@ -814,7 +815,7 @@ def rename_table(
     *,
     so: StorageOptions,
     claims: location_claims.ClaimStore,
-    root: str = "",
+    root: str,
 ) -> tuple[list[str], str]:
     """Rename a table by moving its POINTER. No data byte is read, written or deleted.
 
@@ -886,16 +887,15 @@ def rename_table(
     if _existing_location(ns, new_segments) is not None:
         raise TableAlreadyExistsError(f"table already exists: {'.'.join(new_segments)}")
     # RELATIVE, because the dir backend refuses an absolute URI here ("Absolute URIs are not allowed
-    # for register_table") — the same conversion `undrop` already makes. `_relative_to_root` derives
-    # it from the namespace's own root rather than assuming the final path segment: under V2 naming a
-    # location is `<hash>_<object_id>` at the root, but a backend that nests would break the guess.
+    # for register_table"): the key the source's location decodes to under the namespace connection's
+    # own root, ``root``, as both undrops re-attach a table (:func:`relative_location`, [[LH-528]]).
     # NO BRANCH GUARD, and its absence is a decision. A branch is a shallow clone referencing its
     # source root by ABSOLUTE path, so the byte-copy rename this door used to perform orphaned every
     # branch — it copied the root, deleted the source, and answered 200 over unreadable branch data.
     # The pointer move copies and deletes nothing: measured on the `dir` backend, `branches.list()`
     # after a rename returns the identical entry and the data reads back, because the bytes never
     # moved. Re-adding a refusal would decline a safe operation.
-    location = _relative_location(source_uri, root=root)
+    location = relative_location(source_uri, root=root)
     # THE CLAIM IS HANDED OVER FIRST, and it is the whole of this door's race arbitration: the loser of
     # two renames of one source finds the claim changed since it read it, or reads the winner's claim, and answers
     # code 14 before touching the backend. The source is still retired before the destination is written, so a rename never shows
@@ -961,28 +961,23 @@ def _resolves_to(ns: LanceNamespace, segments: list[str], location: str) -> bool
     return decoded_path(str(described.location or "")) == decoded_path(location)
 
 
-def _relative_location(uri: str, *, root: str) -> str:
-    """``uri`` expressed relative to the namespace ROOT, which is what ``register_table`` accepts.
+def relative_location(location: str, *, root: str) -> str:
+    """The key ``location`` decodes to under ``root``: what RegisterTable takes to re-attach the table there.
 
-    The dir backend refuses an absolute URI outright and the value `describe_table` reports IS
-    absolute, so every re-registration in this estate makes this conversion (`undrop` included).
+    Every re-registration makes this conversion, a rename's and both undrops'. The ``dir`` backend refuses an absolute
+    location and keeps a relative one as the literal key it is given, while ``describe_table`` answers an absolute URL
+    that percent-encodes a registered table's name (``…/r%C3%A4ksm%C3%B6rg%C3%A5s``). The store holds the table's bytes
+    under the key that decodes to once (``…/räksmörgås``), so that key, whole, is what the table re-attaches at
+    ([[LH-517]]). ``root`` is the root the namespace's connection is rooted at, its warehouse's for a bound namespace
+    ([[LH-528]]): a location under another root has no key the backend resolves to it.
 
-    THE ROOT IS PASSED IN because the namespace object does not carry one. Measured on the installed
-    client: `DirectoryNamespace` exposes no `root` attribute and nothing root-shaped at all, so a
-    `getattr(ns, "root", "")` was always empty — the subtraction never ran and every rename took the
-    leaf fallback below. The caller connects the namespace and holds `settings.root`, so it is the
-    one place that can answer.
-
-    Subtracting the root matters only where a backend NESTS: under V2's flat `<hash>_<object_id>`
-    layout the leaf and the relative path are the same string, and they diverge the moment they are
-    not — where registering the leaf would point at nothing. An absent root falls back to the leaf,
-    which is correct for that flat case and is now the stated behaviour of having no root rather than
-    the only branch that could execute.
+    Raises:
+        InternalError: ``location`` names no place under ``root``, which no door attaches a table at.
     """
-    for candidate in (root, root.removeprefix("file://")):
-        if candidate and (stripped := uri.removeprefix("file://")).startswith(candidate.rstrip("/") + "/"):
-            return stripped[len(candidate.rstrip("/")) + 1 :]
-    return uri.removeprefix("file://").rstrip("/").rsplit("/", 1)[-1]
+    under, base = decoded_segments(location), decoded_segments(root)
+    if under is None or base is None or len(under) <= len(base) or under[: len(base)] != base:
+        raise InternalError(f"the location {location!r} names no place under its namespace root {root!r}, so the table cannot be re-attached there")
+    return "/".join(under[len(base) :])
 
 
 def dataset_fs(uri: str, so: StorageOptions) -> tuple[pafs.FileSystem, str]:
