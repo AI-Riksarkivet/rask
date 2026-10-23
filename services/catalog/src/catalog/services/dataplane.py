@@ -628,7 +628,8 @@ def create_table(
     allow_external = allow_external_blobs
     external_blob_bases = external_blob_bases or []
     normalized = CreateMode.parse(mode)
-    existing, only_declared = _existing_location(ns, segments)
+    existing = _existing_location(ns, segments)
+    only_declared = existing is not None and not holds_a_version(existing, so)
 
     if existing is not None and not only_declared:  # a written, readable table already lives here
         if normalized is CreateMode.OVERWRITE:
@@ -791,19 +792,18 @@ def _write_blob_into(
     return CreateTableResponse(location=location, version=dataset.version)
 
 
-def _existing_location(ns: LanceNamespace, segments: list[str]) -> tuple[str | None, bool]:
-    """``(location, is_only_declared)`` for the table, or ``(None, False)`` if it does not exist.
+def _existing_location(ns: LanceNamespace, segments: list[str]) -> str | None:
+    """The location the table is described at, or ``None`` if no table has the name; a declared table has one too.
 
-    ``check_declared=True`` makes the namespace surface a declared-but-unwritten table (rather than raising
-    TableNotFound), and ``is_only_declared`` distinguishes it from a written one — a declared-only table has
-    no readable dataset, so the caller must NOT try to open it (that would 500).
+    Measured on pylance 13.0.0, the `dir` backend describes a declared table without ``check_declared``. Whether the
+    table holds a version is :func:`holds_a_version`'s to judge, never the backend's verdict ([[LH-528]]): a declared
+    table has no readable dataset, so a caller must not open it.
     """
     try:
-        resp = ns.describe_table(DescribeTableRequest(id=segments, with_table_uri=True, check_declared=True))
+        resp = ns.describe_table(DescribeTableRequest(id=segments, with_table_uri=True))
     except TableNotFoundError:
-        return None, False
-    location = getattr(resp, "table_uri", None) or getattr(resp, "location", None)
-    return location, bool(getattr(resp, "is_only_declared", False))
+        return None
+    return getattr(resp, "table_uri", None) or getattr(resp, "location", None)
 
 
 def rename_table(
@@ -812,6 +812,7 @@ def rename_table(
     new_table_name: str,
     new_namespace_id: list[str] | None,
     *,
+    so: StorageOptions,
     claims: location_claims.ClaimStore,
     root: str = "",
 ) -> tuple[list[str], str]:
@@ -867,7 +868,7 @@ def rename_table(
     if new_segments == segments:
         raise InvalidInputError("the rename destination is identical to the source")
     source_uri = source.location
-    if source_uri is None or source.only_declared:
+    if source_uri is None or not holds_a_version(source_uri, so):
         # Missing OR declared-but-unwritten → nothing to repoint (404, symmetric with every op that
         # requires a written table).
         raise TableNotFoundError(f"table not found: {'.'.join(segments)}")
@@ -882,8 +883,7 @@ def rename_table(
     # stub is TAKEN, never adopted: adopting one skips `register_table`, which is what arbitrates two
     # concurrent renames into the SAME destination name — the source-side race is arbitrated by the
     # location claim below, and the two together are what make this door safe under concurrency.
-    dest_uri, _dest_only_declared = _existing_location(ns, new_segments)
-    if dest_uri is not None:
+    if _existing_location(ns, new_segments) is not None:
         raise TableAlreadyExistsError(f"table already exists: {'.'.join(new_segments)}")
     # RELATIVE, because the dir backend refuses an absolute URI here ("Absolute URIs are not allowed
     # for register_table") — the same conversion `undrop` already makes. `_relative_to_root` derives
@@ -1001,6 +1001,29 @@ def dataset_fs(uri: str, so: StorageOptions) -> tuple[pafs.FileSystem, str]:
         return s3_filesystem(so), decoded_path(uri)
     resolved, path = pafs.FileSystem.from_uri(uri)
     return resolved, path
+
+
+#: A committed manifest's name under either naming scheme: ``{version}.manifest`` (V1) or
+#: ``{u64::MAX - version:020}.manifest`` (V2) (`lance_docs/file_format.md` § Manifest Naming Schemes). A staged
+#: ``{version}.manifest-{uuid}`` (`lance_docs/ns_catalog/namespace/supported-catalogs/lance-dir.md:292`) and a detached
+#: ``d<id>.manifest`` name no version a reader resolves.
+_COMMITTED_MANIFEST: Final = re.compile(r"[0-9]+\.manifest")
+
+
+def holds_a_version(location: str, so: StorageOptions) -> bool:
+    """Does the table at ``location`` hold a committed version, as the store keeps it? A table that does not is only declared.
+
+    The catalog's own judgment ([[LH-528]]), at the key the location decodes to (:func:`dataset_fs`), for every door that
+    asks whether a table is only declared. The `dir` backend probes ``base_path.join(location)``, and object_store's
+    ``Path::join`` appends one segment, percent-encoding ``/`` and every non-ASCII byte, so for a table registered at
+    ``outside/held`` or ``räksmörgås`` it probes a key that does not exist and answers that the table has no storage
+    (``rust/lance-namespace-impls/src/dir/manifest.rs:2272`` at lance v13.0.0; measured on pylance 13.0.0 on a local root
+    and on S3). The backend also counts any object under ``_versions/`` as storage, so it answers that a declared table
+    whose first commit was staged and never finalized has storage; only a committed manifest's name counts here.
+    """
+    fs, path = dataset_fs(location, so)
+    listed = fs.get_file_info(pafs.FileSelector(f"{path.rstrip('/')}/_versions", allow_not_found=True))
+    return any(info.type == pafs.FileType.File and _COMMITTED_MANIFEST.fullmatch(info.base_name) for info in listed)
 
 
 #: What an append with nothing to append onto is told, by the commit classifier and the file-version guard alike.
@@ -2161,9 +2184,13 @@ def read_schema_metadata(ns: LanceNamespace, so: StorageOptions, table_id: list[
     (Arrow bytes keys/values → str) directly. The reserved ``lineage.*`` / ``rask.*`` keys are excluded — they're
     not user properties, and the update path MERGES, so hiding them never drops them on a UI save.
     """
-    meta = open_dataset_unchecked(ns, so, table_id).schema.metadata or {}
+    return user_schema_metadata(open_dataset_unchecked(ns, so, table_id).schema)
+
+
+def user_schema_metadata(schema: pa.Schema) -> dict[str, str]:
+    """``schema``'s schema-level metadata as ``{str: str}``, without the reserved ``lineage.*`` / ``rask.*`` keys."""
     out: dict[str, str] = {}
-    for k, v in meta.items():
+    for k, v in (schema.metadata or {}).items():
         key = k.decode() if isinstance(k, bytes) else str(k)
         out[key] = v.decode() if isinstance(v, bytes) else str(v)
     return filter_internal_metadata(out)

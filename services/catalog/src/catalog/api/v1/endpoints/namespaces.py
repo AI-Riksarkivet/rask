@@ -42,7 +42,7 @@ from lance_namespace import (
 )
 from openfga_sdk import OpenFgaClient
 
-from catalog.api import fga_deps
+from catalog.api import fga_deps, listings
 from catalog.api.dependencies import (
     ControlEmitterDep,
     FgaClientDep,
@@ -52,6 +52,7 @@ from catalog.api.dependencies import (
     ObjectUuidsDep,
     ResolverDep,
     SettingsDep,
+    StorageOptionsDep,
     TrashedUuidQuery,
     namespace_for_root,
 )
@@ -248,8 +249,8 @@ async def create_namespace(
     return response
 
 
-async def _drain_tables(ns: LanceNamespace, segments: list[str], *, include_declared: bool) -> tuple[ListTablesResponse, list[str]]:
-    """Every table under ``segments``, following the backend's cursor to exhaustion.
+async def _drain_tables(ns: LanceNamespace, segments: list[str]) -> tuple[ListTablesResponse, list[str]]:
+    """Every table under ``segments``, declared ones included, following the backend's cursor to exhaustion.
 
     The twin of `_drain_namespaces` and for the identical reason: this route filters per item and then
     applies its own cursor, so reading the backend's first page alone answers a short list whose
@@ -259,7 +260,7 @@ async def _drain_tables(ns: LanceNamespace, segments: list[str], *, include_decl
     token: str | None = None
     response = ListTablesResponse(tables=[])
     for _ in range(_MAX_LIST_PAGES):
-        response = await run_in_threadpool(native.call, ns, "list_tables", ListTablesRequest(id=segments, include_declared=include_declared, page_token=token))
+        response = await run_in_threadpool(native.call, ns, "list_tables", ListTablesRequest(id=segments, include_declared=True, page_token=token))
         seen.extend(response.tables or [])
         token = response.page_token or None
         if not token:
@@ -407,7 +408,7 @@ async def _create_or_replace_empty_namespace(
     replaced = await fga_deps.identify(ns, settings, "namespace", segments)
     await fga_deps.require_relation(client, settings, token, relation="can_delete", obj=replaced.fga_object(), label=f"namespace:{canonical}")
     await fga_deps.require_namespace_unprotected(settings, replaced, force=False)
-    _, tables = await _drain_tables(ns, segments, include_declared=True)
+    _, tables = await _drain_tables(ns, segments)
     _, children = await _drain_namespaces(ns, segments)
     if tables or children:
         raise NamespaceNotEmptyError(
@@ -1237,6 +1238,7 @@ async def list_tables(
     id: str,
     ns: NamespaceDep,
     settings: SettingsDep,
+    so: StorageOptionsDep,
     token: CurrentToken,
     client: FgaClientDep,
     resolver: ResolverDep,
@@ -1245,7 +1247,8 @@ async def list_tables(
     include_declared: bool = True,
 ) -> ListTablesResponse:
     """List the tables under namespace ``id``; when FGA is on, filtered to what the caller can
-    ``can_read_data``. ``include_declared=false`` drops declared-only tables (reserved, no storage yet).
+    ``can_read_data``. ``include_declared=false`` lists only the tables that hold a committed version, each judged by
+    its own storage (:func:`catalog.api.listings.holding_a_version`, [[LH-528]]).
 
     **WHY THIS FILTERS AT ALL — the route's gate stopped implying its contents.** The router mounts
     every endpoint here under ``authorize``, which resolves this route's ``list`` action to
@@ -1270,7 +1273,10 @@ async def list_tables(
     stable only over an ordered one.
     """
     segments = parse_identifier(id)
-    response, names = await _drain_tables(ns, segments, include_declared=include_declared)
+    response, names = await _drain_tables(ns, segments)
+    candidates = [(name, [*segments, name]) for name in names]
+    if not include_declared:
+        candidates = await listings.holding_a_version(resolver, so, candidates)
     # When FGA is on and the caller is known, keep only the tables they may actually read, each judged on the object its
     # name resolves to ([[LH-223]], [[LH-524]]).
     if settings.fga_enabled and token is not None and client is not None:
@@ -1280,10 +1286,10 @@ async def list_tables(
             user=token.subject,
             relation="can_read_data",
             kind="table",
-            candidates=[(name, [*segments, name]) for name in names],
+            candidates=candidates,
             page_token=page_token,
             limit=limit,
         )
         return response
-    response.tables, response.page_token = paginate(names, page_token, limit)
+    response.tables, response.page_token = paginate([name for name, _ in candidates], page_token, limit)
     return response

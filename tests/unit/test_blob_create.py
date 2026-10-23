@@ -247,6 +247,7 @@ def test_rename_rejects_a_blank_name_and_keeps_the_source(tmp_path: Path) -> Non
                 table_claims.resolve(ns, ClaimStore(control_root=str(tmp_path)), ["db", "keep"]),
                 blank,
                 None,
+                so={},
                 claims=ClaimStore(control_root=str(tmp_path)),
             )
     assert _open(ns, ["db", "keep"]).read_blobs("payload", indices=[0])[0][1] == b"x"  # source untouched
@@ -265,6 +266,7 @@ def test_rename_onto_itself_is_rejected(tmp_path: Path) -> None:
             table_claims.resolve(ns, ClaimStore(control_root=str(tmp_path)), ["db", "same"]),
             "same",
             None,
+            so={},
             claims=ClaimStore(control_root=str(tmp_path)),
         )
     assert _open(ns, ["db", "same"]).count_rows() == 1  # not relocated onto itself / deleted
@@ -286,6 +288,7 @@ def test_rename_treats_a_declared_only_destination_as_taken(tmp_path: Path) -> N
             table_claims.resolve(ns, ClaimStore(control_root=str(tmp_path)), ["media", "src"]),
             "stub",
             None,
+            so={},
             claims=ClaimStore(control_root=str(tmp_path)),
         )
     assert _open(ns, ["media", "src"]).read_blobs("payload", indices=[0])[0][1] == b"x"  # source intact
@@ -323,6 +326,7 @@ def test_a_failed_source_claim_leaves_the_rename_UNDONE(tmp_path: Path, monkeypa
             table_claims.resolve(ns, ClaimStore(control_root=str(tmp_path)), ["media", "a"]),
             "b",
             None,
+            so={},
             claims=ClaimStore(control_root=str(tmp_path)),
         )
     monkeypatch.undo()
@@ -338,6 +342,7 @@ def test_a_failed_source_claim_leaves_the_rename_UNDONE(tmp_path: Path, monkeypa
             table_claims.resolve(ns, ClaimStore(control_root=str(tmp_path)), ["media", "a"]),
             "c",
             None,
+            so={},
             claims=ClaimStore(control_root=str(tmp_path)),
         )[1]
         == source

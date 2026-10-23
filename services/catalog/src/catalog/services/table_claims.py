@@ -46,7 +46,6 @@ class ResolvedTable(BaseModel):
 
     segments: list[str]
     location: str | None = None
-    only_declared: bool = False
     #: The location's claim as the resolution read it, with its ETag; ``None`` when the location carries no record.
     claim: ClaimRead | None = None
 
@@ -82,7 +81,8 @@ def claim_store(settings: Settings) -> ClaimStore:
 def resolve(ns: LanceNamespace, store: ClaimStore, segments: list[str]) -> ResolvedTable:
     """Resolve the table ``segments`` names to its location and that location's claim, once.
 
-    A declared table resolves too, flagged. A name that names no table, in a namespace that exists or one that does
+    A declared table resolves too; whether it holds a version is ``dataplane.holds_a_version``'s to judge where a door
+    asks, never the backend's verdict ([[LH-528]]). A name that names no table, in a namespace that exists or one that does
     not (the ``dir`` backend answers ``NamespaceNotFoundError`` for that, measured on pylance 13.0.0), resolves to no
     location rather than raising, so a door answers for that itself after the checks it makes first, an idempotent
     replay of a request that already ended the table among them.
@@ -90,16 +90,11 @@ def resolve(ns: LanceNamespace, store: ClaimStore, segments: list[str]) -> Resol
     if not segments:
         return ResolvedTable(segments=[])
     try:
-        described = native.call(ns, "describe_table", DescribeTableRequest(id=segments, check_declared=True))
+        described = native.call(ns, "describe_table", DescribeTableRequest(id=segments))
     except (TableNotFoundError, NamespaceNotFoundError):
         return ResolvedTable(segments=segments)
     location = described.location or None
-    return ResolvedTable(
-        segments=segments,
-        location=location,
-        only_declared=bool(described.is_only_declared),
-        claim=location_claims.read(store, location) if location else None,
-    )
+    return ResolvedTable(segments=segments, location=location, claim=location_claims.read(store, location) if location else None)
 
 
 def uuid_at(store: ClaimStore, location: str, segments: list[str]) -> str:

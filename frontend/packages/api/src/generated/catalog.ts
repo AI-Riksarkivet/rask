@@ -2654,7 +2654,8 @@ export interface paths {
         /**
          * List Tables
          * @description List the tables under namespace ``id``; when FGA is on, filtered to what the caller can
-         *     ``can_read_data``. ``include_declared=false`` drops declared-only tables (reserved, no storage yet).
+         *     ``can_read_data``. ``include_declared=false`` lists only the tables that hold a committed version, each judged by
+         *     its own storage (:func:`catalog.api.listings.holding_a_version`, [[LH-528]]).
          *
          *     **WHY THIS FILTERS AT ALL — the route's gate stopped implying its contents.** The router mounts
          *     every endpoint here under ``authorize``, which resolves this route's ``list`` action to
@@ -2698,7 +2699,8 @@ export interface paths {
          * List All Tables
          * @description List every table in the namespace via ``list_all_tables``; when FGA is on,
          *     filter the result down to the tables the caller can ``can_read_data``.
-         *     ``include_declared=false`` drops declared-only tables (reserved, no storage yet).
+         *     ``include_declared=false`` lists only the tables that hold a committed version, each judged by its own storage
+         *     (:func:`catalog.api.listings.holding_a_version`, [[LH-528]]).
          *
          *     Pagination is applied to the FINAL merged result, never to the native root call: the response is
          *     root tables + bound seeds + the namespace walk, so a native-level ``limit`` would truncate only

@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from functools import partial
 from typing import Annotated
 
+import lance
 from fastapi import APIRouter, Header, Query, Request, Response
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import (
@@ -43,7 +44,7 @@ from lance_namespace import (
 )
 from openfga_sdk import OpenFgaClient
 
-from catalog.api import fga_deps, lineage_deps
+from catalog.api import fga_deps, lineage_deps, listings
 from catalog.api import idempotency as idem
 from catalog.api.dependencies import (
     ControlEmitterDep,
@@ -63,7 +64,7 @@ from catalog.api.dependencies import (
 from catalog.api.pagination import paginate
 from catalog.api.rask_params import RaskFlag
 from catalog.api.security import Caller, CurrentToken
-from catalog.core import provenance_guard
+from catalog.core import json_arrow, provenance_guard
 from catalog.core.base_judge import BaseJudge, GovernedStorage
 from catalog.core.config import Settings
 from catalog.core.formats import reject_unsupported_properties
@@ -138,8 +139,8 @@ def _is_expired(expires_at: str) -> bool:
     return deadline < datetime.now(UTC)
 
 
-def _collect_tables(ns: LanceNamespace, root_tables: list[str], include_declared: bool) -> list[str]:
-    """Every table in the tree, fully qualified — root tables plus each namespace's, depth-first.
+def _collect_tables(ns: LanceNamespace, root_tables: list[str]) -> list[str]:
+    """Every table in the tree, fully qualified, declared ones included — root tables plus each namespace's, depth-first.
 
     Synchronous and run in a threadpool by the caller: the native namespace client is blocking, and
     a walk of N namespaces is N blocking calls.
@@ -161,7 +162,7 @@ def _collect_tables(ns: LanceNamespace, root_tables: list[str], include_declared
         seen.add(tuple(parent))
         if parent:
             try:
-                tables = native.call(ns, "list_tables", ListTablesRequest(id=parent, include_declared=include_declared)).tables or []
+                tables = native.call(ns, "list_tables", ListTablesRequest(id=parent, include_declared=True)).tables or []
                 found.extend(fga.canonical_object_id([*parent, name]) for name in tables)
             except Exception:  # noqa: BLE001 — one bad namespace, not a blank registry
                 log.warning("could not list tables in %s", parent, exc_info=True)
@@ -180,6 +181,7 @@ async def list_all_tables(
     request: Request,
     ns: NamespaceDep,
     settings: SettingsDep,
+    so: StorageOptionsDep,
     token: CurrentToken,
     client: FgaClientDep,
     resolver: ResolverDep,
@@ -189,7 +191,8 @@ async def list_all_tables(
 ) -> ListTablesResponse:
     """List every table in the namespace via ``list_all_tables``; when FGA is on,
     filter the result down to the tables the caller can ``can_read_data``.
-    ``include_declared=false`` drops declared-only tables (reserved, no storage yet).
+    ``include_declared=false`` lists only the tables that hold a committed version, each judged by its own storage
+    (:func:`catalog.api.listings.holding_a_version`, [[LH-528]]).
 
     Pagination is applied to the FINAL merged result, never to the native root call: the response is
     root tables + bound seeds + the namespace walk, so a native-level ``limit`` would truncate only
@@ -198,7 +201,7 @@ async def list_all_tables(
     ``page_token`` = the last name of the page, stateless and stable across pages. The walk itself
     still costs the full estate server-side per call — acceptable at admin frequency, and honest now.
     """
-    req = ListTablesRequest(id=[], include_declared=include_declared)
+    req = ListTablesRequest(id=[], include_declared=True)
     response: ListTablesResponse = await run_in_threadpool(native.call, ns, "list_all_tables", req)
     # RECURSE INTO CHILD NAMESPACES. `list_all_tables` at the root returns only tables sitting
     # DIRECTLY at the root — despite the name — so with the estate's own convention (tiers are
@@ -219,7 +222,7 @@ async def list_all_tables(
 
     async def _seed_tables(top: str) -> list[str]:
         seed_ns = await namespace_for_top_ns(request, settings, top)
-        listed = await run_in_threadpool(native.call, seed_ns, "list_tables", ListTablesRequest(id=[top], include_declared=include_declared))
+        listed = await run_in_threadpool(native.call, seed_ns, "list_tables", ListTablesRequest(id=[top], include_declared=True))
         return [fga.canonical_object_id([top, name]) for name in (listed.tables or [])]
 
     # CONCURRENT, not one seed at a time (catalog-api-11). Each bound warehouse is an independent
@@ -237,7 +240,9 @@ async def list_all_tables(
             log.warning("could not list bound namespace %s", top, exc_info=listed_or_error)
         else:
             response.tables.extend(listed_or_error)
-    response.tables = await run_in_threadpool(_collect_tables, ns, response.tables, include_declared)
+    candidates = [(name, parse_identifier(name)) for name in await run_in_threadpool(_collect_tables, ns, response.tables)]
+    if not include_declared:
+        candidates = await listings.holding_a_version(resolver, so, candidates)
     # When FGA is on and the caller is known, return only the tables they can read, each judged on the object its name
     # resolves to; pages count only tables the caller can see.
     if settings.fga_enabled and token is not None and client is not None:
@@ -247,12 +252,12 @@ async def list_all_tables(
             user=token.subject,
             relation="can_read_data",
             kind="table",
-            candidates=[(name, parse_identifier(name)) for name in response.tables],
+            candidates=candidates,
             page_token=page_token,
             limit=limit,
         )
         return response
-    response.tables, response.page_token = paginate(response.tables, page_token, limit)
+    response.tables, response.page_token = paginate([name for name, _ in candidates], page_token, limit)
     return response
 
 
@@ -611,40 +616,51 @@ def _describe(
     version: int | None,
     tag: str | None,
 ) -> DescribeTableResponse:
-    """The blocking half of :func:`describe_table`: resolve the pin, describe, fill the metadata, and answer the table's uuid.
+    """The blocking half of :func:`describe_table`: resolve the pin, describe, judge and load the table, and answer its uuid.
 
     The uuid is the one the table's location's claim records ([[LH-519]], ADR 0173 §6, §11), answered under the
     ``rask.uuid`` property, which no door lets a caller set. It is read, never minted here, so every describe of
     the table answers the same one.
+
+    WHETHER THE TABLE IS ONLY DECLARED IS THE CATALOG'S JUDGMENT ([[LH-528]]), and so is the detailed metadata that rides
+    on it. The backend is asked only for the plain describe: its own verdict misjudges a table registered at a nested
+    location, and with ``load_detailed_metadata`` it then answers no version and no schema
+    (``dataplane.holds_a_version``). ``is_only_declared`` is answered when ``check_declared`` or ``load_detailed_metadata``
+    asks for it, as the spec says (`lance_docs/ns_catalog/spec.yaml:2926-2934`).
     """
     if tag is not None:
         version = dataplane.get_tag_version(ns, so, GetTableTagVersionRequest(id=segments, tag=tag)).version
-    if version is not None:
-        # A VERSION THAT DOES NOT EXIST MUST NOT DESCRIBE THE ONE THAT DOES. `describe_table` answers off
-        # the namespace manifest and does not resolve the pin, so `?version=9999` on a two-version table
-        # returned 200 with byte-identical metadata (verified live 2026-08-31) — a caller probing whether
-        # a version exists is told yes about every number they try. Opening the pinned dataset is what
-        # mints the spec's own error 11 `TableVersionNotFound`; the open runs ONLY when a version was
-        # named, so the unpinned describe every client makes is untouched.
-        open_dataset_unchecked(ns, so, segments, version=version)
-    req = DescribeTableRequest(
-        id=segments, with_table_uri=with_table_uri, load_detailed_metadata=load_detailed_metadata, check_declared=check_declared, version=version
-    )
-    response: DescribeTableResponse = native.call(ns, "describe_table", req)
-    # pylance 8.0.0 leaves `metadata` empty even with load_detailed_metadata — so the #74 Table Properties
-    # UI could write a property but never read it back (browser-driven find 2026-07-21). Fill it from the
-    # dataset's schema metadata (best-effort: a read failure must never break describe).
-    if load_detailed_metadata and not response.metadata:
-        try:
-            schema_meta = dataplane.read_schema_metadata(ns, so, segments)
-            if schema_meta:
-                response.metadata = schema_meta
-        except Exception:
-            log.warning("describe_schema_metadata_read_failed", extra={"table": "/".join(segments)})
+    # A VERSION THAT DOES NOT EXIST MUST NOT DESCRIBE THE ONE THAT DOES. `describe_table` answers off
+    # the namespace manifest and does not resolve the pin, so `?version=9999` on a two-version table
+    # returned 200 with byte-identical metadata (verified live 2026-08-31) — a caller probing whether
+    # a version exists is told yes about every number they try. Opening the pinned dataset is what
+    # mints the spec's own error 11 `TableVersionNotFound`; the open runs ONLY when a version was
+    # named, so the unpinned describe every client makes is untouched.
+    pinned = open_dataset_unchecked(ns, so, segments, version=version) if version is not None else None
+    response: DescribeTableResponse = native.call(ns, "describe_table", DescribeTableRequest(id=segments, with_table_uri=with_table_uri, version=version))
+    if response.location and (check_declared or load_detailed_metadata):
+        holds = dataplane.holds_a_version(response.location, so)
+        response.is_only_declared = not holds
+        if load_detailed_metadata and holds:
+            _load_detailed_metadata(response, pinned or open_dataset_unchecked(ns, so, segments))
     claim = location_claims.holder(claims, response.location) if response.location else None
     if claim is not None and claim.uuid is not None:
         response.properties = {**(response.properties or {}), UUID_PROPERTY: claim.uuid}
     return response
+
+
+def _load_detailed_metadata(response: DescribeTableResponse, dataset: lance.LanceDataset) -> None:
+    """Answer ``dataset``'s version and schema as the backend's detailed describe does, and its own schema metadata.
+
+    ``metadata`` is the table's user metadata, read from the same handle, so a table property a caller writes through
+    ``schema_metadata/update`` is read back here.
+    """
+    loaded = DescribeTableResponse.model_validate({"version": dataset.version, "schema": json_arrow.table_schema_json(dataset.lance_schema)})
+    response.version = loaded.version
+    response.var_schema = loaded.var_schema
+    metadata = dataplane.user_schema_metadata(dataset.schema)
+    if metadata:
+        response.metadata = metadata
 
 
 #: The spec gives `exists` a 200 with NO `content:` block — *"Success, no content"* — so a conforming
@@ -1471,6 +1487,7 @@ async def rename_table(
             table,
             body.new_table_name,
             body.new_namespace_id,
+            so=so,
             claims=table_claims.claim_store(settings),
             root=settings.root,
         )

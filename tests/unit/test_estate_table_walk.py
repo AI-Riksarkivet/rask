@@ -85,6 +85,7 @@ def _list(
             request=cast(Request, SimpleNamespace()),
             ns=cast(LanceNamespace, root),
             settings=_settings(tmp_path),
+            so={},
             token=None,
             client=None,
             resolver=NamedResolver(),

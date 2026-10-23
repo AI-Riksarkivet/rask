@@ -146,6 +146,7 @@ def test_the_estate_listing_lists_every_bound_seed_concurrently(tmp_path: Path, 
             request=request,
             ns=cast("LanceNamespace", object()),
             settings=_settings(tmp_path),
+            so={},
             token=None,
             client=None,
             # With no caller and no OpenFGA the listing authorizes no candidate, so no name is resolved.

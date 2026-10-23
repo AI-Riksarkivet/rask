@@ -73,12 +73,31 @@ def test_body_vend_credentials_and_version_are_honoured(client: TestClient, fake
     assert _sent(fake_ns).version == 1
 
 
-def test_body_flags_reach_the_backend(client: TestClient, fake_ns: MagicMock, vendor: MagicMock) -> None:
-    # The three fields the spec DOES put in the query are still legal in the body for a non-REST client.
-    resp = client.post("/v1/table/db$t/describe", json={"with_table_uri": True, "load_detailed_metadata": True, "check_declared": True})
+@pytest.mark.parametrize(
+    ("flag", "answered", "with_table_uri"),
+    [
+        pytest.param("with_table_uri", {"is_only_declared": None, "version": None}, True, id="with-table-uri-reaches-the-backend"),
+        pytest.param("check_declared", {"is_only_declared": False, "version": None}, None, id="check-declared-is-judged"),
+        pytest.param("load_detailed_metadata", {"is_only_declared": False, "version": 1}, None, id="load-detailed-metadata-is-loaded"),
+    ],
+)
+def test_a_body_flag_is_honoured(
+    client: TestClient, fake_ns: MagicMock, monkeypatch: pytest.MonkeyPatch, flag: str, answered: dict[str, Any], with_table_uri: bool | None
+) -> None:
+    """The three fields the spec puts in the query are legal in the body too, for a non-REST client.
+
+    The table is the one-version dataset ``client`` describes. Whether it holds a version, and its detailed metadata,
+    are the door's own to answer ([[LH-528]]), so those two flags never reach the backend.
+    """
+    from catalog.api.v1.endpoints import tables
+    from catalog.core import namespace
+
+    monkeypatch.setattr(tables, "open_dataset_unchecked", namespace.open_dataset_unchecked)
+    resp = client.post("/v1/table/db$t/describe", json={flag: True, "vend_credentials": False})
+
     assert resp.status_code == 200, resp.text
-    sent = _sent(fake_ns)
-    assert (sent.with_table_uri, sent.load_detailed_metadata, sent.check_declared) == (True, True, True)
+    assert {key: resp.json().get(key) for key in answered} == answered
+    assert _sent(fake_ns).with_table_uri is with_table_uri
 
 
 def test_the_query_form_still_works(client: TestClient, fake_ns: MagicMock, vendor: MagicMock) -> None:
