@@ -2,17 +2,19 @@
 
 Maintenance decides and does not rewrite (ADR 0155, ADR 0156 C4): it compacts nothing and builds or optimizes no
 index. What it still writes is reclamation — ``cleanup_old_versions`` deletes superseded manifests and the files only
-they reference — and the config commit that disarms Lance's commit-path auto-cleanup. Every gate here guards one of
-those two writes.
+they reference, and the pass deletes the manifests stock writers staged for versions another commit took — and the
+config commit that disarms Lance's commit-path auto-cleanup. Every gate here guards one of those writes.
 """
 
 from __future__ import annotations
 
 import logging
+import re
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal
+from typing import Any, Final, Literal
 
 import lance
+import pyarrow.fs as pafs
 from pydantic import BaseModel, ConfigDict, Field
 
 from maintenance.core.config import shared_lance_session
@@ -29,8 +31,10 @@ from service_kit.lakehouse.features import (
     mixes_data_file_versions,
     unsupported_features_from_open_error,
 )
+from service_kit.lakehouse.objectfs import credential_of, fs_and_base
 from service_kit.lakehouse.version_retention import Retention, reclaimable_versions
 from service_kit.openlineage import DatasetUuids
+from storage import s3_client
 
 
 log = logging.getLogger(__name__)
@@ -72,6 +76,8 @@ class DatasetResult(BaseModel):
     reclaimable_versions: int | None = None
     old_versions_removed: int = 0
     bytes_removed: int = 0
+    #: Manifests stock writers staged for versions the ref already holds, removed by this pass ([[LH-529]]).
+    staged_manifests_removed: int = 0
     #: This pass found Lance's commit-path auto-cleanup armed and removed every ``lance.auto_cleanup.*`` key
     #: ([[LH-245]]).
     auto_cleanup_disarmed: bool = False
@@ -110,6 +116,9 @@ class ExpiryPolicy(BaseModel):
     cleanup_enabled: bool = True
     #: Reclaim only once at least this many versions are reclaimable (``MAINTENANCE_MIN_VERSIONS_TO_EXPIRE``).
     min_reclaimable: int = Field(default=1, ge=1)
+    #: How long a manifest staged for a version the ref already holds is kept before the pass removes it
+    #: (``MAINTENANCE_STAGED_MANIFEST_GRACE_SECONDS``): past any commit still deciding its outcome.
+    staged_grace: timedelta = timedelta(minutes=10)
 
     def retention(self) -> Retention:
         return Retention(older_than=self.older_than, retain_versions=self.retain_versions)
@@ -335,11 +344,88 @@ def count_reclaimable(ds: lance.LanceDataset, uri: str, policy: ExpiryPolicy) ->
     return len(reclaimable_versions(ds, branch=branch, retention=policy.retention(), now=datetime.now(UTC)))
 
 
-def _reclaim_versions(ds: lance.LanceDataset, result: DatasetResult, policy: ExpiryPolicy) -> None:
-    """Reclaim superseded versions once enough are reclaimable; tagged versions are EXEMPT.
+#: A manifest a stock writer stages, `<inverted version>.manifest-<uuid>` (ADR 0157). Lance's listing drops the name
+#: (`detect_scheme`, `rust/lance-table/src/io/commit.rs:138-150` at v13.0.0), so ``cleanup_old_versions`` never reclaims
+#: one.
+_STAGED_MANIFEST: Final = re.compile(r"^(?P<inverted>\d{20})\.manifest-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+_U64_MAX: Final = (1 << 64) - 1
+#: The most keys one S3 DeleteObjects request takes.
+_DELETE_BATCH: Final = 1000
+
+
+def _on_object_client(uri: str, storage_options: dict[str, str]) -> bool:
+    return uri.startswith("s3://") and bool(storage_options.get("endpoint"))
+
+
+def _object_client(storage_options: dict[str, str]) -> Any:  # noqa: ANN401 — a boto3 S3 client
+    access_key, secret_key, session_token = credential_of(storage_options)
+    return s3_client(
+        storage_options["endpoint"], access_key=access_key, secret_key=secret_key, session_token=session_token, region=storage_options.get("region")
+    )
+
+
+def _staged_manifests(uri: str, storage_options: dict[str, str]) -> list[tuple[str, int, datetime]]:
+    """Each manifest staged under the ref's ``_versions/``: its store path, the version it was staged for, when it was put."""
+    listed: list[tuple[str, datetime]] = []
+    if _on_object_client(uri, storage_options):
+        bucket, _, key = uri.removeprefix("s3://").partition("/")
+        pages = _object_client(storage_options).get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=f"{key.rstrip('/')}/_versions/")
+        listed = [(f"{bucket}/{entry['Key']}", entry["LastModified"]) for page in pages for entry in page.get("Contents", [])]
+    else:
+        fs, base = fs_and_base(uri, storage_options)
+        infos = fs.get_file_info(pafs.FileSelector(f"{base}/_versions", allow_not_found=True))
+        listed = [(info.path, info.mtime if info.mtime.tzinfo else info.mtime.replace(tzinfo=UTC)) for info in infos if info.mtime is not None]
+    staged: list[tuple[str, int, datetime]] = []
+    for path, modified in listed:
+        if (match := _STAGED_MANIFEST.match(path.rsplit("/", 1)[-1])) is not None:
+            staged.append((path, _U64_MAX - int(match["inverted"]), modified))
+    return staged
+
+
+def _delete_paths(uri: str, storage_options: dict[str, str], paths: list[str]) -> None:
+    """Delete store ``paths``: DeleteObjects on S3, which writes no directory marker as pyarrow's delete does.
+
+    Raises:
+        OSError: The store refused a delete.
+    """
+    if not paths:
+        return
+    if not _on_object_client(uri, storage_options):
+        fs, _ = fs_and_base(uri, storage_options)
+        for path in paths:
+            fs.delete_file(path)
+        return
+    client = _object_client(storage_options)
+    bucket = paths[0].partition("/")[0]
+    keys = [path.partition("/")[2] for path in paths]
+    for start in range(0, len(keys), _DELETE_BATCH):
+        answered = client.delete_objects(Bucket=bucket, Delete={"Objects": [{"Key": key} for key in keys[start : start + _DELETE_BATCH]], "Quiet": True})
+        if refused := answered.get("Errors"):
+            raise OSError(f"the store refused {len(refused)} delete(s) in {bucket}: {refused[:3]}")
+
+
+def _reclaim_staged_manifests(ds: lance.LanceDataset, *, result: DatasetResult, target: ExpiryTarget, policy: ExpiryPolicy) -> None:
+    """Remove each manifest staged for a version the ref already holds, once past ``policy.staged_grace`` ([[LH-529]]).
+
+    A commit that loses its version to another leaves the manifest it staged: Lance deletes a losing one with the
+    committer's own credential, which the write tier does not grant, and keeps one whose outcome it cannot prove
+    (`lose_or_retain`, `rust/lance-table/src/io/commit/external_manifest.rs` at v13.0.0). Neither can land once another
+    commit holds its version, and each is one more key every open of the table lists. One staged for a later version is
+    a commit still in flight and is kept, and the grace keeps a commit deciding its outcome from losing the file.
+    """
+    cutoff = datetime.now(UTC) - policy.staged_grace
+    lost = [path for path, version, modified in _staged_manifests(target.uri, target.storage_options) if version <= ds.version and modified <= cutoff]
+    _delete_paths(target.uri, target.storage_options, lost)
+    result.staged_manifests_removed = len(lost)
+
+
+def _reclaim_versions(ds: lance.LanceDataset, *, result: DatasetResult, target: ExpiryTarget, policy: ExpiryPolicy) -> None:
+    """Reclaim superseded versions once enough are reclaimable, then the manifests no version will take; tagged versions
+    are EXEMPT.
 
     ``error_if_tagged_old_versions=False``: the default RAISES once any tag ages past ``older_than``, and the catalog's
-    long-lived ``published`` tag would then stall reclamation on that dataset forever.
+    long-lived ``published`` tag would then stall reclamation on that dataset forever. The staged manifests go in the same
+    pass because only a pass that reclaims holds a write credential (``sweep._probe_before_vending``).
     """
     if not policy.cleanup_enabled:
         log.info("cleanup_disabled_by_policy", extra={"uri": result.uri})
@@ -351,6 +437,7 @@ def _reclaim_versions(ds: lance.LanceDataset, result: DatasetResult, policy: Exp
     stats: Any = ds.cleanup_old_versions(older_than=policy.older_than, retain_versions=policy.retain_versions, error_if_tagged_old_versions=False)
     result.old_versions_removed = int(getattr(stats, "old_versions", 0))
     result.bytes_removed = int(getattr(stats, "bytes_removed", 0))
+    _reclaim_staged_manifests(ds, result=result, target=target, policy=policy)
 
 
 def _record_failure(result: DatasetResult, exc: BaseException) -> None:
@@ -378,7 +465,7 @@ def expire_versions(target: ExpiryTarget, policy: ExpiryPolicy) -> DatasetResult
     result = disarm.onto(opened.result(target.uri))
     result.table_id = target.table_id
     try:
-        _reclaim_versions(opened.ds, result, policy)
+        _reclaim_versions(opened.ds, result=result, target=target, policy=policy)
     except BaseException as exc:  # noqa: BLE001 — a Rust PANIC is not an Exception
         # A pyo3 panic derives from BaseException; measured on the live estate 2026-08-16, one escaping panic answered
         # the entire sweep HTTP 500 and every other dataset lost its reclamation.

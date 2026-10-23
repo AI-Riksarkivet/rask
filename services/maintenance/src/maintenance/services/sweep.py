@@ -361,7 +361,7 @@ def _expire(uri: str, table: str, plan: DatasetPlan, *, sweep: SweepPlan, settin
     disagree.
     """
     options = settings.storage_options()
-    policy = plan.expiry_policy(min_reclaimable=settings.min_versions_to_expire)
+    policy = plan.expiry_policy(min_reclaimable=settings.min_versions_to_expire, staged_grace=timedelta(seconds=settings.staged_manifest_grace_seconds))
     probe = _probe_before_vending(uri, options, policy=policy)
     target = ExpiryTarget(uri=uri, storage_options=options, protected=sweep.protected, table_id=table)
     if probe.may_write:
@@ -548,6 +548,7 @@ def _record_dataset_outcome(result: DatasetResult, *, subject: str) -> None:
             "table_id": result.table_id,
             "old_versions_removed": result.old_versions_removed,
             "bytes_removed": result.bytes_removed,
+            "staged_manifests_removed": result.staged_manifests_removed,
             "due": result.due,
             "refused": result.refused,
             "skipped": result.skipped,

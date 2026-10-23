@@ -79,6 +79,10 @@ Maintenance).
 
 - A provenance table keeps between about 20 and 40 versions, plus the commits of one compaction interval (5 minutes in
   development), and a fragment count bounded by that interval.
+- A compaction that loses its version to one of lineage's writes leaves the manifest it staged: Lance's own cleanup
+  never lists the name, and the job holds no delete. Maintenance's expiry removes each manifest staged for a version the
+  table already holds, once it is ten minutes old (`MAINTENANCE_STAGED_MANIFEST_GRACE_SECONDS`), in the pass that
+  reclaims versions; measured live before it, one about every 20 minutes on `provenance$runs`.
 - An estate that installs the product chart without a compaction job keeps bounded versions and growing fragments; the
   due list shows the tables as due.
 - A pipeline compacting its own tables needs `reader` and `maintainer` on them, not `writer`.

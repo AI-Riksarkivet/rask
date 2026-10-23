@@ -381,7 +381,7 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   (`service_kit.lakehouse.maintenance_due`). The catalog lists the records on `GET /management/v1/maintenance/due` to
   a caller holding `can_maintain`; the list is advisory. **Expiry is commit-driven**: the write-event lane
   (`/maintenance-arrival`) expires the table just written once it has `minVersionsToExpire` (20) reclaimable
-  versions, and the sweep, every 30 minutes, is the backstop that also writes the clone list and the due records.
+  versions, and the sweep, every 30 minutes, is the backstop that also writes the clone list and the due records. The same pass deletes each `_versions/<n>.manifest-<uuid>` a stock writer staged for a version the table already holds, once past `MAINTENANCE_STAGED_MANIFEST_GRACE_SECONDS` (600): a commit that lost its version leaves one, Lance's listing drops the name so `cleanup_old_versions` never does, and the write tier grants no delete ([[LH-529]]).
   Both ask one eligibility rule, `service_kit.lakehouse.version_retention`, which the catalog's GC preview shares.
   Compaction, index builds and index optimize are a bring-your-own job's, committed through `version/create` (below);
   `CreateTableIndex` answers 406 naming that path. An erasure's rewrite is a bring-your-own job's too (ADR 0163,

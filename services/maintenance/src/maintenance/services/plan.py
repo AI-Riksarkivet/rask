@@ -38,9 +38,13 @@ class DatasetPlan(BaseModel):
     optimize_indices_enabled: bool = True
     target_rows_per_fragment: int | None = None
 
-    def expiry_policy(self, *, min_reclaimable: int) -> ExpiryPolicy:
+    def expiry_policy(self, *, min_reclaimable: int, staged_grace: timedelta) -> ExpiryPolicy:
         return ExpiryPolicy(
-            older_than=self.older_than, retain_versions=self.retain_versions, cleanup_enabled=self.cleanup_enabled, min_reclaimable=min_reclaimable
+            older_than=self.older_than,
+            retain_versions=self.retain_versions,
+            cleanup_enabled=self.cleanup_enabled,
+            min_reclaimable=min_reclaimable,
+            staged_grace=staged_grace,
         )
 
     def due_question(self, *, table: str, uuid: str, location: str, clones: list[str]) -> DueQuestion:

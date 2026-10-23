@@ -5,6 +5,7 @@ namespace's `__manifest`, under a policy keeping one version, with a fresh clone
 threshold is set through the environment, and each side of it is one case: one reclaimable version short reclaims
 nothing; at the threshold every reclaimable version goes. A clone list past its age reclaims nothing at the threshold
 either: it is the only evidence of which tables a clone reads through, so the lane leaves the table to the sweep.
+The same pass removes what a commit that lost its version left behind, the manifest it staged ([[LH-529]]).
 
 The table's name is one the catalog percent-encodes ([[LH-319]]): the event names the URL the catalog opened,
 ``…$r%C3%A4ksm%C3%B6rg%C3%A5s`` as ``describe_table`` answers it, while the ``__manifest`` row and the store hold
@@ -134,3 +135,41 @@ def test_a_commit_expires_its_table_only_at_the_threshold(
 
     assert answered.status_code == 200 and answered.json() == {"status": "SUCCESS"}, answered.text
     assert len(lance.dataset(uri, storage_options=store).versions()) == kept
+
+
+def _staged(bucket: str, moto_url: str, location: str, version: int) -> str:
+    """A manifest staged for ``version`` as a stock writer stages one (`<inverted version>.manifest-<uuid>`); its name."""
+    name = f"{(1 << 64) - 1 - version:020d}.manifest-{uuid.uuid4()}"
+    s3 = boto3.client("s3", endpoint_url=moto_url, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1")
+    s3.put_object(Bucket=bucket, Key=f"{location}/_versions/{name}", Body=b"")
+    return name
+
+
+@pytest.mark.parametrize(
+    ("grace_seconds", "lost_stays"),
+    [
+        pytest.param("0", False, id="a-manifest-staged-for-a-committed-version-goes"),
+        pytest.param("3600", True, id="one-inside-its-grace-stays"),
+    ],
+)
+def test_a_commits_expiry_removes_the_staged_manifests_no_version_will_take(
+    *, bucket: str, moto_url: str, store: dict[str, str], maintenance: TestClient, monkeypatch: pytest.MonkeyPatch, grace_seconds: str, lost_stays: bool
+) -> None:
+    """A commit that lost its version to another leaves the manifest it staged, which Lance's listing skips and so
+    ``cleanup_old_versions`` never reclaims ([[LH-529]]); the expiry after a commit removes it once past its grace. One
+    staged for the version after the latest is a commit still in flight and stays."""
+    monkeypatch.setenv("MAINTENANCE_STAGED_MANIFEST_GRACE_SECONDS", grace_seconds)
+    from maintenance.core.config import get_settings
+
+    get_settings.cache_clear()
+    uri = _table_with(THRESHOLD + 1, bucket=bucket, options=store, clone_list_age=timedelta(0))
+    lost = _staged(bucket, moto_url, LOCATION, 2)
+    in_flight = _staged(bucket, moto_url, LOCATION, THRESHOLD + 2)
+
+    answered = maintenance.post("/maintenance-arrival", json=_written(uri, THRESHOLD + 1))
+
+    assert answered.status_code == 200 and answered.json() == {"status": "SUCCESS"}, answered.text
+    s3 = boto3.client("s3", endpoint_url=moto_url, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1")
+    held = {entry["Key"].rsplit("/", 1)[-1] for entry in s3.list_objects_v2(Bucket=bucket, Prefix=f"{LOCATION}/_versions/").get("Contents", [])}
+    assert {name for name in (lost, in_flight) if name in held} == ({lost, in_flight} if lost_stays else {in_flight})
+    assert lance.dataset(uri, storage_options=store).version == THRESHOLD + 1

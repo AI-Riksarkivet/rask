@@ -41,6 +41,7 @@ class _Result:
     table_id = "bronze$events"
     old_versions_removed = 5
     bytes_removed = 7567
+    staged_manifests_removed = 0
     due = "clear"
     # THE DOUBLE CARRIES WHAT THE RECORD NAMES, and this field is why that rule is written above: the
     # record gained `duration_seconds` ([[LH-098]]) and every test here failed with AttributeError

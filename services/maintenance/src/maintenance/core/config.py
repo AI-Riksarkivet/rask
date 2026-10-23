@@ -92,6 +92,10 @@ class MaintenanceSettings(SignatureDoorSettings, FgaSettings, BaseSettings):
     #: manifest commit read and a listing for almost nothing. Eligibility is
     #: :func:`service_kit.lakehouse.version_retention.reclaimable_versions`, the rule the catalog's GC preview shows.
     min_versions_to_expire: int = Field(default=20, ge=1, alias="MAINTENANCE_MIN_VERSIONS_TO_EXPIRE")
+    #: How old a manifest a stock writer staged for a version its table already holds must be before expiry removes it
+    #: ([[LH-529]]): one whose commit lost its version is garbage Lance's own cleanup never lists, and the grace outlasts any
+    #: commit still deciding its outcome.
+    staged_manifest_grace_seconds: int = Field(default=600, ge=0, alias="MAINTENANCE_STAGED_MANIFEST_GRACE_SECONDS")
     #: How old the sweep's clone list may be before the event lane stops trusting it to expire a table. The list is the
     #: only evidence of which tables another dataset resolves its files through, so an older one leaves expiry to the
     #: sweep, which takes a fresh one first. The catalog's commit judge holds the same bound
