@@ -638,15 +638,41 @@ def _describe(
     # named, so the unpinned describe every client makes is untouched.
     pinned = open_dataset_unchecked(ns, so, segments, version=version) if version is not None else None
     response: DescribeTableResponse = native.call(ns, "describe_table", DescribeTableRequest(id=segments, with_table_uri=with_table_uri, version=version))
-    if response.location and (check_declared or load_detailed_metadata):
-        holds = dataplane.holds_a_version(response.location, so)
-        response.is_only_declared = not holds
-        if load_detailed_metadata and holds:
-            _load_detailed_metadata(response, pinned or open_dataset_unchecked(ns, so, segments))
+    if response.location and load_detailed_metadata:
+        _load_or_judge_declared(response, ns, so, segments, pinned=pinned)
+    elif response.location and check_declared:
+        response.is_only_declared = not dataplane.holds_a_version(response.location, so)
     claim = location_claims.holder(claims, response.location) if response.location else None
     if claim is not None and claim.uuid is not None:
         response.properties = {**(response.properties or {}), UUID_PROPERTY: claim.uuid}
     return response
+
+
+def _load_or_judge_declared(
+    response: DescribeTableResponse, ns: LanceNamespace, so: dict[str, str], segments: list[str], *, pinned: lance.LanceDataset | None
+) -> None:
+    """Load the table's detailed metadata onto ``response`` from one open, and judge whether it is only declared by it.
+
+    Lance finds a table's latest version by listing its ``_versions/`` on every open, and the store answers that listing
+    with every manifest key, so the judgment rides the open the metadata needs rather than a listing of its own
+    ([[LH-529]]). Only an open that finds no dataset asks the storage itself (``dataplane.holds_a_version``), which tells
+    a table holding no committed version, only declared, from one whose committed version could not be opened.
+
+    Raises:
+        TableNotFoundError: The table holds a committed version that does not open.
+    """
+    if pinned is not None:
+        dataset = pinned
+    else:
+        try:
+            dataset = open_dataset_unchecked(ns, so, segments)
+        except TableNotFoundError:
+            if dataplane.holds_a_version(str(response.location), so):
+                raise
+            response.is_only_declared = True
+            return
+    response.is_only_declared = False
+    _load_detailed_metadata(response, dataset)
 
 
 def _load_detailed_metadata(response: DescribeTableResponse, dataset: lance.LanceDataset) -> None:

@@ -263,6 +263,14 @@ services:
     # cannot name different namespaces.
     # -- Namespace the catalog keeps for lineage's feed and edge list (`LANCE_PROVENANCE_NAMESPACE`, `LINEAGE_PROVENANCE_NAMESPACE`).
     provenanceNamespace: provenance
+    # Each recorded event is a commit, so every provenance table gains a version and a fragment per event, and Lance
+    # lists a table's `_versions/` on every open ([[LH-529]]). The catalog writes this keep-last-N maintenance policy on
+    # the namespace at boot, and maintenance's expiry reclaims down to it; no lineage read holds a version longer than
+    # one read. Fragments are bounded by a bring-your-own compaction job, named below.
+    # -- Versions maintenance keeps of each provenance table: the namespace's keep-last-N policy, written by the catalog at boot (`LANCE_PROVENANCE_RETAIN_VERSIONS`). Null declares none.
+    provenanceRetainVersions: 20
+    # -- ServiceAccounts outside this release that compact the provenance tables, each `<namespace>:<name>` (e.g. `default:rask-sa-table-maintenance` for the table-maintenance fixture); the catalog grants each `reader` and `maintainer` on the namespace at boot (`LANCE_PROVENANCE_MAINTAINERS`). Read only with auth on.
+    provenanceMaintainers: []
     # The relay tick: a Dapr cron binding POSTs to /<bindingName> on `schedule`. Each tick drains the outbox
     # (records and re-publishes every event a producer staged but never saw acknowledged), prunes the feed past
     # eventsRetentionDays, and forwards the feed to the graph backend `forward.url` names. Every step is

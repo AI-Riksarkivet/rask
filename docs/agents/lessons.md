@@ -104,6 +104,11 @@ in `CLAUDE.md`. Add a line when a trap costs a session, and delete one when the 
   even with `-dev-root-token-id` (openbao 2.2.0 `command/server.go:2720,2732`), so any log reader holds the store; an
   in-memory server from a config file starts uninitialized and logs only that a root token was generated (XC-165,
   measured 2026-10-18).
+- **A Lance table's history is paid for on every open.** On an S3 store Lance lists `_versions/` to find the latest
+  version (the version hint is for stores whose listing is not lexically ordered, lance v13.0.0 `commit.rs:346`), and
+  RustFS answers with every manifest key, about 0.85 ms each; every scan also reads one file per fragment. A table
+  committed once per event needs a declared retention and a compaction job, or every door slows with its age (LH-529,
+  ADR 0174, 2026-10-23).
 - **Helm evaluates both arms of `ternary`, and `and` returns an operand, not a bool.** An arm that reads a key a values
   map lacks fails the render even when its condition is false, and `and $missing true` hands `ternary` a nil it refuses
   ("expected bool"); compute the arm inside an `if`, and default a flag (`| default false`) before testing it (XC-165).

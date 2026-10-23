@@ -15,10 +15,17 @@ stock commit leaves behind, is no version.
 
 The real catalog app over a real `dir` namespace on pylance. The backend's own detailed describe of the table's twin at a
 single-segment location, which it judges right, is what a detailed describe of the nested table must answer.
+
+A detailed describe judges a table by the open that loads its metadata, and a read of a table's version asks for no
+credential, so lineage's readiness read of its feed lists the feed's ``_versions/`` once ([[LH-529]]): Lance finds the
+latest version by that listing on every open, the store answers it with every manifest key, and the readiness read runs
+every few seconds. Counted on the wire, in front of a moto S3 server, since Lance's and pyarrow's native clients go
+through no Python hook.
 """
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import uuid
 from collections.abc import Callable, Iterator
@@ -26,6 +33,8 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+import boto3
+import httpx
 import lance
 import numpy as np
 import pyarrow as pa
@@ -33,11 +42,15 @@ import pytest
 from fastapi.testclient import TestClient
 from lance.arrow import bfloat16_array
 from lance_namespace import CreateNamespaceRequest, DescribeTableRequest, connect
+from moto.server import ThreadedMotoServer
 from pydantic import BaseModel, ConfigDict
 
 from catalog.core.identifiers import with_minted_uuid
 from catalog.services import warehouses
+from lineage.services.provenance import ProvenanceStore
 from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from tests.integration import store_requests
+from tests.integration.lineage_app import ensure_tables, serve
 
 
 #: Where the table registered at a nested location lives, relative to its warehouse's root. A non-ASCII segment, which
@@ -217,6 +230,15 @@ _EXIST_OK = {"params": {"mode": "exist_ok"}, "content": _ROWS, "headers": {"Cont
             "staged",
             id="describe-a-declaration",
         ),
+        pytest.param(
+            "POST",
+            "/v1/table/db$staged/describe",
+            {"params": {"load_detailed_metadata": "true"}, "json": {}},
+            200,
+            lambda _: {"is_only_declared": True, "version": None, "schema": None},
+            "staged",
+            id="describe-a-declaration-detailed",
+        ),
         pytest.param("POST", "/v1/table/db$staged/create", _EXIST_OK, 200, lambda _: {"version": 1}, "staged", id="create-exist-ok-into-a-declaration"),
         pytest.param(
             "POST",
@@ -240,3 +262,49 @@ def test_a_door_answers_a_table_by_its_own_storage(
     expected = answers(held)
     assert {key: answer.json().get(key) for key in expected} == expected
     assert _ok(held.client, f"/v1/table/db${named}/describe", json={})["location"] == held.locations[named]
+
+
+@pytest.fixture
+def feed_on_a_counted_store(monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[ProvenanceStore, store_requests.CountedStore, str]]:
+    """Lineage's store over the live catalog, whose bucket on a moto S3 server it reaches through a proxy counting what
+    the store is asked; answers the store, the count, and where the feed table lives."""
+    server = ThreadedMotoServer(port=0)
+    server.start()
+    host, port = server.get_host_and_port()
+    s3 = boto3.client("s3", endpoint_url=f"http://{host}:{port}", region_name="us-east-1", aws_access_key_id="test", aws_secret_access_key="test")
+    s3.create_bucket(Bucket="counted")
+    with store_requests.counted(f"http://{host}:{port}") as store:
+        for key, value in {
+            "LANCE_REST_IMPL": "dir",
+            "LANCE_REST_ROOT": "s3://counted",
+            "LANCE_S3_ENDPOINT": store.url,
+            "LANCE_S3_ACCESS_KEY_ID": "test",
+            "LANCE_S3_SECRET_ACCESS_KEY": "test",
+            "LANCE_PROVENANCE_NAMESPACE": "provenance",
+        }.items():
+            monkeypatch.setenv(key, value)
+        from catalog.core.config import get_settings
+
+        get_settings.cache_clear()
+        from catalog.main import app
+
+        with serve(app) as url:
+            provenance = ProvenanceStore(catalog_url=url, namespace=["provenance"], token=lambda: None)
+            ensure_tables(provenance)
+            with httpx.Client(base_url=url, timeout=60) as catalog:
+                feed = catalog.post("/v1/table/provenance$events/describe", json={"vend_credentials": False}).json()["location"]
+            yield provenance, store, feed
+        get_settings.cache_clear()
+    server.stop()
+
+
+def test_lineages_read_of_its_feeds_version_lists_the_feeds_versions_once(
+    feed_on_a_counted_store: tuple[ProvenanceStore, store_requests.CountedStore, str],
+) -> None:
+    provenance, store, feed = feed_on_a_counted_store
+    versions = f"{feed.removeprefix('s3://counted/')}/_versions/"
+    store.taken()
+
+    asyncio.run(provenance.ready())
+
+    assert sum(request.lists(versions) for request in store.taken()) == 1

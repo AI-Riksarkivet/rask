@@ -21,6 +21,7 @@ root_packages =
     storage
     ray_kit
     compute
+    table_maintenance
     dapr
 include_external_packages = True
 
@@ -54,6 +55,7 @@ forbidden_modules =
     compute
     ray
     ray_kit
+    table_maintenance
 
 # service-kit still carries code only clients run: the media plane, and the lancekit modules whose only importers are the
 # media services and the annotator. No lakehouse service and no lineage-kit module reaches that code by any chain, a
@@ -134,3 +136,20 @@ type = independence
 modules =
     service_kit
     lineage_kit
+
+# A bring-your-own job reaches the lakehouse through its doors alone ([[LH-529]], ADR 0162): the table-maintenance job
+# compacts what the catalog lists as due with stock clients, so what it does is what any client may do, and it runs as
+# a release of its own.
+[importlinter:contract:a-bring-your-own-job-imports-no-rask-package]
+name = LH-529: the table-maintenance job imports no rask package
+type = forbidden
+source_modules =
+    table_maintenance
+forbidden_modules =
+    catalog
+    lineage
+    maintenance
+    notifications
+    service_kit
+    lineage_kit
+    storage

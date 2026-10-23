@@ -1,0 +1,25 @@
+[project]
+name = "table-maintenance"
+version = "0.1.0"
+description = "a bring-your-own table-maintenance job: compacts each table the catalog lists as due that it may maintain, as its own identity, every commit judged at the catalog's version/create (ADR 0162). Its own release, never the product chart's."
+requires-python = ">=3.13"
+license = "Apache-2.0"
+# Stock clients only, and no rask package: a bring-your-own job reaches the lakehouse as any pipeline does, through the
+# catalog's doors, so what it does is what any client may do.
+dependencies = [
+    "pylance>=13.0.0",
+    "lance-namespace>=0.11.0,<0.12",
+    "httpx>=0.27",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.5",
+]
+
+[project.scripts]
+table-maintenance = "table_maintenance.job:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/table_maintenance"]

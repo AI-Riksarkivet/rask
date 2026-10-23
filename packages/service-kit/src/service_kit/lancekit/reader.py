@@ -415,7 +415,9 @@ class RestCatalogTransport:
         # THEIR version primitive: a plain describe returns location-only (version
         # absent); load_detailed_metadata=true loads the dataset server-side and
         # returns the current version. The 409 handshake compares a client's
-        # base_version against exactly this number.
+        # base_version against exactly this number. It asks for no credential: a vend
+        # opens the table again and mints a store session, for a number this read never
+        # reaches the store with ([[LH-529]]).
         from lance_namespace_urllib3_client import DescribeTableRequest
         from lance_namespace_urllib3_client.api.table_api import TableApi
 
@@ -423,7 +425,7 @@ class RestCatalogTransport:
         with translate_catalog_errors():
             response = api.describe_table(
                 self._delimiter.join(table_id),
-                DescribeTableRequest(id=table_id),
+                DescribeTableRequest(id=table_id, vend_credentials=False),
                 delimiter=self._delimiter,
                 load_detailed_metadata=True,
                 _request_timeout=self._timeout,

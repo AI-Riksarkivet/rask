@@ -319,6 +319,17 @@ class CatalogLineageSettings(BaseSettings):
     #: (`kubernetes~system:serviceaccount:<ns>:<sa>`). Each is granted `writer` on the namespace at boot, which
     #: reaches every table in it and nothing outside it. A bare name is refused when the settings are read.
     provenance_writers: list[PrincipalKey] = Field(default_factory=list, alias="LANCE_PROVENANCE_WRITERS")
+    #: The principals that compact the provenance namespace's tables: a bring-your-own table-maintenance job's
+    #: service-account principal. Each is granted `reader` and `maintainer` on the namespace at boot, what a compaction
+    #: needs (it reads every row and rewrites how they are stored), and never `writer`, so no commit of its changes what
+    #: the provenance says; the write tier it is vended can still put over a committed data file, as a writer's can
+    #: (`vending.build_session_policy`). A principal no longer named loses both at the next boot.
+    provenance_maintainers: list[PrincipalKey] = Field(default_factory=list, alias="LANCE_PROVENANCE_MAINTAINERS")
+    #: The versions maintenance keeps of each provenance table: the namespace's maintenance policy (keep the last N),
+    #: which the catalog writes at boot, so the history every open of those tables lists stays short ([[LH-529]]). No
+    #: lineage read holds a version longer than one read. Unset, the catalog removes the policy it wrote while it stands as
+    #: written, and the sweep's global retention applies; a hold set through the policy door stands.
+    provenance_retain_versions: int | None = Field(default=None, ge=1, le=100_000, alias="LANCE_PROVENANCE_RETAIN_VERSIONS")
 
 
 class CatalogMaintenanceSettings(BaseSettings):

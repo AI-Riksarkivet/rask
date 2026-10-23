@@ -105,6 +105,11 @@ serves S3 over HTTP, and the catalog is pointed at it with `LANCE_REST_ROOT=s3:/
   namespace name, not by bucket.
 - Plain `storage`/boto3 code does not need the server. `with mock_aws():` plus a boto3 client that
   seeds the bucket is enough (`packages/storage/tests/test_storage.py`).
+- To count what a door asks the store (how many listings of a table's `_versions/` an open costs), put
+  `tests/integration/store_requests.counted(<moto url>)` between the catalog and the server and point
+  `LANCE_S3_ENDPOINT` at its `url`: it forwards every request unchanged, chunked bodies included, and
+  `taken()` answers what each asked. Lance's and pyarrow's native clients go through no Python hook, so a
+  count is taken on the wire (`tests/integration/test_a_door_judges_whether_a_table_is_only_declared_by_its_storage.py`).
 
 ## A live uvicorn socket
 

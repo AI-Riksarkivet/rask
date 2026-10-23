@@ -120,6 +120,9 @@ spec:
             - { name: LANCE_LINEAGE_OUTBOX_URI, value: "s3://{{ .Values.objectStore.bucket }}/_lineage_outbox" }
             {{- end }}
             - { name: LANCE_PROVENANCE_NAMESPACE, value: {{ .Values.services.lineage.provenanceNamespace | quote }} }
+            {{- with .Values.services.lineage.provenanceRetainVersions }}
+            - { name: LANCE_PROVENANCE_RETAIN_VERSIONS, value: {{ . | quote }} }
+            {{- end }}
             - { name: LANCE_CONTROL_EMIT_ENABLED, value: {{ hasKey .Values.catalog "controlEmit" | ternary .Values.catalog.controlEmit false | quote }} }
             - { name: LANCE_CONTROL_PUBSUB, value: {{ .Values.pubsub.controlName | default "catalog-control-pubsub" | quote }} }
             {{- if and .Values.catalog.controlEmit .Values.catalog.controlOutbox.enabled }}
@@ -160,6 +163,12 @@ spec:
             {{- end }}
             - { name: LANCE_FGA_MAINTAINERS, value: {{ toJson (compact $maintainers) | quote }} }
             - { name: LANCE_PROVENANCE_WRITERS, value: {{ toJson (list (include "lance.saSubject" (list $root "lineage"))) | quote }} }
+            {{- $provenanceMaintainers := list }}
+            {{- range ($root.Values.services.lineage.provenanceMaintainers | default list) }}
+            {{- if not (regexMatch "^[a-z0-9-]+:[a-z0-9.-]+$" .) }}{{- fail (printf "services.lineage.provenanceMaintainers entry %q is not <namespace>:<serviceaccount>" .) }}{{- end }}
+            {{- $provenanceMaintainers = append $provenanceMaintainers (printf "kubernetes~system:serviceaccount:%s" .) }}
+            {{- end }}
+            - { name: LANCE_PROVENANCE_MAINTAINERS, value: {{ toJson $provenanceMaintainers | quote }} }
             - { name: LANCE_AUDIT_ENABLED, value: {{ hasKey .Values.auth "audit" | ternary .Values.auth.audit true | quote }} }
             - { name: LANCE_FGA_LOCK_ROOT_CREATE, value: {{ hasKey .Values.auth "lockRootCreate" | ternary .Values.auth.lockRootCreate (include "rask.isRealDeployment" . | eq "true") | quote }} }
             {{- end }}

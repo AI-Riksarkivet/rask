@@ -670,8 +670,9 @@ nats-auth: ## NATS auth e2e — each bus client admitted only to its own subject
 # (`flows` is STILL absent and has been since it landed: `.docker/flows.dockerfile` and a `rask-flows`
 # Deployment both exist, so an in-cluster flows is unverifiable today for the identical reason. Named
 # rather than fixed here — it is another plane's diff.)
-# `annotator` is a client with its own release (deploy/fixtures/annotator, ADR 0171) and its own image.
-COMPOSE_IMAGES = compute notifications flows annotator
+# `annotator` is a client with its own release (deploy/fixtures/annotator, ADR 0171) and its own image, and so is
+# `table-maintenance`, the bring-your-own compaction job (deploy/fixtures/table-maintenance, [[LH-529]]).
+COMPOSE_IMAGES = compute notifications flows annotator table-maintenance
 # SvelteKit SSR microfrontend zone images — one web-<zone> image per $(ZONES) entry,
 # all built from the one parametrized .docker/frontend.dockerfile via --build-arg
 # APP=<name>. (R22: the web- prefix keeps the zone image namespace disjoint from the
@@ -794,10 +795,10 @@ DROP_CREDENTIAL_VALUES := --set dapr.appToken=null --set frontend.oidc.sessionSe
 # given the issuer and origin rask is given; rustfs and openbao are the dev object and secret stores, which start once
 # rask is installed: the object store's root credential and the secret store's seed scripts are rask's. The Ray engine is
 # two of them, the operator first, and compute (the Ray dashboard and Serve companion) follows it, starting once rask's
-# app token and Dapr Configuration exist; observability is the store, dashboards and alerting rask's Collector exports
-# to. A GPU node with no device plugin yet adds nvidia-device-plugin. The annotator is not a prerequisite: it is a client
+# app token and Dapr Configuration exist; table-maintenance is the bring-your-own compaction job, whose runs start once
+# rask's catalog answers; observability is the store, dashboards and alerting rask's Collector exports to. A GPU node with no device plugin yet adds nvidia-device-plugin. The annotator is not a prerequisite: it is a client
 # of the lakehouse with its own release (ADR 0171), which `k3s-up` installs after rask (`k3s-annotator`).
-FIXTURES ?= external-secrets dapr nats cloudnative-pg dex rustfs openbao kuberay-operator ray-cluster compute observability marquez mailpit
+FIXTURES ?= external-secrets dapr nats cloudnative-pg dex rustfs openbao kuberay-operator ray-cluster compute table-maintenance observability marquez mailpit
 
 k3s-fixtures: ## Install the development fixtures (FIXTURES) as their own releases, before the rask chart
 	$(if $(filter-out dex compute,$(FIXTURES)),KUBECONFIG=$(KUBECONFIG) ./scripts/fixtures.sh $(filter-out dex compute,$(FIXTURES)))

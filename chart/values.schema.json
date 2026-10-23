@@ -1981,9 +1981,17 @@
                             "description": "Container and Service port of the lineage service.",
                             "type": "integer"
                         },
+                        "provenanceMaintainers": {
+                            "description": "ServiceAccounts outside this release that compact the provenance tables, each `\u003cnamespace\u003e:\u003cname\u003e` (e.g. `default:rask-sa-table-maintenance` for the table-maintenance fixture); the catalog grants each `reader` and `maintainer` on the namespace at boot (`LANCE_PROVENANCE_MAINTAINERS`). Read only with auth on.",
+                            "type": "array"
+                        },
                         "provenanceNamespace": {
                             "description": "Namespace the catalog keeps for lineage's feed and edge list (`LANCE_PROVENANCE_NAMESPACE`, `LINEAGE_PROVENANCE_NAMESPACE`).",
                             "type": "string"
+                        },
+                        "provenanceRetainVersions": {
+                            "description": "Versions maintenance keeps of each provenance table: the namespace's keep-last-N policy, written by the catalog at boot (`LANCE_PROVENANCE_RETAIN_VERSIONS`). Null declares none.",
+                            "type": "integer"
                         },
                         "relay": {
                             "type": "object",

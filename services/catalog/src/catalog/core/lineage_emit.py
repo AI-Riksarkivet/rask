@@ -644,10 +644,10 @@ class _BaseLineageEmitter:
     #: emitter built without them honest instead of claiming an unnamed catalog.
     _catalog_impl: str = ""
     _warehouse_uri: str = ""
-    #: Whether a write under this parent namespace goes unannounced: the namespace the catalog keeps for
-    #: provenance (`catalog.services.provenance_namespace`), whose rows ARE the announcements lineage recorded,
-    #: so announcing their own commits would record them again, without end. Set by `make_emitter`.
-    _unannounced: Callable[[str], bool] | None = None
+    #: Whether a write of an operation under this parent namespace goes unannounced: a row write in the namespace the
+    #: catalog keeps for provenance (`catalog.services.provenance_namespace`), whose rows ARE the announcements lineage
+    #: recorded, so announcing their own commits would record them again, without end. Set by `make_emitter`.
+    _unannounced: Callable[[str, str], bool] | None = None
 
     async def project_for(self, top_ns: str) -> str | None:
         """Resolve the tenant, swallowing failure. BEST-EFFORT LIKE THE EMIT ITSELF: this runs on a
@@ -688,7 +688,7 @@ class _BaseLineageEmitter:
         **fields: Unpack[EmitFields],
     ) -> None:
         # HERE, the one place every catalog emit passes through, so no door can announce a provenance row.
-        if self._unannounced is not None and self._unannounced(namespace):
+        if self._unannounced is not None and self._unannounced(namespace, operation):
             return
         # Resolved here rather than per call site: the mapping is mechanical, and a per-caller kwarg
         # is a rule every future endpoint eventually forgets (none ever passed one). Best-effort —
@@ -862,12 +862,12 @@ def make_emitter(
     catalog_impl: str = "",
     warehouse_uri: str = "",
     signing: SigningKeyHolder[SigningKey] | None = None,
-    unannounced: Callable[[str], bool] | None = None,
+    unannounced: Callable[[str, str], bool] | None = None,
 ) -> LineageEmitter:
     """Select the lineage transport: ``dapr`` (durable pub/sub via the sidecar) or ``http`` (direct POST);
     no-op when disabled or unwired (a half-configured transport must never silently become the other).
 
-    ``unannounced`` answers, for a write's parent namespace, whether its writes go unannounced (the provenance
+    ``unannounced`` answers, for a write's parent namespace and operation, whether it goes unannounced (the provenance
     namespace's own rows)."""
     if not enabled:
         return NoopEmitter()

@@ -4,8 +4,9 @@ A stock client opening a table through the namespace takes the ``storage_options
 client that gets none signs with whatever credential its environment holds. So the spec doors vend unless the
 caller asks them not to: the spec lets the server decide when ``vend_credentials`` is unset
 (``lance_docs/ns_catalog/spec.yaml`` § DescribeTableRequest). The tier is the highest rung FGA grants on the
-table: ``can_write_data`` opens the write tier, judged by the tier judge like every write; ``can_read_data`` the
-read tier; neither, no credential. Maintain is never vended here (LH-473).
+table: ``can_write_data`` opens the write tier, judged by the tier judge like every write, and so do ``can_read_data``
+and ``can_maintain`` together, a compaction job's rungs, whose commits ``version/create`` judges as a maintainer's;
+``can_read_data`` alone the read tier; none, no credential. Maintain is never vended here (LH-473).
 
 Every credential either door mints writes the ``vend_credentials`` issuance record (#532), the record the
 management vend door already writes.
@@ -89,6 +90,7 @@ def _grants(monkeypatch: pytest.MonkeyPatch, relations: set[str]) -> None:
 
 _READER = {"can_get_metadata", "can_read_data"}
 _WRITER = _READER | {"can_write_data"}
+_COMPACTOR = _READER | {"can_maintain"}
 _HEADERS = {"Authorization": "Bearer t"}
 
 
@@ -97,6 +99,8 @@ _HEADERS = {"Authorization": "Bearer t"}
     [
         pytest.param("describe", _READER, {}, "read", id="a-reader-gets-the-read-tier"),
         pytest.param("describe", _WRITER, {}, "write", id="a-writer-gets-the-write-tier"),
+        pytest.param("describe", _COMPACTOR, {}, "write", id="a-reader-who-maintains-gets-the-write-tier"),
+        pytest.param("describe", {"can_get_metadata", "can_maintain"}, {}, None, id="a-maintainer-who-may-not-read-gets-none"),
         pytest.param("describe", _WRITER, {"vend_credentials": True}, "write", id="an-explicit-ask-gets-the-same-tier"),
         pytest.param("describe", _WRITER, {"vend_credentials": False}, None, id="asking-for-none-gets-none"),
         pytest.param("describe", {"can_get_metadata"}, {}, None, id="metadata-without-data-gets-none"),

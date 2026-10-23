@@ -1,0 +1,65 @@
+{{- $r := .Values.rask.release -}}
+{{- $name := printf "%s-table-maintenance" $r -}}
+{{- $selector := dict "app.kubernetes.io/name" "rask" "app.kubernetes.io/instance" $r "app.kubernetes.io/component" "table-maintenance" -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $r }}-sa-table-maintenance
+  labels:
+    {{- toYaml $selector | nindent 4 }}
+automountServiceAccountToken: false
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- toYaml $selector | nindent 4 }}
+spec:
+  schedule: {{ .Values.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: {{ .Values.activeDeadlineSeconds }}
+      template:
+        metadata:
+          labels:
+            {{- toYaml $selector | nindent 12 }}
+        spec:
+          restartPolicy: Never
+          serviceAccountName: {{ $r }}-sa-table-maintenance
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: table-maintenance
+              image: "{{ .Values.image.repository }}:{{ required "image.tag must be set" .Values.image.tag }}"
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              securityContext:
+                runAsNonRoot: true
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+                seccompProfile:
+                  type: RuntimeDefault
+              env:
+                - { name: TABLE_MAINTENANCE_CATALOG_URL, value: {{ .Values.catalogUrl | default (printf "http://%s-catalog:2333" $r) | quote }} }
+                - { name: TABLE_MAINTENANCE_TOKEN_FILE, value: /var/run/secrets/rask/identity/rask-catalog/token }
+              volumeMounts:
+                - { name: tmp, mountPath: /tmp }
+                - { name: identity-rask-catalog, mountPath: /var/run/secrets/rask/identity/rask-catalog, readOnly: true }
+              resources:
+                {{- toYaml .Values.resources | nindent 16 }}
+          volumes:
+            - { name: tmp, emptyDir: { sizeLimit: "2Gi" } }
+            - name: identity-rask-catalog
+              projected:
+                sources:
+                  - serviceAccountToken: { path: token, audience: rask-catalog, expirationSeconds: 600 }

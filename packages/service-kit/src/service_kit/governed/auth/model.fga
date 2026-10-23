@@ -572,6 +572,10 @@ type table
     # Compaction, index optimisation and version reclamation rewrite HOW a dataset is stored; they never
     # change WHAT it says. `can_maintain` therefore neither implies nor is implied by `can_write_data`.
     define can_maintain: maintainer
+    # COMMITTING A STAGED VERSION is a write or maintenance, and the staged operation decides which: `version/create`
+    # admits either rung here and then asks the operation's own (`can_write_data` for an append, `can_maintain` for a
+    # compaction's two commits), so a compaction job commits as a maintainer and holds no writer rung (ADR 0162).
+    define can_create_version: writer or maintainer
     # The maintain storage tier puts and deletes the whole table prefix, `_versions/` and `_refs/` included, so
     # it could finalize a version or move a tag around `version/create`; only the maintenance identity is
     # vended it (ADR 0156 C4). An owner keeps every maintainer DOOR, which the catalog judges, and not this.

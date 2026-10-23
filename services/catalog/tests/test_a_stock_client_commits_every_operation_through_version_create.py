@@ -53,8 +53,12 @@ from service_kit.lakehouse import base_refs, maintenance_due
 
 _TOKEN = {"Authorization": "Bearer t"}
 _TABLE = ["db", "t"]
-#: What ``writer`` and ``maintainer`` on a table grant (``model.fga``: writer -> reader -> can_read_data, can_get_metadata).
-_WRITER_AND_MAINTAINER = frozenset({"can_get_metadata", "can_read_data", "can_write_data", "can_maintain"})
+#: What ``writer`` and ``maintainer`` on a table grant (``model.fga``: writer -> reader -> can_read_data, can_get_metadata;
+#: either one -> can_create_version).
+_WRITER_AND_MAINTAINER = frozenset({"can_get_metadata", "can_read_data", "can_write_data", "can_maintain", "can_create_version"})
+#: What ``reader`` and ``maintainer`` grant: a compaction job's rungs, which read every row and change none, so it may
+#: commit a version and holds no ``can_write_data``.
+_READER_AND_MAINTAINER = frozenset({"can_get_metadata", "can_read_data", "can_maintain", "can_create_version"})
 
 
 class Served(BaseModel):
@@ -228,14 +232,15 @@ def test_append_delete_merge_insert_update_and_restore_each_commit_through_versi
     assert committed == [(1, "Overwrite"), (2, "Append"), (3, "Delete"), (4, "Update"), (5, "Update"), (6, "Restore")]
 
 
-def test_a_stock_compaction_by_a_writer_and_maintainer_commits_through_version_create(served_on_s3: Served, caplog: pytest.LogCaptureFixture) -> None:
+def test_a_stock_compaction_by_a_reader_and_maintainer_commits_through_version_create(served_on_s3: Served, caplog: pytest.LogCaptureFixture) -> None:
     """Lance's own distributed protocol (``lance_docs/file_format.md`` § Rewrite): reserve the new fragment ids, then
-    commit the rewrite. Both are commits a stock client stages, so both are judged here."""
+    commit the rewrite. Both are commits a stock client stages, so both are judged here, and the job that stages them
+    holds no writer rung: a maintainer rewrites how a table is stored and never what it says (``model.fga``)."""
     stock = _created(served_on_s3)
     for row, value in ((4, "d"), (5, "e"), (6, "f")):
         lance.write_dataset(_keyed([row], [value]), namespace_client=stock, table_id=_TABLE, mode="append", storage_options=served_on_s3.storage_options)
     _sweep_wrote_a_clone_list(stock, clones_of_the_table=[])
-    served_on_s3.granted = _WRITER_AND_MAINTAINER
+    served_on_s3.granted = _READER_AND_MAINTAINER
     caplog.clear()
 
     with caplog.at_level(logging.INFO, logger="lance.audit"):
@@ -254,7 +259,7 @@ def test_the_index_door_refuses_and_a_writers_own_index_build_commits_through_ve
     """The catalog builds no index (ADR 0162): its spec door answers 406 naming the bring-your-own path, and a writer's
     own pylance builds the index and later folds new fragments into it, each commit judged at ``version/create``."""
     stock = _created(served)
-    served.granted = frozenset({"can_get_metadata", "can_read_data", "can_write_data"})
+    served.granted = frozenset({"can_get_metadata", "can_read_data", "can_write_data", "can_create_version"})
 
     refused = httpx.post(f"{served.url}/v1/table/db$t/create_scalar_index", json={"column": "id", "index_type": "BTREE"}, headers=_TOKEN)
     assert refused.status_code == 406, refused.text
@@ -378,6 +383,14 @@ def _append_at_file_version_2_1(stock: lance_namespace.LanceNamespace) -> None:
 
 def _create_at_file_version_2_1(stock: lance_namespace.LanceNamespace) -> None:
     lance.write_dataset(_keyed([9], ["z"]), namespace_client=stock, table_id=["db", "u"], mode="create", data_storage_version="2.1", enable_stable_row_ids=True)
+
+
+def _append_a_new_key(stock: lance_namespace.LanceNamespace) -> None:
+    lance.write_dataset(_keyed([9], ["z"]), namespace_client=stock, table_id=_TABLE, mode="append")
+
+
+def _create_a_table(stock: lance_namespace.LanceNamespace) -> None:
+    lance.write_dataset(_keyed([9], ["z"]), namespace_client=stock, table_id=["db", "u"], mode="create", data_storage_version="2.2", enable_stable_row_ids=True)
 
 
 def _append_a_held_key(stock: lance_namespace.LanceNamespace) -> None:
@@ -569,6 +582,8 @@ def _data_staged_under_an_index_label(stock: lance_namespace.LanceNamespace) -> 
         pytest.param(_restore_version_1, {"can_restore"}, False, 403, 15, ("db$t", 4), id="a-writer-cannot-stage-a-restore"),
         pytest.param(_overwrite, set(), True, 409, 19, ("db$t", 4), id="an-overwrite-of-a-protected-table-is-refused"),
         pytest.param(_compact, {"can_maintain"}, False, 403, 15, ("db$t", 4), id="a-writer-cannot-stage-a-compaction"),
+        pytest.param(_append_a_new_key, {"can_write_data"}, False, 403, 15, ("db$t", 4), id="a-maintainer-cannot-stage-an-append"),
+        pytest.param(_create_a_table, {"can_write_data"}, False, 403, 15, ("db$u", 1), id="a-maintainer-cannot-commit-a-tables-first-version"),
         pytest.param(_compact, set(), False, 503, 17, ("db$t", 4), id="a-compaction-waits-for-the-sweeps-clone-list"),
         pytest.param(_compact_on_a_clone_list_past_its_age, set(), False, 503, 17, ("db$t", 4), id="a-compaction-waits-for-a-fresh-clone-list"),
         pytest.param(_compact_a_table_a_clone_reads_through, set(), False, 406, 0, ("db$t", 4), id="a-table-a-clone-reads-through-is-not-compacted"),

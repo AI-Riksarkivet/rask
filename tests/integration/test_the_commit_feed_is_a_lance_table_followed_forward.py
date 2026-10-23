@@ -9,6 +9,9 @@ commit, so a catalog that announced its provenance namespace's writes would feed
 
 What stands in is `lineage_app`'s: OpenFGA answering from a granted set, and the verified caller named in a
 header. The visibility filter is the claim of the second test, and neither stand-in is a claim about the store.
+
+A compaction of a feed table is no recorded event's commit, so the catalog announces it as it announces any table's
+([[LH-529]]): lineage records it once, and recording it is a row write the catalog keeps to itself, so it ends there.
 """
 
 from __future__ import annotations
@@ -16,15 +19,20 @@ from __future__ import annotations
 import asyncio
 import uuid
 from collections.abc import Iterator, Mapping
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import httpx
+import lance
+import lance_namespace
 import pyarrow as pa
 import pyarrow.ipc as ipc
 import pytest
 from fastapi.testclient import TestClient
+from lance.optimize import Compaction
 
+from service_kit.lakehouse import base_refs, maintenance_due
 from service_kit.openlineage import DatasetUuids, with_dataset_uuids
 from tests.integration.lineage_app import SUBJECT_HEADER, free_port, governed_lineage, live_catalog, live_lineage, run_event
 
@@ -68,6 +76,19 @@ def _operation(event: dict[str, Any]) -> str:
     return facets["lance"]["operation"]
 
 
+def _compact_the_feed(catalog_url: str) -> None:
+    """Compact ``provenance$events`` as a bring-your-own job does, through the catalog's doors with Lance's own protocol."""
+    from catalog.core.config import get_settings
+
+    settings = get_settings()
+    # The clone list a maintenance sweep writes, which the catalog judges every compaction against (ADR 0162).
+    clones = maintenance_due.CloneList.taken(base_refs.BaseRefs(), at=datetime.now(UTC))
+    maintenance_due.write_clone_list(settings.registry_root, settings.storage_options(), clones)
+    feed = lance.dataset(namespace_client=lance_namespace.connect("rest", {"uri": catalog_url}), table_id=["provenance", "events"])
+    plan = Compaction.plan(feed, {"target_rows_per_fragment": 1024})
+    Compaction.commit(feed, [task.execute(feed) for task in plan.tasks])
+
+
 def test_each_catalog_commit_is_followed_forward_once_and_in_commit_order(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     port = free_port()
     announced = {"LANCE_LINEAGE_EMIT_ENABLED": "true", "LANCE_LINEAGE_TRANSPORT": "http", "LANCE_LINEAGE_URL": f"http://127.0.0.1:{port}/api/v1/lineage"}
@@ -85,12 +106,20 @@ def test_each_catalog_commit_is_followed_forward_once_and_in_commit_order(tmp_pa
         # What the outbox relay sends when it recovers an event whose publish was never acknowledged.
         redelivered = lineage.post("/api/v1/lineage", json=_follow(lineage)[-1]["event"])
         assert redelivered.status_code == 201, redelivered.text
+        _compact_the_feed(catalog_url)
 
         seen = _follow(lineage)
         # A cursor this feed never issued, as a follower holds one after the store is moved or restored.
         ahead = lineage.get("/events", params={"since": 121_000}).json()
 
-    assert [(row["outputs"], _operation(row["event"])) for row in seen] == [(["acme-silver$pages"], "create_table"), (["acme-silver$pages"], "insert")]
+    assert [(row["outputs"], _operation(row["event"])) for row in seen] == [
+        (["acme-silver$pages"], "create_table"),
+        (["acme-silver$pages"], "insert"),
+        # The feed's own compaction is announced as any table's commit is, once per commit, and recording it is a row
+        # write the catalog keeps to itself, so the feed ends there.
+        (["provenance$events"], "compact_table"),
+        (["provenance$events"], "compact_table"),
+    ]
     seqs = [row["seq"] for row in seen]
     assert seqs == sorted(set(seqs)), seqs
     assert (ahead["events"], ahead["next_cursor"]) == ([], seqs[-1]), "a cursor this feed never issued must be answered with its newest seq"

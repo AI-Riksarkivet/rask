@@ -275,7 +275,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         timeout_seconds=settings.lineage_emit_timeout_seconds,
         project_resolver=_resolve_project,
         # The provenance namespace's own rows are never announced (`services.provenance_namespace`).
-        unannounced=lambda namespace: provenance_namespace.is_provenance(namespace, settings),
+        unannounced=lambda namespace, operation: provenance_namespace.is_unannounced(namespace, operation, settings),
         outbox_uri=settings.lineage_outbox_uri,
         storage_options=settings.storage_options,
         # The catalog's self-description for the standard `catalog` facet ([[LIN-002]]): the Lance

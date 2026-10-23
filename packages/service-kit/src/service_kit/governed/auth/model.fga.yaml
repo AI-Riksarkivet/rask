@@ -423,6 +423,7 @@ tests:
           reader: true                        # inherited through namespace:acme_silver
           can_read_data: true                 # what a reader IS entitled to
           can_write_data: false               # writer-tier; the read/write boundary itself was unpinned
+          can_create_version: false           # a reader commits nothing, through `version/create` either
           can_grant_pass_grants: false
       - user: user:rita
         object: project:acme
@@ -1277,6 +1278,8 @@ tests:
         object: table:acme_silver_features
         assertions:
           can_maintain: true
+          # A compaction's commits go through `version/create` as a maintainer's, with no writer rung.
+          can_create_version: true
           # The maintain storage tier is the maintenance identity's alone (ADR 0156 C4, [[LH-473]]).
           can_vend_maintain: true
           # THE HALF THAT MATTERS. A maintainer may not change what the data says, may not read it, and
@@ -1300,6 +1303,7 @@ tests:
         object: table:acme_silver_features
         assertions:
           can_write_data: true
+          can_create_version: true
           can_maintain: false
           can_vend_maintain: false
       # An OWNER keeps the maintainer doors, concentrically, exactly as `validator` behaves: alice

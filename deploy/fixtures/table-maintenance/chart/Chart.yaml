@@ -1,0 +1,9 @@
+apiVersion: v2
+name: table-maintenance
+description: >-
+  NOT FOR PRODUCTION as shipped. A bring-your-own table-maintenance CronJob beside a rask release: Lance's own compaction
+  of each table the catalog lists as due that it may maintain, committed through the catalog. rask's product chart
+  renders none of it.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

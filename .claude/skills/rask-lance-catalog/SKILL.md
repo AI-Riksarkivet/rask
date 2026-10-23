@@ -226,7 +226,7 @@ ADR 0160, LH-470). `catalog/core/tier_policy.py` holds it:
 | table data + versions | Lance datasets on object storage (rustfs) |
 | project registry (`_projects/<id>.json`), warehouse registry + namespace bindings | JSON records on the control root. **Id-MINTING creates are conditional** (`If-None-Match: *` via `service_kit.lakehouse.records.create_json`): project mint, warehouse mint and the write-once bindings are store-arbitrated, a lost race surfaces as 409, never last-writer-wins. **Mutable-field read-modify-writes are CONDITIONAL too** as of 2026-08-15 — `warehouses.upsert_warehouse` / `set_warehouse_status` / `projects.upsert_project` go through `records.mutate_json` (read + ETag-guarded replace, bounded retry), so an idempotent re-POST can no longer silently revert a concurrent quarantine or protection change. `put_warehouse` / `put_project` remain as SEEDING primitives with no production caller, pinned by `tests/unit/test_registry_writes_are_conditional.py`. Protection and trash records are still plain overwrites and correctly so: they carry no read-modify-write, so there is no carried-forward field to lose. |
 | authz | OpenFGA on its chart-managed Postgres |
-| lineage | Lance tables in the catalog's provenance namespace (`services.lineage.provenanceNamespace`, default `provenance`): the commit feed `events`, the table-level edge list `edges`, outbox `refusals` and forwarder `cursors`. The catalog creates the namespace at boot (`catalog/services/provenance_namespace.py`), protects it, grants each `LANCE_PROVENANCE_WRITERS` subject `writer`, and never announces a write under it. Lineage writes through `merge_insert` and reads through `query` as its own principal; the graph is bring-your-own, fed by lineage's forwarder (ADR 0158) |
+| lineage | Lance tables in the catalog's provenance namespace (`services.lineage.provenanceNamespace`, default `provenance`): the commit feed `events`, the table-level edge list `edges`, outbox `refusals` and forwarder `cursors`. The catalog creates the namespace at boot (`catalog/services/provenance_namespace.py`), protects it, grants each `LANCE_PROVENANCE_WRITERS` subject `writer` and each `LANCE_PROVENANCE_MAINTAINERS` subject (a bring-your-own compaction job's account) `reader` and `maintainer`, revokes a `writer` or `maintainer` the settings no longer name (with that maintainer's `reader`), writes its keep-last-N maintenance policy (`LANCE_PROVENANCE_RETAIN_VERSIONS`) and removes the one it wrote, while it stands as written, once none is declared, and announces no write under it but a compaction's, after which maintenance's write-event lane expires the table (ADR 0174, [[LH-529]]). Lineage writes through `merge_insert` and reads through `query` as its own principal; the graph is bring-your-own, fed by lineage's forwarder (ADR 0158) |
 
 A relational app-DB was removed at P7a and must not creep back for the catalog: registry writes are
 admin-frequency, the conditional creates arbitrate the id-mint races, and deletes are bottom-up
@@ -503,7 +503,9 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   (`service_kit.governed.store_session`), so a running catalog never needs a restart for its credential.
   **The spec doors vend the highest tier FGA grants the caller** (ADR 0156 C3, `fga_deps.spec_vend_tier`):
   `DescribeTable` and `DeclareTable` vend unless the request sets `vend_credentials` false (unset, the spec lets the
-  server decide), write on `can_write_data` (judged by the tier judge), read on `can_read_data`, otherwise none.
+  server decide), write on `can_write_data` (judged by the tier judge) or on `can_read_data` with `can_maintain` (a
+  compaction job's rungs, whose commits `version/create` admits for a compaction alone, ADR 0174, and whose puts can
+  overwrite a committed data file as a writer's can), read on `can_read_data`, otherwise none.
   Every mint, at all three doors, writes the `vend_credentials` audit record with its `tier` and `door`. A stock
   client opening through the namespace therefore signs with the vended credential, not its own
   (`services/catalog/tests/test_a_stock_client_opens_on_the_vended_credential.py`). The endpoint a vend names
@@ -526,8 +528,9 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   create has no committed version to `checkout_version` from; the copy is a one-field wire edit of `Manifest.version =
   3`), opens it with pylance, judges it against the version it follows, deletes the copy, and finalizes through the
   `dir` backend's put-if-not-exists. A refusal leaves the table at its version; pylance reports it as an unknown
-  outcome and keeps its staged manifest. The judge: the operation's rung (`fga_deps.require_staged_operation`:
-  restore `can_restore`, rewrite `can_maintain`, an Overwrite after the first version `can_drop` plus protection,
+  outcome and keeps its staged manifest. The door admits a writer or a maintainer (`can_create_version`), and the judge
+  asks the operation's own rung (`fga_deps.require_staged_operation`: the writer operations and a table's first version `can_write_data`, restore
+  `can_restore`, rewrite `can_maintain`, an Overwrite after the first version `can_drop` plus protection,
   `Clone` and unknown operations refused); a create at 2.2 with stable row ids and no later change to either;
   reserved schema metadata, the provenance and key columns and field-level `rask.*` metadata unchanged; no
   `lance.auto_cleanup.*` and no change to `rask.*` config; feature flags the commit adds; the base list unchanged and
@@ -553,9 +556,11 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   versions on its own door.
   **A compaction or an index commits here too** (ADR 0162). Lance's compaction protocol makes two commits,
   `ReserveFragments` (which may only advance `max_fragment_id`) then `Rewrite` (every row kept, by stable row id or
-  by count; `require_compactable`), and both need `can_maintain` beyond the writer rung: the `maintainer` rung, which an
-  owner holds and the grant doors hand a job's own identity like `writer` (`manage_grants`, or a maintainer holding
-  `pass_grants`); a service account is never an owner (LH-433). A `CreateIndex` (a build or
+  by count; `require_compactable`), and both need `can_maintain` and no writer rung (ADR 0174): the `maintainer` rung,
+  which an owner holds and the grant doors hand a job's own identity (`manage_grants`, or a maintainer holding
+  `pass_grants`), with `reader` to read what it rewrites; a service account is never an owner (LH-433). The
+  bring-your-own table-maintenance job (`services/table-maintenance`, its own release `deploy/fixtures/table-maintenance`)
+  compacts each table the due list names it this way. A `CreateIndex` (a build or
   an `optimize_indices`) needs the writer rung, changes no data, and each new segment lives under the table's own
   `_indices/<uuid>/` with its declared files present and the index opening. A compaction is refused 503 while the
   sweep's clone list is missing or older than `cloneListMaxAgeSeconds` (an hour), and 406 when the table is a

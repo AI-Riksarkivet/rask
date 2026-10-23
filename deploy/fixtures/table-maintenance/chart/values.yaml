@@ -1,0 +1,25 @@
+# The rask release this job sits beside. Its ServiceAccount is `<rask>-sa-table-maintenance`, the account rask's
+# `services.lineage.provenanceMaintainers` names, and the catalog it compacts through is `<rask>-catalog`.
+rask:
+  release: rask
+
+image:
+  # A bare name is a side-loaded image on the node (make k3s-import); a registry path is pulled.
+  repository: table-maintenance
+  tag: dev
+  pullPolicy: IfNotPresent
+
+# How often a run starts. A run compacts what the due list names, and each compaction's commits set off maintenance's
+# expiry of the table, so this bounds how many versions a written table keeps between runs. A run that has not ended
+# when the next is due is not overlapped (`concurrencyPolicy: Forbid`), and a failed one is not retried
+# (`backoffLimit: 0`): the next run reads the due list afresh.
+schedule: "*/5 * * * *"
+# The longest one run may take before Kubernetes ends it.
+activeDeadlineSeconds: 900
+
+# The catalog the job reads the due list from and compacts through; empty derives `http://<rask>-catalog:2333`.
+catalogUrl: ""
+
+resources:
+  requests: { cpu: 100m, memory: 256Mi }
+  limits: { cpu: "1", memory: 1Gi }

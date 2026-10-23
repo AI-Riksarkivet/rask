@@ -175,6 +175,9 @@ services:
       # The development graph backend, the marquez fixture (deploy/fixtures/marquez): lineage forwards every event it
       # records there, as it would to a platform's own (ADR 0158).
       url: http://rask-marquez:5000
+    # The table-maintenance fixture (deploy/fixtures/table-maintenance) is its own release: the catalog grants its
+    # account the compaction rungs on the provenance namespace by name ([[LH-529]]).
+    provenanceMaintainers: ["default:rask-sa-table-maintenance"]
   notifications:
     channels:
       # The development SMTP relay, the mailpit fixture (deploy/fixtures/mailpit): the email channel sends there, and a

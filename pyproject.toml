@@ -267,6 +267,7 @@ known-first-party = [
     "search",
     "service_kit",
     "storage",
+    "table_maintenance",
     "validate",
     "viewer",
 ]

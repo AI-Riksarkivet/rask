@@ -308,7 +308,9 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | services.lineage.module | string | `"lineage.main:app"` | uvicorn import path the lineage Deployment runs (templates/services.yaml). |
 | services.lineage.outbox.enabled | bool | `true` | Stages each lineage event to `s3://<objectStore.bucket>/_lineage_outbox` before publishing, drained by the relay. Requires relay.enabled. |
 | services.lineage.port | int | `8000` | Container and Service port of the lineage service. |
+| services.lineage.provenanceMaintainers | list | `[]` | ServiceAccounts outside this release that compact the provenance tables, each `<namespace>:<name>` (e.g. `default:rask-sa-table-maintenance` for the table-maintenance fixture); the catalog grants each `reader` and `maintainer` on the namespace at boot (`LANCE_PROVENANCE_MAINTAINERS`). Read only with auth on. |
 | services.lineage.provenanceNamespace | string | `"provenance"` | Namespace the catalog keeps for lineage's feed and edge list (`LANCE_PROVENANCE_NAMESPACE`, `LINEAGE_PROVENANCE_NAMESPACE`). |
+| services.lineage.provenanceRetainVersions | int | `20` | Versions maintenance keeps of each provenance table: the namespace's keep-last-N policy, written by the catalog at boot (`LANCE_PROVENANCE_RETAIN_VERSIONS`). Null declares none. |
 | services.lineage.relay.bindingName | string | `"lineage-relay-cron"` | Name of the relay cron binding; the sidecar POSTs to /<bindingName>. |
 | services.lineage.relay.enabled | bool | `true` | Renders the relay cron, which drains the lineage outbox, prunes the feed and forwards it. Needs dapr.enabled. |
 | services.lineage.relay.schedule | string | `"@every 30s"` | Schedule of the relay tick (Dapr cron syntax, e.g. `@every 30s` or a cron expression). |

@@ -303,25 +303,29 @@ _OWNER_SUFFIX_RELATION: dict[str, dict[str, str]] = {
 #: create-on-parent, so a namespace mutation nobody declared is refused rather than resolved to
 #: `can_update_properties`.
 _WRITER_SUFFIX_RELATION: Final[dict[str, dict[str, str]]] = {
-    "table": dict.fromkeys(
-        (
-            "insert",
-            "merge_insert",
-            "update",
-            "delete",
-            "add_columns",
-            "alter_columns",
-            "drop_columns",
-            "backfill_column",
-            "update_field_metadata",
-            "schema_metadata/update",
-            "create_index",
-            "create_scalar_index",
-            "index/{index_name}/drop",
-            "version/create",
+    "table": {
+        **dict.fromkeys(
+            (
+                "insert",
+                "merge_insert",
+                "update",
+                "delete",
+                "add_columns",
+                "alter_columns",
+                "drop_columns",
+                "backfill_column",
+                "update_field_metadata",
+                "schema_metadata/update",
+                "create_index",
+                "create_scalar_index",
+                "index/{index_name}/drop",
+            ),
+            "can_write_data",
         ),
-        "can_write_data",
-    ),
+        # A writer's or a maintainer's: the staged operation then asks its own rung (`require_staged_operation`), so a
+        # compaction job commits as a maintainer and holds no writer rung.
+        "version/create": "can_create_version",
+    },
     # The async rematerialize. `create` is create-on-parent and never reaches the resolver.
     "materialized_view": {"refresh": "can_refresh"},
 }
@@ -1057,6 +1061,21 @@ async def judge_staged_run(
     await tier_policy.judge_run(tier, run, input_read_rungs(run), check=check, names=names)
 
 
+async def _granted_vend_tier(client: OpenFgaClient, subject: str, obj: str) -> Literal["read", "write"] | None:
+    """The tier ``subject``'s rungs on ``obj`` open at a spec door, each rung that decided it audited ALLOW."""
+    writing = VEND_TIER_RUNGS["write"]
+    if await fga.check(client, user=subject, relation=writing, obj=obj):
+        audit(writing, ALLOW, subject=subject, resource=obj)
+        return "write"
+    if not await fga.check(client, user=subject, relation="can_read_data", obj=obj):
+        return None
+    audit("can_read_data", ALLOW, subject=subject, resource=obj)
+    if not await fga.check(client, user=subject, relation="can_maintain", obj=obj):
+        return "read"
+    audit("can_maintain", ALLOW, subject=subject, resource=obj)
+    return "write"
+
+
 async def spec_vend_tier(
     settings: Settings, token: Caller | None, injected: OpenFgaClient | None, ns: LanceNamespace, segments: Sequence[str], *, table_uuid: str, door: str
 ) -> Literal["read", "write"] | None:
@@ -1065,9 +1084,13 @@ async def spec_vend_tier(
     ``table_uuid`` is the uuid the door resolved the name to (or minted, for a declare), whose object the grants are
     held by. ``can_write_data`` opens the write tier, and that is a write, so the tier judge decides it and audits the
     tier it was taken under, as it does for the management vend door; ``ns`` is the connection the door already
-    resolved for the table, which is the one its namespace path's tier is read through. ``can_read_data`` opens
-    the read tier. Neither, no credential: the door still answers, because describing a table is a metadata
-    read. Maintain is never vended here; it is the maintenance identity's (LH-473).
+    resolved for the table, which is the one its namespace path's tier is read through. ``can_read_data`` with
+    ``can_maintain``, a compaction job's rungs, opens the write tier too: its puts are what a compaction stages, and
+    ``version/create`` admits a maintainer's commit for a compaction's two operations alone (ADR 0162, ADR 0174). Those
+    puts reach what a writer's do, so a put over a committed data file is as open to it as to a writer: no session
+    policy refuses one (``vending.build_session_policy``). ``can_read_data`` alone opens the read tier. None of them, no
+    credential: the door still answers, because describing a table is a metadata read. Maintain is never vended here;
+    it is the maintenance identity's (LH-473).
 
     The rungs are probed with ``fga.check``, which writes no DENY: a reader's describe asking whether it may also
     write is not an access attempt. The rung that decides the tier is audited ALLOW, as every authorization
@@ -1079,17 +1102,13 @@ async def spec_vend_tier(
         UnauthenticatedError: FGA is on and nobody is signed in.
     """
     obj = fga.table_object(table_uuid)
-    writing = VEND_TIER_RUNGS["write"]
     if settings.fga_enabled:
         client = require_wired(injected)
         if token is None:
             raise UnauthenticatedError("authentication required")
-        if not await fga.check(client, user=token.subject, relation=writing, obj=obj):
-            if await fga.check(client, user=token.subject, relation="can_read_data", obj=obj):
-                audit("can_read_data", ALLOW, subject=token.subject, resource=obj)
-                return "read"
-            return None
-        audit(writing, ALLOW, subject=token.subject, resource=obj)
+        granted = await _granted_vend_tier(client, token.subject, obj)
+        if granted != "write":
+            return granted
 
     async def namespace(_top_ns: str) -> LanceNamespace:
         return ns
@@ -2086,13 +2105,15 @@ async def require_can_drop_table(
     await _require(client, user=token.subject, relation="can_drop", obj=fga.table_object(table.require_uuid()), label=label)
 
 
-#: The rung a staged commit's operation needs at ``version/create`` beyond the router's ``can_write_data`` ([[LH-471]]).
-#: Each is the rung the catalog's own door for that operation asks, so staging an operation never clears a lower bar
-#: than doing it through the door: restore is ``restore``'s owner rung, a compaction's two commits (the ``ReserveFragments``
-#: and the ``Rewrite`` after it) are the maintainer rung, and an Overwrite of a table that already has a version is
-#: drop-then-recreate (``require_can_drop_table``). The writer operations need nothing more than the router's rung.
-_STAGED_OPERATION_RELATION: Final[dict[str, str | None]] = {
-    **dict.fromkeys(("Append", "Delete", "Update", "Merge", "Project", "CreateIndex", "DataReplacement", "DataOverlay", "UpdateConfig")),
+#: The rung a staged commit's operation needs at ``version/create``, which the router opens to a writer or a maintainer
+#: (``can_create_version``, [[LH-471]]). Each is the rung the catalog's own door for that operation asks, so staging an
+#: operation never clears a lower bar than doing it through the door: the writer operations are the writer rung, restore
+#: is ``restore``'s owner rung, a compaction's two commits (the ``ReserveFragments`` and the ``Rewrite`` after it) are the
+#: maintainer rung, and an Overwrite of a table that already has a version is drop-then-recreate
+#: (``require_can_drop_table``). A table's first version is the writer rung whatever it is staged as
+#: (:func:`require_staged_operation`).
+_STAGED_OPERATION_RELATION: Final[dict[str, str]] = {
+    **dict.fromkeys(("Append", "Delete", "Update", "Merge", "Project", "CreateIndex", "DataReplacement", "DataOverlay", "UpdateConfig"), "can_write_data"),
     "Restore": "can_restore",
     "Rewrite": "can_maintain",
     "ReserveFragments": "can_maintain",
@@ -2112,9 +2133,11 @@ async def require_staged_operation(
 ) -> None:
     """Refuse a staged commit whose operation needs a rung the caller lacks, or that no door commits this way.
 
-    ``creates`` is true for the table's first version, which the declare that reserved it already authorized. An
-    Overwrite of a table with a version is drop-then-recreate, so the protection record refuses it as it refuses a
-    drop, with FGA on or off; ``force`` has no channel on the spec door. The rung check is a no-op when FGA is off / unwired / unauthenticated, as the other ``require_*`` gates are; an
+    ``creates`` is true for the table's first version, which writes the rows of a table only declared so far: it asks
+    the writer rung, as every write does, since the router admits a maintainer too, and no protection record, since
+    none holds a table with no version. An Overwrite of a table with a version is drop-then-recreate, so the
+    protection record refuses it as it refuses a drop, with FGA on or off; ``force`` has no channel on the spec door.
+    The rung check is a no-op when FGA is off / unwired / unauthenticated, as the other ``require_*`` gates are; an
     operation outside the map (``Clone`` among them, which the branch and clone doors own) is refused whatever FGA
     says.
 
@@ -2123,15 +2146,14 @@ async def require_staged_operation(
     """
     if operation not in _STAGED_OPERATION_RELATION:
         raise InvalidInputError(f"a {operation} cannot be committed through CreateTableVersion")
-    relation = _STAGED_OPERATION_RELATION[operation]
-    if relation is None or (operation == "Overwrite" and creates):
-        return
+    relation = "can_write_data" if creates else _STAGED_OPERATION_RELATION[operation]
+    replaces = operation == "Overwrite" and not creates
     canonical = fga.canonical_object_id(segments)
     governed = settings.fga_enabled and client is not None and token is not None
-    if operation != "Overwrite" and not governed:
+    if not replaces and not governed:
         return
     table_uuid = await run_in_threadpool(table_claims.uuid_at, table_claims.claim_store(settings), location, segments)
-    if operation == "Overwrite":
+    if replaces:
         guard = await run_in_threadpool(protection.get_protection, settings.registry_root, settings.storage_options(), "table", table_uuid)
         require_not_protected(guard or {}, kind="table", obj_id=canonical, force=False)
     if not governed or client is None or token is None:
