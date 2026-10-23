@@ -105,8 +105,14 @@ class Workload(BaseModel):
         return ",".join(f"{key}={value}" for key, value in sorted(labels.items()))
 
     def pods(self) -> list[str]:
-        """The names of the pods its selector matches, terminating ones included."""
-        return kubectl("get", "pods", "-l", self.selector(), "-o", "name").split()
+        """The names of the pods its selector matches, terminating ones included and finished ones not.
+
+        A pod in phase Failed or Succeeded runs no process, and the kubelet leaves one behind after an eviction until
+        garbage collection removes it: counted, 17 evicted pods failed every drill after the first on 2026-10-23
+        ("still runs a pod after its scale to zero", "runs 2 pods") while each Deployment ran its one replica.
+        """
+        finished = "status.phase!=Failed,status.phase!=Succeeded"
+        return kubectl("get", "pods", "-l", self.selector(), "--field-selector", finished, "-o", "name").split()
 
 
 def until(holds: Callable[[], bool], failure: str, *, within: float = SETTLE_SECONDS, every: float = 2.0) -> None:
