@@ -27,9 +27,11 @@ of the first kind cannot block the purge forever. An incomplete scan needs the s
 
   * **STRUCTURAL** — an unsupported feature flag, a shallow clone, a branch, a committed overlay. The
     method does not apply. Nothing was missed, so it must not block.
-  * **FAILED** — an unreadable manifest, a listing that raised, a version ceiling. The method DOES
-    apply and could not be run. That is a partial answer and must keep blocking, which is the whole
-    reason `report_is_clean` has the arm.
+  * **FAILED** — an unreadable manifest, a listing that raised. The method DOES apply and could not be
+    run. That is a partial answer and must keep blocking, which is the whole reason `report_is_clean`
+    has the arm.
+
+A history past the version ceiling is excluded too: the ceiling bounds cost and hides no dataset.
 
 The 70 depth-limit notes stay in `incomplete` on purpose: a dataset nested below the walk's bound was
 never opened, which is a real coverage gap and a real answer the report owes.
@@ -45,10 +47,14 @@ import asyncio
 from pathlib import Path
 from typing import Any
 
+import lance
+import pyarrow as pa
+import pyarrow.fs as pafs
 import pytest
 from pydantic import SecretStr
 
 from maintenance.core.config import MaintenanceSettings
+from maintenance.services import orphans
 from maintenance.services import reconcile as reconcile_mod
 from maintenance.services.discovery import Discovery
 from maintenance.services.orphans import OrphanReport
@@ -88,6 +94,27 @@ def test_a_scan_that_TRIED_and_failed_still_closes_the_gate() -> None:
 
     blocked = report_is_clean(report)
     assert blocked is not None and "INCOMPLETE" in blocked
+
+
+def test_a_history_past_the_version_ceiling_is_an_exclusion_not_a_partial_scan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The ceiling bounds what one tick spends walking one dataset's versions. It hides no dataset: the dataset opened,
+    its manifest's layout was read, and the purge's base-reference pre-pass opens it on its own. So it is reported by
+    name and never gates.
+
+    Measured live 2026-10-20 on the previous estate (helm rev 19), two days after a rebuild, on every reconcile tick:
+    `s3://lance-catalog/18edda68_provenance$events: 826 versions exceeds the 500 ceiling`, which held the trash purge shut
+    on any estate whose busiest table kept more than 500 versions inside its retention.
+    """
+    monkeypatch.setattr(orphans, "_MAX_VERSIONS", 2)
+    uri = str(tmp_path / "busy.lance")
+    lance.write_dataset(pa.table({"id": [1]}), uri)
+    for _ in range(2):
+        lance.write_dataset(pa.table({"id": [1]}), uri, mode="append")
+
+    scan = orphans.scan_datasets(pafs.LocalFileSystem(), [(uri, uri)])
+
+    assert scan.incomplete == []
+    assert scan.excluded == [f"{uri}: 3 versions exceed the 2-version ceiling, so its unreferenced files were not looked for"]
 
 
 def test_the_scan_s_exclusions_reach_their_own_field_and_no_other(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

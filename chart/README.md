@@ -89,7 +89,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | catalog.multibase.devSeed | bool | `false` | Local fixture: create each referenced base's bucket, scoped store user and dev-store secret. Refused on a real deployment, without `objectStore.enabled` or without the development store. |
 | catalog.promotion.bindingName | string | `"catalog-promotion-expiry-cron"` | Name of the promotion-expiry Dapr cron Component; also the catalog's LANCE_PROMOTION_EXPIRY_BINDING_NAME and the route it serves. |
 | catalog.promotion.schedule | string | `"@every 60s"` | Dapr cron schedule on which promotion holds past their review deadline expire; lateness only costs time. |
-| catalog.trashGraceDays | int | `7` | Days a dropped table or namespace stays undroppable before the trash purge may reclaim it (LANCE_TRASH_GRACE_DAYS). 0 destroys immediately. |
+| catalog.trashGraceDays | float | `7` | Days, a fraction allowed, a dropped table or namespace stays undroppable before the trash purge may reclaim it (LANCE_TRASH_GRACE_DAYS). 0 destroys immediately. |
 | catalog.warehouses.enabled | bool | `true` | Per-warehouse physical multi-tenancy: POST /management/v1/warehouses provisions a bucket per warehouse and binds top-level namespaces to it. Unbound namespaces use `objectStore.bucket`. |
 | config.AWS_REGION | string | `"us-east-1"` | AWS region written to the fleet ConfigMap for S3 clients to sign with. RustFS's default region is `us-east-1`; whether it accepts another signing region is not measured, so keep `us-east-1` against it. |
 | config.HCP_INSECURE | string | `"true"` | Skips TLS verification for the S3 client (`storage.client` reads it as an alias of RASK_S3_INSECURE). String "true" or "false". |

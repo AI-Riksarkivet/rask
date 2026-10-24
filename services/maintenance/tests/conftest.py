@@ -1,4 +1,4 @@
-"""Shared fixtures for the maintenance suite: the catalog's own app, one dataset's pass, and recorders for the counters."""
+"""Shared fixtures for the maintenance suite: the catalog's own app, one dataset's pass, an S3 store, and recorders for the counters."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 from lance_namespace import connect
+from moto.server import ThreadedMotoServer
 
 from maintenance.core import metrics
 from maintenance.core.config import MaintenanceSettings
@@ -22,6 +23,19 @@ from service_kit.lakehouse import location_claims
 from service_kit.lakehouse.base_refs import BaseRefs, normalise
 from service_kit.lakehouse.maintenance_due import CloneList
 from service_kit.lakehouse.naming import CATALOG_DELIMITER
+
+
+@pytest.fixture(scope="module")
+def moto_url() -> Iterator[str]:
+    """A moto S3 server for one test module: S3 has buckets and key prefixes where a local filesystem has directories.
+
+    Its backends are process-global, so a test names its buckets uniquely.
+    """
+    server = ThreadedMotoServer(port=0)
+    server.start()
+    host, port = server.get_host_and_port()
+    yield f"http://{host}:{port}"
+    server.stop()
 
 
 @pytest.fixture

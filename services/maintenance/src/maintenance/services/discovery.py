@@ -85,6 +85,19 @@ def _may_hide_a_dataset(fs: pafs.FileSystem, path: str) -> bool:
     return any(child.type == pafs.FileType.Directory for child in children)
 
 
+def _is_a_prefix_of_an_existing_bucket(fs: pafs.FileSystem, root: str) -> bool:
+    """Whether ``root`` is a key prefix inside an existing bucket, which S3 lists as absent until an object lands under it.
+
+    A bucket is the store's own container and exists by itself; a key prefix exists only while some object sits under it.
+    pyarrow reads an empty listing of a prefix as an absent path (measured on pyarrow 25.0.0 against moto: one
+    ListObjectsV2, then `Path does not exist`), so a configured data base no table has written to yet reads exactly as an
+    unreachable one. The bucket's own answer is what says the prefix is merely empty. A probe that fails raises, so a
+    store that will not answer is reported rather than certified.
+    """
+    bucket, _, prefix = root.partition("/")
+    return isinstance(fs, pafs.S3FileSystem) and bool(prefix) and fs.get_file_info(bucket).type == pafs.FileType.Directory
+
+
 def _branch_refs(fs: pafs.FileSystem, root: str) -> list[str]:
     """The branches ``root``'s ``_refs/branches`` names, sorted ([[LH-203]]).
 
@@ -129,10 +142,11 @@ def discover_datasets(fs: pafs.FileSystem, bucket: str, *, max_depth: int = 3) -
             # writes and reclaims continuously, and BOTH callers catch per BUCKET, so a raise here would
             # cost a whole bucket its maintenance for the tick over one vanished sub-prefix.
             #
-            # ONLY below the root. A bucket that does not exist must stay distinguishable from an empty
-            # one: both callers rely on that raise to report the bucket rather than certify it as clean,
-            # and swallowing it here would be the "0 that means we did not look" this module forbids.
-            if depth == 1:
+            # ONLY below the root, or at a root that is a prefix of a bucket that exists. A bucket that does
+            # not exist must stay distinguishable from an empty one: both callers rely on that raise to report
+            # the bucket rather than certify it as clean, and swallowing it here would be the "0 that means we
+            # did not look" this module forbids.
+            if depth == 1 and not _is_a_prefix_of_an_existing_bucket(fs, prefix):
                 raise
             return
         for info in entries:

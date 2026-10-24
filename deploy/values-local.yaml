@@ -141,6 +141,9 @@ backups:
 # opts a bucket in deliberately, and the allowlist is what makes "a caller can never point a base at an
 # arbitrary bucket" true.
 catalog:
+  # About an hour (0.04 days), so a recoverable drop reaches the trash purge inside one session and the
+  # purge is read back live on this estate ([[LH-518]], owner 2026-10-24). The chart's default is 7.
+  trashGraceDays: 0.04
   multibase:
     dataBases:
       - s3://lh067-second-store/data

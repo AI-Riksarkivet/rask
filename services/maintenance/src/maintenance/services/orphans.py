@@ -72,6 +72,13 @@ class _OverlaysPresent(Exception):
         )
 
 
+class _HistoryPastTheCeiling(Exception):
+    """A dataset keeps more live versions than one scan walks (:data:`_MAX_VERSIONS`)."""
+
+    def __init__(self, dataset_uri: str, versions: int) -> None:
+        super().__init__(f"{dataset_uri}: {versions} versions exceed the {_MAX_VERSIONS}-version ceiling, so its unreferenced files were not looked for")
+
+
 #: Directories Lance owns inside a dataset. Anything here is structural, not user data.
 _DATA_DIR = "data"
 _DELETIONS_DIR = "_deletions"
@@ -101,8 +108,12 @@ _RESERVED_MARKER = ".lance-reserved"
 
 #: Ceiling on versions inspected per dataset. A table with a very long history would otherwise make
 #: one report O(versions x fragments) — and this pass runs over every dataset in every bucket.
-#: Hitting it is REPORTED (`incomplete`), never silently truncated: a partial referenced-set would
-#: mark live files as orphans, the single most dangerous way this pass can be wrong.
+#: A dataset past it is EXCLUDED before any version is read, and named in `OrphanReport.excluded`;
+#: it is never walked in part, because a partial referenced set would mark live files as orphans, the
+#: single most dangerous way this pass can be wrong. Excluded rather than incomplete, so it never gates
+#: the purge: the ceiling bounds cost and hides no dataset (the dataset opened, and the purge's base-reference
+#: pre-pass reads it on its own), and the tables it reaches are the busy ones, whose expiry keeps raising
+#: the listing floor that floor-bound residue waits behind.
 _MAX_VERSIONS = 500
 
 #: The kinds `cleanup_old_versions` lists PAST the listing floor (lance v13.0.0 `cleanup.rs:764-777`):
@@ -150,19 +161,21 @@ class DatasetOrphanScan(BaseModel):
     #: costs no extra I/O. Zero when `checked` is False, for the reason `orphans` is empty there.
     total_bytes: int = 0
     total_files: int = 0
-    #: TRUE when the orphan method does not APPLY to this layout, as opposed to applying and failing
-    #: to run. Only the second is a partial answer, and only the second may block reclamation
-    #: (`purge.report_is_clean`) — a refusal that no retry can change would freeze that gate shut.
+    #: TRUE when the scan does not examine this dataset and its omission hides nothing the purge relies
+    #: on, as opposed to a scan that tried and failed. Only the second is a partial answer, and only the
+    #: second may block reclamation (`purge.report_is_clean`). Two kinds are excluded:
     #:
-    #: The spec is what makes these permanent rather than merely sticky. `file_format.md` § Feature
-    #: Flags: a reader seeing a flag it does not know "should return an 'unsupported' error on any read
-    #: or write operation", and flag 16 `FLAG_BASE_PATHS` (shallow clones / multi-base) is Reader
-    #: Required. The flag lives in the MANIFEST, so the refusal clears when this code learns base_paths
-    #: and never on a later tick. Measured 2026-09-08: 419 of the estate's 490 incomplete notes were
-    #: that refusal, and `incomplete` held at exactly 490 across a day in which the finding total moved.
+    #: * a layout the orphan method does not APPLY to. The spec is what makes these permanent rather
+    #:   than merely sticky. `file_format.md` § Feature Flags: a reader seeing a flag it does not know
+    #:   "should return an 'unsupported' error on any read or write operation", and flag 16
+    #:   `FLAG_BASE_PATHS` (shallow clones / multi-base) is Reader Required. The flag lives in the
+    #:   MANIFEST, so the refusal clears when this code learns base_paths and never on a later tick.
+    #:   Measured 2026-09-08: 419 of the estate's 490 incomplete notes were that refusal, and
+    #:   `incomplete` held at exactly 490 across a day in which the finding total moved.
+    #: * a history past :data:`_MAX_VERSIONS`, which bounds cost and hides no dataset.
     #:
     #: Mirrors `CategorySkipped.coverage_gap`, which draws the same line one layer up.
-    structural: bool = False
+    excluded: bool = False
 
 
 class OrphanReport(BaseModel):
@@ -171,7 +184,7 @@ class OrphanReport(BaseModel):
 
     datasets_scanned: int = 0
     datasets_unreadable: int = 0
-    #: Datasets the method does not APPLY to — correctly excluded, nothing missed.
+    #: Datasets the scan does not examine and whose omission hides nothing (`DatasetOrphanScan.excluded`).
     datasets_excluded: int = 0
     orphans: list[OrphanFile] = Field(default_factory=list)
     #: Bytes and files under each SCANNED dataset — the storage it occupies, not its orphans
@@ -181,12 +194,13 @@ class OrphanReport(BaseModel):
     #: a small one.
     bytes_by_dataset: dict[str, int] = Field(default_factory=dict)
     files_by_dataset: dict[str, int] = Field(default_factory=dict)
-    #: Sources that answered PARTIALLY — a version ceiling, an unlistable prefix. Named so the reader
+    #: Sources that answered PARTIALLY — an unreadable manifest, an unlistable prefix. Named so the reader
     #: knows which findings to distrust rather than assuming completeness. **This list gates the
     #: purge** (`purge.report_is_clean`), so only a scan that TRIED and failed belongs in it.
     incomplete: list[str] = Field(default_factory=list)
-    #: Datasets EXCLUDED by their own shape — reported so "we correctly skipped 419" stays visible and
-    #: distinguishable from "we scanned everything", without claiming the estate was half-inspected.
+    #: Datasets EXCLUDED, by their own shape or by a history past the version ceiling — reported so "we
+    #: correctly skipped 419" stays visible and distinguishable from "we scanned everything", without
+    #: claiming the estate was half-inspected.
     excluded: list[str] = Field(default_factory=list)
     total: int = 0
 
@@ -221,8 +235,11 @@ def referenced_paths(dataset_uri: str, storage_options: dict[str, str] | None = 
     Sidecar DIRECTORIES are returned as trailing-slash entries, so the caller can prefix-test them
     without a second return value.
 
-    ``note`` is non-None when the version ceiling was hit, in which case the caller must treat the
-    referenced set as INCOMPLETE and report nothing as an orphan from it.
+    ``note`` is non-None when the transaction files could not be read, in which case the caller must
+    treat the referenced set as INCOMPLETE and report nothing as an orphan from it.
+
+    Raises:
+        _HistoryPastTheCeiling: the dataset keeps more than :data:`_MAX_VERSIONS` versions; none was read.
     """
     return referenced_paths_of(open_dataset(dataset_uri, storage_options), dataset_uri)
 
@@ -239,15 +256,13 @@ def referenced_paths_of(ds: lance.LanceDataset, dataset_uri: str) -> tuple[set[s
     # each of those manifest reads is a network round trip, over every dataset in every warehouse
     # bucket on every tick.
     #
-    # The saving is not only speed. `_MAX_VERSIONS` exists to bound that cost, and hitting it sets the
-    # `note` below that makes the referenced set INCOMPLETE — so the scan reports NOTHING as an orphan
-    # for exactly the datasets with the most history. A cost control that turns into a coverage hole
-    # is affordable only while the walk is cheap.
+    # The count is also what `_MAX_VERSIONS` is judged on, before a single version is checked out: a
+    # dataset past it is excluded whole, so the walk below never reads versions whose referenced set
+    # could only be partial.
     versions = [v["version"] for v in ds.version_refs()]
-    note = None
     if len(versions) > _MAX_VERSIONS:
-        note = f"{dataset_uri}: {len(versions)} versions exceeds the {_MAX_VERSIONS} ceiling — referenced set is INCOMPLETE"
-        versions = versions[-_MAX_VERSIONS:]
+        raise _HistoryPastTheCeiling(dataset_uri, len(versions))
+    note = None
 
     for version in versions:
         # checkout_version, NOT a fresh lance.dataset(): the constructor mints a new cache pair per
@@ -497,11 +512,12 @@ def scan_dataset(fs: pafs.FileSystem, dataset_uri: str, *, prefix: str, storage_
     try:
         ds = open_dataset(dataset_uri, storage_options)
         referenced, versions, note = referenced_paths_of(ds, dataset_uri)
-    except _OverlaysPresent as exc:
-        # A refusal by SHAPE that arrives as an exception because the walk is where an overlay becomes
-        # visible. Its own clause, so it is not sorted with the opens that merely failed.
+    except (_OverlaysPresent, _HistoryPastTheCeiling) as exc:
+        # Exclusions that arrive as exceptions because the walk is where they become visible: an overlay
+        # by shape, a history by its length. Their own clause, so they are not sorted with the opens that
+        # merely failed.
         log.warning("orphan_scan_skipped", extra={"dataset": dataset_uri, "reason": str(exc)})
-        return DatasetOrphanScan(dataset=dataset_uri, checked=False, reason=str(exc), structural=True)
+        return DatasetOrphanScan(dataset=dataset_uri, checked=False, reason=str(exc), excluded=True)
     except Exception as exc:
         # pylance refuses a manifest whose feature flags IT does not know (measured: a committed data
         # overlay, flag 64) — a REFUSAL, and it must read as one. Reported raw it is a Rust source
@@ -513,7 +529,7 @@ def scan_dataset(fs: pafs.FileSystem, dataset_uri: str, *, prefix: str, storage_
         # A flag refusal is STRUCTURAL on this path too: the reader will refuse the same manifest on
         # every future tick, so blocking reclamation on it never resolves. An open that failed for any
         # OTHER reason is a scan that could succeed later and must keep blocking.
-        return DatasetOrphanScan(dataset=dataset_uri, checked=False, reason=reason, structural=refusal is not None)
+        return DatasetOrphanScan(dataset=dataset_uri, checked=False, reason=reason, excluded=refusal is not None)
 
     # LAYOUT GATE FIRST, then the incomplete-set note. Both refuse, so the order changes only which
     # REASON is reported — and the layout answer is the better one: "this dataset spans base_paths" is a
@@ -525,7 +541,7 @@ def scan_dataset(fs: pafs.FileSystem, dataset_uri: str, *, prefix: str, storage_
         log.warning("orphan_scan_skipped", extra={"dataset": dataset_uri, "reason": unscannable})
         # STRUCTURAL: the orphan method does not apply to this dataset's layout, so nothing was missed
         # and this must not block reclamation. Every other `checked=False` below TRIED and failed.
-        return DatasetOrphanScan(dataset=dataset_uri, checked=False, versions_scanned=versions, reason=unscannable, structural=True)
+        return DatasetOrphanScan(dataset=dataset_uri, checked=False, versions_scanned=versions, reason=unscannable, excluded=True)
 
     if note:
         return DatasetOrphanScan(dataset=dataset_uri, checked=False, versions_scanned=versions, reason=note)
@@ -581,10 +597,11 @@ def scan_datasets(fs: pafs.FileSystem, datasets: list[tuple[str, str]], storage_
     """Run :func:`scan_dataset` over ``(dataset_uri, prefix)`` pairs and aggregate.
 
     Three outcomes, and the reason they are three rather than two is that only ``incomplete`` blocks
-    reclamation: a dataset that could not be READ can be read on a later tick, while one the method
-    does not APPLY to cannot, so folding the second into the first freezes the purge gate shut.
-    Neither silently reduces the orphan count — "we could not look", "there was nothing to look at"
-    and "there was nothing there" stay distinguishable in the report.
+    reclamation: a dataset that could not be READ hides what its manifest says and can be read on a
+    later tick, while an excluded one (a layout the method does not APPLY to, a history past the
+    version ceiling) hides nothing, so folding the second into the first freezes the purge gate shut.
+    Neither silently reduces the orphan count — "we could not look", "we did not look, by rule" and
+    "there was nothing there" stay distinguishable in the report.
     """
     report = OrphanReport()
     for dataset_uri, prefix in datasets:
@@ -596,7 +613,7 @@ def scan_datasets(fs: pafs.FileSystem, datasets: list[tuple[str, str]], storage_
             report.files_by_dataset[dataset_uri] = result.total_files
             continue
         reason = result.reason or f"{dataset_uri}: unreadable"
-        if result.structural:
+        if result.excluded:
             report.datasets_excluded += 1
             report.excluded.append(reason)
             continue

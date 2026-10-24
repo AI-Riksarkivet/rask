@@ -53,7 +53,7 @@ def make_record(
     uuid: str,
     location: str,
     dropped_by: str | None,
-    grace_days: int,
+    grace_days: float,
     now: datetime | None = None,
     kind: str = "table",
     binding: dict[str, str] | None = None,

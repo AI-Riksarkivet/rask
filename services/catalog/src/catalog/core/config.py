@@ -583,8 +583,9 @@ class Settings(
     # drop DEREGISTERS instead of deleting, which silently changes what `drop_table` means for every
     # existing caller and diverges from the spec's own "drop removes the data". A deployment opts in
     # to recoverable drops; it is never opted in for them by an upgrade. Set it (7 is the sensible
-    # value) on any estate where a fat-fingered drop costs harvested page images.
-    trash_grace_days: int = Field(default=0, ge=0, le=365, alias="LANCE_TRASH_GRACE_DAYS")
+    # value) on any estate where a fat-fingered drop costs harvested page images. Days, a fraction
+    # allowed.
+    trash_grace_days: float = Field(default=0, ge=0, le=365, alias="LANCE_TRASH_GRACE_DAYS")
     # Buckets NO warehouse may ever claim, beyond the always-reserved catalog root/registry buckets (audit
     # 2026-07-23: a project admin could register a warehouse over the SHARED bucket — or a medallion zone
     # bucket — and a later project-policy set would then govern every tenant's datasets in it). The chart

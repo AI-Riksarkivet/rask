@@ -344,10 +344,10 @@ class ReconcileReport(BaseModel):
     #: than zero — a roll-up must not report a partly-seen estate as a small one.
     bytes_by_bucket: dict[str, int] = Field(default_factory=dict)
     files_by_bucket: dict[str, int] = Field(default_factory=dict)
-    #: Datasets the unreferenced-file method does not APPLY to — a shallow clone, a branch, an
-    #: unsupported feature flag. Reported so the coverage stays visible: "we correctly excluded 419"
-    #: and "we scanned everything" are different facts. Deliberately not in `incomplete`, which gates
-    #: the purge.
+    #: Datasets the unreferenced-file scan does not examine and whose omission hides nothing — a shallow
+    #: clone, a branch, an unsupported feature flag, a history past the version ceiling. Reported so the
+    #: coverage stays visible: "we correctly excluded 419" and "we scanned everything" are different
+    #: facts. Deliberately not in `incomplete`, which gates the purge.
     excluded_datasets: list[str] = Field(default_factory=list)
     unavailable: list[CategoryUnavailable] = Field(default_factory=list)
     skipped: list[CategorySkipped] = Field(default_factory=list)
@@ -1316,7 +1316,7 @@ def _orphan_category(report: ReconcileReport, settings: MaintenanceSettings, sou
     report.total += report.orphan_files_blocking
     for note in scan.incomplete:
         report.incomplete.append(IncompleteScan(source="storage:datasets", reason=note))
-    # Its OWN field, never `incomplete` (which gates the purge — see `DatasetOrphanScan.structural`)
+    # Its OWN field, never `incomplete` (which gates the purge — see `DatasetOrphanScan.excluded`)
     # and never `counts` (which feeds `report.total` above and `report_is_clean`'s "drifting" message,
     # so a key here would either inflate the finding total or name a correct exclusion as drift).
     report.excluded_datasets = list(scan.excluded)

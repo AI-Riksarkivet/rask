@@ -43,7 +43,9 @@ default() treats 0 as empty.
 
 #75/#96 the recoverable-drop grace period. hasKey+ternary for the same two reasons as
 above: `--reuse-values` with the key missing must render the default, and the meaningful
-0 (recovery OFF, destroy immediately) must stay settable past Sprig's default().
+0 (recovery OFF, destroy immediately) must stay settable past Sprig's default(). No `| int`:
+a fraction of a day is a valid grace (the schema types it `number`), and truncating one would
+turn the dev estate's 0.04 into 0, which switches recoverable drops off ([[LH-518]]).
 
 ## `- { name: LANCE_WAREHOUSES_ENABLED, value: {{ .Values.catalog.warehouses.enabled | default false | quote }} }`
 

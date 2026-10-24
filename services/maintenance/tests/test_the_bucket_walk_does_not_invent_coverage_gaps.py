@@ -31,9 +31,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+from unittest.mock import create_autospec
+from uuid import uuid4
 
+import boto3
 import lance
 import pyarrow as pa
 import pyarrow.fs as pafs
@@ -214,13 +218,54 @@ def test_a_prefix_that_vanishes_mid_walk_does_not_lose_the_bucket(tmp_path: Path
     assert [u.rsplit("/", 1)[-1] for u in result.uris] == ["real.lance"], "one vanished prefix must not cost the bucket"
 
 
-def test_a_MISSING_BUCKET_still_raises(tmp_path: Path) -> None:
-    """The other side of it, and the reason the tolerance is scoped to nested prefixes only: a bucket
-    that does not exist must stay distinguishable from an empty one. Both callers rely on the raise —
+def _a_store_answering_a_missing_bucket_as_an_absent_path() -> pafs.FileSystem:
+    """An S3 store whose listing of a prefix in a missing bucket answers an absent path, standing in for one no local
+    server reproduces: moto answers `NoSuchBucket`, which pyarrow raises as `OSError` before the walk's absent-path arm.
+    Only the bucket's own answer then tells the prefix from a bucket nobody can read."""
+    fs = create_autospec(pafs.S3FileSystem, instance=True)
+
+    def _answer(arg: str | pafs.FileSelector) -> pafs.FileInfo:
+        if isinstance(arg, pafs.FileSelector):
+            raise FileNotFoundError(arg.base_dir)
+        return pafs.FileInfo(arg, pafs.FileType.NotFound)
+
+    fs.get_file_info.side_effect = _answer
+    return fs
+
+
+@pytest.mark.parametrize(
+    "missing",
+    [
+        pytest.param(lambda root: (pafs.LocalFileSystem(), str(root / "no-such-bucket")), id="a-local-root"),
+        pytest.param(lambda _root: (_a_store_answering_a_missing_bucket_as_an_absent_path(), "no-such-bucket/data"), id="an-s3-prefix"),
+    ],
+)
+def test_a_MISSING_BUCKET_still_raises(tmp_path: Path, missing: Callable[[Path], tuple[pafs.FileSystem, str]]) -> None:
+    """The other side of it, and the reason the tolerance is scoped to nested prefixes and to a prefix of a bucket that
+    exists: a bucket that does not exist must stay distinguishable from an empty one. Both callers rely on the raise —
     swallowing it would report "no datasets here" for a tenant bucket nobody can read, which is the
     "0 that means we did not look" this module's docstrings forbid."""
+    fs, root = missing(tmp_path)
+
     with pytest.raises(FileNotFoundError):
-        discover_datasets(pafs.LocalFileSystem(), str(tmp_path / "no-such-bucket"), max_depth=3)
+        discover_datasets(fs, root, max_depth=3)
+
+
+def test_a_configured_prefix_no_object_sits_under_yet_holds_no_dataset_and_is_no_gap(moto_url: str) -> None:
+    """An S3 key prefix exists only while some object sits under it, so a configured data base no table has written to
+    yet lists as an absent path, and the walk filed it as a failed discovery: an `IncompleteScan` that blocks the purge
+    until the first write lands there.
+
+    Measured live 2026-10-24 on helm rev 13: every reconcile tick's only blocker was `storage:lh067-second-store/data:
+    dataset discovery failed: [Errno 2] Path does not exist 'lh067-second-store/data/'`, for the dev seed's existing
+    bucket. Measured on pyarrow 25.0.0 against moto, the walk's listing of that prefix sends one ListObjectsV2 and reads
+    its empty answer as an absent path.
+    """
+    bucket = f"second-store-{uuid4().hex[:10]}"
+    boto3.client("s3", endpoint_url=moto_url, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1").create_bucket(Bucket=bucket)
+    fs = pafs.S3FileSystem(endpoint_override=moto_url, access_key="test", secret_key="test", region="us-east-1", scheme="http")
+
+    assert discover_datasets(fs, f"{bucket}/data", max_depth=3) == Discovery()
 
 
 # --------------------------------------------------------------------------- #

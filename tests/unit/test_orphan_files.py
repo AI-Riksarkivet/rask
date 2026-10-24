@@ -198,7 +198,7 @@ def test_a_branched_dataset_is_refused_not_scanned(tmp_path: pathlib.Path) -> No
 
     result = orphans.scan_dataset(_fs(), uri, prefix=uri)
     assert result.checked is False, "a branched dataset must be refused, not scanned"
-    assert result.structural is True, "a branch is refused by SHAPE, and no retry ever makes it scannable"
+    assert result.excluded is True, "a branch is refused by SHAPE, and no retry ever makes it scannable"
     assert result.orphans == []
     assert "tree/" in (result.reason or "")
 
@@ -217,7 +217,7 @@ def test_a_shallow_clone_is_refused_because_its_data_lives_elsewhere(tmp_path: p
 
     result = orphans.scan_dataset(_fs(), clone, prefix=clone)
     assert result.checked is False, "a dataset spanning base_paths must be refused"
-    assert result.structural is True, "base_paths is refused by SHAPE — the flag is a permanent property of the manifest"
+    assert result.excluded is True, "base_paths is refused by SHAPE — the flag is a permanent property of the manifest"
     assert result.orphans == []
     assert "base_paths" in (result.reason or "")
 
@@ -263,7 +263,7 @@ def test_a_memwal_shard_tree_is_refused(tmp_path: pathlib.Path) -> None:
 
     result = orphans.scan_dataset(_fs(), uri, prefix=prefix)
     assert result.checked is False
-    assert result.structural is True, "a _mem_wal shard tree is refused by SHAPE"
+    assert result.excluded is True, "a _mem_wal shard tree is refused by SHAPE"
     assert result.orphans == []
     assert "_mem_wal/" in (result.reason or "")
     assert "fencing" in (result.reason or "")
@@ -299,7 +299,7 @@ def test_a_registered_but_unused_base_is_refused_by_the_flag(tmp_path: pathlib.P
     result = orphans.scan_dataset(_fs(), uri, prefix=uri)
 
     assert result.checked is False, "a multi-base dataset must be refused — a prefix listing cannot be subtracted"
-    assert result.structural is True, "a multi-base dataset is refused by SHAPE"
+    assert result.excluded is True, "a multi-base dataset is refused by SHAPE"
     assert result.orphans == []
     assert "16" in (result.reason or "") and "base_paths" in (result.reason or "")
 
@@ -318,7 +318,7 @@ def test_a_REAL_overlay_dataset_is_refused_with_the_flag_named(tmp_path: pathlib
     result = orphans.scan_dataset(_fs(), uri, prefix=uri)
 
     assert result.checked is False, "an overlay dataset must be refused, not scanned"
-    assert result.structural is True, "an overlay dataset is refused by SHAPE"
+    assert result.excluded is True, "an overlay dataset is refused by SHAPE"
     assert result.orphans == []
     assert "64" in (result.reason or "") and "overlay" in (result.reason or "").lower(), result.reason
 

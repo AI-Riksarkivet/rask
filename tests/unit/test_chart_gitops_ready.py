@@ -6,38 +6,9 @@ much later in a cluster nobody was watching.
 
 from __future__ import annotations
 
-import shutil
-import subprocess
-from pathlib import Path
-
 import pytest
-import yaml
-from chart_yaml import FAST_LOADER
 
-from tests.unit.chart_render import PREREQ_ARGS, RAY_ARGS, render_fixture
-
-
-REPO = Path(__file__).resolve().parents[2]
-CHART = REPO / "chart"
-
-
-def _helm() -> str:
-    helm = shutil.which("helm") or str(REPO / ".localbin/helm")
-    if not Path(helm).exists():
-        pytest.skip("helm not available")
-    return helm
-
-
-def _render(*sets: str) -> subprocess.CompletedProcess[str]:
-    argv = [_helm(), "template", "rask", str(CHART)]
-    # Since auth defaults ON (2026-08-06) every render needs identity values; the chart refuses OIDC
-    # without a session secret ON PURPOSE, and that refusal has its own test in test_invariants.py.
-    argv += [*PREREQ_ARGS, *RAY_ARGS]
-    argv += ["--set-string", "auth.oidc.issuer=http://localhost:8080/dex"]
-    argv += ["--set-string", "frontend.oidc.publicOrigin=http://localhost:8080"]
-    for value in sets:
-        argv += ["--set", value]
-    return subprocess.run(argv, capture_output=True, text=True, timeout=300)
+from tests.unit.chart_render import DEFAULT_ARGS, render, render_fixture
 
 
 def test_the_object_store_does_not_inherit_the_generic_APP_memory_ceiling() -> None:
@@ -60,22 +31,30 @@ def test_the_object_store_does_not_inherit_the_generic_APP_memory_ceiling() -> N
             assert _mib(limit) >= 2048, f"the object store is capped at {limit} — it OOMKills under real load"
 
 
-def test_the_recoverable_drop_plane_is_actually_WIRED_into_the_catalog() -> None:
+@pytest.mark.parametrize(
+    ("flags", "grace"),
+    [
+        pytest.param((), "7", id="chart-default"),
+        # A JSON number, as a values file carries it: `--set` keeps `0.04` a string.
+        pytest.param(("--set-json", "catalog.trashGraceDays=0.04"), "0.04", id="a-fraction-of-a-day"),
+    ],
+)
+def test_the_recoverable_drop_plane_is_actually_WIRED_into_the_catalog(flags: tuple[str, ...], grace: str) -> None:
     """#122. The trash/undrop/purge plane — ~500 lines, 42 tests, an undrop UI — was inert in every
     chart deployment: `LANCE_TRASH_GRACE_DAYS` was rendered NOWHERE, while two chart comments
     discussed it as an operator knob. Every drop destroyed bytes immediately, `undrop` had nothing to
     restore, and `maintenance.trashPurge` shipped as a toggle whose input could never exist.
-    """
-    rendered = _render("image.localImages=true")
-    assert rendered.returncode == 0, rendered.stderr
 
-    for doc in yaml.load_all(rendered.stdout, Loader=FAST_LOADER):
-        if not doc or doc.get("kind") != "Deployment":
+    A fraction of a day reaches the catalog as written ([[LH-518]]): the dev estate's grace is about an hour so a purge
+    can be read back live, and a render that truncated it to an integer would turn recoverable drops off.
+    """
+    for doc in render(*DEFAULT_ARGS, *flags):
+        if doc.get("kind") != "Deployment":
             continue
         for container in doc["spec"]["template"]["spec"]["containers"]:
             if container["name"] != "catalog":
                 continue
             env = {e["name"]: e.get("value") for e in container.get("env", [])}
-            assert env.get("LANCE_TRASH_GRACE_DAYS") == "7", "the grace period never reaches the catalog"
+            assert env.get("LANCE_TRASH_GRACE_DAYS") == grace, "the grace period never reaches the catalog as set"
             return
     raise AssertionError("no catalog container rendered — this test would pass vacuously")

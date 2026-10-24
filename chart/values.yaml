@@ -917,8 +917,8 @@ catalog:
   # NOWHERE: ~500 lines of shipped, tested recovery code (undrop, /tasks, the recoverable cascade,
   # the purge's whole input) were inert in every chart deployment while two chart comments discussed
   # the knob as if it worked. 0 restores the old destroy-immediately behaviour.
-  # -- Days a dropped table or namespace stays undroppable before the trash purge may reclaim it (LANCE_TRASH_GRACE_DAYS). 0 destroys immediately.
-  trashGraceDays: 7
+  # -- (float) Days, a fraction allowed, a dropped table or namespace stays undroppable before the trash purge may reclaim it (LANCE_TRASH_GRACE_DAYS). 0 destroys immediately.
+  trashGraceDays: 7 # @schema type: number; minimum: 0; maximum: 365
   # #3-A per-warehouse physical multi-tenancy (admin control plane). On → POST /management/v1/warehouses provisions a
   # physically separate bucket per warehouse (Lakekeeper parity) and binds top-level namespaces to it, so a
   # table under a bound namespace lands in that warehouse's bucket. Additive + backward-compatible: an
