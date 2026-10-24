@@ -1519,6 +1519,9 @@ export interface paths {
          *
          *     The credential is a session the catalog's own token is exchanged for, named at the store for the verified caller
          *     it is vended to; the caller's own token never leaves the catalog.
+         *
+         *     It is scoped to the location the door resolved, never to the name, and answered only while that location still
+         *     holds the table authorized: a credential for a location is a grant on whatever table holds it ([[LH-530]]).
          */
         post: operations["vend_credentials_management_v1_table__id__credentials_post"];
         delete?: never;
@@ -1666,7 +1669,7 @@ export interface paths {
          *     Previewing MAIN and labelling it the branch's answer is the failure this replaces, not a lesser
          *     version of it: the caller acts on the version list, so
          *     ``test_the_gc_preview_names_exactly_what_the_run_deletes.py`` compares the ANSWER, per ref, with
-         *     what ``/run`` deletes on that ref rather than asserting the branch reached ``open_dataset``.
+         *     what ``/run`` deletes on that ref rather than asserting which ref the door opened.
          */
         post: operations["preview_maintenance_management_v1_table__id__maintenance_preview_post"];
         delete?: never;
@@ -1695,8 +1698,7 @@ export interface paths {
          *
          *     Reclaiming MAIN's history and reporting it as the branch's is the failure this replaces, and it is
          *     irreversible, so ``test_the_gc_run_reclaims_the_ref_the_request_names`` asserts what SURVIVED — the
-         *     parent's data files, counted before and after — rather than that the branch reached
-         *     ``open_dataset``.
+         *     parent's data files, counted before and after — rather than which ref the door opened.
          */
         post: operations["run_maintenance_management_v1_table__id__maintenance_run_post"];
         delete?: never;
@@ -2813,7 +2815,7 @@ export interface paths {
         put?: never;
         /**
          * Analyze Table Query Plan
-         * @description Return the analyzed query plan with runtime metrics — ``analyze_table_query_plan``; plain text.
+         * @description Return the analyzed query plan with runtime metrics — ``analyze_table_query_plan``; plain text, served once the name still resolves to the door's location.
          */
         post: operations["analyze_table_query_plan_v1_table__id__analyze_plan_post"];
         delete?: never;
@@ -3218,6 +3220,8 @@ export interface paths {
         /**
          * Table Exists
          * @description Check the table at ``id`` exists via ``table_exists`` — 200 if present (spec 0.9), else error.
+         *
+         *     The answer is about the table the request resolved, so it stands only while the name still resolves there ([[LH-530]]).
          */
         post: operations["table_exists_v1_table__id__exists_post"];
         delete?: never;
@@ -3237,7 +3241,7 @@ export interface paths {
         put?: never;
         /**
          * Explain Table Query Plan
-         * @description Return the logical query plan — ``explain_table_query_plan``; plain text.
+         * @description Return the logical query plan — ``explain_table_query_plan``; plain text, served once the name still resolves to the door's location.
          */
         post: operations["explain_table_query_plan_v1_table__id__explain_plan_post"];
         delete?: never;
@@ -3295,7 +3299,9 @@ export interface paths {
          *     one was missed, where the consequence is a write rather than a read.
          *
          *     Refused BEFORE `native.call`, because the whole point is that the native op would otherwise
-         *     succeed against the wrong object.
+         *     succeed against the wrong object. The drop stays the native op, whose refusal of a system index is the namespace's
+         *     own and not Lance's (lance-namespace-impls 13.0.0, ``dir.rs``), so it is the door's guarded native write, made after
+         *     the handle opened at the door's location has disarmed commit-path cleanup ([[LH-530]]).
          */
         post: operations["drop_table_index_v1_table__id__index__index_name__drop_post"];
         delete?: never;
@@ -3394,6 +3400,9 @@ export interface paths {
         /**
          * Query Table
          * @description Run a query and return matching rows as an Arrow-IPC file — wraps ``query_table``.
+         *
+         *     The native query names the table, so its rows are served only when the name still resolves to the location the
+         *     door opened ([[LH-530]]).
          */
         post: operations["query_table_v1_table__id__query_post"];
         delete?: never;
@@ -3501,9 +3510,10 @@ export interface paths {
          *     The op MERGES, whatever the spec's "Replace" wording says (probed against a real ``dir`` backend:
          *     posting ``{owner}`` over ``{owner, tier}`` leaves ``tier`` standing). Omitting a key therefore cannot
          *     remove it, and the spec's request model types ``metadata`` as a strict ``{str: str}`` that cannot carry
-         *     a null — so ``{"key": null}`` is a rask EXTENSION, routed to the dataplane's pylance
-         *     ``update_schema_metadata`` (the same ``None``-deletes dialect ``update_field_metadata`` already speaks).
-         *     A body with no nulls stays on the native spec op, transaction id and all.
+         *     a null — so ``{"key": null}`` is a rask EXTENSION, served by pylance's ``update_schema_metadata`` (the same
+         *     ``None``-deletes dialect ``update_field_metadata`` already speaks). Every body is written through that one call, on
+         *     the handle opened at the door's location: the native op names the table and would resolve it again ([[LH-530]]),
+         *     and it makes the same merging call on the dataset it loads (lance-namespace-impls 13.0.0, ``dir.rs``).
          *
          *     Keys under ``lineage.*`` and ``rask.*`` are the platform's and are refused 400, set or null alike.
          */
@@ -3726,6 +3736,9 @@ export interface paths {
          *     describes against the one it follows on that ref and finalizes the judged bytes through the backend's
          *     put-if-not-exists. A refusal leaves the ref at its version and answers a typed spec error. A branch is created
          *     through ``CreateTableBranch``, and a branch this table does not list answers 404 (code 22).
+         *
+         *     The staged manifest is judged at the door's location while it still holds the table authorized, and the finalize,
+         *     which names the table, is made once the name is found still resolving there ([[LH-530]]).
          */
         post: operations["create_table_version_v1_table__id__version_create_post"];
         delete?: never;
@@ -3779,7 +3792,8 @@ export interface paths {
          *
          *     Backed by the native dir backend, which returns a spec-correct ``TableVersion`` (with ``manifest_path``
          *     / ``manifest_size`` / ``e_tag`` / ``timestamp``); ``native.call`` marshals the request to the dict the
-         *     binding expects. A missing version raises the backend's ``TableVersionNotFoundError`` → 404.
+         *     binding expects. A missing version raises the backend's ``TableVersionNotFoundError`` → 404. The answer names the
+         *     table, so it is served only while the name still resolves to the door's location ([[LH-530]]).
          */
         post: operations["describe_table_version_v1_table__id__version_describe_post"];
         delete?: never;

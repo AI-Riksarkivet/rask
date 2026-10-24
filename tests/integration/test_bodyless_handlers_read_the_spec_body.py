@@ -149,19 +149,18 @@ def test_get_table_stats_refuses_a_body_branch(client: TestClient, fake_ns: Magi
         pytest.param("/v1/table/db$t/deregister", {"id": ["db", "other"]}, "deregister_table", id="deregister"),
         # The ENVELOPE form of the schema-metadata update carries the id beside the map, so it is reconciled
         # like every {id} route. Only the envelope is: a flat body IS the map, and an "id" key in it is data.
+        # The door writes it through a handle at its location, so no backend op stands to be called.
         pytest.param(
-            "/v1/table/db1$users/schema_metadata/update",
-            {"id": ["db1", "other"], "metadata": {"owner": "alice"}},
-            "update_table_schema_metadata",
-            id="schema-metadata-envelope",
+            "/v1/table/db1$users/schema_metadata/update", {"id": ["db1", "other"], "metadata": {"owner": "alice"}}, None, id="schema-metadata-envelope"
         ),
     ],
 )
-def test_a_table_door_refuses_a_contradicting_body_id(client: TestClient, fake_ns: MagicMock, path: str, body: dict[str, Any], backend: str) -> None:
+def test_a_table_door_refuses_a_contradicting_body_id(client: TestClient, fake_ns: MagicMock, path: str, body: dict[str, Any], backend: str | None) -> None:
     fake_ns.deregister_table.return_value = DeregisterTableResponse()
     resp = client.post(path, json=body)
     assert resp.status_code == 400, resp.text
-    getattr(fake_ns, backend).assert_not_called()
+    if backend is not None:
+        getattr(fake_ns, backend).assert_not_called()
 
 
 # --- the query aliases must keep working, or this "fix" is a break ---------------------------------

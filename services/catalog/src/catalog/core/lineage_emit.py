@@ -341,7 +341,7 @@ def build_write_event(
         lance_fields["version"] = version
     # THE REF THE WRITE LANDED ON, because the version alone does not identify a snapshot. A branch is a
     # whole parallel dataset under `tree/<name>/` with its OWN version sequence
-    # (`core/namespace.py::open_dataset`), so one number names two different states. Measured on the
+    # (`core/namespace.py::open_resolved_dataset`), so one number names two different states. Measured on the
     # installed pylance: main at v2, a branch write gives branch v3, a later main write gives main v3 —
     # same dataset, same number, different contents. The edge list records the ref beside the version
     # (`out_branch`), so `(table, ref, version)` names one commit.

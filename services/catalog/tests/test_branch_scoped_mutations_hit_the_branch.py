@@ -25,8 +25,12 @@ from pathlib import Path
 import pyarrow as pa
 import pytest
 from lance_namespace import CreateNamespaceRequest, connect
+from tables_by_name import open_by_name
 
-from catalog.services.dataplane import create_table, delete_from_table, open_dataset, update_table
+from catalog.services import table_claims
+from catalog.services.dataplane import create_table, delete_from_table, update_table
+from catalog.services.table_claims import DoorTable
+from service_kit.lakehouse.location_claims import ClaimStore
 
 
 lance = pytest.importorskip("lance")
@@ -50,22 +54,28 @@ def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace is runtime-only
     namespace = connect("dir", {"root": root})
     namespace.create_namespace(CreateNamespaceRequest(id=TABLE_ID[:-1]))
     create_table(namespace, {}, TABLE_ID, _table([1, 2, 3], "main"), root=root, mode="create", registry=None)
-    dataset = open_dataset(namespace, {}, TABLE_ID)
+    dataset = open_by_name(namespace, {}, TABLE_ID)
     dataset.create_branch(BRANCH) if hasattr(dataset, "create_branch") else pytest.skip("pylance has no branch API here")
     return namespace
 
 
-def test_an_update_on_a_branch_leaves_MAIN_untouched(ns) -> None:  # noqa: ANN001
-    """The headline: a branch-scoped update must not rewrite main's rows."""
-    update_table(ns, {}, UpdateTableRequest(id=TABLE_ID, branch=BRANCH, updates=[["label", "'edited'"]]))
+@pytest.fixture
+def table(ns, tmp_path: Path) -> DoorTable:  # noqa: ANN001
+    """The table as a door acts on it, resolved on ``ns``."""
+    return table_claims.door_table(ns, ClaimStore(control_root=str(tmp_path / "control")), TABLE_ID)
 
-    main = open_dataset(ns, {}, TABLE_ID).to_table().column("label").to_pylist()
+
+def test_an_update_on_a_branch_leaves_MAIN_untouched(ns, table: DoorTable) -> None:  # noqa: ANN001
+    """The headline: a branch-scoped update must not rewrite main's rows."""
+    update_table(table, {}, UpdateTableRequest(id=TABLE_ID, branch=BRANCH, updates=[["label", "'edited'"]]))
+
+    main = open_by_name(ns, {}, TABLE_ID).to_table().column("label").to_pylist()
     assert main == ["main", "main", "main"], f"a branch-scoped update rewrote MAIN: {main}"
 
 
-def test_a_delete_on_a_branch_leaves_MAIN_untouched(ns) -> None:  # noqa: ANN001
+def test_a_delete_on_a_branch_leaves_MAIN_untouched(ns, table: DoorTable) -> None:  # noqa: ANN001
     """Same defect, the destructive half — and the one where a silent wrong target loses data."""
-    delete_from_table(ns, {}, DeleteFromTableRequest(id=TABLE_ID, branch=BRANCH, predicate="id = 1"))
+    delete_from_table(table, {}, DeleteFromTableRequest(id=TABLE_ID, branch=BRANCH, predicate="id = 1"))
 
-    main = open_dataset(ns, {}, TABLE_ID)
+    main = open_by_name(ns, {}, TABLE_ID)
     assert main.count_rows() == 3, f"a branch-scoped delete removed rows from MAIN: {main.count_rows()} left"

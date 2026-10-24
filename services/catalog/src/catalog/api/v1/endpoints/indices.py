@@ -29,12 +29,12 @@ from lance_namespace import (
 )
 
 from catalog.api import lineage_deps
-from catalog.api.dependencies import LineageEmitterDep, NamespaceDep, ObjectUuidsDep, SettingsDep, StorageOptionsDep
+from catalog.api.dependencies import DoorTableDep, LineageEmitterDep, ObjectUuidsDep, SettingsDep, StorageOptionsDep
 from catalog.api.security import CurrentToken
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.core.lineage_emit import DROP_INDEX
-from catalog.core.namespace import open_dataset_for_commit
-from catalog.services import dataplane, native
+from catalog.core.namespace import disarm_commit_path_cleanup
+from catalog.services import dataplane
 
 
 #: Ceiling for the spec list ops' `limit`. The Lance Namespace spec pages these with
@@ -72,7 +72,7 @@ def create_scalar_index(id: str, body: CreateTableIndexRequest) -> CreateTableSc
 @router.post("/{id}/index/list", response_model_exclude_none=True)
 def list_table_indices(
     id: str,
-    ns: NamespaceDep,
+    table: DoorTableDep,
     body: ListTableIndicesRequest | None = None,
     page_token: str | None = None,
     limit: Annotated[int | None, Query(ge=1, le=_MAX_LIST_LIMIT)] = None,
@@ -99,14 +99,15 @@ def list_table_indices(
         branch = body.branch if "branch" in sent else branch
     req = ListTableIndicesRequest(id=segments, page_token=page_token, limit=limit, branch=branch, version=body.version if body else None)
     dataplane.refuse_a_branch_this_door_cannot_honour(branch, door="list_table_indices")
-    return native.call(ns, "list_table_indices", req)
+    listed = table.read_natively("list_table_indices", req)
+    return listed
 
 
 @router.post("/{id}/index/{index_name}/stats", response_model_exclude_none=True)
 def describe_table_index_stats(
     id: str,
     index_name: str,
-    ns: NamespaceDep,
+    table: DoorTableDep,
     body: DescribeTableIndexStatsRequest | None = None,
     branch: Annotated[
         str | None,
@@ -125,14 +126,15 @@ def describe_table_index_stats(
         branch = body.branch
     req = DescribeTableIndexStatsRequest(id=segments, index_name=index_name, branch=branch, version=body.version if body else None)
     dataplane.refuse_a_branch_this_door_cannot_honour(branch, door="describe_table_index_stats")
-    return native.call(ns, "describe_table_index_stats", req)
+    stats = table.read_natively("describe_table_index_stats", req)
+    return stats
 
 
 @router.post("/{id}/index/{index_name}/drop", response_model_exclude_none=True)
 async def drop_table_index(
     id: str,
     index_name: str,
-    ns: NamespaceDep,
+    table: DoorTableDep,
     settings: SettingsDep,
     so: StorageOptionsDep,
     token: CurrentToken,
@@ -159,25 +161,27 @@ async def drop_table_index(
     one was missed, where the consequence is a write rather than a read.
 
     Refused BEFORE `native.call`, because the whole point is that the native op would otherwise
-    succeed against the wrong object.
+    succeed against the wrong object. The drop stays the native op, whose refusal of a system index is the namespace's
+    own and not Lance's (lance-namespace-impls 13.0.0, ``dir.rs``), so it is the door's guarded native write, made after
+    the handle opened at the door's location has disarmed commit-path cleanup ([[LH-530]]).
     """
     segments = parse_identifier(id)
     if body is not None and "branch" in body.model_fields_set:
         branch = body.branch
     dataplane.refuse_a_branch_this_door_cannot_honour(branch, door="drop_table_index")
     req = DropTableIndexRequest(id=segments, index_name=index_name)
-    await run_in_threadpool(partial(open_dataset_for_commit, ns, so, segments, checked=False))
-    response: DropTableIndexResponse = await run_in_threadpool(native.call, ns, "drop_table_index", req)
+    await run_in_threadpool(lambda: disarm_commit_path_cleanup(table.open_unchecked(so), segments))
+    response: DropTableIndexResponse = await run_in_threadpool(table.write_natively, "drop_table_index", req)
     await lineage_deps.emit_measured_write(
         emitter,
         segments,
-        ns=ns,
+        location=table.location,
         so=so,
         token=token,
         operation=DROP_INDEX,
         authorization=authorization,
         uuids=uuids,
-        pin_version=await run_in_threadpool(partial(dataplane.committed_version, ns, so, segments, response.transaction_id, branch=None)),
+        pin_version=await run_in_threadpool(partial(dataplane.committed_version, table, so, response.transaction_id, branch=None)),
         # Main only: this door refuses a branch before the build.
         branch=None,
     )

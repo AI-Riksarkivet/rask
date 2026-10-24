@@ -23,7 +23,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
-from lance_namespace import NamespaceNotFoundError, TableNotFoundError
+from lance_namespace import ConcurrentModificationError, NamespaceNotFoundError, TableNotFoundError
 from pydantic import BaseModel
 
 from catalog.api.dependencies import ClockDep, ControlEmitterDep, SettingsDep, StorageOptionsDep, namespace_for_top_ns
@@ -114,11 +114,16 @@ async def _unpin(request: Request, settings: Settings, so: dict[str, str], table
     segments = parse_identifier(table)
     try:
         ns = await namespace_for_top_ns(request, settings, segments[0])
+        # The pin moves only on the hold's own table: the name is resolved once and must still be that uuid ([[LH-530]]).
+        named = await run_in_threadpool(table_claims.door_table, ns, table_claims.claim_store(settings), segments)
+        if named.resolved.uuid != table_uuid:
+            log.info("promotion_expired_table_gone", extra={"table": table})
+            return
         current = await run_in_threadpool(promotions.hold_of, settings.registry_root, settings.storage_options(), table_uuid)
-        await run_in_threadpool(promotions.sync_pin, ns, so, segments, current)
+        await run_in_threadpool(promotions.sync_pin, named, so, current)
     except (NamespaceNotFoundError, TableNotFoundError):
         log.info("promotion_expired_table_gone", extra={"table": table})
-    except (OSError, RecordChangedError):
+    except (OSError, RecordChangedError, ConcurrentModificationError):
         log.warning("promotion_unpin_failed", extra={"table": table}, exc_info=True)
 
 

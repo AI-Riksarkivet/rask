@@ -30,6 +30,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from lance_namespace import CreateNamespaceRequest, LanceNamespace
+from tables_by_name import open_by_name
 
 from catalog.api import erasure_release as release_door
 from catalog.api.dependencies import get_clock, get_control_emitter, get_namespace, get_storage_options
@@ -37,7 +38,6 @@ from catalog.api.security import authenticate
 from catalog.api.v1.endpoints import erasure as door
 from catalog.core.config import Settings, get_settings
 from catalog.core.identifiers import with_minted_uuid
-from catalog.core.namespace import open_dataset
 from catalog.services import erasure_release, table_claims
 from catalog.services.dataplane import create_table, read_arrow_body
 from catalog.services.erasure import Pin
@@ -81,19 +81,19 @@ def _table_uuid(ns: LanceNamespace, tmp_path: Path) -> str:
 def _tagged_over_a_plain_delete(root: Path) -> LanceNamespace:
     """A writer's plain delete hides alice at v2, which a run's tag ``trained`` names; v3 adds carol."""
     ns = _created(root)
-    open_dataset(ns, {}, _TABLE_ID).delete(_PREDICATE)
-    open_dataset(ns, {}, _TABLE_ID).tags.create("trained", 2)
-    open_dataset(ns, {}, _TABLE_ID).insert(_rows("carol"))
+    open_by_name(ns, {}, _TABLE_ID).delete(_PREDICATE)
+    open_by_name(ns, {}, _TABLE_ID).tags.create("trained", 2)
+    open_by_name(ns, {}, _TABLE_ID).insert(_rows("carol"))
     return ns
 
 
 def _pinned_subtree(root: Path) -> LanceNamespace:
     """main v2 adds carol; ``work`` cut from main v2 gains eve at v3; ``deeper`` cut from (work, 3), tagged ``t1``."""
     ns = _created(root)
-    open_dataset(ns, {}, _TABLE_ID).insert(_rows("carol"))
-    lance.write_dataset(_rows("eve"), open_dataset(ns, {}, _TABLE_ID).create_branch("work", 2), mode="append")
-    open_dataset(ns, {}, _TABLE_ID).create_branch("deeper", ("work", 3))
-    open_dataset(ns, {}, _TABLE_ID).tags.create("t1", ("deeper", 3))
+    open_by_name(ns, {}, _TABLE_ID).insert(_rows("carol"))
+    lance.write_dataset(_rows("eve"), open_by_name(ns, {}, _TABLE_ID).create_branch("work", 2), mode="append")
+    open_by_name(ns, {}, _TABLE_ID).create_branch("deeper", ("work", 3))
+    open_by_name(ns, {}, _TABLE_ID).tags.create("t1", ("deeper", 3))
     return ns
 
 
@@ -147,7 +147,7 @@ def _catalog(ns: LanceNamespace, tmp_path: Path, *, grace_days: int, emitter: _R
 
 
 def _branches(ns: LanceNamespace) -> dict[str, tuple[str | None, int]]:
-    return {name: (meta["parent_branch"], meta["parent_version"]) for name, meta in open_dataset(ns, {}, _TABLE_ID).branches.list().items()}
+    return {name: (meta["parent_branch"], meta["parent_version"]) for name, meta in open_by_name(ns, {}, _TABLE_ID).branches.list().items()}
 
 
 def _record(client: TestClient) -> str:
@@ -168,7 +168,7 @@ def test_a_settled_erasure_tells_each_person_then_releases_its_pin_at_the_deadli
 
     with _catalog(ns, tmp_path, grace_days=7, emitter=emitter, clock=clock) as client:
         obligation = _record(client)
-        erasure_job(open_dataset(ns, {}, _TABLE_ID).uri, _PREDICATE).run()
+        erasure_job(open_by_name(ns, {}, _TABLE_ID).uri, _PREDICATE).run()
         verified = _verify(client, obligation)
         refs = ["tag:trained"]
         assert ([pin["ref"] for pin in verified["report"]["pinned_by"]], verified["obligation"]["state"]) == (refs, "released")
@@ -183,14 +183,14 @@ def test_a_settled_erasure_tells_each_person_then_releases_its_pin_at_the_deadli
 
         clock.now = due - timedelta(seconds=1)
         assert client.post(f"/{_BINDING}").status_code == 200
-        assert "trained" in open_dataset(ns, {}, _TABLE_ID).tags.list(), "nothing is released before the deadline"
+        assert "trained" in open_by_name(ns, {}, _TABLE_ID).tags.list(), "nothing is released before the deadline"
 
         clock.now = due + timedelta(seconds=1)
         assert client.post(f"/{_BINDING}").status_code == 200
         again = _verify(client, _record(client))
 
     assert (again["report"]["complete"], again["report"]["residual_versions"], again["report"]["release"]) == (True, [], None), again["report"]["surfaces"]
-    assert "trained" not in open_dataset(ns, {}, _TABLE_ID).tags.list()
+    assert "trained" not in open_by_name(ns, {}, _TABLE_ID).tags.list()
 
 
 @pytest.mark.parametrize(
@@ -210,13 +210,13 @@ def test_a_release_an_earlier_verification_scheduled_settles_the_obligation_only
     emitter, clock = _Recorder(), _Clock()
     with _catalog(ns, tmp_path, grace_days=7, emitter=emitter, clock=clock) as client:
         obligation = _record(client)
-        erasure_job(open_dataset(ns, {}, _TABLE_ID).uri, _PREDICATE).run()
+        erasure_job(open_by_name(ns, {}, _TABLE_ID).uri, _PREDICATE).run()
         earlier = erasure_release.new_release(
             [Pin(ref=scheduled, holds="main@2")],
             release_id=obligation,
             table="db$subjects",
             table_uuid=_table_uuid(ns, tmp_path),
-            location=open_dataset(ns, {}, _TABLE_ID).uri,
+            location=open_by_name(ns, {}, _TABLE_ID).uri,
             requested_by="user:dex~alice",
             notified=["user:dex~alice", "user:dex~olivia"],
             due_at=clock.now + timedelta(days=7),
@@ -255,7 +255,7 @@ def test_a_release_cut_short_is_finished_at_the_reference_it_recorded(tmp_path: 
         release_id="0" * 32,
         table="db$subjects",
         table_uuid=_table_uuid(ns, tmp_path),
-        location=open_dataset(ns, {}, _TABLE_ID).uri,
+        location=open_by_name(ns, {}, _TABLE_ID).uri,
         requested_by="user:dex~alice",
         notified=["user:dex~alice"],
         due_at=clock.now,
@@ -263,20 +263,20 @@ def test_a_release_cut_short_is_finished_at_the_reference_it_recorded(tmp_path: 
     erasure_release.schedule(str(tmp_path / "control"), {}, release)
 
     with _catalog(ns, tmp_path, grace_days=0, emitter=emitter, clock=clock) as client:
-        recorded = open_dataset(ns, {}, _TABLE_ID).version
+        recorded = open_by_name(ns, {}, _TABLE_ID).version
         if dies_in == "recreate":
             _dies_once(monkeypatch, lance.LanceDataset, "create_branch", after=0)
         else:
-            _dies_once(monkeypatch, type(open_dataset(ns, {}, _TABLE_ID).branches), "delete", after=1)
+            _dies_once(monkeypatch, type(open_by_name(ns, {}, _TABLE_ID).branches), "delete", after=1)
         client.post(f"/{_BINDING}")
         expected = {"work": (None, recorded), "deeper": ("work", recorded)}
         if dies_in == "deletes":
             assert set(_branches(ns)) == {"work"}, "the first tick deleted the leaf and died before its parent"
-            open_dataset(ns, {}, _TABLE_ID).create_branch("late", ("work", None))
+            open_by_name(ns, {}, _TABLE_ID).create_branch("late", ("work", None))
             expected["late"] = ("work", recorded)
         else:
             assert _branches(ns) == {}, "the first tick deleted the subtree and died before recreating it"
-        open_dataset(ns, {}, _TABLE_ID).insert(_rows("zed"))
+        open_by_name(ns, {}, _TABLE_ID).insert(_rows("zed"))
         assert client.post(f"/{_BINDING}").status_code == 200
 
     assert _branches(ns) == expected

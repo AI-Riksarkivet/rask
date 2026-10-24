@@ -24,8 +24,12 @@ from pathlib import Path
 import pyarrow as pa
 import pytest
 from lance_namespace import CreateNamespaceRequest, InsertIntoTableRequest, connect
+from tables_by_name import open_by_name
 
-from catalog.services.dataplane import create_table, insert_into_table, open_dataset
+from catalog.services import table_claims
+from catalog.services.dataplane import create_table, insert_into_table
+from catalog.services.table_claims import DoorTable
+from service_kit.lakehouse.location_claims import ClaimStore
 
 
 #: The catalog's default body cap (LANCE_MAX_BODY_BYTES), far above every body here.
@@ -55,20 +59,26 @@ def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace is runtime-only
     namespace = connect("dir", {"root": str(tmp_path / "data")})
     namespace.create_namespace(CreateNamespaceRequest(id=TABLE_ID[:-1]))
     create_table(namespace, {}, TABLE_ID, _rows(1), root=str(tmp_path / "data"), mode="create", registry=None)
-    open_dataset(namespace, {}, TABLE_ID).create_branch(BRANCH, None)
+    open_by_name(namespace, {}, TABLE_ID).create_branch(BRANCH, None)
     return namespace
 
 
-def test_both_paths_report_the_same_shape_for_the_same_payload(ns) -> None:  # noqa: ANN001
+@pytest.fixture
+def table(ns, tmp_path: Path) -> DoorTable:  # noqa: ANN001
+    """The table as a door acts on it, resolved on ``ns``."""
+    return table_claims.door_table(ns, ClaimStore(control_root=str(tmp_path / "control")), TABLE_ID)
+
+
+def test_both_paths_report_the_same_shape_for_the_same_payload(table: DoorTable) -> None:
     """Parity, and it subsumes the single-path case rather than sitting beside one.
 
     A separate "the main path reports its rows" test asserted a strict subset of this — same call, same
     field, one fewer comparison — so it could only ever fail when this one already had. The messages
     below carry which side was wrong, which is the only thing the extra test bought.
     """
-    main = insert_into_table(ns, {}, InsertIntoTableRequest(id=TABLE_ID, mode="append"), _ipc(_rows(20)), max_bytes=_BODY_LIMIT, transaction_properties=None)
+    main = insert_into_table(table, {}, InsertIntoTableRequest(id=TABLE_ID, mode="append"), _ipc(_rows(20)), max_bytes=_BODY_LIMIT, transaction_properties=None)
     branched = insert_into_table(
-        ns, {}, InsertIntoTableRequest(id=TABLE_ID, mode="append", branch=BRANCH), _ipc(_rows(30)), max_bytes=_BODY_LIMIT, transaction_properties=None
+        table, {}, InsertIntoTableRequest(id=TABLE_ID, mode="append", branch=BRANCH), _ipc(_rows(30)), max_bytes=_BODY_LIMIT, transaction_properties=None
     )
 
     assert main.num_inserted_rows == 2, f"the MAIN path did not report the rows it wrote: {main}"

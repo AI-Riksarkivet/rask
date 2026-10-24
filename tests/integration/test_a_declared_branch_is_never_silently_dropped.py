@@ -10,7 +10,7 @@ serves the ref or refuses it with ``refuse_a_branch_this_door_cannot_honour`` (s
 The probe is a branch the table does not have. A door that ignores ``branch`` answers it from main with
 a 200; a refusing door answers 0 ``Unsupported``; a serving door opens the ref and finds nothing there.
 Every door below delegates to ``native.call`` with a branch-carrying spec model, which is the shape the
-defect takes; a door that opens its own ref goes through ``open_dataset`` and answers code 22 from there
+defect takes; a door that opens its own ref goes through ``DoorTable.open`` and answers code 22 from there
 (``tests/integration/test_column_branch.py``).
 """
 

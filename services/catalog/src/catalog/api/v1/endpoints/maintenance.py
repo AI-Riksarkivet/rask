@@ -15,18 +15,17 @@ rewrites on its own compute, and commits through ``version/create``, which judge
 from __future__ import annotations
 
 import logging
+from functools import partial
 from typing import Annotated
 
 from fastapi import APIRouter, Query
 from fastapi.concurrency import run_in_threadpool
 
-from catalog.api.dependencies import FgaClientDep, NamespaceDep, SettingsDep, StorageOptionsDep
+from catalog.api.dependencies import DoorTableDep, FgaClientDep, SettingsDep, StorageOptionsDep
 from catalog.api.pagination import paginate
 from catalog.api.security import CurrentToken
 from catalog.core.base_judge import BaseJudge
 from catalog.core.config import Settings
-from catalog.core.identifiers import parse_identifier
-from catalog.core.namespace import open_dataset
 from catalog.schemas import DueTable, GcPreview, GcRequest, GcRunResult, MaintenanceDueResponse
 from catalog.services import maintenance, table_claims
 from service_kit.governed import fga
@@ -68,7 +67,7 @@ async def _base_refs(ds: object, so: dict[str, str], settings: Settings) -> main
 async def preview_maintenance(
     id: str,
     body: GcRequest,
-    ns: NamespaceDep,
+    table: DoorTableDep,
     so: StorageOptionsDep,
     branch: Annotated[str | None, Query(description="The ref to preview. Omit for main; this door reads the ref it is given.")] = None,
 ) -> GcPreview:
@@ -82,9 +81,8 @@ async def preview_maintenance(
     Previewing MAIN and labelling it the branch's answer is the failure this replaces, not a lesser
     version of it: the caller acts on the version list, so
     ``test_the_gc_preview_names_exactly_what_the_run_deletes.py`` compares the ANSWER, per ref, with
-    what ``/run`` deletes on that ref rather than asserting the branch reached ``open_dataset``."""
-    segments = parse_identifier(id)
-    ds = await run_in_threadpool(open_dataset, ns, so, segments, branch=branch)
+    what ``/run`` deletes on that ref rather than asserting which ref the door opened."""
+    ds = await run_in_threadpool(partial(table.open, so, branch=branch))
     result = await run_in_threadpool(
         maintenance.preview_gc,
         ds,
@@ -99,7 +97,7 @@ async def preview_maintenance(
 async def run_maintenance(
     id: str,
     body: GcRequest,
-    ns: NamespaceDep,
+    table: DoorTableDep,
     settings: SettingsDep,
     so: StorageOptionsDep,
     branch: Annotated[
@@ -115,10 +113,8 @@ async def run_maintenance(
 
     Reclaiming MAIN's history and reporting it as the branch's is the failure this replaces, and it is
     irreversible, so ``test_the_gc_run_reclaims_the_ref_the_request_names`` asserts what SURVIVED — the
-    parent's data files, counted before and after — rather than that the branch reached
-    ``open_dataset``."""
-    segments = parse_identifier(id)
-    ds = await run_in_threadpool(open_dataset, ns, so, segments, branch=branch)
+    parent's data files, counted before and after — rather than which ref the door opened."""
+    ds = await run_in_threadpool(partial(table.open, so, branch=branch))
     protected = await _base_refs(ds, so, settings)
     result = await run_in_threadpool(
         maintenance.run_gc,

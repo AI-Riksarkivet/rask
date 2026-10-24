@@ -31,10 +31,12 @@ import pyarrow as pa
 import pytest
 
 from catalog.services import dataplane
+from catalog.services.table_claims import DoorTable, ResolvedTable
+from service_kit.lakehouse.location_claims import ClaimStore
 
 
 @pytest.fixture
-def compacted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> str:
+def compacted(tmp_path: Path) -> DoorTable:
     """A real compaction, never a hand-written operation name.
 
     The defect is invisible to any test that supplies its own operation strings: it lives in what Lance
@@ -45,18 +47,17 @@ def compacted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> str:
     for value in (2, 3, 4):
         lance.write_dataset(pa.table({"id": [value]}), uri, mode="append")
     lance.dataset(uri).optimize.compact_files()
-    monkeypatch.setattr(dataplane, "open_dataset_unchecked", lambda *_args, **_kwargs: lance.dataset(uri))
-    return uri
+    return DoorTable(cast(Any, None), ClaimStore(control_root=str(tmp_path / "control")), ResolvedTable(segments=["db", "t"], location=uri))
 
 
-def _history(table_id: list[str] | None = None) -> dict[int, Any]:
-    rows = dataplane.table_history(cast(Any, None), cast(Any, {}), table_id or ["db", "t"])
+def _history(table: DoorTable) -> dict[int, Any]:
+    rows = dataplane.table_history(table, cast(Any, {}))
     return {int(row["version"]): row["operation"] for row in rows}
 
 
-def test_an_operation_the_binding_cannot_name_is_reported_null(compacted: str) -> None:
+def test_an_operation_the_binding_cannot_name_is_reported_null(compacted: DoorTable) -> None:
     """THE GATE. Before this, a compacted table's log claimed an operation called 'BaseOperation'."""
-    operations = _history()
+    operations = _history(compacted)
 
     assert operations[5] is None, (
         "the version a compaction commits before its Rewrite has no operation this binding can name, so "

@@ -76,7 +76,7 @@ def test_the_measured_write_trailer_STAMPS_the_uri_it_read_back() -> None:
             lineage_deps.emit_measured_write(
                 cast(Any, recorder),
                 ["db", "t"],
-                ns=cast(Any, None),
+                location="s3://bucket/abc12345_db$t",
                 so={},
                 token=None,
                 operation="insert",
@@ -111,7 +111,7 @@ def test_a_readback_that_could_not_open_the_dataset_stamps_no_uri() -> None:
             lineage_deps.emit_measured_write(
                 cast(Any, recorder),
                 ["db", "t"],
-                ns=cast(Any, None),
+                location="s3://bucket/abc12345_db$t",
                 so={},
                 token=None,
                 operation="insert",

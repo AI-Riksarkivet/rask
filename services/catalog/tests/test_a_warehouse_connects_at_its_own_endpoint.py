@@ -104,7 +104,7 @@ def test_an_UNREACHABLE_store_is_503_naming_it_not_a_500(settings: Settings, mon
 
     Measured live 2026-09-20 on the deployed catalog: a warehouse pointed at `http://127.0.0.1:1`
     answered `500 InternalError code 18`, which sends whoever is on call to the wrong system. pylance
-    raises a BARE `ValueError` here — the same shape `open_dataset` already converts for a missing
+    raises a BARE `ValueError` here — the same shape `open_resolved_dataset` already converts for a missing
     dataset, and for the same reason.
 
     WHICH STORE reaches the LOG, not the caller. `ns_errors` redacts every 5xx detail to "Internal

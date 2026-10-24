@@ -30,51 +30,53 @@ from lance_namespace import (
     AlterTableDropColumnsRequest,
     CreateNamespaceRequest,
     DeleteFromTableRequest,
-    LanceNamespace,
     UpdateTableRequest,
     connect,
 )
 
-from catalog.services import dataplane
+from catalog.services import dataplane, table_claims
+from catalog.services.table_claims import DoorTable
+from service_kit.lakehouse.location_claims import ClaimStore
 
 
 @pytest.fixture
-def ns(tmp_path: Path) -> LanceNamespace:
+def table(tmp_path: Path) -> DoorTable:
+    """``db$t`` as a door acts on it, resolved on a real ``dir`` namespace."""
     backend = connect("dir", {"root": str(tmp_path)})
     backend.create_namespace(CreateNamespaceRequest(id=["db"]))
     dataplane.create_table(backend, {}, ["db", "t"], pa.table({"id": [1, 2, 3], "v": ["a", "b", "c"]}), root=str(tmp_path), mode="create", registry=None)
-    return backend
+    return table_claims.door_table(backend, ClaimStore(control_root=str(tmp_path / "control")), ["db", "t"])
 
 
 @pytest.fixture
 def opens(monkeypatch: pytest.MonkeyPatch) -> list[str]:
-    """Tally every ``open_dataset`` the data plane performs, keeping the real behaviour."""
+    """Tally every open of the door's table the data plane performs, keeping the real behaviour."""
     seen: list[str] = []
-    real = dataplane.open_dataset
+    real = table_claims.open_resolved_dataset
 
     def counting(*args: Any, **kwargs: Any) -> Any:
         seen.append("open")
         return real(*args, **kwargs)
 
-    monkeypatch.setattr(dataplane, "open_dataset", counting)
+    monkeypatch.setattr(table_claims, "open_resolved_dataset", counting)
     return seen
 
 
-def _ops(ns: LanceNamespace) -> dict[str, Any]:
+def _ops(table: DoorTable) -> dict[str, Any]:
     return {
-        "delete_from_table": lambda: dataplane.delete_from_table(ns, {}, DeleteFromTableRequest(id=["db", "t"], predicate="id = 1")),
-        "update_table": lambda: dataplane.update_table(ns, {}, UpdateTableRequest(id=["db", "t"], updates=[["v", "'z'"]])),
+        "delete_from_table": lambda: dataplane.delete_from_table(table, {}, DeleteFromTableRequest(id=["db", "t"], predicate="id = 1")),
+        "update_table": lambda: dataplane.update_table(table, {}, UpdateTableRequest(id=["db", "t"], updates=[["v", "'z'"]])),
         "add_columns": lambda: dataplane.add_columns(
-            ns, {}, AlterTableAddColumnsRequest(id=["db", "t"], new_columns=[{"name": "doubled", "expression": "id * 2"}])
+            table, {}, AlterTableAddColumnsRequest(id=["db", "t"], new_columns=[{"name": "doubled", "expression": "id * 2"}])
         ),
-        "drop_columns": lambda: dataplane.drop_columns(ns, {}, AlterTableDropColumnsRequest(id=["db", "t"], columns=["v"])),
-        "update_field_metadata": lambda: dataplane.update_field_metadata(ns, {}, ["db", "t"], [{"path": "id", "metadata": {"unit": "px"}}]),
+        "drop_columns": lambda: dataplane.drop_columns(table, {}, AlterTableDropColumnsRequest(id=["db", "t"], columns=["v"])),
+        "update_field_metadata": lambda: dataplane.update_field_metadata(table, {}, [{"path": "id", "metadata": {"unit": "px"}}]),
     }
 
 
 @pytest.mark.parametrize("op", ["delete_from_table", "update_table", "add_columns", "drop_columns", "update_field_metadata"])
-def test_a_mutating_op_opens_the_dataset_exactly_once(op: str, ns: LanceNamespace, opens: list[str]) -> None:
-    response = _ops(ns)[op]()
+def test_a_mutating_op_opens_the_dataset_exactly_once(op: str, table: DoorTable, opens: list[str]) -> None:
+    response = _ops(table)[op]()
     assert opens, f"{op} never opened a dataset — the tally is not seeing the op"
     assert len(opens) == 1, f"{op} opened the dataset {len(opens)}x; the version readback is a second full describe + open"
     assert int(response.version) == 2, f"{op} reported version {response.version!r}, not the version it just committed"

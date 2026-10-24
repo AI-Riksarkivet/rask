@@ -28,8 +28,9 @@ import pytest
 from lance_namespace import CreateNamespaceRequest, connect
 from lance_namespace.errors import InvalidInputError
 from lance_namespace_urllib3_client.exceptions import ApiException  # noqa: F401  (import shape kept for parity)
+from tables_by_name import open_by_name
 
-from catalog.services.dataplane import create_table, open_dataset
+from catalog.services.dataplane import create_table
 from catalog.services.publication import gate
 
 
@@ -53,7 +54,7 @@ def _make(tmp_path: Path, schema: pa.Schema, **cols: object):  # noqa: ANN201
     ns = connect("dir", {"root": str(tmp_path / "d")})
     ns.create_namespace(CreateNamespaceRequest(id=TABLE_ID[:-1]))
     create_table(ns, {}, TABLE_ID, pa.table(dict(cols), schema=schema), root=str(tmp_path / "d"), mode="create", registry=None)
-    return open_dataset(ns, {}, TABLE_ID).uri
+    return open_by_name(ns, {}, TABLE_ID).uri
 
 
 def test_gate_refuses_a_nonconforming_tier_exactly_as_publish_does(tmp_path: Path) -> None:

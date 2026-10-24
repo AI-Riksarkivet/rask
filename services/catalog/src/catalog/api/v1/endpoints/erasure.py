@@ -30,13 +30,13 @@ import lance
 from fastapi import APIRouter, Depends, Query
 from fastapi.concurrency import run_in_threadpool
 
-from catalog.api.dependencies import ClockDep, ControlEmitterDep, FgaClientDep, ResolvedTableDep, SettingsDep, StorageOptionsDep
+from catalog.api.dependencies import ClockDep, ControlEmitterDep, DoorTableDep, FgaClientDep, SettingsDep, StorageOptionsDep
 from catalog.api.pagination import paginate
 from catalog.api.security import CurrentToken
 from catalog.core.base_judge import BaseJudge
 from catalog.core.config import Settings, fresh_lance_session
 from catalog.core.identifiers import parse_identifier
-from catalog.core.namespace import disarm_every_ref, open_resolved_dataset
+from catalog.core.namespace import disarm_every_ref
 from catalog.schemas import ErasureRequest, ErasureVerifyRequest
 from catalog.services import erasure, erasure_obligations, erasure_release, table_claims
 from catalog.services.erasure import ErasureReport, PinRelease, SurfaceResult
@@ -81,7 +81,7 @@ TableOwnersDep = Annotated[TableOwners, Depends(get_table_owners)]
 async def erase_subject(
     id: str,
     body: ErasureRequest,
-    table: ResolvedTableDep,
+    table: DoorTableDep,
     settings: SettingsDep,
     so: StorageOptionsDep,
     clock: ClockDep,
@@ -106,8 +106,8 @@ async def erase_subject(
     """
     segments = parse_identifier(id)
     canonical = fga.canonical_object_id(segments)
-    table_uuid = table.require_uuid()
-    dataset = await run_in_threadpool(open_resolved_dataset, str(table.location), so, segments)
+    table_uuid = table.resolved.require_uuid()
+    dataset = await run_in_threadpool(table.open, so)
     await run_in_threadpool(erasure.plan, dataset, body.predicate)
     dataset = await run_in_threadpool(disarm_every_ref, dataset, segments)
     now = clock()
@@ -141,7 +141,7 @@ async def verify_erasure(
     id: str,
     obligation_id: str,
     body: ErasureVerifyRequest,
-    table: ResolvedTableDep,
+    table: DoorTableDep,
     settings: SettingsDep,
     so: StorageOptionsDep,
     control: ControlEmitterDep,
@@ -173,8 +173,8 @@ async def verify_erasure(
     canonical = fga.canonical_object_id(segments)
     control_root, control_options = settings.registry_root, settings.storage_options()
     obligation = await run_in_threadpool(erasure_obligations.read, control_root, control_options, obligation_id)
-    table_uuid = table.require_uuid()
-    dataset = await run_in_threadpool(open_resolved_dataset, str(table.location), so, segments)
+    table_uuid = table.resolved.require_uuid()
+    dataset = await run_in_threadpool(table.open, so)
     erasure_obligations.require_verifiable(obligation, table_uuid=table_uuid, location=str(dataset.uri), predicate=body.predicate)
     # The #114 pre-pass `version/create` and the GC door run, for the same reason: the evidence that another dataset
     # resolves its files through this one lives only on that dataset. Same bound too, one listing of the table's parent

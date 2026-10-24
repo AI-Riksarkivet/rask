@@ -11,9 +11,8 @@ error rendered as an RFC 9457 problem body, so a client dispatches on a code rat
 traceback. A 500 also says the wrong thing: it reads as "the catalog is broken" when the catalog is
 fine and the REGISTRATION is stale, which sends whoever is on call to the wrong system.
 
-`TableNotFoundError` is the same error this function already raises when the registration names no
-location at all. A registration naming a location with nothing behind it is the same fact, discovered
-one step later.
+So the open every door makes at its resolved location (`namespace.open_resolved_dataset`) answers a location with
+nothing behind it as `TableNotFoundError`: the table the name resolved to is not there.
 """
 
 from __future__ import annotations
@@ -24,8 +23,9 @@ from urllib.parse import urlparse
 import pyarrow as pa
 import pytest
 from lance_namespace import CreateNamespaceRequest, TableNotFoundError, connect
+from tables_by_name import open_by_name
 
-from catalog.core.namespace import open_dataset
+from catalog.core.namespace import open_resolved_dataset
 from catalog.services.dataplane import create_table
 
 
@@ -46,11 +46,11 @@ def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace, runtime-only
 
 def test_a_registration_whose_bytes_are_GONE_is_a_404(ns, tmp_path: Path) -> None:  # noqa: ANN001
     """The live shape: the table is registered, the location resolves, and nothing is there."""
-    uri = open_dataset(ns, {}, TABLE_ID).uri
+    uri = open_by_name(ns, {}, TABLE_ID).uri
     versions = Path(urlparse(uri).path) / "_versions"
     for f in versions.iterdir():
         f.unlink()
     versions.rmdir()
 
     with pytest.raises(TableNotFoundError, match=Path(urlparse(uri).path).name):
-        open_dataset(ns, {}, TABLE_ID)
+        open_resolved_dataset(uri, {}, TABLE_ID)

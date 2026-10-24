@@ -32,11 +32,11 @@ from lance_namespace import PermissionDeniedError
 
 from catalog.api import fga_deps
 from catalog.api.v1.endpoints import columns as ep
-from catalog.services.table_claims import ResolvedTable
+from catalog.services.table_claims import DoorTable, ResolvedTable
 from service_kit.governed.oidc import IDToken
 from service_kit.governed.person_identity import PersonPrincipal
 from service_kit.governed.principal import Principal
-from service_kit.lakehouse.location_claims import ClaimRead, LocationClaim
+from service_kit.lakehouse.location_claims import ClaimRead, ClaimStore, LocationClaim
 
 
 @pytest.fixture
@@ -82,8 +82,7 @@ def _call(updates: list[dict[str, Any]]) -> Any:
         ep.update_field_metadata(
             id="bronze$pages",
             body=cast("Any", body),
-            ns=cast("Any", object()),
-            table=_RESOLVED,
+            table=DoorTable(cast("Any", object()), ClaimStore(control_root="/unread"), _RESOLVED),
             settings=cast("Any", SimpleNamespace(fga_enabled=True)),
             so=cast("Any", {}),
             token=PersonPrincipal(principal=Principal(idp_id="dex", subject="alice"), claims=IDToken(iss="i", sub="alice", aud="lance", exp=1, iat=1)),

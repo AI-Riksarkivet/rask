@@ -38,20 +38,22 @@ import pyarrow as pa
 
 from catalog.api import pagination
 from catalog.api.v1.endpoints import versions as versions_ep
+from catalog.services import table_claims
+from service_kit.lakehouse.location_claims import ClaimStore
 
 
-def _table_with(version_count: int) -> tuple[Any, str]:
-    """A real `dir` namespace over a table with ``version_count`` versions."""
+def _table_with(version_count: int) -> table_claims.DoorTable:
+    """A table with ``version_count`` versions on a real `dir` namespace, as the listing door resolves it."""
     root = tempfile.mkdtemp()
     uri = str(pathlib.Path(root) / "t.lance")
     lance.write_dataset(pa.table({"id": [1]}), uri)
     for value in range(2, version_count + 1):
         lance.write_dataset(pa.table({"id": [value]}), uri, mode="append")
-    return ln.connect("dir", {"root": root}), "t"
+    return table_claims.door_table(ln.connect("dir", {"root": root}), ClaimStore(control_root=str(pathlib.Path(root) / "control")), ["t"])
 
 
-def _list(ns: Any, table: str, **kwargs: Any) -> Any:
-    return versions_ep.list_table_versions(table, ns, **kwargs)
+def _list(table: table_claims.DoorTable, **kwargs: Any) -> Any:
+    return versions_ep.list_table_versions("t", table, **kwargs)
 
 
 def test_descending_pages_downward_and_its_cursor_follows() -> None:
@@ -65,16 +67,16 @@ def test_descending_pages_downward_and_its_cursor_follows() -> None:
 
 def test_paging_twice_over_a_REAL_table_gets_different_rows() -> None:
     """THE GATE, and the test this row asked for. Driven against the `dir` backend, not a double."""
-    ns, table = _table_with(7)
+    table = _table_with(7)
 
-    first = _list(ns, table, limit=3)
+    first = _list(table, limit=3)
     served = [v.version for v in (first.versions or [])]
     assert served == [1, 2, 3]
     assert first.page_token is not None, "a listing with four more versions behind it reported itself complete"
 
-    second = _list(ns, table, limit=3, page_token=first.page_token)
+    second = _list(table, limit=3, page_token=first.page_token)
     assert [v.version for v in (second.versions or [])] == [4, 5, 6], "the second page repeated the first"
 
-    third = _list(ns, table, limit=3, page_token=second.page_token)
+    third = _list(table, limit=3, page_token=second.page_token)
     assert [v.version for v in (third.versions or [])] == [7]
     assert third.page_token is None, "the last page must say so, or the caller pages forever"

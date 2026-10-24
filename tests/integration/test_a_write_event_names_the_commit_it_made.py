@@ -259,7 +259,11 @@ def test_a_branch_lookup_that_walks_past_the_branch_point_finds_nothing_and_rais
     assert real_ns_client.post(f"/v1/table/{TABLE}/insert?branch={BRANCH}", content=_ipc(_rows(9)), headers=ARROW).status_code == 200
     ns = connect("dir", {"root": str(tmp_path)})
 
-    assert dataplane.committed_version(ns, {}, ["lh214", "t"], "00000000-0000-0000-0000-000000000000", branch=BRANCH) is None
+    from catalog.core.config import get_settings
+    from catalog.services import table_claims
+
+    table = table_claims.door_table(ns, table_claims.claim_store(get_settings()), ["lh214", "t"])
+    assert dataplane.committed_version(table, {}, "00000000-0000-0000-0000-000000000000", branch=BRANCH) is None
 
 
 def test_every_event_names_the_table_and_its_namespace_by_their_uuids(

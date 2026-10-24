@@ -34,6 +34,8 @@ def test_a_concurrent_FIRST_publication_converges_instead_of_409ing(monkeypatch)
     from lance_namespace import TableTagAlreadyExistsError
 
     from catalog.services import publication
+    from catalog.services.table_claims import DoorTable, ResolvedTable
+    from service_kit.lakehouse.location_claims import ClaimStore
 
     calls: list[str] = []
 
@@ -51,6 +53,7 @@ def test_a_concurrent_FIRST_publication_converges_instead_of_409ing(monkeypatch)
     monkeypatch.setattr(publication.dataplane, "create_tag", _create)
     monkeypatch.setattr(publication.dataplane, "update_tag", _update)
 
-    publication.set_tag(cast("Any", None), {}, ["acme", "silver", "features"], "published", 7)
+    table = DoorTable(cast("Any", None), ClaimStore(control_root="/unread"), ResolvedTable(segments=["acme", "silver", "features"]))
+    publication.set_tag(table, {}, "published", 7)
 
     assert calls == ["create", "update"], f"the lost race was not converged: {calls}"

@@ -48,6 +48,7 @@ from catalog.api import fga_deps, lineage_deps, listings
 from catalog.api import idempotency as idem
 from catalog.api.dependencies import (
     ControlEmitterDep,
+    DoorTableDep,
     FgaClientDep,
     LineageEmitterDep,
     NamespaceDep,
@@ -79,7 +80,7 @@ from catalog.core.lineage_emit import (
     emit_write_event,
 )
 from catalog.core.modes import RegisterMode
-from catalog.core.namespace import judged_native_version, open_dataset_unchecked, registered_dataset_facts, warn_if_mixed_file_versions
+from catalog.core.namespace import judged_for_native_read, open_resolved_dataset_unchecked, registered_dataset_facts, warn_if_mixed_file_versions
 from catalog.core.vending import (
     CredentialVendor,
     ModeBVendor,
@@ -92,7 +93,7 @@ from catalog.core.vending import (
 )
 from catalog.schemas import ProtectionResponse, SetProtectionRequest, TrashEntry
 from catalog.services import dataplane, native, table_bases, table_claims, trash_doors, warehouses
-from catalog.services.table_claims import ResolvedTable
+from catalog.services.table_claims import DoorTable, ResolvedTable
 from service_kit.control_emit import ControlEmitter, emit_control
 from service_kit.governed import fga
 from service_kit.governed.audit import SUCCESS, audit
@@ -469,7 +470,7 @@ def _refuse_a_branch_describe_cannot_honour(branch: str | None) -> None:
     """Refuse a branch this door cannot describe — with the code its fifteen siblings use.
 
     THIS DOOR DESCRIBES MAIN. `describe_table` answers off the namespace manifest, which has no branch
-    selector, and the branch-aware read lives in the dataplane (`open_dataset(branch=...)`). Refusing is
+    selector, and the branch-aware read lives in the dataplane (`DoorTable.open(branch=...)`). Refusing is
     the point: SILENTLY describing main for a caller who pinned a branch is the same class of
     wrong-but-plausible answer as the ignored `version` this door used to give.
 
@@ -497,7 +498,7 @@ def _refuse_a_branch_describe_cannot_honour(branch: str | None) -> None:
 @router.post("/{id}/describe", response_model_exclude_none=True)
 async def describe_table(
     id: str,
-    ns: NamespaceDep,
+    table: DoorTableDep,
     settings: SettingsDep,
     so: StorageOptionsDep,
     vendor: VendorDep,
@@ -573,10 +574,8 @@ async def describe_table(
         raise InvalidInputError("`tag` cannot be used together with `version` (spec 0.9)")
     response = await run_in_threadpool(
         _describe,
-        ns,
+        table,
         so,
-        segments,
-        claims=table_claims.claim_store(settings),
         with_table_uri=with_table_uri,
         load_detailed_metadata=load_detailed_metadata,
         check_declared=check_declared,
@@ -590,7 +589,7 @@ async def describe_table(
         if table_uuid is None:
             raise InternalError(f"table {segments} answers no uuid, so no credential can be vended for it")
         response.storage_options = await _vend_on_spec_door(
-            ns,
+            table.namespace,
             door="describe",
             segments=segments,
             table_uuid=table_uuid,
@@ -606,11 +605,9 @@ async def describe_table(
 
 
 def _describe(
-    ns: LanceNamespace,
+    table: DoorTable,
     so: dict[str, str],
-    segments: list[str],
     *,
-    claims: location_claims.ClaimStore,
     with_table_uri: bool | None,
     load_detailed_metadata: bool | None,
     check_declared: bool | None,
@@ -623,35 +620,44 @@ def _describe(
     ``rask.uuid`` property, which no door lets a caller set. It is read, never minted here, so every describe of
     the table answers the same one.
 
+    THE DESCRIBE IS THE ACT, so it answers for the name's resolution ([[LH-530]]): every open it makes is at the door's
+    location, and the answer stands only when its own describe found the name there, under the claim the resolution
+    read (``DoorTable.require_described_at``); a failure is told the change first, as every door's open is.
+
     WHETHER THE TABLE IS ONLY DECLARED IS THE CATALOG'S JUDGMENT ([[LH-528]]), and so is the detailed metadata that rides
     on it. The backend is asked only for the plain describe: its own verdict misjudges a table registered at a nested
     location, and with ``load_detailed_metadata`` it then answers no version and no schema
     (``dataplane.holds_a_version``). ``is_only_declared`` is answered when ``check_declared`` or ``load_detailed_metadata``
     asks for it, as the spec says (`lance_docs/ns_catalog/spec.yaml:2926-2934`).
     """
-    if tag is not None:
-        version = dataplane.get_tag_version(ns, so, GetTableTagVersionRequest(id=segments, tag=tag)).version
-    # A VERSION THAT DOES NOT EXIST MUST NOT DESCRIBE THE ONE THAT DOES. `describe_table` answers off
-    # the namespace manifest and does not resolve the pin, so `?version=9999` on a two-version table
-    # returned 200 with byte-identical metadata (verified live 2026-08-31) — a caller probing whether
-    # a version exists is told yes about every number they try. Opening the pinned dataset is what
-    # mints the spec's own error 11 `TableVersionNotFound`; the open runs ONLY when a version was
-    # named, so the unpinned describe every client makes is untouched.
-    pinned = open_dataset_unchecked(ns, so, segments, version=version) if version is not None else None
-    response: DescribeTableResponse = native.call(ns, "describe_table", DescribeTableRequest(id=segments, with_table_uri=with_table_uri, version=version))
-    if response.location and load_detailed_metadata:
-        _load_or_judge_declared(response, ns, so, segments, pinned=pinned)
-    elif response.location and check_declared:
-        response.is_only_declared = not dataplane.holds_a_version(response.location, so)
-    claim = location_claims.holder(claims, response.location) if response.location else None
-    if claim is not None and claim.uuid is not None:
-        response.properties = {**(response.properties or {}), UUID_PROPERTY: claim.uuid}
+    segments = table.segments
+    try:
+        if tag is not None:
+            version = dataplane.get_tag_version(table, so, GetTableTagVersionRequest(id=segments, tag=tag)).version
+        # A VERSION THAT DOES NOT EXIST MUST NOT DESCRIBE THE ONE THAT DOES. `describe_table` answers off
+        # the namespace manifest and does not resolve the pin, so `?version=9999` on a two-version table
+        # returned 200 with byte-identical metadata (verified live 2026-08-31) — a caller probing whether
+        # a version exists is told yes about every number they try. Opening the pinned dataset is what
+        # mints the spec's own error 11 `TableVersionNotFound`; the open runs ONLY when a version was
+        # named, so the unpinned describe every client makes is untouched.
+        pinned = open_resolved_dataset_unchecked(table.location, so, segments, version=version) if version is not None else None
+        response: DescribeTableResponse = native.call(
+            table.namespace, "describe_table", DescribeTableRequest(id=segments, with_table_uri=with_table_uri, version=version)
+        )
+        if response.location and load_detailed_metadata:
+            _load_or_judge_declared(response, table, so, pinned=pinned)
+        elif response.location and check_declared:
+            response.is_only_declared = not dataplane.holds_a_version(response.location, so)
+    except Exception:
+        table.require_named()
+        raise
+    table.require_described_at(response.location)
+    if (uuid := table.resolved.uuid) is not None:
+        response.properties = {**(response.properties or {}), UUID_PROPERTY: uuid}
     return response
 
 
-def _load_or_judge_declared(
-    response: DescribeTableResponse, ns: LanceNamespace, so: dict[str, str], segments: list[str], *, pinned: lance.LanceDataset | None
-) -> None:
+def _load_or_judge_declared(response: DescribeTableResponse, table: DoorTable, so: dict[str, str], *, pinned: lance.LanceDataset | None) -> None:
     """Load the table's detailed metadata onto ``response`` from one open, and judge whether it is only declared by it.
 
     Lance finds a table's latest version by listing its ``_versions/`` on every open, and the store answers that listing
@@ -666,7 +672,7 @@ def _load_or_judge_declared(
         dataset = pinned
     else:
         try:
-            dataset = open_dataset_unchecked(ns, so, segments)
+            dataset = open_resolved_dataset_unchecked(table.location, so, table.segments)
         except TableNotFoundError:
             if dataplane.holds_a_version(str(response.location), so):
                 raise
@@ -695,10 +701,13 @@ def _load_detailed_metadata(response: DescribeTableResponse, dataset: lance.Lanc
 #: bytes `null`, which a strict client reads as a JSON document where the contract promised none.
 #: `response_class=Response` is what makes FastAPI emit nothing; `status_code=200` alone does not.
 @router.post("/{id}/exists", status_code=200, response_class=Response)
-def table_exists(id: str, ns: NamespaceDep, body: TableExistsRequest | None = None) -> Response:
-    """Check the table at ``id`` exists via ``table_exists`` — 200 if present (spec 0.9), else error."""
+def table_exists(id: str, table: DoorTableDep, body: TableExistsRequest | None = None) -> Response:
+    """Check the table at ``id`` exists via ``table_exists`` — 200 if present (spec 0.9), else error.
+
+    The answer is about the table the request resolved, so it stands only while the name still resolves there ([[LH-530]]).
+    """
     segments = reconcile_body_id(parse_identifier(id), body.id if body else None)
-    native.call(ns, "table_exists", TableExistsRequest(id=segments, version=body.version if body else None))
+    table.read_natively("table_exists", TableExistsRequest(id=segments, version=body.version if body else None))
     return Response(status_code=200)
 
 
@@ -1647,7 +1656,7 @@ async def rename_table(
 async def restore_table(
     id: str,
     body: RestoreTableRequest,
-    ns: NamespaceDep,
+    table: DoorTableDep,
     settings: SettingsDep,
     so: StorageOptionsDep,
     token: CurrentToken,
@@ -1666,20 +1675,17 @@ async def restore_table(
 
     segments = parse_identifier(id)
     body.id = reconcile_body_id(segments, body.id)
-    # THE BRANCH IS SERVED, and the upstream op is what serves it: measured on pylance 12.0.0, the `dir`
-    # `restore_table` restores the named ref (a branch at v3 restored to v2 went to v4, main kept its
-    # version). It reports a missing branch as TableNotFound (code 4) with a storage path in the text, so
-    # the ref is opened here first: a missing branch answers 22 and a version the branch lacks answers
-    # 11, the codes `_open_ref` mints for every other door. Unchecked, because a restore reads no row.
-    if body.branch is not None:
-        await run_in_threadpool(partial(open_dataset_unchecked, ns, so, segments, version=body.version, branch=body.branch))
+    # THE BRANCH IS SERVED: `dataplane.restore` opens the ref named at the door's location, where a missing branch
+    # answers 22 and a version the branch lacks answers 11, the codes `_open_ref` mints for every other door, and
+    # restores through that handle, which commits on the ref it is on (measured on pylance 13.0.0: a branch restored
+    # to an earlier version took a new version of its own, and main kept its version).
     # The event names the version THAT restore committed on the ref it restored, and the shared trailer reads
-    # its schema off one pinned open (best-effort: a lookup or readback failure never fails the committed restore).
-    response, committed = await run_in_threadpool(dataplane.restore, ns, so, body)
+    # its schema off one pinned open (best-effort: a readback failure never fails the committed restore).
+    response, committed = await run_in_threadpool(dataplane.restore, table, so, body)
     await lineage_deps.emit_measured_write(
         emitter,
         segments,
-        ns=ns,
+        location=table.location,
         so=so,
         token=token,
         operation=RESTORE_TABLE,
@@ -1695,7 +1701,7 @@ async def restore_table(
 @router.post("/{id}/stats", response_model_exclude_none=True)
 def get_table_stats(
     id: str,
-    ns: NamespaceDep,
+    table: DoorTableDep,
     so: StorageOptionsDep,
     body: GetTableStatsRequest | None = None,
     branch: Annotated[
@@ -1725,5 +1731,6 @@ def get_table_stats(
     dataplane.refuse_a_branch_this_door_cannot_honour(branch, door="get_table_stats")
     # The request carries no version to pin, so a base planted between this judgement and the native
     # open is read unjudged; the window is the two opens apart ([[LH-279]]).
-    judged_native_version(ns, so, segments, version=None)
-    return native.call(ns, "get_table_stats", req)
+    judged_for_native_read(table.open(so), so, table.segments)
+    stats = table.read_natively("get_table_stats", req)
+    return stats

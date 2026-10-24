@@ -31,13 +31,13 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from lance_namespace import CreateNamespaceRequest, LanceNamespace
+from tables_by_name import open_by_name
 
 from catalog.api.dependencies import get_namespace, get_storage_options
 from catalog.api.v1.endpoints import erasure as door
 from catalog.core import base_judge
 from catalog.core.config import Settings, get_settings
 from catalog.core.identifiers import with_minted_uuid
-from catalog.core.namespace import open_dataset
 from catalog.services.dataplane import create_table, read_arrow_body
 from catalog.services.erasure import ErasureReport, ref_heads, verify
 from service_kit.lakehouse import base_registry
@@ -567,14 +567,14 @@ def _table(root: Path, first: pa.Table, *more: pa.Table) -> LanceNamespace:
     registry = base_registry.BaseRegistry(control_root=str(_control(root)))
     create_table(ns, {}, _TABLE_ID, body, root=str(root), mode="create", registry=registry, holder="$".join(_TABLE_ID))
     for batch in more:
-        open_dataset(ns, {}, _TABLE_ID).insert(batch)
+        open_by_name(ns, {}, _TABLE_ID).insert(batch)
     return ns
 
 
 def _namespace(root: Path) -> LanceNamespace:
     ns = _table(root, _rows("bob"), _rows(_SUBJECT))
-    open_dataset(ns, {}, _TABLE_ID).tags.create("snap", 2)
-    open_dataset(ns, {}, _TABLE_ID).create_branch("work", 2)
+    open_by_name(ns, {}, _TABLE_ID).tags.create("snap", 2)
+    open_by_name(ns, {}, _TABLE_ID).create_branch("work", 2)
     return ns
 
 
@@ -614,7 +614,7 @@ def _recorded(namespace: LanceNamespace, settings: Settings, erasure_job: Any) -
     with _door(namespace, settings) as client:
         recorded = client.post("/management/v1/table/db$subjects/erasure", json={"predicate": _PREDICATE})
     assert recorded.status_code == 202, recorded.text
-    erasure_job(open_dataset(namespace, {}, _TABLE_ID).uri, _PREDICATE).run()
+    erasure_job(open_by_name(namespace, {}, _TABLE_ID).uri, _PREDICATE).run()
     return str(recorded.json()["obligation_id"])
 
 
@@ -665,7 +665,7 @@ def _indexed(kind: Literal["BTREE", "BITMAP"]) -> Callable[[Path], LanceNamespac
 
     def build(root: Path) -> LanceNamespace:
         ns = _table(root, _UNDER_THE_THRESHOLD)
-        open_dataset(ns, {}, _TABLE_ID).create_scalar_index("pii", kind)
+        open_by_name(ns, {}, _TABLE_ID).create_scalar_index("pii", kind)
         return ns
 
     return build
@@ -727,7 +727,7 @@ def _external_payloads_deleted_first(compacted: bool) -> Callable[[Path], LanceN
 
     def build(root: Path) -> LanceNamespace:
         ns = _external_payloads(root)
-        dataset = open_dataset(ns, {}, _TABLE_ID)
+        dataset = open_by_name(ns, {}, _TABLE_ID)
         dataset.delete(f"pii = '{_IDENTIFIER}'")
         if compacted:
             dataset.optimize.compact_files(materialize_deletions_threshold=0.0)
@@ -740,7 +740,7 @@ def _tagged_before_the_subject_arrived(root: Path) -> LanceNamespace:
     """A run's tag names a BTREE-indexed version the subject never touched; it arrives after, and the index
     is optimized over it."""
     ns = _table(root, _rows(*(f"person-{i}" for i in range(20))))
-    dataset = open_dataset(ns, {}, _TABLE_ID)
+    dataset = open_by_name(ns, {}, _TABLE_ID)
     dataset.create_scalar_index("pii", "BTREE")
     dataset.tags.create("trained", dataset.version)
     dataset.insert(_rows(_IDENTIFIER))
@@ -751,9 +751,9 @@ def _tagged_before_the_subject_arrived(root: Path) -> LanceNamespace:
 def _through_a_mem_wal_shard(root: Path) -> LanceNamespace:
     """The subject arrives through a MemWAL shard writer, so the base table never holds it."""
     ns = _table(root, _rows(*(f"person-{i}" for i in range(19))))
-    dataset = open_dataset(ns, {}, _TABLE_ID)
+    dataset = open_by_name(ns, {}, _TABLE_ID)
     dataset.initialize_mem_wal(unsharded=True)
-    writer = open_dataset(ns, {}, _TABLE_ID).mem_wal_writer("6f1d9a52-3c1e-4c5e-9a43-0b6f3c2d7e10")
+    writer = open_by_name(ns, {}, _TABLE_ID).mem_wal_writer("6f1d9a52-3c1e-4c5e-9a43-0b6f3c2d7e10")
     writer.put(_rows(_IDENTIFIER))
     writer.close()
     return ns
@@ -763,7 +763,7 @@ def _tagged_over_a_stale_index_segment(root: Path) -> LanceNamespace:
     """The delete door and a materialising compaction removed the subject's row and kept the BTREE segment
     holding its key, cleanup reclaimed every earlier version, and a run's tag names the result."""
     ns = _indexed("BTREE")(root)
-    dataset = open_dataset(ns, {}, _TABLE_ID)
+    dataset = open_by_name(ns, {}, _TABLE_ID)
     dataset.delete(f"pii = '{_IDENTIFIER}'")
     dataset.optimize.compact_files(materialize_deletions_threshold=0.0)
     dataset.cleanup_old_versions(timedelta(0))
@@ -774,8 +774,8 @@ def _tagged_over_a_stale_index_segment(root: Path) -> LanceNamespace:
 def _tagged_after_a_plain_delete(root: Path) -> LanceNamespace:
     """The delete door removed the subject at v2, behind a deletion vector, and a run's tag names v2."""
     ns = _table(root, _UNDER_THE_THRESHOLD)
-    open_dataset(ns, {}, _TABLE_ID).delete(f"pii = '{_IDENTIFIER}'")
-    open_dataset(ns, {}, _TABLE_ID).tags.create("trained", 2)
+    open_by_name(ns, {}, _TABLE_ID).delete(f"pii = '{_IDENTIFIER}'")
+    open_by_name(ns, {}, _TABLE_ID).tags.create("trained", 2)
     return ns
 
 
@@ -841,7 +841,7 @@ def test_no_object_under_the_table_root_holds_the_identifier_or_the_report_names
         with _door(namespace, settings) as client:
             recorded = client.post("/management/v1/table/db$subjects/erasure", json={"predicate": predicate})
             assert recorded.status_code == 202, recorded.text
-            job = erasure_job(open_dataset(namespace, {}, _TABLE_ID).uri, predicate)
+            job = erasure_job(open_by_name(namespace, {}, _TABLE_ID).uri, predicate)
             job.delete()
             if compacts:
                 job.compact()
@@ -883,7 +883,7 @@ def test_a_predicate_lance_refuses_answers_400_and_records_nothing(tmp_path: Pat
     probe and reclaimed history ([[LH-210]]), and a predicate Lance parses but cannot evaluate answered
     as a store fault. The door plans the predicate before it records an obligation no job could fulfil."""
     ns = _namespace(tmp_path / "data")
-    location = open_dataset(ns, {}, _TABLE_ID).uri
+    location = open_by_name(ns, {}, _TABLE_ID).uri
     before = _history(location)
     with _door(ns, _settings(tmp_path)) as client:
         response = client.post("/management/v1/table/db$subjects/erasure", json={"predicate": predicate})

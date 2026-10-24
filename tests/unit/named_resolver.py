@@ -4,12 +4,14 @@ seam of the catalog directly rather than through a request.
 Through a request the catalog resolves each name once (``catalog.api.dependencies.Resolver``) through the namespace
 connection it routes to. A test whose claim is about which relation is asked, not about the resolution, passes this
 one: ``uuid_of`` names the uuid it answers, so an assertion can say which object a check reached, and ``absent`` names
-the names that hold no object.
+the names that hold no object. A test driving a door through a request passes ``tables`` as well: the door acts on the
+location its table's resolution read ([[LH-530]]), so that resolution is the one the test's own backend describes.
 """
 
 from __future__ import annotations
 
 import uuid
+from collections.abc import Callable
 from typing import Any, override
 
 from lance_namespace import LanceNamespace
@@ -28,13 +30,21 @@ class NamedResolver(Resolver):
     for each name in ``in_trash``, under the same uuid; no store is read. Every public method is answered here, so
     nothing inherited reads the request or settings a real resolver is built with."""
 
-    def __init__(self, absent: frozenset[tuple[str, ...]] = frozenset(), in_trash: frozenset[tuple[str, ...]] = frozenset()) -> None:
+    def __init__(
+        self,
+        absent: frozenset[tuple[str, ...]] = frozenset(),
+        in_trash: frozenset[tuple[str, ...]] = frozenset(),
+        tables: Callable[[list[str]], ResolvedTable] | None = None,
+    ) -> None:
         self._absent = absent
         self._in_trash = in_trash
+        self._table_answer = tables
         self._admitted_trash: dict[tuple[str, tuple[str, ...]], list[dict[str, Any]]] = {}
 
     @override
     async def table(self, segments: list[str], *, ns: LanceNamespace | None = None) -> ResolvedTable:
+        if self._table_answer is not None:
+            return self._table_answer(segments)
         return (
             ResolvedTable(segments=segments)
             if tuple(segments) in self._absent

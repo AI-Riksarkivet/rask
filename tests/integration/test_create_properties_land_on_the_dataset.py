@@ -68,7 +68,7 @@ def test_a_property_set_at_create_is_readable_off_the_table(real_ns: LanceNamesp
         transaction_properties=run,
     )
 
-    stored = dataplane.read_schema_metadata(real_ns, {}, ["db", "props_at_create"])
+    stored = dataplane.user_schema_metadata(lance.dataset(str(created.location)).schema)
 
     assert stored.get("owner") == "team-a", f"the property never reached the dataset: {stored}"
     assert stored.get("tier") == "gold", f"the property never reached the dataset: {stored}"
@@ -83,6 +83,6 @@ def test_a_property_set_at_create_is_readable_off_the_table(real_ns: LanceNamesp
 
 def test_creating_without_properties_writes_no_metadata(real_ns: LanceNamespace, tmp_path: Path) -> None:
     """A create that names nothing must not invent a key — the boundary the merge could get wrong."""
-    dataplane.create_table(real_ns, {}, ["db", "no_props"], _table(), root=str(tmp_path), registry=None)
+    created = dataplane.create_table(real_ns, {}, ["db", "no_props"], _table(), root=str(tmp_path), registry=None)
 
-    assert dataplane.read_schema_metadata(real_ns, {}, ["db", "no_props"]) == {}
+    assert dataplane.user_schema_metadata(lance.dataset(str(created.location)).schema) == {}

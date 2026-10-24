@@ -16,7 +16,7 @@ while the parent's `data/` stayed byte-identical and still time-travelled to v1.
 and that layout is what contains the reclaim.
 
 THE ASSERTION IS ON WHAT WAS DESTROYED, not on the call, and the last leg is the one that matters: a
-door that opened the branch and then reclaimed main would satisfy a spy on `open_dataset` and still be
+door that opened the branch and then reclaimed main would satisfy a spy on the open and still be
 the irreversible defect. So the parent's data files are counted before and after.
 """
 
@@ -34,11 +34,11 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from lance_namespace import CreateNamespaceRequest, LanceNamespace
+from tables_by_name import open_by_name
 
 from catalog.api.dependencies import get_namespace, get_storage_options
 from catalog.api.v1.endpoints import maintenance as door
 from catalog.core.config import Settings, get_settings
-from catalog.core.namespace import open_dataset
 from catalog.services.dataplane import create_table
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 
@@ -65,18 +65,18 @@ def namespace(tmp_path: Path) -> LanceNamespace:
     ns = lance_namespace.connect("dir", {"root": str(tmp_path / "data")})
     ns.create_namespace(CreateNamespaceRequest(id=TABLE_ID[:-1]))
     create_table(ns, {}, TABLE_ID, _rows(1), root=str(tmp_path / "data"), mode="create", registry=None)
-    open_dataset(ns, {}, TABLE_ID).insert(_rows(1, start=1))
-    lance.write_dataset(_rows(1, start=2), str(open_dataset(ns, {}, TABLE_ID).uri), mode="overwrite")
-    open_dataset(ns, {}, TABLE_ID).create_branch(BRANCH, None)
-    branch = open_dataset(ns, {}, TABLE_ID, branch=BRANCH)
+    open_by_name(ns, {}, TABLE_ID).insert(_rows(1, start=1))
+    lance.write_dataset(_rows(1, start=2), str(open_by_name(ns, {}, TABLE_ID).uri), mode="overwrite")
+    open_by_name(ns, {}, TABLE_ID).create_branch(BRANCH, None)
+    branch = open_by_name(ns, {}, TABLE_ID, branch=BRANCH)
     for i in range(3, 9):
         branch.insert(_rows(1, start=i))
     return ns
 
 
 @pytest.fixture
-def client(namespace: LanceNamespace) -> Iterator[TestClient]:
-    settings = Settings(LANCE_S3_ACCESS_KEY_ID="k", LANCE_S3_SECRET_ACCESS_KEY="s")
+def client(namespace: LanceNamespace, tmp_path: Path) -> Iterator[TestClient]:
+    settings = Settings(LANCE_S3_ACCESS_KEY_ID="k", LANCE_S3_SECRET_ACCESS_KEY="s", LANCE_CONTROL_ROOT=str(tmp_path / "control"))
     application = FastAPI()
     install_problem_handlers(application, logging.getLogger(__name__))
     application.include_router(door.router)
@@ -95,7 +95,7 @@ def _run(client: TestClient, *, branch: str | None) -> dict[str, Any]:
 
 
 def _parent_data_files(namespace: LanceNamespace) -> list[str]:
-    root = Path(urlparse(open_dataset(namespace, {}, TABLE_ID).uri).path) / "data"
+    root = Path(urlparse(open_by_name(namespace, {}, TABLE_ID).uri).path) / "data"
     return sorted(entry.name for entry in root.iterdir())
 
 
@@ -106,4 +106,4 @@ def test_a_branch_reclaim_leaves_the_PARENTS_data_files_alone(client: TestClient
     _run(client, branch=BRANCH)
 
     assert _parent_data_files(namespace) == before, f"a branch reclaim deleted parent data files: {set(before) - set(_parent_data_files(namespace))}"
-    assert open_dataset(namespace, {}, TABLE_ID, version=1).count_rows() == 1, "main no longer time-travels to v1"
+    assert open_by_name(namespace, {}, TABLE_ID, version=1).count_rows() == 1, "main no longer time-travels to v1"

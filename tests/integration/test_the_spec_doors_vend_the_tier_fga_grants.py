@@ -29,6 +29,7 @@ from lance_namespace import DeclareTableResponse, DescribeNamespaceResponse
 from catalog.api.dependencies import get_resolver, get_vendor
 from catalog.core.config import Settings, get_settings
 from catalog.core.vending import VendedCredentials
+from catalog.services import table_claims
 from service_kit.governed import fga as fga_module
 from service_kit.governed.oidc import IDToken
 from service_kit.governed.person_identity import PersonPrincipal
@@ -56,10 +57,12 @@ def vendor(client: TestClient, fake_ns: MagicMock, claim_described: Callable[[st
     """Alice signed in with FGA on, and a vendor that records each tier it is asked for.
 
     Every name holds an object (``NamedResolver``): the claim is which tier a grant opens, not how a name resolves. The
-    table's location carries the claim recording its uuid, which its credential is scoped by (ADR 0173 §6).
+    table resolves to the location ``fake_ns`` describes, whose claim records its uuid, which its credential is scoped
+    by (ADR 0173 §6).
     """
     client.app.dependency_overrides[get_settings] = _auth_settings
-    client.app.dependency_overrides[get_resolver] = lambda: NamedResolver()
+    claims = table_claims.claim_store(_auth_settings())
+    client.app.dependency_overrides[get_resolver] = lambda: NamedResolver(tables=lambda segments: table_claims.resolve(fake_ns, claims, segments))
     claim_described("db$t")
     verifier = MagicMock()
     verifier.verify.return_value = PersonPrincipal(

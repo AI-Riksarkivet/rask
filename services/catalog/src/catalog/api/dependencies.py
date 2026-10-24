@@ -27,7 +27,7 @@ from catalog.core.namespace import NamespaceConnections
 from catalog.core.run_context import RunContext
 from catalog.core.vending import CredentialVendor, ModeBVendor
 from catalog.services import object_uuids, table_claims, warehouses
-from catalog.services.table_claims import ResolvedTable
+from catalog.services.table_claims import DoorTable, ResolvedTable
 from service_kit.control_emit import ControlEmitter, NoopControlEmitter
 from service_kit.control_events import CatalogControlEvent, ControlUuids
 from service_kit.governed import fga
@@ -392,6 +392,14 @@ async def get_resolved_table(request: Request, ns: NamespaceDep, resolver: Resol
 
 
 ResolvedTableDep = Annotated[ResolvedTable, Depends(get_resolved_table)]
+
+
+def get_door_table(ns: NamespaceDep, settings: SettingsDep, resolved: ResolvedTableDep) -> DoorTable:
+    """The table the request's ``{id}`` resolved to, as a door reading or writing its data or metadata acts on it ([[LH-530]])."""
+    return DoorTable(ns, table_claims.claim_store(settings), resolved)
+
+
+DoorTableDep = Annotated[DoorTable, Depends(get_door_table)]
 
 
 async def get_data_namespace(request: Request, settings: SettingsDep, ns: NamespaceDep) -> LanceNamespace:

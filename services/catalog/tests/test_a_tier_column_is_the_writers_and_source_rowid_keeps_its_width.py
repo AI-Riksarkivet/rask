@@ -29,12 +29,14 @@ from catalog.api.security import CurrentToken
 from catalog.api.v1.endpoints import publication as door
 from catalog.core.identifiers import with_minted_uuid
 from catalog.core.lineage_emit import NoopEmitter
+from catalog.services import table_claims
 from catalog.services.dataplane import create_table
 from catalog.services.publication import published_version
 from service_kit.governed.oidc import IDToken
 from service_kit.governed.person_identity import PersonPrincipal
 from service_kit.governed.principal import Principal
 from service_kit.lakehouse.base_registry import BaseRegistry
+from service_kit.lakehouse.location_claims import ClaimStore
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
@@ -111,7 +113,7 @@ def test_a_tier_without_stage_or_lineage_publishes_and_keeps_its_source_rowid(tm
 
     assert (response.status_code, response.json().get("published")) == (200, True), response.text
     location = namespace.describe_table(DescribeTableRequest(id=TABLE_ID)).location
-    published = lance.dataset(location, version=published_version(namespace, {}, TABLE_ID))
+    published = lance.dataset(location, version=published_version(table_claims.door_table(namespace, ClaimStore(control_root=registry_root), TABLE_ID), {}))
     assert published.to_table(columns=["source_rowid"]).column(0).to_pylist() == [11, 12, 13]
 
 
@@ -121,4 +123,6 @@ def test_a_source_rowid_of_the_wrong_width_is_refused(tmp_path: Path, monkeypatc
     response = _publish(client, key_column="id")
 
     assert (response.status_code, "uint64" in response.text) == (400, True), response.text
-    assert published_version(namespace, {}, TABLE_ID) is None, "the refusal must be fail-closed — nothing may be pointed at"
+    assert published_version(table_claims.door_table(namespace, ClaimStore(control_root=registry_root), TABLE_ID), {}) is None, (
+        "the refusal must be fail-closed — nothing may be pointed at"
+    )

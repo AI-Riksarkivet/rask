@@ -28,17 +28,25 @@ def _ipc(table: pa.Table) -> bytes:
     return sink.getvalue().to_pybytes()
 
 
-def _target(monkeypatch: pytest.MonkeyPatch, schema: pa.Schema) -> None:
-    monkeypatch.setattr(dataplane, "open_dataset", lambda *_a, **_k: SimpleNamespace(schema=schema))
+class _Table:
+    """The door's table, answering the schema the coercion aligns to: the only thing the coercion reads of it."""
+
+    segments = ["hunt", "t"]
+
+    def __init__(self, schema: pa.Schema) -> None:
+        self._schema = schema
+
+    def open(self, so: Any, *, version: int | None = None, branch: str | None = None) -> Any:  # noqa: ANN401 — a handle's schema is all that is read
+        return SimpleNamespace(schema=self._schema)
 
 
-def _coerce(data: bytes) -> pa.Table:
-    out = dataplane.coerce_insert_arrow(cast(Any, None), cast(Any, {}), ["hunt", "t"], data, max_bytes=_BODY_LIMIT)
+def _coerce(table: _Table, data: bytes) -> pa.Table:
+    out = dataplane.coerce_insert_arrow(cast(Any, table), cast(Any, {}), data, max_bytes=_BODY_LIMIT)
     return pa.ipc.open_stream(out).read_all()
 
 
-def test_reorders_and_drops_extra_columns(monkeypatch: pytest.MonkeyPatch) -> None:
-    _target(monkeypatch, pa.schema([("id", pa.int64()), ("tag", pa.string())]))
+def test_reorders_and_drops_extra_columns() -> None:
+    table = _Table(pa.schema([("id", pa.int64()), ("tag", pa.string())]))
     # columns out of order + an extra 'junk' the table doesn't have → aligned by name, extra dropped
     incoming = pa.table(
         {
@@ -47,30 +55,30 @@ def test_reorders_and_drops_extra_columns(monkeypatch: pytest.MonkeyPatch) -> No
             "id": pa.array([1.0], pa.float64()),
         }
     )
-    out = _coerce(_ipc(incoming))
+    out = _coerce(table, _ipc(incoming))
     assert out.schema.names == ["id", "tag"]
     assert out.column("id").to_pylist() == [1]
 
 
-def test_non_integral_value_is_400_not_500(monkeypatch: pytest.MonkeyPatch) -> None:
-    _target(monkeypatch, pa.schema([("id", pa.int64())]))
+def test_non_integral_value_is_400_not_500() -> None:
+    table = _Table(pa.schema([("id", pa.int64())]))
     incoming = pa.table({"id": pa.array([4.5], pa.float64())})  # 4.5 can't become an int
     with pytest.raises(InvalidInputError):
-        _coerce(_ipc(incoming))
+        _coerce(table, _ipc(incoming))
 
 
-def test_missing_column_is_400(monkeypatch: pytest.MonkeyPatch) -> None:
-    _target(monkeypatch, pa.schema([("id", pa.int64()), ("score", pa.int64())]))
+def test_missing_column_is_400() -> None:
+    table = _Table(pa.schema([("id", pa.int64()), ("score", pa.int64())]))
     incoming = pa.table({"id": pa.array([1], pa.int64())})  # no 'score'
     with pytest.raises(InvalidInputError):
-        _coerce(_ipc(incoming))
+        _coerce(table, _ipc(incoming))
 
 
-def test_matching_names_with_differing_nullability_still_coerces(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_matching_names_with_differing_nullability_still_coerces() -> None:
     """Same names+types but a non-nullable target field ⇒ NOT the fast path — the cast must run so
     the declared nullability lands (the native append checks the schema, not the values)."""
-    _target(monkeypatch, pa.schema([pa.field("id", pa.int64(), nullable=False)]))
+    table = _Table(pa.schema([pa.field("id", pa.int64(), nullable=False)]))
     data = _ipc(pa.table({"id": pa.array([1], pa.int64())}))  # incoming field is nullable=True
-    out = dataplane.coerce_insert_arrow(cast(Any, None), cast(Any, {}), ["hunt", "t"], data, max_bytes=_BODY_LIMIT)
+    out = dataplane.coerce_insert_arrow(cast(Any, table), cast(Any, {}), data, max_bytes=_BODY_LIMIT)
     assert out is not data
     assert pa.ipc.open_stream(out).read_all().schema.field("id").nullable is False

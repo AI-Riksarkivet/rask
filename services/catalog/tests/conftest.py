@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 import uuid
 from collections.abc import Iterator
 from pathlib import Path
@@ -18,6 +19,11 @@ from moto.iam.access_control import IAMRequestBase
 from moto.server import ThreadedMotoServer
 from pydantic import BaseModel
 
+
+# THIS DIRECTORY, IMPORTABLE, so a plain helper module beside the suite (`tables_by_name`) resolves for a single file as
+# for the whole directory: under `--import-mode=importlib` nothing else puts it on the path, and a conftest is loaded
+# before collection begins.
+sys.path.insert(0, str(Path(__file__).parent))
 
 #: The name the reference gives the second store's secret.
 SECOND_REF = "second-store"

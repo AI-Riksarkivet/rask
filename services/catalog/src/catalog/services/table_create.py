@@ -244,12 +244,15 @@ async def create_governed_table(
     pre_existed = probe and await run_in_threadpool(table_exists, ns, segments)
     overwrote_existing = pre_existed and mode is CreateMode.OVERWRITE
     existok_kept_existing = pre_existed and mode is CreateMode.EXIST_OK
+    overwriting: table_claims.DoorTable | None = None
     if overwrote_existing:
         overwritten = await resolver.table(segments, ns=ns)
         await fga_deps.require_can_drop_table(client, settings, token, table=overwritten)
         # After the authz gate, as on the drop door: a caller who may not drop the table learns nothing
         # about its protection.
         await fga_deps.require_table_unprotected(settings, overwritten, force=force)
+        # The table asked about is the one overwritten ([[LH-530]]).
+        overwriting = table_claims.DoorTable(ns, table_claims.claim_store(settings), overwritten)
     # [[LH-279]] Where the create records the bases it registers — the catalog's control root, written
     # with the catalog's own credential and never through a vend.
     registry = base_registry.BaseRegistry(control_root=settings.registry_root, storage_options=settings.storage_options())
@@ -262,7 +265,9 @@ async def create_governed_table(
         segments,
         table,
         root=root,
-        mode=mode,
+        # An Overwrite of a name the probe found no table under is a create: one made under the name since is refused as
+        # the create's own conflict, never overwritten without the `can_drop` asked above ([[LH-530]]).
+        mode=mode if overwrote_existing or mode is not CreateMode.OVERWRITE else CreateMode.CREATE,
         properties=shape.properties,
         allow_external_blobs=settings.allow_external_blobs,
         external_blob_bases=[external_base] if external_base else [],
@@ -274,6 +279,7 @@ async def create_governed_table(
         registry=registry,
         holder=table_id,
         transaction_properties=run_context.commit_properties(run, author=created_by),
+        overwriting=overwriting,
     )
 
     # Make the caller owner of a table this request brought into being + link it to its parent so it
@@ -354,7 +360,7 @@ async def create_governed_table(
     # and an Overwrite of an existing table wrote the table's provenance fields and metadata over the
     # payload's. Best-effort either way (failure → []).
     if mode is CreateMode.EXIST_OK or overwrote_existing:
-        _, schema_fields, _location = await run_in_threadpool(dataplane.read_version_and_schema, ns, so, segments, response.version, None)
+        _, schema_fields, _location = await run_in_threadpool(dataplane.read_version_and_schema, str(response.location), so, segments, response.version, None)
     else:
         schema_fields = dataplane.payload_schema_fields(table.schema, segments)
     inputs = await input_refs(run_inputs(run), uuids=uuids)

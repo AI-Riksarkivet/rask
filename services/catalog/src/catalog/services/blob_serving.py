@@ -23,14 +23,13 @@ from typing import Any
 
 from lance_namespace import (
     InvalidInputError,
-    LanceNamespace,
     TableColumnNotFoundError,
     TableNotFoundError,
     TableVersionNotFoundError,
 )
 from pydantic import BaseModel, ConfigDict, Field
 
-from catalog.core.namespace import open_dataset
+from catalog.services.table_claims import DoorTable
 from service_kit.lakehouse import blobs
 from service_kit.lakehouse.objectfs import StorageOptions
 
@@ -90,9 +89,8 @@ class BlobStream(BaseModel):
 
 
 def read_blob(
-    ns: LanceNamespace,
+    table: DoorTable,
     so: StorageOptions,
-    table_id: list[str],
     *,
     column: str,
     row: int,
@@ -127,7 +125,7 @@ def read_blob(
     erroring (``read_range`` rejects over-length windows).
     """
     try:
-        dataset = open_dataset(ns, so, table_id, version=version)
+        dataset = table.open(so, version=version)
     except ValueError as exc:
         # lance raises bare ValueErrors for two distinct missing-things: a pinned version with no
         # manifest ("…/_versions/N.manifest was not found…") and a location with no dataset at all

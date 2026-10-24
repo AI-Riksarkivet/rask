@@ -64,6 +64,34 @@ Two contracts stack here, and confusing them is how bugs happen:
   deregister racing a rename, the rival landed after the door read its claim and as it acts) and
   `packages/service-kit/tests/test_a_release_frees_only_the_claim_it_read.py`. The spec's *minimum* is 8 metadata ops; we carry the whole list
   including versioning, tags, branches, indices and transactions.
+- **Every other table door acts on that resolution too** ([[LH-530]]): each door that reads or writes a table's data or
+  metadata takes `DoorTableDep` (`table_claims.DoorTable`), opens and commits at the location the resolution read, never
+  at the name, and each open refuses 409 code 14 (`TableChangedError`) unless the location's claim is the one the
+  resolution read (its ETag) (`DoorTable.require_held`): a drop, a re-create, a rename, a deregister and a re-register
+  each write the claim. A recoverable drop leaves it as it was and files a trash record, so where a trash record names
+  the claim's table the open also asks `require_named`, since a crashed undrop leaves its record beside the live table
+  it restored. Every write Lance serves on a handle commits through one opened there, main's merge, restore and schema
+  metadata included. A native call takes the name and no location, so around it the door asks whether the name still
+  resolves to the location under that claim (`require_named`): after a native read, its answer discarded and its failure
+  told the change first (`DoorTable.read_natively`), and right before a write Lance serves only through the namespace
+  (`DoorTable.write_natively`): both version finalizes (`version/create`'s and `commit_stamped`'s, the backend's
+  put-if-not-exists), drop_index, whose system-index refusal is the namespace's and not Lance's, and backfill. Describe
+  answers for the name off its own describe (`require_described_at`). A readback after a committed write (the lineage
+  trailer, `dataplane.committed_version`, `branch_identifier`) opens the location unguarded: a 409 after a commit would
+  make a retry commit twice. An `Overwrite` create writes at the table it asked `can_drop` on, and one whose door found
+  no table creates in Create mode, so a table created under the name meanwhile answers TableAlreadyExists rather than
+  being overwritten without `can_drop`. The catalog has no by-name open; a test arranging a table by its name opens
+  through `services/catalog/tests/tables_by_name.py`. The merge reads each `*_filt` as its clause's own condition and
+  `when_not_matched_insert_all` as false when absent (`spec.yaml`), on main as on a branch; the `dir` backend's native
+  merge reads an absent insert flag as an insert. Residual, stated: a write through a handle can land between its guard
+  and Lance's commit, and reach another table only where a registered location is deregistered and registered again in
+  that window; a native write can reach another table only where a drop and a create land between its guard and the
+  backend's own resolution of the name, one describe later; a native read is unguarded only against the name leaving the
+  location and returning to it within the one call: a recoverable drop (of the table, or of its namespace's cascade),
+  another table created under the name and gone again, then the undrop, which leave the claim's bytes, and so its ETag,
+  as they were. Pinned by `services/catalog/tests/test_a_door_acts_only_on_the_table_its_name_resolved_to.py`, which
+  lands a drop and a re-create after the router authorized each door, and, on a handle write and a native read, a
+  recoverable drop and a create, and a deregister and a register at the same location.
 - **Every table and namespace has a uuid the catalog mints** ([[LH-519]], ADR 0173). A table's lives in its location
   claim: create, declare and register mint it (`table_claims.claim_new_table`; a declaration takes its claim before any
   backend call, and a failed one removes its marker and releases the claim, [[LH-520]]), a create into a table an
@@ -357,7 +385,7 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   erasure and project-policy listings name each table as it is named now (`table_claims.names_now`: its location's
   claim's holder while the claim carries the record's uuid) and filter it under that name; a record whose table is gone
   names no table and is listed to no one, since the name it kept may belong to a new table now. A door resolves its
-  table once and opens the location it resolved (`namespace.open_resolved_dataset`), so a uuid and a location never come
+  table once and opens the location it resolved (`table_claims.DoorTable`), so a uuid and a location never come
   from two resolutions. Pinned by
   `tests/integration/test_a_rename_carries_what_the_table_holds.py`.
   A destructive CASCADE destroys its children INSIDE one native call, so they never re-enter this

@@ -57,7 +57,6 @@ from lance_namespace import (
 from pydantic import BaseModel, ConfigDict
 
 from catalog.core.config import shared_lance_session
-from catalog.core.namespace import open_dataset
 from catalog.services import dataplane
 from service_kit.lakehouse import gate_specs
 from service_kit.lakehouse.quality import NOT_NULL, STRUCTURAL_ASSERTIONS, Assertion, assert_quality, tier_contract_violations
@@ -66,8 +65,7 @@ from service_kit.lakehouse.quality import NOT_NULL, STRUCTURAL_ASSERTIONS, Asser
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from lance_namespace import LanceNamespace
-
+    from catalog.services.table_claims import DoorTable
     from service_kit.lakehouse.gate_specs import GateSpec
 
 
@@ -365,7 +363,7 @@ class PublicationResult(BaseModel):
         return self.published and self.to_version != self.from_version
 
 
-def _tag_version(ns: LanceNamespace, so: dict[str, str], table_id: Sequence[str], tag: str) -> int | None:
+def _tag_version(table: DoorTable, so: dict[str, str], tag: str) -> int | None:
     """The version a tag points at, or None when unset.
 
     Goes through the catalog's own `GetTableTagVersion` rather than reading `ds.tags` directly, so
@@ -374,17 +372,17 @@ def _tag_version(ns: LanceNamespace, so: dict[str, str], table_id: Sequence[str]
     `TableTagNotFound`; this turns that into the absence it represents.
     """
     try:
-        return int(dataplane.get_tag_version(ns, so, GetTableTagVersionRequest(id=list(table_id), tag=tag)).version)
+        return int(dataplane.get_tag_version(table, so, GetTableTagVersionRequest(id=table.segments, tag=tag)).version)
     except TableTagNotFoundError:
         return None
 
 
-def published_version(ns: LanceNamespace, so: dict[str, str], table_id: Sequence[str]) -> int | None:
+def published_version(table: DoorTable, so: dict[str, str]) -> int | None:
     """The version `published` points at, or None when nothing has been published yet."""
-    return _tag_version(ns, so, table_id, PUBLISHED_TAG)
+    return _tag_version(table, so, PUBLISHED_TAG)
 
 
-def set_tag(ns: LanceNamespace, so: dict[str, str], table_id: Sequence[str], tag: str, version: int) -> None:
+def set_tag(table: DoorTable, so: dict[str, str], tag: str, version: int) -> None:
     """Create the tag, or move it if it already exists.
 
     The spec splits create and update into two operations and refuses the wrong one, so which to call
@@ -403,38 +401,38 @@ def set_tag(ns: LanceNamespace, so: dict[str, str], table_id: Sequence[str], tag
     same shape `records.create_json` uses for the registry, where a 409 means someone else won rather
     than that this failed.
     """
-    if _tag_version(ns, so, table_id, tag) is None:
+    if _tag_version(table, so, tag) is None:
         try:
-            dataplane.create_tag(ns, so, CreateTableTagRequest(id=list(table_id), tag=tag, version=version))
+            dataplane.create_tag(table, so, CreateTableTagRequest(id=table.segments, tag=tag, version=version))
             return
         except TableTagAlreadyExistsError:
             pass  # the racer created it between the read and here — converge below
-    dataplane.update_tag(ns, so, UpdateTableTagRequest(id=list(table_id), tag=tag, version=version))
+    dataplane.update_tag(table, so, UpdateTableTagRequest(id=table.segments, tag=tag, version=version))
 
 
-def advance(ns: LanceNamespace, so: dict[str, str], table_id: Sequence[str], version: int, *, tag: str = PUBLISHED_TAG) -> tuple[bool, int | None]:
+def advance(table: DoorTable, so: dict[str, str], version: int, *, tag: str = PUBLISHED_TAG) -> tuple[bool, int | None]:
     """Move ``tag`` forward to ``version``: whether it moved, and the version it named before.
 
     Read again right before the move, so a publication that landed after the caller's own read is never moved back
     over. The read and the move are two operations, because a Lance tag has no conditional update, so two
     publications inside that gap can still race.
     """
-    current = _tag_version(ns, so, table_id, tag)
+    current = _tag_version(table, so, tag)
     if current is not None and current >= version:
         return False, current
-    set_tag(ns, so, table_id, tag, version)
+    set_tag(table, so, tag, version)
     return True, current
 
 
-def drop_tag(ns: LanceNamespace, so: dict[str, str], table_id: Sequence[str], tag: str) -> None:
+def drop_tag(table: DoorTable, so: dict[str, str], tag: str) -> None:
     """Delete the tag; one that is already gone is the outcome asked for, not an error."""
     with contextlib.suppress(TableTagNotFoundError):
-        dataplane.delete_tag(ns, so, DeleteTableTagRequest(id=list(table_id), tag=tag))
+        dataplane.delete_tag(table, so, DeleteTableTagRequest(id=table.segments, tag=tag))
 
 
-def rows_at(ns: LanceNamespace, so: dict[str, str], table_id: Sequence[str], version: int | None) -> int | None:
+def rows_at(table: DoorTable, so: dict[str, str], version: int | None) -> int | None:
     """The row count of ``version`` on main, or ``None`` for no version. Read off the manifest, not a scan."""
-    return None if version is None else int(open_dataset(ns, so, list(table_id), version=version).count_rows())
+    return None if version is None else int(table.open(so, version=version).count_rows())
 
 
 def gate(
@@ -502,10 +500,9 @@ def gate(
 
 
 def publish(
-    ns: LanceNamespace,
+    table: DoorTable,
     storage_options: dict[str, str],
     *,
-    table_id: Sequence[str],
     version: int,
     key_column: str,
     required_columns: Sequence[str] = (),
@@ -528,17 +525,19 @@ def publish(
     `declared_by` names the project whose declared `GateSpec` supplied `key_column`, or `""` when the
     request did — see `EffectiveGate`. It is composed by the door, never resolved here, so `gate` and
     `publish` cannot end up under different policy.
+
+    ``table`` is the table the door resolved: every read and every tag move is at its location ([[LH-530]]).
     """
     if version < 1:
         raise InvalidInputError(f"version must be >= 1, got {version}")
 
-    table_id = list(table_id)
-    dataset = open_dataset(ns, storage_options, table_id)
+    table_id = table.segments
+    dataset = table.open(storage_options)
     latest = int(dataset.version)
     if version > latest:
         raise TableVersionNotFoundError(f"version {version} not found (latest is {latest})")
 
-    previous = _tag_version(ns, storage_options, table_id, tag)
+    previous = _tag_version(table, storage_options, tag)
     if previous is not None and version < previous:
         # Publishing backwards is a rollback, and a rollback arriving by accident — a late retry of an
         # older run — silently un-publishes newer good data. Checked BEFORE the gate: there is no point
@@ -549,12 +548,12 @@ def publish(
 
     try:
         # Pin the candidate for the gate's duration — see PUBLISHING_TAG.
-        set_tag(ns, storage_options, table_id, PUBLISHING_TAG, version)
+        set_tag(table, storage_options, PUBLISHING_TAG, version)
 
         # Gate the version being published, not `latest`: they differ the moment another writer commits
         # while this gate runs, and publishing a version nobody checked is the whole failure this
         # prevents.
-        candidate = open_dataset(ns, storage_options, table_id, version=version)
+        candidate = table.open(storage_options, version=version)
         assertions = assert_quality(
             candidate.uri,
             storage_options,
@@ -574,7 +573,7 @@ def publish(
 
         # The band compares the row count readers would move to with the one they read now.
         band = (
-            review_reasons(rows=int(candidate.count_rows()), published_rows=rows_at(ns, storage_options, table_id, previous), band=review.band)
+            review_reasons(rows=int(candidate.count_rows()), published_rows=rows_at(table, storage_options, previous), band=review.band)
             if review is not None
             else []
         )
@@ -592,7 +591,7 @@ def publish(
                 hold_reasons=verdict.reasons if verdict.outcome == "hold" else [],
             )
 
-        set_tag(ns, storage_options, table_id, tag, version)
+        set_tag(table, storage_options, tag, version)
         return PublicationResult(
             table=candidate.uri,
             published=True,
@@ -606,4 +605,4 @@ def publish(
         # Suppressed on purpose: a failure to unpin must never mask the publish outcome, and the worst
         # case is one version exempt from GC until someone deletes a visible tag.
         with contextlib.suppress(Exception):
-            dataplane.delete_tag(ns, storage_options, DeleteTableTagRequest(id=table_id, tag=PUBLISHING_TAG))
+            dataplane.delete_tag(table, storage_options, DeleteTableTagRequest(id=table_id, tag=PUBLISHING_TAG))

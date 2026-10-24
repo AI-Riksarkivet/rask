@@ -27,7 +27,10 @@ import pyarrow as pa
 import pytest
 from lance_namespace import CreateNamespaceRequest, CreateTableTagRequest, connect
 
+from catalog.services import table_claims
 from catalog.services.dataplane import create_table, create_tag
+from catalog.services.table_claims import DoorTable
+from service_kit.lakehouse.location_claims import ClaimStore
 
 
 lance = pytest.importorskip("lance")
@@ -45,10 +48,16 @@ def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace is runtime-only
     return namespace
 
 
-def _create(ns, tag: str) -> int | None:  # noqa: ANN001
+@pytest.fixture
+def table(ns, tmp_path: Path) -> DoorTable:  # noqa: ANN001
+    """The table as a door acts on it, resolved on ``ns``."""
+    return table_claims.door_table(ns, ClaimStore(control_root=str(tmp_path / "control")), TABLE_ID)
+
+
+def _create(table: DoorTable, tag: str) -> int | None:
     """Create the tag and return the spec code it answered, or None if it succeeded."""
     try:
-        create_tag(ns, {}, CreateTableTagRequest(id=TABLE_ID, tag=tag, version=1))
+        create_tag(table, {}, CreateTableTagRequest(id=TABLE_ID, tag=tag, version=1))
     except Exception as exc:  # noqa: BLE001 — the CODE is the subject
         return getattr(exc, "code", None)
     return None
@@ -61,11 +70,11 @@ def _create(ns, tag: str) -> int | None:  # noqa: ANN001
         ("a separator, which a branch allows and a tag does not", "feature/x"),
     ],
 )
-def test_a_malformed_tag_name_answers_invalid_input(ns, shape: str, tag: str) -> None:  # noqa: ANN001
-    assert _create(ns, tag) == 13, f"{shape}: answered something other than InvalidInput, so the door now needs its own guard"
+def test_a_malformed_tag_name_answers_invalid_input(table: DoorTable, shape: str, tag: str) -> None:  # noqa: ANN001
+    assert _create(table, tag) == 13, f"{shape}: answered something other than InvalidInput, so the door now needs its own guard"
 
 
 @pytest.mark.parametrize("tag", ["main"])
-def test_a_legal_tag_name_is_accepted(ns, tag: str) -> None:  # noqa: ANN001
+def test_a_legal_tag_name_is_accepted(table: DoorTable, tag: str) -> None:  # noqa: ANN001
     """`main` is the headline: it is reserved for BRANCHES only, and a guard copied across would break it."""
-    assert _create(ns, tag) is None
+    assert _create(table, tag) is None

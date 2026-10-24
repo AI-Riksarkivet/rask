@@ -31,8 +31,12 @@ from pathlib import Path
 import pyarrow as pa
 import pytest
 from lance_namespace import CreateNamespaceRequest, InsertIntoTableRequest, connect
+from tables_by_name import open_by_name
 
-from catalog.services.dataplane import coerce_insert_arrow, create_table, insert_into_table, open_dataset
+from catalog.services import table_claims
+from catalog.services.dataplane import coerce_insert_arrow, create_table, insert_into_table
+from catalog.services.table_claims import DoorTable
+from service_kit.lakehouse.location_claims import ClaimStore
 
 
 #: The catalog's default body cap (LANCE_MAX_BODY_BYTES), far above every body here.
@@ -76,19 +80,25 @@ def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace is runtime-only
         mode="create",
         registry=None,
     )
-    dataset = open_dataset(namespace, {}, TABLE_ID)
+    dataset = open_by_name(namespace, {}, TABLE_ID)
     dataset.create_branch(BRANCH, None)
-    branch_dataset = open_dataset(namespace, {}, TABLE_ID, branch=BRANCH)
+    branch_dataset = open_by_name(namespace, {}, TABLE_ID, branch=BRANCH)
     branch_dataset.add_columns({BRANCH_ONLY: "cast(null as string)"})
     return namespace
 
 
-def test_a_branch_insert_lands_the_branch_only_column(ns) -> None:  # noqa: ANN001
+@pytest.fixture
+def table(ns, tmp_path: Path) -> DoorTable:  # noqa: ANN001
+    """The table as a door acts on it, resolved on ``ns``."""
+    return table_claims.door_table(ns, ClaimStore(control_root=str(tmp_path / "control")), TABLE_ID)
+
+
+def test_a_branch_insert_lands_the_branch_only_column(ns, table: DoorTable) -> None:  # noqa: ANN001
     """The same defect seen end to end, so the fix is not a coercion-shaped local truth."""
     payload = pa.table({"id": pa.array([2], pa.int64()), "s": pa.array(["b"]), BRANCH_ONLY: pa.array(["keep me"])})
-    data = coerce_insert_arrow(ns, {}, TABLE_ID, _ipc(payload), branch=BRANCH, max_bytes=_BODY_LIMIT)
+    data = coerce_insert_arrow(table, {}, _ipc(payload), branch=BRANCH, max_bytes=_BODY_LIMIT)
 
-    insert_into_table(ns, {}, InsertIntoTableRequest(id=TABLE_ID, mode="append", branch=BRANCH), data, max_bytes=_BODY_LIMIT, transaction_properties=None)
+    insert_into_table(table, {}, InsertIntoTableRequest(id=TABLE_ID, mode="append", branch=BRANCH), data, max_bytes=_BODY_LIMIT, transaction_properties=None)
 
-    written = open_dataset(ns, {}, TABLE_ID, branch=BRANCH).to_table().to_pydict()
+    written = open_by_name(ns, {}, TABLE_ID, branch=BRANCH).to_table().to_pydict()
     assert "keep me" in (written.get(BRANCH_ONLY) or []), f"the branch row lost its {BRANCH_ONLY!r} value: {written}"

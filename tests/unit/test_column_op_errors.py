@@ -20,23 +20,25 @@ import pytest
 from lance_namespace import (
     AlterTableDropColumnsRequest,
     CreateNamespaceRequest,
-    LanceNamespace,
     LanceNamespaceError,
     connect,
 )
 
+from catalog.services import table_claims
 from catalog.services.dataplane import create_table, drop_columns
+from catalog.services.table_claims import DoorTable
+from service_kit.lakehouse.location_claims import ClaimStore
 
 
 @pytest.fixture
-def table(tmp_path: Path) -> LanceNamespace:
+def table(tmp_path: Path) -> DoorTable:
     ns = connect("dir", {"root": str(tmp_path)})
     ns.create_namespace(CreateNamespaceRequest(id=["db"]))
     create_table(ns, {}, ["db", "t"], pa.table({"id": [1, 2, 3], "v": ["a", "b", "c"]}), root=str(tmp_path), mode="create", registry=None)
-    return ns
+    return table_claims.door_table(ns, ClaimStore(control_root=str(tmp_path / "control")), ["db", "t"])
 
 
-def test_a_storage_failure_on_a_column_op_is_not_blamed_on_the_caller(table: LanceNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_storage_failure_on_a_column_op_is_not_blamed_on_the_caller(table: DoorTable, monkeypatch: pytest.MonkeyPatch) -> None:
     """An ``OSError`` with no user-error signature propagates untranslated — it is a 500, and it stays one.
 
     ``drop_columns``' real user errors arrive as bare ``ValueError``/``OSError`` with no marker, so the
@@ -47,7 +49,7 @@ def test_a_storage_failure_on_a_column_op_is_not_blamed_on_the_caller(table: Lan
     def boom(*_a: object, **_k: object) -> None:
         raise OSError("object store unreachable")
 
-    monkeypatch.setattr("catalog.services.dataplane.open_dataset", boom)
+    monkeypatch.setattr("catalog.services.table_claims.open_resolved_dataset", boom)
     with pytest.raises(OSError, match="unreachable") as caught:
         drop_columns(table, {}, AlterTableDropColumnsRequest(id=["db", "t"], columns=["v"]))
     assert not isinstance(caught.value, LanceNamespaceError), "a storage outage was minted into a domain error"

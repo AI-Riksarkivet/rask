@@ -1,9 +1,9 @@
 """Backend namespace construction and dataset resolution.
 
 The REST server is an adapter over a native ``LanceNamespace`` backend
-(``DirectoryNamespace`` on the object store by default). ``open_dataset`` resolves a
-table's storage location via the namespace and opens it with pylance — used by
-the data-plane service for operations the native backend does not implement.
+(``DirectoryNamespace`` on the object store by default). ``open_resolved_dataset`` opens a
+table at the location its door resolved with pylance — used by the data-plane service for
+operations the native backend does not implement.
 """
 
 from __future__ import annotations
@@ -13,7 +13,6 @@ import threading
 
 import lance
 from lance_namespace import (
-    DescribeTableRequest,
     LanceNamespace,
     ServiceUnavailableError,
     TableBranchNotFoundError,
@@ -162,15 +161,10 @@ def _branch_checkout_error(
     return exc
 
 
-def open_dataset(
-    ns: LanceNamespace,
-    storage_options: dict[str, str],
-    table_id: list[str],
-    *,
-    version: int | None = None,
-    branch: str | None = None,
+def open_resolved_dataset(
+    location: str, storage_options: dict[str, str], table_id: list[str], *, version: int | None = None, branch: str | None = None
 ) -> lance.LanceDataset:
-    """Open the table's Lance dataset on the ref the request names, refusing one declaring a base nothing sanctioned.
+    """Open the table at the location a door resolved ``table_id`` to (ADR 0173 §7), on the ref named, refusing a base nothing sanctioned.
 
     THE CHECKED OPEN ([[LH-279]]): the handle's own ``base_paths`` — the ref actually opened, after the
     version pin and the branch checkout, read in memory at no request — are judged by
@@ -180,22 +174,8 @@ def open_dataset(
 
     Every door that reads or writes a table's ROWS opens through here. A door that reads or changes only
     its version and ref metadata — the repairs an operator needs on exactly such a table — opens through
-    :func:`open_dataset_unchecked`. Both carry each data base's own ``base_store_params``
+    :func:`open_resolved_dataset_unchecked`. Both carry each data base's own ``base_store_params``
     (:func:`open_location`).
-
-    Raises:
-        InvalidTableStateError: The opened ref declares a base the catalog did not sanction.
-    """
-    return open_resolved_dataset(_table_location(ns, table_id), storage_options, table_id, version=version, branch=branch)
-
-
-def open_resolved_dataset(
-    location: str, storage_options: dict[str, str], table_id: list[str], *, version: int | None = None, branch: str | None = None
-) -> lance.LanceDataset:
-    """:func:`open_dataset` at the location a door already resolved ``table_id`` to (ADR 0173 §7), with the same base judge.
-
-    A door that resolved its table once (``ResolvedTableDep``) opens what that resolution read, so a rename landing
-    in between cannot pair one table's uuid with another table's bytes.
 
     Raises:
         InvalidTableStateError: The opened ref declares a base the catalog did not sanction.
@@ -205,22 +185,17 @@ def open_resolved_dataset(
     return dataset
 
 
-def open_dataset_unchecked(
-    ns: LanceNamespace,
-    storage_options: dict[str, str],
-    table_id: list[str],
-    *,
-    version: int | None = None,
-    branch: str | None = None,
+def open_resolved_dataset_unchecked(
+    location: str, storage_options: dict[str, str], table_id: list[str], *, version: int | None = None, branch: str | None = None
 ) -> lance.LanceDataset:
-    """:func:`open_dataset` WITHOUT the base judge — for a door that reads no row through the handle.
+    """:func:`open_resolved_dataset` WITHOUT the base judge — for a door that reads no row through the handle.
 
     Describing a version, listing versions, tags and branches, restoring and deleting them are how an
     operator sees and repairs a table whose manifest declares a base nobody sanctioned; refusing them
     would leave no way out but a drop. None of them reads a data file, so none of them reads through the
     base, and a door that does read rows must not call this.
     """
-    return _open_ref(_table_location(ns, table_id), storage_options, table_id, version=version, branch=branch)
+    return _open_ref(location, storage_options, table_id, version=version, branch=branch)
 
 
 def disarm_commit_path_cleanup(dataset: lance.LanceDataset, table_id: list[str]) -> lance.LanceDataset:
@@ -259,57 +234,27 @@ def disarm_every_ref(dataset: lance.LanceDataset, table_id: list[str]) -> lance.
     return disarm_commit_path_cleanup(dataset, table_id)
 
 
-def open_dataset_for_commit(
-    ns: LanceNamespace,
-    storage_options: dict[str, str],
-    table_id: list[str],
-    *,
-    branch: str | None = None,
-    checked: bool = True,
-) -> lance.LanceDataset:
-    """:func:`open_dataset` (or, with ``checked=False``, :func:`open_dataset_unchecked`) on the ref a door is
-    about to commit on, with commit-path auto-cleanup disarmed (:func:`disarm_commit_path_cleanup`).
-
-    Every catalog door that commits opens here, including the doors whose commit runs inside the native
-    backend: they open the ref only to disarm it, and the native call's own open then reads the disarmed manifest.
-    """
-    opened = open_dataset(ns, storage_options, table_id, branch=branch) if checked else open_dataset_unchecked(ns, storage_options, table_id, branch=branch)
-    return disarm_commit_path_cleanup(opened, table_id)
-
-
-def judged_native_version(ns: LanceNamespace, storage_options: dict[str, str], table_id: list[str], *, version: int | None) -> int:
-    """The version a NATIVE data op must be pinned to, after judging that version's bases ([[LH-279]]).
+def judged_for_native_read(dataset: lance.LanceDataset, storage_options: dict[str, str], table_id: list[str]) -> lance.LanceDataset:
+    """``dataset``, the checked open of the ref a NATIVE data op reads, once nothing on it is beyond that op ([[LH-279]]).
 
     ``DirectoryNamespace`` opens the dataset inside its own Rust call for ``query_table``,
     ``count_table_rows`` and the plan ops, so no Python handle exists to judge (lh279 m2 read the victim
-    through each). This opens the ref the request names on the shared session — the version the request
-    pinned, else the latest — judges it, and returns its number: the door then pins the native request
-    to exactly the version judged, so a commit landing between the two cannot be served unjudged. The
-    shared session also carries the manifest the native open reads next (lh279 m2: query 5 -> 4
-    requests), so the pre-open costs about what it saves.
+    through each). The door opens the ref the request names on the shared session — the version the request
+    pinned, else the latest — through the checked open (:func:`open_resolved_dataset`), which judges its
+    bases, and pins the native request to exactly that handle's version, so a commit landing between the two
+    cannot be served unjudged. The shared session also carries the manifest the native open reads next
+    (lh279 m2: query 5 -> 4 requests), so the pre-open costs about what it saves.
 
     A TABLE WITH A BASE UNDER ITS OWN CREDENTIAL IS REFUSED HERE ([[LH-273]]). The native open takes the
     namespace's storage options and no ``base_store_params``, so it would read that base with the
     estate's key: refused outright where the estate key has no grant on the base, and served under an
     identity nobody configured for it where the key does. The pylance-served doors — ``/changes`` and
-    every door through :func:`open_dataset` — read the same table under each base's own key; the vend
+    every door reading through a checked open — read the same table under each base's own key; the vend
     answers ``server_mediated`` for it, because an STS credential is the estate role's.
 
     Raises:
-        InvalidTableStateError: That version declares a base the catalog did not sanction.
         UnsupportedOperationError: That version keeps data on a base under its own credential.
     """
-    return int(judged_native_dataset(ns, storage_options, table_id, version=version).version)
-
-
-def judged_native_dataset(ns: LanceNamespace, storage_options: dict[str, str], table_id: list[str], *, version: int | None) -> lance.LanceDataset:
-    """:func:`judged_native_version`, handing back the judged handle for a door that also reads its schema.
-
-    Raises:
-        InvalidTableStateError: That version declares a base the catalog did not sanction.
-        UnsupportedOperationError: That version keeps data on a base under its own credential.
-    """
-    dataset = open_dataset(ns, storage_options, table_id, version=version)
     if base_store_params_for(dataset, storage_options) is not None:
         raise UnsupportedOperationError(
             f"table {'.'.join(table_id)} keeps data on a base opened under its own credential, which this door's native reader cannot "
@@ -325,7 +270,7 @@ def base_store_params_for(dataset: lance.LanceDataset, storage_options: dict[str
     that string and nothing else (measured, :mod:`catalog.services.base_credentials`). The credential
     references come from the installed judge (:func:`catalog.core.base_judge.installed_judge`), the same
     deployment configuration the bases are judged against; a process with no judge installed answers
-    ``None``, and :func:`open_dataset` then refuses the foreign base before any row is read.
+    ``None``, and :func:`open_resolved_dataset` then refuses the foreign base before any row is read.
     """
     paths = [ref.path for ref in manifest_base_path_refs(dataset)]
     if not paths:
@@ -360,14 +305,6 @@ def open_location(location: str, storage_options: dict[str, str], *, version: in
         location, storage_options=storage_options, version=None if branch else version, session=shared_lance_session(), base_store_params=params
     )
     return reopened.checkout_version((branch, version)) if branch else reopened
-
-
-def _table_location(ns: LanceNamespace, table_id: list[str]) -> str:
-    resp = ns.describe_table(DescribeTableRequest(id=list(table_id), with_table_uri=True))
-    location = getattr(resp, "table_uri", None) or getattr(resp, "location", None)
-    if not location:
-        raise TableNotFoundError(f"Table not found: {table_id}")
-    return str(location)
 
 
 def _open_ref(location: str, storage_options: dict[str, str], table_id: list[str], *, version: int | None, branch: str | None) -> lance.LanceDataset:

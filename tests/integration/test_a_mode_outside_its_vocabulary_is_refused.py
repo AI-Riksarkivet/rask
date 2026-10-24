@@ -35,7 +35,9 @@ import pyarrow.ipc as ipc
 import pytest
 from lance_namespace import CreateNamespaceRequest, InsertIntoTableRequest, InvalidInputError, connect
 
-from catalog.services.dataplane import create_table, insert_into_table, open_dataset
+from catalog.services import table_claims
+from catalog.services.dataplane import create_table, insert_into_table
+from service_kit.lakehouse.location_claims import ClaimStore
 
 
 #: The catalog's default body cap (LANCE_MAX_BODY_BYTES), far above every body here.
@@ -192,12 +194,13 @@ def test_the_data_plane_refuses_it_without_the_door(tmp_path: Path, branch: str 
     ns = connect("dir", {"root": str(tmp_path / "data")})
     ns.create_namespace(CreateNamespaceRequest(id=["db"]))
     create_table(ns, {}, ["db", "t"], _id_table(), root=str(tmp_path / "data"), mode="create", registry=None)
+    table = table_claims.door_table(ns, ClaimStore(control_root=str(tmp_path / "control")), ["db", "t"])
     if branch is not None:
-        open_dataset(ns, {}, ["db", "t"]).create_branch(branch, None)
+        table.open({}).create_branch(branch, None)
 
     with pytest.raises(InvalidInputError):
         insert_into_table(
-            ns, {}, InsertIntoTableRequest(id=["db", "t"], mode="Appnd", branch=branch), _rows(5), max_bytes=_BODY_LIMIT, transaction_properties=None
+            table, {}, InsertIntoTableRequest(id=["db", "t"], mode="Appnd", branch=branch), _rows(5), max_bytes=_BODY_LIMIT, transaction_properties=None
         )
 
-    assert open_dataset(ns, {}, ["db", "t"], branch=branch).count_rows() == 3, "a refused insert must write no rows"
+    assert table.open({}, branch=branch).count_rows() == 3, "a refused insert must write no rows"

@@ -36,6 +36,7 @@ from catalog.api.security import CurrentToken
 from catalog.api.v1.endpoints import publication as door
 from catalog.core.identifiers import with_minted_uuid
 from catalog.core.lineage_emit import NoopEmitter
+from catalog.services import table_claims
 from catalog.services.dataplane import create_table
 from catalog.services.publication import published_version
 from service_kit.governed.oidc import IDToken
@@ -44,6 +45,7 @@ from service_kit.governed.principal import Principal
 from service_kit.lakehouse import gate_specs
 from service_kit.lakehouse.base_registry import BaseRegistry
 from service_kit.lakehouse.gate_specs import GateSpec
+from service_kit.lakehouse.location_claims import ClaimStore
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
@@ -140,11 +142,11 @@ def _assertion(payload: dict[str, Any], name: str) -> dict[str, Any] | None:
 # --- 1 THE REFUSAL: a key column the data does not carry ------------------------------------------
 
 
-def test_the_REFUSED_publish_moves_nothing(client: TestClient, ns) -> None:  # noqa: ANN001
+def test_the_REFUSED_publish_moves_nothing(client: TestClient, ns, registry_root: str) -> None:  # noqa: ANN001
     """A refusal is fail-closed: the pointer stays where it was, so no consumer sees the version."""
     _publish(client, key_column="nope")
 
-    assert published_version(ns, {}, TABLE_ID) is None
+    assert published_version(table_claims.door_table(ns, ClaimStore(control_root=registry_root), TABLE_ID), {}) is None
 
 
 def test_the_same_refusal_applies_to_the_gate_only_QUESTION(client: TestClient) -> None:
@@ -190,7 +192,7 @@ def test_a_DECLARED_column_the_table_lost_BLOCKS_the_publish(client: TestClient,
 
     assert payload["published"] is False
     assert "column_declared" in (payload["reason"] or "")
-    assert published_version(ns, {}, TABLE_ID) is None
+    assert published_version(table_claims.door_table(ns, ClaimStore(control_root=registry_root), TABLE_ID), {}) is None
 
 
 def test_the_RESULT_NAMES_WHICH_GATE_RAN(client: TestClient, registry_root: str) -> None:

@@ -9,14 +9,18 @@ keeps its uuid.
 A door resolves its table once (ADR 0173 §7, [[LH-521]]): :func:`resolve` reads the table's location and that
 location's claim when the request reaches the door, and a drop, deregister or rename acts on that reading and
 nothing else. A drop or deregister fences the claim it read (:func:`fence`) before its backend call and lifts the fence
-once it has acted (:func:`lift_fence`); a rename hands over the claim it read (:func:`hand_over`).
+once it has acted (:func:`lift_fence`); a rename hands over the claim it read (:func:`hand_over`). Every other door
+acts on that reading through :class:`DoorTable` ([[LH-530]]).
 """
 
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
+from typing import Any
 from uuid import uuid4
 
+import lance
 from lance_namespace import (
     ConcurrentModificationError,
     DescribeTableRequest,
@@ -28,11 +32,14 @@ from lance_namespace import (
 from pydantic import BaseModel
 
 from catalog.core.config import Settings
+from catalog.core.namespace import open_resolved_dataset, open_resolved_dataset_unchecked
 from catalog.services import native
 from catalog.services.object_uuids import UnidentifiedObjectError
+from service_kit.governed import fga
 from service_kit.lakehouse import location_claims, trash
 from service_kit.lakehouse.base_refs import decoded_path
 from service_kit.lakehouse.location_claims import ClaimRead, ClaimStore, LocationClaim
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 log = logging.getLogger(__name__)
@@ -48,6 +55,8 @@ class ResolvedTable(BaseModel):
     location: str | None = None
     #: The location's claim as the resolution read it, with its ETag; ``None`` when the location carries no record.
     claim: ClaimRead | None = None
+    #: The name named no table because its namespace does not exist, as the backend answered (code 1, not 4).
+    namespace_absent: bool = False
 
     @property
     def uuid(self) -> str | None:
@@ -91,10 +100,182 @@ def resolve(ns: LanceNamespace, store: ClaimStore, segments: list[str]) -> Resol
         return ResolvedTable(segments=[])
     try:
         described = native.call(ns, "describe_table", DescribeTableRequest(id=segments))
-    except (TableNotFoundError, NamespaceNotFoundError):
+    except TableNotFoundError:
         return ResolvedTable(segments=segments)
+    except NamespaceNotFoundError:
+        return ResolvedTable(segments=segments, namespace_absent=True)
     location = described.location or None
     return ResolvedTable(segments=segments, location=location, claim=location_claims.read(store, location) if location else None)
+
+
+type _Open = Callable[..., lance.LanceDataset]
+
+
+class DoorTable:
+    """The table a door acts on: what its name resolved to when the request reached the door (ADR 0173 §7, [[LH-530]]).
+
+    The router authorized the uuid this resolution read, and the door acts at the location it read, never at the name:
+    every handle it reads or commits through opens there. Each open asks first whether that is still the table authorized
+    (:meth:`require_held`): the location's claim is the one the resolution read, under its ETag, and the table it records
+    is not in the trash. A drop, a re-create, a rename, a deregister and a re-register each write the claim; a
+    recoverable drop keeps it as it was, uuid and all, and files the trash record instead, which an undrop whose last
+    step failed leaves beside the restored table, so a trash record is settled by whether the name still resolves there.
+    Either way the door answers 409, and acts on no other table and on none in the trash.
+
+    A call to the native backend takes the name and no location, so around one the door asks whether the name still
+    resolves to the location under that claim (:meth:`require_named`): after a read, discarding its answer when the name
+    moved (:meth:`read_natively`), and right before a write (:meth:`write_natively`).
+    """
+
+    def __init__(self, ns: LanceNamespace, claims: ClaimStore, resolved: ResolvedTable) -> None:
+        self._ns = ns
+        self._claims = claims
+        self._resolved = resolved
+
+    @property
+    def segments(self) -> list[str]:
+        """The name the door is addressed by."""
+        return list(self._resolved.segments)
+
+    @property
+    def namespace(self) -> LanceNamespace:
+        """The connection the name resolves through: for a native describe the door judges itself, and a readback after its commit."""
+        return self._ns
+
+    @property
+    def resolved(self) -> ResolvedTable:
+        """The resolution the router authorized."""
+        return self._resolved
+
+    @property
+    def location(self) -> str:
+        """The location the name resolved to.
+
+        Raises:
+            TableNotFoundError: The name named no table.
+            NamespaceNotFoundError: The name named no table because its namespace does not exist.
+        """
+        if self._resolved.location is None:
+            missing = NamespaceNotFoundError if self._resolved.namespace_absent else TableNotFoundError
+            raise missing(f"table not found: {fga.canonical_object_id(self.segments)}")
+        return self._resolved.location
+
+    def require_held(self) -> None:
+        """Refuse the door's act unless the location's claim is the one the resolution read and its table is not in the trash.
+
+        Raises:
+            TableNotFoundError: The name named no table.
+            TableChangedError: The claim changed since the resolution read it, or its table was dropped recoverably.
+        """
+        location = self.location
+        now = location_claims.read(self._claims, location)
+        if _etag(now) != _etag(self._resolved.claim):
+            self._refuse(location)
+        if now is not None and kept_in_trash(self._claims, now.claim):
+            self.require_named()
+
+    def require_named(self) -> None:
+        """Refuse the door's act unless the name still resolves to the location, under the claim the resolution read.
+
+        Raises:
+            TableNotFoundError: The name named no table.
+            TableChangedError: The name resolves elsewhere or to nothing now, or the location's claim changed.
+        """
+        self.require_described_at(resolve(self._ns, self._claims, self.segments).location)
+
+    def require_described_at(self, location: str | None) -> None:
+        """:meth:`require_named` for a door whose own native describe, made as it acted, found the name at ``location``.
+
+        Raises:
+            TableNotFoundError: The name named no table.
+            TableChangedError: ``location`` is not the door's, or the location's claim changed.
+        """
+        if location != self.location or _etag(location_claims.read(self._claims, location)) != _etag(self._resolved.claim):
+            self._refuse(location)
+
+    def _refuse(self, now: str | None) -> None:
+        log.warning("door_table_changed", extra={"table": self.segments, "location": self.location, "resolves_to": now})
+        raise TableChangedError(f"table {fga.canonical_object_id(self.segments)} changed while this request was being served; describe it and retry")
+
+    def read_natively(self, method: str, *args: object, via: LanceNamespace | None = None) -> Any:  # noqa: ANN401 — the backend's own answer, as `native.call` types it
+        """``native.call`` of a read that names the table, through ``via`` (the door's own connection when ``None``), kept only
+        while the name still resolves to the door's location (:meth:`require_named`).
+
+        The read may have reached whatever table the name names by then, so its answer, or its failure, is the door's
+        only once the name is found still resolving there after it.
+
+        Raises:
+            TableChangedError: The table changed since the request's resolution.
+        """
+        return _checked(lambda: native.call(via if via is not None else self._ns, method, *args), self.require_named)
+
+    def write_natively(self, method: str, *args: object, via: LanceNamespace | None = None) -> Any:  # noqa: ANN401 — the backend's own answer, as `native.call` types it
+        """``native.call`` of a write that names the table, through ``via`` (the door's own connection when ``None``), made
+        once the name is found still resolving to the door's location (:meth:`require_named`).
+
+        For a write Lance serves only through the namespace: the version finalize (the backend's put-if-not-exists), an
+        index drop, whose system-index refusal is the namespace's own, and a backfill. The write takes no location, so a
+        drop and a create landing between this check and the backend's own resolution of the name, one describe later,
+        would reach the table created; a write Lance serves on a handle is made through :meth:`open` instead.
+
+        Raises:
+            TableChangedError: The table changed since the request's resolution.
+        """
+        self.require_named()
+        return native.call(via if via is not None else self._ns, method, *args)
+
+    def open(self, so: StorageOptions, *, version: int | None = None, branch: str | None = None) -> lance.LanceDataset:
+        """The checked open of the ref named at the location (``namespace.open_resolved_dataset``), once it still holds the table (:meth:`require_held`).
+
+        Raises:
+            TableNotFoundError: The name named no table.
+            TableChangedError: The table changed since the request's resolution.
+            InvalidTableStateError: The opened ref declares a base the catalog did not sanction.
+        """
+        return self._opened(open_resolved_dataset, so, version=version, branch=branch)
+
+    def open_unchecked(self, so: StorageOptions, *, version: int | None = None, branch: str | None = None) -> lance.LanceDataset:
+        """:meth:`open` without the base judge, for a door that reads no row through the handle.
+
+        Raises:
+            TableNotFoundError: The name named no table.
+            TableChangedError: The table changed since the request's resolution.
+        """
+        return self._opened(open_resolved_dataset_unchecked, so, version=version, branch=branch)
+
+    def _opened(self, opener: _Open, so: StorageOptions, *, version: int | None, branch: str | None) -> lance.LanceDataset:
+        # Asked after the open: a claim unchanged since the resolution means no other table took the location in
+        # between, so the handle holds the manifest of the table the router authorized. Asked when the open fails too,
+        # since a table destroyed since its resolution fails the open first, and the change is what the caller needs.
+        return _checked(lambda: opener(self.location, so, self.segments, version=version, branch=branch), self.require_held)
+
+
+class TableChangedError(ConcurrentModificationError):
+    """The table a door resolved changed while the request was served (the spec's code 14).
+
+    Apart from a commit's lost race, which its writer retries by planning again on the new version: a table that
+    changed is retried by its caller, who describes it first.
+    """
+
+
+def _checked[T](act: Callable[[], T], check: Callable[[], None]) -> T:
+    """``act()``, its answer or its failure the door's only once ``check`` passes after it."""
+    try:
+        answer = act()
+    except Exception:
+        check()
+        raise
+    check()
+    return answer
+
+
+def _etag(claim: ClaimRead | None) -> str | None:
+    return claim.etag if claim is not None else None
+
+
+def door_table(ns: LanceNamespace, store: ClaimStore, segments: list[str]) -> DoorTable:
+    """The table ``segments`` names now, for a reader that resolves it outside a request's door (a cron acting on a record)."""
+    return DoorTable(ns, store, resolve(ns, store, segments))
 
 
 def uuid_at(store: ClaimStore, location: str, segments: list[str]) -> str:

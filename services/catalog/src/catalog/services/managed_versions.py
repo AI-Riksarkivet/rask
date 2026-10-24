@@ -32,7 +32,6 @@ from lance_namespace import (
     CreateTableVersionRequest,
     CreateTableVersionResponse,
     InvalidInputError,
-    LanceNamespace,
     ServiceUnavailableError,
     TableBranchNotFoundError,
     UnsupportedOperationError,
@@ -41,7 +40,7 @@ from pydantic import BaseModel, InstanceOf
 
 from catalog.core import lineage_emit, manifest_bytes, provenance_guard
 from catalog.core.base_judge import BaseJudge, require_sanctioned_bases
-from catalog.services import client_fragments, dataplane, maintenance, native, primary_keys
+from catalog.services import client_fragments, dataplane, maintenance, primary_keys, table_claims
 from service_kit.lakehouse import base_refs, base_registry, features, maintenance_due
 from service_kit.lakehouse.branch_layout import BRANCH_CONTAINER
 from service_kit.lakehouse.objectfs import StorageOptions
@@ -855,18 +854,19 @@ def refuse(staged: StagedVersion, so: StorageOptions) -> None:
     _discard(staged.location, so, staged.finalize_id)
 
 
-def finalize(ns: LanceNamespace, staged: StagedVersion, request: CreateTableVersionRequest, so: StorageOptions) -> CreateTableVersionResponse:
+def finalize(table: table_claims.DoorTable, staged: StagedVersion, request: CreateTableVersionRequest, so: StorageOptions) -> CreateTableVersionResponse:
     """Finalize the judged bytes through the backend's put-if-not-exists; a lost race is the backend's 409.
 
     The backend is handed the catalog's own copy, which it moves into the version slot (measured on pylance 13.0.0), so
     the version that lands is the one judged whatever the writer puts over its staged key meanwhile. The copy carries the
     writer's transaction byte for byte, and a client whose answer was lost relies on that: Lance reads the version back
-    and keeps the commit as its own only when the transaction there is the one it staged ([[LH-491]]).
+    and keeps the commit as its own only when the transaction there is the one it staged ([[LH-491]]). The finalize names
+    the table and no location, so it is the door's guarded native write ([[LH-530]]).
     """
     path = f"{dataplane.object_store_path(staged.location.rstrip('/'))}/_versions/d{staged.finalize_id}.manifest"
     judged = request.model_copy(update={"manifest_path": path})
     try:
-        response = CreateTableVersionResponse.model_validate(native.call(ns, "create_table_version", judged))
+        response = CreateTableVersionResponse.model_validate(table.write_natively("create_table_version", judged))
     except BaseException:
         refuse(staged, so)
         raise

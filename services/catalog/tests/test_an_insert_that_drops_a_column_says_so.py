@@ -28,7 +28,10 @@ import pyarrow as pa
 import pytest
 from lance_namespace import CreateNamespaceRequest, connect
 
+from catalog.services import table_claims
 from catalog.services.dataplane import coerce_insert_arrow, create_table
+from catalog.services.table_claims import DoorTable
+from service_kit.lakehouse.location_claims import ClaimStore
 
 
 #: The catalog's default body cap (LANCE_MAX_BODY_BYTES), far above every body here.
@@ -64,22 +67,28 @@ def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace is runtime-only
     return namespace
 
 
-def test_a_dropped_column_is_reported_by_name(ns, caplog: pytest.LogCaptureFixture) -> None:  # noqa: ANN001
+@pytest.fixture
+def table(ns, tmp_path: Path) -> DoorTable:  # noqa: ANN001
+    """The table as a door acts on it, resolved on ``ns``."""
+    return table_claims.door_table(ns, ClaimStore(control_root=str(tmp_path / "control")), TABLE_ID)
+
+
+def test_a_dropped_column_is_reported_by_name(table: DoorTable, caplog: pytest.LogCaptureFixture) -> None:
     payload = pa.table({"id": pa.array([2], pa.int64()), "s": pa.array(["b"]), "OOPS": pa.array(["gone"])})
 
     with caplog.at_level(logging.WARNING):
-        coerce_insert_arrow(ns, {}, TABLE_ID, _ipc(payload), max_bytes=_BODY_LIMIT)
+        coerce_insert_arrow(table, {}, _ipc(payload), max_bytes=_BODY_LIMIT)
 
     assert any("OOPS" in record.getMessage() or "OOPS" in str(getattr(record, "columns", "")) for record in caplog.records), (
         "the column was discarded and nothing said so, so a caller cannot tell a stored value from a lost one"
     )
 
 
-def test_an_aligned_insert_reports_nothing(ns, caplog: pytest.LogCaptureFixture) -> None:
+def test_an_aligned_insert_reports_nothing(table: DoorTable, caplog: pytest.LogCaptureFixture) -> None:
     """The control: a payload that drops nothing must not produce a warning anyone learns to ignore."""
     payload = pa.table({"id": pa.array([3], pa.int64()), "s": pa.array(["c"])}, schema=SCHEMA)
 
     with caplog.at_level(logging.WARNING):
-        coerce_insert_arrow(ns, {}, TABLE_ID, _ipc(payload), max_bytes=_BODY_LIMIT)
+        coerce_insert_arrow(table, {}, _ipc(payload), max_bytes=_BODY_LIMIT)
 
     assert not caplog.records, f"an exactly-aligned insert warned anyway: {[r.getMessage() for r in caplog.records]}"

@@ -99,7 +99,7 @@ from catalog.core import manifest_bytes, provenance_guard
 from catalog.core.config import shared_lance_session
 from catalog.core.identifiers import rename_destination
 from catalog.core.modes import CreateMode, InsertMode
-from catalog.core.namespace import disarm_commit_path_cleanup, judged_native_version, open_dataset, open_dataset_unchecked
+from catalog.core.namespace import disarm_commit_path_cleanup, judged_for_native_read, open_resolved_dataset, open_resolved_dataset_unchecked
 from catalog.services import changes, native, primary_keys, table_bases, table_claims
 from catalog.services.base_credentials import BaseCredentials
 from catalog.services.cast_size import bytes_after_cast
@@ -123,16 +123,8 @@ from storage import s3_client, split_s3_uri
 log = logging.getLogger(__name__)
 
 
-def _table_id(req: object) -> list[str]:
-    """Return the request's table identifier, or raise if it is empty."""
-    table_id = getattr(req, "id", None)
-    if not table_id:
-        raise InvalidInputError("table identifier is required")
-    return table_id
-
-
 def read_version_and_schema(
-    ns: LanceNamespace,
+    location: str,
     so: StorageOptions,
     table_id: list[str],
     pin_version: int | None,
@@ -148,29 +140,30 @@ def read_version_and_schema(
     commit landed last, which under concurrent appends is somebody else's (measured on pylance 12.0.0:
     two handles appending in turn commit v3 and v4, and a reopen after both reports v4 for each).
 
-    ``branch`` must name the ref the write COMMITTED TO: a branch keeps its own version sequence, so
-    version N opened on main is a different snapshot.
+    ``location`` is where the write committed, the location its door resolved ([[LH-530]]): a name read again after
+    the commit may name another table by then. ``branch`` must name the ref the write COMMITTED TO: a branch keeps its
+    own version sequence, so version N opened on main is a different snapshot.
 
     Entirely best-effort: the write is already committed, so a readback failure must degrade the lineage
     enrichment (``(pin_version, [], None)``), never fail the request.
     """
     try:
-        dataset = open_dataset(ns, so, table_id, version=pin_version, branch=branch)
+        dataset = open_resolved_dataset(location, so, table_id, version=pin_version, branch=branch)
         # The physical URI rides the SAME handle, so the standard `dataSource` facet costs nothing
         # beyond this open. Without it #23 reconcile has no URI to read and reports every live table
         # `missing_on_storage`, and an event-driven consumer receives a table id it cannot resolve —
         # `services/maintenance` holds no catalog client by design.
-        location = str(getattr(dataset, "uri", "") or "") or None
+        uri = str(getattr(dataset, "uri", "") or "") or None
     except Exception as exc:
         log.warning("lineage_readback_failed", extra={"table": table_id, "error": str(exc)})
         return pin_version, [], None
     if pin_version is None:
-        return None, [], location
+        return None, [], uri
     try:
-        return pin_version, facet_fields(dataset.schema), location
+        return pin_version, facet_fields(dataset.schema), uri
     except Exception as exc:
         log.warning("schema_facet_read_failed", extra={"table": table_id, "error": str(exc)})
-        return pin_version, [], location
+        return pin_version, [], uri
 
 
 #: How far below a branch's head :func:`committed_version` looks for a transaction. The commit being
@@ -179,8 +172,8 @@ def read_version_and_schema(
 _TRANSACTION_SEARCH_DEPTH: Final = 64
 
 
-def committed_version(ns: LanceNamespace, so: StorageOptions, table_id: list[str], transaction_id: str | None, *, branch: str | None) -> int | None:
-    """The version the transaction ``transaction_id`` committed on ``branch``, or ``None`` when it cannot be found.
+def committed_version(table: table_claims.DoorTable, so: StorageOptions, transaction_id: str | None, *, branch: str | None) -> int | None:
+    """The version the transaction ``transaction_id`` committed on ``branch`` of the door's ``table``, or ``None`` when it cannot be found.
 
     For the native ops whose response carries a ``transaction_id`` and no version (restore, schema
     metadata, the index doors): the spec's ``DescribeTransaction`` answers ``properties.version``
@@ -194,16 +187,21 @@ def committed_version(ns: LanceNamespace, so: StorageOptions, table_id: list[str
     branch's head returned that uuid. The walk starts at the head and stops at the bound or above the
     branch point, the first version the branch did not commit.
 
+    Main's lookup names the table, which only that table's own history answers, since the transaction id is the
+    commit's; a branch's opens the location the door resolved. Read after the write, so neither asks whether the
+    name still resolves there.
+
     Best-effort: ``None`` makes the event versionless, never the request a failure.
     """
     if not transaction_id:
         return None
+    table_id = table.segments
     try:
         if recorded_branch(branch) is None:
-            described = ns.describe_transaction(DescribeTransactionRequest(id=[*table_id, transaction_id]))
+            described = table.namespace.describe_transaction(DescribeTransactionRequest(id=[*table_id, transaction_id]))
             raw = (described.properties or {}).get("version")
             return int(raw) if raw is not None else None
-        dataset = open_dataset_unchecked(ns, so, table_id, branch=branch)
+        dataset = open_resolved_dataset_unchecked(table.location, so, table_id, branch=branch)
         head = int(dataset.version)
         # THE WALK STOPS ABOVE THE BRANCH POINT. A branch's first manifest carries the parent's version
         # number and no transaction a write could have made, and on pylance 12.0.0 `read_transaction` on
@@ -228,8 +226,8 @@ def committed_version(ns: LanceNamespace, so: StorageOptions, table_id: list[str
     return None
 
 
-def branch_identifier(ns: LanceNamespace, so: StorageOptions, table_id: list[str], branch: str | None) -> str | None:
-    """The identifier of the CURRENT incarnation of ``branch``, or ``None`` for main or when unreadable.
+def branch_identifier(location: str, so: StorageOptions, table_id: list[str], branch: str | None) -> str | None:
+    """The identifier of the CURRENT incarnation of ``branch`` of the table at ``location``, or ``None`` for main or when unreadable.
 
     pylance 12's ``branches.list()`` carries ``branch_identifier``, the version mapping stored in
     ``_refs/branches/<b>.json``: a list of ``(parent version, uuid)`` pairs from the first branch off main
@@ -243,7 +241,7 @@ def branch_identifier(ns: LanceNamespace, so: StorageOptions, table_id: list[str
     if name is None:
         return None
     try:
-        entry = open_dataset_unchecked(ns, so, table_id).branches.list().get(name)
+        entry = open_resolved_dataset_unchecked(location, so, table_id).branches.list().get(name)
     except Exception as exc:
         log.warning("branch_identifier_unreadable", extra={"table": table_id, "branch": name, "error": str(exc)})
         return None
@@ -584,6 +582,7 @@ def create_table(
     registry: base_registry.BaseRegistry | None,
     holder: str = "",
     transaction_properties: dict[str, str] | None = None,
+    overwriting: table_claims.DoorTable | None = None,
 ) -> CreateTableResponse:
     """Create a table at file format 2.2 with stable row ids — the ONLY create path (audit 2026-07-14).
 
@@ -627,20 +626,27 @@ def create_table(
     table's canonical id, required whenever ``registry`` is given.
 
     ``transaction_properties`` ride the commit that writes the data (the run a governed create names).
+
+    ``overwriting`` is the table an ``Overwrite`` asked ``can_drop`` on, as its door resolved it ([[LH-530]]): the write
+    lands at that location once the name still resolves there.
+
+    Raises:
+        ConcurrentModificationError: The table an ``Overwrite`` resolved changed since.
     """
     if registry is not None and not holder:
         raise ValueError("a governed create names the table that holds its location and data directories")
     allow_external = allow_external_blobs
     external_blob_bases = external_blob_bases or []
     normalized = CreateMode.parse(mode)
-    existing = _existing_location(ns, segments)
+    existing = overwriting.location if overwriting is not None else _existing_location(ns, segments)
     only_declared = existing is not None and not holds_a_version(existing, so)
 
     if existing is not None and not only_declared:  # a written, readable table already lives here
         if normalized is CreateMode.OVERWRITE:
             # A new version of the same table, so the table's provenance rides onto it ([[LH-242]]).
             # Disarmed first ([[LH-245]]): an overwrite carries the table's config forward, keys included.
-            current = disarm_commit_path_cleanup(lance.dataset(existing, storage_options=so, session=shared_lance_session()), segments)
+            opened = overwriting.open_unchecked(so) if overwriting is not None else lance.dataset(existing, storage_options=so, session=shared_lance_session())
+            current = disarm_commit_path_cleanup(opened, segments)
             # The table's key, not the payload's: a key is fixed once set (`lance_docs/file_format.md:4684`).
             primary_keys.refuse_repeats_within(table, primary_keys.key_columns(current.lance_schema), door="create")
             dataset = _write_blob(
@@ -664,6 +670,8 @@ def create_table(
     # BEFORE the declare, so a refused create leaves no name behind ([[LH-243]]).
     primary_keys.refuse_repeats_within(table, primary_keys.declared_key(table.schema), door="create")
     if existing is not None and only_declared:  # declared, no data yet → write into it (all modes)
+        if overwriting is not None:
+            overwriting.require_held()
         if registry is not None:
             table_claims.take(ns, _claim_store(registry), existing, holder, segments)
         return _write_blob_into(
@@ -1125,7 +1133,7 @@ _STAMPED_COMMIT_ATTEMPTS: Final = 10
 
 
 def commit_stamped[T](
-    ns: LanceNamespace, so: StorageOptions, table_id: list[str], properties: dict[str, str], plan: Callable[[lance.LanceDataset], tuple[Transaction, T]]
+    table: table_claims.DoorTable, so: StorageOptions, properties: dict[str, str], plan: Callable[[lance.LanceDataset], tuple[Transaction, T]]
 ) -> tuple[int, T]:
     """Commit the transaction ``plan`` builds on main's latest version with ``properties``; return the version.
 
@@ -1137,11 +1145,16 @@ def commit_stamped[T](
     the backend's put-if-not-exists (the ``version/create`` finalize); a lost race plans again on the new latest
     version, whose rows the key check then sees.
 
+    The finalize names the table and no location, so it is the door's guarded native write ([[LH-530]]), asking the name
+    again after the plan has written its data files, which can take as long as the rows do.
+
     Raises:
         ConcurrentModificationError: Every attempt lost its race.
+        TableChangedError: The table changed since the door's resolution.
     """
+    table_id = table.segments
     for _ in range(_STAMPED_COMMIT_ATTEMPTS):
-        dataset = disarm_commit_path_cleanup(open_dataset(ns, so, table_id), table_id)
+        dataset = disarm_commit_path_cleanup(table.open(so), table_id)
         transaction, measured = plan(dataset)
         detached = lance.LanceDataset.commit(dataset, replace(transaction, transaction_properties=properties), detached=True)
         location = dataset.uri
@@ -1157,10 +1170,13 @@ def commit_stamped[T](
             request = CreateTableVersionRequest(
                 id=table_id, version=version, manifest_path=f"{object_store_path(location)}/_versions/d{finalize_id}.manifest", manifest_size=len(body)
             )
-            native.call(ns, "create_table_version", request)
-        except ConcurrentModificationError:
-            discard_detached_manifest(location, so, finalize_id)
-            continue
+            try:
+                table.write_natively("create_table_version", request)
+            except table_claims.TableChangedError:
+                raise
+            except ConcurrentModificationError:
+                discard_detached_manifest(location, so, finalize_id)
+                continue
         except BaseException:
             discard_detached_manifest(location, so, finalize_id)
             raise
@@ -1741,7 +1757,7 @@ def _column_op(action: str, fields: Sequence[str] = ()) -> Generator[None]:
 
     Classification, in order:
 
-    * ``LanceNamespaceError`` — already typed (``TableBranchNotFound`` out of ``open_dataset``, our own
+    * ``LanceNamespaceError`` — already typed (``TableBranchNotFound`` out of the door's open, our own
       ``InvalidInput`` for an unsupported cast target): re-raised untouched.
     * a message naming a MISSING column → ``TableColumnNotFoundError`` (code 12 → 404). ``fields`` is the
       live schema, appended when Lance's own text does not already list it, so the answer always tells the
@@ -1790,9 +1806,9 @@ def _column_op(action: str, fields: Sequence[str] = ()) -> Generator[None]:
         raise  # not attributable to the request: a real 5xx, and it stays one
 
 
-def update_table(ns: LanceNamespace, so: StorageOptions, req: UpdateTableRequest) -> UpdateTableResponse:
+def update_table(table: table_claims.DoorTable, so: StorageOptions, req: UpdateTableRequest) -> UpdateTableResponse:
     """Apply SQL ``[path, expression]`` updates to matching rows."""
-    table_id = _table_id(req)
+    table_id = table.segments
     updates = dict(req.updates or [])
     if not updates:
         raise InvalidInputError("update requires at least one [path, expression] pair")
@@ -1804,7 +1820,7 @@ def update_table(ns: LanceNamespace, so: StorageOptions, req: UpdateTableRequest
     refuse_an_unbounded_boolean_chain(req.predicate, field="predicate")
     for expression in updates.values():
         refuse_an_unbounded_boolean_chain(expression, field="updates")
-    dataset = disarm_commit_path_cleanup(open_dataset(ns, so, table_id, branch=req.branch), table_id)
+    dataset = disarm_commit_path_cleanup(table.open(so, branch=req.branch), table_id)
     with caller_sql("invalid update expression or predicate"):
         result = dataset.update(updates, where=req.predicate)
     # pylance's update() returns an UpdateResult TypedDict (a plain dict at runtime); the row count is
@@ -1815,20 +1831,26 @@ def update_table(ns: LanceNamespace, so: StorageOptions, req: UpdateTableRequest
     return UpdateTableResponse(updated_rows=updated if updated is not None else 0, version=dataset.version)
 
 
-def delete_from_table(ns: LanceNamespace, so: StorageOptions, req: DeleteFromTableRequest) -> DeleteFromTableResponse:
+def delete_from_table(table: table_claims.DoorTable, so: StorageOptions, req: DeleteFromTableRequest) -> DeleteFromTableResponse:
     """Delete rows matching the request predicate."""
-    table_id = _table_id(req)
+    table_id = table.segments
     # Same omission as `update_table` above, and worse here: a wrong-target DELETE loses rows that were
     # never meant to be touched, and returns 200.
     refuse_an_unbounded_boolean_chain(req.predicate, field="predicate")
-    dataset = disarm_commit_path_cleanup(open_dataset(ns, so, table_id, branch=req.branch), table_id)
+    dataset = disarm_commit_path_cleanup(table.open(so, branch=req.branch), table_id)
     with caller_sql("invalid delete predicate"):
         dataset.delete(req.predicate)
     return DeleteFromTableResponse(version=dataset.version)
 
 
 def insert_into_table(
-    ns: LanceNamespace, so: StorageOptions, req: InsertIntoTableRequest, data: bytes, *, max_bytes: int, transaction_properties: dict[str, str] | None
+    table: table_claims.DoorTable,
+    so: StorageOptions,
+    req: InsertIntoTableRequest,
+    data: bytes,
+    *,
+    max_bytes: int,
+    transaction_properties: dict[str, str] | None,
 ) -> InsertIntoTableResponse:
     """Append (or overwrite) Arrow-IPC rows on the ref the request NAMES, and report the commit it made.
 
@@ -1855,7 +1877,7 @@ def insert_into_table(
     # Validated here as well as at the door's coercion: this hands pyarrow's buffers to Lance in-process,
     # and Lance writes whatever an unvalidated offset points at.
     rows = read_arrow_body(data, max_bytes=max_bytes)
-    dataset = disarm_commit_path_cleanup(open_dataset(ns, so, _table_id(req), branch=req.branch), _table_id(req))
+    dataset = disarm_commit_path_cleanup(table.open(so, branch=req.branch), table.segments)
     # THROUGH `InsertMode`, the one vocabulary every caller shares. pylance's own parser is not the
     # spec's: it takes `create`, which the spec does not give this door, and refuses an unknown value with
     # a bare ValueError that would answer 500. The parse is idempotent, so a mode the door already parsed
@@ -1866,9 +1888,7 @@ def insert_into_table(
     with _write_schema_errors():
         keyed_append = mode is InsertMode.APPEND and primary_keys.joinable(rows, keys)
         if keyed_append and transaction_properties is not None:
-            version, _ = commit_stamped(
-                ns, so, _table_id(req), transaction_properties, lambda latest: primary_keys.plan_new_keys(latest, rows, keys, door="insert")
-            )
+            version, _ = commit_stamped(table, so, transaction_properties, lambda latest: primary_keys.plan_new_keys(latest, rows, keys, door="insert"))
         elif keyed_append:
             # Lance's own enforcement, on the same handle: refused when the key is held as it lands, and
             # re-planned when another commit wins the race, so a racing insert of the same key is refused ([[LH-243]]).
@@ -1890,16 +1910,19 @@ def _refuse_a_run_on_a_branch(transaction_properties: dict[str, str] | None, bra
 
 
 def merge_insert_into_table(
-    ns: LanceNamespace,
+    table: table_claims.DoorTable,
     so: StorageOptions,
     req: MergeInsertIntoTableRequest,
     data: bytes,
     *,
     max_bytes: int,
-    data_ns: LanceNamespace,
     transaction_properties: dict[str, str] | None,
 ) -> MergeInsertIntoTableResponse:
-    """Run the spec's merge-insert against the ref the request NAMES; main's native merge runs on ``data_ns``.
+    """Run the spec's merge-insert against the ref the request NAMES, on the handle opened at the door's location.
+
+    In-process on every ref, main included: the native merge names the table and would resolve it again ([[LH-530]]),
+    and it runs the same ``MergeInsertBuilder`` on the dataset it loads (lance-namespace-impls 13.0.0, ``dir.rs``),
+    answering no transaction id either.
 
     Same defect and same severity as `insert_into_table`: verified live, a merge naming `work` applied
     its update to MAIN and left the branch untouched, reporting `num_updated_rows: 1` for a row it had
@@ -1914,27 +1937,22 @@ def merge_insert_into_table(
     runs in-process, because the native merge takes no transaction properties.
     """
     _refuse_a_run_on_a_branch(transaction_properties, req.branch, door="merge_insert")
-    # BEFORE EITHER ARM. The branch arm hands pyarrow's buffers to Lance in-process, where an offset
-    # past its values buffer is written as process heap and a decreasing one crashes the process
-    # (measured on pylance 12.0.0); main's native reader refuses both, as a 500. Checked once, here, so
-    # both arms answer 400.
+    # BEFORE THE MERGE. Lance in-process is handed pyarrow's buffers, where an offset past its values
+    # buffer is written as process heap and a decreasing one crashes the process (measured on pylance 12.0.0),
+    # so both filters answer 400 here.
     refuse_an_unbounded_boolean_chain(req.when_matched_update_all_filt, field="when_matched_update_all_filt")
     refuse_an_unbounded_boolean_chain(req.when_not_matched_by_source_delete_filt, field="when_not_matched_by_source_delete_filt")
     rows = read_arrow_body(data, max_bytes=max_bytes)
-    dataset = disarm_commit_path_cleanup(open_dataset(ns, so, _table_id(req), branch=req.branch), _table_id(req))
+    dataset = disarm_commit_path_cleanup(table.open(so, branch=req.branch), table.segments)
     # A source repeating a key either inserts every copy (unmatched) or is ambiguous (matched); both arms ([[LH-243]]).
     primary_keys.refuse_repeats_within(rows, primary_keys.key_columns(dataset.lance_schema), door="merge_insert")
-    if req.branch is None and transaction_properties is None:
-        return cast(MergeInsertIntoTableResponse, native.call(data_ns, "merge_insert_into_table", req, data))
     # THE BUILDER IS CONSTRUCTED INSIDE THE GUARD, and that placement is the fix rather than a tidy-up:
     # `merge_insert(on)` is where Lance rejects a key column that does not exist, and it sat outside
     # `caller_sql`, so the one door whose whole job is matching on that column reported `Internal 18`
     # for naming it wrongly — while the branchless path answered 13.
     with _write_schema_errors(), caller_sql("invalid merge_insert filter"):
         if transaction_properties is not None:
-            version, stats = commit_stamped(
-                ns, so, _table_id(req), transaction_properties, lambda latest: _merge_builder(latest, req).execute_uncommitted(rows)
-            )
+            version, stats = commit_stamped(table, so, transaction_properties, lambda latest: _merge_builder(latest, req).execute_uncommitted(rows))
         else:
             stats = _merge_builder(dataset, req).execute(rows)
             version = dataset.version
@@ -1948,34 +1966,37 @@ def merge_insert_into_table(
 
 
 def _merge_builder(dataset: lance.LanceDataset, req: MergeInsertIntoTableRequest) -> lance.MergeInsertBuilder:
-    """The merge ``req`` asks for, on ``dataset``; every spec parameter has a builder method of the same name."""
+    """The merge ``req`` asks for, on ``dataset``; every spec parameter has a builder method of the same name.
+
+    Read as ``spec.yaml`` states them: each ``*_filt`` is its clause's own condition, so a filter applies whether or not
+    its flag is set, and ``when_not_matched_insert_all`` defaults to false. The ``dir`` backend's native merge reads an
+    absent ``when_not_matched_insert_all`` as an insert (lance-namespace-impls 13.0.0, ``dir.rs``), which the spec's
+    default is not.
+    """
     builder = dataset.merge_insert(req.on)
-    if req.when_matched_update_all:
+    if req.when_matched_update_all or req.when_matched_update_all_filt is not None:
         builder.when_matched_update_all(req.when_matched_update_all_filt)
     if req.when_not_matched_insert_all:
         builder.when_not_matched_insert_all()
-    if req.when_not_matched_by_source_delete:
+    if req.when_not_matched_by_source_delete or req.when_not_matched_by_source_delete_filt is not None:
         builder.when_not_matched_by_source_delete(req.when_not_matched_by_source_delete_filt)
     if req.use_index is not None:
         builder.use_index(req.use_index)
     return builder
 
 
-def refuse_a_restore_that_arms_cleanup(ns: LanceNamespace, so: StorageOptions, table_id: list[str], *, version: int | None, branch: str | None) -> None:
-    """Refuse restoring a version whose config carries ``lance.auto_cleanup.*`` keys ([[LH-245]]).
+def refuse_a_restore_that_arms_cleanup(target: lance.LanceDataset, *, version: int) -> None:
+    """Refuse restoring ``target``, the version a restore would commit again, when its config carries ``lance.auto_cleanup.*`` keys ([[LH-245]]).
 
     A restore commits the restored version's config, and Lance's commit-path cleanup reads the manifest a
     commit produces (measured on pylance 12.0.0: disarming the latest version and then restoring an armed one
     re-armed the table and deleted versions in the restore's own commit). No disarm can precede that commit,
     because the keys arrive with it, so the door refuses rather than letting a restore delete history past
-    every hold. Unchecked, because a restore reads no row.
+    every hold.
 
     Raises:
         InvalidInputError: The version to restore carries ``lance.auto_cleanup.*`` keys.
     """
-    if version is None:
-        return
-    target = open_dataset_unchecked(ns, so, table_id, version=version, branch=branch)
     if armed := auto_cleanup.armed_keys(target.config()):
         raise InvalidInputError(
             f"restore refused: version {version} carries commit-path auto-cleanup config {armed}, and restoring it would delete "
@@ -1983,20 +2004,29 @@ def refuse_a_restore_that_arms_cleanup(ns: LanceNamespace, so: StorageOptions, t
         )
 
 
-def restore(ns: LanceNamespace, so: StorageOptions, req: RestoreTableRequest) -> tuple[RestoreTableResponse, int | None]:
+def restore(table: table_claims.DoorTable, so: StorageOptions, req: RestoreTableRequest) -> tuple[RestoreTableResponse, int]:
     """Commit ``req``'s ref at ``req.version`` again as its newest version: the spec's answer, and the version made.
 
-    The spec's ``RestoreTable`` answers a transaction id and no version, so the version is read back from it, and
-    ``None`` means it could not be. Shared by the restore door and a promotion's rejection, which restores main to
-    the published version (ADR 0156 C1).
+    The spec's ``RestoreTable`` answers a transaction id and no version; the version is the handle's own after the
+    restore. Shared by the restore door and a promotion's rejection, which restores main to the published version
+    (ADR 0156 C1).
+
+    The version is opened at the door's location, where a missing branch answers 22 and a version the ref lacks 11, the
+    codes every other door mints, and restored through that handle: the native restore names the table and would
+    resolve it again ([[LH-530]]), and it restores the dataset it loads the same way (lance-namespace-impls 13.0.0,
+    ``dir.rs``). The handle advances to the version the restore made, on main and on a branch alike (measured on pylance
+    13.0.0). Unchecked, because a restore reads no row.
 
     Raises:
         InvalidInputError: The version to restore would arm commit-path cleanup.
+        TableChangedError: The table changed since the door's resolution.
     """
-    table_id = list(req.id or [])
-    refuse_a_restore_that_arms_cleanup(ns, so, table_id, version=req.version, branch=req.branch)
-    response: RestoreTableResponse = native.call(ns, "restore_table", req)
-    return response, committed_version(ns, so, table_id, response.transaction_id, branch=req.branch)
+    target = table.open_unchecked(so, version=req.version, branch=req.branch)
+    refuse_a_restore_that_arms_cleanup(target, version=req.version)
+    target.restore()
+    version = int(target.version)
+    made = target.read_transaction(version)
+    return RestoreTableResponse(transaction_id=made.uuid if made is not None else None), version
 
 
 def refuse_a_branch_this_door_cannot_honour(branch: str | None, *, door: str, remedy: str | None = None) -> None:
@@ -2048,7 +2078,7 @@ def refuse_a_branch_this_door_cannot_honour(branch: str | None, *, door: str, re
         )
 
 
-def count_rows(ns: LanceNamespace, so: StorageOptions, req: CountTableRowsRequest, *, data_ns: LanceNamespace) -> int:
+def count_rows(table: table_claims.DoorTable, so: StorageOptions, req: CountTableRowsRequest, *, data_ns: LanceNamespace) -> int:
     """Count rows on the ref the request NAMES — the read-side twin of `update_table`'s omission; main's native count runs on ``data_ns``.
 
     The upstream `count_table_rows` takes the whole request and answers from main whatever `branch`
@@ -2061,30 +2091,31 @@ def count_rows(ns: LanceNamespace, so: StorageOptions, req: CountTableRowsReques
     Spec-mandated on both counts. `CountTableRowsRequest.branch` is "Branch to target. When not
     specified, the main branch is used" (namespace.md), and the SDK states the general rule for a
     branch-scoped handle: "Reads and writes operate in the branch's context." An absent ref is error
-    code 22 `TableBranchNotFound`, which `open_dataset` already raises — so routing through it buys the
+    code 22 `TableBranchNotFound`, which the door's open already raises — so routing through it buys the
     404 as well as the correct answer.
 
     MAIN STAYS ON THE UPSTREAM PATH. A branchless count is the overwhelmingly common one and already
     correct; re-implementing it here would put a second definition of "count" in the estate for no
-    defect, and any divergence in predicate dialect or version resolution would be ours to own.
+    defect, and any divergence in predicate dialect or version resolution would be ours to own. The native count
+    names the table, so the answer is kept only when the name still resolves to the door's location ([[LH-530]]).
     """
     refuse_an_unbounded_boolean_chain(req.predicate, field="predicate")
     if req.branch is None:
         # PINNED TO THE VERSION JUDGED ([[LH-279]]): the native count opens the table inside Rust, so the
         # request carries the exact version whose bases were just checked.
-        req.version = judged_native_version(ns, so, _table_id(req), version=req.version)
-        response = native.call(data_ns, "count_table_rows", req)
+        req.version = int(judged_for_native_read(table.open(so, version=req.version), so, table.segments).version)
+        response = table.read_natively("count_table_rows", req, via=data_ns)
         if not isinstance(response, CountTableRowsResponse) or response.count is None:
             raise TypeError(f"count_table_rows must answer a CountTableRowsResponse with a count, got {type(response).__name__}: {response!r}")
         return response.count
-    dataset = open_dataset(ns, so, _table_id(req), version=req.version, branch=req.branch)
+    dataset = table.open(so, version=req.version, branch=req.branch)
     with caller_sql("invalid count predicate"):
         return int(dataset.count_rows(filter=req.predicate) if req.predicate else dataset.count_rows())
 
 
-def add_columns(ns: LanceNamespace, so: StorageOptions, req: AlterTableAddColumnsRequest) -> AlterTableAddColumnsResponse:
+def add_columns(table: table_claims.DoorTable, so: StorageOptions, req: AlterTableAddColumnsRequest) -> AlterTableAddColumnsResponse:
     """Add columns computed from per-column SQL expressions."""
-    table_id = _table_id(req)
+    table_id = table.segments
     columns = req.new_columns or []
     # The spec also allows a `virtual_column` (UDF/Docker-backed) instead of a SQL `expression`. That needs
     # a UDF execution backend we don't run, so reject it as a spec-correct 501 — not a 400 (it's a valid
@@ -2111,15 +2142,15 @@ def add_columns(ns: LanceNamespace, so: StorageOptions, req: AlterTableAddColumn
     transforms = {c.name: c.expression for c in columns if c.expression}
     if not transforms:
         raise InvalidInputError("add_columns requires a name and SQL expression per column")
-    dataset = disarm_commit_path_cleanup(open_dataset(ns, so, table_id, branch=req.branch), table_id)
+    dataset = disarm_commit_path_cleanup(table.open(so, branch=req.branch), table_id)
     with _column_op("add_columns", dataset.schema.names):
         dataset.add_columns(transforms)
     return AlterTableAddColumnsResponse(version=dataset.version)
 
 
-def alter_columns(ns: LanceNamespace, so: StorageOptions, req: AlterTableAlterColumnsRequest) -> AlterTableAlterColumnsResponse:
+def alter_columns(table: table_claims.DoorTable, so: StorageOptions, req: AlterTableAlterColumnsRequest) -> AlterTableAlterColumnsResponse:
     """Rename / re-type / change nullability of existing columns."""
-    table_id = _table_id(req)
+    table_id = table.segments
     alterations: list[dict[str, object]] = []
     for entry in req.alterations or []:
         alteration: dict[str, object] = {"path": entry.path}
@@ -2132,7 +2163,7 @@ def alter_columns(ns: LanceNamespace, so: StorageOptions, req: AlterTableAlterCo
             # data_type is a JsonArrowDataType dict; pylance needs a real pa.DataType, not the JSON dict.
             alteration["data_type"] = _json_arrow_to_pa_type(dt if isinstance(dt, dict) else dt.model_dump())
         alterations.append(alteration)
-    dataset = disarm_commit_path_cleanup(open_dataset(ns, so, table_id, branch=req.branch), table_id)
+    dataset = disarm_commit_path_cleanup(table.open(so, branch=req.branch), table_id)
     provenance_guard.refuse_provenance_alter(dataset.schema, alterations)
     with _column_op("alter_columns", dataset.schema.names):
         # pylance accepts plain dict alterations at runtime; its stub types them as
@@ -2141,11 +2172,11 @@ def alter_columns(ns: LanceNamespace, so: StorageOptions, req: AlterTableAlterCo
     return AlterTableAlterColumnsResponse(version=dataset.version)
 
 
-def drop_columns(ns: LanceNamespace, so: StorageOptions, req: AlterTableDropColumnsRequest) -> AlterTableDropColumnsResponse:
+def drop_columns(table: table_claims.DoorTable, so: StorageOptions, req: AlterTableDropColumnsRequest) -> AlterTableDropColumnsResponse:
     """Drop the named columns from the table."""
-    table_id = _table_id(req)
+    table_id = table.segments
     columns = list(req.columns or [])
-    dataset = disarm_commit_path_cleanup(open_dataset(ns, so, table_id, branch=req.branch), table_id)
+    dataset = disarm_commit_path_cleanup(table.open(so, branch=req.branch), table_id)
     provenance_guard.refuse_provenance_drop(dataset.schema, columns)
     with _column_op("drop_columns", dataset.schema.names):
         dataset.drop_columns(columns)
@@ -2218,9 +2249,8 @@ def _arrow_file_chunks(schema: pa.Schema, first: pa.RecordBatch | None, rest: It
 
 
 def read_changes(
-    ns: LanceNamespace,
+    table: table_claims.DoorTable,
     so: StorageOptions,
-    table_id: list[str],
     *,
     begin_version: int,
     end_version: int | None,
@@ -2277,13 +2307,13 @@ def read_changes(
             version columns cannot describe or whose record cannot be read.
     """
     changes.validate_window(begin_version=begin_version, end_version=end_version)
-    table = ".".join(table_id)
-    dataset = open_dataset(ns, so, table_id, version=end_version, branch=branch)
-    changes.require_row_versions(dataset.has_stable_row_ids, table=table)
+    label = ".".join(table.segments)
+    dataset = table.open(so, version=end_version, branch=branch)
+    changes.require_row_versions(dataset.has_stable_row_ids, table=label)
     end = int(dataset.version)
     spans = _window_spans(dataset, begin_version, end, branch)
     if begin_version > 0:
-        _require_followable_window(spans, table=table)
+        _require_followable_window(spans, table=label)
     if kind == "deleted":
         # A window from version 0 names only rows the consumer never held, and `delta()` would need the
         # manifest of version 1, which maintenance cleanup removes from every table older than its
@@ -2431,18 +2461,6 @@ def filter_internal_metadata(metadata: dict[str, str]) -> dict[str, str]:
     return {k: v for k, v in metadata.items() if not provenance_guard.is_reserved_key(k)}
 
 
-def read_schema_metadata(ns: LanceNamespace, so: StorageOptions, table_id: list[str]) -> dict[str, str]:
-    """The table's schema-level metadata as ``{str: str}`` — the read twin of ``schema_metadata/update``.
-
-    pylance 8.0.0's ``describe_table`` leaves ``DescribeTableResponse.metadata`` unpopulated, so the #74
-    Table Properties UI could WRITE a property but never SEE it back (the editor always seeded empty — found
-    by driving the real UI in a browser, 2026-07-21). The catalog fills the gap: read ``schema.metadata``
-    (Arrow bytes keys/values → str) directly. The reserved ``lineage.*`` / ``rask.*`` keys are excluded — they're
-    not user properties, and the update path MERGES, so hiding them never drops them on a UI save.
-    """
-    return user_schema_metadata(open_dataset_unchecked(ns, so, table_id).schema)
-
-
 def user_schema_metadata(schema: pa.Schema) -> dict[str, str]:
     """``schema``'s schema-level metadata as ``{str: str}``, without the reserved ``lineage.*`` / ``rask.*`` keys."""
     out: dict[str, str] = {}
@@ -2453,7 +2471,7 @@ def user_schema_metadata(schema: pa.Schema) -> dict[str, str]:
 
 
 def update_schema_metadata(
-    ns: LanceNamespace, so: StorageOptions, table_id: list[str], values: dict[str, str | None], *, branch: str | None = None
+    table: table_claims.DoorTable, so: StorageOptions, values: dict[str, str | None], *, branch: str | None = None
 ) -> tuple[dict[str, str], int]:
     """Upsert the table's schema-level metadata; a ``None`` value DELETES that key.
 
@@ -2474,13 +2492,13 @@ def update_schema_metadata(
     reports, and the version the update committed: the handle advances to it in place (measured on pylance
     12.0.0), so the lineage event names this commit rather than whatever a reopen finds.
     """
-    dataset = disarm_commit_path_cleanup(open_dataset(ns, so, table_id, branch=branch), table_id)
+    dataset = disarm_commit_path_cleanup(table.open(so, branch=branch), table.segments)
     result = dataset.update_schema_metadata(values)
     return filter_internal_metadata(result), int(dataset.version)
 
 
 def coerce_insert_arrow(
-    ns: LanceNamespace, so: StorageOptions, table_id: list[str], data: bytes, branch: str | None = None, *, max_bytes: int, overwrite: bool = False
+    table: table_claims.DoorTable, so: StorageOptions, data: bytes, branch: str | None = None, *, max_bytes: int, overwrite: bool = False
 ) -> bytes:
     """Align Arrow-IPC insert rows to the table's schema before the append.
 
@@ -2521,7 +2539,7 @@ def coerce_insert_arrow(
     # corner. Same defect family as `update`/`delete` rewriting main
     # (`test_branch_scoped_mutations_hit_the_branch.py`); it survived here because the door-level gate
     # walks doors that build a branched request model, and this is a helper.
-    target = open_dataset(ns, so, table_id, branch=branch).schema
+    target = table.open(so, branch=branch).schema
     if [(f.name, f.type, f.nullable) for f in incoming.schema] == [(f.name, f.type, f.nullable) for f in target]:
         if not overwrite or incoming.schema.equals(target, check_metadata=True):
             return data
@@ -2540,7 +2558,7 @@ def coerce_insert_arrow(
         # a stored value from a lost one, and the sibling above already raises for the other half of
         # the same schema mismatch. Reported, not refused: accept -> refuse on a live door is a
         # contract change rather than a bug fix.
-        log.warning("insert_dropped_columns", extra={"table": table_id, "columns": discarded})
+        log.warning("insert_dropped_columns", extra={"table": table.segments, "columns": discarded})
     selected = pa.table({f.name: incoming.column(f.name) for f in target})
     _refuse_over_the_cap(sum(bytes_after_cast(selected.column(f.name), f.type) for f in target), max_bytes)
     try:
@@ -2562,16 +2580,15 @@ def _refuse_over_the_cap(size: int, max_bytes: int) -> None:
 
 
 def update_field_metadata(
-    ns: LanceNamespace,
+    table: table_claims.DoorTable,
     so: StorageOptions,
-    table_id: list[str],
     updates: list[dict[str, Any]],
     branch: str | None = None,
 ) -> UpdateFieldMetadataResponse:
     """Merge/replace per-field metadata for the given field paths."""
     field_updates = {u["path"]: dict(u.get("metadata") or {}) for u in updates if u.get("path")}
     replace = any(bool(u.get("replace")) for u in updates)
-    dataset = disarm_commit_path_cleanup(open_dataset(ns, so, table_id, branch=branch), table_id)
+    dataset = disarm_commit_path_cleanup(table.open(so, branch=branch), table.segments)
     with _column_op("update_field_metadata", dataset.schema.names):
         dataset.update_field_metadata(field_updates, replace=replace)
     # A None value is the key-deletion signal for the backend; drop those from the
@@ -2632,7 +2649,7 @@ _TXN_DETAIL_FIELDS = (
 _TXN_FIELD_RENAMES = {"version": "restored_from"}
 
 
-def table_history(ns: LanceNamespace, so: StorageOptions, table_id: list[str], limit: int = 50) -> list[dict[str, Any]]:
+def table_history(table: table_claims.DoorTable, so: StorageOptions, limit: int = 50) -> list[dict[str, Any]]:
     """The table's commit log: one row per version, newest first — what changed, and when.
 
     Lance is immutable and append-only at the manifest level, so the history is not something we have to
@@ -2650,7 +2667,7 @@ def table_history(ns: LanceNamespace, so: StorageOptions, table_id: list[str], l
     ``limit`` bounds the transaction reads, not the versions list: a table with 10k versions should not
     become 10k object-store round trips because a UI asked for a page.
     """
-    dataset = open_dataset_unchecked(ns, so, table_id)
+    dataset = table.open_unchecked(so)
     versions = sorted(dataset.versions(), key=lambda v: int(v["version"]), reverse=True)[:limit]
     out: list[dict[str, Any]] = []
     for entry in versions:
@@ -2665,7 +2682,7 @@ def table_history(ns: LanceNamespace, so: StorageOptions, table_id: list[str], l
         except Exception as exc:
             # Versions written before transaction files, or a GC'd txn, still belong in the log. Reporting
             # the version with a null operation is honest; dropping it would make the history lie by omission.
-            log.info("txn_unreadable", extra={"table": table_id, "version": version, "error": str(exc)})
+            log.info("txn_unreadable", extra={"table": table.segments, "version": version, "error": str(exc)})
             out.append(row)
             continue
         op = getattr(txn, "operation", None)
@@ -2828,11 +2845,10 @@ def _ref_errors(kind: str, name: str, *, invalid_name: str | None = None) -> Gen
         raise translated from exc
 
 
-def list_tags(ns: LanceNamespace, so: StorageOptions, req: ListTableTagsRequest) -> ListTableTagsResponse:
+def list_tags(table: table_claims.DoorTable, so: StorageOptions, req: ListTableTagsRequest) -> ListTableTagsResponse:
     """List the table's tags as ``{name: TagContents{version, manifest_size, branch}}``."""
-    table_id = _table_id(req)
     tags: dict[str, dict[str, Any]] = {}
-    for name, tag in open_dataset_unchecked(ns, so, table_id).tags.list().items():
+    for name, tag in table.open_unchecked(so).tags.list().items():
         # pylance's Tag is a TypedDict (plain dict at runtime), so read by key.
         entry = tag if isinstance(tag, dict) else {"version": getattr(tag, "version", None)}
         tags[name] = {
@@ -2850,16 +2866,16 @@ def _tag_reference(branch: str | None, version: int | None) -> int | tuple[str |
     return (branch, version) if branch is not None else version
 
 
-def create_tag(ns: LanceNamespace, so: StorageOptions, req: CreateTableTagRequest) -> CreateTableTagResponse:
+def create_tag(table: table_claims.DoorTable, so: StorageOptions, req: CreateTableTagRequest) -> CreateTableTagResponse:
     """Tag the given table version with a name (honoring the request's optional ``branch``)."""
     with _ref_errors("tag", req.tag):
-        open_dataset(ns, so, _table_id(req)).tags.create(req.tag, _tag_reference(req.branch, req.version))
+        table.open(so).tags.create(req.tag, _tag_reference(req.branch, req.version))
     return CreateTableTagResponse()
 
 
-def get_tag_version(ns: LanceNamespace, so: StorageOptions, req: GetTableTagVersionRequest) -> GetTableTagVersionResponse:
+def get_tag_version(table: table_claims.DoorTable, so: StorageOptions, req: GetTableTagVersionRequest) -> GetTableTagVersionResponse:
     """Return the table version a tag points to (404 on an unknown tag)."""
-    tags = open_dataset_unchecked(ns, so, _table_id(req)).tags
+    tags = table.open_unchecked(so).tags
     try:
         version = tags.get_version(req.tag)
     except ValueError as exc:  # pylance 8 raises ("Ref not found"), it does NOT return None
@@ -2871,17 +2887,17 @@ def get_tag_version(ns: LanceNamespace, so: StorageOptions, req: GetTableTagVers
     return GetTableTagVersionResponse(version=version, branch=entry.get("branch"))
 
 
-def update_tag(ns: LanceNamespace, so: StorageOptions, req: UpdateTableTagRequest) -> UpdateTableTagResponse:
+def update_tag(table: table_claims.DoorTable, so: StorageOptions, req: UpdateTableTagRequest) -> UpdateTableTagResponse:
     """Move an existing tag to a new table version (honoring the request's optional ``branch``)."""
     with _ref_errors("tag", req.tag):
-        open_dataset(ns, so, _table_id(req)).tags.update(req.tag, _tag_reference(req.branch, req.version))
+        table.open(so).tags.update(req.tag, _tag_reference(req.branch, req.version))
     return UpdateTableTagResponse()
 
 
-def delete_tag(ns: LanceNamespace, so: StorageOptions, req: DeleteTableTagRequest) -> DeleteTableTagResponse:
+def delete_tag(table: table_claims.DoorTable, so: StorageOptions, req: DeleteTableTagRequest) -> DeleteTableTagResponse:
     """Delete a tag from the table."""
     with _ref_errors("tag", req.tag):
-        open_dataset_unchecked(ns, so, _table_id(req)).tags.delete(req.tag)
+        table.open_unchecked(so).tags.delete(req.tag)
     return DeleteTableTagResponse()
 
 
@@ -2898,14 +2914,14 @@ def _branch_reference(req: CreateTableBranchRequest) -> int | tuple[str | None, 
     return None
 
 
-def list_branches(ns: LanceNamespace, so: StorageOptions, req: ListTableBranchesRequest) -> ListTableBranchesResponse:
+def list_branches(table: table_claims.DoorTable, so: StorageOptions, req: ListTableBranchesRequest) -> ListTableBranchesResponse:
     """List the table's branches as ``{name: BranchContents}``, read from pylance ``ds.branches``.
 
     The native ``DirectoryNamespace`` 501s branch ops, but ``lance.LanceDataset`` implements them, so we
     back them in-process here exactly like tags. A ``Branch`` is a TypedDict (plain dict at runtime).
     """
     branches: dict[str, dict[str, Any]] = {}
-    for name, branch in open_dataset_unchecked(ns, so, _table_id(req)).branches.list().items():
+    for name, branch in table.open_unchecked(so).branches.list().items():
         entry = branch if isinstance(branch, dict) else {}
         metadata = dict(entry.get("metadata") or {})
         # WHICH INCARNATION, in the one free-form map `BranchContents` has: the spec declares no field for
@@ -2924,7 +2940,7 @@ def list_branches(ns: LanceNamespace, so: StorageOptions, req: ListTableBranches
     return ListTableBranchesResponse.model_validate({"branches": branches})
 
 
-def create_branch(ns: LanceNamespace, so: StorageOptions, req: CreateTableBranchRequest) -> CreateTableBranchResponse:
+def create_branch(table: table_claims.DoorTable, so: StorageOptions, req: CreateTableBranchRequest) -> CreateTableBranchResponse:
     """Create a branch from main (or a source branch/version) — maps to pylance ``create_branch``.
 
     A COLLISION IS ESTABLISHED BY READING, NOT BY MATCHING A MESSAGE, and this is the one ref failure
@@ -2939,8 +2955,7 @@ def create_branch(ns: LanceNamespace, so: StorageOptions, req: CreateTableBranch
     # `branches.list()` (the default ref is implicit), so the collision check below cannot see it.
     refuse_a_branch_name_the_backend_cannot_use(req.name)
     refuse_a_branch_name_that_shadows_the_layout(req.name)
-    table_id = _table_id(req)
-    dataset = open_dataset(ns, so, table_id)
+    dataset = table.open(so)
     branches = dataset.branches.list()
     if req.name in branches:
         raise TableBranchAlreadyExistsError(f"branch {req.name!r} already exists")
@@ -2959,13 +2974,13 @@ def create_branch(ns: LanceNamespace, so: StorageOptions, req: CreateTableBranch
         with _ref_errors("branch", source, invalid_name=req.name):
             dataset.create_branch(req.name, _branch_reference(req))
     except OSError:
-        if req.name in open_dataset(ns, so, table_id).branches.list():
+        if req.name in table.open(so).branches.list():
             raise TableBranchAlreadyExistsError(f"branch {req.name!r} already exists") from None
         raise
     return CreateTableBranchResponse()
 
 
-def delete_branch(ns: LanceNamespace, so: StorageOptions, req: DeleteTableBranchRequest) -> DeleteTableBranchResponse:
+def delete_branch(table: table_claims.DoorTable, so: StorageOptions, req: DeleteTableBranchRequest) -> DeleteTableBranchResponse:
     """Delete a branch from the table, and every branch whose directory lies inside its own ([[LH-203]]).
 
     THROUGH THE NESTED BRANCHES FIRST. Lance keeps a directory another branch lives in, so deleting
@@ -2978,7 +2993,7 @@ def delete_branch(ns: LanceNamespace, so: StorageOptions, req: DeleteTableBranch
     branch's directory recursively, so deleting ``a/_versions`` deletes ``tree/a/_versions``, which is
     ``a``'s whole history, and ``a`` stops opening. Deleting ``a`` removes both.
     """
-    dataset = open_dataset_unchecked(ns, so, _table_id(req))
+    dataset = table.open_unchecked(so)
     listed = dataset.branches.list()
     branches = list(listed)
     # Read before anything is deleted: a missing `a` with an `a/b` would otherwise delete `a/b` and then fail.

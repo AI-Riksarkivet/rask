@@ -33,6 +33,7 @@ from catalog.api import idempotency as idem
 from catalog.api.dependencies import (
     ControlEmitterDep,
     DataNamespaceDep,
+    DoorTableDep,
     FgaClientDep,
     LineageEmitterDep,
     NamespaceDep,
@@ -50,11 +51,11 @@ from catalog.core.formats import reject_unsupported_properties
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.core.lineage_emit import DELETE, INSERT, MERGE_INSERT, OVERWRITE_TABLE, UPDATE
 from catalog.core.modes import CreateMode, InsertMode
-from catalog.core.namespace import judged_native_dataset, judged_native_version
+from catalog.core.namespace import judged_for_native_read
 from catalog.core.run_context import RunContext
 from catalog.core.serialization import dump
 from catalog.schemas import TableChangesRequest
-from catalog.services import blob_serving, dataplane, native, table_claims, table_create
+from catalog.services import blob_serving, dataplane, table_create
 from service_kit.governed.audit import audit_read
 from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE
 
@@ -204,7 +205,7 @@ async def create_table(
 @router.post("/{id}/insert", response_model_exclude_none=True)
 async def insert_into_table(
     id: str,
-    ns: NamespaceDep,
+    table: DoorTableDep,
     settings: SettingsDep,
     so: StorageOptionsDep,
     token: CurrentToken,
@@ -231,24 +232,23 @@ async def insert_into_table(
     # Ahead of the coerce because that opens the dataset, and a shape refusal costs no round trip.
     insert_mode = InsertMode.parse(mode)
     if insert_mode is InsertMode.OVERWRITE:
-        overwritten = await run_in_threadpool(table_claims.resolve, ns, table_claims.claim_store(settings), segments)
-        await fga_deps.require_table_unprotected(settings, overwritten, force=force)
+        await fga_deps.require_table_unprotected(settings, table.resolved, force=force)
     # Cast the incoming rows to the table's schema first, so a client that infers loose Arrow types (a
     # browser infers float64 for every JS number) can append to int64 columns — else the append 500s on
     # the mismatch. A genuinely incompatible payload becomes a clean 400 here, not a 500 downstream.
     data = await run_in_threadpool(
-        dataplane.coerce_insert_arrow, ns, so, segments, data, branch, max_bytes=settings.max_body_bytes, overwrite=insert_mode is InsertMode.OVERWRITE
+        dataplane.coerce_insert_arrow, table, so, data, branch, max_bytes=settings.max_body_bytes, overwrite=insert_mode is InsertMode.OVERWRITE
     )
     req = InsertIntoTableRequest(id=segments, mode=insert_mode.value, branch=branch)
     response: InsertIntoTableResponse = await run_in_threadpool(
-        partial(dataplane.insert_into_table, ns, so, req, data, max_bytes=settings.max_body_bytes, transaction_properties=_stamp(run, token))
+        partial(dataplane.insert_into_table, table, so, req, data, max_bytes=settings.max_body_bytes, transaction_properties=_stamp(run, token))
     )
     # The version THIS insert committed, off the handle that committed it: a reopen would name whichever
     # append landed last.
     await lineage_deps.emit_measured_write(
         emitter,
         segments,
-        ns=ns,
+        location=table.location,
         so=so,
         token=token,
         operation=OVERWRITE_TABLE if insert_mode is InsertMode.OVERWRITE else INSERT,
@@ -266,8 +266,7 @@ async def insert_into_table(
 @router.post("/{id}/merge_insert", response_model_exclude_none=True)
 async def merge_insert_into_table(
     id: str,
-    ns: NamespaceDep,
-    data_ns: DataNamespaceDep,
+    table: DoorTableDep,
     settings: SettingsDep,
     so: StorageOptionsDep,
     token: CurrentToken,
@@ -314,7 +313,13 @@ async def merge_insert_into_table(
     )
     response: MergeInsertIntoTableResponse = await run_in_threadpool(
         partial(
-            dataplane.merge_insert_into_table, ns, so, req, data, max_bytes=settings.max_body_bytes, data_ns=data_ns, transaction_properties=_stamp(run, token)
+            dataplane.merge_insert_into_table,
+            table,
+            so,
+            req,
+            data,
+            max_bytes=settings.max_body_bytes,
+            transaction_properties=_stamp(run, token),
         )
     )
     # merge can add/change columns (schema drift at this version) → record the post-write schema, read
@@ -322,7 +327,7 @@ async def merge_insert_into_table(
     await lineage_deps.emit_measured_write(
         emitter,
         segments,
-        ns=ns,
+        location=table.location,
         so=so,
         token=token,
         operation=MERGE_INSERT,
@@ -341,7 +346,7 @@ async def merge_insert_into_table(
 async def update_table(
     id: str,
     body: UpdateTableRequest,
-    ns: NamespaceDep,
+    table: DoorTableDep,
     settings: SettingsDep,
     so: StorageOptionsDep,
     token: CurrentToken,
@@ -356,11 +361,11 @@ async def update_table(
     reject_unsupported_properties(body.properties)
     segments = parse_identifier(id)
     body.id = reconcile_body_id(segments, body.id)
-    response: UpdateTableResponse = await run_in_threadpool(dataplane.update_table, ns, so, body)
+    response: UpdateTableResponse = await run_in_threadpool(dataplane.update_table, table, so, body)
     await lineage_deps.emit_measured_write(
         emitter,
         segments,
-        ns=ns,
+        location=table.location,
         so=so,
         token=token,
         operation=UPDATE,
@@ -378,7 +383,7 @@ async def update_table(
 async def delete_from_table(
     id: str,
     body: DeleteFromTableRequest,
-    ns: NamespaceDep,
+    table: DoorTableDep,
     settings: SettingsDep,
     so: StorageOptionsDep,
     token: CurrentToken,
@@ -389,13 +394,13 @@ async def delete_from_table(
     """Delete rows matching a predicate — ``delete_from_table``; emits a DELETE lineage event."""
     segments = parse_identifier(id)
     body.id = reconcile_body_id(segments, body.id)
-    response: DeleteFromTableResponse = await run_in_threadpool(dataplane.delete_from_table, ns, so, body)
+    response: DeleteFromTableResponse = await run_in_threadpool(dataplane.delete_from_table, table, so, body)
     # A row-delete doesn't change columns, but the event at this new version still carries the
     # (unchanged) schema, so every version the feed records has one, not just writes.
     await lineage_deps.emit_measured_write(
         emitter,
         segments,
-        ns=ns,
+        location=table.location,
         so=so,
         token=token,
         operation=DELETE,
@@ -457,7 +462,7 @@ def _serves(media_type: str) -> dict[int | str, dict[str, object]]:
 @management_router.get("/{id}/blobs", responses=_serves(_OCTET_STREAM), response_class=OctetStreamResponse)
 async def read_table_blob(
     id: str,
-    ns: NamespaceDep,
+    table: DoorTableDep,
     so: StorageOptionsDep,
     column: Annotated[str, Query(min_length=1)],
     row: Annotated[int, Query(ge=0)],
@@ -490,12 +495,10 @@ async def read_table_blob(
     (same rung as ``/query``) — this endpoint serves DATA, so credential-vending tiers apply
     unchanged; it just removes the need for the credentials themselves.
     """
-    segments = parse_identifier(id)
     blob = await run_in_threadpool(
         blob_serving.read_blob,
-        ns,
+        table,
         so,
-        segments,
         column=column,
         row=row,
         version=version,
@@ -549,18 +552,22 @@ def _reader(token: Caller | None) -> str:
 
 @router.post("/{id}/query", responses=_serves(ARROW_FILE), response_class=ArrowFileResponse)
 def query_table(
-    id: str, body: QueryTableRequest, ns: NamespaceDep, data_ns: DataNamespaceDep, settings: SettingsDep, so: StorageOptionsDep, token: CurrentToken = None
+    id: str, body: QueryTableRequest, table: DoorTableDep, data_ns: DataNamespaceDep, settings: SettingsDep, so: StorageOptionsDep, token: CurrentToken = None
 ) -> Response:
-    """Run a query and return matching rows as an Arrow-IPC file — wraps ``query_table``."""
+    """Run a query and return matching rows as an Arrow-IPC file — wraps ``query_table``.
+
+    The native query names the table, so its rows are served only when the name still resolves to the location the
+    door opened ([[LH-530]]).
+    """
     body.id = reconcile_body_id(parse_identifier(id), body.id)
     dataplane.refuse_a_branch_this_door_cannot_honour(body.branch, door="query_table")
     dataplane.refuse_an_unbounded_boolean_chain(body.filter, field="filter")
     # PINNED TO THE VERSION WHOSE BASES WERE JUDGED ([[LH-279]]): the native query opens the table inside
     # Rust, where a planted base answered with another table's rows (lh279 m2).
-    judged = judged_native_dataset(ns, so, list(body.id or []), version=body.version)
+    judged = judged_for_native_read(table.open(so, version=body.version), so, table.segments)
     dataplane.refuse_an_unbounded_result(judged, k=body.k, offset=body.offset, columns=body.columns, max_bytes=settings.query_max_response_mb << 20)
     body.version = int(judged.version)
-    response = native.call(data_ns, "query_table", body)
+    response = table.read_natively("query_table", body, via=data_ns)
     if not isinstance(response, QueryTableResponse) or not isinstance(response.data, bytes):
         raise TypeError(f"query_table must answer a QueryTableResponse carrying Arrow bytes, got {type(response).__name__}: {response!r:.200}")
     # AFTER the read, not before: an audit line for rows nobody received is a false record, and this
@@ -587,7 +594,7 @@ def query_table(
 # `_post` between runs, which is invalid (operationIds must be unique) and made the contract gate
 # flip-flop. Explicit ids keep the spec's POST canonical and name the GET for what it is.
 @management_router.post("/{id}/changes", responses=_serves(ARROW_FILE), response_class=ArrowFileResponse)
-def table_changes(id: str, body: TableChangesRequest, ns: NamespaceDep, so: StorageOptionsDep, token: CurrentToken = None) -> Response:
+def table_changes(id: str, body: TableChangesRequest, table: DoorTableDep, so: StorageOptionsDep, token: CurrentToken = None) -> Response:
     """Rows that changed in ``(begin_version, end_version]`` — Arrow-IPC, like ``query``.
 
     Answers the change data feed `lance_docs/file_format.md:6214-6242` documents, from one snapshot at
@@ -616,12 +623,11 @@ def table_changes(id: str, body: TableChangesRequest, ns: NamespaceDep, so: Stor
     ALLOW` beside the `read_data` record for the same call. Pinned by
     `tests/unit/test_fga_model_contract.py::test_every_DATA_READ_door_is_gated_as_a_READ`.
     """
-    segments = parse_identifier(id)
     # ONE CALL FOR ALL THREE KINDS: the window is one snapshot, opened at its end, and `deleted` is
     # answered from the transaction range on that same handle rather than from a scan — learning which
     # rows a table LOST is as disclosing as learning which it gained, so it is audited identically.
     data = dataplane.read_changes(
-        ns, so, segments, begin_version=body.begin_version, end_version=body.end_version, kind=body.kind, columns=body.columns, branch=body.branch
+        table, so, begin_version=body.begin_version, end_version=body.end_version, kind=body.kind, columns=body.columns, branch=body.branch
     )
     audit_read(subject=_reader(token), resource=id, version=body.end_version, columns=body.columns, change_kind=body.kind)
     # STREAMED, like the blob door above and for the same reason: a feed's size is a property of the
@@ -643,7 +649,7 @@ def table_changes(id: str, body: TableChangesRequest, ns: NamespaceDep, so: Stor
 @router.get("/{id}/count_rows", operation_id="count_table_rows_compat_get")
 def count_table_rows(
     id: str,
-    ns: NamespaceDep,
+    table: DoorTableDep,
     data_ns: DataNamespaceDep,
     so: StorageOptionsDep,
     body: CountTableRowsRequest | None = None,
@@ -661,7 +667,7 @@ def count_table_rows(
     # transparently as a bare number for the REST namespace." It answered `text/plain` and survived
     # only by accident — a bare number happens to parse as JSON — while its two siblings below, whose
     # payload is a STRING, did not.
-    counted = dataplane.count_rows(ns, so, req, data_ns=data_ns)
+    counted = dataplane.count_rows(table, so, req, data_ns=data_ns)
     # A COUNT IS A READ. It answers a question about the rows without returning them, and a subject that
     # can count is a subject that can probe — so it belongs in the same log as a query (§ J1).
     audit_read(subject=_reader(token), resource=id, version=getattr(req, "version", None))
@@ -669,8 +675,8 @@ def count_table_rows(
 
 
 @router.post("/{id}/explain_plan")
-def explain_table_query_plan(id: str, body: ExplainTableQueryPlanRequest, ns: NamespaceDep, so: StorageOptionsDep, token: CurrentToken = None) -> Response:
-    """Return the logical query plan — ``explain_table_query_plan``; plain text."""
+def explain_table_query_plan(id: str, body: ExplainTableQueryPlanRequest, table: DoorTableDep, so: StorageOptionsDep, token: CurrentToken = None) -> Response:
+    """Return the logical query plan — ``explain_table_query_plan``; plain text, served once the name still resolves to the door's location."""
     body.id = reconcile_body_id(parse_identifier(id), body.id)
     # BOTH CHANNELS. `ExplainTableQueryPlanRequest` nests the whole query, so a branch can arrive at
     # the top level OR inside `query` — and guarding only the outer one left the inner one serving
@@ -678,10 +684,10 @@ def explain_table_query_plan(id: str, body: ExplainTableQueryPlanRequest, ns: Na
     # channels reads as a guard while being none.
     dataplane.refuse_a_branch_this_door_cannot_honour(body.branch or (body.query.branch if body.query else None), door="explain_table_query_plan")
     dataplane.refuse_an_unbounded_boolean_chain(body.query.filter if body.query else None, field="query.filter")
-    judged = judged_native_version(ns, so, list(body.id or []), version=body.query.version if body.query else None)
+    judged = int(judged_for_native_read(table.open(so, version=body.query.version if body.query else None), so, table.segments).version)
     if body.query is not None:
         body.query.version = judged
-    result = native.call(ns, "explain_table_query_plan", body)
+    result = table.read_natively("explain_table_query_plan", body)
     # A JSON-ENCODED STRING, per `components.responses`. It answered `text/plain`, which the 0.12.0
     # reqwest client rejects outright (the Python urllib3 client tolerates it, which is why rask's own
     # e2e never noticed). `JSONResponse` on a `str` encodes it AS a string, so a plan that happens to
@@ -696,17 +702,17 @@ def explain_table_query_plan(id: str, body: ExplainTableQueryPlanRequest, ns: Na
 
 @router.post("/{id}/analyze_plan")
 def analyze_table_query_plan(
-    id: str, body: AnalyzeTableQueryPlanRequest, ns: NamespaceDep, data_ns: DataNamespaceDep, settings: SettingsDep, so: StorageOptionsDep
+    id: str, body: AnalyzeTableQueryPlanRequest, table: DoorTableDep, data_ns: DataNamespaceDep, settings: SettingsDep, so: StorageOptionsDep
 ) -> Response:
-    """Return the analyzed query plan with runtime metrics — ``analyze_table_query_plan``; plain text."""
+    """Return the analyzed query plan with runtime metrics — ``analyze_table_query_plan``; plain text, served once the name still resolves to the door's location."""
     body.id = reconcile_body_id(parse_identifier(id), body.id)
     dataplane.refuse_a_branch_this_door_cannot_honour(body.branch, door="analyze_table_query_plan")
     dataplane.refuse_an_unbounded_boolean_chain(body.filter, field="filter")
     # ANALYZE RUNS THE QUERY to report its metrics, so it spends what `/query` would and takes its bound.
-    judged = judged_native_dataset(ns, so, list(body.id or []), version=body.version)
+    judged = judged_for_native_read(table.open(so, version=body.version), so, table.segments)
     dataplane.refuse_an_unbounded_result(judged, k=body.k, offset=body.offset, columns=body.columns, max_bytes=settings.query_max_response_mb << 20)
     body.version = int(judged.version)
-    result = native.call(data_ns, "analyze_table_query_plan", body)
+    result = table.read_natively("analyze_table_query_plan", body, via=data_ns)
     # A JSON-ENCODED STRING, per `components.responses`. It answered `text/plain`, which the 0.12.0
     # reqwest client rejects outright (the Python urllib3 client tolerates it, which is why rask's own
     # e2e never noticed). `JSONResponse` on a `str` encodes it AS a string, so a plan that happens to

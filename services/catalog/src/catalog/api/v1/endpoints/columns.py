@@ -31,7 +31,6 @@ from lance_namespace import (
     AlterTableDropColumnsResponse,
     UpdateFieldMetadataRequest,
     UpdateFieldMetadataResponse,
-    UpdateTableSchemaMetadataRequest,
     UpdateTableSchemaMetadataResponse,
 )
 from openfga_sdk import OpenFgaClient
@@ -39,11 +38,10 @@ from openfga_sdk import OpenFgaClient
 from catalog.api import fga_deps, lineage_deps
 from catalog.api.dependencies import (
     DataNamespaceDep,
+    DoorTableDep,
     FgaClientDep,
     LineageEmitterDep,
-    NamespaceDep,
     ObjectUuidsDep,
-    ResolvedTableDep,
     SettingsDep,
     StorageOptionsDep,
 )
@@ -58,8 +56,8 @@ from catalog.core.lineage_emit import (
     UPDATE_FIELD_METADATA,
     UPDATE_SCHEMA_METADATA,
 )
-from catalog.core.namespace import judged_native_version, open_dataset_for_commit
-from catalog.services import dataplane, native
+from catalog.core.namespace import judged_for_native_read
+from catalog.services import dataplane
 from catalog.services.table_claims import ResolvedTable
 from service_kit.governed import fga
 
@@ -132,7 +130,7 @@ router = APIRouter(prefix="/v1/table", tags=["columns"])
 async def add_columns(
     id: str,
     body: AlterTableAddColumnsRequest,
-    ns: NamespaceDep,
+    table: DoorTableDep,
     settings: SettingsDep,
     so: StorageOptionsDep,
     token: CurrentToken,
@@ -144,11 +142,11 @@ async def add_columns(
     ADD_COLUMNS event carrying the NEW per-version schema, so the feed records the add at its version."""
     segments = parse_identifier(id)
     body.id = reconcile_body_id(segments, body.id)
-    response = await run_in_threadpool(dataplane.add_columns, ns, so, body)
+    response = await run_in_threadpool(dataplane.add_columns, table, so, body)
     await lineage_deps.emit_measured_write(
         emitter,
         segments,
-        ns=ns,
+        location=table.location,
         so=so,
         token=token,
         operation=ADD_COLUMNS,
@@ -164,7 +162,7 @@ async def add_columns(
 async def alter_columns(
     id: str,
     body: AlterTableAlterColumnsRequest,
-    ns: NamespaceDep,
+    table: DoorTableDep,
     settings: SettingsDep,
     so: StorageOptionsDep,
     token: CurrentToken,
@@ -176,11 +174,11 @@ async def alter_columns(
     emits an ALTER_COLUMNS event with the post-evolution schema, so renames and re-types reach the feed."""
     segments = parse_identifier(id)
     body.id = reconcile_body_id(segments, body.id)
-    response = await run_in_threadpool(dataplane.alter_columns, ns, so, body)
+    response = await run_in_threadpool(dataplane.alter_columns, table, so, body)
     await lineage_deps.emit_measured_write(
         emitter,
         segments,
-        ns=ns,
+        location=table.location,
         so=so,
         token=token,
         operation=ALTER_COLUMNS,
@@ -196,7 +194,7 @@ async def alter_columns(
 async def drop_columns(
     id: str,
     body: AlterTableDropColumnsRequest,
-    ns: NamespaceDep,
+    table: DoorTableDep,
     settings: SettingsDep,
     so: StorageOptionsDep,
     token: CurrentToken,
@@ -208,11 +206,11 @@ async def drop_columns(
     event with the reduced schema, so the feed records the version without the dropped columns."""
     segments = parse_identifier(id)
     body.id = reconcile_body_id(segments, body.id)
-    response = await run_in_threadpool(dataplane.drop_columns, ns, so, body)
+    response = await run_in_threadpool(dataplane.drop_columns, table, so, body)
     await lineage_deps.emit_measured_write(
         emitter,
         segments,
-        ns=ns,
+        location=table.location,
         so=so,
         token=token,
         operation=DROP_COLUMNS,
@@ -229,7 +227,7 @@ async def drop_columns(
 # missing `status_code` would go unnoticed until a backend arrived and silently answered 200.
 @router.post("/{id}/backfill_column", response_model_exclude_none=True, status_code=202)
 def backfill_column(
-    id: str, body: AlterTableBackfillColumnsRequest, ns: NamespaceDep, data_ns: DataNamespaceDep, so: StorageOptionsDep
+    id: str, body: AlterTableBackfillColumnsRequest, table: DoorTableDep, data_ns: DataNamespaceDep, so: StorageOptionsDep
 ) -> AlterTableBackfillColumnsResponse:
     """Backfill values into columns via the native driver — wraps ``alter_table_backfill_columns``.
 
@@ -238,16 +236,16 @@ def backfill_column(
     version that hasn't been written. The version the job lands is not announced from here.
     """
     body.id = reconcile_body_id(parse_identifier(id), body.id)
-    judged_native_version(ns, so, list(body.id or []), version=None)
-    return native.call(data_ns, "alter_table_backfill_columns", body)
+    judged_for_native_read(table.open(so), so, table.segments)
+    response = table.write_natively("alter_table_backfill_columns", body, via=data_ns)
+    return response
 
 
 @router.post("/{id}/update_field_metadata", response_model_exclude_none=True)
 async def update_field_metadata(
     id: str,
     body: UpdateFieldMetadataRequest,
-    ns: NamespaceDep,
-    table: ResolvedTableDep,
+    table: DoorTableDep,
     settings: SettingsDep,
     so: StorageOptionsDep,
     token: CurrentToken,
@@ -262,12 +260,12 @@ async def update_field_metadata(
     segments = parse_identifier(id)
     body.id = reconcile_body_id(segments, body.id)
     updates = [u.model_dump() for u in (body.updates or [])]
-    await _require_classifier_for_governance_keys(client, settings, token, table=table, updates=updates)
-    response = await run_in_threadpool(dataplane.update_field_metadata, ns, so, segments, updates, body.branch)
+    await _require_classifier_for_governance_keys(client, settings, token, table=table.resolved, updates=updates)
+    response = await run_in_threadpool(dataplane.update_field_metadata, table, so, updates, body.branch)
     await lineage_deps.emit_measured_write(
         emitter,
         segments,
-        ns=ns,
+        location=table.location,
         so=so,
         token=token,
         operation=UPDATE_FIELD_METADATA,
@@ -283,7 +281,7 @@ async def update_field_metadata(
 async def update_table_schema_metadata(
     id: str,
     body: dict[str, Any],
-    ns: NamespaceDep,
+    table: DoorTableDep,
     settings: SettingsDep,
     so: StorageOptionsDep,
     token: CurrentToken,
@@ -297,9 +295,10 @@ async def update_table_schema_metadata(
     The op MERGES, whatever the spec's "Replace" wording says (probed against a real ``dir`` backend:
     posting ``{owner}`` over ``{owner, tier}`` leaves ``tier`` standing). Omitting a key therefore cannot
     remove it, and the spec's request model types ``metadata`` as a strict ``{str: str}`` that cannot carry
-    a null — so ``{"key": null}`` is a rask EXTENSION, routed to the dataplane's pylance
-    ``update_schema_metadata`` (the same ``None``-deletes dialect ``update_field_metadata`` already speaks).
-    A body with no nulls stays on the native spec op, transaction id and all.
+    a null — so ``{"key": null}`` is a rask EXTENSION, served by pylance's ``update_schema_metadata`` (the same
+    ``None``-deletes dialect ``update_field_metadata`` already speaks). Every body is written through that one call, on
+    the handle opened at the door's location: the native op names the table and would resolve it again ([[LH-530]]),
+    and it makes the same merging call on the dataset it loads (lance-namespace-impls 13.0.0, ``dir.rs``).
 
     Keys under ``lineage.*`` and ``rask.*`` are the platform's and are refused 400, set or null alike.
     """
@@ -334,35 +333,15 @@ async def update_table_schema_metadata(
     # deleting `lineage.dataset_id` erases the name maintenance files a medallion tier under.
     provenance_guard.refuse_reserved_keys(values, door="schema_metadata/update")
     response: UpdateTableSchemaMetadataResponse
-    # A BRANCH TAKES THE DATAPLANE PATH WHICHEVER DIALECT THE BODY SPEAKS. Passing `branch` to the
-    # native op is not enough and looked like it was: the spec request carries the field, the catalog
-    # filled it in, and the upstream implementation disregards it — so a null-free body on a branch
-    # rewrote MAIN's properties and answered 200, while the same call carrying a null was isolated
-    # correctly. Verified live 2026-08-31 against the object store: main advanced a version and took
-    # the branch's key. The dataplane implementation merges and null-deletes with the same semantics
-    # and opens the ref it is given, so routing a branch through it is the whole fix rather than a
-    # detour around one. It costs the native op's transaction id on branch writes, which is a real
-    # trade and the right way round: an id naming a commit to the wrong dataset is worth less than no
-    # id at all.
-    committed: int | None
-    if branch is not None or any(v is None for v in values.values()):
-        updated, committed = await run_in_threadpool(partial(dataplane.update_schema_metadata, ns, so, segments, values, branch=branch))
-        response = UpdateTableSchemaMetadataResponse(metadata=updated)
-    else:
-        req = UpdateTableSchemaMetadataRequest(id=segments, metadata={k: v for k, v in values.items() if v is not None}, branch=branch)
-        await run_in_threadpool(partial(open_dataset_for_commit, ns, so, segments, checked=False))
-        response = await run_in_threadpool(native.call, ns, "update_table_schema_metadata", req)
-        # ONE DOOR, ONE ANSWER. The dataplane route above already hides the reserved `lineage.*` /
-        # `rask.*` keys; the native op returns them verbatim, so without this the same door described a table
-        # two different ways depending on which route the request happened to take — and the map a
-        # caller sees is the map it saves back.
-        response.metadata = dataplane.filter_internal_metadata(response.metadata or {})
-        # The native op answers a transaction id and no version; the version is the one THAT transaction made.
-        committed = await run_in_threadpool(partial(dataplane.committed_version, ns, so, segments, response.transaction_id, branch=None))
+    # THE BRANCH THE BODY NAMES IS THE REF WRITTEN: the native op carries the field and disregards it, so a branch's
+    # null-free body rewrote MAIN's properties and answered 200 (verified live 2026-08-31 against the object store),
+    # while the handle is opened on the ref it is given.
+    updated, committed = await run_in_threadpool(partial(dataplane.update_schema_metadata, table, so, values, branch=branch))
+    response = UpdateTableSchemaMetadataResponse(metadata=updated)
     await lineage_deps.emit_measured_write(
         emitter,
         segments,
-        ns=ns,
+        location=table.location,
         so=so,
         token=token,
         operation=UPDATE_SCHEMA_METADATA,

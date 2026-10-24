@@ -17,17 +17,17 @@ from lance_namespace import (
     CreateTableBranchResponse,
     DeleteTableBranchRequest,
     DeleteTableBranchResponse,
-    LanceNamespace,
     ListTableBranchesRequest,
     ListTableBranchesResponse,
 )
 
 from catalog.api import fga_deps
-from catalog.api.dependencies import ControlEmitterDep, NamespaceDep, ResolvedTableDep, SettingsDep, StorageOptionsDep
+from catalog.api.dependencies import ControlEmitterDep, DoorTableDep, SettingsDep, StorageOptionsDep
 from catalog.api.rask_params import RaskFlag
 from catalog.api.security import CurrentToken
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.services import dataplane
+from catalog.services.table_claims import DoorTable
 from service_kit.control_emit import emit_control
 from service_kit.governed import fga
 
@@ -48,22 +48,21 @@ router = APIRouter(prefix="/v1/table", tags=["branch"])
 @router.post("/{id}/branches/list", response_model_exclude_none=True)
 def list_table_branches(
     id: str,
-    ns: NamespaceDep,
+    table: DoorTableDep,
     so: StorageOptionsDep,
     page_token: str | None = None,
     limit: Annotated[int | None, Query(ge=1, le=_MAX_LIST_LIMIT)] = None,
 ) -> ListTableBranchesResponse:
     """List a table's Git-like branches (paginated) — wraps the pylance ``list_branches`` data-plane op."""
     req = ListTableBranchesRequest(id=parse_identifier(id), page_token=page_token, limit=limit)
-    return dataplane.list_branches(ns, so, req)
+    return dataplane.list_branches(table, so, req)
 
 
 @router.post("/{id}/branches/create", response_model_exclude_none=True)
 async def create_table_branch(
     id: str,
     body: CreateTableBranchRequest,
-    ns: NamespaceDep,
-    table: ResolvedTableDep,
+    table: DoorTableDep,
     so: StorageOptionsDep,
     control: ControlEmitterDep,
     token: CurrentToken = None,
@@ -78,26 +77,26 @@ async def create_table_branch(
     """
     segments = parse_identifier(id)
     body.id = reconcile_body_id(segments, body.id)
-    response = dataplane.create_branch(ns, so, body)
+    response = dataplane.create_branch(table, so, body)
     # AFTER the data-plane call, never before — the rule `namespaces.py` states: a change that did not
     # happen is never announced, so a refused create emits nothing.
     await emit_control(
         control,
         action="table_branch_created",
         object_type="table",
-        object_id=fga.table_object(table.require_uuid()),
+        object_id=fga.table_object(table.resolved.require_uuid()),
         object_name=fga.canonical_object_id(segments),
         actor=f"user:{token.subject}" if token is not None else None,
         # `name`, not `branch` — that is the field `CreateTableBranchRequest` declares. "Branched from
         # what" is the question a consumer asks next, and it is answered from the DATASET rather than
         # from the request: a branch taken from main sends no `from_version` and records main's current
         # version, so announcing the request answered `null` for the case that happens most.
-        extra={"branch": body.name, **_recorded_parent(ns, so, body)},
+        extra={"branch": body.name, **_recorded_parent(table, so, body)},
     )
     return response
 
 
-def _recorded_parent(ns: LanceNamespace, so: dict[str, str], body: CreateTableBranchRequest) -> dict[str, Any]:
+def _recorded_parent(table: DoorTable, so: dict[str, str], body: CreateTableBranchRequest) -> dict[str, Any]:
     """The parent the dataset recorded for a just-created branch, or nothing.
 
     ONE EXTRA READ PER CREATE, which is a rare operation and a permanent announcement: a console that
@@ -113,7 +112,7 @@ def _recorded_parent(ns: LanceNamespace, so: dict[str, str], body: CreateTableBr
     this estate — ingest's publish delta range — and `extra` has no schema to keep the two apart.
     """
     try:
-        listed = dataplane.list_branches(ns, so, ListTableBranchesRequest(id=body.id))
+        listed = dataplane.list_branches(table, so, ListTableBranchesRequest(id=body.id))
         entry = (listed.branches or {}).get(body.name)
     except Exception:  # noqa: BLE001 — an announcement must survive an unreadable parent
         log.warning("branch_parent_unreadable", extra={"branch": body.name})
@@ -135,8 +134,7 @@ def _recorded_parent(ns: LanceNamespace, so: dict[str, str], body: CreateTableBr
 async def delete_table_branch(
     id: str,
     body: DeleteTableBranchRequest,
-    ns: NamespaceDep,
-    table: ResolvedTableDep,
+    table: DoorTableDep,
     settings: SettingsDep,
     so: StorageOptionsDep,
     control: ControlEmitterDep,
@@ -155,16 +153,16 @@ async def delete_table_branch(
     """
     segments = parse_identifier(id)
     body.id = reconcile_body_id(segments, body.id)
-    await fga_deps.require_table_unprotected(settings, table, force=force)
+    await fga_deps.require_table_unprotected(settings, table.resolved, force=force)
     # The incarnation being deleted, read while it still exists: the name alone also names whatever branch
     # is created under it next.
-    identifier = await run_in_threadpool(dataplane.branch_identifier, ns, so, segments, body.name)
-    response = dataplane.delete_branch(ns, so, body)
+    identifier = await run_in_threadpool(dataplane.branch_identifier, table.location, so, segments, body.name)
+    response = dataplane.delete_branch(table, so, body)
     await emit_control(
         control,
         action="table_branch_deleted",
         object_type="table",
-        object_id=fga.table_object(table.require_uuid()),
+        object_id=fga.table_object(table.resolved.require_uuid()),
         object_name=fga.canonical_object_id(segments),
         actor=f"user:{token.subject}" if token is not None else None,
         extra={"branch": body.name, **({dataplane.BRANCH_IDENTIFIER_KEY: identifier} if identifier is not None else {})},

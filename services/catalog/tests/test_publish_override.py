@@ -24,8 +24,11 @@ import pyarrow as pa
 import pytest
 from lance_namespace import CreateNamespaceRequest, connect
 
+from catalog.services import table_claims
 from catalog.services.dataplane import create_table
 from catalog.services.publication import publish
+from catalog.services.table_claims import DoorTable
+from service_kit.lakehouse.location_claims import ClaimStore
 
 
 SCHEMA = pa.schema([pa.field("id", pa.int64()), pa.field("payload", pa.string())])
@@ -47,10 +50,16 @@ def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace, runtime-only
     return namespace
 
 
-def _uri(ns) -> str:  # noqa: ANN001
-    from catalog.core.namespace import open_dataset
+@pytest.fixture
+def table(ns, tmp_path: Path) -> DoorTable:  # noqa: ANN001
+    """The table as a door acts on it, resolved on ``ns``."""
+    return table_claims.door_table(ns, ClaimStore(control_root=str(tmp_path / "control")), TABLE_ID)
 
-    return open_dataset(ns, {}, TABLE_ID).uri
+
+def _uri(ns) -> str:  # noqa: ANN001
+    from tables_by_name import open_by_name
+
+    return open_by_name(ns, {}, TABLE_ID).uri
 
 
 def _write(ns, ids: list[int | None]) -> int:  # noqa: ANN001
@@ -64,26 +73,25 @@ def _empty(ns) -> int:  # noqa: ANN001
 
 
 class TestAnAcceptedFindingPublishes:
-    def test_an_empty_batch_can_be_accepted(self, ns) -> None:  # noqa: ANN001
+    def test_an_empty_batch_can_be_accepted(self, ns, table: DoorTable) -> None:  # noqa: ANN001
         """`row_count_positive` is the archetype of an UNUSUAL finding: a batch that legitimately
         shipped zero rows is not broken, and a service cannot tell that from a bug — a person can."""
         version = _empty(ns)
 
-        refused = publish(ns, {}, table_id=TABLE_ID, version=version, key_column="id")
+        refused = publish(table, {}, version=version, key_column="id")
         assert refused.published is False
 
-        accepted = publish(ns, {}, table_id=TABLE_ID, version=version, key_column="id", accept_assertions=["row_count_positive"])
+        accepted = publish(table, {}, version=version, key_column="id", accept_assertions=["row_count_positive"])
         assert accepted.published is True
         assert accepted.accepted == ["row_count_positive"]
 
-    def test_a_MISSING_declared_column_can_be_accepted(self, ns) -> None:  # noqa: ANN001
+    def test_a_MISSING_declared_column_can_be_accepted(self, ns, table: DoorTable) -> None:  # noqa: ANN001
         """The other reviewable class: a consumer agreed to the schema change."""
         version = _write(ns, [1, 2, 3])
 
         accepted = publish(
-            ns,
+            table,
             {},
-            table_id=TABLE_ID,
             version=version,
             key_column="id",
             required_columns=["id", "thumbnail"],
@@ -94,12 +102,12 @@ class TestAnAcceptedFindingPublishes:
 
 
 class TestStructuralFindingsAreNeverAcceptable:
-    def test_a_NULL_KEY_is_refused_even_when_named(self, ns) -> None:  # noqa: ANN001
+    def test_a_NULL_KEY_is_refused_even_when_named(self, ns, table: DoorTable) -> None:  # noqa: ANN001
         """The load-bearing refusal. The medallion's review will not ask about this; the door will not
         act on it either, so bypassing the workflow buys nothing."""
         version = _write(ns, [1, None, 3])
 
-        result = publish(ns, {}, table_id=TABLE_ID, version=version, key_column="id", accept_assertions=["not_null"])
+        result = publish(table, {}, version=version, key_column="id", accept_assertions=["not_null"])
 
         assert result.published is False
         assert result.accepted == []
@@ -107,15 +115,14 @@ class TestStructuralFindingsAreNeverAcceptable:
 
 
 class TestAnOverrideIsNotABlanketForce:
-    def test_an_UNNAMED_failure_still_refuses(self, ns) -> None:  # noqa: ANN001
+    def test_an_UNNAMED_failure_still_refuses(self, ns, table: DoorTable) -> None:  # noqa: ANN001
         """Accepting one finding must not wave through a second the approver never saw — which is the
         difference between this and `force=true`."""
         version = _empty(ns)
 
         result = publish(
-            ns,
+            table,
             {},
-            table_id=TABLE_ID,
             version=version,
             key_column="id",
             required_columns=["thumbnail"],
@@ -125,12 +132,12 @@ class TestAnOverrideIsNotABlanketForce:
         assert result.published is False
         assert "column_declared" in (result.reason or "")
 
-    def test_accepting_a_finding_that_did_not_occur_changes_nothing(self, ns) -> None:  # noqa: ANN001
+    def test_accepting_a_finding_that_did_not_occur_changes_nothing(self, ns, table: DoorTable) -> None:  # noqa: ANN001
         """A clean version publishes, and records no acceptance — the field means "waved through",
         never "was asked for"."""
         version = _write(ns, [1, 2, 3])
 
-        result = publish(ns, {}, table_id=TABLE_ID, version=version, key_column="id", accept_assertions=["row_count_positive"])
+        result = publish(table, {}, version=version, key_column="id", accept_assertions=["row_count_positive"])
 
         assert result.published is True
         assert result.accepted == []

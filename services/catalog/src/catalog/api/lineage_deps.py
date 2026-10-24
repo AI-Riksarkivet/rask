@@ -6,8 +6,9 @@ copy per endpoint module) so the two correctness properties live in exactly one 
 
 * **the commit, never a re-read** — the version is the one the write itself reported (a handle's
   version after the commit, a response's ``version``, or the version its ``transaction_id`` committed),
-  and the schema comes from ONE open pinned to it, so a concurrent writer can never lend its version or
-  its schema to this event's output;
+  and the schema comes from ONE open pinned to it, at the location the write committed at, so neither a
+  concurrent writer nor a table created under the name since can lend its version or its schema to this
+  event's output;
 * **best-effort throughout** — the mutation is already committed when this runs, so a read-back failure
   degrades the lineage enrichment (versionless / schemaless emit) but never fails the request.
 
@@ -18,7 +19,6 @@ Ops that emit a versionless marker with no read-back (drop/deregister/declare/re
 from __future__ import annotations
 
 from fastapi.concurrency import run_in_threadpool
-from lance_namespace import LanceNamespace
 
 from catalog.api.security import Caller
 from catalog.core.lineage_emit import LineageEmitter, UuidReader, emit_write_event, run_inputs
@@ -31,7 +31,7 @@ async def emit_measured_write(
     emitter: LineageEmitter,
     segments: list[str],
     *,
-    ns: LanceNamespace,
+    location: str,
     so: StorageOptions,
     token: Caller | None,
     operation: str,
@@ -62,12 +62,14 @@ async def emit_measured_write(
     ``commits_rows`` says the commit added rows, which makes a table's first version a write rather than a
     dataset change ([[LH-492]]).
 
+    ``location`` is where the write committed: the location its door resolved ([[LH-530]]), or the one a create made.
+
     ``uuids`` reads the table's uuid from the claim at the location the read-back opened, the table the write landed in.
     """
     # A request may spell main by name; the event records main as no ref at all, as Lance does.
     ref = dataplane.recorded_branch(branch)
-    version, schema_fields, location = await run_in_threadpool(dataplane.read_version_and_schema, ns, so, segments, pin_version, ref)
-    identifier = await run_in_threadpool(dataplane.branch_identifier, ns, so, segments, ref) if ref is not None else None
+    version, schema_fields, uri = await run_in_threadpool(dataplane.read_version_and_schema, location, so, segments, pin_version, ref)
+    identifier = await run_in_threadpool(dataplane.branch_identifier, location, so, segments, ref) if ref is not None else None
     await emit_write_event(
         emitter,
         segments,
@@ -80,7 +82,7 @@ async def emit_measured_write(
         # The standard `dataSource` facet. Every write door reaches lineage through this trailer, so
         # omitting it here withheld the URI from ALL of them — the facet was plumbed end to end and
         # reachable from nothing, the same shape `test_originator_reaches_the_event.py` pins.
-        source_uri=location,
+        source_uri=uri,
         # THE REF FOLLOWS THE WRITE, not just the READ. The version was already read off the right ref
         # above — for the reason this function's own docstring gives — and then the ref was dropped, so
         # the event recorded a number that names two different snapshots (a branch and main keep

@@ -30,7 +30,10 @@ import pyarrow as pa
 import pytest
 from lance_namespace import ConcurrentModificationError, CreateNamespaceRequest, connect
 
+from catalog.services import table_claims
 from catalog.services.dataplane import add_columns, create_table
+from catalog.services.table_claims import DoorTable
+from service_kit.lakehouse.location_claims import ClaimStore
 
 
 lance = pytest.importorskip("lance")
@@ -57,13 +60,19 @@ def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace is runtime-only
     return namespace
 
 
-def test_the_losers_of_an_add_columns_race_answer_CONCURRENT_MODIFICATION(ns) -> None:  # noqa: ANN001
+@pytest.fixture
+def table(ns, tmp_path: Path) -> DoorTable:  # noqa: ANN001
+    """The table as a door acts on it, resolved on ``ns``."""
+    return table_claims.door_table(ns, ClaimStore(control_root=str(tmp_path / "control")), TABLE_ID)
+
+
+def test_the_losers_of_an_add_columns_race_answer_CONCURRENT_MODIFICATION(table: DoorTable) -> None:
     """The headline: a lost race is 14, and a caller can act on 14."""
 
     def add(i: int) -> BaseException | None:
         request = AlterTableAddColumnsRequest(id=TABLE_ID, new_columns=[AddColumnsEntry(name=f"c{i}", expression="id + 1")])
         try:
-            add_columns(ns, {}, request)
+            add_columns(table, {}, request)
         except BaseException as exc:  # noqa: BLE001 — the losers are the subject; every one is inspected
             return exc
         return None
@@ -77,7 +86,7 @@ def test_the_losers_of_an_add_columns_race_answer_CONCURRENT_MODIFICATION(ns) ->
         assert exc.code == 14, f"a lost commit race minted code {exc.code}, not 14"
 
 
-def test_a_column_named_concurrent_is_still_a_MISSING_COLUMN(ns) -> None:  # noqa: ANN001
+def test_a_column_named_concurrent_is_still_a_MISSING_COLUMN(table: DoorTable) -> None:
     """The ordering guard, and it is not hypothetical.
 
     `_COMMIT_CONFLICT_MARKERS` carries the bare word `concurrent`, so testing it before the
@@ -90,5 +99,5 @@ def test_a_column_named_concurrent_is_still_a_MISSING_COLUMN(ns) -> None:  # noq
     from catalog.services.dataplane import drop_columns
 
     with pytest.raises(TableColumnNotFoundError) as caught:
-        drop_columns(ns, {}, AlterTableDropColumnsRequest(id=TABLE_ID, columns=["concurrent"]))
+        drop_columns(table, {}, AlterTableDropColumnsRequest(id=TABLE_ID, columns=["concurrent"]))
     assert caught.value.code == 12, f"a column named 'concurrent' minted code {caught.value.code}, not 12"

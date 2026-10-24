@@ -25,12 +25,12 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from lance_namespace import CreateNamespaceRequest, LanceNamespace
+from tables_by_name import open_by_name
 
 from catalog.api.dependencies import get_namespace, get_storage_options
 from catalog.api.v1.endpoints import erasure as door
 from catalog.core.config import Settings, get_settings
 from catalog.core.identifiers import with_minted_uuid
-from catalog.core.namespace import open_dataset
 from catalog.services.dataplane import create_table, read_arrow_body
 from catalog.services.erasure import ErasureReport, ref_heads, verify
 from service_kit.lakehouse import base_registry
@@ -103,8 +103,8 @@ def namespace(tmp_path: Path) -> LanceNamespace:
         registry=base_registry.BaseRegistry(control_root=str(tmp_path / "control")),
         holder="db$subjects",
     )
-    open_dataset(ns, {}, ["db", "subjects"]).insert(_rows("carol"))
-    source = open_dataset(ns, {}, ["db", "subjects"])
+    open_by_name(ns, {}, ["db", "subjects"]).insert(_rows("carol"))
+    source = open_by_name(ns, {}, ["db", "subjects"])
     clone = str(tmp_path / "data" / "clone.lance")
     source.shallow_clone(clone, (None, None))
     # RECORDED, as the catalog records a clone it made ([[LH-279]]): an unrecorded clone's base is a claim
@@ -137,7 +137,7 @@ def client(namespace: LanceNamespace, tmp_path: Path) -> Iterator[TestClient]:
 def test_the_door_leaves_a_clones_source_readable_through_the_clone(client: TestClient, namespace: LanceNamespace, tmp_path: Path, erasure_job: Any) -> None:  # noqa: ANN401 — conftest.ErasureJob
     recorded = client.post("/management/v1/table/db$subjects/erasure", json={"predicate": _PREDICATE})
     assert recorded.status_code == 202, recorded.text
-    erasure_job(open_dataset(namespace, {}, ["db", "subjects"]).uri, _PREDICATE).run()
+    erasure_job(open_by_name(namespace, {}, ["db", "subjects"]).uri, _PREDICATE).run()
 
     response = client.post(f"/management/v1/table/db$subjects/erasure/{recorded.json()['obligation_id']}/verify", json={"predicate": _PREDICATE})
 

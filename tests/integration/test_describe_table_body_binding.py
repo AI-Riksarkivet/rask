@@ -41,7 +41,7 @@ def _version_exists(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     from catalog.api.v1.endpoints import tables
 
-    monkeypatch.setattr(tables, "open_dataset_unchecked", lambda *a, **k: MagicMock())
+    monkeypatch.setattr(tables, "open_resolved_dataset_unchecked", lambda *a, **k: MagicMock())
 
 
 @pytest.fixture
@@ -57,12 +57,12 @@ def vendor(client: TestClient, fake_ns: MagicMock, claim_described: Callable[[st
 
 
 def _sent(fake_ns: MagicMock) -> Any:
-    """The DescribeTableRequest the ROUTE handed the backend — the FIRST call.
+    """The DescribeTableRequest the ROUTE handed the backend — the SECOND call.
 
-    Not ``call_args``: with ``load_detailed_metadata`` set, the route's metadata backfill re-enters the
-    dataplane, which describes the table again to resolve its location, so the last call is not ours.
+    The first is the resolution every door acts on (ADR 0173 §7, [[LH-530]]), which names the table and nothing the
+    body carries; the route's own describe follows it.
     """
-    return fake_ns.describe_table.call_args_list[0][0][0]
+    return fake_ns.describe_table.call_args_list[1][0][0]
 
 
 def test_body_vend_credentials_and_version_are_honoured(client: TestClient, fake_ns: MagicMock, vendor: MagicMock) -> None:
@@ -92,7 +92,7 @@ def test_a_body_flag_is_honoured(
     from catalog.api.v1.endpoints import tables
     from catalog.core import namespace
 
-    monkeypatch.setattr(tables, "open_dataset_unchecked", namespace.open_dataset_unchecked)
+    monkeypatch.setattr(tables, "open_resolved_dataset_unchecked", namespace.open_resolved_dataset_unchecked)
     resp = client.post("/v1/table/db$t/describe", json={flag: True, "vend_credentials": False})
 
     assert resp.status_code == 200, resp.text

@@ -91,7 +91,7 @@ def test_a_branch_name_that_CLIMBS_OUT_is_refused_AS_A_CLIENT_ERROR() -> None:
     that: raise a `lance_namespace` typed error and let `ns_errors.install_problem_handlers` translate
     it (`InvalidInput` -> 400, RFC 9457). Measured live 2026-09-21 before this: a climbing name was
     correctly refused and surfaced as **500 InternalError**, which tells the caller the catalog is
-    broken when the catalog is fine — the same defect `open_dataset`'s ValueError conversion fixed one
+    broken when the catalog is fine — the same defect `open_resolved_dataset`'s ValueError conversion fixed one
     module over. `dataplane.py:109` is the estate's own precedent for raising the typed error from a
     service module rather than at the route.
     """

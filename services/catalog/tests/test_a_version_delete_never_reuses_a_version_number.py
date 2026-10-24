@@ -26,11 +26,11 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from lance_namespace import CreateNamespaceRequest, LanceNamespace, connect
+from tables_by_name import open_by_name
 
 from catalog.api.dependencies import NamespaceDep, SettingsDep, StorageOptionsDep
 from catalog.api.v1.endpoints import versions as version_door
 from catalog.core.identifiers import with_minted_uuid
-from catalog.core.namespace import open_dataset
 from catalog.services import maintenance
 from catalog.services.dataplane import create_table
 from service_kit.lakehouse import base_registry
@@ -46,13 +46,13 @@ LATEST = 4
 
 
 def _append(ns: LanceNamespace, value: int, *, branch: str | None = None) -> int:
-    ds = open_dataset(ns, {}, TABLE, branch=branch)
+    ds = open_by_name(ns, {}, TABLE, branch=branch)
     ds.insert(pa.table({"id": pa.array([value], pa.int64())}))
-    return int(open_dataset(ns, {}, TABLE, branch=branch).version)
+    return int(open_by_name(ns, {}, TABLE, branch=branch).version)
 
 
 def _versions(ns: LanceNamespace, *, branch: str | None = None) -> list[int]:
-    return [int(v["version"]) for v in open_dataset(ns, {}, TABLE, branch=branch).versions()]
+    return [int(v["version"]) for v in open_by_name(ns, {}, TABLE, branch=branch).versions()]
 
 
 @pytest.fixture
@@ -121,7 +121,7 @@ def test_a_range_that_reaches_the_current_version_is_refused(client: TestClient,
 
 
 def test_a_tagged_version_is_refused_and_the_tag_is_named(client: TestClient, ns: LanceNamespace) -> None:
-    open_dataset(ns, {}, TABLE).tags.create("published", 2)
+    open_by_name(ns, {}, TABLE).tags.create("published", 2)
 
     answer = _delete(client, (1, 3))
 
@@ -129,11 +129,11 @@ def test_a_tagged_version_is_refused_and_the_tag_is_named(client: TestClient, ns
     assert answer.json()["code"] == 19
     assert "published" in answer.json()["detail"]
     assert _versions(ns) == [1, 2, 3, 4], "a refusal that names a pin must delete nothing, the unpinned version 1 included"
-    assert open_dataset(ns, {}, TABLE).checkout_version("published").to_table().column("id").to_pylist() == [1, 2]
+    assert open_by_name(ns, {}, TABLE).checkout_version("published").to_table().column("id").to_pylist() == [1, 2]
 
 
 def test_a_version_a_branch_was_cut_from_is_refused_and_the_branch_is_named(client: TestClient, ns: LanceNamespace) -> None:
-    open_dataset(ns, {}, TABLE).create_branch("exp", 2)
+    open_by_name(ns, {}, TABLE).create_branch("exp", 2)
 
     answer = _delete(client, (2, 3))
 
@@ -193,7 +193,7 @@ def test_one_refused_range_deletes_nothing_from_the_others(client: TestClient, n
 
 
 def test_a_branch_delete_removes_the_branch_version_and_leaves_main(client: TestClient, ns: LanceNamespace) -> None:
-    open_dataset(ns, {}, TABLE).create_branch(BRANCH, LATEST)
+    open_by_name(ns, {}, TABLE).create_branch(BRANCH, LATEST)
     _append(ns, 50, branch=BRANCH)
     _append(ns, 51, branch=BRANCH)
     assert _versions(ns, branch=BRANCH) == [4, 5, 6]
@@ -212,7 +212,7 @@ def test_a_table_another_dataset_resolves_its_files_through_is_refused(client: T
 
     The clone is in its base record, as the catalog records a clone it made: an unrecorded one would be
     a base nothing sanctioned, which protects nothing ([[LH-279]])."""
-    source = open_dataset(ns, {}, TABLE)
+    source = open_by_name(ns, {}, TABLE)
     # Joined as a string: the table's location is a `file://` URI, which `Path` would collapse to `file:/`.
     clone = f"{source.uri.rsplit('/', 1)[0]}/clone.lance"
     source.shallow_clone(clone, reference=2)

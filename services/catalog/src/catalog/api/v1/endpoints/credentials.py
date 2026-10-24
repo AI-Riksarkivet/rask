@@ -22,18 +22,14 @@ from typing import Annotated
 from fastapi import APIRouter, Query
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import (
-    DescribeTableRequest,
-    DescribeTableResponse,
     TableBranchNotFoundError,
 )
 
-from catalog.api.dependencies import FgaClientDep, NamespaceDep, ResolvedTableDep, SettingsDep, VendorDep
+from catalog.api.dependencies import DoorTableDep, FgaClientDep, SettingsDep, VendorDep
 from catalog.api.security import CurrentSubject, CurrentToken
 from catalog.core.base_judge import BaseJudge
-from catalog.core.identifiers import parse_identifier
 from catalog.core.vending import Tier, dataset_facts, require_vendable_bases, role_session_name, table_has_branch, unsanctioned_bases, vend_or_refuse
 from catalog.schemas import CredentialResponse
-from catalog.services import native
 from service_kit.governed import fga
 from service_kit.governed.audit import SUCCESS, audit
 
@@ -50,8 +46,7 @@ router = APIRouter(prefix="/management/v1/table", tags=["credentials"])
 @router.post("/{id}/credentials", response_model_exclude_none=True)
 async def vend_credentials(
     id: str,
-    ns: NamespaceDep,
-    table: ResolvedTableDep,
+    table: DoorTableDep,
     settings: SettingsDep,
     token: CurrentToken,
     subject: CurrentSubject,
@@ -79,26 +74,31 @@ async def vend_credentials(
 
     The credential is a session the catalog's own token is exchanged for, named at the store for the verified caller
     it is vended to; the caller's own token never leaves the catalog.
+
+    It is scoped to the location the door resolved, never to the name, and answered only while that location still
+    holds the table authorized: a credential for a location is a grant on whatever table holds it ([[LH-530]]).
     """
-    segments = parse_identifier(id)
-    described: DescribeTableResponse = await run_in_threadpool(native.call, ns, "describe_table", DescribeTableRequest(id=segments))
-    if described.location is None:  # no object-store location to scope to → fall back to server-mediated
-        return CredentialResponse(mode="server_mediated")
-    # The client-direct write target + optimistic-commit base version (a declared-only/new table reads as 0).
-    # A tiny manifest read under the catalog's own credential to learn the version — not the byte-proxy (no data bytes move).
-    # THE BRANCH MUST BE ONE THE TABLE HAS ([[LH-056]]), checked before anything is minted. `branch` is
-    # caller-chosen and `build_session_policy` guards only `*`, `?` and `..` — the format allows `/`
-    # inside a branch name, so a shape rule cannot answer this and a lookup has to. Unchecked, the grant
-    # is a 900 s write credential for a prefix no manifest references: storage charged to a table for
-    # objects nothing will read, under a name somebody may create later. Creating a branch needs no
-    # credential, so there is no flow that must vend for one before it exists.
-    if branch and not await run_in_threadpool(table_has_branch, described.location, settings.storage_options(), branch):
-        raise TableBranchNotFoundError(f"branch {branch!r} not found on this table")
-    facts = await run_in_threadpool(partial(dataset_facts, described.location, settings.storage_options(), branch=branch))
-    # [[LH-279]] A BASE NOTHING SANCTIONED REFUSES THE VEND, before the classification answer below can
-    # route it anywhere: a writer can plant any root in its manifest, and a credential granting READ on
-    # it — or a server-mediated read through it — hands over another table's bytes. 409, not a fallback.
-    bases = await run_in_threadpool(require_vendable_bases, described.location, facts, BaseJudge.from_settings(settings))
+    location = table.location
+    try:
+        # The client-direct write target + optimistic-commit base version (a declared-only/new table reads as 0).
+        # A tiny manifest read under the catalog's own credential to learn the version — not the byte-proxy (no data bytes move).
+        # THE BRANCH MUST BE ONE THE TABLE HAS ([[LH-056]]), checked before anything is minted. `branch` is
+        # caller-chosen and `build_session_policy` guards only `*`, `?` and `..` — the format allows `/`
+        # inside a branch name, so a shape rule cannot answer this and a lookup has to. Unchecked, the grant
+        # is a 900 s write credential for a prefix no manifest references: storage charged to a table for
+        # objects nothing will read, under a name somebody may create later. Creating a branch needs no
+        # credential, so there is no flow that must vend for one before it exists.
+        if branch and not await run_in_threadpool(table_has_branch, location, settings.storage_options(), branch):
+            raise TableBranchNotFoundError(f"branch {branch!r} not found on this table")
+        facts = await run_in_threadpool(partial(dataset_facts, location, settings.storage_options(), branch=branch))
+        # [[LH-279]] A BASE NOTHING SANCTIONED REFUSES THE VEND, before the classification answer below can
+        # route it anywhere: a writer can plant any root in its manifest, and a credential granting READ on
+        # it — or a server-mediated read through it — hands over another table's bytes. 409, not a fallback.
+        bases = await run_in_threadpool(require_vendable_bases, location, facts, BaseJudge.from_settings(settings))
+    except Exception:
+        await run_in_threadpool(table.require_held)
+        raise
+    await run_in_threadpool(table.require_held)
     # [[LH-058]] A CLASSIFIED COLUMN MAKES A TABLE UNVENDABLE RAW, and it is a property of the TABLE
     # rather than of the caller — the same shape as the unsanctioned base below, for a reason that was
     # measured rather than chosen.
@@ -119,22 +119,22 @@ async def vend_credentials(
     # not mask either. This stops the raw bytes leaving under a 900 s credential the caller holds,
     # which is the precondition for masking rather than masking itself.
     if facts.classified:
-        log.info("vend_server_mediated_classified_columns", extra={"location": described.location, "columns": list(facts.classified)})
+        log.info("vend_server_mediated_classified_columns", extra={"location": location, "columns": list(facts.classified)})
         return CredentialResponse(mode="server_mediated")
     # [[LH-273]] A BASE UNDER ITS OWN CREDENTIAL IS READ ONLY THROUGH THE CATALOG. The STS credential is
     # minted from the estate role, so a direct client would read that base under the estate identity —
     # the identity the base's credential reference exists to keep off it. The catalog's own reads open
     # it with the base's `base_store_params` (`core.namespace.open_location`).
     if facts.own_credential:
-        log.info("vend_server_mediated_own_credential_base", extra={"location": described.location})
+        log.info("vend_server_mediated_own_credential_base", extra={"location": location})
         return CredentialResponse(mode="server_mediated")
     # #3-B ⊥ #2, NARROWED to the bases the policy would actually miss ([[LH-057]]). Every base here is
     # already one the catalog sanctioned (above); what remains is whether the session policy can ADDRESS
     # it — `build_session_policy` grants each allowlisted base a `ListBase<n>`/`BaseObjects<n>` pair, so the
     # client reaches its own bytes. A sanctioned base the policy cannot grant is reachable only through
     # the catalog's own credential, which is what the server-mediated answer routes the caller to.
-    if missed := unsanctioned_bases(described.location, bases, settings.multibase_data_base_list):
-        log.info("vend_server_mediated_unreachable_bases", extra={"location": described.location, "bases": list(missed)})
+    if missed := unsanctioned_bases(location, bases, settings.multibase_data_base_list):
+        log.info("vend_server_mediated_unreachable_bases", extra={"location": location, "bases": list(missed)})
         return CredentialResponse(mode="server_mediated")
     # The blocking STS exchange runs in the threadpool; a refused or unreachable exchange answers 503
     # (`vend_or_refuse`), never a bare 500.
@@ -142,7 +142,7 @@ async def vend_credentials(
         partial(
             vend_or_refuse,
             vendor,
-            table_location=described.location,
+            table_location=location,
             tier=tier,
             session_name=role_session_name(subject),
             bases=bases,
@@ -151,7 +151,7 @@ async def vend_credentials(
     )
     mode = "server_mediated" if creds is None else "direct"
     if mode == "direct":  # #41 audit the actual issuance of direct object-store credentials (who, what, tier)
-        obj = fga.table_object(table.require_uuid())
+        obj = fga.table_object(table.resolved.require_uuid())
         audit(
             "vend_credentials",
             SUCCESS,
@@ -160,4 +160,4 @@ async def vend_credentials(
             tier=tier,
             door="credentials",
         )
-    return CredentialResponse(mode=mode, credentials=creds, location=described.location, read_version=facts.read_version)
+    return CredentialResponse(mode=mode, credentials=creds, location=location, read_version=facts.read_version)

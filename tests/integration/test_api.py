@@ -23,7 +23,6 @@ from lance_namespace import (
     DescribeTableResponse,
     DescribeTableVersionResponse,
     ListTableVersionsResponse,
-    MergeInsertIntoTableResponse,
     TableAlreadyExistsError,
     TableVersion,
     TableVersionNotFoundError,
@@ -36,16 +35,17 @@ ARROW_STREAM = {"content-type": "application/vnd.apache.arrow.stream"}
 # --- identifier parsing (our logic) ---------------------------------------- #
 
 
-def test_schema_metadata_flat_map_keeps_keys_named_like_envelope_fields(client: TestClient, fake_ns: MagicMock) -> None:
+def test_schema_metadata_flat_map_keeps_keys_named_like_envelope_fields(real_ns_client: TestClient) -> None:
     # CONTRACT (audit 2026-07-15): a FLAT body IS the metadata map — a user key literally named "id"
-    # (or identity/context) is data, and must reach the backend, never be eaten as an envelope field.
-    from lance_namespace import UpdateTableSchemaMetadataResponse
+    # (or identity/context) is data, and must land on the table, never be eaten as an envelope field.
+    _ensure_namespace(real_ns_client, "db1")
+    assert real_ns_client.post("/v1/table/db1$users/create", content=_ONE_ROW, headers=ARROW_STREAM).status_code == 200
 
-    fake_ns.update_table_schema_metadata.return_value = UpdateTableSchemaMetadataResponse()
-    client.post("/v1/table/db1$users/schema_metadata/update", json={"id": "row-key", "owner": "alice"})
-    sent = fake_ns.update_table_schema_metadata.call_args.args[0]
-    assert sent.metadata == {"id": "row-key", "owner": "alice"}
-    assert sent.id == ["db1", "users"]
+    resp = real_ns_client.post("/v1/table/db1$users/schema_metadata/update", json={"id": "row-key", "owner": "alice"})
+
+    assert resp.status_code == 200, resp.text
+    location = real_ns_client.post("/v1/table/db1$users/describe", json={}).json()["location"]
+    assert {key: lance.dataset(location).schema.metadata[key.encode()].decode() for key in ("id", "owner")} == {"id": "row-key", "owner": "alice"}
 
 
 def test_create_namespace_routes_with_body_and_id(client: TestClient, fake_ns: MagicMock) -> None:
@@ -123,6 +123,7 @@ def test_create_delegates_to_dataplane_create_table(client: TestClient, fake_ns:
         registry=None,
         holder="",
         transaction_properties=None,
+        overwriting=None,
     ) -> CreateTableResponse:
         seen["segments"] = segments
         seen["root"] = root  # [[LH-520]] where a table this create brings into being is declared under its uuid
@@ -159,27 +160,28 @@ def test_create_delegates_to_dataplane_create_table(client: TestClient, fake_ns:
     }
 
 
-def test_merge_insert_maps_spec_09_query_params(client: TestClient, fake_ns: MagicMock) -> None:
-    """The spec-0.9 query parameters reach the native op.
+def test_merge_insert_reads_its_query_params_as_the_spec_states_them(real_ns_client: TestClient) -> None:
+    """A ``*_filt`` is its clause's own condition, and ``when_not_matched_insert_all`` defaults to false (``spec.yaml``).
 
-    `branch` is deliberately NOT sent here any more. It used to be, and the assertion was
-    `req.branch == "exp"` — i.e. it pinned the branch reaching `native.call`, which is exactly the
-    defect fixed on 2026-09-01: the upstream accepted `branch` and merged into MAIN. A branch-scoped
-    merge now takes the branch-aware dataplane path and never reaches this mock at all, so asserting
-    the old shape would re-pin the bug. The branch behaviour is driven live instead, against the
-    object store, by `tests/e2e-py/test_track_a_acceptance.py::
-    test_a_branch_scoped_merge_insert_applies_to_the_branch_and_not_to_main`.
+    Main and a branch merge through one builder on the handle opened at the door's location ([[LH-530]]), so the filter
+    alone updates only the rows it holds true for, and a source row matching nothing is not inserted unless asked.
     """
-    fake_ns.merge_insert_into_table.return_value = MergeInsertIntoTableResponse(version=2)
-    client.post(
-        "/v1/table/db$t/merge_insert?on=id&when_matched_update_all=true&when_matched_update_all_filt=score>0.5&timeout=30s&use_index=true",
-        content=_ONE_ROW,
-        headers=ARROW_STREAM,
+    _ensure_namespace(real_ns_client, "db")
+    target = _arrow_ipc(pa.table({"id": pa.array([1, 2], pa.int64()), "score": pa.array([0.9, 0.1]), "label": ["a", "b"]}))
+    assert real_ns_client.post("/v1/table/db$t/create", content=target, headers=ARROW_STREAM).status_code == 200
+    source = _arrow_ipc(pa.table({"id": pa.array([1, 2, 3], pa.int64()), "score": pa.array([0.9, 0.1, 0.5]), "label": ["A", "B", "C"]}))
+
+    resp = real_ns_client.post(
+        "/v1/table/db$t/merge_insert?on=id&when_matched_update_all_filt=target.score > 0.5&timeout=30s&use_index=true", content=source, headers=ARROW_STREAM
     )
-    req = fake_ns.merge_insert_into_table.call_args.args[0]
-    assert req.when_matched_update_all_filt == "score>0.5"
-    assert req.timeout == "30s"
-    assert req.use_index is True
+
+    assert resp.status_code == 200, resp.text
+    assert (resp.json()["num_updated_rows"], resp.json()["num_inserted_rows"]) == (1, 0)
+    location = real_ns_client.post("/v1/table/db$t/describe", json={}).json()["location"]
+    assert sorted(lance.dataset(location).to_table(columns=["id", "label"]).to_pylist(), key=lambda row: row["id"]) == [
+        {"id": 1, "label": "A"},
+        {"id": 2, "label": "b"},
+    ]
 
 
 def test_list_table_versions_maps_descending_and_branch(client: TestClient, fake_ns: MagicMock) -> None:
@@ -232,7 +234,7 @@ def test_list_branches_routes_to_dataset_branches(client: TestClient, monkeypatc
     # Branches are now backed in-process via pylance `ds.branches` (was a native Unsupported).
     dataset = MagicMock()
     dataset.branches.list.return_value = {"exp": {"parent_branch": None, "parent_version": 2, "create_at": 1, "manifest_size": 9}}
-    monkeypatch.setattr("catalog.services.dataplane.open_dataset_unchecked", lambda *a, **k: dataset)
+    monkeypatch.setattr("catalog.services.table_claims.open_resolved_dataset_unchecked", lambda *a, **k: dataset)
     resp = client.post("/v1/table/db1$users/branches/list")
     assert resp.status_code == 200
     assert resp.json()["branches"]["exp"]["parentVersion"] == 2  # serialized with the spec's camelCase alias
@@ -241,7 +243,7 @@ def test_list_branches_routes_to_dataset_branches(client: TestClient, monkeypatc
 def test_create_branch_maps_from_version_to_int_reference(client: TestClient, monkeypatch, claim_described: Callable[[str], str]) -> None:
     claim_described("db$t")  # the table a ref is made on, whose location's claim records its uuid
     dataset = MagicMock()
-    monkeypatch.setattr("catalog.services.dataplane.open_dataset", lambda *a, **k: dataset)
+    monkeypatch.setattr("catalog.services.table_claims.open_resolved_dataset", lambda *a, **k: dataset)
     resp = client.post("/v1/table/db$t/branches/create", json={"name": "exp", "from_version": 3})
     assert resp.status_code == 200
     dataset.create_branch.assert_called_once_with("exp", 3)  # fromVersion → int reference
@@ -257,7 +259,7 @@ def test_create_branch_maps_from_branch_and_version_to_tuple(client: TestClient,
     # that models no branches — the request under test needs `exp` to exist for its mapping to be
     # reached at all.
     dataset.branches.list.return_value = {"exp": {"parent_version": 2}}
-    monkeypatch.setattr("catalog.services.dataplane.open_dataset", lambda *a, **k: dataset)
+    monkeypatch.setattr("catalog.services.table_claims.open_resolved_dataset", lambda *a, **k: dataset)
     resp = client.post("/v1/table/db$t/branches/create", json={"name": "x", "from_branch": "exp", "from_version": 2})
     assert resp.status_code == 200
     dataset.create_branch.assert_called_once_with("x", ("exp", 2))  # (branch, version) reference
@@ -266,7 +268,7 @@ def test_create_branch_maps_from_branch_and_version_to_tuple(client: TestClient,
 def test_create_branch_from_main_uses_no_reference(client: TestClient, monkeypatch, claim_described: Callable[[str], str]) -> None:
     claim_described("db$t")  # the table a ref is made on, whose location's claim records its uuid
     dataset = MagicMock()
-    monkeypatch.setattr("catalog.services.dataplane.open_dataset", lambda *a, **k: dataset)
+    monkeypatch.setattr("catalog.services.table_claims.open_resolved_dataset", lambda *a, **k: dataset)
     resp = client.post("/v1/table/db$t/branches/create", json={"name": "exp"})
     assert resp.status_code == 200
     dataset.create_branch.assert_called_once_with("exp", None)  # neither → latest of main
@@ -337,24 +339,6 @@ def test_add_columns_emits_pinned_schema_evolution_lineage(client: TestClient, f
     assert captured["operation"] == "add_columns"
     assert captured["version"] == 4
     assert captured["schema_fields"] == [{"name": "x", "type": "int64"}]  # post-evolution schema rides along
-
-
-def test_restore_emits_lineage_at_new_version(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
-    from lance_namespace import DescribeTransactionResponse, RestoreTableResponse
-
-    fake_ns.restore_table.return_value = RestoreTableResponse(transaction_id="tx")
-    fake_ns.describe_transaction.return_value = DescribeTransactionResponse(status="SUCCEEDED", properties={"uuid": "tx", "version": "12"})
-    dataset = MagicMock()
-    dataset.version = 13
-    dataset.config.return_value = {}
-    monkeypatch.setattr("catalog.services.dataplane.open_dataset", lambda *a, **k: dataset)
-    monkeypatch.setattr("catalog.services.dataplane.open_dataset_unchecked", lambda *a, **k: dataset)
-    captured = _capture_measured_emit(monkeypatch)
-
-    resp = client.post("/v1/table/db$t/restore", json={"version": 3})
-    assert resp.status_code == 200
-    assert captured["operation"] == "restore_table"
-    assert captured["version"] == 12  # the NEW version the restore minted, not the latest (13)
 
 
 def test_create_exist_ok_reads_schema_back_instead_of_trusting_payload(real_ns_client: TestClient, monkeypatch) -> None:
@@ -482,7 +466,7 @@ def test_update_builds_updates_dict_and_reads_real_count_key(client: TestClient,
     # and NOT an attribute) — the response must read that exact key, else updated_rows is always 0.
     dataset.update.return_value = {"num_rows_updated": 2}
     dataset.version = 5
-    monkeypatch.setattr("catalog.services.dataplane.open_dataset", lambda *a, **k: dataset)
+    monkeypatch.setattr("catalog.services.table_claims.open_resolved_dataset", lambda *a, **k: dataset)
 
     resp = client.post("/v1/table/db$t/update", json={"predicate": "id = 1", "updates": [["name", "'x'"]]})
     assert resp.status_code == 200
@@ -496,7 +480,7 @@ def test_create_tag_with_branch_passes_branch_version_tuple(client: TestClient, 
     # A branch-scoped tag must pass (branch, version) — a bare int would resolve against main, tagging the
     # WRONG version. (Was silently dropping `branch`.)
     dataset = MagicMock()
-    monkeypatch.setattr("catalog.services.dataplane.open_dataset", lambda *a, **k: dataset)
+    monkeypatch.setattr("catalog.services.table_claims.open_resolved_dataset", lambda *a, **k: dataset)
     resp = client.post("/v1/table/db$t/tags/create", json={"tag": "rc", "version": 5, "branch": "dev"})
     assert resp.status_code == 200
     dataset.tags.create.assert_called_once_with("rc", ("dev", 5))
@@ -509,7 +493,7 @@ def test_alter_columns_converts_json_arrow_type_to_pyarrow(client: TestClient, m
 
     dataset = MagicMock()
     dataset.version = 4
-    monkeypatch.setattr("catalog.services.dataplane.open_dataset", lambda *a, **k: dataset)
+    monkeypatch.setattr("catalog.services.table_claims.open_resolved_dataset", lambda *a, **k: dataset)
     resp = client.post(
         "/v1/table/db$t/alter_columns",
         json={"alterations": [{"path": "embedding", "data_type": {"type": "float16"}}]},
@@ -520,7 +504,7 @@ def test_alter_columns_converts_json_arrow_type_to_pyarrow(client: TestClient, m
 
 
 def test_alter_columns_unsupported_type_is_400_not_500(client: TestClient, monkeypatch) -> None:
-    monkeypatch.setattr("catalog.services.dataplane.open_dataset", lambda *a, **k: MagicMock())
+    monkeypatch.setattr("catalog.services.table_claims.open_resolved_dataset", lambda *a, **k: MagicMock())
     resp = client.post(
         "/v1/table/db$t/alter_columns",
         json={"alterations": [{"path": "c", "data_type": {"type": "some_exotic_type"}}]},
@@ -529,7 +513,7 @@ def test_alter_columns_unsupported_type_is_400_not_500(client: TestClient, monke
 
 
 def test_update_with_empty_updates_is_400(client: TestClient, monkeypatch) -> None:
-    monkeypatch.setattr("catalog.services.dataplane.open_dataset", lambda *a, **k: MagicMock())
+    monkeypatch.setattr("catalog.services.table_claims.open_resolved_dataset", lambda *a, **k: MagicMock())
     resp = client.post("/v1/table/db$t/update", json={"updates": []})
     assert resp.status_code == 400
     assert resp.json()["code"] == 13  # InvalidInput

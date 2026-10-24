@@ -73,13 +73,6 @@ def test_an_exchange_the_store_refuses_answers_unavailable(client: TestClient, f
     assert resp.json()["code"] == 17, resp.text
 
 
-def test_missing_location_falls_back_to_server_mediated(client: TestClient, fake_ns: MagicMock) -> None:
-    fake_ns.describe_table.return_value = _described(None)
-    resp = client.post("/management/v1/table/db$t/credentials")
-    assert resp.status_code == 200
-    assert resp.json()["mode"] == "server_mediated"
-
-
 def test_invalid_tier_is_rejected(client: TestClient, fake_ns: MagicMock) -> None:
     fake_ns.describe_table.return_value = _described("s3://lance-catalog/db$t")
     assert client.post("/management/v1/table/db$t/credentials?tier=admin").status_code == 422

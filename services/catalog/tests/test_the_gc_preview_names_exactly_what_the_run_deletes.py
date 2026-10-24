@@ -37,11 +37,11 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from lance_namespace import CreateNamespaceRequest, LanceNamespace
+from tables_by_name import open_by_name
 
 from catalog.api.dependencies import get_namespace, get_storage_options
 from catalog.api.v1.endpoints import maintenance as door
 from catalog.core.config import Settings, get_settings
-from catalog.core.namespace import open_dataset
 from catalog.services.dataplane import create_table
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 
@@ -63,13 +63,13 @@ def namespace(tmp_path: Path) -> LanceNamespace:
     ns = lance_namespace.connect("dir", {"root": str(tmp_path / "data")})
     ns.create_namespace(CreateNamespaceRequest(id=TABLE_ID[:-1]))
     create_table(ns, {}, TABLE_ID, _rows(0), root=str(tmp_path / "data"), mode="create", registry=None)
-    open_dataset(ns, {}, TABLE_ID).insert(_rows(1))
-    open_dataset(ns, {}, TABLE_ID).create_branch(BRANCH, 2)
+    open_by_name(ns, {}, TABLE_ID).insert(_rows(1))
+    open_by_name(ns, {}, TABLE_ID).create_branch(BRANCH, 2)
     for i in range(2, 6):
-        open_dataset(ns, {}, TABLE_ID).insert(_rows(i))
+        open_by_name(ns, {}, TABLE_ID).insert(_rows(i))
     for i in range(10, 14):
-        open_dataset(ns, {}, TABLE_ID, branch=BRANCH).insert(_rows(i))
-    root = open_dataset(ns, {}, TABLE_ID)
+        open_by_name(ns, {}, TABLE_ID, branch=BRANCH).insert(_rows(i))
+    root = open_by_name(ns, {}, TABLE_ID)
     root.tags.create("pinned", (BRANCH, 3))
     root.tags.create("release", (None, 4))
     root.create_branch(NESTED, (BRANCH, 5))
@@ -77,8 +77,8 @@ def namespace(tmp_path: Path) -> LanceNamespace:
 
 
 @pytest.fixture
-def client(namespace: LanceNamespace) -> Iterator[TestClient]:
-    settings = Settings(LANCE_S3_ACCESS_KEY_ID="k", LANCE_S3_SECRET_ACCESS_KEY="s")
+def client(namespace: LanceNamespace, tmp_path: Path) -> Iterator[TestClient]:
+    settings = Settings(LANCE_S3_ACCESS_KEY_ID="k", LANCE_S3_SECRET_ACCESS_KEY="s", LANCE_CONTROL_ROOT=str(tmp_path / "control"))
     application = FastAPI()
     install_problem_handlers(application, logging.getLogger(__name__))
     application.include_router(door.router)
@@ -97,7 +97,7 @@ def _call(client: TestClient, verb: str, *, branch: str | None, retain_versions:
 
 
 def _versions(namespace: LanceNamespace, *, branch: str | None) -> set[int]:
-    return {int(v["version"]) for v in open_dataset(namespace, {}, TABLE_ID, branch=branch).versions()}
+    return {int(v["version"]) for v in open_by_name(namespace, {}, TABLE_ID, branch=branch).versions()}
 
 
 @pytest.mark.parametrize("retain_versions", [1])

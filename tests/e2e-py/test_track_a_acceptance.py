@@ -35,7 +35,7 @@ WHY MAIN AND THE BRANCH ARE READ THROUGH LANCE, NOT THROUGH `/query`
 The catalog's `/query` accepts `branch` and answers with main's rows regardless, so using it as the
 oracle here would compare main against main and call every write isolated. The ground truth is the
 object store: `lance.dataset(uri)` opens main and `checkout_version((branch, None))` opens the branch,
-which is the same reference `catalog.core.namespace.open_dataset` uses to serve a branch-scoped write.
+which is the same reference `catalog.core.namespace.open_resolved_dataset` uses to serve a branch-scoped write.
 Reading the storage directly also keeps the assertion independent of the read path — a write defect
 and a read defect cannot cancel out into a green.
 
@@ -184,7 +184,7 @@ def _open_main(uri: str) -> lance.LanceDataset:
 
 
 def _open_branch(uri: str, branch: str) -> lance.LanceDataset:
-    """The branch ref, opened the way the catalog's own `open_dataset` opens one.
+    """The branch ref, opened the way the catalog's own `open_resolved_dataset` opens one.
 
     A branch is a parallel dataset under `tree/{branch}/` with its own version numbering, and a plain
     `lance.dataset(uri)` reaches main only — which is precisely the confusion the three branch defects

@@ -21,6 +21,7 @@ import pyarrow as pa
 import pytest
 from lance_namespace import (
     CreateNamespaceRequest,
+    DescribeTableRequest,
     InvalidInputError,
     InvalidTableStateError,
     ListTableTagsRequest,
@@ -29,7 +30,7 @@ from lance_namespace import (
 )
 
 from catalog.core.identifiers import with_minted_uuid
-from catalog.core.namespace import open_dataset
+from catalog.services import table_claims
 from catalog.services.dataplane import create_table
 from catalog.services.publication import (
     PUBLISHED_TAG,
@@ -37,7 +38,9 @@ from catalog.services.publication import (
     publish,
     published_version,
 )
+from catalog.services.table_claims import DoorTable
 from service_kit.lakehouse import base_registry
+from service_kit.lakehouse.location_claims import ClaimStore
 from service_kit.lakehouse.quality import Assertion
 from tests.unit.no_uuids import NO_OBJECT_UUIDS
 
@@ -71,8 +74,14 @@ def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace, a runtime-only type
     return namespace
 
 
+@pytest.fixture
+def table(ns, tmp_path: Path) -> DoorTable:  # noqa: ANN001
+    """The table as a door acts on it, resolved on ``ns``."""
+    return table_claims.door_table(ns, ClaimStore(control_root=str(tmp_path / "control")), TABLE_ID)
+
+
 def _uri(ns) -> str:  # noqa: ANN001
-    return open_dataset(ns, {}, TABLE_ID).uri
+    return str(ns.describe_table(DescribeTableRequest(id=TABLE_ID)).location)
 
 
 def _write(ns, ids: list[int | None], *, mode: str = "overwrite") -> int:  # noqa: ANN001
@@ -85,23 +94,23 @@ def _write(ns, ids: list[int | None], *, mode: str = "overwrite") -> int:  # noq
     return int(dataset.version)
 
 
-def _publish(ns, version: int):  # noqa: ANN001, ANN202
-    return publish(ns, {}, table_id=TABLE_ID, version=version, key_column="id")
+def _publish(table: DoorTable, version: int):  # noqa: ANN202
+    return publish(table, {}, version=version, key_column="id")
 
 
-def test_a_PASSING_gate_advances_the_pointer_and_names_the_range(ns) -> None:  # noqa: ANN001
+def test_a_PASSING_gate_advances_the_pointer_and_names_the_range(ns, table: DoorTable) -> None:  # noqa: ANN001
     """The happy path, and the range D-R3 requires. A first publication has no prior version, so the
     delta is "everything up to to_version" and `from_version` is None rather than 0."""
     version = _write(ns, [1, 2, 3])
 
-    result = _publish(ns, version)
+    result = _publish(table, version)
 
     assert result.published is True
     assert (result.from_version, result.to_version) == (None, version)
-    assert published_version(ns, {}, TABLE_ID) == version
+    assert published_version(table, {}) == version
 
 
-def test_a_FAILING_gate_leaves_CONSUMERS_ON_LAST_GOOD(ns) -> None:  # noqa: ANN001
+def test_a_FAILING_gate_leaves_CONSUMERS_ON_LAST_GOOD(ns, table: DoorTable) -> None:  # noqa: ANN001
     """The whole point of § D, asserted from the consumer's side.
 
     Version 1 is good and published. Version 2 is written with a null key — the `not_null` assertion
@@ -109,16 +118,16 @@ def test_a_FAILING_gate_leaves_CONSUMERS_ON_LAST_GOOD(ns) -> None:  # noqa: ANN0
     pointer must still be on version 1.
     """
     good = _write(ns, [1, 2, 3])
-    _publish(ns, good)
+    _publish(table, good)
 
     bad = _write(ns, [4, None, 6], mode="overwrite")
-    result = _publish(ns, bad)
+    result = _publish(table, bad)
 
     assert result.published is False
     assert result.reason is not None and "not_null" in result.reason
     assert result.to_version == bad, "the rejected version is still NAMED — a blocked batch must be auditable"
 
-    assert published_version(ns, {}, TABLE_ID) == good
+    assert published_version(table, {}) == good
 
     # The rejected version is committed and visible to anyone NOT using the pointer, which is exactly
     # why the pointer has to exist: Lance cannot hide it.
@@ -128,7 +137,7 @@ def test_a_FAILING_gate_leaves_CONSUMERS_ON_LAST_GOOD(ns) -> None:  # noqa: ANN0
     assert pinned.to_table(columns=["id"]).column("id").to_pylist() == [1, 2, 3]
 
 
-def test_the_candidate_is_PINNED_while_the_gate_runs(ns, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: ANN001
+def test_the_candidate_is_PINNED_while_the_gate_runs(ns, monkeypatch: pytest.MonkeyPatch, table: DoorTable) -> None:  # noqa: ANN001
     """The GC hazard, closed.
 
     `cleanup_old_versions` exempts only TAGGED versions, and the candidate is untagged for exactly as
@@ -159,69 +168,69 @@ def test_the_candidate_is_PINNED_while_the_gate_runs(ns, monkeypatch: pytest.Mon
         # parameters keeps passing on the day the gate grows one, which is the whole point of this shape.
         session: object | None = None,
     ) -> list[Assertion]:
-        tags = publication.dataplane.list_tags(ns, {}, ListTableTagsRequest(id=TABLE_ID)).tags or {}
+        tags = publication.dataplane.list_tags(table, {}, ListTableTagsRequest(id=TABLE_ID)).tags or {}
         entry = tags.get(PUBLISHING_TAG)
         seen.append(getattr(entry, "version", None) if entry is not None else None)
         return real(uri, storage_options, key_column=key_column, required_columns=required_columns, version=version)
 
     monkeypatch.setattr(publication, "assert_quality", observing)
-    _publish(ns, version)
+    _publish(table, version)
 
     assert seen == [version], f"the candidate was not pinned while the gate ran: {seen}"
 
-    after = publication.dataplane.list_tags(ns, {}, ListTableTagsRequest(id=TABLE_ID)).tags or {}
+    after = publication.dataplane.list_tags(table, {}, ListTableTagsRequest(id=TABLE_ID)).tags or {}
     assert PUBLISHING_TAG not in after, "the pin outlived the publish — that version can never be collected"
     assert PUBLISHED_TAG in after
 
 
-def test_the_pin_is_dropped_even_when_the_gate_REJECTS(ns) -> None:  # noqa: ANN001
+def test_the_pin_is_dropped_even_when_the_gate_REJECTS(ns, table: DoorTable) -> None:  # noqa: ANN001
     """A rejected publish must not leave a version pinned against GC forever."""
     version = _write(ns, [1, None])
 
-    result = _publish(ns, version)
+    result = _publish(table, version)
 
     assert result.published is False
     import catalog.services.publication as publication
 
-    tags = publication.dataplane.list_tags(ns, {}, ListTableTagsRequest(id=TABLE_ID)).tags or {}
+    tags = publication.dataplane.list_tags(table, {}, ListTableTagsRequest(id=TABLE_ID)).tags or {}
     assert PUBLISHING_TAG not in tags
 
 
-def test_a_SECOND_publication_carries_the_PREVIOUS_version_as_from(ns) -> None:  # noqa: ANN001
+def test_a_SECOND_publication_carries_the_PREVIOUS_version_as_from(ns, table: DoorTable) -> None:  # noqa: ANN001
     """D-R3's range across successive runs: `from` is the last PUBLISHED version, not the last
     committed one, so a consumer that only ever saw published data gets a contiguous delta."""
     first = _write(ns, [1, 2])
-    _publish(ns, first)
+    _publish(table, first)
 
     second = _write(ns, [3, 4], mode="append")
-    result = _publish(ns, second)
+    result = _publish(table, second)
 
     assert (result.from_version, result.to_version) == (first, second)
-    assert published_version(ns, {}, TABLE_ID) == second
+    assert published_version(table, {}) == second
 
 
-def test_publishing_BACKWARDS_is_refused(ns) -> None:  # noqa: ANN001
+def test_publishing_BACKWARDS_is_refused(ns, table: DoorTable) -> None:  # noqa: ANN001
     """A late retry of an older run must not silently un-publish newer good data. The tag API remains
     available for a deliberate rollback, where an operator names the version."""
     first = _write(ns, [1, 2])
     second = _write(ns, [3, 4], mode="append")
-    _publish(ns, second)
+    _publish(table, second)
 
     with pytest.raises(InvalidTableStateError, match="backwards"):
-        _publish(ns, first)
+        _publish(table, first)
 
-    assert published_version(ns, {}, TABLE_ID) == second
+    assert published_version(table, {}) == second
 
 
-def test_a_version_that_does_not_exist_is_refused(ns) -> None:  # noqa: ANN001
+def test_a_version_that_does_not_exist_is_refused(ns, table: DoorTable) -> None:  # noqa: ANN001
     """Fail before reading anything, and name the latest so the caller sees how far off it was."""
     version = _write(ns, [1])
 
     with pytest.raises(TableVersionNotFoundError, match="latest"):
-        _publish(ns, version + 99)
+        _publish(table, version + 99)
 
     with pytest.raises(InvalidInputError):
-        _publish(ns, 0)
+        _publish(table, 0)
 
 
 # ── the notification (D-R2) ───────────────────────────────────────────────────────────
@@ -249,7 +258,7 @@ async def test_a_PUBLICATION_announces_the_range_and_a_REJECTION_announces_nothi
     from catalog.core.config import Settings
     from catalog.core.lineage_emit import NoopEmitter
     from catalog.schemas import PublishRequest
-    from catalog.services.table_claims import claim_store, resolve
+    from catalog.services.table_claims import claim_store, door_table
 
     announced: list[dict[str, object]] = []
 
@@ -270,13 +279,12 @@ async def test_a_PUBLICATION_announces_the_range_and_a_REJECTION_announces_nothi
     # The control root the fixture's create took the table's claim on, where the door reads the table's uuid.
     monkeypatch.setenv("LANCE_CONTROL_ROOT", str(tmp_path / "control"))
     settings = Settings()
-    table = resolve(ns, claim_store(settings), TABLE_ID)
+    table = door_table(ns, claim_store(settings), TABLE_ID)
 
     good = _write(ns, [1, 2, 3])
     await publish_table(
         "db$pages",
         PublishRequest(version=good, key_column="id"),
-        ns,
         table,
         settings,
         {},
@@ -292,7 +300,6 @@ async def test_a_PUBLICATION_announces_the_range_and_a_REJECTION_announces_nothi
     await publish_table(
         "db$pages",
         PublishRequest(version=bad, key_column="id"),
-        ns,
         table,
         settings,
         {},
@@ -311,7 +318,7 @@ async def test_a_PUBLICATION_announces_the_range_and_a_REJECTION_announces_nothi
     assert "project" not in announced[0]
 
 
-def test_the_gate_scans_the_version_being_PUBLISHED_not_latest(ns) -> None:  # noqa: ANN001
+def test_the_gate_scans_the_version_being_PUBLISHED_not_latest(ns, table: DoorTable) -> None:  # noqa: ANN001
     """The silent half of the defect: a dirty version published because a later clean one exists.
 
     `publish` pins the candidate and its comment says the gate must scan it — "publishing a version
@@ -326,16 +333,16 @@ def test_the_gate_scans_the_version_being_PUBLISHED_not_latest(ns) -> None:  # n
     dirty = _write(ns, [1, None, 3])
     clean = _write(ns, [4, 5, 6])
 
-    refused = publication.publish(ns, {}, table_id=TABLE_ID, version=dirty, key_column="id")
+    refused = publication.publish(table, {}, version=dirty, key_column="id")
     assert refused.published is False, "a dirty version was published because latest happened to be clean"
     assert "not_null" in (refused.reason or "")
 
-    ok = publication.publish(ns, {}, table_id=TABLE_ID, version=clean, key_column="id")
+    ok = publication.publish(table, {}, version=clean, key_column="id")
     assert ok.published is True
     assert ok.to_version == clean
 
 
-def test_a_REPUBLISH_at_the_same_version_announces_nothing(ns) -> None:  # noqa: ANN001
+def test_a_REPUBLISH_at_the_same_version_announces_nothing(ns, table: DoorTable) -> None:  # noqa: ANN001
     """`published` is not the same question as "did the tag move", and the endpoint asked the wrong one.
 
     Re-publishing a version that is already published succeeds — the version IS published, so 200 is
@@ -353,8 +360,8 @@ def test_a_REPUBLISH_at_the_same_version_announces_nothing(ns) -> None:  # noqa:
     """
     first = _write(ns, [1, 2, 3])
 
-    r1 = publish(ns, {}, table_id=TABLE_ID, version=first, key_column="id")
-    r2 = publish(ns, {}, table_id=TABLE_ID, version=first, key_column="id")
+    r1 = publish(table, {}, version=first, key_column="id")
+    r2 = publish(table, {}, version=first, key_column="id")
 
     assert r1.published is True and r1.advanced is True
     assert r2.published is True, "the version IS published; re-asking is not an error"

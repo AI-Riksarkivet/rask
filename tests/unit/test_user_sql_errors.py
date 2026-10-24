@@ -26,24 +26,26 @@ from lance_namespace import (
     CreateNamespaceRequest,
     DeleteFromTableRequest,
     InvalidInputError,
-    LanceNamespace,
     UpdateTableRequest,
     connect,
 )
 
+from catalog.services import table_claims
 from catalog.services.dataplane import create_table, delete_from_table, update_table
+from catalog.services.table_claims import DoorTable
+from service_kit.lakehouse.location_claims import ClaimStore
 
 
 @pytest.fixture
-def table(tmp_path: Path) -> LanceNamespace:
+def table(tmp_path: Path) -> DoorTable:
     """A two-column table (`id`, `v`) in a real dir namespace."""
     ns = connect("dir", {"root": str(tmp_path)})
     ns.create_namespace(CreateNamespaceRequest(id=["db"]))
     create_table(ns, {}, ["db", "t"], pa.table({"id": [1, 2, 3], "v": ["a", "b", "c"]}), root=str(tmp_path), mode="create", registry=None)
-    return ns
+    return table_claims.door_table(ns, ClaimStore(control_root=str(tmp_path / "control")), ["db", "t"])
 
 
-def test_update_with_an_unknown_column_is_invalid_input(table: LanceNamespace) -> None:
+def test_update_with_an_unknown_column_is_invalid_input(table: DoorTable) -> None:
     # The live shape of the bug: `Z` unquoted is a column reference, and there is no column Z.
     with pytest.raises(InvalidInputError) as caught:
         update_table(table, {}, UpdateTableRequest(id=["db", "t"], updates=[["v", "Z"]], predicate="id = 3"))
@@ -60,12 +62,12 @@ def test_update_with_an_unknown_column_is_invalid_input(table: LanceNamespace) -
     assert ".rs:" not in message
 
 
-def test_delete_with_a_bad_predicate_is_invalid_input(table: LanceNamespace) -> None:
+def test_delete_with_a_bad_predicate_is_invalid_input(table: DoorTable) -> None:
     with pytest.raises(InvalidInputError):
         delete_from_table(table, {}, DeleteFromTableRequest(id=["db", "t"], predicate="nosuchcol = 3"))
 
 
-def test_a_storage_failure_is_not_reclassified(table: LanceNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_storage_failure_is_not_reclassified(table: DoorTable, monkeypatch: pytest.MonkeyPatch) -> None:
     """A storage/IO failure stays a 5xx.
 
     The guard discriminates on Lance's "Invalid user input" MARKER, not on the exception class — it has to,
@@ -80,6 +82,6 @@ def test_a_storage_failure_is_not_reclassified(table: LanceNamespace, monkeypatc
         # "Invalid user input" marker. That is exactly the pair the guard has to tell apart.
         raise OSError("object store unreachable")
 
-    monkeypatch.setattr("catalog.services.dataplane.open_dataset", boom)
+    monkeypatch.setattr("catalog.services.table_claims.open_resolved_dataset", boom)
     with pytest.raises(OSError, match="unreachable"):
         update_table(table, {}, UpdateTableRequest(id=["db", "t"], updates=[["v", "'Z'"]], predicate="id = 3"))

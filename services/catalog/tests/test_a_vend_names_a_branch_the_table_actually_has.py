@@ -29,7 +29,6 @@ somebody's work, it is nobody's.
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -40,8 +39,9 @@ from lance_namespace import TableBranchNotFoundError
 
 from catalog.api.v1.endpoints.credentials import vend_credentials
 from catalog.schemas import VendedCredentials
-from catalog.services.table_claims import ResolvedTable
-from service_kit.lakehouse.location_claims import ClaimRead, LocationClaim
+from catalog.services.table_claims import DoorTable, ResolvedTable
+from service_kit.lakehouse import location_claims
+from service_kit.lakehouse.location_claims import ClaimStore
 
 
 lance = pytest.importorskip("lance")
@@ -91,11 +91,12 @@ def _settings() -> SimpleNamespace:
     )
 
 
-def _resolved(location: str) -> ResolvedTable:
-    """The table the door resolved ``ns$t`` to: its location, whose claim records the table's uuid."""
-    uuid = "0b6f8a52-4c1e-4f7a-9d3e-2a1c5b7e9f01"
-    claim = LocationClaim(location=location, table="ns$t", segments=["ns", "t"], uuid=uuid, claimed_at=datetime.now(UTC))
-    return ResolvedTable(segments=["ns", "t"], location=location, claim=ClaimRead(claim=claim, etag="e1"))
+def _door(location: str) -> DoorTable:
+    """The table the door resolved ``ns$t`` to: its location, whose claim records the table's uuid, on a control root beside it."""
+    store = ClaimStore(control_root=str(Path(location).parent / "control"))
+    location_claims.take(store, location, "ns$t", ["ns", "t"], is_gone=lambda _claim: False, uuid="0b6f8a52-4c1e-4f7a-9d3e-2a1c5b7e9f01")
+    resolved = ResolvedTable(segments=["ns", "t"], location=location, claim=location_claims.read(store, location))
+    return DoorTable(cast("Any", _Namespace(location)), store, resolved)
 
 
 @pytest.fixture
@@ -115,8 +116,7 @@ def _vend(location: str, branch: str) -> tuple[Any, _Vendor]:
             # CAST, never an ignore: the door reaches `describe_table` and a handful of settings fields,
             # and standing up a real backend and STS endpoint would add two systems that take no part in
             # this defect. Every attribute the door touches IS present on these.
-            ns=cast("Any", _Namespace(location)),
-            table=_resolved(location),
+            table=_door(location),
             settings=cast("Any", _settings()),
             token=None,
             client=None,
@@ -137,8 +137,7 @@ def test_the_refusal_happens_BEFORE_a_credential_is_minted(table: str) -> None:
         asyncio.run(
             vend_credentials(
                 id="ns$t",
-                ns=cast("Any", _Namespace(table)),
-                table=_resolved(table),
+                table=_door(table),
                 settings=cast("Any", _settings()),
                 token=None,
                 client=None,
@@ -189,8 +188,7 @@ def test_an_UNREADABLE_branch_registry_refuses_rather_than_admits(table: str, mo
         asyncio.run(
             vend_credentials(
                 id="ns$t",
-                ns=cast("Any", _Namespace(table)),
-                table=_resolved(table),
+                table=_door(table),
                 settings=cast("Any", _settings()),
                 token=None,
                 client=None,

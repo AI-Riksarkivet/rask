@@ -15,7 +15,10 @@ import pyarrow as pa
 import pytest
 from lance_namespace import CreateNamespaceRequest, DeleteFromTableRequest, UpdateTableRequest, connect
 
+from catalog.services import table_claims
 from catalog.services.dataplane import create_table, delete_from_table, update_table
+from catalog.services.table_claims import DoorTable
+from service_kit.lakehouse.location_claims import ClaimStore
 
 
 TABLE_ID = ["db", "rows"]
@@ -38,10 +41,16 @@ def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace is runtime-only
     return namespace
 
 
-def test_the_doors_still_answer_and_advance_the_version(ns) -> None:  # noqa: ANN001
-    updated = update_table(ns, {}, UpdateTableRequest(id=TABLE_ID, updates=[["v", "7"]]))
+@pytest.fixture
+def table(ns, tmp_path: Path) -> DoorTable:  # noqa: ANN001
+    """The table as a door acts on it, resolved on ``ns``."""
+    return table_claims.door_table(ns, ClaimStore(control_root=str(tmp_path / "control")), TABLE_ID)
+
+
+def test_the_doors_still_answer_and_advance_the_version(table: DoorTable) -> None:
+    updated = update_table(table, {}, UpdateTableRequest(id=TABLE_ID, updates=[["v", "7"]]))
     assert updated.updated_rows == 3, f"update reported {updated.updated_rows} rows, not 3"
-    deleted = delete_from_table(ns, {}, DeleteFromTableRequest(id=TABLE_ID, predicate="id = 1"))
+    deleted = delete_from_table(table, {}, DeleteFromTableRequest(id=TABLE_ID, predicate="id = 1"))
     # `version` is Optional on the response model; a door that answers None reported no version at all,
     # which is the same defect as reporting a stale one and is asserted rather than narrowed away.
     assert deleted.version is not None, "delete answered no version"

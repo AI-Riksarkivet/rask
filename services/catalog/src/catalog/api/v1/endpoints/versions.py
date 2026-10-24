@@ -22,12 +22,9 @@ from lance_namespace import (
     BatchDeleteTableVersionsResponse,
     CreateTableVersionRequest,
     CreateTableVersionResponse,
-    DescribeTableRequest,
-    DescribeTableResponse,
     DescribeTableVersionRequest,
     DescribeTableVersionResponse,
     InvalidInputError,
-    LanceNamespace,
     ListTableVersionsRequest,
     ListTableVersionsResponse,
     UnsupportedOperationError,
@@ -35,11 +32,10 @@ from lance_namespace import (
 
 from catalog.api import fga_deps, lineage_deps
 from catalog.api.dependencies import (
+    DoorTableDep,
     FgaClientDep,
     LineageEmitterDep,
-    NamespaceDep,
     ObjectUuidsDep,
-    ResolvedTableDep,
     ResolverDep,
     SettingsDep,
     StorageOptionsDep,
@@ -51,8 +47,8 @@ from catalog.core import run_context
 from catalog.core.base_judge import BaseJudge
 from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
-from catalog.core.namespace import open_dataset_unchecked
-from catalog.services import dataplane, maintenance, managed_versions, native
+from catalog.services import dataplane, maintenance, managed_versions
+from catalog.services.table_claims import DoorTable
 from service_kit.governed import fga
 from service_kit.governed.audit import SUCCESS, audit
 from service_kit.lakehouse import maintenance_due
@@ -80,7 +76,7 @@ management_router = APIRouter(prefix="/management/v1/table", tags=["version-mana
 @management_router.get("/{id}/history", response_model_exclude_none=True)
 async def table_history(
     id: str,
-    ns: NamespaceDep,
+    table: DoorTableDep,
     so: StorageOptionsDep,
     token: CurrentToken,
     client: FgaClientDep,
@@ -123,8 +119,7 @@ async def table_history(
     ``limit`` bounds the per-version transaction reads — a table with 10k versions must not turn a UI page
     into 10k object-store round trips.
     """
-    segments = parse_identifier(id)
-    rows = await run_in_threadpool(dataplane.table_history, ns, so, segments, limit)
+    rows = await run_in_threadpool(dataplane.table_history, table, so, limit)
     return {"table": id, "versions": rows}
 
 
@@ -155,7 +150,7 @@ def batch_commit_tables(body: BatchCommitTablesRequest) -> BatchCommitTablesResp
 @router.post("/{id}/version/list", response_model_exclude_none=True)
 def list_table_versions(
     id: str,
-    ns: NamespaceDep,
+    table: DoorTableDep,
     page_token: str | None = None,
     limit: Annotated[int | None, Query(ge=1, le=_MAX_LIST_LIMIT)] = None,
     descending: bool | None = None,
@@ -183,7 +178,7 @@ def list_table_versions(
         descending=descending,
         branch=branch,
     )
-    answer = native.call(ns, "list_table_versions", req)
+    answer = table.read_natively("list_table_versions", req)
     rows = list(answer.versions or [])
     by_version = {row.version: row for row in rows}
     try:
@@ -199,7 +194,7 @@ def list_table_versions(
 async def create_table_version(
     id: str,
     body: CreateTableVersionRequest,
-    ns: NamespaceDep,
+    table: DoorTableDep,
     settings: SettingsDep,
     so: StorageOptionsDep,
     token: CurrentToken,
@@ -217,21 +212,23 @@ async def create_table_version(
     describes against the one it follows on that ref and finalizes the judged bytes through the backend's
     put-if-not-exists. A refusal leaves the ref at its version and answers a typed spec error. A branch is created
     through ``CreateTableBranch``, and a branch this table does not list answers 404 (code 22).
+
+    The staged manifest is judged at the door's location while it still holds the table authorized, and the finalize,
+    which names the table, is made once the name is found still resolving there ([[LH-530]]).
     """
     segments = parse_identifier(id)
     body.id = reconcile_body_id(segments, body.id)
-    described: DescribeTableResponse = await run_in_threadpool(native.call, ns, "describe_table", DescribeTableRequest(id=segments))
-    if not described.location:
-        raise InvalidInputError("table has no object-store location to commit a version to")
+    await run_in_threadpool(table.require_held)
+    location = table.location
     canonical = fga.canonical_object_id(segments)
-    ref = await run_in_threadpool(managed_versions.commit_ref, described.location, so, dataplane.recorded_branch(body.branch))
+    ref = await run_in_threadpool(managed_versions.commit_ref, location, so, dataplane.recorded_branch(body.branch))
     staged = await run_in_threadpool(managed_versions.stage, ref, so, body)
     try:
         await fga_deps.require_staged_operation(
-            client, settings, token, segments=segments, location=described.location, operation=staged.operation, creates=staged.creates
+            client, settings, token, segments=segments, location=location, operation=staged.operation, creates=staged.creates
         )
         judge = BaseJudge.from_settings(settings)
-        record = await run_in_threadpool(judge.read_record, described.location)
+        record = await run_in_threadpool(judge.read_record, location)
         run = run_context.from_properties(staged.properties)
         run_context.require_caller_authored(staged.properties, run, caller=token.subject if token is not None else None)
         adds_data = await run_in_threadpool(
@@ -244,13 +241,13 @@ async def create_table_version(
             staged,
             so,
         )
-        await fga_deps.judge_staged_run(settings, token, client, resolver, ns=ns, segments=segments, run=run, adds_data=adds_data)
+        await fga_deps.judge_staged_run(settings, token, client, resolver, ns=table.namespace, segments=segments, run=run, adds_data=adds_data)
     except BaseException:
         await run_in_threadpool(managed_versions.refuse, staged, so)
         raise
     finally:
         await run_in_threadpool(managed_versions.discard, staged, so)
-    response = await run_in_threadpool(managed_versions.finalize, ns, staged, body, so)
+    response = await run_in_threadpool(managed_versions.finalize, table, staged, body, so)
     audit(
         "commit_version",
         SUCCESS,
@@ -263,7 +260,7 @@ async def create_table_version(
     await lineage_deps.emit_measured_write(
         emitter,
         segments,
-        ns=ns,
+        location=location,
         so=so,
         token=token,
         operation=managed_versions.lineage_operation(staged),
@@ -290,7 +287,7 @@ async def _clone_evidence_for(staged: managed_versions.StagedVersion, settings: 
 @router.post("/{id}/version/describe", response_model_exclude_none=True)
 def describe_table_version(
     id: str,
-    ns: NamespaceDep,
+    table: DoorTableDep,
     version: int | None = None,
     body: DescribeTableVersionRequest | None = None,
 ) -> DescribeTableVersionResponse:
@@ -298,21 +295,22 @@ def describe_table_version(
 
     Backed by the native dir backend, which returns a spec-correct ``TableVersion`` (with ``manifest_path``
     / ``manifest_size`` / ``e_tag`` / ``timestamp``); ``native.call`` marshals the request to the dict the
-    binding expects. A missing version raises the backend's ``TableVersionNotFoundError`` → 404.
+    binding expects. A missing version raises the backend's ``TableVersionNotFoundError`` → 404. The answer names the
+    table, so it is served only while the name still resolves to the door's location ([[LH-530]]).
     """
     req = body or DescribeTableVersionRequest()
     req.id = reconcile_body_id(parse_identifier(id), req.id)
     if version is not None:
         req.version = version
-    return native.call(ns, "describe_table_version", req)
+    described = table.read_natively("describe_table_version", req)
+    return described
 
 
 @router.post("/{id}/version/delete", response_model_exclude_none=True)
 async def batch_delete_table_versions(
     id: str,
     body: BatchDeleteTableVersionsRequest,
-    ns: NamespaceDep,
-    table: ResolvedTableDep,
+    table: DoorTableDep,
     settings: SettingsDep,
     so: StorageOptionsDep,
     force: RaskFlag = False,
@@ -331,14 +329,12 @@ async def batch_delete_table_versions(
     """
     segments = parse_identifier(id)
     body.id = reconcile_body_id(segments, body.id)
-    await fga_deps.require_table_unprotected(settings, table, force=force)
-    return await run_in_threadpool(_delete_versions, ns, so, settings, segments, body)
+    await fga_deps.require_table_unprotected(settings, table.resolved, force=force)
+    return await run_in_threadpool(_delete_versions, table, so, settings, body)
 
 
-def _delete_versions(
-    ns: LanceNamespace, so: dict[str, str], settings: Settings, segments: list[str], body: BatchDeleteTableVersionsRequest
-) -> BatchDeleteTableVersionsResponse:
-    ds = open_dataset_unchecked(ns, so, segments, branch=body.branch)
+def _delete_versions(table: DoorTable, so: dict[str, str], settings: Settings, body: BatchDeleteTableVersionsRequest) -> BatchDeleteTableVersionsResponse:
+    ds = table.open_unchecked(so, branch=body.branch)
     ranges = [(r.start_version, r.end_version) for r in body.ranges]
     # Judged before the sibling scan, which opens every dataset beside this one, so a refused request
     # does no estate I/O. `delete_versions` judges again against the handle it deletes from.

@@ -33,8 +33,12 @@ from pathlib import Path
 import pyarrow as pa
 import pytest
 from lance_namespace import CreateNamespaceRequest, MergeInsertIntoTableRequest, connect
+from tables_by_name import open_by_name
 
-from catalog.services.dataplane import create_table, merge_insert_into_table, open_dataset
+from catalog.services import table_claims
+from catalog.services.dataplane import create_table, merge_insert_into_table
+from catalog.services.table_claims import DoorTable
+from service_kit.lakehouse.location_claims import ClaimStore
 
 
 #: The catalog's default body cap (LANCE_MAX_BODY_BYTES), far above every body here.
@@ -65,15 +69,21 @@ def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace is runtime-only
     namespace = connect("dir", {"root": str(tmp_path / "data")})
     namespace.create_namespace(CreateNamespaceRequest(id=TABLE_ID[:-1]))
     create_table(namespace, {}, TABLE_ID, _base(), root=str(tmp_path / "data"), mode="create", registry=None)
-    open_dataset(namespace, {}, TABLE_ID).create_branch(BRANCH, None)
+    open_by_name(namespace, {}, TABLE_ID).create_branch(BRANCH, None)
     return namespace
 
 
-def _code(ns, *, branch: str | None, on: str, payload: pa.Table) -> int | None:  # noqa: ANN001
+@pytest.fixture
+def table(ns, tmp_path: Path) -> DoorTable:  # noqa: ANN001
+    """The table as the merge door acts on it."""
+    return table_claims.door_table(ns, ClaimStore(control_root=str(tmp_path / "control")), TABLE_ID)
+
+
+def _code(table: DoorTable, *, branch: str | None, on: str, payload: pa.Table) -> int | None:
     """Drive merge_insert and return the spec code it answered, or None if it did not fail."""
     request = MergeInsertIntoTableRequest(id=TABLE_ID, on=on, when_matched_update_all=True, branch=branch)
     try:
-        merge_insert_into_table(ns, {}, request, _ipc(payload), max_bytes=_BODY_LIMIT, data_ns=ns, transaction_properties=None)
+        merge_insert_into_table(table, {}, request, _ipc(payload), max_bytes=_BODY_LIMIT, transaction_properties=None)
     except Exception as exc:  # noqa: BLE001 — the CODE is the subject; the class is only how it carries one
         return getattr(exc, "code", None)
     return None
@@ -88,10 +98,10 @@ def _code(ns, *, branch: str | None, on: str, payload: pa.Table) -> int | None: 
         ("an `on` key column that does not exist", "nosuchcol", _base()),
     ],
 )
-def test_a_failed_merge_insert_answers_one_code_on_both_paths(ns, shape: str, on: str, payload: pa.Table) -> None:  # noqa: ANN001
+def test_a_failed_merge_insert_answers_one_code_on_both_paths(table: DoorTable, shape: str, on: str, payload: pa.Table) -> None:
     """The headline: branch and main must agree, and must both be a real code rather than Internal."""
-    main = _code(ns, branch=None, on=on, payload=payload)
-    branch = _code(ns, branch=BRANCH, on=on, payload=payload)
+    main = _code(table, branch=None, on=on, payload=payload)
+    branch = _code(table, branch=BRANCH, on=on, payload=payload)
 
     assert main is not None and branch is not None, f"{shape}: a bad write SUCCEEDED (main={main}, branch={branch})"
     assert branch == main, f"{shape}: branch answered code {branch} where main answered {main} — the same mistake, two answers"

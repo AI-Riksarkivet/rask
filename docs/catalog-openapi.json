@@ -17621,7 +17621,7 @@
     },
     "/management/v1/table/{id}/credentials": {
       "post": {
-        "description": "Vend scoped ``storage_options`` for direct object-store access to this table at ``tier``.\n\nThe credential is a session the catalog's own token is exchanged for, named at the store for the verified caller\nit is vended to; the caller's own token never leaves the catalog.",
+        "description": "Vend scoped ``storage_options`` for direct object-store access to this table at ``tier``.\n\nThe credential is a session the catalog's own token is exchanged for, named at the store for the verified caller\nit is vended to; the caller's own token never leaves the catalog.\n\nIt is scoped to the location the door resolved, never to the name, and answered only while that location still\nholds the table authorized: a credential for a location is a grant on whatever table holds it ([[LH-530]]).",
         "operationId": "vend_credentials_management_v1_table__id__credentials_post",
         "parameters": [
           {
@@ -17975,7 +17975,7 @@
     },
     "/management/v1/table/{id}/maintenance/preview": {
       "post": {
-        "description": "Dry-run the old-version cleanup \u2014 the versions GC would reclaim + the tags protecting others. Owner-\ngated (``can_drop``); never mutates.\n\n``branch`` IS HONOURED, as on every door here (see the module header), and this is the one that\nneeds no containment argument: it calls ``_base_refs`` zero times and mutates nothing \u2014\n``preview_gc`` reads ``ds.version``, ``ds.versions()`` and the tag and child-branch pins and returns.\n\nPreviewing MAIN and labelling it the branch's answer is the failure this replaces, not a lesser\nversion of it: the caller acts on the version list, so\n``test_the_gc_preview_names_exactly_what_the_run_deletes.py`` compares the ANSWER, per ref, with\nwhat ``/run`` deletes on that ref rather than asserting the branch reached ``open_dataset``.",
+        "description": "Dry-run the old-version cleanup \u2014 the versions GC would reclaim + the tags protecting others. Owner-\ngated (``can_drop``); never mutates.\n\n``branch`` IS HONOURED, as on every door here (see the module header), and this is the one that\nneeds no containment argument: it calls ``_base_refs`` zero times and mutates nothing \u2014\n``preview_gc`` reads ``ds.version``, ``ds.versions()`` and the tag and child-branch pins and returns.\n\nPreviewing MAIN and labelling it the branch's answer is the failure this replaces, not a lesser\nversion of it: the caller acts on the version list, so\n``test_the_gc_preview_names_exactly_what_the_run_deletes.py`` compares the ANSWER, per ref, with\nwhat ``/run`` deletes on that ref rather than asserting which ref the door opened.",
         "operationId": "preview_maintenance_management_v1_table__id__maintenance_preview_post",
         "parameters": [
           {
@@ -18069,7 +18069,7 @@
     },
     "/management/v1/table/{id}/maintenance/run": {
       "post": {
-        "description": "Reclaim old versions on demand (DESTRUCTIVE; tag-pinned versions are exempt). Owner-gated\n(``can_drop``) \u2014 the same bar as scheduling it via the retention policy.\n\n``branch`` IS HONOURED, and the containment is the LAYOUT's rather than this door's \u2014 see the\nmodule header for the measurement. The pre-pass below runs on both paths and is the same listing\neither way, because a branch handle's ``uri`` is the dataset root.\n\nReclaiming MAIN's history and reporting it as the branch's is the failure this replaces, and it is\nirreversible, so ``test_the_gc_run_reclaims_the_ref_the_request_names`` asserts what SURVIVED \u2014 the\nparent's data files, counted before and after \u2014 rather than that the branch reached\n``open_dataset``.",
+        "description": "Reclaim old versions on demand (DESTRUCTIVE; tag-pinned versions are exempt). Owner-gated\n(``can_drop``) \u2014 the same bar as scheduling it via the retention policy.\n\n``branch`` IS HONOURED, and the containment is the LAYOUT's rather than this door's \u2014 see the\nmodule header for the measurement. The pre-pass below runs on both paths and is the same listing\neither way, because a branch handle's ``uri`` is the dataset root.\n\nReclaiming MAIN's history and reporting it as the branch's is the failure this replaces, and it is\nirreversible, so ``test_the_gc_run_reclaims_the_ref_the_request_names`` asserts what SURVIVED \u2014 the\nparent's data files, counted before and after \u2014 rather than which ref the door opened.",
         "operationId": "run_maintenance_management_v1_table__id__maintenance_run_post",
         "parameters": [
           {
@@ -21913,7 +21913,7 @@
     },
     "/v1/table/{id}/analyze_plan": {
       "post": {
-        "description": "Return the analyzed query plan with runtime metrics \u2014 ``analyze_table_query_plan``; plain text.",
+        "description": "Return the analyzed query plan with runtime metrics \u2014 ``analyze_table_query_plan``; plain text, served once the name still resolves to the door's location.",
         "operationId": "analyze_table_query_plan_v1_table__id__analyze_plan_post",
         "parameters": [
           {
@@ -23567,7 +23567,7 @@
     },
     "/v1/table/{id}/exists": {
       "post": {
-        "description": "Check the table at ``id`` exists via ``table_exists`` \u2014 200 if present (spec 0.9), else error.",
+        "description": "Check the table at ``id`` exists via ``table_exists`` \u2014 200 if present (spec 0.9), else error.\n\nThe answer is about the table the request resolved, so it stands only while the name still resolves there ([[LH-530]]).",
         "operationId": "table_exists_v1_table__id__exists_post",
         "parameters": [
           {
@@ -23643,7 +23643,7 @@
     },
     "/v1/table/{id}/explain_plan": {
       "post": {
-        "description": "Return the logical query plan \u2014 ``explain_table_query_plan``; plain text.",
+        "description": "Return the logical query plan \u2014 ``explain_table_query_plan``; plain text, served once the name still resolves to the door's location.",
         "operationId": "explain_table_query_plan_v1_table__id__explain_plan_post",
         "parameters": [
           {
@@ -23852,7 +23852,7 @@
     },
     "/v1/table/{id}/index/{index_name}/drop": {
       "post": {
-        "description": "Drop a named index from a table \u2014 wraps the native ``drop_table_index`` op; emits a DROP_INDEX\nlineage event at the new version.\n\n``branch`` is DECLARED only so it can be REFUSED, the same rule the listing and the stats door\nbeside it already carry \u2014 and this door is the one where getting it wrong destroys something.\n`DropTableIndexRequest` has a `branch` field in the spec (\"Branch to target. When not specified,\nthe main branch is used\"), and the route accepted no body at all, so a spec-conformant client\nasking to drop `work`'s index was answered 200 having dropped MAIN's. Its siblings were fixed for\nexactly this shape on 2026-08-31 \u2014 they returned main's LIST for a branch's request \u2014 and this\none was missed, where the consequence is a write rather than a read.\n\nRefused BEFORE `native.call`, because the whole point is that the native op would otherwise\nsucceed against the wrong object.",
+        "description": "Drop a named index from a table \u2014 wraps the native ``drop_table_index`` op; emits a DROP_INDEX\nlineage event at the new version.\n\n``branch`` is DECLARED only so it can be REFUSED, the same rule the listing and the stats door\nbeside it already carry \u2014 and this door is the one where getting it wrong destroys something.\n`DropTableIndexRequest` has a `branch` field in the spec (\"Branch to target. When not specified,\nthe main branch is used\"), and the route accepted no body at all, so a spec-conformant client\nasking to drop `work`'s index was answered 200 having dropped MAIN's. Its siblings were fixed for\nexactly this shape on 2026-08-31 \u2014 they returned main's LIST for a branch's request \u2014 and this\none was missed, where the consequence is a write rather than a read.\n\nRefused BEFORE `native.call`, because the whole point is that the native op would otherwise\nsucceed against the wrong object. The drop stays the native op, whose refusal of a system index is the namespace's\nown and not Lance's (lance-namespace-impls 13.0.0, ``dir.rs``), so it is the door's guarded native write, made after\nthe handle opened at the door's location has disarmed commit-path cleanup ([[LH-530]]).",
         "operationId": "drop_table_index_v1_table__id__index__index_name__drop_post",
         "parameters": [
           {
@@ -24504,7 +24504,7 @@
     },
     "/v1/table/{id}/query": {
       "post": {
-        "description": "Run a query and return matching rows as an Arrow-IPC file \u2014 wraps ``query_table``.",
+        "description": "Run a query and return matching rows as an Arrow-IPC file \u2014 wraps ``query_table``.\n\nThe native query names the table, so its rows are served only when the name still resolves to the location the\ndoor opened ([[LH-530]]).",
         "operationId": "query_table_v1_table__id__query_post",
         "parameters": [
           {
@@ -24962,7 +24962,7 @@
     },
     "/v1/table/{id}/schema_metadata/update": {
       "post": {
-        "description": "Upsert the table's schema-level metadata map \u2014 a ``null`` value DELETES that key; emits an\nUPDATE_SCHEMA_METADATA event at the version the update committed (the response omits it, so the event resolves it from the commit).\n\nThe op MERGES, whatever the spec's \"Replace\" wording says (probed against a real ``dir`` backend:\nposting ``{owner}`` over ``{owner, tier}`` leaves ``tier`` standing). Omitting a key therefore cannot\nremove it, and the spec's request model types ``metadata`` as a strict ``{str: str}`` that cannot carry\na null \u2014 so ``{\"key\": null}`` is a rask EXTENSION, routed to the dataplane's pylance\n``update_schema_metadata`` (the same ``None``-deletes dialect ``update_field_metadata`` already speaks).\nA body with no nulls stays on the native spec op, transaction id and all.\n\nKeys under ``lineage.*`` and ``rask.*`` are the platform's and are refused 400, set or null alike.",
+        "description": "Upsert the table's schema-level metadata map \u2014 a ``null`` value DELETES that key; emits an\nUPDATE_SCHEMA_METADATA event at the version the update committed (the response omits it, so the event resolves it from the commit).\n\nThe op MERGES, whatever the spec's \"Replace\" wording says (probed against a real ``dir`` backend:\nposting ``{owner}`` over ``{owner, tier}`` leaves ``tier`` standing). Omitting a key therefore cannot\nremove it, and the spec's request model types ``metadata`` as a strict ``{str: str}`` that cannot carry\na null \u2014 so ``{\"key\": null}`` is a rask EXTENSION, served by pylance's ``update_schema_metadata`` (the same\n``None``-deletes dialect ``update_field_metadata`` already speaks). Every body is written through that one call, on\nthe handle opened at the door's location: the native op names the table and would resolve it again ([[LH-530]]),\nand it makes the same merging call on the dataset it loads (lance-namespace-impls 13.0.0, ``dir.rs``).\n\nKeys under ``lineage.*`` and ``rask.*`` are the platform's and are refused 400, set or null alike.",
         "operationId": "update_table_schema_metadata_v1_table__id__schema_metadata_update_post",
         "parameters": [
           {
@@ -25821,7 +25821,7 @@
     },
     "/v1/table/{id}/version/create": {
       "post": {
-        "description": "Finalize a client-staged manifest as the next version of the table or of one of its branches, after judging it\n([[LH-471]], [[LH-490]], ADR 0157).\n\nThe catalog answers ``managed_versioning=true``, so a stock writer stages ``_versions/<n>.manifest-<uuid>`` (under\n``tree/<branch>/`` for a branch, which ``branch`` names) and asks here; ``managed_versions`` judges the version it\ndescribes against the one it follows on that ref and finalizes the judged bytes through the backend's\nput-if-not-exists. A refusal leaves the ref at its version and answers a typed spec error. A branch is created\nthrough ``CreateTableBranch``, and a branch this table does not list answers 404 (code 22).",
+        "description": "Finalize a client-staged manifest as the next version of the table or of one of its branches, after judging it\n([[LH-471]], [[LH-490]], ADR 0157).\n\nThe catalog answers ``managed_versioning=true``, so a stock writer stages ``_versions/<n>.manifest-<uuid>`` (under\n``tree/<branch>/`` for a branch, which ``branch`` names) and asks here; ``managed_versions`` judges the version it\ndescribes against the one it follows on that ref and finalizes the judged bytes through the backend's\nput-if-not-exists. A refusal leaves the ref at its version and answers a typed spec error. A branch is created\nthrough ``CreateTableBranch``, and a branch this table does not list answers 404 (code 22).\n\nThe staged manifest is judged at the door's location while it still holds the table authorized, and the finalize,\nwhich names the table, is made once the name is found still resolving there ([[LH-530]]).",
         "operationId": "create_table_version_v1_table__id__version_create_post",
         "parameters": [
           {
@@ -26005,7 +26005,7 @@
     },
     "/v1/table/{id}/version/describe": {
       "post": {
-        "description": "Describe one table version (the latest when ``version`` is omitted).\n\nBacked by the native dir backend, which returns a spec-correct ``TableVersion`` (with ``manifest_path``\n/ ``manifest_size`` / ``e_tag`` / ``timestamp``); ``native.call`` marshals the request to the dict the\nbinding expects. A missing version raises the backend's ``TableVersionNotFoundError`` \u2192 404.",
+        "description": "Describe one table version (the latest when ``version`` is omitted).\n\nBacked by the native dir backend, which returns a spec-correct ``TableVersion`` (with ``manifest_path``\n/ ``manifest_size`` / ``e_tag`` / ``timestamp``); ``native.call`` marshals the request to the dict the\nbinding expects. A missing version raises the backend's ``TableVersionNotFoundError`` \u2192 404. The answer names the\ntable, so it is served only while the name still resolves to the door's location ([[LH-530]]).",
         "operationId": "describe_table_version_v1_table__id__version_describe_post",
         "parameters": [
           {
