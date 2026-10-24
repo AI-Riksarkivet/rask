@@ -44,6 +44,7 @@ from catalog.services.erasure_obligations import ErasureObligation, ErasureOblig
 from service_kit.control_emit import ControlEmitter, emit_control
 from service_kit.governed import fga
 from service_kit.governed.audit import SUCCESS, audit
+from service_kit.lakehouse.history_fences import TableHistory
 from service_kit.lakehouse.records import RecordExistsError
 
 
@@ -192,6 +193,7 @@ async def verify_erasure(
         predicate=body.predicate,
         retention=timedelta(days=obligation.retain_days),
         trusted=obligation.refs,
+        history=TableHistory(control_root=control_root, storage_options=control_options, table_uuid=table_uuid),
     )
     if report.settled and report.pinned_by:
         # The events name the table as it is named now, which a rename since the request changed; its owners are found on

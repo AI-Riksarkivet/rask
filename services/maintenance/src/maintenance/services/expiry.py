@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import re
+from contextlib import AbstractContextManager, nullcontext
 from datetime import UTC, datetime, timedelta
 from typing import Any, Final, Literal
 
@@ -31,6 +32,7 @@ from service_kit.lakehouse.features import (
     mixes_data_file_versions,
     unsupported_features_from_open_error,
 )
+from service_kit.lakehouse.history_fences import HistoryFencedError, HistoryWork, TableHistory
 from service_kit.lakehouse.stored_objects import delete_objects, list_under
 from service_kit.lakehouse.version_retention import Retention, reclaimable_versions
 from service_kit.openlineage import DatasetUuids
@@ -49,12 +51,16 @@ type Gate = Literal["protected_base", "manifest_flags", "invalid_ref", "nested_b
 #: ``__manifest`` row naming the dataset, ``failed`` could not decide and left the record as it was.
 type DueVerdict = Literal["due", "clear", "unnamed", "failed"]
 
+#: Why a pass that would delete did not run this tick: a write of the table's tags or branches held its history ([[LH-308]]).
+HISTORY_FENCED: Final = "history_fenced"
+
 
 class DatasetResult(BaseModel):
     """What one dataset's pass did, or why it did not run."""
 
     uri: str
-    #: Why the policy cadence skipped this dataset this tick (``policy_interval``); ``None`` when the pass ran.
+    #: Why this dataset's pass did not run this tick: the policy cadence (``policy_interval``), or a write of one of the
+    #: table's tags or branches holding its history ([[LH-308]], :data:`HISTORY_FENCED`); ``None`` when the pass ran.
     skipped: str | None = None
     #: Why this dataset was REFUSED, and by which gate (:data:`Gate`, or one of the catalog's answers for the id).
     refused: str | None = None
@@ -141,6 +147,8 @@ class ExpiryTarget(BaseModel):
     data_directories: list[RecordedBase] = Field(default_factory=list)
     #: The tick's clock, which a file's age in a data directory is judged by.
     now: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    #: Where the table's history fence is kept, which the pass holds while it deletes ([[LH-308]]); ``None`` holds none.
+    history: TableHistory | None = None
 
 
 class DisarmOutcome(BaseModel):
@@ -364,8 +372,7 @@ def _reclaim_versions(ds: lance.LanceDataset, *, result: DatasetResult, target: 
     if not policy.cleanup_enabled:
         log.info("cleanup_disabled_by_policy", extra={"uri": result.uri})
         return
-    result.reclaimable_versions = count_reclaimable(ds, result.uri, policy)
-    if result.reclaimable_versions < policy.min_reclaimable:
+    if (result.reclaimable_versions or 0) < policy.min_reclaimable:
         log.debug("maintenance_expiry_below_threshold", extra={"uri": result.uri, "reclaimable": result.reclaimable_versions})
         return
     stats: Any = ds.cleanup_old_versions(older_than=policy.older_than, retain_versions=policy.retain_versions, error_if_tagged_old_versions=False)
@@ -389,6 +396,26 @@ def _reclaim_data_directories(ds: lance.LanceDataset, *, result: DatasetResult, 
         return
     reclaimed = base_reclaim.reclaim(ds, target.data_directories, target.storage_options, now=target.now)
     result.base_files_removed, result.base_bytes_removed = reclaimed.files, reclaimed.bytes
+
+
+def _deletes(result: DatasetResult, target: ExpiryTarget, policy: ExpiryPolicy) -> bool:
+    """Whether this pass will delete: versions past the policy's threshold, or files in the table's data directories."""
+    return policy.cleanup_enabled and ((result.reclaimable_versions or 0) >= policy.min_reclaimable or bool(target.data_directories))
+
+
+def _history_held(result: DatasetResult, target: ExpiryTarget, policy: ExpiryPolicy) -> AbstractContextManager[None]:
+    """The table's history held for a reclaim while a pass that deletes runs ([[LH-308]]); nothing held for one that does not.
+
+    ``cleanup_old_versions`` reads the table's tags and branches once, when it starts, so a ref written while it runs can
+    name a version it deletes. Only a pass that deletes holds the fence, so a table's ref writes wait on no pass that
+    reclaims nothing.
+
+    Raises:
+        HistoryFencedError: A write of the table's tags or branches holds its history.
+    """
+    if target.history is None or not _deletes(result, target, policy):
+        return nullcontext()
+    return target.history.held(HistoryWork.RECLAIM)
 
 
 def _record_failure(result: DatasetResult, exc: BaseException) -> None:
@@ -417,8 +444,14 @@ def expire_versions(target: ExpiryTarget, policy: ExpiryPolicy) -> DatasetResult
     result = disarm.onto(opened.result(target.uri))
     result.table_id = target.table_id
     try:
-        _reclaim_versions(opened.ds, result=result, target=target, policy=policy)
-        _reclaim_data_directories(opened.ds, result=result, target=target, policy=policy)
+        if policy.cleanup_enabled:
+            result.reclaimable_versions = count_reclaimable(opened.ds, result.uri, policy)
+        with _history_held(result, target, policy):
+            _reclaim_versions(opened.ds, result=result, target=target, policy=policy)
+            _reclaim_data_directories(opened.ds, result=result, target=target, policy=policy)
+    except HistoryFencedError as exc:
+        log.info("maintenance_history_fenced", extra={"uri": result.uri, "table_id": result.table_id, "reason": str(exc)})
+        result.skipped = HISTORY_FENCED
     except BaseException as exc:  # noqa: BLE001 — a Rust PANIC is not an Exception
         # A pyo3 panic derives from BaseException; measured on the live estate 2026-08-16, one escaping panic answered
         # the entire sweep HTTP 500 and every other dataset lost its reclamation.

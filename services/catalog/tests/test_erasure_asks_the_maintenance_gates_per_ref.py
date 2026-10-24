@@ -1,9 +1,10 @@
-"""An erasure's verification asks the GC door's manifest-flag gate of every ref before reclaiming it.
+"""An erasure's verification asks the GC door's gates of every ref before reclaiming it.
 
 The GC door refuses a dataset whose manifest carries a flag its reclaim has not been checked against
 (``maintenance.require_reclaimable``, which asks the sweep's ``describe_gc_unsupported_flags``). The
 verification reclaims every clean ref through that ref's own handle, so it refuses the same way and says so
-per ref. The job's compaction is ``version/create``'s to judge (``maintenance.require_compactable``, ADR
+per ref. Like every reclaim, it reclaims nothing while a write of the table's tags or branches holds its history
+([[LH-308]]). The job's compaction is ``version/create``'s to judge (``maintenance.require_compactable``, ADR
 0162), so nothing here compacts.
 """
 
@@ -30,6 +31,7 @@ from catalog.services.dataplane import create_table, read_arrow_body
 from catalog.services.erasure import ErasureReport, ref_heads, verify
 from service_kit.lakehouse import base_refs, base_registry
 from service_kit.lakehouse.base_refs import BaseRefs
+from service_kit.lakehouse.history_fences import HistoryWork, TableHistory
 
 
 #: The catalog's default body cap (LANCE_MAX_BODY_BYTES), far above every body here.
@@ -62,12 +64,48 @@ def test_a_table_mixing_file_versions_is_not_reclaimed_on_any_ref(tmp_path: Path
         predicate=_PREDICATE,
         retention=timedelta(0),
         trusted=recorded,
+        history=None,
     )
 
     history = {s.surface: (s.outcome, s.detail) for s in report.surfaces if s.surface.startswith("history:")}
     assert {surface: outcome for surface, (outcome, _) in history.items()} == {"history:main": "failed", "history:work": "failed"}
     assert all("256 (mixed data file versions)" in detail for _, detail in history.values()), history
     assert (report.complete, report.settled) == (False, False)
+
+
+def _versions(uri: str) -> dict[str, list[int]]:
+    """Each ref's retained versions."""
+    return {ref: [int(v["version"]) for v in lance.dataset(uri).checkout_version((ref, None)).versions()] for ref in ("main", "work")}
+
+
+def test_no_ref_is_reclaimed_while_a_ref_write_holds_the_tables_history(tmp_path: Path, erasure_job: Any) -> None:  # noqa: ANN401 — conftest.ErasureJob
+    """Lance reads the refs once per reclaim, so a tag or branch written meanwhile could pin a version it deletes; the
+    verification reclaims no ref, says so per ref, and leaves the obligation open for the next verification."""
+    uri = str(tmp_path / "subjects")
+    lance.write_dataset(_rows("alice", "bob"), uri, data_storage_version="2.2", enable_stable_row_ids=True)
+    lance.dataset(uri).create_branch("work")
+    recorded = ref_heads(lance.dataset(uri))
+    erasure_job(uri, _PREDICATE).run()
+    versions = _versions(uri)
+    history = TableHistory(control_root=str(tmp_path / "control"), storage_options={}, table_uuid="0b5d8a8c-2f6e-4d1a-9c3b-7e1f0a2d4c6b")
+    history.take(HistoryWork.REFS)
+
+    report = verify(
+        lance.dataset(uri),
+        storage_options={},
+        protected=None,
+        reopen=lambda: lance.dataset(uri),
+        table="t",
+        predicate=_PREDICATE,
+        retention=timedelta(0),
+        trusted=recorded,
+        history=history,
+    )
+
+    outcomes = {s.surface: s.outcome for s in report.surfaces if s.surface.startswith("history:")}
+    assert outcomes == {"history:main": "failed", "history:work": "failed"}, report.surfaces
+    assert _versions(uri) == versions, "a reclaim ran while a ref write held the history"
+    assert report.settled is False
 
 
 def test_the_door_reads_the_store_the_table_lives_in_with_the_requests_options(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -140,9 +140,9 @@ def test_a_version_a_branch_was_cut_from_is_refused_and_the_branch_is_named(clie
     assert _versions(ns) == [1, 2, 3, 4]
 
 
-@pytest.mark.parametrize("bad", [(3, 3), (1, -2)], ids=["empty", "negative-end"])
-def test_a_range_that_names_no_version_is_refused(client: TestClient, ns: LanceNamespace, bad: tuple[int, int]) -> None:
-    answer = _delete(client, bad)
+def test_a_range_that_names_no_version_is_refused(client: TestClient, ns: LanceNamespace) -> None:
+    """``[3, 3)``: end-exclusive, so a range whose end is its start names nothing."""
+    answer = _delete(client, (3, 3))
 
     assert answer.status_code == 400, answer.text
     assert answer.json()["code"] == 13

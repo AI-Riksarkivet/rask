@@ -28,6 +28,7 @@ from catalog.services import table_claims
 from catalog.services.dataplane import create_table
 from catalog.services.publication import publish
 from catalog.services.table_claims import DoorTable
+from service_kit.lakehouse import base_registry
 from service_kit.lakehouse.location_claims import ClaimStore
 
 
@@ -42,11 +43,16 @@ def _table(ids: list[int | None]) -> pa.Table:
     )
 
 
+def _registry(tmp_path: Path) -> base_registry.BaseRegistry:
+    """The control root the doors read, so the table holds its location under a uuid as every table does (ADR 0173 §6)."""
+    return base_registry.BaseRegistry(control_root=str(tmp_path / "control"), storage_options={})
+
+
 @pytest.fixture
 def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace, runtime-only
     namespace = connect("dir", {"root": str(tmp_path)})
     namespace.create_namespace(CreateNamespaceRequest(id=TABLE_ID[:-1]))
-    create_table(namespace, {}, TABLE_ID, _table([1, 2, 3]), root=str(tmp_path), mode="create", registry=None)
+    create_table(namespace, {}, TABLE_ID, _table([1, 2, 3]), root=str(tmp_path), mode="create", registry=_registry(tmp_path), holder="db$pages")
     return namespace
 
 

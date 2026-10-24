@@ -46,6 +46,7 @@ from service_kit.governed.oidc import IDToken
 from service_kit.governed.person_identity import PersonPrincipal
 from service_kit.governed.principal import Principal
 from service_kit.lakehouse.base_registry import BaseRegistry
+from service_kit.lakehouse.history_fences import HistoryWork, TableHistory
 from service_kit.lakehouse.location_claims import ClaimStore
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 
@@ -280,3 +281,33 @@ def test_a_release_cut_short_is_finished_at_the_reference_it_recorded(tmp_path: 
         assert client.post(f"/{_BINDING}").status_code == 200
 
     assert _branches(ns) == expected
+
+
+def test_a_release_waits_while_a_reclaim_holds_the_tables_history(tmp_path: Path) -> None:
+    """A release recreates branches at the versions it recorded, and Lance's reclaim reads the refs once, so a branch
+    recreated while a reclaim runs could be cut from a version it deletes ([[LH-308]]). The tick changes no ref and
+    leaves the release for a later one."""
+    ns = _pinned_subtree(tmp_path / "data")
+    emitter, clock = _Recorder(), _Clock()
+    pins = [Pin(ref="tag:t1", holds="deeper@3"), Pin(ref="branch:deeper", holds="work@3"), Pin(ref="branch:work", holds="main@2")]
+    table_uuid = _table_uuid(ns, tmp_path)
+    release = erasure_release.new_release(
+        pins,
+        release_id="1" * 32,
+        table="db$subjects",
+        table_uuid=table_uuid,
+        location=open_by_name(ns, {}, _TABLE_ID).uri,
+        requested_by="user:dex~alice",
+        notified=["user:dex~alice"],
+        due_at=clock.now,
+    )
+    erasure_release.schedule(str(tmp_path / "control"), {}, release)
+    branches, tags = _branches(ns), open_by_name(ns, {}, _TABLE_ID).tags.list()
+    TableHistory(control_root=str(tmp_path / "control"), storage_options={}, table_uuid=table_uuid).take(HistoryWork.RECLAIM)
+
+    with _catalog(ns, tmp_path, grace_days=0, emitter=emitter, clock=clock) as client:
+        tick = client.post(f"/{_BINDING}")
+
+    assert tick.status_code == 200, tick.text
+    assert (_branches(ns), open_by_name(ns, {}, _TABLE_ID).tags.list()) == (branches, tags), "the release changed refs while a reclaim held the history"
+    assert erasure_release.scheduled(str(tmp_path / "control"), {}, release.release_id) is not None, "the release did not wait for a later tick"

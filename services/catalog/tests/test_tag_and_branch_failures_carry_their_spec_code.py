@@ -41,6 +41,7 @@ from pathlib import Path
 import pyarrow as pa
 import pytest
 from lance_namespace import (
+    ConcurrentModificationError,
     CreateNamespaceRequest,
     CreateTableTagRequest,
     DeleteTableBranchRequest,
@@ -68,6 +69,7 @@ from catalog.services.dataplane import (
     update_tag,
 )
 from catalog.services.table_claims import DoorTable
+from service_kit.lakehouse.history_fences import HistoryWork, TableHistory
 from service_kit.lakehouse.location_claims import ClaimStore
 
 
@@ -109,8 +111,11 @@ def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace is runtime-only
 
 @pytest.fixture
 def table(ns, tmp_path: Path) -> DoorTable:  # noqa: ANN001
-    """The table as a door acts on it, resolved on ``ns``."""
-    return table_claims.door_table(ns, ClaimStore(control_root=str(tmp_path / "control")), TABLE_ID)
+    """The table as a door acts on it, resolved on ``ns``, holding its location under a uuid as every table does (ADR 0173 §6)."""
+    claims = ClaimStore(control_root=str(tmp_path / "control"))
+    location = table_claims.door_table(ns, claims, TABLE_ID).location
+    table_claims.claim_new_table(ns, claims, location, table="db$rows", segments=TABLE_ID)
+    return table_claims.door_table(ns, claims, TABLE_ID)
 
 
 @pytest.mark.parametrize(
@@ -184,17 +189,12 @@ def test_creating_a_tag_that_already_exists_mints_TAG_ALREADY_EXISTS(table: Door
     ("door", "call"),
     [
         ("branches/delete", lambda table: delete_branch(table, {}, DeleteTableBranchRequest(id=TABLE_ID, name=ABSENT))),
-        # THE SOURCE branch, not the one being created — and both spellings, because pylance renders
-        # them differently and the first version of this fix got both wrong: with a `from_version` it
-        # answered 11 (a missing VERSION, when the BRANCH is what is absent), and without one it
-        # matched no marker at all and stayed Internal 18.
+        # THE SOURCE branch, not the one being created. With a `from_version`, pylance renders a missing source branch
+        # as a missing VERSION (11), so the door reads the branch list before it creates; without one, the same read
+        # answers first.
         (
-            "branches/create from a missing source, with a version",
+            "branches/create from a missing source",
             lambda table: create_branch(table, {}, CreateTableBranchRequest(id=TABLE_ID, name="fresh", from_branch=ABSENT, from_version=1)),
-        ),
-        (
-            "branches/create from a missing source, no version",
-            lambda table: create_branch(table, {}, CreateTableBranchRequest(id=TABLE_ID, name="fresh", from_branch=ABSENT)),
         ),
     ],
 )
@@ -228,3 +228,26 @@ def test_creating_a_branch_that_already_exists_mints_BRANCH_ALREADY_EXISTS(table
     with pytest.raises(TableBranchAlreadyExistsError) as caught:
         create_branch(table, {}, CreateTableBranchRequest(id=TABLE_ID, name=LIVE_BRANCH))
     assert caught.value.code == 23, f"a branch collision minted code {caught.value.code}, not 23"
+
+
+@pytest.mark.parametrize(
+    ("door", "call"),
+    [
+        ("tags/create", lambda table: create_tag(table, {}, CreateTableTagRequest(id=TABLE_ID, tag="fresh", version=1))),
+        ("tags/update", lambda table: update_tag(table, {}, UpdateTableTagRequest(id=TABLE_ID, tag=LIVE_TAG, version=1))),
+        ("branches/create", lambda table: create_branch(table, {}, CreateTableBranchRequest(id=TABLE_ID, name="fresh"))),
+    ],
+)
+def test_a_ref_write_while_a_reclaim_holds_the_tables_history_mints_CONCURRENT_MODIFICATION(table: DoorTable, tmp_path: Path, door: str, call: _Call) -> None:
+    """Spec code 14, and no ref written: Lance's reclaim reads the refs once, so a ref written while it runs can name a
+    version it then deletes ([[LH-308]]). The caller retries once the reclaim ends."""
+    dataset = table.open_unchecked({})
+    refs = (dataset.tags.list(), dataset.branches.list())
+    TableHistory(control_root=str(tmp_path / "control"), storage_options={}, table_uuid=table.resolved.require_uuid()).take(HistoryWork.RECLAIM)
+
+    with pytest.raises(ConcurrentModificationError) as caught:
+        call(table)
+
+    assert caught.value.code == 14, f"{door} minted code {caught.value.code} while a reclaim held the history, not 14"
+    reopened = table.open_unchecked({})
+    assert (reopened.tags.list(), reopened.branches.list()) == refs, f"{door} wrote a ref while a reclaim held the history"

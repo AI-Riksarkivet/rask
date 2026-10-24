@@ -631,11 +631,16 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   that reaches the current version (400; ranges are end-exclusive), refuses a version a tag or a child
   branch pins (409, naming it), judges every range before deleting any, and asks `maintenance/run`'s
   #114 base-reference gate, because the reclaim also removes data files only those versions referenced.
-  **The pin refusal covers refs that exist when the reclaim starts, not refs created during it.** Lance
-  reads tags and branches once per `cleanup_old_versions`, and no door serializes `tags/create`,
-  `tags/update` or `branches/create` with a reclaim: measured with concurrent races, a tag created
-  mid-reclaim named a deleted version (31 of 60), and `maintenance/run` loses the same race (59 of 60).
-  Parked as LH-308, which covers every reclaim path, the sweep included.
+  **A ref written during a reclaim is held off by the table's history fence** ([[LH-308]], ADR 0176,
+  `service_kit.lakehouse.history_fences`). Lance reads tags and branches once per `cleanup_old_versions`
+  (`cleanup.rs:472-511` at v13.0.0); measured on pylance 13.0.0, a tag created mid-cleanup named a deleted version in
+  20 of 60 races and a branch could not be read in 9 of 60. So every reclaim (`maintenance/run`, `version/delete`, the
+  erasure verification's step 3, maintenance's expiry pass while it deletes) and every ref write (`tags/create`,
+  `tags/update`, `branches/create`, publication's tag move, the erasure release's branch re-creation) holds the fence,
+  one record per table uuid under `_history_fences/`; holders of one kind share it, the other kind is refused 409 code
+  14 (`DoorTable.history_held`), and a fenced sweep pass is `skipped="history_fenced"`. A hold lapses after 15 minutes.
+  Pinned by `services/catalog/tests/test_tag_and_branch_failures_carry_their_spec_code.py` and
+  `tests/integration/test_no_reclaim_deletes_a_version_while_a_ref_is_written.py`.
 - **An erasure is an obligation a bring-your-own job fulfils and the catalog verifies** ([[LH-493]], ADR 0163).
   `POST /management/v1/table/{id}/erasure` (owner rung) plans the predicate (400 with nothing recorded when Lance
   refuses it), disarms every ref and records the obligation (`catalog.services.erasure_obligations`,

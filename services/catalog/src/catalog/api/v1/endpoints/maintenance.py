@@ -30,6 +30,7 @@ from catalog.schemas import DueTable, GcPreview, GcRequest, GcRunResult, Mainten
 from catalog.services import maintenance, table_claims
 from service_kit.governed import fga
 from service_kit.lakehouse import maintenance_due
+from service_kit.lakehouse.history_fences import HistoryWork
 
 
 log = logging.getLogger(__name__)
@@ -116,15 +117,14 @@ async def run_maintenance(
     parent's data files, counted before and after — rather than which ref the door opened."""
     ds = await run_in_threadpool(partial(table.open, so, branch=branch))
     protected = await _base_refs(ds, so, settings)
-    result = await run_in_threadpool(
-        maintenance.run_gc,
-        ds,
-        retention_days=body.retention_days,
-        retain_versions=body.retain_versions,
-        protected=protected,
-        branch=branch,
-    )
-    return GcRunResult(**result)
+
+    def _reclaim() -> maintenance.GcRunData:
+        # [[LH-308]] Held while Lance deletes: it reads the refs once, so a tag or branch written meanwhile could pin a
+        # version this deletes. A ref write holding it answers this request 409.
+        with table.history_held(HistoryWork.RECLAIM):
+            return maintenance.run_gc(ds, retention_days=body.retention_days, retain_versions=body.retain_versions, protected=protected, branch=branch)
+
+    return GcRunResult(**await run_in_threadpool(_reclaim))
 
 
 @due_router.get("/due")

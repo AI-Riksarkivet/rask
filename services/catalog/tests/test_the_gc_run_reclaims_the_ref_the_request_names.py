@@ -40,6 +40,7 @@ from catalog.api.dependencies import get_namespace, get_storage_options
 from catalog.api.v1.endpoints import maintenance as door
 from catalog.core.config import Settings, get_settings
 from catalog.services.dataplane import create_table
+from service_kit.lakehouse import base_registry
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
@@ -64,7 +65,8 @@ def namespace(tmp_path: Path) -> LanceNamespace:
     """
     ns = lance_namespace.connect("dir", {"root": str(tmp_path / "data")})
     ns.create_namespace(CreateNamespaceRequest(id=TABLE_ID[:-1]))
-    create_table(ns, {}, TABLE_ID, _rows(1), root=str(tmp_path / "data"), mode="create", registry=None)
+    registry = base_registry.BaseRegistry(control_root=str(tmp_path / "control"), storage_options={})
+    create_table(ns, {}, TABLE_ID, _rows(1), root=str(tmp_path / "data"), mode="create", registry=registry, holder="db$rows")
     open_by_name(ns, {}, TABLE_ID).insert(_rows(1, start=1))
     lance.write_dataset(_rows(1, start=2), str(open_by_name(ns, {}, TABLE_ID).uri), mode="overwrite")
     open_by_name(ns, {}, TABLE_ID).create_branch(BRANCH, None)

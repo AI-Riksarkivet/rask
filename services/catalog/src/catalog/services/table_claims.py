@@ -16,7 +16,8 @@ acts on that reading through :class:`DoorTable` ([[LH-530]]).
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Generator
+from contextlib import contextmanager
 from typing import Any
 from uuid import uuid4
 
@@ -36,7 +37,7 @@ from catalog.core.namespace import open_resolved_dataset, open_resolved_dataset_
 from catalog.services import native
 from catalog.services.object_uuids import UnidentifiedObjectError
 from service_kit.governed import fga
-from service_kit.lakehouse import location_claims, trash
+from service_kit.lakehouse import history_fences, location_claims, trash
 from service_kit.lakehouse.base_refs import decoded_path
 from service_kit.lakehouse.location_claims import ClaimRead, ClaimStore, LocationClaim
 from service_kit.lakehouse.objectfs import StorageOptions
@@ -248,6 +249,25 @@ class DoorTable:
         # between, so the handle holds the manifest of the table the router authorized. Asked when the open fails too,
         # since a table destroyed since its resolution fails the open first, and the change is what the caller needs.
         return _checked(lambda: opener(self.location, so, self.segments, version=version, branch=branch), self.require_held)
+
+    @contextmanager
+    def history_held(self, work: history_fences.HistoryWork) -> Generator[None]:
+        """The table's history held for ``work`` while the block runs: no reclaim deletes a version while a tag or branch
+        is written, and no ref is written while a reclaim runs ([[LH-308]], :mod:`service_kit.lakehouse.history_fences`).
+
+        Raises:
+            ConcurrentModificationError: Work of the other kind holds the history; the block did not run.
+            UnidentifiedObjectError: The table's location carries no claim recording a uuid.
+        """
+        history = history_fences.TableHistory(
+            control_root=self._claims.control_root, storage_options=self._claims.storage_options, table_uuid=self._resolved.require_uuid()
+        )
+        try:
+            with history.held(work):
+                yield
+        except history_fences.HistoryFencedError as exc:
+            log.info("table_history_fenced", extra={"table": self.segments, "work": work, "reason": str(exc)})
+            raise ConcurrentModificationError(f"table {fga.canonical_object_id(self.segments)}: {exc}") from exc
 
 
 class TableChangedError(ConcurrentModificationError):

@@ -76,6 +76,7 @@ def _verify(uri: str, retention: timedelta = _NOW, trusted: dict[str, int] | Non
         predicate=_PREDICATE,
         retention=retention,
         trusted=trusted if trusted is not None else ref_heads(lance.dataset(uri)),
+        history=None,
     )
 
 

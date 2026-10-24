@@ -52,6 +52,7 @@ from catalog.services.table_claims import DoorTable
 from service_kit.governed import fga
 from service_kit.governed.audit import SUCCESS, audit
 from service_kit.lakehouse import maintenance_due
+from service_kit.lakehouse.history_fences import HistoryWork
 
 
 log = logging.getLogger(__name__)
@@ -343,5 +344,8 @@ def _delete_versions(table: DoorTable, so: dict[str, str], settings: Settings, b
     refs = BaseJudge.from_settings(settings).sibling_base_refs(location, so)
     if refs.unreadable:
         log.warning("version_delete_base_refs_incomplete", extra={"location": location, "unreadable": len(refs.unreadable)})
-    deleted = maintenance.delete_versions(ds, ranges=ranges, branch=body.branch, protected=refs)
+    # [[LH-308]] Held while Lance deletes: it reads the refs once, so a tag or branch written meanwhile could pin a
+    # version this deletes. A ref write holding it answers this request 409.
+    with table.history_held(HistoryWork.RECLAIM):
+        deleted = maintenance.delete_versions(ds, ranges=ranges, branch=body.branch, protected=refs)
     return BatchDeleteTableVersionsResponse(deleted_count=deleted)

@@ -188,3 +188,4 @@ before they had a record here; each names its source document and the date of th
 | [0173](0173-tables-and-namespaces-are-keyed-by-a-minted-uuid.md) | LH-512 | Every table and namespace is keyed by a uuid the catalog mints; no name reaches a storage path, a credential's policy or an FGA object (2026-10-21) |
 | [0174](0174-the-provenance-namespace-is-maintained-as-every-table-is.md) | LH-529 | The provenance namespace is maintained as every table is: a declared retention, a bring-your-own compaction job, and expiry after each compaction (2026-10-23) |
 | [0175](0175-a-data-base-is-its-tables-storage.md) | LH-286 | A data base is its tables' storage: reached under the catalog's own identity, and reclaimed by maintenance (2026-10-24) |
+| [0176](0176-a-tables-history-is-fenced-between-reclaims-and-ref-writes.md) | LH-308 | A table's history is fenced between reclaims and ref writes (2026-10-24) |

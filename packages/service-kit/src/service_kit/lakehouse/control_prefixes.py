@@ -9,7 +9,7 @@ purge's clean-report gate.
 
 Each name is the prefix one writer keeps under a control root: the namespace backend's ``__manifest``, service-kit's
 record stores (``_trash``, ``_policies``, ``_protection``, ``_bases``, ``_locations``, ``_idempotency``, ``_gates``,
-``_maintenance_due``, ``_warehouses``), the catalog's (``_projects``, ``_erasure_obligations``, ``_erasure_releases``,
+``_maintenance_due``, ``_warehouses``, ``_history_fences``), the catalog's (``_projects``, ``_erasure_obligations``, ``_erasure_releases``,
 ``_promotions``), the lineage and control outboxes (``_lineage_outbox``, ``_control_outbox``), a distributed write's
 ``_staging`` and the control-root backups (``_backups``).
 """
@@ -32,6 +32,7 @@ CONTROL_PREFIXES: Final[frozenset[str]] = frozenset(
         "_idempotency",
         "_gates",
         "_maintenance_due",
+        "_history_fences",
         "_erasure_obligations",
         "_erasure_releases",
         "_promotions",

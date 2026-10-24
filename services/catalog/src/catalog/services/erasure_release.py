@@ -42,6 +42,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from catalog.services.dataplane import recorded_branch
 from catalog.services.erasure import Pin
+from service_kit.lakehouse.history_fences import HistoryFencedError, HistoryWork, TableHistory
 from service_kit.lakehouse.objectfs import StorageOptions
 from service_kit.lakehouse.record_store import delete_record, list_records
 from service_kit.lakehouse.records import RecordChangedError, RecordMissingError, create_json, mutate_json, read_json
@@ -181,7 +182,8 @@ def completion_bound(due_at: datetime, cleanup_window_days: int) -> str:
 def release_due(control_root: str, storage_options: StorageOptions, *, now: datetime, open_location: Callable[[str], _Dataset]) -> list[RefChange]:
     """Release every scheduled release that is due and not held by another tick; the refs it changed.
 
-    One release failing records its error, hands its lease back and leaves the others to run.
+    One release failing records its error, hands its lease back and leaves the others to run. One a reclaim of its table
+    holds off ([[LH-308]]) is left unclaimed for a later tick.
     """
     changes: list[RefChange] = []
     for raw in list_records(control_root, storage_options, RELEASE_PREFIX, event="erasure_release"):
@@ -196,6 +198,8 @@ def release_due(control_root: str, storage_options: StorageOptions, *, now: date
             changes += _release(control_root, storage_options, record, now=now, open_location=open_location)
         except _Lost:
             log.info("erasure_release_claimed_elsewhere", extra={"release": record.release_id})
+        except HistoryFencedError as exc:
+            log.info("erasure_release_waits_for_a_reclaim", extra={"release": record.release_id, "table": record.table, "reason": str(exc)})
         except Exception as exc:  # noqa: BLE001 — one release's failure must not hold up the others
             log.warning("erasure_release_failed", extra={"release": record.release_id, "table": record.table, "error": str(exc)})
             _hand_back(control_root, storage_options, record.release_id, now=now, error=str(exc))
@@ -214,13 +218,17 @@ def _release(
     control_root: str, storage_options: StorageOptions, record: ReleaseRecord, *, now: datetime, open_location: Callable[[str], _Dataset]
 ) -> list[RefChange]:
     dataset = open_location(record.location)
-    tags, plan = _plan(dataset, record) if record.phase != "recreating" else (record.tags, record.plan)
-    claimed = _mutate(control_root, storage_options, record.release_id, lambda current: _claim(current, now=now, tags=tags, plan=plan))
-    changes: list[RefChange] = []
-    if claimed.phase == "deleting":
-        changes += _delete(dataset, claimed)
-        claimed = _mutate(control_root, storage_options, record.release_id, lambda current: {**current, "phase": "recreating"})
-    changes += _recreate(dataset, claimed)
+    # [[LH-308]] Held before the release is claimed, so a tick a reclaim holds off leaves it as it was: a branch is
+    # recreated at the version the release recorded, which a reclaim reading the refs before it would delete.
+    history = TableHistory(control_root=control_root, storage_options=storage_options, table_uuid=record.table_uuid)
+    with history.held(HistoryWork.REFS):
+        tags, plan = _plan(dataset, record) if record.phase != "recreating" else (record.tags, record.plan)
+        claimed = _mutate(control_root, storage_options, record.release_id, lambda current: _claim(current, now=now, tags=tags, plan=plan))
+        changes: list[RefChange] = []
+        if claimed.phase == "deleting":
+            changes += _delete(dataset, claimed)
+            claimed = _mutate(control_root, storage_options, record.release_id, lambda current: {**current, "phase": "recreating"})
+        changes += _recreate(dataset, claimed)
     _finish(control_root, storage_options, record.release_id)
     log.info(
         "erasure_release_done",

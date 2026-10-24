@@ -113,6 +113,7 @@ from catalog.services.maintenance import refuse_a_referring_datasets_source
 from service_kit.lakehouse.base_refs import BaseRefs, normalise
 from service_kit.lakehouse.blobs import EXTERNAL_KIND, blob_field_names
 from service_kit.lakehouse.features import describe_gc_unsupported_flags, manifest_feature_flags
+from service_kit.lakehouse.history_fences import HistoryFencedError, HistoryWork, TableHistory
 from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base
 
 
@@ -296,6 +297,7 @@ def verify(
     predicate: str,
     retention: timedelta,
     trusted: Mapping[str, int],
+    history: TableHistory | None,
 ) -> ErasureReport:
     """Judge every ref's head on bytes, drop the tags pinning the subject, reclaim each clean ref, and verify every
     retained version of every ref.
@@ -311,7 +313,9 @@ def verify(
     to zero: an erasure is not a licence to destroy unrelated history, and a requester that means to reclaim
     everything says so with ``retain_days=0``. ``trusted`` maps each ref (`main` or a branch name) to the last version
     whose `CreateIndex` commits are read as provenance, the heads :func:`ref_heads` read when the obligation was
-    recorded; a ref it does not name, a branch cut since, offers none. It has no default for the same reason.
+    recorded; a ref it does not name, a branch cut since, offers none. It has no default for the same reason. ``history``
+    is where the table's history fence is kept, which the reclaim holds ([[LH-308]]); ``None`` holds none, and it has no
+    default for the same reason.
 
     EVERY SURFACE IS ATTEMPTED even when one fails, short of what would destroy history for nothing (the module's
     `skipped`). Stopping at the first error would leave the remaining surfaces both unjudged and unreported, so nobody
@@ -350,7 +354,7 @@ def verify(
     referred = _referred(dataset, protected)
     if referred is not None:
         log.warning("erasure_refused_referred_source", extra={"table": table, "reason": referred})
-    cutoffs = _reclaim(report, dataset, deepest_first, clean=clean, referred=referred, retention=retention)
+    cutoffs = _reclaim(report, dataset, deepest_first, clean=clean, referred=referred, retention=retention, history=history)
 
     # 4. VERIFY EVERY REF, because every step above is an ATTEMPT and only this is evidence. Every head can be clean and
     #    the row still readable at a version a branch or a tag stands on, which is the one outcome an erasure must never
@@ -465,9 +469,36 @@ def _label_surface(ref: str | None) -> str:
 
 
 def _reclaim(
+    report: ErasureReport,
+    dataset: _Dataset,
+    deepest_first: Sequence[str | None],
+    *,
+    clean: Collection[str | None],
+    referred: str | None,
+    retention: timedelta,
+    history: TableHistory | None,
+) -> dict[str | None, datetime]:
+    """Step 3: clean up every ref whose head is clean, deepest first; each reclaimed ref's cutoff.
+
+    Under the table's history fence, held for a reclaim ([[LH-308]]): Lance reads the refs once per cleanup, so a tag or
+    branch written meanwhile could pin a version it deletes. While a write of the table's refs holds it, no ref is
+    reclaimed and each says so, so the obligation stays open for the next verification.
+    """
+    if history is None:
+        return _reclaim_refs(report, dataset, deepest_first, clean=clean, referred=referred, retention=retention)
+    try:
+        with history.held(HistoryWork.RECLAIM):
+            return _reclaim_refs(report, dataset, deepest_first, clean=clean, referred=referred, retention=retention)
+    except HistoryFencedError as exc:
+        log.info("erasure_history_fenced", extra={"table": report.table, "reason": str(exc)})
+        report.surfaces += [SurfaceResult(surface=f"history:{_label(ref)}", outcome="failed", detail=f"{exc} Not reclaimed.") for ref in deepest_first]
+        return {}
+
+
+def _reclaim_refs(
     report: ErasureReport, dataset: _Dataset, deepest_first: Sequence[str | None], *, clean: Collection[str | None], referred: str | None, retention: timedelta
 ) -> dict[str | None, datetime]:
-    """Step 3: clean up every ref whose head is clean, deepest first; each reclaimed ref's cutoff."""
+    """Each clean ref's cleanup, deepest first; each reclaimed ref's cutoff."""
     cutoffs: dict[str | None, datetime] = {}
     for ref in deepest_first:
         surface = f"history:{_label(ref)}"

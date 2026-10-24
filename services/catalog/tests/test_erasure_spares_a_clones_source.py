@@ -71,6 +71,7 @@ def _erase_protected(tmp_path: Path, erasure_job: Any) -> tuple[str, ErasureRepo
         predicate=_PREDICATE,
         retention=timedelta(0),
         trusted=recorded,
+        history=None,
     )
     return uri, report
 

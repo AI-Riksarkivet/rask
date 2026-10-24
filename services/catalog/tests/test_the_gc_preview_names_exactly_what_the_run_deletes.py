@@ -43,6 +43,7 @@ from catalog.api.dependencies import get_namespace, get_storage_options
 from catalog.api.v1.endpoints import maintenance as door
 from catalog.core.config import Settings, get_settings
 from catalog.services.dataplane import create_table
+from service_kit.lakehouse import base_registry
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
@@ -57,12 +58,17 @@ def _rows(start: int) -> pa.Table:
     return pa.table({"id": pa.array([start], pa.int64())})
 
 
+def _registry(tmp_path: Path) -> base_registry.BaseRegistry:
+    """The control root the doors read, so the table holds its location under a uuid as every table does (ADR 0173 §6)."""
+    return base_registry.BaseRegistry(control_root=str(tmp_path / "control"), storage_options={})
+
+
 @pytest.fixture
 def namespace(tmp_path: Path) -> LanceNamespace:
     """Main at v1..v6 and ``work`` at v2..v6, with one tag and one child branch pinning each ref."""
     ns = lance_namespace.connect("dir", {"root": str(tmp_path / "data")})
     ns.create_namespace(CreateNamespaceRequest(id=TABLE_ID[:-1]))
-    create_table(ns, {}, TABLE_ID, _rows(0), root=str(tmp_path / "data"), mode="create", registry=None)
+    create_table(ns, {}, TABLE_ID, _rows(0), root=str(tmp_path / "data"), mode="create", registry=_registry(tmp_path), holder="db$rows")
     open_by_name(ns, {}, TABLE_ID).insert(_rows(1))
     open_by_name(ns, {}, TABLE_ID).create_branch(BRANCH, 2)
     for i in range(2, 6):

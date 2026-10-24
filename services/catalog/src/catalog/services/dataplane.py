@@ -107,6 +107,7 @@ from service_kit.lakehouse import auto_cleanup, base_registry, branch_layout, da
 from service_kit.lakehouse.base_refs import decoded_path, decoded_segments, location_in_store, normalise, store_of
 from service_kit.lakehouse.control_prefixes import CONTROL_PREFIXES
 from service_kit.lakehouse.features import manifest_base_path_refs
+from service_kit.lakehouse.history_fences import HistoryWork
 from service_kit.lakehouse.naming import CATALOG_DELIMITER
 from service_kit.lakehouse.ns_errors import PartiallyApplied
 from service_kit.lakehouse.objectfs import StorageOptions, credential_of, s3_filesystem
@@ -2876,8 +2877,12 @@ def _tag_reference(branch: str | None, version: int | None) -> int | tuple[str |
 
 
 def create_tag(table: table_claims.DoorTable, so: StorageOptions, req: CreateTableTagRequest) -> CreateTableTagResponse:
-    """Tag the given table version with a name (honoring the request's optional ``branch``)."""
-    with _ref_errors("tag", req.tag):
+    """Tag the given table version with a name (honoring the request's optional ``branch``), never while a reclaim runs.
+
+    Raises:
+        ConcurrentModificationError: A reclaim holds the table's history ([[LH-308]]); no tag was written.
+    """
+    with table.history_held(HistoryWork.REFS), _ref_errors("tag", req.tag):
         table.open(so).tags.create(req.tag, _tag_reference(req.branch, req.version))
     return CreateTableTagResponse()
 
@@ -2897,8 +2902,12 @@ def get_tag_version(table: table_claims.DoorTable, so: StorageOptions, req: GetT
 
 
 def update_tag(table: table_claims.DoorTable, so: StorageOptions, req: UpdateTableTagRequest) -> UpdateTableTagResponse:
-    """Move an existing tag to a new table version (honoring the request's optional ``branch``)."""
-    with _ref_errors("tag", req.tag):
+    """Move an existing tag to a new table version (honoring the request's optional ``branch``), never while a reclaim runs.
+
+    Raises:
+        ConcurrentModificationError: A reclaim holds the table's history ([[LH-308]]); the tag was not moved.
+    """
+    with table.history_held(HistoryWork.REFS), _ref_errors("tag", req.tag):
         table.open(so).tags.update(req.tag, _tag_reference(req.branch, req.version))
     return UpdateTableTagResponse()
 
@@ -2980,7 +2989,7 @@ def create_branch(table: table_claims.DoorTable, so: StorageOptions, req: Create
     # which exists nowhere yet and tells the caller nothing about what was missing.
     source = req.from_branch if req.from_branch is not None else MAIN_BRANCH
     try:
-        with _ref_errors("branch", source, invalid_name=req.name):
+        with table.history_held(HistoryWork.REFS), _ref_errors("branch", source, invalid_name=req.name):
             dataset.create_branch(req.name, _branch_reference(req))
     except OSError:
         if req.name in table.open(so).branches.list():

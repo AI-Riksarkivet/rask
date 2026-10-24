@@ -69,6 +69,11 @@ The catalog's record of which table holds a location, and of that table's uuid. 
 rename hands the claim to the new name, and destroying the table releases it.
 _Avoid_: lock, lease, ownership record
 
+**History fence**:
+The record that keeps a table's reclaims and its tag and branch writes from overlapping: either may hold it, never both
+at once, so no tag or branch is written on a version a running reclaim may delete. A hold lapses after 15 minutes.
+_Avoid_: ref lock, reclaim lease, GC lock
+
 ### Governance
 
 **Principal**:

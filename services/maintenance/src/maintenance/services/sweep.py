@@ -60,6 +60,7 @@ from service_kit.governed import fga
 from service_kit.governed.audit import SUCCESS, audit
 from service_kit.lakehouse import auto_cleanup, base_refs, base_registry, data_directories, location_claims, maintenance_policies, trash
 from service_kit.lakehouse.features import flags_from_open_error, manifest_base_path_refs, manifest_feature_flags, mixes_data_file_versions
+from service_kit.lakehouse.history_fences import TableHistory
 from service_kit.lakehouse.lance_session import affordable_cache_bytes
 from service_kit.lakehouse.maintenance_due import CloneList, DueRecord, delete_due, list_due, write_clone_list
 from service_kit.lakehouse.objectfs import s3_filesystem
@@ -389,17 +390,22 @@ def _data_directories(uri: str, *, sweep: SweepPlan, settings: MaintenanceSettin
     return held
 
 
-def _expire(uri: str, table: str, plan: DatasetPlan, *, sweep: SweepPlan, settings: MaintenanceSettings) -> DatasetResult:
-    """One dataset's expiry, signed by a vend scoped to ``table``, the table ``__manifest`` names it as, where expiry may write.
+def _expire(uri: str, named: NamedDataset, plan: DatasetPlan, *, sweep: SweepPlan, settings: MaintenanceSettings) -> DatasetResult:
+    """One dataset's expiry, signed by a vend scoped to the table ``__manifest`` names it as, where expiry may write.
 
     One name feeds the vend and the result, so the table a credential is scoped to and the table events name cannot
-    disagree.
+    disagree. The pass holds that table's history fence, keyed by its uuid, while it deletes ([[LH-308]]), so a pass over
+    a branch holds the same fence as a pass over its table.
     """
+    table = named.table
     options = settings.storage_options()
     policy = plan.expiry_policy(min_reclaimable=settings.min_versions_to_expire, staged_grace=timedelta(seconds=settings.staged_manifest_grace_seconds))
     directories = _data_directories(uri, sweep=sweep, settings=settings, options=options)
     probe = _probe_before_vending(uri, options, policy=policy, directories=directories, now=sweep.context.now)
-    target = ExpiryTarget(uri=uri, storage_options=options, protected=sweep.protected, table_id=table, data_directories=directories, now=sweep.context.now)
+    history = TableHistory(control_root=settings.resolved_control_root, storage_options=options, table_uuid=named.owners.table_uuid)
+    target = ExpiryTarget(
+        uri=uri, storage_options=options, protected=sweep.protected, table_id=table, data_directories=directories, now=sweep.context.now, history=history
+    )
     if probe.may_write:
         try:
             target.storage_options = credentials.write_options_for(uri, settings, table_id=table, fallback=options)
@@ -408,7 +414,7 @@ def _expire(uri: str, table: str, plan: DatasetPlan, *, sweep: SweepPlan, settin
     return expire_versions(target, policy)
 
 
-def _expire_in_span(uri: str, table: str, plan: DatasetPlan, *, sweep: SweepPlan, settings: MaintenanceSettings) -> DatasetResult:
+def _expire_in_span(uri: str, named: NamedDataset, plan: DatasetPlan, *, sweep: SweepPlan, settings: MaintenanceSettings) -> DatasetResult:
     """:func:`_expire` inside its own span, timed around the work: a failure and a refusal are both on the span.
 
     A pass its lineage event will name carries the uuids of the table and its namespace, read only for such a pass.
@@ -416,9 +422,9 @@ def _expire_in_span(uri: str, table: str, plan: DatasetPlan, *, sweep: SweepPlan
     with tracer.start_as_current_span("maintenance.expire_versions") as span:
         span.set_attribute("lance.maintenance.dataset_uri", uri)
         started = perf_counter()
-        result = _expire(uri, table, plan, sweep=sweep, settings=settings)
+        result = _expire(uri, named, plan, sweep=sweep, settings=settings)
         if _lane_of(result) is not None:
-            result.uuids = read_uuids(sweep.table_ids, table, claims=_claims(settings))
+            result.uuids = read_uuids(sweep.table_ids, named.table, claims=_claims(settings))
         result.duration_seconds = round(perf_counter() - started, 3)
         span.set_attribute("lance.maintenance.duration_seconds", result.duration_seconds)
         if result.refused is not None:
@@ -476,7 +482,7 @@ def maintain_dataset(uri: str, *, sweep: SweepPlan, settings: MaintenanceSetting
     plan = _plan_for(uri, named, sweep=sweep, settings=settings)
     if plan.skipped is not None:
         return _skipped(uri, plan, settings=settings)
-    result = _expire_in_span(uri, named.table, plan, sweep=sweep, settings=settings)
+    result = _expire_in_span(uri, named, plan, sweep=sweep, settings=settings)
     result.due = _evaluate_due(uri, named, plan, sweep=sweep, settings=settings)
     _finish(result, plan=plan, now=sweep.context.now, settings=settings)
     return result
@@ -491,7 +497,7 @@ def expire_dataset(uri: str, *, sweep: SweepPlan, settings: MaintenanceSettings)
     plan = _plan_for(uri, named, sweep=sweep, settings=settings)
     if plan.skipped is not None:
         return _skipped(uri, plan, settings=settings)
-    result = _expire_in_span(uri, named.table, plan, sweep=sweep, settings=settings)
+    result = _expire_in_span(uri, named, plan, sweep=sweep, settings=settings)
     _finish(result, plan=plan, now=sweep.context.now, settings=settings)
     return result
 
@@ -541,7 +547,7 @@ def _stamp_cadence(result: DatasetResult, *, plan: DatasetPlan, settings: Mainte
     as a transient ``policy_interval`` skip for the whole interval rather than a standing refusal.
     """
     policy = plan.policy
-    if policy is None or not policy.get("compact_interval_hours") or result.error is not None or result.refused is not None:
+    if policy is None or not policy.get("compact_interval_hours") or result.error is not None or result.refused is not None or result.skipped is not None:
         return
     try:
         maintenance_policies.write_state(settings.resolved_policy_root, settings.storage_options(), policy, result.uri, now.isoformat())
