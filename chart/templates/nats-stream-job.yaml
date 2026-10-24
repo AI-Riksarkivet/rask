@@ -178,3 +178,23 @@ spec:
                   fi
                 done
               done
+              LIN="{{ .Values.services.lineage.daprAppId }}-durable"
+              EXP_MACK="{{ required "services.lineage.deliveriesInFlight is required" .Values.services.lineage.deliveriesInFlight }}"
+              mack_of() { nats --server "$S" consumer info LINEAGE "$LIN" --json 2>/dev/null | tr -d ' \n' | sed -n 's/.*"max_ack_pending":\(-\{0,1\}[0-9]*\).*/\1/p'; }
+              mack=$(mack_of)
+              if [ -n "$mack" ] && [ "$mack" != "$EXP_MACK" ]; then
+                deadline=$(( $(date +%s) + 300 ))
+                while :; do
+                  mack=$(mack_of)
+                  if [ "$mack" = "$EXP_MACK" ]; then echo "RECONCILED LINEAGE/$LIN: max_ack_pending=$mack"; break; fi
+                  if [ -n "$mack" ]; then
+                    echo "RECONCILE LINEAGE/$LIN: max_ack_pending=$mack != expected $EXP_MACK — deleting (sidecar re-creates)"
+                    nats --server "$S" consumer rm LINEAGE "$LIN" -f
+                  fi
+                  if [ "$(date +%s)" -ge "$deadline" ]; then
+                    [ -z "$(mack_of)" ] && break
+                    echo "!! LINEAGE/$LIN is not at max_ack_pending=$EXP_MACK after 300 s"; exit 1
+                  fi
+                  sleep 5
+                done
+              fi

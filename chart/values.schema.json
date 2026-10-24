@@ -1934,6 +1934,10 @@
                             "description": "Dapr app-id of lineage; also names its pubsub, DLQ and durable consumers and scopes its relay cron.",
                             "type": "string"
                         },
+                        "deliveriesInFlight": {
+                            "description": "How many of lineage's bus deliveries may be unacknowledged at once (its durable consumer's `maxAckPending`).",
+                            "type": "integer"
+                        },
                         "eventsRetentionDays": {
                             "description": "Days of arrival time the durable /events feed keeps, pruned on the relay tick; bounds how long a notifications outage it survives. 0 is unbounded.",
                             "type": "integer"

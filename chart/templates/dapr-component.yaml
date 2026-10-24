@@ -100,6 +100,10 @@ spec:
     - { name: name, value: "lance-dapr-{{ .appId }}" }
     - { name: queueGroupName, value: {{ .appId | quote }} }
     - { name: deliverPolicy, value: {{ .deliverPolicy | quote }} }
+    {{- if eq .appId $.Values.services.lineage.daprAppId }}
+    - { name: concurrencyMode, value: "parallel" }
+    - { name: maxAckPending, value: {{ required "services.lineage.deliveriesInFlight is required" $.Values.services.lineage.deliveriesInFlight | quote }} }
+    {{- end }}
     {{- if eq .appId "notifications" }}
     - { name: protectedTopics, value: "{{ $.Values.pubsub.topic }}" }
     - { name: publishingScopes, value: "{{ .appId }}=dlq.{{ .appId }}" }

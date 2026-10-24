@@ -165,16 +165,17 @@ async def ingest_event(
     try:
         enforce_author(event, token)
         await enforce_output_authz(event, request, settings, token)
+        started = time.perf_counter()
+        # The edges, then the feed row, each keyed: a failure answers an error, the producer retries, and the
+        # retry lands what is missing and nothing twice (see `ProvenanceStore.record`). Its own refusal of a run
+        # another author bound first is counted as the door's is.
+        await provenance.record(event)
     except (UnauthoredRunError, UngovernedOutputError, ForeignRunError):
         record_outcome(Outcome.UNREPAIRABLE, door=Door.HTTP)
         raise
     except PermissionDeniedError:
         record_outcome(Outcome.REFUSED, door=Door.HTTP)
         raise
-    started = time.perf_counter()
-    # The edges, then the feed row, each keyed: a failure answers an error, the producer retries, and the
-    # retry lands what is missing and nothing twice (see `ProvenanceStore.record`).
-    await provenance.record(event)
     # Domain metrics for the HTTP transport too — every external producer lands here, so counting only the Dapr subscriber undercounted real ingest (audit 2026-07-15).
     # A 401 or a 422 still never reaches this point and needs no domain outcome: neither names a run the
     # graph should have held. An authorization refusal does, and is counted above.

@@ -89,6 +89,20 @@ no author) are ACKED and counted rather than parked, because nothing can change 
 park would write a duplicate per replay. A named PERSON who lacks a grant still parks: a tuple can be
 written and the same event then succeeds.
 
+## `{{- if eq .appId $.Values.services.lineage.daprAppId }}`
+
+LINEAGE'S SUBSCRIPTION DELIVERS IN PARALLEL ([[LH-533]]). Unset, the JetStream component hands its app
+one message at a time (components-contrib v1.19.0, `pubsub/jetstream/metadata.go:63-65`): measured on the
+live estate 2026-10-23, 61 of 61 deliveries ran back to back, so a backlog was recorded one commit per
+event, and the one delivery a catalog kill failed held every later message through its 120 s retry. With
+`parallel` each message is handled on its own, the events a commit is in flight for land together in the
+next (`ProvenanceStore.record`), and a retrying event holds no other back. The bound is the durable's own
+`maxAckPending` (`services.lineage.deliveriesInFlight`), so JetStream hands out no more than that and
+nothing waits in the sidecar while its `ackWait` runs. A sidecar cannot rebind a durable whose config
+changed, so nats-stream-job.yaml recreates `lineage-durable` when its `max_ack_pending` differs, and its
+`deliverPolicy: all` replays the retained stream into the keyed ingest. `concurrencyMode` is the
+component's alone and changes no durable. The other subscribers keep one at a time.
+
 ## `{{- $subscribers = append $subscribers (dict "appId" "notifications" "deliverPolicy" "new") }}`
 
 The INBOX (open_notifications.md §2). `new` is the strongest case in this list: lineage's `all`

@@ -289,7 +289,7 @@ def feed_on_a_counted_store(monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[P
         from catalog.main import app
 
         with serve(app) as url:
-            provenance = ProvenanceStore(catalog_url=url, namespace=["provenance"], token=lambda: None)
+            provenance = ProvenanceStore(catalog_url=url, namespace=["provenance"], token=lambda: None, refuse_foreign_runs=False)
             ensure_tables(provenance)
             with httpx.Client(base_url=url, timeout=60) as catalog:
                 feed = catalog.post("/v1/table/provenance$events/describe", json={"vend_credentials": False}).json()["location"]

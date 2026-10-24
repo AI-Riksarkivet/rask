@@ -56,9 +56,14 @@ one row per terminal state of a run, one per arrival of a non-terminal state, an
 and scan pays for (ADR 0174), so the events recorded while a commit is in flight land together in the next one: one
 writer per process, started by a burst's first event, with no timer. The commit keeps `record`'s order for the whole
 batch (the run bindings, then the edges, then the feed rows) and sends a key the batch repeats once, its first
-delivery's row, so a run is bound to its first event's author. A batch whose rows the catalog refuses (400, 413, 422)
-lands in halves, so only the event it refuses fails its delivery; any other failure (a 429 at its write cap, a 5xx, no
-answer) fails the batch whole, and each delivery retries.
+delivery's row, so a run is bound to its first event's author. Where the doors authorize, an event of a run another
+author bound first is refused with none of its rows written: the doors' rule, asked again at the commit because events
+delivered together were each authorized before any of them bound its run. A batch whose rows the catalog refuses (400,
+413, 422) lands in halves, so only the event it refuses fails its delivery; any other failure (a 429 at its write cap, a
+5xx, no answer) fails the batch whole, and each delivery retries. Lineage's bus subscription delivers in parallel
+(`concurrencyMode: parallel`; the JetStream component's default is one at a time), at most
+`services.lineage.deliveriesInFlight` unacknowledged at once (its durable's `maxAckPending`), so a backlog's events arrive
+together and an event the sidecar is retrying holds no other back.
 
 **The feed's sequence is Lance's own.** The tables use stable row ids, which Lance assigns in commit order
 (`lance_docs/file_format.md`, "Row ID Assignment"), and `seq` is `_rowid + 1`. A follower reading `seq > since`

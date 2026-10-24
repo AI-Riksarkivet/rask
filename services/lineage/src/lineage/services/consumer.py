@@ -155,6 +155,12 @@ async def handle_cloud_event(
         # The edges, then the feed row, each keyed: a failure here retries the delivery, and the retry lands
         # what is missing and nothing twice (see `ProvenanceStore.record`).
         await provenance.record(event)
+    except ForeignRunError as exc:
+        # The commit's own refusal of a run another author bound first, among events delivered together: as
+        # unrepairable as the door's.
+        log.warning("lineage_event_foreign_run", extra={"run": event.run_id, "reason": str(exc)})
+        record_outcome(Outcome.UNREPAIRABLE, door=door)
+        return _SUCCESS
     except Exception as exc:
         log.warning("lineage_ingest_failed", extra={"run": event.run_id, "error": str(exc)})
         record_outcome(Outcome.RETRIED, door=door)

@@ -300,6 +300,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | services.flows.replicas | int | `1` | Replica count of the flows Deployment; 0 scales it to zero. |
 | services.flows.waitFor | list | `[]` | List of dependencies flows waits for in an init container; only `objectStore` is honoured (when objectStore.enabled). |
 | services.lineage.daprAppId | string | `"lineage"` | Dapr app-id of lineage; also names its pubsub, DLQ and durable consumers and scopes its relay cron. |
+| services.lineage.deliveriesInFlight | int | `64` | How many of lineage's bus deliveries may be unacknowledged at once (its durable consumer's `maxAckPending`). |
 | services.lineage.eventsRetentionDays | int | `7` | Days of arrival time the durable /events feed keeps, pruned on the relay tick; bounds how long a notifications outage it survives. 0 is unbounded. |
 | services.lineage.forward.authSecret.key | string | `"api-key"` | Field of that secret the API key is under. |
 | services.lineage.forward.authSecret.name | string | `""` | Secret in the Dapr secret store holding the backend's API key, sent as `Authorization: Bearer`. Empty sends none. |

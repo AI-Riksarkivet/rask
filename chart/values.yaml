@@ -256,6 +256,15 @@ services:
     # merge on the event's key in the feed table lands a redelivery as nothing.
     # -- Replica count of lineage; replicas form a competing-consumer group, so it scales freely.
     replicas: 1
+    # Dapr's JetStream component hands its app one message at a time unless its metadata says `concurrencyMode:
+    # parallel` (components-contrib v1.19.0, `pubsub/jetstream/metadata.go:63-65`). Lineage's says parallel, so a
+    # backlog's events arrive together and land in one commit per provenance table (ProvenanceStore.record's group
+    # commit), and an event the sidecar is retrying holds no other back. This is the bound, the durable consumer's
+    # `maxAckPending`, so JetStream hands out no more than it and nothing waits in the sidecar while its ackWait runs. A
+    # change recreates `lineage-durable` (templates/nats-stream-job.yaml), which replays the retained stream into the
+    # keyed ingest.
+    # -- How many of lineage's bus deliveries may be unacknowledged at once (its durable consumer's `maxAckPending`).
+    deliveriesInFlight: 64
     # Lineage keeps no database (ADR 0158): its commit feed, table-level edge list and outbox refusals are Lance
     # tables in this namespace, written and read through the catalog's doors as lineage's own principal. The
     # catalog creates the namespace at boot, protects it, grants lineage `writer` on it, and never announces a

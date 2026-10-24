@@ -41,3 +41,14 @@ The path of the `admin` creds file the nats CLI reads (values.yaml `nats.auth`),
 ## `until err=$(nats --server "$S" stream ls 2>&1 >/dev/null); do`
 
 A server that is not up yet is waited for; one that refuses this Job's credential fails it now, by name.
+
+## `LIN="{{ .Values.services.lineage.daprAppId }}-durable"`
+
+LINEAGE'S DURABLE IS HELD TO ITS IN-FLIGHT BOUND ([[LH-533]]). `services.lineage.deliveriesInFlight` is the
+durable's `max_ack_pending`, the one config field the chart sets beyond `max_deliver` and `backoff`, and a
+sidecar cannot rebind a durable whose config differs ("consumer name already in use"), so a durable at another
+value is deleted for the sidecar to recreate. This Job runs beside the rollout, so the outgoing pod's sidecar
+may recreate the durable as it was: the Job checks again every 5 s and deletes it again until it is at the
+bound, and after 300 s, which outlasts the outgoing pod's grace period, it fails for its retry if a durable is
+still at another value. Each recreation starts at the stream's first message (`deliverPolicy: all`), a replay
+the keyed ingest lands nothing twice from.

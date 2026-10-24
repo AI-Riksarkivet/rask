@@ -19,9 +19,10 @@ two racing deliveries of one event land it once (``catalog.services.primary_keys
 per terminal state of a run, one per arrival of a non-terminal state, and one per static change.
 
 A BURST IS ONE COMMIT PER TABLE ([[LH-533]]). Every commit is a Lance version and a fragment that each later open and
-scan of the table pays for (ADR 0174), and the sidecar delivers in parallel, so the events recorded while a commit is in
-flight wait and land together in the next one: one writer per process, started by the first event of a burst and gone
-with its last, with no timer, so an idle estate waits on nothing. Measured on pylance 13.0.0 against the catalog app, 29
+scan of the table pays for (ADR 0174), and the sidecar delivers lineage's subscription in parallel (`concurrencyMode:
+parallel`, chart `services.lineage.deliveriesInFlight`), so the events recorded while a commit is in flight wait and land
+together in the next one: one writer per process, started by the first event of a burst and gone with its last, with no
+timer, so an idle estate waits on nothing. Measured on pylance 13.0.0 against the catalog app, 29
 concurrent deliveries recorded one commit each took 16, 16 and 13 commits on `runs`, `edges` and `events`, and the
 catalog refused some of them 429 at its concurrent-write cap; 200 recorded by group commit took 2 on each, and none was
 refused.
@@ -42,7 +43,7 @@ import logging
 import threading
 import uuid
 from collections import deque
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import Future
 from datetime import UTC, datetime, timedelta
 from typing import Any, Final, TypeVar
@@ -53,7 +54,7 @@ from opentelemetry.trace import SpanContext
 from pydantic import BaseModel, ConfigDict
 
 from lineage.core.config import LineageSettings
-from lineage.models import Dataset, DatasetEvent, RunEvent, author_sub_from_payload
+from lineage.models import Dataset, DatasetEvent, ForeignRunError, RunEvent, author_sub_from_payload
 from lineage.schemas import DerivedTable, EventRecord
 from service_kit.governed.machine_identity import read_identity_token
 from service_kit.lakehouse.naming import CATALOG_DELIMITER, is_external_source_namespace
@@ -330,11 +331,13 @@ class _Recording(BaseModel):
 
     model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True)
 
-    #: The run's binding to its author, for a run event naming a run; a later event of a bound run writes none.
-    binding: pa.Table | None
+    #: The run a run event names, and the verified author it is recorded for: what a run's first event binds it to.
+    run_id: str | None
+    author: str | None
+    received_at: datetime
     edges: pa.Table
     row: pa.Table
-    #: The bytes of all three, what a batch is bounded by.
+    #: The bytes of its rows, what a batch is bounded by.
     weight: int
     #: The span of the delivery, which the commit landing these rows links to.
     origin: SpanContext
@@ -343,17 +346,16 @@ class _Recording(BaseModel):
 
 def _recording_of(event: RunEvent | DatasetEvent, *, received_at: datetime) -> _Recording:
     row = feed_row(event, received_at=received_at)
-    binding = None
-    if isinstance(event, RunEvent) and event.run.run_id:
-        author = author_sub_from_payload(json.loads(row["event"]))
-        binding = pa.Table.from_pylist([{"run_id": event.run.run_id, "author": author, "received_at": received_at}], schema=RUN_SCHEMA)
+    run_id = event.run.run_id if isinstance(event, RunEvent) and event.run.run_id else None
     edges = pa.Table.from_pylist(edges_of(event, received_at=received_at), schema=EDGE_SCHEMA)
     rows = pa.Table.from_pylist([row], schema=FEED_SCHEMA)
     return _Recording(
-        binding=binding,
+        run_id=run_id,
+        author=author_sub_from_payload(json.loads(row["event"])) if run_id else None,
+        received_at=received_at,
         edges=edges,
         row=rows,
-        weight=rows.nbytes + edges.nbytes + (binding.nbytes if binding is not None else 0),
+        weight=rows.nbytes + edges.nbytes,
         origin=trace.get_current_span().get_span_context(),
         landed=Future(),
     )
@@ -376,6 +378,14 @@ def _refused_rows(error: Exception) -> bool:
     return isinstance(error.__cause__, ApiException) and error.__cause__.status in _REFUSED_ROWS
 
 
+def _extends_another_authors(recording: _Recording, authors: Mapping[str, str | None]) -> bool:
+    """Whether ``recording`` names an author other than the one its run is bound to; an unauthored side compares to nothing, as at the doors."""
+    if recording.run_id is None or recording.author is None:
+        return False
+    owner = authors[recording.run_id]
+    return owner is not None and owner != recording.author
+
+
 def _settle(recording: _Recording, error: BaseException | None) -> None:
     """Answer the delivery waiting on ``recording`` with its outcome, unless it stopped waiting."""
     if not recording.landed.running():
@@ -392,10 +402,19 @@ class ProvenanceStore:
     Every method is async and runs its catalog calls off the event loop, because the spec client is blocking: a record on
     the writer thread of its burst, every other call in a worker thread. ``token`` answers this pod's bearer for the
     catalog, read on every call: the kubelet rotates a projected token at about 515 s of its 600 s life. ``None`` sends
-    none, which only a catalog with authentication off accepts.
+    none, which only a catalog with authentication off accepts. ``refuse_foreign_runs`` is whether a commit refuses an event
+    of a run another author bound (:meth:`_commit`): the doors' rule, on when they authorize.
     """
 
-    def __init__(self, *, catalog_url: str, namespace: Sequence[str], token: Callable[[], str | None], timeout_seconds: float = 30.0) -> None:
+    def __init__(
+        self,
+        *,
+        catalog_url: str,
+        namespace: Sequence[str],
+        token: Callable[[], str | None],
+        refuse_foreign_runs: bool,
+        timeout_seconds: float = 30.0,
+    ) -> None:
         if not catalog_url:
             raise ValueError("the provenance store needs the catalog's URL (LINEAGE_CATALOG_URL)")
         if not namespace:
@@ -403,6 +422,7 @@ class ProvenanceStore:
         self._url = catalog_url.rstrip("/")
         self._namespace = list(namespace)
         self._token = token
+        self._refuse_foreign_runs = refuse_foreign_runs
         self._timeout = timeout_seconds
         self._pending: deque[_Recording] = deque()
         self._pending_lock = threading.Lock()
@@ -421,6 +441,7 @@ class ProvenanceStore:
             catalog_url=settings.catalog_url,
             namespace=settings.provenance_namespace.split(CATALOG_DELIMITER),
             token=token,
+            refuse_foreign_runs=settings.fga_enabled,
             timeout_seconds=settings.catalog_timeout_seconds,
         )
 
@@ -533,7 +554,7 @@ class ProvenanceStore:
         many.
         """
         try:
-            self._commit(batch)
+            foreign = {id(recording) for recording in self._commit(batch)}
         except Exception as exc:
             if len(batch) > 1 and _refused_rows(exc):
                 log.warning("provenance_batch_refused", extra={"events": len(batch), "error": str(exc)})
@@ -546,37 +567,55 @@ class ProvenanceStore:
                 _settle(recording, exc)
             return
         for recording in batch:
-            _settle(recording, None)
+            refused = id(recording) in foreign
+            _settle(recording, ForeignRunError(f"run {recording.run_id} was founded by another subject; only its author may extend it") if refused else None)
 
-    def _commit(self, batch: Sequence[_Recording]) -> None:
+    def _commit(self, batch: Sequence[_Recording]) -> list[_Recording]:
         """Land ``batch``'s rows in one commit per table, in :meth:`record`'s order: the run bindings, the edges, the feed rows.
 
-        A key the batch repeats is sent once, its first delivery's row: a redelivery's, which the table may hold already,
-        and the binding of a run's first event, which is its author's.
+        Answers the recordings refused because their run is another author's, whose rows it does not write.
+
+        A RUN IS EXTENDED ONLY BY ITS AUTHOR ([[LIN-5]]). The doors refuse an event of a run the table binds to another
+        subject, but events delivered together were each authorized before any of them bound its run, so the commit asks
+        again where the doors ask at all: a run is bound to the author of its first event, the table's binding or else the
+        batch's first, and an event of it naming another author is refused. With authorization off the doors take an
+        author as claimed, and so does the commit.
+
+        A key the batch repeats is sent once, its first delivery's row, since the catalog refuses a write that repeats one.
         """
         links = [trace.Link(recording.origin) for recording in batch if recording.origin.is_valid]
         with tracer.start_as_current_span("lineage.record", links=links) as span:
             span.set_attribute("lance.lineage.events", len(batch))
-            bindings = [recording.binding for recording in batch if recording.binding is not None]
-            if bindings:
-                unbound = self._unbound(_first_of_each(pa.concat_tables(bindings), "run_id"))
-                if unbound.num_rows:
-                    self._writer(RUNS).merge_insert_only(unbound, on="run_id")
-            edges = _first_of_each(pa.concat_tables([recording.edges for recording in batch]), "edge_key")
-            if edges.num_rows:
-                self._writer(EDGES).merge_insert_only(edges, on="edge_key")
-            rows = _first_of_each(pa.concat_tables([recording.row for recording in batch]), "event_key")
-            self._writer(FEED).merge_insert_only(rows, on="event_key")
+            bound = self._authors_of({recording.run_id for recording in batch if recording.run_id})
+            founders: dict[str, _Recording] = {}
+            for recording in batch:
+                if recording.run_id and recording.run_id not in bound:
+                    founders.setdefault(recording.run_id, recording)
+            authors = {**{run: founder.author for run, founder in founders.items()}, **bound}
+            foreign = [recording for recording in batch if self._refuse_foreign_runs and _extends_another_authors(recording, authors)]
+            refused = {id(recording) for recording in foreign}
+            landing = [recording for recording in batch if id(recording) not in refused]
+            if founders:
+                bindings = [{"run_id": run, "author": founder.author, "received_at": founder.received_at} for run, founder in founders.items()]
+                self._writer(RUNS).merge_insert_only(pa.Table.from_pylist(bindings, schema=RUN_SCHEMA), on="run_id")
+            if landing:
+                edges = _first_of_each(pa.concat_tables([recording.edges for recording in landing]), "edge_key")
+                if edges.num_rows:
+                    self._writer(EDGES).merge_insert_only(edges, on="edge_key")
+                rows = _first_of_each(pa.concat_tables([recording.row for recording in landing]), "event_key")
+                self._writer(FEED).merge_insert_only(rows, on="event_key")
+        return foreign
 
-    def _unbound(self, bindings: pa.Table) -> pa.Table:
-        """The rows of ``bindings`` whose run the table binds to no author yet."""
+    def _authors_of(self, runs: set[str]) -> dict[str, str | None]:
+        """The author the table binds each of ``runs`` to, for those of them it binds."""
         reader = self._reader(RUNS)
-        runs = bindings.column("run_id").to_pylist()
-        bound: set[str] = set()
-        for start in range(0, len(runs), _IN_LIST):
-            listed = ", ".join(sql_literal(run) for run in runs[start : start + _IN_LIST])
-            bound.update(reader.to_table(columns=["run_id"], filter=f"run_id IN ({listed})").column("run_id").to_pylist())
-        return bindings.filter(pa.array([run not in bound for run in runs], pa.bool_()))
+        listed_runs = sorted(runs)
+        authors: dict[str, str | None] = {}
+        for start in range(0, len(listed_runs), _IN_LIST):
+            listed = ", ".join(sql_literal(run) for run in listed_runs[start : start + _IN_LIST])
+            bound = reader.to_table(columns=["run_id", "author"], filter=f"run_id IN ({listed})")
+            authors.update(zip(bound.column("run_id").to_pylist(), bound.column("author").to_pylist(), strict=True))
+        return authors
 
     async def record_refusal(self, *, outbox_key: str, run_id: str | None, author: str | None, reason: str, event_json: str) -> None:
         """Keep a settled governance refusal of a staged event, so the staged object can be retired ([[LH-182]]).
