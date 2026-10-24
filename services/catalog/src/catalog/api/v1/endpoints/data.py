@@ -51,7 +51,6 @@ from catalog.core.formats import reject_unsupported_properties
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.core.lineage_emit import DELETE, INSERT, MERGE_INSERT, OVERWRITE_TABLE, UPDATE
 from catalog.core.modes import CreateMode, InsertMode
-from catalog.core.namespace import judged_for_native_read
 from catalog.core.run_context import RunContext
 from catalog.core.serialization import dump
 from catalog.schemas import TableChangesRequest
@@ -564,7 +563,7 @@ def query_table(
     dataplane.refuse_an_unbounded_boolean_chain(body.filter, field="filter")
     # PINNED TO THE VERSION WHOSE BASES WERE JUDGED ([[LH-279]]): the native query opens the table inside
     # Rust, where a planted base answered with another table's rows (lh279 m2).
-    judged = judged_for_native_read(table.open(so, version=body.version), so, table.segments)
+    judged = table.open(so, version=body.version)
     dataplane.refuse_an_unbounded_result(judged, k=body.k, offset=body.offset, columns=body.columns, max_bytes=settings.query_max_response_mb << 20)
     body.version = int(judged.version)
     response = table.read_natively("query_table", body, via=data_ns)
@@ -684,7 +683,7 @@ def explain_table_query_plan(id: str, body: ExplainTableQueryPlanRequest, table:
     # channels reads as a guard while being none.
     dataplane.refuse_a_branch_this_door_cannot_honour(body.branch or (body.query.branch if body.query else None), door="explain_table_query_plan")
     dataplane.refuse_an_unbounded_boolean_chain(body.query.filter if body.query else None, field="query.filter")
-    judged = int(judged_for_native_read(table.open(so, version=body.query.version if body.query else None), so, table.segments).version)
+    judged = int(table.open(so, version=body.query.version if body.query else None).version)
     if body.query is not None:
         body.query.version = judged
     result = table.read_natively("explain_table_query_plan", body)
@@ -709,7 +708,7 @@ def analyze_table_query_plan(
     dataplane.refuse_a_branch_this_door_cannot_honour(body.branch, door="analyze_table_query_plan")
     dataplane.refuse_an_unbounded_boolean_chain(body.filter, field="filter")
     # ANALYZE RUNS THE QUERY to report its metrics, so it spends what `/query` would and takes its bound.
-    judged = judged_for_native_read(table.open(so, version=body.version), so, table.segments)
+    judged = table.open(so, version=body.version)
     dataplane.refuse_an_unbounded_result(judged, k=body.k, offset=body.offset, columns=body.columns, max_bytes=settings.query_max_response_mb << 20)
     body.version = int(judged.version)
     result = table.read_natively("analyze_table_query_plan", body, via=data_ns)

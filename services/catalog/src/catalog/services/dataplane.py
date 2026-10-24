@@ -99,9 +99,8 @@ from catalog.core import manifest_bytes, provenance_guard
 from catalog.core.config import shared_lance_session
 from catalog.core.identifiers import rename_destination
 from catalog.core.modes import CreateMode, InsertMode
-from catalog.core.namespace import disarm_commit_path_cleanup, judged_for_native_read, open_resolved_dataset, open_resolved_dataset_unchecked
+from catalog.core.namespace import disarm_commit_path_cleanup, open_resolved_dataset, open_resolved_dataset_unchecked
 from catalog.services import changes, native, primary_keys, table_bases, table_claims
-from catalog.services.base_credentials import BaseCredentials
 from catalog.services.cast_size import bytes_after_cast
 from service_kit.lakehouse import auto_cleanup, base_registry, branch_layout, location_claims, trash
 from service_kit.lakehouse.base_refs import decoded_path, decoded_segments, location_in_store, normalise, store_of
@@ -379,7 +378,6 @@ def _write_blob(
     external_blob_bases: list[str],
     data_bases: list[DataBase] | None = None,
     properties: dict[str, str] | None = None,
-    base_credentials: BaseCredentials | None = None,
     transaction_properties: dict[str, str] | None = None,
 ) -> lance.LanceDataset:
     """Write a table at file format 2.2 with stable row ids.
@@ -407,12 +405,9 @@ def _write_blob(
     # /insert append route which has no data_base param) concentrates its NEW fragments in the primary root —
     # create-time distribution is the firm guarantee; per-write distribution needs the bases re-supplied.
     target_bases = [base.name for base in data_bases] or None
-    # base_store_params: each base's object-store options at RUNTIME — pylance does not persist them to
-    # the manifest, which is what makes this the only form a CREDENTIAL may take here. A base under a
-    # configured credential reference gets its own entry, resolved through the Dapr secret store; with
-    # none referenced the map is `None` and every base reads and writes on the top-level options. The
-    # read side composes the same map from the manifest at every open (`core.namespace.open_location`).
-    base_store_params = (base_credentials or BaseCredentials()).store_params([base.path for base in data_bases], so) if data_bases else None
+    # Every base writes under the root's own options, Lance's default (`lance_docs/guide.md` § Per-Base
+    # Configuration: "every base inherits the unscoped options"): a data base on the estate's store is the table's own
+    # storage, reached under the catalog's identity as the root is ([[LH-286]]).
     try:
         return lance.write_dataset(  # noqa: TID251
             table,
@@ -428,7 +423,6 @@ def _write_blob(
             enable_stable_row_ids=True,
             initial_bases=initial_bases,
             target_bases=target_bases,
-            base_store_params=base_store_params,
             allow_external_blob_outside_bases=allow_external,
             transaction_properties=transaction_properties,
         )
@@ -578,7 +572,6 @@ def create_table(
     allow_external_blobs: bool = False,
     external_blob_bases: list[str] | None = None,
     data_bases: list[str] | None = None,
-    base_credentials: BaseCredentials | None = None,
     registry: base_registry.BaseRegistry | None,
     holder: str = "",
     transaction_properties: dict[str, str] | None = None,
@@ -658,7 +651,6 @@ def create_table(
                 external_blob_bases=external_blob_bases,
                 data_bases=registered_data_bases(data_bases, current) if data_bases else None,
                 properties=properties,
-                base_credentials=base_credentials,
                 transaction_properties=transaction_properties,
             )
             return CreateTableResponse(location=existing, version=dataset.version)
@@ -684,7 +676,6 @@ def create_table(
             allow_external=allow_external,
             external_blob_bases=external_blob_bases,
             data_bases=data_bases,
-            base_credentials=base_credentials,
             registry=registry,
             holder=holder,
             transaction_properties=transaction_properties,
@@ -701,7 +692,6 @@ def create_table(
         allow_external=allow_external,
         external_blob_bases=external_blob_bases,
         data_bases=data_bases,
-        base_credentials=base_credentials,
         registry=registry,
         holder=holder,
         transaction_properties=transaction_properties,
@@ -738,7 +728,6 @@ def _write_blob_into(
     allow_external: bool,
     external_blob_bases: list[str],
     data_bases: list[str] | None = None,
-    base_credentials: BaseCredentials | None = None,
     registry: base_registry.BaseRegistry | None,
     holder: str = "",
     transaction_properties: dict[str, str] | None = None,
@@ -787,7 +776,6 @@ def _write_blob_into(
             external_blob_bases=external_blob_bases,
             data_bases=own_bases,
             properties=properties,
-            base_credentials=base_credentials,
             transaction_properties=transaction_properties,
         )
     except Exception:
@@ -2103,7 +2091,7 @@ def count_rows(table: table_claims.DoorTable, so: StorageOptions, req: CountTabl
     if req.branch is None:
         # PINNED TO THE VERSION JUDGED ([[LH-279]]): the native count opens the table inside Rust, so the
         # request carries the exact version whose bases were just checked.
-        req.version = int(judged_for_native_read(table.open(so, version=req.version), so, table.segments).version)
+        req.version = int(table.open(so, version=req.version).version)
         response = table.read_natively("count_table_rows", req, via=data_ns)
         if not isinstance(response, CountTableRowsResponse) or response.count is None:
             raise TypeError(f"count_table_rows must answer a CountTableRowsResponse with a count, got {type(response).__name__}: {response!r}")

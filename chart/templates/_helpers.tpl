@@ -702,10 +702,6 @@ catalog maintenance
 activeDeadlineSeconds: 1800
 {{- end -}}
 
-{{- define "lance.baseSecretField" -}}
-secret_key
-{{- end -}}
-
 {{- define "lance.objectStoreAudience" -}}
 {{- required "objectStore.identity.audience names the audience the catalog's store token is projected for, which the store trusts as its identity provider's client; the catalog holds no store key (ADR 0170)" .Values.objectStore.identity.audience -}}
 {{- end -}}
@@ -720,24 +716,6 @@ secret_key
 {{- if or .Values.backups.pgDump.enabled .Values.backups.controlRoot.enabled -}}
 {{- required "objectStore.backupAccessKey names the backups' identity; a backup never holds the store's root (ADR 0168)" .Values.objectStore.backupAccessKey -}}
 {{- end -}}
-{{- end -}}
-
-{{- define "lance.baseFixture" -}}
-{{- $out := dict -}}
-{{- if .Values.catalog.multibase.devSeed -}}
-{{- if or (include "rask.isRealDeployment" .) (not .Values.objectStore.enabled) (not .Values.openbao.enabled) -}}
-{{- fail "catalog.multibase.devSeed is a local fixture: it needs objectStore.enabled, the development store (openbao.enabled) and side-loaded images" -}}
-{{- end -}}
-{{- range $base, $ref := .Values.catalog.multibase.baseCredentialRefs | default dict -}}
-{{- if not (and (hasPrefix "s3://" $base) (regexMatch "^[a-z0-9][a-z0-9-]*$" $ref)) -}}
-{{- fail (printf "catalog.multibase.devSeed cannot seed %q=%q: it needs an s3:// base and a lowercase [a-z0-9-] reference" $base $ref) -}}
-{{- end -}}
-{{- $parts := splitn "/" 2 (trimPrefix "s3://" $base) -}}
-{{- $loc := dict "bucket" $parts._0 "prefix" (trimSuffix "/" ($parts._1 | default "")) -}}
-{{- $_ := set $out $ref (append (get $out $ref | default list) $loc) -}}
-{{- end -}}
-{{- end -}}
-{{- $out | toJson -}}
 {{- end -}}
 
 {{- define "lance.scopedSecretFn" -}}
@@ -760,7 +738,7 @@ scoped_secret() {
 {{- $own := dict -}}
 {{- range (include "lance.signers" . | fromJsonArray) }}{{- $_ := set $own .app (concat (get $own .app | default list) (list (printf "signing-key-%s" .key) (printf "signing-public-%s" .key))) }}{{- end -}}
 {{- $apps := list
-  (dict "app" $v.services.catalog.daprAppId "sa" "catalog" "api" (concat (list "dapr-app-token") (values ($v.catalog.multibase.baseCredentialRefs | default dict)) (ternary $everySigner list (and $v.auth.enabled $doors $v.catalog.controlEmit))) "bus" true)
+  (dict "app" $v.services.catalog.daprAppId "sa" "catalog" "api" (concat (list "dapr-app-token") (ternary $everySigner list (and $v.auth.enabled $doors $v.catalog.controlEmit))) "bus" true)
   (dict "app" $v.services.lineage.daprAppId "sa" "lineage" "api" (concat (list "lineage-s3" "dapr-app-token") (compact (list $v.services.lineage.forward.authSecret.name)) (ternary $everySigner list (and $v.auth.enabled ($v.signing).enforce))) "bus" true) -}}
 {{- if $v.maintenance.enabled -}}
 {{- $apps = append $apps (dict "app" $v.maintenance.daprAppId "sa" "maintenance" "api" (concat (list "maintenance-s3" "dapr-app-token") (ternary $everySigner list (and $v.auth.enabled $doors $v.maintenance.arrivalEnabled))) "bus" (or $v.maintenance.arrivalEnabled $v.maintenance.lineageEmit (and $v.catalog.controlEmit $v.maintenance.controlEmit))) -}}

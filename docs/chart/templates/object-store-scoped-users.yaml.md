@@ -247,6 +247,8 @@ reads the registry prefixes of `objectStore.bucket` (`_projects`, `_warehouses`,
 held by `s3:prefix` to the same prefixes, each as `<p>` and `<p>/*`. A backup credential cannot rewrite a record it
 copies, so a compromised backup pod cannot change what the catalog is permitted to do, and it holds no `admin:*`.
 
-## `{{- range $ref, $locs := $fixture }}`
+## `{{- range $.Values.catalog.multibase.dataBases | default list }}`
 
-values.yaml `catalog.multibase.devSeed`: one user per credential reference, reaching only its bases.
+Each multibase data base's bucket, created on the development store beside the estate's own. A data base is its tables'
+storage on the estate's store, reached under the catalog's and maintenance's own identities ([[LH-286]]), so the
+bucket is the store's to hold and no user or policy of its own goes with it.

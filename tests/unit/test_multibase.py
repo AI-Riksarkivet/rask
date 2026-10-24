@@ -1,7 +1,7 @@
 """#3-B — Lance multi-base DATA distribution (unit).
 
 The write path (`dataplane._write_blob`) is the only place multi-base touches Lance, so patch
-`lance.write_dataset` and assert the base wiring (initial_bases + target_bases + base_store_params) — and,
+`lance.write_dataset` and assert the base wiring (initial_bases + target_bases) — and,
 critically, that the #5a invariant (2.2 + stable-row-ids) SURVIVES multi-base. Config allowlist parsing
 mirrors the external-blob-bases property.
 """
@@ -51,7 +51,6 @@ def test_write_threads_data_bases_into_write_dataset() -> None:
     # [[LH-252]] each base registers the TABLE'S OWN directory beneath it, never the approved base itself
     assert [base.path for base in captured["initial_bases"]] == ["s3://b1/t-1", "s3://b2/data/t-1"]
     assert captured["target_bases"] == ["b1", "b2-data"]  # round-robin targets, referenced by the approved base's NAME
-    assert captured["base_store_params"] is None  # no credential reference -> every base on the top-level options
     # #5a invariant MUST survive multi-base (the whole point of routing creates through this 2.2 path):
     assert captured["enable_stable_row_ids"] is True
     assert captured["data_storage_version"] == "2.2"

@@ -39,7 +39,9 @@ def test_direct_creds_from_the_vendor_carry_scoped_storage_options(client: TestC
     captured: dict[str, object] = {}
 
     class _FakeVendor:
-        def vend(self, *, table_location: str, tier: Tier, session_name: str, bases: Sequence[str] = (), branch: str = "") -> VendedCredentials:
+        def vend(
+            self, *, table_location: str, tier: Tier, session_name: str, bases: Sequence[str] = (), data_directories: Sequence[str] = (), branch: str = ""
+        ) -> VendedCredentials:
             captured.update(table_location=table_location, tier=tier)
             return VendedCredentials(
                 storage_options={"access_key_id": "AK", "secret_access_key": "SK", "session_token": "ST"},
@@ -63,7 +65,9 @@ def test_an_exchange_the_store_refuses_answers_unavailable(client: TestClient, f
     fake_ns.describe_table.return_value = _described("s3://lance-catalog/db$t")
 
     class _RefusedVendor:
-        def vend(self, *, table_location: str, tier: Tier, session_name: str, bases: Sequence[str] = (), branch: str = "") -> VendedCredentials:
+        def vend(
+            self, *, table_location: str, tier: Tier, session_name: str, bases: Sequence[str] = (), data_directories: Sequence[str] = (), branch: str = ""
+        ) -> VendedCredentials:
             raise ClientError({"Error": {"Code": "AccessDenied", "Message": "token verification failed"}}, "AssumeRoleWithWebIdentity")
 
     client.app.dependency_overrides[get_vendor] = lambda: _RefusedVendor()

@@ -70,19 +70,22 @@ from typing import Any
 
 import lance
 import pyarrow.fs as pafs
+from botocore.exceptions import BotoCoreError, ClientError
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
 from maintenance.core.config import MaintenanceSettings, shared_lance_session
 from maintenance.core.metrics import record_trash_purge
+from maintenance.services.data_directories import claimed_by, directory_uri, recorded_directories
 from maintenance.services.naming import manifest_uuid
 from maintenance.services.reconcile import MANIFEST_DIR, NON_GATING_CATEGORIES, ReconcileReport
+from maintenance.services.stored_objects import delete_objects, list_under
 from service_kit.control_emit import ControlEmitter, NoopControlEmitter, emit_control
 from service_kit.control_events import ControlAction, ControlObjectType, ControlUuids
 from service_kit.governed import fga
 from service_kit.lakehouse import location_claims, object_records, trash, warehouse_records
 from service_kit.lakehouse.base_refs import BaseRefs, decoded_path, decoded_segments, location_within, names_a_location, normalise, store_of
-from service_kit.lakehouse.base_registry import BaseRegistry, UnreadableBaseRecordError, forget_base_record
+from service_kit.lakehouse.base_registry import BaseRegistry, RecordedBase, UnreadableBaseRecordError, forget_base_record, read_base_record
 from service_kit.lakehouse.control_prefixes import CONTROL_PREFIXES
 from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base
 
@@ -725,13 +728,15 @@ async def _delete_bytes_or_refuse(
     storage_options: StorageOptions,
     protected: BaseRefs | None,
 ) -> tuple[int, int] | None:
-    """Delete the bytes this record names and the table's base record with them, or record a refusal and answer ``None``.
+    """Delete the bytes this record names, its root and its data directories, and the table's base record with them, or
+    record a refusal and answer ``None``.
 
     THREE ARMS RATHER THAN ONE, because they say different things to an operator and only one of them
     means the record itself is wrong: ``NotADatasetRootError`` means this record points at something
     that is not a dataset; ``ProtectedBaseError`` means a live clone resolves its files through these
-    bytes, so an operator who drops the clone first can let the next tick reclaim them legitimately;
-    an ``OSError`` is transient and the next tick simply retries.
+    bytes, or another table holds one of its data directories, so an operator who drops the clone first
+    can let the next tick reclaim them legitimately; an ``OSError``, or a base record that could not be
+    read, is transient and the next tick simply retries.
 
     A namespace record owns no bytes (it is a ``__manifest`` row), so it reclaims ``(0, 0)`` without
     touching the store.
@@ -741,8 +746,9 @@ async def _delete_bytes_or_refuse(
     """
     if not location or kind == "namespace":
         return (0, 0)
+    registry = BaseRegistry(control_root=control_root, storage_options=storage_options)
     try:
-        reclaimed = await run_in_threadpool(_delete_guarded, location, storage_options, protected)
+        reclaimed = await run_in_threadpool(partial(_delete_guarded, location, storage_options, protected, registry=registry, table=obj_id))
     except NotADatasetRootError as exc:
         await _refuse(out, kind=kind, obj_id=obj_id, uuid=uuid, reason=str(exc), control_root=control_root, storage_options=storage_options)
         log.warning("trash_purge_refused_not_a_dataset", extra={"kind": kind, "id": obj_id, "location": location})
@@ -751,7 +757,7 @@ async def _delete_bytes_or_refuse(
         await _refuse(out, kind=kind, obj_id=obj_id, uuid=uuid, reason=str(exc), control_root=control_root, storage_options=storage_options)
         log.warning("trash_purge_refused_protected_base", extra={"kind": kind, "id": obj_id, "location": location})
         return None
-    except OSError as exc:
+    except (OSError, UnreadableBaseRecordError, ClientError, BotoCoreError) as exc:
         reason = f"deleting {location!r} failed ({type(exc).__name__}: {exc}) — the record survives and the next tick retries"
         await _refuse(out, kind=kind, obj_id=obj_id, uuid=uuid, reason=reason, control_root=control_root, storage_options=storage_options)
         log.error("trash_purge_delete_failed", extra={"kind": kind, "id": obj_id, "location": location, "error": str(exc)})
@@ -761,7 +767,7 @@ async def _delete_bytes_or_refuse(
     # knows the location. Both deletes are idempotent, so a failure here is finished by the next tick.
     # [[LH-204]] The trashed id's claim on the location goes with them too, so the location is free again.
     try:
-        await run_in_threadpool(partial(forget_base_record, BaseRegistry(control_root=control_root, storage_options=storage_options), location, table=obj_id))
+        await run_in_threadpool(partial(forget_base_record, registry, location, table=obj_id))
         await run_in_threadpool(
             location_claims.release, location_claims.ClaimStore(control_root=control_root, storage_options=storage_options), location, obj_id
         )
@@ -1106,6 +1112,51 @@ def _estate_base_refs(roots: set[str], storage_options: StorageOptions, *, setti
     )
 
 
-def _delete_guarded(location: str, storage_options: StorageOptions, protected: BaseRefs | None) -> tuple[int, int]:
-    """`delete_location` with the #128d guard bound — the shape `run_in_threadpool` can call."""
-    return delete_location(location, storage_options, protected=protected)
+def _judged_data_directories(location: str, *, registry: BaseRegistry, table: str, protected: BaseRefs | None) -> list[RecordedBase]:
+    """The data directories the table at ``location`` holds, as its base record names them, each judged its own to delete ([[LH-286]]).
+
+    Each is the table's own directory beneath an approved base ([[LH-252]]), and its claim names the table while the trash
+    keeps it, so a directory whose claim the table does not hold (another table's, or none, as an approved base itself
+    has), or one a live dataset resolves its files through, refuses the whole delete before any byte goes.
+
+    Raises:
+        UnreadableBaseRecordError: The record exists and cannot be read.
+        ProtectedBaseError: The table does not hold a directory's claim, or a live dataset reads through it.
+        botocore.exceptions.ClientError: The store refused a read of the record or a claim.
+    """
+    claims = location_claims.ClaimStore(control_root=registry.control_root, storage_options=registry.storage_options)
+    directories = recorded_directories(read_base_record(registry, location))
+    for directory in directories:
+        uri = directory_uri(directory)
+        if not claimed_by(claims, directory, table):
+            raise ProtectedBaseError(
+                f"refusing to delete {location}: {table!r} holds no claim on its data directory {uri}, so its bytes are not that table's alone"
+            )
+        if protected is not None and (root := protected.protects_from_deletion(uri, along_with=location)) is not None:
+            raise ProtectedBaseError(_protected_base_reason(uri, referrer=root))
+    return directories
+
+
+def _delete_data_directories(directories: list[RecordedBase], storage_options: StorageOptions) -> tuple[int, int]:
+    """Delete every object in ``directories`` by key, which writes no directory marker ([[LH-535]]); ``(bytes, files)``."""
+    deleted_bytes = deleted_files = 0
+    for directory in directories:
+        uri = directory_uri(directory)
+        held = list_under(uri, storage_options)
+        delete_objects(uri, storage_options, [obj.path for obj in held])
+        deleted_bytes += sum(obj.size for obj in held)
+        deleted_files += len(held)
+    return deleted_bytes, deleted_files
+
+
+def _delete_guarded(location: str, storage_options: StorageOptions, protected: BaseRefs | None, *, registry: BaseRegistry, table: str) -> tuple[int, int]:
+    """`delete_location` with the #128d guard bound, and the table's data directories after its root; ``(bytes, files)``.
+
+    Every directory is judged before the root is touched, so a refusal deletes nothing. The record names the directories,
+    so it is forgotten only after them (:func:`_delete_bytes_or_refuse`): a failure here leaves the record for the next
+    tick, which finds the root already empty and finishes the directories.
+    """
+    directories = _judged_data_directories(location, registry=registry, table=table, protected=protected)
+    root_bytes, root_files = delete_location(location, storage_options, protected=protected)
+    directory_bytes, directory_files = _delete_data_directories(directories, storage_options)
+    return root_bytes + directory_bytes, root_files + directory_files

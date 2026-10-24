@@ -170,7 +170,6 @@ data:
       echo "NATS trust root $how, {{ len $natsUsers }} users"
     }
     {{- end }}
-    {{- $baseFixture := include "lance.baseFixture" . | fromJson }}
     G=$DEV_CREDENTIALS
     {{- include "lance.scopedSecretFn" . | nindent 4 }}
     fingerprint() {
@@ -185,9 +184,6 @@ data:
       (umask 077; printf 'postgres://%s:%s@%s:%s/%s?sslmode=disable' {{ .Values.age.user | squote }} "$(cat "$G/postgres-password")" {{ include "lance.ageConnectHost" . | squote }} {{ .Values.age.port | squote }} {{ .Values.age.stateDb | squote }} > "$HOME/seed/dapr-state-dsn")
       {{- range $id := list .Values.objectStore.maintenanceAccessKey .Values.objectStore.lineageAccessKey .Values.objectStore.viewerAccessKey (include "lance.mediaIdentity" .) (include "lance.backupIdentity" .) | compact | uniq }}
       scoped_secret {{ $id }} "$HOME/seed/scoped-{{ $id }}"
-      {{- end }}
-      {{- range $ref, $_ := $baseFixture }}
-      scoped_secret {{ $ref }} "$HOME/seed/base-{{ $ref }}"
       {{- end }}
     }
     seed() {
@@ -253,10 +249,6 @@ data:
     echo "seeded secret/viewer-s3 into OpenBao"
     {{- end }}
 
-    {{- range $ref, $_ := $baseFixture }}
-    bao kv put secret/{{ $ref }} aws_access_key_id={{ $ref }} {{ include "lance.baseSecretField" $ }}=@"$HOME/seed/base-{{ $ref }}" >/dev/null
-    echo "seeded secret/{{ $ref }} into OpenBao"
-    {{- end }}
     {{- if $.Values.secrets.hfTokenInStore }}
     if [ -s "$SUPPLIED_CREDENTIALS/hf-token" ]; then
       bao kv put secret/hf-token token=@"$SUPPLIED_CREDENTIALS/hf-token" >/dev/null

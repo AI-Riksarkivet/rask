@@ -80,11 +80,12 @@ from catalog.core.lineage_emit import (
     emit_write_event,
 )
 from catalog.core.modes import RegisterMode
-from catalog.core.namespace import judged_for_native_read, open_resolved_dataset_unchecked, registered_dataset_facts, warn_if_mixed_file_versions
+from catalog.core.namespace import open_resolved_dataset_unchecked, registered_dataset_facts, warn_if_mixed_file_versions
 from catalog.core.vending import (
     CredentialVendor,
     ModeBVendor,
     Tier,
+    VendableBases,
     dataset_facts,
     require_vendable_bases,
     role_session_name,
@@ -263,14 +264,13 @@ async def list_all_tables(
     return response
 
 
-def _vendable_bases(location: str, settings: Settings, so: dict[str, str]) -> tuple[str, ...] | None:
+def _vendable_bases(location: str, settings: Settings, so: dict[str, str]) -> VendableBases | None:
     """The bases a credential for the table at ``location`` grants, or ``None`` where only the catalog may read it.
 
     ``None`` is the management vend door's ``server_mediated``, off the same read ([[LH-057]]):
 
     * a classified column cannot be excluded from an object-store grant, because Lance's field-to-file mapping
       is write-order dependent ([[LH-058]], `credentials.py`);
-    * a base under its own credential is read only through the catalog ([[LH-273]]);
     * a sanctioned base the session policy cannot address is reachable only with the catalog's own credential.
 
     Raises:
@@ -278,12 +278,12 @@ def _vendable_bases(location: str, settings: Settings, so: dict[str, str]) -> tu
     """
     facts = dataset_facts(location, so)
     bases = require_vendable_bases(location, facts, BaseJudge.from_settings(settings))
-    if facts.classified or facts.own_credential or unsanctioned_bases(location, bases, settings.multibase_data_base_list):
+    if facts.classified or unsanctioned_bases(location, bases.bases, settings.multibase_data_base_list):
         return None
     return bases
 
 
-def _mint(location: str, *, tier: Tier, bases: tuple[str, ...], vendor: CredentialVendor, session_name: str) -> dict[str, str] | None:
+def _mint(location: str, *, tier: Tier, bases: VendableBases, vendor: CredentialVendor, session_name: str) -> dict[str, str] | None:
     """The ``storage_options`` the vendor mints for ``location`` at ``tier``, with the expiry the spec reads.
 
     THE EXPIRY GOES INSIDE ``storage_options``, where the spec puts it and the only place a stock client looks
@@ -291,7 +291,7 @@ def _mint(location: str, *, tier: Tier, bases: tuple[str, ...], vendor: Credenti
     ``expires_at_millis`` key ..."). Without it a temporary credential looks permanent, and the client discovers
     the TTL by failing at the 900-second mark instead of refreshing.
     """
-    creds = vend_or_refuse(vendor, table_location=location, tier=tier, session_name=session_name, bases=bases)
+    creds = vend_or_refuse(vendor, table_location=location, tier=tier, session_name=session_name, bases=bases.bases, data_directories=bases.data_directories)
     if creds is None:
         return None
     options = dict(creds.storage_options)
@@ -1731,6 +1731,6 @@ def get_table_stats(
     dataplane.refuse_a_branch_this_door_cannot_honour(branch, door="get_table_stats")
     # The request carries no version to pin, so a base planted between this judgement and the native
     # open is read unjudged; the window is the two opens apart ([[LH-279]]).
-    judged_for_native_read(table.open(so), so, table.segments)
+    table.open(so)
     stats = table.read_natively("get_table_stats", req)
     return stats

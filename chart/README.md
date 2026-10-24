@@ -84,9 +84,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | catalog.erasure.schedule | string | `"@every 300s"` | Dapr cron schedule on which due erasure pin releases run; lateness only costs time. |
 | catalog.maxBodyBytes | int | `268435456` | Maximum request-body bytes on any catalog route (LANCE_MAX_BODY_BYTES); larger bodies get 413 before buffering. Default 256 MiB. |
 | catalog.maxConcurrentWrites | int | `16` | Cap on concurrent in-flight Arrow-IPC writes; over it the catalog answers 429 + Retry-After. Peak buffer memory is this times `maxBodyBytes`. 0 disables shedding. |
-| catalog.multibase.baseCredentialRefs | object | `{}` | Map of data-base URI to a Dapr secret-store reference naming that base's credential. Every key must also be in `dataBases` or the render fails. Empty = estate options. |
 | catalog.multibase.dataBases | list | `[]` | Allowlist of bucket URIs one table's fragments may be spread across (`?data_base=` on create). Empty = multi-base off, single-location creates. |
-| catalog.multibase.devSeed | bool | `false` | Local fixture: create each referenced base's bucket, scoped store user and dev-store secret. Refused on a real deployment, without `objectStore.enabled` or without the development store. |
 | catalog.promotion.bindingName | string | `"catalog-promotion-expiry-cron"` | Name of the promotion-expiry Dapr cron Component; also the catalog's LANCE_PROMOTION_EXPIRY_BINDING_NAME and the route it serves. |
 | catalog.promotion.schedule | string | `"@every 60s"` | Dapr cron schedule on which promotion holds past their review deadline expire; lateness only costs time. |
 | catalog.trashGraceDays | float | `7` | Days, a fraction allowed, a dropped table or namespace stays undroppable before the trash purge may reclaim it (LANCE_TRASH_GRACE_DAYS). 0 destroys immediately. |

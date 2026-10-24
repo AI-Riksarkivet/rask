@@ -150,20 +150,23 @@ class BaseRefs(BaseModel):
         target = decoded_path(location)
         return next((root for root in self._roots() if _overlaps(target, root)), None)
 
-    def protects_from_deletion(self, location: str) -> str | None:
+    def protects_from_deletion(self, location: str, *, along_with: str | None = None) -> str | None:
         """The root whose referrer a delete of ``location`` would break, else ``None`` — the DELETE answer.
 
         :meth:`is_protected`, less the referrers the delete takes with it. A table's branch lives at
         ``<table>/tree/<branch>`` and declares the table's root as its base (``file_format.md`` § Branch Dataset Layout),
-        so deleting the table deletes the branch too, and the branch protects nothing from that delete. A referrer
-        anywhere else still protects, and so does a root no referrer is recorded for: an unknown referrer may be outside.
+        so deleting the table deletes the branch too, and the branch protects nothing from that delete. ``along_with`` is
+        another location the same delete removes: a table's data directory goes with its root ([[LH-286]]), so the table
+        and its branches, whose manifests read through the directory, protect nothing from it either. A referrer anywhere
+        else still protects, and so does a root no referrer is recorded for: an unknown referrer may be outside.
         """
         target = decoded_path(location)
+        gone = [location] if along_with is None else [location, along_with]
         for root in self._roots():
             if not _overlaps(target, root):
                 continue
             referrers = self.referrers.get(root)
-            if not referrers or any(not location_within(location, referrer) for referrer in referrers):
+            if not referrers or any(not any(location_within(deleted, referrer) for deleted in gone) for referrer in referrers):
                 return root
         return None
 

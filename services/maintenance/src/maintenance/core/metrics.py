@@ -76,6 +76,14 @@ _mixed_file_versions = _meter.create_counter(
     unit="{dataset}",
     description="Datasets whose data files are at more than one Lance file version (reader flag 256), counted each time the sweep opens one.",
 )
+#: [[LH-286]] Fragments whose data file sits in their table's own data directory under a deletion vector: the deleted
+#: rows' bytes stay there until a compaction rewrites the fragment, which the compaction gate refuses for such a table.
+#: Reported rather than reclaimed (owner, 2026-10-24), so the count is how an operator sees what they cost.
+_base_fragments_holding_deleted_rows = _meter.create_counter(
+    "compaction.base_fragments.holding_deleted_rows",
+    unit="{fragment}",
+    description="Fragments keeping deleted rows' bytes in their table's data directory on a data base, counted each time the sweep expires their table.",
+)
 
 
 #: THE FAILURE SERIES, and its absence was the gap. Seven instruments here counted what the sweep
@@ -340,6 +348,14 @@ def record_mixed_file_versions(datasets: int) -> None:
     `increase()` sees that mix as a step from 0 rather than as a series appearing.
     """
     _mixed_file_versions.add(datasets)
+
+
+def record_base_fragments_holding_deleted_rows(fragments: int) -> None:
+    """Record how many fragments keep deleted rows' bytes in their table's data directory ([[LH-286]]).
+
+    Always emits, including zero, for `record_mixed_file_versions`' reason.
+    """
+    _base_fragments_holding_deleted_rows.add(fragments)
 
 
 def record_unrecorded_bases(bases: int) -> None:

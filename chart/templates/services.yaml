@@ -74,21 +74,11 @@ spec:
             - { name: LANCE_RESERVED_BUCKETS, value: {{ $reserved | uniq | join "," | quote }} }
             - { name: LANCE_MULTIBASE_DATA_BASES, value: {{ .Values.catalog.multibase.dataBases | default (list) | join "," | quote }} }
 
-            {{- $allow := .Values.catalog.multibase.dataBases | default (list) }}
-            {{- $pairs := list }}
-            {{- range $base, $ref := .Values.catalog.multibase.baseCredentialRefs | default dict }}
-              {{- if not (has $base $allow) }}
-                {{- fail (printf "catalog.multibase.baseCredentialRefs names %q, which is not on the catalog.multibase.dataBases allowlist — a base with a credential reference and no allowlist entry can never be reached" $base) }}
-              {{- end }}
-              {{- $pairs = append $pairs (printf "%s=%s" $base $ref) }}
-            {{- end }}
-            - { name: LANCE_MULTIBASE_BASE_CREDENTIAL_REFS, value: {{ $pairs | join "," | quote }} }
             - { name: LANCE_S3_ENDPOINT, value: "{{ include "lance.s3Endpoint" . }}" }
             - { name: LANCE_S3_WEB_IDENTITY_TOKEN_FILE, value: "/var/run/secrets/rask/identity/{{ include "lance.objectStoreAudience" . }}/token" }
             - { name: LANCE_S3_STS_ENDPOINT, value: "{{ include "lance.s3Endpoint" . }}" }
             - { name: LANCE_S3_ASSUME_ROLE_ARN, value: {{ .Values.vending.assumeRoleArn | quote }} }
             - { name: LANCE_S3_SESSION_SECONDS, value: {{ .Values.objectStore.identity.sessionSeconds | quote }} }
-            - { name: LANCE_DAPR_SECRET_S3_FIELD, value: {{ include "lance.baseSecretField" . | quote }} }
             - { name: LANCE_SECRETS_FROM_DAPR, value: "true" }
             {{- with include "lance.signingEnv" (list $root .Values.services.catalog.daprAppId) }}{{ . | nindent 12 }}{{- end }}
             - { name: LANCE_S3_REGION, value: "us-east-1" }

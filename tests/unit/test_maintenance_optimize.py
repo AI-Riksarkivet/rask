@@ -134,40 +134,6 @@ def test_a_table_with_an_external_blob_base_IS_due_for_compaction(tmp_path: Path
     assert (due.fragments, due.candidate_fragments) == (4, 4), due
 
 
-def test_expiry_refuses_a_table_whose_data_files_live_on_a_data_base(tmp_path: Path) -> None:
-    """The half of `add_bases` that is genuinely the clone hazard, and the one the manifest's own
-    `BasePath.is_dataset_root` bit CANNOT see.
-
-    `write_dataset(..., target_bases=["alt"])` lands this dataset's data files under the registered
-    base. The manifest still reports `is_dataset_root=False` and the base directory still has no
-    `_versions/` — it is not a dataset root by either reading — yet the files are foreign-resident
-    and compaction pulls them home. MEASURED on pylance 10.0.0 with this exact fixture: local root
-    3,540 -> 5,991 bytes, the base's three data files left behind as garbage, every surviving
-    `base_id` None.
-
-    So `DataFile.base_id` is a third, independent signal. A plain base outside the root holding data
-    files is a DATA base, which may be read only under its own credential ([[LH-273]]), so expiry
-    refuses it and touches nothing.
-    """
-    alt = tmp_path / "altbase"
-    alt.mkdir()
-    uri = str(tmp_path / "targeted.lance")
-    lance.write_dataset(pa.table({"id": pa.array(range(10), pa.int64())}), uri, initial_bases=[lance.DatasetBasePath(str(alt), "alt")])
-    for i in range(3):
-        lance.write_dataset(pa.table({"id": pa.array(range(10 + i * 5, 15 + i * 5), pa.int64())}), uri, mode="append", target_bases=["alt"])
-    assert any(df.base_id is not None for f in lance.dataset(uri).get_fragments() for df in f.data_files()), "fixture must really put data under the base"
-    base_files_before = sorted(p.name for p in alt.iterdir())
-    version_before = lance.dataset(uri).version
-
-    result = _expire(uri, older_than=timedelta(0))
-
-    assert result.refused_by == "foreign_data_base", f"the refusal must name its gate: {result}"
-    assert result.error is None
-    assert result.old_versions_removed == 0
-    assert lance.dataset(uri).version == version_before, "a base-resident dataset was committed to anyway"
-    assert sorted(p.name for p in alt.iterdir()) == base_files_before, "the base's files were touched"
-
-
 def test_a_registered_base_that_IS_A_LANCE_DATASET_ROOT_is_not_due_for_compaction(tmp_path: Path) -> None:
     """Why the gate PROBES object storage instead of trusting the manifest's self-report.
 

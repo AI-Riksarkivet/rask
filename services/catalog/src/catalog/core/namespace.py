@@ -18,12 +18,11 @@ from lance_namespace import (
     TableBranchNotFoundError,
     TableNotFoundError,
     TableVersionNotFoundError,
-    UnsupportedOperationError,
     connect,
 )
 from pydantic import BaseModel, Field
 
-from catalog.core.base_judge import installed_judge, require_sanctioned_bases
+from catalog.core.base_judge import require_sanctioned_bases
 from catalog.core.config import Settings, StorePlane, shared_lance_session
 from catalog.core.store_endpoint import require_estate_store
 from service_kit.governed.store_credential import S3KeyPair
@@ -174,8 +173,7 @@ def open_resolved_dataset(
 
     Every door that reads or writes a table's ROWS opens through here. A door that reads or changes only
     its version and ref metadata — the repairs an operator needs on exactly such a table — opens through
-    :func:`open_resolved_dataset_unchecked`. Both carry each data base's own ``base_store_params``
-    (:func:`open_location`).
+    :func:`open_resolved_dataset_unchecked`.
 
     Raises:
         InvalidTableStateError: The opened ref declares a base the catalog did not sanction.
@@ -234,77 +232,18 @@ def disarm_every_ref(dataset: lance.LanceDataset, table_id: list[str]) -> lance.
     return disarm_commit_path_cleanup(dataset, table_id)
 
 
-def judged_for_native_read(dataset: lance.LanceDataset, storage_options: dict[str, str], table_id: list[str]) -> lance.LanceDataset:
-    """``dataset``, the checked open of the ref a NATIVE data op reads, once nothing on it is beyond that op ([[LH-279]]).
-
-    ``DirectoryNamespace`` opens the dataset inside its own Rust call for ``query_table``,
-    ``count_table_rows`` and the plan ops, so no Python handle exists to judge (lh279 m2 read the victim
-    through each). The door opens the ref the request names on the shared session — the version the request
-    pinned, else the latest — through the checked open (:func:`open_resolved_dataset`), which judges its
-    bases, and pins the native request to exactly that handle's version, so a commit landing between the two
-    cannot be served unjudged. The shared session also carries the manifest the native open reads next
-    (lh279 m2: query 5 -> 4 requests), so the pre-open costs about what it saves.
-
-    A TABLE WITH A BASE UNDER ITS OWN CREDENTIAL IS REFUSED HERE ([[LH-273]]). The native open takes the
-    namespace's storage options and no ``base_store_params``, so it would read that base with the
-    estate's key: refused outright where the estate key has no grant on the base, and served under an
-    identity nobody configured for it where the key does. The pylance-served doors — ``/changes`` and
-    every door reading through a checked open — read the same table under each base's own key; the vend
-    answers ``server_mediated`` for it, because an STS credential is the estate role's.
-
-    Raises:
-        UnsupportedOperationError: That version keeps data on a base under its own credential.
-    """
-    if base_store_params_for(dataset, storage_options) is not None:
-        raise UnsupportedOperationError(
-            f"table {'.'.join(table_id)} keeps data on a base opened under its own credential, which this door's native reader cannot "
-            "carry; read it through the catalog's /changes door"
-        )
-    return dataset
-
-
-def base_store_params_for(dataset: lance.LanceDataset, storage_options: dict[str, str]) -> dict[str, dict[str, str]] | None:
-    """The ``base_store_params`` the bases ``dataset``'s manifest declares need, or ``None`` when none needs its own.
-
-    Keyed by each base's path exactly as the manifest states it, because pylance matches the key against
-    that string and nothing else (measured, :mod:`catalog.services.base_credentials`). The credential
-    references come from the installed judge (:func:`catalog.core.base_judge.installed_judge`), the same
-    deployment configuration the bases are judged against; a process with no judge installed answers
-    ``None``, and :func:`open_resolved_dataset` then refuses the foreign base before any row is read.
-    """
-    paths = [ref.path for ref in manifest_base_path_refs(dataset)]
-    if not paths:
-        return None
-    try:
-        credentials = installed_judge().credentials
-    except ServiceUnavailableError:
-        return None
-    return credentials.store_params(paths, storage_options)
-
-
 def open_location(location: str, storage_options: dict[str, str], *, version: int | None = None, branch: str | None = None) -> lance.LanceDataset:
-    """Open the dataset at ``location`` on the ref named, with each declared base under its own credential ([[LH-273]]).
+    """Open the dataset at ``location`` on the ref named, on the shared session.
 
-    A base's ``base_store_params`` are known only once its manifest is read, so the first open carries
-    none: it reads the manifest from the table's own root and no data file. When a declared base lies
-    under a referenced one, the dataset is opened again with the composed map, on the shared session
-    that already holds that manifest. A branch is checked out from that handle, which carries the map on
-    (measured on pylance 12.0.0: the checkout of a handle opened with a base's entry reads that base's
-    rows, and the checkout of one opened without it is refused), and the map is composed from the
-    BRANCH's manifest, whose base list is its own.
+    Every base a manifest declares opens under the same options as its root, Lance's default (``lance_docs/guide.md``
+    § Per-Base Configuration: "every base inherits the unscoped options"): a data base on the estate's store is part of
+    its table's storage, reached under the catalog's own identity as the root is ([[LH-286]]).
 
     Raises whatever pylance raises — a caller translates it (:func:`_open_ref`) or degrades on it
     (:func:`catalog.core.vending.dataset_facts`).
     """
     first = lance.dataset(location, storage_options=storage_options, version=None if branch else version, session=shared_lance_session())
-    ref = first.checkout_version((branch, version)) if branch else first
-    params = base_store_params_for(ref, storage_options)
-    if params is None:
-        return ref
-    reopened = lance.dataset(
-        location, storage_options=storage_options, version=None if branch else version, session=shared_lance_session(), base_store_params=params
-    )
-    return reopened.checkout_version((branch, version)) if branch else reopened
+    return first.checkout_version((branch, version)) if branch else first
 
 
 def _open_ref(location: str, storage_options: dict[str, str], table_id: list[str], *, version: int | None, branch: str | None) -> lance.LanceDataset:

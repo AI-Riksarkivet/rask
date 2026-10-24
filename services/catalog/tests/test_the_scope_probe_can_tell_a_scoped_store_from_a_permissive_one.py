@@ -38,7 +38,9 @@ class _Vendor:
         self._error = error
         self.asked: list[tuple[str, str]] = []
 
-    def vend(self, *, table_location: str, tier: str, session_name: str, bases: Sequence[str] = (), branch: str = "") -> VendedCredentials | None:
+    def vend(
+        self, *, table_location: str, tier: str, session_name: str, bases: Sequence[str] = (), data_directories: Sequence[str] = (), branch: str = ""
+    ) -> VendedCredentials | None:
         self.asked.append((table_location, tier))
         if self._error is not None:
             raise self._error

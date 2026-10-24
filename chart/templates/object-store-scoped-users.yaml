@@ -4,7 +4,6 @@
 {{- $catalogAccount := include "lance.saAccount" (list . "catalog") }}
 {{- $media := include "lance.mediaIdentity" . }}
 {{- $backup := include "lance.backupIdentity" . }}
-{{- $fixture := include "lance.baseFixture" . | fromJson }}
 {{- if .Values.objectStore.enabled }}
 {{- range $phase := ternary (list "install") (list "pre-upgrade" "post-upgrade") .Release.IsInstall }}
 ---
@@ -69,9 +68,6 @@ spec:
               {{- include "lance.scopedSecretFn" $ | nindent 14 }}
               {{- range $id := list $maint $lineage $viewer $media $backup | compact | uniq }}
               scoped_secret {{ $id }} "$KEYS/{{ $id }}"
-              {{- end }}
-              {{- range $ref, $_ := $fixture }}
-              scoped_secret {{ $ref }} "$KEYS/{{ $ref }}"
               {{- end }}
       containers:
         # RustFS's native admin API, driven by `scripts/rustfs_admin.py` out of rask's own image: canned policies
@@ -299,21 +295,6 @@ spec:
               POLICY
               {{- end }}
 
-              {{- range $ref, $locs := $fixture }}
-              cat >/tmp/policies/rask-base-{{ $ref }}.json <<'POLICY'
-              {
-                "Version": "2012-10-17",
-                "Statement": [
-                  {{- range $i, $l := $locs }}
-                  {{- $objects := ternary (printf "%s/%s/*" $l.bucket $l.prefix) (printf "%s/*" $l.bucket) (ne $l.prefix "") }}
-                  {{ if $i }},{{ end }}{ "Effect": "Allow", "Action": ["s3:GetBucketLocation", "s3:ListBucketMultipartUploads"], "Resource": ["arn:aws:s3:::{{ $l.bucket }}"] },
-                  { "Effect": "Allow", "Action": ["s3:ListBucket"], "Resource": ["arn:aws:s3:::{{ $l.bucket }}"]{{ if $l.prefix }}, "Condition": { "StringLike": { "s3:prefix": ["{{ $l.prefix }}", "{{ $l.prefix }}/*"] } }{{ end }} },
-                  { "Effect": "Allow", "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts"], "Resource": ["arn:aws:s3:::{{ $objects }}"] }
-                  {{- end }}
-                ]
-              }
-              POLICY
-              {{- end }}
               exec python /srv/rustfs_admin.py \
                 --endpoint {{ include "lance.s3Endpoint" $ | quote }} \
                 --root-access-key {{ $.Values.objectStore.accessKey | quote }} \
@@ -322,10 +303,8 @@ spec:
                 {{- range $_, $zone := $.Values.medallion.buckets }}
                 {{- $buckets = append $buckets $zone }}
                 {{- end }}
-                {{- range $ref, $locs := $fixture }}
-                {{- range $locs }}
-                {{- $buckets = append $buckets .bucket }}
-                {{- end }}
+                {{- range $.Values.catalog.multibase.dataBases | default list }}
+                {{- $buckets = append $buckets (first (splitList "/" (trimPrefix "s3://" .))) }}
                 {{- end }}
                 {{- range compact $buckets | uniq }}
                 --bucket {{ . | quote }} \
@@ -345,9 +324,6 @@ spec:
                 {{- end }}
                 {{- with $backup }}
                 --policy rask-backup=/tmp/policies/rask-backup.json --user {{ printf "%s=rask-backup" . | quote }} \
-                {{- end }}
-                {{- range $ref, $_ := $fixture }}
-                --policy {{ printf "rask-base-%s=/tmp/policies/rask-base-%s.json" $ref $ref | quote }} --user {{ printf "%s=rask-base-%s" $ref $ref | quote }} \
                 {{- end }}
                 {{- if ne $phase "pre-upgrade" }}
                 --prune \

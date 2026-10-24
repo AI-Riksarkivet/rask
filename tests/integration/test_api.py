@@ -119,7 +119,6 @@ def test_create_delegates_to_dataplane_create_table(client: TestClient, fake_ns:
         allow_external_blobs=False,
         external_blob_bases=None,
         data_bases=None,
-        base_credentials=None,
         registry=None,
         holder="",
         transaction_properties=None,

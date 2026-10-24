@@ -56,7 +56,6 @@ from catalog.core.lineage_emit import (
     UPDATE_FIELD_METADATA,
     UPDATE_SCHEMA_METADATA,
 )
-from catalog.core.namespace import judged_for_native_read
 from catalog.services import dataplane
 from catalog.services.table_claims import ResolvedTable
 from service_kit.governed import fga
@@ -236,7 +235,7 @@ def backfill_column(
     version that hasn't been written. The version the job lands is not announced from here.
     """
     body.id = reconcile_body_id(parse_identifier(id), body.id)
-    judged_for_native_read(table.open(so), so, table.segments)
+    table.open(so)
     response = table.write_natively("alter_table_backfill_columns", body, via=data_ns)
     return response
 

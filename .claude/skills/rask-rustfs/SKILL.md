@@ -96,8 +96,8 @@ on RustFS", `docs/audits/2026-10-18/rustfs_sts_measure.py`): 26 checks, all as r
 - **`s3:*` does not grant force-delete.** `s3:ForceDeleteBucket`/`s3:ForceDeleteObject` must be named explicitly
   (`rustfs@1.0.3:crates/policy/src/policy/action.rs:184-198`). The catalog's purge works with `s3:DeleteBucket`
   alone; never name the force actions in a rask policy.
-- **Rotation is a second USER** (ADR 0166) for the planes that still hold a pair (lineage, maintenance, a data base's
-  credential reference). AssumeRole refuses a service account (`sts.rs:219-221`), so a pair that signed AssumeRole
+- **Rotation is a second USER** (ADR 0166) for the planes that still hold a pair (lineage, maintenance). A multibase
+  data base holds none: it is its tables' storage, reached under the catalog's own identity ([[LH-286]]). AssumeRole refuses a service account (`sts.rs:219-221`), so a pair that signed AssumeRole
   would rotate to another user under the same policy; no rask pair signs AssumeRole any more.
 - **Never set `RUSTFS_IDENTITY_OPENID_ROLE_POLICY`.** With it, **every** valid token for the audience gets the whole
   role policy, and any pod may project a token for any audience as its own ServiceAccount

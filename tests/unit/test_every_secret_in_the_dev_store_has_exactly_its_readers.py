@@ -62,8 +62,6 @@ EXPECTED: Final[dict[str, dict[str, frozenset[str]]]] = {
     "maintenance-s3": {"store": frozenset({"maintenance"}), "dapr": frozenset({"maintenance"})},
     "viewer-s3": {"store": frozenset({"viewer"}), "dapr": frozenset({"viewer"})},
     "media-s3": {"store": frozenset({"search"}), "dapr": frozenset({"search"})},
-    # values-local.yaml's multibase data base names this credential reference.
-    "lh067-second-store": {"store": frozenset({"catalog"}), "dapr": frozenset({"catalog"})},
     "oidc-client": {"store": frozenset({"eso"}), "pods": _ZONES},
     "dapr-app-token": {"store": _DOORS | {"eso"}, "dapr": _DOORS, "pods": _SIDECARS},
     "signing-key-rask-sa-catalog": {"store": frozenset({"catalog"}), "dapr": frozenset({"catalog"})},

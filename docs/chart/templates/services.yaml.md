@@ -86,12 +86,6 @@ The store's own endpoint, where RustFS and Ceph RGW serve STS. Always named: wit
 token to the public AWS STS, and the catalog refuses to boot (`Settings._validate_store_identity`). An AWS deployment
 needs its regional STS endpoint here, for which the chart has no value yet.
 
-## `- { name: LANCE_DAPR_SECRET_S3_FIELD, value: {{ include "lance.baseSecretField" . | quote }} }`
-
-The field a data base's credential reference carries its secret in (`catalog.multibase.baseCredentialRefs`), named
-here, as lineage and maintenance name theirs, so a field the seed writes and a field the catalog asks for cannot drift
-apart.
-
 ## `- { name: LANCE_SECRETS_FROM_DAPR, value: "true" }`
 
 The catalog's secrets (its signing key, a data base's credential reference) come ONLY from the Dapr secret store, read

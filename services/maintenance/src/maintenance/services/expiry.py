@@ -2,7 +2,8 @@
 
 Maintenance decides and does not rewrite (ADR 0155, ADR 0156 C4): it compacts nothing and builds or optimizes no
 index. What it still writes is reclamation — ``cleanup_old_versions`` deletes superseded manifests and the files only
-they reference, and the pass deletes the manifests stock writers staged for versions another commit took — and the
+they reference, the pass deletes the manifests stock writers staged for versions another commit took, and what no
+retained version references in the table's own data directories (:mod:`maintenance.services.data_directories`) — and the
 config commit that disarms Lance's commit-path auto-cleanup. Every gate here guards one of those writes.
 """
 
@@ -14,27 +15,25 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Final, Literal
 
 import lance
-import pyarrow.fs as pafs
 from pydantic import BaseModel, ConfigDict, Field
 
 from maintenance.core.config import shared_lance_session
 from maintenance.core.metrics import CatalogRefusal
+from maintenance.services import data_directories
+from maintenance.services.stored_objects import delete_objects, list_under
 from service_kit.lakehouse import auto_cleanup
-from service_kit.lakehouse.base_refs import BaseRefs, location_in_store, rewrite_refusal
+from service_kit.lakehouse.base_refs import BaseRefs, rewrite_refusal
+from service_kit.lakehouse.base_registry import RecordedBase
 from service_kit.lakehouse.branch_layout import BRANCH_CONTAINER, branch_named_by, branches_inside
 from service_kit.lakehouse.features import (
-    data_file_base_paths,
     describe_gc_unsupported_flags,
     flags_from_open_error,
-    manifest_base_path_refs,
     manifest_feature_flags,
     mixes_data_file_versions,
     unsupported_features_from_open_error,
 )
-from service_kit.lakehouse.objectfs import credential_of, fs_and_base
 from service_kit.lakehouse.version_retention import Retention, reclaimable_versions
 from service_kit.openlineage import DatasetUuids
-from storage import s3_client
 
 
 log = logging.getLogger(__name__)
@@ -43,9 +42,7 @@ log = logging.getLogger(__name__)
 #: failed"). The gate names which: a count that merges them is not actionable, because a clone's source stays refused
 #: forever, a manifest flag is a pylance upgrade away from being supported, and a bad branch name clears when somebody
 #: removes a directory. A closed set: it is a metric label.
-type Gate = Literal[
-    "protected_base", "manifest_flags", "invalid_ref", "nested_branch", "foreign_data_base", "governed_elsewhere", "unauthenticated", "unnamed", "unidentified"
-]
+type Gate = Literal["protected_base", "manifest_flags", "invalid_ref", "nested_branch", "governed_elsewhere", "unauthenticated", "unnamed", "unidentified"]
 
 #: Whether the dataset's table needs compacting or reindexing, as this tick's due evaluation decided
 #: (:mod:`maintenance.services.due`): ``due`` wrote its record, ``clear`` deleted it, ``unnamed`` found no
@@ -78,6 +75,12 @@ class DatasetResult(BaseModel):
     bytes_removed: int = 0
     #: Manifests stock writers staged for versions the ref already holds, removed by this pass ([[LH-529]]).
     staged_manifests_removed: int = 0
+    #: Files in the table's own data directories that no retained version references, removed by this pass ([[LH-286]]).
+    base_files_removed: int = 0
+    base_bytes_removed: int = 0
+    #: The table's fragments that keep a deleted row's bytes in one of its data directories: only a compaction rewrites
+    #: them, and the compaction gate refuses such a table ([[LH-286]]).
+    base_fragments_holding_deleted_rows: int = 0
     #: This pass found Lance's commit-path auto-cleanup armed and removed every ``lance.auto_cleanup.*`` key
     #: ([[LH-245]]).
     auto_cleanup_disarmed: bool = False
@@ -134,6 +137,10 @@ class ExpiryTarget(BaseModel):
     protected: BaseRefs = Field(default_factory=BaseRefs)
     #: The id the caller resolved, and vended the credential under.
     table_id: str | None = None
+    #: The table's own data directories, as its base record names them; empty for a branch, whose files are its table's.
+    data_directories: list[RecordedBase] = Field(default_factory=list)
+    #: The tick's clock, which a file's age in a data directory is judged by.
+    now: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 class DisarmOutcome(BaseModel):
@@ -244,32 +251,6 @@ def _refuse_a_branch_with_branches_inside(opened: _Opened, uri: str) -> DatasetR
     return opened.result(uri).refuse(why, gate="nested_branch")
 
 
-def _refuse_a_foreign_data_base(opened: _Opened, uri: str) -> DatasetResult | None:
-    """The ``foreign_data_base`` refusal for ``uri``, an error when its bases cannot be read, or ``None`` ([[LH-273]]).
-
-    A DATA BASE MAY BE READ ONLY UNDER ITS OWN CREDENTIAL. The catalog opens a table whose fragments sit on a data base
-    with that base's ``base_store_params``; this pass holds no reference and no secret, so every read or delete it made
-    there would be signed by its own key. Which data bases carry a reference is the catalog's configuration, so EVERY
-    data file on a plain base outside the table's own root refuses: fail closed rather than guess.
-    """
-    try:
-        declared = {ref.path: ref for ref in manifest_base_path_refs(opened.ds)}
-        through = data_file_base_paths(opened.ds)
-    except Exception as exc:
-        failed = opened.result(uri)
-        failed.error, failed.error_type = f"bases: {exc}", type(exc).__name__
-        return failed
-    foreign = sorted(path for path in through if path in declared and not declared[path].is_dataset_root and not location_in_store(uri, path))
-    if not foreign:
-        return None
-    log.warning("maintenance_refused_foreign_data_base", extra={"uri": uri, "bases": foreign})
-    why = (
-        f"data files live on the data base(s) {foreign} outside this table's root; a data base is read only under its own credential, "
-        "which this pass does not hold, so it touches nothing here"
-    )
-    return opened.result(uri).refuse(why, gate="foreign_data_base")
-
-
 def _refuse_unsupported_flags(opened: _Opened, uri: str) -> DatasetResult | None:
     """The ``manifest_flags`` refusal when the manifest sets a feature reclamation cannot handle (#64), else ``None``.
 
@@ -331,10 +312,7 @@ def _open(target: ExpiryTarget) -> _Opened | DatasetResult:
 def _refusal(opened: _Opened, target: ExpiryTarget) -> DatasetResult | None:
     """The first gate that refuses reclamation on this dataset, in ladder order, or ``None`` to reclaim."""
     return (
-        _refuse_a_branch_with_branches_inside(opened, target.uri)
-        or _refuse_a_foreign_data_base(opened, target.uri)
-        or _refuse_unsupported_flags(opened, target.uri)
-        or _refuse_a_referenced_root(opened, target)
+        _refuse_a_branch_with_branches_inside(opened, target.uri) or _refuse_unsupported_flags(opened, target.uri) or _refuse_a_referenced_root(opened, target)
     )
 
 
@@ -349,59 +327,15 @@ def count_reclaimable(ds: lance.LanceDataset, uri: str, policy: ExpiryPolicy) ->
 #: one.
 _STAGED_MANIFEST: Final = re.compile(r"^(?P<inverted>\d{20})\.manifest-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 _U64_MAX: Final = (1 << 64) - 1
-#: The most keys one S3 DeleteObjects request takes.
-_DELETE_BATCH: Final = 1000
-
-
-def _on_object_client(uri: str, storage_options: dict[str, str]) -> bool:
-    return uri.startswith("s3://") and bool(storage_options.get("endpoint"))
-
-
-def _object_client(storage_options: dict[str, str]) -> Any:  # noqa: ANN401 — a boto3 S3 client
-    access_key, secret_key, session_token = credential_of(storage_options)
-    return s3_client(
-        storage_options["endpoint"], access_key=access_key, secret_key=secret_key, session_token=session_token, region=storage_options.get("region")
-    )
 
 
 def _staged_manifests(uri: str, storage_options: dict[str, str]) -> list[tuple[str, int, datetime]]:
     """Each manifest staged under the ref's ``_versions/``: its store path, the version it was staged for, when it was put."""
-    listed: list[tuple[str, datetime]] = []
-    if _on_object_client(uri, storage_options):
-        bucket, _, key = uri.removeprefix("s3://").partition("/")
-        pages = _object_client(storage_options).get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=f"{key.rstrip('/')}/_versions/")
-        listed = [(f"{bucket}/{entry['Key']}", entry["LastModified"]) for page in pages for entry in page.get("Contents", [])]
-    else:
-        fs, base = fs_and_base(uri, storage_options)
-        infos = fs.get_file_info(pafs.FileSelector(f"{base}/_versions", allow_not_found=True))
-        listed = [(info.path, info.mtime if info.mtime.tzinfo else info.mtime.replace(tzinfo=UTC)) for info in infos if info.mtime is not None]
     staged: list[tuple[str, int, datetime]] = []
-    for path, modified in listed:
-        if (match := _STAGED_MANIFEST.match(path.rsplit("/", 1)[-1])) is not None:
-            staged.append((path, _U64_MAX - int(match["inverted"]), modified))
+    for listed in list_under(f"{uri.rstrip('/')}/_versions", storage_options):
+        if (match := _STAGED_MANIFEST.match(listed.path.rsplit("/", 1)[-1])) is not None:
+            staged.append((listed.path, _U64_MAX - int(match["inverted"]), listed.modified))
     return staged
-
-
-def _delete_paths(uri: str, storage_options: dict[str, str], paths: list[str]) -> None:
-    """Delete store ``paths``: DeleteObjects on S3, which writes no directory marker as pyarrow's delete does.
-
-    Raises:
-        OSError: The store refused a delete.
-    """
-    if not paths:
-        return
-    if not _on_object_client(uri, storage_options):
-        fs, _ = fs_and_base(uri, storage_options)
-        for path in paths:
-            fs.delete_file(path)
-        return
-    client = _object_client(storage_options)
-    bucket = paths[0].partition("/")[0]
-    keys = [path.partition("/")[2] for path in paths]
-    for start in range(0, len(keys), _DELETE_BATCH):
-        answered = client.delete_objects(Bucket=bucket, Delete={"Objects": [{"Key": key} for key in keys[start : start + _DELETE_BATCH]], "Quiet": True})
-        if refused := answered.get("Errors"):
-            raise OSError(f"the store refused {len(refused)} delete(s) in {bucket}: {refused[:3]}")
 
 
 def _reclaim_staged_manifests(ds: lance.LanceDataset, *, result: DatasetResult, target: ExpiryTarget, policy: ExpiryPolicy) -> None:
@@ -415,7 +349,7 @@ def _reclaim_staged_manifests(ds: lance.LanceDataset, *, result: DatasetResult, 
     """
     cutoff = datetime.now(UTC) - policy.staged_grace
     lost = [path for path, version, modified in _staged_manifests(target.uri, target.storage_options) if version <= ds.version and modified <= cutoff]
-    _delete_paths(target.uri, target.storage_options, lost)
+    delete_objects(target.uri, target.storage_options, lost)
     result.staged_manifests_removed = len(lost)
 
 
@@ -440,6 +374,23 @@ def _reclaim_versions(ds: lance.LanceDataset, *, result: DatasetResult, target: 
     _reclaim_staged_manifests(ds, result=result, target=target, policy=policy)
 
 
+def _reclaim_data_directories(ds: lance.LanceDataset, *, result: DatasetResult, target: ExpiryTarget, policy: ExpiryPolicy) -> None:
+    """Reclaim what no retained version references in the table's own data directories, and count what a deleted row keeps.
+
+    After ``cleanup_old_versions``, which deletes the manifests and the root's files and leaves every base alone, so the
+    versions it removed no longer hold a base file here ([[LH-286]]). Whatever the reclaimable-version count, because a
+    base file a past pass found too young waits for a later one. Never under a policy that disables cleanup: a table
+    whose whole history is kept keeps every file that history could name.
+    """
+    if not target.data_directories:
+        return
+    result.base_fragments_holding_deleted_rows = data_directories.fragments_holding_deleted_rows(ds, target.data_directories)
+    if not policy.cleanup_enabled:
+        return
+    reclaimed = data_directories.reclaim(ds, target.data_directories, target.storage_options, now=target.now)
+    result.base_files_removed, result.base_bytes_removed = reclaimed.files, reclaimed.bytes
+
+
 def _record_failure(result: DatasetResult, exc: BaseException) -> None:
     """A reclaim that raised: a ref Lance will never accept is a refusal, anything else a failure."""
     if (gate := classify_maintain_failure(str(exc))) is not None:
@@ -454,7 +405,8 @@ def expire_versions(target: ExpiryTarget, policy: ExpiryPolicy) -> DatasetResult
     """One dataset's version expiry. Never raises: a per-dataset failure is captured in ``error``.
 
     Opens the dataset, disarms commit-path auto-cleanup before any gate can return (version reclamation has ONE owner,
-    this pass), runs the refusal ladder that guards reclamation, then reclaims.
+    this pass), runs the refusal ladder that guards reclamation, then reclaims the versions and what they left in the
+    table's data directories.
     """
     opened = _open(target)
     if isinstance(opened, DatasetResult):
@@ -466,6 +418,7 @@ def expire_versions(target: ExpiryTarget, policy: ExpiryPolicy) -> DatasetResult
     result.table_id = target.table_id
     try:
         _reclaim_versions(opened.ds, result=result, target=target, policy=policy)
+        _reclaim_data_directories(opened.ds, result=result, target=target, policy=policy)
     except BaseException as exc:  # noqa: BLE001 — a Rust PANIC is not an Exception
         # A pyo3 panic derives from BaseException; measured on the live estate 2026-08-16, one escaping panic answered
         # the entire sweep HTTP 500 and every other dataset lost its reclamation.

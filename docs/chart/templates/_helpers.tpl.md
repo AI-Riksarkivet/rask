@@ -881,12 +881,6 @@ sleep 3; done` — r229's exact shape — and a 20-second deadline was terminate
 `Failed=DeadlineExceeded` (2026-09-24). The three-bound reasoning above is only worth anything if the
 one bound that applies actually fires here.
 
-## `{{- define "lance.baseSecretField" -}}`
-
-The field a data base's credential reference carries its S3 secret in (`catalog.multibase.baseCredentialRefs`,
-[[LH-067]]), beside `aws_access_key_id`. It is the one static pair the catalog still reads, parked as [[XC-168]]; the
-catalog's own identity holds no key (ADR 0170).
-
 ## `{{- define "lance.objectStoreAudience" -}}`
 
 The audience the catalog's store token is projected for, `objectStore.identity.audience` (ADR 0170). One value names
@@ -911,14 +905,9 @@ The backups' access key, `objectStore.backupAccessKey`, when either backup CronJ
 policy, the seed's `secret/backup-s3`, ESO's read of it, the `<release>-backup-s3` Secret and both CronJobs'
 `AWS_ACCESS_KEY_ID`. `required` while a backup is on, so a backup never presents the store's root.
 
-## `{{- define "lance.baseFixture" -}}`
-
-[[LH-067]] The local data-base fixture (values.yaml `catalog.multibase.devSeed`): JSON
-{ref: [{bucket, prefix}]} over `baseCredentialRefs`, `{}` when off.
-
 ## `{{- define "lance.scopedSecretFn" -}}`
 
-The secret half of a SCOPED STORAGE IDENTITY (and of a per-base fixture credential), derived in the
+The secret half of a SCOPED STORAGE IDENTITY, derived in the
 cluster: `scoped_secret <identity> <file>` writes sha256("<identity>-s3-<root>")[:40] to <file> from the
 store's root secret in `$root`, never to output, argv or the render.
 
@@ -1197,8 +1186,8 @@ or the state store's DSN is resolved for the component and never served to the a
 the role's policy, the second layer, which holds even for a request that never asks the sidecar.
 
 Every secret a reader names is known at render: the viewer's per-store credentials come from the store registry,
-`RASK_STORES`, which the chart renders from `storage.stores`, and a data base's credential reference from
-`catalog.multibase.baseCredentialRefs`; a warehouse record's `credential_ref` is consumed by no door ([[LH-205]]).
+`RASK_STORES`, which the chart renders from `storage.stores`. A data base holds no credential of its own ([[LH-286]]),
+and a warehouse record's `credential_ref` is consumed by no door ([[LH-205]]).
 
 ## `allowedSecrets:`
 

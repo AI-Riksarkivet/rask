@@ -72,7 +72,6 @@ from catalog.core.lineage_metadata import build_lineage_metadata, stamp_lineage_
 from catalog.core.modes import CreateMode
 from catalog.core.run_context import RunContext
 from catalog.services import dataplane, native, table_bases, table_claims
-from catalog.services.base_credentials import BaseCredentials
 from service_kit.control_emit import ControlEmitter, emit_control
 from service_kit.governed import fga
 from service_kit.lakehouse import base_registry, location_claims
@@ -272,10 +271,6 @@ async def create_governed_table(
         allow_external_blobs=settings.allow_external_blobs,
         external_blob_bases=[external_base] if external_base else [],
         data_bases=data_base or None,
-        # [[LH-067]] WHICH secret each base's credential comes from. The map holds NAMES; the material
-        # is fetched at composition through the Dapr store the catalog already uses for its own S3
-        # secret, so nothing secret passes through here.
-        base_credentials=BaseCredentials.from_settings(settings),
         registry=registry,
         holder=table_id,
         transaction_properties=run_context.commit_properties(run, author=created_by),

@@ -284,17 +284,9 @@
                 "multibase": {
                     "type": "object",
                     "properties": {
-                        "baseCredentialRefs": {
-                            "description": "Map of data-base URI to a Dapr secret-store reference naming that base's credential. Every key must also be in `dataBases` or the render fails. Empty = estate options.",
-                            "type": "object"
-                        },
                         "dataBases": {
                             "description": "Allowlist of bucket URIs one table's fragments may be spread across (`?data_base=` on create). Empty = multi-base off, single-location creates.",
                             "type": "array"
-                        },
-                        "devSeed": {
-                            "description": "Local fixture: create each referenced base's bucket, scoped store user and dev-store secret. Refused on a real deployment, without `objectStore.enabled` or without the development store.",
-                            "type": "boolean"
                         }
                     }
                 },

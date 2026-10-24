@@ -256,8 +256,8 @@ class CatalogDaprSettings(BaseSettings):
     every one of its fields, aliases and defaults.
     """
 
-    # Secret consumption — when on, every secret the catalog reads is the Dapr secret store's (OpenBao): its signing key,
-    # its app token and each data base's credential, never plaintext env, and a store miss FAILS CLOSED (no env
+    # Secret consumption — when on, every secret the catalog reads is the Dapr secret store's (OpenBao): its signing key
+    # and its app token, never plaintext env, and a store miss FAILS CLOSED (no env
     # fallback). Its object-store identity is then its ServiceAccount token (`s3_web_identity_token_file`), which the
     # validator below requires: no key pair of the catalog's own is in the store either.
     secrets_from_dapr: bool = Field(default=False, alias="LANCE_SECRETS_FROM_DAPR")
@@ -267,9 +267,6 @@ class CatalogDaprSettings(BaseSettings):
     #: (already what viewer and ingest read); the per-service alias stays FIRST so a single service can
     #: still be moved on its own.
     dapr_secret_store: str = Field(default="lance-secrets", validation_alias=AliasChoices("LANCE_DAPR_SECRET_STORE", "RASK_SECRET_STORE"))
-    #: The field of a data base's credential secret (`LANCE_MULTIBASE_BASE_CREDENTIAL_REFS`) holding its secret key
-    #: ([[LH-067]]); the key id rides the same secret (`catalog.services.base_credentials`).
-    dapr_secret_s3_field: str = Field(default="secret_key", alias="LANCE_DAPR_SECRET_S3_FIELD")
     # Dapr pub/sub transport (used when lineage_transport == "dapr"). The component name is what the
     # sidecar resolves to NATS JetStream; the topic is versioned (a breaking schema change → a new .vN).
     dapr_pubsub: str = Field(default="lineage-pubsub", alias="LANCE_DAPR_PUBSUB")
@@ -519,54 +516,14 @@ class Settings(
     # Empty (default) = the feature is off and every create is byte-identical to today.
     # A table registers its OWN directory beneath each base it names (`<base>/<directory>`,
     # `dataplane.table_data_bases`), and a vend grants that directory and never the base ([[LH-252]]).
-    # Every base here shares the catalog's S3 ENDPOINT: a base's own credential
-    # (`LANCE_MULTIBASE_BASE_CREDENTIAL_REFS`) replaces the key pair and never the address.
+    # Every base here is on the catalog's own store and part of its tables' storage, reached under the catalog's own
+    # identity as a table root is ([[LH-286]]).
     multibase_data_bases: str = Field(default="", alias="LANCE_MULTIBASE_DATA_BASES")
 
     @property
     def multibase_data_base_list(self) -> list[str]:
         """The approved multi-base data-distribution base URIs (parsed from the comma-separated allowlist)."""
         return [b.strip() for b in self.multibase_data_bases.split(",") if b.strip()]
-
-    # [[LH-067]] Which SECRET each data base's credential comes from: `base-uri=secret-ref` pairs, comma
-    # separated. A NAME, never material — the reference identifies a key in the Dapr secret store, which
-    # is what lets this live in configuration at all under the estate's secrets rule.
-    #
-    # A base with a reference here, and every table directory beneath it, is written with its own
-    # credential (`dataplane._write_blob`) and opened with it at every pylance open
-    # (`core.namespace.open_location`, composed from the manifest's base paths). The native data doors
-    # cannot carry it and refuse such a table (`core.namespace.judged_native_version`).
-    # Empty (default) = every base keeps the estate's options and every write is byte-identical.
-    multibase_base_credential_refs: str = Field(default="", alias="LANCE_MULTIBASE_BASE_CREDENTIAL_REFS")
-
-    @property
-    def multibase_base_credential_ref_map(self) -> dict[str, str]:
-        """`{base_uri: secret_ref}`, parsed HERE so nothing else splits this string.
-
-        A second parser is a second thing that can disagree about the separator, about whitespace, or
-        about what an empty entry means — the reason `multibase_data_base_list` is a property too.
-
-        BOTH MALFORMED SHAPES RAISE rather than dropping the entry, because a reference that silently
-        vanishes leaves its base on the estate credential and looks correct — which is exactly the
-        failure this whole axis exists to prevent. A repeated base raises for the same reason one step
-        on: answering "which of these two secrets" by ordering is not an answer an estate should give.
-        A reference for a base off ``LANCE_MULTIBASE_DATA_BASES`` raises too: no create can register
-        that base, so the reference is configuration that does nothing.
-        """
-        parsed: dict[str, str] = {}
-        for entry in (e.strip() for e in self.multibase_base_credential_refs.split(",")):
-            if not entry:
-                continue
-            if "=" not in entry:
-                raise ValueError(f"{entry!r} is not a base=secret-ref pair; LANCE_MULTIBASE_BASE_CREDENTIAL_REFS holds comma-separated `base=secret-ref`")
-            base, _, ref = entry.partition("=")
-            base, ref = base.strip(), ref.strip()
-            if base in parsed:
-                raise ValueError(f"base {base!r} is given a credential reference more than once; one base has one secret")
-            parsed[base] = ref
-        if unlisted := sorted(set(parsed) - set(self.multibase_data_base_list)):
-            raise ValueError(f"{unlisted} is not on LANCE_MULTIBASE_DATA_BASES; a credential reference for a base no create can register does nothing")
-        return parsed
 
     # #3-A per-warehouse physical multi-tenancy (admin control plane). When enabled, an admin API
     # (POST /management/v1/warehouses) provisions a physically separate S3 bucket per warehouse and binds top-level

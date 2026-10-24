@@ -121,19 +121,12 @@ async def vend_credentials(
     if facts.classified:
         log.info("vend_server_mediated_classified_columns", extra={"location": location, "columns": list(facts.classified)})
         return CredentialResponse(mode="server_mediated")
-    # [[LH-273]] A BASE UNDER ITS OWN CREDENTIAL IS READ ONLY THROUGH THE CATALOG. The STS credential is
-    # minted from the estate role, so a direct client would read that base under the estate identity —
-    # the identity the base's credential reference exists to keep off it. The catalog's own reads open
-    # it with the base's `base_store_params` (`core.namespace.open_location`).
-    if facts.own_credential:
-        log.info("vend_server_mediated_own_credential_base", extra={"location": location})
-        return CredentialResponse(mode="server_mediated")
     # #3-B ⊥ #2, NARROWED to the bases the policy would actually miss ([[LH-057]]). Every base here is
     # already one the catalog sanctioned (above); what remains is whether the session policy can ADDRESS
     # it — `build_session_policy` grants each allowlisted base a `ListBase<n>`/`BaseObjects<n>` pair, so the
     # client reaches its own bytes. A sanctioned base the policy cannot grant is reachable only through
     # the catalog's own credential, which is what the server-mediated answer routes the caller to.
-    if missed := unsanctioned_bases(location, bases, settings.multibase_data_base_list):
+    if missed := unsanctioned_bases(location, bases.bases, settings.multibase_data_base_list):
         log.info("vend_server_mediated_unreachable_bases", extra={"location": location, "bases": list(missed)})
         return CredentialResponse(mode="server_mediated")
     # The blocking STS exchange runs in the threadpool; a refused or unreachable exchange answers 503
@@ -145,7 +138,8 @@ async def vend_credentials(
             table_location=location,
             tier=tier,
             session_name=role_session_name(subject),
-            bases=bases,
+            bases=bases.bases,
+            data_directories=bases.data_directories,
             branch=branch,
         )
     )

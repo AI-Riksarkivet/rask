@@ -36,10 +36,10 @@ from urllib.parse import urlsplit
 
 from botocore.exceptions import BotoCoreError, ClientError
 from lance_namespace import InvalidInputError, ServiceUnavailableError
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from catalog.core.base_judge import BaseJudge, require_sanctioned_bases
-from catalog.core.namespace import base_store_params_for, open_location
+from catalog.core.namespace import open_location
 from service_kit.governed import store_session
 from service_kit.governed.machine_identity import IdentityTokenUnavailableError
 from service_kit.governed.store_session import IssuedSession, WebIdentity
@@ -99,10 +99,14 @@ class EncryptionAtRest(BaseModel):
 class CredentialVendor(Protocol):
     """Vend scoped storage credentials for one table prefix at one tier."""
 
-    def vend(self, *, table_location: str, tier: Tier, session_name: str, bases: Sequence[str] = (), branch: str = "") -> VendedCredentials | None:
+    def vend(
+        self, *, table_location: str, tier: Tier, session_name: str, bases: Sequence[str] = (), data_directories: Sequence[str] = (), branch: str = ""
+    ) -> VendedCredentials | None:
         """Return creds for ``table_location`` at ``tier``, named ``session_name`` at the store (:func:`role_session_name`).
 
-        ``None`` means "no direct credential" — the caller falls back to the server-mediated (Mode B) data path.
+        ``data_directories`` are those of ``bases`` the table's record holds as its own data directories
+        (:class:`VendableBases`). ``None`` means "no direct credential" — the caller falls back to the server-mediated
+        (Mode B) data path.
         """
         ...
 
@@ -133,6 +137,9 @@ _MAINTAIN_ACTIONS = (
     "s3:DeleteObject",
     "s3:AbortMultipartUpload",
 )
+#: What a maintainer does in its table's own data directory: read it, and delete what no version references ([[LH-286]]).
+#: No put: a compaction writes its rewrite to the table's root, since pylance 13.0.0's ``CompactionOptions`` names no base.
+_DATA_DIRECTORY_MAINTAIN_ACTIONS = ("s3:GetObject", "s3:DeleteObject")
 
 #: What AWS lets a RoleSessionName hold (2 to 64 of `[\w+=,.@-]`); RustFS accepts the name and keeps none of it.
 _SESSION_NAME_UNSAFE: Final = re.compile(r"[^A-Za-z0-9_+=,.@-]")
@@ -367,9 +374,6 @@ class VendFacts(BaseModel):
     base_uris: tuple[str, ...] = ()
     #: Fields carrying :data:`CLASSIFICATION_KEY` ([[LH-058]]).
     classified: tuple[str, ...] = ()
-    #: A declared base is read under its OWN credential ([[LH-273]]). The vend's STS credential is the
-    #: estate role's, so it would read that base under an identity nobody configured for it.
-    own_credential: bool = False
 
 
 def dataset_facts(location: str, storage_options: dict[str, str], *, branch: str = "") -> VendFacts:
@@ -383,8 +387,7 @@ def dataset_facts(location: str, storage_options: dict[str, str], *, branch: str
 
     All three come off the same handle deliberately: this read already existed for the version, and a
     second open to learn the bases would double the manifest reads on every vend. The handle is
-    :func:`catalog.core.namespace.open_location`'s, so a table with a base under its own credential is
-    opened with that base's ``base_store_params`` like every other read of it ([[LH-273]]).
+    :func:`catalog.core.namespace.open_location`'s, the open every other read of the table makes.
 
     ``branch`` IS THE REF THE CREDENTIAL IS FOR ([[LH-279]]), so it is the ref these facts describe: a
     base planted on ``tree/<b>`` is invisible from main (lh279 m7), and a branch credential read through
@@ -419,11 +422,22 @@ def dataset_facts(location: str, storage_options: dict[str, str], *, branch: str
         bases=refs,
         base_uris=uris,
         classified=classified_columns(ds),
-        own_credential=base_store_params_for(ds, storage_options) is not None,
     )
 
 
-def require_vendable_bases(location: str, facts: VendFacts, judge: BaseJudge) -> tuple[str, ...]:
+class VendableBases(BaseModel):
+    """The declared bases a vend may grant, and which of them the table's record holds as its own data directories."""
+
+    model_config = ConfigDict(frozen=True)
+
+    #: In the spelling and order of ``VendFacts.base_uris``.
+    bases: tuple[str, ...] = ()
+    #: Those of ``bases`` the record holds as ``data`` entries: the table's own directory beneath an approved base, which
+    #: its claim keeps every other table out of ([[LH-252]]), so a maintainer may delete in it ([[LH-286]]).
+    data_directories: tuple[str, ...] = ()
+
+
+def require_vendable_bases(location: str, facts: VendFacts, judge: BaseJudge) -> VendableBases:
     """The declared bases a vend may grant, refusing a ref declaring a base the catalog did not sanction — both vending doors ask this ([[LH-279]]).
 
     A vended session policy grants READ on every declared base it can address, so vending for a table
@@ -441,14 +455,27 @@ def require_vendable_bases(location: str, facts: VendFacts, judge: BaseJudge) ->
     base judged CONFIGURED, or RECORDED as ``external_blob``, from what the policy is asked to grant.
 
     Returns:
-        The vendable bases, in the spelling and order of ``facts.base_uris``.
+        The vendable bases, in the spelling and order of ``facts.base_uris``, with the table's own data directories among
+        them named.
 
     Raises:
         InvalidTableStateError: A declared base is sanctioned by none of those (code 19, 409).
         ServiceUnavailableError: The table's record could not be read.
     """
-    judged = require_sanctioned_bases(location, facts.bases, judge=judge)
-    return tuple(uri for uri, judgement in zip(facts.base_uris, judged, strict=True) if not _is_pointer_base(judgement))
+    judged = list(zip(facts.base_uris, require_sanctioned_bases(location, facts.bases, judge=judge), strict=True))
+    return VendableBases(
+        bases=tuple(uri for uri, judgement in judged if not _is_pointer_base(judgement)),
+        data_directories=tuple(uri for uri, judgement in judged if _is_own_data_directory(judgement)),
+    )
+
+
+def _is_own_data_directory(judgement: BaseJudgement) -> bool:
+    return (
+        judgement.standing is BaseStanding.RECORDED
+        and judgement.entry is not None
+        and judgement.entry.role is BaseRole.DATA
+        and not judgement.entry.is_dataset_root
+    )
 
 
 def _is_pointer_base(judgement: BaseJudgement) -> bool:
@@ -489,6 +516,7 @@ def build_session_policy(
     bases: Sequence[str] = (),
     *,
     sanctioned_bases: Sequence[str] = (),
+    data_directories: Sequence[str] = (),
     branch: str = "",
 ) -> dict[str, object]:
     """Build an STS inline session policy scoping access to one table prefix + tier.
@@ -537,8 +565,11 @@ def build_session_policy(
 
     READ ONLY is the whole of the privilege being added, and the asymmetry is deliberate: the table
     reads through the base, it does not own it, and a write grant on another dataset's root is exactly
-    the blast radius vending exists to bound. § C1's remaining two rights — write on ``target_bases``,
-    nothing on reference-only bases — need evidence a manifest read does not yet distinguish.
+    the blast radius vending exists to bound. ``data_directories`` are the one exception, at the table's own
+    ``maintain`` tier: those of ``bases`` the table's record holds as its own data directory
+    (:class:`VendableBases`), where a maintainer also deletes, because Lance's cleanup is root-scoped and leaves
+    every file it stranded there ([[LH-286]]). A branch-maintain credential gets no delete: a branch's files
+    there are its table's to reclaim.
 
     One grant shape serves both base layouts, and the spec is why (``file_format.md`` § Base Path
     System): for ``is_dataset_root`` the files sit under the base's ``data/``/``_deletions/``/
@@ -670,11 +701,12 @@ def build_session_policy(
                 "Condition": {"StringLike": {"s3:prefix": [f"{base_prefix}/*"] if base_prefix else ["*"]}},
             }
         )
+        reclaimed_here = tier == "maintain" and not branch and base in data_directories
         statements.append(
             {
                 "Sid": f"BaseObjects{n}",
                 "Effect": "Allow",
-                "Action": list(_READ_ACTIONS),
+                "Action": list(_DATA_DIRECTORY_MAINTAIN_ACTIONS if reclaimed_here else _READ_ACTIONS),
                 "Resource": f"arn:aws:s3:::{base_bucket}/{base_prefix}/*" if base_prefix else f"arn:aws:s3:::{base_bucket}/*",
             }
         )
@@ -689,6 +721,7 @@ def vend_or_refuse(
     tier: Tier,
     session_name: str,
     bases: Sequence[str],
+    data_directories: Sequence[str] = (),
     branch: str = "",
 ) -> VendedCredentials | None:
     """``vendor.vend``, with a failed exchange answered as the spec's typed error rather than a bare 500.
@@ -702,7 +735,7 @@ def vend_or_refuse(
             could not be reached.
     """
     try:
-        return vendor.vend(table_location=table_location, tier=tier, session_name=session_name, bases=bases, branch=branch)
+        return vendor.vend(table_location=table_location, tier=tier, session_name=session_name, bases=bases, data_directories=data_directories, branch=branch)
     except IdentityTokenUnavailableError as exc:
         raise ServiceUnavailableError("the catalog's projected token could not be read, so no credential was vended") from exc
     except ClientError as exc:
@@ -715,7 +748,9 @@ def vend_or_refuse(
 class ModeBVendor:
     """No vending: data flows through the catalog's server-mediated endpoints."""
 
-    def vend(self, *, table_location: str, tier: Tier, session_name: str, bases: Sequence[str] = (), branch: str = "") -> VendedCredentials | None:
+    def vend(
+        self, *, table_location: str, tier: Tier, session_name: str, bases: Sequence[str] = (), data_directories: Sequence[str] = (), branch: str = ""
+    ) -> VendedCredentials | None:
         return None
 
 
@@ -754,9 +789,11 @@ class WebIdentityVendor:
         self._ttl = ttl_seconds
         self._exchange = exchange
 
-    def vend(self, *, table_location: str, tier: Tier, session_name: str, bases: Sequence[str] = (), branch: str = "") -> VendedCredentials | None:
+    def vend(
+        self, *, table_location: str, tier: Tier, session_name: str, bases: Sequence[str] = (), data_directories: Sequence[str] = (), branch: str = ""
+    ) -> VendedCredentials | None:
         bucket, prefix = split_s3_location(table_location)
-        policy = build_session_policy(bucket, prefix, tier, bases, sanctioned_bases=self._sanctioned_bases, branch=branch)
+        policy = build_session_policy(bucket, prefix, tier, bases, sanctioned_bases=self._sanctioned_bases, data_directories=data_directories, branch=branch)
         issued = self._exchange(self._identity, session_name=session_name, duration_seconds=self._ttl, policy=json.dumps(policy))
         session_token = issued.key_pair.session_token
         # BUILT THROUGH THE SHARED BUILDER, not hand-rolled. A hand-rolled dict carried the bare credential spellings,

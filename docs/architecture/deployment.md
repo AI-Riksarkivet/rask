@@ -75,8 +75,8 @@ unprovisioned secret is a fail-closed outage at first use, not a fallback. Each 
 - `nats-user-<user>` per values.yaml `nats.auth` user (read by that app's login, or by ESO for `admin` and `monitor`),
   and `nats-route` (and `nats-server`, in operator mode), attested by `nats.auth.provisioned`.
 - With `secrets.hfTokenInStore`, `hf-token` (field `token`); with the in-chart Collector, `otel-collector-export`
-  (fields username, password), the credential the audit store admits; each multibase data base's credential reference
-  (`catalog.multibase.baseCredentialRefs`, fields `aws_access_key_id` and `secret_key`), read by the catalog alone.
+  (fields username, password), the credential the audit store admits. A multibase data base holds none: it is its
+  tables' storage on the estate's store, reached under the catalog's own identity ([[LH-286]]).
 
 No secret holds a store root: rask presents none in production, and on the dev store the root sits at
 `object-store-root`, which only ESO reads, for the store and its provisioning hook (ADR 0168). The dev seed

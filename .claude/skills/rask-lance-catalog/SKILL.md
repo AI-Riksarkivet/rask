@@ -539,7 +539,9 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   staged Allow also matches
   `<n>.manifest-<uuid>.manifest`, which pylance reads as a final manifest, and `tree/*` reaches every branch's
   `_versions/`. The catalog finalizes what the writer staged (`version/create`, below). `maintain` (`can_maintain`) gets put/delete on the whole prefix for compaction and
-  cleanup, and is also the shape for the warehouse scope probe. The management vend door checks the one rung its
+  cleanup, and get/delete on the table's own data directories, those of its declared bases its base record holds as
+  `data` entries (`vending.VendableBases`, [[LH-286]]); every other base is read-only at every tier. It is also the
+  shape for the warehouse scope probe. The management vend door checks the one rung its
   tier names, never either. A put over an existing key is the residue no session policy can refuse.
   **Each vend is a session of its own** ([[XC-083]], ADR 0170): the catalog exchanges its OWN projected ServiceAccount
   token through STS `AssumeRoleWithWebIdentity` with that session policy, named for the verified caller
@@ -703,17 +705,25 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   config-time list goes stale by construction. The orphan scan reads the same registry
   (`_scannable_buckets`), reporting an `IncompleteScan` rather than silently narrowing when it is
   unreadable. Residual: no multi-warehouse run against REAL object storage yet (#80).
-- **A MULTI-BASE dataset leaks, and nothing in Lance reclaims it — upstream-blocked, not a backlog
-  item.** `cleanup_old_versions` is ROOT-SCOPED: it reclaims dead files under the dataset's own root
-  and leaves every non-root base alone. MEASURED on pylance 9.0.0 — a dataset with
-  `target_bases=['cold']` landed a data file in an external base; after an overwrite orphaned it,
-  aggressive cleanup (`older_than=None, delete_unverified=True`) reported `data_files_removed: 2` for
-  the root-owned files and `EXTRA_BASE_DELETED = []` for the external one, which survived. There is no
-  pylance API that reclaims it, so this cannot be fixed in `services/maintenance`; it needs an upstream
-  answer or a bespoke reclaimer that understands `base_paths`, which is exactly the "list the prefix,
-  subtract what is referenced" logic the orphan scan REFUSES to run on these datasets for safety.
-  The same root-scoping is what makes cleanup SAFE on a shallow clone (see `SUPPORTED_FOR_GC`) — the
-  property that protects the base is the property that strands its garbage.
+- **Lance's cleanup leaves every non-root base alone, so maintenance reclaims a table's data directories
+  itself** ([[LH-286]], `maintenance.services.data_directories`). `cleanup_old_versions` is ROOT-SCOPED: measured
+  on pylance 13.0.0, after an overwrite of a table whose fragments sit on a data base, `cleanup_old_versions(older_than=0,
+  delete_unverified=True)` removed every superseded version and none of the base's files (against
+  `lance_docs/guide.md:4349`). The same root-scoping is what makes cleanup SAFE on a shallow clone (see
+  `SUPPORTED_FOR_GC`). A data base is its tables' storage on the estate's store, reached under the catalog's own
+  identity like a root (owner, 2026-10-24: Lance's default, "every base inherits the unscoped options",
+  `guide.md` § Per-Base Configuration); no base holds a credential of its own, so the native doors read it and the
+  vend is direct. The expiry pass, after `cleanup_old_versions`, lists each directory the table's base record names
+  as a `data` entry (a plain base, never a dataset root), subtracts every file any retained version of main or any
+  branch references (a branch inherits the base under the same id and appends into the same directory, measured), and
+  deletes what is left once it is older than Lance's unverified-file age, 7 days (`lance_sdk.md:931`). It signs with the
+  maintain-tier vend, which gets delete on the table's own data directories (`vending.VendableBases`), and the probe
+  asks for that vend when a stranded file is past the age, so a table overwritten once still reclaims. A deleted row's
+  bytes stay in its base fragment behind a deletion vector; the pass reports such fragments
+  (`compaction.base_fragments.holding_deleted_rows`) and the compaction gate keeps refusing the table, since
+  `CompactionOptions` has no `target_bases` and a rewrite would move the rows into the root (owner, 2026-10-24). The
+  trash purge deletes a dropped table's data directories after its root and before it forgets its base record.
+  Pinned by `tests/integration/test_a_data_bases_bytes_are_reclaimed.py`.
 - **A JSON index has NO stats, and Lance says so with a PANIC — upstream, already contained.** On
   pylance 10.0.0 every maintenance sweep prints `thread '<unnamed>' panicked at
   lance-index/src/scalar/json.rs:95:9: not yet implemented`, twice, once per Json index. The

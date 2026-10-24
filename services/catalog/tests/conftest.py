@@ -25,8 +25,6 @@ from pydantic import BaseModel
 # before collection begins.
 sys.path.insert(0, str(Path(__file__).parent))
 
-#: The name the reference gives the second store's secret.
-SECOND_REF = "second-store"
 #: The account moto files every role and session under.
 ACCOUNT = "123456789012"
 
@@ -39,13 +37,13 @@ class Key(BaseModel):
 
 
 class TwoStores(BaseModel):
-    """A moto server whose estate and second buckets each answer only their own key."""
+    """A moto server holding an estate bucket and a second one, where a key or a role reaches only the buckets it is allowed."""
 
     url: str
     estate_bucket: str
     second_bucket: str
+    #: Allowed the estate bucket alone.
     estate: Key
-    second: Key
     #: May call IAM once enforcement is on, which the users' own keys may not: issues and revokes their keys.
     admin: Key
 
@@ -61,28 +59,24 @@ class TwoStores(BaseModel):
 
     @property
     def second_base(self) -> str:
-        """The data base the second key owns, approved on the catalog with a credential reference."""
+        """An approved data base in the second bucket, which the catalog's role reaches as it reaches the estate's."""
         return f"s3://{self.second_bucket}/data"
 
     @property
     def plain_base(self) -> str:
-        """An approved data base with NO credential reference: the estate key reads it, and a vend may grant it."""
+        """An approved data base in the estate bucket."""
         return f"s3://{self.estate_bucket}/shared-data"
 
-    def role_on(self, bucket: str) -> str:
-        """A new role allowed ``bucket``, the one a catalog's token is exchanged for; per call, so no session is another's."""
+    def role_on(self, *buckets: str) -> str:
+        """A new role allowed ``buckets``, the one a catalog's token is exchanged for; per call, so no session is another's."""
         name = f"catalog-{uuid.uuid4().hex[:12]}"
         iam = self.iam()
         iam.create_role(RoleName=name, AssumeRolePolicyDocument=json.dumps({"Version": "2012-10-17", "Statement": []}))
+        resources = [arn for bucket in buckets for arn in (f"arn:aws:s3:::{bucket}", f"arn:aws:s3:::{bucket}/*")]
         iam.put_role_policy(
             RoleName=name,
-            PolicyName=f"{bucket}-only",
-            PolicyDocument=json.dumps(
-                {
-                    "Version": "2012-10-17",
-                    "Statement": [{"Effect": "Allow", "Action": ["s3:*"], "Resource": [f"arn:aws:s3:::{bucket}", f"arn:aws:s3:::{bucket}/*"]}],
-                }
-            ),
+            PolicyName="its-buckets",
+            PolicyDocument=json.dumps({"Version": "2012-10-17", "Statement": [{"Effect": "Allow", "Action": ["s3:*"], "Resource": resources}]}),
         )
         return f"arn:aws:iam::{ACCOUNT}:role/{name}"
 
@@ -148,7 +142,6 @@ def two_stores() -> Iterator[TwoStores]:
         estate_bucket=estate_bucket,
         second_bucket=second_bucket,
         estate=_user_on(iam, f"estate-{suffix}", estate_bucket),
-        second=_user_on(iam, f"second-{suffix}", second_bucket),
         admin=_admin(iam, f"admin-{suffix}"),
     )
     gate = ActionAuthenticatorMixin._authenticate_and_authorize_normal_action
@@ -179,16 +172,13 @@ def plain_base(two_stores: TwoStores) -> str:
 
 @pytest.fixture
 def two_store_catalog(two_stores: TwoStores, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
-    """The real catalog app on a session under the estate's role, with the second store's ``data`` base approved and referenced to its key.
+    """The real catalog app on a session under a role allowed both buckets, with a data base approved in each.
 
-    The catalog's projected token is exchanged on moto's STS for a session under a role allowed the estate bucket, as
-    the deployed catalog's is (ADR 0170). The Dapr secret store is the one collaborator replaced: it answers the
-    reference with the second store's bundle, in the shape ``warehouse_credentials.resolve`` reads. Vending is
-    ``web_identity``, so the lifespan builds the deployed ``WebIdentityVendor`` with the deployed allowlist; a test that
-    vends replaces only its ``_exchange``, the call that would reach the store.
+    The catalog's projected token is exchanged on moto's STS for a session under that role, as the deployed catalog's is
+    for the canned policy its subject names (ADR 0170): a data base is its tables' storage, reached under the catalog's
+    own identity ([[LH-286]]). Vending is ``web_identity``, so the lifespan builds the deployed ``WebIdentityVendor`` with
+    the deployed allowlist; a test that vends replaces only its ``_exchange``, the call that would reach the store.
     """
-    from catalog.services import warehouse_credentials
-
     token = tmp_path / "projected-rask-object-store-token"
     token.write_text("projected-for-rask-object-store")
     for key, value in {
@@ -198,9 +188,8 @@ def two_store_catalog(two_stores: TwoStores, tmp_path: Path, monkeypatch: pytest
         "LANCE_S3_ENDPOINT": two_stores.url,
         "LANCE_S3_WEB_IDENTITY_TOKEN_FILE": str(token),
         "LANCE_S3_STS_ENDPOINT": two_stores.url,
-        "LANCE_S3_ASSUME_ROLE_ARN": two_stores.role_on(two_stores.estate_bucket),
+        "LANCE_S3_ASSUME_ROLE_ARN": two_stores.role_on(two_stores.estate_bucket, two_stores.second_bucket),
         "LANCE_MULTIBASE_DATA_BASES": f"{two_stores.second_base},{two_stores.plain_base}",
-        "LANCE_MULTIBASE_BASE_CREDENTIAL_REFS": f"{two_stores.second_base}={SECOND_REF}",
         "LANCE_CONTROL_EMIT_ENABLED": "false",
         "LANCE_VENDING_MODE": "web_identity",
         "RASK_OIDC_ENABLED": "false",
@@ -209,12 +198,6 @@ def two_store_catalog(two_stores: TwoStores, tmp_path: Path, monkeypatch: pytest
         monkeypatch.setenv(key, value)
     monkeypatch.delenv("LANCE_S3_ACCESS_KEY_ID", raising=False)
     monkeypatch.delenv("LANCE_S3_SECRET_ACCESS_KEY", raising=False)
-
-    def _secret_store(store: str, ref: str, *, require: str, timeout: float = 5.0, retries: int = 10, backoff: float = 3.0) -> dict[str, str]:
-        assert ref == SECOND_REF, f"the catalog asked the secret store for {ref!r}"
-        return {require: two_stores.second.aws_secret_access_key, "aws_access_key_id": two_stores.second.aws_access_key_id}
-
-    monkeypatch.setattr(warehouse_credentials, "fetch_required_secrets", _secret_store)
     from catalog.core.config import get_settings
 
     get_settings.cache_clear()

@@ -31,10 +31,7 @@ def _settings() -> Any:
         lineage_emit_enabled=True,
         allow_external_blobs=False,
         external_blob_base_list=[],
-        # [[LH-067]] Read by the create path to compose per-base credentials; empty renders today's map.
-        multibase_base_credential_ref_map={},
         dapr_secret_store="",
-        dapr_secret_s3_field="",
         # [[XC-104]] The door holds the body to this once its compressed buffers inflate.
         max_body_bytes=256 * 1024 * 1024,
         # [[LH-279]] Where the create records the bases it registers; the write is faked here.

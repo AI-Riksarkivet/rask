@@ -7,12 +7,14 @@ grants exactly the directories the table's manifest declares, and a directory is
 registration whose manifest declares another table's directory is refused, or it would be vended GET on
 that table's fragments.
 
+A maintain-tier vend also DELETES in its own table's directory and nowhere else ([[LH-286]]): Lance's cleanup is
+root-scoped, so maintenance reclaims what no version references there under that credential, and the directory is the
+table's alone, as its base record and its claim say.
+
 Driven through the real create, register and credentials doors on the two-store estate
-(``conftest.two_store_catalog``), on the approved data base that carries no credential reference — a
-base with one is never vended directly ([[LH-273]]). moto's S3 does not enforce a session policy, so the
-policy the lifespan-built ``WebIdentityVendor`` sends with its token exchange is judged by moto's IAM evaluator
-(``IAMPolicy``) against the object keys each table's fragments occupy. Whether RustFS's STS enforces it
-is the live probe's question.
+(``conftest.two_store_catalog``). moto's S3 does not enforce a session policy, so the policy the lifespan-built
+``WebIdentityVendor`` sends with its token exchange is judged by moto's IAM evaluator (``IAMPolicy``) against the object
+keys each table's fragments occupy. Whether RustFS's STS enforces it is the live probe's question.
 """
 
 from __future__ import annotations
@@ -75,14 +77,14 @@ def _fragment_keys(two_stores: Any, directory: str) -> list[tuple[str, str]]:  #
     return keys
 
 
-def _permits_get(policy: dict[str, Any], bucket: str, key: str) -> bool:
-    """IAM's verdict on GetObject over ``bucket/key``, by moto's evaluator.
+def _permits(policy: dict[str, Any], action: str, bucket: str, key: str) -> bool:
+    """IAM's verdict on ``action`` over ``bucket/key``, by moto's evaluator.
 
     moto turns a Resource into a regex without escaping it, so the ``$`` a table directory carries would
     read as an end anchor; it is swapped for a character IAM gives no meaning, on both sides alike.
     """
     document = json.dumps(policy).replace("$", "~")
-    return IAMPolicy(document).is_action_permitted("s3:GetObject", f"arn:aws:s3:::{bucket}/{key.replace('$', '~')}") == PermissionResult.PERMITTED
+    return IAMPolicy(document).is_action_permitted(action, f"arn:aws:s3:::{bucket}/{key.replace('$', '~')}") == PermissionResult.PERMITTED
 
 
 def _capture_policy(client: TestClient) -> dict[str, Any]:
@@ -99,7 +101,7 @@ def _capture_policy(client: TestClient) -> dict[str, Any]:
     return sent
 
 
-@pytest.mark.parametrize("second_table", ["created", "registered-over-its-directory", "registered-over-a-renamed-tables-directory"])
+@pytest.mark.parametrize("second_table", ["created", "created-and-maintained", "registered-over-its-directory", "registered-over-a-renamed-tables-directory"])
 def test_a_table_on_a_data_base_reaches_none_of_another_tables_fragments(
     two_store_catalog: TestClient,
     two_stores: Any,
@@ -117,15 +119,18 @@ def test_a_table_on_a_data_base_reaches_none_of_another_tables_fragments(
     owner_keys = _fragment_keys(two_stores, _directory(two_stores, owner_location))
     sent = _capture_policy(two_store_catalog)
 
-    if second_table == "created":
+    if second_table.startswith("created"):
+        tier = "maintain" if second_table == "created-and-maintained" else "read"
         sibling, sibling_location = _create(two_store_catalog, plain_base, _ids(3, 4))
-        vended = two_store_catalog.post(f"/management/v1/table/{sibling}/credentials")
+        vended = two_store_catalog.post(f"/management/v1/table/{sibling}/credentials", params={"tier": tier})
 
         assert vended.status_code == 200, vended.text
         assert vended.json()["mode"] == "direct", vended.text
         sibling_keys = _fragment_keys(two_stores, _directory(two_stores, sibling_location))
-        assert all(_permits_get(sent["policy"], *key) for key in sibling_keys), f"the sibling's vend cannot read its own fragments: {sent['policy']}"
-        assert not [key for key in owner_keys if _permits_get(sent["policy"], *key)], f"the sibling's vend reads the owner's fragments: {sent['policy']}"
+        granted = {action: [_permits(sent["policy"], action, *key) for key in sibling_keys] for action in ("s3:GetObject", "s3:DeleteObject")}
+        assert granted == {"s3:GetObject": [True] * len(sibling_keys), "s3:DeleteObject": [tier == "maintain"] * len(sibling_keys)}, sent["policy"]
+        reached = [(action, key) for action in ("s3:GetObject", "s3:DeleteObject") for key in owner_keys if _permits(sent["policy"], action, *key)]
+        assert reached == [], f"the sibling's vend reaches the owner's fragments: {sent['policy']}"
     else:
         # The thief writes its own dataset declaring the owner's directory as a base, as any holder of a
         # write credential on its own prefix can, then asks the catalog to register it.

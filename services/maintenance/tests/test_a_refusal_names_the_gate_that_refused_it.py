@@ -50,31 +50,10 @@ def _mixed_table(root: Path) -> str:
     return uri
 
 
-def _table_on_a_data_base(root: Path) -> str:
-    """A table whose fragments sit on a plain data base outside its root ([[LH-273]]): read only under that base's own credential."""
-    uri = str(root / "multibase.lance")
-    base = str(root / "data-base" / "t-1")
-    lance.write_dataset(
-        _ids(0, 4),
-        uri,
-        data_storage_version="2.2",
-        enable_stable_row_ids=True,
-        initial_bases=[lance.DatasetBasePath(base, is_dataset_root=False, name="data")],
-        target_bases=["data"],
-    )
-    return uri
-
-
-@pytest.mark.parametrize(
-    ("build", "gate"),
-    [pytest.param(_mixed_table, "manifest_flags", id="manifest-flags"), pytest.param(_table_on_a_data_base, "foreign_data_base", id="foreign-data-base")],
-)
-def test_a_refusal_carries_the_gate(
-    *, tmp_path: Path, maintain_one: Callable[..., DatasetResult], build: Callable[[Path], str], gate: str, added: list[tuple[int, dict[str, Any] | None]]
-) -> None:
-    uri = build(tmp_path)
+def test_a_refusal_carries_the_gate(*, tmp_path: Path, maintain_one: Callable[..., DatasetResult], added: list[tuple[int, dict[str, Any] | None]]) -> None:
+    uri = _mixed_table(tmp_path)
 
     result = maintain_one(uri, MaintenanceSettings.model_validate({"s3_bucket": "b"}))
 
-    assert result.refused_by == gate, f"the dataset was not refused by {gate}: {result}"
-    assert added == [(1, {"refused_by": gate})], f"the gate did not reach the series: {added}"
+    assert result.refused_by == "manifest_flags", f"the dataset was not refused by manifest_flags: {result}"
+    assert added == [(1, {"refused_by": "manifest_flags"})], f"the gate did not reach the series: {added}"

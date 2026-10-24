@@ -8,11 +8,9 @@ store, and its vend AssumeRole at the estate's STS. Until a reference is resolve
 end, an endpoint other than the estate's is refused at create, and an existing record naming one is
 refused at every door that would reach a store for it.
 
-"Resolvable" is answered by what the estate consumes, not by what it could fetch.
-``catalog.services.warehouse_credentials.resolve`` can fetch a bundle from the Dapr secret store, but
-only the multibase write path uses it; open, provision and vend never do, so a warehouse reference
-resolves to nothing any of them would sign with. Lakekeeper makes the same call at the same door: it
-validates a warehouse's storage credential at create and refuses the warehouse when it cannot
+"Resolvable" is answered by what the estate consumes: open, provision and vend sign only with the catalog's own
+identity, so a warehouse reference resolves to nothing any of them would sign with. Lakekeeper makes the same call at
+the same door: it validates a warehouse's storage credential at create and refuses the warehouse when it cannot
 (``crates/lakekeeper/src/api/management/v1/warehouse/mod.rs:97-110``).
 
 "The estate's endpoint" is ``Settings.s3_endpoint``, compared after normalisation so a respelling of it

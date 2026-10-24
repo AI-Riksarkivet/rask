@@ -157,10 +157,6 @@ reads `access_key`/`secret_key` from it, so the store registry can point a store
 reads; with no `secret` on a store the viewer would read process env, putting a root S3 key in the environment of a
 pod that HAS a Dapr sidecar.
 
-## `{{- range $ref, $_ := $baseFixture }}`
-
-values.yaml `catalog.multibase.devSeed`: each data base's credential, under the name its reference gives.
-
 ## `bao auth enable -path={{ $.Values.externalSecrets.kubernetesAuthPath }} kubernetes 2>/dev/null || echo "kub...`
 
 THE STORE'S KUBERNETES AUTH, which every identity that reads it logs in through: ESO's SecretStore, as the role

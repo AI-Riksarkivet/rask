@@ -30,6 +30,7 @@ from typing import Any, Literal
 
 import lance
 import pyarrow.fs as pafs
+from botocore.exceptions import BotoCoreError, ClientError
 from opentelemetry import trace
 from opentelemetry.trace import StatusCode
 from pydantic import BaseModel, Field
@@ -37,6 +38,7 @@ from pydantic import BaseModel, Field
 from maintenance.core.config import MaintenanceSettings, get_settings, shared_lance_session
 from maintenance.core.lineage_emit import MaintenanceEmitter
 from maintenance.core.metrics import (
+    record_base_fragments_holding_deleted_rows,
     record_dataset_swept,
     record_failed,
     record_mixed_file_versions,
@@ -48,7 +50,7 @@ from maintenance.core.metrics import (
     record_trashed_skipped,
     record_unrecorded_bases,
 )
-from maintenance.services import credentials, purge
+from maintenance.services import credentials, data_directories, purge
 from maintenance.services.discovery import discover_datasets
 from maintenance.services.due import refresh_due, table_ids
 from maintenance.services.expiry import DatasetResult, DueVerdict, ExpiryPolicy, ExpiryTarget, count_reclaimable, expire_versions, summarize_refusals
@@ -57,7 +59,7 @@ from maintenance.services.plan import DatasetPlan, PlanContext, buckets_to_sweep
 from service_kit.governed import fga
 from service_kit.governed.audit import SUCCESS, audit
 from service_kit.lakehouse import auto_cleanup, base_refs, base_registry, location_claims, maintenance_policies, trash
-from service_kit.lakehouse.features import flags_from_open_error, manifest_feature_flags, mixes_data_file_versions
+from service_kit.lakehouse.features import flags_from_open_error, manifest_base_path_refs, manifest_feature_flags, mixes_data_file_versions
 from service_kit.lakehouse.lance_session import affordable_cache_bytes
 from service_kit.lakehouse.maintenance_due import CloneList, DueRecord, delete_due, list_due, write_clone_list
 from service_kit.lakehouse.objectfs import s3_filesystem
@@ -287,13 +289,16 @@ class WriteProbe(BaseModel):
     mixed_data_file_versions: bool = False
 
 
-def _probe_before_vending(uri: str, options: dict[str, str], *, policy: ExpiryPolicy) -> WriteProbe:
+def _probe_before_vending(
+    uri: str, options: dict[str, str], *, policy: ExpiryPolicy, directories: list[base_registry.RecordedBase], now: datetime
+) -> WriteProbe:
     """Could expiry write anything at all on this dataset?
 
     THE COST IT REMOVES, measured 2026-09-11: the store mints one STS identity record per vend and prunes none — 280 per
     minute on this estate — and the previous store became unable to restart at 107,485 of them. Expiry writes only
-    when commit-path cleanup is armed (the disarm commits) or the policy's threshold of reclaimable versions is met,
-    counted by the same rule the pass itself applies.
+    when commit-path cleanup is armed (the disarm commits), when the policy's threshold of reclaimable versions is met,
+    counted by the same rule the pass itself applies, or when the table's data directories hold a file the pass would
+    delete ([[LH-286]]), found by the rule the pass applies again under its vend (`data_directories.unreferenced`).
 
     CONSERVATIVE BY CONSTRUCTION: an unreadable dataset answers `True`, because skipping a dataset that WOULD have been
     maintained is the failure this service exists to prevent while a spare credential is only a cost. Logged, never
@@ -303,8 +308,9 @@ def _probe_before_vending(uri: str, options: dict[str, str], *, policy: ExpiryPo
         ds = lance.dataset(uri, storage_options=options, session=shared_lance_session())
         armed = bool(auto_cleanup.armed_keys(ds.config()))
         reclaimable = policy.cleanup_enabled and count_reclaimable(ds, uri, policy) >= policy.min_reclaimable
+        stranded = policy.cleanup_enabled and bool(directories) and bool(data_directories.unreferenced(ds, directories, options, now=now))
         return WriteProbe(
-            may_write=armed or reclaimable,
+            may_write=armed or reclaimable or stranded,
             data_storage_version=ds.data_storage_version,
             mixed_data_file_versions=mixes_data_file_versions(manifest_feature_flags(ds)[0]),
         )
@@ -354,6 +360,35 @@ def _stopped_by_vend(probe: WriteProbe, target: ExpiryTarget, exc: Exception) ->
     return stopped
 
 
+def _data_directories(uri: str, *, sweep: SweepPlan, settings: MaintenanceSettings, options: dict[str, str]) -> list[base_registry.RecordedBase]:
+    """The data directories the table at ``uri`` holds, as its base record names them ([[LH-286]]).
+
+    None for a branch, whose files are its table's, and none for a table whose manifest declares no plain base outside
+    its own root: the record is read only for a table that could hold a directory. A record that cannot be read names
+    none this tick, so the pass reclaims nothing on the base and expires the table's versions as usual; the next tick
+    reads it again. Only a directory the record names and whose claim the table holds is ever listed, so neither a base a
+    writer planted in the manifest nor one another table holds is reclaimed.
+    """
+    if (table := sweep.table_ids.of(uri)) is None:
+        return []
+    try:
+        declared = manifest_base_path_refs(lance.dataset(uri, storage_options=options, session=shared_lance_session()))
+    except Exception as exc:  # noqa: BLE001 — the pass opens the dataset again and reports its own failure
+        log.debug("maintenance_data_directories_unopened", extra={"uri": uri, "error": f"{type(exc).__name__}: {exc}"[:300]})
+        return []
+    if not any(not ref.is_dataset_root and not base_refs.location_in_store(uri, ref.path) for ref in declared):
+        return []
+    try:
+        recorded = data_directories.recorded_directories(base_record_reader(settings, options)(uri))
+        held = [directory for directory in recorded if data_directories.claimed_by(_claims(settings), directory, table)]
+    except (base_registry.UnreadableBaseRecordError, ClientError, BotoCoreError, OSError, ValueError) as exc:
+        log.warning("maintenance_base_record_unreadable", extra={"uri": uri, "error": f"{type(exc).__name__}: {exc}"[:300]})
+        return []
+    if unheld := [directory.path for directory in recorded if directory not in held]:
+        log.warning("maintenance_data_directory_not_held", extra={"uri": uri, "table": table, "directories": unheld})
+    return held
+
+
 def _expire(uri: str, table: str, plan: DatasetPlan, *, sweep: SweepPlan, settings: MaintenanceSettings) -> DatasetResult:
     """One dataset's expiry, signed by a vend scoped to ``table``, the table ``__manifest`` names it as, where expiry may write.
 
@@ -362,8 +397,9 @@ def _expire(uri: str, table: str, plan: DatasetPlan, *, sweep: SweepPlan, settin
     """
     options = settings.storage_options()
     policy = plan.expiry_policy(min_reclaimable=settings.min_versions_to_expire, staged_grace=timedelta(seconds=settings.staged_manifest_grace_seconds))
-    probe = _probe_before_vending(uri, options, policy=policy)
-    target = ExpiryTarget(uri=uri, storage_options=options, protected=sweep.protected, table_id=table)
+    directories = _data_directories(uri, sweep=sweep, settings=settings, options=options)
+    probe = _probe_before_vending(uri, options, policy=policy, directories=directories, now=sweep.context.now)
+    target = ExpiryTarget(uri=uri, storage_options=options, protected=sweep.protected, table_id=table, data_directories=directories, now=sweep.context.now)
     if probe.may_write:
         try:
             target.storage_options = credentials.write_options_for(uri, settings, table_id=table, fallback=options)
@@ -515,7 +551,9 @@ def _stamp_cadence(result: DatasetResult, *, plan: DatasetPlan, settings: Mainte
 
 def _record_dataset_metrics(result: DatasetResult) -> None:
     """The per-dataset counters, keyed by the STABLE error class and the refusing gate, never a message or a URI."""
-    record_reclaimed(versions_removed=result.old_versions_removed, bytes_removed=result.bytes_removed)
+    # A base file is a byte a superseded version stranded, so the bytes the sweep frees count both ([[LH-286]]).
+    record_reclaimed(versions_removed=result.old_versions_removed, bytes_removed=result.bytes_removed + result.base_bytes_removed)
+    record_base_fragments_holding_deleted_rows(result.base_fragments_holding_deleted_rows)
     record_refused(1 if result.refused else 0, result.refused_by)
     _record_parked(result)
     record_mixed_file_versions(1 if result.mixed_data_file_versions else 0)
@@ -549,6 +587,9 @@ def _record_dataset_outcome(result: DatasetResult, *, subject: str) -> None:
             "old_versions_removed": result.old_versions_removed,
             "bytes_removed": result.bytes_removed,
             "staged_manifests_removed": result.staged_manifests_removed,
+            "base_files_removed": result.base_files_removed,
+            "base_bytes_removed": result.base_bytes_removed,
+            "base_fragments_holding_deleted_rows": result.base_fragments_holding_deleted_rows,
             "due": result.due,
             "refused": result.refused,
             "skipped": result.skipped,
@@ -661,9 +702,10 @@ def run_sweep(settings: MaintenanceSettings) -> list[DatasetResult]:
 
 
 def _did_material_work(result: DatasetResult) -> bool:
-    """Did the pass reclaim any version? Only then is a maintenance run recorded: a cron re-sweeping every dataset
-    would otherwise flood the lineage graph and the compliance trail with no-op runs."""
-    return result.old_versions_removed > 0
+    """Did the pass reclaim any version, or any file in the table's data directories? Only then is a maintenance run
+    recorded: a cron re-sweeping every dataset would otherwise flood the lineage graph and the compliance trail with
+    no-op runs."""
+    return result.old_versions_removed > 0 or result.base_files_removed > 0
 
 
 def audit_material_work(result: DatasetResult, *, subject: str) -> None:
@@ -682,6 +724,8 @@ def audit_material_work(result: DatasetResult, *, subject: str) -> None:
         dataset=result.uri,
         old_versions_removed=result.old_versions_removed,
         bytes_removed=result.bytes_removed,
+        base_files_removed=result.base_files_removed,
+        base_bytes_removed=result.base_bytes_removed,
         duration_seconds=result.duration_seconds,
     )
 
