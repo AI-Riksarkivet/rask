@@ -14,8 +14,9 @@ and dropped through its doors, so its base record and its directory claim are th
   unverified-file age (7 days, ``lance_docs/lance_sdk.md:931``), keeps one a branch still references and every file
   younger than that age, and reports the base fragment a deleted row keeps alive, which only a compaction could rewrite;
 - the purge of an expired trashed table deletes its data directory with its root, then forgets its base record and
-  releases the directory's claim, and deletes nothing at all while its record names a directory whose claim the table
-  does not hold: a record written before [[LH-252]] named the approved base itself, which every table naming it shared.
+  releases the directory's claim, also where an earlier tick released it ([[LH-535]]), and deletes nothing at all while
+  its record names a directory no claim names the table on: a record written before [[LH-252]] named the approved base
+  itself, which every table naming it shared.
 """
 
 from __future__ import annotations
@@ -192,16 +193,28 @@ def _expired(estate: _Estate, table: str) -> None:
     trash.put(estate.root, estate.key, {**dropped, "expires_at": (datetime.now(UTC) - timedelta(days=1)).isoformat()})
 
 
-def test_the_purge_deletes_a_trashed_tables_data_directory_with_its_root(estate: _Estate) -> None:
+@pytest.mark.parametrize(
+    "claim",
+    [
+        pytest.param("held", id="its-claim-held"),
+        # [[LH-535]] On RustFS an earlier tick's forget of the record fails on a directory marker after it released the
+        # claims, so the tick that finishes the purge finds the table's own claim released.
+        pytest.param("released", id="its-claim-released-by-an-earlier-tick"),
+    ],
+)
+def test_the_purge_deletes_a_trashed_tables_data_directory_with_its_root(estate: _Estate, claim: str) -> None:
     table = f"db$p{uuid.uuid4().hex[:8]}"
     location = estate.create(table, _ids(0, 3))
     estate.create(table, _ids(3, 6), mode="overwrite")
     directory = estate.directory(location)
+    claims = location_claims.ClaimStore(control_root=estate.root, storage_options=estate.key)
     root_prefix = f"{location.removeprefix(f'{estate.root}/')}/"
     estate.door(table, "drop")
     held = {**estate.keys(estate.bucket, root_prefix), **estate.files(directory)}
     assert len(estate.files(directory)) == 2, "precondition: the create and the overwrite each left a file on the base"
     _expired(estate, table)
+    if claim == "released":
+        location_claims.release(claims, directory, table)
 
     out = asyncio.run(
         purge_expired_trash(estate.maintenance(trash_purge_enabled=True), report=_clean_report(), control_root=estate.root, data_roots={estate.root})
@@ -211,10 +224,10 @@ def test_the_purge_deletes_a_trashed_tables_data_directory_with_its_root(estate:
     assert [(purged.id, purged.files_deleted, purged.bytes_deleted) for purged in out.purged] == [(table, len(held), sum(held.values()))]
     assert (estate.keys(estate.bucket, root_prefix), estate.files(directory)) == ({}, {}), "the purge left bytes of the table it reclaimed"
     assert base_registry.read_base_record(estate.registry, location) is None, "the base record outlived the bytes it named"
-    assert location_claims.holder(location_claims.ClaimStore(control_root=estate.root, storage_options=estate.key), directory) is None
+    assert location_claims.holder(claims, directory) is None
 
 
-def test_the_purge_deletes_nothing_while_the_record_names_a_directory_its_table_holds_no_claim_on(estate: _Estate) -> None:
+def test_the_purge_deletes_nothing_while_the_record_names_a_directory_no_claim_names_its_table_on(estate: _Estate) -> None:
     table = f"db$q{uuid.uuid4().hex[:8]}"
     location = estate.create(table, _ids(0, 3))
     root_prefix = f"{location.removeprefix(f'{estate.root}/')}/"
@@ -229,5 +242,5 @@ def test_the_purge_deletes_nothing_while_the_record_names_a_directory_its_table_
         purge_expired_trash(estate.maintenance(trash_purge_enabled=True), report=_clean_report(), control_root=estate.root, data_roots={estate.root})
     )
 
-    assert [(refused.id, "holds no claim" in refused.reason) for refused in out.refused] == [(table, True)], out.refused
+    assert [(refused.id, "no claim names" in refused.reason) for refused in out.refused] == [(table, True)], out.refused
     assert {**estate.keys(estate.bucket, root_prefix), **estate.keys(estate.second, "data/")} == held, "a refused purge deleted bytes"

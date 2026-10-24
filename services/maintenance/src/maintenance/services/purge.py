@@ -76,7 +76,7 @@ from pydantic import BaseModel, Field
 
 from maintenance.core.config import MaintenanceSettings, shared_lance_session
 from maintenance.core.metrics import record_trash_purge
-from maintenance.services.data_directories import claimed_by, directory_uri, recorded_directories
+from maintenance.services.data_directories import directory_uri, last_claimed_by, recorded_directories
 from maintenance.services.naming import manifest_uuid
 from maintenance.services.reconcile import MANIFEST_DIR, NON_GATING_CATEGORIES, ReconcileReport
 from maintenance.services.stored_objects import delete_objects, list_under
@@ -1116,21 +1116,22 @@ def _judged_data_directories(location: str, *, registry: BaseRegistry, table: st
     """The data directories the table at ``location`` holds, as its base record names them, each judged its own to delete ([[LH-286]]).
 
     Each is the table's own directory beneath an approved base ([[LH-252]]), and its claim names the table while the trash
-    keeps it, so a directory whose claim the table does not hold (another table's, or none, as an approved base itself
-    has), or one a live dataset resolves its files through, refuses the whole delete before any byte goes.
+    keeps it, held or, once an earlier tick forgot part of the record, released (:func:`last_claimed_by`). A directory
+    whose claim names another table or none, as an approved base itself has, or one a live dataset resolves its files
+    through, refuses the whole delete before any byte goes.
 
     Raises:
         UnreadableBaseRecordError: The record exists and cannot be read.
-        ProtectedBaseError: The table does not hold a directory's claim, or a live dataset reads through it.
+        ProtectedBaseError: A directory's claim does not name the table, or a live dataset reads through it.
         botocore.exceptions.ClientError: The store refused a read of the record or a claim.
     """
     claims = location_claims.ClaimStore(control_root=registry.control_root, storage_options=registry.storage_options)
     directories = recorded_directories(read_base_record(registry, location))
     for directory in directories:
         uri = directory_uri(directory)
-        if not claimed_by(claims, directory, table):
+        if not last_claimed_by(claims, directory, table):
             raise ProtectedBaseError(
-                f"refusing to delete {location}: {table!r} holds no claim on its data directory {uri}, so its bytes are not that table's alone"
+                f"refusing to delete {location}: no claim names {table!r} on its data directory {uri}, so its bytes are not that table's alone"
             )
         if protected is not None and (root := protected.protects_from_deletion(uri, along_with=location)) is not None:
             raise ProtectedBaseError(_protected_base_reason(uri, referrer=root))

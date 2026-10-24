@@ -75,6 +75,22 @@ def claimed_by(claims: location_claims.ClaimStore, directory: RecordedBase, tabl
     return held is not None and held.table == table
 
 
+def last_claimed_by(claims: location_claims.ClaimStore, directory: RecordedBase, table: str) -> bool:
+    """Whether ``directory``'s claim names ``table``, held or released by it: what a purge of that table may delete.
+
+    A purge that forgot the table's base record part-way has released the record's directory claims already
+    (:func:`service_kit.lakehouse.base_registry.forget_base_record` releases them first), so the tick that finishes it
+    finds them released. A claim another table took since names that table, and no record names a directory no claim
+    ever named, such as an approved base itself.
+
+    Raises:
+        ValueError: The stored claim is not a claim.
+        botocore.exceptions.ClientError: The store refused the read.
+    """
+    found = location_claims.read(claims, directory.path)
+    return found is not None and found.claim.table == table
+
+
 def directory_uri(directory: RecordedBase) -> str:
     """Where ``directory`` is listed: its path in the store the record names."""
     return f"/{directory.path}" if directory.store == "file" else f"{directory.store}://{directory.path}"
