@@ -270,28 +270,6 @@ tests:
       - user: user:dave
         object: estate:rask
         assertions: { can_observe_events: false }
-  - name: only an ESTATE admin can browse the raw object stores, and no warehouse confers it
-    check:
-      # #90. The store registry's buckets include the external RAW tier and the observability bucket
-      # — outside the medallion entirely — so this is deliberately the same estate tier as the event
-      # feed, not a per-tenant one. alice owning acme_bucket must NOT reach the raw scans.
-      - user: user:root_admin
-        object: estate:rask
-        assertions: { can_browse_storage: true }
-      - user: user:alice
-        object: estate:rask
-        assertions: { can_browse_storage: false }
-      - user: user:dave
-        object: estate:rask
-        assertions: { can_browse_storage: false }
-      # THE HALF THAT USED TO BE SURPRISING, and is now simply impossible. While `warehouse` defined
-      # this rung it resolved on ANY warehouse its owner owned — alice owns acme_bucket, so it was true
-      # THERE — and the privilege was estate-scoped only because the app never checked it anywhere but
-      # `fga_root_object`. One caller naming a tenant warehouse would have widened it silently. The
-      # rung is defined on `type estate` alone, so the model refuses the question outright.
-      - user: user:alice
-        object: warehouse:acme_bucket
-        assertions: {}
   - name: arming deletion protection is its own ACTION at the drop's tier, on both types
     # [[LH-055]]. The reference model's `_effective` shape: a privilege is a tier, and several distinct
     # ACTIONS resolve to it. `can_set_protection` shares `can_drop`'s tier deliberately — a writer must
@@ -369,10 +347,10 @@ tests:
         assertions:
           reader: true              # the tuple is live
           can_get_metadata: true    # what a reader IS entitled to
-          # The two estate rungs are NOT asserted here, and their absence is not a gap: `warehouse`
-          # defines neither, so a check would error rather than deny. The same mutation detection lives
-          # on the type that owns them — `user:looker`, a bare estate `reader`, is denied
-          # `can_observe_events` and `can_browse_storage` in the estate-root case below.
+          # The estate rungs are NOT asserted here, and their absence is not a gap: `warehouse` defines
+          # none of them, so a check would error rather than deny. The same mutation detection lives on
+          # the type that owns them: `user:provisioner`, an estate `operator`, is denied
+          # `can_observe_events` in the estate-root case below.
       - user: user:peter
         object: table:acme_gold_catalog
         assertions:
@@ -1495,21 +1473,16 @@ tests:
   # with or without the new type — a result that proves a type breaks nothing and proves nothing about
   # whether it WORKS. That is the gap these cases close.
   #
-  # THE TIERS ARE THE POINT, not the `can_*` rungs. Three services gate their WHOLE routers on a bare
-  # tier on the root object — `compute/security.py:39` and `controlplane/security.py:42` check
-  # `reader`, `flows/security.py:18` checks `writer` — so a root type that carried only the ruling's
-  # admin/operator/project plus verbs would refuse all three on the day of the repoint. That is the
-  # failure these cases are written to make impossible to ship.
-  - name: the estate root carries the tiers three services gate on, and a machine identity that is a relation
+  # Every rung here is checked by a lakehouse door on the root object, and a client gating an estate-wide
+  # surface asks one of them (`can_observe_events`) through the decision door, so the estate carries no tier
+  # below its owner.
+  - name: the estate root's rungs open only their own doors, and a machine identity is a relation
     tuples:
       - user: user:root_admin
         relation: admin
         object: estate:rask
       - user: user:provisioner
         relation: operator
-        object: estate:rask
-      - user: user:looker
-        relation: reader
         object: estate:rask
       # The tuple the chart's bootstrap hook writes for the notifications reconciler ([[CTL-021]]).
       - user: user:notifications
@@ -1534,8 +1507,7 @@ tests:
         object: estate:rask
     check:
       # EACH CHECK-ONLY SERVICE OPENS THE DECISION ROUTES IT IS GRANTED AND NOTHING ELSE ON THE ROOT ([[LH-442]]).
-      # Each flips if a role is folded into another, or into a rung that edits the graph (`can_observe_events`)
-      # or reads data (`reader`).
+      # Each flips if a role is folded into another, or into a rung that edits the graph (`can_observe_events`).
       - user: user:lineage
         object: estate:rask
         assertions:
@@ -1544,7 +1516,6 @@ tests:
           can_expand_members: false
           can_observe_events: false
           can_read_event_feed: false
-          reader: false
       - user: user:viewer
         object: estate:rask
         assertions:
@@ -1585,28 +1556,14 @@ tests:
         object: estate:rask
         assertions:
           can_create_project: true
-          # An operator provisions; it does not thereby get to read the estate's events or storage.
+          # An operator provisions; it does not thereby get the estate-admin rung.
           can_observe_events: false
-          can_browse_storage: false
       # `admin` reaches every rung, so nobody loses one when this type arrives.
       - user: user:root_admin
         object: estate:rask
         assertions:
           can_create_project: true
           can_observe_events: true
-          can_browse_storage: true
-          reader: true
-          writer: true
-      # THE TIER CASE. A bare `reader` is what compute and controlplane ask for, and it must NOT
-      # carry the owner-tier rungs — the whole point of the tier being one rung below.
-      - user: user:looker
-        object: estate:rask
-        assertions:
-          reader: true
-          writer: false
-          can_observe_events: false
-          can_browse_storage: false
-          can_create_project: false
       # THE RECONCILER READS THE WHOLE RUN FEED AND NOTHING ELSE ON THE ROOT ([[CTL-021]]). The two
       # refusals that matter are the doors that mint a tenant (`POST /management/v1/projects` checks
       # `can_observe_events`; `can_create_project` is the model's own verb) and the raw tuple editor
@@ -1617,20 +1574,13 @@ tests:
           can_read_event_feed: true
           can_observe_events: false
           can_create_project: false
-          can_browse_storage: false
-          reader: false
       # The estate owner keeps it concentrically, as with every other rung here.
       - user: user:root_admin
         object: estate:rask
         assertions:
           can_read_event_feed: true
-      # A bare estate `reader` (what compute and controlplane gate on) and an operator are both
-      # refused: the feed is read through its own grant, never through a tier someone holds for
-      # another reason. `looker` flips if the rung is widened to `reader`, `provisioner` to `operator`.
-      - user: user:looker
-        object: estate:rask
-        assertions:
-          can_read_event_feed: false
+      # An operator is refused: the feed is read through its own grant, never through a rung someone holds
+      # for another reason. `provisioner` flips if the rung is widened to `operator`.
       - user: user:provisioner
         object: estate:rask
         assertions:
@@ -1639,26 +1589,17 @@ tests:
       - user: user:nobody
         object: estate:rask
         assertions:
-          reader: false
-          writer: false
           can_create_project: false
           can_observe_events: false
-          can_browse_storage: false
           can_read_event_feed: false
-      # THE SCOPE FIX, and it is what a separate TYPE buys over a second warehouse. The
-      # `can_browse_storage` case above records the arrangement this replaces in its own words: the
-      # relation "resolves on ANY warehouse its owner owns — alice owns acme_bucket, so it is true
-      # THERE", and the privilege was estate-scoped only because the app never checked it anywhere but
-      # `fga_root_object`. A tenant cannot own an `estate:` object, so the scope stops depending on
-      # every call site remembering which object to name.
+      # THE SCOPE, and it is what a separate TYPE buys over a second warehouse: an estate rung defined on
+      # `warehouse` would resolve on ANY warehouse its owner owns, and alice owns acme_bucket. A tenant cannot
+      # own an `estate:` object, so the scope does not depend on every call site remembering which object to name.
       - user: user:alice
         object: estate:rask
         assertions:
-          reader: false
-          writer: false
           can_create_project: false
           can_observe_events: false
-          can_browse_storage: false
 
   # ------------------------------------------------------------------------------------------------
   # [[LH-055]] — the classification VOCABULARY is a tag type with per-tag `apply`
@@ -1711,8 +1652,8 @@ tests:
         object: classification:pii
         assertions: { can_apply: true, can_grant_apply: true }
       # ESTATE `owner` IS NOT ENOUGH, and that is deliberate rather than an oversight. `owner` on the
-      # estate is the tier `compute`/`controlplane`/`flows` gate whole routers on, so a service holding
-      # it would silently gain the power to mint classification labels. Minting is `admin`.
+      # estate opens every estate-wide surface `can_observe_events` gates, so a subject holding it for one
+      # of them would silently gain the power to mint classification labels. Minting is `admin`.
       - user: user:root_admin
         object: classification:pii
         assertions: { can_apply: false, can_grant_apply: false }

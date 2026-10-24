@@ -341,7 +341,7 @@ def test_grant_routes_are_intercepted_before_the_resolver(monkeypatch: pytest.Mo
     # against three named types began asking `warehouse` about a rung only `classification` defines.
     #
     # The SUBJECTS come from the routes that exist, because a rung is only grantable if something
-    # serves it: `estate` declares `owner`/`writer`/`reader` and has no grant route, so demanding
+    # serves it: `estate` declares `owner` and has no grant route, so demanding
     # `can_grant_owner` there would be a gate on an unreachable door. A new `<type>_router` carrying
     # `/access/grant` is covered the day it is added, which is the property a list cannot have.
     served = _types_served_by("access/grant")

@@ -74,7 +74,7 @@ otel:
   endpoint: ""
   environment: rask
 
-# The user door: compute gates its routers on the estate reader tier. Off, it answers anonymously and says so
+# The user door: compute gates its routers on the estate-admin verb, asked through the catalog's decision door. Off, it answers anonymously and says so
 # (RASK_INSECURE_ALLOW_UNAUTHENTICATED).
 auth:
   enabled: true

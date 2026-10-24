@@ -11,7 +11,7 @@ plus `/livez`, so a caller who never gets past validation can still take the ser
 
 THE MODULE DOCSTRING SAID THIS ROUTE WAS DELIBERATELY OPEN — "the catalog and validate routes stay
 open: they read a server-declared registry and run graph hygiene, no cluster involved". That
-reasoning is about the EXECUTE tier and it is sound on its own terms; it does not address unmetered
+reasoning is about spending compute and it is sound on its own terms; it does not address unmetered
 parsing, which is the actual defect. Both halves are fixed here, and the docstring is corrected
 rather than left contradicting the code.
 """

@@ -107,10 +107,10 @@ type estate
         # inherits eight rungs `… from parent` that this type does not define — pointing a namespace
         # here is a model error and a lost cascade, which is why the two are separate settings.
         #
-        # WHAT A SEPARATE TYPE BUYS over a second warehouse: `can_browse_storage` on `warehouse`
-        # resolves on ANY warehouse its owner owns, so the privilege was estate-scoped only because
-        # every call site remembered to name the root. A tenant cannot own an `estate:` object, so the
-        # scope is the model's now. Pinned in `model.fga.yaml` as alice holding nothing here.
+        # WHAT A SEPARATE TYPE BUYS over a second warehouse: an estate rung defined on `warehouse` would
+        # resolve on ANY warehouse its owner owns, so it would be estate-scoped only for as long as every
+        # call site remembered to name the root. A tenant cannot own an `estate:` object, so the scope is
+        # the model's. Pinned in `model.fga.yaml` as alice holding nothing here.
         #
         # NO DOWNWARD `project: [project]`, though the reference model declares one under its `server`.
         # Nothing here would traverse it — `can_create_project` is `admin or operator`, not
@@ -124,13 +124,10 @@ type estate
         # A machine identity is a RELATION on the top type, never a principal type — the ruling is
         # explicit, and `type user` carries no relations for the same reason.
         define operator: [user, role#assignee] or admin
-        # THE TIERS THREE SERVICES ALREADY GATE WHOLE ROUTERS ON. `compute/security.py:39` and
-        # `controlplane/security.py:42` check `reader` on the root object; `flows/security.py:18`
-        # checks `writer` there, "not a can_* verb", and relies on `writer: ... or owner` to pass the
-        # bootstrap owner. A root type without these refuses all three the day it is repointed.
+        # The estate-admin rung the owner-tier verbs below resolve through. NO `writer` OR `reader` HERE: the
+        # estate holds no data, so a tier below the owner would be a relation no lakehouse door checks. A
+        # client gating an estate-wide surface of its own asks an owner-tier verb through the decision door.
         define owner: [user, role#assignee] or admin
-        define writer: [user, role#assignee] or owner
-        define reader: [user, role#assignee] or writer
         # `can_read_event_feed`'s grantable half, its own relation rather than a computed userset over
         # `owner`. `[user]` alone: the holder is one machine identity granted by name, and a
         # `role#assignee` here would let whoever manages a role hand the whole estate's run feed to a
@@ -150,28 +147,15 @@ type estate
         #     (`endpoints/access_admin.py:199`)
         #   * the `estate_admin` flag `/management/v1/me` reports (`endpoints/me.py:62`) — a display lookup rather
         #     than a door, listed because it is a consumer
-        # The viewer and controlplane gate their own estate reads on their own relations and merely CITE
-        # this one for contrast, so they are deliberately absent.
+        #   * every estate-wide surface a CLIENT gates on it through the decision door (a raw object-store browser,
+        #     a compute engine's dashboard, a flow runner), which the lakehouse does not name: a client asks a
+        #     lakehouse verb rather than carrying a relation of its own here
         # So this is not an observer rung wearing an admin's name — it IS the admin rung, and "observe"
         # is the weakest thing it permits. Renaming it is [[LH-076]]'s other half and needs an owner
         # call, because the string appears in seeded tuples; correcting what it CLAIMS needs nobody's.
         #
         # The consumer list is kept by hand: a new check of this relation belongs in it.
         define can_observe_events: owner
-        # Raw OBJECT-STORE browsing (#90) — the viewer's `/api/objects`, `/api/object`,
-        # `/api/object/download`: an S3 list, a HEAD, and a full byte download over any bucket in the
-        # store registry. Like can_observe_events this is an ESTATE-WIDE privilege checked only on the
-        # root object, and owner-tier for the same reason: the registry's buckets include the external
-        # RAW tier and the observability bucket, which sit outside the medallion entirely (R23), so a
-        # per-tenant admin must not reach them.
-        #
-        # DELIBERATELY NOT a `store` type with per-store grants, and the reason is not simplicity. A
-        # `store` type needs an `estate`/parent tuple per store to be reachable at all, and the four
-        # SHIPPED default stores are never registered through the API — they come from `DEFAULT_STORES`
-        # in code. Nothing would write their tuples, so the model would be correct and the gate would
-        # deny every caller including the estate owner. A gate that denies everyone is an outage, not a
-        # gate. Per-store granularity lands the day store registration owns its own tuples.
-        define can_browse_storage: owner
         # Reading lineage's run feed WITHOUT the per-dataset filter (`GET /events/projection`, [[CTL-021]]),
         # checked ONLY on the root object. The holder is the notifications reconciler, which must see
         # every warehouse's runs to work out whom to tell: on the governed `/events` a service sees only
@@ -179,10 +163,8 @@ type estate
         # reach it. Disclosure stays gated per person at delivery (`can_be_notified`) and at render
         # (`can_get_metadata`), so this widens what the SERVICE observes and never what a person receives.
         #
-        # ITS OWN RUNG, not `can_observe_events` and not `reader`. `can_observe_events` also creates
-        # tenants, edits the authorization graph and registers stores (the consumer list above), so a
-        # reconciler holding it would hold all three; a `reader` here is what compute and controlplane
-        # gate their routers on, so reusing it would hand this feed to every holder of theirs. Lakekeeper
+        # ITS OWN RUNG, not `can_observe_events`. `can_observe_events` also creates tenants and edits the
+        # authorization graph (the consumer list above), so a reconciler holding it would hold both. Lakekeeper
         # keeps its machine identities on narrow per-purpose relations for the same reason
         # (docs/audits/2026-09-25/lakekeeper-deep-read/authz.md §8 items 2 and 4).
         #
@@ -264,7 +246,7 @@ type warehouse
     define publisher: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant] or owner
     # THE ESTATE PRIVILEGES ARE NOT HERE, and their absence is the governance.
     #
-    # `can_observe_events`, `can_browse_storage` and `can_read_event_feed` live on
+    # `can_observe_events` and `can_read_event_feed` live on
     # `type estate`, which is what `fga_root_object` names ([[LH-055]]). Defining them here too would
     # make them resolve on ANY warehouse their owner owns, so a tenant admin would hold the estate-admin rung on their own
     # bucket and the privilege would be estate-scoped only for as long as every call site remembered to
@@ -363,27 +345,6 @@ type warehouse
     # must exist on BOTH `namespace` and `warehouse` — otherwise the check 400s ("relation not found") and
     # fails closed to a 503 for everyone. Same writer rung as can_create_table.
     define can_create_materialized_view: writer
-    # THE ESTATE-ADMIN RUNG. Checked ONLY on the root object (`fga_root_object`), never on a
-    # caller-supplied one, so there is nothing to inject. Owner-tier: authz scope == data scope, and a
-    # per-project admin must not reach an estate-wide surface.
-    #
-    # **THE NAME UNDERSTATES IT, AND THAT IS THE THING TO KNOW BEFORE GRANTING IT.** This comment used
-    # to describe only `GET /management/v1/events`, which reads as "grant this and someone can watch a feed".
-    # Measured across the estate 2026-09-15, holding it also grants:
-    #   * `GET /management/v1/events` — every project's governance changes (`endpoints/events.py:59`)
-    #   * `POST /management/v1/projects`, the whole-estate project list and one project's detail — i.e. CREATING TENANTS and enumerating them (`endpoints/projects.py`)
-    #   * the raw-tuple admin route — reading and MUTATING the authorization graph itself
-    #     (`endpoints/access_admin.py:199`)
-    #   * the `estate_admin` flag `/management/v1/me` reports (`endpoints/me.py:62`) — a display lookup rather than
-    #     a door, listed because it is a consumer
-    # The viewer and controlplane gate their own estate reads on their own relations and merely CITE
-    # this one for contrast, so they are deliberately absent.
-    # So this is not an observer rung wearing an admin's name — it IS the admin rung, and "observe" is
-    # the weakest thing it permits. Renaming it is [[LH-076]]'s other half and needs an owner call,
-    # because the string appears in seeded tuples; correcting what it CLAIMS needs nobody's permission.
-    #
-    # The consumer list is kept by hand: a new check of this relation belongs in it.
-
     # ---- grant actions, one per assignable rung ----
     # `manage_grants` grants anything here; a `pass_grants` holder may hand on ONLY what they already
     # hold. This is SQL's WITH GRANT OPTION, and the second clause is what makes the split useful

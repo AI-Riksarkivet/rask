@@ -1897,7 +1897,7 @@
                             "type": "boolean"
                         },
                         "governedAuth": {
-                            "description": "Gives flows the OIDC/FGA env and FGA token mount when auth.enabled; its run door checks the writer tier.",
+                            "description": "Gives flows the OIDC/FGA env and FGA token mount when auth.enabled; its doors check the estate-admin verb.",
                             "type": "boolean"
                         },
                         "module": {

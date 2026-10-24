@@ -1,7 +1,7 @@
 """The run door's authorization contract (#56).
 
-``POST /flows/runs`` is the one flows route that spends compute, so it is the one that checks the
-estate ``writer`` tier on the root object. These pin the four outcomes: defaults stay open (a dev
+``POST /flows/runs`` is the one flows route that spends compute. It checks the lakehouse's estate-admin verb,
+``can_observe_events`` on the root object, through the catalog's decision door. These pin the four outcomes: defaults stay open (a dev
 stack is unchanged), a denial is a 403 that NAMES the missing tuple, an allow proceeds to the run,
 and a governed stack whose auth layer failed to build answers 503 — never a silent allow.
 
@@ -63,7 +63,7 @@ def test_a_denial_is_a_403_that_names_the_missing_tuple() -> None:
     # `estate:rask` (LH-055), leaving these two assertions red against a door that was behaving
     # correctly. Deriving it means the next repoint moves the door and the test together.
     assert "mallory" in detail
-    assert "writer" in detail
+    assert "can_observe_events" in detail
     assert FlowsSettings(serve_url="http://serve.invalid:8000").fga_root_object in detail
 
 
@@ -133,7 +133,7 @@ def test_reading_a_run_is_refused_with_the_same_named_tuple() -> None:
     assert resp.status_code == 403
     detail = resp.json()["detail"]
     assert "mallory" in detail
-    assert "writer" in detail
+    assert "can_observe_events" in detail
     assert FlowsSettings(serve_url="http://serve.invalid:8000").fga_root_object in detail
     assert "Anno 1723" not in resp.text  # the point of the door: no node output escapes it
 
@@ -153,8 +153,8 @@ def test_a_denied_reader_cannot_tell_a_real_run_from_a_missing_one() -> None:
         assert client.get("/api/flows/runs/run-nope").status_code == 403
 
 
-def test_the_writer_tier_reads_its_own_run() -> None:
-    """The tier is not too strict for its own resource: nobody can create a run without holding it,
+def test_the_caller_who_may_run_a_flow_reads_its_own_run() -> None:
+    """The gate is not too strict for its own resource: nobody can create a run without passing it,
     so the caller who spent the compute can always read what it produced."""
     app = _app_with_a_run()
 

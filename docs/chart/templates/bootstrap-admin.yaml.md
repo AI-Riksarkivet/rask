@@ -10,8 +10,8 @@ out-of-band `fga tuple write`. A post-install/post-upgrade hook grants the perso
 auth.bootstrapAdmin (`<idp-id>~<user id>`, [[LH-063]]) two things, on TWO objects, because they are two different authorities:
 `owner` on the default warehouse (warehouse:lance_catalog — RASK_FGA_DEFAULT_WAREHOUSE_OBJECT's
 default), which cascades down into every namespace and table that warehouse parents; and `admin` on
-the estate root (estate:rask — RASK_FGA_ROOT_OBJECT's default), which is what can_observe_events,
-can_browse_storage and the admin console gate on. Plus one rung per SERVICE principal that needs a
+the estate root (estate:rask — RASK_FGA_ROOT_OBJECT's default), which is what can_observe_events
+and the admin console gate on. Plus one rung per SERVICE principal that needs a
 standing capability, each on whichever of the two its capability belongs to.
 
 THE ESTATE GRANTS ARE SEEDED A RELEASE AHEAD OF THE SETTING THAT READS THEM. This hook runs

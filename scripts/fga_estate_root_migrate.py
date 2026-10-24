@@ -1,9 +1,8 @@
 """Carry the estate PRIVILEGES from the default warehouse onto the estate root ([[LH-055]]).
 
 `fga_root_object` moves from `warehouse:lance_catalog` to `estate:rask`, and every check aimed at it
-moves with it: `can_observe_events` (the admin console, the whole-estate lineage projection),
-`can_browse_storage` (the object browser), and the bare
-`reader` / `writer` that compute and flows gate their whole routers on.
+moves with it: `can_observe_events` (the admin console, every estate-wide door, and each client's estate-wide
+surface, asked through the decision door).
 
 THE TUPLES DO NOT MOVE THEMSELVES. A principal holding `owner` on the old root passes every one of
 those doors today and NONE of them the moment the setting flips, so the grants have to exist on the new
@@ -51,21 +50,15 @@ from service_kit.governed.auth.write_model import carried_model, fga_headers
 #: authorities nobody granted them.
 RUNG_MAP: Final[dict[str, str]] = {"owner": "owner"}
 
-#: Warehouse rungs that are DELIBERATELY not carried, and what carrying one would have granted.
+#: Warehouse rungs that are DELIBERATELY not carried, reported so an operator sees who held them.
 #:
-#: This is the whole point of the port rather than a gap in it. Measured on the live store 2026-09-22,
-#: a blanket carry would have written `estate#writer` for four cascade services — `service-ingest`,
-#: `service-medallion-producer`, `service-bronze-to-silver`, `service-media-to-silver` — and
-#: `estate#writer` is what flows gates run/terminate on. A service that may append bronze rows to one
-#: warehouse would have acquired the authority to execute flows across the estate, purely as a
-#: side-effect of a setting being repointed. Verified before narrowing: none of those services, nor
-#: `notifications`, calls compute or flows, so nothing in use is lost.
-#:
-#: `maintainer` is absent from both lists because `type estate` does not define it at all — it is a
-#: warehouse rung describing who may rewrite bytes, which the estate root has no opinion about.
+#: `type estate` defines none of them: they are the warehouse's data rungs, and the estate root holds no data.
+#: Measured on the live store 2026-09-22, four cascade services (`service-ingest`, `service-medallion-producer`,
+#: `service-bronze-to-silver`, `service-media-to-silver`) held `writer` on the default warehouse, a grant to append
+#: rows that says nothing about the estate.
 NOT_CARRIED: Final[dict[str, str]] = {
-    "writer": "estate#writer is what flows gates run/terminate/read on",
-    "reader": "estate#reader is what compute gates its whole router on",
+    "writer": "type estate does not define it — it is a warehouse data rung",
+    "reader": "type estate does not define it — it is a warehouse data rung",
     "maintainer": "type estate does not define it — it is a warehouse rung",
 }
 

@@ -292,7 +292,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | services.catalog.port | int | `2333` | Container and Service port of the Lance catalog. |
 | services.catalog.replicas | int | `1` | Replica count of the catalog; above 1 requires catalog.controlEmit=true or the render fails. |
 | services.flows.frontDoor | bool | `true` | Renders flows outside singleTenant, because the cluster route publishes /api/flows on it. |
-| services.flows.governedAuth | bool | `true` | Gives flows the OIDC/FGA env and FGA token mount when auth.enabled; its run door checks the writer tier. |
+| services.flows.governedAuth | bool | `true` | Gives flows the OIDC/FGA env and FGA token mount when auth.enabled; its doors check the estate-admin verb. |
 | services.flows.module | string | `"flows:app"` | uvicorn import path the flows (studio flow-builder server) Deployment runs. |
 | services.flows.port | int | `8840` | Container and Service port of the flows app. |
 | services.flows.replicas | int | `1` | Replica count of the flows Deployment; 0 scales it to zero. |

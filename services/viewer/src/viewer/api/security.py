@@ -48,8 +48,9 @@ READ_METADATA = "can_get_metadata"
 #: how `datasets.py` reasons about a corpus listing.
 READ_DATA = "can_read_data"
 
-#: Raw OBJECT-STORE browsing (#90) — the S3 list/HEAD/download routes. An ESTATE-wide privilege,
-#: checked ONLY against `fga_root_object`, exactly like the catalog's `can_observe_events`.
+#: Raw OBJECT-STORE browsing (#90) — the S3 list/HEAD/download routes. An ESTATE-wide privilege, checked ONLY against
+#: `fga_root_object`: the lakehouse's estate-admin verb, asked through the catalog's decision door, since the
+#: lakehouse model carries no relation of the viewer's own.
 #:
 #: Not a per-store grant, and that is a decision with a reason. A `store` FGA type would need a
 #: parent tuple per store to be reachable, and the four SHIPPED default stores are never registered
@@ -60,7 +61,7 @@ READ_DATA = "can_read_data"
 #:
 #: Owner tier, because the registry's buckets include the external RAW tier and the observability
 #: bucket — outside the medallion entirely (R23) — so a per-tenant admin must not reach them.
-BROWSE_STORAGE = "can_browse_storage"
+BROWSE_STORAGE = "can_observe_events"
 
 
 # The two object-naming rules (`corpus_object`, `table_object`) moved to `client_kit.media.authz`

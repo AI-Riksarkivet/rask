@@ -10,10 +10,9 @@ It shipped ungated under the "localhost / trusted network" posture `CLAUDE.md` d
 2026-08-26. That posture was already false (the chart defaults auth ON, `ingress.yaml` publishes
 `/api`) and the owner ruling settled it.
 
-**The relation is the READER tier on the estate root object.** Reading cluster state is looking, not
-spending — the same rung `flows` uses for its palette, and one tier below the `writer` it requires to
-actually run a graph. `warehouse#reader` is defined `... or writer or member from project`, so every
-existing writer and owner passes automatically and no authorized caller loses access.
+**The relation is the lakehouse's estate-admin verb, `can_observe_events`, on the estate root object**, asked through
+the catalog's decision door. The Ray plane is no lakehouse object and the lakehouse model carries no relation of this
+service's own, so the estate-wide surface takes the estate-wide verb, as `flows` does.
 
 Everything mechanical comes from `service_kit.governed.deps`, shared with viewer, flows, annotator and
 notifications rather than copied. With auth off (every knob defaults off) the subject is `anon` and
@@ -35,8 +34,8 @@ _deps = make_auth_deps(ComputeSettingsDep)
 CurrentSubject = Annotated[str, Depends(_deps.current_subject)]
 CheckerDep = Annotated[FgaChecker, Depends(_deps.get_checker)]
 
-#: Looking at the cluster is a READ. One rung below the `writer` tier `flows` requires to SPEND it.
-READ = "reader"
+#: Looking at the cluster: the lakehouse's estate-admin verb (see the module docstring).
+READ = "can_observe_events"
 
 
 async def require_read(subject: CurrentSubject, checker: CheckerDep, settings: ComputeSettingsDep) -> None:
@@ -50,4 +49,4 @@ async def require_read(subject: CurrentSubject, checker: CheckerDep, settings: C
     allowed = await checker(user=subject, relation=READ, obj=obj)
     audit("compute_read", ALLOW if allowed else DENY, subject=subject, resource=obj)
     if not allowed:
-        raise ForbiddenError(f"'{subject}' lacks '{READ}' on '{obj}' — reading the compute plane needs the estate reader tier")
+        raise ForbiddenError(f"'{subject}' lacks '{READ}' on '{obj}' — reading the compute plane needs the estate admin")

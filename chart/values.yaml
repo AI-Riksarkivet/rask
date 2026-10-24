@@ -146,8 +146,8 @@ services:
     # -- Renders flows outside singleTenant, because the cluster route publishes /api/flows on it.
     frontDoor: true
     # The run door spends GPU compute (model nodes invoke live Serve endpoints), so on a governed
-    # stack it checks the estate writer tier — FlowsSettings extends GovernedAuthSettings (LANCE_*).
-    # -- Gives flows the OIDC/FGA env and FGA token mount when auth.enabled; its run door checks the writer tier.
+    # stack it checks the estate-admin verb through the catalog's decision door — FlowsSettings extends GovernedAuthSettings (LANCE_*).
+    # -- Gives flows the OIDC/FGA env and FGA token mount when auth.enabled; its doors check the estate-admin verb.
     governedAuth: true
     # -- List of dependencies flows waits for in an init container; only `objectStore` is honoured (when objectStore.enabled).
     waitFor: []

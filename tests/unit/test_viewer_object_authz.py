@@ -25,7 +25,6 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from service_kit.exceptions import register_handlers
-from viewer.api.security import BROWSE_STORAGE
 from viewer.api.v1.endpoints import objects as ob
 from viewer.api.v1.endpoints.objects import router
 from viewer.core.config import ViewerSettings, get_viewer_settings
@@ -131,12 +130,11 @@ def test_every_object_route_is_refused_without_the_estate_grant(path: str, param
 
 
 def test_the_check_is_made_against_the_ESTATE_ROOT_not_the_store() -> None:
-    """The app-side half of the scoping, promised in `model.fga.yaml`'s own comment.
+    """The app-side half of the estate scope `model.fga.yaml` pins on `type estate`.
 
-    `can_browse_storage` resolves on ANY warehouse its owner owns — the model happily says yes for
-    a tenant's own warehouse. What makes this an ESTATE privilege is solely that the route names
-    `fga_root_object`. If a later edit passed the store or a tenant warehouse instead, the model
-    would not complain and the scope would widen in silence. So it is pinned here.
+    The relation is the lakehouse's estate-admin verb, `can_observe_events`, which only `type estate` defines, and
+    the object is `fga_root_object`. If a later edit passed the store or a tenant warehouse instead, the decision door
+    would refuse a question the model cannot answer there and every browse would fail. So both are pinned here.
     """
     seen: list[dict[str, Any]] = []
     client = TestClient(_app(allow=True, seen=seen))
@@ -146,5 +144,5 @@ def test_the_check_is_made_against_the_ESTATE_ROOT_not_the_store() -> None:
     client.get("/api/object/download", params={"bucket": STORE, "key": "a.tif"})
 
     assert [s["obj"] for s in seen] == [ROOT, ROOT, ROOT]
-    assert {s["relation"] for s in seen} == {BROWSE_STORAGE}
+    assert {s["relation"] for s in seen} == {"can_observe_events"}
     assert {s["user"] for s in seen} == {"dex~gina"}

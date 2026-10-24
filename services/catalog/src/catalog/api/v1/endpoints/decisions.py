@@ -11,8 +11,8 @@ Each route opens on its own estate rung, checked on the root object, so a servic
 without it is refused 403 for the whole call, as Lakekeeper refuses a check for another identity the actor may not
 inspect (``CannotInspectPermissions``, crates/authz-openfga/src/authorizer.rs:1495-1504).
 
-What may be asked is closed: a check names a ``can_*`` permission or the ``reader``/``member`` a gate checks, never a
-role such as ``owner`` or ``admin`` and never a decision rung; list-users expands only a membership userset; governed
+What may be asked is closed: a check names a ``can_*`` permission or the ``member`` a gate checks, never a role such
+as ``owner`` or ``writer`` and never a decision rung; list-users expands only a membership userset; governed
 answers only for ``table:`` objects. Anything else is 400.
 
 A check may name tables by name as well as objects by id ([[LH-531]]): every grant is held by a table's uuid (ADR 0173
@@ -62,12 +62,11 @@ log = logging.getLogger(__name__)
 #: business learning which services may decide.
 _DECISION_PERMISSIONS: Final = frozenset({"can_decide_access", "can_expand_members", "can_probe_governance"})
 
-#: The relations a check may name besides the `can_*` permissions: the estate tiers the fleet gates on (`reader`, which
-#: compute and flows check to look; `writer`, which flows checks to run, stop and read a run), and the `project#member`
-#: notifications re-checks at delivery. Every other role (`owner`, `admin`,
-#: `operator`, the decision roles) is refused: Lakekeeper's door takes typed actions only, never a raw relation
+#: The relation a check may name besides the `can_*` permissions: the `project#member` notifications re-checks at
+#: delivery. Every other role (`owner`, `writer`, `reader`, `admin`, `operator`, the decision roles) is refused, so a
+#: client gates on a lakehouse verb: Lakekeeper's door takes typed actions only, never a raw relation
 #: (crates/lakekeeper/src/api/management/v1/check.rs:244-280).
-_DECIDABLE_ROLES: Final = frozenset({"reader", "writer", "member"})
+_DECIDABLE_ROLES: Final = frozenset({"member"})
 
 #: The usersets list-users may expand: the groups a task or a grant names, resolved to the people in them.
 _EXPANDABLE_USERSETS: Final = frozenset({("role", "assignee"), ("team", "member"), ("project", "member")})

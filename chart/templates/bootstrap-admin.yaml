@@ -161,7 +161,7 @@ spec:
               # reaches every tier by cascading down `warehouse -> namespace -> table`. None of that is an estate
               # privilege and none of it moves here.
               #
-              # `admin` reaches every estate rung (`owner`/`writer`/`reader` and the can_* verbs), so the
+              # `admin` reaches every estate rung (`owner` and the can_* verbs), so the
               # first human needs exactly one tuple. The SERVICE rung is estate-scoped because what it guards
               # is a platform surface rather than anyone's data: `event_reader`, the whole run feed, and the decision
               # roles ([[LH-442]]): every service that writes no tuple asks the catalog's decision door instead of

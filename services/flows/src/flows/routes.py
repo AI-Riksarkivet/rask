@@ -6,7 +6,7 @@ which is exactly what the cluster route's `/api/flows` rule forwards unrewritten
 `/flows` with an api_prefix of `/api/v1` would serve `/api/v1/flows/...` and every call through the
 route would 404; that trap has already been paid for once in this estate (the ingest row's `/v1`).
 
-Both `/runs` routes are gated on the estate `writer` tier (`flows.security`), and a run id is
+Every route is gated on the lakehouse's estate-admin verb (`flows.security`), and a run id is
 DERIVED from the caller's `Idempotency-Key` rather than minted per attempt — the run id is also the
 durable workflow's instance id, so deriving it is what makes a retry converge on the run it is
 retrying instead of forking a second one. See `create_run` and `lifespan.DaprFlowScheduler`.
@@ -160,10 +160,10 @@ async def create_run(
     # model nodes invoke live Serve endpoints, so this is the one route that spends compute. The
     # denial NAMES the missing tuple — the estate's FGA-denial format, so the fix is in the message.
     obj = settings.fga_root_object
-    allowed = await checker(user=subject, relation=security.EXECUTE, obj=obj)
+    allowed = await checker(user=subject, relation=security.ESTATE_ADMIN, obj=obj)
     audit("flows_run", ALLOW if allowed else DENY, subject=subject, resource=obj)
     if not allowed:
-        raise ForbiddenError(f"'{subject}' lacks '{security.EXECUTE}' on '{obj}' — running a flow needs the estate writer tier")
+        raise ForbiddenError(f"'{subject}' lacks '{security.ESTATE_ADMIN}' on '{obj}' — running a flow needs the estate admin")
 
     # A key-less call gets a fresh run: `run_id_for` still derives it, so one code path mints every
     # run id, and the randomness lives in the KEY rather than in a second id scheme.
@@ -276,10 +276,10 @@ async def terminate_run(
     AUTHZ BEFORE EXISTENCE, matching `get_run`: no run-id oracle for an unpermitted caller.
     """
     obj = settings.fga_root_object
-    allowed = await checker(user=subject, relation=security.EXECUTE, obj=obj)
+    allowed = await checker(user=subject, relation=security.ESTATE_ADMIN, obj=obj)
     audit("flows_run_terminate", ALLOW if allowed else DENY, subject=subject, resource=obj)
     if not allowed:
-        raise ForbiddenError(f"'{subject}' lacks '{security.EXECUTE}' on '{obj}' — stopping a run needs the estate writer tier")
+        raise ForbiddenError(f"'{subject}' lacks '{security.ESTATE_ADMIN}' on '{obj}' — stopping a run needs the estate admin")
     if reader is None:
         raise ServiceUnavailableError("the workflow engine is not reachable from this pod")
     # Through a thread: `DaprWorkflowClient` is synchronous gRPC, and blocking the loop here would
@@ -309,10 +309,10 @@ async def get_run(
     less oracle for guessing run ids.
     """
     obj = settings.fga_root_object
-    allowed = await checker(user=subject, relation=security.EXECUTE, obj=obj)
+    allowed = await checker(user=subject, relation=security.ESTATE_ADMIN, obj=obj)
     audit("flows_run_read", ALLOW if allowed else DENY, subject=subject, resource=obj)
     if not allowed:
-        raise ForbiddenError(f"'{subject}' lacks '{security.EXECUTE}' on '{obj}' — reading a run needs the estate writer tier")
+        raise ForbiddenError(f"'{subject}' lacks '{security.ESTATE_ADMIN}' on '{obj}' — reading a run needs the estate admin")
 
     # The ENGINE first, the local dict second. In the durable lane the dict only ever holds
     # `RunState(status="running")` with an empty `nodes` map — written once by `_remember` and never

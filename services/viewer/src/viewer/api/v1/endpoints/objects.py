@@ -233,10 +233,9 @@ async def _require_browse(checker: object, subject: str, settings: object, store
     it". Their neighbour `datasets.py` was already FGA-gated, so this was an inconsistency rather
     than a stance.
 
-    Checked against the ROOT object, not the store. The relation resolves on any warehouse its owner
-    owns, so what makes this an estate privilege is precisely that this call names `fga_root_object`
-    — the same arrangement `can_observe_events` has. Checking it against a tenant warehouse would
-    silently widen the scope, which is why the object is built here and not passed in.
+    Checked against the ROOT object, not the store: the estate-admin verb is defined on `type estate` alone, so a
+    question about a store or a tenant warehouse is one the decision door refuses. The object is built here and not
+    passed in for that reason.
     """
     obj = settings.fga_root_object  # ty: ignore[unresolved-attribute]
     if not await checker(user=subject, relation=BROWSE_STORAGE, obj=obj):  # ty: ignore[call-non-callable]
