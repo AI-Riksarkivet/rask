@@ -50,7 +50,7 @@ def test_a_split_stem_is_refused_with_both_tags_named() -> None:
         '{"items":[\n'
         '{"metadata":{"name":"rask-catalog"},"spec":{"template":{"spec":{"containers":['
         '{"image":"localhost:5000/lance-rest-catalog:tag-new"}]}}}},\n'
-        '{"metadata":{"name":"rask-viewer"},"spec":{"template":{"spec":{"containers":['
+        '{"metadata":{"name":"rask-lineage"},"spec":{"template":{"spec":{"containers":['
         '{"image":"localhost:5000/lance-rest-catalog:tag-old"}]}}}}\n'
         "]}\nJSON\n",
         encoding="utf-8",
@@ -69,7 +69,7 @@ def test_a_split_stem_is_refused_with_both_tags_named() -> None:
         fake.unlink(missing_ok=True)
 
     assert done.returncode == 1, f"a split stem was accepted (rc={done.returncode}); stdout={done.stdout!r} stderr={done.stderr!r}"
-    for expected in ("lance-rest-catalog", "tag-new", "tag-old", "rask-catalog", "rask-viewer"):
+    for expected in ("lance-rest-catalog", "tag-new", "tag-old", "rask-catalog", "rask-lineage"):
         assert expected in done.stderr, f"the refusal does not name {expected!r}, so it cannot be acted on: {done.stderr!r}"
 
 
@@ -87,7 +87,7 @@ def test_a_converged_estate_passes_and_says_so() -> None:
         '{"items":[\n'
         '{"metadata":{"name":"rask-catalog"},"spec":{"template":{"spec":{"containers":['
         '{"image":"localhost:5000/lance-rest-catalog:tag-one"}]}}}},\n'
-        '{"metadata":{"name":"rask-viewer"},"spec":{"template":{"spec":{"containers":['
+        '{"metadata":{"name":"rask-lineage"},"spec":{"template":{"spec":{"containers":['
         '{"image":"localhost:5000/lance-rest-catalog:tag-one"}]}}}},\n'
         '{"metadata":{"name":"rask-rustfs"},"spec":{"template":{"spec":{"containers":['
         '{"image":"rustfs/rustfs:1.0.1"}]}}}},\n'

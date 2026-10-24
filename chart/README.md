@@ -155,7 +155,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | frontend.serveUrl | string | `""` | Ray Serve HTTP origin for zones that run inference; empty uses `ray.dashboardUrl`. |
 | frontend.service.port | int | `3000` | Port each zone's Bun server listens on and its Service exposes. |
 | fullnameOverride | string | `"rask"` | Base name for every rendered object; pinned to `rask` so in-cluster Services resolve as `rask-<component>`. |
-| image.catalog | object | `{"repository":"lance-rest-catalog","tag":"dev"}` | Lakehouse image (catalog, lineage, maintenance, media services): `repository` is the image name under image.repository, `tag` is required (empty fails the render). |
+| image.catalog | object | `{"repository":"lance-rest-catalog"}` | Lakehouse image (catalog, lineage, maintenance, and the chart's Jobs and hooks): `repository` is its name under image.repository; its tag or digest is `tags`/`digests` keyed by that name, else the global one. |
 | image.digest | string | `""` | Global digest pin (sha256:...) for every first-party image; wins over `tag`. Empty uses tags. |
 | image.digests | object | `{}` | Per-component digest map keyed by component name; beats `tags` and the global tag. |
 | image.localImages | bool | `false` | Renders bare `<component>:<tag>` references for images side-loaded into the node (k3s-import). Never for a remote cluster. |

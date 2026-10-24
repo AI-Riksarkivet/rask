@@ -91,8 +91,9 @@ Consequences that follow from the seal, all deliberate:
 
 There is **no `projects/` layer**. `annotator`, `compute`, `flows` and `notifications`
 each build their own `.docker/<name>.dockerfile` via `uv sync --frozen --package <name>`
-against the **root** `uv.lock`; one image, `.docker/rest-catalog.dockerfile`, serves `catalog`, `lineage`,
-`maintenance`, `viewer` and `search`. The seven zones build from `.docker/frontend.dockerfile`.
+against the **root** `uv.lock`; one image, `.docker/rest-catalog.dockerfile`, serves the lakehouse's `catalog`,
+`lineage` and `maintenance`, and another, `.docker/media.dockerfile`, the clients `viewer` and `search`. The seven
+zones build from `.docker/frontend.dockerfile`.
 
 ## Workspace membership is globbed
 

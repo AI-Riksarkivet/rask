@@ -7,11 +7,13 @@
 # also need the matching external-endpoint chart hooks (tracked as follow-up) before they do anything.
 
 # --- App images: set a real release tag before applying (never :dev/:latest in prod). The chart's image
-# helper FAILS the render on an empty tag, so DON'T ship tag:"" here — uncomment and fill these. -------
+# helper FAILS the render on an empty tag, so DON'T ship tag:"" here — uncomment and fill these. Each
+# first-party image takes its entry in `tags` (or `digests`), keyed by its name, else `tag`; the zones take
+# `frontend.image.tag`. -------
 image:
   pullPolicy: IfNotPresent
-  # catalog: { tag: v1.2.3 }   # the released catalog/lineage image tag
-  # web:     { tag: v1.2.3 }   # the released web image tag
+  # tag: v1.2.3                                          # every first-party image without an entry below
+  # tags: { lance-rest-catalog: v1.2.3, media: v1.2.3 }  # the lakehouse image; the explorer's media image
 
 # --- Governance ON — Dex OIDC + OpenFGA. auth.enabled governs the catalog + lineage. -----------------
 auth:

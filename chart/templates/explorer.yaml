@@ -33,7 +33,7 @@ spec:
 {{- end }}
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
 # lance-media plane (merged from the lance-audio checkout per docs/LANCE_NS_HANDOFF.md): the viewer and
-# search services. Both share the catalog image (services/ tree is COPY'd whole), mount the CORPUS
+# search services. Both run the media image (.docker/media.dockerfile), not the lakehouse's, mount the CORPUS
 # read-only from the volume explorer.corpus.mode selects (emptyDir by default — a fresh cluster must come
 # up with no node preparation; `pvc` for prod; `hostPath` opt-in for a node-staged corpus, see the volume
 # block below), and run CATALOG-mode reads (MEDIA_READ/WRITE_BACKEND=catalog, MEDIA_CATALOG_URI → the
@@ -70,7 +70,7 @@ spec:
       {{- end }}
       containers:
         - name: {{ $name }}
-          image: "{{ include "lance.catalogImage" $root }}"
+          image: {{ include "rask.image" (list $root "media") | quote }}
           imagePullPolicy: {{ $root.Values.image.pullPolicy }}
           {{- include "lance.securityContext" $root | nindent 10 }}
           {{- include "lance.preStop" $root | nindent 10 }}

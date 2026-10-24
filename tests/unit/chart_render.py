@@ -92,7 +92,6 @@ DEFAULT_ARGS: tuple[str, ...] = ("--set", "image.localImages=true", "--set", "ob
 #: `scripts/prod_render_check.sh` supplies.
 PROD_ARGS: tuple[str, ...] = (
     "-f", str(REPO / "deploy/values-prod.yaml"),
-    "--set", "image.catalog.tag=v0",
     "--set", "frontend.image.tag=v0",
     "--set", "signing.provisioned=true",
     "--set", "nats.auth.provisioned=true",

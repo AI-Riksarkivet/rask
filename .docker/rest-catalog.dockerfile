@@ -2,12 +2,13 @@
 # Lance lakehouse image — ONE image, many entrypoints, built from the ROOT uv workspace
 # (src-layout services installed as wheels; no PYTHONPATH, no raw source COPY in the final stage).
 # The chart runs every lakehouse container from this image with a different command
-# (see chart/templates/{services,maintenance,explorer}.yaml → include "lance.catalogImage"):
-#   catalog.main:app (:2333) · lineage.main:app (:8000) · maintenance.service:app (:8000) ·
-#   viewer.main:app (:8101) · search.main:app (:8102)
-# The annotator is a client with its own image (.docker/annotator.dockerfile, ADR 0171).
+# (see chart/templates/{services,maintenance}.yaml → include "lance.catalogImage"):
+#   catalog.main:app (:2333) · lineage.main:app (:8000) · maintenance.service:app (:8000)
 # — optionally wrapped in `opentelemetry-instrument` (shipped via lineage's opentelemetry-distro).
-# Build context = repo root:  docker build -f .docker/rest-catalog.dockerfile .
+# It installs and import-gates the lakehouse's services and nothing else: every client builds its own image
+# (the media viewer and search: .docker/media.dockerfile; the annotator: .docker/annotator.dockerfile, ADR 0171), so
+# deleting a client changes nothing this image builds or installs ([[XC-177]]).
+# Build context = repo root:  scripts/dagger-image.sh --name rest-catalog --tag lance-rest-catalog:dev
 
 # ── builder: two-step uv sync against the ROOT uv.lock ───────────────────────
 FROM ghcr.io/astral-sh/uv:python3.13-trixie-slim@sha256:7820aa74c8a3147ab13553c127432656969548971fbe350ba46a975b59dd42b2 AS builder
@@ -21,30 +22,18 @@ ENV UV_LINK_MODE=copy \
 
 WORKDIR /app
 
-# A TOOLCHAIN FOR THE ONE DEPENDENCY WITH NO ARM64 WHEEL. lance-graph (the viewer's graph door) publishes
-# x86_64 wheels only, measured on PyPI 2026-10-13 for 0.5.0 to 0.5.4, so on an arm64 host uv builds it from
-# its sdist. The crates' build scripts need a C/C++ compiler, cmake, protoc with its well-known types and the OpenSSL headers, and the
-# sdist's Cargo.lock pins ethnum 1.5.2, which fails to compile on Rust 1.99 (E0512, measured 2026-10-13), so
-# Rust is pinned rather than left for maturin to fetch at latest. Builder stage only: the final stage copies
-# the venv and carries no toolchain, and the uv cache mount keeps the compiled wheel across builds.
-ARG RUST_TOOLCHAIN=1.90.0
-ENV RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo PATH=/opt/cargo/bin:$PATH
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl gcc g++ libc6-dev make cmake pkg-config protobuf-compiler libprotobuf-dev libssl-dev \
-    && rm -rf /var/lib/apt/lists/* \
-    && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain "$RUST_TOOLCHAIN"
-
 # Step 1: third-party deps only, from the lockfile (--frozen tolerates the absent workspace
 # source trees; --no-install-workspace skips the members themselves). The union of --package
 # flags covers every service the chart runs from this image — cached until pyproject/uv.lock change.
+# No toolchain precedes it: every package in this closure locks an arm64 and an x86_64 wheel (read from uv.lock
+# 2026-10-24). lance-graph, the one with no arm64 wheel, is the viewer's and compiles in the media image.
 RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=uv.lock,target=uv.lock \
     --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
     --mount=type=bind,source=packages,target=packages \
     --mount=type=bind,source=services,target=services \
     uv sync --frozen --no-dev --no-install-workspace --no-editable \
-        --package catalog --package lineage --package maintenance \
-        --package viewer --package search
+        --package catalog --package lineage --package maintenance
 
 # Step 2: COPY real sources and install the workspace members as wheels (--no-editable →
 # they land in site-packages; the final stage needs only the venv).
@@ -53,8 +42,7 @@ COPY packages packages
 COPY services services
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev --no-editable \
-        --package catalog --package lineage --package maintenance \
-        --package viewer --package search
+        --package catalog --package lineage --package maintenance
 
 # Strip residual setuid/setgid bits before the venv leaves the builder.
 RUN find / -xdev -perm /6000 -type f -exec chmod a-s {} + 2>/dev/null || true
@@ -66,7 +54,7 @@ ARG BUILD_DATE
 ARG VCS_REF
 ARG VERSION
 LABEL org.opencontainers.image.title="lance-rest-catalog" \
-      org.opencontainers.image.description="Lance lakehouse fleet image — REST catalog + lineage + maintenance + the media viewer and search; one image, per-container uvicorn commands" \
+      org.opencontainers.image.description="Lance lakehouse image — REST catalog + lineage + maintenance; one image, per-container uvicorn commands" \
       org.opencontainers.image.source="https://github.com/AI-Riksarkivet/rask" \
       org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.revision="${VCS_REF}" \
@@ -111,7 +99,7 @@ COPY --link scripts/rustfs_admin.py /srv/rustfs_admin.py
 # DECLARED dependency is invisible to the workspace venv (a sibling member resolves it) and can
 # only be seen here, where the deployable's own closure is the only one present. See the script.
 COPY .docker/import-gate.py /tmp/import-gate.py
-RUN --network=none /opt/venv/bin/python /tmp/import-gate.py catalog lineage maintenance viewer search && rm /tmp/import-gate.py
+RUN --network=none /opt/venv/bin/python /tmp/import-gate.py catalog lineage maintenance && rm /tmp/import-gate.py
 
 # Strip setuid/setgid bits from the whole shipped filesystem (base account tools passwd/chsh/... +
 # anything in the venv) — no use in a container, residual privesc surface. Own RUN so its `|| true`
@@ -122,8 +110,8 @@ RUN find / -xdev -perm /6000 -type f -exec chmod a-s {} + || true
 # admission when the image user is numeric; a name ("app") makes the kubelet reject the pod
 # (CreateContainerConfigError). The chart's lance.securityContext relies on this.
 USER 10001
-# 2333 catalog · 8000 lineage/maintenance · 8101/8102 viewer/search.
-EXPOSE 2333 8000 8101 8102
+# 2333 catalog · 8000 lineage/maintenance.
+EXPOSE 2333 8000
 
 # Cheap socket-connect probe against the default CMD's port (avoids urllib's ssl/http.client
 # cold-import cost). k8s owns real readiness via /readyz; this HEALTHCHECK is for the compose demo.

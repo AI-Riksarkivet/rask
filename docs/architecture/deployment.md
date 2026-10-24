@@ -204,8 +204,8 @@ make k3s-down         # uninstall   |   make k3s-purge  # + delete PVCs
 
 `k3s-build` builds every image through `scripts/dagger-image.sh --out`, as an OCI tarball in `build/k3s-images/`:
 `compute`, `notifications` and `flows`, the seven zone images (`web-<zone>`), `annotator` (the client
-the annotator fixture runs), `lance-rest-catalog` (the lakehouse image that serves catalog, lineage, maintenance, the
-viewer and search) and the `ray-cluster` image the
+the annotator fixture runs), `media` (the viewer and search, which the explorer runs), `lance-rest-catalog` (the
+lakehouse image that serves catalog, lineage and maintenance) and the `ray-cluster` image the
 development engine fixture runs. `k3s-import` loads each tarball into k3s containerd as `<image>:dev` with
 `sudo k3s ctr images import`; neither step runs docker. The release installs into `RELEASE_NAMESPACE` (default
 `default`, the fixtures' namespace), and `values-live-pins.yaml` files are per-host state from `make k3s-pins`, never
@@ -220,7 +220,8 @@ locally and in CI.
 
 | Image | Dockerfile | Notes |
 |---|---|---|
-| `lance-rest-catalog` | `rest-catalog.dockerfile` | One image, several deployments: `catalog`, `lineage`, `maintenance`, `viewer` and `search`. |
+| `lance-rest-catalog` | `rest-catalog.dockerfile` | The lakehouse image, one image for several deployments: `catalog`, `lineage` and `maintenance`, plus the chart's Jobs and hooks. It installs no client, so deleting a client changes nothing it builds. |
+| `media` | `media.dockerfile` | The viewer and search, clients of the lakehouse, one image for both; the product chart's explorer runs it. |
 | `flows`, `notifications`, `compute`, `annotator` | `<name>.dockerfile` | One per service, `uv sync --frozen --package <name>` against the root `uv.lock`. `compute` and `annotator` each ship in their own chart (`deploy/fixtures/compute`, `deploy/fixtures/annotator`). |
 | `web-<zone>` (7 images) | `frontend.dockerfile` | One parametrized dockerfile, `--build-arg APP=<zone>`. SSR via `svelte-adapter-bun`; `home` is the catch-all (owns `/`), the six domain zones (lakehouse, explorer, annotator, compute, models, studio) each pin a bare base `/<zone>`, and the cluster route (`<release>-web`) sends each base there as a `PathPrefix` match with no rewrite. Probes are TCP, because a zone's `/` 404s under its own base. tini as PID 1, non-root UID 10001. |
 | `ray-cluster`, `ray-<runner>` | `ray-cluster.dockerfile`, `ray-runner.dockerfile` | The development engine's head image and one image per sealed runner (`--runner <runner>`); neither is part of the product chart. |

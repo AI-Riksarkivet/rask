@@ -364,11 +364,11 @@ image:
   localImages: false
   # -- imagePullPolicy for first-party containers.
   pullPolicy: IfNotPresent
-  # The lakehouse image: catalog (catalog.main:app) + lineage (lineage.main:app) + maintenance + the media
-  # services all run from this one image, different entrypoint.
-  # `lance.catalogImage` uses required() on the tag, so an empty tag FAILS the render loudly.
-  # -- Lakehouse image (catalog, lineage, maintenance, media services): `repository` is the image name under image.repository, `tag` is required (empty fails the render).
-  catalog: { repository: lance-rest-catalog, tag: dev }
+  # The lakehouse image: catalog (catalog.main:app) + lineage (lineage.main:app) + maintenance all run from this one
+  # image, different entrypoint. The explorer's viewer and search run the `media` image, keyed `media` in `tags` and
+  # `digests` like every other component.
+  # -- Lakehouse image (catalog, lineage, maintenance, and the chart's Jobs and hooks): `repository` is its name under image.repository; its tag or digest is `tags`/`digests` keyed by that name, else the global one.
+  catalog: { repository: lance-rest-catalog }
 
 resources:
   # rask fleet tier (templates/fleet.yaml).
@@ -1359,7 +1359,7 @@ maintenance:
   controlEmit: false
 
 # === lance-media plane ============================================================================
-# The viewer and search services from the lance-audio checkout. Both share the catalog image and read
+# The viewer and search services from the lance-audio checkout. Both run the `media` image, not the lakehouse's, and read
 # the corpus from the volume `corpus.mode` selects (MEDIA_READ/WRITE_BACKEND=catalog is the merge's env
 # flip, "direct" restores standalone dev). The annotator is a client of the lakehouse with its own
 # release (deploy/fixtures/annotator, ADR 0171); this chart renders none of it.

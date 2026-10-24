@@ -672,7 +672,9 @@ nats-auth: ## NATS auth e2e — each bus client admitted only to its own subject
 # rather than fixed here — it is another plane's diff.)
 # `annotator` is a client with its own release (deploy/fixtures/annotator, ADR 0171) and its own image, and so is
 # `table-maintenance`, the bring-your-own compaction job (deploy/fixtures/table-maintenance, [[LH-529]]).
-COMPOSE_IMAGES = compute notifications flows annotator table-maintenance
+# `media` is the viewer and search, clients of the lakehouse that build apart from its image ([[XC-177]]); the product
+# chart's explorer runs it.
+COMPOSE_IMAGES = compute notifications flows annotator table-maintenance media
 # SvelteKit SSR microfrontend zone images — one web-<zone> image per $(ZONES) entry,
 # all built from the one parametrized .docker/frontend.dockerfile via --build-arg
 # APP=<name>. (R22: the web- prefix keeps the zone image namespace disjoint from the
@@ -689,8 +691,8 @@ KUBECONFIG ?= /etc/rancher/k3s/k3s.yaml
 RELEASE_NAMESPACE ?= default
 HELM ?= KUBECONFIG=$(KUBECONFIG) HELM_NAMESPACE=$(RELEASE_NAMESPACE) ./scripts/helm.sh
 KUBECTL ?= KUBECONFIG=$(KUBECONFIG) kubectl --namespace $(RELEASE_NAMESPACE)
-# lance-rest-catalog is the ONE lakehouse image (catalog + lineage + maintenance +
-# the media viewer and search — chart `image.catalog`); the default render runs its containers from it, so the
+# lance-rest-catalog is the ONE lakehouse image (catalog + lineage + maintenance — chart `image.catalog`);
+# the default render runs its containers from it, so the
 # build/import set must carry it or kind/k3s deploys ImagePullBackOff on every lakehouse pod.
 # The object store fixture runs the upstream RustFS image by digest, which the node pulls; nothing here builds it.
 K3S_IMAGES = $(COMPOSE_IMAGES) $(ZONES:%=web-%) ray-cluster lance-rest-catalog

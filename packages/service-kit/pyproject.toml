@@ -29,7 +29,7 @@ dependencies = [
 [project.optional-dependencies]
 # Rate limiting is its OWN extra, not part of `governed`: metering a route and authorizing it are
 # different concerns, and a service that wants a limiter should not have to pull the OIDC/FGA stack
-# to get one. `search` takes this without `governed` for exactly that reason.
+# to get one.
 ratelimit = [
     "slowapi>=0.1.10",
 ]

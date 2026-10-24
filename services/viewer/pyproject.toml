@@ -5,7 +5,14 @@ description = "Media-plane viewer API — documents, blob columns and Range-stre
 requires-python = ">=3.13"
 license = "Apache-2.0"
 dependencies = [
-    "service-kit[lancekit]",
+    # [governed] because the doors import `service_kit.governed` (deps, audit, settings, secrets) and the media
+    # lifespan imports its `fga` module. The media image's venv is `uv sync --package viewer --package search`,
+    # so nothing else in it carries openfga-sdk or tenacity: its import gate refused 17 modules without it.
+    "service-kit[governed,lancekit]",
+    # The chart launches this service under `opentelemetry-instrument` (chart/templates/explorer.yaml), whose distro
+    # installs the SDK's providers at start; without it the launcher installs none (measured 2026-10-24).
+    "opentelemetry-distro>=0.65b0",
+    "opentelemetry-exporter-otlp>=1.44.0",
     "storage",
     "fastapi>=0.115",
     "pydantic>=2.7",

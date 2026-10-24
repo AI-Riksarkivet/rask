@@ -60,7 +60,7 @@ OUT="$(mktemp)"
 trap 'rm -f "$OUT"' EXIT
 
 helm template rask "$CHART" -f "$PROD_VALUES" \
-  --set image.catalog.tag=v0 --set frontend.image.tag=v0 \
+  --set frontend.image.tag=v0 \
   --set backups.volumeSnapshot.snapshotClassName=csi-snapclass \
   --set route.hostnames[0]=lance.example.com "${COMMON[@]}" > "$OUT"
 

@@ -8,8 +8,13 @@ dependencies = [
     # [ratelimit] because `search.core.rate_limit` imports `service_kit.rate_limit` -> slowapi. The
     # image's venv is `uv sync --package search` alone, so a transitive dep from another workspace
     # member is present locally and ABSENT in the image — the dockerfile's import gate catches it, but
-    # only after a build. Same trap compute and controlplane paid for on 2026-08-26.
-    "service-kit[lancekit,ratelimit]",
+    # only after a build. Same trap compute and controlplane paid for on 2026-08-26. [governed] for the same reason:
+    # `search.api.security` and `search.core.config` import `service_kit.governed`, which needs openfga-sdk and tenacity.
+    "service-kit[governed,lancekit,ratelimit]",
+    # The chart launches this service under `opentelemetry-instrument` (chart/templates/explorer.yaml), whose distro
+    # installs the SDK's providers at start; without it the launcher installs none (measured 2026-10-24).
+    "opentelemetry-distro>=0.65b0",
+    "opentelemetry-exporter-otlp>=1.44.0",
     "fastapi>=0.115",
     "pydantic>=2.7",
     "python-multipart>=0.0.9",

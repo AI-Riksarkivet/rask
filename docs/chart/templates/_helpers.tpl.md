@@ -302,8 +302,9 @@ to name is deleted, so fleet + lakehouse + observability all resolve the same en
 
 ## `{{- define "lance.catalogImage" -}}`
 
-The catalog-family image (catalog, lineage, maintenance, explorer, the bootstrap
-job) — every one of them runs the SAME image with a different entrypoint.
+The lakehouse image (catalog, lineage, maintenance, and the chart's Jobs and hooks)
+— every one of them runs the SAME image with a different entrypoint. The explorer's viewer and
+search are clients and run their own `media` image.
 
 It DELEGATES to `rask.image`, which is the estate's one image contract: registry prefix, digest
 pinning, and the side-loaded (`image.localImages`) form. This helper used to render

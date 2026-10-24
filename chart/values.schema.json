@@ -745,13 +745,10 @@
             "type": "object",
             "properties": {
                 "catalog": {
-                    "description": "Lakehouse image (catalog, lineage, maintenance, media services): `repository` is the image name under image.repository, `tag` is required (empty fails the render).",
+                    "description": "Lakehouse image (catalog, lineage, maintenance, and the chart's Jobs and hooks): `repository` is its name under image.repository; its tag or digest is `tags`/`digests` keyed by that name, else the global one.",
                     "type": "object",
                     "properties": {
                         "repository": {
-                            "type": "string"
-                        },
-                        "tag": {
                             "type": "string"
                         }
                     }
