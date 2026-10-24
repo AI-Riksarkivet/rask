@@ -13,7 +13,14 @@ inspect (``CannotInspectPermissions``, crates/authz-openfga/src/authorizer.rs:14
 
 What may be asked is closed: a check names a ``can_*`` permission or the ``reader``/``member`` a gate checks, never a
 role such as ``owner`` or ``admin`` and never a decision rung; list-users expands only a membership userset; governed
-answers only for ``table:`` objects. Anything else is 400. A store fault is 503, and no route answers part of what it
+answers only for ``table:`` objects. Anything else is 400.
+
+A check may name tables by name as well as objects by id ([[LH-531]]): every grant is held by a table's uuid (ADR 0173
+§8), and a producer's event names its tables only. The catalog is the one resolver of a name, so the door resolves each
+through the request's `Resolver`, as every door resolves the name it is addressed by, decides on the uuid, and answers
+keyed by the name, with the table's uuid and its namespace's when the subject holds the relation, since the event a
+check-only service records keys a table by its uuid (ADR 0173 §10). A name that names no table, one no grant can be held
+on and one in a quarantined warehouse are answered refused. A store fault is 503, and no route answers part of what it
 was asked. Every call is audited once with what was asked and what was answered, also when it is refused or fails, as
 Lakekeeper records ``IntrospectPermissions`` (crates/lakekeeper/src/api/management/v1/check.rs:1844-1891); a caller
 without the route's role is audited by the gate itself (`fga_deps.require_relation`).
@@ -21,16 +28,19 @@ without the route's role is audited by the gate itself (`fga_deps.require_relati
 
 from __future__ import annotations
 
+import logging
 from typing import Annotated, Final
 
 from fastapi import APIRouter, Depends
-from lance_namespace import InvalidInputError, ServiceUnavailableError, UnauthenticatedError
+from lance_namespace import InvalidInputError, PermissionDeniedError, ServiceUnavailableError, UnauthenticatedError
 from openfga_sdk import OpenFgaClient
 
 from catalog.api import fga_deps
-from catalog.api.dependencies import FgaClientDep, SettingsDep
+from catalog.api.dependencies import FgaClientDep, Resolver, ResolverDep, SettingsDep
 from catalog.api.security import Caller, CurrentToken
 from catalog.core.config import Settings
+from catalog.core.identifiers import parse_identifier, require_names
+from catalog.services.object_uuids import UnidentifiedObjectError
 from service_kit.governed import fga
 from service_kit.governed.audit import FAILURE, SUCCESS, audit
 from service_kit.governed.decider import (
@@ -41,7 +51,11 @@ from service_kit.governed.decider import (
     DecisionGovernedResult,
     DecisionListUsers,
     DecisionListUsersResult,
+    TableDecision,
 )
+
+
+log = logging.getLogger(__name__)
 
 
 #: The permissions that open the door's routes, which no route may be asked about: a check-only service has no
@@ -113,6 +127,29 @@ def _relations_of(obj: str) -> frozenset[str]:
     return frozenset()
 
 
+async def _named_table(resolver: Resolver, name: str) -> tuple[str, str | None] | None:
+    """The uuid of the table ``name`` names now and its namespace's, or ``None`` where no grant on it can be decided.
+
+    ``None`` for a name that is no table identifier (fewer than two segments, or a segment that is no name), one naming
+    no table, one in a quarantined warehouse (which suspends every door on it), and one whose table or namespace records
+    no uuid ([[LH-534]]): each names no table a grant is held on.
+    """
+    segments = parse_identifier(name)
+    try:
+        require_names(segments)
+        if len(segments) < 2:
+            return None
+        resolved = await resolver.table(segments)
+        if resolved.location is None:
+            return None
+        return resolved.require_uuid(), await resolver.namespace_uuid(segments[:-1])
+    except (InvalidInputError, PermissionDeniedError):
+        return None
+    except UnidentifiedObjectError:
+        log.error("decision_left_out_unidentified_object", extra={"table": name})
+        return None
+
+
 def _refused(caller: str, route: str, reason: str, **asked: str) -> InvalidInputError:
     """A question the door does not answer, audited with what was asked before it is refused 400."""
     audit(_ACTION, FAILURE, subject=caller, route=route, reason="question_refused", **asked)
@@ -120,24 +157,41 @@ def _refused(caller: str, route: str, reason: str, **asked: str) -> InvalidInput
 
 
 @management_router.post("/check", dependencies=[Depends(require_can_decide_access)])
-async def decide_check(client: WiredFgaClient, token: CurrentToken, body: DecisionCheck) -> DecisionCheckResult:
-    """Whether ``user`` holds ``relation`` on each object, in one round trip.
+async def decide_check(client: WiredFgaClient, token: CurrentToken, resolver: ResolverDep, body: DecisionCheck) -> DecisionCheckResult:
+    """Whether ``user`` holds ``relation`` on each object, and on the table each name names now, in one round trip.
 
-    An object that is no object id is answered False unasked, as `fga.batch_check` answers it: no tuple can name it.
+    An object that is no object id is answered False unasked, as `fga.batch_check` answers it: no tuple can name it. A
+    table asked about by name is decided on the uuid the name resolves to now, and answered with that uuid and its
+    namespace's when allowed; a name naming no table a grant is held on is answered refused.
     """
     caller = token.subject if token else "anonymous"
-    asked = {"grantee": body.user, "relation": body.relation, "objects": ",".join(body.objects)}
+    asked = {"grantee": body.user, "relation": body.relation, "objects": ",".join(body.objects), "tables": ",".join(body.tables)}
     if not _is_decidable(body.relation):
         raise _refused(caller, "check", f"{body.relation!r} is not a relation a decision may ask about", **asked)
     if undefined := sorted(o for o in body.objects if fga.is_object_id(o) and body.relation not in _relations_of(o)):
         raise _refused(caller, "check", f"the model defines no {body.relation!r} on {', '.join(undefined[:5])}", **asked)
+    if body.tables and body.relation not in _relations_of("table:"):
+        raise _refused(caller, "check", f"the model defines no {body.relation!r} on a table", **asked)
     try:
-        allowed = await fga.batch_check(client, user=body.user, relation=body.relation, objects=body.objects)
+        resolved = {name: uuids for name in body.tables if (uuids := await _named_table(resolver, name)) is not None}
+    except Exception:
+        audit(_ACTION, FAILURE, subject=caller, route="check", reason="resolution_failed", **asked)
+        raise
+    objects = list(dict.fromkeys([*body.objects, *(fga.table_object(table) for table, _ in resolved.values())]))
+    try:
+        allowed = await fga.batch_check(client, user=body.user, relation=body.relation, objects=objects) if objects else {}
     except ServiceUnavailableError:
         audit(_ACTION, FAILURE, subject=caller, route="check", reason="authz_unavailable", **asked)
         raise
-    audit(_ACTION, SUCCESS, subject=caller, route="check", allowed=",".join(o for o in body.objects if allowed.get(o)), **asked)
-    return DecisionCheckResult(allowed={o: allowed.get(o, False) for o in body.objects})
+    decided = {name: TableDecision(allowed=False) for name in body.tables}
+    decided |= {
+        name: TableDecision(allowed=True, table_uuid=table, namespace_uuid=namespace)
+        for name, (table, namespace) in resolved.items()
+        if allowed.get(fga.table_object(table))
+    }
+    granted = [*(o for o in body.objects if allowed.get(o)), *(name for name, decision in decided.items() if decision.allowed)]
+    audit(_ACTION, SUCCESS, subject=caller, route="check", allowed=",".join(granted), **asked)
+    return DecisionCheckResult(allowed={o: allowed.get(o, False) for o in body.objects}, tables=decided)
 
 
 @management_router.post("/list-users", dependencies=[Depends(require_can_expand_members)])

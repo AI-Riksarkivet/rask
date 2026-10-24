@@ -7,9 +7,11 @@ names when it takes the event in, as it resolves the name a reader filters or wa
 AS THE CALLER, never as this service: the resolution is the catalog's DescribeTable and DescribeNamespace with the
 caller's own bearer, so it reaches exactly the tables the caller may see, and lineage holds no grant to describe the
 estate. A name the catalog does not hold, or will not describe for this caller, resolves to no uuid. A service
-account's projected token is audience-bound to lineage, so the catalog refuses it and such a caller's names stay
-unresolved. Any other failure raises: an event recorded under a name it should have been keyed by a uuid would split
-the table's lineage, so the producer's retry is the better answer.
+account's projected token is audience-bound to lineage, so the catalog refuses it at those doors; an event's governed
+dataset left without a uuid is therefore asked about at the catalog's decision door, as the caller's verified subject
+and on the rung DescribeTable asks, and the catalog resolves the name there and answers the uuids of a table the caller
+may see ([[LH-531]]). Any other failure raises: an event recorded under a name it should have been keyed by a uuid
+would split the table's lineage, so the producer's retry is the better answer.
 """
 
 from __future__ import annotations
@@ -20,6 +22,7 @@ from typing import Final
 from lineage.core.config import LineageSettings
 from lineage.models import DatasetEvent, RunEvent
 from service_kit.exceptions import ForbiddenError, NotFoundError, UnauthorizedError
+from service_kit.governed.decider import AccessDecider
 from service_kit.lakehouse.naming import CATALOG_DELIMITER, is_external_source_namespace, uuid_of
 from service_kit.lancekit.catalog_client import catalog_api_client, request_headers
 from service_kit.lancekit.reader import translate_catalog_errors
@@ -29,6 +32,10 @@ from service_kit.openlineage import DatasetUuids, with_dataset_uuids
 #: The catalog's answers that mean "no object the caller may see by this name": the name names none, the caller may
 #: not see it, or the catalog does not take the caller's credential.
 _UNSEEN: Final = (NotFoundError, ForbiddenError, UnauthorizedError)
+
+#: The rung the catalog's DescribeTable asks, which a name is resolved on at the decision door: a caller resolves there
+#: exactly the tables it could describe.
+_DESCRIBE_RELATION: Final = "can_get_metadata"
 
 
 class CatalogNames:
@@ -88,16 +95,28 @@ class CatalogNames:
 _PRODUCER: Final = "https://github.com/AI-Riksarkivet/rask/tree/main/services/lineage/src/lineage/services/names.py"
 
 
-async def stamp_resolved_uuids(event: RunEvent | DatasetEvent, names: CatalogNames, *, bearer: str | None) -> None:
+async def stamp_resolved_uuids(
+    event: RunEvent | DatasetEvent,
+    names: CatalogNames,
+    *,
+    bearer: str | None,
+    decider: AccessDecider | None = None,
+    subject: str | None = None,
+) -> None:
     """Name every governed dataset ``event`` names by the uuids its name resolves to for the caller, and no other.
 
     For the HTTP door, whose caller holds a bearer and no signing key: a uuid in its body is a claim, as a signature
     there is, so each governed dataset's is replaced by what the catalog answers and an external source's is removed.
-    A dataset whose name resolves to no table keeps none, and is recorded by its name.
+    A name the describe doors resolve to no table is asked about through ``decider`` as ``subject``, the caller the
+    bearer was verified as, when both are given. A dataset whose name still resolves to no table keeps none, and is
+    recorded by its name.
     """
     datasets = [*event.inputs, *event.outputs]
     governed = sorted({dataset.name for dataset in datasets if not is_external_source_namespace(dataset.namespace, dataset.name)})
     resolved = dict(zip(governed, await asyncio.gather(*(names.table(name, bearer=bearer) for name in governed)), strict=True))
+    if decider is not None and subject is not None and (unseen := [name for name in governed if resolved[name].table_uuid is None]):
+        decided = await decider.check_tables(user=subject, relation=_DESCRIBE_RELATION, tables=unseen)
+        resolved |= {name: DatasetUuids(table_uuid=d.table_uuid, namespace_uuid=d.namespace_uuid) for name, d in decided.items() if d.allowed}
     for dataset in datasets:
         uuids = DatasetUuids() if is_external_source_namespace(dataset.namespace, dataset.name) else resolved[dataset.name]
         dataset.facets = with_dataset_uuids({"facets": dataset.facets}, uuids, producer=_PRODUCER).get("facets", {})

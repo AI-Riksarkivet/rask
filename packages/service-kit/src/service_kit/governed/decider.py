@@ -8,10 +8,15 @@ catalog's decision door instead, as Lakekeeper is OpenFGA's only client and its 
 `/management/v1/action/batch-check` (authz/opa-bridge/policies/lakekeeper/check.rego).
 
 This module is the wire contract (the schemas both sides read) and the two clients; what the door accepts is the
-catalog's own rule (`catalog.api.v1.endpoints.decisions`). `AccessDecider` is the four questions those services ask,
+catalog's own rule (`catalog.api.v1.endpoints.decisions`). `AccessDecider` is the five questions those services ask,
 and nothing that changes the store. `OpenFgaDecider` answers them from the store, for the services that hold a client;
 `CatalogDecider` asks the catalog, which answers each route only to a caller holding that route's decision role on
 the estate root.
+
+A check names its objects by id, or names tables by name ([[LH-531]]). Every grant is held by a table's uuid (ADR 0173
+§8), and a producer's event names its tables only; the catalog is the one resolver of a name, so it resolves each, decides
+on the uuid, and answers keyed by the name, with the uuids for a table the subject holds the relation on. The store
+holds uuids and no names, so only the catalog answers a table by name.
 
 Both fail closed the same way: an answer that cannot be had raises `ServiceUnavailableError`, which every gate
 turns into a 503, never an allow and never a deny.
@@ -21,11 +26,11 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Final, Protocol
+from typing import TYPE_CHECKING, Final, Protocol, Self
 
 import httpx
 from lance_namespace import ServiceUnavailableError
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential_jitter
 
 from service_kit.governed import fga
@@ -52,21 +57,47 @@ _TRANSPORT_ATTEMPTS: Final = 3
 
 
 class DecisionCheck(BaseModel):
-    """May ``user`` (a principal key, as a caller's ``subject``) hold ``relation`` on each of ``objects``."""
+    """May ``user`` (a principal key, as a caller's ``subject``) hold ``relation`` on each of ``objects``, and on the table
+    each of ``tables`` names now (a catalog identifier, its segments joined by `$`)."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     user: str = Field(min_length=1)
     relation: str = Field(min_length=1)
-    objects: list[str] = Field(min_length=1, max_length=MAX_OBJECTS_PER_QUESTION)
+    objects: list[str] = Field(default_factory=list, max_length=MAX_OBJECTS_PER_QUESTION)
+    tables: list[str] = Field(default_factory=list, max_length=MAX_OBJECTS_PER_QUESTION)
+
+    @model_validator(mode="after")
+    def _asks_within_the_ceiling(self) -> Self:
+        if not (0 < len(self.objects) + len(self.tables) <= MAX_OBJECTS_PER_QUESTION):
+            raise ValueError(f"a check names between 1 and {MAX_OBJECTS_PER_QUESTION} objects and tables")
+        return self
 
 
-class DecisionCheckResult(BaseModel):
-    """One verdict per object asked about."""
+class TableDecision(BaseModel):
+    """The answer about one table asked about by name: whether the subject holds the relation on the table the name names
+    now, and, only when it does, that table's uuid and its namespace's (ADR 0173 §10), which a name alone cannot carry."""
 
     model_config = ConfigDict(frozen=True)
 
-    allowed: dict[str, bool]
+    allowed: bool
+    table_uuid: str | None = None
+    namespace_uuid: str | None = None
+
+    @model_validator(mode="after")
+    def _uuids_only_when_allowed(self) -> Self:
+        if self.allowed != (self.table_uuid is not None) or (self.namespace_uuid is not None and not self.allowed):
+            raise ValueError("a table decision carries its table's uuid exactly when it is allowed")
+        return self
+
+
+class DecisionCheckResult(BaseModel):
+    """One verdict per object asked about, and one decision per table asked about, keyed by the name it was asked by."""
+
+    model_config = ConfigDict(frozen=True)
+
+    allowed: dict[str, bool] = Field(default_factory=dict)
+    tables: dict[str, TableDecision] = Field(default_factory=dict)
 
 
 class DecisionListUsers(BaseModel):
@@ -109,6 +140,8 @@ class AccessDecider(Protocol):
 
     async def batch_check(self, *, user: str, relation: str, objects: list[str]) -> dict[str, bool]: ...
 
+    async def check_tables(self, *, user: str, relation: str, tables: list[str]) -> dict[str, TableDecision]: ...
+
     async def list_users(self, *, relation: str, obj: str) -> list[str]: ...
 
     async def governed(self, objects: list[str]) -> dict[str, bool]: ...
@@ -127,6 +160,11 @@ class OpenFgaDecider:
 
     async def batch_check(self, *, user: str, relation: str, objects: list[str]) -> dict[str, bool]:
         return await fga.batch_check(self._client, user=user, relation=relation, objects=objects)
+
+    async def check_tables(self, *, user: str, relation: str, tables: list[str]) -> dict[str, TableDecision]:
+        """Refused, every one: the store holds uuids and no names, and only the catalog resolves a name."""
+        del user, relation
+        return {name: TableDecision(allowed=False) for name in tables}
 
     async def list_users(self, *, relation: str, obj: str) -> list[str]:
         return await fga.list_users(self._client, relation=relation, obj=obj)
@@ -169,6 +207,13 @@ class CatalogDecider:
             answer = await self._ask("/check", DecisionCheck(user=user, relation=relation, objects=chunk), DecisionCheckResult)
             allowed |= _complete(answer.allowed, chunk)
         return allowed
+
+    async def check_tables(self, *, user: str, relation: str, tables: list[str]) -> dict[str, TableDecision]:
+        decided: dict[str, TableDecision] = {}
+        for chunk in _chunks(tables):
+            answer = await self._ask("/check", DecisionCheck(user=user, relation=relation, tables=chunk), DecisionCheckResult)
+            decided |= _complete(answer.tables, chunk)
+        return decided
 
     async def list_users(self, *, relation: str, obj: str) -> list[str]:
         return (await self._ask("/list-users", DecisionListUsers(relation=relation, object=obj), DecisionListUsersResult)).users
@@ -220,7 +265,7 @@ def _chunks(objects: list[str]) -> list[list[str]]:
     return [distinct[i : i + MAX_OBJECTS_PER_QUESTION] for i in range(0, len(distinct), MAX_OBJECTS_PER_QUESTION)]
 
 
-def _complete(answer: dict[str, bool], asked: list[str]) -> dict[str, bool]:
+def _complete[V](answer: dict[str, V], asked: list[str]) -> dict[str, V]:
     """``answer`` when it answers exactly ``asked``: one that leaves an object out, or names one nobody asked about, fails closed."""
     if set(answer) != set(asked):
         log.error("decision_answer_incomplete", extra={"asked": len(asked), "answered": len(answer)})
@@ -240,4 +285,5 @@ __all__ = [
     "DecisionListUsers",
     "DecisionListUsersResult",
     "OpenFgaDecider",
+    "TableDecision",
 ]

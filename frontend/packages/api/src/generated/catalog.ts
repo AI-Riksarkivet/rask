@@ -325,9 +325,11 @@ export interface paths {
         put?: never;
         /**
          * Decide Check
-         * @description Whether ``user`` holds ``relation`` on each object, in one round trip.
+         * @description Whether ``user`` holds ``relation`` on each object, and on the table each name names now, in one round trip.
          *
-         *     An object that is no object id is answered False unasked, as `fga.batch_check` answers it: no tuple can name it.
+         *     An object that is no object id is answered False unasked, as `fga.batch_check` answers it: no tuple can name it. A
+         *     table asked about by name is decided on the uuid the name resolves to now, and answered with that uuid and its
+         *     namespace's when allowed; a name naming no table a grant is held on is answered refused.
          */
         post: operations["decide_check_management_v1_decisions_check_post"];
         delete?: never;
@@ -5801,24 +5803,31 @@ export interface components {
         };
         /**
          * DecisionCheck
-         * @description May ``user`` (a principal key, as a caller's ``subject``) hold ``relation`` on each of ``objects``.
+         * @description May ``user`` (a principal key, as a caller's ``subject``) hold ``relation`` on each of ``objects``, and on the table
+         *     each of ``tables`` names now (a catalog identifier, its segments joined by `$`).
          */
         DecisionCheck: {
             /** Objects */
-            objects: string[];
+            objects?: string[];
             /** Relation */
             relation: string;
+            /** Tables */
+            tables?: string[];
             /** User */
             user: string;
         };
         /**
          * DecisionCheckResult
-         * @description One verdict per object asked about.
+         * @description One verdict per object asked about, and one decision per table asked about, keyed by the name it was asked by.
          */
         DecisionCheckResult: {
             /** Allowed */
-            allowed: {
+            allowed?: {
                 [key: string]: boolean;
+            };
+            /** Tables */
+            tables?: {
+                [key: string]: components["schemas"]["TableDecision"];
             };
         };
         /**
@@ -8939,6 +8948,19 @@ export interface components {
              * @enum {string}
              */
             kind?: "inserted" | "updated" | "deleted";
+        };
+        /**
+         * TableDecision
+         * @description The answer about one table asked about by name: whether the subject holds the relation on the table the name names
+         *     now, and, only when it does, that table's uuid and its namespace's (ADR 0173 §10), which a name alone cannot carry.
+         */
+        TableDecision: {
+            /** Allowed */
+            allowed: boolean;
+            /** Namespace Uuid */
+            namespace_uuid?: string | null;
+            /** Table Uuid */
+            table_uuid?: string | null;
         };
         /**
          * TableExistsRequest

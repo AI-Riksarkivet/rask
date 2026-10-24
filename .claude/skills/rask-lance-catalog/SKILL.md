@@ -115,6 +115,12 @@ Two contracts stack here, and confusing them is how bugs happen:
   only `/management/v1/me` calls `list_objects`, and the estate admin's raw ListObjects explorer. Grant, review and
   access answers carry `object` (the uuid object) and `name`; a control event's `object_id` is the uuid object with
   `object_name` beside it. A registry model (`table:models$<name>`) is no lance-namespace table and keeps its name.
+  A check-only service asks the decision door's `/management/v1/decisions/check` about objects by uuid, or about
+  `tables` by name ([[LH-531]]): the door resolves each name through the request's `Resolver`, decides on the uuid and
+  answers keyed by the name, with the table's and its namespace's uuid only when allowed (a name naming no table, one
+  in a quarantined warehouse and one no uuid identifies answer refused). Lineage's HTTP door asks it, as the caller's
+  subject on `can_get_metadata`, for every governed dataset its DescribeTable left without a uuid, which is every name a
+  service account's lineage-audience token names (`tests/integration/test_a_service_account_records_lineage_on_the_tables_it_names.py`).
   Pinned by `services/catalog/tests/test_a_grant_is_held_by_the_objects_uuid.py` and
   `services/catalog/tests/test_a_listing_judges_its_own_candidates.py`.
 - **An object that records no uuid holds no grant, and only the estate admin's deregister reaches it** ([[LH-534]]). A

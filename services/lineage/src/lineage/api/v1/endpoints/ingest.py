@@ -160,8 +160,11 @@ async def ingest_event(
     # A GOVERNED TABLE IS RECORDED, AND AUTHORIZED, BY ITS UUID ([[LH-522]], [[LH-524]]), which this door resolves from
     # each name as the caller sees it and stamps over whatever the body claimed, as it clears a claimed signature:
     # so a pipeline's runs key on the uuid the catalog's own events carry, a rename since cannot split them, and a
-    # forged uuid in the body can authorize nothing.
-    await stamp_resolved_uuids(event, names, bearer=bearer)
+    # forged uuid in the body can authorize nothing. A name the caller's bearer cannot resolve (a service account's
+    # token is lineage's audience, which the catalog refuses) is resolved by the catalog's decision door, as the
+    # caller ([[LH-531]]).
+    decider = getattr(request.app.state, "decider", None) if settings.fga_enabled else None
+    await stamp_resolved_uuids(event, names, bearer=bearer, decider=decider, subject=token.subject if token else None)
     try:
         enforce_author(event, token)
         await enforce_output_authz(event, request, settings, token)

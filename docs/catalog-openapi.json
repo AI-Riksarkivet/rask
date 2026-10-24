@@ -4441,14 +4441,13 @@
       },
       "DecisionCheck": {
         "additionalProperties": false,
-        "description": "May ``user`` (a principal key, as a caller's ``subject``) hold ``relation`` on each of ``objects``.",
+        "description": "May ``user`` (a principal key, as a caller's ``subject``) hold ``relation`` on each of ``objects``, and on the table\neach of ``tables`` names now (a catalog identifier, its segments joined by `$`).",
         "properties": {
           "objects": {
             "items": {
               "type": "string"
             },
             "maxItems": 1000,
-            "minItems": 1,
             "title": "Objects",
             "type": "array"
           },
@@ -4456,6 +4455,14 @@
             "minLength": 1,
             "title": "Relation",
             "type": "string"
+          },
+          "tables": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 1000,
+            "title": "Tables",
+            "type": "array"
           },
           "user": {
             "minLength": 1,
@@ -4465,14 +4472,13 @@
         },
         "required": [
           "user",
-          "relation",
-          "objects"
+          "relation"
         ],
         "title": "DecisionCheck",
         "type": "object"
       },
       "DecisionCheckResult": {
-        "description": "One verdict per object asked about.",
+        "description": "One verdict per object asked about, and one decision per table asked about, keyed by the name it was asked by.",
         "properties": {
           "allowed": {
             "additionalProperties": {
@@ -4480,11 +4486,15 @@
             },
             "title": "Allowed",
             "type": "object"
+          },
+          "tables": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/TableDecision"
+            },
+            "title": "Tables",
+            "type": "object"
           }
         },
-        "required": [
-          "allowed"
-        ],
         "title": "DecisionCheckResult",
         "type": "object"
       },
@@ -11461,6 +11471,42 @@
         "title": "TableChangesRequest",
         "type": "object"
       },
+      "TableDecision": {
+        "description": "The answer about one table asked about by name: whether the subject holds the relation on the table the name names\nnow, and, only when it does, that table's uuid and its namespace's (ADR 0173 \u00a710), which a name alone cannot carry.",
+        "properties": {
+          "allowed": {
+            "title": "Allowed",
+            "type": "boolean"
+          },
+          "namespace_uuid": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Namespace Uuid"
+          },
+          "table_uuid": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Table Uuid"
+          }
+        },
+        "required": [
+          "allowed"
+        ],
+        "title": "TableDecision",
+        "type": "object"
+      },
       "TableExistsRequest": {
         "description": "TableExistsRequest",
         "properties": {
@@ -13776,7 +13822,7 @@
     },
     "/management/v1/decisions/check": {
       "post": {
-        "description": "Whether ``user`` holds ``relation`` on each object, in one round trip.\n\nAn object that is no object id is answered False unasked, as `fga.batch_check` answers it: no tuple can name it.",
+        "description": "Whether ``user`` holds ``relation`` on each object, and on the table each name names now, in one round trip.\n\nAn object that is no object id is answered False unasked, as `fga.batch_check` answers it: no tuple can name it. A\ntable asked about by name is decided on the uuid the name resolves to now, and answered with that uuid and its\nnamespace's when allowed; a name naming no table a grant is held on is answered refused.",
         "operationId": "decide_check_management_v1_decisions_check_post",
         "parameters": [
           {

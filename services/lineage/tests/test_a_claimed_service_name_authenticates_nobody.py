@@ -9,7 +9,8 @@ sidecar delivered a request, and names nobody.
 
 Driven at lineage's real door: its `authenticate`, the verifiers `attach_auth` builds from lineage's settings at boot,
 and the handlers `build_lance_service_app` installs. The service-account issuer is the loopback one in the root
-conftest, which serves its key set only to a bearer from a private CA, as k3s does.
+conftest, which serves its key set only to a bearer from a private CA, as k3s does. A service admitted by its own
+projected token is driven end to end by `tests/integration/test_a_service_account_records_lineage_on_the_tables_it_names.py`.
 """
 
 from __future__ import annotations
@@ -31,7 +32,6 @@ from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
 _SHARED = "the-estate-wide-app-token"
-_NOTIFICATIONS = "rask-sa-notifications"
 
 
 @pytest.fixture
@@ -70,24 +70,7 @@ def door(sa_issuer: Any, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient
     get_settings.cache_clear()
 
 
-@pytest.mark.parametrize(
-    ("credential", "status", "subject"),
-    [
-        pytest.param("shared-token-and-a-name", 401, None, id="the-shared-token-and-a-claimed-name"),
-        pytest.param("own-projected-token", 200, f"kubernetes~system:serviceaccount:default:{_NOTIFICATIONS}", id="the-pods-own-projected-token"),
-    ],
-)
-def test_lineage_admits_a_service_by_its_projected_token_and_never_by_a_claimed_name(
-    door: TestClient, sa_issuer: Any, credential: str, status: int, subject: str | None
-) -> None:
-    headers = (
-        {"dapr-api-token": _SHARED, "x-lance-service-identity": "notifications"}
-        if credential == "shared-token-and-a-name"
-        else {"Authorization": f"Bearer {sa_issuer.mint(_NOTIFICATIONS, audience='rask-lineage')}"}
-    )
+def test_lineage_refuses_the_shared_token_and_a_claimed_service_name(door: TestClient) -> None:
+    answered = door.get("/who", headers={"dapr-api-token": _SHARED, "x-lance-service-identity": "notifications"})
 
-    answered = door.get("/who", headers=headers)
-
-    assert answered.status_code == status, answered.text
-    if status == 200:
-        assert answered.json() == {"sub": subject}
+    assert answered.status_code == 401, answered.text
