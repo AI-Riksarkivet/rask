@@ -271,9 +271,6 @@ class CatalogDaprSettings(BaseSettings):
     # sidecar resolves to NATS JetStream; the topic is versioned (a breaking schema change → a new .vN).
     dapr_pubsub: str = Field(default="lineage-pubsub", alias="LANCE_DAPR_PUBSUB")
     dapr_topic: str = Field(default="lineage.events.v1", alias="LANCE_DAPR_TOPIC")
-    # Injected into every app container by the Dapr sidecar injector — read it rather than restate it, so a
-    # non-default sidecar port cannot silently point us at a port nothing is listening on.
-    dapr_http_port: int = Field(default=3500, ge=1, le=65535, alias="DAPR_HTTP_PORT")
 
 
 class CatalogLineageSettings(BaseSettings):
@@ -365,27 +362,6 @@ class CatalogMaintenanceSettings(BaseSettings):
     clone_list_max_age_seconds: int = Field(default=3600, ge=60, alias="LANCE_CLONE_LIST_MAX_AGE_SECONDS")
 
 
-class CatalogUserStateSettings(BaseSettings):
-    """The per-user state store behind the estate's own UI preferences.
-
-    Split out of the 464-line `Settings` ([[LH-113]]) so one domain's configuration can be read,
-    changed and reasoned about without the other six in the way. Composed onto `Settings` exactly as
-    `LanceSessionCaps` and the estate-wide `GovernedAuthSettings` already are, so `Settings` exposes
-    every one of its fields, aliases and defaults.
-    """
-
-    # Per-subject user state (`GET/PUT/DELETE /management/v1/user-state/*`) on the Dapr state store. The default names
-    # the component the chart already renders (`stateStore.name` in chart/values.yaml) and that the catalog
-    # app-id is already in the `scopes` of, so this needs NO new chart value; tests/unit/test_invariants.py
-    # asserts that agreement so a rename or a dropped scope reddens rather than 503ing in production.
-    user_state_store: str = Field(default="lance-statestore", alias="LANCE_USER_STATE_STORE")
-    user_state_timeout_seconds: float = Field(default=5.0, ge=0.1, alias="LANCE_USER_STATE_TIMEOUT_SECONDS")
-    # A per-document ceiling. `max_body_bytes` is sized for Arrow-IPC writes (256 MiB), which is four orders
-    # of magnitude past anything a canvas or a saved-view list can legitimately be — and this is an
-    # unmetered per-user write surface onto a SHARED Postgres, so it gets its own honest bound.
-    user_state_max_bytes: int = Field(default=512 * 1024, ge=1, alias="LANCE_USER_STATE_MAX_BYTES")
-
-
 class CatalogVendingSettings(BaseSettings):
     """Credential vending: which mode, and how long a vended credential lives.
 
@@ -451,7 +427,6 @@ class Settings(
     CatalogDaprSettings,
     CatalogLineageSettings,
     CatalogMaintenanceSettings,
-    CatalogUserStateSettings,
     CatalogVendingSettings,
     CatalogAuthzSettings,
     BaseSettings,
@@ -468,7 +443,7 @@ class Settings(
     # every alias below silently gained an un-namespaced twin (MedallionSettings.ray_address
     # answered to Ray's own $RAY_ADDRESS). `env_prefix` redirects that fallback onto the
     # namespace the aliases already declare; an explicit alias bypasses it, so the
-    # deliberately-bare ones (DAPR_HTTP_PORT) still land.
+    # deliberately-bare ones (RASK_SECRET_STORE) still land.
     # See tests/unit/test_settings_env_namespace.py.
     model_config = SettingsConfigDict(populate_by_name=True, env_prefix="LANCE_", extra="ignore")
 

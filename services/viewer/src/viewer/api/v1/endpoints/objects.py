@@ -2,9 +2,8 @@
 
 Ported from the retired rask ``volumes-api`` in the R6/R20 media wave
 (docs/adr/0112-the-media-plane-absorbs-rask-s-discovery-and-viewing-r5-r6.md): one delimiter-scoped listing, a HEAD,
-and a STREAMED byte download over any bucket in the catalog's storage registry
-(it was two fixed buckets once — that premise died with `LANCE_STORES`, and it
-is why the download streams rather than buffers). Public paths ride the
+and a STREAMED byte download over any bucket in the viewer's own store registry
+(``viewer.core.stores``, which ``GET /api/stores`` lists). Public paths ride the
 existing ``/api/explorer`` rule of the cluster route (``/api/explorer/objects`` → ``/api/objects``
 here), so the route grows zero new rules.
 
@@ -39,10 +38,10 @@ from pydantic import BaseModel
 from service_kit.exceptions import ForbiddenError, NotFoundError, ServiceUnavailableError
 from service_kit.governed.audit import FAILURE, audit
 from service_kit.governed.secrets import fetch_dapr_secret
-from service_kit.schemas.storage import Store, store_by_name
 from storage import BucketNotFoundError, ObjectNotFoundError, s3_client, s3_errors
 from viewer.api.security import BROWSE_STORAGE, CheckerDep, CurrentSubject, SettingsDep
 from viewer.core.config import get_viewer_settings
+from viewer.core.stores import Store, StoreRegistry, registered_stores, store_by_name
 
 
 log = logging.getLogger(__name__)
@@ -54,12 +53,8 @@ router = APIRouter(prefix="/api", tags=["objects"])
 _DOWNLOAD_CHUNK = 1 << 20
 
 
-#: R28: the bucket a request may name is validated against the CATALOG'S STORAGE REGISTRY, not a
-#: Literal union. It used to be ``Literal["images-batch", "images-batch-alto"]``, hand-mirrored into
-#: the lakehouse zone's storage.ts — two copies of one fact in two languages, kept in step by
-#: discipline, and neither saying what either bucket was FOR. Registering a store is now config
-#: (``LANCE_STORES``); this endpoint and the UI validate against the SAME list, so they cannot
-#: disagree about which stores exist.
+#: The bucket a request may name is validated against the viewer's store registry, the same list
+#: ``GET /api/stores`` serves the browser, so the two cannot disagree about which stores exist.
 def _registered_store(name: str) -> Store:
     """Resolve a store NAME to its registry entry, or 404 naming the store.
 
@@ -67,7 +62,7 @@ def _registered_store(name: str) -> Store:
     and the distinction matters to a browser that lists stores from the registry — if it asks for
     one, the registry said it existed.
     """
-    store = store_by_name(name)
+    store = store_by_name(name, get_viewer_settings().stores)
     if store is None:
         raise NotFoundError(f"no registered store named {name!r}")
     return store
@@ -133,7 +128,7 @@ def _client_for(name: str) -> Any:  # noqa: ANN401 — boto3 client, same as sto
 #: The dependency every route uses in place of the deleted union.
 BucketName = Annotated[
     str,
-    Query(description="A store registered in the catalog's storage registry (GET /management/v1/stores)."),
+    Query(description="A store in the viewer's registry (GET /api/stores)."),
 ]
 
 
@@ -247,6 +242,17 @@ async def _require_browse(checker: object, subject: str, settings: object, store
     if not await checker(user=subject, relation=BROWSE_STORAGE, obj=obj):  # ty: ignore[call-non-callable]
         audit(action, FAILURE, subject=subject, resource=store, relation=BROWSE_STORAGE)
         raise ForbiddenError(f"{subject} lacks {BROWSE_STORAGE} on {obj}")
+
+
+@router.get("/stores")
+async def list_stores(checker: CheckerDep, subject: CurrentSubject, settings: SettingsDep) -> StoreRegistry:
+    """Every store this browser may read, from the viewer's own configuration.
+
+    Gated as its sibling routes are: the list names hosts and buckets outside the medallion, which is the estate-wide
+    disclosure `_require_browse` exists for.
+    """
+    await _require_browse(checker, subject, settings, "stores", "viewer.stores.list")
+    return StoreRegistry(stores=registered_stores(settings.stores))
 
 
 @router.get("/objects")

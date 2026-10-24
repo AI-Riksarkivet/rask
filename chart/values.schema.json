@@ -2170,7 +2170,7 @@
             "type": "object",
             "properties": {
                 "stores": {
-                    "description": "Object-store registry rendered as RASK_STORES for the fleet and the explorer viewer; each entry is {name, bucket, role, secret, description, endpoint?, insecure?}, `secret` a Dapr secret-store key.",
+                    "description": "Object-store registry rendered as RASK_STORES for the explorer viewer's object browser; each entry is {name, bucket, role, secret, description, endpoint?, insecure?}, `secret` a Dapr secret-store key.",
                     "type": "array",
                     "items": {
                         "type": "object",

@@ -6,8 +6,8 @@ requires-python = ">=3.13"
 license = "Apache-2.0"
 dependencies = [
     # [governed] because the inbox door verifies the bearer and re-derives visibility through
-    # `service_kit.governed.deps` → `.fga`, and the actor id comes from `service_kit.governed.user_state`
-    # — openfga-sdk, pyjwt, httpx and lance-namespace all live behind that extra. The bare
+    # `service_kit.governed.deps` → `.fga` — openfga-sdk, pyjwt, httpx and lance-namespace all live behind
+    # that extra. The bare
     # "service-kit" resolves in the LOCAL venv (another workspace member pulls openfga-sdk in) and NOT
     # in the image, whose venv is `uv sync --frozen --package notifications` alone: that is the exact
     # crash-loop the ingest door and then the flows door each paid for once.

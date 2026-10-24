@@ -1095,7 +1095,7 @@ e2e-container-deletes: ## Warehouse/project delete, cascade and the gate-before-
 # not a CI lane. `make e2e-ci` remains the governed-kind-stack entry point, and wiring the
 # security-shaped ones (edge, cas) into CI is the follow-up — it needs an edit to
 # `.github/workflows/ci.yml`, which a concurrent session is holding.
-E2E_SUITES = annotator byo-branch byo-erasure byo-pipeline cas chaos compaction edge media-catalog observability phase1 soak track-a user-state
+E2E_SUITES = annotator byo-branch byo-erasure byo-pipeline cas chaos compaction edge media-catalog observability phase1 soak track-a
 .PHONY: $(addprefix e2e-,$(E2E_SUITES))   # declared HERE, not up with the other .PHONY: make
                                           # expands a rule's prerequisites AS IT READS the line,
                                           # so referencing E2E_SUITES before this assignment
@@ -1186,9 +1186,6 @@ e2e-track-a:        ## Track A acceptance: tier contract + gate/publish symmetry
 	@test -n "$(LANCE_E2E_TOKEN)" || { echo "  !! e2e-track-a needs LANCE_E2E_CATALOG_URL, LANCE_E2E_TOKEN, LANCE_E2E_S3_ENDPOINT — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
 	@test -n "$(LANCE_E2E_S3_ENDPOINT)" || { echo "  !! e2e-track-a needs LANCE_E2E_CATALOG_URL, LANCE_E2E_TOKEN, LANCE_E2E_S3_ENDPOINT — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
 	LANCE_E2E_CATALOG_URL=$(LANCE_E2E_CATALOG_URL) LANCE_E2E_TOKEN=$(LANCE_E2E_TOKEN) LANCE_E2E_S3_ENDPOINT=$(LANCE_E2E_S3_ENDPOINT) uv run pytest tests/e2e-py -m track_a -v
-e2e-user-state:     ## Durable user-state (dock layouts, read state) proof (needs LANCE_E2E_CATALOG_URL)
-	@test -n "$(LANCE_E2E_CATALOG_URL)" || { echo "  !! e2e-user-state needs LANCE_E2E_CATALOG_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	LANCE_E2E_CATALOG_URL=$(LANCE_E2E_CATALOG_URL) uv run pytest tests/e2e-py -m user_state -v
 
 # ---- the local image path (registry + Dagger engine) ------------------------
 # `make dev-registry` once per host (a local registry on :5000, and k3s pointed at it), and

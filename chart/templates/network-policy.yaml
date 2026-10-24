@@ -281,10 +281,9 @@ spec:
 ---
 # (3c) age-postgres:5432 — the OpenFGA datastore + the Dapr state store
 # (dapr-statestore.yaml rides this same instance). Clients: openfga (subchart pods carry
-# app.kubernetes.io/name=openfga), the openfga-migrate job, the pg backup job, the catalog (per the
-# audit's client list), and (DAPRIFY 2026-07-27) the state-store-scoped apps — daprd's
-# state.postgresql component connects DIRECTLY to this postgres, so those pods' sidecars are real
-# 5432 clients (blocked = the state store never loads and actor hosting silently disables).
+# app.kubernetes.io/name=openfga), the openfga-migrate job, the pg backup job, and the state-store-scoped
+# apps — daprd's state.postgresql component connects DIRECTLY to this postgres, so those pods' sidecars
+# are real 5432 clients (blocked = the state store never loads and actor hosting silently disables).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -301,7 +300,7 @@ spec:
               - key: app.kubernetes.io/component
                 operator: In
 
-                {{- $ageClients := list "catalog" "openfga-migrate" "backup-pg" }}
+                {{- $ageClients := list "openfga-migrate" "backup-pg" }}
                 {{- if and .Values.dapr.enabled .Values.stateStore.enabled }}
                 {{- $ageClients = concat $ageClients .Values.stateStore.scopes }}
                 {{- end }}

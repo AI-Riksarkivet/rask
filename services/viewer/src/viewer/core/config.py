@@ -37,6 +37,10 @@ class ViewerSettings(Settings, GovernedAuthSettings):
     #: so no deployment moves. It names the same component as `s3_secret_store` (MEDIA_S3_SECRET_STORE)
     #: does for the warehouse's own bundle; collapsing the two variables is a config-contract change, not a rename.
     secret_store: str = Field(default="lance-secrets", alias="RASK_SECRET_STORE")
+    #: The stores the object browser may read, as the JSON array the chart renders from `storage.stores`. Kept as the
+    #: raw value and parsed by `viewer.core.stores.registered_stores`, which answers a malformed one with its defaults
+    #: and an error log rather than failing the whole service at boot.
+    stores: str = Field(default="", alias="RASK_STORES")
     #: Where the voiceprint runner's Ray Serve app answers. EMPTY DISABLES the upload form, and that
     #: is the honest default: the read plane no longer carries a speaker encoder, so an estate that
     #: has not deployed the runner cannot embed — and saying so at the door beats a 500 from a model

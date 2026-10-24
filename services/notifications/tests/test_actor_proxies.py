@@ -18,7 +18,7 @@ import pytest
 from notifications.errors import InboxUnreadable
 from notifications.inbox_actor import InboxActorInterface
 from notifications.proxies import TypedActorProxy, inbox_actor_id
-from service_kit.governed.user_state import decode_subject
+from notifications.subjects import decode_subject
 
 
 class _WireOnlyProxy:

@@ -133,39 +133,6 @@ def test_every_first_party_deployment_is_hardened() -> None:
     assert not unhardened, f"first-party Deployments are not hardened: {unhardened}"
 
 
-def test_user_state_store_default_matches_the_component_the_catalog_is_scoped_to() -> None:
-    """The `/management/v1/user-state/*` routes work only if THREE facts agree, and none of them is in the code.
-
-    The catalog's `user_state_store` default names a Dapr component; that component must exist; and the
-    catalog app-id must be in its `scopes` — an unscoped app-id gets "component not found" from the
-    sidecar and every user's saved work 503s. All three live in `chart/values.yaml`, which is not edited
-    when someone renames a component or trims a scope list, so nothing else would notice. This renders the
-    chart and checks the agreement.
-    """
-    from catalog.core.config import Settings
-
-    default = Settings.model_fields["user_state_store"].default
-    rendered = _helm_template()
-    component = next(
-        (
-            doc
-            for doc in rendered.split("\n---")
-            if re.search(r"^kind: Component$", doc, re.MULTILINE) and re.search(rf"^  name: {re.escape(default)}$", doc, re.MULTILINE)
-        ),
-        None,
-    )
-    assert component is not None, (
-        f"the catalog defaults LANCE_USER_STATE_STORE to {default!r}, but the chart renders no Dapr "
-        "Component by that name — every /management/v1/user-state call would 503"
-    )
-    assert re.search(r"type: state\.", component), f"{default} is not a state store"
-    scopes = component.split("scopes:", 1)
-    assert len(scopes) == 2 and re.search(r"^\s+- catalog$", scopes[1], re.MULTILINE), (
-        f"the catalog app-id is not in {default}'s scopes — the sidecar refuses to load the component "
-        "for it, so per-subject user state is unreachable however correct the code is"
-    )
-
-
 # --------------------------------------------------------------------------------------------------
 # 10. The 2026-07-28 install-flow defects (live-proof "Install-flow notes" + defects 1 and 3)
 # --------------------------------------------------------------------------------------------------
@@ -554,9 +521,8 @@ def test_the_inbox_subscribes_on_a_component_the_chart_actually_renders() -> Non
 
     Both ends are asserted because they fail in different deployments. The chart's value is what the
     pod reads; the app's DEFAULT is what a dev run without the ConfigMap reads, and the two drifting
-    apart is how a subscription works in one environment and is silently dead in the other. Same shape
-    as `test_user_state_store_default_matches_the_component_the_catalog_is_scoped_to`, for the same
-    reason: the name is a coordinate, and nothing else compares its two ends.
+    apart is how a subscription works in one environment and is silently dead in the other: the name is
+    a coordinate, and nothing else compares its two ends.
     """
     from notifications.api.settings import IngressSettings
 

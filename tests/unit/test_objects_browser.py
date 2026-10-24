@@ -26,6 +26,7 @@ from fastapi.testclient import TestClient
 from service_kit.exceptions import register_handlers
 from viewer.api.v1.endpoints import objects as objects_module
 from viewer.api.v1.endpoints.objects import router as objects_router
+from viewer.core.config import get_viewer_settings
 
 
 #: The DEPLOYMENT's store registry for this suite. Declared here because `service-kit` ships no
@@ -33,10 +34,19 @@ from viewer.api.v1.endpoints.objects import router as objects_router
 FIXTURE_STORES = '[{"name": "corpus-raw", "bucket": "corpus-raw", "role": "raw", "description": "Fixture source bucket."}, {"name": "corpus-derived", "bucket": "corpus-derived", "role": "derived", "description": "Fixture bucket deliberately never provisioned."}]'
 
 
+@pytest.fixture(autouse=True)
+def _fresh_viewer_settings(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """The viewer reads its registry off its cached settings, so each test reads the env it set and leaves none behind."""
+    get_viewer_settings.cache_clear()
+    yield
+    get_viewer_settings.cache_clear()
+
+
 def _use_fixture_stores(monkeypatch: pytest.MonkeyPatch) -> None:
     """Point the store registry at this suite's buckets. Needed by every test that builds its own
     client instead of taking the `client` fixture."""
     monkeypatch.setenv("RASK_STORES", FIXTURE_STORES)
+    get_viewer_settings.cache_clear()
 
 
 def _app() -> FastAPI:
@@ -68,6 +78,15 @@ def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
 
         with TestClient(_app()) as c:
             yield c
+
+
+def test_the_store_list_is_the_viewers_own_configuration(client: TestClient) -> None:
+    resp = client.get("/api/stores")
+    assert resp.status_code == 200
+    assert [(s["name"], s["bucket"], s["role"]) for s in resp.json()["stores"]] == [
+        ("corpus-raw", "corpus-raw", "raw"),
+        ("corpus-derived", "corpus-derived", "derived"),
+    ]
 
 
 def test_list_objects_returns_prefixes_and_objects(client: TestClient) -> None:

@@ -6,8 +6,8 @@ directory (so the suites can't silently vanish from the gate — see
 tests/unit/test_e2e_collection_gate.py) and offline runs deselect with `-m "not e2e"`.
 
 Per-file `pytestmark = pytest.mark.e2e` is the convention, but one forgotten file
-(it has happened: test_user_state_e2e.py carried only its per-suite marker) would
-make an offline run hit a live endpoint. Location decides, so enforce by location.
+(a suite carrying only its per-suite marker) would make an offline run hit a live
+endpoint. Location decides, so enforce by location.
 """
 
 from __future__ import annotations

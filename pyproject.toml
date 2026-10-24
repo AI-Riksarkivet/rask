@@ -219,7 +219,7 @@ extend-select = ["TID251", "FAST001"]
 "pyarrow.feather".msg = "Decode an Arrow IPC body only through service_kit.lancekit.arrow_ipc: it bounds and validates what a caller sends."
 "service_kit.lancekit.arrow_ipc.decode_arrow_response".msg = "Only the catalog /query reader may skip the size bound."
 "dapr.actor.ActorProxy".msg = "Build an actor proxy through the service's proxies module: it translates the wire method names."
-"service_kit.governed.user_state.encode_subject".msg = "An inbox actor id is derived only in notifications.proxies."
+"notifications.subjects.encode_subject".msg = "An inbox actor id is derived only in notifications.proxies."
 "service_kit.governed.fga.write_tuples".msg = "Tuple grants happen only at the registered granting sites."
 "service_kit.governed.fga.grant_on_create".msg = "Tuple grants happen only at the registered granting sites."
 "service_kit.governed.fga.seed_ownership".msg = "Tuple grants happen only at the registered granting sites."
@@ -343,7 +343,6 @@ markers = [
     "rustfs_provisioning: the scoped-users hook's provisioning script against a real RustFS (run by `dagger call rustfs-provisioning`, which binds a throwaway store; XC-163)",
     "soak: Phase 1's soak (XC-090): a drive an acceptance run kept with --keep-drive, read again a day later; deselected unless the run names that drive with --soak",
     "track_a: Track A acceptance e2e (tier contract, gate/publish symmetry, branch isolation) against a live catalog",
-    "user_state: user-state live e2e",
 ]
 
 [tool.coverage.run]

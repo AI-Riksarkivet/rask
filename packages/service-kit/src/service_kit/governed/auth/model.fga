@@ -148,8 +148,6 @@ type estate
         #   * `POST /management/v1/projects`, the whole-estate project list and one project's detail — i.e. CREATING TENANTS and enumerating them (`endpoints/projects.py`)
         #   * the raw-tuple admin route — reading and MUTATING the authorization graph itself
         #     (`endpoints/access_admin.py:199`)
-        #   * `POST /management/v1/stores` and its attach/detach siblings — naming a host the estate will talk to
-        #     (`endpoints/stores.py:105,135,197`)
         #   * the `estate_admin` flag `/management/v1/me` reports (`endpoints/me.py:62`) — a display lookup rather
         #     than a door, listed because it is a consumer
         # The viewer and controlplane gate their own estate reads on their own relations and merely CITE
@@ -165,9 +163,7 @@ type estate
         # store registry. Like can_observe_events this is an ESTATE-WIDE privilege checked only on the
         # root object, and owner-tier for the same reason: the registry's buckets include the external
         # RAW tier and the observability bucket, which sit outside the medallion entirely (R23), so a
-        # per-tenant admin must not reach them. Registering a store is already an estate-admin door
-        # (`POST /management/v1/stores` gates on can_observe_events), and this makes browsing one consistent with
-        # that rather than strictly weaker.
+        # per-tenant admin must not reach them.
         #
         # DELIBERATELY NOT a `store` type with per-store grants, and the reason is not simplicity. A
         # `store` type needs an `estate`/parent tuple per store to be reachable at all, and the four
@@ -378,8 +374,6 @@ type warehouse
     #   * `POST /management/v1/projects`, the whole-estate project list and one project's detail — i.e. CREATING TENANTS and enumerating them (`endpoints/projects.py`)
     #   * the raw-tuple admin route — reading and MUTATING the authorization graph itself
     #     (`endpoints/access_admin.py:199`)
-    #   * `POST /management/v1/stores` and its attach/detach siblings — naming a host the estate will talk to
-    #     (`endpoints/stores.py:105,135,197`)
     #   * the `estate_admin` flag `/management/v1/me` reports (`endpoints/me.py:62`) — a display lookup rather than
     #     a door, listed because it is a consumer
     # The viewer and controlplane gate their own estate reads on their own relations and merely CITE

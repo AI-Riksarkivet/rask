@@ -13,8 +13,7 @@ everyone is an outage, not a gate.
 
 Owner tier is not incidental either: the registry's buckets include the external RAW tier and the
 observability bucket, both deliberately outside the medallion (R23), so a per-tenant admin must not
-reach them. `POST /management/v1/stores` is already estate-admin gated; this makes reading a store consistent
-with registering one rather than strictly weaker.
+reach them. The store list (`GET /api/stores`) names those buckets, so it takes the same gate.
 """
 
 from __future__ import annotations
@@ -118,11 +117,13 @@ def _fake_s3(monkeypatch: pytest.MonkeyPatch) -> list[str]:
         ("/api/objects", {"bucket": STORE}),
         ("/api/object", {"bucket": STORE, "key": "a.tif"}),
         ("/api/object/download", {"bucket": STORE, "key": "a.tif"}),
+        ("/api/stores", {}),
     ],
-    ids=["list", "head", "download"],
+    ids=["list", "head", "download", "stores"],
 )
 def test_every_object_route_is_refused_without_the_estate_grant(path: str, params: dict[str, str]) -> None:
-    """All THREE, not just the download. A key listing names records someone may not know exist."""
+    """Every route, not just the download. A key listing names records someone may not know exist, and the store
+    list names hosts and buckets outside the medallion."""
     r = TestClient(_app(allow=False)).get(path, params=params)
 
     assert r.status_code == 403

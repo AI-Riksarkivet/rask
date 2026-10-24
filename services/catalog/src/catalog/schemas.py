@@ -20,7 +20,6 @@ from catalog.core.vending import VendedCredentials
 from catalog.services import models as registry
 from catalog.services.changes import ChangeKind
 from service_kit.control_events import CASCADE_ID_MAX_LENGTH, ORIGINATOR_MAX_LENGTH, CatalogControlEvent
-from service_kit.governed.user_state import UserStateDocument
 from service_kit.lakehouse.maintenance_due import CompactionDue, IndexDue
 
 
@@ -1105,25 +1104,6 @@ class DeleteWarehouseResponse(BaseModel):
     tuples_revoked: int
     bucket_purged: bool
     objects_purged: int
-
-
-# --------------------------------------------------------------------------- #
-# Per-subject user state (`/management/v1/user-state/*`)
-# --------------------------------------------------------------------------- #
-
-
-class UserStateEnvelope[T](BaseModel):
-    """One document as served: who owns it, which document, whether it was ever written, and it.
-
-    ``subject`` is echoed from the VERIFIED token — it is what makes a cross-user leak visible in a
-    response body, rather than only in a diff of two documents that happen to look alike.
-    """
-
-    subject: str
-    document: UserStateDocument
-    exists: bool
-    updated_at: datetime | None = None
-    value: T | None = None
 
 
 # --------------------------------------------------------------------------- #

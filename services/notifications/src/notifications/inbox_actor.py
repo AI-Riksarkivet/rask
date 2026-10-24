@@ -59,7 +59,7 @@ from notifications.models import (
     InboxWatches,
     NotificationDelivery,
 )
-from service_kit.governed.user_state import decode_subject
+from notifications.subjects import decode_subject
 
 
 logger = logging.getLogger(__name__)

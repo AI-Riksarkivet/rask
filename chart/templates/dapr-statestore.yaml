@@ -10,7 +10,7 @@
 # single-entity write; in Lance each one would be a dataset version — hundreds of manifests a minute, a
 # history that is noise rather than provenance, and read-modify-write contention on a format with no
 # row-level locking. It is not a limitation of Lance; asking an OLAP format for OLTP semantics is a
-# category error. So the notification inbox (#125) and each person's saved UI state live here.
+# category error. So the notification inbox (#125) lives here.
 #
 # WHY POSTGRES AND NOT REDIS. Both are Stable Dapr state stores with actor support, so either would
 # work, and the owner has approved adding Redis for CACHE. The split is by property, not preference:

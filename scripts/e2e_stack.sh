@@ -588,8 +588,7 @@ failed=()
 #   observability  the telemetry chain: it reads the platform's store behind the Collector, so a deployed estate runs it
 #   edge           the Gateway's routes, which this stack does not render (stack_values.sh)
 #   media_catalog  the annotator's media backend, outside the lakehouse
-#   user_state     the zones' per-person state the catalog keeps, outside the lakehouse
-"${PYTEST[@]}" tests/e2e-py -m "not phase1 and not nats_auth and not rustfs_provisioning and not observability and not edge and not media_catalog and not user_state" \
+"${PYTEST[@]}" tests/e2e-py -m "not phase1 and not nats_auth and not rustfs_provisioning and not observability and not edge and not media_catalog" \
   || failed+=("the lane's suites")
 
 # PHASE 1'S ACCEPTANCE (XC-090), BY ITS MARKER, so a module joins the lane by carrying `phase1`: one drive of the

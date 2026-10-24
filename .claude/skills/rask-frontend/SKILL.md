@@ -123,7 +123,9 @@ can never be unnavigable and a compositor cannot return unnoticed.
 proxies died in the transport convergence, so `makeDockLayoutStore`/`makeDockViewsStore` take a
 `fetcher` shim (`$lib/dock/user-state-fetch.ts`) that maps their two calls onto the zone's
 `readUserStateDoc`/`writeUserStateDoc` and answers with a real `Response` — the store's three
-outcomes (`ok` / `absent` / **`unreadable`**) survive because a status stays a status.
+outcomes (`ok` / `absent` / **`unreadable`**) survive because a status stays a status. **The catalog
+serves no user-state door** ([[LH-513]]): those reads and writes answer 404, so no layout, named view or
+saved view persists until a client keeps that state in its own release.
 
 It is a **thin binding, not a wrapper**: consumers hold the real `DockviewApi` and call its
 documented methods.
@@ -147,7 +149,7 @@ runtime, where nothing fails.
    *removes the element from the document*. Measured: a list scrolled to 260 px returned at 0 while the
    panel's own counter ticked straight through. `'always'` parks panels in the overlay container instead.
 3. **Layout is per-subject, not localStorage.** One `@rask/api/dock-layout` store for the estate, over
-   the catalog's `dock-layout` user-state document on the Dapr state store. Three outcomes —
+   a `dock-layout` user-state document (no service serves one since [[LH-513]]). Three outcomes —
    `ok` / `absent` / **`unreadable`** — and `unreadable` must refuse to save. Treat it as empty and the
    next autosave overwrites a workspace that is still there.
 4. **The dock is dynamically imported.** ~100 KB gzipped in-bundle, on one route of ~11–25. It must
@@ -163,8 +165,7 @@ the first paint rather than a replacement for seeded defaults.
 "+" add-panel picker with search (`PanelPicker`, registries carry `label`/`icon`), whole-panel
 watcher alerts (`alerts.svelte.ts` — bounded, released on dispose, surfaced via `PanelProps.alert`),
 and **named views** (`DockViews` store + `ViewSidebar` — list/active/diverged as runes, persisted in
-the catalog's `dock-layout-library` user-state document, a SEPARATE envelope because `DockLayouts`
-is `extra="forbid"`). Dock chrome popovers use the native Popover API; scope `display` under
+a `dock-layout-library` user-state document, a SEPARATE envelope from the layout's). Dock chrome popovers use the native Popover API; scope `display` under
 `:popover-open` or the author rule beats the UA's closed-state `display:none` **by origin** and the
 closed popover eats clicks. No GSAP on dock chrome. Popout and floating groups remain unwired —
 `dndStrategy: 'pointer'` (chosen for Linux reliability and Playwright testability) *disables

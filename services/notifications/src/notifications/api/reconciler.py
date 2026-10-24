@@ -56,7 +56,7 @@ from service_kit.governed.machine_identity import identity_bearer
 log = logging.getLogger(__name__)
 
 #: The state key the cursor lives under. One key for the service (not per subject), so it carries the
-#: app's own name rather than going through the user-state key derivation.
+#: app's own name rather than an encoded subject (`notifications.subjects`).
 CURSOR_KEY: Final = "notifications-lineage-cursor"
 
 

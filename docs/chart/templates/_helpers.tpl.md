@@ -1156,7 +1156,7 @@ lane. Setting a wider ceiling trades a visibly-broken quantile for a silently-wr
 
 INSEPARABLE from `enabled` above. With obfuscateURLs false daprd logs the raw
 `method + URL.Path`, and the actor URL DOES carry base64url(<oidc sub>) as a path segment
-(service_kit/governed/user_state.py::encode_subject, reversed exactly by decode_subject). With it
+(notifications/subjects.py::encode_subject, reversed exactly by decode_subject). With it
 true daprd logs the matched endpoint NAME instead. This is the one place in this object where a
 subject could reach telemetry, so the two keys ship together or not at all.
 

@@ -31,7 +31,6 @@ from catalog.services.table_claims import DoorTable, ResolvedTable
 from service_kit.control_emit import ControlEmitter, NoopControlEmitter
 from service_kit.control_events import CatalogControlEvent, ControlUuids
 from service_kit.governed import fga
-from service_kit.governed.user_state import UserStateStore
 from service_kit.lakehouse import trash
 from service_kit.openlineage import DatasetUuids
 
@@ -39,14 +38,6 @@ from service_kit.openlineage import DatasetUuids
 log = logging.getLogger(__name__)
 
 SettingsDep = Annotated[Settings, Depends(get_settings)]
-
-
-def get_user_state_store(request: Request) -> UserStateStore | None:
-    """The user-state store client built in the app lifespan, or ``None`` if it was never wired."""
-    return getattr(request.app.state, "user_state", None)
-
-
-UserStateStoreDep = Annotated[UserStateStore | None, Depends(get_user_state_store)]
 
 
 async def _resolve_warehouse_root(request: Request, settings: Settings, top_ns: str) -> tuple[str, str | None] | None:

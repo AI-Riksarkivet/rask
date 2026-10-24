@@ -54,7 +54,7 @@ consequences it does not spell out.
   every member's `src` in the denominator with no edit.
 - **The e2e-stack lane runs every `tests/e2e-py` module it can serve** (ADR 0167). Every offline lane
   deselects `e2e`; the lane's first session selects by the markers a module does NOT carry (`phase1`,
-  `nats_auth`, `observability`, `edge`, `media_catalog`, `user_state`, each with its reason in
+  `nats_auth`, `observability`, `edge`, `media_catalog`, each with its reason in
   `scripts/e2e_stack.sh`), under `--require-live`, so a new module runs on push the day it lands and one
   the lane cannot serve fails the lane. A module that needs what the lane does not stand up gets a
   per-suite marker registered in the root `pyproject.toml` with a `make e2e-<suite>` target (listed in

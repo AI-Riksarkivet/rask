@@ -18,7 +18,7 @@ reach the addresses the platform states in `openbao.egress`, and no other pod do
 store is reached at addresses no URL derives, and the render refuses the rule empty under
 `networkPolicy.enabled`.
 
-## `{{- $ageClients := list "catalog" "openfga-migrate" "backup-pg" }}`
+## `{{- $ageClients := list "openfga-migrate" "backup-pg" }}`
 
 stateStore.scopes appended + uniq'd: the state-store-scoped apps' daprd dial this Postgres directly.
 

@@ -21,8 +21,8 @@ from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from notifications.errors import InboxUnreadable
 from notifications.inbox_actor import INBOX_ACTOR_TYPE, InboxActorInterface
+from notifications.subjects import DAPR_APP_ID_SEPARATOR, encode_subject
 from notifications.watch_actor import WATCH_ACTOR_TYPE, WatchIndexActorInterface
-from service_kit.governed.user_state import DAPR_APP_ID_SEPARATOR, encode_subject
 
 
 if TYPE_CHECKING:

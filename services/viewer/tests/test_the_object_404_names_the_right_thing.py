@@ -25,8 +25,8 @@ from typing import TYPE_CHECKING, cast
 import pytest
 
 from service_kit.exceptions import NotFoundError
-from service_kit.schemas.storage import StorageRole, Store
 from viewer.api.v1.endpoints import objects as objects_ep
+from viewer.core.stores import StorageRole, Store
 
 
 if TYPE_CHECKING:
@@ -46,7 +46,7 @@ async def _allow(**_kw: object) -> bool:
 
 @pytest.fixture(autouse=True)
 def _registry(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(objects_ep, "store_by_name", lambda name: STORE if name == STORE.name else None)
+    monkeypatch.setattr(objects_ep, "store_by_name", lambda name, _raw: STORE if name == STORE.name else None)
 
 
 class _NoBucket:

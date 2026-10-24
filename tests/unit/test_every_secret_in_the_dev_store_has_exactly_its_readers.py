@@ -68,7 +68,7 @@ EXPECTED: Final[dict[str, dict[str, frozenset[str]]]] = {
     "signing-key-rask-sa-maintenance": {"store": frozenset({"maintenance"}), "dapr": frozenset({"maintenance"})},
     "signing-public-rask-sa-catalog": {"store": _CATALOG_VERIFIERS, "dapr": _CATALOG_VERIFIERS},
     "signing-public-rask-sa-maintenance": {"store": _MAINTENANCE_VERIFIERS, "dapr": _MAINTENANCE_VERIFIERS},
-    "dapr-state": {"store": frozenset({"catalog", "flows", "notifications"})},
+    "dapr-state": {"store": frozenset({"flows", "notifications"})},
     "nats-user-catalog": {"store": frozenset({"catalog"})},
     "nats-user-lineage": {"store": frozenset({"lineage"})},
     "nats-user-maintenance": {"store": frozenset({"maintenance"})},

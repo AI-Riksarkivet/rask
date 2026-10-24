@@ -29,7 +29,6 @@ from catalog.core.provenance_guard import RESERVED_METADATA_PREFIXES, is_reserve
 from catalog.core.run_context import INPUTS_HEADER, INPUTS_PROPERTY, RUN_ID_HEADER, RUN_ID_PROPERTY, RunContext
 from catalog.services import native
 from service_kit.governed.audit import ALLOW, audit
-from service_kit.schemas.storage import GOVERNED_TIERS, StorageRole
 
 
 log = logging.getLogger(__name__)
@@ -38,10 +37,11 @@ log = logging.getLogger(__name__)
 #: (`core/provenance_guard.py`), and this is the one key in it a client may name, and only an admin.
 TIER_PROPERTY: Final = "rask.tier"
 
-TIERS: Final = frozenset(tier.value for tier in GOVERNED_TIERS)
+#: The governed tiers, the medallion's three (R23: raw is the external world, never a tier).
+TIERS: Final = frozenset({"bronze", "silver", "gold"})
 
 #: The tiers whose data is derived, so every write adding data to them names its run and inputs.
-DERIVED_TIERS: Final = frozenset({StorageRole.SILVER.value, StorageRole.GOLD.value})
+DERIVED_TIERS: Final = frozenset({"silver", "gold"})
 
 #: The write doors that add data and stamp the request's run into their commit.
 STAMPING_DOORS: Final = frozenset({"create", "insert", "merge_insert"})

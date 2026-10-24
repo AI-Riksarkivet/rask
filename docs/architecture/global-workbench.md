@@ -31,8 +31,8 @@ transport, no mirroring.
 ## What was kept
 
 `@rask/dockview` in full — the binding, the G1–G4 chrome (split menus, the searchable "+" picker,
-panel alerts, named views + `ViewSidebar`), `@rask/api/dock-layout` + `dock-views`, and the
-catalog's `dock-layout` / `dock-layout-library` user-state envelopes. All of it is zone-agnostic
+panel alerts, named views + `ViewSidebar`), and `@rask/api/dock-layout` + `dock-views` (the
+catalog serves no user-state door since LH-513, so their documents persist nowhere). All of it is zone-agnostic
 and all of it now serves the in-zone docks. `dock-reachability.test.ts` pins the docks the estate
 ships, so a compositor cannot return unnoticed.
 

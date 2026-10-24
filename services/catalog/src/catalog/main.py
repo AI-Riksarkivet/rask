@@ -46,7 +46,6 @@ from service_kit.governed.dapr_auth import assert_app_token_configured
 from service_kit.governed.settings import assert_authentication_configured
 from service_kit.governed.signing_key import attach_signing, make_signing_holder, signing_ready_check
 from service_kit.governed.store_session import StoreSession
-from service_kit.governed.user_state import UserStateStore
 from service_kit.lakehouse.lance_metrics import instrument_lance_if_available
 from service_kit.lance_app import build_lance_service_app
 from service_kit.obs import configure_app_logging
@@ -315,15 +314,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         outbox_uri=settings.control_outbox_uri,
         storage_options=settings.storage_options,
     )
-    # Per-subject user state on the Dapr state store (endpoints/user_state.py). Built unconditionally: it
-    # is a client over the local sidecar, so construction is pure and does no I/O — a deployment without a
-    # reachable state store fails at the first request with a fail-closed 503, never at boot, and never by
-    # looking like an empty document set.
-    app.state.user_state = UserStateStore.build(
-        store_name=settings.user_state_store,
-        dapr_http_port=settings.dapr_http_port,
-        timeout_seconds=settings.user_state_timeout_seconds,
-    )
     # RESOLVED LAST, so the probes and the app are up whether or not the key resolved: a catalog that is waiting for
     # its key reports itself not ready and heals in place when the key is published, and a write it has already
     # committed is never failed by an emit that cannot be signed; that emit is withheld, lineage and control alike.
@@ -377,8 +367,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         if dapr_client is not None:
             with suppress(Exception):
                 await dapr_client.close()
-        with suppress(Exception):
-            await app.state.user_state.aclose()
 
 
 async def _namespace_ready(request: Request) -> Readiness:
