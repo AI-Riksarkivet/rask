@@ -4,7 +4,7 @@ Mirrors the atlas ``points_cache``: memoize a query's full result on
 ``(dataset, SELECTED search + its table versions, query hash)``. Any write to a table the query reads
 advances that table's Lance version, so the key changes and the stale entry
 becomes unreachable — Firn's invalidation model, no manual busting. The cache
-lives on :class:`~service_kit.media.state.AppState` (per app instance, never
+lives on :class:`~client_kit.media.state.AppState` (per app instance, never
 module-global) and is sized by ``settings.search_cache_size`` (0 = disabled).
 
 It sits at the ROUTER layer (which owns AppState), so :func:`run_search` stays
@@ -22,14 +22,14 @@ from typing import TYPE_CHECKING, Any
 
 import lance
 
-from service_kit.media.cache_bounds import evict_to_bounds
+from client_kit.media.cache_bounds import evict_to_bounds
 
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
 
+    from client_kit.lancekit.registry import DatasetHandle
     from search.services.spec import SearchSpec
-    from service_kit.lancekit.registry import DatasetHandle
 
 logger = logging.getLogger(__name__)
 

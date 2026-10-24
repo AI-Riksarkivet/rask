@@ -8,14 +8,14 @@ lance-ns merge target instead expects reads to go through the catalog's
 selects which.
 
 Designed host-agnostic + retry-friendly so the catalog path drops into a Dapr
-service-invocation or a Ray-Serve-fronted catalog without touching callers
+service-invocation or a proxy-fronted catalog without touching callers
 (project_merge_runtime_stack): the base URL comes from settings, never a
 hard-coded host, and the transport carries a urllib3 ``Retry``.
 
 Scope (prototype): the dominant read pattern — a scan
 ``to_table(columns=, filter=, limit=, offset=, with_row_id=)`` plus
 ``count_rows`` — is covered end to end, and so is the VERSION surface the
-compare-versions panel needs: version listing (``POST /v1/table/{id}/version/list``,
+comparison of two versions needs: version listing (``POST /v1/table/{id}/version/list``,
 reader-tier governed) and time-travel (the ``version`` pin on ``/query`` /
 ``count_rows``, both honored by the native backend). Blob serving (``take_blobs``
 by stable ``_rowid``) and hybrid ``search`` are the riskier phases the analysis
@@ -334,7 +334,7 @@ def translate_catalog_errors() -> Generator[None]:
     except _api_exc.ConflictException as exc:
         raise ConflictError(f"catalog write conflict: {exc.body}") from exc
     except _api_exc.UnauthorizedException as exc:
-        # 401 is NOT 403, and collapsing them cost real debugging time: a media client sent no
+        # 401 is NOT 403, and collapsing them cost real debugging time: a client sent no
         # bearer, the catalog answered 401, and the browser was told 403 — which reads as "you lack
         # a grant" and sends you looking for a missing FGA tuple that was never the problem. A
         # missing/invalid credential must stay 401 so the next reader can tell authn from authz.
@@ -367,7 +367,7 @@ class RestCatalogTransport:
 
     Host-agnostic (base URL from settings, never hard-coded) + retry-friendly
     (urllib3 ``Retry`` via the generated ``Configuration``) so it drops into a Dapr
-    service-invocation or Ray-Serve-fronted catalog unchanged. Exercised live
+    service-invocation or proxy-fronted catalog unchanged. Exercised live
     against the lance-ns catalog over RustFS by ``tests/test_catalog_live.py``
     (empty-vector scan accepted; responses are Arrow-IPC files).
     """

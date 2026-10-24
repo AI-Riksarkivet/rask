@@ -3,9 +3,7 @@
 Read once at startup via `Settings()`; pass through DI as `SettingsDep`. Never
 re-read env vars in routes or services.
 
-Only the fields the `make_service_app` services (compute, flows, notifications) read live here — the
-viewer-I/O, Lance search and SPA fields died with core-api/search-api/volumes-api
-in the R6/R20 media wave (docs/adr/0112-the-media-plane-absorbs-rask-s-discovery-and-viewing-r5-r6.md). S3 endpoint and
+Only the fields the `make_service_app` services read live here. S3 endpoint and
 credential resolution belongs to `storage` (env-driven: RASK_S3_* / AWS_* /
 HCP_* aliases), not to this class.
 """
@@ -74,7 +72,7 @@ class Settings(BaseSettings):
     # that env var is present, even if this flag is false.
     otel_enabled: bool = Field(default=False, alias="RASK_OTEL_ENABLED")
 
-    # Whether a Dapr sidecar runs beside the app; compute reads it to fail closed on an
+    # Whether a Dapr sidecar runs beside the app; a service reads it to fail closed on an
     # unset app token (`assert_app_token_configured`). DAPR_HTTP_PORT is set by the
     # Dapr sidecar injector in-cluster.
     dapr_enabled: bool = Field(default=False, alias="RASK_DAPR_ENABLED")

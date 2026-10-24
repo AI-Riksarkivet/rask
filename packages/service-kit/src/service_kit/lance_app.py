@@ -1,12 +1,9 @@
-"""THE lance-plane app factory — one assembly for catalog, lineage, medallion and maintenance.
+"""THE lance-plane app factory — one assembly for catalog, lineage and maintenance.
 
-Three factories, three planes, and the split is deliberate rather than accidental:
+Two factories, two planes, and the split is deliberate rather than accidental:
 
-* ``service_kit.make_service_app`` — the FLEET plane (compute, flows,
-  notifications). Routers mount under ``RASK_API_PREFIX``; config is ``service_kit.config.Settings``.
-* ``service_kit.media.app.build_media_app`` — the MEDIA plane (viewer, search, and the clients built on it). Routers
-  mount at the root; config is ``MediaSettings``; CORS must expose the Range headers a browser needs
-  to seek video.
+* ``service_kit.make_service_app`` — the FLEET plane (notifications). Routers mount under
+  ``RASK_API_PREFIX``; config is ``service_kit.config.Settings``.
 * this — the LANCE plane. Routers mount at the root under each service's own paths (``/v1/...``,
   ``/events``, a cron binding's ``/<name>``), config is each service's own ``*Settings``, and the middleware order
   is per-service because the catalog's Arrow-IPC data plane carries load-shedding and a body cap that
@@ -14,9 +11,8 @@ Three factories, three planes, and the split is deliberate rather than accidenta
 
 docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit" DUP-12 counted eight module-level ``app = FastAPI(...)`` entrypoints
 hand-assembling
-the same boot and asked for a ``make_lance_service_app``. The media three are gone (they build through
-``build_media_app`` now); this serves catalog, lineage and maintenance, and what it owns is the part that
-was genuinely identical in all of them:
+the same boot and asked for a ``make_lance_service_app``. This serves catalog, lineage and maintenance, and
+what it owns is the part that is identical in all of them:
 
 1. ``setup_logging()`` BEFORE the app exists. Every module in these services uses
    ``getLogger(__name__)``, and without this they propagate to a root logger with no handlers and are

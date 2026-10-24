@@ -33,8 +33,8 @@ from annotator.api.v1.endpoints import project_events as ev
 from annotator.projects.machines import IllegalTransition
 from annotator.projects.models import AnnotationProject, ProjectState, Task, TaskState
 from annotator.projects.project_actor import DROPPED_KEY, INDEX_KEY, AnnotationProjectActor
+from client_kit.media.deps import get_state
 from service_kit.exceptions import register_handlers
-from service_kit.media.deps import get_state
 
 
 SUBJECT = "henry"

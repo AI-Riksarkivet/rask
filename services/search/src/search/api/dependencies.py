@@ -1,8 +1,8 @@
 """Search-group dependency wrappers — the seam between the app and the router.
 
 The search group owns its own client deps (per §4.4 each router group carries
-its own state deps); only :data:`~service_kit.media.deps.StateDep` is shared, since the
-per-app :class:`~service_kit.media.state.AppState` is the one composition-level resource.
+its own state deps); only :data:`~client_kit.media.deps.StateDep` is shared, since the
+per-app :class:`~client_kit.media.state.AppState` is the one composition-level resource.
 The embedder/reranker deps hand back *zero-arg getters* (bound to that state)
 so the search service keeps its ``Callable[[], Client]`` signature and connects
 lazily on first use. Tests can override any of these via
@@ -16,8 +16,8 @@ from typing import TYPE_CHECKING, Annotated
 
 from fastapi import Depends
 
+from client_kit.media.deps import StateDep
 from search.services.clients import ensure_embedder, ensure_reranker
-from service_kit.media.deps import StateDep
 
 
 if TYPE_CHECKING:

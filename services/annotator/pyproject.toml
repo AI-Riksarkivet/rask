@@ -6,6 +6,8 @@ requires-python = ">=3.13"
 license = "Apache-2.0"
 dependencies = [
     "service-kit[lancekit,governed]",
+    # The media app factory and lifespan the annotator is built on, and the dataset registry it reads.
+    "client-kit",
     "fastapi>=0.115",
     "pydantic>=2.7",
     "uvicorn[standard]>=0.30",
@@ -29,4 +31,5 @@ build-backend = "hatchling.build"
 packages = ["src/annotator"]
 
 [tool.uv.sources]
+client-kit = { workspace = true }
 service-kit = { workspace = true }

@@ -3,7 +3,7 @@
 OpenFGA authenticates its callers and authorizes none of them: any token it admits may call `Write`, `Read`,
 `ListObjects` and `WriteAuthorizationModel` as freely as `Check`. So the estate gives the store as few clients as it
 has writers of grants: the catalog, maintenance and the chart's bootstrap jobs. Every other governed service
-(lineage, notifications, the viewer and search, flows, compute) holds no credential to the store and asks the
+(lineage, notifications) and every client holds no credential to the store and asks the
 catalog's decision door instead, as Lakekeeper is OpenFGA's only client and its OPA bridge asks Lakekeeper's
 `/management/v1/action/batch-check` (authz/opa-bridge/policies/lakekeeper/check.rego).
 

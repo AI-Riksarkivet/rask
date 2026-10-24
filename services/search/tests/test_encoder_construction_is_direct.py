@@ -24,7 +24,7 @@ from service_kit.exceptions import ServiceUnavailableError
 
 
 if TYPE_CHECKING:
-    from service_kit.media.state import AppState
+    from client_kit.media.state import AppState
 
 
 class _Settings:

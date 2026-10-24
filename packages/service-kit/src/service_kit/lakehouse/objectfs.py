@@ -56,7 +56,7 @@ def lance_storage_options(
     parameter could only ever disagree with it. An empty endpoint (AWS proper) answers ``"false"``: the
     regional endpoint the client resolves is TLS. The rule is
     ``service_kit.lakehouse.endpoint_scheme.allow_http_for``, which the catalog's
-    ``namespace_properties`` and ``service_kit.media.config`` call too.
+    ``namespace_properties`` calls too.
 
     AN AMBIENT ``AWS_ALLOW_HTTP`` BEATS THIS KEY, so the derivation holds only in a process without one:
     measured on pylance 12.0.0, the variable won over ``allow_http`` in 5 of 5 fresh processes in each

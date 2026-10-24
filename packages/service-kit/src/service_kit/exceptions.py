@@ -3,15 +3,10 @@
 Routes raise these; never ``HTTPException`` directly. Each subclass maps to a status
 code via the registered handler — one place to change the response shape.
 
-Until this gate the estate carried **two** copies of this module: this one (bound into
-``make_service_app``, and never actually raised from
-anywhere) and the media pair ``media.exceptions`` + ``media.handlers`` (raised
-throughout the media services and lancekit). The ``_problem`` builder and both handler
-bodies were identical; only the member set and the base class differed. They are now one
-module — the unification ``service_kit.media.__init__`` flagged as "a later gate".
+This is the estate's ONE copy: one ``_problem`` builder and one pair of handler bodies, bound into
+``make_service_app`` and shared by every caller that raises a domain error, so two copies cannot drift.
 
-``DomainError`` subclasses :class:`fastapi.HTTPException` (the media lineage's choice, kept
-because it is load-bearing): importing the exception class does NOT pull in the FastAPI
+``DomainError`` subclasses :class:`fastapi.HTTPException` because it is load-bearing: importing the exception class does NOT pull in the FastAPI
 app/router/DI machinery, so non-web service/client modules import these freely, and a
 service-layer raise stays catchable as an ``HTTPException`` while call sites read only the
 domain class names.
@@ -81,8 +76,8 @@ class DomainError(HTTPException):
         # `extensions` are RFC 9457 §3.2 EXTENSION MEMBERS — additional keys on the problem body,
         # which the spec explicitly allows and tells consumers to ignore when unrecognised. Without
         # them a refusal whose substance is STRUCTURED had no way to use this hierarchy at all:
-        # `_problem` flattened everything to one `detail` string, so `flows.create_run` hand-built
-        # its own body and declared `-> RunState | JSONResponse`, an escape hatch around the estate's
+        # `_problem` flattened everything to one `detail` string, so a route hand-built
+        # its own body and declared a `| JSONResponse` return, an escape hatch around the estate's
         # single error plane (FLOWS-422-BYPASSES-HIERARCHY). They can never shadow a standard member
         # — see `_problem`.
         super().__init__(status_code=self.status_code, detail=detail or self.title, headers=headers)

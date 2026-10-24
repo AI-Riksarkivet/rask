@@ -26,16 +26,16 @@ import lance
 import lance_namespace
 from pydantic import BaseModel, ConfigDict
 
+from client_kit.lancekit.descriptor import DESCRIPTOR_METADATA_KEY, Declared, validate_descriptor
+from client_kit.lancekit.introspect import TableInfo, dataset_info
+from client_kit.lancekit.registry import DatasetHandle
+from client_kit.media.state import dataset_handle
 from service_kit.exceptions import ForbiddenError, NotFoundError, ServiceUnavailableError, UnauthorizedError
-from service_kit.lancekit.descriptor import DESCRIPTOR_METADATA_KEY, Declared, validate_descriptor
-from service_kit.lancekit.introspect import TableInfo, dataset_info
-from service_kit.lancekit.registry import DatasetHandle
-from service_kit.media.state import dataset_handle
 
 
 if TYPE_CHECKING:
-    from service_kit.media.config import MediaSettings
-    from service_kit.media.state import AppState
+    from client_kit.media.config import MediaSettings
+    from client_kit.media.state import AppState
 
 
 logger = logging.getLogger(__name__)

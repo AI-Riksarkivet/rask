@@ -33,12 +33,12 @@ from typing import Any
 
 import pytest
 
+from client_kit.lancekit.descriptor import FtsBinding, VectorBinding
 from search.services import service
 from search.services.postprocess import attach_captions
 from search.services.spec import SearchSpec
 from search.services.target import SearchTarget
 from service_kit.exceptions import ValidationError
-from service_kit.lancekit.descriptor import FtsBinding, VectorBinding
 
 
 #: What Lance raises for a malformed caller predicate, verbatim in shape (see `query_errors`).

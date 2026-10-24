@@ -2,7 +2,7 @@
 
 A blob-v2 column is labelled ``"blob"`` (not its verbose extension storage type), a fixed-size vector as
 ``"array<elem>"``, binary as ``"binary"``, and a JSON column as ``"json"`` — so the feed and a forwarded
-graph backend show meaningful column types for media tables (``payload : blob``, ``embedding : array<float>``,
+graph backend show meaningful column types for multimodal tables (``payload : blob``, ``embedding : array<float>``,
 ``thumbnail : binary``, ``alignments_json : json``) instead of the raw pyarrow repr.
 """
 

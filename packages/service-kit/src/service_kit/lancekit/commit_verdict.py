@@ -39,8 +39,7 @@ __all__ = ["CommitVerdict", "classify_commit_failure"]
 class CommitVerdict(Enum):
     """What a failed commit means, independent of which plane's error type will carry it.
 
-    A plain ``Enum``, matching the estate's one other verdict type (`viewer`'s ``RangeVerdict``): this
-    is dispatched on, never serialised, so a ``str`` base would advertise an interchange format nothing
+    A plain ``Enum``: this is dispatched on, never serialised, so a ``str`` base would advertise an interchange format nothing
     reads. Not a ``Literal`` alias — the estate's idiom for a closed set of strings that CROSS a
     boundary (`ControlAction`, `RunStatus`, `Rung`) — because these values cross none.
     """

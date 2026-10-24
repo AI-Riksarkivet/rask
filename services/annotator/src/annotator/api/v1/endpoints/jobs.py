@@ -21,10 +21,10 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
 from annotator.api.security import SettingsDep
+from client_kit.media.deps import StateDep
+from client_kit.media.state import AppState
 from service_kit.exceptions import ServiceUnavailableError
 from service_kit.governed.dapr_auth import require_dapr_token
-from service_kit.media.deps import StateDep
-from service_kit.media.state import AppState
 
 
 logger = logging.getLogger(__name__)

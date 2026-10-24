@@ -151,7 +151,7 @@ def _chunk_rows() -> dict[str, list]:
 def _s3_options() -> dict[str, str]:
     """Lance ``storage_options`` for an s3:// root, from SEED_S3_* (names shared with seed_bronze_pages).
 
-    The same option keys `service_kit.media.config.Settings.storage_options` builds for the READERS —
+    The same option keys `client_kit.media.config.Settings.storage_options` builds for the READERS —
     the seed must speak the dialect the viewer/search/annotator will read with, or the corpus works
     for whoever wrote it and nobody else.
     """

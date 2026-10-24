@@ -24,6 +24,8 @@ from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
 from pydantic import ValidationError as PydanticValidationError
 from starlette.concurrency import run_in_threadpool
 
+from client_kit.lancekit.registry import DatasetHandle
+from client_kit.media.state import AppState, dataset_handle
 from search.api.dependencies import EmbedderFactoryDep, RerankerFactoryDep, StateDep
 from search.api.security import AuthorizedCorpora, CheckerDep, CurrentSubject, SettingsDep, require_search
 from search.core.rate_limit import SEARCH_LIMIT, SEARCH_SCOPE, limiter
@@ -36,8 +38,6 @@ from search.services.spec import PostSearchSpec, SearchMode, SearchSpec
 from search.services.target import resolve_target
 from search.services.vector import vector_search
 from service_kit.exceptions import DomainError, ValidationError
-from service_kit.lancekit.registry import DatasetHandle
-from service_kit.media.state import AppState, dataset_handle
 
 
 logger = logging.getLogger(__name__)

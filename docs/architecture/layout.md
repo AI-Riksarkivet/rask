@@ -18,11 +18,12 @@ flowchart TD
         end
         subgraph packages["packages/ · reusable libraries (no entrypoints)"]
             psk["service-kit"]
+            pck["client-kit"]
             plk["lineage-kit"]
             pst["storage"]
             prk["ray-kit"]
             ptv["validate"]
-            prc["ray-cluster-env (deps only)"]
+            prc["ray-cluster-env (Ray env + tracing hooks)"]
         end
         cx["scripts/ · dev + ops tools"]
     end
@@ -34,7 +35,9 @@ flowchart TD
     lake --> psk
     lake --> plk
     fleet --> psk
-    annot --> psk
+    media --> pck
+    annot --> pck
+    pck --> psk
     mf --> fpk
 ```
 
@@ -46,12 +49,13 @@ plane, and language purity is what lets both workspaces glob their members.
 
 | Package | Language | Purpose |
 |---|---|---|
-| `packages/service-kit` | Python | Platform library: `make_service_app` app factory, `Settings`/config, exceptions, middleware, `get_settings`, injectable lifespan, plus the governed (`service_kit.governed`) and lakehouse (`service_kit.lakehouse`) seams. Dependency-light (no lancedb/ray/sqlmodel). |
+| `packages/service-kit` | Python | Platform library: `make_service_app` app factory, `Settings`/config, exceptions, middleware, `get_settings`, injectable lifespan, plus the governed (`service_kit.governed`) and lakehouse (`service_kit.lakehouse`) seams. Dependency-light (no lancedb/ray/sqlmodel), and carries no code only a client runs. |
+| `packages/client-kit` | Python | Code the lakehouse's clients share and the lakehouse never runs: the media app factory and lifespan, the lancedb dataset registry and descriptors, the per-route rate limiter. Used by viewer, search and the annotator; the lakehouse may not import it. |
 | `packages/lineage-kit` | Python | The OpenLineage emission kernel and the Ed25519 signing and verifying seam for lineage events, used by catalog, lineage, maintenance and notifications. |
 | [`packages/storage`](../packages/storage.md) | Python | The S3 client seam (`s3_client`, `configured_endpoint`, STS, the `StorageError` family) plus `FSSource/Sink`, `S3Source/Sink`, `iter_keys` and `build_source`/`build_sink`. |
 | `packages/ray-kit` | Python | Ray Job SDK + dashboard wrapper (schemas, `build_client`, `RAY_TRANSIENT_ERRORS`, dashboard service). Used by the `compute` service only; the lakehouse may not import it. |
 | `packages/validate` | Python | Pre-upload image validation over bytes or paths. |
-| `packages/ray-cluster-env` | Python | A deps-only member (ships no code) naming the Ray images' platform environment. |
+| `packages/ray-cluster-env` | Python | The Ray images' platform environment and the tracing hooks the head and Serve are configured with (`ray_cluster_env.tracing`). |
 | `frontend/packages/ui` | TS / Svelte | `@rask/ui`: Svelte 5 + Bits UI + Tailwind 4 component library with Storybook; `@rask/ui/shell` exports the shared `AppShell` every zone renders. |
 | `frontend/packages/api` | TS | `@rask/api`: the typed `/api/*` client (relative paths; SSR rewrites them to `RASK_EDGE_URL`) plus the OIDC/BFF plane and the lineage client. |
 | `frontend/packages/explorer-api` | TS | `@rask/explorer-api`: the Arrow-backed explorer/viewer client. |

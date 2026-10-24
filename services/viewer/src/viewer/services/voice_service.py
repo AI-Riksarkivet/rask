@@ -2,7 +2,7 @@
 
 Port of the old ``backend/voice/service.py`` for the media_api group: the
 retrieval logic is unchanged, but every table/column that used to be hardcoded
-is now resolved from the request's :class:`~service_kit.lancekit.registry.DatasetHandle`
+is now resolved from the request's :class:`~client_kit.lancekit.registry.DatasetHandle`
 descriptor — the voice/speakers capability targets, the row table, the identity
 key fields, and the time axis. The hit post-processing (empty ``alignments`` +
 representative-frame caption attach) is vendored here rather than imported from
@@ -30,9 +30,9 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 from pydantic import BaseModel
 
+from client_kit.lancekit import store
+from client_kit.lancekit.predicate import and_, eq, isin, ne
 from service_kit.exceptions import NotFoundError, ServiceUnavailableError, ValidationError
-from service_kit.lancekit import store
-from service_kit.lancekit.predicate import and_, eq, isin, ne
 from viewer.schemas.voice import (
     VoiceAnchor,
     VoiceIdentityAppearance,
@@ -52,8 +52,8 @@ from viewer.services.audio_prep import (
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from service_kit.lancekit.descriptor import Declared
-    from service_kit.lancekit.registry import DatasetHandle
+    from client_kit.lancekit.descriptor import Declared
+    from client_kit.lancekit.registry import DatasetHandle
     from viewer.services.audio_prep import TurnBatchEncoder
 
 logger = logging.getLogger(__name__)

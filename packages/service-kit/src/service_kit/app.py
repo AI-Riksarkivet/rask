@@ -2,12 +2,12 @@
 
 `make_service_app` builds a FastAPI app with shared config, exception handlers, middleware, probes
 and logging. Both the lifespan and the settings are injectable: stateless services get the minimal
-`default_lifespan` (settings only); services needing resources (Lance, Ray, S3) pass their own
+`default_lifespan` (settings only); services needing resources (Lance, S3) pass their own
 factory.
 
 THIS IS A SUBMODULE, and it used to be `service_kit/__init__.py` itself. Being the package `__init__`
 meant that importing ANYTHING under `service_kit` — `service_kit.config` for a `Settings`,
-`service_kit.exceptions` for an error type, `service_kit.lakehouse.*` from a Ray job — first executed
+`service_kit.exceptions` for an error type, `service_kit.lakehouse.*` from a writer's job — first executed
 this module and therefore imported FastAPI, python-dotenv, the OTel wiring, the middleware stack and
 the probe router. Every consumer paid for the app factory whether it wanted an app or not, and the
 package had no way to say what its surface was. `service_kit/__init__.py` now re-exports these names
@@ -109,7 +109,7 @@ def build_settings() -> Settings:
 def default_lifespan(settings: Settings) -> Callable[[FastAPI], AbstractAsyncContextManager[None]]:
     """Minimal lifespan for stateless services: expose `settings` on `app.state`.
 
-    Services that need resources (DB, Lance, Ray, S3) inject their own factory.
+    Services that need resources (Lance, S3) inject their own factory.
     """
 
     @asynccontextmanager
@@ -168,14 +168,14 @@ def make_service_app(
 ) -> FastAPI:
     """Build a backend FastAPI app with shared config/handlers/middleware.
 
-    `routers` are mounted under `settings.api_prefix`; `proxy_router` (the Ray
-    Serve proxy) is mounted at the root. The lifespan defaults to the minimal
+    `routers` are mounted under `settings.api_prefix`; `proxy_router` is
+    mounted at the root, outside the prefix. The lifespan defaults to the minimal
     `default_lifespan` unless `lifespan=` is passed.
 
-    `settings` IS INJECTABLE, and omitting it builds one from the environment. Every caller (compute,
-    flows, notifications) builds its app at MODULE level, so without this parameter `build_settings()` —
+    `settings` IS INJECTABLE, and omitting it builds one from the environment. Every caller builds its
+    app at MODULE level, so without this parameter `build_settings()` —
     `load_dotenv()` plus a whole `Settings` validation off the process environment — would run as an
-    unavoidable side effect of `import compute` / `import flows` / `import notifications`. Nothing could state
+    unavoidable side effect of importing the service (`import notifications`). Nothing could state
     the configuration it wanted: a caller could only mutate the environment and hope it got there before the import did. Passing an object closes that,
     and it is the same object the router prefix, the docs URLs, the middleware, `app.state.settings`
     and the lifespan factory all see — one instance, not a re-read per consumer.
@@ -199,11 +199,11 @@ def make_service_app(
             # THE LIFECYCLE FLAGS `/readyz` READS ARE SET HERE, for every app this factory builds.
             #
             # `service_kit.probes` gates readiness on `startup_complete` / `shutting_down`, and those
-            # two names were a CONVENTION between the probe and each service's own lifespan. Five of
-            # the apps built here — compute, controlplane, ingest, flows, notifications — never held
-            # up their end, so `/readyz` answered `starting` for the whole life of every one of those
-            # pods and the drain never began. compute's lifespan even logs the string
-            # "startup_complete" while setting no attribute, which is how the miss read as done.
+            # two names were a CONVENTION between the probe and each service's own lifespan. Left to
+            # the lifespans, five of the apps built here never held up their end, so `/readyz`
+            # answered `starting` for the whole life of every one of those pods and the drain never
+            # began; one lifespan logged the string "startup_complete" while setting no attribute,
+            # which is how the miss read as done.
             #
             # AFTER the base lifespan has entered, never before: the base builds the resources the
             # service needs, so announcing readiness ahead of it would be a lie about a half-built
@@ -248,8 +248,8 @@ def make_service_app(
     #
     # `service_kit.probes` exists so the estate has ONE drain-aware `/livez` + `/readyz` pair — its own
     # docstring records that the same twenty lines had already drifted three ways across six hand-rolled
-    # copies. This factory then mounted it nowhere, so compute, controlplane, flows and ingest served
-    # neither probe at all and only notifications root-mounted it by hand.
+    # copies. Left to each app, four of the five apps this factory built served neither probe at all
+    # and one root-mounted it by hand; mounting it here makes the pair unconditional.
     #
     # ROOT, not under `api_prefix`: a kubelet does not know a service's prefix. Unconditional because
     # the router is dependency-free — `ready_check` is the optional half, for a service with a hard

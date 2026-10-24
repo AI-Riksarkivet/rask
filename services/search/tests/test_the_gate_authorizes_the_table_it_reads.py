@@ -31,14 +31,14 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-import service_kit.media.state as state_mod
+import client_kit.media.state as state_mod
+from client_kit.lancekit.descriptor import Declared
+from client_kit.media.authz import corpus_object
 from search.api import security
 from search.api.dependencies import StateDep
 from search.api.v1 import router as router_module
 from search.core.config import SearchSettings, get_search_settings
 from service_kit.exceptions import register_handlers
-from service_kit.lancekit.descriptor import Declared
-from service_kit.media.authz import corpus_object
 
 
 DATASET = "vasa"
@@ -86,7 +86,7 @@ def _client(monkeypatch: pytest.MonkeyPatch, *, granted: set[str], checked: list
     """The search app with the corpus resolved to `_Handle` and a checker that grants `granted`.
 
     Both resolution sites are patched: the gate imports `dataset_handle` from
-    `service_kit.media.state` inside `may_search`, the handler holds it in the router's namespace.
+    `client_kit.media.state` inside `may_search`, the handler holds it in the router's namespace.
     """
     monkeypatch.setattr(state_mod, "dataset_handle", lambda *_a, **_k: _Handle())
     monkeypatch.setattr(router_module, "dataset_handle", lambda *_a, **_k: _Handle())

@@ -24,7 +24,7 @@ The three-outcome checker is the load-bearing part, and the middle case is why i
 # PARAM. Every gated route then answers `422 {"field": "query.settings", "message": "Field
 # required"}` instead of authorizing, and the checker never runs.
 #
-# It shipped that way. `viewer/api/v1/endpoints/datasets.py` — the corpus-list gate — was affected
+# It shipped that way. A dataset-list gate was affected
 # from the day it landed, and its tests did not catch it because they override
 # `CheckerDep.__metadata__[0].dependency`, which replaces the sub-dependency whose signature is the
 # broken one. Found 2026-08-04 while gating the object routes (#90), by building a bare app with no
@@ -170,16 +170,14 @@ def make_auth_deps(settings_dep: Any) -> AuthDeps:
         verified token proves (`<idp-id>~<user id>`) and nothing else: there is deliberately no header fallback,
         because a fallback is what turns "verified subject" back into "whatever the caller claimed".
 
-        **IT IS ALSO PUBLISHED ON `request.state`, and that is not incidental.** `rate_limit.by_subject`
-        reads `request.state.subject` and falls back to the client IP; nothing in the estate ever wrote
-        it, so the subject branch was dead and every request fell to the IP branch. Behind a proxy the
-        observed IP is the proxy's pod, so one bucket served every caller — worse than no limiter,
-        because a single caller could exhaust everyone's quota.
+        **IT IS ALSO PUBLISHED ON `request.state`, and that is not incidental.** A per-route rate limiter
+        keys a request by `request.state.subject` and falls back to the client IP when nothing published
+        one. Behind a proxy the observed IP is the proxy's pod, so an unpublished subject puts every caller
+        in one bucket — worse than no limiter, because a single caller can exhaust everyone's quota.
 
-        Published HERE rather than in the limiter because the limiter is a slowapi key function running
-        outside the dependency graph: it cannot ask for a subject, so the subject has to leave one. And
-        here rather than per-service so every route on this dependency is keyed correctly, not just the
-        one service that happened to notice.
+        Published HERE rather than in a limiter because a limiter's key function runs outside the
+        dependency graph: it cannot ask for a subject, so the subject has to leave one. And here rather
+        than per-service so every route on this dependency is keyed correctly.
         """
         subject = token.subject if token is not None else ANONYMOUS_SUBJECT
         request.state.subject = subject

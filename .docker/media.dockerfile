@@ -89,7 +89,7 @@ COPY --from=builder --link /opt/venv /opt/venv
 # DECLARED dependency is invisible to the workspace venv (a sibling member resolves it) and can
 # only be seen here, where the deployable's own closure is the only one present. See the script.
 COPY .docker/import-gate.py /tmp/import-gate.py
-RUN --network=none /opt/venv/bin/python /tmp/import-gate.py viewer search && rm /tmp/import-gate.py
+RUN --network=none /opt/venv/bin/python /tmp/import-gate.py viewer search client_kit && rm /tmp/import-gate.py
 
 # Strip setuid/setgid bits from the whole shipped filesystem (base account tools passwd/chsh/... +
 # anything in the venv) — no use in a container, residual privesc surface. Own RUN so its `|| true`

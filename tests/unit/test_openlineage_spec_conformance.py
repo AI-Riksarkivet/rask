@@ -30,10 +30,10 @@ from openlineage.client import facet_v2
 
 from catalog.core import lineage_emit as catalog_emit
 from catalog.core.run_context import RunContext
+from client_kit.lancekit import openlineage as lancekit_ol
 from lineage.models import ColumnUpstream, Dataset, RunEvent
 from maintenance.core import lineage_emit as compaction_emit
 from service_kit import openlineage as ol
-from service_kit.lancekit import openlineage as lancekit_ol
 
 
 _SPEC_PATH = Path(__file__).resolve().parents[1] / "data" / "openlineage-2-0-2.json"

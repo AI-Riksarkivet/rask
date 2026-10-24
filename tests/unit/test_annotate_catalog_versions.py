@@ -29,12 +29,12 @@ from fastapi.testclient import TestClient
 from annotator.annotations import versions, wire
 from annotator.annotations.router import router as annotations_router
 from annotator.corpus import Corpus
+from client_kit.lancekit.descriptor import DatasetDescriptor, Declared
+from client_kit.lancekit.registry import DatasetHandle
+from client_kit.media.config import Settings
+from client_kit.media.state import AppState
 from service_kit.exceptions import NotFoundError, register_handlers
-from service_kit.lancekit.descriptor import DatasetDescriptor, Declared
 from service_kit.lancekit.reader import CatalogVersion
-from service_kit.lancekit.registry import DatasetHandle
-from service_kit.media.config import Settings
-from service_kit.media.state import AppState
 
 
 if TYPE_CHECKING:

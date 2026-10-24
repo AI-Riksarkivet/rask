@@ -1,7 +1,7 @@
 """The annotator's governed-auth seam: a VERIFIED subject, and authz that fails closed.
 
 `services/annotator` served the read-plane and took its author from a trusted `X-User` header
-(`service_kit.media.deps.get_author`, defaulting to `"anon"`). That is fine for reads and a
+(`client_kit.media.deps.get_author`, defaulting to `"anon"`). That is fine for reads and a
 cross-user leak for annotation projects, whose every entity is keyed on who owns or claims it.
 
 These tests pin the two properties that make the difference real:
@@ -148,7 +148,7 @@ def test_oidc_without_issuer_and_audience_is_refused_at_construction(monkeypatch
 #
 # This file already pinned the projects plane ("X-User used to BE the identity; it must now be
 # inert") — but the two Lance WRITE routes kept the old seam: `save_annotations` and `apply_tags`
-# stamped `service_kit.media.deps.get_author`'s value as the reviewer, so any caller could sign
+# stamped `client_kit.media.deps.get_author`'s value as the reviewer, so any caller could sign
 # another person's name onto annotation provenance by setting a header. The independent re-audit
 # (2026-08-28) confirmed it live at HEAD and noted the sharp part: the gateway's spoofable-header
 # strip covers `dapr-*` and `x-forwarded-*` but not `x-user`, so the header sailed through the edge.

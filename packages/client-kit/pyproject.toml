@@ -1,0 +1,36 @@
+[project]
+name = "client-kit"
+version = "0.1.0"
+description = "Shared code of the lakehouse's own clients (the media app factory, the dataset registry, the rate limiter); the lakehouse imports none of it."
+requires-python = ">=3.13"
+license = "Apache-2.0"
+dependencies = [
+    # `client_kit.media.lifespan` attaches the governed auth posture (`service_kit.governed`), and the dataset registry
+    # reads through `service_kit.lancekit` (pylance, pyarrow and the spec's REST client ride that extra).
+    "service-kit[governed,lancekit]",
+    "fastapi>=0.115",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.5",
+    "httpx>=0.27",
+    "pyarrow",
+    "pylance[otel]>=13.0.0",
+    # `client_kit.lancekit.registry` opens every dataset it serves with a lancedb connection.
+    "lancedb>=0.40.0",
+]
+
+[project.optional-dependencies]
+# Rate limiting is its own extra: metering a route is one client's concern, and a client that wants no limiter pulls no
+# slowapi.
+ratelimit = [
+    "slowapi>=0.1.10",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/client_kit"]
+
+[tool.uv.sources]
+service-kit = { workspace = true }

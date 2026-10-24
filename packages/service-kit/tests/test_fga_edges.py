@@ -12,11 +12,9 @@ these pin the branches no create door reaches.
 
 Deliberately in **service-kit's** own suite rather than ``tests/unit/``: these exercise
 ``service_kit.governed.fga`` alone, and the root ``tests/unit/test_fga_revoke.py`` imports
-``catalog.api.fga_deps``, which pulls the catalog's ``lancekit`` extra (pylance + lancedb) in behind
-it. That import is why the FGA suite needs ``uv sync --all-packages``; these need only
-``uv sync --package service-kit --extra governed``, which is seconds and — measured 2026-08-09 —
-the difference between running and not running at all on macOS/x86_64, where lancedb publishes no
-wheel.
+``catalog.api.fga_deps``, which pulls the catalog's Lance stack (pylance) in behind it. That import is
+why the FGA suite needs ``uv sync --all-packages``; these need only
+``uv sync --package service-kit --extra governed``, which is seconds.
 
 Sync via stdlib ``asyncio.run``, matching test_fga_revoke / test_fga_resilience — no pytest-asyncio
 dependency (this repo does not set ``asyncio_mode``).

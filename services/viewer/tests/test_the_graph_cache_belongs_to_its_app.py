@@ -25,7 +25,7 @@ from typing import Any
 
 import pytest
 
-from service_kit.media.state import AppState
+from client_kit.media.state import AppState
 from viewer.api.v1.endpoints import graph as graph_ep
 
 

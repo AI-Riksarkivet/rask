@@ -18,7 +18,7 @@ WaitForServeDeploymentReady. Fleet consumers (compute) still get the pair via
 rask.rayAuthEnv — that half stays chart-wired. Requires rayVersion >= 2.52.0
 (operator validation); we pin {{ .Values.ray.rayVersion }}.
 
-## `tracing-startup-hook: "service_kit.ray_tracing:setup_tracing"`
+## `tracing-startup-hook: "ray_cluster_env.tracing:setup_tracing"`
 
 Ray CORE tracing. HEAD ONLY, and that is not a simplification: the hook is persisted to
 GCS internal KV by `start_head_processes()` and every Python process that connects reads

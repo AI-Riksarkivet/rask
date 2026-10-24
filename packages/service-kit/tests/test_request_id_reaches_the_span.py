@@ -7,8 +7,8 @@ client, and joined to no span and no log".
 without a hook on the instrumentation that id reaches no span, and a caller holding an `X-Request-ID`
 from a failed call has a value that correlates with nothing. The hook is the join, and it belongs in
 `setup_otel` rather than in another middleware: it runs INSIDE the instrumentation and buffers
-nothing, so it is safe on the `/api/explorer` Range streaming that 206 video seeking depends on, where
-a `BaseHTTPMiddleware` layer is refused outright (`service_kit.media.middleware`).
+nothing, so it is safe on a streamed body such as a 206 Range response, where a `BaseHTTPMiddleware` layer
+fully buffers the body and cannot be used.
 
 THE HOOK'S REACH IS THE `setup_otel` FAMILY, not the estate. It is a Python callable passed to
 `FastAPIInstrumentor.instrument_app`, so only an app that wires the SDK in process can install it —

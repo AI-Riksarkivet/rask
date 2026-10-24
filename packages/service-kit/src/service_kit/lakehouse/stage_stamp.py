@@ -8,8 +8,8 @@ dataset's, so two stamps that place a column differently leave schemas that are 
 reason.
 
 PURE AT IMPORT, and pure per function but one. The stamp is a table in, a table out — no storage
-options, no lance, no Ray — which is what lets one function serve a writer that holds a
-`LanceDataset` and one that holds a Ray batch, and it is the `writing-python` § "Mixed I/O and
+options, no lance, no engine — which is what lets one function serve a writer that holds a
+`LanceDataset` and one that holds an engine's Arrow batch, and it is the `writing-python` § "Mixed I/O and
 business logic" rule applied. The single exception, `ensure_declared_dataset_id`, takes a dataset
 because the thing it repairs only exists on one; it imports lance LAZILY so this module stays
 importable wherever the stamp is wanted.

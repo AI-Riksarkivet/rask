@@ -1,7 +1,7 @@
 """The media trio is assembled ONCE (docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit" DUP-16 + X12 + DUP-20).
 
 `viewer`, `search` and `annotator` are three deployments of one shape — a Lance media service over
-`service_kit.media` — and each hand-assembled that shape in its own `main.py`. Three findings live on
+`client_kit.media` — and each hand-assembled that shape in its own `main.py`. Three findings live on
 that one surface:
 
 * **DUP-16** — the lifespan body was copy-pasted three ways (build `AppState`, warm the default
@@ -13,7 +13,7 @@ that one surface:
   search's. A regression in exactly the layer their production comments describe (an
   `UnauthenticatedError` answering 500 instead of 401) could not be caught through the seam.
 * **DUP-20** — `service_kit` exported two different `register_middleware` functions under one name
-  (`service_kit.middleware` and `service_kit.media.middleware`), imported bare by different callers,
+  (`service_kit.middleware` and `client_kit.media.middleware`), imported bare by different callers,
   so a call site did not say which stack it registered.
 """
 
@@ -30,8 +30,8 @@ def _seam_app(name: str) -> FastAPI:
         from viewer.main import create_viewer_app
 
         return create_viewer_app()
+    from client_kit.media.state import AppState
     from search.main import create_search_app
-    from service_kit.media.state import AppState
 
     return create_search_app(AppState())
 

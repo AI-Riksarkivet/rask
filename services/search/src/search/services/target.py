@@ -1,6 +1,6 @@
 """Descriptor → runtime search target: the one place table/column names resolve.
 
-``resolve_target`` turns a :class:`~service_kit.lancekit.registry.DatasetHandle`
+``resolve_target`` turns a :class:`~client_kit.lancekit.registry.DatasetHandle`
 into a :class:`SearchTarget` holding the opened Lance handles plus every name
 the retrieval modules need (key fields, hit projection, bindings). Nothing
 downstream of this module reads the descriptor, so the "all corpus knowledge
@@ -14,13 +14,13 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
+from client_kit.lancekit.descriptor import Declared, FtsBinding, VectorBinding
+from client_kit.lancekit.introspect import TableInfo
+from client_kit.lancekit.registry import DatasetHandle
 from search.services.constants import DURATION_COLUMN
 from search.services.filters import topic_layer_columns
 from search.services.spec import SearchMode
 from service_kit.exceptions import ValidationError
-from service_kit.lancekit.descriptor import Declared, FtsBinding, VectorBinding
-from service_kit.lancekit.introspect import TableInfo
-from service_kit.lancekit.registry import DatasetHandle
 
 
 logger = logging.getLogger(__name__)

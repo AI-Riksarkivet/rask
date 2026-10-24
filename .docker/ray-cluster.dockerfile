@@ -42,9 +42,9 @@ WORKDIR /app
 
 # The PLATFORM compute environment, from the ROOT workspace lock.
 #
-# `packages/ray-cluster-env` is a deps-only member NAMING this image's environment: ray[data,
-# default,serve], jinja2 and service-kit (for `service_kit.ray_tracing`) — what the head runtime needs
-# (its pyproject carries the measured incidents). The head bakes no job (ADR 0155), so the Lance plane
+# `packages/ray-cluster-env` NAMES this image's environment and ships its tracing hooks
+# (`ray_cluster_env.tracing`): ray[data,default,serve], jinja2 and the OTel SDK and exporter — what the
+# head runtime needs (its pyproject carries the measured incidents), and no lakehouse kit. The head bakes no job (ADR 0155), so the Lance plane
 # is not here. Building from the root lock means this image and the fleet resolve the SAME versions by
 # construction.
 #
@@ -132,6 +132,11 @@ ENV PATH=/opt/venv/bin:$PATH \
     MKL_NUM_THREADS=1 \
     NUMEXPR_NUM_THREADS=1 \
     PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+
+# The import gate: the tracing hooks the head is configured with import against the venv this image ships, and the
+# lakehouse's kit is absent from it ([[XC-178]]).
+COPY .docker/import-gate.py /tmp/import-gate.py
+RUN --network=none /opt/venv/bin/python /tmp/import-gate.py ray_cluster_env --absent service_kit && rm /tmp/import-gate.py
 
 # NUMERIC, not `app`. The kubelet compares runAsNonRoot against a NUMBER, so a named user is
 # refused outright — `cannot verify user is non-root` — and the container never starts while its

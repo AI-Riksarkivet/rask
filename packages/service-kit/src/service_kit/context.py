@@ -70,9 +70,9 @@ class CorrelationFilter(logging.Filter):
 # uvicorn's `color_message` is an ANSI copy of the message meant for uvicorn's formatter to substitute
 # (`uvicorn/logging.py:61`) — rendering it prints every startup line in the fleet twice.
 #
-# PRIVATE NAMES GO WITH THEM, and a library in this estate is why rather than a principle: importing Ray
-# installs a log record factory that stamps `_ray_timestamp_ns` — a nanosecond integer — on EVERY record
-# in the process (`ray/_private/log.py:71-88`), so the compute service and the whole Ray lane would have
+# PRIVATE NAMES GO WITH THEM, and a library's behaviour is why rather than a principle: an engine SDK can
+# install a log record factory that stamps a private nanosecond integer on EVERY record in the process
+# (measured: `_ray_timestamp_ns`, `ray/_private/log.py:71-88`), so every process that imports it would have
 # grown that field on every line. Naming it would fix this release and miss the next field it adds;
 # leading-underscore is the convention a library reaches for when it means "mine, not the caller's", and
 # no diagnostic in `services/` or `packages/` is named that way.
@@ -113,8 +113,8 @@ class DiagnosticFormatter(logging.Formatter):
     Secrets are the standing hazard of a tail like this, and the rule that keeps them out is the same
     one that governs `extra=` itself: a secret's NAME may be recorded, never its value. Audited at the
     time of writing across every `extra=` in `services/` and `packages/` — the only credential-shaped
-    keys are `{"secret": secret}` in the viewer and ingest object-store paths, both of which hold the
-    Dapr secret's name. `services/maintenance/tests/test_the_rewrite_is_signed_by_a_scoped_credential.py`
+    keys are two `{"secret": secret}` object-store paths, both of which hold the Dapr secret's name.
+    `services/maintenance/tests/test_the_rewrite_is_signed_by_a_scoped_credential.py`
     asserts on the whole record for exactly this reason.
     """
 

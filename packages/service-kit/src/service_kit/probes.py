@@ -5,10 +5,9 @@ contract). These two are for a process supervisor / load balancer: livez proves 
 loop is responsive, readyz reports lifecycle gating off ``app.state`` plus — optionally —
 one service-specific hard-dependency check.
 
-Before this module the same twenty lines lived, hand-rolled, in six places (catalog, lineage,
-the two medallion apps, compaction, and ``service_kit.media.probes``) and had already drifted
+Before this module the same twenty lines lived, hand-rolled, in six places and had already drifted
 three ways: the gate order (shutdown-first vs startup-first), the body shape (a bare
-``{"status": ...}`` dict vs the ``Readiness`` model), and — in the media copy — a sync ``def``
+``{"status": ...}`` dict vs the ``Readiness`` model), and — in one copy — a sync ``def``
 handler, which puts liveness on the blocking threadpool where it queues behind heavy Arrow/Lance
 work and fails exactly when the pod is busiest. One home, one shape, ``async def``.
 

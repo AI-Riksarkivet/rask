@@ -1,6 +1,6 @@
 """SK-06 (surviving half) — the viewer's ``_registry`` must not race first-build.
 
-``service_kit.media.state.dataset_handle`` guards its lazy ``DatasetRegistry``
+``client_kit.media.state.dataset_handle`` guards its lazy ``DatasetRegistry``
 build with ``state.registry_lock``; the viewer's enumeration path carried a
 VERBATIM UNLOCKED COPY of the same construction. Sync work runs in the
 threadpool, so two concurrent first ``GET /datasets`` calls both observe
@@ -8,7 +8,7 @@ threadpool, so two concurrent first ``GET /datasets`` calls both observe
 whatever Lance/S3 handles it already opened) is silently discarded.
 
 The fix is de-duplication, not a second lock: ONE guarded lazy-init in
-``service_kit.media.state`` that both ``dataset_handle`` and the viewer's
+``client_kit.media.state`` that both ``dataset_handle`` and the viewer's
 enumeration path go through. This test drives two threads into the viewer's
 entry point and asserts exactly one construction, whichever module the
 construction is reached through.
@@ -21,9 +21,9 @@ import threading
 
 import pytest
 
-from service_kit.lancekit import registry as registry_mod
-from service_kit.media.config import Settings
-from service_kit.media.state import AppState
+from client_kit.lancekit import registry as registry_mod
+from client_kit.media.config import Settings
+from client_kit.media.state import AppState
 from viewer.api.v1.endpoints import datasets as datasets_mod
 
 

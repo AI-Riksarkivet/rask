@@ -31,9 +31,9 @@ import lance_graph as lg
 from fastapi import APIRouter, Query
 from pydantic import BaseModel, ConfigDict
 
-from service_kit.lancekit import store
-from service_kit.media.deps import DatasetParam, StateDep
-from service_kit.media.state import AppState, dataset_handle
+from client_kit.lancekit import store
+from client_kit.media.deps import DatasetParam, StateDep
+from client_kit.media.state import AppState, dataset_handle
 from viewer.api.security import REQUIRE_CORPUS_DATA, REQUIRE_CORPUS_METADATA
 from viewer.schemas.graph import (
     CypherResponse,
@@ -54,8 +54,8 @@ from viewer.schemas.graph import (
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from service_kit.lancekit.descriptor import Declared
-    from service_kit.lancekit.registry import DatasetHandle
+    from client_kit.lancekit.descriptor import Declared
+    from client_kit.lancekit.registry import DatasetHandle
 
 logger = logging.getLogger(__name__)
 

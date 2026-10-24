@@ -36,9 +36,9 @@ from __future__ import annotations
 import httpx
 import pytest
 
+from client_kit.media.config import Settings
+from client_kit.media.state import AppState
 from service_kit.exceptions import NotFoundError, ServiceUnavailableError
-from service_kit.media.config import Settings
-from service_kit.media.state import AppState
 from viewer.api.v1.endpoints import pages as pages_ep
 
 

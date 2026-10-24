@@ -14,6 +14,7 @@ resolution-markers = [
 members = [
     "annotator",
     "catalog",
+    "client-kit",
     "compute",
     "flows",
     "lineage",
@@ -168,6 +169,7 @@ name = "annotator"
 version = "0.1.0"
 source = { editable = "services/annotator" }
 dependencies = [
+    { name = "client-kit" },
     { name = "dapr-ext-fastapi" },
     { name = "fastapi" },
     { name = "httpx" },
@@ -181,6 +183,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "client-kit", editable = "packages/client-kit" },
     { name = "dapr-ext-fastapi", specifier = ">=1.18.1" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "httpx", specifier = ">=0.27" },
@@ -528,6 +531,40 @@ sdist = { url = "https://files.pythonhosted.org/packages/76/d4/81420972a676e8ffe
 wheels = [
     { url = "https://files.pythonhosted.org/packages/fb/e2/79c688af8b210d232694e31e59da9f6ec747bae31c3f5946e4e9b98860d5/click-8.4.2-py3-none-any.whl", hash = "sha256:e6f9f66136c816745b9d65817da91d61d957fb16e02e4dcd0552553c5a197b76", size = 119243, upload-time = "2026-06-24T17:45:13.73Z" },
 ]
+
+[[package]]
+name = "client-kit"
+version = "0.1.0"
+source = { editable = "packages/client-kit" }
+dependencies = [
+    { name = "fastapi" },
+    { name = "httpx" },
+    { name = "lancedb" },
+    { name = "pyarrow" },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+    { name = "pylance", extra = ["otel"] },
+    { name = "service-kit", extra = ["governed", "lancekit"] },
+]
+
+[package.optional-dependencies]
+ratelimit = [
+    { name = "slowapi" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "fastapi", specifier = ">=0.115" },
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "lancedb", specifier = ">=0.40.0" },
+    { name = "pyarrow" },
+    { name = "pydantic", specifier = ">=2.7" },
+    { name = "pydantic-settings", specifier = ">=2.5" },
+    { name = "pylance", extras = ["otel"], specifier = ">=13.0.0" },
+    { name = "service-kit", extras = ["governed", "lancekit"], editable = "packages/service-kit" },
+    { name = "slowapi", marker = "extra == 'ratelimit'", specifier = ">=0.1.10" },
+]
+provides-extras = ["ratelimit"]
 
 [[package]]
 name = "colorama"
@@ -3342,18 +3379,20 @@ serve = [
 [[package]]
 name = "ray-cluster-env"
 version = "0.0.0"
-source = { virtual = "packages/ray-cluster-env" }
+source = { editable = "packages/ray-cluster-env" }
 dependencies = [
     { name = "jinja2" },
+    { name = "opentelemetry-exporter-otlp-proto-http" },
+    { name = "opentelemetry-sdk" },
     { name = "ray", extra = ["data", "default", "serve"] },
-    { name = "service-kit" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "jinja2", specifier = ">=3.1" },
+    { name = "opentelemetry-exporter-otlp-proto-http", specifier = ">=1.44.0" },
+    { name = "opentelemetry-sdk", specifier = ">=1.44.0" },
     { name = "ray", extras = ["data", "default", "serve"], specifier = ">=2.58" },
-    { name = "service-kit", editable = "packages/service-kit" },
 ]
 
 [[package]]
@@ -3664,6 +3703,7 @@ name = "search"
 version = "0.1.0"
 source = { editable = "services/search" }
 dependencies = [
+    { name = "client-kit", extra = ["ratelimit"] },
     { name = "fastapi" },
     { name = "httpx" },
     { name = "lancedb" },
@@ -3674,12 +3714,13 @@ dependencies = [
     { name = "pydantic" },
     { name = "pylance", extra = ["otel"] },
     { name = "python-multipart" },
-    { name = "service-kit", extra = ["governed", "lancekit", "ratelimit"] },
+    { name = "service-kit", extra = ["governed", "lancekit"] },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "client-kit", extras = ["ratelimit"], editable = "packages/client-kit" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "lancedb", specifier = ">=0.40.0" },
@@ -3690,7 +3731,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.7" },
     { name = "pylance", extras = ["otel"], specifier = ">=13.0.0" },
     { name = "python-multipart", specifier = ">=0.0.9" },
-    { name = "service-kit", extras = ["governed", "lancekit", "ratelimit"], editable = "packages/service-kit" },
+    { name = "service-kit", extras = ["governed", "lancekit"], editable = "packages/service-kit" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
 ]
 
@@ -3733,12 +3774,8 @@ lakehouse = [
 lancekit = [
     { name = "lance-namespace" },
     { name = "lance-namespace-urllib3-client" },
-    { name = "lancedb" },
     { name = "pyarrow" },
     { name = "pylance", extra = ["otel"] },
-]
-ratelimit = [
-    { name = "slowapi" },
 ]
 
 [package.metadata]
@@ -3751,7 +3788,6 @@ requires-dist = [
     { name = "lance-namespace", marker = "extra == 'lakehouse'", specifier = ">=0.11.0,<0.12" },
     { name = "lance-namespace", marker = "extra == 'lancekit'", specifier = ">=0.11.0,<0.12" },
     { name = "lance-namespace-urllib3-client", marker = "extra == 'lancekit'", specifier = ">=0.11.0,<0.12" },
-    { name = "lancedb", marker = "extra == 'lancekit'", specifier = ">=0.40.0" },
     { name = "openfga-sdk", marker = "extra == 'governed'", specifier = ">=0.10.4" },
     { name = "opentelemetry-exporter-otlp-proto-http", specifier = ">=1.44.0" },
     { name = "opentelemetry-instrumentation-aiohttp-client", specifier = ">=0.65b0" },
@@ -3770,11 +3806,10 @@ requires-dist = [
     { name = "pyjwt", extras = ["crypto"], marker = "extra == 'governed'", specifier = ">=2.8" },
     { name = "pylance", extras = ["otel"], marker = "extra == 'lancekit'", specifier = ">=13.0.0" },
     { name = "python-dotenv", specifier = ">=1.0" },
-    { name = "slowapi", marker = "extra == 'ratelimit'", specifier = ">=0.1.10" },
     { name = "storage", editable = "packages/storage" },
     { name = "tenacity", marker = "extra == 'governed'", specifier = ">=9.1.4" },
 ]
-provides-extras = ["ratelimit", "governed", "lakehouse", "lancekit"]
+provides-extras = ["governed", "lakehouse", "lancekit"]
 
 [[package]]
 name = "setuptools"
@@ -4102,6 +4137,7 @@ name = "viewer"
 version = "0.1.0"
 source = { editable = "services/viewer" }
 dependencies = [
+    { name = "client-kit" },
     { name = "fastapi" },
     { name = "httpx" },
     { name = "lance-graph" },
@@ -4119,6 +4155,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "client-kit", editable = "packages/client-kit" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "lance-graph", specifier = ">=0.5.4" },

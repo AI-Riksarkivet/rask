@@ -33,7 +33,8 @@ Polyglot monorepo: Python via [uv], JS/TS via [Bun] + Turborepo (oxlint + oxfmt)
 Two language-pure planes: Python at the repo root, all JS/TS under `frontend/`.
 
 - `packages/` — reusable Python libraries (uv workspace members, no entrypoints): `lineage-kit`,
-  `ray-kit`, `service-kit`, `storage`, `validate`, plus `ray-cluster-env` (deps-only, ships no code)
+  `ray-kit`, `service-kit` (the lakehouse's kit), `client-kit` (code only the lakehouse's clients run),
+  `storage`, `validate`, plus `ray-cluster-env` (the Ray images' environment and tracing hooks)
 - `services/` — runnable Python services (uv workspace members):
   - **lakehouse**: `catalog` (governed Lance REST catalog — projects → warehouses → namespaces →
     tables, and the bronze→silver→gold tier governance a pipeline's writes pass through), `lineage`

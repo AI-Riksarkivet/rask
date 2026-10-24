@@ -1248,7 +1248,7 @@ async def list_objects(
 
     Callers pass a principal key (the caller's ``subject``) and this sends the user it is (:func:`user_object`). Pass
     ``qualify=False`` when ``user`` is ALREADY a full subject — a ``type:id`` user or a ``type:id#rel``
-    userset — exactly as :func:`check` does. Without that hatch the estate-admin explorer could only ask
+    userset — exactly as :func:`check` does. Without that hatch an estate admin's access review could only ask
     "what can this *user* reach", never "what can ``team:eng#member`` reach", and in THIS model the
     resource rungs deliberately refuse ``team#member`` directly (a team reaches data through a role), so
     the userset question is the one that explains a real grant.
@@ -1395,8 +1395,8 @@ async def list_users(
     existing caller relies on: bare ``user:`` ids.
 
     ``qualified=True`` returns FULL subjects (``user:alice``, ``team:eng#member``, ``user:*``) instead of
-    bare ids. Off by default because the access-review callers built their output around bare ids; the
-    estate explorer needs the qualified form, since a bare ``eng`` is ambiguous once the filter is not
+    bare ids. Off by default because the access-review callers built their output around bare ids; an
+    estate-wide access view needs the qualified form, since a bare ``eng`` is ambiguous once the filter is not
     ``user``.
 
     ListUsers *expands* the model (role assignees, team members, the parent cascade), so the answer is

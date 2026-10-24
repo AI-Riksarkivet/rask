@@ -38,10 +38,10 @@ from annotator.api.security import current_subject, get_checker
 from annotator.api.v1.endpoints import assist as assist_ep
 from annotator.api.v1.endpoints.assist import router
 from annotator.corpus import Corpus
+from client_kit.lancekit.descriptor import Declared
+from client_kit.media.config import Settings
+from client_kit.media.deps import get_state
 from service_kit.exceptions import register_handlers
-from service_kit.lancekit.descriptor import Declared
-from service_kit.media.config import Settings
-from service_kit.media.deps import get_state
 
 
 class _State:

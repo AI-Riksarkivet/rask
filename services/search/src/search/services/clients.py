@@ -1,4 +1,4 @@
-"""Lazy vLLM query-encoder accessors bound to :class:`~service_kit.media.state.AppState`.
+"""Lazy vLLM query-encoder accessors bound to :class:`~client_kit.media.state.AppState`.
 
 Ported from ``backend.clients`` onto the vendored encoders: each accessor
 returns the cached client if present, else constructs it on first use and
@@ -16,15 +16,15 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+from client_kit.media.state import dataset_handle
 from search.services.spec import SearchMode
 from service_kit.exceptions import ServiceUnavailableError
-from service_kit.media.state import dataset_handle
 
 
 if TYPE_CHECKING:
+    from client_kit.media.state import AppState
     from search.services.encoders.embedding import EmbeddingClient
     from search.services.encoders.reranker import VLLMReranker
-    from service_kit.media.state import AppState
 
 logger = logging.getLogger(__name__)
 

@@ -116,7 +116,7 @@ config:
 # 127.0.0.1 is uvicorn's own default: the address of a proxy in the same pod, here the daprd sidecar.
 # The route's proxy is the Gateway's data plane, in another pod on another IP, so at the default every
 # forwarded header from it is ignored and the client IP is the Gateway's: an anonymous rate-limit key
-# (`service_kit.rate_limit.by_subject`) is then one bucket for every caller. Set this to the Gateway
+# (`client_kit.rate_limit.by_subject`) is then one bucket for every caller. Set this to the Gateway
 # data plane's pod CIDR (k3s default 10.42.0.0/16). The Gateway sets the chain itself and does not
 # pass a client's own `x-forwarded-for` through as trusted.
 #

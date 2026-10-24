@@ -20,10 +20,10 @@ from typing import Any
 import lance
 from fastapi import APIRouter
 
-from service_kit.lancekit import store
-from service_kit.lancekit.topics_meta import NOISE_LABEL
-from service_kit.media.deps import DatasetParam, StateDep
-from service_kit.media.state import dataset_handle
+from client_kit.lancekit import store
+from client_kit.lancekit.topics_meta import NOISE_LABEL
+from client_kit.media.deps import DatasetParam, StateDep
+from client_kit.media.state import dataset_handle
 from viewer.api.security import REQUIRE_CORPUS_DATA
 from viewer.schemas.topics import TopicsResponse
 

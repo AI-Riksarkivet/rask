@@ -42,7 +42,7 @@ from pydantic import BaseModel
 from scratch_tenant import CATALOG, Identity, Tenant, ok
 
 from annotator.annotations.schema import EMPTY_SCHEMA
-from service_kit.lancekit.descriptor import DESCRIPTOR_METADATA_KEY
+from client_kit.lancekit.descriptor import DESCRIPTOR_METADATA_KEY
 
 
 ANNOTATOR = os.environ.get("LANCE_E2E_ANNOTATOR_URL", "").rstrip("/")

@@ -18,7 +18,7 @@ declares any count it likes, and a compressed buffer is inflated as it is read, 
 the limit its own body cap sets. A response from a rask service is not held to that, because an
 honest projection of such a field is dense too.
 Every service that reads Arrow bytes reads them through this module — the catalog's write doors
-through :func:`decode_arrow_stream`, a media client's import through
+through :func:`decode_arrow_stream`, a client's import through
 :func:`decode_arrow_stream_or_file`, the catalog's ``/query`` response through
 :func:`decode_arrow_response`; pinned by the TID251 banned-api entries on the ``pyarrow.ipc``
 readers in the root ``pyproject.toml``.
@@ -78,7 +78,7 @@ class ArrowBodyError(ValueError):
     extension type's own metadata.
 
     A ``ValueError`` rather than a response type: each door maps it to its own refusal (the catalog to
-    ``InvalidInputError``, a media client's import to ``ValidationError``). The message is the reader's,
+    ``InvalidInputError``, a client's import to ``ValidationError``). The message is the reader's,
     which names what is at fault and never the memory it refused to read; the reader's exception is
     its ``__cause__``.
     """

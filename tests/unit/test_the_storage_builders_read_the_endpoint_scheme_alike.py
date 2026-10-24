@@ -1,8 +1,8 @@
 """The storage builders derive `allow_http` and the pyarrow scheme from the endpoint by one case-insensitive rule.
 
-Three builders hand options to object_store: `service_kit.lakehouse.objectfs.lance_storage_options`
-(every vend and most service opens), the catalog's `namespace_properties` (its own `dir` connection)
-and `service_kit.media.config`'s `storage_options`. One script builds a set from its own arguments
+Two builders hand options to object_store: `service_kit.lakehouse.objectfs.lance_storage_options`
+(every vend and most service opens) and the catalog's `namespace_properties` (its own `dir` connection).
+One script builds a set from its own arguments
 through the first, the model-artifact janitor, and is checked by what it hands Lance. object_store lowercases the scheme — measured on pylance 12.0.0 against a closed
 port, `HTTP://127.0.0.1:1` with `allow_http=true` requests `http://127.0.0.1:1/…` and with
 `allow_http=false` dies at `builder error`. So a case-sensitive `startswith("http://")` hands an
@@ -39,7 +39,6 @@ import pytest
 
 from catalog.core.config import Settings as CatalogSettings
 from service_kit.lakehouse.objectfs import StorageOptions, lance_storage_options, s3_filesystem
-from service_kit.media.config import Settings as MediaSettings
 
 
 _SCRIPTS = Path(__file__).parents[2] / "scripts"
@@ -66,15 +65,6 @@ def _catalog(endpoint: str) -> str:
     return CatalogSettings(LANCE_S3_ENDPOINT=endpoint, LANCE_S3_ACCESS_KEY_ID="k").namespace_properties()["storage.allow_http"]
 
 
-def _media(endpoint: str) -> str:
-    # Both static fields set, so the builder takes its no-secret-store branch.
-    options = MediaSettings.model_validate(
-        {"MEDIA_S3_ENDPOINT": endpoint, "MEDIA_S3_ACCESS_KEY_ID": "AK", "MEDIA_S3_SECRET_ACCESS_KEY": "SK"}
-    ).storage_options()
-    assert options is not None
-    return options["allow_http"]
-
-
 def _janitor_options(endpoint: str) -> StorageOptions:
     """What the janitor's CLI hands `sweep`, read by standing in for the sweep itself."""
     handed: list[StorageOptions | None] = []
@@ -97,7 +87,6 @@ def _janitor_options(endpoint: str) -> StorageOptions:
 _BUILDERS: dict[str, Callable[[str], str]] = {
     "lance_storage_options": _lance,
     "namespace_properties": _catalog,
-    "media": _media,
 }
 
 

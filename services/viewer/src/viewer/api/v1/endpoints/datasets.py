@@ -13,13 +13,13 @@ from fastapi import APIRouter
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
+from client_kit.lancekit.descriptor import DatasetDescriptor
+from client_kit.lancekit.registry import DatasetRegistry, UnknownDatasetError
+from client_kit.media.authz import corpus_object
+from client_kit.media.deps import StateDep
+from client_kit.media.state import AppState, dataset_handle, ensure_registry
 from service_kit.exceptions import ForbiddenError
 from service_kit.governed.audit import FAILURE, audit
-from service_kit.lancekit.descriptor import DatasetDescriptor
-from service_kit.lancekit.registry import DatasetRegistry, UnknownDatasetError
-from service_kit.media.authz import corpus_object
-from service_kit.media.deps import StateDep
-from service_kit.media.state import AppState, dataset_handle, ensure_registry
 from viewer.api.security import READ_METADATA, CheckerDep, CurrentSubject, DeciderDep, SettingsDep
 
 
@@ -51,7 +51,7 @@ class DatasetsResponse(BaseModel):
 def _registry(state: AppState) -> DatasetRegistry:
     """The registry behind ``dataset_handle``, named here because enumeration
     has no dataset id to resolve through it. Construction lives ONLY in
-    ``service_kit.media.state.ensure_registry`` — an unlocked copy of that
+    ``client_kit.media.state.ensure_registry`` — an unlocked copy of that
     lazy-init used to sit here and raced the guarded one (SK-06)."""
     return ensure_registry(state)
 

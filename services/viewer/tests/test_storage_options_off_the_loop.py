@@ -19,8 +19,8 @@ from typing import Any, cast
 
 import pytest
 
-from service_kit.media import config as media_config
-from service_kit.media.state import AppState
+from client_kit.media import config as media_config
+from client_kit.media.state import AppState
 from viewer.core.config import ViewerSettings
 
 
@@ -47,7 +47,7 @@ async def test_list_datasets_resolves_the_secret_off_the_event_loop(monkeypatch:
     monkeypatch.setattr(media_config, "_store_secret", _record_fetch)
     # The registry lists a LOCAL/stubbed root, so the test never touches S3 — the property fetch is
     # the only thing under test, not the dataset open.
-    from service_kit.lancekit.registry import DatasetRegistry
+    from client_kit.lancekit.registry import DatasetRegistry
 
     monkeypatch.setattr(DatasetRegistry, "list_ids", lambda self: [])
 

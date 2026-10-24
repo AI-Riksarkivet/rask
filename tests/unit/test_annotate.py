@@ -17,7 +17,7 @@ import pytest
 from annotator.annotations.save import build_delta, new_rows
 from annotator.annotations.schema import EMPTY_SCHEMA, NewAnnotation, TagWrite
 from annotator.annotations.tags import check_keys_arity, tag_id, tag_rows
-from service_kit.lancekit.descriptor import Declared
+from client_kit.lancekit.descriptor import Declared
 
 
 _MEDIA_DECLARED = Declared.model_validate({"identity": {"key_fields": ["doc_id", "speech_id", "chunk_id"]}})

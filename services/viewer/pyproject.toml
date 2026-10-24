@@ -9,6 +9,8 @@ dependencies = [
     # lifespan imports its `fga` module. The media image's venv is `uv sync --package viewer --package search`,
     # so nothing else in it carries openfga-sdk or tenacity: its import gate refused 17 modules without it.
     "service-kit[governed,lancekit]",
+    # The media app factory, its lifespan and the dataset registry the doors serve from.
+    "client-kit",
     # The chart launches this service under `opentelemetry-instrument` (chart/templates/explorer.yaml), whose distro
     # installs the SDK's providers at start; without it the launcher installs none (measured 2026-10-24).
     "opentelemetry-distro>=0.65b0",
@@ -33,6 +35,7 @@ build-backend = "hatchling.build"
 packages = ["src/viewer"]
 
 [tool.uv.sources]
+client-kit = { workspace = true }
 service-kit = { workspace = true }
 storage = { workspace = true }
 

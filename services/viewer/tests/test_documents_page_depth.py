@@ -37,8 +37,8 @@ def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     `get_state` is overridden rather than monkeypatched because it is a real FastAPI dependency;
     `dataset_handle` is a plain call inside the body, so it is patched at the module that calls it.
     """
+    from client_kit.media.deps import get_state
     from service_kit.exceptions import register_handlers
-    from service_kit.media.deps import get_state
     from viewer.api.v1.endpoints import system
 
     class _Declared:
@@ -80,7 +80,7 @@ def test_the_page_size_ceiling_is_still_enforced(client: TestClient) -> None:
 
 # ── the envelope ────────────────────────────────────────────────────────────────────────────────
 #
-# The other half of the same finding: `Page[Item]` in `service_kit.pagination` would be an envelope
+# The other half of the same finding: `Page[Item]` in `client_kit.pagination` would be an envelope
 # nothing sends. The gallery is its natural first consumer, and it is the reference's own argument —
 # `pages`/`has_next`/`has_prev` belong on the wire so a client is not computing them from a partial
 # view and drifting off-by-one from the server.

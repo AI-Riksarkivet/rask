@@ -26,12 +26,12 @@ from annotator.corpus import Corpus, resolve
 from annotator.projects.generation_schema import generation_schema
 from annotator.projects.machines import UnreadableOntology, refuse_unreadable_ontology
 from annotator.projects.ontology import LabelOntology
+from client_kit.lancekit.keys import validate_doc_key
+from client_kit.media.authz import corpus_object
+from client_kit.media.deps import StateDep
+from client_kit.media.state import AppState
 from service_kit.exceptions import ForbiddenError, ServiceUnavailableError
 from service_kit.governed.audit import FAILURE, audit
-from service_kit.lancekit.keys import validate_doc_key
-from service_kit.media.authz import corpus_object
-from service_kit.media.deps import StateDep
-from service_kit.media.state import AppState
 
 
 logger = logging.getLogger(__name__)

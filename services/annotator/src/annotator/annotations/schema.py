@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 
 
 if TYPE_CHECKING:
-    from service_kit.lancekit.descriptor import Declared
+    from client_kit.lancekit.descriptor import Declared
 
 ANNOTATIONS_TABLE = "annotations"
 

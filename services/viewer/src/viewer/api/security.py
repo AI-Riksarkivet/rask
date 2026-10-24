@@ -63,7 +63,7 @@ READ_DATA = "can_read_data"
 BROWSE_STORAGE = "can_browse_storage"
 
 
-# The two object-naming rules (`corpus_object`, `table_object`) moved to `service_kit.media.authz`
+# The two object-naming rules (`corpus_object`, `table_object`) moved to `client_kit.media.authz`
 # when the annotator's assist plane needed the same object. Import them from there — this module's
 # own docstring is why they must not be written twice.
 
@@ -82,11 +82,11 @@ BROWSE_STORAGE = "can_browse_storage"
 
 from starlette.concurrency import run_in_threadpool  # noqa: E402
 
+from client_kit.media import state as _media_state  # noqa: E402
+from client_kit.media.authz import corpus_object  # noqa: E402
+from client_kit.media.deps import DatasetParam, StateDep  # noqa: E402
 from service_kit.exceptions import ForbiddenError  # noqa: E402
 from service_kit.governed.audit import FAILURE, audit  # noqa: E402
-from service_kit.media import state as _media_state  # noqa: E402
-from service_kit.media.authz import corpus_object  # noqa: E402
-from service_kit.media.deps import DatasetParam, StateDep  # noqa: E402
 
 
 #: The verified principal, or ``anon`` — soft only on ABSENCE (a presented-but-invalid token still

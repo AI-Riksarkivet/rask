@@ -18,8 +18,8 @@ from typing import Self
 
 from pydantic import BaseModel, Field, model_validator
 
+from client_kit.media.config import Settings, TableBackend
 from service_kit.governed.settings import GovernedAuthSettings
-from service_kit.media.config import Settings, TableBackend
 
 
 class LineageSink(StrEnum):

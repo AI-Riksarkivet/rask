@@ -231,7 +231,7 @@ def install_problem_handlers(app: FastAPI, log: logging.Logger) -> None:
         #
         # Narrowed to SPEC routes rather than flipped estate-wide: a rask-only door (`/credentials`,
         # the registries) has no lance-ns contract to honour, and FastAPI's 422 is what its callers —
-        # this estate's own zones and tests — already expect. `spec_routes` is committed data because
+        # this estate's own clients and tests — already expect. `spec_routes` is committed data because
         # no image carries `lance_docs/`; a test re-derives it from the spec so it cannot drift.
         route = request.scope.get("route")
         status = 400 if is_spec_route(request.method, getattr(route, "path_format", "") or "") else 422

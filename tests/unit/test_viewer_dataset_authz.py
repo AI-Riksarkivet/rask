@@ -19,11 +19,11 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from client_kit.lancekit.descriptor import DatasetDescriptor
+from client_kit.media.authz import corpus_object
 from service_kit.exceptions import register_handlers
 from service_kit.governed import fga
 from service_kit.governed.decider import OpenFgaDecider
-from service_kit.lancekit.descriptor import DatasetDescriptor
-from service_kit.media.authz import corpus_object
 from viewer.api.v1.endpoints import datasets as ds
 from viewer.api.v1.endpoints.datasets import router
 from viewer.core.config import ViewerSettings, get_viewer_settings

@@ -1,4 +1,4 @@
-# The Ray images' PLATFORM environment — a named dependency set, deliberately no code.
+# The Ray images' PLATFORM environment, and the one module the head runs for the platform: its tracing hooks.
 #
 # Both Ray images (`.docker/ray-cluster.dockerfile`, `.docker/ray-runner.dockerfile`) build their
 # platform venv with `uv sync --package ray-cluster-env` against the ROOT lock, so the images and
@@ -8,18 +8,20 @@
 #
 # WHAT IT HOLDS: what the HEAD runtime itself needs. The head bakes no job (ADR 0155: moving data between tiers
 # is the user's pipeline on their own compute), so the Lance plane is not here; what remains is Ray and the
-# platform's tracing hooks (`service_kit.ray_tracing`, which the ray-cluster fixture names as the head's
-# `tracing-startup-hook` and Serve's span-processor import path). A workload's deps belong to the workload's own
-# image (`ray-runner.dockerfile --runner=<name>`), never to this shared base.
+# platform's tracing hooks (`ray_cluster_env.tracing`, which the ray-cluster fixture names as the head's
+# `tracing-startup-hook` and Serve's span-processor import path). The hooks need the OTel SDK and its OTLP/HTTP
+# exporter and nothing of the lakehouse, so no lakehouse kit is installed in an engine image. A workload's deps belong
+# to the workload's own image (`ray-runner.dockerfile --runner=<name>`), never to this shared base.
 [project]
 name = "ray-cluster-env"
 version = "0.0.0"
-description = "Dependency set for the Ray head/cluster images — resolved from the root lock; ships no code."
+description = "The Ray head/cluster images' platform environment and tracing hooks — resolved from the root lock."
 requires-python = ">=3.13"
 dependencies = [
-    # `service_kit.ray_tracing`: the core tracing-startup-hook and the Serve span processors the head is configured
-    # with (deploy/fixtures/ray-cluster). The OTel SDK and exporter ride service-kit's base.
-    "service-kit",
+    # `ray_cluster_env.tracing`: the core tracing-startup-hook and the Serve span processors the head is configured
+    # with (deploy/fixtures/ray-cluster).
+    "opentelemetry-sdk>=1.44.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.44.0",
     # `serve` is a PLATFORM requirement of the head image, not a workload's. Whenever a RayService
     # declares serveApplications, the KubeRay operator polls the HEAD's dashboard for their status —
     # and without ray[serve] that endpoint answers 501, which stalls a zero-downtime upgrade forever.
@@ -50,9 +52,9 @@ dependencies = [
     "jinja2>=3.1",
 ]
 
-[tool.uv]
-# Deps-only: `uv sync --package ray-cluster-env` resolves this set and installs no project.
-package = false
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
-[tool.uv.sources]
-service-kit = { workspace = true }
+[tool.hatch.build.targets.wheel]
+packages = ["src/ray_cluster_env"]

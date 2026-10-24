@@ -3,8 +3,8 @@
 Lifted out of `endpoints/tables.py` when the model registry needed the identical cursor. It stays a
 CATALOG module rather than moving to `service-kit`: the cursor is "the last name of the previous
 page", which is only stateless and stable because these listings are `sorted(set(...))` name lists.
-That is a property of this service's listings, not of pagination in general — `service_kit.pagination`
-owns the OFFSET strategy, which has no such precondition.
+That is a property of this service's listings, not of pagination in general: an offset strategy has no such
+precondition.
 """
 
 from __future__ import annotations

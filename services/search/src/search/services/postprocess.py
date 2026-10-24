@@ -14,8 +14,8 @@ import json
 import logging
 from typing import TYPE_CHECKING, Any
 
+from client_kit.lancekit.predicate import and_, eq, isin
 from search.services.constants import REPRESENTATIVE_FRAME_INDEX
-from service_kit.lancekit.predicate import and_, eq, isin
 
 
 if TYPE_CHECKING:

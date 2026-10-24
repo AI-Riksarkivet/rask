@@ -4,7 +4,7 @@ NOTHING IS IMPORTED EAGERLY HERE, and that is the point. This module WAS the app
 (`make_service_app` and its whole import graph: FastAPI, python-dotenv, the OTel wiring, the
 middleware stack, the probe router), so `from service_kit.config import Settings` — or any import of
 `service_kit.exceptions`, `service_kit.lakehouse.*`, `service_kit.governed.*` — executed the factory
-first. A Ray job that wanted one Arrow helper imported a web framework; a package of ~80 modules with
+first. A writer's job that wanted one Arrow helper imported a web framework; a package of ~80 modules with
 no `__all__` anywhere had no statement of what was public and what was internal.
 
 The factory lives in :mod:`service_kit.app`. The names below are resolved on FIRST ACCESS through

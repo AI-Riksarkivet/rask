@@ -48,14 +48,13 @@ def server_request_hook(span: Span | None, scope: Mapping[str, Any]) -> None:
     line and the trace are one search.
 
     IN THE INSTRUMENTATION, not in another middleware. A hook buffers nothing, which is what makes it
-    safe on the `/api/explorer` Range streaming that 206 video seeking depends on — a
-    `BaseHTTPMiddleware` layer fully buffers the response body and is refused on that plane
-    (`service_kit.media.middleware`).
+    safe on a streamed body such as a 206 Range response — a `BaseHTTPMiddleware` layer
+    fully buffers the response body, so a streaming route cannot carry one.
 
-    IT APPLIES ONLY WHERE `setup_otel` RUNS: the three `make_service_app` services (compute, flows, notifications). A
+    IT APPLIES ONLY WHERE `setup_otel` RUNS: the `make_service_app` services (notifications). A
     hook is a Python callable passed to `FastAPIInstrumentor.instrument_app`, and
     `opentelemetry-instrument` builds the instrumentor from an entry point with no way to carry one —
-    so the eight apps the chart launches under it (the lance five and the media three) carry the id in
+    so the apps the chart launches under it (the lance-plane services) carry the id in
     their logs and on no span. Closing the gap is a decision about which family takes which OTel path,
     not a change to this hook.
 
@@ -216,9 +215,9 @@ def setup_otel(app: FastAPI, service_name: str, settings: Settings) -> bool:
     atexit.register(logger_provider.shutdown)
 
     # `requests`, because HTTPX is not the only client in the estate and the uninstrumented half is
-    # the EXPENSIVE half. Ray's `JobSubmissionClient` performs every call through `requests`, which
-    # covers `list_jobs` — the call that measured 164.7 MB / 81,155 jobs and OOM-killed the compute
-    # pod — and the pruner's one-HTTP-DELETE-per-job loop. Without this the trace view is not merely
+    # the EXPENSIVE half. A job-submission SDK performs every call through `requests`, which
+    # covers a job listing — the call that measured 164.7 MB / 81,155 jobs and OOM-killed its pod —
+    # and a one-HTTP-DELETE-per-job prune loop. Without this the trace view is not merely
     # incomplete but MISLEADING: the cheap httpx reads carry client spans while the costly requests
     # calls appear instantaneous, so a twenty-minute prune pass and a two-second one look identical.
     #

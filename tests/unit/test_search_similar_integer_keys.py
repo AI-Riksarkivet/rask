@@ -4,7 +4,7 @@
 utf8 and both sub-keys int64, and it says why in its own comment: "speech_id/chunk_id are INTEGERS:
 the viewer builds its frame filter as `speech_id = 0 AND chunk_id = 19` with unquoted numeric
 literals, so string columns" would not match. Every other service renders identity predicates
-through `service_kit.lancekit.keys.chunk_key_filter`, which casts the sub-keys to int for exactly
+through `client_kit.lancekit.keys.chunk_key_filter`, which casts the sub-keys to int for exactly
 that reason.
 
 `search.services.similar` grew its OWN renderer and quoted every segment as SQL text, so
@@ -22,8 +22,8 @@ from typing import Any
 import lancedb
 import pyarrow as pa
 
+from client_kit.lancekit.descriptor import Declared
 from search.services.similar import key_predicate, seed_vector
-from service_kit.lancekit.descriptor import Declared
 
 
 #: The seeded corpus's identity, verbatim: a text doc key plus two int64 sub-keys.

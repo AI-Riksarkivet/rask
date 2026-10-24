@@ -9,8 +9,8 @@ from functools import lru_cache
 
 from pydantic import Field
 
+from client_kit.media.config import Settings
 from service_kit.governed.settings import GovernedAuthSettings
-from service_kit.media.config import Settings
 
 
 class ViewerSettings(Settings, GovernedAuthSettings):

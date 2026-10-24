@@ -28,8 +28,8 @@ from annotator.api.v1.endpoints import project_events as ev
 from annotator.projects.actor import AnnotationTaskActor, AnnotationTaskActorInterface
 from annotator.projects.project_actor import AnnotationProjectActor, AnnotationProjectActorInterface
 from annotator.projects.proxies import TypedActorProxy
+from client_kit.media.deps import get_state
 from service_kit.exceptions import register_handlers
-from service_kit.media.deps import get_state
 
 
 class _WireOnlyProxy:

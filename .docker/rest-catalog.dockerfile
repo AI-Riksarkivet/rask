@@ -98,8 +98,9 @@ COPY --link scripts/rustfs_admin.py /srv/rustfs_admin.py
 # Import every module this image serves, against the venv the runtime stage ships. A missing
 # DECLARED dependency is invisible to the workspace venv (a sibling member resolves it) and can
 # only be seen here, where the deployable's own closure is the only one present. See the script.
+# `--absent`: the client kit and lancedb (a client's dataset reader) never ship in the lakehouse image ([[XC-178]]).
 COPY .docker/import-gate.py /tmp/import-gate.py
-RUN --network=none /opt/venv/bin/python /tmp/import-gate.py catalog lineage maintenance && rm /tmp/import-gate.py
+RUN --network=none /opt/venv/bin/python /tmp/import-gate.py catalog lineage maintenance --absent client_kit lancedb && rm /tmp/import-gate.py
 
 # Strip setuid/setgid bits from the whole shipped filesystem (base account tools passwd/chsh/... +
 # anything in the venv) — no use in a container, residual privesc surface. Own RUN so its `|| true`

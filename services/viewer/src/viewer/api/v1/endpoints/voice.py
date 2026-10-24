@@ -20,9 +20,9 @@ from typing import TYPE_CHECKING, Annotated
 from fastapi import APIRouter, File, Query, UploadFile
 from starlette.concurrency import run_in_threadpool
 
+from client_kit.media.deps import DatasetParam, StateDep
+from client_kit.media.state import AppState, dataset_handle
 from service_kit.exceptions import ServiceUnavailableError, ValidationError
-from service_kit.media.deps import DatasetParam, StateDep
-from service_kit.media.state import AppState, dataset_handle
 from viewer.api.security import REQUIRE_CORPUS_DATA, REQUIRE_CORPUS_METADATA
 from viewer.schemas.voice import VoiceIdentityResponse, VoiceSimilarResponse, VoiceStatusResponse
 from viewer.services import voice_service
@@ -30,7 +30,7 @@ from viewer.services.voice_service import MAX_N, MAX_UPLOAD_BYTES
 
 
 if TYPE_CHECKING:
-    from service_kit.lancekit.registry import DatasetHandle
+    from client_kit.lancekit.registry import DatasetHandle
     from viewer.services.serve_encoder import ServeEncoder
 
 logger = logging.getLogger(__name__)

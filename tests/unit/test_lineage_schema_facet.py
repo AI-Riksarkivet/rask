@@ -30,17 +30,6 @@ def test_type_label_renders_media_types() -> None:
     }
 
 
-def test_lancekit_mirror_labels_json_the_same_way() -> None:
-    # ASSERTS the vendored mirror stays in step: the same column labelled by
-    # ``service_kit.lancekit.openlineage`` (the annotation emit path) and by ``service_kit.lakehouse.schema``
-    # (the catalog's emit path) must reach the lineage graph as the SAME type string.
-    from service_kit.lancekit import openlineage as lancekit_ol
-
-    arrow_schema = pa.schema([pa.field("id", pa.int64()), pa.field("alignments_json", pa.json_())])
-    assert lancekit_ol.facet_fields(arrow_schema) == schema.facet_fields(arrow_schema)
-    assert lancekit_ol.facet_fields(arrow_schema)[1]["type"] == "json"
-
-
 def test_schema_facet_caps_metadata_bloat(caplog) -> None:
     # ASSERTS (§9 P2, 2026-07-11): >512 fields → the facet carries EXACTLY the first 512 + a
     # schema_facet_truncated warning; the _schemaURL stays the shared spec pin (a shorter fields

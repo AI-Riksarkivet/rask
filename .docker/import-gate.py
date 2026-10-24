@@ -1,7 +1,12 @@
 """Import every module of the packages an image serves, at BUILD time.
 
-Run as `python /tmp/import-gate.py <pkg> [<pkg> ...]` from a dockerfile, against the venv the runtime
-stage actually ships. A non-zero exit fails the build.
+Run as `python /tmp/import-gate.py <pkg> [<pkg> ...] [--absent <module> ...]` from a dockerfile, against the venv
+the runtime stage actually ships. A non-zero exit fails the build.
+
+`--absent` names what the image must NOT ship: each module after it fails the build when the venv can import it. The
+lakehouse image names the client kit and lancedb, and the Ray image names the lakehouse kit, so a dependency that
+drags a client into the lakehouse, or the lakehouse into an engine, is refused at the build that would ship it
+([[XC-178]]).
 
 **Why this exists.** A deployable's module can import `service_kit.governed.fga` while its member
 declares a bare `"service-kit"` — openfga-sdk lives behind that library's `[governed]` extra. The
@@ -40,11 +45,13 @@ directive none of these dockerfiles declare, and the one-liner form has to be es
 from __future__ import annotations
 
 import importlib
+import importlib.util
 import pkgutil
 import sys
 
 
-def main(packages: list[str]) -> int:
+def main(argv: list[str]) -> int:
+    packages, absent = _split(argv)
     if not packages:
         print("import-gate: no packages given", file=sys.stderr)
         return 2
@@ -87,15 +94,28 @@ def main(packages: list[str]) -> int:
     for line in executed:
         print(f"import gate: NOT a packaging problem, module executed and raised — {line}")
 
+    present = [name for name in absent if importlib.util.find_spec(name) is not None]
+
     attempted = len(modules) + len(failures) + len(executed)
     if failures:
         print(f"import gate FAILED — {len(failures)}/{attempted} modules could not be IMPORTED:")
         for line in failures:
             print(f"  {line}")
+    if present:
+        print(f"import gate FAILED — the image ships what it must not: {', '.join(present)}")
+    if failures or present:
         return 1
 
-    print(f"import gate: {len(modules)} modules OK ({', '.join(packages)})")
+    print(f"import gate: {len(modules)} modules OK ({', '.join(packages)})" + (f"; absent: {', '.join(absent)}" if absent else ""))
     return 0
+
+
+def _split(argv: list[str]) -> tuple[list[str], list[str]]:
+    """The packages to import, and the modules after `--absent` the image must not be able to import."""
+    if "--absent" not in argv:
+        return argv, []
+    at = argv.index("--absent")
+    return argv[:at], argv[at + 1 :]
 
 
 def _is_packaging_failure(exc: BaseException) -> bool:

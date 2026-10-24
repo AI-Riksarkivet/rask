@@ -8,7 +8,7 @@ from service_kit.otel import setup_otel
 
 
 def _settings(**env: bool | str) -> Settings:
-    return Settings.model_validate({"RASK_VIEWER_INPUT": "/dev/null", "RASK_VIEWER_OUTPUT": "/dev/null", **env})
+    return Settings.model_validate(env)
 
 
 @pytest.fixture(autouse=True)

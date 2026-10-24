@@ -23,16 +23,9 @@ dependencies = [
     "opentelemetry-instrumentation-urllib3>=0.65b0",
 ]
 
-# The governed/lakehouse/lancekit subpackages ported from packages/common (gate 3, R19) carry their
-# heavy deps as extras: a consumer that doesn't install the extra never imports the subpackage, so the
-# base library stays dependency-light and rask's existing consumers resolve unchanged.
+# The governed/lakehouse/lancekit subpackages carry their heavy deps as extras: a consumer that doesn't install the
+# extra never imports the subpackage, so the base library stays dependency-light.
 [project.optional-dependencies]
-# Rate limiting is its OWN extra, not part of `governed`: metering a route and authorizing it are
-# different concerns, and a service that wants a limiter should not have to pull the OIDC/FGA stack
-# to get one.
-ratelimit = [
-    "slowapi>=0.1.10",
-]
 governed = [
     "openfga-sdk>=0.10.4",
     "pyjwt[crypto]>=2.8",
@@ -48,7 +41,6 @@ lancekit = [
     # dataset (packages/ray-cluster-env). 11 does read a 12-written (file format 2.2) one, measured 2026-09-25;
     # 12 and 13 read and write each other's 2.2 stable-row-id tables, measured 2026-10-12.
     "pylance[otel]>=13.0.0",
-    "lancedb>=0.40.0",
     # pylance 13.0.0 itself requires lance-namespace >=0.11.1,<0.12 (its PyPI requires_dist), and 0.12
     # rejects the bare-string `MergeInsertIntoTableRequest.on` that 0.11 sends
     # (`lance_docs/ns_catalog/spec.yaml:3063`). [[LH-022]] 0.13 moves with the first pylance that allows it (ADR 0157).

@@ -14,18 +14,18 @@ from typing import TYPE_CHECKING
 from annotator.annotations.lineage import emit_save
 from annotator.annotations.schema import ANNOTATIONS_TABLE, SaveResult
 from annotator.core.config import AnnotatorSettings
+from client_kit.lancekit.predicate import isin
+from client_kit.lancekit.registry import table_dataset
 from service_kit.exceptions import ConflictError
-from service_kit.lancekit.predicate import isin
 from service_kit.lancekit.reader import open_reader
-from service_kit.lancekit.registry import table_dataset
 
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from annotator.corpus import Corpus
+    from client_kit.media.config import Settings
     from service_kit.lancekit.writer import TableWriter
-    from service_kit.media.config import Settings
 
 
 def check_base_version_value(current: int, base_version: int | None, *, required: bool = False) -> None:

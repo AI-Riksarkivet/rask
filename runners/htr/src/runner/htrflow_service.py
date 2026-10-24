@@ -282,7 +282,7 @@ def _build_in_memory_document(image_bytes: bytes, name: str = "page") -> object:
 # TracerProvider here — inert twice over: no span is opened anywhere under runners/, so it produced
 # none, and its env guard made it a no-op in every process the chart does not hand OTEL_* to. It also
 # defaulted the service name to this workload, putting one modality's name on the shared Ray plane.
-# `service_kit.ray_tracing` now owns both hooks (core + Serve), wired from the chart. See
+# `ray_cluster_env.tracing` owns both hooks (core + Serve), wired from the chart. See
 # open_ray_otel.md section 6.
 
 htrflow_app = HTRFlowDeployment.bind()

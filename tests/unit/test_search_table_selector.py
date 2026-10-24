@@ -14,11 +14,11 @@ from typing import Any, cast
 
 import pytest
 
+from client_kit.lancekit.descriptor import DatasetDescriptor
+from client_kit.lancekit.registry import DatasetHandle
 from search.services.spec import SearchSpec
 from search.services.target import resolve_target
 from service_kit.exceptions import ValidationError
-from service_kit.lancekit.descriptor import DatasetDescriptor
-from service_kit.lancekit.registry import DatasetHandle
 
 
 def _descriptor(searches: list[dict[str, Any]]) -> DatasetDescriptor:

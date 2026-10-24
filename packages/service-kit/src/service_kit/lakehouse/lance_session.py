@@ -19,8 +19,8 @@ The fix is ONE ``lance.Session`` per process, capped explicitly:
 - ``lance.Session`` is thread-safe (verified: 8 threads × 50 open+checkout, zero errors), which
   the maintenance service needs — its sweep and reconcile crons hold separate locks and overlap.
 
-NOT a dataset-handle cache. A cached handle pins a version (the viewer's ``DatasetRegistry``
-trade, right for a read-only corpus); per-tick reopens are CORRECT for a mutating service — what
+NOT a dataset-handle cache. A cached handle pins a version (the
+right trade for a read-only corpus); per-tick reopens are CORRECT for a mutating service — what
 was wrong was each reopen minting and discarding gigabyte-scale cache ceilings.
 """
 

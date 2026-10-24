@@ -27,11 +27,11 @@ ids the sidecar registers them under); the helper owns the full set so it never 
 EACH CORPUS READER PRESENTS ITS OWN SCOPED IDENTITY, never the store's root, which on RustFS signs every STS session
 token (ADR 0168). The pod carries the access key id as config and names the Dapr secret that holds its other half:
 `MEDIA_S3_SECRET_KEY` is the secret's name and `MEDIA_S3_SECRET_FIELD=secret_key` its field, which
-`service_kit.media` fetches fail-closed through the sidecar. The viewer reads `viewer-s3` (`objectStore.viewerAccessKey`,
+`client_kit.media` fetches fail-closed through the sidecar. The viewer reads `viewer-s3` (`objectStore.viewerAccessKey`,
 the object browser's list-and-get identity); search reads `media-s3` (`lance.mediaIdentity`, the
 `rask-media` policy: GetObject and a prefix-held list on `explorer.corpusS3Root`, nothing else), since it writes
 nothing to the corpus. No other app's Configuration allows either secret and no other app's store login reads it
-(`lance.storeReads`), so the identity a pod reads is the one its own row names. Both are set on every reader, though `service_kit.media` defaults to `media-s3` and
+(`lance.storeReads`), so the identity a pod reads is the one its own row names. Both are set on every reader, though `client_kit.media` defaults to `media-s3` and
 `secret_key`, so the render names the identity each pod reads. A blank `objectStore.viewerAccessKey` or
 `objectStore.mediaAccessKey` fails the render rather than falling back to a wider credential.
 

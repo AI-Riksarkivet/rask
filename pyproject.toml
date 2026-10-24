@@ -152,10 +152,11 @@ extend-select = ["TID251", "FAST001"]
 # rule classes it most needs. Adding a rule back here now requires saying which site needs it.
 "packages/service-kit/src/service_kit/governed/**" = ["ANN401", "ANN202", "C901", "PERF401"]
 "packages/service-kit/src/service_kit/lakehouse/**" = ["RUF002", "RUF003", "RUF100", "PERF401"]
-"packages/service-kit/src/service_kit/lancekit/**" = ["A002", "ANN401", "C901", "PERF401"]
+"packages/service-kit/src/service_kit/lancekit/**" = ["A002"]
+"packages/client-kit/src/client_kit/lancekit/**" = ["ANN401", "C901", "PERF401"]
 # No ANN exemption under media/: `dataset_handle` is the entry point every media and annotator route
 # passes through to reach a dataset, and an untyped return there is an `Any` in every one of them.
-"packages/service-kit/src/service_kit/media/**" = ["A002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
+"packages/client-kit/src/client_kit/media/**" = ["E501"]
 # `schemas/**` had the same 21-rule row and NOT ONE of them fired under it — a row that suppressed
 # nothing while implying the subtree needed suppressing. Deleted 2026-08-22 rather than narrowed.
 # `service_kit/obs.py` measured identically and went the same way 2026-09-10.
@@ -241,8 +242,8 @@ indent-style = "space"
 [tool.ruff.lint.isort]
 lines-after-imports = 2
 # COMPLETE, and it is meant to stay that way: every first-party import name on disk is here — the
-# five code-shipping packages (lineage_kit, ray_kit, service_kit, storage, validate —
-# `ray-cluster-env` is deps-only and imports as nothing) and the twelve services: seventeen names. A missing name is not a metadata gap: ruff sorts that module into
+# seven code-shipping packages (client_kit, lineage_kit, ray_cluster_env, ray_kit, service_kit, storage, validate) and
+# the services. A missing name is not a metadata gap: ruff sorts that module into
 # the THIRD-PARTY block, so `from catalog.core.config import ...` sat beside `import httpx` in every
 # file that imported it.
 #
@@ -257,12 +258,14 @@ lines-after-imports = 2
 known-first-party = [
     "annotator",
     "catalog",
+    "client_kit",
     "compute",
     "flows",
     "lineage",
     "lineage_kit",
     "maintenance",
     "notifications",
+    "ray_cluster_env",
     "ray_kit",
     "search",
     "service_kit",

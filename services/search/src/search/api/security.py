@@ -30,17 +30,17 @@ from typing import TYPE_CHECKING, Annotated
 
 from fastapi import Depends, Query, Request
 
+from client_kit.media.authz import corpus_object
+from client_kit.media.state import AppState
 from search.api.dependencies import StateDep
 from search.core.config import SearchSettings, get_search_settings
 from service_kit.exceptions import ForbiddenError
 from service_kit.governed.audit import FAILURE, audit
 from service_kit.governed.deps import FgaChecker, make_auth_deps
-from service_kit.media.authz import corpus_object
-from service_kit.media.state import AppState
 
 
 if TYPE_CHECKING:
-    from service_kit.lancekit.registry import DatasetHandle
+    from client_kit.lancekit.registry import DatasetHandle
 
 
 SettingsDep = Annotated[SearchSettings, Depends(get_search_settings)]
@@ -87,7 +87,7 @@ async def may_search(
         return True
     from starlette.concurrency import run_in_threadpool
 
-    from service_kit.media.state import dataset_handle
+    from client_kit.media.state import dataset_handle
 
     handle = await run_in_threadpool(dataset_handle, state, dataset_id)
     row_table = _row_table(handle, table)

@@ -29,14 +29,14 @@ from fastapi.responses import FileResponse, StreamingResponse
 from lance.blob import BlobFile
 from pydantic import BaseModel
 
+from client_kit.lancekit.keys import chunk_key_filter, validate_doc_key
+from client_kit.lancekit.predicate import eq
+from client_kit.lancekit.registry import DatasetHandle, table_dataset
+from client_kit.media.authz import corpus_object
+from client_kit.media.deps import DatasetParam, StateDep
+from client_kit.media.state import dataset_handle
 from service_kit.exceptions import ForbiddenError, NotFoundError, ServiceUnavailableError, ValidationError
 from service_kit.governed.audit import FAILURE, audit
-from service_kit.lancekit.keys import chunk_key_filter, validate_doc_key
-from service_kit.lancekit.predicate import eq
-from service_kit.lancekit.registry import DatasetHandle, table_dataset
-from service_kit.media.authz import corpus_object
-from service_kit.media.deps import DatasetParam, StateDep
-from service_kit.media.state import dataset_handle
 from viewer.api.security import READ_DATA, REQUIRE_MEDIA_BYTES, CheckerDep, CurrentSubject, SettingsDep
 from viewer.services.clips import MAX_CLIP_S, ClipBusyError, build_clip
 

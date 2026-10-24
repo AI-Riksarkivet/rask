@@ -45,13 +45,13 @@ from fastapi.responses import StreamingResponse
 from lance.blob import BlobFile
 from pydantic import BaseModel, computed_field
 
+from client_kit.lancekit.predicate import eq
+from client_kit.media.authz import table_object
+from client_kit.media.deps import StateDep
 from service_kit.exceptions import ForbiddenError, NotFoundError, ServiceUnavailableError, UnauthorizedError
 from service_kit.governed.audit import FAILURE, audit
 from service_kit.governed.deps import RawBearerToken
 from service_kit.lakehouse.blobs import is_blob_field
-from service_kit.lancekit.predicate import eq
-from service_kit.media.authz import table_object
-from service_kit.media.deps import StateDep
 from viewer.api.security import READ_DATA, READ_METADATA, CheckerDep, CurrentSubject
 from viewer.api.v1.endpoints.media import MAX_BUFFERED_BLOB_BYTES, _handle_size, _stream_handle
 

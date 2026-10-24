@@ -1,7 +1,7 @@
 """Write-path abstraction: direct Lance today, lance-ns catalog tomorrow.
 
-The WRITE mirror of :mod:`service_kit.lancekit.reader`. Annotation saves write Lance
-directly (merge_insert + delete); the merge target routes writes through the
+The WRITE mirror of :mod:`service_kit.lancekit.reader`. A direct writer writes Lance
+itself (merge_insert + delete); the merge target routes writes through the
 catalog's ``POST /v1/table/{id}/merge_insert`` (+ ``/delete``) so the lakehouse
 governs them — OpenFGA gate + OpenLineage emission + quality gate + credential
 vending, all for free. Putting both behind ONE duck-typed :class:`TableWriter`
@@ -10,7 +10,7 @@ makes the merge a config flip (``MEDIA_WRITE_BACKEND``), not a rewrite.
 Host-agnostic + retry-friendly by construction (base URL from settings, urllib3
 ``Retry``) so the catalog path drops into a Dapr service-invocation unchanged.
 
-Scope: the ops ``annotate.py``'s writes perform — a merge UPSERT (update matched +
+Scope: three write ops — a merge UPSERT (update matched +
 insert unmatched, keyed by ``id``), an INSERT-ONLY merge (insert unmatched, leave
 matched untouched — used for tags so a re-save never clobbers a human's review), and
 a delete-by-predicate.
@@ -41,7 +41,7 @@ if TYPE_CHECKING:
 
 @runtime_checkable
 class TableWriter(Protocol):
-    """The write surface — the subset annotate.py Save uses. :class:`LanceTableWriter`
+    """The write surface — the three ops in the module scope. :class:`LanceTableWriter`
     is a pass-through; the catalog writer is duck-type compatible. The caller re-opens
     the table for the new version (mirroring today's code)."""
 

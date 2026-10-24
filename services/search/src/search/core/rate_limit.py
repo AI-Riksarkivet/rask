@@ -2,7 +2,7 @@
 
 `@limiter.limit(...)` is evaluated when `router.py` is imported, so a limiter built inside the
 lifespan could not back it. The mechanism, the key function and the problem+json 429 all live in
-`service_kit.rate_limit`; only the instance and the rate belong to this service.
+`client_kit.rate_limit`; only the instance and the rate belong to this service.
 
 WHY THESE ROUTES AND WHY ONE BUCKET. `/search`, `POST /search` and `/search/similar` all drive the
 same expensive resource — a GPU embedding forward pass, and a cross-encoder rerank on top when it is
@@ -13,7 +13,7 @@ budget: slowapi counts decorators with the same scope into one bucket.
 query does not reach it; a loop does so immediately.
 """
 
-from service_kit.rate_limit import make_limiter
+from client_kit.rate_limit import make_limiter
 
 
 limiter = make_limiter()

@@ -23,9 +23,9 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from client_kit.media.deps import get_state
+from client_kit.media.state import AppState
 from service_kit.exceptions import register_handlers
-from service_kit.media.deps import get_state
-from service_kit.media.state import AppState
 from viewer.api.v1.endpoints.system import router as system_router
 
 
@@ -33,7 +33,7 @@ class _NoDatasetRegistry:
     """A registry whose default dataset does not exist — an un-loaded corpus volume."""
 
     def default(self) -> Any:
-        from service_kit.lancekit.registry import UnknownDatasetError
+        from client_kit.lancekit.registry import UnknownDatasetError
 
         raise UnknownDatasetError("dataset 'transcripts_v2' not found under /media-corpus")
 

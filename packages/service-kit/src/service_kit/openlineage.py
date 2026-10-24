@@ -173,8 +173,8 @@ def lifecycle_facet(producer: str, operation: str) -> dict[str, object]:
 #: Standard ``ProcessingEngineRunFacet`` schema URL — WHICH ENGINE produced the run.
 #:
 #: A lakehouse that means it is multi-engine has to say which engine wrote a table, and rask already
-#: has more than one write path: the catalog commits through pylance in-process, the medallion's stage
-#: lanes write through Ray, and a query engine is a stated direction. Without this facet every one of
+#: has more than one write path: the catalog commits through pylance in-process, a user's pipeline
+#: writes through its own engine, and a query engine is a stated direction. Without this facet every one of
 #: them is an anonymous producer, and the question "what wrote this, and can I reproduce it" has no
 #: answer in lineage's feed or the graph backend it is forwarded to. ``version`` is the only REQUIRED field in the spec.
 PROCESSING_ENGINE_FACET_SCHEMA_URL = "https://openlineage.io/spec/facets/1-1-1/ProcessingEngineRunFacet.json#/$defs/ProcessingEngineRunFacet"

@@ -4,10 +4,9 @@
 ``app.state.shutting_down``, and until this module those two names were pure convention:
 untyped ``getattr(state, ..., False)`` on one side, a hand-rolled assignment in every service's
 own lifespan on the other. Eleven copies of the convention meant eleven chances to miss it, and
-five of them did — every app built by :func:`service_kit.make_service_app` (compute,
-controlplane, ingest, flows, notifications) set neither flag, so ``/readyz`` reported
-``starting`` for the whole life of the pod and the drain never began. ``compute``'s lifespan
-logs the string ``"startup_complete"`` without ever setting the attribute, which is exactly how
+five of them did — every app built by :func:`service_kit.make_service_app` set neither flag,
+so ``/readyz`` reported ``starting`` for the whole life of the pod and the drain never began. One
+lifespan logged the string ``"startup_complete"`` without ever setting the attribute, which is exactly how
 a convention fails: it looks done.
 
 So the FACTORY now owns the invariant (see ``make_service_app``'s lifespan wrapper) and this

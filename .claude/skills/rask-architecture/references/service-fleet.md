@@ -23,7 +23,7 @@ the entrypoint. Count by CALL SITE, not by import.
 THE OTHER SIX COME OUT OF A FACTORY TOO, because copied boots drift: each repeated the same five-step
 boot in copied comments (docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit"
 DUP-12), and one lost its request-id layer in the copying. `viewer`, `search` and `annotator` build through
-`service_kit.media.app.build_media_app` over one shared `service_kit.media.lifespan`; `catalog`, `lineage` and
+`client_kit.media.app.build_media_app` over one shared `client_kit.media.lifespan`; `catalog`, `lineage` and
 `maintenance` build through `service_kit.lance_app.build_lance_service_app`. Both still read their own
 `core/config.py` settings and keep the `api/v1/endpoints/` layout — the factory owns the boot, not
 the layout. See rask-architecture's "Three factories are sanctioned".
@@ -31,7 +31,7 @@ the layout. See rask-architecture's "Three factories are sanctioned".
 | Service | Port | Composes package(s) | Lifespan | DB? | Notes |
 |---|---|---|---|---|---|
 | `compute` | 8804 | `ray-kit` | `compute.lifespan.make_lifespan` | no | Ray dashboard introspection; `proxy_router` mounts at root so `/api/serve/*` reaches Serve status API. Its fixture chart's own HTTPRoute publishes `/api/ray` and `/api/serve`; deployed by that fixture chart |
-| `viewer` (explorer plane) | 8101 | `service-kit[lancekit]` + `storage` | own (lazy registry) | no | public `/api/explorer/*`, rewritten to `/api/*` by the route, incl. the S3 objects browser |
+| `viewer` (explorer plane) | 8101 | `client-kit` + `service-kit[governed,lancekit]` + `storage` | own (lazy registry) | no | public `/api/explorer/*`, rewritten to `/api/*` by the route, incl. the S3 objects browser |
 
 ## The lakehouse runs no ingest, no stage and no engine
 
@@ -52,8 +52,9 @@ query; the graph is bring-your-own, fed by its forwarder (ADR 0158).
 
 `compute` depends only on `service-kit` + `ray-kit` — **no DB**. `service-kit`'s
 core stays dependency-light (no `ray`/`sqlmodel`; lance deps live behind the
-`[lancekit]` extra the explorer plane opts into): pulling a heavy dep into the
-core would force it onto every service and every test that imports the factory.
+`[lancekit]` extra): pulling a heavy dep into the core would force it onto every service and every test
+that imports the factory. What only a client needs (lancedb, slowapi) is in `client-kit`, which no
+lakehouse service installs.
 
 ## Lifespan injection recap
 

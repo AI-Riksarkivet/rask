@@ -1,7 +1,7 @@
 """Decoupled search business logic — the mode-aware retrieval core.
 
 Ported from ``backend.search.service``, descriptor-driven: ``run_search`` takes
-a :class:`~service_kit.lancekit.registry.DatasetHandle`, resolves it to a
+a :class:`~client_kit.lancekit.registry.DatasetHandle`, resolves it to a
 :class:`~search.services.target.SearchTarget` once, and routes a
 :class:`~search.services.spec.SearchSpec` across the seven modes
 (fts / semantic / visual / scene / scene_fts / hybrid / all), returning a
@@ -50,10 +50,10 @@ from service_kit.exceptions import ServiceUnavailableError, ValidationError
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
 
+    from client_kit.lancekit.descriptor import FtsBinding, VectorBinding
+    from client_kit.lancekit.registry import DatasetHandle
     from search.services.encoders.embedding import EmbeddingClient
     from search.services.encoders.reranker import VLLMReranker
-    from service_kit.lancekit.descriptor import FtsBinding, VectorBinding
-    from service_kit.lancekit.registry import DatasetHandle
 
 logger = logging.getLogger(__name__)
 

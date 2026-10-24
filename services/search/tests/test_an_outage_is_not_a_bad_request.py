@@ -23,15 +23,15 @@ from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
+from client_kit.lancekit.descriptor import FtsBinding, VectorBinding
 from search.services import frames, service, similar, vector
 from search.services.spec import SearchSpec
 from search.services.target import SearchTarget
 from service_kit.exceptions import ValidationError
-from service_kit.lancekit.descriptor import FtsBinding, VectorBinding
 
 
 if TYPE_CHECKING:
-    from service_kit.lancekit.registry import DatasetHandle
+    from client_kit.lancekit.registry import DatasetHandle
 
 
 #: What Lance raises for a malformed caller predicate, verbatim in shape (see the module docstring).

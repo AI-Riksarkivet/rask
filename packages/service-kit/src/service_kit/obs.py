@@ -20,13 +20,12 @@ import logging
 
 #: The top-level app packages whose module loggers (``logging.getLogger(__name__)``) must emit INFO. Their
 #: effective level inherits from these package loggers, so raising the package raises the whole tree.
-#: ``viewer``/``search`` are the folded lance-media services. A client of the lakehouse names its own packages
-#: when it calls :func:`configure_app_logging`, and a sealed runner configures its own logging: naming either
-#: here would put a tool's or a workload's name in a shared seam.
+#: These are the lakehouse's own packages. A client of the lakehouse names its own packages when it calls
+#: :func:`configure_app_logging`, and a sealed runner configures its own logging: naming either here would put a
+#: tool's or a workload's name in a shared seam.
 _APP_LOGGERS = (
     "catalog",
     "lineage",
-    "medallion",
     # `maintenance`, NOT `compaction`. The service was renamed and this entry was not, so it named a
     # package that no longer existed while the real one inherited root's WARNING — which muted
     # `log.info("maintenance_sweep", extra=summary)`, the sweep's only account of what it did, for the
@@ -34,8 +33,6 @@ _APP_LOGGERS = (
     "maintenance",
     # The shared platform library's own loggers (fga provisioning, outbox, warehouse registry …).
     "service_kit",
-    "viewer",
-    "search",
 )
 
 

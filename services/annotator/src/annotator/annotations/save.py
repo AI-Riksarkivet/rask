@@ -25,11 +25,11 @@ from annotator.annotations.schema import (
 )
 from annotator.api.security import CurrentSubject, RawBearerToken
 from annotator.corpus import resolve
-from service_kit.lancekit.keys import chunk_key_filter, validate_doc_key
+from client_kit.lancekit.keys import chunk_key_filter, validate_doc_key
+from client_kit.lancekit.registry import table_dataset
+from client_kit.media.deps import DatasetParam, StateDep
 from service_kit.lancekit.reader import open_reader
-from service_kit.lancekit.registry import table_dataset
 from service_kit.lancekit.writer import open_writer
-from service_kit.media.deps import DatasetParam, StateDep
 
 
 logger = logging.getLogger(__name__)

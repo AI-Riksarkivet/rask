@@ -3,7 +3,7 @@
 Annotated aliases over ``app.state`` come from the shared kernel.
 """
 
-from service_kit.media.deps import DatasetParam, StateDep
+from client_kit.media.deps import DatasetParam, StateDep
 
 
 __all__ = ["DatasetParam", "StateDep"]

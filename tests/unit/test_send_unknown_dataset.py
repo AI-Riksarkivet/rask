@@ -22,9 +22,9 @@ from fastapi.testclient import TestClient
 from annotator.api.security import current_subject, get_checker
 from annotator.api.v1.endpoints import project_events as events_ep
 from annotator.api.v1.endpoints.project_events import router
+from client_kit.media.config import Settings
+from client_kit.media.deps import get_state
 from service_kit.exceptions import NotFoundError, register_handlers
-from service_kit.media.config import Settings
-from service_kit.media.deps import get_state
 
 
 class _FakeProjectActor:

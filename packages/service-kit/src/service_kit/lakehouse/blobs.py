@@ -3,7 +3,7 @@
 Lance blob-v2 columns require file format ``>= 2.2`` and are identified by the
 ``lance.blob.v2`` Arrow extension type (registered when ``lance`` is imported).
 These helpers recognise a blob column from an Arrow schema without materialising
-the payloads; blob serving, the viewer's page reads and the pointer-health probe use them.
+the payloads; blob serving and the pointer-health probe use them.
 
 Detection picks no storage version: no writer chooses one from the schema, and every create in
 ``services/``, ``packages/`` and ``scripts/`` names ``data_storage_version="2.2"`` (grep, 2026-09-25).
@@ -97,7 +97,7 @@ def read_aligned_table(
     ``read_blobs`` and ``take_blobs`` keep a null row's slot too (measured on pylance 12.0.0: ``read_blobs`` over
     indices ``[0, 1, 2]`` with a null in slot 1 answers ``[(0, b'a'), (1, None), (2, b'c')]``, and ``take_blobs``
     answers ``[BlobFile, None, BlobFile]``). They read by row, and are the reads for single-row serving and for a
-    known set of row ids (:func:`blob_column_resolves`, the viewer's blob endpoints).
+    known set of row ids (:func:`blob_column_resolves`).
 
     THIS IS A WHOLE-RESULT READ: ``to_table`` holds every selected payload at once. ``limit`` bounds it for a caller
     that needs a few rows; a caller that consumes every payload streams a bounded scanner instead ([[CP-051]]).

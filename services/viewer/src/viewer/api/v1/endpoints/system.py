@@ -15,11 +15,11 @@ import httpx
 from fastapi import APIRouter
 from pydantic import computed_field
 
-from service_kit.lancekit.introspect import ColumnInfo
-from service_kit.lancekit.registry import table_dataset
-from service_kit.media.deps import DatasetParam, StateDep
-from service_kit.media.state import dataset_handle
-from service_kit.pagination import Page, PaginationDep, build_page
+from client_kit.lancekit.introspect import ColumnInfo
+from client_kit.lancekit.registry import table_dataset
+from client_kit.media.deps import DatasetParam, StateDep
+from client_kit.media.state import dataset_handle
+from client_kit.pagination import Page, PaginationDep, build_page
 from viewer.api.security import REQUIRE_CORPUS_METADATA, CorpusFactsVisible
 from viewer.api.v1.endpoints.chunks import alignments_binding
 from viewer.schemas.system import ColumnKind, DbFacts, FilterColumn, HealthResponse, VllmPing

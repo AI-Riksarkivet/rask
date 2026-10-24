@@ -5,12 +5,13 @@ description = "Media-plane search API — FTS, vector and hybrid lookups over La
 requires-python = ">=3.13"
 license = "Apache-2.0"
 dependencies = [
-    # [ratelimit] because `search.core.rate_limit` imports `service_kit.rate_limit` -> slowapi. The
-    # image's venv is `uv sync --package search` alone, so a transitive dep from another workspace
-    # member is present locally and ABSENT in the image — the dockerfile's import gate catches it, but
-    # only after a build. Same trap compute and controlplane paid for on 2026-08-26. [governed] for the same reason:
-    # `search.api.security` and `search.core.config` import `service_kit.governed`, which needs openfga-sdk and tenacity.
-    "service-kit[governed,lancekit,ratelimit]",
+    # [governed] because `search.api.security` and `search.core.config` import `service_kit.governed`, which needs
+    # openfga-sdk and tenacity. The image's venv is `uv sync --package viewer --package search` alone, so a transitive dep
+    # from another workspace member is present locally and ABSENT in the image — the dockerfile's import gate catches
+    # it, but only after a build. Same trap compute and controlplane paid for on 2026-08-26.
+    "service-kit[governed,lancekit]",
+    # [ratelimit] because `search.core.rate_limit` imports `client_kit.rate_limit` -> slowapi, for the same reason.
+    "client-kit[ratelimit]",
     # The chart launches this service under `opentelemetry-instrument` (chart/templates/explorer.yaml), whose distro
     # installs the SDK's providers at start; without it the launcher installs none (measured 2026-10-24).
     "opentelemetry-distro>=0.65b0",
@@ -34,4 +35,5 @@ build-backend = "hatchling.build"
 packages = ["src/search"]
 
 [tool.uv.sources]
+client-kit = { workspace = true }
 service-kit = { workspace = true }

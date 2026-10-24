@@ -17,11 +17,11 @@ import re
 import lance
 from fastapi import APIRouter
 
+from client_kit.lancekit import store
+from client_kit.lancekit.predicate import eq
+from client_kit.media.deps import DatasetParam, StateDep
+from client_kit.media.state import dataset_handle
 from service_kit.exceptions import ValidationError
-from service_kit.lancekit import store
-from service_kit.lancekit.predicate import eq
-from service_kit.media.deps import DatasetParam, StateDep
-from service_kit.media.state import dataset_handle
 from viewer.api.security import REQUIRE_CORPUS_DATA
 from viewer.schemas.diarization import DiarizationResponse, SpeakerTurn
 

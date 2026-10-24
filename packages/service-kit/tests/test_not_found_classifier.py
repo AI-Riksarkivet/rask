@@ -1,9 +1,9 @@
-"""SK-04 — the SERVING layer's three "missing thing" sites, on the estate's one absence vocabulary.
+"""SK-04 — the reader's "missing thing" site, on the estate's one absence vocabulary.
 
-pylance exposes no typed error for a missing table/version, so the registry's ``table_dataset``, the
-reader's ``_at_version`` and ``introspect.discover_tables`` classify by message substring. Before the
-shared helper they had already drifted: the reader matched only "not found", so an OSError saying
-"does not exist" escaped as a raw 500 instead of the 404 the registry returned for the same condition.
+pylance exposes no typed error for a missing table/version, so the reader's ``_at_version`` classifies by
+message substring, as the client kit's registry and introspection do. Before the shared helper they had
+already drifted: the reader matched only "not found", so an OSError saying "does not exist" escaped as a
+raw 500 instead of the 404 the registry returned for the same condition.
 
 That helper was `lancekit.errors.is_not_found`, and it has been folded into
 `lancekit.absence.reads_as_absent` — the write and reconcile paths were asking the same question of a
@@ -15,15 +15,12 @@ condition (409, re-read and re-send), not a not-found.
 
 from __future__ import annotations
 
-from pathlib import Path
-from types import SimpleNamespace
 from typing import cast
 
 import lance
 import pytest
 
 from service_kit.exceptions import NotFoundError
-from service_kit.lancekit import registry as registry_mod
 from service_kit.lancekit.reader import LocalCatalogTransport
 
 
@@ -68,25 +65,3 @@ def test_the_reader_does_not_call_a_CORRUPT_dataset_a_missing_one() -> None:
     transport = _transport(corrupt)
     with pytest.raises(OSError, match="Not found"):
         transport._at_version(9)
-
-
-def test_registry_translates_missing_table_into_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
-    handle = SimpleNamespace(
-        id="ds",
-        path=Path("/nonexistent"),
-        storage_options={"endpoint": "http://s3:9000"},  # non-None → the local dir check is skipped
-        table_uri=lambda table: f"s3://bucket/ds.lance/{table}.lance",
-        sync_table_info=lambda table, version: None,
-    )
-
-    def raise_missing(uri: str, storage_options: dict[str, str] | None = None, *, session: object | None = None) -> None:
-        # The double mirrors `lance.dataset`'s real signature, `session` included. It did not, so when
-        # `table_dataset` began threading a session ([[LH-096]]) this stand-in raised TypeError and the
-        # test failed for a reason that had nothing to do with the classifier it exists to pin.
-        raise OSError("LanceError(IO): Object at location s3://bucket/ds.lance/t.lance does not exist")
-
-    monkeypatch.setattr(registry_mod.lance, "dataset", raise_missing)
-    with pytest.raises(NotFoundError):
-        # cast: a duck-typed stand-in — table_dataset only reads the attributes
-        # scripted above, and building a real DatasetHandle needs a live dataset.
-        registry_mod.table_dataset(cast("registry_mod.DatasetHandle", handle), "t")

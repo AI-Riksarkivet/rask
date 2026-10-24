@@ -1,8 +1,8 @@
 """Annotator service entry — the lance-ns thin-``main.py`` template.
 
 Module-level ``app``; ALL construction in the lifespan onto ``app.state`` (importing this module does
-zero I/O). The lifespan and the assembly are both SHARED — ``service_kit.media.lifespan`` and
-``service_kit.media.app`` — because viewer, search and annotator are three deployments of one shape
+zero I/O). The lifespan and the assembly are both SHARED — ``client_kit.media.lifespan`` and
+``client_kit.media.app`` — because viewer, search and annotator are three deployments of one shape
 and used to hand-write it three times (docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit" DUP-16 / X12 / DUP-20). What is genuinely
 this service's own — the actor plane and the client its checker asks the catalog with — arrives through the
 shared lifespan's ``setup``/``teardown`` hooks, which run before readiness is announced and before anything
@@ -26,21 +26,21 @@ from annotator.core.config import get_annotator_settings
 from annotator.projects.actor import AnnotationTaskActor
 from annotator.projects.project_actor import AnnotationProjectActor
 from annotator.projects.tenant_actor import TenantProjectsActor
+from client_kit.media.app import build_media_app
+from client_kit.media.config import MediaSettings
+from client_kit.media.lifespan import make_media_lifespan
+from client_kit.media.state import AppState
 from service_kit import setup_logging
 from service_kit.governed.actor_state_store import probe_actor_state_store
 from service_kit.governed.actor_warmup import warm_actor_proxy_factory
 from service_kit.governed.dapr_auth import guard_actor_routes
-from service_kit.media.app import build_media_app
-from service_kit.media.config import MediaSettings
-from service_kit.media.lifespan import make_media_lifespan
-from service_kit.media.state import AppState
 from service_kit.obs import configure_app_logging
 from service_kit.schemas.health import Readiness, ReadinessStatus
 
 
 logger = logging.getLogger(__name__)
 
-configure_app_logging(packages=("annotator",))  # INFO audit/lifecycle logs reach OTLP (lance-ns obs contract)
+configure_app_logging(packages=("annotator", "client_kit"))  # INFO audit/lifecycle logs reach OTLP (lance-ns obs contract)
 
 
 async def _start_task_plane(app: FastAPI, _state: AppState) -> None:

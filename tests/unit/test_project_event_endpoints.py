@@ -21,8 +21,8 @@ from annotator.api.security import current_subject, get_checker
 from annotator.api.v1.endpoints import project_events as ev
 from annotator.projects.machines import IllegalTransition
 from annotator.projects.models import ProjectState
+from client_kit.media.deps import get_state
 from service_kit.exceptions import register_handlers
-from service_kit.media.deps import get_state
 
 
 SUBJECT = "henry"
