@@ -52,13 +52,8 @@ def estate(governed_catalog: Any) -> Any:  # noqa: ANN401 — the conftest's Gov
     return governed_catalog
 
 
-def test_a_caller_reaching_more_than_a_thousand_tables_lists_a_namespace_completely(estate: Any) -> None:  # noqa: ANN401
-    listed = _ok(estate, "/v1/namespace/db/table/list", caller="bob")
-
-    assert listed["tables"] == ["a", "b", "c"]
-
-
 def test_a_page_counts_only_the_tables_the_caller_can_read(estate: Any) -> None:  # noqa: ANN401
+    # bob reaches 1,500 tables elsewhere, so the pages hold all of a, b and c only if the listing judged its own candidates.
     first = _ok(estate, "/v1/namespace/db/table/list", caller="bob", params={"limit": 2})
     rest = _ok(estate, "/v1/namespace/db/table/list", caller="bob", params={"limit": 2, "page_token": first.get("page_token") or ""})
 

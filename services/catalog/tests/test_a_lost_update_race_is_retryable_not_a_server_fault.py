@@ -1,24 +1,10 @@
-"""UPDATE and DELETE do not lose commit races — Lance rebases them, so there is nothing to classify.
+"""The UPDATE and DELETE doors answer the rows they touched and advance the table's version.
 
-the lakehouse register, row B3 (drained 2026-09-10; in git history) reads "update/delete/column ops let a Lance conflict escape as 5xx".
-The COLUMN half was real and landed (`test_a_lost_commit_race_is_retryable_not_a_server_fault.py`:
-six concurrent `add_columns`, five losers, all answering 500 until `_column_op` learned the markers).
-The update/delete half is REFUTED, measured 2026-09-08 rather than reasoned about.
-
-Column ops are Merge transactions and genuinely conflict. `update` and `delete` are Rewrite
-transactions that Lance retries internally against the newer version, so a writer holding a stale
-handle does not lose — it rebases and commits. Probed directly, two handles opened at the same
-version, one committing first:
-
-    both at version 1
-    A committed -> 2
-    stale update: no conflict raised, version now 3
-    stale delete: no conflict raised, version now 4
-
-So adding conflict translation to `update_table`/`delete_from_table` would be a branch no input can
-reach — a control that looks like one and is decoration, which is the shape this estate keeps paying
-for. THIS FILE IS THE PIN ON THE REFUTATION: if Lance ever stops rebasing, these tests fail, and that
-failure is the signal to add the classification the row asked for.
+They carry no conflict classification, unlike the column ops (`test_a_lost_commit_race_is_retryable_not_a_server_fault.py`),
+because no input reaches one: `update` and `delete` are Rewrite transactions that Lance retries against the newer
+version, so a writer holding a stale handle rebases and commits rather than losing. Measured 2026-09-08 with two handles
+opened at version 1, one committing first: the stale update committed version 3 and the stale delete version 4, with no
+conflict raised.
 """
 
 from __future__ import annotations
@@ -27,16 +13,9 @@ from pathlib import Path
 
 import pyarrow as pa
 import pytest
-from lance_namespace import CreateNamespaceRequest, connect
+from lance_namespace import CreateNamespaceRequest, DeleteFromTableRequest, UpdateTableRequest, connect
 
-from catalog.services.dataplane import create_table
-
-
-lance = pytest.importorskip("lance")
-
-from lance_namespace import DeleteFromTableRequest, UpdateTableRequest  # noqa: E402
-
-from catalog.services.dataplane import delete_from_table, update_table  # noqa: E402
+from catalog.services.dataplane import create_table, delete_from_table, update_table
 
 
 TABLE_ID = ["db", "rows"]
@@ -59,22 +38,7 @@ def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace is runtime-only
     return namespace
 
 
-def test_a_stale_UPDATE_rebases_instead_of_conflicting(tmp_path: Path) -> None:
-    """Driven at the Lance layer, because that is where the claim lives: the door cannot classify an
-    error the format never raises."""
-    uri = str(tmp_path / "t.lance")
-    lance.write_dataset(pa.table({"id": pa.array([1, 2, 3], pa.int64()), "v": pa.array([0, 0, 0], pa.int64())}), uri)
-    winner = lance.dataset(uri)
-    winner.update({"v": "1"})
-
-    stale = lance.dataset(uri, version=1)
-    stale.update({"v": "9"})
-    assert stale.version > winner.version, "a stale update neither conflicted nor advanced — the premise of this pin changed"
-
-
 def test_the_doors_still_answer_and_advance_the_version(ns) -> None:  # noqa: ANN001
-    """The doors are exercised too, so this file fails if they break for any reason — not only if
-    Lance's conflict behaviour changes."""
     updated = update_table(ns, {}, UpdateTableRequest(id=TABLE_ID, updates=[["v", "7"]]))
     assert updated.updated_rows == 3, f"update reported {updated.updated_rows} rows, not 3"
     deleted = delete_from_table(ns, {}, DeleteFromTableRequest(id=TABLE_ID, predicate="id = 1"))

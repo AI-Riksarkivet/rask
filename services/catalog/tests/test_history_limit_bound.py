@@ -26,32 +26,11 @@ validation at the boundary rather than a redesign.
 from __future__ import annotations
 
 import pytest
-from fastapi.routing import APIRoute
 
 from catalog.api.v1.endpoints import versions as versions_ep
 
 
-def _limit_param():
-    for route in (*versions_ep.router.routes, *versions_ep.management_router.routes):
-        if isinstance(route, APIRoute) and route.path.endswith("/history"):
-            for field in route.dependant.query_params:
-                if field.name == "limit":
-                    return field
-            pytest.fail("the history route declares no `limit` query parameter")
-    pytest.fail("no history route on either versions router")
-
-
-def test_the_limit_has_a_real_ceiling() -> None:
-    """The docstring claims a bound; the signature must actually carry one."""
-    limits = {type(c).__name__: c for c in _limit_param().field_info.metadata}
-    assert "Le" in limits, (
-        "history's `limit` has no upper bound — the reference's named anti-pattern, and the route's own "
-        "docstring describes a ceiling the signature does not enforce"
-    )
-    assert limits["Le"].le <= 200, f"the ceiling is {limits['Le'].le}; the sibling annotator route caps at 200"
-
-
-@pytest.mark.parametrize("bad", [-1, 0])
+@pytest.mark.parametrize("bad", [pytest.param(0, id="below-the-floor"), pytest.param(201, id="above-the-ceiling")])
 def test_a_refused_limit_is_a_422_not_a_surprising_page(bad: int) -> None:
     """Validated at the BOUNDARY, so the caller is told — not clamped silently downstream."""
     from fastapi import FastAPI
