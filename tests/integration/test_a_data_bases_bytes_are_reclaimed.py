@@ -1,4 +1,4 @@
-"""[[LH-286]] A table's bytes on a data base are reclaimed as its root's are: by version expiry, and by the purge.
+"""[[LH-286]] A table's bytes on a data base are reclaimed as its root's are: by version expiry, and by every path that ends it.
 
 LANCE'S OWN CLEANUP IS ROOT-SCOPED. Measured on pylance 13.0.0: after an overwrite of a table whose fragments sit on a
 non-root data base, ``cleanup_old_versions(older_than=0, delete_unverified=True)`` removed every superseded version and
@@ -14,9 +14,13 @@ and dropped through its doors, so its base record and its directory claim are th
   unverified-file age (7 days, ``lance_docs/lance_sdk.md:931``), keeps one a branch still references and every file
   younger than that age, and reports the base fragment a deleted row keeps alive, which only a compaction could rewrite;
 - the purge of an expired trashed table deletes its data directory with its root, then forgets its base record and
-  releases the directory's claim, also where an earlier tick released it ([[LH-535]]), and deletes nothing at all while
-  its record names a directory no claim names the table on: a record written before [[LH-252]] named the approved base
-  itself, which every table naming it shared.
+  releases the directory's claim, also where an earlier tick released it ([[LH-535]]); a directory no claim names the
+  table on is left to whoever's bytes it holds while the table is still purged: a record written before [[LH-252]]
+  named the approved base itself, which every table naming it shared;
+- every catalog door that ends a table's bytes deletes its data directory before the record that names it goes: a
+  destructive drop, a destroyed namespace cascade, and a purging warehouse cascade over a live table and over a trashed
+  one, since the base is no part of the bucket the cascade purges; a cascade keeping its bucket keeps the directory, and
+  a purging cascade whose directory delete fails deletes it when re-issued.
 """
 
 from __future__ import annotations
@@ -25,6 +29,7 @@ import asyncio
 import uuid
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from urllib.parse import quote
 
 import boto3
@@ -39,7 +44,7 @@ from maintenance.services.expiry import DatasetResult
 from maintenance.services.plan import PlanContext
 from maintenance.services.purge import purge_expired_trash
 from maintenance.services.reconcile import CATEGORIES, CategorySkipped, ReconcileReport
-from service_kit.lakehouse import base_registry, location_claims, trash
+from service_kit.lakehouse import base_registry, data_directories, location_claims, trash
 from service_kit.lakehouse.base_refs import normalise
 from service_kit.lakehouse.base_registry import BaseOrigin, BaseRole, RecordedBase
 from service_kit.lakehouse.maintenance_due import CloneList
@@ -227,7 +232,7 @@ def test_the_purge_deletes_a_trashed_tables_data_directory_with_its_root(estate:
     assert location_claims.holder(claims, directory) is None
 
 
-def test_the_purge_deletes_nothing_while_the_record_names_a_directory_no_claim_names_its_table_on(estate: _Estate) -> None:
+def test_the_purge_leaves_a_directory_no_claim_names_its_table_on_and_still_purges_the_table(estate: _Estate) -> None:
     table = f"db$q{uuid.uuid4().hex[:8]}"
     location = estate.create(table, _ids(0, 3))
     root_prefix = f"{location.removeprefix(f'{estate.root}/')}/"
@@ -235,12 +240,125 @@ def test_the_purge_deletes_nothing_while_the_record_names_a_directory_no_claim_n
     base_registry.forget_base_record(estate.registry, location, table=table)
     base_registry.claim_bases(estate.registry, location, [RecordedBase(path=estate.data_base, role=BaseRole.DATA, origin=BaseOrigin.CREATE)])
     estate.door(table, "drop")
-    held = {**estate.keys(estate.bucket, root_prefix), **estate.keys(estate.second, "data/")}
+    on_the_base = estate.keys(estate.second, "data/")
     _expired(estate, table)
 
     out = asyncio.run(
         purge_expired_trash(estate.maintenance(trash_purge_enabled=True), report=_clean_report(), control_root=estate.root, data_roots={estate.root})
     )
 
-    assert [(refused.id, "no claim names" in refused.reason) for refused in out.refused] == [(table, True)], out.refused
-    assert {**estate.keys(estate.bucket, root_prefix), **estate.keys(estate.second, "data/")} == held, "a refused purge deleted bytes"
+    assert (out.refused, [purged.id for purged in out.purged]) == ([], [table]), out
+    assert (estate.keys(estate.bucket, root_prefix), estate.keys(estate.second, "data/")) == ({}, on_the_base), "the purge reached the shared base"
+    assert base_registry.read_base_record(estate.registry, location) is None
+
+
+class _Warehoused(_Estate):
+    """The catalog with warehouses on: a project, a warehouse with its own bucket and a bound namespace, the data base beside."""
+
+    def __init__(self, url: str, client: TestClient, bucket: str, second: str) -> None:
+        self.url = url
+        self.client = client
+        self.bucket = bucket
+        self.second = second
+        self.root = f"s3://{bucket}"
+        self.data_base = f"s3://{second}/data"
+        self.key = lance_storage_options(url, "test", "test", "us-east-1")
+        self.s3 = boto3.client("s3", endpoint_url=url, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1")
+        self.registry = base_registry.BaseRegistry(control_root=self.root, storage_options=self.key)
+        suffix = uuid.uuid4().hex[:8]
+        self.warehouse, self.namespace = f"wh{suffix}", f"ns{suffix}"
+        assert client.post("/management/v1/projects", json={"id": f"p{suffix}"}).status_code == 200
+        assert client.post("/management/v1/warehouses", json={"id": self.warehouse, "project": f"p{suffix}"}).status_code == 200
+        bound = client.post(f"/management/v1/warehouses/{self.warehouse}/namespaces", json={"namespace": self.namespace})
+        assert bound.status_code == 200, bound.text
+
+
+@pytest.fixture
+def warehoused(moto_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[_Warehoused]:
+    suffix = uuid.uuid4().hex[:10]
+    bucket, second = f"lh286w-{suffix}", f"lh286x-{suffix}"
+    s3 = boto3.client("s3", endpoint_url=moto_url, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1")
+    for name in (bucket, second):
+        s3.create_bucket(Bucket=name)
+    for name, value in {
+        "LANCE_REST_IMPL": "dir",
+        "LANCE_REST_ROOT": f"s3://{bucket}",
+        "LANCE_CONTROL_ROOT": f"s3://{bucket}",
+        "LANCE_S3_ENDPOINT": moto_url,
+        "LANCE_S3_ACCESS_KEY_ID": "test",
+        "LANCE_S3_SECRET_ACCESS_KEY": "test",
+        "LANCE_MULTIBASE_DATA_BASES": f"s3://{second}/data",
+        "LANCE_WAREHOUSES_ENABLED": "true",
+        "LANCE_CONTROL_EMIT_ENABLED": "false",
+        "LANCE_TRASH_GRACE_DAYS": "1",
+    }.items():
+        monkeypatch.setenv(name, value)
+    from catalog.core.config import get_settings
+
+    get_settings.cache_clear()
+    from catalog.main import app
+
+    with TestClient(app) as client:
+        yield _Warehoused(moto_url, client, bucket, second)
+    get_settings.cache_clear()
+
+
+@pytest.mark.parametrize(
+    ("door", "trashed", "purge"),
+    [
+        pytest.param("table", False, True, id="a-destructive-drop"),
+        pytest.param("namespace", False, True, id="a-namespace-cascade"),
+        pytest.param("warehouse", False, True, id="a-warehouse-cascade-over-a-live-table"),
+        pytest.param("warehouse", True, True, id="a-warehouse-cascade-over-a-trashed-table"),
+        # A cascade keeping its bucket keeps every byte the table had, its data directory included.
+        pytest.param("warehouse", False, False, id="a-warehouse-cascade-keeping-its-bucket-over-a-live-table"),
+        pytest.param("warehouse", True, False, id="a-warehouse-cascade-keeping-its-bucket-over-a-trashed-table"),
+    ],
+)
+def test_every_door_that_ends_a_tables_bytes_ends_its_data_directory_with_them(warehoused: _Warehoused, door: str, trashed: bool, purge: bool) -> None:
+    table = f"{warehoused.namespace}$t"
+    location = warehoused.create(table, _ids(0, 3))
+    directory = warehoused.directory(location)
+    created = warehoused.files(directory)
+    assert created, "precondition: the create put the table's fragments in its data directory"
+    if trashed:
+        warehoused.door(table, "drop")
+
+    match door:
+        case "table":
+            answer = warehoused.client.post(f"/v1/table/{quote(table, safe='$')}/drop", params={"purge": "true"}, json={})
+        case "namespace":
+            answer = warehoused.client.post(f"/v1/namespace/{warehoused.namespace}/drop", params={"purge": "true"}, json={"behavior": "Cascade"})
+        case _:
+            answer = warehoused.client.delete(
+                f"/management/v1/warehouses/{warehoused.warehouse}", params={"cascade": "true", "purge_bucket": str(purge).lower()}
+            )
+
+    assert answer.status_code == 200, answer.text
+    assert warehoused.files(directory) == ({} if purge else created)
+    # [[LH-279]] Only a detach that keeps the bytes keeps the record vouching for their bases; a trashed table's goes with its trash.
+    assert (base_registry.read_base_record(warehoused.registry, location) is not None) == (not purge and not trashed)
+
+
+def test_a_purging_warehouse_cascade_whose_directory_delete_fails_finishes_it_when_reissued(warehoused: _Warehoused, monkeypatch: pytest.MonkeyPatch) -> None:
+    table = f"{warehoused.namespace}$t"
+    location = warehoused.create(table, _ids(0, 3))
+    directory = warehoused.directory(location)
+    refusals = iter([OSError("the store refused the delete")])
+    delete_objects = data_directories.delete_objects
+
+    def _refused_once(uri: str, storage_options: dict[str, str], paths: list[str]) -> None:
+        if (refusal := next(refusals, None)) is not None:
+            raise refusal
+        delete_objects(uri, storage_options, paths)
+
+    monkeypatch.setattr(data_directories, "delete_objects", _refused_once)
+    cascade = partial(warehoused.client.delete, f"/management/v1/warehouses/{warehoused.warehouse}", params={"cascade": "true", "purge_bucket": "true"})
+    refused = cascade()
+    assert refused.status_code == 503, f"precondition: the refused delete failed the cascade: {refused.text}"
+
+    answer = cascade()
+
+    assert answer.status_code == 200, answer.text
+    assert warehoused.files(directory) == {}, "the re-issued cascade left the data directory the failed one did not delete"
+    assert base_registry.read_base_record(warehoused.registry, location) is None

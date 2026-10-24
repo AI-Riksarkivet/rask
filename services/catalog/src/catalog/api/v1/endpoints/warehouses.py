@@ -39,6 +39,8 @@ from lance_namespace import (
     CreateNamespaceResponse,
     DeregisterTableRequest,
     DeregisterTableResponse,
+    DescribeTableRequest,
+    DescribeTableResponse,
     DropNamespaceRequest,
     InvalidInputError,
     LanceNamespace,
@@ -90,7 +92,7 @@ from catalog.services.vend_probe import CAS_CHECK, CAS_RESERVE, SCOPE_CHECK, Pro
 from service_kit.control_emit import emit_control
 from service_kit.governed import fga
 from service_kit.governed.deps import ANONYMOUS_SUBJECT
-from service_kit.lakehouse import base_registry, location_claims, object_records, trash
+from service_kit.lakehouse import base_registry, data_directories, location_claims, object_records, trash
 from service_kit.lakehouse.naming import CONTROL_ID_RE
 from service_kit.lakehouse.ns_errors import PartiallyApplied
 from service_kit.lakehouse.records import RecordExistsError, RecordMissingError
@@ -857,22 +859,39 @@ async def _detach_table(ns: LanceNamespace, settings: Settings, segments: list[s
     them again; a purge takes them with the bucket, and then their base record goes with them ([[LH-279]]), or it
     would sanction its bases for the next table registered at the location. The location's claim goes either way,
     as at the deregister door ([[LH-204]]).
+
+    A purge deletes the table's data directories BEFORE the deregister ([[LH-286]]): they are on approved bases, which
+    the bucket purge does not reach, and the deregister is the step a re-issued call can no longer see past, so a delete
+    that fails leaves the table registered for the re-issue to detach again.
     """
+    canonical = fga.canonical_object_id(segments)
+    registry = base_registry.BaseRegistry(control_root=settings.registry_root, storage_options=settings.storage_options())
+    if purge:
+        try:
+            described: DescribeTableResponse = await run_in_threadpool(native.call, ns, "describe_table", DescribeTableRequest(id=segments))
+        except TableNotFoundError:
+            return False
+        if described.location:
+            await run_in_threadpool(
+                partial(data_directories.delete_table_directories, registry, described.location, table=canonical, storage_options=settings.storage_options())
+            )
     try:
         detached: DeregisterTableResponse = await run_in_threadpool(native.call, ns, "deregister_table", DeregisterTableRequest(id=segments))
     except TableNotFoundError:
         return False
     if detached.location:
-        canonical = fga.canonical_object_id(segments)
         await run_in_threadpool(location_claims.release, table_claims.claim_store(settings), detached.location, canonical)
         if purge:
-            registry = base_registry.BaseRegistry(control_root=settings.registry_root, storage_options=settings.storage_options())
             await run_in_threadpool(partial(base_registry.forget_base_record, registry, detached.location, table=canonical))
     return True
 
 
-async def _forget_trashed(settings: Settings, entry: dict[str, Any]) -> None:
+async def _forget_trashed(settings: Settings, entry: dict[str, Any], *, purge: bool) -> None:
     """End what one trashed object kept for an undrop besides its grants: its policy, claim and base record, then its record.
+
+    A purge deletes a trashed table's data directories before its base record ([[LH-286]]): they are on approved bases,
+    which the bucket purge does not reach, and nothing names them once the record is gone. Without one the bytes stay,
+    as the bucket does, where a later register can attach them again.
 
     The record goes last, as the trash purge orders it: it is all that still names what the object holds, so a
     failure before it is cleared leaves it for the re-issue to end. Its records are ended, and it is cleared, under the
@@ -887,7 +906,10 @@ async def _forget_trashed(settings: Settings, entry: dict[str, Any]) -> None:
     if location:
         await run_in_threadpool(location_claims.release, claims, location, canonical)
         registry = base_registry.BaseRegistry(control_root=settings.registry_root, storage_options=so)
-        await run_in_threadpool(partial(base_registry.forget_base_record, registry, location, table=canonical))
+        if purge:
+            await run_in_threadpool(partial(data_directories.end_base_record, registry, location, table=canonical, storage_options=so))
+        else:
+            await run_in_threadpool(partial(base_registry.forget_base_record, registry, location, table=canonical))
     if uuid is not None:
         await run_in_threadpool(trash.clear, settings.registry_root, so, uuid, kind=kind)
 
@@ -1053,7 +1075,7 @@ async def delete_warehouse(
                 revoked += await fga_deps.revoke_removed_object(client, settings, obj, token=token)
             else:
                 log.warning("warehouse_cascade_trash_uuid_unread", extra={"warehouse": warehouse_id, "kind": kind, "id": canonical})
-            await _forget_trashed(settings, entry)
+            await _forget_trashed(settings, entry, purge=purge_bucket)
             trash_ended.append(f"{kind}:{canonical}")
         if ns_conn is not None:
             for subtree in subtrees:

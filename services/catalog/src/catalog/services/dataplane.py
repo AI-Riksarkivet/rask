@@ -29,6 +29,7 @@ from typing import Any, Final, cast
 import lance
 import pyarrow as pa
 import pyarrow.fs as pafs
+from botocore.exceptions import BotoCoreError, ClientError
 from lance.dataset import Transaction
 from lance_namespace import (
     AlterTableAddColumnsRequest,
@@ -102,7 +103,7 @@ from catalog.core.modes import CreateMode, InsertMode
 from catalog.core.namespace import disarm_commit_path_cleanup, open_resolved_dataset, open_resolved_dataset_unchecked
 from catalog.services import changes, native, primary_keys, table_bases, table_claims
 from catalog.services.cast_size import bytes_after_cast
-from service_kit.lakehouse import auto_cleanup, base_registry, branch_layout, location_claims, trash
+from service_kit.lakehouse import auto_cleanup, base_registry, branch_layout, data_directories, location_claims, trash
 from service_kit.lakehouse.base_refs import decoded_path, decoded_segments, location_in_store, normalise, store_of
 from service_kit.lakehouse.control_prefixes import CONTROL_PREFIXES
 from service_kit.lakehouse.features import manifest_base_path_refs
@@ -1245,7 +1246,9 @@ def destroy_table(
     1. Judged before anything changes: the location must name one place below a store root, outside every control
        prefix, and neither be nor contain an ``estate_roots`` entry; at its key it must hold nothing, a ``_versions/``
        tree, or the reservation marker alone (a declared table); as spelled, at most the marker. A refusal leaves the
-       table registered and every byte in place.
+       table registered and every byte in place. The table's own data directories on its data bases are read from its
+       base record here too ([[LH-286]], :func:`service_kit.lakehouse.data_directories.directories_to_end`), since
+       they are its bytes as much as its root is.
     2. A location holding a ``_versions/`` tree gets a residue trash record on ``control`` before the row goes
        (:func:`trash.make_record`'s ``residue``, grace 0), so bytes a failed delete leaves keep their location's claim
        (``table_claims.kept_in_trash``): no register adopts them, undrop refuses them, the purge reclaims them. A
@@ -1258,19 +1261,22 @@ def destroy_table(
     4. Every object under both paths is deleted, absent counting as deleted, until a listing finds none, with
        ``_versions/`` last, so a delete that stops part-way leaves the marker the purge recognises a dataset by. On S3
        the delete is DeleteObjects on the listed keys, which writes no directory marker (pyarrow's delete PUTs one,
-       :func:`delete_table_object`).
+       :func:`delete_table_object`). Then every object in the table's data directories, by key; the caller forgets the
+       base record that names them once this answers.
     5. The residue record is cleared, and the drop answers the row it removed, or the judged location when the
        deregister's answer was lost.
 
     Raises:
         InvalidTableStateError: The location is not one a drop may delete; nothing changed.
+        ServiceUnavailableError: The table's base record or a data directory's claim could not be read; nothing changed.
         TableNotFoundError: The backend holds no such table; nothing changed.
-        TableBytesLeftError: The row is gone and objects remain at the location, or the row removed named another
-            location, whose bytes are left alone. The residue record stands.
+        TableBytesLeftError: The row is gone and objects remain at the location or in a data directory, or the row
+            removed named another location, whose bytes are left alone. The residue record stands.
     """
     stored, spelled = _table_paths(location)
     holds_a_dataset = _require_destroyable(location, so, stored, spelled, estate_roots=estate_roots)
     table = CATALOG_DELIMITER.join(segments)
+    directories = _data_directories_of(control, location, table)
     residue = (
         trash.make_record(table, uuid=table_uuid, location=location, dropped_by=dropped_by, grace_days=0, namespace_uuid=namespace_uuid, residue=True)
         if holds_a_dataset
@@ -1294,12 +1300,27 @@ def destroy_table(
         if removed is not None and decoded_path(str(removed.location or "")) != decoded_path(location):
             raise InternalError(f"the row removed for {table} named {removed.location!r}, not the location judged")
         _delete_everything_under(location, so, stored, spelled)
+        data_directories.delete_directories(directories, so)
     except Exception as exc:
         raise _bytes_left(table, location, exc, held=residue is not None) from exc
     _clear_residue(control, residue)
     if removed is None:
         return DropTableResponse(id=segments, location=location)
     return DropTableResponse(id=removed.id, location=removed.location)
+
+
+def _data_directories_of(control: location_claims.ClaimStore, location: str, table: str) -> list[base_registry.RecordedBase]:
+    """The data directories a drop of ``table`` at ``location`` deletes with its root, read before anything changes.
+
+    Raises:
+        ServiceUnavailableError: The base record or a directory's claim could not be read.
+    """
+    registry = base_registry.BaseRegistry(control_root=control.control_root, storage_options=control.storage_options)
+    try:
+        return data_directories.directories_to_end(registry, location, table=table)
+    except (base_registry.UnreadableBaseRecordError, ClientError, BotoCoreError, ValueError) as exc:
+        log.error("drop_data_directories_unread", extra={"table": table, "location": location, "error": str(exc)[:300]})
+        raise ServiceUnavailableError(f"the data directories of {table} could not be read, so nothing was dropped") from exc
 
 
 def _clear_residue(control: location_claims.ClaimStore, residue: dict[str, Any] | None) -> None:

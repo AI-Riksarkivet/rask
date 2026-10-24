@@ -14,9 +14,9 @@ its fork version included (both measured on pylance 13.0.0), so main's history a
 pins a version of main or of a branch, which cleanup retains, so it is in one of those lists.
 
 ONLY A DIRECTORY THE RECORD NAMES AS THE TABLE'S OWN, AND WHOSE CLAIM THE TABLE HOLDS, is listed: a ``data`` entry, a
-plain base. A dataset-root base is another dataset's (a clone's source, a branch's parent) and is never listed here, and
-the claim is what makes a directory one table's ([[LH-252]]): a record naming a directory whose claim the table does not
-hold, such as an approved base itself, which every table naming it once shared, is never listed either.
+plain base (:mod:`service_kit.lakehouse.data_directories` holds the rule). A dataset-root base is another dataset's (a
+clone's source, a branch's parent) and is never listed here, and a record naming a directory whose claim the table does
+not hold, such as an approved base itself, which every table naming it once shared, is never listed either.
 
 A DELETED ROW IS REPORTED, NOT RECLAIMED (owner, 2026-10-24). Its fragment stays referenced behind a deletion vector and
 only a compaction rewrites it; pylance 13.0.0's ``CompactionOptions`` carries no ``target_bases``, so that rewrite would
@@ -33,10 +33,10 @@ from typing import Final
 import lance
 from pydantic import BaseModel, ConfigDict
 
-from maintenance.services.stored_objects import StoredObject, delete_objects, list_under
-from service_kit.lakehouse import location_claims
 from service_kit.lakehouse.base_refs import decoded_path, store_of
-from service_kit.lakehouse.base_registry import BaseRecord, BaseRole, RecordedBase
+from service_kit.lakehouse.base_registry import RecordedBase
+from service_kit.lakehouse.data_directories import directory_uri
+from service_kit.lakehouse.stored_objects import StoredObject, delete_objects, list_under
 
 
 log = logging.getLogger(__name__)
@@ -55,45 +55,6 @@ class Reclaimed(BaseModel):
 
     files: int = 0
     bytes: int = 0
-
-
-def recorded_directories(record: BaseRecord | None) -> list[RecordedBase]:
-    """The table's own data directories, as its base record names them: ``data`` entries on a plain base."""
-    if record is None:
-        return []
-    return [entry for entry in record.entries if entry.role is BaseRole.DATA and not entry.is_dataset_root]
-
-
-def claimed_by(claims: location_claims.ClaimStore, directory: RecordedBase, table: str) -> bool:
-    """Whether ``table`` holds ``directory``'s claim, the evidence that its bytes are that table's alone ([[LH-252]]).
-
-    Raises:
-        ValueError: The stored claim is not a claim.
-        botocore.exceptions.ClientError: The store refused the read.
-    """
-    held = location_claims.holder(claims, directory.path)
-    return held is not None and held.table == table
-
-
-def last_claimed_by(claims: location_claims.ClaimStore, directory: RecordedBase, table: str) -> bool:
-    """Whether ``directory``'s claim names ``table``, held or released by it: what a purge of that table may delete.
-
-    A purge that forgot the table's base record part-way has released the record's directory claims already
-    (:func:`service_kit.lakehouse.base_registry.forget_base_record` releases them first), so the tick that finishes it
-    finds them released. A claim another table took since names that table, and no record names a directory no claim
-    ever named, such as an approved base itself.
-
-    Raises:
-        ValueError: The stored claim is not a claim.
-        botocore.exceptions.ClientError: The store refused the read.
-    """
-    found = location_claims.read(claims, directory.path)
-    return found is not None and found.claim.table == table
-
-
-def directory_uri(directory: RecordedBase) -> str:
-    """Where ``directory`` is listed: its path in the store the record names."""
-    return f"/{directory.path}" if directory.store == "file" else f"{directory.store}://{directory.path}"
 
 
 def _listed_prefix(directory: RecordedBase) -> str:

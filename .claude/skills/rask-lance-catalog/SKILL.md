@@ -706,7 +706,7 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   (`_scannable_buckets`), reporting an `IncompleteScan` rather than silently narrowing when it is
   unreadable. Residual: no multi-warehouse run against REAL object storage yet (#80).
 - **Lance's cleanup leaves every non-root base alone, so maintenance reclaims a table's data directories
-  itself** ([[LH-286]], `maintenance.services.data_directories`). `cleanup_old_versions` is ROOT-SCOPED: measured
+  itself** ([[LH-286]], `maintenance.services.base_reclaim`). `cleanup_old_versions` is ROOT-SCOPED: measured
   on pylance 13.0.0, after an overwrite of a table whose fragments sit on a data base, `cleanup_old_versions(older_than=0,
   delete_unverified=True)` removed every superseded version and none of the base's files (against
   `lance_docs/guide.md:4349`). The same root-scoping is what makes cleanup SAFE on a shallow clone (see
@@ -722,8 +722,13 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   bytes stay in its base fragment behind a deletion vector; the pass reports such fragments
   (`compaction.base_fragments.holding_deleted_rows`) and the compaction gate keeps refusing the table, since
   `CompactionOptions` has no `target_bases` and a rewrite would move the rows into the root (owner, 2026-10-24). The
-  trash purge deletes a dropped table's data directories after its root and before it forgets its base record.
-  Pinned by `tests/integration/test_a_data_bases_bytes_are_reclaimed.py`.
+  trash purge deletes a dropped table's data directories after its root and before it forgets its base record, and
+  so does every catalog door that ends a table with its bytes (`service_kit.lakehouse.data_directories`, one rule for
+  which directories: a `data` entry on a plain base whose claim names the table, held or released by it): a destructive
+  drop and namespace cascade (`dataplane.destroy_table`, after the root, inside its residue record), a purging
+  warehouse cascade (`_detach_table` before the deregister, so a failed delete leaves the table for the re-issue;
+  `_forget_trashed` before the record) and a create's undo. A cascade keeping its bucket keeps the directories. Pinned by
+  `tests/integration/test_a_data_bases_bytes_are_reclaimed.py`.
 - **A JSON index has NO stats, and Lance says so with a PANIC — upstream, already contained.** On
   pylance 10.0.0 every maintenance sweep prints `thread '<unnamed>' panicked at
   lance-index/src/scalar/json.rs:95:9: not yet implemented`, twice, once per Json index. The

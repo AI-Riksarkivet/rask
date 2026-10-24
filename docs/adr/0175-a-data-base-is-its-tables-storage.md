@@ -18,7 +18,8 @@ gaps stood:
 - Nothing reclaimed a base. Measured on pylance 13.0.0: after an overwrite of a table whose fragments sit on a data base,
   `cleanup_old_versions(older_than=0, delete_unverified=True)` removed every superseded version and none of the base's
   files, against `lance_docs/guide.md:4349`. A deleted row's bytes stay in its base fragment behind a root
-  `_deletions/` vector, and the purge of a dropped table deleted its root and left its data directory.
+  `_deletions/` vector, and every path that ended a table (the purge, a destructive drop, a namespace or warehouse
+  cascade) deleted its root and left its data directory.
 
 What the references say:
 
@@ -50,9 +51,15 @@ What the references say:
 - **A deleted row's bytes on a base are reported, not rewritten.** The pass counts the fragments that keep them
   (`compaction.base_fragments.holding_deleted_rows`), and the compaction gate keeps refusing such a table, because
   pylance 13.0.0's `CompactionOptions` has no `target_bases` and a rewrite would move the table's rows into its root.
-- **The trash purge deletes a dropped table's data directories** after its root and before it forgets its base record,
-  each judged first: a directory whose claim names another table, or that a live dataset reads through, refuses the
-  whole delete.
+- **Every path that ends a table with its bytes deletes its data directories before the base record that names them
+  goes**: the trash purge after a dropped table's root, a destructive drop or namespace cascade after the root, a
+  purging warehouse cascade before it deregisters the table (so a failed delete leaves the table for the re-issue) and
+  before it forgets a trashed one's record, and a create's undo. One rule chooses the directories
+  (`service_kit.lakehouse.data_directories`): a `data` entry on a plain base whose claim names the table, held or
+  released by it, since a forget that failed part-way has released them. Any other directory, such as the approved base
+  itself in a record written before [[LH-252]], is left to whoever's bytes it holds and logged, and the table still
+  ends. A directory a live dataset reads through refuses the purge's whole delete, as a root does. A warehouse cascade
+  keeping its bucket keeps the directories, as it keeps the bucket.
 
 ## Consequences
 

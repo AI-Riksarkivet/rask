@@ -50,7 +50,7 @@ from maintenance.core.metrics import (
     record_trashed_skipped,
     record_unrecorded_bases,
 )
-from maintenance.services import credentials, data_directories, purge
+from maintenance.services import base_reclaim, credentials, purge
 from maintenance.services.discovery import discover_datasets
 from maintenance.services.due import refresh_due, table_ids
 from maintenance.services.expiry import DatasetResult, DueVerdict, ExpiryPolicy, ExpiryTarget, count_reclaimable, expire_versions, summarize_refusals
@@ -58,7 +58,7 @@ from maintenance.services.naming import PolicyOwners, TableIds, policy_owners, r
 from maintenance.services.plan import DatasetPlan, PlanContext, buckets_to_sweep, cadence_skip, load_policies, resolve_plan
 from service_kit.governed import fga
 from service_kit.governed.audit import SUCCESS, audit
-from service_kit.lakehouse import auto_cleanup, base_refs, base_registry, location_claims, maintenance_policies, trash
+from service_kit.lakehouse import auto_cleanup, base_refs, base_registry, data_directories, location_claims, maintenance_policies, trash
 from service_kit.lakehouse.features import flags_from_open_error, manifest_base_path_refs, manifest_feature_flags, mixes_data_file_versions
 from service_kit.lakehouse.lance_session import affordable_cache_bytes
 from service_kit.lakehouse.maintenance_due import CloneList, DueRecord, delete_due, list_due, write_clone_list
@@ -298,7 +298,7 @@ def _probe_before_vending(
     minute on this estate — and the previous store became unable to restart at 107,485 of them. Expiry writes only
     when commit-path cleanup is armed (the disarm commits), when the policy's threshold of reclaimable versions is met,
     counted by the same rule the pass itself applies, or when the table's data directories hold a file the pass would
-    delete ([[LH-286]]), found by the rule the pass applies again under its vend (`data_directories.unreferenced`).
+    delete ([[LH-286]]), found by the rule the pass applies again under its vend (`base_reclaim.unreferenced`).
 
     CONSERVATIVE BY CONSTRUCTION: an unreadable dataset answers `True`, because skipping a dataset that WOULD have been
     maintained is the failure this service exists to prevent while a spare credential is only a cost. Logged, never
@@ -308,7 +308,7 @@ def _probe_before_vending(
         ds = lance.dataset(uri, storage_options=options, session=shared_lance_session())
         armed = bool(auto_cleanup.armed_keys(ds.config()))
         reclaimable = policy.cleanup_enabled and count_reclaimable(ds, uri, policy) >= policy.min_reclaimable
-        stranded = policy.cleanup_enabled and bool(directories) and bool(data_directories.unreferenced(ds, directories, options, now=now))
+        stranded = policy.cleanup_enabled and bool(directories) and bool(base_reclaim.unreferenced(ds, directories, options, now=now))
         return WriteProbe(
             may_write=armed or reclaimable or stranded,
             data_storage_version=ds.data_storage_version,

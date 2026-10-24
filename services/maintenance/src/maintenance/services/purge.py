@@ -76,17 +76,16 @@ from pydantic import BaseModel, Field
 
 from maintenance.core.config import MaintenanceSettings, shared_lance_session
 from maintenance.core.metrics import record_trash_purge
-from maintenance.services.data_directories import directory_uri, last_claimed_by, recorded_directories
 from maintenance.services.naming import manifest_uuid
 from maintenance.services.reconcile import MANIFEST_DIR, NON_GATING_CATEGORIES, ReconcileReport
-from maintenance.services.stored_objects import delete_objects, list_under
 from service_kit.control_emit import ControlEmitter, NoopControlEmitter, emit_control
 from service_kit.control_events import ControlAction, ControlObjectType, ControlUuids
 from service_kit.governed import fga
 from service_kit.lakehouse import location_claims, object_records, trash, warehouse_records
 from service_kit.lakehouse.base_refs import BaseRefs, decoded_path, decoded_segments, location_within, names_a_location, normalise, store_of
-from service_kit.lakehouse.base_registry import BaseRegistry, RecordedBase, UnreadableBaseRecordError, forget_base_record, read_base_record
+from service_kit.lakehouse.base_registry import BaseRegistry, RecordedBase, UnreadableBaseRecordError, forget_base_record
 from service_kit.lakehouse.control_prefixes import CONTROL_PREFIXES
+from service_kit.lakehouse.data_directories import delete_directories, directories_to_end, directory_uri
 from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base
 
 
@@ -734,8 +733,8 @@ async def _delete_bytes_or_refuse(
     THREE ARMS RATHER THAN ONE, because they say different things to an operator and only one of them
     means the record itself is wrong: ``NotADatasetRootError`` means this record points at something
     that is not a dataset; ``ProtectedBaseError`` means a live clone resolves its files through these
-    bytes, or another table holds one of its data directories, so an operator who drops the clone first
-    can let the next tick reclaim them legitimately; an ``OSError``, or a base record that could not be
+    bytes or through one of its data directories, so an operator who drops the clone first can let the
+    next tick reclaim them legitimately; an ``OSError``, or a base record that could not be
     read, is transient and the next tick simply retries.
 
     A namespace record owns no bytes (it is a ``__manifest`` row), so it reclaims ``(0, 0)`` without
@@ -1113,41 +1112,23 @@ def _estate_base_refs(roots: set[str], storage_options: StorageOptions, *, setti
 
 
 def _judged_data_directories(location: str, *, registry: BaseRegistry, table: str, protected: BaseRefs | None) -> list[RecordedBase]:
-    """The data directories the table at ``location`` holds, as its base record names them, each judged its own to delete ([[LH-286]]).
+    """The data directories ending the table at ``location`` deletes, each judged before any byte goes ([[LH-286]]).
 
-    Each is the table's own directory beneath an approved base ([[LH-252]]), and its claim names the table while the trash
-    keeps it, held or, once an earlier tick forgot part of the record, released (:func:`last_claimed_by`). A directory
-    whose claim names another table or none, as an approved base itself has, or one a live dataset resolves its files
-    through, refuses the whole delete before any byte goes.
+    :func:`service_kit.lakehouse.data_directories.directories_to_end` decides which are the table's (its claim names
+    the table, held or released by it, and every other one is left); one a live dataset resolves its files through
+    refuses the whole delete, as the root does.
 
     Raises:
         UnreadableBaseRecordError: The record exists and cannot be read.
-        ProtectedBaseError: A directory's claim does not name the table, or a live dataset reads through it.
+        ProtectedBaseError: A live dataset reads through one of the directories.
         botocore.exceptions.ClientError: The store refused a read of the record or a claim.
     """
-    claims = location_claims.ClaimStore(control_root=registry.control_root, storage_options=registry.storage_options)
-    directories = recorded_directories(read_base_record(registry, location))
+    directories = directories_to_end(registry, location, table=table)
     for directory in directories:
         uri = directory_uri(directory)
-        if not last_claimed_by(claims, directory, table):
-            raise ProtectedBaseError(
-                f"refusing to delete {location}: no claim names {table!r} on its data directory {uri}, so its bytes are not that table's alone"
-            )
         if protected is not None and (root := protected.protects_from_deletion(uri, along_with=location)) is not None:
             raise ProtectedBaseError(_protected_base_reason(uri, referrer=root))
     return directories
-
-
-def _delete_data_directories(directories: list[RecordedBase], storage_options: StorageOptions) -> tuple[int, int]:
-    """Delete every object in ``directories`` by key, which writes no directory marker ([[LH-535]]); ``(bytes, files)``."""
-    deleted_bytes = deleted_files = 0
-    for directory in directories:
-        uri = directory_uri(directory)
-        held = list_under(uri, storage_options)
-        delete_objects(uri, storage_options, [obj.path for obj in held])
-        deleted_bytes += sum(obj.size for obj in held)
-        deleted_files += len(held)
-    return deleted_bytes, deleted_files
 
 
 def _delete_guarded(location: str, storage_options: StorageOptions, protected: BaseRefs | None, *, registry: BaseRegistry, table: str) -> tuple[int, int]:
@@ -1159,5 +1140,5 @@ def _delete_guarded(location: str, storage_options: StorageOptions, protected: B
     """
     directories = _judged_data_directories(location, registry=registry, table=table, protected=protected)
     root_bytes, root_files = delete_location(location, storage_options, protected=protected)
-    directory_bytes, directory_files = _delete_data_directories(directories, storage_options)
-    return root_bytes + directory_bytes, root_files + directory_files
+    deleted = delete_directories(directories, storage_options)
+    return root_bytes + deleted.bytes, root_files + deleted.files

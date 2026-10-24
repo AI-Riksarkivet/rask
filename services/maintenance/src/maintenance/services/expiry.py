@@ -3,7 +3,7 @@
 Maintenance decides and does not rewrite (ADR 0155, ADR 0156 C4): it compacts nothing and builds or optimizes no
 index. What it still writes is reclamation — ``cleanup_old_versions`` deletes superseded manifests and the files only
 they reference, the pass deletes the manifests stock writers staged for versions another commit took, and what no
-retained version references in the table's own data directories (:mod:`maintenance.services.data_directories`) — and the
+retained version references in the table's own data directories (:mod:`maintenance.services.base_reclaim`) — and the
 config commit that disarms Lance's commit-path auto-cleanup. Every gate here guards one of those writes.
 """
 
@@ -19,8 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from maintenance.core.config import shared_lance_session
 from maintenance.core.metrics import CatalogRefusal
-from maintenance.services import data_directories
-from maintenance.services.stored_objects import delete_objects, list_under
+from maintenance.services import base_reclaim
 from service_kit.lakehouse import auto_cleanup
 from service_kit.lakehouse.base_refs import BaseRefs, rewrite_refusal
 from service_kit.lakehouse.base_registry import RecordedBase
@@ -32,6 +31,7 @@ from service_kit.lakehouse.features import (
     mixes_data_file_versions,
     unsupported_features_from_open_error,
 )
+from service_kit.lakehouse.stored_objects import delete_objects, list_under
 from service_kit.lakehouse.version_retention import Retention, reclaimable_versions
 from service_kit.openlineage import DatasetUuids
 
@@ -384,10 +384,10 @@ def _reclaim_data_directories(ds: lance.LanceDataset, *, result: DatasetResult, 
     """
     if not target.data_directories:
         return
-    result.base_fragments_holding_deleted_rows = data_directories.fragments_holding_deleted_rows(ds, target.data_directories)
+    result.base_fragments_holding_deleted_rows = base_reclaim.fragments_holding_deleted_rows(ds, target.data_directories)
     if not policy.cleanup_enabled:
         return
-    reclaimed = data_directories.reclaim(ds, target.data_directories, target.storage_options, now=target.now)
+    reclaimed = base_reclaim.reclaim(ds, target.data_directories, target.storage_options, now=target.now)
     result.base_files_removed, result.base_bytes_removed = reclaimed.files, reclaimed.bytes
 
 

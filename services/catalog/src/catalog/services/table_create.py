@@ -45,6 +45,7 @@ from __future__ import annotations
 import json
 import logging
 import uuid
+from functools import partial
 
 import pyarrow as pa
 from fastapi.concurrency import run_in_threadpool
@@ -74,7 +75,7 @@ from catalog.core.run_context import RunContext
 from catalog.services import dataplane, native, table_bases, table_claims
 from service_kit.control_emit import ControlEmitter, emit_control
 from service_kit.governed import fga
-from service_kit.lakehouse import base_registry, location_claims
+from service_kit.lakehouse import base_registry, data_directories, location_claims
 from service_kit.lakehouse.objectfs import StorageOptions
 
 
@@ -300,9 +301,12 @@ async def create_governed_table(
     async def _undo_create() -> None:
         await run_in_threadpool(native.call, ns, "drop_table", DropTableRequest(id=segments))
         # The bytes are gone with the table, so its base record goes too: a record that outlives the
-        # manifest it describes would vouch for bases nothing declares. Its location's claim goes with it.
+        # manifest it describes would vouch for bases nothing declares. The fragments the write put in the table's data
+        # directories go before it ([[LH-286]]), and its location's claim goes with it.
         if response.location:
-            await run_in_threadpool(base_registry.forget_base_record, registry, response.location, table=table_id)
+            await run_in_threadpool(
+                partial(data_directories.end_base_record, registry, response.location, table=table_id, storage_options=settings.storage_options())
+            )
             await run_in_threadpool(location_claims.release, table_claims.claim_store(settings), response.location, table_id)
 
     # The revoke-then-drop pair moved into `seed_ownership_or_compensate` (diff2 F3) because it was
