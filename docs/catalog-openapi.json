@@ -23011,7 +23011,7 @@
     },
     "/v1/table/{id}/deregister": {
       "post": {
-        "description": "Deregister the table at ``id`` (detach it without deleting data) via lance_namespace\n``deregister_table``, then revoke its FGA ownership and emit a best-effort ``deregister_table`` marker.\n\nProtection-gated like drop (#73): deregister keeps bytes but REMOVES the object from governance \u2014\nthe flag's whole jurisdiction \u2014 so leaving it ungated would make \"deregister, then delete the\nfiles by hand\" the unprotected path around the protected drop.",
+        "description": "Deregister the table at ``id`` (detach it without deleting data) via lance_namespace\n``deregister_table``, then revoke its FGA ownership and emit a best-effort ``deregister_table`` marker.\n\nProtection-gated like drop (#73): deregister keeps bytes but REMOVES the object from governance \u2014\nthe flag's whole jurisdiction \u2014 so leaving it ungated would make \"deregister, then delete the\nfiles by hand\" the unprotected path around the protected drop.\n\nA table no uuid identifies is the estate admin's to deregister (the router asks that rung for it, [[LH-534]]): it\nholds no grant, no record and no protection, since each is kept under a uuid, so its row is detached and its\nlocation's claim released, and the detach is announced on the control plane alone. Lineage refuses an event naming\na table by no uuid ([[LH-166]]), so the feed is not told.",
         "operationId": "deregister_table_v1_table__id__deregister_post",
         "parameters": [
           {

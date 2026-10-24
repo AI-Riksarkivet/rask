@@ -21,7 +21,7 @@ from openfga_sdk import OpenFgaClient
 
 from catalog.core import run_context
 from catalog.core.config import Settings, StorePlane, get_settings
-from catalog.core.identifiers import parse_identifier
+from catalog.core.identifiers import is_spelled_as_a_uuid, parse_identifier
 from catalog.core.lineage_emit import LineageEmitter, NoopEmitter, OriginatorBoundEmitter, is_person_subject
 from catalog.core.namespace import NamespaceConnections
 from catalog.core.run_context import RunContext
@@ -310,7 +310,7 @@ class Resolver:
         """The uuid of the namespace ``segments`` names, or ``None`` when no namespace has that name (or for the root).
 
         Raises:
-            InternalError: The namespace carries no uuid, which no door leaves.
+            UnidentifiedObjectError: The namespace carries no uuid, which no door leaves.
         """
         key = tuple(segments)
         if key not in self._namespaces:
@@ -323,7 +323,7 @@ class Resolver:
         """The FGA object ``kind`` ``segments`` names (``table:<uuid>``, ``namespace:<uuid>``), or ``None`` when nothing has that name.
 
         Raises:
-            InternalError: The object carries no uuid, which no door leaves.
+            UnidentifiedObjectError: The object carries no uuid, which no door leaves.
         """
         if kind == "table":
             resolved = await self.table(segments)
@@ -544,8 +544,9 @@ class UuidNamingControlEmitter:
 
     A door names a table or namespace by the uuid object it resolved (``object_id``, ``table:<uuid>``) and its name
     (``object_name``). One place rather than every door fills what the door did not set: ``object_uuid`` from
-    ``object_id``, and the uuid of the namespace the object is in, read by name after the door acted. A door that ends
-    its object or moves it (a drop, a deregister, a rename) reads that uuid before it acts and sets it, and it stands.
+    ``object_id`` when it names a uuid object, and the uuid of the namespace the object is in, read by name after the
+    door acted. A door that ends its object or moves it (a drop, a deregister, a rename) reads that uuid before it acts
+    and sets it, and it stands. An object no uuid identifies is named by its name ([[LH-534]]) and keeps no ``object_uuid``.
     """
 
     def __init__(self, inner: ControlEmitter, uuids: ObjectUuids) -> None:
@@ -556,7 +557,7 @@ class UuidNamingControlEmitter:
         kind, _, key = event.object_id.partition(":")
         if kind in ("table", "namespace") and event.object_name is not None:
             update: dict[str, str | None] = {}
-            if event.object_uuid is None:
+            if event.object_uuid is None and is_spelled_as_a_uuid(key):
                 update["object_uuid"] = key
             if event.namespace_uuid is None:
                 update["namespace_uuid"] = await self._uuids.namespace_of(event.object_name)

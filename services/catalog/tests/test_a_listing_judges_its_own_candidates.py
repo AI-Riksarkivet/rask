@@ -7,16 +7,21 @@ the caller reaches across the estate: that answer stops at the server's ceiling 
 more than that elsewhere saw a small namespace listed short. Pagination counts only what the caller can see, so a page
 is not cut before the items are judged.
 
+An item whose uuid cannot be read, a table whose location no claim names among them, is left out of the page and logged,
+so it never takes the listing down for the callers it was never answered to ([[LH-534]]).
+
 Every decision is the real model's, on a store of this test's own ([[LH-235]]).
 """
 
 from __future__ import annotations
 
 import uuid
+from pathlib import Path
 from typing import Any
 
 import pyarrow as pa
 import pytest
+from lance_namespace import RegisterTableRequest, connect
 
 from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 
@@ -58,6 +63,19 @@ def test_a_page_counts_only_the_tables_the_caller_can_read(estate: Any) -> None:
     rest = _ok(estate, "/v1/namespace/db/table/list", caller="bob", params={"limit": 2, "page_token": first.get("page_token") or ""})
 
     assert (first["tables"], first.get("page_token"), rest["tables"], rest.get("page_token")) == (["a", "b"], "b", ["c"], None)
+
+
+def test_a_table_no_uuid_identifies_is_left_out_of_the_estate_listing_for_every_caller(estate: Any, tmp_path: Path) -> None:  # noqa: ANN401
+    # A row at a location no claim names, written past the doors: the shape measured live on 2026-10-24, where it answered
+    # this listing 500 to every caller.
+    connect("dir", {"root": str(tmp_path)}).register_table(RegisterTableRequest(id=["db", "lost"], location="held"))
+
+    answers = {caller: estate.client.get("/v1/table", headers=estate.bearer(caller)) for caller in ("alice", "bob")}
+
+    assert {caller: (answer.status_code, answer.json().get("tables")) for caller, answer in answers.items()} == {
+        "alice": (200, ["db$a", "db$b", "db$c", "db$hidden"]),
+        "bob": (200, ["db$a", "db$b", "db$c"]),
+    }
 
 
 def test_a_grantee_of_one_namespace_does_not_see_its_sibling(estate: Any) -> None:  # noqa: ANN401

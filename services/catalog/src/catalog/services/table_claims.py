@@ -20,7 +20,6 @@ from uuid import uuid4
 from lance_namespace import (
     ConcurrentModificationError,
     DescribeTableRequest,
-    InternalError,
     InvalidTableStateError,
     LanceNamespace,
     NamespaceNotFoundError,
@@ -30,6 +29,7 @@ from pydantic import BaseModel
 
 from catalog.core.config import Settings
 from catalog.services import native
+from catalog.services.object_uuids import UnidentifiedObjectError
 from service_kit.lakehouse import location_claims, trash
 from service_kit.lakehouse.base_refs import decoded_path
 from service_kit.lakehouse.location_claims import ClaimRead, ClaimStore, LocationClaim
@@ -59,11 +59,11 @@ class ResolvedTable(BaseModel):
 
         Raises:
             TableNotFoundError: The name named no table.
-            InternalError: The table's location carries no claim recording a uuid, which no door leaves.
+            UnidentifiedObjectError: The table's location carries no claim recording a uuid, which no door leaves.
         """
         if self.location is None:
             raise TableNotFoundError(f"table not found: {self.segments}")
-        return _recorded_uuid(self.claim, self.segments)
+        return _recorded_uuid(self.claim, self.segments, self.location)
 
 
 class DoorFence(BaseModel):
@@ -101,15 +101,15 @@ def uuid_at(store: ClaimStore, location: str, segments: list[str]) -> str:
     """The uuid the claim on ``location`` records, for the table ``segments`` resolved to there.
 
     Raises:
-        InternalError: The location carries no claim recording a uuid.
+        UnidentifiedObjectError: The location carries no claim recording a uuid.
     """
-    return _recorded_uuid(location_claims.read(store, location), segments)
+    return _recorded_uuid(location_claims.read(store, location), segments, location)
 
 
-def _recorded_uuid(claim: ClaimRead | None, segments: list[str]) -> str:
+def _recorded_uuid(claim: ClaimRead | None, segments: list[str], location: str) -> str:
     if claim is None or claim.claim.uuid is None:
-        log.error("table_uuid_unrecorded", extra={"table": segments})
-        raise InternalError(f"table {segments} carries no uuid, so no record kept for it can be read")
+        log.error("table_uuid_unrecorded", extra={"table": segments, "location": location})
+        raise UnidentifiedObjectError("table", segments, location=location)
     return claim.claim.uuid
 
 

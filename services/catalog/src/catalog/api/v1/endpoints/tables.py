@@ -92,7 +92,8 @@ from catalog.core.vending import (
 )
 from catalog.schemas import ProtectionResponse, SetProtectionRequest, TrashEntry
 from catalog.services import dataplane, native, table_bases, table_claims, trash_doors, warehouses
-from service_kit.control_emit import emit_control
+from catalog.services.table_claims import ResolvedTable
+from service_kit.control_emit import ControlEmitter, emit_control
 from service_kit.governed import fga
 from service_kit.governed.audit import SUCCESS, audit
 from service_kit.governed.deps import ANONYMOUS_SUBJECT
@@ -886,7 +887,12 @@ async def deregister_table(
 
     Protection-gated like drop (#73): deregister keeps bytes but REMOVES the object from governance —
     the flag's whole jurisdiction — so leaving it ungated would make "deregister, then delete the
-    files by hand" the unprotected path around the protected drop."""
+    files by hand" the unprotected path around the protected drop.
+
+    A table no uuid identifies is the estate admin's to deregister (the router asks that rung for it, [[LH-534]]): it
+    holds no grant, no record and no protection, since each is kept under a uuid, so its row is detached and its
+    location's claim released, and the detach is announced on the control plane alone. Lineage refuses an event naming
+    a table by no uuid ([[LH-166]]), so the feed is not told."""
     # SAME AMPLIFIER AS create (see `catalog.api.idempotency`): a replay re-enters a door that
     # retires the id while the bytes stay. OPTIONAL, because the spec defines no such header and a stock client must keep working.
     converge = await idem.begin(settings, so, token, idempotency_key, endpoint="POST /v1/table/{id}/deregister")
@@ -895,21 +901,14 @@ async def deregister_table(
 
     segments = reconcile_body_id(parse_identifier(id), body.id if body else None)
     canonical = fga.canonical_object_id(segments)
+    if table.location is not None and table.uuid is None:
+        response = await _deregister_unidentified(ns, settings, table, control, token, segments=segments)
+        await converge.remember(200, response)
+        return response
     await fga_deps.require_table_unprotected(settings, table, force=force)
     table_uuid = table.require_uuid()
-    # The door acts on the table its name resolved to, under the fence that holds the claim it read (ADR 0173 §7,
-    # [[LH-521]]): a rename landing since answers this deregister 409, as one landing after the fence answers itself.
-    claims = table_claims.claim_store(settings)
-    fenced = await run_in_threadpool(partial(table_claims.fence, ns, claims, table, holder=canonical, verb="deregister"))
-    location = fenced.location
     known = await uuids.table(segments, uuid=table.uuid)
-    try:
-        response: DeregisterTableResponse = await run_in_threadpool(native.call, ns, "deregister_table", DeregisterTableRequest(id=segments))
-    except Exception:
-        await run_in_threadpool(table_claims.lift_fence, claims, fenced)
-        raise
-    # The detached bytes are nobody's now, so the id's claim on them goes ([[LH-204]]).
-    await run_in_threadpool(location_claims.release, claims, location, canonical)
+    response = await _detach(ns, settings, table, segments=segments)
     # The table leaves governance, so what was kept for it under its uuid goes.
     await run_in_threadpool(object_records.end_object_records, settings.registry_root, settings.storage_options(), "table", table_uuid)
     # Record the detach as best-effort lineage — asymmetric with drop (which deletes data), deregister
@@ -941,6 +940,47 @@ async def deregister_table(
         extra={},
     )
     await converge.remember(200, response)
+    return response
+
+
+async def _detach(ns: LanceNamespace, settings: Settings, table: ResolvedTable, *, segments: list[str]) -> DeregisterTableResponse:
+    """Remove ``table``'s row from ``__manifest`` and release its location's claim; the bytes stay where they are.
+
+    The door acts on the table its name resolved to, under the fence that holds the claim it read (ADR 0173 §7,
+    [[LH-521]]): a rename landing since answers this deregister 409, as one landing after the fence answers itself.
+    """
+    canonical = fga.canonical_object_id(segments)
+    claims = table_claims.claim_store(settings)
+    fenced = await run_in_threadpool(partial(table_claims.fence, ns, claims, table, holder=canonical, verb="deregister"))
+    try:
+        response: DeregisterTableResponse = await run_in_threadpool(native.call, ns, "deregister_table", DeregisterTableRequest(id=segments))
+    except Exception:
+        await run_in_threadpool(table_claims.lift_fence, claims, fenced)
+        raise
+    # The detached bytes are nobody's now, so the id's claim on them goes ([[LH-204]]).
+    await run_in_threadpool(location_claims.release, claims, fenced.location, canonical)
+    return response
+
+
+async def _deregister_unidentified(
+    ns: LanceNamespace, settings: Settings, table: ResolvedTable, control: ControlEmitter, token: Caller | None, *, segments: list[str]
+) -> DeregisterTableResponse:
+    """Detach a table whose location carries no claim recording a uuid, and announce it ([[LH-534]]).
+
+    Its control event names it by name (``table:<name>``), because no uuid object exists to name it by.
+    """
+    canonical = fga.canonical_object_id(segments)
+    response = await _detach(ns, settings, table, segments=segments)
+    log.warning("unidentified_table_deregistered", extra={"table": canonical, "location": table.location})
+    await emit_control(
+        control,
+        action="table_deregistered",
+        object_type="table",
+        object_id=f"table:{canonical}",
+        object_name=canonical,
+        actor=f"user:{token.subject}" if token is not None else None,
+        extra={},
+    )
     return response
 
 

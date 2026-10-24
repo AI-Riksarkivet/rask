@@ -145,7 +145,8 @@ class CatalogControlEvent(BaseModel):
     object_type: ControlObjectType
     #: The mutated object as OpenFGA holds it (e.g. `warehouse:acme`, `table:<uuid>`, `namespace:<uuid>`, or the
     #: `table:<uuid>` a grant/policy is scoped to). A table's or namespace's is its uuid, never its name ([[LH-524]]),
-    #: so a consumer checking a person's access asks about this. What a consumer keys its invalidation off.
+    #: so a consumer checking a person's access asks about this. What a consumer keys its invalidation off. A table no
+    #: uuid identifies holds no grant, and its deregister names it `table:<name>`, with no `object_uuid` ([[LH-534]]).
     object_id: str
     #: The table's or namespace's name when the event was emitted (`db1$t`), beside `object_id`'s uuid: what a person
     #: is shown, and what a consumer keyed by name (a namespace's warehouse binding) reads. `None` for any other object.

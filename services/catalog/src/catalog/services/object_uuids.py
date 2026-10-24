@@ -10,6 +10,7 @@ the event still names the table it was about. Best-effort, as the announcement i
 from __future__ import annotations
 
 import logging
+from typing import Literal
 
 from lance_namespace import DescribeNamespaceRequest, DescribeTableRequest, InternalError, LanceNamespace, NamespaceNotFoundError
 
@@ -22,6 +23,20 @@ from service_kit.openlineage import DatasetUuids
 
 
 log = logging.getLogger(__name__)
+
+
+class UnidentifiedObjectError(InternalError):
+    """A table or namespace that records no uuid, so no grant and no record kept for it can be read (ADR 0173 §6, §8).
+
+    Code 18 at every door that acts on it. A listing leaves such an object out rather than fail for every caller, and a
+    table is detached by the estate admin's deregister ([[LH-534]]). ``location`` is the table's, where its claim is.
+    """
+
+    def __init__(self, kind: Literal["table", "namespace"], segments: list[str], *, location: str | None = None) -> None:
+        self.kind = kind
+        self.segments = list(segments)
+        self.location = location
+        super().__init__(f"{kind} {segments} carries no uuid, so nothing kept for it can be read")
 
 
 def namespace_uuid(ns: LanceNamespace, segments: list[str]) -> str | None:
@@ -40,7 +55,7 @@ def resolve_namespace_uuid(ns: LanceNamespace, segments: list[str]) -> str | Non
     """The uuid of the namespace ``segments`` names, or ``None`` when no namespace has that name.
 
     Raises:
-        InternalError: The namespace carries no uuid, which no door leaves.
+        UnidentifiedObjectError: The namespace carries no uuid, which no door leaves.
     """
     try:
         described = native.call(ns, "describe_namespace", DescribeNamespaceRequest(id=segments))
@@ -49,7 +64,7 @@ def resolve_namespace_uuid(ns: LanceNamespace, segments: list[str]) -> str | Non
     uuid = uuid_of(described.properties)
     if uuid is None:
         log.error("namespace_uuid_unrecorded", extra={"namespace": segments})
-        raise InternalError(f"namespace {segments} carries no uuid, so nothing kept for it can be read")
+        raise UnidentifiedObjectError("namespace", segments)
     return uuid
 
 
@@ -58,7 +73,7 @@ def require_namespace_uuid(ns: LanceNamespace, segments: list[str]) -> str:
 
     Raises:
         NamespaceNotFoundError: No such namespace.
-        InternalError: The namespace carries no uuid, which no door leaves.
+        UnidentifiedObjectError: The namespace carries no uuid, which no door leaves.
     """
     uuid = resolve_namespace_uuid(ns, segments)
     if uuid is None:

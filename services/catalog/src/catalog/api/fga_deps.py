@@ -1015,9 +1015,41 @@ def _rung_check(settings: Settings, token: Caller | None, injected: OpenFgaClien
     user = token.subject
 
     async def check(rung: tier_policy.Rung) -> None:
-        await _require_rung(client, resolver, user=user, rung=rung)
+        try:
+            await _require_rung(client, resolver, user=user, rung=rung)
+        except object_uuids.UnidentifiedObjectError:
+            # Every door but the deregister keeps answering code 18 for an object no uuid identifies, and the
+            # deregister is a judged write door, so this is the one place that door's rung is asked.
+            if rung.relation != _UNIDENTIFIED_TABLE_RUNG:
+                raise
+            await _require_estate_admin_for_unidentified(client, user=user, root=settings.fga_root_object, rung=rung)
 
     return check
+
+
+#: The rung of the one door that reaches a table no uuid identifies: its deregister, which detaches the row and deletes no
+#: byte ([[LH-534]]).
+_UNIDENTIFIED_TABLE_RUNG: Final = "can_deregister"
+
+
+async def _require_estate_admin_for_unidentified(client: OpenFgaClient, *, user: str, root: str, rung: tier_policy.Rung) -> None:
+    """Admit the estate admin to deregister a table no uuid identifies, and refuse anyone else as a name holding nothing is refused.
+
+    Every grant is held by an object's uuid (ADR 0173 §8), so such a table holds none, and its deregister asks the rung
+    every estate-wide door asks, ``can_observe_events`` on the estate root ([[LH-534]]). The decision is audited on the
+    table by its name, with the root it was decided on; a refusal names the door's own rung on the name, so it tells no
+    caller that the name holds a table.
+    """
+    label = _label(rung)
+    try:
+        allowed = await fga.check(client, user=user, relation="can_observe_events", obj=root)
+    except ServiceUnavailableError:  # authz layer down during an access attempt — audit, then fail closed
+        audit("can_observe_events", FAILURE, subject=user, resource=label, decided_on=root, reason="authz_unavailable")
+        raise
+    audit("can_observe_events", ALLOW if allowed else DENY, subject=user, resource=label, decided_on=root, reason="unidentified_table")
+    if not allowed:
+        log.info("access_denied", extra={"sub": user, "relation": rung.relation, "object": label})
+        raise PermissionDeniedError(f"{rung.relation} required on {label}")
 
 
 async def _judge(
@@ -1374,12 +1406,15 @@ async def authorized_page(
     server's ceiling (1,000 objects), so a caller reaching more than that elsewhere would see a small namespace listed
     short. The cursor is the last name served, as :func:`catalog.api.pagination.paginate` keeps it; a ``None`` token
     means every candidate was judged.
+
+    A candidate that records no uuid holds no grant, so it is answered to no caller, and is left out rather than fail the
+    listing for every caller ([[LH-534]]).
     """
     remaining = [(name, list(segments)) for name, segments in candidates if not page_token or name > page_token]
     page: list[str] = []
     for start in range(0, len(remaining), LISTING_BATCH):
         batch = remaining[start : start + LISTING_BATCH]
-        objects = await asyncio.gather(*(resolver.object(kind, segments) for _, segments in batch))
+        objects = await asyncio.gather(*(_listed_object(resolver, kind, name, segments) for name, segments in batch))
         present = sorted({obj for obj in objects if obj is not None})
         allowed = await fga.batch_check(client, user=user, relation=relation, objects=present) if present else {}
         for offset, ((name, _), obj) in enumerate(zip(batch, objects, strict=True)):
@@ -1390,6 +1425,15 @@ async def authorized_page(
                 more = start + offset + 1 < len(remaining)
                 return page, name if more else None
     return page, None
+
+
+async def _listed_object(resolver: Resolver, kind: Literal["table", "namespace"], name: str, segments: list[str]) -> str | None:
+    """The FGA object a listing's candidate ``name`` resolves to; ``None`` for one that names nothing or records no uuid."""
+    try:
+        return await resolver.object(kind, segments)
+    except object_uuids.UnidentifiedObjectError as unidentified:
+        log.error("listing_left_out_unidentified_object", extra={"kind": kind, "object_name": name, "location": unidentified.location})
+        return None
 
 
 # --------------------------------------------------------------------------- #
@@ -1608,7 +1652,7 @@ async def identify(ns: LanceNamespace, settings: Settings, kind: Literal["table"
     Raises:
         TableNotFoundError: No such table.
         NamespaceNotFoundError: No such namespace.
-        InternalError: The object carries no uuid, which no door leaves.
+        UnidentifiedObjectError: The object carries no uuid, which no door leaves.
     """
     if kind == "table":
         resolved = await run_in_threadpool(table_claims.resolve, ns, table_claims.claim_store(settings), segments)

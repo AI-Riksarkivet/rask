@@ -89,6 +89,17 @@ Two contracts stack here, and confusing them is how bugs happen:
   `object_name` beside it. A registry model (`table:models$<name>`) is no lance-namespace table and keeps its name.
   Pinned by `services/catalog/tests/test_a_grant_is_held_by_the_objects_uuid.py` and
   `services/catalog/tests/test_a_listing_judges_its_own_candidates.py`.
+- **An object that records no uuid holds no grant, and only the estate admin's deregister reaches it** ([[LH-534]]). A
+  table whose location carries no claim recording a uuid, or a namespace with no `rask.uuid`, raises
+  `object_uuids.UnidentifiedObjectError` (code 18) at every door that resolves it. A listing leaves it out and logs
+  `listing_left_out_unidentified_object` at ERROR with its name and location, so it never fails the listing for every
+  caller. `POST /v1/table/{id}/deregister` on such a table asks `can_observe_events` on the estate root in place of
+  `can_deregister` (`fga_deps._rung_check`) and refuses anyone else with the refusal an absent name gets; the door
+  fences the location, detaches the row, releases the claim and announces `table_deregistered` naming it
+  `table:<name>` with no `object_uuid`. It emits no lineage marker, since lineage refuses an output no uuid names
+  ([[LH-166]]). A namespace that records no uuid has no such door. Measured live 2026-10-24: a rename on helm rev 4
+  (before LH-528's second commit) re-registered its table at a location no claim named. Pinned by
+  `services/catalog/tests/test_the_estate_admin_deregisters_a_table_no_uuid_identifies.py` and the listing test above.
 - **A table the catalog makes lives at `<namespace root>/<table uuid>`** ([[LH-520]], ADR 0173 §5), the namespace root
   being the root of the warehouse its top-level namespace is bound to (`NamespaceRootDep`; CONTEXT.md's
   `<warehouse root>/<table uuid>`), else the catalog's root. Create and declare

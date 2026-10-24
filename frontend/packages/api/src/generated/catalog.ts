@@ -3099,6 +3099,11 @@ export interface paths {
          *     Protection-gated like drop (#73): deregister keeps bytes but REMOVES the object from governance —
          *     the flag's whole jurisdiction — so leaving it ungated would make "deregister, then delete the
          *     files by hand" the unprotected path around the protected drop.
+         *
+         *     A table no uuid identifies is the estate admin's to deregister (the router asks that rung for it, [[LH-534]]): it
+         *     holds no grant, no record and no protection, since each is kept under a uuid, so its row is detached and its
+         *     location's claim released, and the detach is announced on the control plane alone. Lineage refuses an event naming
+         *     a table by no uuid ([[LH-166]]), so the feed is not told.
          */
         post: operations["deregister_table_v1_table__id__deregister_post"];
         delete?: never;
