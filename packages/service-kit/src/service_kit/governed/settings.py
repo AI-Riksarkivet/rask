@@ -85,9 +85,9 @@ class FgaSettings:
     fga_decider_token_file: str | None = Field(default=None, alias="RASK_FGA_DECIDER_TOKEN_FILE")
     #: The estate's root FGA object — the one a platform-wide PRIVILEGE is checked against, as
     #: opposed to a per-tenant one. Shared here rather than redeclared per service because it is a
-    #: coordinate every governed service must agree on: the catalog gates `GET /management/v1/events` on it,
-    #: lineage gates its whole-estate projection on it, compute gates its routers
-    #: on `reader` there, flows on `writer`, and the viewer gates its object browser on it. Three
+    #: coordinate every governed service must agree on: the catalog gates its estate-wide doors on it,
+    #: lineage gates its whole-estate projection on it, and a client gating an estate-wide surface of its
+    #: own asks the estate-admin verb there through the decision door. Three
     #: copies of the same default in three configs is exactly how one of them ends up naming a
     #: different object and quietly authorizing against something nobody grants.
     fga_root_object: str = Field(default="estate:rask", alias="RASK_FGA_ROOT_OBJECT")
