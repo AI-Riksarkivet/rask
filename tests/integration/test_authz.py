@@ -778,52 +778,6 @@ def test_batch_create_versions_requires_writer(client: TestClient, fake_ns: Magi
     assert seen["objects"] == [_table("db1$users")]
 
 
-def test_transaction_route_requires_authz(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
-    """CONTRACT: a transaction op is authorized, not merely authenticated. An OPAQUE (no enclosing
-    namespace) txn id is checked against the dedicated ``transaction`` FGA type — no longer the
-    ``table:<txn-id>`` alias that nothing ever seeds (the old always-deny). A denial is 403."""
-    _wire(client)
-    captured: list[dict] = []
-    monkeypatch.setattr(fga_module, "check", _fake_check(captured, allow=False))
-
-    resp = client.post("/v1/transaction/txn1/describe", headers={"Authorization": "Bearer t"})
-    assert resp.status_code == 403
-    assert captured, "transaction route must run an authz check, not pass on authn only"
-    assert captured[-1]["obj"] == "transaction:txn1"  # dedicated transaction type, not table alias
-    assert captured[-1]["relation"] == "can_describe"  # describe → viewer rung on the transaction
-
-
-def test_transaction_namespaced_is_parent_scoped(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
-    """CONTRACT: a NAMESPACED txn id (``<ns>$<txn>``) is authorized PARENT-SCOPED against its enclosing
-    namespace — where the caller's grant already lives — so it resolves on the first call with no
-    per-transaction seed (the always-deny fix). ``describe`` = reader tier, ``alter`` = writer tier.
-
-    The writer-tier relation MUST be one the ``namespace`` type defines: this test used to assert
-    ``can_write_data``, a TABLE-only action, which OpenFGA rejects on a namespace (400, "relation not
-    found") — fail-closed to a 503 for EVERY caller, owners included. Mocking ``fga.check`` made the
-    phantom relation look fine, so ``tests/unit/test_fga_model_contract.py`` now cross-checks every
-    (type, relation) the app can send against the compiled model."""
-    _wire(client)
-    captured: list[dict] = []
-    monkeypatch.setattr(fga_module, "check", _fake_check(captured, allow=False))
-
-    # describe → can_get_metadata on the enclosing namespace
-    resp = client.post("/v1/transaction/db1$txn1/describe", headers={"Authorization": "Bearer t"})
-    assert resp.status_code == 403
-    assert captured[-1] == {"user": "dex~alice", "relation": "can_get_metadata", "obj": _namespace("db1")}
-
-    # alter (may commit/abort) → the namespace WRITER rung: can_update_properties (`writer`), the same
-    # rung `transaction#can_set_status: committer` resolves to for a parented txn (committer ⊇ writer
-    # from parent) — so both branches gate on the identical privilege.
-    resp = client.post(
-        "/v1/transaction/db1$txn1/alter",
-        json={"actions": [{"setStatusAction": {"status": "Succeeded"}}]},
-        headers={"Authorization": "Bearer t"},
-    )
-    assert resp.status_code == 403
-    assert captured[-1] == {"user": "dex~alice", "relation": "can_update_properties", "obj": _namespace("db1")}
-
-
 def test_materialized_view_create_is_create_on_parent(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
     """CONTRACT: creating a materialized view is authorized (create-on-parent), not authn-only. It has
     its OWN ``can_create_materialized_view`` relation on the parent namespace (no longer the ``table``

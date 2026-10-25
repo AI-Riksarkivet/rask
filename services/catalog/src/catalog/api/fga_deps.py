@@ -56,7 +56,7 @@ from catalog.api.dependencies import FgaClientDep, Resolver, ResolverDep, Settin
 from catalog.api.security import Caller, CurrentToken
 from catalog.core import run_context, tier_policy
 from catalog.core.config import Settings
-from catalog.core.identifiers import MAX_NAMESPACE_DEPTH, parse_identifier, rename_destination, require_names
+from catalog.core.identifiers import MAX_NAMESPACE_DEPTH, parse_identifier, rename_destination, require_names, transaction_table
 from catalog.services import native, object_uuids, table_claims, warehouses
 from catalog.services.table_claims import ResolvedTable
 from service_kit.governed import fga
@@ -69,11 +69,9 @@ from service_kit.lakehouse.subjects import is_person_subject
 
 log = logging.getLogger(__name__)
 
-# Guarded resource prefixes, in match order. Each maps to its own dedicated FGA type in the model
-# (``service_kit/governed/auth/model.fga``): ``materialized_view`` and ``transaction`` are no longer aliased
-# to ``table``. A transaction is authorized PARENT-SCOPED against its enclosing namespace (see
-# ``_authorize_transaction``) — the old ``table:<txn-id>`` alias targeted an object nothing ever seeds,
-# so every transaction op always-denied.
+# Guarded resource prefixes, in match order. Each but ``transaction`` maps to its own dedicated FGA type in the model
+# (``service_kit/governed/auth/model.fga``). A transaction is no object of its own: its id names the table it belongs
+# to, and both its doors are authorized on that table (``_authorize_transaction``, [[LH-221]]).
 #: `classification` is the odd one and belongs here anyway: it is a governance VOCABULARY rather than a
 #: data object — no rows, no parent warehouse, and the path segment IS the label ([[LH-055]]). It
 #: reaches this map because its grant/revoke doors must be authorized like every other, through
@@ -83,7 +81,6 @@ _FGA_TYPE: dict[str, str] = {
     "namespace": "namespace",
     "table": "table",
     "materialized_view": "materialized_view",
-    "transaction": "transaction",
     "classification": "classification",
 }
 
@@ -637,44 +634,27 @@ async def _require_any(client: OpenFgaClient, *, user: str, doors: list[tuple[st
 _TRANSACTION_SUFFIXES: Final = frozenset({"describe", "alter"})
 
 
-async def _authorize_transaction(client: OpenFgaClient, resolver: Resolver, segments: list[str], suffix: str, *, user: str) -> None:
-    """Authorize a transaction op — PARENT-SCOPED to the enclosing namespace when the id carries one.
+async def _authorize_transaction(client: OpenFgaClient, resolver: Resolver, segments: list[str], suffix: str, *, token: Caller) -> None:
+    """Authorize a transaction door on the table its id names (``<table id>$<transaction>``, [[LH-221]]).
 
-    A transaction is a coordination artifact over its namespace's tables; nothing mints a per-transaction
-    FGA object, so the previous ``table:<txn-id>`` check always denied (that object is never seeded).
-    Instead:
+    Describing a transaction reads the table's metadata (``can_get_metadata``) and altering one would write the table
+    (``can_write_data``), asked on the object the table's name resolves to, as every table door asks. A describe naming
+    an absent table answers the spec's not-found to a reader of its namespace, as every read door does.
 
-    - A NAMESPACED txn id (``<ns>$<txn>``) inherits the caller's grant on ``namespace:<ns>``. ``describe``
-      is a read (``can_get_metadata``); ``alter`` may commit/abort, so it is writer-tier
-      (``can_update_properties``). Resolves on the FIRST call with no seed — this is the always-deny fix.
-    - An OPAQUE root txn id (no enclosing namespace) is authorized against the ``transaction:`` object
-      itself (``can_describe`` / ``can_set_status``), so it stays fail-closed until a grant is seeded on it.
-
-    The dedicated ``transaction`` model type (``can_describe``/``can_set_property``/``can_set_status``/
-    ``can_cancel``, cascading from ``parent``) backs the object-scoped branch and any future per-transaction
-    direct grants; the finer set_status/set_property split lives in the model.
-
-    The writer-tier relation on the PARENT branch must be one the ``namespace`` type actually defines: a
-    namespace has no data plane, so ``can_write_data`` is a ``table``-only action and checking it against a
-    ``namespace:`` object is a model error (OpenFGA 400 ``relation 'namespace#can_write_data' not found``)
-    that fails closed to a 503 for EVERY caller — owners included. ``can_update_properties: writer`` IS the
-    namespace writer rung, and it is exactly the rung the object-scoped branch resolves to for a parented
-    transaction (``can_set_status: committer``, and ``committer`` ⊇ ``writer from parent``), so the two
-    branches gate on the same privilege. ``tests/unit/test_fga_model_contract.py`` now proves every
-    (type, relation) this module can check exists in the compiled model.
-
-    ``describe`` and ``alter`` are the only transaction doors (``_TRANSACTION_SUFFIXES``); ``authorize``
-    refuses any other suffix before calling this, the same rule ``_WRITER_SUFFIX_RELATION`` states for
-    the resolver.
+    Raises:
+        InvalidInputError: The id names no table.
+        PermissionDeniedError: The caller does not hold the door's rung on the table.
+        TableNotFoundError: A reader of the namespace described a transaction of a table that does not exist.
     """
-    is_read = suffix == "describe"
-    if len(segments) > 1:
-        rung = tier_policy.Rung(
-            relation="can_get_metadata" if is_read else "can_update_properties", on=tier_policy.Named(kind="namespace", segments=tuple(segments[:-1]))
+    table = transaction_table(segments)
+    relation = "can_get_metadata" if suffix == "describe" else "can_write_data"
+    try:
+        await _require_rung(
+            client, resolver, user=token.subject, rung=tier_policy.Rung(relation=relation, on=tier_policy.Named(kind="table", segments=tuple(table)))
         )
-    else:
-        rung = tier_policy.Rung(relation="can_describe" if is_read else "can_set_status", on=_object("transaction", segments))
-    await _require_rung(client, resolver, user=user, rung=rung)
+    except PermissionDeniedError:
+        await _absent_to_a_reader_of_the_parent(client, resolver, token=token, fga_type="table", denied=relation, segments=table)
+        raise
 
 
 @lru_cache
@@ -1250,12 +1230,12 @@ async def authorize(request: Request, settings: SettingsDep, token: CurrentToken
             await _require_rung(client, resolver, user=token.subject, rung=parent)
         return
 
-    # Transactions authorize parent-scoped (against their enclosing namespace), not on a per-txn object.
+    # A transaction is authorized on the table its id names, not on an object of its own.
     if resource == "transaction":
         if suffix not in _TRANSACTION_SUFFIXES:
             _record_undeclared(path, "transaction", suffix, user=token.subject, obj=_object("transaction", segments))
             raise _undeclared_door("transaction", suffix)
-        await _authorize_transaction(client, resolver, segments, suffix, user=token.subject)
+        await _authorize_transaction(client, resolver, segments, suffix, token=token)
         return
 
     # THE ROOT NAMES NO OBJECT, and composing one is a 500 rather than a decision. lance-ns encodes

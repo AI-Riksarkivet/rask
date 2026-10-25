@@ -3658,7 +3658,14 @@ export interface paths {
         put?: never;
         /**
          * Alter Transaction
-         * @description Apply the requested state actions to transaction ``id`` — backend ``alter_transaction``.
+         * @description Decline every alteration: the spec's alter applies all its actions or none, and the backend applies none.
+         *
+         *     On pylance 13.0.0 the `dir` backend answers SUCCEEDED to a status change and to a property and applies neither, so a
+         *     200 would report an alteration that never happened.
+         *
+         *     Raises:
+         *         InvalidInputError: The id names no table, or the body's id is another.
+         *         UnsupportedOperationError: Always, past the shape and authorization gates.
          */
         post: operations["alter_transaction_v1_transaction__id__alter_post"];
         delete?: never;
@@ -3678,7 +3685,7 @@ export interface paths {
         put?: never;
         /**
          * Describe Transaction
-         * @description Report the current status of transaction ``id`` — wraps the backend ``describe_transaction`` op.
+         * @description Report the status of transaction ``id`` of the table it names, read by the backend's ``describe_transaction`` on that table.
          */
         post: operations["describe_transaction_v1_transaction__id__describe_post"];
         delete?: never;

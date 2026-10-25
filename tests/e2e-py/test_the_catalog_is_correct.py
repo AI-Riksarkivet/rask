@@ -45,10 +45,6 @@ reaches, so the scene removes the label's tuples when the module ends. The estat
 raw tuple editor, the only door that writes `curator`; the curator grants the delegate through the label's grant door,
 and the delegate hands `apply` on through the same door.
 
-A KNOWN GAP is held as strict xfails: both transaction doors authorize a table's transaction on a namespace object
-nothing grants (LH-221, #143), so they refuse the table's own owner. Those cells assert what the fix must answer, and
-turn the run red when it lands.
-
 WHAT IS NOT CLAIMED, and why. Each operation is driven in the shape its round trip and its gate need, not in every mode
 and edge path a request may take: LH-258 (#185) lists the edge paths left, after launch. LH-037's Skip drop finishes the
 trailer of a namespace whose native drop died, which no outside caller can stage: an absent id holds no rung, so its drop
@@ -1265,17 +1261,8 @@ OPERATIONS: list[str] = [
     if "operationId" in operation
 ]
 
-#: LH-221 (#143): both transaction doors authorize `namespace:<table id>`, an object nothing grants, so they refuse the
-#: table's own owner. These cells assert what the fix must answer.
-LH_221 = pytest.mark.xfail(strict=True, reason="LH-221 #143: the transaction doors authorize a table's transaction on a namespace object nothing grants")
-LH_221_CELLS = {("DescribeTransaction", role) for role in (Role.OWNER, Role.WRITER, Role.READER)} | {
-    ("AlterTransaction", role) for role in (Role.OWNER, Role.WRITER)
-}
-
 CELLS = [
-    pytest.param(operation, role, id=f"{operation}-{role}", marks=[LH_221] if (operation, role) in LH_221_CELLS else [])
-    for operation in (*OPERATIONS, *(door.operation for door in MANAGEMENT_DOORS))
-    for role in Role
+    pytest.param(operation, role, id=f"{operation}-{role}") for operation in (*OPERATIONS, *(door.operation for door in MANAGEMENT_DOORS)) for role in Role
 ]
 
 

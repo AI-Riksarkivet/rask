@@ -61,14 +61,13 @@ tuples:
   - { user: "role:senior_validators#assignee", relation: assignee, object: role:validators }
   - { user: user:hana, relation: assignee, object: role:senior_validators }
   - { user: user:carol, relation: reader, object: warehouse:acme_bucket }
-  # a materialized view + a transaction under the silver stage — only the `parent` edge is stored, so
-  # they inherit the stage's owner/writer/reader rungs (no per-object grants needed).
+  # a materialized view under the silver stage — only the `parent` edge is stored, so it inherits the
+  # stage's owner/writer/reader rungs (no per-object grants needed).
   - { user: namespace:acme_silver, relation: parent, object: materialized_view:acme_silver$daily_agg }
-  - { user: namespace:acme_silver, relation: parent, object: transaction:acme_silver$commit1 }
   # The INVERSE edges. `grant_on_create` writes each of these in the SAME batch as the `parent` tuple
   # above, so the two directions cannot drift; they are spelled out here because a test fixture has no
   # create path. They exist only to answer "is anything under me visible?" — OpenFGA cannot walk a
-  # tuple backwards. No `transaction` child: a receipt is not a browsable object.
+  # tuple backwards.
   - { user: namespace:acme_bronze, relation: child, object: warehouse:acme_bucket }
   - { user: namespace:acme_silver, relation: child, object: warehouse:acme_bucket }
   - { user: namespace:acme_gold, relation: child, object: warehouse:acme_bucket }
@@ -128,8 +127,6 @@ tuples:
   - { user: user:sam, relation: owner, object: namespace:acme_bronze }
   - { user: user:sam, relation: pass_grants, object: namespace:acme_bronze }
 
-  # grace: an editor-only grant on a standalone (parentless) transaction — may edit properties, NOT commit
-  - { user: user:grace, relation: editor, object: transaction:standalone_txn }
   # root_admin: owner of the ROOT warehouse (fga_root_object). ONLY this estate/platform tier reads the
   # estate-wide control-plane event feed (can_observe_events, GET /management/v1/events) — a per-project admin cannot.
   - { user: user:root_admin, relation: owner, object: warehouse:lance_catalog }
@@ -698,40 +695,6 @@ tests:
             can_create_tag: true,
             can_update_tag: true,
           }
-
-  - name: transaction — privileged set_status is above property edits; the once-always-denied path resolves
-    check:
-      - user: user:dave # namespace writer → committer via the parent cascade (the always-deny FIX)
-        object: transaction:acme_silver$commit1
-        assertions: { can_describe: true, can_set_property: true, can_set_status: true, can_cancel: true }
-      - user: user:carol # bucket reader → may describe, but NOT edit properties or commit/abort
-        object: transaction:acme_silver$commit1
-        assertions: { can_describe: true, can_set_property: false, can_set_status: false }
-      - user: user:grace # editor-only on a standalone txn → may set properties, NEVER set_status/cancel
-        object: transaction:standalone_txn
-        assertions: { can_set_property: true, can_set_status: false, can_cancel: false }
-      - user: user:eve # outsider — denied even describe
-        object: transaction:acme_silver$commit1
-        assertions: { can_describe: false, can_set_status: false }
-
-  # The block above asserts the OBJECT-scoped branch (`transaction:` — used only for an OPAQUE root txn id).
-  # A NAMESPACED txn id (`<ns>$<txn>`, the common case) is authorized PARENT-SCOPED by the app against
-  # `namespace:<ns>` — a path the transaction assertions above never exercised, which is how a check against
-  # the non-existent `namespace#can_write_data` shipped (400 → fail-closed 503 for EVERY caller). Pin the
-  # relations the app ACTUALLY sends at the namespace: can_get_metadata (describe) / can_update_properties
-  # (alter = commit/abort, writer rung — the same rung `transaction#can_set_status: committer` resolves to
-  # for a parented txn, so both branches gate identically).
-  - name: transaction (namespaced id) — the PARENT-SCOPED relations the catalog checks on namespace:<ns>
-    check:
-      - user: user:dave # namespace writer → may describe AND drive (commit/abort) the txn
-        object: namespace:acme_silver
-        assertions: { can_get_metadata: true, can_update_properties: true }
-      - user: user:carol # bucket reader → may describe the txn, but NOT commit/abort it
-        object: namespace:acme_silver
-        assertions: { can_get_metadata: true, can_update_properties: false }
-      - user: user:eve # outsider — neither
-        object: namespace:acme_silver
-        assertions: { can_get_metadata: false, can_update_properties: false }
 
   - name: which materialized views can the writer dave refresh? (list_objects) — the silver stage's view
     list_objects:

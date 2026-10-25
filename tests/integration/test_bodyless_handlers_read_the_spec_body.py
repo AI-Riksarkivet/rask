@@ -64,13 +64,13 @@ def test_namespace_exists_refuses_a_contradicting_body_id(client: TestClient, fa
 
 def test_describe_transaction_reconciles_a_body_id(client: TestClient, fake_ns: MagicMock) -> None:
     fake_ns.describe_transaction.return_value = DescribeTransactionResponse(status="open")
-    assert client.post("/v1/transaction/tx1/describe", json={"id": ["tx1"]}).status_code == 200
-    assert _sent(fake_ns.describe_transaction).id == ["tx1"]
+    assert client.post("/v1/transaction/db$t$tx1/describe", json={"id": ["db", "t", "tx1"]}).status_code == 200
+    assert _sent(fake_ns.describe_transaction).id == ["db", "t", "tx1"]
 
 
 def test_describe_transaction_refuses_a_contradicting_body_id(client: TestClient, fake_ns: MagicMock) -> None:
     fake_ns.describe_transaction.return_value = DescribeTransactionResponse(status="open")
-    assert client.post("/v1/transaction/tx1/describe", json={"id": ["other"]}).status_code == 400
+    assert client.post("/v1/transaction/db$t$tx1/describe", json={"id": ["db", "t", "other"]}).status_code == 400
 
 
 # --- the ops whose body carries a TARGET, where dropping it answers about the wrong thing ----------

@@ -11,7 +11,7 @@ explorer renders that faithfully, which reads as a broken view rather than an em
 Meanwhile the model already ships a rich, deliberately-shaped fixture set in ``model.fga.yaml``: three
 teams, three projects, three warehouses, a bronze/silver/gold cascade, a `role:validators` persona,
 plus users who exercise the interesting cases (a plain writer who is NOT a validator, a validator who
-reaches gold only through a role, a grant on a parentless transaction). Those are CI fixtures and have
+reaches gold only through a role). Those are CI fixtures and have
 never been loadable into a running store. This script is that missing half — it reads the SAME file
 CI asserts against, so the demo estate and the tested estate cannot drift.
 

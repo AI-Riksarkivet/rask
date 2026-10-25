@@ -21,7 +21,7 @@ from openfga_sdk import OpenFgaClient
 
 from catalog.core import run_context
 from catalog.core.config import Settings, StorePlane, get_settings
-from catalog.core.identifiers import is_spelled_as_a_uuid, parse_identifier
+from catalog.core.identifiers import is_spelled_as_a_uuid, parse_identifier, transaction_table
 from catalog.core.lineage_emit import LineageEmitter, NoopEmitter, OriginatorBoundEmitter, is_person_subject
 from catalog.core.namespace import NamespaceConnections
 from catalog.core.run_context import RunContext
@@ -391,6 +391,21 @@ def get_door_table(ns: NamespaceDep, settings: SettingsDep, resolved: ResolvedTa
 
 
 DoorTableDep = Annotated[DoorTable, Depends(get_door_table)]
+
+
+async def get_transaction_table(ns: NamespaceDep, settings: SettingsDep, resolver: ResolverDep, request: Request) -> DoorTable:
+    """The table the request's transaction ``{id}`` (``<table id>$<transaction>``) names, as its door acts on it ([[LH-221]]).
+
+    The resolution the router's authorization read, as for every table door.
+
+    Raises:
+        InvalidInputError: The id names no table.
+    """
+    resolved = await resolver.table(transaction_table(parse_identifier(request.path_params["id"])), ns=ns)
+    return DoorTable(ns, table_claims.claim_store(settings), resolved)
+
+
+TransactionTableDep = Annotated[DoorTable, Depends(get_transaction_table)]
 
 
 async def get_data_namespace(request: Request, settings: SettingsDep, ns: NamespaceDep) -> LanceNamespace:

@@ -36,7 +36,7 @@ from service_kit.governed import fga as fga_module
 from service_kit.governed.oidc import IDToken
 from service_kit.governed.person_identity import PersonPrincipal
 from service_kit.governed.principal import Principal
-from tests.unit.named_resolver import NamedResolver, uuid_of
+from tests.unit.named_resolver import NamedResolver
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -119,10 +119,10 @@ def _catalog_pairs(monkeypatch: pytest.MonkeyPatch) -> set[tuple[str, str]]:
         | set(fga_deps._META_READ_ACTIONS)
         | set(fga_deps._DATA_READ_ACTIONS)
     )
-    # `transaction` and `classification` both return from their own branch in `authorize` before
-    # `_action_relation` is consulted, so enumerating the generic suffix map against them would assert
-    # relations the app can never send. `classification` refuses every suffix but `my-permissions`.
-    for fga_type in set(fga_deps._FGA_TYPE.values()) - {"transaction", "classification"}:
+    # `classification` returns from its own branch in `authorize` before `_action_relation` is consulted, so
+    # enumerating the generic suffix map against it would assert relations the app can never send: it refuses every
+    # suffix but `my-permissions`.
+    for fga_type in set(fga_deps._FGA_TYPE.values()) - {"classification"}:
         for suffix in suffixes:
             try:
                 relation = fga_deps._action_relation(fga_type, suffix)
@@ -153,8 +153,8 @@ def _catalog_pairs(monkeypatch: pytest.MonkeyPatch) -> set[tuple[str, str]]:
         )
         pairs.add((_rung_type(top), top.relation))
 
-    # 3. Transactions (parent-scoped for a namespaced id, object-scoped for an opaque one) and the
-    #    batch routes: drive the real coroutines with a recording fga.check / fga.batch_check.
+    # 3. Transactions (asked on the table their id names) and the batch routes: drive the real coroutines with a
+    #    recording fga.check / fga.batch_check.
     checked: list[tuple[str, str]] = []
 
     async def rec_check(_client: object, *, user: str, relation: str, obj: str) -> bool:
@@ -170,9 +170,9 @@ def _catalog_pairs(monkeypatch: pytest.MonkeyPatch) -> set[tuple[str, str]]:
     monkeypatch.setattr(fga_deps.fga, "check", rec_check)
     monkeypatch.setattr(fga_deps.fga, "batch_check", rec_batch)
 
-    for segments in (["db1", "txn1"], ["txn1"]):  # namespaced (parent-scoped) + opaque (object-scoped)
-        for suffix in ("describe", "alter"):
-            asyncio.run(fga_deps._authorize_transaction(_CLIENT, NamedResolver(), segments, suffix, user="dex~alice"))
+    token = PersonPrincipal(principal=Principal(idp_id="dex", subject="alice"), claims=IDToken(iss="i", sub="alice", aud="lance", exp=1, iat=1))
+    for suffix in ("describe", "alter"):
+        asyncio.run(fga_deps._authorize_transaction(_CLIENT, NamedResolver(), ["db1", "t", "txn1"], suffix, token=token))
 
     body = {
         "entries": [{"id": ["db1", "users"]}],
@@ -185,7 +185,6 @@ def _catalog_pairs(monkeypatch: pytest.MonkeyPatch) -> set[tuple[str, str]]:
     asyncio.run(fga_deps._authorize_batch(cast("Request", _FakeRequest(body)), _CLIENT, NamedResolver(), settings, user="dex~alice"))
 
     # 4. The endpoint-level gates that check outside `authorize` (Overwrite / rename-into-namespace).
-    token = PersonPrincipal(principal=Principal(idp_id="dex", subject="alice"), claims=IDToken(iss="i", sub="alice", aud="lance", exp=1, iat=1))
     for resource in ("table", "namespace", "materialized_view"):
         asyncio.run(fga_deps.require_create_on_parent(_CLIENT, settings, token, NamedResolver(), resource=resource, segments=["db1", "child"]))
 
@@ -211,27 +210,6 @@ def test_every_relation_the_catalog_checks_exists_in_the_model(monkeypatch: pyte
         f"the app can check relations that do NOT exist in service_kit/governed/auth/model.json: {phantom}. "
         "OpenFGA rejects these (relation not found) and service_kit.governed.fga fails closed → 503 for every caller."
     )
-
-
-def test_transaction_alter_checks_a_real_namespace_writer_relation(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """CONTRACT (the regression this file was born from): a namespaced txn ``alter`` is checked
-    against the enclosing ``namespace:`` at the WRITER rung, using a relation the ``namespace`` type
-    actually defines. ``can_write_data`` is a TABLE-only action — checking it on a namespace 400s."""
-    checked: list[tuple[str, str]] = []
-
-    async def rec_check(_c: object, *, user: str, relation: str, obj: str) -> bool:
-        checked.append((obj, relation))
-        return True
-
-    monkeypatch.setattr(fga_deps.fga, "check", rec_check)
-    asyncio.run(fga_deps._authorize_transaction(_CLIENT, NamedResolver(), ["db1", "txn1"], "alter", user="dex~alice"))
-
-    obj, relation = checked[-1]
-    assert obj == f"namespace:{uuid_of('namespace', ['db1'])}"  # parent-scoped, not a per-txn object nothing seeds
-    assert relation in _model_relations()["namespace"], f"namespace#{relation} does not exist"
-    assert relation == "can_update_properties"  # the namespace WRITER rung (can_write_data is table-only)
 
 
 def test_access_disclosure_routes_are_owner_tier() -> None:
@@ -396,8 +374,6 @@ _OBJECT_AS_USER_SHAPES: dict[tuple[str, str, str], str] = {
     ("namespace", "parent", "warehouse"): "tuple's object IS the dropped object",
     ("table", "parent", "namespace"): "tuple's object IS the dropped object",
     ("materialized_view", "parent", "namespace"): "tuple's object IS the dropped object",
-    ("transaction", "parent", "namespace"): "tuple's object IS the dropped object",
-    ("transaction", "parent", "warehouse"): "tuple's object IS the dropped object",
     # A tag's parent edge ([[LH-055]]). Same shape as the rows above — dropping a TAG reads by object
     # and finds it — and the estate side cannot dangle for a second reason: there is exactly one
     # `estate:` object, seeded at bootstrap, and no door deletes it.

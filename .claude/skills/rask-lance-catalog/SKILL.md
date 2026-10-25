@@ -22,8 +22,11 @@ Two contracts stack here, and confusing them is how bugs happen:
   spec's 406 (code 0)**: the two index builds (the lakehouse builds nothing, ADR 0162), the two multi-table
   commits, `batch_create_table_versions` and `batch_commit_tables`, because the catalog judges one table version
   at a time (`versions.py::_batches_are_not_judged`), and `backfill_column` and `create_materialized_view`, which
-  the native `dir` backend stubs. `alter_transaction` joins them when LH-221 (#143) lands; until then both
-  transaction doors refuse every caller. `refresh_materialized_view` refuses every caller 403: it needs
+  the native `dir` backend stubs, and `alter_transaction`, which the `dir` backend answers SUCCEEDED having applied
+  nothing (measured on pylance 13.0.0). **A transaction is `<table id>$<transaction>` and is answered on its table**
+  ([[LH-221]]): describe asks `can_get_metadata` and alter `can_write_data` on the table the id names, an id of one
+  segment is refused 400 first (`identifiers.transaction_table`), and describe reads through the door's resolution
+  (`TransactionTableDep`, `DoorTable.read_natively`). The model has no `transaction` type. `refresh_materialized_view` refuses every caller 403: it needs
   `can_refresh` on a view, and no view exists to hold it. **pylance's `RestNamespace` implements 51 of the 54**:
   `update_field_metadata` (served here), `batch_create_table_versions` and `batch_commit_tables` fall to the
   `LanceNamespace` base class, which answers code 0 itself and sends nothing, so a client reaches them through

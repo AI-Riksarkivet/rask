@@ -6,8 +6,9 @@ model
 # Hierarchy:  team -> project -> warehouse(= one S3 bucket) -> namespace (self-nesting) -> table
 #   the estate's containment rule end to end, with lance's
 #   concentric-rung style (owner > writer > reader) layered on top, plus a `validator` rung.
-#   `materialized_view` and `transaction` hang off namespace/warehouse and inherit the SAME rungs via
-#   `parent`, so a grant on the enclosing stage reaches the views + transactions inside it.
+#   `materialized_view` hangs off namespace/warehouse and inherits the SAME rungs via `parent`, so a grant on the
+#   enclosing stage reaches the views inside it. A transaction is no object: its id names its table, and both
+#   transaction doors are asked on that table ([[LH-221]]).
 # Privileges: concentric rungs cascade DOWN via `parent` / `project`. A SEPARATE `validator` rung gates
 #   medallion stage PROMOTION (e.g. silver -> gold): a plain writer can write within a stage but cannot
 #   promote INTO a gated stage; only an owner or an explicit validator can (`can_promote: validator`).
@@ -32,11 +33,6 @@ model
 #         ROOT object (services/catalog/.../projects.py) — the same owner-tier door the estate-wide feed
 #         uses — and then seeds the creator's `admin` tuple. A `can_create_project` on `team` would let a
 #         team lead mint tenants, which is a different (and larger) product decision than it looks.
-#     namespace/warehouse -> transaction            NO `can_create_transaction`, because NO API CREATES ONE:
-#         the catalog exposes only `/v1/transaction/{id}/describe` and `/alter`; transaction objects are
-#         minted by the backend as part of ops that are already gated. Creation is therefore enforced
-#         outside OpenFGA by construction. If a create endpoint is ever added, this line is the reminder
-#         that it needs a door on `namespace` AND `warehouse` (both are allowed parents).
 
 type user
 
@@ -393,9 +389,7 @@ type warehouse
 type namespace
   relations
     define parent: [warehouse, namespace]
-    # The inverse edge — see `warehouse#child`. `materialized_view` is here and `transaction` is not:
-    # a view is a browsable object someone can be granted, a transaction is a receipt that no one
-    # navigates to.
+    # The inverse edge — see `warehouse#child`.
     define child: [namespace, table, materialized_view]
     define owner: [user, role#assignee] or owner from parent
     define writer: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant] or owner or writer from parent
@@ -679,34 +673,6 @@ type materialized_view
     define can_be_notified: reader
     define can_read: reader
     define can_refresh: refresher
-
-# A transaction = a coordination artifact scoped to the namespace/warehouse whose tables it commits
-# (id = the opaque transaction path). Rungs separate the privileged LIFECYCLE (commit/abort/cancel via
-# set_status) from lighter PROPERTY edits: owner ⊇ committer ⊇ editor ⊇ viewer. A `committer` may change
-# the transaction status; an `editor` may only edit its properties (NOT commit/abort); a `viewer` may
-# describe it. All rungs cascade from the enclosing namespace/warehouse, so a namespace writer can drive
-# the transactions it opens — the fix for the old always-deny (the check used to target a `table:<txn-id>`
-# object nothing ever seeds).
-type transaction
-  relations
-    define parent: [namespace, warehouse]
-    define owner: [user, role#assignee] or owner from parent
-    define committer: [user, role#assignee] or owner or writer from parent
-    define editor: [user, role#assignee] or committer
-    define viewer: [user, role#assignee] or editor or reader from parent
-    # ---- actions ----
-    # `can_describe` and `can_set_status` are the two the app actually checks (api/fga_deps.py picks
-    # between them by read-vs-write). `can_set_property` and `can_cancel` are defined and referenced by
-    # NOTHING — no other relation, no code path (swept 2026-08-08). They are leaf permissions, so nothing
-    # inherits through them and they cost only clarity; per the openfga skill's optimize-simplify rule
-    # they are removal candidates, NOT removals — that rule also says never delete on a usage sweep alone,
-    # and a deletion has to ship with `fga model test` green. Left in place with the finding recorded
-    # rather than half-done: `alter_transaction` is the endpoint that would grow the property/cancel
-    # actions, and if it does, these are already the right doors.
-    define can_describe: viewer
-    define can_set_property: editor
-    define can_set_status: committer
-    define can_cancel: committer
 
 # --------------------------------------------------------------------------------------------------
 # Conditions

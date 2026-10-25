@@ -51,8 +51,10 @@ Of the **7 remaining 406s**, four are genuine native-backend stubs and three are
 - **`batch_create_table_versions` / `batch_commit_tables`** — the catalog judges and finalizes one table version at a
   time (`create_table_version`, served under `managed_versioning=true`, ADR 0157), so it answers 406 to a batch that
   would finalize several as one (`versions.py::_batches_are_not_judged`).
-- **`backfill_columns` / `alter_transaction`** — stubbed in the native Rust namespace. `backfill_columns`
-  answers `alter_table_backfill_columns not implemented`, and since #101 that MESSAGE reaches the
+- **`backfill_columns` / `alter_transaction`** — stubbed in the native Rust namespace. `alter_transaction`
+  answers SUCCEEDED and applies neither a status nor a property (measured on pylance 13.0.0), so the catalog
+  declines it 406 past the table's writer rung rather than pass on a 200 that applied nothing ([[LH-221]]).
+  `backfill_columns` answers `alter_table_backfill_columns not implemented`, and since #101 that MESSAGE reaches the
   client: Unsupported is a capability statement, not a fault, so `ns_errors.problem_detail` exempts it from the
   5xx detail redaction that used to render it as "Internal Server Error" in the lakehouse UI.
 

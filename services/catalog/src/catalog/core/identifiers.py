@@ -123,6 +123,22 @@ def rename_destination(source: Sequence[str], new_namespace_id: Sequence[str] | 
     return [*(new_namespace_id or source[:-1]), new_table_name]
 
 
+def transaction_table(segments: list[str]) -> list[str]:
+    """The table a transaction id ``<table id>$<transaction>`` names, which both transaction doors act and authorize on.
+
+    The `dir` backend reads every segment but the last as the table and the last as the transaction (its uuid or the
+    version it committed), and refuses an id of one segment (measured on pylance 13.0.0), so such an id names no table.
+
+    Raises:
+        InvalidInputError: ``segments`` names no table.
+    """
+    if len(segments) < 2:
+        raise InvalidInputError(
+            f"transaction id {CATALOG_DELIMITER.join(segments)!r} names no table: a transaction is <table id>{CATALOG_DELIMITER}<transaction>"
+        )
+    return segments[:-1]
+
+
 def reconcile_body_id(path_segments: list[str], body_id: list[str] | None) -> list[str]:
     """The single spot where a request-body ``id`` meets the path ``{id}`` (spec: a differing pair is a 400,
     ``operations/index.md`` — previously the body id was silently overridden). An absent/empty body id defers

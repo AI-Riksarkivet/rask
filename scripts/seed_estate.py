@@ -38,8 +38,7 @@ reaches gold only through a role, a tenant member who is not an admin). Two deli
   ADR 0173 §8). This file names objects by path, so git never holds a minted uuid, and each grant resolves its
   object through DescribeTable or DescribeNamespace when it is sent.
 
-Two fixture tuples are deliberately NOT seeded, each for the ghost reason this script exists for:
-``transaction:standalone_txn`` (a transaction is minted by a write op, not by a seed) and
+One fixture tuple is deliberately NOT seeded, for the ghost reason this script exists for:
 ``user:root_admin owner warehouse:lance_catalog`` (the estate root is the bootstrap job's to grant, not a
 demo seed's).
 
