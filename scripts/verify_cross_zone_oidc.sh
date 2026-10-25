@@ -60,8 +60,8 @@ done
 # Seed alice = admin on project:acme. Mint her Dex token, read the principal it proves (LH-063: the development Dex's
 # connector `local` is the idp id `dex`, and the user id is the one Dex reports in `federated_claims`), write the tuple
 # as the OpenFGA user that principal is, and wait until the check is readable (OpenFGA is eventually consistent).
-mint() { curl -s http://localhost:5556/dex/token -d grant_type=password -d client_id=lance-catalog \
-  -d client_secret=lance-catalog-secret -d "scope=openid federated:id" -d username="$1" -d password=password | \
+mint() { curl -s http://localhost:5556/dex/token -d grant_type=password -d client_id=rask-web \
+  -d client_secret=lance-catalog-secret -d "scope=openid federated:id audience:server:client_id:rask-lakehouse" -d username="$1" -d password=password | \
   python3 -c "import sys,json;print(json.load(sys.stdin).get('id_token',''))"; }
 principal_of() { python3 -c "import sys,base64,json;t=sys.argv[1].split('.')[1];t+='='*(-len(t)%4);print('dex~'+json.loads(base64.urlsafe_b64decode(t))['federated_claims']['user_id'])" "$1"; }
 ID="$(mint alice@example.com)"; [ -n "$ID" ] || fail "could not mint alice's Dex token (is dex ready?)"

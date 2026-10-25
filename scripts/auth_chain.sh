@@ -32,8 +32,8 @@ sleep 2
 # --- helpers ----------------------------------------------------------------
 dex_token() {  # dex_token <email> -> id_token on stdout
   curl -s -X POST "$DEX/token" \
-    -d grant_type=password -d client_id=lance-catalog \
-    -d "username=$1" -d password=password -d "scope=openid federated:id" \
+    -d grant_type=password -d client_id=rask-web \
+    -d "username=$1" -d password=password -d "scope=openid federated:id audience:server:client_id:rask-lakehouse" \
     | python3 -c "import sys,json;print(json.load(sys.stdin)['id_token'])"
 }
 

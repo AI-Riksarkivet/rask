@@ -417,8 +417,8 @@ PYEOF
 step "7/9 mint Dex tokens + build the tenant through the catalog's doors"
 mint() {
   curl -s -m10 http://localhost:5556/dex/token \
-    -d grant_type=password -d client_id=lance-catalog -d client_secret=lance-catalog-secret \
-    -d scope="openid email federated:id" -d username="$1" -d password=password \
+    -d grant_type=password -d client_id=rask-web -d client_secret=lance-catalog-secret \
+    -d scope="openid email federated:id audience:server:client_id:rask-lakehouse" -d username="$1" -d password=password \
   | uv run python -c "import sys,json;print(json.load(sys.stdin).get('id_token',''))"
 }
 ALICE="$(mint alice@example.com)"

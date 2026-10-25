@@ -132,7 +132,7 @@ const SERVICE_USER = fgaUser(SERVICE_SUBJECT);
 /** The project used to prove WATCH targeting — created as tuples only; no catalog row is needed. */
 const WATCH_PROJECT = process.env.WATCH_PROJECT ?? 'drive-watch-project';
 const TOKEN_URL = process.env.TOKEN_URL ?? `${ORIGIN}/dex/token`;
-const CLIENT_ID = process.env.OIDC_CLIENT_ID ?? 'lance-catalog';
+const CLIENT_ID = process.env.OIDC_CLIENT_ID ?? 'rask-web';
 const CLIENT_SECRET = process.env.OIDC_CLIENT_SECRET ?? 'lance-catalog-secret';
 const PASSWORD = process.env.DEX_PASSWORD ?? 'password';
 // The output the emitting identity must hold `can_write_data` on (model.fga: `can_write_data: writer`).
@@ -217,7 +217,7 @@ async function mintToken(email) {
 		grant_type: 'password',
 		username: email,
 		password: PASSWORD,
-		scope: 'openid profile email federated:id',
+		scope: 'openid profile email federated:id audience:server:client_id:rask-lakehouse',
 	});
 	const res = await fetch(TOKEN_URL, {
 		method: 'POST',

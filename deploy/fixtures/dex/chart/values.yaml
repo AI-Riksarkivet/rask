@@ -9,9 +9,16 @@ issuer: http://rask-dex:5556/dex
 # The origin of rask's zones, whose OIDC callback is `<publicOrigin>/auth/callback`; empty registers none, as rask's
 # default `frontend.oidc.publicOrigin` is. `make k3s-fixtures` passes DEV_ORIGIN.
 publicOrigin: ""
-# The static client; rask's `auth.oidc.clientId` is the audience its services check and `dex.clientSecret` the secret it seeds.
-clientId: lance-catalog
+# The sign-in client: rask's `auth.oidc.clientId`, the client its zones and the live lanes sign in as, and `dex.clientSecret`
+# the secret it seeds.
+clientId: rask-web
 clientSecret: lance-catalog-secret
+# The lakehouse's audience: rask's `auth.oidc.audience`, which every governed door checks. Declared as a client that trusts
+# the sign-in client: Dex issues a token for it only to a trusted client asking for `audience:server:client_id:<audience>`
+# (measured on Dex v2.42.0, [[LH-515]]). It is confidential, with a secret no client is given: Dex refuses a confidential
+# client with no secret, and a public one would let anyone sign in as the audience and skip the trust.
+audience: rask-lakehouse
+audienceSecret: rask-lakehouse-held-by-no-client
 # Demo identities with one password. The hash is bcrypt of "password". alice and bob make the governed demo's allow and
 # deny: alice creates a table and is granted it, bob is refused reading it. carol, dave and erin are the writer, the
 # reader and the outsider of criterion 2's principal matrix (tests/e2e-py/test_the_catalog_is_correct.py), so each rung

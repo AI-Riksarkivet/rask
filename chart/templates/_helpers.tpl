@@ -590,6 +590,18 @@ securityContext:
 {{- $admin -}}
 {{- end -}}
 
+{{- define "lance.oidcAudience" -}}
+{{- $audience := required "auth.oidc.audience names the lakehouse's own audience, which every governed door checks" .Values.auth.oidc.audience -}}
+{{- if eq $audience .Values.auth.oidc.clientId -}}
+{{- fail (printf "auth.oidc.audience=%s is the zones' sign-in client (auth.oidc.clientId): the lakehouse checks an audience of its own, so a token the IdP issued for a client is refused" $audience) -}}
+{{- end -}}
+{{- $audience -}}
+{{- end -}}
+
+{{- define "lance.oidcAudienceScope" -}}
+{{- .Values.auth.oidc.audienceScope | default (printf "audience:server:client_id:%s" (include "lance.oidcAudience" .)) -}}
+{{- end -}}
+
 {{- define "lance.governedOidcEnv" -}}
 {{- $root := . }}
 - { name: RASK_OIDC_ENABLED, value: "true" }
@@ -597,7 +609,7 @@ securityContext:
 {{- if $root.Values.dex.enabled }}
 - { name: RASK_OIDC_DISCOVERY_URL, value: "http://{{ include "lance.dexHost" $root }}:{{ $root.Values.dex.port }}/dex" }
 {{- end }}
-- { name: RASK_OIDC_AUDIENCE, value: {{ $root.Values.auth.oidc.clientId | quote }} }
+- { name: RASK_OIDC_AUDIENCE, value: {{ include "lance.oidcAudience" $root | quote }} }
 - { name: RASK_OIDC_ALLOW_INSECURE, value: {{ ternary "true" "false" $root.Values.dex.enabled | quote }} }
 - { name: RASK_OIDC_CONNECTORS, value: {{ include "lance.oidcConnectors" $root | quote }} }
 {{- end -}}

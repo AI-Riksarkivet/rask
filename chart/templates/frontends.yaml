@@ -110,6 +110,8 @@ spec:
               value: {{ include "lance.oidcIssuer" $root | quote }}
             - name: OIDC_CLIENT_ID
               value: {{ $root.Values.auth.oidc.clientId | quote }}
+            - name: OIDC_SCOPES
+              value: {{ printf "openid profile email federated:id %s" (include "lance.oidcAudienceScope" $root) | quote }}
             - name: OIDC_CLIENT_SECRET
               valueFrom:
                 secretKeyRef:

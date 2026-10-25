@@ -20,6 +20,6 @@ def _annotator_env(*extra: str) -> dict[str, str]:
 
 def test_the_annotator_authenticates_every_request_when_auth_is_on() -> None:
     env = _annotator_env("--set", "auth.enabled=true")
-    expected = {"RASK_OIDC_ENABLED": "true", "RASK_OIDC_ISSUER": "https://auth.example.com/dex", "RASK_OIDC_AUDIENCE": "lance-catalog"}
+    expected = {"RASK_OIDC_ENABLED": "true", "RASK_OIDC_ISSUER": "https://auth.example.com/dex", "RASK_OIDC_AUDIENCE": "rask-lakehouse"}
     assert {name: env.get(name) for name in expected} == expected
     assert "RASK_INSECURE_ALLOW_UNAUTHENTICATED" not in env, "an authenticating annotator also allows the unauthenticated"

@@ -65,8 +65,8 @@ ok "catalog + dex + openfga reachable"
 
 # Mint a user's Dex id_token (password grant), and ask the catalog for the principal it proves (LH-063): the verified
 # subject the catalog stamps, and the OpenFGA user that principal is, through the seam every tuple writer uses.
-mint() { curl -s http://localhost:5556/dex/token -d grant_type=password -d client_id=lance-catalog \
-  -d client_secret=lance-catalog-secret -d "scope=openid federated:id" -d username="$1" -d password=password | \
+mint() { curl -s http://localhost:5556/dex/token -d grant_type=password -d client_id=rask-web \
+  -d client_secret=lance-catalog-secret -d "scope=openid federated:id audience:server:client_id:rask-lakehouse" -d username="$1" -d password=password | \
   python3 -c "import sys,json;print(json.load(sys.stdin).get('id_token',''))"; }
 principal_of() { curl -s "http://localhost:$CAT_PORT/management/v1/me" -H "Authorization: Bearer $1" | \
   python3 -c "import sys,json;print(json.load(sys.stdin).get('sub',''))"; }

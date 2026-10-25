@@ -1151,11 +1151,13 @@ e2e-compaction:     ## Maintenance sweep proofs: the deployed service's sweep an
 check-fast: $(OPENFGA_BIN) ## The pre-push suite in parallel — 1m17s against 9m57s serial
 	uv run pytest tests/unit tests/integration -q -n 16 --dist loadfile
 
-# REQUIRES its target, rather than skipping into a green: every test in this suite skips without
-# RASK_E2E_EDGE_URL, and a live drive with no live target is a failed invocation, not a pass.
-e2e-edge:           ## Each /api prefix reaches its service through the cluster Gateway and is refused there anonymously (needs RASK_E2E_EDGE_URL)
-	@test -n "$(RASK_E2E_EDGE_URL)" || { echo "set RASK_E2E_EDGE_URL, e.g. make e2e-edge RASK_E2E_EDGE_URL=http://10.16.51.55"; exit 1; }
-	RASK_E2E_EDGE_URL=$(RASK_E2E_EDGE_URL) uv run pytest tests/e2e-py -m edge -v
+# REQUIRES its targets, rather than skipping into a green: every test in this suite skips without
+# RASK_E2E_EDGE_URL, the other-audience cases without LANCE_E2E_DEX, and a live drive with no live target is a failed
+# invocation, not a pass.
+e2e-edge:           ## Each /api prefix reaches its service through the cluster Gateway and is refused there anonymously or for another audience (needs RASK_E2E_EDGE_URL, LANCE_E2E_DEX)
+	@test -n "$(RASK_E2E_EDGE_URL)" || { echo "set RASK_E2E_EDGE_URL, e.g. make e2e-edge RASK_E2E_EDGE_URL=http://10.16.51.55 LANCE_E2E_DEX=http://localhost:8080/dex"; exit 1; }
+	@test -n "$(LANCE_E2E_DEX)" || { echo "set LANCE_E2E_DEX, the Dex the estate's issuer names, e.g. http://localhost:8080/dex"; exit 1; }
+	RASK_E2E_EDGE_URL=$(RASK_E2E_EDGE_URL) LANCE_E2E_DEX=$(LANCE_E2E_DEX) uv run pytest tests/e2e-py -m edge -v --require-live
 e2e-media-catalog:  ## Annotator/catalog live-mode proof (needs MEDIA_CATALOG_URL)
 	@test -n "$(MEDIA_CATALOG_URL)" || { echo "  !! e2e-media-catalog needs MEDIA_CATALOG_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
 	MEDIA_CATALOG_URL=$(MEDIA_CATALOG_URL) uv run pytest tests/e2e-py -m media_catalog -v

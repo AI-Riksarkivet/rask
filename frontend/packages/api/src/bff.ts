@@ -71,7 +71,9 @@ export function makeOidcConfig(env: Env): OidcConfig | null {
 		clientSecret: env.OIDC_CLIENT_SECRET || null,
 		redirectUri,
 		// `federated:id` puts the Dex connector and the upstream user id in the token, the two halves of the principal
-		// every governed door keys a person on; a token without them is refused there (LH-063).
+		// every governed door keys a person on; a token without them is refused there (LH-063). The chart renders
+		// OIDC_SCOPES with the lakehouse's audience scope too (LH-515); this fallback cannot know that audience, so a
+		// zone run without OIDC_SCOPES signs in and is refused at every lakehouse door.
 		scopes: env.OIDC_SCOPES || 'openid profile email federated:id',
 		// SESSION_SECRET seals the cookie (AES-256-GCM); unset in dev → unsealed base64 (documented).
 		sessionKey: env.SESSION_SECRET ? deriveSessionKey(env.SESSION_SECRET) : null,

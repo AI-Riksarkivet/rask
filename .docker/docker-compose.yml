@@ -126,7 +126,7 @@ services:
       #   The openfga/postgres/dex services below provide the infra.
       # RASK_OIDC_ENABLED: "true"
       # RASK_OIDC_ISSUER: http://dex:5556/dex
-      # RASK_OIDC_AUDIENCE: lance-catalog
+      # RASK_OIDC_AUDIENCE: rask-lakehouse
       # RASK_OIDC_CONNECTORS: '{"local":"dex"}'
       # RASK_FGA_ENABLED: "true"
       # RASK_FGA_API_URL: http://openfga:8080

@@ -28,7 +28,7 @@ from typing import Any
 import pyarrow as pa
 import pytest
 import requests
-from principals import DEX_SCOPE, principal_of
+from principals import DEX_CLIENT, DEX_SCOPE, principal_of
 from topology import OUTSIDER, assert_parent_exists, create_top_level
 
 from lineage.models import author_sub_from_payload
@@ -46,7 +46,7 @@ _PRODUCER = "https://github.com/Borg93/lance-ns/tree/main/tests/e2e-py/test_gove
 SERVER = os.environ.get("LANCE_E2E_AUTH_SERVER", "")
 LINEAGE = os.environ.get("LANCE_E2E_LINEAGE_URL", "")
 DEX = os.environ.get("LANCE_E2E_DEX", "http://localhost:5556/dex")
-# The kind Dex registers lance-catalog as a CONFIDENTIAL client (needs the secret); the docker-compose
+# The kind Dex registers the sign-in client with a secret (sent here); the docker-compose
 # overlay uses a public client. Default to the kind secret so the suite runs on the canonical stack; set
 # LANCE_E2E_DEX_SECRET="" for a public-client Dex.
 DEX_SECRET = os.environ.get("LANCE_E2E_DEX_SECRET", "lance-catalog-secret")
@@ -75,7 +75,7 @@ def stack() -> tuple[str, str]:
 def _token(username: str) -> str:
     data = {
         "grant_type": "password",
-        "client_id": "lance-catalog",
+        "client_id": DEX_CLIENT,
         "username": username,
         "password": "password",
         "scope": DEX_SCOPE,

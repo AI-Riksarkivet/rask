@@ -15,12 +15,11 @@ from typing import Any
 import lance_namespace
 import requests
 from byo_scenario import CLOSE_EACH_REQUEST
-from principals import DEX_SCOPE, principal_of
+from principals import DEX_CLIENT, DEX_SCOPE, principal_of
 
 
 CATALOG = os.environ.get("LANCE_E2E_CATALOG_URL", "").rstrip("/")
 DEX = os.environ.get("LANCE_E2E_DEX", "").rstrip("/")
-DEX_CLIENT = os.environ.get("LANCE_E2E_OIDC_CLIENT_ID", "lance-catalog")
 DEX_SECRET = os.environ.get("LANCE_E2E_DEX_SECRET", "lance-catalog-secret")
 ADMIN_USER = os.environ.get("LANCE_E2E_USER", "alice@example.com")
 JOB_USER = os.environ.get("LANCE_E2E_PIPELINE_USER", "publisher@rask.internal")

@@ -101,8 +101,8 @@ auth:
     issuer: ""
     # Where discovery is fetched; empty derives `http://<rask>-dex:5556/dex`.
     discoveryUrl: ""
-    # rask's `auth.oidc.clientId`: the zones' session carries a token for it.
-    audience: lance-catalog
+    # rask's `auth.oidc.audience`: the zones' session carries a token for it, which this service forwards to the catalog.
+    audience: rask-lakehouse
     # rask's `auth.oidc.connectors` as its doors render it, exactly: the idp id each Dex connector's users are principals
     # of. The development Dex's password database `local` is `dex`.
     connectors:

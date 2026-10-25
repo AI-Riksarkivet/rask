@@ -26,7 +26,7 @@ import os
 
 import pyarrow as pa
 import requests
-from principals import DEX_SCOPE, principal_of
+from principals import DEX_CLIENT, DEX_SCOPE, principal_of
 
 
 CATALOG = os.environ.get("LANCE_E2E_CATALOG_URL", "").rstrip("/")
@@ -56,7 +56,7 @@ def bearer() -> str:
         return ""
     form = {
         "grant_type": "password",
-        "client_id": os.environ.get("LANCE_E2E_OIDC_CLIENT_ID", "lance-catalog"),
+        "client_id": DEX_CLIENT,
         "client_secret": os.environ.get("LANCE_E2E_OIDC_CLIENT_SECRET", "lance-catalog-secret"),
         "scope": DEX_SCOPE,
         "username": os.environ.get("LANCE_E2E_OIDC_USERNAME", "alice@example.com"),

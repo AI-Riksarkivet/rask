@@ -83,7 +83,8 @@ No secret holds a store root: rask presents none in production, and on the dev s
 (`chart/templates/openbao-seed.yaml`) writes the same list into the dev store; keep the two in step.
 
 ONE IdP CLIENT, ONE KEY (2026-08-09). `oidc-client` serves the zones' OIDC client (the frontend-session ExternalSecret
-in `external-secrets.yaml`): there is one IdP client (`auth.oidc.clientId`), so there is one secret. Do NOT seed a second copy under another name: a rotation
+in `external-secrets.yaml`): there is one IdP client that signs in (`auth.oidc.clientId`), so there is one secret. The
+lakehouse's audience (`auth.oidc.audience`) is a client nobody signs in as, so its secret is given to no service. Do NOT seed a second copy under another name: a rotation
 that updates one copy and not the other breaks a sign-in on a path nothing tests. The object store holds no copy at
 all: verifying a web-identity token needs only the client id, and RustFS reads an OIDC client secret from env alone
 (no `_FILE` variant, `.claude/skills/rask-rustfs/references/security.md` § Web identity), so a store given one would
@@ -158,7 +159,8 @@ backups belong to the platform, so production runs no `pg_dump` CronJob.
 ## Development stand-ins
 
 A real deployment brings its own identity provider, object store and secret store, and the chart takes them by
-reference (`auth.oidc.issuer`, https, and `auth.oidc.clientId`; `objectStore.externalEndpoint` and the scoped
+reference (`auth.oidc.issuer`, https, `auth.oidc.clientId` and the lakehouse's own `auth.oidc.audience`, which the IdP
+issues to the clients it trusts; `objectStore.externalEndpoint` and the scoped
 credentials; `openbao.externalAddr`).
 Development runs stand-ins from `deploy/fixtures` (ADR 0153), and the chart renders none of them:
 

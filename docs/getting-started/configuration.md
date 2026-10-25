@@ -13,7 +13,7 @@ Declared once in `packages/service-kit/src/service_kit/governed/settings.py`, on
 | Variable | Purpose |
 |---|---|
 | `RASK_OIDC_ENABLED` | Verify an OIDC bearer token on every request (on in the chart). |
-| `RASK_OIDC_ISSUER` / `RASK_OIDC_AUDIENCE` | The issuer (Dex in development) and audience the token must carry. |
+| `RASK_OIDC_ISSUER` / `RASK_OIDC_AUDIENCE` | The issuer (Dex in development) and the lakehouse's own audience the token must carry (`auth.oidc.audience`, never a sign-in client's id). |
 | `RASK_FGA_ENABLED` | Authorize every request on OpenFGA (on in the chart). |
 | `RASK_FGA_API_URL` / `RASK_FGA_STORE_ID` | The OpenFGA server and store. |
 | `RASK_FGA_ROOT_OBJECT` | The estate's root object (default `estate:rask`). |

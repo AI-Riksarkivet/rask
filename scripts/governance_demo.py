@@ -60,10 +60,10 @@ def token(username: str) -> str:
         f"{DEX}/token",
         data={
             "grant_type": "password",
-            "client_id": "lance-catalog",
+            "client_id": "rask-web",
             "username": username,
             "password": "password",
-            "scope": "openid federated:id",
+            "scope": "openid federated:id audience:server:client_id:rask-lakehouse",
         },
         timeout=10,
     )

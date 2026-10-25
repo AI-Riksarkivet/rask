@@ -35,7 +35,7 @@ data:
         userID: {{ .Values.publisher.userID | quote }}
     staticClients:
       - id: {{ .Values.clientId }}
-        name: Lance Catalog
+        name: Web zones
         secret: {{ .Values.clientSecret }}
         public: true
         redirectURIs:
@@ -43,6 +43,10 @@ data:
           {{- with .Values.publicOrigin }}
           - {{ . | trimSuffix "/" }}/auth/callback
           {{- end }}
+      - id: {{ required "audience names the lakehouse's audience client" .Values.audience }}
+        name: Lakehouse
+        secret: {{ required "audienceSecret is the audience client's secret, which no client is given" .Values.audienceSecret }}
+        trustedPeers: [{{ .Values.clientId }}]
 ---
 apiVersion: v1
 kind: Service

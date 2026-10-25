@@ -33,7 +33,7 @@ function fgaAuth() {
 	return { authorization: `Bearer ${readFileSync(FGA_TOKEN_FILE, 'utf8').trim()}` };
 }
 const TOKEN_URL = process.env.TOKEN_URL ?? `${ORIGIN}/dex/token`;
-const CLIENT_ID = process.env.OIDC_CLIENT_ID ?? 'lance-catalog';
+const CLIENT_ID = process.env.OIDC_CLIENT_ID ?? 'rask-web';
 const CLIENT_SECRET = process.env.OIDC_CLIENT_SECRET ?? 'lance-catalog-secret';
 const PASSWORD = process.env.DEX_PASSWORD ?? 'password';
 const OUTPUT = process.env.DRIVE_OUTPUT ?? 'bronze$events';
@@ -52,7 +52,7 @@ async function mintToken(email) {
 			'content-type': 'application/x-www-form-urlencoded',
 			authorization: `Basic ${Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString('base64')}`,
 		},
-		body: new URLSearchParams({ grant_type: 'password', username: email, password: PASSWORD, scope: 'openid profile email federated:id' }),
+		body: new URLSearchParams({ grant_type: 'password', username: email, password: PASSWORD, scope: 'openid profile email federated:id audience:server:client_id:rask-lakehouse' }),
 	});
 	if (!res.ok) throw new Error(`dex refused ${email}: HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
 	const json = await res.json();

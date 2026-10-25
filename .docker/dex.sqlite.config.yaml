@@ -5,7 +5,7 @@
 #   bob@example.com   / password   (holds no grant -> denied)
 # Both share the same bcrypt hash of "password"; bcrypt verifies against the
 # plaintext only (no username binding), so reusing the hash is correct.
-# Token audience = the static client id "lance-catalog" (RASK_OIDC_AUDIENCE).
+# Token audience = the audience client "rask-lakehouse" (RASK_OIDC_AUDIENCE), which the sign-in client "rask-web" asks for.
 issuer: http://dex:5556/dex
 storage:
   type: memory
@@ -15,11 +15,17 @@ oauth2:
   passwordConnector: local
   skipApprovalScreen: true
 staticClients:
-  - id: lance-catalog
-    name: Lance Catalog
+  - id: rask-web
+    name: Web zones
     public: true
     redirectURIs:
       - http://localhost:2333/auth/callback
+  # The lakehouse's audience (RASK_OIDC_AUDIENCE): Dex issues a token for it only to the client it trusts, asked with
+  # `audience:server:client_id:rask-lakehouse`. Confidential, with a secret no client is given, so nobody signs in as it.
+  - id: rask-lakehouse
+    name: Lakehouse
+    secret: rask-lakehouse-held-by-no-client
+    trustedPeers: [rask-web]
 enablePasswordDB: true
 staticPasswords:
   - email: alice@example.com

@@ -32,7 +32,7 @@ from typing import Any
 import pyarrow as pa
 import pytest
 import requests
-from principals import DEX_SCOPE
+from principals import DEX_CLIENT, DEX_SCOPE
 
 
 CATALOG = os.environ.get("LANCE_E2E_CATALOG_URL", "")
@@ -61,7 +61,7 @@ def _auth_headers() -> dict[str, str]:
         return {}
     data = {
         "grant_type": "password",
-        "client_id": "lance-catalog",
+        "client_id": DEX_CLIENT,
         "username": "alice@example.com",
         "password": "password",
         "scope": DEX_SCOPE,

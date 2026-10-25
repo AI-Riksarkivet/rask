@@ -145,8 +145,8 @@ else
   done
   SEED_TOKEN="$(curl -s --max-time 15 -X POST "http://localhost:12434/dex/token" \
     -d grant_type=password -d "username=${RASK_SEED_USER:-alice@example.com}" \
-    -d "password=${RASK_SEED_PASS:-password}" -d scope='openid profile email federated:id' \
-    -u lance-catalog:lance-catalog-secret \
+    -d "password=${RASK_SEED_PASS:-password}" -d scope='openid profile email federated:id audience:server:client_id:rask-lakehouse' \
+    -u rask-web:lance-catalog-secret \
     | python3 -c 'import sys,json; print(json.load(sys.stdin).get("id_token",""))' 2>/dev/null || true)"
   # The ANNOTATIONS table, through the catalog. Without this the annotate canvas cannot open at all,
   # and the reason is not obvious: the catalog authorises BEFORE it checks existence, so a table that
@@ -225,8 +225,8 @@ ANNO_CODE=000
 for _ in $(seq 1 30); do
   ANNO_TOKEN="$(curl -s --max-time 10 -X POST "http://localhost:12434/dex/token" \
     -d grant_type=password -d "username=${RASK_SEED_USER:-alice@example.com}" \
-    -d "password=${RASK_SEED_PASS:-password}" -d scope='openid profile email federated:id' \
-    -u lance-catalog:lance-catalog-secret \
+    -d "password=${RASK_SEED_PASS:-password}" -d scope='openid profile email federated:id audience:server:client_id:rask-lakehouse' \
+    -u rask-web:lance-catalog-secret \
     | python3 -c 'import sys,json; print(json.load(sys.stdin).get("id_token",""))' 2>/dev/null || true)"
   if [ -n "$ANNO_TOKEN" ]; then
     ANNO_CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 -H "Authorization: Bearer $ANNO_TOKEN" \

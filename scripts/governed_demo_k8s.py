@@ -26,9 +26,9 @@ def token(username: str) -> str:
         f"{DEX}/token",
         data={
             "grant_type": "password",
-            "client_id": "lance-catalog",
+            "client_id": "rask-web",
             "client_secret": "lance-catalog-secret",
-            "scope": "openid email federated:id",
+            "scope": "openid email federated:id audience:server:client_id:rask-lakehouse",
             "username": username,
             "password": "password",
         },

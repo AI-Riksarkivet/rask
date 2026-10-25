@@ -54,7 +54,9 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | auth.fgaModelId | string | `""` | Pin the OpenFGA authorization model id every service checks against, whatever its image carries. Empty = the store's latest model. |
 | auth.fgaStoreId | string | `""` | Pin the OpenFGA store id used by every service, the openfga-model hook and the bootstrap-admin Job. Empty = the newest store named `lance-catalog`. |
 | auth.issuerMirror.enabled | bool | `true` | Render the issuer mirror (templates/issuer-mirror.yaml) that republishes the SA issuer's discovery and JWKS unauthenticated for OpenFGA and the development store; off only for a publicly served issuer. |
-| auth.oidc.clientId | string | `"lance-catalog"` | The OIDC client id: the audience every governed door checks (`RASK_OIDC_AUDIENCE`), the client the zones sign in as, and the development Dex's static client. |
+| auth.oidc.audience | string | `"rask-lakehouse"` | The audience every governed door checks (`RASK_OIDC_AUDIENCE`); it must differ from `clientId`. |
+| auth.oidc.audienceScope | string | `""` | The scope a client asks the IdP for to obtain a token for `audience`; empty is Dex's cross-client scope, `audience:server:client_id:<audience>`. |
+| auth.oidc.clientId | string | `"rask-web"` | The OIDC client the zones sign in as (`OIDC_CLIENT_ID`), and the development Dex's sign-in client. Never the lakehouse's audience. |
 | auth.oidc.connectors | object | `{}` | The idp id each Dex connector's users are principals of, keyed by connector id (`RASK_OIDC_CONNECTORS`; `{ldap: corp}` makes user `u` of connector `ldap` the principal `corp~u`). An idp id is lower-case letters, digits and `-`, never `kubernetes`. With `dex.enabled` the development Dex's `local` connector is `dex` unless named here; otherwise at least one entry is required. |
 | auth.oidc.issuer | string | `""` | The OIDC issuer every governed door trusts (`RASK_OIDC_ISSUER`; a token is accepted only when its `iss` equals it) and the zones sign in at (`OIDC_ISSUER`). Required when `auth.enabled` or `frontend.oidc.enabled`; https unless `dex.enabled`. |
 | auth.serviceAccountIssuer | string | `"https://kubernetes.default.svc.cluster.local"` | The Kubernetes ServiceAccount token issuer every door verifies service tokens against (RASK_SA_ISSUER); must equal OpenFGA's issuer alias or the render fails. |
@@ -109,7 +111,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | dapr.workflowRetention.enabled | bool | `true` | Render a Dapr workflow `stateRetentionPolicy`, the only thing that purges workflow history; false means history grows unbounded. |
 | dapr.workflowRetention.failed | string | `"720h"` | How long a failed workflow's history is kept for post-mortems, as a positive h or m duration of at least 1h; default 720h. |
 | dapr.workflowRetention.terminated | string | `"720h"` | How long a terminated workflow's history is kept, as a positive h or m duration of at least 1h; default 720h (30 days). |
-| dex.clientSecret | string | `"lance-catalog-secret"` | The development Dex's static client secret (demo value); seeded into OpenBao as `oidc-client` (field `client-secret`). |
+| dex.clientSecret | string | `"lance-catalog-secret"` | The development Dex's sign-in client secret (demo value); seeded into OpenBao as `oidc-client` (field `client-secret`). |
 | dex.enabled | bool | `true` | This estate uses the development Dex (deploy/fixtures/dex, Service `<release>-dex`): the ingress serves it at /dex, and a real deployment refuses it. The chart renders no Dex. |
 | dex.port | int | `5556` | Port of the development Dex's Service. |
 | docs.enabled | bool | `false` | Serves /docs, /redoc and /openapi.json on every app in the release. Off by default; turn on only for a dev cluster. |

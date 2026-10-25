@@ -90,10 +90,14 @@ step "2/4 minting a real bearer through Dex"
 # follows the estate rather than assuming it.
 DEX_CLIENT="$(kubectl get cm "$RELEASE-dex" -o jsonpath='{.data.config\.yaml}' 2>/dev/null | sed -n 's/^ *- id: *//p' | head -1)"
 DEX_SECRET="$(kubectl get cm "$RELEASE-dex" -o jsonpath='{.data.config\.yaml}' 2>/dev/null | sed -n 's/^ *secret: *//p' | head -1)"
-: "${DEX_CLIENT:=lance-catalog}" ; : "${DEX_SECRET:=lance-catalog-secret}"
+: "${DEX_CLIENT:=rask-web}" ; : "${DEX_SECRET:=lance-catalog-secret}"
+# The audience the doors check, read off the catalog's own pod: a token without it is refused ([[LH-515]]), and Dex puts
+# it in a token only when a client its audience client trusts asks for it with the cross-client scope.
+OIDC_AUDIENCE="$(kubectl get deploy "$RELEASE-catalog" -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="RASK_OIDC_AUDIENCE")].value}' 2>/dev/null)"
+: "${OIDC_AUDIENCE:=rask-lakehouse}"
 mint() {
   curl -s -m 20 "http://$DEX/dex/token" -d grant_type=password -d client_id="$DEX_CLIENT" \
-    -d client_secret="$DEX_SECRET" -d scope="openid email federated:id" -d username="$1" -d password=password \
+    -d client_secret="$DEX_SECRET" -d scope="openid email federated:id audience:server:client_id:$OIDC_AUDIENCE" -d username="$1" -d password=password \
     | uv run python -c "import sys,json;print(json.load(sys.stdin).get('id_token',''))"
 }
 ALICE="$(mint alice@example.com)"; BOB="$(mint bob@example.com)"
@@ -221,6 +225,7 @@ if [ -n "$SA_AUDIENCE" ]; then
 fi
 export LANCE_E2E_DAPR_TOKEN="$DAPR_TOKEN"
 export LANCE_E2E_OIDC_CLIENT_ID="$DEX_CLIENT"
+export LANCE_E2E_OIDC_AUDIENCE="$OIDC_AUDIENCE"
 export LANCE_E2E_OIDC_CLIENT_SECRET="$DEX_SECRET"
 export LANCE_E2E_DEX_SECRET="$DEX_SECRET"
 export LANCE_E2E_PROJECT="${LANCE_E2E_PROJECT:-acme}"

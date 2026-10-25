@@ -200,7 +200,7 @@ func (m *Rask) catalogService(src *dagger.Directory, stack *governedStack, auth 
 			WithServiceBinding("openfga", stack.OpenFGA).
 			WithEnvVariable("RASK_OIDC_ENABLED", "true").
 			WithEnvVariable("RASK_OIDC_ISSUER", "http://dex:5556/dex").
-			WithEnvVariable("RASK_OIDC_AUDIENCE", "lance-catalog").
+			WithEnvVariable("RASK_OIDC_AUDIENCE", "rask-lakehouse").
 			WithEnvVariable("RASK_OIDC_CONNECTORS", laneConnectors).
 			// Dex serves discovery over http here. Dev only — the chart never sets this.
 			WithEnvVariable("RASK_OIDC_ALLOW_INSECURE", "true").
@@ -248,7 +248,7 @@ func (m *Rask) lineageToken(ctx context.Context, src *dagger.Directory, dex *dag
 		WithServiceBinding("dex", dex).
 		WithExec([]string{"uv", "run", "--no-sync", "python", "-c", `
 import base64, json, pathlib, time, urllib.parse, urllib.request
-form = urllib.parse.urlencode({"grant_type": "password", "client_id": "lance-catalog", "username": "` + lineageIdentity + `", "password": "password", "scope": "openid email federated:id"}).encode()
+form = urllib.parse.urlencode({"grant_type": "password", "client_id": "rask-web", "username": "` + lineageIdentity + `", "password": "password", "scope": "openid email federated:id audience:server:client_id:rask-lakehouse"}).encode()
 for _ in range(60):
     try:
         body = json.load(urllib.request.urlopen("http://dex:5556/dex/token", form, timeout=5))
@@ -343,7 +343,7 @@ func (m *Rask) AuthChain(
 		WithEnvVariable("DEX_URL", "http://dex:5556/dex").
 		// EMPTY, and it must be set rather than left unset. `test_governance_e2e.py` DEFAULTS
 		// `LANCE_E2E_DEX_SECRET` to "lance-catalog-secret", and both Dex configs in this repo declare
-		// `lance-catalog` as `public: true` — a public client, which rejects a client_secret with
+		// `rask-web` as `public: true` — a public client, which rejects a client_secret with
 		// `401 invalid_client`. Its own comment names the fix (`LANCE_E2E_DEX_SECRET="" for a
 		// public-client Dex`), and `scripts/governance_e2e.sh` never set it: it exported
 		// LANCE_E2E_AUTH_SERVER, LANCE_E2E_LINEAGE_URL and LANCE_E2E_DEX and stopped. So that script

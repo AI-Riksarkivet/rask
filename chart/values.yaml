@@ -771,8 +771,17 @@ auth:
   oidc:
     # -- The OIDC issuer every governed door trusts (`RASK_OIDC_ISSUER`; a token is accepted only when its `iss` equals it) and the zones sign in at (`OIDC_ISSUER`). Required when `auth.enabled` or `frontend.oidc.enabled`; https unless `dex.enabled`.
     issuer: ""
-    # -- The OIDC client id: the audience every governed door checks (`RASK_OIDC_AUDIENCE`), the client the zones sign in as, and the development Dex's static client.
-    clientId: lance-catalog
+    # -- The OIDC client the zones sign in as (`OIDC_CLIENT_ID`), and the development Dex's sign-in client. Never the lakehouse's audience.
+    clientId: rask-web
+    # THE LAKEHOUSE'S OWN AUDIENCE ([[LH-515]]). Every governed door accepts a person's token only when its `aud` names
+    # this, so a token the IdP issued for another client is refused. The IdP issues it to the clients it trusts: the
+    # development Dex declares a confidential audience client of this id, whose secret no client is given and whose
+    # `trustedPeers` name the sign-in client, and a client asks for it with `auth.oidc.audienceScope` (measured on Dex
+    # v2.42.0: the token's `aud` is then `[<audience>, <client>]`, and an untrusted client is refused the scope).
+    # -- The audience every governed door checks (`RASK_OIDC_AUDIENCE`); it must differ from `clientId`.
+    audience: rask-lakehouse
+    # -- The scope a client asks the IdP for to obtain a token for `audience`; empty is Dex's cross-client scope, `audience:server:client_id:<audience>`.
+    audienceScope: ""
     # A PERSON IS THE PRINCIPAL THEIR DEX CONNECTOR MAPS TO ([[LH-063]], ADR 0159 D5): `<idp-id>~<user id>`, with
     # the idp id named here for the connector id Dex reports in `federated_claims` and the upstream user id that
     # connector reports. Every grant, inbox and attribution keys on it, so renaming a connector in Dex is one more
@@ -2286,7 +2295,7 @@ dex:
   enabled: true
   # -- Port of the development Dex's Service.
   port: 5556
-  # -- The development Dex's static client secret (demo value); seeded into OpenBao as `oidc-client` (field `client-secret`).
+  # -- The development Dex's sign-in client secret (demo value); seeded into OpenBao as `oidc-client` (field `client-secret`).
   clientSecret: lance-catalog-secret
 
 # === The secret store the Dapr secret store and ESO read: the platform's, or the dev OpenBao fixture =====

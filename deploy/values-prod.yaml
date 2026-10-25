@@ -162,7 +162,8 @@ ray:
 # --- The bundled Dex is the dev IdP (its users and client secret are published in this chart, XC-025); a real
 # deployment refuses it (templates/prod-credentials.yaml) and signs in through the platform's IdP, which the deployer
 # names as `auth.oidc.issuer` (https; the render refuses an http one) with its client as `auth.oidc.clientId`: every
-# governed door trusts that issuer and nothing else.
+# governed door trusts that issuer and nothing else, and accepts only a token whose audience is `auth.oidc.audience`,
+# which the platform's IdP issues to the clients it trusts (`auth.oidc.audienceScope` names the scope they ask for).
 dex:
   enabled: false
 

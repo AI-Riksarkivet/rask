@@ -9,11 +9,21 @@ that bearer on.
 
 from __future__ import annotations
 
+import os
+
 import requests
 
 
-#: The scope a suite's password grant asks Dex for: `federated:id` makes Dex report the connector and the user id.
-DEX_SCOPE = "openid email federated:id"
+#: The client a suite signs in as: the development Dex's sign-in client, rask's `auth.oidc.clientId`.
+DEX_CLIENT = os.environ.get("LANCE_E2E_OIDC_CLIENT_ID", "rask-web")
+
+#: The lakehouse's audience, rask's `auth.oidc.audience`: every governed door refuses a token that does not name it.
+DEX_AUDIENCE = os.environ.get("LANCE_E2E_OIDC_AUDIENCE", "rask-lakehouse")
+
+#: The scope a suite's password grant asks Dex for: `federated:id` makes Dex report the connector and the user id, and
+#: Dex's cross-client scope puts the lakehouse's audience in the token, which it issues only to a client the audience
+#: client trusts ([[LH-515]]).
+DEX_SCOPE = f"openid email federated:id audience:server:client_id:{DEX_AUDIENCE}"
 
 
 def principal_of(catalog: str, bearer: str) -> str:

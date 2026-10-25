@@ -120,8 +120,16 @@
                 "oidc": {
                     "type": "object",
                     "properties": {
+                        "audience": {
+                            "description": "The audience every governed door checks (`RASK_OIDC_AUDIENCE`); it must differ from `clientId`.",
+                            "type": "string"
+                        },
+                        "audienceScope": {
+                            "description": "The scope a client asks the IdP for to obtain a token for `audience`; empty is Dex's cross-client scope, `audience:server:client_id:\u003caudience\u003e`.",
+                            "type": "string"
+                        },
                         "clientId": {
-                            "description": "The OIDC client id: the audience every governed door checks (`RASK_OIDC_AUDIENCE`), the client the zones sign in as, and the development Dex's static client.",
+                            "description": "The OIDC client the zones sign in as (`OIDC_CLIENT_ID`), and the development Dex's sign-in client. Never the lakehouse's audience.",
                             "type": "string"
                         },
                         "connectors": {
@@ -434,7 +442,7 @@
             "type": "object",
             "properties": {
                 "clientSecret": {
-                    "description": "The development Dex's static client secret (demo value); seeded into OpenBao as `oidc-client` (field `client-secret`).",
+                    "description": "The development Dex's sign-in client secret (demo value); seeded into OpenBao as `oidc-client` (field `client-secret`).",
                     "type": "string"
                 },
                 "enabled": {

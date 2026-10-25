@@ -44,7 +44,7 @@ import lance_namespace
 import pyarrow as pa
 import pyarrow.ipc as ipc
 import requests
-from principals import DEX_SCOPE, principal_of
+from principals import DEX_CLIENT, DEX_SCOPE, principal_of
 from pydantic import BaseModel, Field
 
 
@@ -53,7 +53,6 @@ LINEAGE = os.environ.get("LANCE_E2E_LINEAGE_URL", "").rstrip("/")
 #: The notifications service under its API prefix (`http://<host>:8850/api`).
 NOTIFICATIONS = os.environ.get("LANCE_E2E_NOTIFICATIONS_URL", "").rstrip("/")
 DEX = os.environ.get("LANCE_E2E_DEX", "").rstrip("/")
-DEX_CLIENT = os.environ.get("LANCE_E2E_OIDC_CLIENT_ID", "lance-catalog")
 DEX_SECRET = os.environ.get("LANCE_E2E_DEX_SECRET", "lance-catalog-secret")
 ADMIN_USER = os.environ.get("LANCE_E2E_USER", "alice@example.com")
 PIPELINE_USER = os.environ.get("LANCE_E2E_PIPELINE_USER", "publisher@rask.internal")
