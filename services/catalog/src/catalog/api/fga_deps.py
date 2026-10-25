@@ -1340,26 +1340,75 @@ async def _absent_to_a_reader_of_the_parent(
       that would tell an unauthorized caller which names are real — the oracle this estate refuses —
       and it is the property worth more than the feature.
 
+    A PARENT THAT IS GONE TOO IS READ AT THE NEAREST ANCESTOR THAT STANDS ([[LH-536]]). A cascade leaves a child whose
+    parent went with it; a reader of the nearest standing ancestor asking about it is told no more than asking about
+    that ancestor's absent child would tell them. A top-level name has no ancestor to read, and is never asked of its
+    warehouse: upward visibility (``can_get_metadata from child``) makes a reader of one namespace a reader of its
+    warehouse, so a warehouse's readers would learn which of every tenant's names exist from 403 against 404. What a
+    RECOVERABLE drop leaves is answered by its trash: the drop keeps its objects' grants for the undrop, so a caller
+    holding ``can_get_metadata`` on an object trashed at the name or an ancestor's, on the chain hanging off what
+    stands, already sees it through the trash doors and is answered the absence rather than a refusal that hides it. A
+    trash it cannot read leaves the 403.
+
     Whether the name holds an object is the resolution ``authorize`` already read, so the answer is the one the door
     would act on. The request never reaches the endpoint either way: this raises, and its caller re-raises. Nothing
     is read, and no grant is implied by the 404.
     """
     if denied not in _READ_RELATIONS or fga_type not in _UUID_KEYED:
         return
-    parent = segments[:-1]
-    if not parent or await resolver.object(fga_type, segments) is not None:
-        return
-    parent_obj = await resolver.object("namespace", parent)
-    if parent_obj is None:
+    if await resolver.object(fga_type, segments) is not None:
         return
     try:
-        if not await fga.check(client, user=token.subject, relation="can_get_metadata", obj=parent_obj):
+        standing, ancestor = await _nearest_standing_ancestor(resolver, segments)
+        # The trash is listed only when no standing ancestor admits the caller: it is one read of every record.
+        if not await _reads_any(client, user=token.subject, objects=[ancestor] if ancestor is not None else []) and not await _reads_any(
+            client, user=token.subject, objects=await _trashed_below(resolver, fga_type, segments, standing=standing)
+        ):
             return
     except ServiceUnavailableError:
         return  # the authz layer is down; the 403 the caller already has is the fail-closed answer
+    except (OSError, ValueError):
+        log.warning("absent_object_trash_unreadable", extra={"sub": token.subject, "object": fga.canonical_object_id(segments)}, exc_info=True)
+        return
     ident = fga.canonical_object_id(segments)
     absent = TableNotFoundError if fga_type == "table" else NamespaceNotFoundError
     raise absent(f"{fga_type} {ident!r} does not exist")
+
+
+async def _nearest_standing_ancestor(resolver: Resolver, segments: list[str]) -> tuple[int, str | None]:
+    """The depth and object of the nearest ancestor namespace of ``segments`` that stands, ``(0, None)`` where none does."""
+    for depth in range(len(segments) - 1, 0, -1):
+        if (ancestor := await resolver.object("namespace", segments[:depth])) is not None:
+            return depth, ancestor
+    return 0, None
+
+
+async def _trashed_below(resolver: Resolver, fga_type: str, segments: list[str], *, standing: int) -> list[str]:
+    """The objects trashed at ``segments`` or an ancestor's name deeper than the ``standing`` one, on the chain that hangs
+    off what stands.
+
+    Each depth admits a record only where its namespace at the drop is the standing ancestor or a record admitted one
+    depth up: a grant kept on a trashed ``tree$kids`` says nothing about what a ``tree`` created since holds.
+    """
+    parents = {await resolver.namespace_uuid(segments[:standing])} if standing else None
+    objects: list[str] = []
+    for depth in range(standing + 1, len(segments) + 1):
+        kind = fga_type if depth == len(segments) else "namespace"
+        records = await resolver.trashed(kind, segments[:depth])
+        admitted = {
+            uuid for record in records if (uuid := trash.object_uuid(record)) is not None and (parents is None or record.get("namespace_uuid") in parents)
+        }
+        objects += [fga.object_of(kind, uuid) for uuid in sorted(admitted)]
+        parents = admitted
+    return objects
+
+
+async def _reads_any(client: OpenFgaClient, *, user: str, objects: list[str]) -> bool:
+    """Whether ``user`` holds ``can_get_metadata`` on any of ``objects``."""
+    if not objects:
+        return False
+    allowed = await fga.batch_check(client, user=user, relation="can_get_metadata", objects=objects)
+    return any(allowed.get(obj, False) for obj in objects)
 
 
 #: How many candidates one batch check of a listing authorizes before the page is judged full.

@@ -68,3 +68,48 @@ def test_a_denied_door_answers_not_found_only_for_an_absent_table_a_reader_of_it
     answered = estate.client.post(door, json={}, headers=estate.bearer(caller))
 
     assert (answered.status_code, answered.json()["code"]) == (status, code), answered.text
+
+
+NAMESPACE_NOT_FOUND = 1
+
+
+@pytest.fixture
+def cascaded(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> Any:  # noqa: ANN401 — the conftest's GovernedCatalog
+    """alice's ``tree$kids`` with the subtree dropped by a CASCADE on ``tree``, as ``request.param`` names.
+
+    ``recoverable`` and ``destroyed`` drop it with and without a grace period beside :func:`estate`'s ``db1``, where
+    alice owns ``db1$sub$leaf`` too and drops ``db1$sub`` the same way; ``recreated`` drops it recoverably and bob
+    creates a ``tree`` of his own.
+    """
+    layout = request.param
+    monkeypatch.setenv("LANCE_TRASH_GRACE_DAYS", "0" if layout == "destroyed" else "7")
+    catalog = request.getfixturevalue("estate")
+    alice = catalog.bearer("alice")
+    for namespace in ("tree", "tree$kids", "db1$sub", "db1$sub$leaf"):
+        assert catalog.client.post(f"/v1/namespace/{namespace}/create", json={}, headers=alice).status_code == 200
+    for top in ("tree", "db1$sub"):
+        dropped = catalog.client.post(f"/v1/namespace/{top}/drop", json={"behavior": "CASCADE"}, headers=alice)
+        assert dropped.status_code == 200, dropped.text
+    if layout == "recreated":
+        assert catalog.client.post("/v1/namespace/tree/create", json={}, headers=catalog.bearer("bob")).status_code == 200
+    return catalog
+
+
+@pytest.mark.parametrize(
+    ("cascaded", "caller", "namespace", "status", "code"),
+    [
+        pytest.param("recoverable", "alice", "tree", 404, NAMESPACE_NOT_FOUND, id="a-dropped-top-is-not-found-to-who-holds-it-in-the-trash"),
+        pytest.param("recoverable", "alice", "tree$kids", 404, NAMESPACE_NOT_FOUND, id="its-child-is-not-found-to-who-holds-it-in-the-trash"),
+        pytest.param("destroyed", "bob", "db1$sub$leaf", 404, NAMESPACE_NOT_FOUND, id="a-destroyed-child-is-not-found-to-a-reader-of-what-still-stands"),
+        pytest.param("recoverable", "carol", "tree$kids", 403, PERMISSION_DENIED, id="a-caller-who-held-nothing-learns-nothing"),
+        pytest.param("destroyed", "bob", "nosuch", 403, PERMISSION_DENIED, id="a-top-level-name-is-never-answered-from-its-warehouse"),
+        pytest.param("recreated", "alice", "tree$kids", 403, PERMISSION_DENIED, id="a-trashed-grant-says-nothing-under-a-name-recreated-since"),
+    ],
+    indirect=["cascaded"],
+)
+def test_a_namespace_a_cascade_dropped_is_not_found_to_a_caller_who_held_a_right_above_it(
+    cascaded: Any, caller: str, namespace: str, status: int, code: int
+) -> None:
+    answered = cascaded.client.post(f"/v1/namespace/{namespace}/describe", json={}, headers=cascaded.bearer(caller))
+
+    assert (answered.status_code, answered.json()["code"]) == (status, code), answered.text
