@@ -111,23 +111,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | dex.enabled | bool | `true` | This estate uses the development Dex (deploy/fixtures/dex, Service `<release>-dex`): the ingress serves it at /dex, and a real deployment refuses it. The chart renders no Dex. |
 | dex.port | int | `5556` | Port of the development Dex's Service. |
 | docs.enabled | bool | `false` | Serves /docs, /redoc and /openapi.json on every app in the release. Off by default; turn on only for a dev cluster. |
-| encoders.embedUrl | string | `""` | Base URL of the OpenAI-shaped embedding server search calls and viewer probes (MEDIA_EMBED_URL). Empty = vector search modes report unavailable. |
-| encoders.rerankUrl | string | `""` | Base URL of the OpenAI-shaped reranker server (MEDIA_RERANK_URL). Empty = the rerank leg reports unavailable. |
 | existingSecret | string | `""` | Name of a pre-made Secret used instead of the chart's `<release>-app` (object store access key ID and endpoint, never a credential). Empty renders `<release>-app`. |
-| explorer.catalogUri | string | `""` | Catalog URL the explorer services use (MEDIA_CATALOG_URI). Empty = the in-release catalog Service. |
-| explorer.corpus.accessMode | string | `"ReadWriteMany"` | Access mode of the chart-created corpus PVC; ReadWriteMany because both services read it concurrently. |
-| explorer.corpus.claimName | string | `""` | Existing PVC to mount when mode is `pvc`. Empty = the chart creates `<release>-media-corpus` (kept on uninstall). |
-| explorer.corpus.hostPath | string | `"/var/media-corpus"` | Node directory mounted as the corpus when mode is `hostPath`. |
-| explorer.corpus.mode | string | `"emptyDir"` | How the corpus volume is provided: `emptyDir` (default), `pvc` (existing `claimName` or a chart-created claim) or `hostPath` (DirectoryOrCreate). |
-| explorer.corpus.size | string | `"50Gi"` | Requested size of the chart-created corpus PVC. |
-| explorer.corpus.storageClass | string | `""` | StorageClass of the chart-created corpus PVC. Empty = the cluster's default StorageClass. |
-| explorer.corpusMountPath | string | `"/media-corpus"` | Path the corpus volume is mounted at, read-only, in both explorer services. |
-| explorer.corpusS3Root | string | `""` | S3 root (e.g. a warehouse bucket) the viewer serves the media corpus from (MEDIA_S3_DB_ROOT). Empty = the mounted corpus volume. |
-| explorer.enabled | bool | `false` | Deploy the explorer pair (viewer and search services) and their rows on the cluster route. |
-| explorer.readBackend | string | `"catalog"` | Where the explorer services read annotations from (MEDIA_READ_BACKEND): `catalog` (governed) or `direct` (standalone dev). |
-| explorer.services.search | object | `{"daprAppId":"search","port":8102}` | Explorer search service: `port` (its HTTP port) and `daprAppId` (its Dapr app-id). |
-| explorer.services.viewer | object | `{"daprAppId":"viewer","port":8101}` | Explorer viewer service: `port` (its HTTP port) and `daprAppId` (its Dapr app-id). |
-| explorer.writeBackend | string | `"catalog"` | Where the explorer services write annotations to (MEDIA_WRITE_BACKEND): `catalog` (governed) or `direct` (standalone dev). |
 | externalSecrets.kubernetesAuthPath | string | `"kubernetes"` | Mount path of the store's Kubernetes auth method, which ESO's SecretStore and every app's sidecar log in through. |
 | externalSecrets.kvMount | string | `"secret"` | Vault/OpenBao KV mount path the SecretStore reads from. |
 | externalSecrets.kvVersion | string | `"v2"` | KV engine version of `kvMount` (`v1` or `v2`). |
@@ -148,10 +132,12 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | frontend.podSecurityContext.runAsNonRoot | bool | `true` | Pod-level securityContext for zone pods: refuse to start a container running as root. |
 | frontend.replicas | int | `1` | Replicas per zone Deployment; above 1 the chart also renders a PodDisruptionBudget per zone. |
 | frontend.resources | object | `{"limits":{"cpu":"500m","memory":"256Mi"},"requests":{"cpu":"50m","memory":"64Mi"}}` | Default CPU and memory requests/limits per zone container, used when `resources.web-<zone>` is not set. |
+| frontend.searchUrl | string | `""` | The media plane's search Service URL the explorer and annotator zones proxy to (SEARCH_API), e.g. `http://rask-search:8102`. Empty renders none. |
 | frontend.securityContext.allowPrivilegeEscalation | bool | `false` | Container securityContext for zones: forbid privilege escalation. |
 | frontend.securityContext.capabilities | object | `{"drop":["ALL"]}` | Container securityContext capabilities for zones; drops ALL Linux capabilities. |
 | frontend.serveUrl | string | `""` | Ray Serve HTTP origin for zones that run inference; empty uses `ray.dashboardUrl`. |
 | frontend.service.port | int | `3000` | Port each zone's Bun server listens on and its Service exposes. |
+| frontend.viewerUrl | string | `""` | The media plane's viewer Service URL the explorer and annotator zones proxy to (VIEWER_API), e.g. `http://rask-viewer:8101`. Empty renders none. |
 | fullnameOverride | string | `"rask"` | Base name for every rendered object; pinned to `rask` so in-cluster Services resolve as `rask-<component>`. |
 | image.catalog | object | `{"repository":"lance-rest-catalog"}` | Lakehouse image (catalog, lineage, maintenance, and the chart's Jobs and hooks): `repository` is its name under image.repository; its tag or digest is `tags`/`digests` keyed by that name, else the global one. |
 | image.digest | string | `""` | Global digest pin (sha256:...) for every first-party image; wins over `tag`. Empty uses tags. |
@@ -226,9 +212,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | objectStore.identity.sessionSeconds | int | `3600` | How long a session for the catalog's own IO lasts (LANCE_S3_SESSION_SECONDS, 900 to 43200 s); it is renewed at half its life. |
 | objectStore.lineageAccessKey | string | `"rask-lineage"` | Access key of the lineage service's scoped store identity (read-only plus deletes of its own outbox); secret derives in-cluster. Required: no service presents the store's root. |
 | objectStore.maintenanceAccessKey | string | `"rask-maintenance"` | Access key of maintenance's scoped store identity, the fallback when vending degrades; secret derives in-cluster. Required: no service presents the store's root. |
-| objectStore.mediaAccessKey | string | `"rask-media"` | Access key of search's read-only identity on the media corpus (`explorer.corpusS3Root`); secret derives in-cluster. |
 | objectStore.port | int | `9000` | S3 API port of the development store's Service. |
-| objectStore.viewerAccessKey | string | `"rask-viewer"` | Access key of the object browser's scoped identity (list and get only); secret derives in-cluster. |
 | observability.enabled | bool | `false` | Deploy rask's OTel Collector and turn on OTLP export from the fleet, Dapr and OpenFGA to it; needs `export.endpoint`. |
 | observability.environment | string | `"rask"` | Value of the `deployment.environment.name` OTel resource attribute; empty falls back to the release namespace. |
 | observability.export.auditHeaders | object | `{"x-greptime-log-table-name":"lance_audit"}` | Headers added to the export of `lance.audit` records, which leave on their own exporter. |
@@ -274,7 +258,6 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | resources.fleet | object | `{"limits":{"cpu":"1","memory":"512Mi"},"requests":{"cpu":"50m","memory":"128Mi"}}` | CPU/memory requests and limits for fleet services (templates/fleet.yaml) that name no tier of their own. |
 | resources.lineage | object | `{"limits":{"cpu":"1","memory":"512Mi"},"requests":{"cpu":"250m","memory":"128Mi"}}` | CPU/memory requests and limits for lineage; requests sized so the HPA CPU target is meaningful. |
 | resources.otel-collector | object | `{"limits":{"cpu":"1","memory":"512Mi"},"requests":{"cpu":"300m","memory":"512Mi"}}` | CPU/memory requests and limits for the OTel Collector; memory limit matches its hardcoded 400 MiB memory_limiter. |
-| resources.viewer | object | `{"limits":{"cpu":"2","memory":"1536Mi"},"requests":{"cpu":"200m","memory":"768Mi"}}` | CPU/memory requests and limits for the explorer viewer (in-process KG engine and atlas cache). |
 | route.edgeEgress | list | `[]` | NetworkPolicy egress rules ({to, ports}) admitting the zones to the Gateway's data plane pods, at the pod port a policy sees. Required under networkPolicy.enabled while the zones render. |
 | route.edgeUrl | string | `""` | In-cluster address of that Gateway (RASK_EDGE_URL): where the zones' server side sends `/api/*`, through the same routes a browser takes. Required while the zones render. |
 | route.enabled | bool | `true` | Renders the HTTPRoutes publishing the zones on `/`, `/dex` and each `/api/*` prefix on the Gateway `parentRefs` names. |
@@ -334,7 +317,6 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | stateStore.scopes | list | `["notifications"]` | App-ids allowed to load the state store; the secret-store scope is derived from this list too. Adding one needs a restart of scoped pods. |
 | stateStore.secretStore | string | `"lance-secrets"` | Dapr secret store that resolves the state store's connection string (OpenBao, never a k8s Secret). |
 | stateStore.tableName | string | `"state"` | Postgres table holding Dapr state rows. |
-| storage.stores | list | `[{"bucket":"lance-catalog","description":"The lakehouse warehouse — the governed medallion datasets.","name":"lance-catalog","role":"bronze","secret":"viewer-s3"}]` | Object-store registry rendered as RASK_STORES for the explorer viewer's object browser; each entry is {name, bucket, role, secret, description, endpoint?, insecure?}, `secret` a Dapr secret-store key. |
 | vending.allowExternalBlobs | bool | `false` | Allow blob-v2 columns to reference arbitrary external objects (Blob.from_uri) on create. Off by default: an SSRF and dangling-pointer risk; prefer `externalBlobBases`. |
 | vending.assumeRoleArn | string | `"arn:aws:iam::000000000000:role/lance-vend"` | The role the catalog's token is exchanged for (LANCE_S3_ASSUME_ROLE_ARN), for its own IO and every vend: AWS assumes it; a store granting the policy the token's subject names (RustFS) ignores it, and boto3 requires one. |
 | vending.encryption | object | `{}` | Server-side encryption for direct writes, carried in vended storage options: `algorithm` (AES256, aws:kms, aws:kms:dsse) and `kmsKeyId` (kms only). Empty = bucket default. |

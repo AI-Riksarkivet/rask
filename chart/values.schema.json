@@ -443,109 +443,9 @@
                 }
             }
         },
-        "encoders": {
-            "type": "object",
-            "properties": {
-                "embedUrl": {
-                    "description": "Base URL of the OpenAI-shaped embedding server search calls and viewer probes (MEDIA_EMBED_URL). Empty = vector search modes report unavailable.",
-                    "type": "string"
-                },
-                "rerankUrl": {
-                    "description": "Base URL of the OpenAI-shaped reranker server (MEDIA_RERANK_URL). Empty = the rerank leg reports unavailable.",
-                    "type": "string"
-                }
-            }
-        },
         "existingSecret": {
             "description": "Name of a pre-made Secret used instead of the chart's `\u003crelease\u003e-app` (object store access key ID and endpoint, never a credential). Empty renders `\u003crelease\u003e-app`.",
             "type": "string"
-        },
-        "explorer": {
-            "type": "object",
-            "properties": {
-                "catalogUri": {
-                    "description": "Catalog URL the explorer services use (MEDIA_CATALOG_URI). Empty = the in-release catalog Service.",
-                    "type": "string"
-                },
-                "corpus": {
-                    "type": "object",
-                    "properties": {
-                        "accessMode": {
-                            "description": "Access mode of the chart-created corpus PVC; ReadWriteMany because both services read it concurrently.",
-                            "type": "string"
-                        },
-                        "claimName": {
-                            "description": "Existing PVC to mount when mode is `pvc`. Empty = the chart creates `\u003crelease\u003e-media-corpus` (kept on uninstall).",
-                            "type": "string"
-                        },
-                        "hostPath": {
-                            "description": "Node directory mounted as the corpus when mode is `hostPath`.",
-                            "type": "string"
-                        },
-                        "mode": {
-                            "description": "How the corpus volume is provided: `emptyDir` (default), `pvc` (existing `claimName` or a chart-created claim) or `hostPath` (DirectoryOrCreate).",
-                            "type": "string"
-                        },
-                        "size": {
-                            "description": "Requested size of the chart-created corpus PVC.",
-                            "type": "string"
-                        },
-                        "storageClass": {
-                            "description": "StorageClass of the chart-created corpus PVC. Empty = the cluster's default StorageClass.",
-                            "type": "string"
-                        }
-                    }
-                },
-                "corpusMountPath": {
-                    "description": "Path the corpus volume is mounted at, read-only, in both explorer services.",
-                    "type": "string"
-                },
-                "corpusS3Root": {
-                    "description": "S3 root (e.g. a warehouse bucket) the viewer serves the media corpus from (MEDIA_S3_DB_ROOT). Empty = the mounted corpus volume.",
-                    "type": "string"
-                },
-                "enabled": {
-                    "description": "Deploy the explorer pair (viewer and search services) and their rows on the cluster route.",
-                    "type": "boolean"
-                },
-                "readBackend": {
-                    "description": "Where the explorer services read annotations from (MEDIA_READ_BACKEND): `catalog` (governed) or `direct` (standalone dev).",
-                    "type": "string"
-                },
-                "services": {
-                    "type": "object",
-                    "properties": {
-                        "search": {
-                            "description": "Explorer search service: `port` (its HTTP port) and `daprAppId` (its Dapr app-id).",
-                            "type": "object",
-                            "properties": {
-                                "daprAppId": {
-                                    "type": "string"
-                                },
-                                "port": {
-                                    "type": "integer"
-                                }
-                            }
-                        },
-                        "viewer": {
-                            "description": "Explorer viewer service: `port` (its HTTP port) and `daprAppId` (its Dapr app-id).",
-                            "type": "object",
-                            "properties": {
-                                "daprAppId": {
-                                    "type": "string"
-                                },
-                                "port": {
-                                    "type": "integer"
-                                }
-                            }
-                        }
-                    }
-                },
-                "writeBackend": {
-                    "description": "Where the explorer services write annotations to (MEDIA_WRITE_BACKEND): `catalog` (governed) or `direct` (standalone dev).",
-                    "type": "string"
-                }
-            }
         },
         "externalSecrets": {
             "type": "object",
@@ -688,6 +588,10 @@
                         }
                     }
                 },
+                "searchUrl": {
+                    "description": "The media plane's search Service URL the explorer and annotator zones proxy to (SEARCH_API), e.g. `http://rask-search:8102`. Empty renders none.",
+                    "type": "string"
+                },
                 "securityContext": {
                     "type": "object",
                     "properties": {
@@ -721,6 +625,10 @@
                             "type": "integer"
                         }
                     }
+                },
+                "viewerUrl": {
+                    "description": "The media plane's viewer Service URL the explorer and annotator zones proxy to (VIEWER_API), e.g. `http://rask-viewer:8101`. Empty renders none.",
+                    "type": "string"
                 }
             }
         },
@@ -1212,17 +1120,9 @@
                     "description": "Access key of maintenance's scoped store identity, the fallback when vending degrades; secret derives in-cluster. Required: no service presents the store's root.",
                     "type": "string"
                 },
-                "mediaAccessKey": {
-                    "description": "Access key of search's read-only identity on the media corpus (`explorer.corpusS3Root`); secret derives in-cluster.",
-                    "type": "string"
-                },
                 "port": {
                     "description": "S3 API port of the development store's Service.",
                     "type": "integer"
-                },
-                "viewerAccessKey": {
-                    "description": "Access key of the object browser's scoped identity (list and get only); secret derives in-cluster.",
-                    "type": "string"
                 }
             }
         },
@@ -1753,34 +1653,6 @@
                             }
                         }
                     }
-                },
-                "viewer": {
-                    "description": "CPU/memory requests and limits for the explorer viewer (in-process KG engine and atlas cache).",
-                    "type": "object",
-                    "properties": {
-                        "limits": {
-                            "type": "object",
-                            "properties": {
-                                "cpu": {
-                                    "type": "string"
-                                },
-                                "memory": {
-                                    "type": "string"
-                                }
-                            }
-                        },
-                        "requests": {
-                            "type": "object",
-                            "properties": {
-                                "cpu": {
-                                    "type": "string"
-                                },
-                                "memory": {
-                                    "type": "string"
-                                }
-                            }
-                        }
-                    }
                 }
             }
         },
@@ -2121,35 +1993,6 @@
                 "tableName": {
                     "description": "Postgres table holding Dapr state rows.",
                     "type": "string"
-                }
-            }
-        },
-        "storage": {
-            "type": "object",
-            "properties": {
-                "stores": {
-                    "description": "Object-store registry rendered as RASK_STORES for the explorer viewer's object browser; each entry is {name, bucket, role, secret, description, endpoint?, insecure?}, `secret` a Dapr secret-store key.",
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "bucket": {
-                                "type": "string"
-                            },
-                            "description": {
-                                "type": "string"
-                            },
-                            "name": {
-                                "type": "string"
-                            },
-                            "role": {
-                                "type": "string"
-                            },
-                            "secret": {
-                                "type": "string"
-                            }
-                        }
-                    }
                 }
             }
         },

@@ -10,11 +10,6 @@ Services (ClusterIP):
 {{- range $name, $svc := .Values.services }}
   - {{ $name }}: {{ include "rask.fullname" $root }}-{{ $name }}:{{ $svc.port }}
 {{- end }}
-{{- with .Values.explorer }}
-{{- if .enabled }}
-  - media:     {{ include "rask.fullname" $root }}-{viewer,search} (the media plane, /api/explorer/*)
-{{- end }}
-{{- end }}
   - age:       {{ include "lance.ageConnectHost" . }}:{{ .Values.age.port }} (Apache AGE — the lineage graph{{ if .Values.age.externalHost }}; the platform's Postgres{{ end }})
 {{- if .Values.objectStore.enabled }}
   - store:     {{ include "lance.objectStoreHost" $root }}:{{ .Values.objectStore.port }} (the rustfs fixture's development store)

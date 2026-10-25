@@ -22,7 +22,7 @@ _DEV_ISSUER = "http://localhost:8080/dex"
 
 #: The overlay, the issuer it names, and what every governed door then carries: (issuer, allow-insecure, discovery URL).
 _OVERLAYS = {
-    "prod": ((*PROD_ARGS, "--set-string", f"auth.oidc.issuer={_PLATFORM_IDP}", "--set", "explorer.enabled=true"), (_PLATFORM_IDP, "false", None)),
+    "prod": ((*PROD_ARGS, "--set-string", f"auth.oidc.issuer={_PLATFORM_IDP}"), (_PLATFORM_IDP, "false", None)),
     "dev-dex": ((*DEFAULT_ARGS, "--set-string", f"auth.oidc.issuer={_DEV_ISSUER}"), (_DEV_ISSUER, "true", "http://rask-dex:5556/dex")),
 }
 

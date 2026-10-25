@@ -344,18 +344,8 @@ spec:
                   - backup-pg # the pg-backup CronJob uploads its dumps to the lakehouse (_backups/pg/)
                   - backup-control-root # the control-root backup copies the registries to _backups/control/
                   - object-store-scoped-users # the identity-provisioning hook — blocked, every scoped user is absent
-                  # The media-plane viewer serves the S3 object browser (ported from the retired
-                  # volumes-api in the R6/R20 wave) — it reads s3://images-batch* from its pod, so
-                  # blocking it here kills the lakehouse storage browser under prod default-deny
-                  # (audit 2026-07-27 defect 5's exact failure class). Label is media.yaml's
-                  # `app.kubernetes.io/component: viewer`. (core-api/search-api/volumes-api died
-                  # with the wave; the orchestrator died at P7a.)
-                  - viewer
-                  # #142: search reads the media corpus from the governed bucket too — absent from this
-                  # list it is SILENTLY dropped (green pod, empty corpus). A client reading a governed table
-                  # on the credential the catalog vends it (the annotator's release, a user's pipeline) is
-                  # admitted by `networkPolicy.objectStoreExtraFrom`.
-                  - search
+                  # A client reading a governed table on the credential the catalog vends it (the annotator's or the
+                  # media plane's release, a user's pipeline) is admitted by `networkPolicy.objectStoreExtraFrom`.
         {{- if .Values.ray.enabled }}
         # The HTR runner executes inside the KubeRay-managed RayService pods (PageLoader reads the
         # image cache, AltoWriter writes ALTO — s3://images-batch*). The chart's head template stamps
@@ -466,7 +456,7 @@ spec:
 ---
 # (3f) nats:4222 — the client port. Admitted from ANY intra-namespace pod, port-scoped, and honestly so:
 # the legitimate clients are the daprd SIDECARS, which live inside every dapr.io/enabled app pod
-# (catalog, lineage, maintenance, notifications, the media trio) plus the nats-box hook Jobs
+# (catalog, lineage, maintenance, notifications) plus the nats-box hook Jobs
 # (stream provision + DLQ tooling) — i.e. nearly every first-party pod in the namespace, and the set
 # follows the dapr.io/enabled ANNOTATION, which no label selector can see. Enumerating component labels
 # would restate that near-total list and silently strand the next sidecar carrier (a wedged bus, not a

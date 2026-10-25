@@ -26,8 +26,6 @@ from tests.unit.chart_render import ANNOTATOR_FIXTURE_ARGS, DEFAULT_ARGS, PROD_A
 
 #: public prefix -> (Service, port, internal prefix the route rewrites to, or None for unchanged)
 _PRODUCT_API = {
-    "/api/explorer/search": ("rask-search", 8102, "/api/search"),
-    "/api/explorer": ("rask-viewer", 8101, "/api"),
     "/api/catalog": ("rask-catalog", 2333, None),
     "/api/lineage": ("rask-lineage", 8000, "/"),
     "/api/notifications": ("rask-notifications", 8850, None),
@@ -58,7 +56,7 @@ def _api_rows(docs: tuple[dict, ...]) -> dict[str, tuple[str, int, str | None]]:
 
 
 def test_each_api_prefix_reaches_its_service_through_the_cluster_route_and_no_gateway_remains() -> None:
-    product = render(*DEFAULT_ARGS, "--set", "explorer.enabled=true")
+    product = render(*DEFAULT_ARGS)
     compute = render_fixture("compute", "--set", "auth.oidc.issuer=https://auth.example.com/dex")
     annotator = render_fixture("annotator", *ANNOTATOR_FIXTURE_ARGS)
 

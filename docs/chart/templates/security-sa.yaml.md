@@ -3,7 +3,7 @@
 Rationale for `chart/templates/security-sa.yaml`. It lives here because Helm stores the chart's templates in
 every release revision, under a 1 MiB ceiling. Each section is headed by the template line it explains.
 
-## `{{- $components := list "catalog" "lineage" "web" "maintenance" "jobs" "viewer" "search" "issuer-mirror" "hooks" }}`
+## `{{- $components := list "catalog" "lineage" "web" "maintenance" "jobs" "issuer-mirror" "hooks" }}`
 
 ONE ServiceAccount PER FIRST-PARTY SERVICE, each with automountServiceAccountToken: false on the
 SA object, so a pod holds a Kubernetes API token only where its own spec asks for one. The Dapr

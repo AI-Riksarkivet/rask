@@ -33,8 +33,6 @@ pytestmark = [pytest.mark.e2e, pytest.mark.edge]
 _PROBES = [
     ("GET", "/api/catalog/management/v1/me"),
     ("GET", "/api/lineage/events?limit=1"),
-    ("GET", "/api/explorer/datasets"),
-    ("GET", "/api/explorer/search?q=edge"),
     ("POST", "/api/explorer/annotations/tags"),
     ("GET", "/api/notifications/inbox"),
     ("GET", "/api/ray/jobs"),

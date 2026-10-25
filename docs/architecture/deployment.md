@@ -59,8 +59,7 @@ unprovisioned secret is a fail-closed outage at first use, not a fallback. Each 
   the catalog's policy, and the catalog exchanges its projected token for sessions through STS
   `AssumeRoleWithWebIdentity`. A platform store's owner provisions that trust; on AWS it is an IAM OIDC provider and
   the role `vending.assumeRoleArn` names, whose trust policy names the subject.
-- `viewer-s3` (the viewer), `media-s3` (search, read-only on `explorer.corpusS3Root`, when explorer serves
-  a corpus) and `backup-s3` (ESO, for the backups, when one is on), fields `access_key`, `secret_key`.
+- `backup-s3` (ESO, for the backups, when one is on), fields `access_key`, `secret_key`.
 - `dapr-app-token` (fields `token` and, during a rotation, `previous`; docs/OPERATORS.md § 8): the app-API token, read by
   the apps with a Dapr door (catalog, lineage, maintenance, notifications) and by ESO, which writes it into the
   `<release>-dapr-app-token` Secret daprd stamps the header from.
@@ -314,8 +313,8 @@ the grants the estate-wide surfaces gate on. Empty seeds no human grant.
 
 ### StorageClasses: omit, don't guess
 
-No template names a StorageClass. `explorer.corpus.storageClass` defaults to `""`, which omits `storageClassName` so the **cluster's
-default** class provisions — the only portable answer (`local-path` is k3s's provisioner name and does not
+No template names a StorageClass: a claim that omits `storageClassName` lets the **cluster's
+default** class provision — the only portable answer (`local-path` is k3s's provisioner name and does not
 exist on kind, whose default is `standard`). Note `storageClassName: ""` is *not* the same as omitting it:
 the empty string disables dynamic provisioning, which is why the templates use `with`. No test pins it.
 

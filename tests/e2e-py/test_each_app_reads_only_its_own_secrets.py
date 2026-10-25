@@ -32,8 +32,6 @@ SIDECAR_READS: Final[dict[str, tuple[str, str, str]]] = {
     "lineage": ("lineage-s3", "access_key", "maintenance-s3"),
     "maintenance": ("maintenance-s3", "access_key", "lineage-s3"),
     "notifications": ("dapr-app-token", "token", "lineage-s3"),
-    "viewer": ("viewer-s3", "access_key", "media-s3"),
-    "search": ("media-s3", "access_key", "viewer-s3"),
 }
 
 #: Asks the pod's own sidecar for each named secret and prints, per secret, the status and the FIELD NAMES it answered.
@@ -59,7 +57,7 @@ def _run(*args: str, stdin: str = "") -> subprocess.CompletedProcess[str]:
 
 def _sidecars() -> dict[str, str]:
     """app -> the Deployment that runs its sidecar, for each app the `lance-secrets` component is scoped to that the release
-    runs a pod of: a release that renders no explorer runs no search or viewer. A Deployment that asks for a pod and has none running stays, and fails the ask."""
+    runs a pod of. A Deployment that asks for a pod and has none running stays, and fails the ask."""
     scopes = set(json.loads(chaos.kubectl("get", "components.dapr.io", "lance-secrets", "-o", "json")).get("scopes") or [])
     running: dict[str, str] = {}
     for deployment in json.loads(chaos.kubectl("get", "deployments", "-o", "json"))["items"]:

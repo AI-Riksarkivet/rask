@@ -3,7 +3,7 @@
 # Two systems now install from this one file:
 #   * the rask fleet (notifications),
 #     KubeRay Serve, the SvelteKit microfrontend zones;
-#   * the lance-ns lakehouse (catalog + lineage + maintenance + media), governance
+#   * the lance-ns lakehouse (catalog + lineage + maintenance), governance
 #     (Dex OIDC + OpenFGA), the Dapr/NATS event fabric, OpenBao, and the OTel-first observability tier.
 #
 # Merge rule applied throughout (plan P4, docs/adr/0124-chart-unification-one-control-plane-each-one-object-store.md): rask's chart is the BASE and every rask key is preserved;
@@ -32,30 +32,6 @@ imagePullSecrets: []
 # deliberately NOT in this list: objectStore.enabled alone gates the store's provisioning hooks
 # (docs/adr/0124-chart-unification-one-control-plane-each-one-object-store.md) because the lakehouse plane resolves the store
 # (`rask-rustfs:9000` in development) regardless of singleTenant.
-# The storage registry served to the object browser. Empty => the built-in defaults (every store on
-# the deployment's own S3). Declare stores here when they do NOT all live on one backend: `endpoint`
-# names the host, `secret` is a Dapr secret-store key holding {access_key, secret_key}, `insecure`
-# skips TLS verification for hosts with a private CA.
-#
-#   stores:
-#     - { name: images-batch, bucket: images-batch, role: raw, endpoint: "https://<tenant>.<hcp-domain>",
-#         insecure: true, secret: hcp-s3, description: "Source page images, as harvested." }
-storage:
-  # DECLARED rather than left to the built-in defaults, and the reason is the `secret` field: a store
-  # that declares one takes its credentials from the Dapr secret store (`objects.py::_creds`, cached
-  # and fail-closed); one that declares none falls back to the deployment's process env. That fallback
-  # is what put the store's ROOT credential in the viewer's environment.
-  # The warehouse row IS the viewer's built-in default (`viewer.core.stores.DEFAULT_STORES`) — same name,
-  # bucket and role — carrying the secret that makes the Dapr path the only path. The telemetry store is
-  # the platform's (ADR 0153), so no observability bucket is registered.
-  # -- Object-store registry rendered as RASK_STORES for the explorer viewer's object browser; each entry is {name, bucket, role, secret, description, endpoint?, insecure?}, `secret` a Dapr secret-store key.
-  stores:
-    - name: lance-catalog
-      bucket: lance-catalog
-      role: bronze
-      secret: viewer-s3
-      description: The lakehouse warehouse — the governed medallion datasets.
-
 singleTenant:
   # -- Renders the single-tenant default workloads (every fleet service, domain zones). False installs front-door services only; the object store is gated by `objectStore.enabled`.
   enabled: false
@@ -84,8 +60,6 @@ secrets:
 # OFF, and the reason it is one knob rather than a per-service choice is the defect it closes. Four
 # services already had a `docs_enabled` setting; all four defaulted it to True and NO manifest
 # anywhere set it, so the flag documented a decision nobody was making and the schemas shipped openly.
-# The viewer and search had no flag at all, and `templates/route.yaml` publishes each of them at the
-# edge, so an open schema is one unauthenticated GET away.
 #
 # Turn it on for a dev cluster (deploy/values-local.yaml does). Leave it off anywhere reachable.
 docs:
@@ -341,8 +315,7 @@ image:
   # -- imagePullPolicy for first-party containers.
   pullPolicy: IfNotPresent
   # The lakehouse image: catalog (catalog.main:app) + lineage (lineage.main:app) + maintenance all run from this one
-  # image, different entrypoint. The explorer's viewer and search run the `media` image, keyed `media` in `tags` and
-  # `digests` like every other component.
+  # image, different entrypoint.
   # -- Lakehouse image (catalog, lineage, maintenance, and the chart's Jobs and hooks): `repository` is its name under image.repository; its tag or digest is `tags`/`digests` keyed by that name, else the global one.
   catalog: { repository: lance-rest-catalog }
 
@@ -413,23 +386,6 @@ resources:
   otel-collector:
     requests: { cpu: 300m, memory: 512Mi }
     limits: { cpu: "1", memory: 512Mi }
-  # The viewer is not a request pod: it holds an in-process lance-graph CypherEngine over the KG and a
-  # cache of Arrow-IPC atlas point clouds, both sized by the corpus. On the default 512Mi tier a SINGLE
-  # `GET /api/graph/status` (what the media zone's /graph page calls on mount) OOM-killed it — measured
-  # 2026-07-26, kernel `Memory cgroup out of memory: Killed process (uvicorn)` anon-rss:510000kB, exit
-  # 137, and the annotator's next thumbnail fetch surfaced the bare 502.
-  #
-  # Sizing, from cgroup memory.current on the live pod (11 GB corpus: 145,175 chunks, 139,407 KG
-  # entities, 290,408 relations, 507,344 mentions):
-  #   idle 124Mi → all 1154 thumbnails 139Mi → three atlas point clouds 265Mi → KG engine built 736Mi
-  #   → full concurrent mixed drive 609Mi steady, high-water 955Mi (the KG build's transient).
-  # 1536Mi = 1.6x the measured 955Mi peak; requests 768Mi covers the 609-736Mi steady working set.
-  # CPU 2 is for the thumbnail grid, measured at conc 8: 172 req/s p95 80ms at 1 core vs 310 req/s
-  # p95 46ms at 2 — the annotator opens a whole page of tiles at once.
-  # -- CPU/memory requests and limits for the explorer viewer (in-process KG engine and atlas cache).
-  viewer:
-    requests: { cpu: 200m, memory: 768Mi }
-    limits: { cpu: "2", memory: 1536Mi }
 
 # === Graceful rollouts =============================================================================
 # preStop sleep: endpoint removal must propagate to kube-proxy/the Dapr sidecar BEFORE the app receives
@@ -592,6 +548,12 @@ frontend:
   # the lakehouse with its own release (ADR 0171), so this chart names it and renders none of it.
   # -- The annotator release's Service URL the annotator zone proxies to (ANNOTATOR_API), e.g. `http://rask-annotator:8103` from deploy/fixtures/annotator. Empty renders none.
   annotatorUrl: ""
+  # The media plane's Services the explorer and annotator zones' server side proxy to (VIEWER_API, SEARCH_API). Viewer and
+  # search are clients of the lakehouse, so this chart names them and renders none of them.
+  # -- The media plane's viewer Service URL the explorer and annotator zones proxy to (VIEWER_API), e.g. `http://rask-viewer:8101`. Empty renders none.
+  viewerUrl: ""
+  # -- The media plane's search Service URL the explorer and annotator zones proxy to (SEARCH_API), e.g. `http://rask-search:8102`. Empty renders none.
+  searchUrl: ""
   # Ray Serve's HTTP ingress origin, for the zones that run inference (studio's flow builder, the
   # annotator's producer calls). Empty => the dashboard every Ray consumer names (`rask.rayServeOrigin`;
   # an external dashboard host serves the apps too), so the builder cannot list an app it is unable to call.
@@ -675,8 +637,8 @@ frontend:
     # with none of the independent-deploy payoff. One zone, four areas under /lakehouse/<area>.
     - {name: lakehouse, path: /lakehouse}
     # The lance-media zones: full BFF zones like the rest — SSR on, the shared session handle, and
-    # same-origin /<zone>/api/* proxy routes to the media Services (VIEWER_API/SEARCH_API env, rendered
-    # when explorer.enabled) and to the annotator's own release (ANNOTATOR_API, `frontend.annotatorUrl`).
+    # same-origin /<zone>/api/* proxy routes to the media plane (VIEWER_API/SEARCH_API, `frontend.viewerUrl` and
+    # `frontend.searchUrl`) and to the annotator (ANNOTATOR_API, `frontend.annotatorUrl`), each a client with its own release.
     - {name: explorer, path: /explorer}
     - {name: annotator, path: /annotator}
   # Per-user OIDC login (opt-in), shared across ALL zones — one origin, one sealed cookie, so a login on
@@ -1343,83 +1305,6 @@ maintenance:
   # -- Announce each reclamation on the catalog control topic (catalog.control.v1); needs Dapr sidecars. Off by default.
   controlEmit: false
 
-# === lance-media plane ============================================================================
-# The viewer and search services from the lance-audio checkout. Both run the `media` image, not the lakehouse's, and read
-# the corpus from the volume `corpus.mode` selects (MEDIA_READ/WRITE_BACKEND=catalog is the merge's env
-# flip, "direct" restores standalone dev). The annotator is a client of the lakehouse with its own
-# release (deploy/fixtures/annotator, ADR 0171); this chart renders none of it.
-explorer:
-  # -- Deploy the explorer pair (viewer and search services) and their rows on the cluster route.
-  enabled: false
-  # #142: set to a warehouse bucket (e.g. "s3://bind86-wh") to serve the media corpus from the
-  # GOVERNED object store instead of the mounted volume: the viewer reads it as `viewer-s3`, search
-  # as `media-s3`. "" = the disk, unchanged.
-  # -- S3 root (e.g. a warehouse bucket) the viewer serves the media corpus from (MEDIA_S3_DB_ROOT). Empty = the mounted corpus volume.
-  corpusS3Root: ""
-  # -- Path the corpus volume is mounted at, read-only, in both explorer services.
-  corpusMountPath: /media-corpus
-  # HOW the corpus volume is provided. This used to be an unconditional `hostPath` with
-  # `type: Directory` pointed at /var/media-corpus — which means explorer.enabled=true on a cluster where
-  # nobody had pre-created that directory wedged all three pods in ContainerCreating, with a kubelet
-  # event as the only diagnostic (live-proof 2026-07-28, defect 5; the plan already said no hostPath
-  # ships). Modes:
-  #   * emptyDir (DEFAULT) — the pair starts on ANY cluster with zero node preparation. The corpus
-  #     datasets are then loaded into the pod, or read through the catalog (MEDIA_READ_BACKEND=catalog).
-  #     With no dataset present the viewer's /api/health degrades honestly (db: null) instead of 404ing
-  #     — see services/viewer/api/v1/endpoints/system.py.
-  #   * pvc — the PROD posture. Set `claimName` to mount an EXISTING claim (the chart touches nothing);
-  #     leave it empty and the chart creates `<release>-media-corpus` from the fields below
-  #     (helm.sh/resource-policy: keep — the corpus outlives the release).
-  #   * hostPath — a node-staged corpus (the lance-audio runbook's posture). Now OPT-IN, and rendered
-  #     with `type: DirectoryOrCreate` so a missing directory can no longer wedge the pods.
-  corpus:
-    # -- How the corpus volume is provided: `emptyDir` (default), `pvc` (existing `claimName` or a chart-created claim) or `hostPath` (DirectoryOrCreate).
-    mode: emptyDir            # emptyDir | pvc | hostPath
-    # -- Existing PVC to mount when mode is `pvc`. Empty = the chart creates `<release>-media-corpus` (kept on uninstall).
-    claimName: ""             # mode=pvc: an existing PVC; empty => the chart creates one
-    # -- Requested size of the chart-created corpus PVC.
-    size: 50Gi                # chart-created PVC only
-    # -- Access mode of the chart-created corpus PVC; ReadWriteMany because both services read it concurrently.
-    accessMode: ReadWriteMany # chart-created PVC only — both services read it concurrently
-    # -- StorageClass of the chart-created corpus PVC. Empty = the cluster's default StorageClass.
-    storageClass: ""          # chart-created PVC only; "" => the cluster's DEFAULT StorageClass
-    # -- Node directory mounted as the corpus when mode is `hostPath`.
-    hostPath: /var/media-corpus # mode=hostPath only
-  # -- Where the explorer services read annotations from (MEDIA_READ_BACKEND): `catalog` (governed) or `direct` (standalone dev).
-  readBackend: catalog
-  # -- Where the explorer services write annotations to (MEDIA_WRITE_BACKEND): `catalog` (governed) or `direct` (standalone dev).
-  writeBackend: catalog
-  # Default: the in-release catalog Service (rendered in media.yaml); set to override.
-  # -- Catalog URL the explorer services use (MEDIA_CATALOG_URI). Empty = the in-release catalog Service.
-  catalogUri: ""
-  services:
-    # -- Explorer viewer service: `port` (its HTTP port) and `daprAppId` (its Dapr app-id).
-    viewer: { port: 8101, daprAppId: viewer }
-    # -- Explorer search service: `port` (its HTTP port) and `daprAppId` (its Dapr app-id).
-    search: { port: 8102, daprAppId: search }
-
-# === Query encoders — the vector/rerank half of media search =====================================
-# The search + viewer services are CLIENTS of two OpenAI-shaped HTTP endpoints
-# (services/search/services/encoders/{embedding,reranker}.py): Qwen3-VL-Embedding-2B on
-# `POST {embedUrl}/v1/embeddings` and Qwen3-VL-Reranker-2B on `POST {rerankUrl}/v1/rerank`. Neither
-# server is our code — lance-audio serves both from the stock `vllm/vllm-openai` image, so this is a
-# URL, not a Deployment.
-#
-# The settings default is `http://127.0.0.1:8001` / `:8002` — a sidecar-era address that inside a pod
-# is the POD's own loopback, so every vector mode 503s until these are set. Measured 2026-07-26:
-# fts + scene_fts 200, and `semantic`/`visual`/`scene`/`hybrid`/`all` + `rerank=true` all 503.
-# Leaving them empty is the HONEST off state, not an oversight: /api/health reports embed.ok=false /
-# rerank.ok=false and the media zone disables the modes with that reason.
-#
-# Point these at whatever serves the two models — an out-of-cluster fleet, or a host-run vLLM reached
-# through the node gateway. Under `networkPolicy.enabled` an off-cluster endpoint also needs a
-# `networkPolicy.extraEgress` entry, the same as the externalized S3/NATS/OTLP endpoints.
-encoders:
-  # -- Base URL of the OpenAI-shaped embedding server search calls and viewer probes (MEDIA_EMBED_URL). Empty = vector search modes report unavailable.
-  embedUrl: "" # e.g. http://encoders.internal:8001 — enables semantic / visual / scene / hybrid / all
-  # -- Base URL of the OpenAI-shaped reranker server (MEDIA_RERANK_URL). Empty = the rerank leg reports unavailable.
-  rerankUrl: "" # e.g. http://encoders.internal:8002 — enables the rerank leg on any mode
-
 # === Dapr state store — operational state (NOT analytical data) ===================================
 # Backed by the already-deployed AGE Postgres, in its own database. This is what the notification inbox
 # (#125) persists to; Lance keeps the
@@ -1626,21 +1511,6 @@ objectStore:
   # policy in the estate.
   # -- Access key of the lineage service's scoped store identity (read-only plus deletes of its own outbox); secret derives in-cluster. Required: no service presents the store's root.
   lineageAccessKey: rask-lineage
-  # THE OBJECT BROWSER, and the LOOSEST-privileged plane holding the TIGHTEST policy: the viewer only
-  # LISTS and GETS. It has no write path at all — `objects.py` calls `list_objects_v2`, `head_object`
-  # and `get_object` and nothing else — so its identity needs no PutObject and no DeleteObject, which
-  # not even lineage's can say.
-  # Named here rather than left empty because the alternative is what was measured on the running
-  # estate 2026-09-09: `AWS_ACCESS_KEY_ID=rustfsadmin` in the viewer's own env — the store's ROOT
-  # credential, on a pod that HAS a Dapr sidecar and could have asked the secret store for a scoped
-  # one. The widest credential in the estate, reached by the one path the goal forbids.
-  # -- Access key of the object browser's scoped identity (list and get only); secret derives in-cluster.
-  viewerAccessKey: rask-viewer
-  # THE MEDIA CORPUS READER: search lists and opens the corpus under `explorer.corpusS3Root` and writes nothing there,
-  # so this identity reads that root and nothing else. It reaches search from the Dapr secret `media-s3`, which only its
-  # Configuration allows and only its store login reads; a platform store holds that secret for it in production.
-  # -- Access key of search's read-only identity on the media corpus (`explorer.corpusS3Root`); secret derives in-cluster.
-  mediaAccessKey: rask-media
   # THE BACKUPS: the control-root backup reads the registry prefixes it copies, and both backups write and prune under
   # `_backups/` in `objectStore.bucket`, so this identity holds that and never the root, which on RustFS signs every
   # STS session token (ADR 0168). It reaches the backup CronJobs as files ESO writes (`<release>-backup-s3`) from the

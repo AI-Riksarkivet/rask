@@ -36,8 +36,6 @@ _DRAIN_ARMED = frozenset(
         "Deployment/rask-lineage",
         "Deployment/rask-maintenance",
         "Deployment/rask-notifications",
-        "Deployment/rask-search",
-        "Deployment/rask-viewer",
     }
 )
 
@@ -48,7 +46,7 @@ _MOVED = {"terminationGracePeriodSeconds": 61, "maintenanceTerminationGracePerio
 
 
 def _overlay(lifecycle: dict[str, int | str]) -> tuple[str, ...]:
-    return (*DEFAULT_ARGS, "--set", "explorer.enabled=true", *(arg for key, value in lifecycle.items() for arg in ("--set", f"lifecycle.{key}={value}")))
+    return (*DEFAULT_ARGS, *(arg for key, value in lifecycle.items() for arg in ("--set", f"lifecycle.{key}={value}")))
 
 
 def _runs_uvicorn(container: dict) -> bool:

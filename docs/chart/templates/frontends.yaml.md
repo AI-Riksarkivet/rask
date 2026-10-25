@@ -216,7 +216,7 @@ endpoints onto this base. Without Dex (every real deployment) it renders nothing
 so the token exchange, which carries the client secret, goes to the IdP's own
 https address and never to whatever answers `rask-dex` ([[XC-148]]).
 
-## `{{- if and $root.Values.explorer.enabled (or (eq .name "explorer") (eq .name "annotator")) }}`
+## `{{- if or (eq .name "explorer") (eq .name "annotator") }}`
 
 NO per-zone ray block here any more. It set the compute zone's `COMPUTE_SERVE_URL`
 to the IN-CLUSTER head (`rask-ray-head-svc:8000<serveRoutePrefix>`), and that address
@@ -232,7 +232,8 @@ purpose, because Ray's dashboard can PUT a deployment) lives with STUDIO_SERVE_U
 ## `- name: VIEWER_API`
 
 --- the media plane's upstreams for these two zones' BFF proxy routes -------
-(/<zone>/api/* -> the media Services). Scoped PER ZONE, not handed to every
+(/<zone>/api/* -> the media plane's Services, `frontend.viewerUrl` and `frontend.searchUrl`). Viewer and
+search are clients of the lakehouse with their own release, so the chart names them and renders neither. Scoped PER ZONE, not handed to every
 zone: one should not hold a service URL it never routes to. explorer searches
 and reads the viewer; the annotator reads the viewer for the media it draws on
 the canvas.

@@ -600,8 +600,8 @@ harvest-ead:
 	uv run python scripts/harvest_ead.py
 
 # ---- dev seeding -----------------------------------------------------------
-# A fresh install serves an EMPTY corpus (explorer.corpus.mode defaults to emptyDir), so /explorer finds
-# nothing, /annotator has no page and /lakehouse lists no tables — and "not seeded" is
+# The media plane (viewer and search) is a client the product chart does not deploy; with its release running and
+# empty, /explorer finds nothing, /annotator has no page and /lakehouse lists no tables — and "not seeded" is
 # indistinguishable from "not built". One command fixes that for the whole estate.
 seed-dev: ## Seed the dev estate: media corpus + a labeling task with items (needs a running cluster)
 	scripts/seed_dev_estate.sh
@@ -730,38 +730,6 @@ k3s-import: ## Side-load the k3s-build tarballs into k3s containerd as <image>:d
 	  sudo k3s ctr -n k8s.io images import --digests --index-name docker.io/library/$$s:dev $(K3S_IMAGE_DIR)/$$s.tar || exit 1; \
 	done
 
-# The MEDIA PLANE is on by default here, and it has to be: `frontend.apps` always includes the
-# `explorer` and `annotator` zones, and both proxy /<zone>/api/* to VIEWER_API — env the chart only
-# injects when `explorer.enabled`. That value DEFAULTS TO FALSE, so a k3s-up without this flag
-# deployed two zones with no upstream at all; their BFF fell back to a localhost dev default that
-# does not exist in-cluster and /annotator/api/datasets answered 502. Observed live on release
-# revision 25, where `explorer` had simply never been set — the zones rendered fine, which is why
-# nobody noticed. `make k3s-up EXPLORER=false` is still available for a fleet that genuinely does
-# not want the corpus volume mounted.
-EXPLORER ?= true
-
-# The corpus volume, same story one value along — and it cost three days. The chart defaults
-# `explorer.corpus.mode` to `emptyDir` so that a FRESH cluster comes up with zero node preparation,
-# which is right for an arbitrary consumer of the chart and wrong for this deploy: an emptyDir is
-# per-pod scratch, so the media plane can never hold a corpus across a restart, and a seed written
-# into one is invisible to the very pod that mounts it. On 2026-08-06 exactly that was live — a real
-# seeded corpus on a hostPath, three media pods reading an emptyDir, `{"datasets": []}`, green
-# probes on both sides. `pvc` is the chart's own prod posture and the claim carries
-# `helm.sh/resource-policy: keep`, so the corpus outlives the release.
-# `make k3s-up CORPUS=emptyDir` restores the chart default for a fleet that wants no corpus storage.
-CORPUS ?= pvc
-
-# And the access mode has to come with it. The chart defaults the corpus claim to ReadWriteMany
-# because three services read it, and values.yaml claims a single-node dev cluster "will still bind
-# an RWX claim because every pod lands on the one node — but that is luck, not a contract."
-# That is not luck and it is not true: k3s's local-path provisioner REFUSES outright —
-#   failed to provision volume with StorageClass "local-path":
-#   NodePath only supports ReadWriteOnce and ReadWriteOncePod (1.22+) access modes
-# so the claim sits Pending forever and all three media pods sit Pending behind it. RWO is correct
-# here and loses nothing: RWO restricts a volume to one NODE, not to one pod, so all three still
-# mount it on this single-node cluster. Prod (a real RWX class) keeps the chart default.
-CORPUS_ACCESS_MODE ?= ReadWriteOnce
-
 # The LOCAL dev identity values. auth.enabled + frontend.oidc.enabled are ON in the chart's own
 # defaults (a security default must fail closed), and the chart REFUSES to render OIDC without a
 # browser-reachable issuer and origin, so the local loop supplies them here. Neither is a secret: the
@@ -781,7 +749,7 @@ DEV_VENDED_ENDPOINT ?= http://$(DEV_NODE_IP):$(DEV_STORE_NODE_PORT)
 DROP_CREDENTIAL_VALUES := --set dapr.appToken=null --set frontend.oidc.sessionSecret=null \
   --set secrets.hfToken=null --set ray.auth.token=null --set age.password=null --set objectStore.secretKey=null \
   --set objectStore.maintenanceSecretKey=null \
-  --set objectStore.catalogSecretKey=null --set objectStore.lineageSecretKey=null --set objectStore.viewerSecretKey=null
+  --set objectStore.catalogSecretKey=null --set objectStore.lineageSecretKey=null
 
 # THE ONE BOOTSTRAP SECRET a dev estate is given by hand: the operator-supplied third-party credentials
 # (today the Hugging Face token), which nothing in the cluster can generate. The dev OpenBao seeds the
@@ -856,12 +824,9 @@ k3s-up: k3s-crds k3s-fixtures k3s-deps k3s-stem-check ## Apply CRDs, install fix
 	  --take-ownership \
 	  $$IMGARGS \
 	  -f deploy/values-local.yaml \
-	  --set explorer.enabled=$(EXPLORER) \
 	  --set-string auth.oidc.issuer=$(DEV_ISSUER) \
 	  --set-string frontend.oidc.publicOrigin=$(DEV_ORIGIN) \
 	  --set-string vending.endpoint=$(DEV_VENDED_ENDPOINT) \
-	  --set explorer.corpus.mode=$(CORPUS) \
-	  --set explorer.corpus.accessMode=$(CORPUS_ACCESS_MODE) \
 	  $(DROP_CREDENTIAL_VALUES) \
 	  $$HFARGS \
 	  $${AWS_ACCESS_KEY_ID:+--set-string objectStore.accessKey=$$AWS_ACCESS_KEY_ID}
@@ -918,7 +883,7 @@ k3s-converge: ## Roll a WHOLE image stem to one tag and upgrade (the resolution 
 	@# clean, which is the worst direction for this failure to go. So the recipe keeps the upgrade's
 	@# status in rc and exits with it after the cleanup.
 	@test -n "$(TAG)" || { echo "!! TAG is required, e.g. make k3s-converge TAG=main-$$(git rev-parse --short=8 HEAD)"; exit 2; }
-	@set -a; [ -f .env ] && . ./.env; set +a; 	STEM="$${STEM:-lance-rest-catalog}"; 	LIVE=$$(mktemp); 	$(HELM) get values rask -o yaml >"$$LIVE" 2>/dev/null || { echo "!! no live release to read image settings from"; exit 1; }; 	grep -q 'repository:' "$$LIVE" || { echo "!! the live release carries no image.repository; run make k3s-up first"; exit 1; }; 	echo ">> converging stem $$STEM -> $(TAG)"; 	$(HELM) upgrade --install rask ./chart --wait --wait-for-jobs --timeout 20m --take-ownership 	  -f "$$LIVE" 	  -f deploy/values-local.yaml 	  --set image.tags.$$STEM=$(TAG) 	  --set explorer.enabled=$(EXPLORER) 	  --set-string auth.oidc.issuer=$(DEV_ISSUER) 	  --set-string frontend.oidc.publicOrigin=$(DEV_ORIGIN) 	  --set explorer.corpus.mode=$(CORPUS) 	  --set explorer.corpus.accessMode=$(CORPUS_ACCESS_MODE) 	  $(DROP_CREDENTIAL_VALUES); 	rc=$$?; 	rm -f "$$LIVE"; 	[ $$rc -eq 0 ] || { echo "!! helm upgrade FAILED (exit $$rc) — the release was NOT converged, and the cluster may now disagree with it"; exit $$rc; }
+	@set -a; [ -f .env ] && . ./.env; set +a; 	STEM="$${STEM:-lance-rest-catalog}"; 	LIVE=$$(mktemp); 	$(HELM) get values rask -o yaml >"$$LIVE" 2>/dev/null || { echo "!! no live release to read image settings from"; exit 1; }; 	grep -q 'repository:' "$$LIVE" || { echo "!! the live release carries no image.repository; run make k3s-up first"; exit 1; }; 	echo ">> converging stem $$STEM -> $(TAG)"; 	$(HELM) upgrade --install rask ./chart --wait --wait-for-jobs --timeout 20m --take-ownership 	  -f "$$LIVE" 	  -f deploy/values-local.yaml 	  --set image.tags.$$STEM=$(TAG) 	  --set-string auth.oidc.issuer=$(DEV_ISSUER) 	  --set-string frontend.oidc.publicOrigin=$(DEV_ORIGIN) 	  $(DROP_CREDENTIAL_VALUES); 	rc=$$?; 	rm -f "$$LIVE"; 	[ $$rc -eq 0 ] || { echo "!! helm upgrade FAILED (exit $$rc) — the release was NOT converged, and the cluster may now disagree with it"; exit $$rc; }
 	@# SINGLE QUOTES around the suggested command, never backticks: a backtick inside an echo is
 	@# COMMAND SUBSTITUTION, so `>> ... `make k3s-up` ...` RAN a full k3s-up as a side effect of
 	@# printing advice. Observed 2026-09-22 in this target's own output — "every stem converged —
@@ -1010,7 +975,7 @@ kind-load: ## Side-load the :dev image set into the kind cluster
 # `apache/age:release_`, so the image the OpenFGA migration blocks on would be the one this target
 # never preloads.
 kind-preload: bootstrap ## Pull the chart's third-party images into the host cache, then side-load them
-	@imgs=$$(helm template rask ./chart --set singleTenant.enabled=true --set explorer.enabled=true \
+	@imgs=$$(helm template rask ./chart --set singleTenant.enabled=true \
 	    --set observability.enabled=true 2>/dev/null \
 	  | grep -oE 'image: *"?[A-Za-z0-9./:@_-]+' | sed 's/image: *"\?//' \
 	  | grep -vE "^($$(echo '$(K3S_IMAGES)' | tr ' ' '|'))(:|$$)" \

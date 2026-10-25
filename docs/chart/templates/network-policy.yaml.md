@@ -24,8 +24,7 @@ stateStore.scopes appended + uniq'd: the state-store-scoped apps' daprd dial thi
 
 ## `name: {{ include "lance.fullname" . }}-object-store-ingress`
 
-THE STORE ADMITS ITS NAMED CLIENTS ONLY, by component label: the data-plane services, the corpus readers (viewer,
-search), the scoped-users hook, which creates every platform bucket and every scoped user and so must reach
+THE STORE ADMITS ITS NAMED CLIENTS ONLY, by component label: the data-plane services, the scoped-users hook, which creates every platform bucket and every scoped user and so must reach
 the store before anything else can, and both backup CronJobs (`backup-pg`, `backup-control-root`), each writing under
 `_backups/`. A backup pod absent from the list is dropped in silence under default-deny and its CronJob stays green
 while nothing is copied. The rule cannot narrow the admin API, which RustFS serves on the S3 port: that plane is held

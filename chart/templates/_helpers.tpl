@@ -648,7 +648,6 @@ catalog maintenance
 {{- $v := .Values -}}{{- $root := . -}}
 {{- $routes := dict "lineage" (list "governance_prober") "notifications" (list "member_expander") -}}
 {{- $names := list "lineage" -}}
-{{- if $v.explorer.enabled }}{{ range $n, $_ := $v.explorer.services }}{{ $names = append $names $n }}{{ end }}{{ end -}}
 {{- range $n, $s := $v.services }}{{ if and (not (has $n (list "catalog" "lineage"))) (or $s.frontDoor $v.singleTenant.enabled) $s.governedAuth }}{{ $names = append $names $n }}{{ end }}{{ end -}}
 {{- $out := dict -}}
 {{- if $v.auth.enabled -}}
@@ -693,35 +692,12 @@ catalog maintenance
 {{- end }}
 {{- end -}}
 
-{{- define "lance.corpusVolume" -}}
-{{- $corpus := .Values.explorer.corpus | default dict -}}
-{{- $mode := $corpus.mode | default "emptyDir" -}}
-{{- if not (has $mode (list "emptyDir" "pvc" "hostPath")) -}}
-{{- fail (printf "rask chart: explorer.corpus.mode=%q is not one of emptyDir|pvc|hostPath" $mode) -}}
-{{- end -}}
-- name: corpus
-{{- if eq $mode "pvc" }}
-  persistentVolumeClaim:
-    claimName: {{ $corpus.claimName | default (printf "%s-media-corpus" (include "lance.fullname" .)) | quote }}
-{{- else if eq $mode "hostPath" }}
-  hostPath: { path: {{ $corpus.hostPath | default "/var/media-corpus" | quote }}, type: DirectoryOrCreate }
-{{- else }}
-  emptyDir: {}
-{{- end }}
-{{- end -}}
-
 {{- define "lance.bootstrapJobDeadline" -}}
 activeDeadlineSeconds: 1800
 {{- end -}}
 
 {{- define "lance.objectStoreAudience" -}}
 {{- required "objectStore.identity.audience names the audience the catalog's store token is projected for, which the store trusts as its identity provider's client; the catalog holds no store key (ADR 0170)" .Values.objectStore.identity.audience -}}
-{{- end -}}
-
-{{- define "lance.mediaIdentity" -}}
-{{- if and .Values.explorer.enabled .Values.explorer.corpusS3Root -}}
-{{- required "objectStore.mediaAccessKey names search's read-only identity on explorer.corpusS3Root; it never presents the store's root (ADR 0168)" .Values.objectStore.mediaAccessKey -}}
-{{- end -}}
 {{- end -}}
 
 {{- define "lance.backupIdentity" -}}
@@ -754,14 +730,6 @@ scoped_secret() {
   (dict "app" $v.services.lineage.daprAppId "sa" "lineage" "api" (concat (list "lineage-s3" "dapr-app-token") (compact (list $v.services.lineage.forward.authSecret.name)) (ternary $everySigner list (and $v.auth.enabled ($v.signing).enforce))) "bus" true) -}}
 {{- if $v.maintenance.enabled -}}
 {{- $apps = append $apps (dict "app" $v.maintenance.daprAppId "sa" "maintenance" "api" (concat (list "maintenance-s3" "dapr-app-token") (ternary $everySigner list (and $v.auth.enabled $doors $v.maintenance.arrivalEnabled))) "bus" (or $v.maintenance.arrivalEnabled $v.maintenance.lineageEmit (and $v.catalog.controlEmit $v.maintenance.controlEmit))) -}}
-{{- end -}}
-{{- if $v.explorer.enabled -}}
-{{- range $name, $svc := $v.explorer.services -}}
-{{- $api := list -}}
-{{- if and (eq $name "viewer") $v.storage.stores }}{{- range $v.storage.stores }}{{- $api = append $api .secret }}{{- end }}{{- end -}}
-{{- if $v.explorer.corpusS3Root }}{{- $api = append $api (ternary "viewer-s3" "media-s3" (eq $name "viewer")) }}{{- end -}}
-{{- $apps = append $apps (dict "app" ($svc.daprAppId | default $name) "sa" $name "api" $api "bus" false) -}}
-{{- end -}}
 {{- end -}}
 {{- range $name, $svc := $v.services -}}
 {{- if and (not (has $name (list "catalog" "lineage"))) (or $svc.frontDoor $v.singleTenant.enabled) -}}
@@ -1001,11 +969,6 @@ keys_shaped() { case "$1" in *,) return 1 ;; *,*) pub_shaped "${1%%,*}" && pub_s
 {{- define "rask.apiRoutes" -}}
 {{- $root := . -}}
 {{- $rows := list -}}
-{{- if .Values.explorer.enabled -}}
-{{- $media := .Values.explorer.services -}}
-{{- $rows = append $rows (dict "prefix" "/api/explorer/search" "component" "search" "service" (printf "%s-search" (include "lance.fullname" $root)) "port" $media.search.port "rewrite" "/api/search") -}}
-{{- $rows = append $rows (dict "prefix" "/api/explorer" "component" "viewer" "service" (printf "%s-viewer" (include "lance.fullname" $root)) "port" $media.viewer.port "rewrite" "/api") -}}
-{{- end -}}
 {{- $rows = append $rows (dict "prefix" (include "rask.catalogPublicPrefix" $root) "component" "catalog" "service" (printf "%s-catalog" (include "lance.fullname" $root)) "port" .Values.services.catalog.port "rewrite" "") -}}
 {{- $rows = append $rows (dict "prefix" "/api/lineage" "component" "lineage" "service" (printf "%s-lineage" (include "lance.fullname" $root)) "port" .Values.services.lineage.port "rewrite" "/") -}}
 {{- $prefix := .Values.config.RASK_API_PREFIX -}}

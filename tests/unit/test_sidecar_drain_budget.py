@@ -42,7 +42,7 @@ def _sidecar_pods() -> dict[str, dict[str, str]]:
     from test_invariants import _rendered_docs  # noqa: PLC0415
 
     found: dict[str, dict[str, str]] = {}
-    for doc in _rendered_docs("explorer.enabled=true"):
+    for doc in _rendered_docs():
         if doc.get("kind") not in {"Deployment", "StatefulSet"}:
             continue
         template = doc["spec"]["template"]

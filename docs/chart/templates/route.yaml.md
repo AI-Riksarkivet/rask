@@ -45,19 +45,17 @@ whatever host its listener accepts (`localhost`, the node's address), and the ki
 `<release>-api`: one rule per public `/api/*` prefix, ranged from the `rask.apiRoutes` helper
 (`_helpers.tpl`). The helper is the ONE route table — the NetworkPolicy edge rules
 (`network-policy.yaml`, `<release>-edge-<component>`) range the same list, so a prefix the route
-publishes is always a port the policy admits. Gateway API matches the longest prefix first, so
-`/api/explorer/search` wins over `/api/explorer` regardless of rule order.
+publishes is always a port the policy admits. Gateway API matches the longest prefix first, regardless of
+rule order.
 
 | Public prefix | Service | Path at the service |
 | --- | --- | --- |
-| `/api/explorer/search` | `<fullname>-search` | `/api/search…` |
-| `/api/explorer` | `<fullname>-viewer` | `/api…` |
 | `/api/catalog` | `<fullname>-catalog` | `/…` |
 | `/api/lineage` | `<fullname>-lineage` | `/…` |
 | `/api/notifications` | `<release>-notifications` | unchanged |
 
-The explorer rows render only with `explorer.enabled`; notifications only when it is
-front-door (`services.notifications.frontDoor`) or the install is single-tenant. Flows is a client with no row here. Compute's `/api/ray` and
+Notifications' row renders only when it is front-door (`services.notifications.frontDoor`) or the install is
+single-tenant. Flows, viewer and search are clients with no row here. Compute's `/api/ray` and
 `/api/serve` are not here either: the compute fixture chart renders its own HTTPRoute
 (`deploy/fixtures/compute/chart/templates/route.yaml`).
 

@@ -116,7 +116,7 @@ def test_every_first_party_deployment_is_hardened() -> None:
     the first.
     """
     unhardened: list[str] = []
-    for doc in _first_party_deployments(_rendered_docs("explorer.enabled=true")):
+    for doc in _first_party_deployments(_rendered_docs()):
         name = doc["metadata"]["name"]
         for container in doc["spec"]["template"]["spec"].get("containers") or []:
             missing = [
@@ -178,7 +178,6 @@ def test_the_hook_creates_every_platform_bucket_and_every_zone() -> None:
     """
     rendered = _helm_template(
         "singleTenant.enabled=true",
-        "explorer.enabled=true",
         "objectStore.bucket=root-x",
         "objectStore.buckets={extra-platform}",
         "medallion.buckets.gold=acme-gold",
@@ -198,7 +197,7 @@ def test_a_renamed_bucket_leaves_nothing_behind_under_its_old_name() -> None:
     """
     values = yaml.safe_load((CHART / "values.yaml").read_text())
     spellings = {"root-x", values["objectStore"]["bucket"]}
-    rendered = _helm_template("singleTenant.enabled=true", "explorer.enabled=true", "objectStore.bucket=root-x", "objectStore.buckets=null")
+    rendered = _helm_template("singleTenant.enabled=true", "objectStore.bucket=root-x", "objectStore.buckets=null")
 
     buckets = _hook_buckets(rendered)
 
@@ -219,7 +218,7 @@ def test_every_dapr_annotated_pod_carries_the_injector_webhook_label() -> None:
     """
     import yaml
 
-    rendered = _helm_template("singleTenant.enabled=true", "explorer.enabled=true")
+    rendered = _helm_template("singleTenant.enabled=true")
     docs = [d for d in yaml.load_all(rendered, Loader=FAST_LOADER) if d]
 
     annotated = 0
@@ -568,7 +567,7 @@ def test_every_ray_consumer_names_one_cluster_or_the_render_refuses(overlay: tup
     The engine is bring-your-own ([[XC-125]], ADR 0153): no render holds a `ray.io` object or the KubeRay operator, so
     the address is always one the estate names (the local overlay names the ray-cluster fixture's head Service).
     """
-    text = chart_render.render_chart_text(CHART, "--set", "explorer.enabled=true", *overlay, base=chart_render.UNNAMED_RAY_ARGS)
+    text = chart_render.render_chart_text(CHART, *overlay, base=chart_render.UNNAMED_RAY_ARGS)
     docs = [doc for doc in yaml.load_all(text, Loader=FAST_LOADER) if isinstance(doc, dict)]
     named: dict[str, set[str]] = {}
     for doc in docs:
@@ -593,7 +592,7 @@ def test_every_bus_client_dials_the_bus_the_estate_names_and_the_render_runs_non
     every pub/sub Component and the stream Job dial that one address, nothing else reads a NATS address, and no render holds a NATS
     server or its JetStream volumes (nats-box's CLI, which the stream Job and the dev mint run, is a client). That the
     render refuses with no bus named is the prerequisite gate in test_no_credential_is_carried_by_the_render.py."""
-    docs = chart_render.render(*chart_render.DEFAULT_ARGS, "--set", "explorer.enabled=true", "--set", "networkPolicy.enabled=true")
+    docs = chart_render.render(*chart_render.DEFAULT_ARGS, "--set", "networkPolicy.enabled=true")
     dialled: dict[str, set[str]] = {}
     for doc in docs:
         if doc.get("kind") == "Component" and (doc.get("spec") or {}).get("type") == "pubsub.jetstream":
@@ -866,8 +865,6 @@ _DOCS_ENV_BY_WORKLOAD: dict[str, str] = {
     "catalog": "LANCE_REST_DOCS",
     "lineage": "LINEAGE_DOCS",
     "maintenance": "MAINTENANCE_DOCS",
-    "viewer": "MEDIA_DOCS",
-    "search": "MEDIA_DOCS",
 }
 
 
@@ -905,11 +902,7 @@ def test_the_chart_TURNS_DOCS_OFF_by_default_and_ON_when_asked() -> None:
     would pass just as well against a chart that never mentions docs at all — which is exactly the
     state this finding describes.
     """
-    # `explorer.enabled` is false by default (a fresh cluster must come up with no node
-    # preparation), so viewer/search render only when asked for. Enable it here or the gate
-    # silently covers three of the five apps.
-    _ON = "explorer.enabled=true"
-    off = _app_containers(_rendered_docs(_ON))
+    off = _app_containers(_rendered_docs())
     missing = sorted(set(_DOCS_ENV_BY_WORKLOAD) - set(off))
     assert not missing, (
         f"these workloads render no docs env var at all: {missing} — a service whose docs flag no manifest sets is one whose default nobody chose"
@@ -918,7 +911,7 @@ def test_the_chart_TURNS_DOCS_OFF_by_default_and_ON_when_asked() -> None:
         var = _DOCS_ENV_BY_WORKLOAD[workload]
         assert _env_of(container)[var].lower() in {"false", "0"}, f"{workload} renders {var}={_env_of(container)[var]} by default — docs are opt-in"
 
-    on = _app_containers(_rendered_docs(_ON, "docs.enabled=true"))
+    on = _app_containers(_rendered_docs("docs.enabled=true"))
     for workload in _DOCS_ENV_BY_WORKLOAD:
         var = _DOCS_ENV_BY_WORKLOAD[workload]
         value = _env_of(on[workload])[var]

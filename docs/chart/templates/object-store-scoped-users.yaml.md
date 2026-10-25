@@ -7,7 +7,7 @@ every release revision, under a 1 MiB ceiling. Each section is headed by the tem
 
 SCOPED USERS AND PLATFORM BUCKETS — the one provisioning step for the development store, rendered whenever
 `objectStore.enabled`. It creates every bucket the estate makes for itself (below), every plane identity named in
-values.yaml `objectStore` (maintenance, lineage, viewer, the media corpus readers, the backups, and each multi-base data
+values.yaml `objectStore` (maintenance, lineage, the backups, and each multi-base data
 base), and the catalog's policy, named after its ServiceAccount and held by no user: the store grants it to the token
 the catalog's pod projects (ADR 0170). Without a step in the release, a scoped identity is a values knob only a hand-run
 admin session can turn, and a fresh install comes up on the store's root. It is the only workload that presents the root
@@ -214,28 +214,6 @@ other plane. That is the blast-radius change; a credential that can rewrite the 
 that governs it is root wearing another name, which is exactly what
 this hook's own header warns about. `s3:ForceDelete*` is also absent: `s3:*` does not imply it
 on RustFS, and the purge needs only `s3:DeleteBucket`.
-
-## `cat >/tmp/policies/rask-viewer.json <<'POLICY'`
-
-NO WRITE OF ANY KIND, and it can have none: the object browser has no write path
-at all. `viewer/api/v1/endpoints/objects.py` calls `list_objects_v2`, `head_object` and
-`get_object`, and nothing else — so this identity needs no `PutObject` and no
-`DeleteObject`, which not even lineage's (one scoped delete on its own outbox) can say.
-
-THE READ STAYS WIDE ON PURPOSE. A browser that cannot list a bucket does not report a
-permission error to the operator — it renders the bucket as EMPTY, which is the same
-failure the store-registry fix already paid for once (`_client_for`: a bucket holding
-millions of objects rendered as empty, and nothing errored). Narrowing the read here
-would buy little and reintroduce the least debuggable failure this plane has.
-
-## `cat >/tmp/policies/rask-media.json <<'POLICY'`
-
-THE MEDIA CORPUS READER, search (`lance.mediaIdentity`): READ ONE ROOT, write nothing. It lists and opens the corpus
-under `explorer.corpusS3Root` and writes nothing there, so the grant is `GetBucketLocation` and `ListBucket` on the corpus bucket, the list held
-to the root's prefix by an `s3:prefix` condition on both `<p>` and `<p>/*`, and `GetObject` under that prefix. With
-no prefix in the root the grant is the whole corpus bucket, and still read-only. The narrowing is possible here
-because the corpus root is a render-time value, unlike the warehouse buckets the maintenance and catalog policies
-must reach.
 
 ## `cat >/tmp/policies/rask-backup.json <<'POLICY'`
 

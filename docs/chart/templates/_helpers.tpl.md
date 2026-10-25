@@ -50,7 +50,7 @@ only readers, since on RustFS the root secret signs every STS session token (ADR
 
 Dapr sidecar pod annotations (no-op unless dapr.enabled) — the ONE annotation surface for the whole
 estate: the rask fleet AND the lance planes (services.yaml catalog/lineage,
-maintenance.yaml, explorer.yaml viewer/search) all render
+maintenance.yaml) all render
 THIS helper, so the sidecar contract can never drift between planes (DAPRIFY 2026-07-27). Carries the full union of what the two planes shipped:
   - enabled / app-id / app-port / log-level (the original rask surface)
   - max-body-size (when dapr.maxBodySize is set — Dapr's 4Mi default rejects multi-image batch uploads)
@@ -223,7 +223,7 @@ outnumbered `GET /api/health` three to one.
 lance-ns — grafted verbatim from lance-ns main@083b49a chart/templates/_helpers.tpl.
 
 Every one of these is referenced by a grafted lance template (services.yaml, maintenance.yaml,
-explorer.yaml, fleet.yaml, object-store-scoped-users.yaml, openbao-seed.yaml, age-postgres.yaml,
+fleet.yaml, object-store-scoped-users.yaml, openbao-seed.yaml, age-postgres.yaml,
 otel-collector.yaml, network-policy.yaml, ha.yaml, …). None of them
 was renamed: no lance name collided with a rask name.
 
@@ -712,8 +712,8 @@ block never asked for.
 
 Safe to set estate-wide: these change behaviour ONLY where a route declares an auth dependency,
 so a service with no gated route is unaffected and cannot quietly 401 a surface nobody gated.
-(explorer.yaml's reasoning, from #90, where scoping the block to one service left the one that
-streams page IMAGE BYTES wide open.)
+(Measured in #90: scoping the block to one service left the one that streamed page IMAGE BYTES
+wide open.)
 
 The acknowledgement a service needs when authentication is deliberately OFF.
 
@@ -831,35 +831,6 @@ business making. The store id is the SAME auth.fgaStoreId the bootstrap-admin Jo
 so a pinned store can never diverge from the store the services check against. Unset =
 provision-by-name at boot (`lance-catalog`).
 
-## `{{- define "lance.corpusVolume" -}}`
-
----------------------------------------------------------------------------------------------
-THE CORPUS VOLUME — one definition, because a writer and a reader that disagree are INVISIBLE.
-
-Measured 2026-08-06, and it had been true for three days: `job/rask-seed-corpus` really did
-seed a corpus (10 chunk rows, 3 documents, an FTS index over chunks.text) and the viewer really
-did answer `{"datasets": []}`. Neither was broken. They mounted a volume with the same NAME and
-a different SOURCE:
-
-    seed job                  corpus -> hostPath /home/gabriel/media-corpus
-    viewer/search/annotator   corpus -> emptyDir {}          (explorer.corpus.mode default)
-
-A THIRD path was in play: explorer.corpus.hostPath defaults to /var/media-corpus, so even
-flipping mode=hostPath would have missed the seeded bytes. Three paths, one volume name.
-
-Nothing could catch it. The seed exits 0 (it wrote its files). The viewer is 1/1 Ready and
-answers 200 (it read its directory). `helm template` renders. Every probe is green and the
-product is empty — the failure only exists in the RELATION between two manifests, which is
-exactly the thing no single manifest can assert.
-
-So the volume source is defined ONCE, here, and every mount site includes it. A new writer
-cannot pick its own source without deleting this call, which is a visible edit rather than a
-silent divergence.
-
-Modes are unchanged (emptyDir | pvc | hostPath) and so is their rationale — see values.yaml
-`explorer.corpus`. What changes is that they are no longer transcribed per site.
----------------------------------------------------------------------------------------------
-
 ## `{{- define "lance.bootstrapJobDeadline" -}}`
 
 lance.bootstrapJobDeadline — the wall-clock ceiling on a bootstrap Job.
@@ -886,15 +857,6 @@ both halves: the token the catalog's pod mounts (`lance.identityTokens`) and the
 identity provider's (`deploy/fixtures/rustfs` `identityProvider.clientId`, which
 `tests/unit/test_a_provisioned_identity_is_one_the_service_uses.py` holds equal). `required`: a blank audience would
 leave the catalog no identity at the store, and there is no key pair to fall back to.
-
-## `{{- define "lance.mediaIdentity" -}}`
-
-The corpus reader's access key, `objectStore.mediaAccessKey`, when explorer serves a corpus
-(`explorer.enabled` and `explorer.corpusS3Root`), else empty. Every consumer branches on this one value: the
-scoped-users hook's `rask-media` user and policy, the seed's `secret/media-s3`, and search's
-`MEDIA_S3_ACCESS_KEY_ID` (explorer.yaml), so the user the store holds, the secret the store's seed writes and the
-key a pod presents cannot disagree. `required` while a corpus is served: a blank key would leave the reader with
-no identity, and it never falls back to the root (ADR 0168).
 
 ## `{{- define "lance.backupIdentity" -}}`
 
@@ -926,7 +888,7 @@ allows `api` (`lance.daprAppSpec`), its store role's policy grants `api` and `co
 its owner, so nothing restates it.
 
 The split is by READER SET, because a store and Dapr both grant by secret name: a secret two apps read is one secret
-both name (`dapr-app-token`, `dapr-state`, `media-s3`), never a copy, so a rotation writes one place. The verifier
+both name (`dapr-app-token`, `dapr-state`), never a copy, so a rotation writes one place. The verifier
 lists follow the env the same flags render (`LINEAGE_SIGNERS` under `signing.enforce`, the doors under
 `signing.doors`), and a signer reads its own pair. The pub/sub condition restates `dapr-component.yaml`'s, so
 `tests/unit/test_a_dapr_component_names_a_secret_something_can_resolve.py` checks, over every overlay CI deploys, that
@@ -1174,8 +1136,7 @@ goes straight to the store with the sidecar's login (`pkg/runtime/processor/secr
 or the state store's DSN is resolved for the component and never served to the app. What the store itself refuses is
 the role's policy, the second layer, which holds even for a request that never asks the sidecar.
 
-Every secret a reader names is known at render: the viewer's per-store credentials come from the store registry,
-`RASK_STORES`, which the chart renders from `storage.stores`. A data base holds no credential of its own ([[LH-286]]),
+Every secret a reader names is known at render. A data base holds no credential of its own ([[LH-286]]),
 and a warehouse record's `credential_ref` is consumed by no door ([[LH-205]]).
 
 ## `allowedSecrets:`
@@ -1269,11 +1230,9 @@ THE ONE ROUTE TABLE: the public `/api/*` prefixes the cluster route publishes, a
 `network-policy.yaml` renders one `<release>-edge-<component>` policy per row admitting that port, so a
 published prefix and an admitted port come from one list and cannot drift.
 
-The rows mirror the gates of the templates that render each backend: the media trio only under
-`explorer.enabled` (explorer.yaml), catalog and lineage always (services.yaml), notifications
-only when front-door or single-tenant (fleet.yaml's own condition), so the route never names a Service
-that did not render. The more specific `/api/explorer/*` rows precede `/api/explorer` for the reader;
-Gateway API matches the longest prefix regardless of order.
+The rows mirror the gates of the templates that render each backend: catalog and lineage always
+(services.yaml), notifications only when front-door or single-tenant (fleet.yaml's own condition), so the
+route never names a Service that did not render.
 
 A new public prefix is a row here plus a row in
 `tests/unit/test_the_cluster_route_names_one_backend_per_api_prefix.py`. Compute's `/api/ray` and

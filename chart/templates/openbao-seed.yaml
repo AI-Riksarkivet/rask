@@ -182,7 +182,7 @@ data:
       done
       root=$(cat "$G/object-store-secret-key")
       (umask 077; printf 'postgres://%s:%s@%s:%s/%s?sslmode=disable' {{ .Values.age.user | squote }} "$(cat "$G/postgres-password")" {{ include "lance.ageConnectHost" . | squote }} {{ .Values.age.port | squote }} {{ .Values.age.stateDb | squote }} > "$HOME/seed/dapr-state-dsn")
-      {{- range $id := list .Values.objectStore.maintenanceAccessKey .Values.objectStore.lineageAccessKey .Values.objectStore.viewerAccessKey (include "lance.mediaIdentity" .) (include "lance.backupIdentity" .) | compact | uniq }}
+      {{- range $id := list .Values.objectStore.maintenanceAccessKey .Values.objectStore.lineageAccessKey (include "lance.backupIdentity" .) | compact | uniq }}
       scoped_secret {{ $id }} "$HOME/seed/scoped-{{ $id }}"
       {{- end }}
     }
@@ -205,10 +205,6 @@ data:
     bao kv put secret/object-store-root object-store-access-key={{ $.Values.objectStore.accessKey }} \
       object-store-secret-key=@"$G/object-store-secret-key" >/dev/null
     echo "seeded secret/object-store-root into OpenBao"
-    {{- end }}
-    {{- with include "lance.mediaIdentity" $ }}
-    bao kv put secret/media-s3 access_key={{ . }} secret_key=@"$HOME/seed/scoped-{{ . }}" >/dev/null
-    echo "seeded secret/media-s3 into OpenBao"
     {{- end }}
     {{- with include "lance.backupIdentity" $ }}
     bao kv put secret/backup-s3 access_key={{ . }} secret_key=@"$HOME/seed/scoped-{{ . }}" >/dev/null
@@ -241,12 +237,6 @@ data:
     {{- range $signers }}
     put_pair {{ . }}
     {{- end }}
-    {{- end }}
-    {{- if $.Values.objectStore.viewerAccessKey }}
-    bao kv put secret/viewer-s3 \
-      access_key={{ $.Values.objectStore.viewerAccessKey }} \
-      secret_key=@"$HOME/seed/scoped-{{ $.Values.objectStore.viewerAccessKey }}" >/dev/null
-    echo "seeded secret/viewer-s3 into OpenBao"
     {{- end }}
 
     {{- if $.Values.secrets.hfTokenInStore }}

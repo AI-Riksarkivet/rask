@@ -16,8 +16,6 @@ from __future__ import annotations
 import json
 from pathlib import PurePosixPath
 
-import pytest
-
 from tests.unit.chart_render import DEFAULT_ARGS, containers, env_of, render
 
 
@@ -44,7 +42,7 @@ def test_openfga_runs_oidc_against_the_mirrored_cluster_issuer_with_no_playgroun
 
 #: The accounts that write tuples ([[LH-442]]): the catalog and maintenance, plus the jobs that publish the model and seed the
 #: estate's grants, whatever else the release runs. Every other governed service decides through the catalog.
-_WRITERS = {"default": {"catalog", "maintenance", "jobs", "hooks"}, "every-client": {"catalog", "maintenance", "jobs", "hooks"}}
+_WRITERS = {"catalog", "maintenance", "jobs", "hooks"}
 
 
 def _projected(pod: dict, container: dict, path: str) -> set[tuple[str | None, str]]:
@@ -59,11 +57,8 @@ def _projected(pod: dict, container: dict, path: str) -> set[tuple[str | None, s
     }
 
 
-@pytest.mark.parametrize("overlay", [pytest.param((), id="default"), pytest.param(("--set", "explorer.enabled=true"), id="every-client")])
-def test_only_a_tuple_writer_holds_an_openfga_token_and_every_other_governed_service_decides_through_the_catalog(
-    request: pytest.FixtureRequest, overlay: tuple[str, ...]
-) -> None:
-    docs = render(*DEFAULT_ARGS, "--set", "networkPolicy.enabled=true", *overlay)
+def test_only_a_tuple_writer_holds_an_openfga_token_and_every_other_governed_service_decides_through_the_catalog() -> None:
+    docs = render(*DEFAULT_ARGS, "--set", "networkPolicy.enabled=true")
     audience = _openfga(docs)["OPENFGA_AUTHN_OIDC_AUDIENCE"]
     pods = {f"{d['kind']}/{d['metadata']['name']}": d["spec"]["template"]["spec"] for d in docs if d.get("kind") in {"Deployment", "Job"}}
     subjects_ref = next(
@@ -75,7 +70,7 @@ def test_only_a_tuple_writer_holds_an_openfga_token_and_every_other_governed_ser
     )
     config_map = next(d for d in docs if d.get("kind") == "ConfigMap" and d["metadata"]["name"] == subjects_ref["name"])
     admitted = set(config_map["data"][subjects_ref["key"]].split(","))
-    writers = {f"system:serviceaccount:default:rask-sa-{w}" for w in _WRITERS[request.node.callspec.id]}
+    writers = {f"system:serviceaccount:default:rask-sa-{w}" for w in _WRITERS}
     seeded = json.loads(next(env_of(c)["FGA_DECISION_ROLES"] for w, _n, c in containers(docs) if w == "Job/rask-bootstrap-admin"))
     reaching = next(d for d in docs if d.get("kind") == "NetworkPolicy" and d["metadata"]["name"] == "rask-openfga")["spec"]["ingress"][0]["from"]
     reachers = {v for peer in reaching for e in peer["podSelector"]["matchExpressions"] for v in e["values"]}

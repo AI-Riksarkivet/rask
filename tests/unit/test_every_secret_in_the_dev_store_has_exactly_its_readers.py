@@ -36,7 +36,6 @@ from tests.unit.chart_render import REPO, containers, render, render_fixture, se
 #: The dev estate as `make k3s-up` renders it, with the planes that hold a credential switched on.
 DEV_ESTATE: Final = (
     "--set", "image.localImages=true", "-f", str(REPO / "deploy/values-local.yaml"),
-    "--set", "explorer.enabled=true", "--set", "search.enabled=true",
     "--set", "backups.pgDump.enabled=true", "--set", "backups.controlRoot.enabled=true",
 )  # fmt: skip
 
@@ -48,7 +47,7 @@ STORE_POD: Final = "Deployment/rask-openbao"
 _DATA_PATH: Final = re.compile(r"^secret/data/([^/*]+)$")
 
 _DOORS: Final = frozenset({"catalog", "lineage", "maintenance", "notifications"})
-_SIDECARS: Final = frozenset(f"Deployment/rask-{app}" for app in ("catalog", "lineage", "maintenance", "notifications", "search", "viewer"))
+_SIDECARS: Final = frozenset(f"Deployment/rask-{app}" for app in ("catalog", "lineage", "maintenance", "notifications"))
 _ZONES: Final = frozenset(f"Deployment/rask-web-{zone}" for zone in ("home", "lakehouse", "explorer", "annotator", "compute", "models", "studio"))
 _POSTGRES_CLIENTS: Final = frozenset({"StatefulSet/rask-age", "Deployment/rask-openfga", "Job/rask-openfga-migrate-r1", "CronJob/rask-pg-backup"})
 _CATALOG_VERIFIERS: Final = frozenset({"catalog", "lineage", "maintenance", "notifications"})
@@ -58,8 +57,6 @@ _MAINTENANCE_VERIFIERS: Final = frozenset({"catalog", "lineage", "maintenance", 
 EXPECTED: Final[dict[str, dict[str, frozenset[str]]]] = {
     "lineage-s3": {"store": frozenset({"lineage"}), "dapr": frozenset({"lineage"})},
     "maintenance-s3": {"store": frozenset({"maintenance"}), "dapr": frozenset({"maintenance"})},
-    "viewer-s3": {"store": frozenset({"viewer"}), "dapr": frozenset({"viewer"})},
-    "media-s3": {"store": frozenset({"search"}), "dapr": frozenset({"search"})},
     "oidc-client": {"store": frozenset({"eso"}), "pods": _ZONES},
     "dapr-app-token": {"store": _DOORS | {"eso"}, "dapr": _DOORS, "pods": _SIDECARS},
     "signing-key-rask-sa-catalog": {"store": frozenset({"catalog"}), "dapr": frozenset({"catalog"})},

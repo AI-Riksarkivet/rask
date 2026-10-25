@@ -123,18 +123,10 @@ object, as the store's non-optional secret volume needs them.
 `tests/unit/test_every_secret_in_the_dev_store_has_exactly_its_readers.py` follows it through every path a pod reads a
 secret by.
 
-## `bao kv put secret/media-s3 access_key={{ . }} secret_key=@"$HOME/seed/scoped-{{ . }}" >/dev/null`
-
-THE MEDIA CORPUS READER'S IDENTITY (values.yaml `objectStore.mediaAccessKey`), seeded when explorer serves a corpus
-(`lance.mediaIdentity`). Search reads it from its sidecar as `MEDIA_S3_SECRET_KEY=media-s3`
-(explorer.yaml), with the `access_key`/`secret_key` fields the viewer's `viewer-s3` carries, and no other app's
-Configuration or policy names it. Its secret is derived from the root in `derive()` by `lance.scopedSecretFn`, the function
-the scoped-users hook runs, so the store's user and this field agree without either handing the other a key.
-
 ## `bao kv put secret/backup-s3 access_key={{ . }} secret_key=@"$HOME/seed/scoped-{{ . }}" >/dev/null`
 
 THE BACKUPS' IDENTITY (values.yaml `objectStore.backupAccessKey`), seeded when either backup CronJob is on
-(`lance.backupIdentity`) and derived in `derive()` like `media-s3`. The CronJobs carry no sidecar, so ESO reads this
+(`lance.backupIdentity`) and derived in `derive()` like the other scoped identities. The CronJobs carry no sidecar, so ESO reads this
 path (its policy names it) and writes `<release>-backup-s3`; no app's policy names it.
 
 ## `c="$HOME/seed/otel-collector-export"`
@@ -149,13 +141,6 @@ under the same create-if-absent rule as the Collector's. The `notifications-emai
 `password` in the notifications sidecar, whose store policy names it through `lance.storeReads`. The dev relay
 (the `mailpit` fixture) asks for no authentication, so the dev pair is one only the store holds; a platform's relay
 gets the pair its operator puts in the platform's store.
-
-## `bao kv put secret/viewer-s3 \`
-
-THE OBJECT BROWSER'S CREDENTIALS, as their own secret. `objects.py::_creds` fetches a per-STORE secret by name and
-reads `access_key`/`secret_key` from it, so the store registry can point a store at a credential the viewer alone
-reads; with no `secret` on a store the viewer would read process env, putting a root S3 key in the environment of a
-pod that HAS a Dapr sidecar.
 
 ## `bao auth enable -path={{ $.Values.externalSecrets.kubernetesAuthPath }} kubernetes 2>/dev/null || echo "kub...`
 

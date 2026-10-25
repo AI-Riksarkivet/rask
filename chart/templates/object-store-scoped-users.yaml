@@ -1,8 +1,6 @@
 {{- $maint := .Values.objectStore.maintenanceAccessKey }}
 {{- $lineage := .Values.objectStore.lineageAccessKey }}
-{{- $viewer := .Values.objectStore.viewerAccessKey }}
 {{- $catalogAccount := include "lance.saAccount" (list . "catalog") }}
-{{- $media := include "lance.mediaIdentity" . }}
 {{- $backup := include "lance.backupIdentity" . }}
 {{- if .Values.objectStore.enabled }}
 {{- range $phase := ternary (list "install") (list "pre-upgrade" "post-upgrade") .Release.IsInstall }}
@@ -66,7 +64,7 @@ spec:
               set -e
               root=$(cat "$ROOT_FILE")
               {{- include "lance.scopedSecretFn" $ | nindent 14 }}
-              {{- range $id := list $maint $lineage $viewer $media $backup | compact | uniq }}
+              {{- range $id := list $maint $lineage $backup | compact | uniq }}
               scoped_secret {{ $id }} "$KEYS/{{ $id }}"
               {{- end }}
       containers:
@@ -203,53 +201,6 @@ spec:
               }
               POLICY
 
-              {{- if $viewer }}
-              cat >/tmp/policies/rask-viewer.json <<'POLICY'
-              {
-                "Version": "2012-10-17",
-                "Statement": [
-                  {
-                    "Sid": "BrowseAnythingItCanShow",
-                    "Effect": "Allow",
-                    "Action": ["s3:ListBucket", "s3:GetBucketLocation", "s3:GetObject"],
-                    "Resource": ["arn:aws:s3:::*", "arn:aws:s3:::*/*"]
-                  }
-                ]
-              }
-              POLICY
-              {{- end }}
-
-              {{- with $media }}
-              {{- $corpus := splitList "/" (trimSuffix "/" (trimPrefix "s3://" $.Values.explorer.corpusS3Root)) }}
-              {{- $prefix := join "/" (rest $corpus) }}
-              cat >/tmp/policies/rask-media.json <<'POLICY'
-              {
-                "Version": "2012-10-17",
-                "Statement": [
-                  {
-                    "Sid": "FindTheCorpus",
-                    "Effect": "Allow",
-                    "Action": ["s3:GetBucketLocation"],
-                    "Resource": ["arn:aws:s3:::{{ first $corpus }}"]
-                  },
-                  {
-                    "Sid": "ListTheCorpus",
-                    "Effect": "Allow",
-                    "Action": ["s3:ListBucket"],
-                    "Resource": ["arn:aws:s3:::{{ first $corpus }}"]{{ if $prefix }},
-                    "Condition": { "StringLike": { "s3:prefix": ["{{ $prefix }}", "{{ $prefix }}/*"] } }{{ end }}
-                  },
-                  {
-                    "Sid": "ReadTheCorpusAndNothingElse",
-                    "Effect": "Allow",
-                    "Action": ["s3:GetObject"],
-                    "Resource": ["arn:aws:s3:::{{ first $corpus }}/{{ if $prefix }}{{ $prefix }}/{{ end }}*"]
-                  }
-                ]
-              }
-              POLICY
-              {{- end }}
-
               {{- with $backup }}
               {{- $control := $.Values.objectStore.bucket }}
               {{- $records := list "_projects" "_warehouses" "_trash" "_protection" "_policies" "_gates" "_bases" }}
@@ -316,12 +267,6 @@ spec:
                 --policy rask-lineage=/tmp/policies/rask-lineage.json --user {{ printf "%s=rask-lineage" $lineage | quote }} \
                 {{- end }}
                 --policy {{ printf "%s=/tmp/policies/rask-catalog.json" $catalogAccount | quote }} \
-                {{- if $viewer }}
-                --policy rask-viewer=/tmp/policies/rask-viewer.json --user {{ printf "%s=rask-viewer" $viewer | quote }} \
-                {{- end }}
-                {{- with $media }}
-                --policy rask-media=/tmp/policies/rask-media.json --user {{ printf "%s=rask-media" . | quote }} \
-                {{- end }}
                 {{- with $backup }}
                 --policy rask-backup=/tmp/policies/rask-backup.json --user {{ printf "%s=rask-backup" . | quote }} \
                 {{- end }}

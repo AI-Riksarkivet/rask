@@ -62,7 +62,7 @@ _NOT_A_TOPIC_THE_APP_USES = frozenset({"MEDALLION_PUB_TOPIC"})
 _SPLIT_UNDER_A_FLAG = [
     (
         "every-optional-publisher",
-        (*DEFAULT_ARGS, "--set", "maintenance.controlEmit=true", "--set", "explorer.enabled=true", "--set", "explorer.controlEmit=true"),
+        (*DEFAULT_ARGS, "--set", "maintenance.controlEmit=true"),
     ),
     ("no-write-event-lane", (*DEFAULT_ARGS, "--set", "maintenance.arrivalEnabled=false")),
 ]

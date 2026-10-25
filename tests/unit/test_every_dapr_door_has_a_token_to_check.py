@@ -43,7 +43,7 @@ def _deployed_apps() -> list[tuple[str, str, set[str]]]:
     string the image actually runs — so this cannot drift from what is deployed the way a mapping
     table would.
     """
-    raw = _helm_template("dapr.enabled=true", "explorer.enabled=true")
+    raw = _helm_template("dapr.enabled=true")
     apps: list[tuple[str, str, set[str]]] = []
     for doc in yaml.safe_load_all(raw):
         if not doc or doc.get("kind") != "Deployment":
