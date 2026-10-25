@@ -26,6 +26,7 @@ from lance_namespace import DeregisterTableResponse, InvalidTableStateError, Nam
 
 from catalog.api import fga_deps
 from catalog.api.dependencies import Resolver
+from catalog.api.idempotency import KeyedDoor
 from catalog.core.config import Settings
 from catalog.services import table_claims
 from catalog.services.table_claims import ResolvedTable
@@ -204,6 +205,7 @@ def _drop_table(settings: Settings, ns: Any, *, force: bool = False) -> Any:
     return asyncio.run(
         t_ep.drop_table(
             id="bronze$pages",
+            keyed=KeyedDoor(registry_root="", storage_options={}, scope="anonymous", key=None),
             ns=ns,  # structural stand-in, recorded not mocked
             table=_resolved(settings),
             settings=settings,
@@ -250,6 +252,7 @@ def test_a_protected_table_refuses_deregister_too(tmp_path: Any) -> None:
         asyncio.run(
             t_ep.deregister_table(
                 id="bronze$pages",
+                keyed=KeyedDoor(registry_root="", storage_options={}, scope="anonymous", key=None),
                 ns=ns,
                 table=_resolved(settings),
                 settings=settings,
@@ -390,6 +393,7 @@ def test_purge_true_still_destroys_immediately(tmp_path: Any) -> None:
     asyncio.run(
         __import__("catalog.api.v1.endpoints.tables", fromlist=["tables"]).drop_table(
             id="bronze$pages",
+            keyed=KeyedDoor(registry_root="", storage_options={}, scope="anonymous", key=None),
             ns=ns,
             table=_resolved(settings),
             settings=settings,

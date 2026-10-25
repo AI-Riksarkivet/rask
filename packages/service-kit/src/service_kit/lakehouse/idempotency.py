@@ -23,10 +23,11 @@ and nothing here is in-memory, so it works across replicas.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass  # noqa: TID251
 from typing import Any
 
-from service_kit.lakehouse.records import RecordExistsError, create_json, mutate_json, read_json
+from pydantic import BaseModel, ConfigDict
+
+from service_kit.lakehouse.records import RecordChangedError, RecordExistsError, create_json, mutate_json, read_json, replace_json
 
 
 #: Where the records live under the control root. A dedicated prefix rather than a suffix inside the
@@ -34,19 +35,22 @@ from service_kit.lakehouse.records import RecordExistsError, create_json, mutate
 #: prefix is a reclaim somebody will actually run.
 PREFIX = "_idempotency"
 
-#: A key is a caller-supplied token that becomes part of an object key. Constrained HERE and not only
-#: at the header: a second caller of this module must not have to remember, and the failure mode of
-#: forgetting is a write outside the prefix.
-#:
-#: The leading negative lookahead is not decoration — `.` is in the character class (keys like
-#: `run.3` are ordinary), so without it `..` matches the token rule and becomes a path segment that
-#: climbs out of the prefix. A character class alone is not path safety.
-_KEY_RE = re.compile(r"^(?!\.\.?$)[A-Za-z0-9._-]{1,64}$")
+#: A key is a caller-supplied token that becomes part of an object key, so it is a UUID in its canonical lower-case
+#: form, which no spelling can turn into a path segment that climbs out of the prefix. Constrained HERE and not only
+#: at the header: a second caller of this module must not have to remember, and the failure mode of forgetting is a
+#: write outside the prefix.
+_KEY_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+#: A scope is the module's caller's own token (a subject's digest), never the request's.
+_SCOPE_RE = re.compile(r"^[a-z0-9]{1,64}$")
 
 #: How long a claimed-but-unfinished attempt holds the key before another may take it. Long enough
 #: that a slow door is not overtaken, short enough that a CRASHED one does not wedge a caller's key
 #: forever — which would turn one process death into a permanently unusable key for that caller.
 DEFAULT_LEASE_SECONDS = 300
+
+
+#: A claim its own attempt gave back, because the attempt was refused before it wrote anything: the key is free.
+RELEASED = "released"
 
 
 class KeyReusedError(Exception):
@@ -66,19 +70,20 @@ class InFlightError(Exception):
     """
 
 
-@dataclass(frozen=True)
-class Replay:
+class Replay(BaseModel):
     """What the first attempt answered, to be returned verbatim instead of executing again."""
 
+    model_config = ConfigDict(frozen=True)
+
     status: int
-    body: Any
+    body: Any = None
 
 
 def _record_key(scope: str, key: str) -> str:
     if not _KEY_RE.match(key):
         raise ValueError(f"invalid idempotency key {key!r}: must match {_KEY_RE.pattern}")
-    if not _KEY_RE.match(scope):
-        raise ValueError(f"invalid idempotency key scope {scope!r}: must match {_KEY_RE.pattern}")
+    if not _SCOPE_RE.match(scope):
+        raise ValueError(f"invalid idempotency key scope {scope!r}: must match {_SCOPE_RE.pattern}")
     return f"{PREFIX}/{scope}/{key}.json"
 
 
@@ -120,7 +125,7 @@ def claim(
     if record.get("state") == "done":
         return Replay(status=int(record["status"]), body=record.get("body"))
 
-    if now - float(record.get("claimed_at") or 0) < lease_seconds:
+    if record.get("state") != RELEASED and now - float(record.get("claimed_at") or 0) < lease_seconds:
         raise InFlightError(f"idempotency key {key!r} is held by an attempt that has not finished")
 
     # ABANDONED. Take it over, but do NOT delete-and-recreate: the original attempt may be slow rather
@@ -129,6 +134,28 @@ def claim(
     # way.
     mutate_json(root_uri, storage_options, record_key, lambda r: {**r, "state": "in_flight", "claimed_at": now})
     return None
+
+
+def release(root_uri: str, storage_options: dict[str, str], *, scope: str, key: str, claimed_at: float) -> None:
+    """Give back the claim an attempt made at ``claimed_at``, for an attempt refused before it wrote anything.
+
+    Its caller's corrected retry under the same key then runs at once instead of meeting :class:`InFlightError` for
+    the rest of the lease. Only that claim is released: the record is replaced under the ETag it was read with, and
+    left alone when another attempt has taken the key over or an outcome has been recorded since, so a release never
+    frees a key another attempt holds. The record is kept, stamped ``released``, never deleted, as a location claim
+    is released.
+    """
+    record_key = _record_key(scope, key)
+    read = read_json(root_uri, storage_options, record_key)
+    if read is None:
+        return
+    record, etag = read
+    if record.get("state") != "in_flight" or record.get("claimed_at") != claimed_at:
+        return
+    try:
+        replace_json(root_uri, storage_options, record_key, {**record, "state": RELEASED}, etag=etag)
+    except RecordChangedError:
+        return
 
 
 def record_outcome(root_uri: str, storage_options: dict[str, str], *, scope: str, key: str, status: int, body: Any) -> None:  # noqa: ANN401 — the door's own response model
@@ -145,4 +172,4 @@ def record_outcome(root_uri: str, storage_options: dict[str, str], *, scope: str
     )
 
 
-__all__ = ["DEFAULT_LEASE_SECONDS", "PREFIX", "InFlightError", "KeyReusedError", "Replay", "claim", "record_outcome"]
+__all__ = ["DEFAULT_LEASE_SECONDS", "PREFIX", "RELEASED", "InFlightError", "KeyReusedError", "Replay", "claim", "record_outcome", "release"]

@@ -45,10 +45,12 @@ class _TupleStore:
 
     def __init__(self) -> None:
         self.tuples: set[Triple] = set()
+        #: Relations every check of refuses; any other is allowed.
+        self.denied: set[str] = set()
 
     async def check(self, body: ClientCheckRequest, options: dict[str, int | str | dict[str, int | str]] | None = None) -> CheckResponse:
-        del body, options
-        return CheckResponse(allowed=True)
+        del options
+        return CheckResponse(allowed=body.relation not in self.denied)
 
     async def read(self, body: ReadRequestTupleKey, options: dict[str, int | str | dict[str, int | str]] | None = None) -> ReadResponse:
         del options
@@ -172,6 +174,30 @@ def test_overwrite_replaces_an_empty_namespace_with_fresh_ownership_and_a_new_uu
     assert governed.naming(new) == {("user:dex~bob", "owner", new), *{tuple(new if part == old else part for part in edge) for edge in edges}}
     assert maintenance_policies.get_policy(str(tmp_path), {}, "namespace", replaced) is None
     assert (warehouses.binding_for_namespace(str(tmp_path), {}, "ghost") or {}).get("warehouse_id") == WAREHOUSE
+
+
+def test_existok_keeps_an_existing_top_level_namespace(real_ns_client: TestClient, governed: _TupleStore) -> None:
+    """[[LH-416]] ExistOk over a bound top-level namespace keeps it: the generic door's warehouse requirement is met by
+    the binding the namespace already has."""
+    _create_top_level(real_ns_client, "kept")
+    kept = _properties(real_ns_client, "kept")["rask.uuid"]
+
+    resp = real_ns_client.post("/v1/namespace/kept/create", json={"mode": "ExistOk"}, headers=AUTH)
+
+    assert (resp.status_code, resp.json().get("properties", {}).get("rask.uuid")) == (200, kept), resp.text
+
+
+def test_overwrite_by_a_caller_who_may_not_delete_the_namespace_is_refused(real_ns_client: TestClient, governed: _TupleStore) -> None:
+    """[[LH-416]] Overwrite drops the namespace, so it asks the drop's `can_delete` first: refused 403 (code 15), and the
+    namespace stays as it was."""
+    _create_top_level(real_ns_client, "kept")
+    kept = _properties(real_ns_client, "kept")["rask.uuid"]
+    governed.denied.add("can_delete")
+
+    resp = real_ns_client.post("/v1/namespace/kept/create", json={"mode": "Overwrite"}, headers=AUTH)
+
+    assert (resp.status_code, resp.json()["code"]) == (403, 15), resp.text
+    assert _properties(real_ns_client, "kept")["rask.uuid"] == kept, "a refused overwrite replaced the namespace"
 
 
 def test_overwrite_refuses_a_namespace_that_holds_anything(real_ns_client: TestClient, governed: _TupleStore) -> None:

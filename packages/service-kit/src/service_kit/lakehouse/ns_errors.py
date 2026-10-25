@@ -17,7 +17,7 @@ from lance_namespace import ErrorCode, LanceNamespaceError, ServiceUnavailableEr
 
 from service_kit.lakehouse.spec_routes import is_spec_route
 from service_kit.lancekit.outage import reads_as_store_outage
-from service_kit.problem import PROBLEM_JSON, problem_body
+from service_kit.problem import PROBLEM_JSON, occurrence, problem_body
 
 
 if TYPE_CHECKING:
@@ -149,6 +149,7 @@ def problem_detail(exc: LanceNamespaceError) -> tuple[int, dict[str, object]]:
         # Spec-0.9 ErrorResponse compatibility: `code` (required) + `error` (brief message). Kept
         # alongside the RFC 9457 fields so both problem-details and spec clients can parse us.
         "error": detail,
+        **occurrence(),
     }
     # EXTENSION MEMBERS (RFC 9457 §3.2), the one way a 5xx can tell the caller something true about
     # THEIR OWN objects without breaking the redaction rule above. `detail` stays generic because it

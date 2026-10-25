@@ -50,11 +50,13 @@ from functools import partial
 import pyarrow as pa
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import (
+    ConcurrentModificationError,
     CreateTableResponse,
     DescribeTableRequest,
     DropTableRequest,
     InvalidInputError,
     LanceNamespace,
+    TableAlreadyExistsError,
     TableNotFoundError,
 )
 from openfga_sdk import OpenFgaClient
@@ -145,8 +147,8 @@ def parse_create_shape(
     """Refuse a create that is malformed on its face, and return what it decoded.
 
     Pure: no round trip, no write. The door calls it BEFORE its idempotency claim, beside the mode
-    parse, because a claim minted for a request refused here would hold the key for its lease and
-    answer the corrected retry 409.
+    parse, so a request refused here is answered from the request alone, with no claim to mint and
+    give back on the store.
     """
     # #3-B governance (the security crux): validate BEFORE any write. An off-allowlist base is a client
     # error (400), never a silent write to an unapproved bucket.
@@ -258,7 +260,7 @@ async def create_governed_table(
     registry = base_registry.BaseRegistry(control_root=settings.registry_root, storage_options=settings.storage_options())
     # ``dataplane.create_table`` picks the write path by schema off the event loop: a blob-v2 column needs
     # file format 2.2 (native create pins 2.1 and rejects it) → a direct 2.2 write; else → native create. (§9)
-    response: CreateTableResponse = await run_in_threadpool(
+    create = partial(
         dataplane.create_table,
         ns,
         so,
@@ -277,6 +279,17 @@ async def create_governed_table(
         transaction_properties=run_context.commit_properties(run, author=created_by),
         overwriting=overwriting,
     )
+    try:
+        response: CreateTableResponse = await run_in_threadpool(create)
+    except (TableAlreadyExistsError, ConcurrentModificationError):
+        # AN ExistOk THAT LOST THE RACE KEEPS THE WINNER'S TABLE. Two ExistOk creates in one pod both find no table at
+        # the probe, and the backend's put-if-not-exists answers the loser's add as a conflict; ExistOk asks for the
+        # table to exist, so the loser answers it as kept, and as kept it writes nothing and seeds no owner. A winner
+        # still between its declaration and its first write holds no version yet, and the conflict stands: a retry
+        # finds the table written.
+        if mode is not CreateMode.EXIST_OK or (kept := await run_in_threadpool(dataplane.kept_table, ns, so, segments)) is None:
+            raise
+        response, existok_kept_existing = kept, True
 
     # Make the caller owner of a table this request brought into being + link it to its parent so it
     # inherits the cascade. An Overwrite of an existing table keeps every grant the table holds, the owner's
@@ -329,7 +342,7 @@ async def create_governed_table(
     #
     # `undo` stays conditional. Compensation undoes what THIS request created, and an ExistOk that kept
     # an existing table created nothing to undo.
-    seeding_a_new_table = not pre_existed
+    seeding_a_new_table = not pre_existed and not existok_kept_existing
     # The table's grants are held by the uuid its location's claim records: the one this create minted, or the kept
     # table's own under ExistOk or an Overwrite (ADR 0173 §2, [[LH-524]]).
     table_uuid = await run_in_threadpool(table_claims.uuid_at, table_claims.claim_store(settings), response.location or "", segments)

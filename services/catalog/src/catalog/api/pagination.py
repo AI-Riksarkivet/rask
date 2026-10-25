@@ -9,6 +9,21 @@ precondition.
 
 from __future__ import annotations
 
+from typing import Annotated, Final
+
+from fastapi import Query
+
+
+#: Ceiling for the spec list ops' `limit`. The Lance Namespace spec pages these with `page_token`, so a server
+#: answering fewer rows than asked and handing back a token is SPEC-CORRECT: the cap costs a caller nothing but a
+#: second call. Declared on the parameter rather than clamped in the body so the schema states the real bound.
+MAX_LIST_LIMIT: Final = 1000
+
+#: A spec listing's `limit`: the spec's `PageLimit` is "an inclusive upper bound of the number of results", so a
+#: bound of zero or below asks for nothing a listing can mean, and is refused 400 (code 13) by
+#: `install_problem_handlers` rather than answered as an empty page or as the whole listing.
+ListLimit = Annotated[int | None, Query(ge=1, le=MAX_LIST_LIMIT)]
+
 
 def paginate(names: list[str], page_token: str | None, limit: int | None) -> tuple[list[str], str | None]:
     """Keyset pagination over an already-sorted, deduped name list.
@@ -19,7 +34,7 @@ def paginate(names: list[str], page_token: str | None, limit: int | None) -> tup
     """
     if page_token:
         names = [name for name in names if name > page_token]
-    if limit is None or limit < 0 or limit >= len(names):
+    if limit is None or limit >= len(names):
         return names, None
     page = names[:limit]
     return page, (page[-1] if page else None)
@@ -45,7 +60,7 @@ def paginate_versions(versions: list[int], page_token: str | None, limit: int | 
     if page_token:
         cursor = int(page_token)
         ordered = [version for version in ordered if (version < cursor if descending else version > cursor)]
-    if limit is None or limit < 0 or limit >= len(ordered):
+    if limit is None or limit >= len(ordered):
         return ordered, None
     page = ordered[:limit]
     return page, (str(page[-1]) if page else None)

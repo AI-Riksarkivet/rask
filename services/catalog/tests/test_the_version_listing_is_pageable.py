@@ -53,7 +53,7 @@ def _table_with(version_count: int) -> table_claims.DoorTable:
 
 
 def _list(table: table_claims.DoorTable, **kwargs: Any) -> Any:
-    return versions_ep.list_table_versions("t", table, **kwargs)
+    return versions_ep.list_table_versions("t", table, {}, **kwargs)
 
 
 def test_descending_pages_downward_and_its_cursor_follows() -> None:

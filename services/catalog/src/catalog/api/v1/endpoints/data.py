@@ -20,6 +20,7 @@ from lance_namespace import (
     ExplainTableQueryPlanRequest,
     InsertIntoTableRequest,
     InsertIntoTableResponse,
+    InvalidInputError,
     MergeInsertIntoTableRequest,
     MergeInsertIntoTableResponse,
     QueryTableRequest,
@@ -107,6 +108,7 @@ def _stamp(run: RunContext | None, token: Caller | None) -> dict[str, str] | Non
 @router.post("/{id}/create", response_model_exclude_none=True)
 async def create_table(
     id: str,
+    keyed: idem.KeyedDoorDep,
     ns: NamespaceDep,
     root: NamespaceRootDep,
     settings: SettingsDep,
@@ -121,10 +123,10 @@ async def create_table(
     data: Annotated[bytes, Body(media_type=ARROW_STREAM_MEDIA_TYPE)],
     mode: str | None = None,
     properties: str | None = None,
+    storage_options: Annotated[str | None, Query(description="REFUSED: storage access is the catalog's to vend.")] = None,
     data_base: RaskDataBase = [],  # noqa: B006 — FastAPI Query default, not mutated
     external_blob_base: RaskExternalBlobBase = None,
     authorization: Annotated[str | None, Header()] = None,
-    idempotency_key: idem.IdempotencyKeyHeader = None,
     force: RaskFlag = False,
 ) -> CreateTableResponse:
     """Create a Lance table from an Arrow-IPC stream — ``create_table``; seeds ownership + lineage.
@@ -134,8 +136,9 @@ async def create_table(
     turns the protection lock only, as on drop.
 
     ``properties`` is the spec-0.9 JSON-encoded query parameter. Client-supplied ``storage_options``
-    are deliberately NOT accepted: storage access is the catalog's to vend (two-tier secret model),
-    so callers can't redirect writes or splice credentials.
+    are refused 400 (code 13), never dropped unread: storage access is the catalog's to vend (two-tier
+    secret model), so callers can't redirect writes or splice credentials, and a caller who sent them is
+    told they did not apply.
 
     ``data_base`` (#3-B, repeatable) spreads the table's fragments across the named approved buckets (Lance
     multi-base). Each MUST be on the ``LANCE_MULTIBASE_DATA_BASES`` allowlist — a caller can never point a
@@ -151,8 +154,13 @@ async def create_table(
     names none, and an input the caller cannot read.
     """
     # BEFORE `idem.begin`, like the register door's: a malformed mode, id, base or property map is a SHAPE
-    # refusal, and a claim minted for it would hold the key for its lease and answer the corrected retry 409.
+    # refusal, answered from the request alone, with no claim to mint and give back on the store.
     create_mode = CreateMode.parse(mode)
+    if storage_options is not None:
+        raise InvalidInputError(
+            "storage_options are not accepted on create: the catalog writes with its own credential and vends one for "
+            "direct access through DescribeTable or DeclareTable"
+        )
     shape = table_create.parse_create_shape(
         id,
         settings=settings,
@@ -169,7 +177,7 @@ async def create_table(
     # OPTIONAL BY SPEC CONSTRAINT (see `catalog.api.idempotency`): a stock Lance client sends no key
     # and is unaffected. A caller that sends one gets the first attempt's answer back rather than a
     # second execution of a door that DROPS AND REWRITES the dataset under `mode=Overwrite`.
-    converge = await idem.begin(settings, so, token, idempotency_key, endpoint="POST /v1/table/{id}/create")
+    converge = await keyed.begin(endpoint="POST /v1/table/{id}/create")
     if converge.replay is not None:
         return CreateTableResponse.model_validate(converge.replay.body)
 
@@ -193,8 +201,8 @@ async def create_table(
         run=run,
         force=force,
     )
-    # AFTER the door succeeded, and only then: a failure raises past this line, leaving the claim
-    # in-flight until its lease expires rather than recording an outcome the caller never received.
+    # AFTER the door succeeded, and only then: a failure raises past this line, and records no outcome the caller
+    # never received. A refusal gives the claim back (`idem.keyed_door`); a fault leaves it in flight for its lease.
     await converge.remember(200, response)
     return response
 
@@ -566,7 +574,8 @@ def query_table(
     judged = table.open(so, version=body.version)
     dataplane.refuse_an_unbounded_result(judged, k=body.k, offset=body.offset, columns=body.columns, max_bytes=settings.query_max_response_mb << 20)
     body.version = int(judged.version)
-    response = table.read_natively("query_table", body, via=data_ns)
+    with dataplane.caller_query("invalid query"):
+        response = table.read_natively("query_table", body, via=data_ns)
     if not isinstance(response, QueryTableResponse) or not isinstance(response.data, bytes):
         raise TypeError(f"query_table must answer a QueryTableResponse carrying Arrow bytes, got {type(response).__name__}: {response!r:.200}")
     # AFTER the read, not before: an audit line for rows nobody received is a false record, and this
@@ -686,7 +695,8 @@ def explain_table_query_plan(id: str, body: ExplainTableQueryPlanRequest, table:
     judged = int(table.open(so, version=body.query.version if body.query else None).version)
     if body.query is not None:
         body.query.version = judged
-    result = table.read_natively("explain_table_query_plan", body)
+    with dataplane.caller_query("invalid query"):
+        result = table.read_natively("explain_table_query_plan", body)
     # A JSON-ENCODED STRING, per `components.responses`. It answered `text/plain`, which the 0.12.0
     # reqwest client rejects outright (the Python urllib3 client tolerates it, which is why rask's own
     # e2e never noticed). `JSONResponse` on a `str` encodes it AS a string, so a plan that happens to
@@ -711,7 +721,8 @@ def analyze_table_query_plan(
     judged = table.open(so, version=body.version)
     dataplane.refuse_an_unbounded_result(judged, k=body.k, offset=body.offset, columns=body.columns, max_bytes=settings.query_max_response_mb << 20)
     body.version = int(judged.version)
-    result = table.read_natively("analyze_table_query_plan", body, via=data_ns)
+    with dataplane.caller_query("invalid query"):
+        result = table.read_natively("analyze_table_query_plan", body, via=data_ns)
     # A JSON-ENCODED STRING, per `components.responses`. It answered `text/plain`, which the 0.12.0
     # reqwest client rejects outright (the Python urllib3 client tolerates it, which is why rask's own
     # e2e never noticed). `JSONResponse` on a `str` encodes it AS a string, so a plan that happens to

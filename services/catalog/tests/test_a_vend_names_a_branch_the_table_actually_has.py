@@ -157,12 +157,14 @@ def test_a_vend_for_a_branch_the_table_DOES_have_is_served(table: str) -> None:
     assert response.mode == "direct"
 
 
-def test_a_vend_for_MAIN_is_untouched(table: str) -> None:
+@pytest.mark.parametrize("main", [pytest.param("", id="absent"), pytest.param("main", id="named")])
+def test_a_vend_for_MAIN_is_untouched(table: str, main: str) -> None:
     """Main is the ABSENT branch, not a named one, and `branches.list()` has no entry for it — a lookup
-    that did not special-case that would refuse every credential the estate vends today."""
-    response, vendor = _vend(table, "")
+    that did not special-case that would refuse every credential the estate vends today. Spelled `main`, it is
+    the same ref ([[LH-258]] (b)), so the credential is main's, never one scoped to a `tree/main` prefix."""
+    response, vendor = _vend(table, main)
 
-    assert len(vendor.calls) == 1, "the main-tier vend was broken by the branch check"
+    assert [call["branch"] for call in vendor.calls] == [""], "main's credential was not the one vended"
     assert response.mode == "direct"
 
 

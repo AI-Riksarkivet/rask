@@ -74,6 +74,7 @@ from lance_namespace import (
     ListTableTagsResponse,
     MergeInsertIntoTableRequest,
     MergeInsertIntoTableResponse,
+    NamespaceExistsRequest,
     RegisterTableRequest,
     RestoreTableRequest,
     RestoreTableResponse,
@@ -96,6 +97,7 @@ from lance_namespace import (
 )
 from pydantic import BaseModel
 
+from catalog.api.pagination import paginate
 from catalog.core import manifest_bytes, provenance_guard
 from catalog.core.config import shared_lance_session
 from catalog.core.identifiers import rename_destination
@@ -524,10 +526,29 @@ def declare_table(ns: LanceNamespace, so: StorageOptions, segments: list[str], *
     try:
         _reserve(location, so)
         native.call(ns, "register_table", RegisterTableRequest(id=segments, location=table_uuid))
-    except Exception:
+    except Exception as exc:
         _unreserve(location, so, claims=claims, holder=holder)
+        # The `dir` backend keeps namespaces and tables in one object-id space and arbitrates the add by
+        # put-if-not-exists, so a namespace at the id surfaces as the add's conflict: a TableAlreadyExists on a local
+        # root, a ConcurrentModification (14) on the e2e-stack lane's store (run 39029359505). Neither a retry nor a
+        # table holds the id, so the answer is the already-exists code naming what does.
+        if isinstance(exc, TableAlreadyExistsError | ConcurrentModificationError) and _namespace_holds(ns, segments):
+            raise TableAlreadyExistsError(f"a namespace already holds the id {'$'.join(segments)}; a table cannot be created there") from exc
         raise
     return _described_location(ns, segments, fallback=location)
+
+
+def _namespace_holds(ns: LanceNamespace, segments: list[str]) -> bool:
+    """Whether a namespace, and no table, is at ``segments``; an unreadable answer is not one.
+
+    The `dir` backend's ``namespace_exists`` answers present for a table's id as well (measured on pylance 13.0.0), so
+    a table answering at the id means the holder is a table: a second declaration, or two creates racing.
+    """
+    try:
+        ns.namespace_exists(NamespaceExistsRequest(id=segments))
+    except Exception:  # noqa: BLE001 — only a namespace that answers present changes the conflict's wording
+        return False
+    return _existing_location(ns, segments) is None
 
 
 def _reserve(location: str, so: StorageOptions) -> None:
@@ -657,9 +678,10 @@ def create_table(
             )
             return CreateTableResponse(location=existing, version=dataset.version)
         if normalized is CreateMode.EXIST_OK:  # keep it untouched, just report its current version
-            version = lance.dataset(existing, storage_options=so, session=shared_lance_session()).version
-            return CreateTableResponse(location=existing, version=version)
-        # `create` against a written table → let declare surface the canonical TableAlreadyExists conflict.
+            return _kept_at(existing, so)
+        # A written table under `Create` is the create's conflict, whatever the payload holds: the spec's 409 comes
+        # before a judgement of rows that will never be written ([[LH-424]]).
+        raise TableAlreadyExistsError(f"Table already exists: {'$'.join(segments)}")
 
     # BEFORE the declare, so a refused create leaves no name behind ([[LH-243]]).
     primary_keys.refuse_repeats_within(table, primary_keys.declared_key(table.schema), door="create")
@@ -780,7 +802,9 @@ def _write_blob_into(
             properties=properties,
             transaction_properties=transaction_properties,
         )
-    except Exception:
+    except BaseException as exc:
+        # A Rust PANIC is a pyo3 `PanicException`, which derives from BaseException, so `except Exception` would skip
+        # the rollback and leave the name declared with no dataset behind it ([[LH-302]]).
         with suppress(Exception):  # best-effort rollback; re-raise the real write error
             ns.drop_table(DropTableRequest(id=segments))
         if registry is not None:
@@ -791,8 +815,31 @@ def _write_blob_into(
                 location_claims.release(_claim_store(registry), location, holder)
             except Exception as release_exc:  # noqa: BLE001 — the write error is what the caller is told
                 log.error("create_base_record_release_failed", extra={"location": location, "error": str(release_exc)[:300]})
-        raise
+        if isinstance(exc, Exception | KeyboardInterrupt | SystemExit | GeneratorExit):
+            if isinstance(exc, OSError) and _UNSUPPORTED_TYPE_MARKER in str(exc):
+                raise InvalidInputError(f"the table's schema holds a type Lance does not store: {clean_lance_message(str(exc))}") from exc
+            raise
+        raise InternalError("the table's first write panicked in Lance; the create was rolled back and may be retried") from exc
     return CreateTableResponse(location=location, version=dataset.version)
+
+
+#: Lance's refusal of an Arrow type it does not store, as a bare `OSError`: "LanceError(Schema): Unsupported data type:
+#: ListView(...)" for list_view, large_list_view, run-end encoded, union, month_day_nano and decimal32 columns (measured
+#: on pylance 13.0.0). The caller's schema, so InvalidInput (13) rather than Internal ([[LH-301]]).
+_UNSUPPORTED_TYPE_MARKER = "Unsupported data type:"
+
+
+def kept_table(ns: LanceNamespace, so: StorageOptions, segments: list[str]) -> CreateTableResponse | None:
+    """What an ExistOk create keeps at ``segments``: the written table's location and version, or ``None`` while no
+    table there holds a version (none at all, or one only declared)."""
+    existing = _existing_location(ns, segments)
+    if existing is None or not holds_a_version(existing, so):
+        return None
+    return _kept_at(existing, so)
+
+
+def _kept_at(location: str, so: StorageOptions) -> CreateTableResponse:
+    return CreateTableResponse(location=location, version=lance.dataset(location, storage_options=so, session=shared_lance_session()).version)
 
 
 def _existing_location(ns: LanceNamespace, segments: list[str]) -> str | None:
@@ -1706,6 +1753,45 @@ def caller_sql(action: str) -> Generator[None]:
         raise InvalidInputError(f"{action}: {detail}") from exc
 
 
+#: The two shapes a query-plane refusal of the caller's expression arrives in (measured on pylance 13.0.0, through the
+#: `dir` backend): ``query_table`` raises a typed ``InternalError`` whose text is Lance's Debug form,
+#: ``Failed to execute query: InvalidInput { source: "Error parsing statement: …", location: … }``, while
+#: ``explain_table_query_plan`` and ``analyze_table_query_plan`` raise a bare ``RuntimeError`` carrying
+#: ``Failed to explain query plan for table at '<location>': Invalid user input: …``.
+_QUERY_INPUT_MARKERS = (_USER_INPUT_MARKER, "InvalidInput {")
+#: A column the caller named that the table lacks, in either shape: Display ``No field named nope.`` and Debug
+#: ``FieldNotFound { field: Column { relation: None, name: "nope" }``.
+_QUERY_MISSING_FIELD = re.compile(r'No field named (?P<display>[^\s.]+)|FieldNotFound \{ field: Column \{ relation: [^,]*, name: "(?P<debug>[^"]+)"')
+#: The caller's own text in the Debug shape: ``InvalidInput { source: "<message>", location: … }``.
+_QUERY_DEBUG_SOURCE = re.compile(r'InvalidInput \{ source: "(?P<source>(?:[^"\\]|\\.)*)"')
+
+
+@contextmanager
+def caller_query(action: str) -> Generator[None]:
+    """Answer a query-plane refusal of the caller's request as the caller's mistake ([[LH-287]]).
+
+    A filter naming an absent column is the spec's 12 ``TableColumnNotFound`` (404), and any other expression Lance
+    refuses (a syntax slip, a literal of the wrong type) is 13 ``InvalidInput`` (400); everything without one of
+    Lance's input markers propagates untouched, so a store outage stays a 5xx. The detail names the column or carries
+    Lance's message with its location prefix and Rust source suffix removed: the raw text names the table's storage
+    location and Lance's build paths, so it is logged and never answered.
+    """
+    try:
+        yield
+    except (InternalError, RuntimeError, ValueError, OSError) as exc:
+        message = str(exc)
+        if not any(marker in message for marker in _QUERY_INPUT_MARKERS):
+            raise
+        log.info("caller_query_rejected", extra={"action": action, "error": message[:1000]})
+        if (missing := _QUERY_MISSING_FIELD.search(message)) is not None:
+            raise TableColumnNotFoundError(f"{action}: the table has no column {missing.group('display') or missing.group('debug')!r}") from exc
+        if (debug := _QUERY_DEBUG_SOURCE.search(message)) is not None:
+            detail = debug.group("source").replace('\\"', '"').replace("\\\\", "\\")
+        else:
+            detail = message.rsplit(_USER_INPUT_MARKER, 1)[-1]
+        raise InvalidInputError(f"{action}: {clean_lance_message(detail.lstrip(': '))}") from exc
+
+
 #: Lance's schema check on a write, raised as a bare `OSError`. A stable Rust error-variant prefix, not
 #: a path: "Append with different schema: `s` should have type string but type was int64" for a type
 #: mismatch, "…: fields did not match, missing=[], unexpected=[zz]" for a column the table lacks.
@@ -2159,8 +2245,14 @@ def add_columns(table: table_claims.DoorTable, so: StorageOptions, req: AlterTab
 
 
 def alter_columns(table: table_claims.DoorTable, so: StorageOptions, req: AlterTableAlterColumnsRequest) -> AlterTableAlterColumnsResponse:
-    """Rename / re-type / change nullability of existing columns."""
+    """Rename / re-type / change nullability of existing columns.
+
+    A ``virtual_column`` alteration (a UDF-backed column) is declined as Unsupported (406, code 0), as ``add_columns``
+    declines one: pylance's ``alter_columns`` takes a name, a type and a nullability and nothing that carries a UDF.
+    """
     table_id = table.segments
+    if any(entry.virtual_column is not None for entry in req.alterations or []):
+        raise UnsupportedOperationError("virtual_column alter_columns is not supported by this backend")
     alterations: list[dict[str, object]] = []
     for entry in req.alterations or []:
         alteration: dict[str, object] = {"path": entry.path}
@@ -2821,9 +2913,10 @@ def _classify_ref_error(exc: Exception, *, kind: str, name: str, invalid_name: s
     if _REF_INVALID_MARKER in message.lower():
         # A branch create names its SOURCE for a missing version but the NEW name for a malformed one.
         subject = name if invalid_name is None else invalid_name
-        return InvalidInputError(f"invalid {kind} name {subject!r}: {exc}")
+        return InvalidInputError(f"invalid {kind} name {subject!r}: {clean_lance_message(message)}")
     if any(marker in message.lower() for marker in _REF_VERSION_MISSING_MARKERS):
-        return TableVersionNotFoundError(f"no such version for {kind} {name!r}: {exc}")
+        # Lance's text names the manifest's storage path, so the caller is told the version, never the text.
+        return TableVersionNotFoundError(f"no such version for {kind} {name!r}")
     match = _REF_FAILURE_RE.search(message)
     if match is None:
         return exc
@@ -2852,13 +2945,17 @@ def _ref_errors(kind: str, name: str, *, invalid_name: str | None = None) -> Gen
         translated = _classify_ref_error(exc, kind=kind, name=name, invalid_name=invalid_name)
         if translated is exc:
             raise
+        log.info("ref_operation_refused", extra={"kind": kind, "ref": name, "error": str(exc)[:500]})
         raise translated from exc
 
 
 def list_tags(table: table_claims.DoorTable, so: StorageOptions, req: ListTableTagsRequest) -> ListTableTagsResponse:
-    """List the table's tags as ``{name: TagContents{version, manifest_size, branch}}``."""
+    """List the table's tags as ``{name: TagContents{version, manifest_size, branch}}``, paged by name (``req.limit``,
+    ``req.page_token``): pylance lists every tag at once, so the page is cut here."""
+    listed = table.open_unchecked(so).tags.list()
+    page, next_token = paginate(sorted(listed), req.page_token, req.limit)
     tags: dict[str, dict[str, Any]] = {}
-    for name, tag in table.open_unchecked(so).tags.list().items():
+    for name, tag in ((name, listed[name]) for name in page):
         # pylance's Tag is a TypedDict (plain dict at runtime), so read by key.
         entry = tag if isinstance(tag, dict) else {"version": getattr(tag, "version", None)}
         tags[name] = {
@@ -2867,7 +2964,22 @@ def list_tags(table: table_claims.DoorTable, so: StorageOptions, req: ListTableT
             "branch": entry.get("branch"),  # None for a tag on main (TagContents.branch is optional)
         }
     # model_validate coerces the inner dicts into TagContents (not exported to name directly).
-    return ListTableTagsResponse.model_validate({"tags": tags})
+    return ListTableTagsResponse.model_validate({"tags": tags, "page_token": next_token})
+
+
+def _open_with_branch(table: table_claims.DoorTable, so: StorageOptions, branch: str | None) -> lance.LanceDataset:
+    """Main's handle, once the ``branch`` a tag op names is one the table has ([[LH-406]]).
+
+    pylance resolves ``(branch, version)`` as one reference and reports a missing branch as a missing version
+    (``version ghost:1 does not exist``), so the branch is established by reading the table's branch list first.
+
+    Raises:
+        TableBranchNotFoundError: The table has no branch ``branch``.
+    """
+    dataset = table.open(so)
+    if (named := recorded_branch(branch)) is not None and named not in dataset.branches.list():
+        raise TableBranchNotFoundError(f"branch {named!r} not found")
+    return dataset
 
 
 def _tag_reference(branch: str | None, version: int | None) -> int | tuple[str | None, int | None] | None:
@@ -2882,8 +2994,9 @@ def create_tag(table: table_claims.DoorTable, so: StorageOptions, req: CreateTab
     Raises:
         ConcurrentModificationError: A reclaim holds the table's history ([[LH-308]]); no tag was written.
     """
+    dataset = _open_with_branch(table, so, req.branch)
     with table.history_held(HistoryWork.REFS), _ref_errors("tag", req.tag):
-        table.open(so).tags.create(req.tag, _tag_reference(req.branch, req.version))
+        dataset.tags.create(req.tag, _tag_reference(recorded_branch(req.branch), req.version))
     return CreateTableTagResponse()
 
 
@@ -2907,8 +3020,9 @@ def update_tag(table: table_claims.DoorTable, so: StorageOptions, req: UpdateTab
     Raises:
         ConcurrentModificationError: A reclaim holds the table's history ([[LH-308]]); the tag was not moved.
     """
+    dataset = _open_with_branch(table, so, req.branch)
     with table.history_held(HistoryWork.REFS), _ref_errors("tag", req.tag):
-        table.open(so).tags.update(req.tag, _tag_reference(req.branch, req.version))
+        dataset.tags.update(req.tag, _tag_reference(recorded_branch(req.branch), req.version))
     return UpdateTableTagResponse()
 
 
@@ -2933,13 +3047,15 @@ def _branch_reference(req: CreateTableBranchRequest) -> int | tuple[str | None, 
 
 
 def list_branches(table: table_claims.DoorTable, so: StorageOptions, req: ListTableBranchesRequest) -> ListTableBranchesResponse:
-    """List the table's branches as ``{name: BranchContents}``, read from pylance ``ds.branches``.
+    """List the table's branches as ``{name: BranchContents}``, read from pylance ``ds.branches`` and paged by name.
 
     The native ``DirectoryNamespace`` 501s branch ops, but ``lance.LanceDataset`` implements them, so we
     back them in-process here exactly like tags. A ``Branch`` is a TypedDict (plain dict at runtime).
     """
+    listed = table.open_unchecked(so).branches.list()
+    page, next_token = paginate(sorted(listed), req.page_token, req.limit)
     branches: dict[str, dict[str, Any]] = {}
-    for name, branch in table.open_unchecked(so).branches.list().items():
+    for name, branch in ((name, listed[name]) for name in page):
         entry = branch if isinstance(branch, dict) else {}
         metadata = dict(entry.get("metadata") or {})
         # WHICH INCARNATION, in the one free-form map `BranchContents` has: the spec declares no field for
@@ -2955,7 +3071,7 @@ def list_branches(table: table_claims.DoorTable, so: StorageOptions, req: ListTa
             "manifest_size": entry.get("manifest_size") or 0,
             "metadata": metadata,
         }
-    return ListTableBranchesResponse.model_validate({"branches": branches})
+    return ListTableBranchesResponse.model_validate({"branches": branches, "page_token": next_token})
 
 
 def create_branch(table: table_claims.DoorTable, so: StorageOptions, req: CreateTableBranchRequest) -> CreateTableBranchResponse:
@@ -2973,6 +3089,9 @@ def create_branch(table: table_claims.DoorTable, so: StorageOptions, req: Create
     # `branches.list()` (the default ref is implicit), so the collision check below cannot see it.
     refuse_a_branch_name_the_backend_cannot_use(req.name)
     refuse_a_branch_name_that_shadows_the_layout(req.name)
+    # `main` is a ref every table has and no branch list names (`lance_docs/file_format.md` "Branch Metadata"),
+    # so a source spelled `main` is main itself.
+    req.from_branch = recorded_branch(req.from_branch)
     dataset = table.open(so)
     branches = dataset.branches.list()
     if req.name in branches:
@@ -3030,15 +3149,23 @@ def delete_branch(table: table_claims.DoorTable, so: StorageOptions, req: Delete
     forks = sorted(child for child, meta in listed.items() if child not in doomed and (meta or {}).get("parent_branch") in doomed)
     if forks:
         raise _forked_from(req.name, forks)
+    # A TAG NAMING A VERSION ON ONE OF THEM pins it the same way ("Ref conflict error: Branch b is referenced by
+    # tags [("t", 1)]", measured on pylance 13.0.0), so it is asked before the first delete too.
+    pins = sorted(tag for tag, meta in dataset.tags.list().items() if (meta or {}).get("branch") in doomed)
+    if pins:
+        raise InvalidTableStateError(
+            f"branch {req.name!r} cannot be deleted: tag {', '.join(repr(t) for t in pins)} names a version on it or on a branch inside it, and a "
+            "tag pins its branch. Delete or move the tag first. Nothing was deleted"
+        )
     deleted: list[str] = []
     for name in doomed:
         try:
             with _ref_errors("branch", name):
                 dataset.branches.delete(name)
         except TableBranchAlreadyExistsError as exc:
-            # The ref-conflict marker here is a fork pin made after the read above, not a name collision.
+            # The ref-conflict marker here is a pin made after the read above, not a name collision.
             raise InvalidTableStateError(
-                f"deleting branch {req.name!r} stopped at {name!r}: a branch forked from it since the check pins it ({exc.__cause__}). "
+                f"deleting branch {req.name!r} stopped at {name!r}: a branch forked from it or a tag naming it since the check pins it. "
                 f"Deleted before stopping: {deleted}"
             ) from exc
         deleted.append(name)

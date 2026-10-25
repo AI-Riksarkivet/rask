@@ -19577,6 +19577,8 @@
             "schema": {
               "anyOf": [
                 {
+                  "maximum": 1000,
+                  "minimum": 1,
                   "type": "integer"
                 },
                 {
@@ -19675,6 +19677,8 @@
             "schema": {
               "anyOf": [
                 {
+                  "maximum": 1000,
+                  "minimum": 1,
                   "type": "integer"
                 },
                 {
@@ -20761,7 +20765,7 @@
     },
     "/v1/table/{id}/create": {
       "post": {
-        "description": "Create a Lance table from an Arrow-IPC stream \u2014 ``create_table``; seeds ownership + lineage.\n\n``mode=Overwrite`` over an existing table writes a new version of it ([[LH-242]],\n``table_create``'s module docstring): a protected table refuses it 409 unless ``force=true``, which\nturns the protection lock only, as on drop.\n\n``properties`` is the spec-0.9 JSON-encoded query parameter. Client-supplied ``storage_options``\nare deliberately NOT accepted: storage access is the catalog's to vend (two-tier secret model),\nso callers can't redirect writes or splice credentials.\n\n``data_base`` (#3-B, repeatable) spreads the table's fragments across the named approved buckets (Lance\nmulti-base). Each MUST be on the ``LANCE_MULTIBASE_DATA_BASES`` allowlist \u2014 a caller can never point a\nbase at an arbitrary bucket. Omitted \u2192 a single-location table exactly as before.\n\n``external_blob_base`` ([[LH-209]]) asks to register ONE external blob base, so the table's blob\ncolumns may hold ``Blob.from_uri`` pointers under it. It must lie inside a ``LANCE_EXTERNAL_BLOB_BASES``\nentry and outside governed storage (``table_bases.requested_external_blob_base``). Omitted \u2192 no\nexternal base, and a pointer in the rows is refused.\n\nThe run the request's Context names (:mod:`catalog.core.run_context`) is stamped into the commit and its inputs\nbecome the create event's version-pinned inputs; the tier judge has already refused a silver or gold create that\nnames none, and an input the caller cannot read.",
+        "description": "Create a Lance table from an Arrow-IPC stream \u2014 ``create_table``; seeds ownership + lineage.\n\n``mode=Overwrite`` over an existing table writes a new version of it ([[LH-242]],\n``table_create``'s module docstring): a protected table refuses it 409 unless ``force=true``, which\nturns the protection lock only, as on drop.\n\n``properties`` is the spec-0.9 JSON-encoded query parameter. Client-supplied ``storage_options``\nare refused 400 (code 13), never dropped unread: storage access is the catalog's to vend (two-tier\nsecret model), so callers can't redirect writes or splice credentials, and a caller who sent them is\ntold they did not apply.\n\n``data_base`` (#3-B, repeatable) spreads the table's fragments across the named approved buckets (Lance\nmulti-base). Each MUST be on the ``LANCE_MULTIBASE_DATA_BASES`` allowlist \u2014 a caller can never point a\nbase at an arbitrary bucket. Omitted \u2192 a single-location table exactly as before.\n\n``external_blob_base`` ([[LH-209]]) asks to register ONE external blob base, so the table's blob\ncolumns may hold ``Blob.from_uri`` pointers under it. It must lie inside a ``LANCE_EXTERNAL_BLOB_BASES``\nentry and outside governed storage (``table_bases.requested_external_blob_base``). Omitted \u2192 no\nexternal base, and a pointer in the rows is refused.\n\nThe run the request's Context names (:mod:`catalog.core.run_context`) is stamped into the commit and its inputs\nbecome the create event's version-pinned inputs; the tier judge has already refused a silver or gold create that\nnames none, and an input the caller cannot read.",
         "operationId": "create_table_v1_table__id__create_post",
         "parameters": [
           {
@@ -20806,6 +20810,24 @@
             }
           },
           {
+            "description": "REFUSED: storage access is the catalog's to vend.",
+            "in": "query",
+            "name": "storage_options",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "REFUSED: storage access is the catalog's to vend.",
+              "title": "Storage Options"
+            }
+          },
+          {
             "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
             "in": "query",
             "name": "delimiter",
@@ -20846,9 +20868,7 @@
             "schema": {
               "anyOf": [
                 {
-                  "maxLength": 64,
-                  "minLength": 1,
-                  "pattern": "^[A-Za-z0-9._-]+$",
+                  "pattern": "^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$",
                   "type": "string"
                 },
                 {
@@ -21350,9 +21370,7 @@
             "schema": {
               "anyOf": [
                 {
-                  "maxLength": 64,
-                  "minLength": 1,
-                  "pattern": "^[A-Za-z0-9._-]+$",
+                  "pattern": "^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$",
                   "type": "string"
                 },
                 {
@@ -21681,9 +21699,7 @@
             "schema": {
               "anyOf": [
                 {
-                  "maxLength": 64,
-                  "minLength": 1,
-                  "pattern": "^[A-Za-z0-9._-]+$",
+                  "pattern": "^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$",
                   "type": "string"
                 },
                 {
@@ -21853,7 +21869,7 @@
     },
     "/v1/table/{id}/exists": {
       "post": {
-        "description": "Check the table at ``id`` exists via ``table_exists`` \u2014 200 if present (spec 0.9), else error.\n\nThe answer is about the table the request resolved, so it stands only while the name still resolves there ([[LH-530]]).",
+        "description": "Check the table at ``id`` exists via ``table_exists`` \u2014 200 if present (spec 0.9), else error.\n\nThe answer is about the table the request resolved, so it stands only while the name still resolves there ([[LH-530]]).\nA ``version`` asks whether the table holds that version (`lance_docs/ns_catalog/spec.yaml` TableExistsRequest), which\nthe backend's own answer ignores, so the version is opened: one the table lacks answers 404 code 11, as describe does.",
         "operationId": "table_exists_v1_table__id__exists_post",
         "parameters": [
           {
@@ -22920,9 +22936,7 @@
             "schema": {
               "anyOf": [
                 {
-                  "maxLength": 64,
-                  "minLength": 1,
-                  "pattern": "^[A-Za-z0-9._-]+$",
+                  "pattern": "^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$",
                   "type": "string"
                 },
                 {
@@ -23047,9 +23061,7 @@
             "schema": {
               "anyOf": [
                 {
-                  "maxLength": 64,
-                  "minLength": 1,
-                  "pattern": "^[A-Za-z0-9._-]+$",
+                  "pattern": "^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$",
                   "type": "string"
                 },
                 {
@@ -23174,9 +23186,7 @@
             "schema": {
               "anyOf": [
                 {
-                  "maxLength": 64,
-                  "minLength": 1,
-                  "pattern": "^[A-Za-z0-9._-]+$",
+                  "pattern": "^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$",
                   "type": "string"
                 },
                 {
@@ -23609,7 +23619,7 @@
     },
     "/v1/table/{id}/tags/list": {
       "get": {
-        "description": "List every tag on the table \u2014 wraps lance_namespace ListTableTags.",
+        "description": "List the table's tags, a page at a time \u2014 wraps lance_namespace ListTableTags.",
         "operationId": "list_table_tags_compat_get",
         "parameters": [
           {
@@ -23619,6 +23629,40 @@
             "schema": {
               "title": "Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Page Token"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 1000,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Limit"
             }
           },
           {
@@ -23673,7 +23717,7 @@
         ]
       },
       "post": {
-        "description": "List every tag on the table \u2014 wraps lance_namespace ListTableTags.",
+        "description": "List the table's tags, a page at a time \u2014 wraps lance_namespace ListTableTags.",
         "operationId": "list_table_tags",
         "parameters": [
           {
@@ -23683,6 +23727,40 @@
             "schema": {
               "title": "Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Page Token"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 1000,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Limit"
             }
           },
           {
@@ -24390,7 +24468,7 @@
     },
     "/v1/table/{id}/version/list": {
       "post": {
-        "description": "List the versions of table ``id`` via ``list_table_versions``; ``descending=true`` guarantees\nlatest-to-oldest ordering, ``branch`` targets a non-main branch (spec 0.9 query params).\n\nPAGED HERE, NOT DOWNSTREAM, because the backend cannot page. Driven against a `dir` namespace\n2026-09-13 on a seven-version table: `limit=3` serves three rows and answers `page_token: None`,\nand a token it is handed changes nothing. `None` is what a client stops on, so forwarding `limit`\ntold a caller asking for three of seven that it had seen everything \u2014 truncation wearing\npagination's clothes, the shape `GET /management/v1/model` already names.\n\nSo the native call is made UNPAGINATED \u2014 the same rule `catalog.api.pagination` states for the name\nlistings \u2014 and the cursor is this layer's. The full list is what the backend returns unbounded\n(measured: no limit gives all seven), and `_MAX_LIST_LIMIT` still bounds what leaves the door.",
+        "description": "List the versions of table ``id`` via ``list_table_versions``; ``descending=true`` guarantees\nlatest-to-oldest ordering, ``branch`` targets a non-main branch (spec 0.9 query params).\n\nPAGED HERE, NOT DOWNSTREAM, because the backend cannot page. Driven against a `dir` namespace\n2026-09-13 on a seven-version table: `limit=3` serves three rows and answers `page_token: None`,\nand a token it is handed changes nothing. `None` is what a client stops on, so forwarding `limit`\ntold a caller asking for three of seven that it had seen everything \u2014 truncation wearing\npagination's clothes, the shape `GET /management/v1/model` already names.\n\nSo the native call is made UNPAGINATED \u2014 the same rule `catalog.api.pagination` states for the name\nlistings \u2014 and the cursor is this layer's. The full list is what the backend returns unbounded\n(measured: no limit gives all seven), and `ListLimit` still bounds what leaves the door.",
         "operationId": "list_table_versions_v1_table__id__version_list_post",
         "parameters": [
           {

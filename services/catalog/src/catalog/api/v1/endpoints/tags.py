@@ -20,6 +20,7 @@ from lance_namespace import (
 
 from catalog.api import fga_deps
 from catalog.api.dependencies import ControlEmitterDep, DoorTableDep, SettingsDep, StorageOptionsDep
+from catalog.api.pagination import ListLimit
 from catalog.api.rask_params import RaskFlag
 from catalog.api.security import CurrentToken
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
@@ -59,9 +60,9 @@ def _refuse_a_catalog_tag(tag: str) -> None:
 # flip-flop. Explicit ids keep the spec's POST canonical and name the GET for what it is.
 @router.post("/{id}/tags/list", response_model_exclude_none=True, operation_id="list_table_tags")
 @router.get("/{id}/tags/list", response_model_exclude_none=True, operation_id="list_table_tags_compat_get")
-def list_table_tags(id: str, table: DoorTableDep, so: StorageOptionsDep) -> ListTableTagsResponse:
-    """List every tag on the table — wraps lance_namespace ListTableTags."""
-    req = ListTableTagsRequest(id=parse_identifier(id))
+def list_table_tags(id: str, table: DoorTableDep, so: StorageOptionsDep, page_token: str | None = None, limit: ListLimit = None) -> ListTableTagsResponse:
+    """List the table's tags, a page at a time — wraps lance_namespace ListTableTags."""
+    req = ListTableTagsRequest(id=parse_identifier(id), page_token=page_token, limit=limit)
     return dataplane.list_tags(table, so, req)
 
 

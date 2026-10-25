@@ -27,6 +27,7 @@ if TYPE_CHECKING:
 ARROW_STREAM = {"content-type": "application/vnd.apache.arrow.stream"}
 INVALID_INPUT = 13
 CREATE = "/v1/table/db$t/create"
+KEY = "3f2b8c1a-7d4e-4f6a-9b0c-5e1d2a3b4c5d"
 #: Past CPython's int-string conversion limit, so `json.loads` raises a bare `ValueError` rather than
 #: `JSONDecodeError` — valid JSON Python will not parse.
 _UNPARSEABLE_INT = "1" * 5000
@@ -68,11 +69,13 @@ _OFFSETS = struct.pack("<iii", 0, 5, 10)
         pytest.param(f'{CREATE}?properties={{"a":1}}', {}, "string values", id="a-property-that-is-a-number"),
         pytest.param(f'{CREATE}?properties={{"write.format.default":"parquet"}}', {}, "Lance only", id="a-non-lance-format"),
         pytest.param(CREATE, {"x-rask-run-id": "run-7", "x-rask-inputs": "{not-json"}, "inputs are not JSON", id="a-run-whose-inputs-are-not-json"),
+        # Refused, never dropped unread: the catalog writes with its own credential ([[LH-258]]).
+        pytest.param(f'{CREATE}?storage_options={{"aws_region":"x"}}', {}, "storage_options are not accepted", id="client-storage-options"),
     ],
 )
 def test_a_keyed_shape_refusal_lets_the_corrected_retry_run(real_ns_client: TestClient, malformed: str, headers: dict[str, str], refusal: str) -> None:
     assert real_ns_client.post("/v1/namespace/db/create", json={}).status_code == 200
-    keyed = {**ARROW_STREAM, "Idempotency-Key": "typo-then-fix"}
+    keyed = {**ARROW_STREAM, "Idempotency-Key": KEY}
 
     refused = real_ns_client.post(malformed, content=_rows(), headers={**keyed, **headers})
     assert refused.status_code == 400, f"the malformed create was not refused 400: {refused.status_code} {refused.text[:300]}"
@@ -110,7 +113,7 @@ def test_a_keyed_shape_refusal_lets_the_corrected_retry_run(real_ns_client: Test
 )
 def test_a_keyed_body_that_is_not_an_arrow_stream_lets_the_corrected_retry_run(real_ns_client: TestClient, body: bytes) -> None:
     assert real_ns_client.post("/v1/namespace/db/create", json={}).status_code == 200
-    keyed = {**ARROW_STREAM, "Idempotency-Key": "typo-then-fix"}
+    keyed = {**ARROW_STREAM, "Idempotency-Key": KEY}
 
     refused = real_ns_client.post(CREATE, content=body, headers=keyed)
     assert refused.status_code == 400, f"the malformed body was not refused 400: {refused.status_code} {refused.text[:300]}"
@@ -122,6 +125,33 @@ def test_a_keyed_body_that_is_not_an_arrow_stream_lets_the_corrected_retry_run(r
     assert retried.status_code == 200, f"the corrected retry under the same key was refused: {retried.status_code} {retried.text[:300]}"
     counted = real_ns_client.post("/v1/table/db$t/count_rows", json={})
     assert (counted.status_code, counted.text) == (200, "3"), counted.text
+
+
+def test_a_keyed_create_refused_after_its_claim_lets_the_corrected_retry_run(real_ns_client: TestClient) -> None:
+    """[[LH-487]] A refusal the door raises after its claim, before any write (here the namespace the table needs is
+    absent, 404), gives the claim back, so the retry under the same key once the namespace exists runs."""
+    keyed = {**ARROW_STREAM, "Idempotency-Key": KEY}
+
+    refused = real_ns_client.post(CREATE, content=_rows(), headers=keyed)
+    assert (refused.status_code, refused.json().get("code")) == (404, 1), refused.text
+    assert real_ns_client.post("/v1/namespace/db/create", json={}).status_code == 200
+
+    retried = real_ns_client.post(CREATE, content=_rows(), headers=keyed)
+
+    assert retried.status_code == 200, f"the corrected retry under the same key was refused: {retried.status_code} {retried.text[:300]}"
+
+
+def test_a_release_the_store_fails_never_answers_over_the_refusal(real_ns_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The refusal is what the caller is told; a claim the store would not give back is left to its lease."""
+
+    def unreachable(*_args: object, **_kwargs: object) -> None:
+        raise OSError("the object store did not answer")
+
+    monkeypatch.setattr("service_kit.lakehouse.idempotency.release", unreachable)
+
+    refused = real_ns_client.post(CREATE, content=_rows(), headers={**ARROW_STREAM, "Idempotency-Key": KEY})
+
+    assert (refused.status_code, refused.json().get("code")) == (404, 1), refused.text
 
 
 def test_string_properties_still_create(real_ns_client: TestClient) -> None:

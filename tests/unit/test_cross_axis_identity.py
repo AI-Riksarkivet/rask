@@ -61,6 +61,7 @@ def test_create_handler_keeps_both_name_axes_identical(monkeypatch: pytest.Monke
 
     Guards the regression where one axis is derived differently from the other: the captures below would diverge.
     """
+    from catalog.api.idempotency import KeyedDoor
     from catalog.api.v1.endpoints import data
     from catalog.services import table_create
 
@@ -96,6 +97,7 @@ def test_create_handler_keeps_both_name_axes_identical(monkeypatch: pytest.Monke
     asyncio.run(
         data.create_table(
             id="alpha$bronze$images",
+            keyed=KeyedDoor(registry_root="", storage_options={}, scope="anonymous", key=None),
             ns=cast(Any, object()),
             root="s3://root",
             settings=_settings(),

@@ -48,6 +48,8 @@ from lance_namespace import (
     DeleteTableTagRequest,
     GetTableTagVersionRequest,
     InvalidInputError,
+    InvalidTableStateError,
+    ListTableTagsRequest,
     TableBranchAlreadyExistsError,
     TableBranchNotFoundError,
     TableTagAlreadyExistsError,
@@ -66,6 +68,8 @@ from catalog.services.dataplane import (
     delete_branch,
     delete_tag,
     get_tag_version,
+    list_branches,
+    list_tags,
     update_tag,
 )
 from catalog.services.table_claims import DoorTable
@@ -76,6 +80,7 @@ from service_kit.lakehouse.location_claims import ClaimStore
 lance = pytest.importorskip("lance")
 
 from lance_namespace_urllib3_client.models.create_table_branch_request import CreateTableBranchRequest  # noqa: E402
+from lance_namespace_urllib3_client.models.list_table_branches_request import ListTableBranchesRequest  # noqa: E402
 
 
 TABLE_ID = ["db", "rows"]
@@ -196,6 +201,9 @@ def test_creating_a_tag_that_already_exists_mints_TAG_ALREADY_EXISTS(table: Door
             "branches/create from a missing source",
             lambda table: create_branch(table, {}, CreateTableBranchRequest(id=TABLE_ID, name="fresh", from_branch=ABSENT, from_version=1)),
         ),
+        # [[LH-406]] pylance resolves `(branch, version)` as one reference and reports a missing branch as a missing version.
+        ("tags/create on a missing branch", lambda table: create_tag(table, {}, CreateTableTagRequest(id=TABLE_ID, tag="fresh", version=1, branch=ABSENT))),
+        ("tags/update on a missing branch", lambda table: update_tag(table, {}, UpdateTableTagRequest(id=TABLE_ID, tag=LIVE_TAG, version=1, branch=ABSENT))),
     ],
 )
 def test_a_missing_branch_mints_BRANCH_NOT_FOUND(table: DoorTable, door: str, call: _Call) -> None:
@@ -203,6 +211,57 @@ def test_a_missing_branch_mints_BRANCH_NOT_FOUND(table: DoorTable, door: str, ca
     with pytest.raises(TableBranchNotFoundError) as caught:
         call(table)
     assert caught.value.code == 22, f"{door} minted code {caught.value.code} for a missing branch, not 22"
+
+
+def test_a_branch_a_tag_names_is_refused_INVALID_TABLE_STATE_naming_the_tag(table: DoorTable) -> None:
+    """Spec code 19, naming the tag, and nothing deleted: a tag pins its branch ("Ref conflict error: Branch staging is
+    referenced by tags", measured on pylance 13.0.0), which the door asks before its first delete."""
+    table.open_unchecked({}).tags.create("pin", (LIVE_BRANCH, None))
+
+    with pytest.raises(InvalidTableStateError, match="tag 'pin'") as caught:
+        delete_branch(table, {}, DeleteTableBranchRequest(id=TABLE_ID, name=LIVE_BRANCH))
+
+    assert caught.value.code == 19
+    assert LIVE_BRANCH in table.open_unchecked({}).branches.list()
+
+
+def test_a_branch_cut_from_main_by_name_is_created(table: DoorTable) -> None:
+    """`main` is a ref every table has and no branch list names, so a source spelled `main` is main itself."""
+    create_branch(table, {}, CreateTableBranchRequest(id=TABLE_ID, name="fresh", from_branch="main"))
+
+    assert table.open_unchecked({}).branches.list()["fresh"].get("parent_branch") is None
+
+
+@pytest.mark.parametrize(
+    ("listing", "names"),
+    [
+        pytest.param(lambda table, token: list_tags(table, {}, ListTableTagsRequest(id=TABLE_ID, limit=1, page_token=token)), ["a", "b", LIVE_TAG], id="tags"),
+        pytest.param(
+            lambda table, token: list_branches(table, {}, ListTableBranchesRequest(id=TABLE_ID, limit=1, page_token=token)),
+            ["a", "b", LIVE_BRANCH],
+            id="branches",
+        ),
+    ],
+)
+def test_a_ref_listing_pages_by_its_limit(table: DoorTable, listing: Callable[[DoorTable, str | None], object], names: list[str]) -> None:
+    """``limit`` bounds the page and ``page_token`` resumes after it, so a caller paging one at a time reads every ref once."""
+    dataset = table.open_unchecked({})
+    for name in ("a", "b"):
+        dataset.tags.create(name, 1)
+        dataset.create_branch(name, None)
+
+    seen: list[str] = []
+    token: str | None = None
+    while True:
+        page = listing(table, token)
+        refs = getattr(page, "tags", None) or getattr(page, "branches", None) or {}
+        assert len(refs) <= 1, refs
+        seen.extend(refs)
+        token = getattr(page, "page_token", None)
+        if not token:
+            break
+
+    assert seen == names
 
 
 def test_a_version_error_names_the_SOURCE_branch_not_the_one_being_created(table: DoorTable) -> None:

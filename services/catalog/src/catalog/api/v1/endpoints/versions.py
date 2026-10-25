@@ -40,7 +40,7 @@ from catalog.api.dependencies import (
     SettingsDep,
     StorageOptionsDep,
 )
-from catalog.api.pagination import paginate_versions
+from catalog.api.pagination import ListLimit, paginate_versions
 from catalog.api.rask_params import RaskFlag
 from catalog.api.security import CurrentToken
 from catalog.core import run_context
@@ -57,13 +57,6 @@ from service_kit.lakehouse.history_fences import HistoryWork
 
 log = logging.getLogger(__name__)
 
-#: Ceiling for the spec list ops' `limit`. The Lance Namespace spec pages these with
-#: `page_token`, so a server answering fewer rows than asked and handing back a token is
-#: SPEC-CORRECT — the cap costs a caller nothing but a second call. Declared here rather than
-#: clamped in the body so the schema states the real bound. An over-limit request is refused by
-#: `install_problem_handlers`, which carries the spec `code` (INVALID_INPUT) a generated client
-#: dispatches on.
-_MAX_LIST_LIMIT = 1000
 
 router = APIRouter(prefix="/v1/table", tags=["version"])
 
@@ -152,8 +145,9 @@ def batch_commit_tables(body: BatchCommitTablesRequest) -> BatchCommitTablesResp
 def list_table_versions(
     id: str,
     table: DoorTableDep,
+    so: StorageOptionsDep,
     page_token: str | None = None,
-    limit: Annotated[int | None, Query(ge=1, le=_MAX_LIST_LIMIT)] = None,
+    limit: ListLimit = None,
     descending: bool | None = None,
     branch: Annotated[str | None, Query(description="The ref whose version history to list. Omit for main.")] = None,
 ) -> ListTableVersionsResponse:
@@ -168,7 +162,7 @@ def list_table_versions(
 
     So the native call is made UNPAGINATED — the same rule `catalog.api.pagination` states for the name
     listings — and the cursor is this layer's. The full list is what the backend returns unbounded
-    (measured: no limit gives all seven), and `_MAX_LIST_LIMIT` still bounds what leaves the door.
+    (measured: no limit gives all seven), and `ListLimit` still bounds what leaves the door.
     """
     req = ListTableVersionsRequest(
         id=parse_identifier(id),
@@ -179,6 +173,8 @@ def list_table_versions(
         descending=descending,
         branch=branch,
     )
+    # The backend reports a branch the table lacks as a missing table; opening the ref answers the spec's 22 ([[LH-406]]).
+    table.open_unchecked(so, branch=dataplane.recorded_branch(branch))
     answer = table.read_natively("list_table_versions", req)
     rows = list(answer.versions or [])
     by_version = {row.version: row for row in rows}
@@ -289,6 +285,7 @@ async def _clone_evidence_for(staged: managed_versions.StagedVersion, settings: 
 def describe_table_version(
     id: str,
     table: DoorTableDep,
+    so: StorageOptionsDep,
     version: int | None = None,
     body: DescribeTableVersionRequest | None = None,
 ) -> DescribeTableVersionResponse:
@@ -303,6 +300,7 @@ def describe_table_version(
     req.id = reconcile_body_id(parse_identifier(id), req.id)
     if version is not None:
         req.version = version
+    table.open_unchecked(so, branch=dataplane.recorded_branch(req.branch))
     described = table.read_natively("describe_table_version", req)
     return described
 

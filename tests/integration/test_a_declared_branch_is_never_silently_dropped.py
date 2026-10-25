@@ -29,7 +29,6 @@ from fastapi.testclient import TestClient
 _T = "/v1/table/g1$t"
 _VECTOR = {"single_vector": [0.1, 0.2]}
 _UNSUPPORTED = 0
-_TABLE_NOT_FOUND = 4
 _BRANCH_NOT_FOUND = 22
 
 
@@ -77,9 +76,9 @@ def table(real_ns_client: TestClient) -> tuple[TestClient, str]:
         pytest.param("/stats", {"json": {"branch": "ghost"}}, 406, _UNSUPPORTED, id="stats"),
         pytest.param("/schema_metadata/update", {"json": {"branch": "ghost", "metadata": {"k": "v"}}}, 404, _BRANCH_NOT_FOUND, id="schema_metadata"),
         pytest.param("/restore", {"json": {"branch": "ghost", "version": 1}}, 404, _BRANCH_NOT_FOUND, id="restore"),
-        # Served by the upstream op, which reports a missing branch as TableNotFound rather than code 22.
-        pytest.param("/version/list?branch=ghost", {"json": {}}, 404, _TABLE_NOT_FOUND, id="version_list"),
-        pytest.param("/version/describe", {"json": {"branch": "ghost", "version": 1}}, 404, _TABLE_NOT_FOUND, id="version_describe"),
+        # Served by the upstream op, which reports a missing branch as TableNotFound; the door opens the ref first ([[LH-406]]).
+        pytest.param("/version/list?branch=ghost", {"json": {}}, 404, _BRANCH_NOT_FOUND, id="version_list"),
+        pytest.param("/version/describe", {"json": {"branch": "ghost", "version": 1}}, 404, _BRANCH_NOT_FOUND, id="version_describe"),
     ],
 )
 def test_a_branch_the_table_lacks_is_never_answered_from_main(

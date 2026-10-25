@@ -56,7 +56,7 @@ from catalog.api.dependencies import (
     TrashedUuidQuery,
     namespace_for_root,
 )
-from catalog.api.pagination import paginate
+from catalog.api.pagination import ListLimit, paginate
 from catalog.api.rask_params import RaskFlag
 from catalog.api.security import Caller, CurrentToken
 from catalog.core import tier_policy
@@ -170,11 +170,11 @@ async def create_namespace(
     # A top-level namespace needs a warehouse to live in. This door cannot name one, so a NEW top-level
     # namespace is refused here and the caller is sent to the warehouse-scoped route; checked BEFORE the
     # native create, so a refusal leaves nothing half-made. Nested namespaces inherit their parent's
-    # binding and pass. An Overwrite of a top-level id that already has a binding passes too: the
-    # replacement is created where the binding routes it (`NamespaceDep` resolves through it) and hangs
-    # off that binding's warehouse, so it belongs to a warehouse exactly as the namespace it replaces did.
+    # binding and pass. An Overwrite or an ExistOk of a top-level id that already has a binding passes too
+    # ([[LH-416]]): the namespace it keeps or creates is where the binding routes it (`NamespaceDep` resolves
+    # through it) and hangs off that binding's warehouse, so it belongs to a warehouse as the bound one does.
     binding: dict[str, str] | None = None
-    if create_mode is CreateMode.OVERWRITE and settings.warehouses_enabled and len(segments) == 1:
+    if create_mode in (CreateMode.OVERWRITE, CreateMode.EXIST_OK) and settings.warehouses_enabled and len(segments) == 1:
         binding = await run_in_threadpool(warehouses.binding_for_namespace, settings.registry_root, settings.storage_options(), segments[0])
     if binding is None:
         fga_deps.require_warehouse_scoped(segments, warehouses_enabled=settings.warehouses_enabled)
@@ -457,7 +457,7 @@ async def list_namespaces(
     client: FgaClientDep,
     resolver: ResolverDep,
     page_token: str | None = None,
-    limit: int | None = None,
+    limit: ListLimit = None,
 ) -> ListNamespacesResponse:
     """List the child namespaces under ``id``; when FGA is on, filtered to what the caller can see.
 
@@ -1275,7 +1275,7 @@ async def list_tables(
     client: FgaClientDep,
     resolver: ResolverDep,
     page_token: str | None = None,
-    limit: int | None = None,
+    limit: ListLimit = None,
     include_declared: bool = True,
 ) -> ListTablesResponse:
     """List the tables under namespace ``id``; when FGA is on, filtered to what the caller can

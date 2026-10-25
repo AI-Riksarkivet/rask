@@ -32,6 +32,7 @@ from catalog.core.vending import Tier, dataset_facts, require_vendable_bases, ro
 from catalog.schemas import CredentialResponse
 from service_kit.governed import fga
 from service_kit.governed.audit import SUCCESS, audit
+from service_kit.lakehouse.version_retention import recorded_branch
 
 
 log = logging.getLogger(__name__)
@@ -79,6 +80,8 @@ async def vend_credentials(
     holds the table authorized: a credential for a location is a grant on whatever table holds it ([[LH-530]]).
     """
     location = table.location
+    # `main` is the table itself, which no branch list names; the credential for it is main's.
+    branch = recorded_branch(branch) or ""
     try:
         # The client-direct write target + optimistic-commit base version (a declared-only/new table reads as 0).
         # A tiny manifest read under the catalog's own credential to learn the version — not the byte-proxy (no data bytes move).

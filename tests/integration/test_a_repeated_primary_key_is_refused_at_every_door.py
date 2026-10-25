@@ -79,6 +79,8 @@ def _two_inserts_of_one_new_key(client: TestClient, _location: str, context: dic
     [
         pytest.param(lambda c, _l: [_create(c, 5, 5)], False, [400], None, id="fresh-create-repeats-within"),
         pytest.param(lambda c, _l: [_create(c, 5, 5, mode="Overwrite")], True, [400], [1, 2], id="overwrite-repeats-within"),
+        # [[LH-424]] A Create over a written table is the create's conflict before any judgement of its rows.
+        pytest.param(lambda c, _l: [_create(c, 5, 5)], True, [409], [1, 2], id="create-over-a-written-table-repeats-within"),
         pytest.param(lambda c, _l: [_insert(c, 5, 5)], True, [400], [1, 2], id="insert-repeats-within"),
         pytest.param(lambda c, _l: [_insert(c, 2, 5)], True, [400], [1, 2], id="insert-repeats-a-held-key"),
         pytest.param(lambda c, _l: [_merge(c, 5, 5)], True, [400], [1, 2], id="merge-source-repeats-within"),

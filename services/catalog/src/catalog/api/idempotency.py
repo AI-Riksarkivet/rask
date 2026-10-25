@@ -24,25 +24,33 @@ not an audit trail and the audit lane already carries the principal.
 from __future__ import annotations
 
 import hashlib
+import logging
 import time
-from dataclasses import dataclass  # noqa: TID251
+from collections.abc import AsyncIterator
 from typing import Annotated, Any
 
-from fastapi import Header
+from fastapi import Depends, Header
 from fastapi.concurrency import run_in_threadpool
-from lance_namespace import ConcurrentModificationError, InvalidInputError
+from lance_namespace import ConcurrentModificationError, InvalidInputError, LanceNamespaceError
+from pydantic import BaseModel, ConfigDict
 
-from catalog.api.security import Caller
-from catalog.core.config import Settings
+from catalog.api.dependencies import SettingsDep, StorageOptionsDep
+from catalog.api.security import Caller, CurrentToken
 from service_kit.lakehouse import idempotency
+from service_kit.lakehouse.ns_errors import status_for
 
 
-#: The header, constrained to the same shape the seam validates. Bounded and tokenised because it
-#: becomes part of an object key; `None` is the ordinary case and means "no convergence asked for".
+#: The header: a UUID, in any case, because the key becomes part of an object key and a UUID is a segment no spelling
+#: can turn into a path that leaves its prefix. Idempotency-Key is rask's own extension (the spec defines none), so its
+#: grammar is the catalog's to choose. Anything else is refused 400 (code 13) on a spec route. `None` is the ordinary
+#: case and means "no convergence asked for".
 IdempotencyKeyHeader = Annotated[
     str | None,
-    Header(alias="Idempotency-Key", min_length=1, max_length=64, pattern=r"^[A-Za-z0-9._-]+$"),
+    Header(alias="Idempotency-Key", pattern=r"^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$"),
 ]
+
+
+log = logging.getLogger(__name__)
 
 
 #: The scope for a request that carries no verified principal — auth OFF, which the estate supports for
@@ -57,19 +65,38 @@ def _scope(token: Caller | None) -> str:
     return hashlib.blake2s(token.subject.encode("utf-8"), digest_size=8).hexdigest()
 
 
-@dataclass(frozen=True)
-class Converge:
+class Converge(BaseModel):
     """A claimed key, or the no-op a keyless caller gets.
 
-    `replay` is the first attempt's answer when there is one. `remember` stores this attempt's answer;
-    it is a no-op without a key, so a door calls it unconditionally and reads the same on both paths.
+    `replay` is the first attempt's answer when there is one. `remember` stores this attempt's answer, and
+    `release_if_refused` gives the claim back for a refusal; both are no-ops without a key, so a door calls them
+    unconditionally and reads the same on both paths.
     """
 
-    settings: Settings
+    model_config = ConfigDict(frozen=True)
+
+    registry_root: str
     storage_options: dict[str, str]
     scope: str
     key: str | None
-    replay: idempotency.Replay | None
+    claimed_at: float = 0.0
+    replay: idempotency.Replay | None = None
+
+    async def release_if_refused(self, exc: BaseException) -> None:
+        """Give the claim back when ``exc`` is a refusal (a 4xx of the spec's taxonomy), which the keyed doors raise
+        before any write: the caller's corrected retry under the key then runs rather than meeting 409 for the
+        lease ([[LH-487]]). A fault (5xx), or anything else, keeps the lease, since the write may have landed.
+        """
+        if self.key is None or not isinstance(exc, LanceNamespaceError) or status_for(int(exc.code)) >= 500:
+            return
+        await run_in_threadpool(
+            idempotency.release,
+            self.registry_root,
+            self.storage_options,
+            scope=self.scope,
+            key=self.key,
+            claimed_at=self.claimed_at,
+        )
 
     async def remember(self, status: int, response: Any) -> None:  # noqa: ANN401 — the door's own response model
         """Store what this attempt answered. A no-op without a key, so a door calls it unconditionally.
@@ -84,7 +111,7 @@ class Converge:
         body = response.model_dump(mode="json", exclude_none=True) if hasattr(response, "model_dump") else response
         await run_in_threadpool(
             idempotency.record_outcome,
-            self.settings.registry_root,
+            self.registry_root,
             self.storage_options,
             scope=self.scope,
             key=self.key,
@@ -93,7 +120,7 @@ class Converge:
         )
 
 
-async def begin(settings: Settings, storage_options: dict[str, str], token: Caller | None, key: str | None, *, endpoint: str) -> Converge:
+async def begin(registry_root: str, storage_options: dict[str, str], scope: str, key: str | None, *, endpoint: str) -> Converge:
     """Claim `key` for `endpoint`, or return the no-op when the caller sent none.
 
     The two failures are translated to the spec's own vocabulary rather than a hand-picked status, per
@@ -102,24 +129,70 @@ async def begin(settings: Settings, storage_options: dict[str, str], token: Call
     `ConcurrentModification` (409), which is what a retrying client should see.
     """
     if key is None:
-        return Converge(settings=settings, storage_options=storage_options, scope="", key=None, replay=None)
+        return Converge(registry_root=registry_root, storage_options=storage_options, scope=scope, key=None)
 
-    scope = _scope(token)
+    # One key, however the caller cases its hex digits.
+    key = key.lower()
+    claimed_at = time.time()
     try:
         replay = await run_in_threadpool(
             idempotency.claim,
-            settings.registry_root,
+            registry_root,
             storage_options,
             scope=scope,
             key=key,
             endpoint=endpoint,
-            now=time.time(),
+            now=claimed_at,
         )
     except idempotency.KeyReusedError as exc:
         raise InvalidInputError(str(exc)) from exc
     except idempotency.InFlightError as exc:
         raise ConcurrentModificationError(str(exc)) from exc
-    return Converge(settings=settings, storage_options=storage_options, scope=scope, key=key, replay=replay)
+    return Converge(registry_root=registry_root, storage_options=storage_options, scope=scope, key=key, claimed_at=claimed_at, replay=replay)
 
 
-__all__ = ["Converge", "IdempotencyKeyHeader", "begin"]
+class KeyedDoor(BaseModel):
+    """A keyed door's request: the key it was sent, and the claim :meth:`begin` makes for it.
+
+    Built per request by :func:`keyed_door`, which gives the claim back when the door is refused (:meth:`Converge.release_if_refused`).
+    """
+
+    #: Where the claims are kept: the control root.
+    registry_root: str
+    storage_options: dict[str, str]
+    #: The caller the key belongs to (:func:`_scope`).
+    scope: str
+    key: str | None
+    converge: Converge | None = None
+
+    async def begin(self, *, endpoint: str) -> Converge:
+        """Claim the request's key for ``endpoint`` (:func:`begin`), after the door's shape refusals."""
+        self.converge = await begin(self.registry_root, self.storage_options, self.scope, self.key, endpoint=endpoint)
+        return self.converge
+
+
+async def keyed_door(
+    settings: SettingsDep, so: StorageOptionsDep, token: CurrentToken, idempotency_key: IdempotencyKeyHeader = None
+) -> AsyncIterator[KeyedDoor]:
+    """The door's :class:`KeyedDoor`; a refusal the door raises after its claim gives the claim back ([[LH-487]]).
+
+    A dependency with ``yield`` is handed the endpoint's exception at the ``yield`` (FastAPI 0.140.13), before the
+    problem handlers answer it, so every keyed door releases through this one place.
+    """
+    door = KeyedDoor(registry_root=settings.registry_root, storage_options=so, scope=_scope(token), key=idempotency_key)
+    try:
+        yield door
+    except Exception as exc:
+        if door.converge is not None:
+            # The door's own refusal is what the caller is told; a release the store fails leaves the claim to its lease.
+            try:
+                await door.converge.release_if_refused(exc)
+            except Exception as release_exc:  # noqa: BLE001 — never answered over the door's refusal
+                log.warning("idempotency_release_failed", extra={"key": door.key, "error": str(release_exc)[:300]})
+        raise
+
+
+KeyedDoorDep = Annotated[KeyedDoor, Depends(keyed_door)]
+
+
+__all__ = ["Converge", "IdempotencyKeyHeader", "KeyedDoor", "KeyedDoorDep", "begin"]

@@ -25,11 +25,11 @@ from pathlib import Path
 
 import pytest
 
-from service_kit.lakehouse.idempotency import InFlightError, Replay, claim, record_outcome
+from service_kit.lakehouse.idempotency import InFlightError, Replay, claim, record_outcome, release
 
 
 SCOPE = "acme"
-KEY = "caller-supplied-key-1"
+KEY = "0b6f3f0e-5c7a-4a43-9d6e-2f1c8a9b7e10"
 ENDPOINT = "POST /v1/table/{id}/create"
 
 
@@ -44,27 +44,7 @@ class TestTheFirstAttemptOwnsTheKey:
         assert claim(_root(tmp_path), {}, scope="other", key=KEY, endpoint=ENDPOINT, now=1000.0) is None
 
 
-class TestAReplayGetsTheFirstAttemptsAnswer:
-    def test_a_FAILED_outcome_replays_too(self, tmp_path: Path) -> None:
-        """The point is one execution, not one success. Replaying a 4xx the caller already earned is
-        strictly better than re-running the door to earn it again."""
-        root = _root(tmp_path)
-        claim(root, {}, scope=SCOPE, key=KEY, endpoint=ENDPOINT, now=1000.0)
-        record_outcome(root, {}, scope=SCOPE, key=KEY, status=409, body={"error": "exists"})
-
-        assert claim(root, {}, scope=SCOPE, key=KEY, endpoint=ENDPOINT, now=1001.0) == Replay(status=409, body={"error": "exists"})
-
-
 class TestAnAttemptStillRunningIsNotAReplay:
-    def test_a_concurrent_second_attempt_is_told_to_wait(self, tmp_path: Path) -> None:
-        """The first attempt claimed the key and has not finished. Returning "no replay" would let it
-        execute twice, and returning an empty replay would answer with a result nobody produced."""
-        root = _root(tmp_path)
-        claim(root, {}, scope=SCOPE, key=KEY, endpoint=ENDPOINT, now=1000.0)
-
-        with pytest.raises(InFlightError):
-            claim(root, {}, scope=SCOPE, key=KEY, endpoint=ENDPOINT, now=1001.0)
-
     def test_reclaiming_does_not_lose_the_outcome_the_first_attempt_then_writes(self, tmp_path: Path) -> None:
         """The abandoned attempt may not be dead, only slow. Whichever finishes writes the outcome, and
         a later replay must see one — never a record still marked in-flight."""
@@ -75,12 +55,24 @@ class TestAnAttemptStillRunningIsNotAReplay:
 
         assert claim(root, {}, scope=SCOPE, key=KEY, endpoint=ENDPOINT, now=1100.0) == Replay(status=200, body={"ok": True})
 
+    def test_a_release_by_an_attempt_whose_claim_was_taken_over_frees_nothing(self, tmp_path: Path) -> None:
+        """[[LH-487]] An attempt releases only the claim it made: once another attempt has taken the key over, the
+        first one's release leaves the key held, so a third attempt still waits."""
+        root = _root(tmp_path)
+        claim(root, {}, scope=SCOPE, key=KEY, endpoint=ENDPOINT, now=1000.0, lease_seconds=60)
+        claim(root, {}, scope=SCOPE, key=KEY, endpoint=ENDPOINT, now=1061.0, lease_seconds=60)
+
+        release(root, {}, scope=SCOPE, key=KEY, claimed_at=1000.0)
+
+        with pytest.raises(InFlightError):
+            claim(root, {}, scope=SCOPE, key=KEY, endpoint=ENDPOINT, now=1062.0, lease_seconds=60)
+
 
 class TestTheKeyIsNeverAPathTraversal:
-    @pytest.mark.parametrize("bad", ["a/b", "..", "", "a" * 200])
-    def test_a_key_that_is_not_a_plain_token_is_refused(self, tmp_path: Path, bad: str) -> None:
-        """The key becomes part of an object key, so an unvalidated one writes outside its own prefix.
-        The doors constrain it at the header too; this refuses it at the seam, because a second caller
-        of this module must not have to remember."""
+    @pytest.mark.parametrize("bad", ["..", KEY.upper()])
+    def test_a_key_that_is_not_a_canonical_uuid_is_refused(self, tmp_path: Path, bad: str) -> None:
+        """The key becomes part of an object key, so an unvalidated one writes outside its own prefix. A canonical
+        lower-case UUID is the one spelling that cannot. The doors constrain it at the header too; this refuses it
+        at the seam, because a second caller of this module must not have to remember."""
         with pytest.raises(ValueError, match="idempotency key"):
             claim(_root(tmp_path), {}, scope=SCOPE, key=bad, endpoint=ENDPOINT, now=1000.0)

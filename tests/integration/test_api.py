@@ -183,8 +183,10 @@ def test_merge_insert_reads_its_query_params_as_the_spec_states_them(real_ns_cli
     ]
 
 
-def test_list_table_versions_maps_descending_and_branch(client: TestClient, fake_ns: MagicMock) -> None:
+def test_list_table_versions_maps_descending_and_branch(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
     fake_ns.list_table_versions.return_value = ListTableVersionsResponse(versions=[])
+    # The door opens the named branch before the native call ([[LH-406]]); the table here has it.
+    monkeypatch.setattr("catalog.services.table_claims.open_resolved_dataset_unchecked", lambda *a, **k: MagicMock())
     client.post("/v1/table/db$t/version/list?descending=true&branch=exp")
     req = fake_ns.list_table_versions.call_args.args[0]
     assert req.descending is True
@@ -479,6 +481,7 @@ def test_create_tag_with_branch_passes_branch_version_tuple(client: TestClient, 
     # A branch-scoped tag must pass (branch, version) — a bare int would resolve against main, tagging the
     # WRONG version. (Was silently dropping `branch`.)
     dataset = MagicMock()
+    dataset.branches.list.return_value = {"dev": {}}  # a tag is made on a branch the table has ([[LH-406]])
     monkeypatch.setattr("catalog.services.table_claims.open_resolved_dataset", lambda *a, **k: dataset)
     resp = client.post("/v1/table/db$t/tags/create", json={"tag": "rc", "version": 5, "branch": "dev"})
     assert resp.status_code == 200

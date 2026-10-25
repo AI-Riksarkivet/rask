@@ -52,6 +52,7 @@ if TYPE_CHECKING:
 
 ARROW_STREAM = {"content-type": "application/vnd.apache.arrow.stream"}
 INVALID_INPUT = 13
+UNSUPPORTED = 0
 
 
 def _id_table(n: int = 3) -> pa.Table:
@@ -141,16 +142,19 @@ def test_a_drop_field_outside_its_vocabulary_drops_nothing(real_ns_client: TestC
     assert _exists(real_ns_client, "namespace", "db"), "a refused drop must leave the namespace in place"
 
 
-@pytest.mark.parametrize("mode", ["ExistOk", "Overwrite"])
-def test_a_register_mode_the_door_refuses_attaches_nothing(real_ns_client: TestClient, tmp_path: Path, mode: str) -> None:
+@pytest.mark.parametrize(("mode", "status", "code"), [("ExistOk", 400, INVALID_INPUT), ("Overwrite", 406, UNSUPPORTED)])
+def test_a_register_mode_the_door_refuses_attaches_nothing(real_ns_client: TestClient, tmp_path: Path, mode: str, status: int, code: int) -> None:
     """`register` has two modes, not `create`'s three. `ExistOk` is a real word on the create doors, so a
-    caller reusing it here is the likeliest way to reach the parse's refusal. `Overwrite` is one of the
-    two, and this door refuses it by name: replacing a registration would detach bytes the catalog does
-    not own from the table that points at them."""
+    caller reusing it here is the likeliest way to reach the parse's refusal (400, code 13). `Overwrite` is one
+    of the two, and this door declines it as the spec's Unsupported (406, code 0, which RegisterTable lists):
+    replacing a registration would detach bytes the catalog does not own from the table that points at them."""
     _namespace(real_ns_client, "db")
     lance.write_dataset(pa.table({"id": pa.array([1, 2], pa.int64())}), str(tmp_path / "ext"), data_storage_version="2.2", enable_stable_row_ids=True)
 
-    _refused(real_ns_client.post("/v1/table/db$r/register", json={"location": "ext", "mode": mode}), mode)
+    response = real_ns_client.post("/v1/table/db$r/register", json={"location": "ext", "mode": mode})
+
+    assert (response.status_code, response.json().get("code")) == (status, code), response.text
+    assert mode in str(response.json().get("detail")), response.text
 
     assert not _exists(real_ns_client, "table", "db$r"), "a refused register must attach nothing"
 

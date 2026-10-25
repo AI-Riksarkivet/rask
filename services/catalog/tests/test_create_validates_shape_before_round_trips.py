@@ -20,6 +20,7 @@ import pytest
 from lance_namespace import InvalidInputError, LanceNamespace
 
 from catalog.api import fga_deps
+from catalog.api.idempotency import KeyedDoor
 from catalog.api.v1.endpoints import data as ep
 from catalog.core.config import Settings
 from service_kit.lancekit.arrow_ipc import encode_arrow_stream
@@ -45,6 +46,7 @@ def no_round_trips(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 def _create(**over: Any) -> Any:
     kwargs: dict[str, Any] = {
         "id": "db1$t",
+        "keyed": KeyedDoor(registry_root="", storage_options={}, scope="anonymous", key=None),
         "ns": cast("LanceNamespace", object()),
         "root": "s3://root",
         "settings": _settings(),

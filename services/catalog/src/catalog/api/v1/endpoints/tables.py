@@ -41,6 +41,7 @@ from lance_namespace import (
     TableAlreadyExistsError,
     TableExistsRequest,
     TableNotFoundError,
+    UnsupportedOperationError,
 )
 from openfga_sdk import OpenFgaClient
 
@@ -62,7 +63,7 @@ from catalog.api.dependencies import (
     VendorDep,
     namespace_for_top_ns,
 )
-from catalog.api.pagination import paginate
+from catalog.api.pagination import ListLimit, paginate
 from catalog.api.rask_params import RaskFlag
 from catalog.api.security import Caller, CurrentToken
 from catalog.core import json_arrow, provenance_guard
@@ -105,13 +106,6 @@ from service_kit.lakehouse.ns_errors import PartiallyApplied
 
 
 log = logging.getLogger(__name__)
-#: Ceiling for the spec list ops' `limit`. The Lance Namespace spec pages these with
-#: `page_token`, so a server answering fewer rows than asked and handing back a token is
-#: SPEC-CORRECT — the cap costs a caller nothing but a second call. Declared here rather than
-#: clamped in the body so the schema states the real bound. An over-limit request is refused by
-#: `install_problem_handlers`, which carries the spec `code` (INVALID_INPUT) a generated client
-#: dispatches on.
-_MAX_LIST_LIMIT = 1000
 
 router = APIRouter(prefix="/v1/table", tags=["table"])
 
@@ -189,7 +183,7 @@ async def list_all_tables(
     client: FgaClientDep,
     resolver: ResolverDep,
     page_token: str | None = None,
-    limit: Annotated[int | None, Query(ge=1, le=_MAX_LIST_LIMIT)] = None,
+    limit: ListLimit = None,
     include_declared: bool = True,
 ) -> ListTablesResponse:
     """List every table in the namespace via ``list_all_tables``; when FGA is on,
@@ -683,14 +677,24 @@ def _load_or_judge_declared(response: DescribeTableResponse, table: DoorTable, s
 
 
 def _load_detailed_metadata(response: DescribeTableResponse, dataset: lance.LanceDataset) -> None:
-    """Answer ``dataset``'s version and schema as the backend's detailed describe does, and its own schema metadata.
+    """Answer ``dataset``'s version, schema and stats, and its own schema metadata.
 
-    ``metadata`` is the table's user metadata, read from the same handle, so a table property a caller writes through
-    ``schema_metadata/update`` is read back here.
+    ``load_detailed_metadata`` "must include all detailed metadata such as `version`, `schema`, and `stats`"
+    (`lance_docs/ns_catalog/spec.yaml` DescribeTableRequest); the stats are ``TableBasicStats``, which Lance's
+    ``dataset_stats`` reads off the manifest the handle already holds. ``metadata`` is the table's user metadata, read
+    from the same handle, so a table property a caller writes through ``schema_metadata/update`` is read back here.
     """
-    loaded = DescribeTableResponse.model_validate({"version": dataset.version, "schema": json_arrow.table_schema_json(dataset.lance_schema)})
+    stats = dataset.stats.dataset_stats()
+    loaded = DescribeTableResponse.model_validate(
+        {
+            "version": dataset.version,
+            "schema": json_arrow.table_schema_json(dataset.lance_schema),
+            "stats": {"num_deleted_rows": int(stats["num_deleted_rows"]), "num_fragments": int(stats["num_fragments"])},
+        }
+    )
     response.version = loaded.version
     response.var_schema = loaded.var_schema
+    response.stats = loaded.stats
     metadata = dataplane.user_schema_metadata(dataset.schema)
     if metadata:
         response.metadata = metadata
@@ -701,19 +705,25 @@ def _load_detailed_metadata(response: DescribeTableResponse, dataset: lance.Lanc
 #: bytes `null`, which a strict client reads as a JSON document where the contract promised none.
 #: `response_class=Response` is what makes FastAPI emit nothing; `status_code=200` alone does not.
 @router.post("/{id}/exists", status_code=200, response_class=Response)
-def table_exists(id: str, table: DoorTableDep, body: TableExistsRequest | None = None) -> Response:
+def table_exists(id: str, table: DoorTableDep, so: StorageOptionsDep, body: TableExistsRequest | None = None) -> Response:
     """Check the table at ``id`` exists via ``table_exists`` — 200 if present (spec 0.9), else error.
 
     The answer is about the table the request resolved, so it stands only while the name still resolves there ([[LH-530]]).
+    A ``version`` asks whether the table holds that version (`lance_docs/ns_catalog/spec.yaml` TableExistsRequest), which
+    the backend's own answer ignores, so the version is opened: one the table lacks answers 404 code 11, as describe does.
     """
     segments = reconcile_body_id(parse_identifier(id), body.id if body else None)
-    table.read_natively("table_exists", TableExistsRequest(id=segments, version=body.version if body else None))
+    version = body.version if body else None
+    table.read_natively("table_exists", TableExistsRequest(id=segments, version=version))
+    if version is not None:
+        table.open_unchecked(so, version=version)
     return Response(status_code=200)
 
 
 @router.post("/{id}/drop", response_model_exclude_none=True)
 async def drop_table(
     id: str,
+    keyed: idem.KeyedDoorDep,
     ns: NamespaceDep,
     table: ResolvedTableDep,
     settings: SettingsDep,
@@ -726,7 +736,6 @@ async def drop_table(
     authorization: Annotated[str | None, Header()] = None,
     force: RaskFlag = False,
     purge: RaskFlag = False,
-    idempotency_key: idem.IdempotencyKeyHeader = None,
 ) -> DropTableResponse:
     """Drop the table at ``id`` via ``drop_table``, then revoke its FGA tuples and
     emit a best-effort ``drop_table`` lineage event.
@@ -737,7 +746,7 @@ async def drop_table(
     with or without it."""
     # SAME AMPLIFIER AS create (see `catalog.api.idempotency`): a replay re-enters a door that
     # DELETES BYTES or files a trash record. OPTIONAL, because the spec defines no such header and a stock client must keep working.
-    converge = await idem.begin(settings, so, token, idempotency_key, endpoint="POST /v1/table/{id}/drop")
+    converge = await keyed.begin(endpoint="POST /v1/table/{id}/drop")
     if converge.replay is not None:
         return DropTableResponse.model_validate(converge.replay.body)
 
@@ -877,6 +886,7 @@ async def drop_table(
 @router.post("/{id}/deregister", response_model_exclude_none=True)
 async def deregister_table(
     id: str,
+    keyed: idem.KeyedDoorDep,
     ns: NamespaceDep,
     table: ResolvedTableDep,
     settings: SettingsDep,
@@ -889,7 +899,6 @@ async def deregister_table(
     body: DeregisterTableRequest | None = None,
     authorization: Annotated[str | None, Header()] = None,
     force: RaskFlag = False,
-    idempotency_key: idem.IdempotencyKeyHeader = None,
 ) -> DeregisterTableResponse:
     """Deregister the table at ``id`` (detach it without deleting data) via lance_namespace
     ``deregister_table``, then revoke its FGA ownership and emit a best-effort ``deregister_table`` marker.
@@ -904,7 +913,7 @@ async def deregister_table(
     a table by no uuid ([[LH-166]]), so the feed is not told."""
     # SAME AMPLIFIER AS create (see `catalog.api.idempotency`): a replay re-enters a door that
     # retires the id while the bytes stay. OPTIONAL, because the spec defines no such header and a stock client must keep working.
-    converge = await idem.begin(settings, so, token, idempotency_key, endpoint="POST /v1/table/{id}/deregister")
+    converge = await keyed.begin(endpoint="POST /v1/table/{id}/deregister")
     if converge.replay is not None:
         return DeregisterTableResponse.model_validate(converge.replay.body)
 
@@ -1040,6 +1049,7 @@ def absolute_table_location(ns: LanceNamespace, segments: list[str], registered:
 @router.post("/{id}/register", response_model_exclude_none=True)
 async def register_table(
     id: str,
+    keyed: idem.KeyedDoorDep,
     body: RegisterTableRequest,
     ns: NamespaceDep,
     root: NamespaceRootDep,
@@ -1052,7 +1062,6 @@ async def register_table(
     control: ControlEmitterDep,
     resolver: ResolverDep,
     authorization: Annotated[str | None, Header()] = None,
-    idempotency_key: idem.IdempotencyKeyHeader = None,
 ) -> RegisterTableResponse:
     """Register an existing table location at ``id`` via ``register_table``, refuse it when the location
     overlaps the control root, a configured base or another table, when the dataset there carries reader
@@ -1075,8 +1084,10 @@ async def register_table(
     # BEFORE `idem.begin`, deliberately: this is a SHAPE refusal, and minting an idempotency record
     # for a request the door was never going to attempt would make the replay of a malformed call
     # converge on nothing.
+    # Declined as the spec's Unsupported (406, code 0), which RegisterTable lists: the mode is well formed, and this
+    # catalog does not serve it.
     if RegisterMode.parse(body.mode) is RegisterMode.OVERWRITE:
-        raise InvalidInputError(
+        raise UnsupportedOperationError(
             "mode 'Overwrite' is not supported on this door: replacing a registration would detach bytes this "
             "catalog does not own from the table that currently points at them. Deregister the existing table "
             "first, then register the new location."
@@ -1106,7 +1117,7 @@ async def register_table(
     )
     # SAME AMPLIFIER AS create (see `catalog.api.idempotency`): a replay re-enters a door that
     # MINTS an id and seeds its ownership. OPTIONAL, because the spec defines no such header and a stock client must keep working.
-    converge = await idem.begin(settings, so, token, idempotency_key, endpoint="POST /v1/table/{id}/register")
+    converge = await keyed.begin(endpoint="POST /v1/table/{id}/register")
     if converge.replay is not None:
         return RegisterTableResponse.model_validate(converge.replay.body)
 
@@ -1508,6 +1519,7 @@ async def _hand_over_data_directories(settings: Settings, location: str, *, sour
 @router.post("/{id}/rename", response_model_exclude_none=True)
 async def rename_table(
     id: str,
+    keyed: idem.KeyedDoorDep,
     body: RenameTableRequest,
     ns: NamespaceDep,
     table: ResolvedTableDep,
@@ -1522,7 +1534,6 @@ async def rename_table(
     root: NamespaceRootDep,
     authorization: Annotated[str | None, Header()] = None,
     force: RaskFlag = False,
-    idempotency_key: idem.IdempotencyKeyHeader = None,
 ) -> RenameTableResponse:
     """Rename the table at ``id`` by moving its POINTER, and emit lineage; its grants stay on its uuid.
 
@@ -1545,7 +1556,7 @@ async def rename_table(
     concurrent rename or registration → 409 ``ConcurrentModification`` (code 14, [[LH-204]])."""
     # SAME AMPLIFIER AS create (see `catalog.api.idempotency`): a replay re-enters a door that
     # retires the source id and re-registers the destination. OPTIONAL, because the spec defines no such header and a stock client must keep working.
-    converge = await idem.begin(settings, so, token, idempotency_key, endpoint="POST /v1/table/{id}/rename")
+    converge = await keyed.begin(endpoint="POST /v1/table/{id}/rename")
     if converge.replay is not None:
         return RenameTableResponse.model_validate(converge.replay.body)
 
@@ -1655,6 +1666,7 @@ async def rename_table(
 @router.post("/{id}/restore", response_model_exclude_none=True)
 async def restore_table(
     id: str,
+    keyed: idem.KeyedDoorDep,
     body: RestoreTableRequest,
     table: DoorTableDep,
     settings: SettingsDep,
@@ -1663,13 +1675,12 @@ async def restore_table(
     emitter: LineageEmitterDep,
     uuids: ObjectUuidsDep,
     authorization: Annotated[str | None, Header()] = None,
-    idempotency_key: idem.IdempotencyKeyHeader = None,
 ) -> RestoreTableResponse:
     """Restore the table at ``id`` to a prior version via ``restore_table``; emits a RESTORE_TABLE event at
     the NEW current version (restore mints a fresh version pointing at the restored data)."""
     # SAME AMPLIFIER AS create (see `catalog.api.idempotency`): a replay re-enters a door that
     # REWINDS the table to an older version. OPTIONAL, because the spec defines no such header and a stock client must keep working.
-    converge = await idem.begin(settings, so, token, idempotency_key, endpoint="POST /v1/table/{id}/restore")
+    converge = await keyed.begin(endpoint="POST /v1/table/{id}/restore")
     if converge.replay is not None:
         return RestoreTableResponse.model_validate(converge.replay.body)
 

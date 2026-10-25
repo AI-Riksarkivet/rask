@@ -23,9 +23,23 @@ names, so every existing import site is untouched.
 
 from __future__ import annotations
 
+from opentelemetry import trace
+
 
 #: The RFC 9457 media type every problem body is served with.
 PROBLEM_JSON = "application/problem+json"
+
+
+def occurrence() -> dict[str, str]:
+    """The spec's optional ``instance`` for the error being answered: the W3C trace id of the request's span.
+
+    ``instance`` "identifies the specific occurrence of the error", "a request or response ID, or anything that the
+    implementation can recognize to trace" it (`lance_docs/ns_catalog/spec.yaml` ErrorResponse). A 5xx detail is
+    redacted, so this id is what a caller gives an operator, and it is the trace the request already has, where the
+    redacted error's log line sits. Empty when no span is active (tracing off), since no id would then find anything.
+    """
+    context = trace.get_current_span().get_span_context()
+    return {"instance": format(context.trace_id, "032x")} if context.is_valid else {}
 
 
 def problem_body(code: int, *, status: int, title: str, detail: str, slug: str | None = None) -> dict[str, object]:
@@ -60,4 +74,5 @@ def problem_body(code: int, *, status: int, title: str, detail: str, slug: str |
         "detail": detail,
         "code": int(code),
         "error": detail,
+        **occurrence(),
     }

@@ -65,7 +65,7 @@ class TestAReplayIsAnsweredNotReExecuted:
     def test_the_same_key_returns_the_first_answer_and_leaves_the_table_alone(self, real_ns_client: TestClient) -> None:
         """The defect this closes: the second call must not re-enter the create path at all."""
         assert real_ns_client.post("/v1/namespace/db/create", json={}).status_code == 200
-        headers = {**ARROW_STREAM, "Idempotency-Key": "retry-1"}
+        headers = {**ARROW_STREAM, "Idempotency-Key": "6a1c9d5e-0f3b-4c2a-8e7d-1b2c3d4e5f60"}
 
         first = real_ns_client.post("/v1/table/db$keyed/create", content=_rows(3), headers=headers)
         assert first.status_code == 200, first.text
@@ -82,19 +82,24 @@ class TestAReplayIsAnsweredNotReExecuted:
     def test_a_DIFFERENT_key_is_a_different_request(self, real_ns_client: TestClient) -> None:
         """Convergence must not become deduplication of unrelated calls."""
         assert real_ns_client.post("/v1/namespace/db/create", json={}).status_code == 200
-        first = real_ns_client.post("/v1/table/db$two/create", content=_rows(), headers={**ARROW_STREAM, "Idempotency-Key": "a"})
+        first = real_ns_client.post(
+            "/v1/table/db$two/create", content=_rows(), headers={**ARROW_STREAM, "Idempotency-Key": "6a1c9d5e-0f3b-4c2a-8e7d-1b2c3d4e5f61"}
+        )
         assert first.status_code == 200, first.text
 
-        second = real_ns_client.post("/v1/table/db$two/create?mode=Overwrite", content=_rows(5), headers={**ARROW_STREAM, "Idempotency-Key": "b"})
+        second = real_ns_client.post(
+            "/v1/table/db$two/create?mode=Overwrite", content=_rows(5), headers={**ARROW_STREAM, "Idempotency-Key": "6a1c9d5e-0f3b-4c2a-8e7d-1b2c3d4e5f62"}
+        )
 
         assert second.status_code == 200, second.text
 
 
 class TestTheHeaderIsConstrainedAtTheDoor:
-    @pytest.mark.parametrize("bad", ["", "a" * 65, "../escape"])
-    def test_a_key_that_is_not_a_plain_bounded_token_is_refused(self, real_ns_client: TestClient, bad: str) -> None:
-        """It becomes part of an object key. Refused at the header AND at the seam — the door's refusal is
-        the better error, and the seam's `ValueError` is what protects a second caller of the module.
+    @pytest.mark.parametrize("bad", ["..", "retry-1"])
+    def test_a_key_that_is_not_a_uuid_is_refused(self, real_ns_client: TestClient, bad: str) -> None:
+        """It becomes part of an object key, so it is a UUID, a segment no spelling turns into a path. Refused at the
+        header AND at the seam: the door's refusal is the better error, and the seam's `ValueError` is what protects
+        a second caller of the module. `..` once reached the seam and answered 500.
 
         400 because `CreateTable` is a SPEC operation: the vendored spec has no 422 and maps
         `InvalidInput` to 400. It also makes this door answer one way — `TestTheKeyIsScopedToItsEndpoint`
@@ -103,7 +108,7 @@ class TestTheHeaderIsConstrainedAtTheDoor:
         """
         response = real_ns_client.post("/v1/table/db$y/create", content=_rows(), headers={**ARROW_STREAM, "Idempotency-Key": bad})
 
-        assert response.status_code == 400, response.text
+        assert (response.status_code, response.json().get("code")) == (400, 13), response.text
 
 
 class TestTheDestructiveDoorsConvergeToo:
@@ -118,7 +123,7 @@ class TestTheDestructiveDoorsConvergeToo:
     def test_a_replayed_drop_answers_once_and_the_second_call_does_not_re_enter(self, real_ns_client: TestClient) -> None:
         assert real_ns_client.post("/v1/namespace/db/create", json={}).status_code == 200
         assert real_ns_client.post("/v1/table/db$doomed/create", content=_rows(), headers=ARROW_STREAM).status_code == 200
-        headers = {"Idempotency-Key": "drop-1"}
+        headers = {"Idempotency-Key": "6a1c9d5e-0f3b-4c2a-8e7d-1b2c3d4e5f63"}
 
         first = real_ns_client.post("/v1/table/db$doomed/drop", headers=headers)
         assert first.status_code == 200, first.text
@@ -133,7 +138,7 @@ class TestTheDestructiveDoorsConvergeToo:
     def test_a_replayed_rename_does_not_report_the_success_as_a_missing_source(self, real_ns_client: TestClient) -> None:
         assert real_ns_client.post("/v1/namespace/db/create", json={}).status_code == 200
         assert real_ns_client.post("/v1/table/db$before/create", content=_rows(), headers=ARROW_STREAM).status_code == 200
-        headers = {"Idempotency-Key": "rename-1"}
+        headers = {"Idempotency-Key": "6a1c9d5e-0f3b-4c2a-8e7d-1b2c3d4e5f64"}
         body = {"id": ["db", "before"], "new_table_name": "after"}
 
         first = real_ns_client.post("/v1/table/db$before/rename", json=body, headers=headers)
@@ -149,9 +154,14 @@ class TestTheDestructiveDoorsConvergeToo:
         the doors rather than only at the seam, because the endpoint string is what binds them and a
         typo in one would silently merge two operations' keys."""
         assert real_ns_client.post("/v1/namespace/db/create", json={}).status_code == 200
-        assert real_ns_client.post("/v1/table/db$shared/create", content=_rows(), headers={**ARROW_STREAM, "Idempotency-Key": "shared-key"}).status_code == 200
+        assert (
+            real_ns_client.post(
+                "/v1/table/db$shared/create", content=_rows(), headers={**ARROW_STREAM, "Idempotency-Key": "6a1c9d5e-0f3b-4c2a-8e7d-1b2c3d4e5f65"}
+            ).status_code
+            == 200
+        )
 
-        crossed = real_ns_client.post("/v1/table/db$shared/drop", headers={"Idempotency-Key": "shared-key"})
+        crossed = real_ns_client.post("/v1/table/db$shared/drop", headers={"Idempotency-Key": "6a1c9d5e-0f3b-4c2a-8e7d-1b2c3d4e5f65"})
 
         assert crossed.status_code == 400, crossed.text
 

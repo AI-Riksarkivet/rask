@@ -2786,8 +2786,9 @@ export interface paths {
          *     turns the protection lock only, as on drop.
          *
          *     ``properties`` is the spec-0.9 JSON-encoded query parameter. Client-supplied ``storage_options``
-         *     are deliberately NOT accepted: storage access is the catalog's to vend (two-tier secret model),
-         *     so callers can't redirect writes or splice credentials.
+         *     are refused 400 (code 13), never dropped unread: storage access is the catalog's to vend (two-tier
+         *     secret model), so callers can't redirect writes or splice credentials, and a caller who sent them is
+         *     told they did not apply.
          *
          *     ``data_base`` (#3-B, repeatable) spreads the table's fragments across the named approved buckets (Lance
          *     multi-base). Each MUST be on the ``LANCE_MULTIBASE_DATA_BASES`` allowlist — a caller can never point a
@@ -3036,6 +3037,8 @@ export interface paths {
          * @description Check the table at ``id`` exists via ``table_exists`` — 200 if present (spec 0.9), else error.
          *
          *     The answer is about the table the request resolved, so it stands only while the name still resolves there ([[LH-530]]).
+         *     A ``version`` asks whether the table holds that version (`lance_docs/ns_catalog/spec.yaml` TableExistsRequest), which
+         *     the backend's own answer ignores, so the version is opened: one the table lacks answers 404 code 11, as describe does.
          */
         post: operations["table_exists_v1_table__id__exists_post"];
         delete?: never;
@@ -3430,13 +3433,13 @@ export interface paths {
         };
         /**
          * List Table Tags
-         * @description List every tag on the table — wraps lance_namespace ListTableTags.
+         * @description List the table's tags, a page at a time — wraps lance_namespace ListTableTags.
          */
         get: operations["list_table_tags_compat_get"];
         put?: never;
         /**
          * List Table Tags
-         * @description List every tag on the table — wraps lance_namespace ListTableTags.
+         * @description List the table's tags, a page at a time — wraps lance_namespace ListTableTags.
          */
         post: operations["list_table_tags"];
         delete?: never;
@@ -3638,7 +3641,7 @@ export interface paths {
          *
          *     So the native call is made UNPAGINATED — the same rule `catalog.api.pagination` states for the name
          *     listings — and the cursor is this layer's. The full list is what the backend returns unbounded
-         *     (measured: no limit gives all seven), and `_MAX_LIST_LIMIT` still bounds what leaves the door.
+         *     (measured: no limit gives all seven), and `ListLimit` still bounds what leaves the door.
          */
         post: operations["list_table_versions_v1_table__id__version_list_post"];
         delete?: never;
@@ -13108,6 +13111,8 @@ export interface operations {
             query?: {
                 mode?: string | null;
                 properties?: string | null;
+                /** @description REFUSED: storage access is the catalog's to vend. */
+                storage_options?: string | null;
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
@@ -14094,6 +14099,8 @@ export interface operations {
     list_table_tags_compat_get: {
         parameters: {
             query?: {
+                page_token?: string | null;
+                limit?: number | null;
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
@@ -14128,6 +14135,8 @@ export interface operations {
     list_table_tags: {
         parameters: {
             query?: {
+                page_token?: string | null;
+                limit?: number | null;
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
