@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "INSID3 in-context segmentation as an assist producer (sealed runner; see server.py)"
 requires-python = "==3.10.*"
 dependencies = [
-    "torch==2.7.1",
+    "torch==2.13.0",
     "torchvision==0.22.1",
     "fastapi",
     "uvicorn",
