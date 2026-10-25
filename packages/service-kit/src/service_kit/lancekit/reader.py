@@ -368,7 +368,7 @@ class RestCatalogTransport:
     Host-agnostic (base URL from settings, never hard-coded) + retry-friendly
     (urllib3 ``Retry`` via the generated ``Configuration``) so it drops into a Dapr
     service-invocation or proxy-fronted catalog unchanged. Exercised live
-    against the lance-ns catalog over RustFS by ``tests/test_catalog_live.py``
+    against the lance-ns catalog over RustFS by ``services/annotator/tests/live/test_catalog_live.py``
     (empty-vector scan accepted; responses are Arrow-IPC files).
     """
 

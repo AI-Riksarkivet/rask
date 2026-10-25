@@ -241,7 +241,7 @@ operator, no RayCluster or RayService, no GPU reservation and no Serve applicati
 The **`compute` service** (`:8804`, over `ray-kit`) is the companion of a bring-your-own Ray engine, not part of the
 lakehouse. It reads that engine's Ray dashboard REST API at `RAY_DASHBOARD_URL` for the jobs board and job-history
 prune, and proxies `/api/serve/*`. It ships in its own chart, `deploy/fixtures/compute` (release `compute` in rask's
-namespace, installed by `make k3s-fixtures`), which reads the rask release's Dapr app token, `lance-tracing`
+namespace, installed by `make k3s-clients` after `make k3s-up`), which reads the rask release's Dapr app token, `lance-tracing`
 Configuration, Dex, catalog, OTel Collector and Ray auth token by reference; it holds no OpenFGA credential and asks the
 catalog's decision door, which answers its service account only when the product chart's `auth.externalDeciders` names
 it ([[LH-442]]). The fixture chart publishes `/api/ray` and `/api/serve`
@@ -250,7 +250,7 @@ admitting its app port. The address of the engine's dashboard is `ray.dashboardU
 (`rask.rayDashboardUrl`); the annotator fixture names the same head for its Serve discovery
 (its `serve.discoveryUrl`).
 
-In development `make k3s-up` installs the `kuberay-operator`, `ray-cluster` and `compute` fixtures
+In development `make k3s-clients` installs the `kuberay-operator`, `ray-cluster` and `compute` fixtures, after `make k3s-up`
 (`deploy/fixtures`, not for production); the head Service is `rask-ray-head-svc`, and `deploy/values-local.yaml`
 names it. GPUs, a device plugin, the `nvidia` RuntimeClass and each Serve replica's GPU fraction belong to the
 engine: the `ray-cluster` fixture's `gpuCount` sizes its head, and the `nvidia-device-plugin` fixture advertises
@@ -284,8 +284,9 @@ with `--address ray://…:10001`.
 
 Everything else is a separate release ([[XC-085]], ADR 0153). `make k3s-up` installs the development set from
 `deploy/fixtures` first (`make k3s-fixtures`): the External Secrets Operator, Dapr, NATS, the CloudNativePG operator,
-Dex, RustFS, OpenBao, the telemetry chain, and the development engine (the KubeRay operator, a Ray cluster and the
-`compute` chart). A platform brings its own.
+Dex, RustFS, OpenBao, the telemetry chain, the lineage graph backend and the SMTP relay. It installs no client:
+`make k3s-clients` adds them after it (the KubeRay operator, a Ray cluster, the `compute` chart, the table-maintenance
+job and the annotator), each its own release reaching the lakehouse by reference. A platform brings its own.
 
 ### The first estate admin
 

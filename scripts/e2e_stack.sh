@@ -8,10 +8,11 @@
 #
 # It brings up the GOVERNED stack (Dex OIDC + OpenFGA + Dapr + NATS + RustFS + OpenBao) on kind with the feature
 # flags the suites need, seeds the exact grants/buckets they assume, then runs every tests/e2e-py module the lane can
-# serve, Phase 1's acceptance (`-m phase1`, XC-090) and its soak, each in a session of its own (ADR 0167).
+# serve, Phase 1's acceptance (`-m phase1`, XC-090) and its soak, each in a session of its own (ADR 0167), on the
+# lakehouse and its platform fixtures alone. Only then does it install a client (the annotator) and run that client's
+# suite in a session of its own (XC-183).
 #
-# The telemetry chain and the zones are off: OpenTelemetry is rask's boundary and the store behind the Collector is the
-# platform's, and no zone is under test here. Maintenance is on, because its deployed sweep is a lakehouse claim
+# The telemetry chain is off: OpenTelemetry is rask's boundary and the store behind the Collector is the platform's. Maintenance is on, because its deployed sweep is a lakehouse claim
 # (`tests/e2e-py/test_maintenance_e2e.py`).
 #
 # Idempotent: safe to re-run against an existing cluster. Env overrides: CLUSTER, RELEASE, KEEP_STACK=1.
@@ -232,7 +233,7 @@ STORE_PORT="$(kubectl get svc "$RELEASE-rustfs" -o jsonpath='{.spec.ports[?(@.na
 [ -n "$NODE_IP" ] && [ -n "$STORE_PORT" ] || { echo "!! no node address ($NODE_IP) or store NodePort ($STORE_PORT) to vend" >&2; exit 2; }
 HELM_SET+=(--set-string vending.endpoint="http://$NODE_IP:$STORE_PORT")
 
-step "4/9 deploy the governed stack (auth ON, #3-A/#3-B/#4 flags ON, maintenance ON, telemetry and zones OFF)"
+step "4/9 deploy the governed stack (auth ON, #3-A/#3-B/#4 flags ON, maintenance ON, telemetry OFF, no client)"
 # HISTORY: `--wait` used to DEADLOCK on a fresh cluster, which is why this job never once passed in CI.
 # helm's order is: apply manifests → (--wait) block until every resource is Ready → run post-install hooks.
 # The OpenFGA schema migration WAS a post-install hook, and the OpenFGA server cannot become Ready until its
@@ -309,18 +310,12 @@ sys.exit(0 if {s.get("topic") for s in (m.get("subscriptions") or [])} and (m.ge
   sleep 3
 done
 
-# THE ANNOTATOR, installed after rask as a deployment beside it would install it: it reaches rask by reference, and the
-# issuer it accepts is the one the catalog was given. This stack renders no Gateway, so its route is off. Its pod waits
-# for the Postgres its release renders, so its rollout is given the Cluster's bootstrap.
-ISSUER="$(kubectl get deploy "$RELEASE-catalog" -o jsonpath='{.spec.template.spec.containers[?(@.name=="catalog")].env[?(@.name=="RASK_OIDC_ISSUER")].value}')"
-"$(dirname "$0")/fixtures.sh" annotator -- --set-string auth.oidc.issuer="$ISSUER" --set-string image.tag="$TAG" --set route.enabled=false
-kubectl delete pods -l "app.kubernetes.io/instance=$RELEASE,app.kubernetes.io/component=annotator" --ignore-not-found >/dev/null 2>&1 || true
-kubectl rollout status deploy/"$RELEASE"-annotator --timeout=600s
-
 # Every running container of a side-loaded image must serve the archive this run built — the definitive proof the whole
 # suite tests fresh code, not a stale same-tag image (the failure mode this guard exists for). A container's `imageID`
-# names either digest depending on how containerd recorded the import, so both recorded above are accepted.
-kubectl get pods -o json >"$FRESH.pods"
+# names either digest depending on how containerd recorded the import, so both recorded above are accepted. It runs again
+# once the clients are installed, after the lakehouse's own sessions.
+check_fresh() {
+kubectl get pods -o json >"$FRESH.pods" || return 1
 python3 -c '
 import json, sys
 fresh = {line.split()[0]: set(line.split()[1:]) for line in open(sys.argv[1]) if line.strip()}
@@ -337,6 +332,8 @@ if stale or not checked:
     sys.exit("!! " + ("; ".join(stale) or "no running container serves a side-loaded image"))
 print(f"   {checked} running containers serve the images this run built")
 ' "$FRESH" "$FRESH.pods"
+}
+check_fresh
 
 step "5/9 port-forward the services the suites talk to"
 # A FORWARD FOLLOWS ITS SERVICE'S READY POD. `kubectl port-forward` binds to one pod for its life, and when that pod goes
@@ -371,7 +368,6 @@ forward "$RELEASE-rustfs" 9900:9000 /tmp/pf-rfs.log
 forward "$RELEASE-dex" 5556:5556 /tmp/pf-dex.log
 forward "$RELEASE-openfga" 8081:8080 /tmp/pf-fga.log
 forward "$RELEASE-notifications" 8850:8850 /tmp/pf-not.log
-forward "$RELEASE-annotator" 8103:8103 /tmp/pf-ann.log
 # The bus `nats.url` names (stack_values.sh): criterion 4's module reads its streams and publishes on it.
 forward rask-nats 4222:4222 /tmp/pf-nats.log
 for i in $(seq 1 40); do
@@ -558,8 +554,6 @@ export LANCE_E2E_RELAY_BINDING=lineage-relay-cron
 # bus, and the release whose ServiceAccounts sign.
 export LANCE_E2E_NOTIFICATIONS_URL="http://localhost:8850$(kubectl get cm "$RELEASE-config" -o jsonpath='{.data.RASK_API_PREFIX}')"
 export LANCE_E2E_NATS_URL=nats://localhost:4222
-# The annotator's own release, which the suite drives through the lakehouse's public doors.
-export LANCE_E2E_ANNOTATOR_URL=http://localhost:8103
 export LANCE_E2E_RELEASE="$RELEASE"
 # Criterion 2's service identity: the lineage service's account, for the audience the catalog's own door checks.
 SERVICE_TOKEN_FILE="$(mktemp)"
@@ -582,7 +576,8 @@ failed=()
 #   observability  the telemetry chain: it reads the platform's store behind the Collector, so a deployed estate runs it
 #   edge           the Gateway's routes, which this stack does not render (stack_values.sh)
 #   media_catalog  the annotator's media backend, outside the lakehouse
-"${PYTEST[@]}" tests/e2e-py -m "not phase1 and not nats_auth and not rustfs_provisioning and not observability and not edge and not media_catalog" \
+#   annotator      a client's suite, run in a session of its own once the client is installed, after Phase 1
+"${PYTEST[@]}" tests/e2e-py -m "not phase1 and not nats_auth and not rustfs_provisioning and not observability and not edge and not media_catalog and not annotator" \
   || failed+=("the lane's suites")
 
 # PHASE 1'S ACCEPTANCE (XC-090), BY ITS MARKER, so a module joins the lane by carrying `phase1`: one drive of the
@@ -602,10 +597,29 @@ else
   failed+=("Phase 1's acceptance")
 fi
 
+# THE CLIENTS, ONLY NOW (XC-183). Everything above ran on the lakehouse and its platform fixtures alone, which is the
+# removal test: no lakehouse session needs a client. The annotator installs as a deployment beside rask would install
+# it: it reaches rask by reference, and the issuer it accepts is the one the catalog was given. This stack renders no
+# Gateway, so its route is off. Its pod waits for the Postgres its release renders, so its rollout is given the
+# Cluster's bootstrap. Its suite drives it through the lakehouse's public doors, in a session of its own.
+ISSUER="$(kubectl get deploy "$RELEASE-catalog" -o jsonpath='{.spec.template.spec.containers[?(@.name=="catalog")].env[?(@.name=="RASK_OIDC_ISSUER")].value}')"
+if "$(dirname "$0")/fixtures.sh" annotator -- --set-string auth.oidc.issuer="$ISSUER" --set-string image.tag="$TAG" --set route.enabled=false \
+  && { kubectl delete pods -l "app.kubernetes.io/instance=$RELEASE,app.kubernetes.io/component=annotator" --ignore-not-found >/dev/null 2>&1 || true; } \
+  && kubectl rollout status deploy/"$RELEASE"-annotator --timeout=600s && check_fresh; then
+  forward "$RELEASE-annotator" 8103:8103 /tmp/pf-ann.log
+  for i in $(seq 1 40); do
+    [ "$(curl -s -o /dev/null -w '%{http_code}' -m2 http://localhost:8103/livez 2>/dev/null || true)" = "200" ] && break
+    sleep 2
+  done
+  LANCE_E2E_ANNOTATOR_URL=http://localhost:8103 "${PYTEST[@]}" tests/e2e-py services/annotator/tests/live -m annotator || failed+=("the annotator's suite")
+else
+  failed+=("the annotator's install")
+fi
+
 if [ "${#failed[@]}" -gt 0 ]; then
   echo
   echo "!! FAIL: $(IFS=,; echo "${failed[*]}")"
   exit 1
 fi
 echo
-echo "✓ e2e stack suite green, Phase 1's acceptance and its soak with it"
+echo "✓ e2e stack suite green on the lakehouse alone, Phase 1's acceptance and its soak with it, then the clients' suites"

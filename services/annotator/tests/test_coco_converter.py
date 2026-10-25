@@ -16,7 +16,7 @@ from annotator.projects.imports import shapes_from_ipc
 from annotator.projects.ontology import LabelClass, LabelOntology
 
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "scripts"))
 
 from coco_to_annotations import main, rows_for_image, to_ipc  # ty: ignore[unresolved-import] — sys.path above  # noqa: E402
 

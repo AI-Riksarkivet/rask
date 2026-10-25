@@ -7,7 +7,7 @@ whose wire name disagrees — stays green in every suite and raises `AttributeEr
 sidecar. That is not hypothetical: it is what the first live drive of this plane found, and it is
 exactly the shape `send_many`/`SendMany` reintroduces (docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit" ANN-03).
 
-`tests/unit/test_actor_proxy_names.py` pins the translation for a hand-written list of methods. This
+`services/annotator/tests/test_actor_proxy_names.py` pins the translation for a hand-written list of methods. This
 file pins it for the SEND PATH end to end (the handler, through the real `TypedActorProxy`, onto a
 proxy that resolves wire names only) and then closes the list: every `@actormethod` on the project
 interface must resolve and must be implemented, so the next method added is covered without anyone

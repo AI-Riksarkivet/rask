@@ -67,7 +67,7 @@ def test_schema_single_source_of_truth(tmp_path: Path) -> None:
     import importlib.util
     from pathlib import Path as P
 
-    spec = importlib.util.spec_from_file_location("seed_annotations", P(__file__).resolve().parents[2] / "scripts" / "seed_annotations.py")
+    spec = importlib.util.spec_from_file_location("seed_annotations", P(__file__).resolve().parents[3] / "scripts" / "seed_annotations.py")
     assert spec is not None and spec.loader is not None
     seed_mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(seed_mod)

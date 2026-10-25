@@ -116,7 +116,7 @@ serves S3 over HTTP, and the catalog is pointed at it with `LANCE_REST_ROOT=s3:/
 Use one when the claim is about the wire. The rask example is
 `tests/integration/test_a_catalog_reader_reads_a_whole_table_in_bounded_pages.py` (`uvicorn.Config(app, port=0, lifespan="on")` on a
 thread, with a bounded wait for `server.started`). Why it matters here:
-`tests/unit/test_search_spec_binding.py`'s docstring records a query-model binding that `TestClient`
+`services/search/tests/test_search_spec_binding.py`'s docstring records a query-model binding that `TestClient`
 accepted and a live uvicorn on fastapi 0.140.13 answered with 422 on every call.
 
 ## NATS, locally, through Dagger

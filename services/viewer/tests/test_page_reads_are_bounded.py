@@ -179,7 +179,7 @@ def _catalog_ok() -> Any:
 def _app() -> FastAPI:
     """The pages router with the authorization plane satisfied — this file measures reads, not gates.
 
-    The gate itself is pinned by `tests/unit/test_viewer_page_authz.py`; granting here keeps a
+    The gate itself is pinned by `services/viewer/tests/test_viewer_page_authz.py`; granting here keeps a
     permission failure from masquerading as a bounded read.
     """
 

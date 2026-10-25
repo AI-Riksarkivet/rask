@@ -37,6 +37,70 @@ roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: {{ $sa 
 subjects:
   - { kind: ServiceAccount, name: {{ $sa }}, namespace: {{ .Release.Namespace }} }
 ---
+{{ include "lance.otelCollectorConfigMap" . }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $sa }}
+  labels: {{- include "lance.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app.kubernetes.io/component: otel-collector, app.kubernetes.io/instance: {{ .Release.Name }} }
+  template:
+    metadata:
+      labels:
+        {{- include "lance.labels" . | nindent 8 }}
+        app.kubernetes.io/component: otel-collector
+      annotations:
+        checksum/config: {{ include "lance.otelCollectorConfigMap" . | sha256sum }}
+    spec:
+      serviceAccountName: {{ $sa }}
+      securityContext: { runAsNonRoot: true, runAsUser: 65534, fsGroup: 65534 }
+      containers:
+        - name: otel-collector
+          image: {{ $c.image }}
+
+          {{- include "lance.rootlessSecurityContext" 65534 | nindent 10 }}
+          args: ["--config=/etc/otelcol/config.yaml"]
+          ports:
+            - { name: otlp-grpc, containerPort: 4317 }
+            - { name: otlp-http, containerPort: 4318 }
+          readinessProbe: { httpGet: { path: /, port: 13133 }, initialDelaySeconds: 5, periodSeconds: 10 }
+          livenessProbe: { httpGet: { path: /, port: 13133 }, initialDelaySeconds: 30, periodSeconds: 30, failureThreshold: 3 }
+          resources: {{- include "lance.resources" (dict "root" . "comp" "otel-collector") | nindent 12 }}
+          volumeMounts:
+            - { name: config, mountPath: /etc/otelcol, readOnly: true }
+            - { name: varlogpods, mountPath: /var/log/pods, readOnly: true }
+            - { name: varlibdockercontainers, mountPath: /var/lib/docker/containers, readOnly: true }
+            - { name: offsets, mountPath: /var/lib/otelcol/file_storage }
+            - { name: export-credential, mountPath: /var/run/secrets/rask/export, readOnly: true }
+      volumes:
+        - name: config
+          configMap: { name: {{ $sa }} }
+        - { name: varlogpods, hostPath: { path: /var/log/pods } }
+        - { name: varlibdockercontainers, hostPath: { path: /var/lib/docker/containers } }
+        - { name: offsets, emptyDir: { sizeLimit: 2Gi } }
+        - { name: export-credential, secret: { secretName: {{ $sa }}-export, defaultMode: 0440 } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $sa }}
+  labels: {{- include "lance.labels" . | nindent 4 }}
+spec:
+  selector: { app.kubernetes.io/component: otel-collector, app.kubernetes.io/instance: {{ .Release.Name }} }
+  ports:
+    - { name: otlp-grpc, port: 4317, targetPort: otlp-grpc }
+    - { name: otlp-http, port: 4318, targetPort: otlp-http }
+{{- end }}
+{{- define "lance.otelCollectorConfigMap" -}}
+{{- $fullname := include "lance.fullname" . }}
+{{- $sa := printf "%s-otel-collector" $fullname }}
+{{- $x := .Values.observability.export | default dict }}
+{{- $endpoint := $x.endpoint }}
+{{- $headers := $x.headers | default dict }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -373,60 +437,4 @@ data:
           receivers: [otlp]
           processors: [memory_limiter, k8sattributes, filter/audit_only, batch]
           exporters: [otlphttp/audit]
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: {{ $sa }}
-  labels: {{- include "lance.labels" . | nindent 4 }}
-spec:
-  replicas: 1
-  selector:
-    matchLabels: { app.kubernetes.io/component: otel-collector, app.kubernetes.io/instance: {{ .Release.Name }} }
-  template:
-    metadata:
-      labels:
-        {{- include "lance.labels" . | nindent 8 }}
-        app.kubernetes.io/component: otel-collector
-      annotations:
-        checksum/config: {{ .Values | toYaml | sha256sum }}
-    spec:
-      serviceAccountName: {{ $sa }}
-      securityContext: { runAsNonRoot: true, runAsUser: 65534, fsGroup: 65534 }
-      containers:
-        - name: otel-collector
-          image: {{ $c.image }}
-
-          {{- include "lance.rootlessSecurityContext" 65534 | nindent 10 }}
-          args: ["--config=/etc/otelcol/config.yaml"]
-          ports:
-            - { name: otlp-grpc, containerPort: 4317 }
-            - { name: otlp-http, containerPort: 4318 }
-          readinessProbe: { httpGet: { path: /, port: 13133 }, initialDelaySeconds: 5, periodSeconds: 10 }
-          livenessProbe: { httpGet: { path: /, port: 13133 }, initialDelaySeconds: 30, periodSeconds: 30, failureThreshold: 3 }
-          resources: {{- include "lance.resources" (dict "root" . "comp" "otel-collector") | nindent 12 }}
-          volumeMounts:
-            - { name: config, mountPath: /etc/otelcol, readOnly: true }
-            - { name: varlogpods, mountPath: /var/log/pods, readOnly: true }
-            - { name: varlibdockercontainers, mountPath: /var/lib/docker/containers, readOnly: true }
-            - { name: offsets, mountPath: /var/lib/otelcol/file_storage }
-            - { name: export-credential, mountPath: /var/run/secrets/rask/export, readOnly: true }
-      volumes:
-        - name: config
-          configMap: { name: {{ $sa }} }
-        - { name: varlogpods, hostPath: { path: /var/log/pods } }
-        - { name: varlibdockercontainers, hostPath: { path: /var/lib/docker/containers } }
-        - { name: offsets, emptyDir: { sizeLimit: 2Gi } }
-        - { name: export-credential, secret: { secretName: {{ $sa }}-export, defaultMode: 0440 } }
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: {{ $sa }}
-  labels: {{- include "lance.labels" . | nindent 4 }}
-spec:
-  selector: { app.kubernetes.io/component: otel-collector, app.kubernetes.io/instance: {{ .Release.Name }} }
-  ports:
-    - { name: otlp-grpc, port: 4317, targetPort: otlp-grpc }
-    - { name: otlp-http, port: 4318, targetPort: otlp-http }
 {{- end }}

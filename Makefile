@@ -1,4 +1,4 @@
-.PHONY: k3s-annotator fga-store-check fga-estate-migrate sbom zone-sbom registry-gc dagger-gc dev-gc help install build test test-slow lint lint-imports fmt clean storybook typecheck knip comment-gate check coverage fga-test ci dev-micro dev-frontends dev-frontends-k3s dev-zone home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-fixtures k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap dev-registry e2e frontend-images prod-render-check chart-docs chart-docs-check alert-rules-check alert-rules-drill notifications-lanes notifications-rig audit smoke-rustfs rustfs-lifecycle rustfs-provisioning auth-chain governance-chain nats-auth go-fmt scan-config scan-secrets scan-image scan-zone-image seed-corpus e2e-isolation e2e-container-deletes e2e-fga-model
+.PHONY: k3s-clients fga-store-check fga-estate-migrate sbom zone-sbom registry-gc dagger-gc dev-gc help install build test test-slow lint lint-imports fmt clean storybook typecheck knip comment-gate check coverage fga-test ci dev-micro dev-frontends dev-frontends-k3s dev-zone home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-fixtures k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap dev-registry e2e frontend-images prod-render-check chart-docs chart-docs-check alert-rules-check alert-rules-drill notifications-lanes notifications-rig audit smoke-rustfs rustfs-lifecycle rustfs-provisioning auth-chain governance-chain nats-auth go-fmt scan-config scan-secrets scan-image scan-zone-image seed-corpus e2e-isolation e2e-container-deletes e2e-fga-model
 
 help:
 	@echo "Targets:"
@@ -750,20 +750,26 @@ DROP_CREDENTIAL_VALUES := --set dapr.appToken=null \
 # Ready before any pod that wants a sidecar exists; the NATS bus every pub/sub component dials follows. The CloudNativePG
 # operator serves the AGE-on-CNPG Cluster; its CRDs come from k3s-crds, which runs first. Dex is the dev OIDC issuer,
 # given the issuer and origin rask is given; rustfs and openbao are the dev object and secret stores, which start once
-# rask is installed: the object store's root credential and the secret store's seed scripts are rask's. The Ray engine is
-# two of them, the operator first, and compute (the Ray dashboard and Serve companion) follows it, starting once rask's
-# app token and Dapr Configuration exist; table-maintenance is the bring-your-own compaction job, whose runs start once
-# rask's catalog answers; observability is the store, dashboards and alerting rask's Collector exports to. A GPU node with no device plugin yet adds nvidia-device-plugin. The annotator is not a prerequisite: it is a client
-# of the lakehouse with its own release (ADR 0171), which `k3s-up` installs after rask (`k3s-annotator`).
-FIXTURES ?= external-secrets dapr nats cloudnative-pg dex rustfs openbao kuberay-operator ray-cluster compute table-maintenance observability marquez mailpit
+# rask is installed: the object store's root credential and the secret store's seed scripts are rask's; observability is
+# the store, dashboards and alerting rask's Collector exports to; marquez is the graph lineage forwards to and mailpit the
+# relay the email channel sends to. A GPU node with no device plugin yet adds nvidia-device-plugin.
+FIXTURES ?= external-secrets dapr nats cloudnative-pg dex rustfs openbao observability marquez mailpit
+
+# THE CLIENTS, each its own release and none a prerequisite: `k3s-up` installs the lakehouse alone, and `k3s-clients`
+# adds them after it (XC-183), each reaching the lakehouse by reference. The Ray engine is two releases, the operator
+# first, and compute (the Ray dashboard and Serve companion) follows it, reading rask's app token and Dapr Configuration;
+# table-maintenance is the bring-your-own compaction job ([[LH-529]]); the annotator keeps its state on the
+# cloudnative-pg fixture (ADR 0171).
+CLIENTS ?= kuberay-operator ray-cluster compute table-maintenance annotator
 
 k3s-fixtures: ## Install the development fixtures (FIXTURES) as their own releases, before the rask chart
-	$(if $(filter-out dex compute,$(FIXTURES)),KUBECONFIG=$(KUBECONFIG) ./scripts/fixtures.sh $(filter-out dex compute,$(FIXTURES)))
+	$(if $(filter-out dex,$(FIXTURES)),KUBECONFIG=$(KUBECONFIG) ./scripts/fixtures.sh $(filter-out dex,$(FIXTURES)))
 	$(if $(filter dex,$(FIXTURES)),KUBECONFIG=$(KUBECONFIG) ./scripts/fixtures.sh dex -- --set-string issuer=$(DEV_ISSUER) --set-string publicOrigin=$(DEV_ORIGIN))
-	$(if $(filter compute,$(FIXTURES)),KUBECONFIG=$(KUBECONFIG) ./scripts/fixtures.sh compute -- --set-string auth.oidc.issuer=$(DEV_ISSUER))
 
-k3s-annotator: ## Install the annotator's own release beside rask, after it: a client reaching the lakehouse by reference (ADR 0171), its Postgres served by the cloudnative-pg fixture
-	KUBECONFIG=$(KUBECONFIG) ./scripts/fixtures.sh annotator -- --set-string auth.oidc.issuer=$(DEV_ISSUER)
+k3s-clients: ## Install the lakehouse's clients (CLIENTS) as their own releases, after `k3s-up`: each reaches it by reference
+	$(if $(filter-out compute annotator,$(CLIENTS)),KUBECONFIG=$(KUBECONFIG) ./scripts/fixtures.sh $(filter-out compute annotator,$(CLIENTS)))
+	$(if $(filter compute,$(CLIENTS)),KUBECONFIG=$(KUBECONFIG) ./scripts/fixtures.sh compute -- --set-string auth.oidc.issuer=$(DEV_ISSUER))
+	$(if $(filter annotator,$(CLIENTS)),KUBECONFIG=$(KUBECONFIG) ./scripts/fixtures.sh annotator -- --set-string auth.oidc.issuer=$(DEV_ISSUER))
 
 k3s-crds: ## Apply the vendored CRDs no release owns (see chart/.helmignore), before the cloudnative-pg fixture
 	@# Server-side apply: the CNPG CRD set exceeds kubectl's client-side annotation limit.
@@ -820,7 +826,6 @@ k3s-up: k3s-crds k3s-fixtures k3s-deps k3s-stem-check ## Apply CRDs, install fix
 	  $$HFARGS \
 	  $${AWS_ACCESS_KEY_ID:+--set-string objectStore.accessKey=$$AWS_ACCESS_KEY_ID}
 	$(KUBECTL) rollout status deploy/rask-catalog --timeout=300s
-	@$(MAKE) --no-print-directory k3s-annotator
 	@echo "API → http://<node-ip>/api/catalog/livez   (host-less routes on Traefik's Gateway; over VS Code/ssh -L forward port 80 → http://localhost:<port>/)"
 
 seed-corpus: ## Seed the demo corpus into the volume the media plane actually READS
@@ -1050,9 +1055,9 @@ E2E_SUITES = annotator byo-branch byo-erasure byo-pipeline cas chaos compaction 
                                           # so referencing E2E_SUITES before this assignment
                                           # expands to nothing and silently declares no target.
 
-e2e-annotator:      ## XC-167 live proof: the annotator, from its own release, works a scratch tenant through the lakehouse's public doors as the person and publishes as its own account (`bash scripts/e2e_live.sh -m annotator --require-live` discovers its addresses)
+e2e-annotator:      ## XC-167 live proof: the annotator, from its own release, works a scratch tenant through the lakehouse's public doors as the person and publishes as its own account (`bash scripts/e2e_live.sh tests/e2e-py services/annotator/tests/live -m annotator --require-live` discovers its addresses)
 	@test -n "$(LANCE_E2E_ANNOTATOR_URL)" || { echo "  !! e2e-annotator needs LANCE_E2E_ANNOTATOR_URL, LANCE_E2E_CATALOG_URL, LANCE_E2E_DEX, LANCE_E2E_NOTIFICATIONS_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	uv run pytest tests/e2e-py -m annotator --require-live -v
+	uv run pytest tests/e2e-py services/annotator/tests/live -m annotator --require-live -v
 e2e-byo-branch:     ## LH-490 live proof: a branch the owner creates through CreateTableBranch takes a writer's stock append, delete and update through version/create on the table's vended credential, main is unchanged, a refused branch commit answers a typed error, and the store refuses the credential a final manifest and a ref (needs LANCE_E2E_CATALOG_URL, LANCE_E2E_DEX; `bash scripts/e2e_live.sh tests/e2e-py/test_a_stock_client_commits_on_a_branch.py` discovers them)
 	@test -n "$(LANCE_E2E_CATALOG_URL)" || { echo "  !! e2e-byo-branch needs LANCE_E2E_CATALOG_URL, LANCE_E2E_DEX — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
 	@test -n "$(LANCE_E2E_DEX)" || { echo "  !! e2e-byo-branch needs LANCE_E2E_CATALOG_URL, LANCE_E2E_DEX — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
@@ -1109,7 +1114,7 @@ e2e-edge:           ## Each /api prefix reaches its service through the cluster 
 	RASK_E2E_EDGE_URL=$(RASK_E2E_EDGE_URL) LANCE_E2E_DEX=$(LANCE_E2E_DEX) uv run pytest tests/e2e-py -m edge -v --require-live
 e2e-media-catalog:  ## Annotator/catalog live-mode proof (needs MEDIA_CATALOG_URL)
 	@test -n "$(MEDIA_CATALOG_URL)" || { echo "  !! e2e-media-catalog needs MEDIA_CATALOG_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	MEDIA_CATALOG_URL=$(MEDIA_CATALOG_URL) uv run pytest tests/e2e-py -m media_catalog -v
+	MEDIA_CATALOG_URL=$(MEDIA_CATALOG_URL) uv run pytest tests/e2e-py services/annotator/tests/live -m media_catalog -v
 e2e-observability:  ## OTLP → GreptimeDB observability proof (needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_GREPTIME_URL)
 	@test -n "$(LANCE_E2E_CATALOG_URL)" || { echo "  !! e2e-observability needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_GREPTIME_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
 	@test -n "$(LANCE_E2E_LINEAGE_URL)" || { echo "  !! e2e-observability needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_GREPTIME_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }

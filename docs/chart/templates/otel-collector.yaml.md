@@ -114,6 +114,13 @@ OTLP ONLY. An audit record is emitted by a service through the SDK; a `body == "
 arriving from `filelog` is a container log that happens to read that way, and writing it to
 the governance table would make the trail forgeable by anything that can print.
 
+## `checksum/config: {{ include "lance.otelCollectorConfigMap" . | sha256sum }}`
+
+The Collector rolls when its own config changes, and on nothing else: the hash is over the ConfigMap this template
+renders (`lance.otelCollectorConfigMap`, defined at the end of the file so the ConfigMap and this annotation read one
+rendering). A hash of all of `.Values` would roll it on any value, a client's grant included, and admitting a client may
+change only the objects its extension point feeds (`tests/unit/test_the_product_chart_renders_no_client.py`).
+
 ## `{{- include "lance.rootlessSecurityContext" 65534 | nindent 10 }}`
 
 The same uid the pod already pins. Everything the Collector writes goes to the

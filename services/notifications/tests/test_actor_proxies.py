@@ -6,7 +6,7 @@ green at every gate while every real cross-actor call raises `AttributeError` ag
 which is precisely what the annotator's first live drive found. These tests pin the translation AND
 sweep this service's own tree onto it.
 
-The estate-wide sweep in `tests/unit/test_actor_proxy_names.py` walks
+The estate-wide sweep in `services/annotator/tests/test_actor_proxy_names.py` walks
 `services/annotator/src/annotator` by path, so it does NOT cover this module: the equivalent gate has
 to live here until that root is widened.
 """

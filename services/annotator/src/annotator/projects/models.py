@@ -6,7 +6,7 @@ Server-side counterpart of `frontend/packages/labeling`'s `LabelOp` model. Spec:
 Deliberately store-free and corpus-free. This module imports nothing from the lakehouse plane — no
 `lancekit`, no registry, no dataset handle — because an annotation project's state (tasks, claims,
 drafts, reviews) is the annotator's own and never enters the governed plane until a publish. The
-import guard in `tests/unit/test_annotation_projects_machine.py` makes that mechanical rather than a
+import guard in `services/annotator/tests/test_annotation_projects_machine.py` makes that mechanical rather than a
 promise, so slices S1/S3 are buildable before any actor store exists.
 
 Ids are `uuid4().hex`, not UUID7: the deployed interpreter is CPython 3.13 (`uuid.uuid7` is absent)

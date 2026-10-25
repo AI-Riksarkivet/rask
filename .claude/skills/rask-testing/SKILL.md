@@ -37,7 +37,7 @@ reverted, and the commit message carries the delta.
 
 | The claim needs                                   | Directory                                                                                       |
 | ------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| One member's code, through its app or public API  | `packages/<m>/tests`, `services/<m>/tests`                                                      |
+| One member's code, through its app or public API  | `packages/<m>/tests`, `services/<m>/tests`; a client's (annotator, search, viewer, client-kit) always its own, so deleting the client deletes its tests and `make test` stays green (XC-183) |
 | Several members in one flow, or a fixture from `tests/integration/conftest.py` (`real_ns_client`) | `tests/integration`: a conftest's fixtures reach only the tests beneath it |
 | The rendered chart, or a fixture's render         | `tests/unit`, through `tests/unit/chart_render.py` (`render_fixture` for `deploy/fixtures/<name>`) |
 | A deployed stack                                  | `tests/e2e-py`, run by the e2e-stack lane unless it carries a marker the lane leaves out: § Wiring |
@@ -54,7 +54,7 @@ consequences it does not spell out.
   every member's `src` in the denominator with no edit.
 - **The e2e-stack lane runs every `tests/e2e-py` module it can serve** (ADR 0167). Every offline lane
   deselects `e2e`; the lane's first session selects by the markers a module does NOT carry (`phase1`,
-  `nats_auth`, `observability`, `edge`, `media_catalog`, each with its reason in
+  `nats_auth`, `observability`, `edge`, `media_catalog`, `annotator`, each with its reason in
   `scripts/e2e_stack.sh`), under `--require-live`, so a new module runs on push the day it lands and one
   the lane cannot serve fails the lane. A module that needs what the lane does not stand up gets a
   per-suite marker registered in the root `pyproject.toml` with a `make e2e-<suite>` target (listed in
@@ -125,7 +125,7 @@ consequences it does not spell out.
 | CI: `dagger call rustfs-lifecycle`, `dagger call smoke-rustfs` | `tests/e2e-py/test_e2e.py` under `--require-live` against a catalog whose bytes are on RustFS, and `scripts/smoke_rustfs.py` through `packages/storage` |
 | CI: `dagger call rustfs-provisioning` (= `make rustfs-provisioning`) | `tests/e2e-py/test_a_policy_the_store_refuses_fails_the_scoped_users_hook.py` (marker `rustfs_provisioning`) under `--require-live`: the scoped-users hook's `scripts/rustfs_admin.py` against a throwaway RustFS booted as the fixture boots it (root pair from files); the e2e-stack lane leaves the marker out, since it provisions IAM on the store it runs against |
 | CI: `dagger call nats-auth` (= `make nats-auth`, ms-gates leg `nats-auth`) | `tests/e2e-py/test_nats_admits_each_client_only_to_its_own_subjects.py` (marker `nats_auth`) under `--require-live`: the NATS fixture's nats-server in operator mode with test-only nsc keys, the permission table read off the render's dev seed, every user's call set, foreign and credential-less publishes refused, and one real daprd 1.18.1 per component shape, judged by the broker's log ([[XC-078]]) |
-| CI: `e2e-stack` (= `make e2e-ci`) | against a stack the lane brings up, three sessions under `--require-live`: every `tests/e2e-py` module carrying none of the markers the lane leaves out, then Phase 1's acceptance (`-m phase1 --chaos --keep-drive`), then its soak at once (`-m soak`) |
+| CI: `e2e-stack` (= `make e2e-ci`) | against a stack the lane brings up with no client, three sessions under `--require-live`: every `tests/e2e-py` module carrying none of the markers the lane leaves out, then Phase 1's acceptance (`-m phase1 --chaos --keep-drive`), then its soak at once (`-m soak`); only then does it install the annotator and run `-m annotator` in a fourth session (XC-183) |
 | `make fga-test` (part of `make check`)            | the OpenFGA model's own `.fga.yaml` suite                                                                         |
 | `make e2e-<suite>`, `make e2e-live`               | `tests/e2e-py` against a stack already deployed: one marker at the addresses you pass, or `-m e2e` against the k3s release |
 

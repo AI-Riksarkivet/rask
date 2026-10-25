@@ -16,9 +16,9 @@ catalog's grant door. One drive, against the deployed estate:
   project and publishes it, and the annotator's account commits the published table for the admin, who is told;
 * every table the drive wrote is read back through the catalog with pylance's stock client.
 
-Run with `bash scripts/e2e_live.sh -m annotator --require-live` against an estate the annotator's release is installed
-beside (`make k3s-annotator`, which `make k3s-up` runs after rask); the e2e-stack lane installs it after rask too and runs
-this module on every push.
+Run with `make e2e-annotator` against an estate the annotator's release is installed beside (`make k3s-clients`, after
+`make k3s-up`); the e2e-stack lane installs it after Phase 1's acceptance has run on the lakehouse alone, and runs this
+module in a session of its own on every push.
 """
 
 from __future__ import annotations

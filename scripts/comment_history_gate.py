@@ -45,7 +45,7 @@ refuted. AT LEAST TWO are false positives, and a third is right for the wrong re
 * `frontend/microfrontends/models/e2e/shell.spec.ts:14` — "the lakehouse's panel no longer advertises
   the routes it gave up" is a present-tense statement of what the test ASSERTS about the UI. Nothing
   in it narrates prose; `no longer` alone carried the match.
-* `tests/unit/test_publish_saga.py:491` — "This used to say 'demo'" is history, so flagging it is
+* `services/annotator/tests/test_publish_saga.py:491` — "This used to say 'demo'" is history, so flagging it is
   defensible, but its subject is a FIXTURE LITERAL. The gate reports it as "a comment whose subject is
   a previous comment", and that reason is false.
 

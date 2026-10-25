@@ -51,7 +51,7 @@ auth:
 # THE ENGINE ([[CP-041]]): the ray-cluster fixture's RayCluster `rask-ray` gives KubeRay's own `rask-ray-head-svc`,
 # the one address compute prunes on.
 ray:
-  # The ray-cluster fixture's head (deploy/fixtures/ray-cluster), installed before rask by `make k3s-up`.
+  # The ray-cluster fixture's head (deploy/fixtures/ray-cluster), installed after rask by `make k3s-clients`.
   dashboardUrl: http://rask-ray-head-svc:8265
 
 # Interactive API docs (/docs, /redoc, /openapi.json) across the release.

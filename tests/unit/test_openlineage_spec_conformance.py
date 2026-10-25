@@ -30,8 +30,7 @@ from openlineage.client import facet_v2
 
 from catalog.core import lineage_emit as catalog_emit
 from catalog.core.run_context import RunContext
-from client_kit.lancekit import openlineage as lancekit_ol
-from lineage.models import ColumnUpstream, Dataset, RunEvent
+from lineage.models import RunEvent
 from maintenance.core import lineage_emit as compaction_emit
 from service_kit import openlineage as ol
 
@@ -137,56 +136,6 @@ def test_compaction_maintenance_events_conform() -> None:
         error="commit conflict, retry limit exceeded",
     )
     _assert_conforms(failed)
-
-
-def test_lancekit_annotation_event_conforms() -> None:
-    result = lancekit_ol.WriteResult(
-        version=4,
-        row_count=12,
-        size_bytes=0,
-        fields=[{"name": "id", "type": "int64"}, {"name": "labels", "type": "json"}],
-        column_map=[("id", "id", "IDENTITY"), ("labels", "labels", "IDENTITY")],
-    )
-    event = lancekit_ol.build_run_event(
-        operation="MERGE_INSERT",
-        job_namespace="media",
-        job_name="annotate.merge_insert",
-        inputs=[("media", "unit-7")],
-        output_namespace="media",
-        output_name="annotations",
-        event_time=_EVENT_TIME,
-        result=result,
-        source_uri="s3://media/annotations",
-        seed="annotate-annotations-unit-7-v4",
-    )
-    _assert_conforms(event)
-
-
-def test_lancekit_column_lineage_uses_the_modern_transformations_array() -> None:
-    # ASSERTS the slot a graph backend reads the kind from. The first cut put transformationType/
-    # transformationSubtype on the InputField — valid JSON (InputField allows additional properties) but a slot
-    # no consumer reads, so every forwarded edge arrived with an empty type and subtype. And lineage's own
-    # authorizer must find the column's source dataset in the same facet, or it authorizes nothing.
-    result = lancekit_ol.WriteResult(
-        version=1,
-        row_count=1,
-        size_bytes=0,
-        fields=[{"name": "labels", "type": "json"}],
-        column_map=[("labels", "raw_labels", "TRANSFORMATION")],
-    )
-    event = lancekit_ol.build_run_event(
-        operation="MERGE_INSERT",
-        job_namespace="media",
-        job_name="annotate.merge_insert",
-        inputs=[("media", "unit-7")],
-        output_namespace="media",
-        output_name="annotations",
-        event_time=_EVENT_TIME,
-        result=result,
-    )
-    [source] = event["outputs"][0]["facets"]["columnLineage"]["fields"]["labels"]["inputFields"]
-    assert [(t["type"], t["subtype"]) for t in source["transformations"]] == [("DIRECT", "TRANSFORMATION")]
-    assert Dataset.model_validate(event["outputs"][0]).column_upstreams == [ColumnUpstream(namespace="media", name="unit-7")]
 
 
 def test_typed_slots_survive_the_feed_round_trip() -> None:

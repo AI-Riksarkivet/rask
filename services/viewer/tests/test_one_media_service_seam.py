@@ -19,25 +19,13 @@ that one surface:
 
 from __future__ import annotations
 
-import pytest
-from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from lance_namespace import UnauthenticatedError
 
-
-def _seam_app(name: str) -> FastAPI:
-    if name == "viewer":
-        from viewer.main import create_viewer_app
-
-        return create_viewer_app()
-    from client_kit.media.state import AppState
-    from search.main import create_search_app
-
-    return create_search_app(AppState())
+from viewer.main import create_viewer_app
 
 
-@pytest.mark.parametrize("name", ["viewer", "search"])
-def test_the_test_seam_app_maps_the_same_errors_production_does(name: str) -> None:
+def test_the_test_seam_app_maps_the_same_errors_production_does() -> None:
     """X12: an app built through the seam must translate the same exceptions the deployed one does.
 
     DRIVEN THROUGH A REQUEST, not by inspecting the handler table: starlette resolves a handler by
@@ -45,11 +33,9 @@ def test_the_test_seam_app_maps_the_same_errors_production_does(name: str) -> No
     an app that maps nothing. This raises the exact exception the OIDC verifier raises and reads the
     response.
 
-    RED before the fix: `create_search_app` registered only `register_handlers`, which maps
-    `DomainError` alone — so an expired or wrong-audience bearer came back `500 text/plain` from
-    starlette's fallback, the very regression both mains' production comments are about.
+    A seam that maps `DomainError` alone answers this request 500 `text/plain` from starlette's fallback.
     """
-    app = _seam_app(name)
+    app = create_viewer_app()
 
     @app.get("/_probe_unauthenticated")
     async def _raise() -> None:

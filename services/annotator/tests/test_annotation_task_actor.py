@@ -341,9 +341,13 @@ async def test_a_transition_reports_its_new_state_to_the_project(monkeypatch: py
             reported.append(payload)
             return {}
 
-    import dapr.actor
+    # The suite refuses every sidecar channel (conftest.py); this test asks for the project proxy explicitly, through
+    # the real typed adapter, so the wire-name translation stays under test.
+    from annotator.projects import proxies
 
-    monkeypatch.setattr(dapr.actor.ActorProxy, "create", classmethod(lambda cls, *a, **k: _ProjectProxy()))
+    monkeypatch.setattr(
+        proxies, "typed_proxy", lambda actor_type, actor_id, interface: proxies.TypedActorProxy(cast("proxies.WireDispatch", _ProjectProxy()), interface)
+    )
     actor = await _seeded()
 
     await actor.fire(_verified({"event": "claim", "actor": "gina"}))
