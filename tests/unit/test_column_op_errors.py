@@ -30,6 +30,10 @@ from catalog.services.table_claims import DoorTable
 from service_kit.lakehouse.location_claims import ClaimStore
 
 
+#: The stamp a door commits with ([[LH-497]]).
+STAMP = {"rask.author": "alice", "rask.operation": "update"}
+
+
 @pytest.fixture
 def table(tmp_path: Path) -> DoorTable:
     ns = connect("dir", {"root": str(tmp_path)})
@@ -51,5 +55,5 @@ def test_a_storage_failure_on_a_column_op_is_not_blamed_on_the_caller(table: Doo
 
     monkeypatch.setattr("catalog.services.table_claims.open_resolved_dataset", boom)
     with pytest.raises(OSError, match="unreachable") as caught:
-        drop_columns(table, {}, AlterTableDropColumnsRequest(id=["db", "t"], columns=["v"]))
+        drop_columns(table, {}, AlterTableDropColumnsRequest(id=["db", "t"], columns=["v"]), transaction_properties=STAMP)
     assert not isinstance(caught.value, LanceNamespaceError), "a storage outage was minted into a domain error"

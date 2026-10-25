@@ -15,17 +15,9 @@ def _schema_meta(table: pa.Table) -> dict[str, str]:
     return {k.decode(): v.decode() for k, v in (table.schema.metadata or {}).items()}
 
 
-def test_build_lineage_metadata() -> None:
-    md = build_lineage_metadata(namespace="a$b", run_id="r-1")
-    assert md == {
-        "lineage.namespace": "a$b",
-        "lineage.create_run_id": "r-1",
-    }
-
-
 def test_stamp_preserves_existing_schema_metadata() -> None:
     schema = pa.schema([("id", pa.int64())], metadata={"existing": "keep"})
     table = pa.table({"id": [1]}, schema=schema)
-    meta = _schema_meta(stamp_lineage_metadata(table, build_lineage_metadata(namespace="", run_id="r")))
+    meta = _schema_meta(stamp_lineage_metadata(table, build_lineage_metadata(namespace="a$b")))
     assert meta["existing"] == "keep"  # pre-existing schema metadata is preserved
-    assert meta["lineage.create_run_id"] == "r"
+    assert meta["lineage.namespace"] == "a$b"

@@ -30,7 +30,7 @@ import lance
 import pyarrow as pa
 import pyarrow.fs as pafs
 from botocore.exceptions import BotoCoreError, ClientError
-from lance.dataset import Transaction
+from lance.dataset import AlterColumn, Transaction
 from lance_namespace import (
     AlterTableAddColumnsRequest,
     AlterTableAddColumnsResponse,
@@ -47,6 +47,7 @@ from lance_namespace import (
     CreateTableTagRequest,
     CreateTableTagResponse,
     CreateTableVersionRequest,
+    CreateTableVersionResponse,
     DeleteFromTableRequest,
     DeleteFromTableResponse,
     DeleteTableBranchRequest,
@@ -56,7 +57,11 @@ from lance_namespace import (
     DeregisterTableRequest,
     DeregisterTableResponse,
     DescribeTableRequest,
+    DescribeTableResponse,
+    DescribeTableVersionRequest,
+    DescribeTableVersionResponse,
     DescribeTransactionRequest,
+    DropTableIndexResponse,
     DropTableRequest,
     DropTableResponse,
     GetTableTagVersionRequest,
@@ -72,6 +77,8 @@ from lance_namespace import (
     ListTableBranchesResponse,
     ListTableTagsRequest,
     ListTableTagsResponse,
+    ListTableVersionsRequest,
+    ListTableVersionsResponse,
     MergeInsertIntoTableRequest,
     MergeInsertIntoTableResponse,
     NamespaceExistsRequest,
@@ -83,10 +90,12 @@ from lance_namespace import (
     TableBranchAlreadyExistsError,
     TableBranchNotFoundError,
     TableColumnNotFoundError,
+    TableIndexNotFoundError,
     TableNotFoundError,
     TableSchemaValidationError,
     TableTagAlreadyExistsError,
     TableTagNotFoundError,
+    TableVersion,
     TableVersionNotFoundError,
     UnsupportedOperationError,
     UpdateFieldMetadataResponse,
@@ -126,14 +135,28 @@ from storage import s3_client, split_s3_uri
 log = logging.getLogger(__name__)
 
 
+class CommitReadback(BaseModel):
+    """What a committed write's announcement reads back of the commit it made."""
+
+    #: The version the write committed, ``None`` when it could not be identified.
+    version: int | None
+    #: The per-version column schema, empty when it could not be read.
+    schema_fields: SchemaFields
+    #: The dataset's physical URI, the standard ``dataSource`` facet.
+    uri: str | None
+    #: When the version was committed (the manifest's own time), ISO 8601 in UTC: the announcement's ``eventTime``, so
+    #: the announcement and a re-announcement of the same commit carry the same instant ([[LH-497]]).
+    committed_at: str | None = None
+
+
 def read_version_and_schema(
     location: str,
     so: StorageOptions,
     table_id: list[str],
     pin_version: int | None,
     branch: str | None,
-) -> tuple[int | None, SchemaFields, str | None]:
-    """The ``(version, schema-facet fields, location)`` triple for stamping lineage after a committed write.
+) -> CommitReadback:
+    """The version, schema-facet fields, location and commit time for stamping lineage after a committed write.
 
     ``pin_version`` is the version the write COMMITTED, as the write itself reported it: a handle's
     ``version`` after the commit, a response's ``version``, or :func:`committed_version` for a response
@@ -148,7 +171,7 @@ def read_version_and_schema(
     own version sequence, so version N opened on main is a different snapshot.
 
     Entirely best-effort: the write is already committed, so a readback failure must degrade the lineage
-    enrichment (``(pin_version, [], None)``), never fail the request.
+    enrichment (the pinned version alone), never fail the request.
     """
     try:
         dataset = open_resolved_dataset(location, so, table_id, version=pin_version, branch=branch)
@@ -159,14 +182,25 @@ def read_version_and_schema(
         uri = str(getattr(dataset, "uri", "") or "") or None
     except Exception as exc:
         log.warning("lineage_readback_failed", extra={"table": table_id, "error": str(exc)})
-        return pin_version, [], None
+        return CommitReadback(version=pin_version, schema_fields=[], uri=None)
     if pin_version is None:
-        return None, [], uri
+        return CommitReadback(version=None, schema_fields=[], uri=uri)
+    when = commit_time(dataset)
     try:
-        return pin_version, facet_fields(dataset.schema), uri
+        return CommitReadback(version=pin_version, schema_fields=facet_fields(dataset.schema), uri=uri, committed_at=when)
     except Exception as exc:
         log.warning("schema_facet_read_failed", extra={"table": table_id, "error": str(exc)})
-        return pin_version, [], uri
+        return CommitReadback(version=pin_version, schema_fields=[], uri=uri, committed_at=when)
+
+
+def commit_time(dataset: lance.LanceDataset) -> str | None:
+    """When the version ``dataset`` is opened at was committed, ISO 8601 in UTC, off its manifest; ``None`` when unread."""
+    try:
+        when = manifest_bytes.commit_time(dataset._ds.serialized_manifest())  # noqa: SLF001 — pylance exposes the manifest only here
+    except Exception as exc:
+        log.warning("commit_time_unread", extra={"uri": str(getattr(dataset, "uri", "")), "error": str(exc)})
+        return None
+    return when.isoformat() if when is not None else None
 
 
 #: How far below a branch's head :func:`committed_version` looks for a transaction. The commit being
@@ -1170,31 +1204,53 @@ _STAMPED_COMMIT_ATTEMPTS: Final = 10
 
 
 def commit_stamped[T](
-    table: table_claims.DoorTable, so: StorageOptions, properties: dict[str, str], plan: Callable[[lance.LanceDataset], tuple[Transaction, T]]
+    table: table_claims.DoorTable,
+    so: StorageOptions,
+    properties: dict[str, str],
+    plan: Callable[[lance.LanceDataset], tuple[Transaction, T]],
+    *,
+    branch: str | None = None,
+    opened: lance.LanceDataset | None = None,
 ) -> tuple[int, T]:
-    """Commit the transaction ``plan`` builds on main's latest version with ``properties``; return the version.
+    """Commit the transaction ``plan`` builds on the latest version of ``branch`` (``None`` = main) with ``properties``;
+    return the version.
 
-    ``plan`` also returns what it measured (a merge's row counts), handed back beside the version. A commit through
-    ``LanceDataset.commit`` would rebase over a writer that landed first, and a merge_insert transaction loses its key
-    check on the way through Python (pylance 13.0.0: ``LanceOperation.Update`` carries no inserted-rows filter):
-    measured, two racing ``when_matched_fail`` inserts of one key both landed, with ``max_retries=0`` as well. So the
-    transaction is committed detached and finalized as exactly the version after the one it was planned on, through
-    the backend's put-if-not-exists (the ``version/create`` finalize); a lost race plans again on the new latest
-    version, whose rows the key check then sees.
+    Every catalog door's commit carries the ``rask.*`` stamp ([[LH-497]]), and most Lance operations take no transaction
+    properties (pylance 13.0.0: ``update``, ``delete``, ``add_columns``, ``alter_columns``, ``drop_columns``, both metadata
+    updates, ``drop_index`` and ``MergeInsertBuilder.execute``), so the door's transaction is planned, then committed
+    here. ``plan`` also returns what it measured (a merge's row counts), handed back beside the version.
+
+    A commit through ``LanceDataset.commit`` would rebase over a writer that landed first, and a merge_insert
+    transaction loses its key check on the way through Python (pylance 13.0.0: ``LanceOperation.Update`` carries no
+    inserted-rows filter): measured, two racing ``when_matched_fail`` inserts of one key both landed, with
+    ``max_retries=0`` as well. So the transaction is committed detached and finalized as exactly the version after the
+    one it was planned on, through the backend's put-if-not-exists (the ``version/create`` finalize, which takes the
+    branch it names, [[LH-490]]); a lost race plans again on the new latest version, which a planned operation then
+    sees.
 
     The finalize names the table and no location, so it is the door's guarded native write ([[LH-530]]), asking the name
-    again after the plan has written its data files, which can take as long as the rows do.
+    again after the plan has written its data files, which can take as long as the rows do. ``opened`` is the ref as the
+    door already opened it (:meth:`table_claims.DoorTable.open`), which the first attempt plans on rather than opening it
+    again.
 
     Raises:
         ConcurrentModificationError: Every attempt lost its race.
         TableChangedError: The table changed since the door's resolution.
     """
     table_id = table.segments
+    ref = recorded_branch(branch)
     for _ in range(_STAMPED_COMMIT_ATTEMPTS):
-        dataset = disarm_commit_path_cleanup(table.open(so), table_id)
-        transaction, measured = plan(dataset)
-        detached = lance.LanceDataset.commit(dataset, replace(transaction, transaction_properties=properties), detached=True)
-        location = dataset.uri
+        dataset = disarm_commit_path_cleanup(opened if opened is not None else table.open(so, branch=ref), table_id)
+        opened = None
+        try:
+            transaction, measured = plan(dataset)
+        except _PlannedOnAStaleVersion:
+            continue
+        stamped = replace(transaction, read_version=dataset.version, transaction_properties={**(transaction.transaction_properties or {}), **properties})
+        detached = lance.LanceDataset.commit(dataset, stamped, detached=True)
+        # The ref's own location: a branch handle reports the table's root, while its versions live under
+        # `tree/<branch>/`, where the detached commit wrote (measured on pylance 13.0.0).
+        location = detached.uri
         version = dataset.version + 1
         finalize_id = manifest_bytes.detached_id()
         try:
@@ -1205,7 +1261,11 @@ def commit_stamped[T](
             with fs.open_output_stream(f"{versions}/d{finalize_id}.manifest") as sink:
                 sink.write(body)
             request = CreateTableVersionRequest(
-                id=table_id, version=version, manifest_path=f"{object_store_path(location)}/_versions/d{finalize_id}.manifest", manifest_size=len(body)
+                id=table_id,
+                version=version,
+                branch=ref,
+                manifest_path=f"{object_store_path(location)}/_versions/d{finalize_id}.manifest",
+                manifest_size=len(body),
             )
             try:
                 table.write_natively("create_table_version", request)
@@ -1221,6 +1281,166 @@ def commit_stamped[T](
             discard_detached_manifest(location, so, detached.version)
         return version, measured
     raise ConcurrentModificationError(f"the commit lost the race for the next version {_STAMPED_COMMIT_ATTEMPTS} times; retry it")
+
+
+class _StagedCapture(Exception):
+    """Raised by :class:`_CapturingNamespace` in place of a finalize, ending the operation that staged its manifest."""
+
+
+#: How Lance words a commit that met a conflicting one committed since it was planned (pylance 13.0.0:
+#: ``Retryable commit conflict for version 5: This Merge transaction was preempted by concurrent transaction ...``).
+_LANCE_RETRYABLE_CONFLICT: Final = "retryable commit conflict"
+
+
+class _PlannedOnAStaleVersion(Exception):
+    """A captured operation met a version committed after the one it was planned on: :func:`commit_stamped` plans again.
+
+    Lance checks the latest version before it stages (pylance 13.0.0): an operation that conflicts with one committed
+    since is refused there as a retryable conflict, and one that does not is rebased and staged as a later version.
+    """
+
+
+class _CapturingNamespace(LanceNamespace):
+    """The namespace a handle is opened through so that Lance's own operation stages its commit and finalizes none.
+
+    Under managed versioning (``lance_docs/ns_catalog/spec.yaml`` CreateTableVersion) a handle's commit writes the version
+    as a staged manifest and hands its path to the namespace's ``create_table_version``; this answers that call by
+    keeping the request and raising, so the operation's transaction, planned and written by Lance itself, can be read
+    off the staged manifest and committed with the door's stamp (:func:`captured`). Measured on pylance 13.0.0: update,
+    delete, add_columns, alter_columns (rename and nullability), drop_columns, both metadata updates and drop_index each
+    stage one manifest this way, on main and on a branch, and the transaction re-committed with transaction properties
+    leaves the rows, schema, indices and version Lance's own call leaves.
+
+    The ref's versions are answered off its own location, as the ``dir`` backend answers them (a ``TableVersion`` naming
+    the V2 manifest's object-store path), with the version planned on as the latest: Lance then stages exactly the next
+    version, and :func:`commit_stamped` plans again when another writer took it. Nothing here names the table, so nothing
+    resolves its name again ([[LH-530]]).
+    """
+
+    def __init__(self, table: table_claims.DoorTable, so: StorageOptions, *, ref: str | None, planned: int) -> None:
+        self._table = table
+        self._so = so
+        self._ref = ref
+        self._planned = planned
+        self.staged: dict[str, Any] | None = None
+
+    def ref_location(self, branch: str | None) -> str:
+        """Where ``branch``'s versions live: the table's root for main, else its ``tree/<branch>``."""
+        root = self._table.location.rstrip("/")
+        return root if branch is None else f"{root}/{branch_layout.BRANCH_CONTAINER}/{branch}"
+
+    def _latest(self, branch: str | None) -> int:
+        """The version planned on for the ref planned on; any other ref's own latest (pylance opens main first)."""
+        if branch == self._ref:
+            return self._planned
+        return int(lance.dataset(self.ref_location(branch), storage_options=dict(self._so) if self._so else None).version)
+
+    def namespace_id(self) -> str:
+        return "rask-stamped-commit"
+
+    def describe_table(self, request: DescribeTableRequest) -> DescribeTableResponse:
+        return DescribeTableResponse(location=self._table.location, managed_versioning=True, storage_options=dict(self._so) if self._so else None)
+
+    def _version(self, branch: str | None, version: int) -> TableVersion:
+        location = self.ref_location(branch)
+        fs, base = dataset_fs(location, self._so)
+        # V2 names first, as every table the catalog creates is named; a table written with V1 paths names `<n>.manifest`.
+        for name in (f"{_MANIFEST_NAME_BASE - version:020d}.manifest", f"{version}.manifest"):
+            info = fs.get_file_info(f"{base.rstrip('/')}/_versions/{name}")
+            if info.type == pafs.FileType.File:
+                break
+        else:
+            raise TableVersionNotFoundError(f"version {version} is not on the ref")
+        when = info.mtime_ns // 1_000_000 if info.mtime_ns is not None else None
+        return TableVersion(version=version, manifest_path=f"{object_store_path(location)}/_versions/{name}", manifest_size=info.size, timestamp_millis=when)
+
+    def list_table_versions(self, request: ListTableVersionsRequest) -> ListTableVersionsResponse:
+        branch = recorded_branch(dict(request).get("branch"))
+        return ListTableVersionsResponse(versions=[self._version(branch, self._latest(branch))])
+
+    def describe_table_version(self, request: DescribeTableVersionRequest) -> DescribeTableVersionResponse:
+        asked = dict(request)
+        branch = recorded_branch(asked.get("branch"))
+        version = asked.get("version")
+        return DescribeTableVersionResponse(version=self._version(branch, int(version) if version is not None else self._latest(branch)))
+
+    def create_table_version(self, request: CreateTableVersionRequest) -> CreateTableVersionResponse:
+        self.staged = dict(request)
+        raise _StagedCapture
+
+
+#: A V2 manifest is named ``u64::MAX - version``, zero-padded to 20 digits (measured on pylance 13.0.0: version 2 is
+#: ``18446744073709551613.manifest``); a V1 one is named by the version itself.
+_MANIFEST_NAME_BASE: Final = (1 << 64) - 1
+
+
+def captured[T](
+    table: table_claims.DoorTable,
+    so: StorageOptions,
+    operation: Callable[[lance.LanceDataset], object],
+    *,
+    branch: str | None,
+    measure: Callable[[lance.LanceDataset], T] | None = None,
+) -> Callable[[lance.LanceDataset], tuple[Transaction, T | None]]:
+    """A :func:`commit_stamped` plan running Lance's own ``operation`` on the version planned on, and taking the
+    transaction it stages (:class:`_CapturingNamespace`) without committing it. ``branch`` is the ref
+    :func:`commit_stamped` plans on, which a handle does not report.
+
+    ``measure`` reads what the door answers off the same version before the operation runs (an update's matched rows),
+    since the operation ends in the capture and returns nothing. A failure of the operation before it staged anything
+    (a predicate Lance refuses, a missing column) is raised as Lance raised it.
+    """
+
+    def plan(dataset: lance.LanceDataset) -> tuple[Transaction, T | None]:
+        ref = recorded_branch(branch)
+        namespace = _CapturingNamespace(table, so, ref=ref, planned=int(dataset.version))
+        handle = lance.dataset(namespace_client=namespace, table_id=table.segments, session=shared_lance_session())
+        handle = handle.checkout_version((ref, dataset.version) if ref is not None else dataset.version)
+        measured = measure(handle) if measure is not None else None
+        try:
+            operation(handle)
+        except Exception as exc:
+            if namespace.staged is None:
+                # Lance's own wording for it, never the broad conflict markers: a column a caller named `concurrent` is
+                # missing, not raced.
+                if _LANCE_RETRYABLE_CONFLICT in str(exc).lower():
+                    raise _PlannedOnAStaleVersion from exc
+                raise
+            if not isinstance(exc, (_StagedCapture, OSError, RuntimeError)):
+                raise
+        if namespace.staged is None:
+            raise InternalError("the operation committed no staged version; its handle was not opened under managed versioning")
+        transaction = _staged_transaction(namespace.ref_location(ref), so, str(namespace.staged["manifest_path"]))
+        if namespace.staged.get("version") != dataset.version + 1:
+            raise _PlannedOnAStaleVersion
+        return transaction, measured
+
+    return plan
+
+
+def _staged_transaction(location: str, so: StorageOptions, manifest_path: str) -> Transaction:
+    """The transaction of the manifest Lance staged at ``manifest_path`` under the ref at ``location``, read by planting a
+    copy as a detached version; the staged manifest and the copy are both deleted.
+
+    Raises:
+        InternalError: The staged manifest names no transaction pylance can read.
+    """
+    name = manifest_path.rsplit("/", 1)[-1]
+    fs, base = dataset_fs(location, so)
+    versions = f"{base.rstrip('/')}/_versions"
+    detached = manifest_bytes.detached_id()
+    try:
+        with fs.open_input_stream(f"{versions}/{name}") as source:
+            body = manifest_bytes.with_manifest_version(source.read(), detached)
+        with fs.open_output_stream(f"{versions}/d{detached}.manifest") as sink:
+            sink.write(body)
+        transaction = lance.dataset(location, version=detached, storage_options=dict(so) if so else None).read_transaction(detached)
+    finally:
+        discard_detached_manifest(location, so, detached)
+        delete_table_object(location, so, f"_versions/{name}")
+    if transaction is None:
+        raise InternalError("the staged manifest carries no transaction")
+    return transaction
 
 
 def discard_detached_manifest(location: str, so: StorageOptions, version: int) -> None:
@@ -1904,9 +2124,13 @@ def _column_op(action: str, fields: Sequence[str] = ()) -> Generator[None]:
         raise  # not attributable to the request: a real 5xx, and it stays one
 
 
-def update_table(table: table_claims.DoorTable, so: StorageOptions, req: UpdateTableRequest) -> UpdateTableResponse:
-    """Apply SQL ``[path, expression]`` updates to matching rows."""
-    table_id = table.segments
+def update_table(table: table_claims.DoorTable, so: StorageOptions, req: UpdateTableRequest, *, transaction_properties: dict[str, str]) -> UpdateTableResponse:
+    """Apply SQL ``[path, expression]`` updates to matching rows, committed with ``transaction_properties`` ([[LH-497]]).
+
+    Lance's own update, captured and committed stamped (:func:`captured`): it takes no transaction properties. The rows
+    it updates are the rows its predicate matches on the version it was planned on, counted on that version before it
+    runs, since the captured call answers nothing.
+    """
     updates = dict(req.updates or [])
     if not updates:
         raise InvalidInputError("update requires at least one [path, expression] pair")
@@ -1918,27 +2142,35 @@ def update_table(table: table_claims.DoorTable, so: StorageOptions, req: UpdateT
     refuse_an_unbounded_boolean_chain(req.predicate, field="predicate")
     for expression in updates.values():
         refuse_an_unbounded_boolean_chain(expression, field="updates")
-    dataset = disarm_commit_path_cleanup(table.open(so, branch=req.branch), table_id)
+    where = req.predicate
+
+    def matched(handle: lance.LanceDataset) -> int:
+        return int(handle.count_rows(filter=where) if where else handle.count_rows())
+
     with caller_sql("invalid update expression or predicate"):
-        result = dataset.update(updates, where=req.predicate)
-    # pylance's update() returns an UpdateResult TypedDict (a plain dict at runtime); the row count is
-    # `num_rows_updated`. (The previous `getattr(result, "num_updated_rows", ...)` was wrong twice — attr
-    # access on a dict + wrong key — so updated_rows was hard-wired to 0 on every successful update.)
-    updated = result.get("num_rows_updated") if isinstance(result, dict) else None
-    # The version off the SAME handle the update committed through — pylance advances it in place.
-    return UpdateTableResponse(updated_rows=updated if updated is not None else 0, version=dataset.version)
+        version, updated = commit_stamped(
+            table,
+            so,
+            transaction_properties,
+            captured(table, so, lambda handle: handle.update(updates, where=where), branch=req.branch, measure=matched),
+            branch=req.branch,
+        )
+    return UpdateTableResponse(updated_rows=updated or 0, version=version)
 
 
-def delete_from_table(table: table_claims.DoorTable, so: StorageOptions, req: DeleteFromTableRequest) -> DeleteFromTableResponse:
-    """Delete rows matching the request predicate."""
-    table_id = table.segments
+def delete_from_table(
+    table: table_claims.DoorTable, so: StorageOptions, req: DeleteFromTableRequest, *, transaction_properties: dict[str, str]
+) -> DeleteFromTableResponse:
+    """Delete rows matching the request predicate, committed with ``transaction_properties`` ([[LH-497]])."""
     # Same omission as `update_table` above, and worse here: a wrong-target DELETE loses rows that were
     # never meant to be touched, and returns 200.
     refuse_an_unbounded_boolean_chain(req.predicate, field="predicate")
-    dataset = disarm_commit_path_cleanup(table.open(so, branch=req.branch), table_id)
+    predicate = req.predicate
     with caller_sql("invalid delete predicate"):
-        dataset.delete(req.predicate)
-    return DeleteFromTableResponse(version=dataset.version)
+        version, _ = commit_stamped(
+            table, so, transaction_properties, captured(table, so, lambda handle: handle.delete(predicate), branch=req.branch), branch=req.branch
+        )
+    return DeleteFromTableResponse(version=version)
 
 
 def insert_into_table(
@@ -1948,7 +2180,7 @@ def insert_into_table(
     data: bytes,
     *,
     max_bytes: int,
-    transaction_properties: dict[str, str] | None,
+    transaction_properties: dict[str, str],
 ) -> InsertIntoTableResponse:
     """Append (or overwrite) Arrow-IPC rows on the ref the request NAMES, and report the commit it made.
 
@@ -1969,9 +2201,9 @@ def insert_into_table(
     lands through Lance's `merge_insert(...).when_matched_fail().when_not_matched_insert_all()`, refused
     when the table holds one of its keys as it commits ([[LH-243]], :mod:`catalog.services.primary_keys`).
 
-    ``transaction_properties`` (a run, :mod:`catalog.core.run_context`) ride the commit, on main only.
+    ``transaction_properties`` (the door's stamp, :mod:`catalog.core.run_context`) ride the commit, on any ref: a keyed
+    append is finalized on the ref it planned on (:func:`commit_stamped`), and Lance's own insert takes them.
     """
-    _refuse_a_run_on_a_branch(transaction_properties, req.branch, door="insert")
     # Validated here as well as at the door's coercion: this hands pyarrow's buffers to Lance in-process,
     # and Lance writes whatever an unvalidated offset points at.
     rows = read_arrow_body(data, max_bytes=max_bytes)
@@ -1985,13 +2217,12 @@ def insert_into_table(
     primary_keys.refuse_repeats_within(rows, keys, door="insert")
     with _write_schema_errors():
         keyed_append = mode is InsertMode.APPEND and primary_keys.joinable(rows, keys)
-        if keyed_append and transaction_properties is not None:
-            version, _ = commit_stamped(table, so, transaction_properties, lambda latest: primary_keys.plan_new_keys(latest, rows, keys, door="insert"))
-        elif keyed_append:
-            # Lance's own enforcement, on the same handle: refused when the key is held as it lands, and
-            # re-planned when another commit wins the race, so a racing insert of the same key is refused ([[LH-243]]).
-            primary_keys.append_new_keys(dataset, rows, keys, door="insert")
-            version = int(dataset.version)
+        if keyed_append:
+            # Planned on the latest version and finalized as exactly the next, so a racing insert of the same key is
+            # planned again and refused ([[LH-243]]).
+            version, _ = commit_stamped(
+                table, so, transaction_properties, lambda latest: primary_keys.plan_new_keys(latest, rows, keys, door="insert"), branch=req.branch
+            )
         else:
             # An append or overwrite commutes with any racing append, so Lance's own rebase keeps it whole.
             dataset.insert(rows, mode=mode.value, transaction_properties=transaction_properties)
@@ -2001,12 +2232,6 @@ def insert_into_table(
     return InsertIntoTableResponse(version=version, num_inserted_rows=rows.num_rows)
 
 
-def _refuse_a_run_on_a_branch(transaction_properties: dict[str, str] | None, branch: str | None, *, door: str) -> None:
-    """Refuse a run on a branch write: the backend's put-if-not-exists that keeps a stamped commit whole finalizes main only."""
-    if transaction_properties is not None and recorded_branch(branch) is not None:
-        raise UnsupportedOperationError(f"{door} with a run in its Context is served on main only; a branch write cannot carry the run into its commit")
-
-
 def merge_insert_into_table(
     table: table_claims.DoorTable,
     so: StorageOptions,
@@ -2014,7 +2239,7 @@ def merge_insert_into_table(
     data: bytes,
     *,
     max_bytes: int,
-    transaction_properties: dict[str, str] | None,
+    transaction_properties: dict[str, str],
 ) -> MergeInsertIntoTableResponse:
     """Run the spec's merge-insert against the ref the request NAMES, on the handle opened at the door's location.
 
@@ -2031,10 +2256,10 @@ def merge_insert_into_table(
     is refused. There is no vector search, no full-text query and no index-selection surface here to
     re-derive and get subtly wrong.
 
-    ``transaction_properties`` (a run, :mod:`catalog.core.run_context`) ride the commit, on main only; the merge then
-    runs in-process, because the native merge takes no transaction properties.
+    ``transaction_properties`` (the door's stamp, :mod:`catalog.core.run_context`) ride the commit, on any ref: the merge
+    is planned uncommitted and finalized on the ref it planned on (:func:`commit_stamped`), because the native merge takes
+    no transaction properties.
     """
-    _refuse_a_run_on_a_branch(transaction_properties, req.branch, door="merge_insert")
     # BEFORE THE MERGE. Lance in-process is handed pyarrow's buffers, where an offset past its values
     # buffer is written as process heap and a decreasing one crashes the process (measured on pylance 12.0.0),
     # so both filters answer 400 here.
@@ -2049,11 +2274,9 @@ def merge_insert_into_table(
     # `caller_sql`, so the one door whose whole job is matching on that column reported `Internal 18`
     # for naming it wrongly — while the branchless path answered 13.
     with _write_schema_errors(), caller_sql("invalid merge_insert filter"):
-        if transaction_properties is not None:
-            version, stats = commit_stamped(table, so, transaction_properties, lambda latest: _merge_builder(latest, req).execute_uncommitted(rows))
-        else:
-            stats = _merge_builder(dataset, req).execute(rows)
-            version = dataset.version
+        version, stats = commit_stamped(
+            table, so, transaction_properties, lambda latest: _merge_builder(latest, req).execute_uncommitted(rows), branch=req.branch
+        )
     counts = stats if isinstance(stats, dict) else {}
     return MergeInsertIntoTableResponse(
         version=version,
@@ -2102,18 +2325,19 @@ def refuse_a_restore_that_arms_cleanup(target: lance.LanceDataset, *, version: i
         )
 
 
-def restore(table: table_claims.DoorTable, so: StorageOptions, req: RestoreTableRequest) -> tuple[RestoreTableResponse, int]:
+def restore(
+    table: table_claims.DoorTable, so: StorageOptions, req: RestoreTableRequest, *, transaction_properties: dict[str, str]
+) -> tuple[RestoreTableResponse, int]:
     """Commit ``req``'s ref at ``req.version`` again as its newest version: the spec's answer, and the version made.
 
-    The spec's ``RestoreTable`` answers a transaction id and no version; the version is the handle's own after the
-    restore. Shared by the restore door and a promotion's rejection, which restores main to the published version
-    (ADR 0156 C1).
+    The spec's ``RestoreTable`` answers a transaction id and no version; the version is the one the restore committed.
+    Shared by the restore door and a promotion's rejection, which restores main to the published version (ADR 0156 C1).
 
     The version is opened at the door's location, where a missing branch answers 22 and a version the ref lacks 11, the
-    codes every other door mints, and restored through that handle: the native restore names the table and would
-    resolve it again ([[LH-530]]), and it restores the dataset it loads the same way (lance-namespace-impls 13.0.0,
-    ``dir.rs``). The handle advances to the version the restore made, on main and on a branch alike (measured on pylance
-    13.0.0). Unchecked, because a restore reads no row.
+    codes every other door mints, and the restore is Lance's own ``Restore`` operation committed with
+    ``transaction_properties`` on the ref's latest version (:func:`commit_stamped`, [[LH-497]]); the native restore names
+    the table and would resolve it again ([[LH-530]]). Measured on pylance 13.0.0, a ``Restore`` committed this way leaves
+    the rows and schema the handle's own ``restore()`` leaves. Unchecked, because a restore reads no row.
 
     Raises:
         InvalidInputError: The version to restore would arm commit-path cleanup.
@@ -2121,10 +2345,41 @@ def restore(table: table_claims.DoorTable, so: StorageOptions, req: RestoreTable
     """
     target = table.open_unchecked(so, version=req.version, branch=req.branch)
     refuse_a_restore_that_arms_cleanup(target, version=req.version)
-    target.restore()
-    version = int(target.version)
-    made = target.read_transaction(version)
-    return RestoreTableResponse(transaction_id=made.uuid if made is not None else None), version
+    restored = int(target.version)
+
+    def plan(latest: lance.LanceDataset) -> tuple[Transaction, str]:
+        transaction = Transaction(read_version=latest.version, operation=lance.LanceOperation.Restore(restored))
+        return transaction, transaction.uuid
+
+    version, transaction_id = commit_stamped(table, so, transaction_properties, plan, branch=req.branch)
+    return RestoreTableResponse(transaction_id=transaction_id), version
+
+
+#: The indices Lance keeps for itself, which the ``dir`` backend's drop refuses as Unsupported: ``is_system_index`` names
+#: exactly these (Lance ``rust/lance-table/src/system_index.rs`` at v13.0.0).
+SYSTEM_INDICES: Final = frozenset({"__lance_frag_reuse", "__lance_mem_wal"})
+
+
+def drop_index(table: table_claims.DoorTable, so: StorageOptions, name: str, *, transaction_properties: dict[str, str]) -> DropTableIndexResponse:
+    """Drop the index ``name`` from main, committed with ``transaction_properties`` ([[LH-497]]), answering the commit's
+    transaction id as the spec's ``DropTableIndex`` does.
+
+    Lance's own ``drop_index`` on the handle opened at the door's location, captured and committed stamped
+    (:func:`captured`); the refusals are the ``dir`` backend's own (lance-namespace-impls 13.0.0, ``dir.rs``
+    ``drop_table_index``): an index the table does not hold answers TableIndexNotFound, a system index Unsupported.
+
+    Raises:
+        TableIndexNotFoundError: The table holds no index named ``name``.
+        UnsupportedOperationError: ``name`` is a system index.
+    """
+    held = {index.name for index in table.open_unchecked(so).describe_indices()}
+    if name not in held:
+        raise TableIndexNotFoundError(f"Table index not found: the table holds no index named {name!r}")
+    if name in SYSTEM_INDICES:
+        raise UnsupportedOperationError(f"System index '{name}' cannot be dropped via this API")
+    version, _ = commit_stamped(table, so, transaction_properties, captured(table, so, lambda handle: handle.drop_index(name), branch=None))
+    made = table.open_unchecked(so, version=version).read_transaction(version)
+    return DropTableIndexResponse(transaction_id=made.uuid if made is not None else None)
 
 
 def refuse_a_branch_this_door_cannot_honour(branch: str | None, *, door: str, remedy: str | None = None) -> None:
@@ -2211,9 +2466,10 @@ def count_rows(table: table_claims.DoorTable, so: StorageOptions, req: CountTabl
         return int(dataset.count_rows(filter=req.predicate) if req.predicate else dataset.count_rows())
 
 
-def add_columns(table: table_claims.DoorTable, so: StorageOptions, req: AlterTableAddColumnsRequest) -> AlterTableAddColumnsResponse:
-    """Add columns computed from per-column SQL expressions."""
-    table_id = table.segments
+def add_columns(
+    table: table_claims.DoorTable, so: StorageOptions, req: AlterTableAddColumnsRequest, *, transaction_properties: dict[str, str]
+) -> AlterTableAddColumnsResponse:
+    """Add columns computed from per-column SQL expressions, committed with ``transaction_properties`` ([[LH-497]])."""
     columns = req.new_columns or []
     # The spec also allows a `virtual_column` (UDF/Docker-backed) instead of a SQL `expression`. That needs
     # a UDF execution backend we don't run, so reject it as a spec-correct 501 — not a 400 (it's a valid
@@ -2240,19 +2496,27 @@ def add_columns(table: table_claims.DoorTable, so: StorageOptions, req: AlterTab
     transforms = {c.name: c.expression for c in columns if c.expression}
     if not transforms:
         raise InvalidInputError("add_columns requires a name and SQL expression per column")
-    dataset = disarm_commit_path_cleanup(table.open(so, branch=req.branch), table_id)
+    dataset = table.open(so, branch=req.branch)
     with _column_op("add_columns", dataset.schema.names):
-        dataset.add_columns(transforms)
-    return AlterTableAddColumnsResponse(version=dataset.version)
+        version, _ = commit_stamped(
+            table,
+            so,
+            transaction_properties,
+            captured(table, so, lambda handle: handle.add_columns(transforms), branch=req.branch),
+            branch=req.branch,
+            opened=dataset,
+        )
+    return AlterTableAddColumnsResponse(version=version)
 
 
-def alter_columns(table: table_claims.DoorTable, so: StorageOptions, req: AlterTableAlterColumnsRequest) -> AlterTableAlterColumnsResponse:
-    """Rename / re-type / change nullability of existing columns.
+def alter_columns(
+    table: table_claims.DoorTable, so: StorageOptions, req: AlterTableAlterColumnsRequest, *, transaction_properties: dict[str, str]
+) -> AlterTableAlterColumnsResponse:
+    """Rename / re-type / change nullability of existing columns, committed with ``transaction_properties`` ([[LH-497]]).
 
     A ``virtual_column`` alteration (a UDF-backed column) is declined as Unsupported (406, code 0), as ``add_columns``
     declines one: pylance's ``alter_columns`` takes a name, a type and a nullability and nothing that carries a UDF.
     """
-    table_id = table.segments
     if any(entry.virtual_column is not None for entry in req.alterations or []):
         raise UnsupportedOperationError("virtual_column alter_columns is not supported by this backend")
     alterations: list[dict[str, object]] = []
@@ -2267,24 +2531,37 @@ def alter_columns(table: table_claims.DoorTable, so: StorageOptions, req: AlterT
             # data_type is a JsonArrowDataType dict; pylance needs a real pa.DataType, not the JSON dict.
             alteration["data_type"] = _json_arrow_to_pa_type(dt if isinstance(dt, dict) else dt.model_dump())
         alterations.append(alteration)
-    dataset = disarm_commit_path_cleanup(table.open(so, branch=req.branch), table_id)
-    provenance_guard.refuse_provenance_alter(dataset.schema, alterations)
-    with _column_op("alter_columns", dataset.schema.names):
-        # pylance accepts plain dict alterations at runtime; its stub types them as
-        # AlterColumn (a TypedDict), which ty can't match from dict[str, object].
-        dataset.alter_columns(*alterations)  # ty: ignore[invalid-argument-type]
-    return AlterTableAlterColumnsResponse(version=dataset.version)
+    dataset = table.open(so, branch=req.branch)
+    schema = dataset.schema
+    provenance_guard.refuse_provenance_alter(schema, alterations)
+
+    def alter(handle: lance.LanceDataset) -> None:
+        # Each positional argument is one alteration dict at runtime (pylance 13.0.0 passes `list(alterations)` on); its
+        # stub types each as `Iterable[AlterColumn]`.
+        handle.alter_columns(*cast(list[Iterable[AlterColumn]], alterations))
+
+    with _column_op("alter_columns", schema.names):
+        version, _ = commit_stamped(table, so, transaction_properties, captured(table, so, alter, branch=req.branch), branch=req.branch, opened=dataset)
+    return AlterTableAlterColumnsResponse(version=version)
 
 
-def drop_columns(table: table_claims.DoorTable, so: StorageOptions, req: AlterTableDropColumnsRequest) -> AlterTableDropColumnsResponse:
-    """Drop the named columns from the table."""
-    table_id = table.segments
+def drop_columns(
+    table: table_claims.DoorTable, so: StorageOptions, req: AlterTableDropColumnsRequest, *, transaction_properties: dict[str, str]
+) -> AlterTableDropColumnsResponse:
+    """Drop the named columns from the table, committed with ``transaction_properties`` ([[LH-497]])."""
     columns = list(req.columns or [])
-    dataset = disarm_commit_path_cleanup(table.open(so, branch=req.branch), table_id)
+    dataset = table.open(so, branch=req.branch)
     provenance_guard.refuse_provenance_drop(dataset.schema, columns)
     with _column_op("drop_columns", dataset.schema.names):
-        dataset.drop_columns(columns)
-    return AlterTableDropColumnsResponse(version=dataset.version)
+        version, _ = commit_stamped(
+            table,
+            so,
+            transaction_properties,
+            captured(table, so, lambda handle: handle.drop_columns(columns), branch=req.branch),
+            branch=req.branch,
+            opened=dataset,
+        )
+    return AlterTableDropColumnsResponse(version=version)
 
 
 class _ChunkSink(io.RawIOBase):
@@ -2575,7 +2852,12 @@ def user_schema_metadata(schema: pa.Schema) -> dict[str, str]:
 
 
 def update_schema_metadata(
-    table: table_claims.DoorTable, so: StorageOptions, values: dict[str, str | None], *, branch: str | None = None
+    table: table_claims.DoorTable,
+    so: StorageOptions,
+    values: dict[str, str | None],
+    *,
+    branch: str | None = None,
+    transaction_properties: dict[str, str],
 ) -> tuple[dict[str, str], int]:
     """Upsert the table's schema-level metadata; a ``None`` value DELETES that key.
 
@@ -2593,12 +2875,14 @@ def update_schema_metadata(
     this function is also how the platform itself writes them.
 
     Returns the table's new full map with the reserved keys filtered out, matching what the read twin
-    reports, and the version the update committed: the handle advances to it in place (measured on pylance
-    12.0.0), so the lineage event names this commit rather than whatever a reopen finds.
+    reports, read off the version the update committed, and that version, so the lineage event names this
+    commit rather than whatever a reopen finds. Committed with ``transaction_properties`` ([[LH-497]]).
     """
-    dataset = disarm_commit_path_cleanup(table.open(so, branch=branch), table.segments)
-    result = dataset.update_schema_metadata(values)
-    return filter_internal_metadata(result), int(dataset.version)
+    version, _ = commit_stamped(
+        table, so, transaction_properties, captured(table, so, lambda handle: handle.update_schema_metadata(values), branch=branch), branch=branch
+    )
+    committed = table.open_unchecked(so, version=version, branch=recorded_branch(branch))
+    return user_schema_metadata(committed.schema), version
 
 
 def coerce_insert_arrow(
@@ -2688,17 +2972,26 @@ def update_field_metadata(
     so: StorageOptions,
     updates: list[dict[str, Any]],
     branch: str | None = None,
+    *,
+    transaction_properties: dict[str, str],
 ) -> UpdateFieldMetadataResponse:
-    """Merge/replace per-field metadata for the given field paths."""
+    """Merge/replace per-field metadata for the given field paths, committed with ``transaction_properties`` ([[LH-497]])."""
     field_updates = {u["path"]: dict(u.get("metadata") or {}) for u in updates if u.get("path")}
-    replace = any(bool(u.get("replace")) for u in updates)
-    dataset = disarm_commit_path_cleanup(table.open(so, branch=branch), table.segments)
+    replace_existing = any(bool(u.get("replace")) for u in updates)
+    dataset = table.open(so, branch=branch)
     with _column_op("update_field_metadata", dataset.schema.names):
-        dataset.update_field_metadata(field_updates, replace=replace)
+        version, _ = commit_stamped(
+            table,
+            so,
+            transaction_properties,
+            captured(table, so, lambda handle: handle.update_field_metadata(field_updates, replace=replace_existing), branch=branch),
+            branch=branch,
+            opened=dataset,
+        )
     # A None value is the key-deletion signal for the backend; drop those from the
     # echoed map since the response model's field values are non-nullable strings.
     fields = {path: {k: v for k, v in meta.items() if v is not None} for path, meta in field_updates.items()}
-    return UpdateFieldMetadataResponse(version=dataset.version, fields=fields)
+    return UpdateFieldMetadataResponse(version=version, fields=fields)
 
 
 #: Per-operation fields worth surfacing in a commit log, keyed by the pylance operation class name. Read

@@ -353,6 +353,17 @@ class CatalogMaintenanceSettings(BaseSettings):
     #: ADR 0156 C1). One string with the Component's name and the served path, as for the erasure release. Empty =
     #: no expiry route, so a hold waits until it is decided: the chart renders both.
     promotion_expiry_binding_name: str = Field(default="", alias="LANCE_PROMOTION_EXPIRY_BINDING_NAME")
+    #: The cron binding that announces every committed version lineage's feed lacks (`catalog/api/commit_reconcile.py`,
+    #: [[LH-497]]). One string with the Component's name and the served path, as for the erasure release. Empty = no
+    #: reconcile route, so an announcement lost between a commit and its staging is never made: the chart renders both.
+    commit_reconcile_binding_name: str = Field(default="", alias="LANCE_COMMIT_RECONCILE_BINDING_NAME")
+    #: How old a version is before the reconciler looks for its announcement: the inline publish and the outbox relay
+    #: deliver a commit's own announcement within it, so a younger one is still in flight, not lost.
+    commit_reconcile_grace_seconds: int = Field(default=600, ge=0, alias="LANCE_COMMIT_RECONCILE_GRACE_SECONDS")
+    #: How old a version may be and still be looked for: the feed keeps rows for its retention only, so a version older
+    #: than that may have had its row pruned, and announcing it again would put a write back on the feed it left. Kept
+    #: inside lineage's `eventsRetentionDays` by the chart.
+    commit_reconcile_horizon_seconds: int = Field(default=86400, ge=1, alias="LANCE_COMMIT_RECONCILE_HORIZON_SECONDS")
     #: The maintenance sweep's cleanup window (`maintenance.olderThanDays`), which an erasure report quotes as
     #: the last condition before the subject's bytes leave storage. Read here only to say it; the sweep owns it.
     erasure_cleanup_window_days: int = Field(default=7, ge=0, alias="LANCE_ERASURE_CLEANUP_WINDOW_DAYS")

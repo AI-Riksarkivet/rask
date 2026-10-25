@@ -138,20 +138,8 @@ def _refusing_held_keys(door: str) -> Generator[None]:
         ) from exc
 
 
-def append_new_keys(dataset: lance.LanceDataset, rows: pa.Table, keys: Sequence[str], *, door: str) -> None:
-    """Append ``rows`` through ``dataset``, refusing the write if the table holds one of their keys when it lands.
-
-    ``dataset`` advances to the version this append committed. The caller checks :func:`joinable` first.
-
-    Raises:
-        InvalidInputError: the table holds a row with one of the key values; nothing was written.
-    """
-    with _refusing_held_keys(door):
-        dataset.merge_insert(list(keys)).when_matched_fail().when_not_matched_insert_all().execute(rows)
-
-
 def plan_new_keys(dataset: lance.LanceDataset, rows: pa.Table, keys: Sequence[str], *, door: str) -> tuple[Transaction, dict[str, Any]]:
-    """Plan the append of ``rows`` on ``dataset`` as :func:`append_new_keys` lands it, uncommitted, with its row counts.
+    """Plan the append of ``rows`` on ``dataset`` through Lance's ``when_matched_fail`` merge, uncommitted, with its row counts.
 
     Raises:
         InvalidInputError: ``dataset`` holds a row with one of the key values.

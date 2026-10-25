@@ -253,19 +253,47 @@ ADR 0160, LH-470). `catalog/core/tier_policy.py` holds it:
   its run and inputs, and every named input, on any tier, needs `can_read_data` (`tier_policy.judge_run`). The
   run is `catalog.core.run_context`: on `create`, `insert` and `merge_insert` it comes from the spec Context headers
   `x-rask-run-id`, `x-rask-job`, `x-rask-inputs` (a JSON array of `{table: [segments], version, branch}`) and the
-  door stamps it as the transaction properties `rask.run_id` / `rask.job` / `rask.inputs`, with `rask.author` the
-  verified caller; at `version/create` the catalog reads the same properties from the staged manifest, which may carry
-  no other `rask.*` key, and refuses a `rask.author` other than the caller or a run without one (a property any
-  committer can write proves authorship only because of that refusal). A compaction and a restore add no data, so
-  they name no run. A rename commits nothing a run can reach, so moving a table into silver or gold from another
-  tier is refused, and so is `register` into one, which attaches bytes no run produced through the catalog ([[LH-463]]). A keyed insert
-  and a merge carrying a run commit through `dataplane.commit_stamped`: detached, then finalized as exactly the
-  next version by the backend's put-if-not-exists, because `LanceDataset.commit` of an `execute_uncommitted` merge
-  rebases past a racing writer without its key check (measured on pylance 13.0.0: a duplicate key landed). A run on
-  a branch write is refused 406. `update` and `add_columns` cannot carry transaction properties on pylance 13, so
-  silver and gold refuse them 406. The judge answers allow or refuse; a version breaching the project's quality gate
-  is held when it is published, at the publish door (ADR 0161, below). Nothing anywhere reads a tier from
+  door stamps it as the transaction properties `rask.run_id` / `rask.job` / `rask.inputs`; at `version/create` the
+  catalog reads the same properties from the staged manifest, which may carry no other `rask.*` key but `rask.author`,
+  and refuses a `rask.author` other than the caller (a property any committer can write proves authorship only because
+  of that refusal). A compaction and a restore add no data, so they name no run. A rename commits nothing a run can
+  reach, so moving a table into silver or gold from another tier is refused, and so is `register` into one, which
+  attaches bytes no run produced through the catalog ([[LH-463]]). `update` and `add_columns` read no run from the
+  Context, so silver and gold refuse them 406. The judge answers allow or refuse; a version breaching the project's
+  quality gate is held when it is published, at the publish door (ADR 0161, below). Nothing anywhere reads a tier from
   a name.
+- **Every version names its author, and every door commits stamped** ([[LH-497]]). Each catalog door stamps
+  `rask.author` (the verified caller) and `rask.operation` (the lineage operation it announces) on its commit, on main
+  and on every branch, through `dataplane.commit_stamped`: the door's transaction is planned on the ref's latest version,
+  committed detached with the stamp and finalized as exactly the next version by the backend's put-if-not-exists, and a
+  writer that lost that version plans again. Most pylance operations take no transaction properties (13.0.0: `update`,
+  `delete`, `add_columns`, `alter_columns`, `drop_columns`, both metadata updates, `drop_index`,
+  `MergeInsertBuilder.execute`), so for those the plan is Lance's own call made on a handle opened through an in-process
+  namespace under managed versioning (`dataplane.captured`), which keeps the staged manifest instead of finalizing it;
+  the transaction read off it leaves the rows, schema, indices and version Lance's own call leaves (measured). Building
+  a schema op's transaction by hand is not possible: `LanceSchema.from_pyarrow` renumbers field ids, and a `Project`
+  built from it read one column's data as another's. A keyed insert and a merge plan `execute_uncommitted` instead,
+  since `LanceDataset.commit` of one rebases past a racing writer without its key check (a duplicate key landed). A
+  restore is planned as Lance's `Restore`, and `drop_index` keeps the `dir` backend's own refusals (a system index 406,
+  a missing one 404). A stock commit that cannot carry an author (`Compaction.commit` stamps neither of its two commits,
+  and pylance models no class for `ReserveFragments`) has its verified caller recorded by `version/create` before the
+  finalize, at `_commit_authors/<table uuid>/<transaction uuid>.json` (`service_kit.lakehouse.commit_records`), ended
+  with the table by `end_object_records`.
+- **The commit is the outbox** ([[LH-497]]). A versioned announcement's OpenLineage run id is a UUIDv8 of HMAC-SHA256
+  under `commit-id-key` (a secret only the catalog reads; a stack with no store derives under the empty key) over the
+  table's uuid, the ref, its incarnation and the version (`catalog.core.commit_ids`), and its `eventTime` is the
+  commit's own time, so every announcement of one commit is one run on lineage's feed. Keyed because lineage binds a
+  run id to its first author for ever (LIN-5) and any writer may post any run id: a predictable id would let one
+  table's writer suppress another's announcements. The `catalog-commit-reconcile-cron` tick
+  (`catalog.api.commit_reconcile`) lists every held location claim whose name still describes to it, reads each ref's
+  versions after its mark (`_commit_marks/`) older than `LANCE_COMMIT_RECONCILE_GRACE_SECONDS`, looks each up on
+  `provenance$events` by the table's uuid, ref and version (so a renamed table is not announced again), and announces
+  every one the feed lacks from the version log alone, signed for its author; each find counts
+  `catalog.commit_reconcile.reannounced`, and a version of an announced operation with no author counts
+  `catalog.commit_reconcile.unauthored` (both page, `deploy/alerting/rules.yml`). A mark moves only past versions
+  confirmed on the feed, unannounced by design (a `Clone`, a config-only disarm, a provenance row write) or unauthored.
+  The catalog refuses an announced write while it holds no commit id key (`api/signing_gate.py`). Pinned by
+  `tests/integration/test_a_commit_whose_announcement_was_lost_is_announced_once.py`.
 
 ## Storage — what state lives where (and why there is NO app database)
 

@@ -7,11 +7,18 @@ committing through ``version/create`` writes the same properties into its staged
 reads them there. Either way the committed manifest carries the run, so a crash after the commit loses nothing a
 reader of the version's transaction cannot recover.
 
-``rask.author`` names who committed: the verified caller, which the catalog stamps beside the run on its own doors and
-requires of a stock client's run at ``version/create``. A property any committer can write proves who wrote it only
-because the catalog refuses every other value before it finalizes.
+``rask.author`` names who committed: the verified caller, which the catalog stamps on every commit its own doors make and
+refuses any other value of at ``version/create``. A property any committer can write proves who wrote it only because of
+that refusal. A stock client's commit that names no author (a compaction cannot, pylance 13.0.0) has its caller recorded
+by the catalog before it finalizes (``service_kit.lakehouse.commit_records``). Every version therefore names its author,
+which is what lets the catalog announce a commit whose announcement was lost from its version log alone
+(``catalog.services.commit_reconcile``), on behalf of that author ([[LH-497]]).
 
-The properties are the only ``rask.*`` keys a commit may carry. ``rask.inputs`` is a JSON array of
+``rask.operation`` is the lineage operation a catalog door's commit is announced as, which Lance's own operation does not
+always tell (an ``Update`` is an update or a merge, a ``Project`` a drop or a rename). Only the catalog's doors stamp it:
+a stock client's commit is named from its Lance operation, and ``version/create`` refuses one naming it.
+
+The run's properties and the author are the only ``rask.*`` keys a stock client's commit may carry. ``rask.inputs`` is a JSON array of
 ``{"table": [<id segment>, ...], "version": <n>, "branch": <name>}``, ``branch`` omitted for main: the table is the
 spec identifier as a list of names, so reading it needs no delimiter.
 """
@@ -34,8 +41,9 @@ RUN_ID_PROPERTY: Final = "rask.run_id"
 JOB_PROPERTY: Final = "rask.job"
 INPUTS_PROPERTY: Final = "rask.inputs"
 AUTHOR_PROPERTY: Final = "rask.author"
+OPERATION_PROPERTY: Final = "rask.operation"
 
-#: Every ``rask.*`` transaction property a commit may carry.
+#: Every ``rask.*`` transaction property a stock client's commit may carry.
 PROPERTIES: Final = frozenset({RUN_ID_PROPERTY, JOB_PROPERTY, INPUTS_PROPERTY, AUTHOR_PROPERTY})
 
 #: Each input is one FGA check on the commit path, so the list is bounded.
@@ -117,23 +125,25 @@ def from_properties(properties: Mapping[str, str] | None) -> RunContext | None:
     return _parse(properties.get(RUN_ID_PROPERTY), properties.get(JOB_PROPERTY), properties.get(INPUTS_PROPERTY), where="the commit's transaction properties")
 
 
-def commit_properties(run: RunContext | None, *, author: str | None) -> dict[str, str] | None:
-    """The transaction properties a catalog door stamps for ``run``, committed by ``author``; ``None`` without a run."""
-    return run.properties(author=author) if run is not None else None
+def commit_properties(run: RunContext | None, *, author: str | None, operation: str) -> dict[str, str]:
+    """The transaction properties a catalog door stamps on its commit of ``operation`` by ``author``, with ``run``'s when
+    it names one. ``author`` is ``None`` only where the catalog authenticates nobody."""
+    stamped = run.properties(author=author) if run is not None else ({AUTHOR_PROPERTY: author} if author is not None else {})
+    return {**stamped, OPERATION_PROPERTY: operation}
 
 
-def require_caller_authored(properties: Mapping[str, str], run: RunContext | None, *, caller: str | None) -> None:
-    """Refuse a staged commit whose ``rask.author`` is not the verified ``caller``, or whose run names no author.
+def require_caller_authored(properties: Mapping[str, str], *, caller: str | None) -> None:
+    """Refuse a staged commit whose ``rask.author`` is not the verified ``caller``.
 
-    ``caller`` is ``None`` when the catalog authenticates nobody, and then there is no one to compare with.
+    A commit naming no author is admitted: a stock compaction cannot carry one, and the catalog records the caller as
+    its author before it finalizes (`service_kit.lakehouse.commit_records`, [[LH-497]]). ``caller`` is ``None`` when the
+    catalog authenticates nobody, and then there is no one to compare with.
 
     Raises:
-        InvalidInputError: The commit names an author other than the caller, or a run without its author.
+        InvalidInputError: The commit names an author other than the caller.
     """
     if caller is None:
         return
     author = properties.get(AUTHOR_PROPERTY)
     if author is not None and author != caller:
         raise InvalidInputError(f"commit refused: {AUTHOR_PROPERTY} names {author!r}, but the commit is {caller!r}'s; it names the verified caller")
-    if author is None and run is not None:
-        raise InvalidInputError(f"commit refused: a commit naming its run names its author too, {AUTHOR_PROPERTY}={caller!r}")

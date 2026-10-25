@@ -118,8 +118,14 @@ is recorded without a uuid. Every other facet is that producer's own claim.
 - The catalog stages each write's event in its outbox (the chart sets `LANCE_LINEAGE_OUTBOX_URI`) before
   publishing; from there, delivery into the feed is at least once, and lineage records each event once
   (an insert-only merge on the row's key), so a redelivery lands no second row.
-- A crash between the Lance commit and the stage loses the event: nothing in the estate detects that commit
-  yet (LH-497, #641). An event the outbox drain recovers takes a new, larger seq, so it can arrive after
-  events for later commits. Order the writes of one table by `lance.version`, not by `seq`.
+- A crash between the Lance commit and the stage loses that announcement, not the write: the commit names its author
+  and operation, and the catalog's reconcile cron (`catalog.commitReconcile`, every 10 minutes by default) announces
+  every committed version older than `catalog.commitReconcile.graceSeconds` that the feed holds no row for, from the
+  table's version log (LH-497). A write's run id is derived from its commit (the table's uuid, ref, ref incarnation and
+  version, keyed by a secret only the catalog holds), so the write's own announcement and a re-announcement are one
+  run and land one row, whichever arrives first. A versioned dataset change carries its commit's time as `eventTime`
+  for the same reason.
+- An event the outbox drain or the reconciler recovers takes a new, larger seq, so it can arrive after events for later
+  commits. Order the writes of one table by `lance.version`, not by `seq`.
 - The feed keeps rows for `services.lineage.eventsRetentionDays` of arrival time (default 7), so a follower
   that stops for longer can find its cursor below `oldest_seq - 1` (see the cursor rule).

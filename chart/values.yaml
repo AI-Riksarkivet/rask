@@ -821,6 +821,24 @@ catalog:
     # A tick lists the open holds, an empty prefix in the healthy case, so it is cheap at this cadence.
     # -- Dapr cron schedule on which promotion holds past their review deadline expire; lateness only costs time.
     schedule: "@every 60s"
+  # LH-497: the commit is the outbox. A write's announcement is made after its commit, and a crash between the commit
+  # and the staging of its event loses it; this cron reads each table's version log after its mark and announces every
+  # committed version lineage's feed lacks, under the run id derived from the commit, and pages on each find.
+  commitReconcile:
+    # ONE STRING, as for controlOutbox: the Component (catalog-commit-reconcile-cron.yaml), the app's
+    # LANCE_COMMIT_RECONCILE_BINDING_NAME and the route at the catalog's pod root.
+    # -- Name of the commit-reconcile Dapr cron Component; also the catalog's LANCE_COMMIT_RECONCILE_BINDING_NAME and the route it serves.
+    bindingName: catalog-commit-reconcile-cron
+    # A tick reads every table's versions after its mark, so it runs less often than the relays; it must run well
+    # inside maintenance.olderThanDays, since a version cleanup reclaimed is one it can no longer read.
+    # -- Dapr cron schedule on which the catalog announces every committed version lineage's feed lacks.
+    schedule: "@every 600s"
+    # -- Seconds a committed version waits before the reconciler looks for its announcement (LANCE_COMMIT_RECONCILE_GRACE_SECONDS): longer than the inline publish and the outbox relay take to deliver it.
+    graceSeconds: 600
+    # The feed prunes rows past services.lineage.eventsRetentionDays, so a version older than that may be on no row while
+    # it was announced; the render refuses a horizon at or past the retention.
+    # -- Seconds back the reconciler looks for a version's announcement (LANCE_COMMIT_RECONCILE_HORIZON_SECONDS); kept inside services.lineage.eventsRetentionDays.
+    horizonSeconds: 86400
 
 # Dapr pub/sub: the publish-side component name + the lineage topic. Each SUBSCRIBER app additionally
 # gets its own derived component `<name>-<app-id>` carrying its queue group + deliver policy

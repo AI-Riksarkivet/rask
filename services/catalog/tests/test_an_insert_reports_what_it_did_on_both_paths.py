@@ -76,9 +76,9 @@ def test_both_paths_report_the_same_shape_for_the_same_payload(table: DoorTable)
     field, one fewer comparison — so it could only ever fail when this one already had. The messages
     below carry which side was wrong, which is the only thing the extra test bought.
     """
-    main = insert_into_table(table, {}, InsertIntoTableRequest(id=TABLE_ID, mode="append"), _ipc(_rows(20)), max_bytes=_BODY_LIMIT, transaction_properties=None)
+    main = insert_into_table(table, {}, InsertIntoTableRequest(id=TABLE_ID, mode="append"), _ipc(_rows(20)), max_bytes=_BODY_LIMIT, transaction_properties={})
     branched = insert_into_table(
-        table, {}, InsertIntoTableRequest(id=TABLE_ID, mode="append", branch=BRANCH), _ipc(_rows(30)), max_bytes=_BODY_LIMIT, transaction_properties=None
+        table, {}, InsertIntoTableRequest(id=TABLE_ID, mode="append", branch=BRANCH), _ipc(_rows(30)), max_bytes=_BODY_LIMIT, transaction_properties={}
     )
 
     assert main.num_inserted_rows == 2, f"the MAIN path did not report the rows it wrote: {main}"

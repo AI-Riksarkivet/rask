@@ -20,6 +20,7 @@ from fastapi import FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import LanceNamespaceError
 
+from catalog.api.commit_reconcile import mount_commit_reconcile
 from catalog.api.control_relay import mount_control_relay
 from catalog.api.dapr import register_control_dapr
 from catalog.api.erasure_release import mount_erasure_release
@@ -30,6 +31,8 @@ from catalog.api.promotion_expiry import mount_promotion_expiry
 from catalog.api.signing_gate import signing_gate_middleware
 from catalog.api.v1.router import api_router
 from catalog.core import base_judge
+from catalog.core.commit_ids import STATE as COMMIT_IDS_STATE
+from catalog.core.commit_ids import CommitIdKeyHolder, commit_ids_ready_check, make_commit_ids
 from catalog.core.config import Settings, get_settings
 from catalog.core.control_buffer import ControlEventBuffer
 from catalog.core.control_signing import control_sign
@@ -262,6 +265,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         parse_published=parse_published_keys,
     )
     attach_signing(app, signing)
+    # THE KEY EVERY COMMIT'S RUN ID IS DERIVED UNDER ([[LH-497]]): read from the store like the signing seed, or the empty
+    # key for a stack with no store. Published for the gate, the readiness check and the reconciler.
+    commit_ids = make_commit_ids(secrets_from_dapr=settings.secrets_from_dapr, store=settings.dapr_secret_store)
+    setattr(app.state, COMMIT_IDS_STATE, commit_ids)
     app.state.lineage_emitter = make_emitter(
         enabled=settings.lineage_emit_enabled,
         transport=settings.lineage_transport,
@@ -286,6 +293,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         # THIS CATALOG'S OWN SIGNING KEY ([[LH-064]]), or None for an estate with no store or no identity. The holder
         # is built here and started with the app below: an emitter never reaches for the store itself.
         signing=signing,
+        commit_ids=commit_ids,
     )
     # Control-plane change-events (opt-in, best-effort — the governance/metadata stream). Publishes through
     # the same local sidecar (reuse/lazily build the Dapr client). The per-replica ring buffer is ALWAYS
@@ -319,6 +327,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     # committed is never failed by an emit that cannot be signed; that emit is withheld, lineage and control alike.
     if signing is not None:
         await signing.start()
+    if isinstance(commit_ids, CommitIdKeyHolder):
+        await commit_ids.start()
     app.state.startup_complete = True
     # Re-assert the warehouse grants over warehouses that already exist. BACKGROUND and non-fatal, and
     # both of those are the design rather than caution:
@@ -354,6 +364,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
             await bus_watchdog.stop()
         if signing is not None:
             await signing.stop()
+        if isinstance(commit_ids, CommitIdKeyHolder):
+            await commit_ids.stop()
         if store_session is not None:
             await store_session.stop()
         fga_client = getattr(app.state, "fga", None)
@@ -401,7 +413,7 @@ app = build_lance_service_app(
     lifespan=lifespan,
     log=log,
     routers=[api_router],
-    ready_check=signing_ready_check(_namespace_ready),
+    ready_check=signing_ready_check(commit_ids_ready_check(_namespace_ready)),
     inner_middleware=[maintenance_middleware, signing_gate_middleware],
 )
 # Wire the broadcast control-plane-event subscription that fills each replica's ring buffer. DaprApp always
@@ -419,6 +431,9 @@ mount_erasure_release(app, _settings.erasure_release_binding_name)
 # ADR 0156 C1: expire promotion holds nobody answered before their review deadline (POST /<binding name> at the
 # pod root). Mounted only when the chart names the binding, like the relay.
 mount_promotion_expiry(app, _settings.promotion_expiry_binding_name)
+# [[LH-497]]: announce every committed version lineage's feed lacks, from the version log (POST /<binding name> at the
+# pod root). Mounted only when the chart names the binding, like the relay.
+mount_commit_reconcile(app, _settings.commit_reconcile_binding_name)
 # ADDED AFTER, therefore OUTSIDE the request-id layer — where they already were, and where they belong.
 # Reject oversized request bodies with 413 before they are buffered (Arrow-IPC OOM guard). See body_limit.py.
 app.add_middleware(BodySizeLimitMiddleware, max_bytes=_settings.max_body_bytes)

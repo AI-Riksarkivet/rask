@@ -51,7 +51,7 @@ from catalog.services import dataplane, maintenance, managed_versions
 from catalog.services.table_claims import DoorTable
 from service_kit.governed import fga
 from service_kit.governed.audit import SUCCESS, audit
-from service_kit.lakehouse import maintenance_due
+from service_kit.lakehouse import commit_records, maintenance_due
 from service_kit.lakehouse.history_fences import HistoryWork
 
 
@@ -227,7 +227,7 @@ async def create_table_version(
         judge = BaseJudge.from_settings(settings)
         record = await run_in_threadpool(judge.read_record, location)
         run = run_context.from_properties(staged.properties)
-        run_context.require_caller_authored(staged.properties, run, caller=token.subject if token is not None else None)
+        run_context.require_caller_authored(staged.properties, caller=token.subject if token is not None else None)
         adds_data = await run_in_threadpool(
             partial(
                 managed_versions.judge,
@@ -244,6 +244,12 @@ async def create_table_version(
         raise
     finally:
         await run_in_threadpool(managed_versions.discard, staged, so)
+    caller = token.subject if token is not None else None
+    if caller is not None and run_context.AUTHOR_PROPERTY not in staged.properties:
+        # BEFORE THE FINALIZE: once the version lands it must name its author, and this commit cannot ([[LH-497]]).
+        await run_in_threadpool(
+            commit_records.record_author, settings.registry_root, settings.storage_options(), table.resolved.require_uuid(), staged.transaction_uuid, caller
+        )
     response = await run_in_threadpool(managed_versions.finalize, table, staged, body, so)
     audit(
         "commit_version",

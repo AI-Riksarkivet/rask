@@ -1,10 +1,7 @@
 """The UPDATE and DELETE doors answer the rows they touched and advance the table's version.
 
-They carry no conflict classification, unlike the column ops (`test_a_lost_commit_race_is_retryable_not_a_server_fault.py`),
-because no input reaches one: `update` and `delete` are Rewrite transactions that Lance retries against the newer
-version, so a writer holding a stale handle rebases and commits rather than losing. Measured 2026-09-08 with two handles
-opened at version 1, one committing first: the stale update committed version 3 and the stale delete version 4, with no
-conflict raised.
+Both commit stamped ([[LH-497]], `dataplane.commit_stamped`): Lance's own operation, planned on the latest version and
+finalized as exactly the next one, so the update's row count is the rows its predicate matched on that version.
 """
 
 from __future__ import annotations
@@ -22,6 +19,8 @@ from service_kit.lakehouse.location_claims import ClaimStore
 
 
 TABLE_ID = ["db", "rows"]
+#: The stamp a door commits with ([[LH-497]]).
+STAMP = {"rask.author": "alice", "rask.operation": "update"}
 SCHEMA = pa.schema([pa.field("id", pa.int64()), pa.field("v", pa.int64())])
 
 
@@ -48,9 +47,9 @@ def table(ns, tmp_path: Path) -> DoorTable:  # noqa: ANN001
 
 
 def test_the_doors_still_answer_and_advance_the_version(table: DoorTable) -> None:
-    updated = update_table(table, {}, UpdateTableRequest(id=TABLE_ID, updates=[["v", "7"]]))
+    updated = update_table(table, {}, UpdateTableRequest(id=TABLE_ID, updates=[["v", "7"]]), transaction_properties=STAMP)
     assert updated.updated_rows == 3, f"update reported {updated.updated_rows} rows, not 3"
-    deleted = delete_from_table(table, {}, DeleteFromTableRequest(id=TABLE_ID, predicate="id = 1"))
+    deleted = delete_from_table(table, {}, DeleteFromTableRequest(id=TABLE_ID, predicate="id = 1"), transaction_properties=STAMP)
     # `version` is Optional on the response model; a door that answers None reported no version at all,
     # which is the same defect as reporting a stale one and is asserted rather than narrowed away.
     assert deleted.version is not None, "delete answered no version"

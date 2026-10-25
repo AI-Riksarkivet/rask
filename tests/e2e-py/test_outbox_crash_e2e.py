@@ -40,7 +40,7 @@ from datetime import UTC, datetime
 
 import pytest
 import requests
-from outbox_probe import bearer, owned_output_table
+from outbox_probe import bearer, owned_output_table, table_uuids
 
 from catalog.core.lineage_emit import INSERT, InputRef, build_write_event
 from lineage_kit.signing import SigningKey, attach_signature
@@ -258,6 +258,9 @@ def test_sigkilled_producer_loses_nothing(lineage: str) -> None:
         # object that can never carry a tuple. Measured live 2026-09-20:
         # `can_get_metadata required on inputs: e2e_crash_src`.
         inputs=[InputRef(namespace="s3://e2e-crash-src", name="e2e_crash_src", version=None)],
+        # The table's uuids, as every event the catalog signs names its table by them: lineage refuses an output no
+        # uuid names ([[LH-166]]), so without them the relay drains this event into a refusal and the feed never holds it.
+        uuids=table_uuids(PROBE_NAMESPACE, PROBE_TABLE),
     )
     key = _signing_key()
     if key is not None:

@@ -7,9 +7,9 @@ it named. Every decision is audited with the tier it was taken under.
 
 A write that adds data to a silver or gold table names the run that produced it and the inputs it read
 (:mod:`catalog.core.run_context`, ADR 0156 C2): a catalog door reads them from the request's Context and stamps them
-into its commit, a stock client writes them into its staged manifest. A door whose pylance call cannot carry
-transaction properties (``update``, ``add_columns``), or that attaches bytes written elsewhere (``register``), is refused on those tiers, because the run it was given would
-not reach the commit. Every named input, on any tier, needs ``can_read_data``: naming a table one cannot read as an
+into its commit, a stock client writes them into its staged manifest. A door that reads no run from the request's
+Context (``update``, ``add_columns``), or that attaches bytes written elsewhere (``register``), is refused on those tiers,
+because its commit would name no run. Every named input, on any tier, needs ``can_read_data``: naming a table one cannot read as an
 input would launder it into the derived table's lineage. The judge answers allow or refuse before a write; a version
 that breaches the project's quality gate is held when it is published, by the publish door (``catalog.services.promotions``,
 ADR 0161). A staged manifest's content is judged by ``catalog.services.managed_versions`` (LH-471), which hands its run here.
@@ -46,9 +46,8 @@ DERIVED_TIERS: Final = frozenset({"silver", "gold"})
 #: The write doors that add data and stamp the request's run into their commit.
 STAMPING_DOORS: Final = frozenset({"create", "insert", "merge_insert"})
 
-#: The write doors that land data and commit nothing the request's run can reach: ``update`` and ``add_columns`` call
-#: pylance methods taking no transaction properties (pylance 13.0.0), and ``register`` attaches bytes written elsewhere
-#: ([[LH-463]]).
+#: The write doors that land data and commit no run: ``update`` and ``add_columns`` read none from the request's Context,
+#: and ``register`` attaches bytes written elsewhere ([[LH-463]]).
 UNSTAMPABLE_DATA_DOORS: Final = frozenset({"update", "add_columns", "register"})
 
 #: Ask one rung, raising the spec's typed refusal on a denial. ``None`` when FGA is off.

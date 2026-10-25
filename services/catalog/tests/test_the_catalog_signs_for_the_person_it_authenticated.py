@@ -173,6 +173,8 @@ def boot(tmp_path: Path, control_outbox: str, two_stores: Any, monkeypatch: pyte
             stack.enter_context(respx.mock)
             respx.get(f"{SECRETS}/signing-key-{signing_key_name(CATALOG)}").mock(return_value=seed)
             respx.get(f"{SECRETS}/signing-public-{signing_key_name(CATALOG)}").mock(return_value=keys)
+            # The key every announcement's run id is derived under ([[LH-497]]), read through the same sidecar.
+            respx.get(f"{SECRETS}/commit-id-key").mock(return_value=httpx.Response(200, json={"key": "ab" * 32}))
             namespace = connect("dir", {"root": str(tmp_path / "warehouse")})
             main.app.dependency_overrides[get_namespace] = lambda: namespace
             main.app.dependency_overrides[get_storage_options] = lambda: {}

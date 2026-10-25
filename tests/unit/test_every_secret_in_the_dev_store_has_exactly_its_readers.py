@@ -58,6 +58,8 @@ EXPECTED: Final[dict[str, dict[str, frozenset[str]]]] = {
     "maintenance-s3": {"store": frozenset({"maintenance"}), "dapr": frozenset({"maintenance"})},
     "dapr-app-token": {"store": _DOORS | {"eso"}, "dapr": _DOORS, "pods": _SIDECARS},
     "signing-key-rask-sa-catalog": {"store": frozenset({"catalog"}), "dapr": frozenset({"catalog"})},
+    # The key the catalog derives every announcement's run id under ([[LH-497]]): the catalog's alone.
+    "commit-id-key": {"store": frozenset({"catalog"}), "dapr": frozenset({"catalog"})},
     "signing-key-rask-sa-maintenance": {"store": frozenset({"maintenance"}), "dapr": frozenset({"maintenance"})},
     "signing-public-rask-sa-catalog": {"store": _CATALOG_VERIFIERS, "dapr": _CATALOG_VERIFIERS},
     "signing-public-rask-sa-maintenance": {"store": _MAINTENANCE_VERIFIERS, "dapr": _MAINTENANCE_VERIFIERS},

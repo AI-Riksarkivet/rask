@@ -111,7 +111,7 @@ class _RecordingEmitter(_BaseLineageEmitter):
 def _optional() -> EmitFields:
     """Every OPTIONAL field, so a dropped one is visible in the emitted event."""
     return EmitFields(
-        run_id="run-1",
+        event_time="2026-10-25T12:00:00+00:00",
         authorization="Bearer x",
         source_uri="s3://bkt/t.lance",
         schema_fields=[],
@@ -131,7 +131,7 @@ def test_every_field_in_the_bundle_reaches_the_emitted_event() -> None:
     asyncio.run(_create(emitter, **_optional()))
     [event] = emitter.events
     facets = event["run"]["facets"]
-    assert event["run"]["runId"] == "run-1"
+    assert event["eventTime"] == "2026-10-25T12:00:00+00:00"
     assert facets["lance"]["project"] == "acme"
     assert facets["lance"]["originator"] == "dex~bob"
     assert (facets["lance"]["runId"], facets["lance"]["job"]) == ("pipeline-7", "nightly")

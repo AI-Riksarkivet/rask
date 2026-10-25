@@ -61,7 +61,7 @@ from datetime import UTC, datetime, timedelta
 
 from pydantic import BaseModel, Field
 
-from service_kit.lakehouse import records
+from service_kit.lakehouse import record_store, records
 from service_kit.lakehouse.base_refs import decoded_path
 from service_kit.lakehouse.objectfs import StorageOptions
 
@@ -155,6 +155,20 @@ def holder(store: ClaimStore, location: str) -> LocationClaim | None:
         return None
     claim = LocationClaim.model_validate(found[0])
     return None if claim.released_at is not None else claim
+
+
+def held_claims(store: ClaimStore) -> list[LocationClaim]:
+    """Every claim on the control root nobody has released, a table's and a data directory's alike; a record that is not a
+    claim is left out with a warning, as the registry listing it reads leaves one out."""
+    held: list[LocationClaim] = []
+    for record in record_store.list_records(store.control_root, store.storage_options, _PREFIX, event="location_claim"):
+        try:
+            claim = LocationClaim.model_validate(record)
+        except ValueError:
+            continue
+        if claim.released_at is None:
+            held.append(claim)
+    return held
 
 
 def read(store: ClaimStore, location: str) -> ClaimRead | None:

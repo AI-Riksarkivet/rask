@@ -1,4 +1,4 @@
-"""A catalog that cannot sign takes no write it would announce ([[XC-095]]).
+"""A catalog that cannot sign takes no write it would announce ([[XC-095]]), nor one whose run id it cannot derive.
 
 Every write the catalog commits is announced after the commit, signed with the catalog's own key: its lineage event
 (`catalog.core.lineage_emit`) and its control events (`service_kit.control_emit`). A holder without its key withholds
@@ -7,6 +7,8 @@ pipeline following them, not a person. While the key is unresolved the catalog t
 announce, ServiceUnavailable before the commit, classifying a write the way the read-only window does
 (`maintenance_mode.is_mutating`, fail-closed). Its readiness says why meanwhile (`signing_ready_check`), and a missing
 key is re-read every 15 s (`service_kit.governed.signing_key`), so the refusal ends on its own once the store answers.
+The commit id key (`catalog.core.commit_ids`, [[LH-497]]) is held to the same rule: an announcement names its commit by the
+run id derived under it, so a write the catalog cannot name that way is refused before its commit as well.
 
 THE WRITES IT STILL TAKES ARE THE ONES IT NEVER ANNOUNCES: a data write under the provenance namespace, lineage's own
 record of the announcements, which the lineage emitter never announces (`provenance_namespace.is_provenance`). Those four
@@ -23,6 +25,7 @@ from fastapi.responses import JSONResponse
 from lance_namespace import ErrorCode
 
 from catalog.api.maintenance_mode import GATED_MOUNTS, PROBLEM_JSON, is_mutating, is_read_vend
+from catalog.core.commit_ids import commit_ids_of
 from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier
 from catalog.services.provenance_namespace import is_provenance
@@ -66,19 +69,14 @@ def unsigned_response() -> JSONResponse:
 
 
 async def signing_gate_middleware(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
-    """Refuse a write the catalog would announce while it holds no signing key."""
+    """Refuse a write the catalog would announce while it holds no signing key or no commit id key."""
     holder = signing_of(request.app)
+    # An announcement also needs its commit's run id, derived under a key read from the store ([[LH-497]]).
+    unready = (holder is not None and not holder.ready) or not commit_ids_of(request.app).ready
     # The path routing matches, never `request.url.path`: that re-parses the decoded path as a URL, so a `?` in a name
     # would end the path there and the action read would be a segment of the name ([[LH-526]]).
     path: str = request.scope["path"]
     settings: Settings | None = getattr(request.app.state, "settings", None)
-    if (
-        holder is not None
-        and not holder.ready
-        and path.startswith(GATED_MOUNTS)
-        and is_mutating(request.method, path)
-        and not is_read_vend(path, request)
-        and announces(path, settings)
-    ):
+    if unready and path.startswith(GATED_MOUNTS) and is_mutating(request.method, path) and not is_read_vend(path, request) and announces(path, settings):
         return unsigned_response()
     return await call_next(request)

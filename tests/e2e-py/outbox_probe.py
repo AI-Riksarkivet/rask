@@ -28,6 +28,8 @@ import pyarrow as pa
 import requests
 from principals import DEX_CLIENT, DEX_SCOPE, principal_of
 
+from service_kit.openlineage import DatasetUuids
+
 
 CATALOG = os.environ.get("LANCE_E2E_CATALOG_URL", "").rstrip("/")
 WAREHOUSE = os.environ.get("LANCE_E2E_WAREHOUSE", "")
@@ -116,3 +118,21 @@ def owned_output_table(namespace: str, table: str) -> str:
     )
     assert created.status_code == 200, f"could not create the probe's output table {table_id}: {created.status_code} {created.text[:300]}"
     return subject_of(token)
+
+
+def table_uuids(namespace: str, table: str) -> DatasetUuids:
+    """The uuids the catalog minted for ``<namespace>$<table>`` and its namespace, which every event naming the table carries.
+
+    Lineage refuses an output no uuid names ([[LH-166]]), so a staged event carrying none is refused at the bus door
+    whoever signed it, and the relay retires it as a refusal rather than recording it. None without a catalog to ask.
+    """
+    if not CATALOG:
+        return DatasetUuids()
+    auth = {"Authorization": f"Bearer {token}"} if (token := bearer()) else {}
+
+    def minted(kind: str, name: str) -> str | None:
+        described = requests.post(f"{CATALOG}/v1/{kind}/{name}/describe", json={}, headers=auth, timeout=30)
+        assert described.status_code == 200, f"could not describe the probe's {kind} {name}: {described.status_code} {described.text[:300]}"
+        return (described.json().get("properties") or {}).get("rask.uuid")
+
+    return DatasetUuids(table_uuid=minted("table", f"{namespace}${table}"), namespace_uuid=minted("namespace", namespace))

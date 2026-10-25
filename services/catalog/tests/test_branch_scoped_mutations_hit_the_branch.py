@@ -40,6 +40,8 @@ from lance_namespace_urllib3_client.models.update_table_request import UpdateTab
 
 
 TABLE_ID = ["db", "rows"]
+#: The stamp a door commits with ([[LH-497]]).
+STAMP = {"rask.author": "alice", "rask.operation": "update"}
 SCHEMA = pa.schema([pa.field("id", pa.int64()), pa.field("label", pa.string())])
 BRANCH = "staging"
 
@@ -67,7 +69,7 @@ def table(ns, tmp_path: Path) -> DoorTable:  # noqa: ANN001
 
 def test_an_update_on_a_branch_leaves_MAIN_untouched(ns, table: DoorTable) -> None:  # noqa: ANN001
     """The headline: a branch-scoped update must not rewrite main's rows."""
-    update_table(table, {}, UpdateTableRequest(id=TABLE_ID, branch=BRANCH, updates=[["label", "'edited'"]]))
+    update_table(table, {}, UpdateTableRequest(id=TABLE_ID, branch=BRANCH, updates=[["label", "'edited'"]]), transaction_properties=STAMP)
 
     main = open_by_name(ns, {}, TABLE_ID).to_table().column("label").to_pylist()
     assert main == ["main", "main", "main"], f"a branch-scoped update rewrote MAIN: {main}"
@@ -75,7 +77,7 @@ def test_an_update_on_a_branch_leaves_MAIN_untouched(ns, table: DoorTable) -> No
 
 def test_a_delete_on_a_branch_leaves_MAIN_untouched(ns, table: DoorTable) -> None:  # noqa: ANN001
     """Same defect, the destructive half — and the one where a silent wrong target loses data."""
-    delete_from_table(table, {}, DeleteFromTableRequest(id=TABLE_ID, branch=BRANCH, predicate="id = 1"))
+    delete_from_table(table, {}, DeleteFromTableRequest(id=TABLE_ID, branch=BRANCH, predicate="id = 1"), transaction_properties=STAMP)
 
     main = open_by_name(ns, {}, TABLE_ID)
     assert main.count_rows() == 3, f"a branch-scoped delete removed rows from MAIN: {main.count_rows()} left"

@@ -129,6 +129,53 @@ groups:
             still be staged in the outbox.
             Runbook: docs/runbooks/RUNBOOK-oncall.md#outbox-not-draining
 
+      # LH-497: the commit is the outbox. A find is a write whose own announcement was lost between its commit and its
+      # staging, which the catalog's reconcile cron has just announced from the version log: the feed now holds it, and a
+      # pipeline following `/events` was late to hear of it. Any find pages, as the closes-when of the row asks.
+      - alert: CatalogCommitsReannounced
+        expr: sum(increase(catalog_commit_reconcile_reannounced_total[15m])) > 0
+        labels:
+          severity: warning
+          service: catalog
+        annotations:
+          summary: "Committed versions reached lineage's feed only through the reconciler"
+          description: >-
+            The catalog's commit reconciler found committed versions whose own announcement lineage's feed lacked
+            past the grace, and announced them from the version log. Each is an announcement lost between a commit
+            and its staging, so a pipeline following `/events` started its next hop late. Read the
+            `lance.catalog.operation` label and the catalog's `commit_reannounced` logs for the tables.
+            Runbook: docs/runbooks/RUNBOOK-oncall.md#committed-versions-re-announced
+
+      # A version of an announced operation naming no author, which the catalog recorded none for, was committed past
+      # every catalog door; nothing can announce it on anyone's behalf.
+      - alert: CatalogCommitsUnauthored
+        expr: sum(increase(catalog_commit_reconcile_unauthored_total[15m])) > 0
+        labels:
+          severity: critical
+          service: catalog
+        annotations:
+          summary: "A table holds versions no catalog door committed"
+          description: >-
+            The catalog's commit reconciler found committed versions that name no author and for which version/create
+            recorded none: a manifest was finalized past every catalog door, by a credential that can write one. The
+            version is unjudged and unannounced. Read the catalog's `commit_unauthored` logs for the tables and versions.
+            Runbook: docs/runbooks/RUNBOOK-oncall.md#committed-versions-re-announced
+
+      # A ref the reconciler cannot read past keeps its mark, so every lost announcement after that point waits on it.
+      - alert: CatalogCommitReconcileBlocked
+        expr: sum(increase(catalog_commit_reconcile_unreadable_total[30m])) > 0
+        for: 30m
+        labels:
+          severity: warning
+          service: catalog
+        annotations:
+          summary: "The commit reconciler cannot read a table's version log"
+          description: >-
+            The catalog's commit reconciler could not read a retained version, or its commit time, on a table's ref, so
+            it kept that ref's mark and announces nothing after it until it can. Read the catalog's
+            `commit_reconcile_ref_unreadable` and `commit_reconcile_table_failed` logs for the table and the error.
+            Runbook: docs/runbooks/RUNBOOK-oncall.md#committed-versions-re-announced
+
       - alert: LineageIngestDeadLettering
         expr: sum(rate(lineage_events_processed_total{lance_lineage_outcome="dead_lettered"}[5m])) > 0
         for: 5m

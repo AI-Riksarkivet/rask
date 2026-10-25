@@ -707,7 +707,7 @@ scoped_secret() {
 {{- $own := dict -}}
 {{- range (include "lance.signers" . | fromJsonArray) }}{{- $_ := set $own .app (concat (get $own .app | default list) (list (printf "signing-key-%s" .key) (printf "signing-public-%s" .key))) }}{{- end -}}
 {{- $apps := list
-  (dict "app" $v.services.catalog.daprAppId "sa" "catalog" "api" (concat (list "dapr-app-token") (ternary $everySigner list (and $v.auth.enabled $doors $v.catalog.controlEmit))) "bus" true)
+  (dict "app" $v.services.catalog.daprAppId "sa" "catalog" "api" (concat (list "dapr-app-token" "commit-id-key") (ternary $everySigner list (and $v.auth.enabled $doors $v.catalog.controlEmit))) "bus" true)
   (dict "app" $v.services.lineage.daprAppId "sa" "lineage" "api" (concat (list "lineage-s3" "dapr-app-token") (compact (list $v.services.lineage.forward.authSecret.name)) (ternary $everySigner list (and $v.auth.enabled ($v.signing).enforce))) "bus" true) -}}
 {{- if $v.maintenance.enabled -}}
 {{- $apps = append $apps (dict "app" $v.maintenance.daprAppId "sa" "maintenance" "api" (concat (list "maintenance-s3" "dapr-app-token") (ternary $everySigner list (and $v.auth.enabled $doors $v.maintenance.arrivalEnabled))) "bus" (or $v.maintenance.arrivalEnabled $v.maintenance.lineageEmit (and $v.catalog.controlEmit $v.maintenance.controlEmit))) -}}

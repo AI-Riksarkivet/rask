@@ -146,11 +146,19 @@ def test_concurrent_appends_each_emit_the_version_that_carries_their_own_rows(re
 
 
 def test_every_branch_door_emits_its_branch_and_that_branchs_version(real_ns_client: TestClient, location: str, events: list[dict[str, Any]]) -> None:
-    """Every door keyed on a ``branch`` request field emits that ref, the branch's head version and schema.
+    """Every door keyed on a ``branch`` request field emits that ref, the branch's head version and schema, and commits
+    that version naming its verified caller and the door's own operation ([[LH-497]]).
 
     Main is moved ahead of the branch first, so a version number read off main is a different number
     rather than a coincidentally equal one.
     """
+    from catalog.api.security import CurrentToken
+    from service_kit.governed.oidc import IDToken
+    from service_kit.governed.person_identity import PersonPrincipal
+    from service_kit.governed.principal import Principal
+
+    caller = PersonPrincipal(principal=Principal(idp_id="dex", subject="alice"), claims=IDToken(iss="i", sub="alice", aud="lance", exp=4102444800, iat=1))
+    real_ns_client.app.dependency_overrides[CurrentToken.__metadata__[0].dependency] = lambda: caller
     client = real_ns_client
     assert client.post(f"/v1/table/{TABLE}/branches/create", json={"name": BRANCH}).status_code == 200
     for ids in ((4,), (5,), (6,)):
@@ -211,6 +219,10 @@ def test_every_branch_door_emits_its_branch_and_that_branchs_version(real_ns_cli
         schema = [field["name"] for field in _dataset(event).get("facets", {}).get("schema", {}).get("fields", [])]
         if (named, _version(event), schema) != (expected_ref, head.version, head.schema.names):
             wrong.append(f"{operation}: ref {named} v{_version(event)} {schema}, branch head v{head.version} {head.schema.names}")
+        committed = head.read_transaction(head.version)
+        stamp = dict(committed.transaction_properties or {}) if committed is not None else {}
+        if stamp != {"rask.author": "dex~alice", "rask.operation": operation}:
+            wrong.append(f"{operation}: the branch head v{head.version} committed {stamp}")
     assert not wrong, "branch writes recorded as some other commit:\n" + "\n".join(wrong)
 
 

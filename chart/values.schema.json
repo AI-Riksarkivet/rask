@@ -231,6 +231,27 @@
         "catalog": {
             "type": "object",
             "properties": {
+                "commitReconcile": {
+                    "type": "object",
+                    "properties": {
+                        "bindingName": {
+                            "description": "Name of the commit-reconcile Dapr cron Component; also the catalog's LANCE_COMMIT_RECONCILE_BINDING_NAME and the route it serves.",
+                            "type": "string"
+                        },
+                        "graceSeconds": {
+                            "description": "Seconds a committed version waits before the reconciler looks for its announcement (LANCE_COMMIT_RECONCILE_GRACE_SECONDS): longer than the inline publish and the outbox relay take to deliver it.",
+                            "type": "integer"
+                        },
+                        "horizonSeconds": {
+                            "description": "Seconds back the reconciler looks for a version's announcement (LANCE_COMMIT_RECONCILE_HORIZON_SECONDS); kept inside services.lineage.eventsRetentionDays.",
+                            "type": "integer"
+                        },
+                        "schedule": {
+                            "description": "Dapr cron schedule on which the catalog announces every committed version lineage's feed lacks.",
+                            "type": "string"
+                        }
+                    }
+                },
                 "controlEmit": {
                     "description": "Publish catalog control events (catalog.control.v1) on a broadcast Dapr topic; renders the control pubsub component, CATALOG_CONTROL stream and subscription. Best-effort.",
                     "type": "boolean"

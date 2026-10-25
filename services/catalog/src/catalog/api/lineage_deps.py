@@ -21,10 +21,17 @@ from __future__ import annotations
 from fastapi.concurrency import run_in_threadpool
 
 from catalog.api.security import Caller
+from catalog.core import run_context
 from catalog.core.lineage_emit import LineageEmitter, UuidReader, emit_write_event, run_inputs
 from catalog.core.run_context import RunContext
 from catalog.services import dataplane
 from service_kit.lakehouse.objectfs import StorageOptions
+
+
+def door_stamp(token: Caller | None, operation: str, run: RunContext | None = None) -> dict[str, str]:
+    """The transaction properties a door stamps on the commit it makes ([[LH-497]]): the verified caller, the lineage
+    ``operation`` it is announced as, and the run when the request names one (:func:`run_context.commit_properties`)."""
+    return run_context.commit_properties(run, author=token.subject if token is not None else None, operation=operation)
 
 
 async def emit_measured_write(
@@ -68,21 +75,21 @@ async def emit_measured_write(
     """
     # A request may spell main by name; the event records main as no ref at all, as Lance does.
     ref = dataplane.recorded_branch(branch)
-    version, schema_fields, uri = await run_in_threadpool(dataplane.read_version_and_schema, location, so, segments, pin_version, ref)
+    readback = await run_in_threadpool(dataplane.read_version_and_schema, location, so, segments, pin_version, ref)
     identifier = await run_in_threadpool(dataplane.branch_identifier, location, so, segments, ref) if ref is not None else None
     await emit_write_event(
         emitter,
         segments,
         author=token.subject if token is not None else None,
-        version=version,
+        version=readback.version,
         operation=operation,
         authorization=authorization,
         uuids=uuids,
-        schema_fields=schema_fields,
+        schema_fields=readback.schema_fields,
         # The standard `dataSource` facet. Every write door reaches lineage through this trailer, so
         # omitting it here withheld the URI from ALL of them — the facet was plumbed end to end and
         # reachable from nothing, the same shape `test_originator_reaches_the_event.py` pins.
-        source_uri=uri,
+        source_uri=readback.uri,
         # THE REF FOLLOWS THE WRITE, not just the READ. The version was already read off the right ref
         # above — for the reason this function's own docstring gives — and then the ref was dropped, so
         # the event recorded a number that names two different snapshots (a branch and main keep
@@ -93,4 +100,6 @@ async def emit_measured_write(
         inputs=run_inputs(run),
         run=run,
         commits_rows=commits_rows,
+        # The commit's own time, so a re-announcement of this commit is the same event ([[LH-497]]).
+        event_time=readback.committed_at,
     )

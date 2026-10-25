@@ -29,6 +29,9 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import MagicMock
 
+import lance
+import pyarrow as pa
+import pyarrow.ipc as ipc
 import pytest
 from fastapi.testclient import TestClient
 from lance_namespace import (
@@ -102,24 +105,41 @@ def test_index_stats_refuses_a_body_branch(client: TestClient, fake_ns: MagicMoc
     assert resp.status_code == 406, f"{resp.status_code}: {resp.text[:160]}"
 
 
-def test_drop_table_index_reaches_the_native_op_with_the_index_from_the_PATH(client: TestClient, fake_ns: MagicMock) -> None:
+def test_drop_table_index_drops_the_index_its_PATH_names(real_ns_client: TestClient) -> None:
     """The one door in this family nothing drove. [[LH-105]].
 
     `index/list` and `index/{n}/stats` are covered above; the DROP had no test anywhere in the estate,
     which matters more than a missing case usually would — it is half of the only repair path an index
-    has. A vector index cannot be rebuilt under its own name (`index_build.build_index` deliberately
-    passes no `replace`, and pylance refuses a duplicate vector name), so drop-then-create IS the
-    repair, and it rests on a door that was served and never exercised.
+    has. A vector index cannot be rebuilt under its own name (pylance refuses a duplicate vector name), so
+    drop-then-create IS the repair, and it rests on this door.
 
     The index name is a PATH segment, like the id: the route grammar puts everything a proxy needs to
-    authorize in the path, so a handler reading it from the body would be routable and ungovernable.
+    authorize in the path, so a handler reading it from the body would be routable and ungovernable. The drop commits
+    with the door's stamp ([[LH-497]]).
     """
-    fake_ns.drop_table_index.return_value = DropTableIndexResponse()
+    assert real_ns_client.post("/v1/namespace/db/create", json={}).status_code == 200
+    created = real_ns_client.post("/v1/table/db$t/create", content=_ipc(pa.table({"id": pa.array([1, 2, 3], pa.int64())})), headers=_ARROW)
+    assert created.status_code == 200, created.text
+    location = real_ns_client.post("/v1/table/db$t/describe", json={}).json()["location"]
+    lance.dataset(location).create_scalar_index("id", "BTREE", name="id_idx")
 
-    resp = client.post("/v1/table/db$t/index/vec_idx/drop", json={})
+    resp = real_ns_client.post("/v1/table/db$t/index/id_idx/drop", json={})
 
     assert resp.status_code == 200, f"{resp.status_code}: {resp.text[:200]}"
-    assert _sent(fake_ns.drop_table_index).index_name == "vec_idx", "the index name did not reach the native op from the path"
+    dropped = lance.dataset(location)
+    assert [index.name for index in dropped.describe_indices()] == []
+    committed = dropped.read_transaction(dropped.version)
+    assert committed is not None and committed.transaction_properties == {"rask.operation": "drop_index"}
+
+
+_ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
+
+
+def _ipc(table: pa.Table) -> bytes:
+    sink = pa.BufferOutputStream()
+    with ipc.new_stream(sink, table.schema) as writer:
+        writer.write_table(table)
+    return sink.getvalue().to_pybytes()
 
 
 def test_drop_table_index_refuses_a_body_branch(client: TestClient, fake_ns: MagicMock) -> None:

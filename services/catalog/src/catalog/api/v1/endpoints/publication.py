@@ -667,7 +667,14 @@ async def reject_promotion(
         published = await run_in_threadpool(publication.published_version, table, so)
         restored: int | None = None
         if published is not None and published < decided.version:
-            _, restored = await run_in_threadpool(dataplane.restore, table, so, RestoreTableRequest(id=segments, version=published))
+            restore = partial(
+                dataplane.restore,
+                table,
+                so,
+                RestoreTableRequest(id=segments, version=published),
+                transaction_properties=lineage_deps.door_stamp(token, RESTORE_TABLE),
+            )
+            _, restored = await run_in_threadpool(restore)
             await lineage_deps.emit_measured_write(
                 lineage,
                 segments,

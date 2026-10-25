@@ -70,7 +70,7 @@ def test_the_measured_write_trailer_STAMPS_the_uri_it_read_back() -> None:
         monkey.setattr(
             lineage_deps.dataplane,
             "read_version_and_schema",
-            lambda *a, **k: (4, [], "s3://bucket/abc12345_db$t"),
+            lambda *a, **k: lineage_deps.dataplane.CommitReadback(version=4, schema_fields=[], uri="s3://bucket/abc12345_db$t"),
         )
         asyncio.run(
             lineage_deps.emit_measured_write(
@@ -106,7 +106,9 @@ def test_a_readback_that_could_not_open_the_dataset_stamps_no_uri() -> None:
     recorder = _Recording()
     monkey = pytest.MonkeyPatch()
     try:
-        monkey.setattr(lineage_deps.dataplane, "read_version_and_schema", lambda *a, **k: (None, [], None))
+        monkey.setattr(
+            lineage_deps.dataplane, "read_version_and_schema", lambda *a, **k: lineage_deps.dataplane.CommitReadback(version=None, schema_fields=[], uri=None)
+        )
         asyncio.run(
             lineage_deps.emit_measured_write(
                 cast(Any, recorder),

@@ -216,6 +216,14 @@ data:
     fi
     bao kv put secret/otel-collector-export username=otel-collector password=@"$c" >/dev/null
     {{- end }}
+    i="$HOME/seed/commit-id-key"
+    if [ ! -s "$i" ]; then
+      if svc_get commit-id-key key; then v=$got; else v=$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n'); fi
+      [ ${#v} -ge 64 ] || { echo "the commit id key is not 32 bytes of hex, so the catalog stays not Ready" >&2; exit 1; }
+      (umask 077; printf '%s' "$v" > "$i")
+    fi
+    bao kv put secret/commit-id-key key=@"$i" >/dev/null
+    echo "seeded secret/commit-id-key into OpenBao"
     {{- with ((.Values.services.notifications).channels).email }}
     {{- if .enabled }}
     m="$HOME/seed/{{ .secretName }}"

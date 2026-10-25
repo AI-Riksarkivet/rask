@@ -129,6 +129,13 @@ spec:
             {{- if .Values.dapr.enabled }}
             - { name: LANCE_ERASURE_RELEASE_BINDING_NAME, value: {{ .Values.catalog.erasure.bindingName | quote }} }
             - { name: LANCE_PROMOTION_EXPIRY_BINDING_NAME, value: {{ .Values.catalog.promotion.bindingName | quote }} }
+            - { name: LANCE_COMMIT_RECONCILE_BINDING_NAME, value: {{ .Values.catalog.commitReconcile.bindingName | quote }} }
+            - { name: LANCE_COMMIT_RECONCILE_GRACE_SECONDS, value: {{ required "catalog.commitReconcile.graceSeconds is required" .Values.catalog.commitReconcile.graceSeconds | quote }} }
+            {{- $horizon := required "catalog.commitReconcile.horizonSeconds is required" .Values.catalog.commitReconcile.horizonSeconds | int }}
+            {{- if ge $horizon (mul (.Values.services.lineage.eventsRetentionDays | int) 86400) }}
+            {{- fail "catalog.commitReconcile.horizonSeconds must be shorter than services.lineage.eventsRetentionDays: a version older than the feed's retention may have had its row pruned, and the reconciler would announce it again" }}
+            {{- end }}
+            - { name: LANCE_COMMIT_RECONCILE_HORIZON_SECONDS, value: {{ $horizon | quote }} }
             {{- include "lance.busEnv" $root | nindent 12 }}
             {{- end }}
             {{- if .Values.dapr.enabled }}

@@ -4,16 +4,12 @@ The catalog already links a table to its lineage by a convention — the canonic
 ``Dataset`` name and the ``WROTE`` edge carries the Lance version. But nothing is written *into the
 data*, so a copied/moved Lance dataset loses its lineage coordinates. Here we stamp those coordinates
 onto the Arrow **schema metadata** of the create payload, so the Lance file is **self-describing**:
-``lineage.dataset_id`` / ``lineage.namespace`` / ``lineage.create_run_id`` can be read straight off the
-table and reconciled to the lineage graph without the catalog. (The creator's identity is deliberately
-NOT embedded — see below — but stays recoverable via the run id.)
+``lineage.dataset_id`` / ``lineage.namespace`` can be read straight off the table and reconciled to the
+lineage graph without the catalog. (The creator's identity is deliberately NOT embedded — see below.)
 
-``create_run_id`` is the id the catalog generated for the create. It does NOT resolve to a Run node: a
-create changes the table's definition and nothing executed, so it goes on the wire as an OpenLineage
-``DatasetEvent`` which has no run ([[LIN-004]]). That costs nothing a reader had — `prune_runs` deletes
-Run nodes anyway, so this pointer was never durable, while the ``(:User)-[:CREATED]->(:Dataset)`` edge
-"is never removed — it IS the creator's record" (`cypher.py`; measured on the live graph 2026-09-11:
-1150 CREATED edges, 1145 of 1247 datasets carrying one).
+No run id is stamped: every announcement's run id is derived from its commit ([[LH-497]],
+``catalog.core.commit_ids``), the table's uuid in ``lineage.dataset_id`` among its coordinates, so a stamp
+made before the commit could only name an id no announcement carries.
 
 **THE RESOLVABLE COORDINATE IS ``lineage.dataset_id``**, and the **creator stays recoverable** through
 it: the lineage service's FGA-gated ``/creator`` endpoint takes a DATASET name and reads that CREATED
@@ -33,15 +29,11 @@ import pyarrow as pa
 #: ``lineage.dataset_id`` is the table's uuid, which only the write that brings the table into being knows, so
 #: ``catalog.services.dataplane.create_table`` stamps it there (ADR 0173 §10).
 _KEY_NAMESPACE = "lineage.namespace"
-_KEY_CREATE_RUN_ID = "lineage.create_run_id"
 
 
-def build_lineage_metadata(*, namespace: str, run_id: str) -> dict[str, str]:
+def build_lineage_metadata(*, namespace: str) -> dict[str, str]:
     """The lineage coordinates to stamp into the Lance file's schema metadata at create (no PII)."""
-    return {
-        _KEY_NAMESPACE: namespace,
-        _KEY_CREATE_RUN_ID: run_id,
-    }
+    return {_KEY_NAMESPACE: namespace}
 
 
 def stamp_lineage_metadata(table: pa.Table, metadata: dict[str, str]) -> pa.Table:

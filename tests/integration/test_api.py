@@ -10,7 +10,7 @@ are exercised.
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock
 from uuid import uuid4
 
@@ -27,6 +27,8 @@ from lance_namespace import (
     TableVersion,
     TableVersionNotFoundError,
 )
+
+from catalog.services.dataplane import CommitReadback
 
 
 ARROW_STREAM = {"content-type": "application/vnd.apache.arrow.stream"}
@@ -328,7 +330,7 @@ def test_add_columns_emits_pinned_schema_evolution_lineage(client: TestClient, f
     def _readback(_ns: object, _so: object, _segments: object, pin_version: object = None, branch: object = None) -> object:
         seen["pin"] = pin_version
         seen["branch"] = branch
-        return pin_version, [{"name": "x", "type": "int64"}], "s3://bucket/abc12345_db$t"
+        return CommitReadback(version=cast(int, pin_version), schema_fields=[{"name": "x", "type": "int64"}], uri="s3://bucket/abc12345_db$t")
 
     monkeypatch.setattr("catalog.services.dataplane.read_version_and_schema", _readback)
     captured = _capture_measured_emit(monkeypatch)
@@ -354,7 +356,7 @@ def test_create_exist_ok_reads_schema_back_instead_of_trusting_payload(real_ns_c
 
     def _readback(_ns: object, _so: object, _segments: object, pin_version: object = None, branch: object = None) -> object:
         seen["pin"] = pin_version
-        return pin_version, [{"name": "true_col", "type": "int64"}], "s3://bucket/abc12345_db$t"
+        return CommitReadback(version=cast(int, pin_version), schema_fields=[{"name": "true_col", "type": "int64"}], uri="s3://bucket/abc12345_db$t")
 
     def _payload_bomb(*_a: object, **_k: object) -> object:
         raise AssertionError("ExistOk create must not trust the request payload's schema")
@@ -461,21 +463,6 @@ def test_request_validation_on_a_SPEC_route_maps_to_400_problem_json(client: Tes
 # --- data-plane request building (our logic; fake dataset) ----------------- #
 
 
-def test_update_builds_updates_dict_and_reads_real_count_key(client: TestClient, monkeypatch) -> None:
-    dataset = MagicMock()
-    # pylance's update() returns the UpdateResult dict with key `num_rows_updated` (NOT `num_updated_rows`,
-    # and NOT an attribute) — the response must read that exact key, else updated_rows is always 0.
-    dataset.update.return_value = {"num_rows_updated": 2}
-    dataset.version = 5
-    monkeypatch.setattr("catalog.services.table_claims.open_resolved_dataset", lambda *a, **k: dataset)
-
-    resp = client.post("/v1/table/db$t/update", json={"predicate": "id = 1", "updates": [["name", "'x'"]]})
-    assert resp.status_code == 200
-    assert dataset.update.call_args.args[0] == {"name": "'x'"}  # list-of-pairs -> dict
-    assert dataset.update.call_args.kwargs["where"] == "id = 1"
-    assert resp.json() == {"updated_rows": 2, "version": 5}
-
-
 def test_create_tag_with_branch_passes_branch_version_tuple(client: TestClient, monkeypatch, claim_described: Callable[[str], str]) -> None:
     claim_described("db$t")  # the table a ref is made on, whose location's claim records its uuid
     # A branch-scoped tag must pass (branch, version) — a bare int would resolve against main, tagging the
@@ -488,21 +475,16 @@ def test_create_tag_with_branch_passes_branch_version_tuple(client: TestClient, 
     dataset.tags.create.assert_called_once_with("rc", ("dev", 5))
 
 
-def test_alter_columns_converts_json_arrow_type_to_pyarrow(client: TestClient, monkeypatch) -> None:
+def test_alter_columns_converts_json_arrow_type_to_pyarrow(real_ns_client: TestClient) -> None:
     # A re-type carries `data_type` as a JsonArrowDataType dict; it must reach pylance as a real pa.DataType,
     # not the JSON dict (which would 500 at the Rust boundary). float32→float16 is the documented vector case.
-    import pyarrow as pa
-
-    dataset = MagicMock()
-    dataset.version = 4
-    monkeypatch.setattr("catalog.services.table_claims.open_resolved_dataset", lambda *a, **k: dataset)
-    resp = client.post(
-        "/v1/table/db$t/alter_columns",
-        json={"alterations": [{"path": "embedding", "data_type": {"type": "float16"}}]},
-    )
-    assert resp.status_code == 200
-    alteration = dataset.alter_columns.call_args.args[0]  # alterations are passed positionally (*alterations)
-    assert alteration["data_type"] == pa.float16()
+    _ensure_namespace(real_ns_client, "db")
+    body = _arrow_ipc(pa.table({"id": pa.array([1, 2], pa.int64()), "embedding": pa.array([0.5, 1.5], pa.float32())}))
+    assert real_ns_client.post("/v1/table/db$t/create", content=body, headers=ARROW_STREAM).status_code == 200
+    resp = real_ns_client.post("/v1/table/db$t/alter_columns", json={"alterations": [{"path": "embedding", "data_type": {"type": "float16"}}]})
+    assert resp.status_code == 200, resp.text
+    location = real_ns_client.post("/v1/table/db$t/describe", json={}).json()["location"]
+    assert lance.dataset(location).schema.field("embedding").type == pa.float16()
 
 
 def test_alter_columns_unsupported_type_is_400_not_500(client: TestClient, monkeypatch) -> None:

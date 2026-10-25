@@ -47,12 +47,11 @@ from catalog.api.dependencies import (
 )
 from catalog.api.rask_params import RaskDataBase, RaskExternalBlobBase, RaskFlag
 from catalog.api.security import Caller, CurrentToken
-from catalog.core import provenance_guard, run_context
+from catalog.core import provenance_guard
 from catalog.core.formats import reject_unsupported_properties
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.core.lineage_emit import DELETE, INSERT, MERGE_INSERT, OVERWRITE_TABLE, UPDATE
 from catalog.core.modes import CreateMode, InsertMode
-from catalog.core.run_context import RunContext
 from catalog.core.serialization import dump
 from catalog.schemas import TableChangesRequest
 from catalog.services import blob_serving, dataplane, table_create
@@ -98,11 +97,6 @@ management_router = APIRouter(prefix="/management/v1/table", tags=["data-managem
 
 # The LANCE-ONLY guard now lives in `catalog.core.formats` — four other doors take the same
 # `properties` map and none of them called it while it was private to this module.
-
-
-def _stamp(run: RunContext | None, token: Caller | None) -> dict[str, str] | None:
-    """The transaction properties a write door stamps: the request's run, committed by the verified caller."""
-    return run_context.commit_properties(run, author=token.subject if token is not None else None)
 
 
 @router.post("/{id}/create", response_model_exclude_none=True)
@@ -232,7 +226,7 @@ async def insert_into_table(
     so a protected table refuses it 409 unless ``force=true``, on any branch — the protection record is the
     table's — and it is recorded as ``overwrite_table`` with the ``OVERWRITE`` lifecycle state ([[LH-242]]).
 
-    The run the request's Context names is stamped into the commit, on main only ([[LH-225]])."""
+    The verified caller and the run the request's Context names are stamped into the commit, on any ref ([[LH-225]], [[LH-497]])."""
     segments = parse_identifier(id)
     # PARSED HERE, ONCE: pylance's `LanceDataset.insert` refuses a value outside Append/Overwrite with a
     # bare ValueError or OSError (500, measured on pylance 12.0.0), where the spec answers InvalidInput.
@@ -248,7 +242,15 @@ async def insert_into_table(
     )
     req = InsertIntoTableRequest(id=segments, mode=insert_mode.value, branch=branch)
     response: InsertIntoTableResponse = await run_in_threadpool(
-        partial(dataplane.insert_into_table, table, so, req, data, max_bytes=settings.max_body_bytes, transaction_properties=_stamp(run, token))
+        partial(
+            dataplane.insert_into_table,
+            table,
+            so,
+            req,
+            data,
+            max_bytes=settings.max_body_bytes,
+            transaction_properties=lineage_deps.door_stamp(token, OVERWRITE_TABLE if insert_mode is InsertMode.OVERWRITE else INSERT, run),
+        )
     )
     # The version THIS insert committed, off the handle that committed it: a reopen would name whichever
     # append landed last.
@@ -300,8 +302,8 @@ async def merge_insert_into_table(
     """Upsert Arrow-IPC rows — ``merge_insert_into_table``; emits a MERGE_INSERT lineage event.
     The ``*_filt`` SQL filters, ``timeout``, ``use_index`` and ``branch`` are spec-0.9 query params.
 
-    The run the request's Context names is stamped into the commit, on main only, and its inputs become the
-    event's version-pinned inputs ([[LH-225]]).
+    The verified caller and the run the request's Context names are stamped into the commit, on any ref, and the run's
+    inputs become the event's version-pinned inputs ([[LH-225]], [[LH-497]]).
 
     The merge builds no index: a writer builds one on the ``on`` key with its own pylance, committed through
     ``version/create``, and the maintenance sweep lists a table whose index no longer covers its rows (ADR 0162)."""
@@ -326,7 +328,7 @@ async def merge_insert_into_table(
             req,
             data,
             max_bytes=settings.max_body_bytes,
-            transaction_properties=_stamp(run, token),
+            transaction_properties=lineage_deps.door_stamp(token, MERGE_INSERT, run),
         )
     )
     # merge can add/change columns (schema drift at this version) → record the post-write schema, read
@@ -368,7 +370,9 @@ async def update_table(
     reject_unsupported_properties(body.properties)
     segments = parse_identifier(id)
     body.id = reconcile_body_id(segments, body.id)
-    response: UpdateTableResponse = await run_in_threadpool(dataplane.update_table, table, so, body)
+    response: UpdateTableResponse = await run_in_threadpool(
+        partial(dataplane.update_table, table, so, body, transaction_properties=lineage_deps.door_stamp(token, UPDATE))
+    )
     await lineage_deps.emit_measured_write(
         emitter,
         segments,
@@ -401,7 +405,9 @@ async def delete_from_table(
     """Delete rows matching a predicate — ``delete_from_table``; emits a DELETE lineage event."""
     segments = parse_identifier(id)
     body.id = reconcile_body_id(segments, body.id)
-    response: DeleteFromTableResponse = await run_in_threadpool(dataplane.delete_from_table, table, so, body)
+    response: DeleteFromTableResponse = await run_in_threadpool(
+        partial(dataplane.delete_from_table, table, so, body, transaction_properties=lineage_deps.door_stamp(token, DELETE))
+    )
     # A row-delete doesn't change columns, but the event at this new version still carries the
     # (unchanged) schema, so every version the feed records has one, not just writes.
     await lineage_deps.emit_measured_write(

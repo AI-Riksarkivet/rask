@@ -3,8 +3,7 @@
 The lakehouse names a table by ONE id string on two axes: the **lineage Dataset** name and the **id
 embedded in the Lance file** (#21). They MUST be byte-identical, else a lineage node names one table while the
 file names another and provenance splits. The real ``create_table`` handler derives the lineage emit
-``table_id``/``namespace`` and the embedded Lance metadata from one canonicalisation of the identifier, and stamps
-the file with the run id the event carries. The OpenFGA object is keyed by the table's uuid, not its name
+``table_id``/``namespace`` and the embedded Lance metadata from one canonicalisation of the identifier. The OpenFGA object is keyed by the table's uuid, not its name
 (ADR 0173 §8).
 """
 
@@ -57,7 +56,7 @@ class _RecordingEmitter:
 
 def test_create_handler_keeps_both_name_axes_identical(monkeypatch: pytest.MonkeyPatch) -> None:
     """Drive the real ``create_table`` handler and assert the lineage Dataset name and the embedded Lance metadata
-    agree byte for byte, and that the file carries the run id the event does.
+    agree byte for byte.
 
     Guards the regression where one axis is derived differently from the other: the captures below would diverge.
     """
@@ -76,10 +75,9 @@ def test_create_handler_keeps_both_name_axes_identical(monkeypatch: pytest.Monke
 
     real_build_meta = table_create.build_lineage_metadata
 
-    def _build_meta(*, namespace: str, run_id: str) -> dict[str, str]:
+    def _build_meta(*, namespace: str) -> dict[str, str]:
         stamped["namespace"] = namespace
-        stamped["run_id"] = run_id
-        return real_build_meta(namespace=namespace, run_id=run_id)
+        return real_build_meta(namespace=namespace)
 
     def _facade_create(_ns: object, _so: object, _segments: list[str], table: pa.Table, **_kw: object) -> Any:
         # Stubs the write, not the table handed to it: this test is about the THREE-AXIS identity the
@@ -124,13 +122,9 @@ def test_create_handler_keeps_both_name_axes_identical(monkeypatch: pytest.Monke
     assert emitter.create["author"] == "dex~alice"
     # Data axis: the namespace stamped into the Lance file's schema metadata (#21).
     assert stamped["namespace"] == "alpha$bronze"
-    # #21: the run id stamped into the Lance file is the SAME one the lineage event carries.
-    assert stamped["run_id"] == emitter.create["run_id"]
-    assert emitter.create["run_id"]  # and it's non-empty
     # ...and both coordinates are on the table handed to the write, not only computed. `lineage.dataset_id` is the
     # table's uuid, which the write stamps once it has claimed the location (`dataplane.create_table`).
     metadata = written["table"].schema.metadata or {}
     assert metadata.get(b"lineage.namespace") == b"alpha$bronze"
-    assert metadata.get(b"lineage.create_run_id") == emitter.create["run_id"].encode()
     # The WROTE edge's schema facet is read off the table written.
     assert [field["name"] for field in emitter.create["schema_fields"]] == ["id"]

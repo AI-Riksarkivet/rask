@@ -34,7 +34,6 @@ from catalog.api.pagination import ListLimit
 from catalog.api.security import CurrentToken
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.core.lineage_emit import DROP_INDEX
-from catalog.core.namespace import disarm_commit_path_cleanup
 from catalog.services import dataplane
 
 
@@ -142,8 +141,8 @@ async def drop_table_index(
         ),
     ] = None,
 ) -> DropTableIndexResponse:
-    """Drop a named index from a table — wraps the native ``drop_table_index`` op; emits a DROP_INDEX
-    lineage event at the new version.
+    """Drop a named index from a table — the spec's ``drop_table_index``; emits a DROP_INDEX lineage event at the new
+    version.
 
     ``branch`` is DECLARED only so it can be REFUSED, the same rule the listing and the stats door
     beside it already carry — and this door is the one where getting it wrong destroys something.
@@ -153,18 +152,15 @@ async def drop_table_index(
     exactly this shape on 2026-08-31 — they returned main's LIST for a branch's request — and this
     one was missed, where the consequence is a write rather than a read.
 
-    Refused BEFORE `native.call`, because the whole point is that the native op would otherwise
-    succeed against the wrong object. The drop stays the native op, whose refusal of a system index is the namespace's
-    own and not Lance's (lance-namespace-impls 13.0.0, ``dir.rs``), so it is the door's guarded native write, made after
-    the handle opened at the door's location has disarmed commit-path cleanup ([[LH-530]]).
+    Refused BEFORE the drop, because the whole point is that the drop would otherwise succeed against the wrong
+    object. The drop is Lance's own on the handle opened at the door's location, committed with the door's stamp
+    ([[LH-497]], `dataplane.drop_index`), with the `dir` backend's own refusals of a system index and a missing one.
     """
     segments = parse_identifier(id)
     if body is not None and "branch" in body.model_fields_set:
         branch = body.branch
     dataplane.refuse_a_branch_this_door_cannot_honour(branch, door="drop_table_index")
-    req = DropTableIndexRequest(id=segments, index_name=index_name)
-    await run_in_threadpool(lambda: disarm_commit_path_cleanup(table.open_unchecked(so), segments))
-    response: DropTableIndexResponse = await run_in_threadpool(table.write_natively, "drop_table_index", req)
+    response = await run_in_threadpool(partial(dataplane.drop_index, table, so, index_name, transaction_properties=lineage_deps.door_stamp(token, DROP_INDEX)))
     await lineage_deps.emit_measured_write(
         emitter,
         segments,

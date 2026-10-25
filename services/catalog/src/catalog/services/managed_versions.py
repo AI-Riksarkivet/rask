@@ -123,6 +123,8 @@ class StagedVersion(BaseModel):
     operation: str
     #: The staged transaction's properties, where a stock writer names its run (:mod:`catalog.core.run_context`).
     properties: dict[str, str] = {}
+    #: The staged transaction's own uuid, which keys the author the catalog records for a commit naming none ([[LH-497]]).
+    transaction_uuid: str = ""
     #: The staged manifest's ``max_fragment_id``, ``None`` when it states none.
     max_fragment_id: int | None = None
 
@@ -211,6 +213,7 @@ def stage(ref: CommitRef, so: StorageOptions, request: CreateTableVersionRequest
         version=request.version,
         operation=operation,
         properties=properties,
+        transaction_uuid=transaction.uuid if transaction is not None else "",
         max_fragment_id=manifest_bytes.varint_field(manifest_bytes.manifest_message(manifest), manifest_bytes.MAX_FRAGMENT_ID_FIELD),
     )
 

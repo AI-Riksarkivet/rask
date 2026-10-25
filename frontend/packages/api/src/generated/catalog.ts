@@ -3104,8 +3104,8 @@ export interface paths {
         put?: never;
         /**
          * Drop Table Index
-         * @description Drop a named index from a table — wraps the native ``drop_table_index`` op; emits a DROP_INDEX
-         *     lineage event at the new version.
+         * @description Drop a named index from a table — the spec's ``drop_table_index``; emits a DROP_INDEX lineage event at the new
+         *     version.
          *
          *     ``branch`` is DECLARED only so it can be REFUSED, the same rule the listing and the stats door
          *     beside it already carry — and this door is the one where getting it wrong destroys something.
@@ -3115,10 +3115,9 @@ export interface paths {
          *     exactly this shape on 2026-08-31 — they returned main's LIST for a branch's request — and this
          *     one was missed, where the consequence is a write rather than a read.
          *
-         *     Refused BEFORE `native.call`, because the whole point is that the native op would otherwise
-         *     succeed against the wrong object. The drop stays the native op, whose refusal of a system index is the namespace's
-         *     own and not Lance's (lance-namespace-impls 13.0.0, ``dir.rs``), so it is the door's guarded native write, made after
-         *     the handle opened at the door's location has disarmed commit-path cleanup ([[LH-530]]).
+         *     Refused BEFORE the drop, because the whole point is that the drop would otherwise succeed against the wrong
+         *     object. The drop is Lance's own on the handle opened at the door's location, committed with the door's stamp
+         *     ([[LH-497]], `dataplane.drop_index`), with the `dir` backend's own refusals of a system index and a missing one.
          */
         post: operations["drop_table_index_v1_table__id__index__index_name__drop_post"];
         delete?: never;
@@ -3169,7 +3168,7 @@ export interface paths {
          *     so a protected table refuses it 409 unless ``force=true``, on any branch — the protection record is the
          *     table's — and it is recorded as ``overwrite_table`` with the ``OVERWRITE`` lifecycle state ([[LH-242]]).
          *
-         *     The run the request's Context names is stamped into the commit, on main only ([[LH-225]]).
+         *     The verified caller and the run the request's Context names are stamped into the commit, on any ref ([[LH-225]], [[LH-497]]).
          */
         post: operations["insert_into_table_v1_table__id__insert_post"];
         delete?: never;
@@ -3192,8 +3191,8 @@ export interface paths {
          * @description Upsert Arrow-IPC rows — ``merge_insert_into_table``; emits a MERGE_INSERT lineage event.
          *     The ``*_filt`` SQL filters, ``timeout``, ``use_index`` and ``branch`` are spec-0.9 query params.
          *
-         *     The run the request's Context names is stamped into the commit, on main only, and its inputs become the
-         *     event's version-pinned inputs ([[LH-225]]).
+         *     The verified caller and the run the request's Context names are stamped into the commit, on any ref, and the run's
+         *     inputs become the event's version-pinned inputs ([[LH-225]], [[LH-497]]).
          *
          *     The merge builds no index: a writer builds one on the ``on`` key with its own pylance, committed through
          *     ``version/create``, and the maintenance sweep lists a table whose index no longer covers its rows (ADR 0162).

@@ -21,7 +21,11 @@ fail a catalog write. Two transports sit behind the same :class:`LineageEmitter`
   park-and-alert, not replay — docs/RESILIENCE.md gap #2, fixed 2026-07-12). The lineage
   service subscribes via its own sidecar. With ``LANCE_LINEAGE_OUTBOX_URI`` set the event is staged in the
   object-store outbox (``service_kit.lakehouse.outbox``) before the publish, which narrows the loss window
-  to commit→stage: a crash between the Lance write and the stage still loses it.
+  to commit→stage; the catalog's reconcile cron announces a version whose event a crash in that window lost,
+  from the version log (``catalog.api.commit_reconcile``, [[LH-497]]).
+
+A versioned announcement's run id is derived from its commit (:mod:`catalog.core.commit_ids`), and its ``eventTime`` is
+the commit's own time, so the original and a re-announcement of one commit are one event.
 """
 
 from __future__ import annotations
@@ -40,6 +44,7 @@ from dapr.aio.clients import DaprClient
 from opentelemetry import metrics
 from pydantic import BaseModel
 
+from catalog.core.commit_ids import CommitIds, UnkeyedCommitIds, commit_run_id
 from catalog.core.run_context import RunContext
 from lineage_kit import CanonError, SigningKey, attach_signature, author_of
 from service_kit.governed import fga
@@ -136,6 +141,10 @@ PROMOTE_MODEL = "promote_model"
 #: project's watchers are told that new data is live: the notifications plane targets them by this event's
 #: ``lance.project`` (`.claude/skills/rask-notifications`, WATCH).
 PUBLISH_TABLE = "publish_table"
+
+#: The operations that move a tag and commit no version: the ``version`` their event names is the tag's target, a version
+#: another write committed and announced, so their run is never that commit's ([[LH-497]]).
+TAG_MOVES = frozenset({PUBLISH_TABLE, PROMOTE_MODEL})
 
 #: OpenLineage ``producer`` URI — identifies the software that emitted the event (spec-required,
 #: and what a Marquez-style consumer records as the event source).
@@ -483,8 +492,8 @@ class EmitFields(TypedDict, total=False):
     required field in a ``total=False`` bundle would be an optional one.
     """
 
-    #: For a create, the run id stamped into the Lance file (#21); otherwise a fresh id per write.
-    run_id: str | None
+    #: When the commit was made (``dataplane.CommitReadback.committed_at``), the event's ``eventTime``; now when unknown.
+    event_time: str | None
     #: The caller's bearer, forwarded so lineage ingest accepts it when the lineage service has OIDC on.
     authorization: str | None
     #: The physical Lance URI → the standard ``dataSource`` facet.
@@ -644,6 +653,9 @@ class _BaseLineageEmitter:
     #: emitter built without them honest instead of claiming an unnamed catalog.
     _catalog_impl: str = ""
     _warehouse_uri: str = ""
+    #: The key every versioned announcement's run id is derived under (`catalog.core.commit_ids`). Set by `make_emitter`;
+    #: an emitter built without one derives under the empty key, as a stack with no secret store does.
+    _commit_ids: CommitIds | None = None
     #: Whether a write of an operation under this parent namespace goes unannounced: a row write in the namespace the
     #: catalog keeps for provenance (`catalog.services.provenance_namespace`), whose rows ARE the announcements lineage
     #: recorded, so announcing their own commits would record them again, without end. Set by `make_emitter`.
@@ -694,16 +706,22 @@ class _BaseLineageEmitter:
         # is a rule every future endpoint eventually forgets (none ever passed one). Best-effort —
         # this runs on a committed write, so an unresolvable tenant costs a notification, not a request.
         resolved_project = fields.get("project") or await self.project_for(namespace)
+        try:
+            run_id = self._run_id(version, operation, fields)
+        except SigningKeyUnavailableError as exc:
+            # The gate (`catalog.api.signing_gate`) refuses the write before its commit while the key is missing, so only a
+            # key lost between the gate and here reaches this; the reconciler announces the commit once the key is back.
+            _emit_failed.add(1, {"lance.catalog.transport": "derive"})
+            log.warning("lineage_emit_withheld_underived", extra={"operation": operation, "table": table_id, "error": str(exc)})
+            return
         event = build_write_event(
             table_id=table_id,
             namespace=namespace,
             author=author,
             version=version,
             operation=operation,
-            # For a create this is the run id stamped into the Lance file (#21); for other writes a
-            # fresh id. Generate one only when the caller didn't supply it.
-            run_id=fields.get("run_id") or str(uuid.uuid4()),
-            event_time=datetime.now(UTC).isoformat(),
+            run_id=run_id,
+            event_time=fields.get("event_time") or datetime.now(UTC).isoformat(),
             job_namespace=self._job_namespace,
             source_uri=fields.get("source_uri"),
             schema_fields=fields.get("schema_fields"),
@@ -719,6 +737,20 @@ class _BaseLineageEmitter:
             warehouse_uri=self._warehouse_uri,
         )
         await self._send(event, operation=operation, table_id=table_id, authorization=fields.get("authorization"))
+
+    def _run_id(self, version: int | None, operation: str, fields: EmitFields) -> str:
+        """The event's run id: derived from the commit for a version of a table the catalog minted a uuid for, so every
+        announcement of one commit is one run ([[LH-497]]); a fresh id for a versionless marker (a drop, a declare) and
+        for a tag move, which names a version another write committed (:data:`TAG_MOVES`).
+
+        Raises:
+            SigningKeyUnavailableError: The catalog reads its key from the store and does not hold it.
+        """
+        uuids = fields.get("uuids")
+        if version is None or uuids is None or not uuids.table_uuid or operation in TAG_MOVES:
+            return str(uuid.uuid4())
+        key = (self._commit_ids or UnkeyedCommitIds()).key()
+        return commit_run_id(key, table_uuid=uuids.table_uuid, branch=fields.get("branch"), branch_identifier=fields.get("branch_identifier"), version=version)
 
     async def _send(self, event: dict[str, Any], *, operation: str, table_id: str, authorization: str | None) -> None:  # pragma: no cover — abstract
         raise NotImplementedError
@@ -816,11 +848,10 @@ class DaprEmitter(_BaseLineageEmitter):
             # signature that cannot be made is a lost announcement, counted and logged, and never a failed request.
             event = self._signed(event)
             # STAGED, then published, then dropped on ack (#4). The emit is inline-awaited and
-            # best-effort AFTER the Lance write commits, so an unstaged event is lost outright to a crash
-            # between the write and the publish: the data exists on storage and the feed never records
-            # it. Worse than a provenance hole — a user's pipeline reads this announcement off lineage's
-            # `GET /events` to start its next hop, so a lost one means the next tier's run silently never
-            # happens. Staging narrows that window to commit→stage; it does not close it.
+            # best-effort AFTER the Lance write commits, so an unstaged event is lost to a crash between the
+            # write and the publish until the reconcile cron finds the version the feed lacks ([[LH-497]]); a
+            # user's pipeline reads this announcement off lineage's `GET /events` to start its next hop, so
+            # staging keeps that wait to a crash between the commit and the stage.
             #
             # Degrades to exactly the previous plain publish when `outbox_uri` is empty, which is the
             # default — so this is inert until a deployment sets LANCE_LINEAGE_OUTBOX_URI. Bounded by
@@ -863,12 +894,13 @@ def make_emitter(
     warehouse_uri: str = "",
     signing: SigningKeyHolder[SigningKey] | None = None,
     unannounced: Callable[[str, str], bool] | None = None,
+    commit_ids: CommitIds | None = None,
 ) -> LineageEmitter:
     """Select the lineage transport: ``dapr`` (durable pub/sub via the sidecar) or ``http`` (direct POST);
     no-op when disabled or unwired (a half-configured transport must never silently become the other).
 
     ``unannounced`` answers, for a write's parent namespace and operation, whether it goes unannounced (the provenance
-    namespace's own rows)."""
+    namespace's own rows). ``commit_ids`` holds the key a versioned announcement's run id is derived under."""
     if not enabled:
         return NoopEmitter()
     if transport == "dapr" and dapr is not None:
@@ -889,6 +921,7 @@ def make_emitter(
         emitter._catalog_impl = catalog_impl
         emitter._warehouse_uri = warehouse_uri
         emitter._unannounced = unannounced
+        emitter._commit_ids = commit_ids
         return emitter
     if transport == "http" and url and client is not None:
         http_emitter = HttpLineageEmitter(client, url, job_namespace=job_namespace)
@@ -896,6 +929,7 @@ def make_emitter(
         http_emitter._catalog_impl = catalog_impl
         http_emitter._warehouse_uri = warehouse_uri
         http_emitter._unannounced = unannounced
+        http_emitter._commit_ids = commit_ids
         return http_emitter
     return NoopEmitter()
 
@@ -917,6 +951,7 @@ async def emit_write_event(
     inputs: list[InputPin] | None = None,
     run: RunContext | None = None,
     commits_rows: bool = False,
+    event_time: str | None = None,
 ) -> None:
     """Publish a best-effort lineage event for a catalog mutation, awaited INLINE in the handler.
 
@@ -930,6 +965,8 @@ async def emit_write_event(
     ``inputs`` names the source dataset(s) this write is DERIVED FROM, each optionally version-pinned (a
     rename passes its source; a pipeline's write passes the inputs its run names); ``run`` names that run's id and job.
     ``commits_rows`` says the commit added rows, which makes a create a write (:func:`build_write_event`).
+    ``event_time`` is when the commit was made, the event's ``eventTime``; a versioned event's run id is derived from
+    the commit (:mod:`catalog.core.commit_ids`).
     Names come from ``fga.canonical_object_id``, so the lineage Dataset is named as the catalog names the table.
 
     ``uuids`` reads the table's uuid and its namespace's, which the event names beside the names (ADR 0173 §10), and each
@@ -951,7 +988,6 @@ async def emit_write_event(
         author=author,
         version=version,
         operation=operation,
-        run_id=str(uuid.uuid4()),
         authorization=authorization,
         source_uri=source_uri,
         schema_fields=schema_fields,
@@ -962,4 +998,5 @@ async def emit_write_event(
         branch_identifier=branch_identifier,
         commits_rows=commits_rows,
         uuids=table_uuids,
+        event_time=event_time,
     )

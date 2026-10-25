@@ -74,6 +74,10 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | backups.volumeSnapshot.kubectlImage | string | `"alpine/k8s:1.31.3"` | Image the snapshot job runs; it needs both a shell and kubectl. |
 | backups.volumeSnapshot.schedule | string | `"0 3 * * *"` | Cron schedule of the volume snapshot (default daily 03:00). |
 | backups.volumeSnapshot.snapshotClassName | string | `""` | VolumeSnapshotClass the snapshot names; empty uses the cluster default. |
+| catalog.commitReconcile.bindingName | string | `"catalog-commit-reconcile-cron"` | Name of the commit-reconcile Dapr cron Component; also the catalog's LANCE_COMMIT_RECONCILE_BINDING_NAME and the route it serves. |
+| catalog.commitReconcile.graceSeconds | int | `600` | Seconds a committed version waits before the reconciler looks for its announcement (LANCE_COMMIT_RECONCILE_GRACE_SECONDS): longer than the inline publish and the outbox relay take to deliver it. |
+| catalog.commitReconcile.horizonSeconds | int | `86400` | Seconds back the reconciler looks for a version's announcement (LANCE_COMMIT_RECONCILE_HORIZON_SECONDS); kept inside services.lineage.eventsRetentionDays. |
+| catalog.commitReconcile.schedule | string | `"@every 600s"` | Dapr cron schedule on which the catalog announces every committed version lineage's feed lacks. |
 | catalog.controlEmit | bool | `true` | Publish catalog control events (catalog.control.v1) on a broadcast Dapr topic; renders the control pubsub component, CATALOG_CONTROL stream and subscription. Best-effort. |
 | catalog.controlOutbox.bindingName | string | `"catalog-control-relay-cron"` | Name of the control relay's Dapr cron Component; also the catalog's LANCE_CONTROL_RELAY_BINDING_NAME and the route it serves. Must stay one string. |
 | catalog.controlOutbox.enabled | bool | `true` | Stage control events in a durable S3 outbox and run the relay cron that drains it; carries `table_published` to its subscribers. Requires `controlEmit`. |

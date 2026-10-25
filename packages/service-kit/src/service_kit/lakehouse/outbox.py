@@ -12,9 +12,10 @@ corresponds to a real committed write (no phantoms). If the process crashes befo
 publish never lands — the object survives and the lineage service's relay tick re-ingests it
 idempotently and deletes it, with inputs, author and columnLineage all preserved.
 
-NARROWED, NOT CLOSED. A crash between the commit and the stage loses the event, and nothing detects the
-loss ([[LH-497]]). A stage that fails is counted and the call degrades to a plain publish, so that
-event is unprotected and is lost only if the publish fails too.
+NARROWED HERE, CLOSED BY THE VERSION LOG. A crash between the commit and the stage loses this event, and the
+catalog's reconcile cron finds the committed version the feed lacks and announces it from the version log, under the
+run id the commit derives, so a late copy of this event lands no second row (``catalog.api.commit_reconcile``,
+[[LH-497]]). A stage that fails is counted and the call degrades to a plain publish.
 
 Storage-agnostic: an ``s3://`` outbox uses an ``S3FileSystem`` built from the SAME ``storage_options`` the
 producer/relay already use; a local/``file://`` path uses the local filesystem (dev + unit tests).

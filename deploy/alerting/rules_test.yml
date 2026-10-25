@@ -1143,6 +1143,69 @@ tests:
               summary: "Catalog writes are committing without recording their provenance"
               description: "A catalog mutation committed to Lance and its lineage emit failed terminally, so lineage's feed does not record that the write happened and a pipeline following `/events` never hears of it. Read the `lance.catalog.transport` label — `http` means the event is gone, `dapr` means it may still be staged in the outbox. Runbook: docs/runbooks/RUNBOOK-oncall.md#outbox-not-draining"
 
+  # A re-announced commit pages: the feed held it only because the reconciler announced it (LH-497).
+  - interval: 1m
+    input_series:
+      - series: "catalog_commit_reconcile_reannounced_total"
+        values: "0 0 1 1 1"
+      - series: "catalog_commit_reconcile_unauthored_total"
+        values: "0 0 0 1 1"
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: CatalogCommitsReannounced
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              service: "catalog"
+            exp_annotations:
+              summary: "Committed versions reached lineage's feed only through the reconciler"
+              description: "The catalog's commit reconciler found committed versions whose own announcement lineage's feed lacked past the grace, and announced them from the version log. Each is an announcement lost between a commit and its staging, so a pipeline following `/events` started its next hop late. Read the `lance.catalog.operation` label and the catalog's `commit_reannounced` logs for the tables. Runbook: docs/runbooks/RUNBOOK-oncall.md#committed-versions-re-announced"
+      - eval_time: 4m
+        alertname: CatalogCommitsUnauthored
+        exp_alerts:
+          - exp_labels:
+              severity: "critical"
+              service: "catalog"
+            exp_annotations:
+              summary: "A table holds versions no catalog door committed"
+              description: "The catalog's commit reconciler found committed versions that name no author and for which version/create recorded none: a manifest was finalized past every catalog door, by a credential that can write one. The version is unjudged and unannounced. Read the catalog's `commit_unauthored` logs for the tables and versions. Runbook: docs/runbooks/RUNBOOK-oncall.md#committed-versions-re-announced"
+
+  # A ref the reconciler cannot read past, tick after tick, pages after half an hour.
+  - interval: 1m
+    input_series:
+      - series: "catalog_commit_reconcile_unreadable_total"
+        values: "0+1x70"
+    alert_rule_test:
+      - eval_time: 65m
+        alertname: CatalogCommitReconcileBlocked
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              service: "catalog"
+            exp_annotations:
+              summary: "The commit reconciler cannot read a table's version log"
+              description: "The catalog's commit reconciler could not read a retained version, or its commit time, on a table's ref, so it kept that ref's mark and announces nothing after it until it can. Read the catalog's `commit_reconcile_ref_unreadable` and `commit_reconcile_table_failed` logs for the table and the error. Runbook: docs/runbooks/RUNBOOK-oncall.md#committed-versions-re-announced"
+
+  # A reconciler that finds nothing must NOT page.
+  - interval: 1m
+    input_series:
+      - series: "catalog_commit_reconcile_reannounced_total"
+        values: "0+0x20"
+      - series: "catalog_commit_reconcile_unauthored_total"
+        values: "0+0x20"
+      - series: "catalog_commit_reconcile_unreadable_total"
+        values: "0+0x20"
+    alert_rule_test:
+      - eval_time: 18m
+        alertname: CatalogCommitsReannounced
+        exp_alerts: []
+      - eval_time: 18m
+        alertname: CatalogCommitsUnauthored
+        exp_alerts: []
+      - eval_time: 18m
+        alertname: CatalogCommitReconcileBlocked
+        exp_alerts: []
+
   # A healthy catalog must NOT page. Flat, not absent — the series exists and simply stops increasing,
   # which is the state every working estate is in.
   - interval: 1m

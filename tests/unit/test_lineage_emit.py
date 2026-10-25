@@ -15,11 +15,13 @@ from typing import Any, cast
 import httpx
 import pytest
 
+from catalog.core.commit_ids import commit_run_id
 from catalog.core.lineage_emit import (
     CREATE_TABLE,
     DROP_TABLE,
     INSERT,
     MERGE_INSERT,
+    PUBLISH_TABLE,
     DaprEmitter,
     HttpLineageEmitter,
     InputPin,
@@ -31,6 +33,7 @@ from catalog.core.lineage_emit import (
     make_emitter,
 )
 from lineage.models import RunEvent
+from service_kit.openlineage import DatasetUuids
 from tests.unit.no_uuids import NO_OBJECT_UUIDS
 
 
@@ -282,7 +285,6 @@ def test_emit_write_event_maps_segments_to_canonical_ids_and_awaits_inline() -> 
     assert w["version"] == 3
     assert w["author"] == "alice"
     assert w["authorization"] == "Bearer x"
-    assert w["run_id"]  # a fresh run id is generated per emit
 
 
 def test_build_write_event_records_derived_from_inputs() -> None:
@@ -459,7 +461,7 @@ def test_dapr_emitter_publishes_event_to_topic() -> None:
         job_namespace="lance-catalog",
         timeout_seconds=5.0,
     )
-    asyncio.run(emitter.emit_create(table_id="a$b", namespace="a", author="alice", version=1, run_id="r-1"))
+    asyncio.run(emitter.emit_create(table_id="a$b", namespace="a", author="alice", version=1))
     assert len(dapr.published) == 1
     pub = dapr.published[0]
     assert pub["pubsub"] == "lineage-pubsub" and pub["topic"] == "lineage.events.v1"
@@ -520,14 +522,26 @@ def test_build_write_event_merge_carries_version() -> None:
     assert "author" not in _facets(event)
 
 
-def test_http_emitter_emit_write_posts_operation_and_version() -> None:
+def test_http_emitter_emit_write_posts_operation_and_version_under_the_commits_run_id() -> None:
     client = _CapturingClient()
     emitter = HttpLineageEmitter(cast(httpx.AsyncClient, client), "http://lineage/api/v1/lineage", job_namespace="lance-catalog")
-    asyncio.run(emitter.emit_write(table_id="a$b", namespace="a", author="alice", version=4, operation=MERGE_INSERT, run_id="r-9"))
+
+    def announce() -> str:
+        uuids = DatasetUuids(table_uuid="0b6f8a52-4c1e-4f7a-9d3e-2a1c5b7e9f01")
+        asyncio.run(emitter.emit_write(table_id="a$b", namespace="a", author="alice", version=4, operation=MERGE_INSERT, uuids=uuids))
+        assert client.posted is not None
+        return str(client.posted["run"]["runId"])
+
+    first, second = announce(), announce()
     assert client.posted is not None
     assert client.posted["job"]["name"] == "merge_insert.a$b"
-    assert client.posted["run"]["runId"] == "r-9"
     assert client.posted["outputs"][0]["facets"]["version"]["datasetVersion"] == "4"
+    # Two announcements of one commit are one run ([[LH-497]]), under the empty key of a stack with no store.
+    assert first == second == commit_run_id(b"", table_uuid="0b6f8a52-4c1e-4f7a-9d3e-2a1c5b7e9f01", branch=None, branch_identifier=None, version=4)
+    # A tag move names the version another write committed, and is never that commit's run.
+    uuids = DatasetUuids(table_uuid="0b6f8a52-4c1e-4f7a-9d3e-2a1c5b7e9f01")
+    asyncio.run(emitter.emit_write(table_id="a$b", namespace="a", author="alice", version=4, operation=PUBLISH_TABLE, uuids=uuids))
+    assert client.posted["run"]["runId"] != first
 
 
 @pytest.mark.asyncio

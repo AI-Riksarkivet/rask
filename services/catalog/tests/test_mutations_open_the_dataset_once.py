@@ -12,8 +12,8 @@ a number the handle it already held was carrying. Measured against pylance: ``de
 ``add_columns``, ``alter_columns``, ``drop_columns`` and ``update_field_metadata`` all mutate their
 dataset object IN PLACE, so ``dataset.version`` after the call IS the committed version.
 
-Reading it off the SAME handle is also strictly more correct: the readback can no longer land on a
-different ref than the write did.
+Each op now commits stamped ([[LH-497]], ``dataplane.commit_stamped``), which answers the version it finalized, and
+plans its first attempt on the handle the door opened, so the door's checked open is still the only one.
 
 Counted, not read: the opens are tallied through the real ops against a real ``dir`` namespace.
 """
@@ -62,15 +62,21 @@ def opens(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     return seen
 
 
+#: The stamp a door commits with ([[LH-497]]).
+STAMP = {"rask.author": "alice", "rask.operation": "update"}
+
+
 def _ops(table: DoorTable) -> dict[str, Any]:
     return {
-        "delete_from_table": lambda: dataplane.delete_from_table(table, {}, DeleteFromTableRequest(id=["db", "t"], predicate="id = 1")),
-        "update_table": lambda: dataplane.update_table(table, {}, UpdateTableRequest(id=["db", "t"], updates=[["v", "'z'"]])),
-        "add_columns": lambda: dataplane.add_columns(
-            table, {}, AlterTableAddColumnsRequest(id=["db", "t"], new_columns=[{"name": "doubled", "expression": "id * 2"}])
+        "delete_from_table": lambda: dataplane.delete_from_table(
+            table, {}, DeleteFromTableRequest(id=["db", "t"], predicate="id = 1"), transaction_properties=STAMP
         ),
-        "drop_columns": lambda: dataplane.drop_columns(table, {}, AlterTableDropColumnsRequest(id=["db", "t"], columns=["v"])),
-        "update_field_metadata": lambda: dataplane.update_field_metadata(table, {}, [{"path": "id", "metadata": {"unit": "px"}}]),
+        "update_table": lambda: dataplane.update_table(table, {}, UpdateTableRequest(id=["db", "t"], updates=[["v", "'z'"]]), transaction_properties=STAMP),
+        "add_columns": lambda: dataplane.add_columns(
+            table, {}, AlterTableAddColumnsRequest(id=["db", "t"], new_columns=[{"name": "doubled", "expression": "id * 2"}]), transaction_properties=STAMP
+        ),
+        "drop_columns": lambda: dataplane.drop_columns(table, {}, AlterTableDropColumnsRequest(id=["db", "t"], columns=["v"]), transaction_properties=STAMP),
+        "update_field_metadata": lambda: dataplane.update_field_metadata(table, {}, [{"path": "id", "metadata": {"unit": "px"}}], transaction_properties=STAMP),
     }
 
 

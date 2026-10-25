@@ -141,7 +141,7 @@ async def add_columns(
     ADD_COLUMNS event carrying the NEW per-version schema, so the feed records the add at its version."""
     segments = parse_identifier(id)
     body.id = reconcile_body_id(segments, body.id)
-    response = await run_in_threadpool(dataplane.add_columns, table, so, body)
+    response = await run_in_threadpool(partial(dataplane.add_columns, table, so, body, transaction_properties=lineage_deps.door_stamp(token, ADD_COLUMNS)))
     await lineage_deps.emit_measured_write(
         emitter,
         segments,
@@ -173,7 +173,7 @@ async def alter_columns(
     emits an ALTER_COLUMNS event with the post-evolution schema, so renames and re-types reach the feed."""
     segments = parse_identifier(id)
     body.id = reconcile_body_id(segments, body.id)
-    response = await run_in_threadpool(dataplane.alter_columns, table, so, body)
+    response = await run_in_threadpool(partial(dataplane.alter_columns, table, so, body, transaction_properties=lineage_deps.door_stamp(token, ALTER_COLUMNS)))
     await lineage_deps.emit_measured_write(
         emitter,
         segments,
@@ -205,7 +205,7 @@ async def drop_columns(
     event with the reduced schema, so the feed records the version without the dropped columns."""
     segments = parse_identifier(id)
     body.id = reconcile_body_id(segments, body.id)
-    response = await run_in_threadpool(dataplane.drop_columns, table, so, body)
+    response = await run_in_threadpool(partial(dataplane.drop_columns, table, so, body, transaction_properties=lineage_deps.door_stamp(token, DROP_COLUMNS)))
     await lineage_deps.emit_measured_write(
         emitter,
         segments,
@@ -260,7 +260,9 @@ async def update_field_metadata(
     body.id = reconcile_body_id(segments, body.id)
     updates = [u.model_dump() for u in (body.updates or [])]
     await _require_classifier_for_governance_keys(client, settings, token, table=table.resolved, updates=updates)
-    response = await run_in_threadpool(dataplane.update_field_metadata, table, so, updates, body.branch)
+    response = await run_in_threadpool(
+        partial(dataplane.update_field_metadata, table, so, updates, body.branch, transaction_properties=lineage_deps.door_stamp(token, UPDATE_FIELD_METADATA))
+    )
     await lineage_deps.emit_measured_write(
         emitter,
         segments,
@@ -335,7 +337,11 @@ async def update_table_schema_metadata(
     # THE BRANCH THE BODY NAMES IS THE REF WRITTEN: the native op carries the field and disregards it, so a branch's
     # null-free body rewrote MAIN's properties and answered 200 (verified live 2026-08-31 against the object store),
     # while the handle is opened on the ref it is given.
-    updated, committed = await run_in_threadpool(partial(dataplane.update_schema_metadata, table, so, values, branch=branch))
+    updated, committed = await run_in_threadpool(
+        partial(
+            dataplane.update_schema_metadata, table, so, values, branch=branch, transaction_properties=lineage_deps.door_stamp(token, UPDATE_SCHEMA_METADATA)
+        )
+    )
     response = UpdateTableSchemaMetadataResponse(metadata=updated)
     await lineage_deps.emit_measured_write(
         emitter,

@@ -44,7 +44,6 @@ from __future__ import annotations
 
 import json
 import logging
-import uuid
 from functools import partial
 
 import pyarrow as pa
@@ -70,7 +69,7 @@ from catalog.core.base_judge import GovernedStorage
 from catalog.core.config import Settings
 from catalog.core.formats import reject_unsupported_properties
 from catalog.core.identifiers import parse_identifier
-from catalog.core.lineage_emit import OVERWRITE_TABLE, LineageEmitter, UuidReader, input_refs, run_inputs
+from catalog.core.lineage_emit import CREATE_TABLE, OVERWRITE_TABLE, LineageEmitter, UuidReader, input_refs, run_inputs
 from catalog.core.lineage_metadata import build_lineage_metadata, stamp_lineage_metadata
 from catalog.core.modes import CreateMode
 from catalog.core.run_context import RunContext
@@ -225,13 +224,12 @@ async def create_governed_table(
     table_id = fga.canonical_object_id(segments)
     namespace = fga.parent_namespace_id(segments) or ""
     created_by = token.subject if token is not None else None
-    run_id = str(uuid.uuid4())
     # #21: stamp the lineage coordinates into the Lance file's schema metadata so the data is
     # self-describing (reconcilable to the graph without the catalog). A metadata swap on the decoded
     # table that shares its buffers, so no payload is too large to stamp. Gated on lineage being
-    # enabled: when off we don't stamp a create_run_id the graph never receives.
+    # enabled: when off we don't stamp coordinates the graph never receives.
     if settings.lineage_emit_enabled:
-        table = stamp_lineage_metadata(table, build_lineage_metadata(namespace=namespace, run_id=run_id))
+        table = stamp_lineage_metadata(table, build_lineage_metadata(namespace=namespace))
     # Pre-existence, computed BEFORE the write (declared-only counts — it already holds an owner grant).
     # Overwrite and ExistOk always probe, because what each did decides its lineage record, which does not
     # depend on FGA: an Overwrite of a table is not its create, and an ExistOk that kept one committed no rows
@@ -276,7 +274,7 @@ async def create_governed_table(
         data_bases=data_base or None,
         registry=registry,
         holder=table_id,
-        transaction_properties=run_context.commit_properties(run, author=created_by),
+        transaction_properties=run_context.commit_properties(run, author=created_by, operation=OVERWRITE_TABLE if overwrote_existing else CREATE_TABLE),
         overwriting=overwriting,
     )
     try:
@@ -361,20 +359,18 @@ async def create_governed_table(
     # (after the response, best-effort) so the lineage service can never block/fail a create. The
     # canonical id names the lineage Dataset as the catalog names the table, and the event carries the table's uuid,
     # which its OpenFGA object names (ADR 0173 §8, §10); the caller's bearer is forwarded so ingest accepts it when the lineage service has OIDC on; the
-    # ``run_id`` is the same one stamped into the Lance file above (#21).
+    # run id is derived from the commit (`catalog.core.commit_ids`).
     # Inline-await (NOT BackgroundTasks — no retry, dies with the worker; fastapi anti-pattern) so the event
     # reaches the durable Dapr/JetStream transport before the response. emit_create is best-effort internally,
     # so it never fails the create; JetStream + the consumer's idempotent MERGE-on-run_id give durability.
     # The per-version column schema (blob/vector-aware) for the WROTE edge (#24). A fresh create writes
-    # exactly the request's table, so the payload schema IS the table's schema — read in memory, no
-    # describe + dataset reopen round trip. Two exceptions read the true schema back PINNED at the version:
-    # ExistOk may have KEPT an existing table (nothing written, response.version = the existing version),
-    # and an Overwrite of an existing table wrote the table's provenance fields and metadata over the
-    # payload's. Best-effort either way (failure → []).
-    if mode is CreateMode.EXIST_OK or overwrote_existing:
-        _, schema_fields, _location = await run_in_threadpool(dataplane.read_version_and_schema, str(response.location), so, segments, response.version, None)
-    else:
-        schema_fields = dataplane.payload_schema_fields(table.schema, segments)
+    # exactly the request's table, so the payload schema IS the table's schema. Two exceptions take the true
+    # schema read back PINNED at the version: ExistOk may have KEPT an existing table (nothing written,
+    # response.version = the existing version), and an Overwrite of an existing table wrote the table's
+    # provenance fields and metadata over the payload's. The read-back is made for every create, for the
+    # commit's own time, the event's `eventTime` ([[LH-497]]). Best-effort either way (failure → []).
+    readback = await run_in_threadpool(dataplane.read_version_and_schema, str(response.location), so, segments, response.version, None)
+    schema_fields = readback.schema_fields if mode is CreateMode.EXIST_OK or overwrote_existing else dataplane.payload_schema_fields(table.schema, segments)
     inputs = await input_refs(run_inputs(run), uuids=uuids)
     # Read through the location the write landed in, so a rename since cannot lend the event another table's uuid.
     table_uuids = await uuids.table(segments, location=response.location)
@@ -386,13 +382,13 @@ async def create_governed_table(
             author=created_by,
             version=response.version,
             operation=OVERWRITE_TABLE,
-            run_id=run_id,
             authorization=authorization,
             source_uri=response.location,
             schema_fields=schema_fields,
             inputs=inputs,
             run=run,
             uuids=table_uuids,
+            event_time=readback.committed_at,
         )
     else:
         await emitter.emit_create(
@@ -400,7 +396,6 @@ async def create_governed_table(
             namespace=namespace,
             author=created_by,
             version=response.version or 1,
-            run_id=run_id,
             authorization=authorization,
             source_uri=response.location,  # the real Lance URI → #23 reconcile can read the on-disk file
             schema_fields=schema_fields,
@@ -409,6 +404,7 @@ async def create_governed_table(
             # The payload's rows landed at v1 only when this request wrote the table.
             commits_rows=table.num_rows > 0 and not existok_kept_existing,
             uuids=table_uuids,
+            event_time=readback.committed_at,
         )
     # Only a real creation emits — an ExistOk request that KEPT a pre-existing table wrote nothing and
     # created nothing (same guard that skips ownership seeding above), so a `table_created` here would be a

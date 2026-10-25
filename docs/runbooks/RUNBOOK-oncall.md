@@ -33,6 +33,7 @@ these are found by watching the Perses dashboards (`make dashboards`) or a user 
 | `dapr_dead_letter_parked` ERROR logs | [DLQ parking](#dlq-parking--a-delivery-gave-up) |
 | `LineageSignatureRefusedForAListedSigner` firing, `lineage_signature_refused` WARN logs | [Lineage refusing a signer's events](#lineage-refusing-a-signers-events) |
 | `outbox_depth` sustained > 0, `outbox_oldest_age_seconds` climbing | [Outbox not draining](#outbox-not-draining) |
+| `CatalogCommitsReannounced`, `CatalogCommitsUnauthored` or `CatalogCommitReconcileBlocked` firing | [Committed versions re-announced](#committed-versions-re-announced) |
 | Catalog reads/writes fail, Lance data unreachable | [Object store down](#object-store-down--data-plane) |
 | FGA failing, notifications' inbox state unreadable | [AGE down](#age-postgres-down--fga--dapr-state) |
 
@@ -179,6 +180,31 @@ mean something other than the catalog wrote under `_control_outbox`: treat that 
 (§ A bus door refusing events).
 
 **Act.** Restore lineage / the bus; the relay re-ingests staged survivors idempotently on recovery.
+
+## Committed versions re-announced
+
+**Symptom.** `CatalogCommitsReannounced` (warning): the catalog's `commit_reannounced` WARN logs name a table, a
+version and an operation. `CatalogCommitsUnauthored` (critical): `commit_unauthored` ERROR logs name a table and
+versions.
+
+**Cause.** The commit is the outbox (LH-497). Every version names its author and, for a catalog door's, its operation,
+and the catalog's reconcile cron (`catalog-commit-reconcile-cron`) announces every version older than
+`catalog.commitReconcile.graceSeconds` that lineage's feed holds no row for. A re-announced version is a write whose own
+announcement was lost between its commit and its staging: a catalog restart mid-write, or a lineage emit failing before
+the outbox staged it (`CatalogLineageEmitFailing` beside it). An unauthored one names no author and has none recorded:
+a manifest finalized past every catalog door, which only a credential that can write a final manifest can do.
+
+**Diagnose.** For a re-announcement, look for a catalog restart or emit failures at the version's commit time; the feed
+now holds the version, so a pipeline following `/events` has caught up. For an unauthored version, find who could
+write that table's `_versions/`: no writer is vended a put on a final manifest, so it is a maintain-tier or store-root
+credential.
+
+A blocked reconciler (`CatalogCommitReconcileBlocked`, `commit_reconcile_ref_unreadable` ERROR logs) could not read a
+retained version or its commit time; it keeps that ref's mark until the read succeeds, so it skips nothing.
+
+**Act.** A re-announcement needs nothing further once its cause is understood. An unauthored version is unjudged:
+treat it as an incident on the credential that wrote it, and restore the table to the last authored version if its
+content is not trusted.
 
 ## Object store down → data plane
 

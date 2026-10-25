@@ -98,7 +98,7 @@ def test_a_branch_insert_lands_the_branch_only_column(ns, table: DoorTable) -> N
     payload = pa.table({"id": pa.array([2], pa.int64()), "s": pa.array(["b"]), BRANCH_ONLY: pa.array(["keep me"])})
     data = coerce_insert_arrow(table, {}, _ipc(payload), branch=BRANCH, max_bytes=_BODY_LIMIT)
 
-    insert_into_table(table, {}, InsertIntoTableRequest(id=TABLE_ID, mode="append", branch=BRANCH), data, max_bytes=_BODY_LIMIT, transaction_properties=None)
+    insert_into_table(table, {}, InsertIntoTableRequest(id=TABLE_ID, mode="append", branch=BRANCH), data, max_bytes=_BODY_LIMIT, transaction_properties={})
 
     written = open_by_name(ns, {}, TABLE_ID, branch=BRANCH).to_table().to_pydict()
     assert "keep me" in (written.get(BRANCH_ONLY) or []), f"the branch row lost its {BRANCH_ONLY!r} value: {written}"

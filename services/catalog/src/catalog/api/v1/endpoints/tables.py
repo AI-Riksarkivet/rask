@@ -1692,7 +1692,9 @@ async def restore_table(
     # to an earlier version took a new version of its own, and main kept its version).
     # The event names the version THAT restore committed on the ref it restored, and the shared trailer reads
     # its schema off one pinned open (best-effort: a readback failure never fails the committed restore).
-    response, committed = await run_in_threadpool(dataplane.restore, table, so, body)
+    response, committed = await run_in_threadpool(
+        partial(dataplane.restore, table, so, body, transaction_properties=lineage_deps.door_stamp(token, RESTORE_TABLE))
+    )
     await lineage_deps.emit_measured_write(
         emitter,
         segments,

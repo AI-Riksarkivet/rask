@@ -69,14 +69,16 @@ def _catalog_env(docs: list[dict]) -> dict[str, str]:
     return {}
 
 
-def _relay_component(docs: list[dict]) -> dict:
+def _relay_component(docs: list[dict], name: str | None) -> dict:
+    """The ``bindings.cron`` Component scoped to `catalog` that is named ``name``, the relay binding the catalog is told."""
     for doc in docs:
         if doc.get("kind") != "Component" or (doc.get("spec") or {}).get("type") != "bindings.cron":
             continue
-        if "catalog" in (doc.get("scopes") or []):
+        if "catalog" in (doc.get("scopes") or []) and doc["metadata"]["name"] == name:
             return doc
     raise AssertionError(
-        "no bindings.cron Component is scoped to `catalog` — nothing ever drains the control outbox, so a staged table_published is never re-published"
+        f"no bindings.cron Component scoped to `catalog` is named {name!r}, the relay binding the catalog is told — every tick is "
+        "delivered to a route the service does not serve, and a staged table_published is never re-published"
     )
 
 
@@ -108,13 +110,8 @@ def test_the_relay_binding_name_is_the_route_the_catalog_serves() -> None:
     on a real drift and failing on a legitimate `bindingName` edit. A fresh process is what a pod is.
     """
     docs = _render()
-    binding = _relay_component(docs)["metadata"]["name"]
     env = _catalog_env(docs)
-
-    assert env.get("LANCE_CONTROL_RELAY_BINDING_NAME") == binding, (
-        f"the cron Component is named {binding!r} but the catalog is told {env.get('LANCE_CONTROL_RELAY_BINDING_NAME')!r} — "
-        "every tick is delivered to a route the service does not serve, and the outbox never drains"
-    )
+    binding = _relay_component(docs, env.get("LANCE_CONTROL_RELAY_BINDING_NAME"))["metadata"]["name"]
 
     probe = subprocess.run(  # noqa: S603
         [sys.executable, "-c", "import json,catalog.main as m; print(json.dumps(sorted(m.app.openapi()['paths'])))"],

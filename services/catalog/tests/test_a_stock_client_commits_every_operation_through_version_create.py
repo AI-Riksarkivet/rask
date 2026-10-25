@@ -230,6 +230,17 @@ def test_append_delete_merge_insert_update_and_restore_each_commit_through_versi
     assert restored.version == 6
     committed = [(getattr(r, "audit.version"), getattr(r, "audit.operation")) for r in caplog.records if getattr(r, "audit.action", None) == "commit_version"]
     assert committed == [(1, "Overwrite"), (2, "Append"), (3, "Delete"), (4, "Update"), (5, "Update"), (6, "Restore")]
+    # A stock commit carries no `rask.author`, so the catalog recorded its verified caller as each version's author ([[LH-497]]).
+    from catalog.core.config import get_settings
+    from service_kit.lakehouse import commit_records
+
+    settings, table_uuid = get_settings(), str((stock.describe_table(lance_namespace.DescribeTableRequest(id=_TABLE)).properties or {})["rask.uuid"])
+    authors = []
+    for version in range(1, 7):
+        transaction = restored.read_transaction(version)
+        assert transaction is not None
+        authors.append(commit_records.recorded_author(settings.registry_root, settings.storage_options(), table_uuid, transaction.uuid))
+    assert authors == ["dex~alice"] * 6
 
 
 def test_a_stock_compaction_by_a_reader_and_maintainer_commits_through_version_create(served_on_s3: Served, caplog: pytest.LogCaptureFixture) -> None:
@@ -788,9 +799,9 @@ class _Recorder:
         self.writes.append(fields)
 
 
-@pytest.mark.parametrize("door", [pytest.param(_insert, id="insert"), pytest.param(_merge_insert, id="merge_insert")])
+@pytest.mark.parametrize(("door", "operation"), [pytest.param(_insert, "insert", id="insert"), pytest.param(_merge_insert, "merge_insert", id="merge_insert")])
 def test_a_catalog_write_door_commits_the_run_its_context_names(
-    served: Served, door: Callable[[lance_namespace.LanceNamespace], None], monkeypatch: pytest.MonkeyPatch
+    served: Served, door: Callable[[lance_namespace.LanceNamespace], None], operation: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from catalog.main import app
 
@@ -807,6 +818,7 @@ def test_a_catalog_write_door_commits_the_run_its_context_names(
         "rask.run_id": "run-7",
         "rask.job": "nightly",
         "rask.author": "dex~alice",
+        "rask.operation": operation,
     }
     assert json.loads(properties["rask.inputs"]) == [{"table": ["db", "src"], "version": 1}]
     (announced,) = recorder.writes

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import secrets
 import struct
+from datetime import UTC, datetime, timedelta
 from typing import Final
 
 from lance_namespace import InvalidInputError
@@ -154,6 +155,20 @@ def varint_field(message: bytes, number: int) -> int | None:
         if field == number and isinstance(value, int):
             found = value
     return found
+
+
+#: ``google.protobuf.Timestamp timestamp = 7`` of ``message Manifest``: when the version was committed, as ``seconds = 1``
+#: and ``nanos = 2``. Measured on pylance 13.0.0: equal to ``LanceDataset.versions()``'s ``timestamp`` for the version.
+TIMESTAMP_FIELD: Final = 7
+
+
+def commit_time(message: bytes) -> datetime | None:
+    """When the version whose ``Manifest`` message is ``message`` was committed, in UTC; ``None`` when it records no time."""
+    stamp = next((value for field, value in _fields(message) if field == TIMESTAMP_FIELD and isinstance(value, bytes)), None)
+    if stamp is None:
+        return None
+    parts = {field: value for field, value in _fields(stamp) if isinstance(value, int)}
+    return datetime.fromtimestamp(parts.get(1, 0), tz=UTC) + timedelta(microseconds=parts.get(2, 0) // 1000)
 
 
 def transaction_section(manifest: bytes) -> bytes | None:

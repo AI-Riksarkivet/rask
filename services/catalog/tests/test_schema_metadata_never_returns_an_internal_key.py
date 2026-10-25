@@ -27,6 +27,8 @@ from service_kit.lakehouse.location_claims import ClaimStore
 lance = pytest.importorskip("lance")
 
 TABLE_ID = ["db", "rows"]
+#: The stamp a door commits with ([[LH-497]]).
+STAMP = {"rask.author": "alice", "rask.operation": "update_schema_metadata"}
 SCHEMA = pa.schema([pa.field("id", pa.int64())])
 INTERNAL = "lineage.run_id"
 
@@ -38,7 +40,9 @@ def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace is runtime-only
     dataplane.create_table(
         namespace, {}, TABLE_ID, pa.table({"id": pa.array([1], pa.int64())}, schema=SCHEMA), root=str(tmp_path / "data"), mode="create", registry=None
     )
-    dataplane.update_schema_metadata(table_claims.door_table(namespace, ClaimStore(control_root=str(tmp_path / "control")), TABLE_ID), {}, {INTERNAL: "r-123"})
+    dataplane.update_schema_metadata(
+        table_claims.door_table(namespace, ClaimStore(control_root=str(tmp_path / "control")), TABLE_ID), {}, {INTERNAL: "r-123"}, transaction_properties=STAMP
+    )
     return namespace
 
 
@@ -49,6 +53,6 @@ def table(ns, tmp_path: Path) -> DoorTable:  # noqa: ANN001
 
 
 def test_the_write_answers_the_map_without_the_internal_key(table: DoorTable) -> None:
-    answer, _ = dataplane.update_schema_metadata(table, {}, {"owner": "bob"})
+    answer, _ = dataplane.update_schema_metadata(table, {}, {"owner": "bob"}, transaction_properties=STAMP)
 
     assert answer == {"owner": "bob"}, f"the write answered the internal key, or lost the caller's: {answer}"

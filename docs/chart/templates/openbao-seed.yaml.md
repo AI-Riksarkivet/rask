@@ -134,6 +134,10 @@ path (its policy names it) and writes `<release>-backup-s3`; no app's policy nam
 THE COLLECTOR'S AUDIT-STORE CREDENTIAL ([[XC-003]]), create-if-absent: kept, else carried from the store behind
 the Service, else minted.
 
+## `i="$HOME/seed/commit-id-key"`
+
+LH-497: the key the catalog derives every announcement's run id under, which only the catalog reads (`lance.storeReads`). Carried from the store behind the Service when a pod replaces this one, like a signing pair, because it is never rotated: an id derived under a new key would announce every commit still unconfirmed a second time. Minted as 32 random bytes of hex only when no store serves one. A platform store's operator provisions `commit-id-key` itself; the catalog is not Ready until it reads one.
+
 ## `m="$HOME/seed/{{ .secretName }}"`
 
 THE EMAIL CHANNEL'S SMTP CREDENTIAL ([[CTL-30]]), seeded only while `services.notifications.channels.email` is on,
