@@ -6,13 +6,12 @@ every release revision, under a 1 MiB ceiling. Each section is headed by the tem
 ## `apiVersion: dapr.io/v1alpha1`
 
 THE SIDECAR Configuration. Named for tracing because that is all it carried when it was written; it
-now also carries the workflow state-retention policy, the sidecar metric-cardinality bound and the
-api-logging policy, and it renders whether or not telemetry ships.
+also carries the sidecar metric-cardinality bound and the api-logging policy, and it renders whether
+or not telemetry ships.
 
 **Why it is no longer gated on otelEnabled.** A sidecar may reference exactly ONE `dapr.io/config`,
-so everything configured per-sidecar has to live in one object. While this was gated, turning
-telemetry off also took the workflow retention policy with it — and retention is a durability
-concern, not an observability one. The gate now lives on the tracing STANZA, which is the thing
+so everything configured per-sidecar has to live in one object, and only the tracing stanza is about
+telemetry. The gate lives on the tracing STANZA, which is the thing
 that is actually about telemetry, and the annotation in `rask.daprAnnotations` is unconditional to
 match. That direction is safe: the guard the old comment protected was against a DANGLING
 `dapr.io/config` reference, and a Configuration that always exists cannot dangle.
@@ -20,46 +19,6 @@ match. That direction is safe: the guard the old comment protected was against a
 NO EDGE-AUTH SECRET FOR THE TELEMETRY UIs: no cluster route rule publishes them, so they are
 cluster-internal (port-forward) and the store, its dashboards and their auth are the platform's (ADR 0153).
 An edge that re-exposes them carries the auth itself, wired to that edge's own machinery.
-
-WORKFLOW STATE RETENTION — the thing nothing collected. Workflow history is append-only and
-`stateRetentionPolicy` is the only lever that removes it: the CRD says "If not set, workflow
-instances will not be automatically purged", and nothing else in this estate purges them. Measured
-on the live cluster 2026-08-10 before this landed: 1367 rows in `daprstate` for
-`dapr.internal.default.ingest.workflow`, `count(expiredate) = 0`, oldest row 2026-08-03 — i.e.
-every instance since the plane's first deploy, retained forever, with no TTL, no sweep and no alert.
-
-Per-terminal-state rather than `anyTerminal`, because the states are not worth the same. A COMPLETED
-run's history is the least interesting thing in the estate once its lineage event has landed —
-lineage IS the durable record (docs/adr/0023-workflow-history-has-no-browser-surface-the-alert-is-the.md), so this is a cache of a fact stored elsewhere. A
-FAILED or TERMINATED run's history is the post-mortem, and is kept several times longer, because the
-question it answers ("why did this run die") is asked days later.
-
-There is deliberately NO application-side purge to go with this. `DaprWorkflowClient` exposes
-`purge_workflow(instance_id)` but NO list-instances API, and the one index that could drive a sweep
-— `InMemoryRunStore` — is documented as "deliberately NOT durable", so after a restart it cannot
-name the instances that need collecting while their history persists. A sweep built on it would
-collect only what happened since the last pod start. The built-in policy needs no such index.
-
-WHAT ENFORCES IT, measured rather than assumed. All four upstream sources are silent on the question, but the
-sidecar answers it directly: every workflow-hosting app registers THREE actor types, not two.
-
-$ curl -s 127.0.0.1:3500/v1.0/metadata      # from inside the ingest pod, 2026-08-26
-['dapr.internal.default.ingest.retentioner',
-'dapr.internal.default.ingest.workflow',
-'dapr.internal.default.ingest.activity']
-
-`retentioner` is the janitor and it lives in THE APP'S OWN SIDECAR, not in a central controller.
-Confirmed by elimination: `notifications` hosts two actor types and no retentioner, because it runs
-no workflows. It holds no state rows of its own (the state table carries `.workflow` keys and nothing
-else), so the window it waits out is a REMINDER — and since Dapr 1.15 reminders live in the
-scheduler's etcd. Chain: instance goes terminal -> the app's retentioner registers a reminder -> the
-reminder fires from the scheduler's etcd -> the retentioner DELETES that instance's rows.
-
-THAT SHAPE IS WHY deploy/alerting/rules.yml CARRIES `DaprWorkflowHistoryNotCollected`. The timer and
-the data it governs sit in DIFFERENT failure domains — a reminder in a 3-replica etcd StatefulSet,
-rows in Postgres — and the symptom of a lost reminder is SILENCE: rows with nothing scheduled to
-collect them, forever, reported by nothing. A central reconciling controller (Argo's model)
-re-derives its work list every loop and cannot lose an item this way; a reminder-driven actor can.
 
 ## `{{- $cfgRoot := . }}`
 
@@ -69,8 +28,8 @@ live: `spec.secrets.scopes` is a CONFIGURATION field, a sidecar may reference ex
 can only say the same thing to everybody, which is the state this closes -- measured live
 2026-09-23, the `medallion-producer` pod read eight identities' credentials from its own sidecar.
 
-THE SPEC BODY IS INCLUDED, NOT COPIED. HotReload, the tracing exporter, the metric-cardinality bound
-and workflow retention are each a measured decision made once above; a per-app copy would drift from
+THE SPEC BODY IS INCLUDED, NOT COPIED. HotReload, the tracing exporter and the metric-cardinality bound
+are each a measured decision made once above; a per-app copy would drift from
 `lance-tracing` silently and each sidecar would get whichever version its document carried.
 
 EACH APP'S SCOPE IS DENY-BY-DEFAULT, allowing exactly the secrets its code reads (`lance.daprAppSpec` over

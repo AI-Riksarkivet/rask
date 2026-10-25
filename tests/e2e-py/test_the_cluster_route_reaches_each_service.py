@@ -36,7 +36,6 @@ _PROBES = [
     ("GET", "/api/explorer/datasets"),
     ("GET", "/api/explorer/search?q=edge"),
     ("POST", "/api/explorer/annotations/tags"),
-    ("GET", "/api/flows/catalog"),
     ("GET", "/api/notifications/inbox"),
     ("GET", "/api/ray/jobs"),
     ("GET", "/api/serve/applications/"),

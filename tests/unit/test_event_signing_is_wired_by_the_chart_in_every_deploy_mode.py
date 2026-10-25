@@ -220,7 +220,7 @@ def test_a_configuration_is_renamed_when_and_only_when_its_spec_changes_so_a_pod
     probe = ("--set", "services.lineage.forward.authSecret.name=probe-forward-auth")
     after = _loaded_configurations(chart_render.render(*DEFAULT_ARGS, *probe))
 
-    assert before.keys() == after.keys() and len(before) >= 5, f"the pods that name a Configuration are {sorted(before)}"
+    assert before.keys() == after.keys() and len(before) >= 4, f"the pods that name a Configuration are {sorted(before)}"
     edited = {pod for pod in before if before[pod][1] != after[pod][1]}
     renamed = {pod for pod in before if before[pod][0] != after[pod][0]}
     # The forwarder's credential is denied in every per-app Configuration but lineage's, which reads it.

@@ -879,24 +879,6 @@ dapr.io/volume-mounts: "openbao-identity:/var/run/secrets/rask/openbao"
       enabled: true
       obfuscateURLs: true
       omitHealthChecks: true
-{{- with .Values.dapr.workflowRetention }}
-{{- if .enabled }}
-  workflow:
-
-    {{- range $k, $v := (dict "completed" .completed "failed" .failed "terminated" .terminated) }}
-    {{- if not (regexMatch "^([1-9][0-9]*)(h|m)$" (toString $v)) }}
-    {{- fail (printf "dapr.workflowRetention.%s = %q — must be a positive duration in h or m. A zero or malformed value silently purges workflow history the instant an instance terminates." $k $v) }}
-    {{- end }}
-    {{- if and (hasSuffix "m" (toString $v)) (lt (int (trimSuffix "m" (toString $v))) 60) }}
-    {{- fail (printf "dapr.workflowRetention.%s = %q is under an hour. Workflow history is the only record of what a run did; raise the floor here deliberately if that is genuinely wanted." $k $v) }}
-    {{- end }}
-    {{- end }}
-    stateRetentionPolicy:
-      completed: {{ .completed | quote }}
-      failed: {{ .failed | quote }}
-      terminated: {{ .terminated | quote }}
-{{- end }}
-{{- end }}
 {{- end -}}
 
 {{- define "lance.daprAppSpec" -}}
@@ -1027,11 +1009,9 @@ keys_shaped() { case "$1" in *,) return 1 ;; *,*) pub_shaped "${1%%,*}" && pub_s
 {{- $rows = append $rows (dict "prefix" (include "rask.catalogPublicPrefix" $root) "component" "catalog" "service" (printf "%s-catalog" (include "lance.fullname" $root)) "port" .Values.services.catalog.port "rewrite" "") -}}
 {{- $rows = append $rows (dict "prefix" "/api/lineage" "component" "lineage" "service" (printf "%s-lineage" (include "lance.fullname" $root)) "port" .Values.services.lineage.port "rewrite" "/") -}}
 {{- $prefix := .Values.config.RASK_API_PREFIX -}}
-{{- range $name := list "flows" "notifications" -}}
-{{- $svc := index $root.Values.services $name -}}
+{{- $svc := $root.Values.services.notifications -}}
 {{- if or $svc.frontDoor $root.Values.singleTenant.enabled -}}
-{{- $rows = append $rows (dict "prefix" (printf "%s/%s" $prefix $name) "component" $name "service" (printf "%s-%s" (include "rask.fullname" $root) $name) "port" $svc.port "rewrite" "") -}}
-{{- end -}}
+{{- $rows = append $rows (dict "prefix" (printf "%s/notifications" $prefix) "component" "notifications" "service" (printf "%s-notifications" (include "rask.fullname" $root)) "port" $svc.port "rewrite" "") -}}
 {{- end -}}
 {{- toJson $rows -}}
 {{- end -}}

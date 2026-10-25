@@ -54,12 +54,11 @@ publishes is always a port the policy admits. Gateway API matches the longest pr
 | `/api/explorer` | `<fullname>-viewer` | `/api…` |
 | `/api/catalog` | `<fullname>-catalog` | `/…` |
 | `/api/lineage` | `<fullname>-lineage` | `/…` |
-| `/api/flows` | `<release>-flows` | unchanged |
 | `/api/notifications` | `<release>-notifications` | unchanged |
 
-The explorer rows render only with `explorer.enabled`; flows and notifications only when they are
-front-door (`services.<name>.frontDoor`) or the install is single-tenant. Compute's `/api/ray` and
-`/api/serve` are not here: the compute fixture chart renders its own HTTPRoute
+The explorer rows render only with `explorer.enabled`; notifications only when it is
+front-door (`services.notifications.frontDoor`) or the install is single-tenant. Flows is a client with no row here. Compute's `/api/ray` and
+`/api/serve` are not here either: the compute fixture chart renders its own HTTPRoute
 (`deploy/fixtures/compute/chart/templates/route.yaml`).
 
 An unmatched `/api/*` path is the Gateway's own 404: no rule, no backend. A 401 or 403 always comes from

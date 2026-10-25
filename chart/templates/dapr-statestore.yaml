@@ -16,19 +16,18 @@
 # work, and the owner has approved adding Redis for CACHE. The split is by property, not preference:
 #
 #   * A cache must FORGET. TTL eviction and memory-bound behaviour are what Redis is best at.
-#   * Durable workflow that loses its state on a pod restart is not durable. Postgres is durable by
+#   * Actor state that is lost on a pod restart is not durable. Postgres is durable by
 #     default; a Redis without AOF configured loses everything on restart.
 #   * `maxmemory-policy` is SERVER-wide, not per-key or per-database. One Redis holding both an
-#     evicting cache and actor state can silently evict workflow state under memory pressure — so a
+#     evicting cache and actor state can silently evict actor state under memory pressure — so a
 #     single instance cannot safely play both roles, and two instances would be two new pods.
 #
 # And this one needs NO new infrastructure: `lance-ns-age` is already deployed, already backed up
 # (backup-pg.yaml), already monitored, and already holds the OpenFGA datastore.
 # One component, one extra database, zero extra pods.
 #
-# `actorStateStore: "true"` is not optional decoration: it is the prerequisite for Dapr ACTORS *and*
-# for Dapr WORKFLOW, because workflow uses the actor framework internally. Without it, #125's per-user
-# inbox cannot exist, and a workflow instance cannot persist. Postgres v1
+# `actorStateStore: "true"` is not optional decoration: it is the prerequisite for Dapr ACTORS. Without
+# it, #125's per-user inbox cannot exist. Postgres v1
 # and v2 both carry Stable actor support (Dapr's supported-state-stores reference).
 #
 # Scoped to the services that own operational state. A component with no `scopes` is loadable by every
@@ -56,7 +55,7 @@ spec:
       secretKeyRef:
         name: dapr-state # the secret at secret/data/dapr-state; vaultKVUsePrefix=false drops Dapr's "dapr/" prefix
         key: connection-string
-    # The gate for actors and workflow both. See the header.
+    # The gate for actors. See the header.
     - { name: actorStateStore, value: "true" }
     # Dapr creates and migrates this table itself; naming it explicitly keeps a future second store
     # (a cache, say) from colliding in the same database if one is ever pointed here.

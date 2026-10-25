@@ -116,12 +116,6 @@ helm repo update >/dev/null && helm dependency build ./chart >/dev/null
 # The governed stack's values, shared with scripts/install_from_empty.sh so the two lanes install one shape.
 # shellcheck source=scripts/stack_values.sh
 . "$(dirname "$0")/stack_values.sh"
-# FLOWS OFF: no suite this lane runs reaches it, and on a 4-core runner its build and sidecar pod are what the lane's
-# budget goes to (measured 2026-10-16: with flows and notifications on, the fixture installs ran beside four builds and
-# Dapr's took 90 s instead of 13 s). Scaled to zero, the render schedules no pod for it, so the side-loaded set below
-# asks for no flows image; install_from_empty keeps it, since it proves every workload starts. NOTIFICATIONS STAYS ON:
-# criterion 4's module reads the inboxes the shared scenario fills (tests/e2e-py/test_events_are_correct.py).
-HELM_SET+=(--set services.flows.replicas=0)
 
 # EVERY SIDE-LOADED IMAGE THE CHART SCHEDULES, derived from the render rather than a list kept here.
 # `image.localImages=true` means a bare `<component>:dev` resolves on the NODE, so an image this

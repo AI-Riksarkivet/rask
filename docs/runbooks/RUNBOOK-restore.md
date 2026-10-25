@@ -16,7 +16,7 @@ before trusting either in an incident.
 
 | Artifact | What | Where | Template |
 |---|---|---|---|
-| **pg_dump** (gzip) | the `openfga` DB (authz tuples) **and** the `daprstate` DB (Dapr state store: inbox read state + workflow/actor instances) | the object store, `_backups/pg/<UTC>/` | `backup-pg.yaml` (CronJob, `backups.pgDump`) |
+| **pg_dump** (gzip) | the `openfga` DB (authz tuples) **and** the `daprstate` DB (Dapr state store: inbox read state and actor instances) | the object store, `_backups/pg/<UTC>/` | `backup-pg.yaml` (CronJob, `backups.pgDump`) |
 | **VolumeSnapshot** | the RustFS fixture's data PVC = the **Lance lakehouse** (every tier + registry data, and lineage's provenance tables) | cluster CSI VolumeSnapshot | `backup-snapshot.yaml` (`backups.volumeSnapshot`) |
 | **control-root records** | the governance objects: `_projects/`, `_warehouses/` (registry + namespace bindings), `_trash/`, `_protection/`, `_policies/`, `_gates/`, `_transforms/`, `_tasks/` | a timestamped prefix, `_backups/control/<UTC>/` by default | `scripts/control_root_backup.py` |
 
@@ -64,8 +64,7 @@ drop/recreate it first.
    - **What is lost without it:** every subject's inbox READ state. The inbox *contents* come back on
      their own — the notifications reconciler replays lineage's durable `GET /events` — but "which of
      these have I already seen" lives nowhere else, so skipping this dump marks the entire estate
-     unread for everyone. Dapr workflow instances and actor state are lost with it too; in-flight
-     workflows do not resume.
+     unread for everyone. The rest of the actor state is lost with it too.
    - **Why LAST, and from the same window:** the rows point at feed rows in the object store and at objects
      OpenFGA's tuples govern. Restore both dumps from the SAME `_backups/pg/<UTC>/` directory — they are dumped in
      one CronJob run, so a single timestamp directory is internally consistent.
@@ -73,11 +72,6 @@ drop/recreate it first.
      dropping `daprstate` and letting Dapr recreate its schema is legitimate and safe. Everyone starts
      with a full unread inbox, which is noisy but not wrong. Say so in the incident notes — an inbox
      that silently re-alerts on months of history reads as an outage to the people receiving it.
-   - **Check its size before assuming it is small.** Most of `daprstate` is Dapr workflow history, and
-     that grows without bound unless `dapr.workflowStateRetention` is on — measured live 2026-08-10,
-     before retention landed: 1367 instance rows for `dapr.internal.default.ingest.workflow` alone,
-     `count(expiredate) = 0`, oldest 7 days back. Retention bounds it (7d completed / 30d failed),
-     but a cluster restored from a dump taken with retention OFF carries the whole history.
 6. **App recovery is automatic**: OpenFGA and the Dapr sidecars reconnect on their own.
 
 ## Restore — the object store (the Lance lakehouse)

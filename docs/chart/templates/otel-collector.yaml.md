@@ -21,71 +21,10 @@ Deploys whenever observability.enabled. Single Deployment (not a DaemonSet): fil
 on, which is correct on a single node. Under NetworkPolicy its egress to an endpoint outside the namespace
 needs a `networkPolicy.extraEgress` entry.
 
-## `{{- $daprState := and .Values.dapr.enabled .Values.stateStore.enabled (or .Values.age.enabled .Values.age.e...`
-
-The Dapr state store's own database is only worth querying when there IS one: the state store
-component must be enabled (nothing writes workflow history otherwise) and Postgres must exist,
-either in-cluster or as age.externalHost. Gated rather than always-on because a receiver that
-cannot connect retries forever and fills the log with a failure that is not one.
-
 ## `apiVersion: rbac.authorization.k8s.io/v1`
 
 k8sattributes needs pod/namespace/replicaset/node reads for enrichment; the prometheus receiver's k8s SD
 needs pod discovery. Cluster-scoped (SD + attributes are cluster-wide), read-only.
-
-## `sqlquery/daprstate:`
-
-DAPR WORKFLOW HISTORY — measured by QUERY, because there is nothing to scrape.
-
-Every other metric in this file arrives from a target that already exports it. This one cannot:
-enumerated live on 2026-08-26 against the `ingest` sidecar, daprd's ENTIRE metric surface is
-dapr_error_code_total, dapr_grpc_io_*, dapr_http_*, dapr_runtime_component_{init_total,loaded}
-and go_*. No workflow metric, no actor metric, no state-store metric — and
-`dapr_runtime_workflow_*` (already documented as unreliable for this codebase in
-deploy/alerting/rules.yml) is absent outright. A fourth scrape job would have had no target.
-
-So the state store is read directly. `spec.workflow.stateRetentionPolicy` in observability.yaml
-is the ONLY thing that removes workflow history — there is deliberately no application-side
-purge (DaprWorkflowClient has no list-instances API, so a sweep could not name what to purge
-after a restart) — and if it stops collecting, the first symptom is a full disk. These two
-gauges are what deploy/alerting/rules.yml's `dapr-workflow-state` group alerts on, so a rename
-here has to reach those rules in the same change.
-
-A COLLECTOR RECEIVER RATHER THAN A postgres_exporter SIDECAR: no second image to vendor, scan
-and size, no second credential path, and the query lives in the file that already owns "get
-this series into GreptimeDB". Cost measured on the live store: 4.7ms over a 7.5MB table.
-
-THE AGE METRIC READS HISTORY ROWS ONLY, and that filter is load-bearing rather than tidy. A
-workflow's `metadata` row keeps its original insertdate across `continue_as_new`, so a
-long-running recurring workflow would
-look arbitrarily old forever and the alert would fire on a perfectly healthy store. History
-rows are rewritten per turn, so their age is the property the retention policy actually
-governs.
-
-DO NOT "CORRECT" `%||history-%` TO `wf-history-%`, however authoritative the source. Dapr's own
-protocol reference (contributing/protocol-reference/workflow-protocol/…-state-and-history) states
-the history key format is `wf-history-<instance_id>-<index>`. That is the LOGICAL key; it is not
-what the Postgres state store holds. Measured on the live store 2026-08-26:
-key like '%wf-history-%'  ->     0 rows
-key like '%||history-%'   ->  5551 rows
-The real shape is `<app>||dapr.internal.default.<app>.workflow||<id>||history-000006`. A filter
-taken from the doc matches nothing, the gauge is a permanent 0, and DaprWorkflowHistoryNotCollected
-can never fire — which is indistinguishable from a healthy estate. Same class of defect as
-`outbox_oldest_age`.
-
-The password is an ENV REFERENCE, not a literal: the Collector expands ${env:...} at load, and
-the value arrives by secretKeyRef on the Deployment below, so no credential is in this ConfigMap.
-
-## `- metric_name: dapr_workflow_state_rows`
-
-Volume. Read by DaprWorkflowStateMetricsMissing and by nothing else — its job is to be
-PRESENT, so that the age rule going quiet can be told apart from the age rule going blind.
-
-## `- metric_name: dapr_workflow_history_oldest_age_seconds`
-
-The property. NO `unit:` field, and the name carries `_seconds` itself — declaring a unit
-would make the OTLP->Prometheus convention APPEND the suffix, which is exactly how
-`outbox_oldest_age` shipped as a rule that could never fire (see rules.yml:22-27).
 
 ## `filter/drop_app_file_logs:`
 
@@ -180,12 +119,6 @@ the governance table would make the trail forgeable by anything that can print.
 The same uid the pod already pins. Everything the Collector writes goes to the
 `offsets` volume below (the file_storage extension's checkpoints); the config is a
 read-only mount, so a read-only rootfs takes nothing away from it.
-
-## `env:`
-
-The Dapr state store's Postgres password, for the sqlquery/daprstate receiver. By
-secretKeyRef so it stays out of the ConfigMap, `helm get manifest` and `kubectl describe`;
-the config references it as ${env:DAPRSTATE_PASSWORD}, expanded by the Collector at load.
 
 ## `livenessProbe: { httpGet: { path: /, port: 13133 }, initialDelaySeconds: 30, periodSeconds: 30, failureThre...`
 

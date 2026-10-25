@@ -47,10 +47,6 @@ services:
   # double the FGA and actor load, silently, exactly when lineage or the sidecar is already slow.
   # Nothing but this note holds it at 1. What would unblock it is a cross-pod guard that SKIPS (not
   # an actor — actors are turn-based, so ticks would queue instead).
-  # flows is DELIBERATELY ABSENT and must stay at 1: .docker/flows.dockerfile records that its run
-  # store is a process-local dict (v0) with no durable fallback, so a second worker would answer
-  # GET /flows/runs/{id} with a 404 for a live run. Raise it when that store is durable, not before.
-  # Pinned by tests/unit/test_prod_ha_posture.py.
 frontend:
   replicas: 2
   # A governed backend needs a UI that can sign in. auth.enabled is true above, and

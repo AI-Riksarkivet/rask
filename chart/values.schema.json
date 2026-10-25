@@ -414,27 +414,6 @@
                 "sidecarRestricted": {
                     "description": "Add the RuntimeDefault seccomp annotation to daprd for PodSecurity `restricted`; also set the injector's `sidecarDropALLCapabilities`.",
                     "type": "boolean"
-                },
-                "workflowRetention": {
-                    "type": "object",
-                    "properties": {
-                        "completed": {
-                            "description": "How long a completed workflow's history is kept, as a positive h or m duration of at least 1h; default 168h (7 days).",
-                            "type": "string"
-                        },
-                        "enabled": {
-                            "description": "Render a Dapr workflow `stateRetentionPolicy`, the only thing that purges workflow history; false means history grows unbounded.",
-                            "type": "boolean"
-                        },
-                        "failed": {
-                            "description": "How long a failed workflow's history is kept for post-mortems, as a positive h or m duration of at least 1h; default 720h.",
-                            "type": "string"
-                        },
-                        "terminated": {
-                            "description": "How long a terminated workflow's history is kept, as a positive h or m duration of at least 1h; default 720h (30 days).",
-                            "type": "string"
-                        }
-                    }
                 }
             }
         },
@@ -1897,35 +1876,6 @@
                         }
                     }
                 },
-                "flows": {
-                    "type": "object",
-                    "properties": {
-                        "frontDoor": {
-                            "description": "Renders flows outside singleTenant, because the cluster route publishes /api/flows on it.",
-                            "type": "boolean"
-                        },
-                        "governedAuth": {
-                            "description": "Gives flows the OIDC/FGA env and FGA token mount when auth.enabled; its doors check the estate-admin verb.",
-                            "type": "boolean"
-                        },
-                        "module": {
-                            "description": "uvicorn import path the flows (studio flow-builder server) Deployment runs.",
-                            "type": "string"
-                        },
-                        "port": {
-                            "description": "Container and Service port of the flows app.",
-                            "type": "integer"
-                        },
-                        "replicas": {
-                            "description": "Replica count of the flows Deployment; 0 scales it to zero.",
-                            "type": "integer"
-                        },
-                        "waitFor": {
-                            "description": "List of dependencies flows waits for in an init container; only `objectStore` is honoured (when objectStore.enabled).",
-                            "type": "array"
-                        }
-                    }
-                },
                 "lineage": {
                     "type": "object",
                     "properties": {
@@ -2146,7 +2096,7 @@
                     "type": "string"
                 },
                 "enabled": {
-                    "description": "Render the Dapr Postgres state store component (actor and workflow state) on the AGE `stateDb`.",
+                    "description": "Render the Dapr Postgres state store component (actor state) on the AGE `stateDb`.",
                     "type": "boolean"
                 },
                 "metadataTableName": {

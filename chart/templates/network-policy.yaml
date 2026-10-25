@@ -305,9 +305,6 @@ spec:
                 {{- $ageClients = concat $ageClients .Values.stateStore.scopes }}
                 {{- end }}
 
-                {{- if and .Values.observability.enabled .Values.stateStore.enabled }}
-                {{- $ageClients = append $ageClients "otel-collector" }}
-                {{- end }}
                 values:
                   {{- range ($ageClients | uniq) }}
                   - {{ . }}

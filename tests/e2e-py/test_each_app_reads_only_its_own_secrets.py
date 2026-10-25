@@ -25,17 +25,15 @@ import pytest
 
 pytestmark = pytest.mark.e2e
 
-#: app -> (a secret its own sidecar serves its code, a field of it, a secret it may not read through its sidecar). flows reads
-#: nothing itself: the state store's DSN is resolved by its component, so its own read of `dapr-state` is refused. The
+#: app -> (a secret its own sidecar serves its code, a field of it, a secret it may not read through its sidecar). The
 #: catalog holds no store pair (ADR 0170), so its own read is the app token its door checks.
-SIDECAR_READS: Final[dict[str, tuple[str | None, str | None, str]]] = {
+SIDECAR_READS: Final[dict[str, tuple[str, str, str]]] = {
     "catalog": ("dapr-app-token", "token", "lineage-s3"),
     "lineage": ("lineage-s3", "access_key", "maintenance-s3"),
     "maintenance": ("maintenance-s3", "access_key", "lineage-s3"),
     "notifications": ("dapr-app-token", "token", "lineage-s3"),
     "viewer": ("viewer-s3", "access_key", "media-s3"),
     "search": ("media-s3", "access_key", "viewer-s3"),
-    "flows": (None, None, "dapr-state"),
 }
 
 #: Asks the pod's own sidecar for each named secret and prints, per secret, the status and the FIELD NAMES it answered.
@@ -61,8 +59,7 @@ def _run(*args: str, stdin: str = "") -> subprocess.CompletedProcess[str]:
 
 def _sidecars() -> dict[str, str]:
     """app -> the Deployment that runs its sidecar, for each app the `lance-secrets` component is scoped to that the release
-    runs a pod of: a release that renders no explorer runs no search or viewer, and the kind lane scales flows
-    to none (`scripts/stack_values.sh`). A Deployment that asks for a pod and has none running stays, and fails the ask."""
+    runs a pod of: a release that renders no explorer runs no search or viewer. A Deployment that asks for a pod and has none running stays, and fails the ask."""
     scopes = set(json.loads(chaos.kubectl("get", "components.dapr.io", "lance-secrets", "-o", "json")).get("scopes") or [])
     running: dict[str, str] = {}
     for deployment in json.loads(chaos.kubectl("get", "deployments", "-o", "json"))["items"]:
@@ -107,14 +104,12 @@ def test_each_sidecar_serves_its_app_only_its_own_secrets() -> None:
     found: dict[str, object] = {}
     for app, deployment in sorted(sidecars.items()):
         own, field, foreign = SIDECAR_READS[app]
-        names = [name for name in (own, foreign) if name]
-        done = _run("exec", f"deployment/{deployment}", "-c", app, "--", "python", "-c", _ASK_THE_SIDECAR, *names)
+        done = _run("exec", f"deployment/{deployment}", "-c", app, "--", "python", "-c", _ASK_THE_SIDECAR, own, foreign)
         assert done.returncode == 0, f"{app}'s pod could not ask its sidecar: {done.stderr.strip()[-300:]}"
         answers = json.loads(done.stdout)
-        if own is not None:
-            status, fields = answers[own]
-            if status != 200 or field not in fields:
-                found[f"{app} reading its own {own}"] = answers[own]
+        status, fields = answers[own]
+        if status != 200 or field not in fields:
+            found[f"{app} reading its own {own}"] = answers[own]
         if answers[foreign][0] != 403:
             found[f"{app} reading {foreign}"] = answers[foreign][0]
     assert not found, f"a sidecar served a secret its app does not own, or refused one it does: {found}"

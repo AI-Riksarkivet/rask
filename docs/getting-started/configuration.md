@@ -43,7 +43,6 @@ authenticates every request itself. The route table:
 | `/api/explorer` | viewer (incl. the objects browser) | `/api…` |
 | `/api/catalog` | catalog | `/…` |
 | `/api/lineage` | lineage | `/…` |
-| `/api/flows` | flows | unchanged |
 | `/api/notifications` | notifications | unchanged |
 | `/api/ray`, `/api/serve` | compute (the compute fixture chart's own HTTPRoute) | unchanged |
 

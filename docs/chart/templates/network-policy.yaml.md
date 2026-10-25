@@ -22,16 +22,6 @@ store is reached at addresses no URL derives, and the render refuses the rule em
 
 stateStore.scopes appended + uniq'd: the state-store-scoped apps' daprd dial this Postgres directly.
 
-## `{{- if and .Values.observability.enabled .Values.stateStore.enabled }}`
-
-The OTel Collector is a 5432 client too: its `sqlquery/daprstate`
-receiver reads the workflow-history volume and age that nothing else can
-measure (daprd exports no workflow or state-store metric at all). Blocked here
-and the receiver retries forever, DaprWorkflowStateMetricsMissing fires, and
-the retention alert it guards goes blind. Gated on the conditions that render
-the Collector and its receiver, so an estate without them carries no
-allow-entry for a pod it never deploys.
-
 ## `name: {{ include "lance.fullname" . }}-object-store-ingress`
 
 THE STORE ADMITS ITS NAMED CLIENTS ONLY, by component label: the data-plane services, the corpus readers (viewer,

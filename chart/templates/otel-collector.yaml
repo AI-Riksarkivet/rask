@@ -8,7 +8,6 @@
 {{- $endpoint := required "observability.export.endpoint: the OTLP/HTTP endpoint the Collector exports to (the platform's telemetry backend)" $x.endpoint }}
 {{- $headers := $x.headers | default dict }}
 
-{{- $daprState := and .Values.dapr.enabled .Values.stateStore.enabled (or .Values.age.enabled .Values.age.externalHost) }}
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -275,23 +274,6 @@ data:
                 - source_labels: [__name__]
                   action: drop
                   regex: "(go_|process_).*"
-{{- if $daprState }}
-      sqlquery/daprstate:
-        driver: postgres
-        datasource: "host={{ include "lance.ageConnectHost" . }} port={{ .Values.age.port }} user={{ .Values.age.user }} password=${env:DAPRSTATE_PASSWORD} dbname={{ .Values.age.stateDb }} sslmode=disable"
-        collection_interval: 5m
-        queries:
-          - sql: "select count(*)::bigint as workflow_rows, coalesce(extract(epoch from now() - min(insertdate) filter (where key like '%||history-%')), 0)::bigint as oldest_history_age_seconds from {{ .Values.stateStore.tableName }} where key like '%workflow%'"
-            metrics:
-              - metric_name: dapr_workflow_state_rows
-                value_column: workflow_rows
-                value_type: int
-                data_type: gauge
-              - metric_name: dapr_workflow_history_oldest_age_seconds
-                value_column: oldest_history_age_seconds
-                value_type: int
-                data_type: gauge
-{{- end }}
     processors:
       memory_limiter:
         check_interval: 1s
@@ -380,7 +362,7 @@ data:
           processors: [memory_limiter, k8sattributes, filter/drop_keepalive, batch]
           exporters: [otlphttp/traces]
         metrics:
-          receivers: [otlp, prometheus{{ if $daprState }}, sqlquery/daprstate{{ end }}]
+          receivers: [otlp, prometheus]
           processors: [memory_limiter, k8sattributes, batch]
           exporters: [otlphttp]
         logs:
@@ -417,12 +399,6 @@ spec:
 
           {{- include "lance.rootlessSecurityContext" 65534 | nindent 10 }}
           args: ["--config=/etc/otelcol/config.yaml"]
-{{- if $daprState }}
-          env:
-            - name: DAPRSTATE_PASSWORD
-              valueFrom:
-                secretKeyRef: { name: {{ include "lance.fullname" . }}-infra-credentials, key: postgres-password }
-{{- end }}
           ports:
             - { name: otlp-grpc, containerPort: 4317 }
             - { name: otlp-http, containerPort: 4318 }

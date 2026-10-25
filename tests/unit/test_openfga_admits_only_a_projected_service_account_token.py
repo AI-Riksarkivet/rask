@@ -109,6 +109,6 @@ def test_only_a_tuple_writer_holds_an_openfga_token_and_every_other_governed_ser
     assert admitted == openfga_clients == writers, (
         f"OpenFGA admits {sorted(admitted)}; its clients are {sorted(openfga_clients)}; the writers are {sorted(writers)}"
     )
-    assert len(deciders) >= 3 and set(deciders) == set(seeded), f"deciders {sorted(deciders)} vs the roles bootstrap seeds {sorted(seeded)}"
+    assert len(deciders) >= 2 and set(deciders) == set(seeded), f"deciders {sorted(deciders)} vs the roles bootstrap seeds {sorted(seeded)}"
     assert all("decider" in roles for roles in seeded.values()), seeded
     assert reachers == {"catalog", "maintenance", "bootstrap-admin", "openfga-model"}, f"OpenFGA's API is reachable from {sorted(reachers)}"

@@ -107,10 +107,6 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | dapr.sidecarResources.memoryLimit | string | `"256Mi"` | Memory limit for every injected daprd sidecar (`dapr.io/sidecar-memory-limit`). |
 | dapr.sidecarResources.memoryRequest | string | `"64Mi"` | Memory request for every injected daprd sidecar (`dapr.io/sidecar-memory-request`). |
 | dapr.sidecarRestricted | bool | `false` | Add the RuntimeDefault seccomp annotation to daprd for PodSecurity `restricted`; also set the injector's `sidecarDropALLCapabilities`. |
-| dapr.workflowRetention.completed | string | `"168h"` | How long a completed workflow's history is kept, as a positive h or m duration of at least 1h; default 168h (7 days). |
-| dapr.workflowRetention.enabled | bool | `true` | Render a Dapr workflow `stateRetentionPolicy`, the only thing that purges workflow history; false means history grows unbounded. |
-| dapr.workflowRetention.failed | string | `"720h"` | How long a failed workflow's history is kept for post-mortems, as a positive h or m duration of at least 1h; default 720h. |
-| dapr.workflowRetention.terminated | string | `"720h"` | How long a terminated workflow's history is kept, as a positive h or m duration of at least 1h; default 720h (30 days). |
 | dex.clientSecret | string | `"lance-catalog-secret"` | The development Dex's sign-in client secret (demo value); seeded into OpenBao as `oidc-client` (field `client-secret`). |
 | dex.enabled | bool | `true` | This estate uses the development Dex (deploy/fixtures/dex, Service `<release>-dex`): the ingress serves it at /dex, and a real deployment refuses it. The chart renders no Dex. |
 | dex.port | int | `5556` | Port of the development Dex's Service. |
@@ -293,12 +289,6 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | services.catalog.module | string | `"catalog.main:app"` | uvicorn import path the catalog Deployment runs (templates/services.yaml). |
 | services.catalog.port | int | `2333` | Container and Service port of the Lance catalog. |
 | services.catalog.replicas | int | `1` | Replica count of the catalog; above 1 requires catalog.controlEmit=true or the render fails. |
-| services.flows.frontDoor | bool | `true` | Renders flows outside singleTenant, because the cluster route publishes /api/flows on it. |
-| services.flows.governedAuth | bool | `true` | Gives flows the OIDC/FGA env and FGA token mount when auth.enabled; its doors check the estate-admin verb. |
-| services.flows.module | string | `"flows:app"` | uvicorn import path the flows (studio flow-builder server) Deployment runs. |
-| services.flows.port | int | `8840` | Container and Service port of the flows app. |
-| services.flows.replicas | int | `1` | Replica count of the flows Deployment; 0 scales it to zero. |
-| services.flows.waitFor | list | `[]` | List of dependencies flows waits for in an init container; only `objectStore` is honoured (when objectStore.enabled). |
 | services.lineage.daprAppId | string | `"lineage"` | Dapr app-id of lineage; also names its pubsub, DLQ and durable consumers and scopes its relay cron. |
 | services.lineage.deliveriesInFlight | int | `64` | How many of lineage's bus deliveries may be unacknowledged at once (its durable consumer's `maxAckPending`). |
 | services.lineage.eventsRetentionDays | int | `7` | Days of arrival time the durable /events feed keeps, pruned on the relay tick; bounds how long a notifications outage it survives. 0 is unbounded. |
@@ -338,10 +328,10 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | signing.provisioned | bool | `false` | Attest that signing keys exist for every identity in the platform's store; the render fails until it is true there. |
 | singleTenant.enabled | bool | `false` | Renders the single-tenant default workloads (every fleet service, domain zones). False installs front-door services only; the object store is gated by `objectStore.enabled`. |
 | stateStore.componentVersion | string | `"v1"` | Version of the Dapr Postgres state store component. |
-| stateStore.enabled | bool | `true` | Render the Dapr Postgres state store component (actor and workflow state) on the AGE `stateDb`. |
+| stateStore.enabled | bool | `true` | Render the Dapr Postgres state store component (actor state) on the AGE `stateDb`. |
 | stateStore.metadataTableName | string | `"dapr_metadata"` | Table the Dapr state store keeps its own metadata in. |
 | stateStore.name | string | `"lance-statestore"` | Name of the Dapr state store component. |
-| stateStore.scopes | list | `["flows","notifications"]` | App-ids allowed to load the state store; the secret-store scope is derived from this list too. Adding one needs a restart of scoped pods. |
+| stateStore.scopes | list | `["notifications"]` | App-ids allowed to load the state store; the secret-store scope is derived from this list too. Adding one needs a restart of scoped pods. |
 | stateStore.secretStore | string | `"lance-secrets"` | Dapr secret store that resolves the state store's connection string (OpenBao, never a k8s Secret). |
 | stateStore.tableName | string | `"state"` | Postgres table holding Dapr state rows. |
 | storage.stores | list | `[{"bucket":"lance-catalog","description":"The lakehouse warehouse — the governed medallion datasets.","name":"lance-catalog","role":"bronze","secret":"viewer-s3"}]` | Object-store registry rendered as RASK_STORES for the explorer viewer's object browser; each entry is {name, bucket, role, secret, description, endpoint?, insecure?}, `secret` a Dapr secret-store key. |

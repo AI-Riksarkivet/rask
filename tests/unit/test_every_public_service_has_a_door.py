@@ -36,8 +36,8 @@ from chart_yaml import FAST_LOADER
 
 
 #: Fleet services the gateway carries to the public edge, each fed its door by `fleet.yaml`'s `governedAuth`
-#: flag: `flows` serves `{prefix}/flows`, `notifications` serves `{prefix}/notifications`.
-PUBLICLY_PROXIED = ("flows", "notifications")
+#: flag: `notifications` serves `{prefix}/notifications`.
+PUBLICLY_PROXIED = ("notifications",)
 
 
 # ── the CHART half: a door with no env is a door that never engages ──────────────────────────────

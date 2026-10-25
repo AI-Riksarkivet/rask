@@ -34,7 +34,7 @@ guarantee a rask selector can never adopt a lance pod inside the shared release.
 =====================================================================================================
 
 ---------------------------------------------------------------------------------------------------
-rask — the base chart's helpers (fleet: flows, notifications, frontends, the cluster route —
+rask — the base chart's helpers (fleet: notifications, frontends, the cluster route —
 the orchestrator died at P7a; core-api/search-api/volumes-api died in the R6/R20 wave).
 ---------------------------------------------------------------------------------------------------
 
@@ -59,12 +59,9 @@ THIS helper, so the sidecar contract can never drift between planes (DAPRIFY 202
     `dapr-api-token` on delivered requests → sidecar-only routes reject forged direct POSTs
   - the daprd resource bounds + disable-builtin-k8s-secret-store (+ optional seccomp) via
     lance.daprSidecarResources
-  - dapr.io/config: lance-tracing — UNCONDITIONAL. It was gated on lance.otelEnabled, which was
-    right while that Configuration held only tracing and wrong the moment it also held the
-    workflow state-retention policy: turning telemetry off silently turned retention off with it,
-    and workflow history is then kept forever. The object now always renders (the tracing STANZA
-    inside it is what carries the otel gate), so this reference cannot dangle — which is the
-    property the old gate existed to protect.
+  - dapr.io/config: lance-tracing — UNCONDITIONAL. The object always renders (the tracing STANZA
+    inside it is what carries the otel gate, and its metric and api-logging bounds hold with
+    telemetry off), so this reference cannot dangle.
 Usage: {{- include "rask.daprAnnotations" (list $root $appId $appPort) | nindent 8 }}
 
 ---------------------------------------------------------------------------------------------
@@ -1164,15 +1161,6 @@ subject could reach telemetry, so the two keys ship together or not at all.
 
 The kubelet polls /v1.0/healthz on every sidecar; without this the stream is mostly probe noise.
 
-## `{{- range $k, $v := (dict "completed" .completed "failed" .failed "terminated" .terminated) }}`
-
-A FLOOR, because the failure mode is silent and total. `completed: "0s"` is a valid duration
-that renders, applies, and purges every workflow instance the moment it terminates — the
-history is gone before anyone can read it, and nothing reports that. A typo in a values file
-should not be able to do that, so anything under an hour is REFUSED at render rather than
-discovered later by its absence. Raise the floor deliberately if a shorter window is ever
-genuinely wanted.
-
 ## `{{- define "lance.daprAppSpec" -}}`
 
 One app-id's Dapr Configuration spec: the Configuration object and its name (`lance.daprAppConfigName`) both derive from THIS.
@@ -1192,8 +1180,7 @@ and a warehouse record's `credential_ref` is consumed by no door ([[LH-205]]).
 
 ## `allowedSecrets:`
 
-Rendered only when the app reads something itself. An app whose components alone read the store (flows: the state
-store's DSN) gets a deny-by-default scope with no list, which Dapr reads as every secret refused; a bare
+Rendered only when the app reads something itself. An app whose components alone read the store gets a deny-by-default scope with no list, which Dapr reads as every secret refused; a bare
 `allowedSecrets:` over an empty range would be YAML null, which the CRD refuses (measured 2026-09-24 with
 `deniedSecrets`).
 
@@ -1283,7 +1270,7 @@ THE ONE ROUTE TABLE: the public `/api/*` prefixes the cluster route publishes, a
 published prefix and an admitted port come from one list and cannot drift.
 
 The rows mirror the gates of the templates that render each backend: the media trio only under
-`explorer.enabled` (explorer.yaml), catalog and lineage always (services.yaml), flows and notifications
+`explorer.enabled` (explorer.yaml), catalog and lineage always (services.yaml), notifications
 only when front-door or single-tenant (fleet.yaml's own condition), so the route never names a Service
 that did not render. The more specific `/api/explorer/*` rows precede `/api/explorer` for the reader;
 Gateway API matches the longest prefix regardless of order.

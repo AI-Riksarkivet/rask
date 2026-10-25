@@ -239,8 +239,8 @@ unrendered=$(comm -23 <(sort -u <<<"$named") <(echo "$rendered"))
 [ -z "$unrendered" ] || fail "workloads name ServiceAccounts this render does not create: $(tr '\n' ' ' <<<"$unrendered")"
 sa=$(grep -c "^kind: ServiceAccount" "$OUT" || true)
 automount=$(grep -c "automountServiceAccountToken: false" "$OUT" || true)
-[ "$automount" -ge 11 ] \
-  || fail "prod must stop mounting the SA token into app pods, rendered $automount refusals (>=11 expected; 1 is the baseline)"
+[ "$automount" -ge 10 ] \
+  || fail "prod must stop mounting the SA token into app pods, rendered $automount refusals (>=10 expected; 1 is the baseline)"
 grep -q 'dapr.io/sidecar-seccomp-profile-type: RuntimeDefault' "$OUT" \
   || fail "prod must restrict the daprd sidecar (dapr.sidecarRestricted) — a pod is only as restricted as its loosest container"
 

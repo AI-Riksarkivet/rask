@@ -273,7 +273,7 @@ def test_a_per_component_pin_beats_the_global_tag_and_a_digest_beats_the_pin() -
     """
     pinned = _helm_template(*_REAL_REGISTRY, "image.tags.notifications=PINNED")
     assert 'image: "reg.example/notifications:PINNED"' in pinned, "a per-component tag did not reach the render"
-    assert 'image: "reg.example/flows:dev"' in pinned, "the pin leaked onto a component that did not ask for it"
+    assert 'image: "reg.example/lance-rest-catalog:dev"' in pinned, "the pin leaked onto a component that did not ask for it"
 
     # A digest is a CONTENT pin — a reconciler's, typically — so no tag may undo it.
     both = _helm_template(*_REAL_REGISTRY, "image.tags.notifications=IGNORED", "image.digests.notifications=sha256:abc")
@@ -665,7 +665,6 @@ def test_a_production_render_runs_no_store_the_platform_serves_and_dials_the_pla
     assert not re.findall(in_chart, text), "a client still dials the in-chart instance"
     fga_urls = {env[k] for _, _, c in chart_render.containers(docs) for k in ("RASK_FGA_API_URL", "FGA_API_URL") if k in (env := chart_render.env_of(c))}
     assert fga_urls == {fga}, fga_urls
-    assert f"host={pg} " in text, "the Collector's state-store scrape does not dial the platform's Postgres"
 
     [secrets] = [doc for doc in docs if doc.get("kind") == "Component" and doc["spec"]["type"].startswith("secretstores.")]
     named = {row["value"] for row in secrets["spec"]["metadata"] if row["name"] == "vaultAddr"}
@@ -765,31 +764,11 @@ def _lance_tracing_config(rendered: str) -> dict[str, Any] | None:
     return None
 
 
-def _retention_policy(spec: dict[str, Any]) -> dict[str, Any]:
-    """The retention stanza, or an empty mapping. Narrowed rather than `or {}`-chained: the render is
-    untyped YAML, so a `workflow` key holding something that is not a mapping must read as ABSENT here
-    rather than raise an AttributeError that looks like a chart bug."""
-    workflow = spec.get("workflow")
-    if not isinstance(workflow, dict):
-        return {}
-    policy = workflow.get("stateRetentionPolicy")
-    return policy if isinstance(policy, dict) else {}
-
-
 def test_the_sidecars_non_telemetry_config_survives_telemetry_being_off() -> None:
-    """THE REGRESSION THIS GUARDS, and it is the reason the Configuration is no longer otel-gated.
-
-    A sidecar may reference exactly ONE `dapr.io/config`, so everything per-sidecar lives in one
-    object — and that object used to render only when `lance.otelEnabled`. Retention is a DURABILITY
-    concern, so hanging it there meant turning telemetry off silently returned the estate to unbounded
-    workflow history. The gate now sits on the tracing stanza, which is the part that is about
-    telemetry.
-
-    RENAMED AND WIDENED rather than joined by a sibling, because retention was only the FIRST instance
-    of the rule. Metric cardinality and api-logging are instances two and three: the sidecar's `:9090`
-    exposition and its log stream both exist whether or not this estate ships a collector, so a bound
-    that vanishes with telemetry is not a bound. A second test asserting the same rule from the same
-    render would be a divergent answer to a settled question.
+    """A sidecar may reference exactly ONE `dapr.io/config`, so everything per-sidecar lives in one
+    object, and only its tracing stanza is about telemetry. Metric cardinality and api-logging bound the
+    sidecar's `:9090` exposition and its log stream, which both exist whether or not this estate ships a
+    collector, so a bound that vanishes with telemetry is not a bound.
 
     ASSERTING THE LITERAL KEY NAMES IS THE WHOLE POINT, and it is the only gate there is. Helm does not
     request strict field validation, so `increasedCardinallity`, `recordErrorCode` or `obfuscateUrls`
@@ -806,7 +785,6 @@ def test_the_sidecars_non_telemetry_config_survives_telemetry_being_off() -> Non
     spec = _lance_tracing_config(_helm_template("observability.enabled=false"))
 
     assert spec is not None, "the Configuration vanished with telemetry — every sidecar's config reference now dangles"
-    assert _retention_policy(spec), "retention was lost with telemetry"
     assert "tracing" not in spec, "tracing must still drop out when telemetry is off"
 
     metrics = spec.get("metrics")

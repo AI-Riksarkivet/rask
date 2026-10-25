@@ -1,7 +1,7 @@
 # rask umbrella chart values — the MERGED estate (rask 0.2.0 + lance-ns 0.1.0, one release named `rask`).
 #
 # Two systems now install from this one file:
-#   * the rask fleet (flows/notifications),
+#   * the rask fleet (notifications),
 #     KubeRay Serve, the SvelteKit microfrontend zones;
 #   * the lance-ns lakehouse (catalog + lineage + maintenance + media), governance
 #     (Dex OIDC + OpenFGA), the Dapr/NATS event fabric, OpenBao, and the OTel-first observability tier.
@@ -102,7 +102,7 @@ config:
   HCP_INSECURE: "true"
 
 # Per-service definitions. TWO planes share this map, by design of the merge:
-#   * the rask FLEET (flows, notifications) — rendered by templates/fleet.yaml, which ranges over this
+#   * the rask FLEET (notifications) — rendered by templates/fleet.yaml, which ranges over this
 #     map but only emits a `frontDoor` entry unless singleTenant.enabled;
 #   * the lance-ns LAKEHOUSE apps (catalog, lineage) — rendered by templates/services.yaml, which
 #     reads .Values.services.catalog / .Values.services.lineage by NAME.
@@ -126,31 +126,7 @@ forwardedAllowIps: 127.0.0.1
 
 services:
   # ==== rask fleet (uvicorn modules, one Deployment each via templates/fleet.yaml) ====
-  # (compute, the Ray plane's service, is not here: it is a bring-your-own engine's companion and installs as its
-  # own release, deploy/fixtures/compute.)
-  # The studio flow-builder's server half: the node catalog, graph validation, and runs on two lanes
-  # (inline, or the Dapr Workflow orchestrator when a sidecar is injected). It needs NOTHING to boot —
-  # no store, no cluster — so it is part of the default install: the builder's client-side lane works
-  # without it, but "engine offline" is what a user sees, and durable runs are unreachable.
-  #
-  # `frontDoor: true` because the cluster route carries /api/flows and a front-door-only install still serves
-  # the studio zone. Serve is reached from the ZONE (bytes ride its own +server.ts), never from here, so
-  # this service needs no Serve URL of its own.
-  flows:
-    # -- uvicorn import path the flows (studio flow-builder server) Deployment runs.
-    module: "flows:app"
-    # -- Container and Service port of the flows app.
-    port: 8840
-    # -- Replica count of the flows Deployment; 0 scales it to zero.
-    replicas: 1
-    # -- Renders flows outside singleTenant, because the cluster route publishes /api/flows on it.
-    frontDoor: true
-    # The run door spends GPU compute (model nodes invoke live Serve endpoints), so on a governed
-    # stack it checks the estate-admin verb through the catalog's decision door — FlowsSettings extends GovernedAuthSettings (LANCE_*).
-    # -- Gives flows the OIDC/FGA env and FGA token mount when auth.enabled; its doors check the estate-admin verb.
-    governedAuth: true
-    # -- List of dependencies flows waits for in an init container; only `objectStore` is honoured (when objectStore.enabled).
-    waitFor: []
+  # (compute and flows are clients of the lakehouse, not here: the product chart deploys neither.)
   # The notification plane: one InboxActor per subject, holding
   # claim-check pointers with durable read state, so the bell counts YOUR work instead of the whole
   # estate's. Its own app-id because an inbox aggregates lineage runs and catalog governance and
@@ -172,7 +148,7 @@ services:
     # -- Renders notifications outside singleTenant, because the cluster route publishes /api/notifications on it.
     frontDoor: true
     # The inbox door verifies the bearer and re-derives visibility per recipient — NotificationsSettings
-    # extends GovernedAuthSettings, so the prefix is LANCE_ like flows'.
+    # extends GovernedAuthSettings, so the prefix is LANCE_.
     # -- Gives notifications the OIDC/FGA env and FGA token mount when auth.enabled.
     governedAuth: true
     # This service HOSTS a sidecar-delivered route (`POST /lineage-events`) and refuses to start
@@ -344,11 +320,11 @@ image:
   # PER-COMPONENT pins (#135) — the reason a `helm upgrade` stopped being destructive.
   #
   # One `tag` above cannot describe this fleet. A real estate runs a catalog tag across 11 services,
-  # a different tag on flows/notifications, a third across the 7 zones, and a
+  # a different tag on notifications, a third across the 7 zones, and a
   # DIGEST on one more. Rendering all of them from one value overwrites every image with a tag that is not on
   # the node — observed twice on 2026-08-06, once taking the whole fleet to ImagePullBackOff.
   #
-  # Keys are the COMPONENT name the template passes to `rask.image` (`flows`, `notifications`,
+  # Keys are the COMPONENT name the template passes to `rask.image` (`notifications`,
   # `lance-rest-catalog`, `web-lakehouse`, …) — the same string that appears in the rendered
   # reference. `digests` beats `tags`, exactly as the global `digest` beats the global `tag`.
   #
@@ -1446,11 +1422,11 @@ encoders:
 
 # === Dapr state store — operational state (NOT analytical data) ===================================
 # Backed by the already-deployed AGE Postgres, in its own database. This is what the notification inbox
-# (#125) and Dapr workflow instances persist to; Lance keeps the
+# (#125) persists to; Lance keeps the
 # published, versioned, analytical data and nothing operational. See chart/templates/dapr-statestore.yaml
 # for why Postgres rather than Redis.
 stateStore:
-  # -- Render the Dapr Postgres state store component (actor and workflow state) on the AGE `stateDb`.
+  # -- Render the Dapr Postgres state store component (actor state) on the AGE `stateDb`.
   enabled: true
   # -- Name of the Dapr state store component.
   name: lance-statestore
@@ -1468,14 +1444,6 @@ stateStore:
   # every app-id in the namespace, which would let any service write another's state.
   # -- App-ids allowed to load the state store; the secret-store scope is derived from this list too. Adding one needs a restart of scoped pods.
   scopes:
-    # ── `flows` is here for STATE, and it is the one entry that genuinely provisions workflows. ──────
-    # The studio flow-builder's durable lane IS Dapr Workflow (`flows/workflow.py`), which stores its
-    # orchestration state through the ACTOR runtime — so without this scope the sidecar cannot load the
-    # component and `create_workflow_instance` fails with "the state store is not configured to use the
-    # actor runtime", pointing at a component that declares `actorStateStore: "true"` and is simply not
-    # visible to this app-id. Measured live 2026-08-06: the service booted healthy, served its catalog,
-    # and 500'd on the first POST /runs — the scope is the whole difference.
-    - flows
     # ── `notifications` needs STATE, and it is the entry that forces the rollout. ────────────────────
     # The whole service is actor state: one InboxActor per subject, holding the pointer rows and the
     # compaction reminder. Unscoped, the sidecar answers "Actor state store not configured - actor
@@ -1495,10 +1463,6 @@ stateStore:
     # window open for its other passengers (the Dapr Configuration/ActorStateTTL
     # decision, the state.postgresql v1→v2 move); ride them together or not at all.
     - notifications
-    # An app-id that hosts a workflow runtime and is unscoped logs
-    #   "Actor state store not configured - actor hosting disabled, but invocation enabled"
-    #   "Workflow engine started"
-    # in that order (measured live 2026-08-15), and every workflow it starts fails.
 
 # === Backups — a FALLBACK for the SELF-CONTAINED in-cluster path only. OFF by default. When you run the
 # managed/operator path (CloudNativePG for AGE — the rask deployment), DISABLE these
@@ -1919,35 +1883,6 @@ dapr:
   enabled: true
   # -- Namespace the Dapr control plane runs in; the Collector scrapes it and, under NetworkPolicy, every pod may reach it.
   controlPlaneNamespace: dapr-system
-  # WORKFLOW STATE RETENTION — the only thing that collects workflow history.
-  #
-  # Dapr's own CRD: "If not set, workflow instances will not be automatically purged." Nothing else
-  # in this estate purges them, and nothing can: `DaprWorkflowClient` has `purge_workflow(id)` but no
-  # list-instances API, so no sweep can name the instances to purge. Measured live 2026-08-10, before
-  # this landed: 1367 rows in `daprstate` for one app's workflows, `count(expiredate) = 0`, oldest
-  # 2026-08-03 — every instance since that app's first deploy, on a store with no TTL, no sweep and no
-  # alert.
-  #
-  # PER-TERMINAL-STATE, because the states are not worth the same:
-  #   · `completed` — short. A successful run's history is a cache of a fact stored durably elsewhere:
-  #     the lineage event IS the record (docs/adr/0023-workflow-history-has-no-browser-surface-the-alert-is-the.md), so once it has landed the history answers
-  #     nothing lineage does not. 7 days is a comfortable margin over the reconciler's own windows.
-  #   · `failed` / `terminated` — long. This is the post-mortem, and "why did that run die" is a
-  #     question asked days later, usually after someone notices downstream. 30 days.
-  # `anyTerminal` is deliberately unset: setting it alongside these would be a second, blunter rule
-  # governing the same objects.
-  #
-  # Turning this off returns the estate to unbounded growth — it is a flag so a deployment that wants
-  # forensic retention can opt out knowingly, not so it can be forgotten.
-  workflowRetention:
-    # -- Render a Dapr workflow `stateRetentionPolicy`, the only thing that purges workflow history; false means history grows unbounded.
-    enabled: true
-    # -- How long a completed workflow's history is kept, as a positive h or m duration of at least 1h; default 168h (7 days).
-    completed: "168h"
-    # -- How long a failed workflow's history is kept for post-mortems, as a positive h or m duration of at least 1h; default 720h.
-    failed: "720h"
-    # -- How long a terminated workflow's history is kept, as a positive h or m duration of at least 1h; default 720h (30 days).
-    terminated: "720h"
   # -- daprd sidecar log level, stamped as the `dapr.io/log-level` annotation (debug, info, warn, error).
   logLevel: "info"
   # Max request body size for Dapr service invocation. Dapr defaults to 4Mi,

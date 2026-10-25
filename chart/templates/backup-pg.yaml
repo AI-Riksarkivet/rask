@@ -51,10 +51,9 @@ spec:
                   set -e
                   rm -f /tmp/.dump-failed
                   # Both databases that hold state. `stateDb` (daprstate) is the Dapr state store: the
-                  # notifications plane's per-subject InboxActor read state and Dapr workflow/actor instance
-                  # state. The inbox CONTENTS are reconstructible (the cron reconciler replays lineage's durable
+                  # notifications plane's per-subject InboxActor read state. The inbox CONTENTS are reconstructible (the cron reconciler replays lineage's durable
                   # GET /events), but WHICH messages a subject has already read exists nowhere else: losing
-                  # it marks the whole estate unread for everyone, and in-flight workflows do not resume.
+                  # it marks the whole estate unread for everyone.
                   for db in {{ .Values.age.openfgaDb }} {{ .Values.age.stateDb }}; do
                     # NOT `pg_dump | gzip`. A pipeline reports only the LAST command's status, and this is
                     # `sh` — dash, where `set -o pipefail` does not exist. So a pg_dump that dies mid-stream

@@ -44,8 +44,9 @@ from tests.unit.test_invariants import _helm_template
 #: 22 -> 20 when the store's server, whose two root-credential env vars these were, became a fixture of its own ([[XC-131]]).
 #: 20 -> 19 when compute, whose APP_API_TOKEN this was, became its own release (deploy/fixtures/compute, ADR 0155).
 #: 19 -> 18 when the object store's bucket Job took the store root as a mounted file ([[XC-163]]).
+#: 18 -> 17 when the OTel Collector's Postgres password left with its workflow-history query, as flows left the chart ([[XC-179]]).
 #: Lowering it is the point; raising it means a workload took the banned path and the rule lost ground.
-SECRET_ENV_BASELINE = 18
+SECRET_ENV_BASELINE = 17
 
 
 def _secret_env_entries() -> list[tuple[str, str, bool]]:

@@ -667,9 +667,6 @@ nats-auth: ## NATS auth e2e — each bus client admitted only to its own subject
 # ErrImagePull, rolled back.
 # `notifications` joins for exactly that reason, in the same commit as its dockerfile and its chart
 # Deployment — the three are one act, and any two of them without the third is the ErrImagePull above.
-# (`flows` is STILL absent and has been since it landed: `.docker/flows.dockerfile` and a `rask-flows`
-# Deployment both exist, so an in-cluster flows is unverifiable today for the identical reason. Named
-# rather than fixed here — it is another plane's diff.)
 # `annotator` is a client with its own release (deploy/fixtures/annotator, ADR 0171) and its own image, and so is
 # `table-maintenance`, the bring-your-own compaction job (deploy/fixtures/table-maintenance, [[LH-529]]).
 # `media` is the viewer and search, clients of the lakehouse that build apart from its image ([[XC-177]]); the product

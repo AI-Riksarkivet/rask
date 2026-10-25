@@ -48,11 +48,9 @@ STORE_POD: Final = "Deployment/rask-openbao"
 _DATA_PATH: Final = re.compile(r"^secret/data/([^/*]+)$")
 
 _DOORS: Final = frozenset({"catalog", "lineage", "maintenance", "notifications"})
-_SIDECARS: Final = frozenset(f"Deployment/rask-{app}" for app in ("catalog", "lineage", "maintenance", "notifications", "search", "viewer", "flows"))
+_SIDECARS: Final = frozenset(f"Deployment/rask-{app}" for app in ("catalog", "lineage", "maintenance", "notifications", "search", "viewer"))
 _ZONES: Final = frozenset(f"Deployment/rask-web-{zone}" for zone in ("home", "lakehouse", "explorer", "annotator", "compute", "models", "studio"))
-_POSTGRES_CLIENTS: Final = frozenset(
-    {"StatefulSet/rask-age", "Deployment/rask-openfga", "Job/rask-openfga-migrate-r1", "Deployment/rask-otel-collector", "CronJob/rask-pg-backup"}
-)
+_POSTGRES_CLIENTS: Final = frozenset({"StatefulSet/rask-age", "Deployment/rask-openfga", "Job/rask-openfga-migrate-r1", "CronJob/rask-pg-backup"})
 _CATALOG_VERIFIERS: Final = frozenset({"catalog", "lineage", "maintenance", "notifications"})
 _MAINTENANCE_VERIFIERS: Final = frozenset({"catalog", "lineage", "maintenance", "notifications"})
 
@@ -68,7 +66,7 @@ EXPECTED: Final[dict[str, dict[str, frozenset[str]]]] = {
     "signing-key-rask-sa-maintenance": {"store": frozenset({"maintenance"}), "dapr": frozenset({"maintenance"})},
     "signing-public-rask-sa-catalog": {"store": _CATALOG_VERIFIERS, "dapr": _CATALOG_VERIFIERS},
     "signing-public-rask-sa-maintenance": {"store": _MAINTENANCE_VERIFIERS, "dapr": _MAINTENANCE_VERIFIERS},
-    "dapr-state": {"store": frozenset({"flows", "notifications"})},
+    "dapr-state": {"store": frozenset({"notifications"})},
     "nats-user-catalog": {"store": frozenset({"catalog"})},
     "nats-user-lineage": {"store": frozenset({"lineage"})},
     "nats-user-maintenance": {"store": frozenset({"maintenance"})},

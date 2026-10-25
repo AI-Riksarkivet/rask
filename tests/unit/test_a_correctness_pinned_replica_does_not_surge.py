@@ -17,9 +17,8 @@ rollout there are TWO maintenance pods, both with a cron binding, both able to t
 posture is correct and the transition violates it — which is why reading `replicas: 1` is not enough
 to conclude the invariant holds.
 
-`tests/unit/test_prod_ha_posture.py` reasons about how many replicas a service RUNS and records why
-three of them may not scale. It does not reach the rollout, and this file is the other half of that:
-the pin has to survive the deploy that applies it.
+The pin on how many replicas a service RUNS does not reach the rollout: it has to survive the deploy
+that applies it, which is what this file holds.
 
 SCOPED TO THE CORRECTNESS PIN, deliberately. Seven other deployments hardcode `replicas: 1`
 (dex, openbao, the collector, alerting, dapr-dashboard, age-postgres), and none of them was measured

@@ -30,7 +30,6 @@ _PRODUCT_API = {
     "/api/explorer": ("rask-viewer", 8101, "/api"),
     "/api/catalog": ("rask-catalog", 2333, None),
     "/api/lineage": ("rask-lineage", 8000, "/"),
-    "/api/flows": ("rask-flows", 8840, None),
     "/api/notifications": ("rask-notifications", 8850, None),
 }
 _COMPUTE_API = {
