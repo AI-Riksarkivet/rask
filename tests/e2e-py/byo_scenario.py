@@ -298,6 +298,9 @@ class Commit(BaseModel):
     branch: str | None = None
     version: int
     run: NamedRun
+    #: The lineage operation the catalog door that made the commit stamps as `rask.operation`; ``None`` for a stock
+    #: commit through version/create, which carries only what its writer staged.
+    operation: str | None = None
 
 
 class ScenarioRun(BaseModel):
@@ -374,7 +377,10 @@ def drive(tenant: Tenant) -> ScenarioRun:
         lance_namespace.InsertIntoTableRequest(id=silver_id, mode="append"), arrow_ipc(rows_of(range(8, 24)))
     )
     assert created.version is not None and inserted.version is not None, f"silver's create answered version {created.version}, its insert {inserted.version}"
-    commits += [Commit(table=silver_table, version=created.version, run=first_run), Commit(table=silver_table, version=inserted.version, run=second_run)]
+    commits += [
+        Commit(table=silver_table, version=created.version, run=first_run, operation="create_table"),
+        Commit(table=silver_table, version=inserted.version, run=second_run, operation="insert"),
+    ]
     held = ok(pipeline.http.post(f"{CATALOG}/management/v1/table/{silver_table}/publish", json={"version": 2, "key_column": "id"}, timeout=120))
     published_while_held = published_rows(admin, silver_id)
     stock_while_held = lance.dataset(namespace_client=stock, table_id=silver_id).count_rows()

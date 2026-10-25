@@ -109,8 +109,12 @@ def rask_properties(properties: Mapping[str, str]) -> dict[str, Any]:
 
 def as_named(commits: Iterable[Commit], *, author: str) -> History:
     """What Lance holds for ``commits`` once ``author`` has committed them: each at its table, ref and version, carrying
-    the `rask.*` properties its run names."""
-    return {(commit.table, commit.branch, commit.version): rask_properties(commit.run.transaction_properties(author=author)) for commit in commits}
+    the `rask.*` properties its run names and, for a commit a catalog door made, the operation the door stamps."""
+    return {
+        (commit.table, commit.branch, commit.version): rask_properties(commit.run.transaction_properties(author=author))
+        | ({"rask.operation": commit.operation} if commit.operation is not None else {})
+        for commit in commits
+    }
 
 
 def _refs(main: lance.LanceDataset) -> list[tuple[str | None, lance.LanceDataset, int]]:
