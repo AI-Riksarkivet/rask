@@ -1186,6 +1186,33 @@ tests:
               summary: "The commit reconciler cannot read a table's version log"
               description: "The catalog's commit reconciler could not read a retained version, or its commit time, on a table's ref, so it kept that ref's mark and announces nothing after it until it can. Read the catalog's `commit_reconcile_ref_unreadable` and `commit_reconcile_table_failed` logs for the table and the error. Runbook: docs/runbooks/RUNBOOK-oncall.md#committed-versions-re-announced"
 
+  # A pod's first find pages too: the counter's first sample is already 1, and `increase` alone reads 0 across it.
+  - interval: 1m
+    input_series:
+      - series: "catalog_commit_reconcile_reannounced_total"
+        values: "_ _ 1 1 1"
+      - series: "catalog_commit_reconcile_unauthored_total"
+        values: "_ _ 1 1 1"
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: CatalogCommitsReannounced
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              service: "catalog"
+            exp_annotations:
+              summary: "Committed versions reached lineage's feed only through the reconciler"
+              description: "The catalog's commit reconciler found committed versions whose own announcement lineage's feed lacked past the grace, and announced them from the version log. Each is an announcement lost between a commit and its staging, so a pipeline following `/events` started its next hop late. Read the `lance.catalog.operation` label and the catalog's `commit_reannounced` logs for the tables. Runbook: docs/runbooks/RUNBOOK-oncall.md#committed-versions-re-announced"
+      - eval_time: 4m
+        alertname: CatalogCommitsUnauthored
+        exp_alerts:
+          - exp_labels:
+              severity: "critical"
+              service: "catalog"
+            exp_annotations:
+              summary: "A table holds versions no catalog door committed"
+              description: "The catalog's commit reconciler found committed versions that name no author and for which version/create recorded none: a manifest was finalized past every catalog door, by a credential that can write one. The version is unjudged and unannounced. Read the catalog's `commit_unauthored` logs for the tables and versions. Runbook: docs/runbooks/RUNBOOK-oncall.md#committed-versions-re-announced"
+
   # A reconciler that finds nothing must NOT page.
   - interval: 1m
     input_series:

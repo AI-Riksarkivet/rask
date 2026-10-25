@@ -132,8 +132,12 @@ groups:
       # LH-497: the commit is the outbox. A find is a write whose own announcement was lost between its commit and its
       # staging, which the catalog's reconcile cron has just announced from the version log: the feed now holds it, and a
       # pipeline following `/events` was late to hear of it. Any find pages, as the closes-when of the row asks.
+      # THE SECOND ARM IS A POD'S FIRST FIND. An OTel counter exports nothing until its first add, so its first sample is
+      # already 1 and `increase()` reads 0 across it; a series present now and absent a window ago is that find. Measured
+      # against GreptimeDB 2026-10-25 on the first live re-announcement: the `increase` arm alone returned no point, the
+      # pair fired for the window after it. The two rules below carry the same pair.
       - alert: CatalogCommitsReannounced
-        expr: sum(increase(catalog_commit_reconcile_reannounced_total[15m])) > 0
+        expr: (sum(increase(catalog_commit_reconcile_reannounced_total[15m])) > 0) or (sum(catalog_commit_reconcile_reannounced_total unless catalog_commit_reconcile_reannounced_total offset 15m) > 0)
         labels:
           severity: warning
           service: catalog
@@ -149,7 +153,7 @@ groups:
       # A version of an announced operation naming no author, which the catalog recorded none for, was committed past
       # every catalog door; nothing can announce it on anyone's behalf.
       - alert: CatalogCommitsUnauthored
-        expr: sum(increase(catalog_commit_reconcile_unauthored_total[15m])) > 0
+        expr: (sum(increase(catalog_commit_reconcile_unauthored_total[15m])) > 0) or (sum(catalog_commit_reconcile_unauthored_total unless catalog_commit_reconcile_unauthored_total offset 15m) > 0)
         labels:
           severity: critical
           service: catalog
@@ -163,7 +167,7 @@ groups:
 
       # A ref the reconciler cannot read past keeps its mark, so every lost announcement after that point waits on it.
       - alert: CatalogCommitReconcileBlocked
-        expr: sum(increase(catalog_commit_reconcile_unreadable_total[30m])) > 0
+        expr: (sum(increase(catalog_commit_reconcile_unreadable_total[30m])) > 0) or (sum(catalog_commit_reconcile_unreadable_total unless catalog_commit_reconcile_unreadable_total offset 30m) > 0)
         for: 30m
         labels:
           severity: warning
