@@ -330,8 +330,11 @@ def reconcile_table(
 
     The window is the grace (``LANCE_COMMIT_RECONCILE_GRACE_SECONDS``) at the young end and the horizon
     (``LANCE_COMMIT_RECONCILE_HORIZON_SECONDS``, inside the feed's retention) at the old end. A ref whose log cannot be
-    read keeps the mark it had and is named in ``unreadable``.
+    read keeps the mark it had and is named in ``unreadable``. A table only declared has no ref to read.
     """
+    if not dataplane.holds_a_version(location, so):
+        # A table only declared holds no version, so nothing of it was announced or lost.
+        return TableReconcile()
     control, control_so = settings.registry_root, settings.storage_options()
     marks = commit_records.read_marks(control, control_so, table_uuid)
     after = now - timedelta(seconds=settings.commit_reconcile_horizon_seconds)

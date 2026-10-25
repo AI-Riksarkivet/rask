@@ -118,6 +118,8 @@ def test_a_lost_announcement_is_on_the_feed_after_one_tick_exactly_once(tmp_path
             # The gate is down, so each write's own announcement is lost after its commit.
             assert catalog.post("/v1/table/db$t/create", content=_rows(0, 3), headers=_ARROW).status_code == 200
             assert catalog.post("/v1/table/db$t/insert", content=_rows(3, 5), headers=_ARROW).status_code == 200
+            # A table only declared holds no version: nothing to announce, and nothing the tick cannot read.
+            assert catalog.post("/v1/table/db$declared/declare", json={}).status_code == 200
             originals = [event for event in gate.refused if "run" in event and event["outputs"][0]["name"] == "db$t"]
             assert len(originals) == 2, gate.refused
 
@@ -149,7 +151,7 @@ def test_a_lost_announcement_is_on_the_feed_after_one_tick_exactly_once(tmp_path
                     late = lineage.post("/api/v1/lineage", json=original)
                     assert late.status_code == 201, late.text
                 again = catalog.post(f"/{_TICK}")
-                assert again.json()["reannounced"] == 0, again.json()
+                assert (again.json()["reannounced"], again.json()["unreadable"]) == (0, 0), again.json()
                 assert _commits(_follow(lineage)) == [("db$t", "create_table", "1"), ("db$t", "insert", "2")]
 
     assert [amount for amount, _ in counted.added] == [1, 1]
